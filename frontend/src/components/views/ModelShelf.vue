@@ -3008,9 +3008,7 @@ const LOC_TITLE = {
   // scan could not list lands here too, and naming a cause we did not observe
   // is the same overclaim the muted glyph exists to avoid.
   unreachable: "Out of reach: this location could not be read",
-  removed:
-    "You removed this copy to keep another. The shelf still records that they " +
-    "were the same model, so anything naming this file still finds it",
+  removed: "You removed this copy to keep another one",
   forgotten: "Every registered copy has been forgotten",
 };
 

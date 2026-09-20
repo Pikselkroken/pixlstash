@@ -728,6 +728,22 @@ describe("Keep one copy", () => {
     expect(wrapper.vm.mergeable).toBe(false);
   });
 
+  it("is refused for a whole run", async () => {
+    // A collapsed run is one ROW and several models, and it carries the cover's
+    // copy count - so the verb would be offered on the run and act on the cover
+    // alone while the pill said six. It deletes bytes; it asks for a model.
+    const cover = twice(1);
+    selectRows([
+      {
+        ...cover,
+        members: [cover, twice(2)],
+        memberIds: [1, 2],
+      },
+    ]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(wrapper.vm.mergeable).toBe(false);
+  });
+
   it("is refused for two models at once", async () => {
     // The keeper is a per-model choice; a batch would be a table of radio
     // groups rather than a dialog.

@@ -3,15 +3,12 @@
     :open="open"
     title="Keep one copy"
     :subtitle="subtitle"
-    @close="emit('close')"
+    :persistent="working"
+    @close="close"
   >
     <p class="mcd-note">
-      The same file is on this machine
-      {{ copies.length }} times. Choose the one to keep; the others go to your
-      {{ trash }}. The model stays on the shelf with everything you recorded
-      about it, and PixlStash keeps the record that these files were the same
-      model — so a workflow naming the copy you remove is put on the one you
-      keep when PixlStash can see that it will load.
+      You have {{ copies.length }} copies of this model. Pick the one to keep;
+      the others go to your {{ trash }}. The model itself stays on the shelf.
     </p>
 
     <!-- A radio group, and nothing is pre-selected: the wrong default here is a
@@ -21,41 +18,49 @@
       <legend class="mcd-legend">Keep</legend>
       <label
         v-for="(copy, index) in copies"
-        :key="`${copy.folder_id}:${copy.relpath}`"
+        :key="keyOf(copy)"
         class="mcd-copy"
+        :class="{ 'mcd-copy--going': keeper && keyOf(copy) !== keeper }"
       >
         <input
           :ref="(el) => index === 0 && (firstFieldEl = el)"
           v-model="keeper"
           type="radio"
           name="merge-keeper"
-          :value="`${copy.folder_id}:${copy.relpath}`"
+          :value="keyOf(copy)"
           :disabled="working"
         />
         <span class="mcd-path">{{ copyPath(copy) }}</span>
+        <!-- What happens to THIS row, on the row. The consequence used to live
+             only in the paragraph above, which is what a reader skips on a
+             dialog they opened deliberately - and this is the gesture where the
+             thing being skipped is which file gets deleted. -->
+        <span v-if="keeper" class="mcd-fate">{{
+          keyOf(copy) === keeper ? "kept" : goingTo
+        }}</span>
       </label>
     </fieldset>
 
-    <p v-if="checking" class="mcd-note" role="status">
-      Checking what your ComfyUI reads…
+    <!-- ONE live region, not three `v-if` siblings. A region inserted with its
+         text already in it is announced unreliably, and the sentence this dialog
+         exists to deliver is the one that would be lost. -->
+    <p class="mcd-status" :class="{ 'mcd-status--warn': warned }" role="status">
+      {{ status }}
     </p>
-
-    <!-- The warning that has to arrive BEFORE the bytes go. It is the delete's
-         side of the rule the submit-time swap obeys: ComfyUI's own file list is
-         what says whether that install can load the copy being removed. -->
-    <p v-else-if="comfyuiWarning" class="mcd-warning" role="status">
-      {{ comfyuiWarning }}
-    </p>
-
-    <p v-if="refusal" class="mcd-warning" role="status">{{ refusal }}</p>
 
     <template #footer>
-      <AppButton variant="ghost" key-hint="esc" @click="emit('close')">
+      <AppButton variant="ghost" key-hint="esc" @click="close">
         Cancel
       </AppButton>
+      <!-- `danger`, like every other confirm in the app that destroys a file.
+           The argument for `primary` - the model survives and the copy is
+           recoverable - is real and still loses: it left this footer
+           pixel-identical to the Move dialog's, which destroys nothing. No
+           `key-hint`: `AppDialog`'s Enter fires its `accept` emit, this dialog
+           does not listen for one, and wiring it would put a delete one
+           reflexive Enter away from a focused radio. -->
       <AppButton
-        variant="primary"
-        key-hint="enter"
+        variant="danger"
         :loading="working"
         :disabled="!canSubmit"
         @click="submit"
@@ -77,13 +82,12 @@
 // Two things make it safe rather than merely convenient, and both are the
 // server's. The request names the copy to KEEP, so nothing here can empty a
 // model; and the removed copies keep their shelf rows, so the record of which
-// files were one model outlives the files - a recipe naming the copy that went
-// still resolves, and a run through PixlStash is substituted onto the copy that
-// is left.
+// files were one model outlives the files.
 //
 // The dry run is not a nicety. It is how the ComfyUI warning arrives before the
-// delete instead of after it, so it runs on every change of the keeper and the
-// confirm waits for it.
+// delete instead of after it, so it runs on every change of the keeper, the
+// confirm waits for it, and a dry run that FAILS closes the confirm rather than
+// leaving it open with nothing asked.
 
 import { computed, nextTick, ref, watch } from "vue";
 
@@ -110,24 +114,32 @@ const store = useModelShelfStore();
 
 const keeper = ref(null);
 const working = ref(false);
-const checking = ref(false);
 const plan = ref(null);
+/** The keeper a dry run is currently out for, or null when none is. */
+const pending = ref(null);
+/** True when the last dry run did not answer at all. */
+const planFailed = ref(false);
 const firstFieldEl = ref(null);
+/** Where focus was when this opened, so Cancel and Escape can give it back. */
+let returnFocusTarget = null;
 
 const trash = computed(() => plan.value?.trash_name || trashName());
+const goingTo = computed(() => `goes to ${trash.value}`);
 
-/** The copies that are actually on the disk - the only ones there is a choice between. */
+/** The copies that are on the disk - the only ones there is a choice between. */
 const copies = computed(() =>
   (props.row?.locations || []).filter((loc) => loc?.state === "present"),
 );
 
 const subtitle = computed(() => props.row?.name || props.row?.filename || "");
 
+const keyOf = (copy) => `${copy?.folder_id}:${copy?.relpath}`;
+
 const chosen = computed(() =>
-  copies.value.find(
-    (copy) => `${copy.folder_id}:${copy.relpath}` === keeper.value,
-  ),
+  copies.value.find((copy) => keyOf(copy) === keeper.value),
 );
+
+const checking = computed(() => pending.value !== null);
 
 /** One copy's path, joined the way the shelf's tooltips join one. */
 function copyPath(copy) {
@@ -142,74 +154,107 @@ function copyPath(copy) {
 /**
  * What the reader has to know before agreeing, in ComfyUI's own words.
  *
- * Two different sentences, because they are two different situations. If that
- * ComfyUI also lists the copy being kept, PixlStash can put the run on it and
- * only a graph queued inside ComfyUI itself breaks. If it does not, nothing can
- * be substituted and every graph naming the file stops working there.
+ * Two sentences because `keeper_advertised` is two situations: ComfyUI can be
+ * pointed at the copy being kept, or it cannot and nothing can be substituted
+ * there at all.
  */
 const comfyuiWarning = computed(() => {
   const reads = plan.value?.comfyui_reads || [];
   if (!reads.length) return "";
   if (reads.some((item) => !item.keeper_advertised)) {
     return (
-      "Your ComfyUI reads the copy you are removing and not the one you are " +
-      "keeping, so PixlStash cannot put a run on it either. Any workflow " +
-      "naming that file will stop working there until you rescan or move it."
+      "ComfyUI uses the copy you are removing and cannot see the one you are " +
+      "keeping. Workflows that name this file will stop working until you " +
+      "rescan in ComfyUI."
     );
   }
   return (
-    "Your ComfyUI reads the copy you are removing. Workflows you run through " +
-    "PixlStash are put on the copy you keep; one you open in ComfyUI and queue " +
-    "there still names the file that went."
+    "ComfyUI uses the copy you are removing. Runs you start from PixlStash " +
+    "will use the copy you keep; one you open in ComfyUI itself will not."
   );
 });
 
 /** The server's refusal, said before the press rather than after it. */
 const refusal = computed(() => {
+  if (planFailed.value) {
+    return "PixlStash could not check this. Try again in a moment.";
+  }
   const reason = plan.value?.refused?.[0]?.reason;
   if (!reason) return "";
   if (reason === "keeper_not_present") {
-    return "That copy is not on the disk any more. Rescan the folder, or keep another one.";
+    return "That copy is not on your disk any more. Rescan the folder, or keep another one.";
+  }
+  if (reason === "keeper_is_that_copy") {
+    return "These two are one file — one is a shortcut to the other. There is nothing to reclaim.";
   }
   if (reason === "not_a_user_folder") {
-    return "One of the other copies is in a folder PixlStash keeps for itself and will not remove. Keep that one instead.";
+    return "One of the other copies is in a folder PixlStash manages. Keep that one instead.";
   }
   if (reason === "unreachable_copy") {
-    return "Another copy is on a drive that is not plugged in, so nothing will be removed.";
+    return "Another copy is on a drive that is not plugged in. Plug it in first.";
   }
   if (reason === "not_a_duplicate") {
-    return "There is only one copy left, so there is nothing to merge.";
+    return "There is only one copy left. Nothing to merge.";
   }
-  return "This cannot be merged right now; the shelf will say why if you try.";
+  return "PixlStash will not merge this one right now.";
+});
+
+/** Whether the line below the copies is a warning rather than a note. */
+const warned = computed(() => Boolean(refusal.value || comfyuiWarning.value));
+
+/**
+ * The one live region's text.
+ *
+ * A single persistent region rather than three `v-if` siblings: a region
+ * inserted with its text already in it is announced unreliably, and the
+ * sentence this dialog exists to deliver is the one that would be lost.
+ */
+const status = computed(() => {
+  if (checking.value) return "Checking with ComfyUI…";
+  if (refusal.value) return refusal.value;
+  return comfyuiWarning.value;
 });
 
 /**
  * Whether the press may go ahead.
  *
- * `refusal` is in it, not merely displayed beside it: the server would refuse
- * this keeper, so a live button with the reason printed under it invites the
- * reader to press it and read the same sentence again as a failure. The dry run
- * has to have come back too (`checking`), because until it has, neither the
- * refusal nor the ComfyUI warning has been asked.
+ * The dry run has to have come back - and come back at all - because until it
+ * has, neither the refusal nor the ComfyUI warning has been asked. A failed
+ * check is therefore a closed confirm, not an open one: the warning is the whole
+ * reason for planning first, and the real call reports it only in the receipt,
+ * once the files have gone.
  */
 const canSubmit = computed(
-  () => !working.value && !checking.value && !!chosen.value && !refusal.value,
+  () =>
+    !working.value &&
+    !checking.value &&
+    !planFailed.value &&
+    !!chosen.value &&
+    !refusal.value,
 );
 
 /**
  * Ask the server what it would do, removing nothing.
  *
  * Re-run on every change of the keeper, because both answers depend on which
- * copy stays: the refusal is about the copies that would go, and so is the
- * ComfyUI warning.
+ * copy stays. **The response is matched to the keeper that asked for it**: a
+ * radio group is arrow-keyed, so walking four copies dispatches four requests
+ * and overlap is the ordinary keyboard path rather than an edge case. Without
+ * the check the last response to land wins, and a stale clean plan can enable a
+ * confirm the selected keeper's own check would have refused.
  */
 async function check() {
   const copy = chosen.value;
   plan.value = null;
-  if (!copy) return;
-  checking.value = true;
+  planFailed.value = false;
+  if (!copy) {
+    pending.value = null;
+    return;
+  }
+  const key = keeper.value;
+  pending.value = key;
   try {
-    plan.value = await mergeModelCopies(
+    const answer = await mergeModelCopies(
       [
         {
           model_id: props.row.id,
@@ -219,12 +264,16 @@ async function check() {
       ],
       { dryRun: true },
     );
+    if (key !== keeper.value) return;
+    plan.value = answer;
   } catch (err) {
-    // Not a notice: the dialog is open and the press is still ahead, so the
-    // server's own answer to the real call is the one the reader should see.
+    if (key !== keeper.value) return;
+    planFailed.value = true;
     console.warn("[MergeCopiesDialog] could not plan the merge", err);
   } finally {
-    checking.value = false;
+    // Only the newest request may clear it, or an early completion would report
+    // "asked and answered" while later ones are still out.
+    if (key === keeper.value) pending.value = null;
   }
 }
 
@@ -235,15 +284,37 @@ watch(
   async (open) => {
     if (!open) return;
     working.value = false;
-    checking.value = false;
+    pending.value = null;
+    planFailed.value = false;
     plan.value = null;
-    // Nothing pre-selected, every time it opens.
+    // Nothing pre-selected, every time it opens - and the previous model's
+    // warning must not be on screen against this one.
     keeper.value = null;
+    returnFocusTarget =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
     await nextTick();
     firstFieldEl.value?.focus();
   },
   { immediate: true },
 );
+
+/**
+ * Close, and give focus back.
+ *
+ * Vuetify restores focus only to an `activatorEl` and only through its own
+ * Escape listener, which `AppDialog` pre-empts; this dialog is opened from a
+ * context menu that is gone by now, so without this Cancel, Escape and success
+ * all land focus on `<body>`.
+ */
+async function close() {
+  const target = returnFocusTarget;
+  returnFocusTarget = null;
+  emit("close");
+  await nextTick();
+  target?.focus?.();
+}
 
 async function submit() {
   if (!canSubmit.value) return;
@@ -257,7 +328,7 @@ async function submit() {
     },
   ]);
   working.value = false;
-  if (done) emit("close");
+  if (done) await close();
 }
 </script>
 
@@ -268,11 +339,16 @@ async function submit() {
   color: rgb(var(--v-theme-on-surface-variant));
 }
 
+.mcd-status {
+  margin: 0;
+  min-height: 1.5em;
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-on-surface-variant));
+}
+
 /* The hue drawn as TEXT, which is `surface-warning` and never the fill: the
    fill is 2.1:1 on a light canvas (`frontend/src/main.js`). */
-.mcd-warning {
-  margin: 0;
-  font-size: var(--text-sm);
+.mcd-status--warn {
   color: rgb(var(--v-theme-surface-warning));
 }
 
@@ -315,6 +391,19 @@ async function submit() {
 }
 
 .mcd-path {
+  flex: 1;
   overflow-wrap: anywhere;
+}
+
+/* What happens to this row, on the row. Muted, because the path is the thing
+   being read; the word only has to be there when the eye arrives. */
+.mcd-fate {
+  flex: none;
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-on-surface-variant));
+}
+
+.mcd-copy--going .mcd-path {
+  color: rgb(var(--v-theme-on-surface-variant));
 }
 </style>

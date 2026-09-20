@@ -369,22 +369,23 @@ export function mergeReceipt(
   note(
     "keeper_not_present",
     (n) =>
-      `${modelCount(n)} ${n === 1 ? "was" : "were"} left alone: the copy you chose to keep is not on the disk any more.`,
+      `The copy you chose to keep is gone, so ${modelCount(n)} was left alone.`,
   );
-  note(
-    "not_a_duplicate",
-    (n) =>
-      `${modelCount(n)} ${n === 1 ? "has" : "have"} only one copy left, so there was nothing to merge.`,
-  );
+  note("not_a_duplicate", (n) => `${modelCount(n)} already had only one copy.`);
   note(
     "no_such_copy",
     (n) =>
-      `${modelCount(n)} ${n === 1 ? "no longer has" : "no longer have"} the copy you chose; rescan that folder.`,
+      `${modelCount(n)} no longer has the copy you chose. Rescan that folder.`,
+  );
+  note(
+    "keeper_is_that_copy",
+    (n) =>
+      `${modelCount(n)} has two names for one file — a shortcut — so there was nothing to reclaim.`,
   );
   note(
     "not_a_user_folder",
     (n) =>
-      `${modelCount(n)} ${n === 1 ? "keeps a redundant copy" : "keep redundant copies"} in a folder PixlStash keeps for itself, which it will not remove.`,
+      `${modelCount(n)} keeps a spare copy in a folder PixlStash manages, which it will not delete from.`,
   );
   note(
     "is_a_builtin_engine",
@@ -399,17 +400,16 @@ export function mergeReceipt(
   note(
     "trash_unavailable",
     (n) =>
-      `There is no ${trash} this server can reach, so ${modelCount(n)} ${n === 1 ? "was" : "were"} kept.`,
+      `This server cannot reach a ${trash}, so ${modelCount(n)} ${n === 1 ? "was" : "were"} kept.`,
   );
   note(
     "partly_deleted",
-    (n) =>
-      `${modelCount(n)} lost some of ${n === 1 ? "its" : "their"} redundant copies before the removal failed.`,
+    (n) => `${modelCount(n)} lost some spare copies before the removal failed.`,
   );
   note(
     "escapes_its_folder",
     (n) =>
-      `${modelCount(n)} ${n === 1 ? "is" : "are"} recorded at a path outside the folder ${n === 1 ? "it belongs" : "they belong"} to; rescan that folder.`,
+      `${modelCount(n)} is recorded outside its own folder. Rescan that folder.`,
   );
   note(
     "no_such_model",
@@ -417,25 +417,21 @@ export function mergeReceipt(
   );
   const rest = [...counts.values()].reduce((sum, n) => sum + n, 0);
   if (rest) {
-    notes.push(
-      `${modelCount(rest)} ${rest === 1 ? "was" : "were"} left alone; the server said why.`,
-    );
+    notes.push(`${modelCount(rest)} was left alone; the server said why.`);
   }
   if (!gone) {
     return notes.length
       ? `Nothing was removed. ${notes.join(" ")}`
       : "There was nothing to merge.";
   }
+  const spares =
+    filesRemoved === 1 ? "The spare copy" : `${filesRemoved} spare copies`;
   const where = filesRemoved
     ? permanent
-      ? `${filesRemoved === 1 ? "The other copy" : `The other ${filesRemoved} copies`} ${filesRemoved === 1 ? "is" : "are"} gone for good.`
-      : `${filesRemoved === 1 ? "The other copy is" : `The other ${filesRemoved} copies are`} in your ${trash}.`
+      ? `${spares} ${filesRemoved === 1 ? "is" : "are"} deleted.`
+      : `${spares} ${filesRemoved === 1 ? "is" : "are"} in your ${trash}.`
     : "";
-  return [
-    `${modelCount(gone)} ${gone === 1 ? "is" : "are"} down to one copy, still on the shelf with everything you recorded about ${gone === 1 ? "it" : "them"}.`,
-    where,
-    ...notes,
-  ]
+  return [`Kept one copy of ${modelCount(gone)}.`, where, ...notes]
     .filter(Boolean)
     .join(" ");
 }
@@ -1937,7 +1933,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     } catch (err) {
       notices.push({
         level: "error",
-        text: errorDetail(err) || "Could not merge those copies.",
+        text: errorDetail(err) || "Could not remove those copies.",
       });
       return false;
     }

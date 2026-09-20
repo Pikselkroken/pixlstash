@@ -2393,7 +2393,7 @@ describe("mergeCopies", () => {
     // than assumed: the row survives a merge with one fewer copy, so the list has
     // to be re-read or the copy count on screen stays wrong until the next visit.
     expect(listAdapters).toHaveBeenCalled();
-    expect(useNoticeStore().notices.at(-1).text).toContain("down to one copy");
+    expect(useNoticeStore().notices.at(-1).text).toContain("Kept one copy");
   });
 
   it("says so when the call fails and keeps the shelf as it was", async () => {
@@ -2416,19 +2416,21 @@ describe("mergeCopies", () => {
 });
 
 describe("mergeReceipt", () => {
-  it("leads with what survived, because that is what a merge is", () => {
+  it("leads with what was kept, because that is what a merge is", () => {
     // A reader who has just removed a copy of a 20 GB checkpoint needs to know
     // the model is still there, or this reads like the delete they did not ask
-    // for.
-    const text = mergeReceipt(1, [], false, "Trash", 1);
-    expect(text).toContain("down to one copy");
-    expect(text).toContain("still on the shelf");
-    expect(text).toContain("in your Trash");
+    // for. Asserted whole, because a receipt nobody finishes reading is not a
+    // receipt: the whole point of the wording is that it is one short line.
+    expect(mergeReceipt(1, [], false, "Trash", 1)).toBe(
+      "Kept one copy of 1 model. The spare copy is in your Trash.",
+    );
   });
 
-  it("names where the bytes went, and does not name a place on a permanent one", () => {
-    expect(mergeReceipt(1, [], true, "Trash", 2)).toContain("gone for good");
-    expect(mergeReceipt(1, [], true, "Trash", 2)).not.toContain("Trash.");
+  it("names where the bytes went, and names no place on a permanent one", () => {
+    expect(mergeReceipt(1, [], true, "Trash", 2)).toBe(
+      "Kept one copy of 1 model. 2 spare copies are deleted.",
+    );
+    expect(mergeReceipt(1, [], true, "Trash", 2)).not.toContain("Trash");
   });
 
   it("tells the two refusals this route owns apart", () => {
@@ -2442,10 +2444,23 @@ describe("mergeReceipt", () => {
         false,
         "Trash",
       ),
-    ).toContain("the copy you chose to keep is not on the disk");
+    ).toContain("The copy you chose to keep is gone");
     expect(
       mergeReceipt(0, [{ id: 1, reason: "not_a_duplicate" }], false, "Trash"),
-    ).toContain("only one copy left");
+    ).toContain("already had only one copy");
+  });
+
+  it("says plainly when two names turned out to be one file", () => {
+    // The symlink refusal, which reads as nonsense ("nothing was removed")
+    // without a sentence of its own.
+    expect(
+      mergeReceipt(
+        0,
+        [{ id: 1, reason: "keeper_is_that_copy" }],
+        false,
+        "Trash",
+      ),
+    ).toContain("two names for one file");
   });
 
   it("reports a reason it has never seen as kept rather than dropping it", () => {

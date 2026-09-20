@@ -568,13 +568,21 @@ const movable = computed(
  * is a per-model choice, and a batch would be a table of radio groups rather than
  * a dialog.
  */
-const mergeable = computed(
-  () => single.value && (store.selectedRows[0]?.copies ?? 0) > 1,
-);
+const mergeable = computed(() => {
+  const row = store.selectedRows[0];
+  // A collapsed run satisfies `single` - it is one row - and carries the COVER's
+  // `copies`, so without the `members` check the verb would be offered on a
+  // whole run and act on one file of it while the pill counted several. `move`
+  // has the same shape and may be settled convention there; this one deletes
+  // bytes, so it asks for a model.
+  return single.value && !row?.members && (row?.copies ?? 0) > 1;
+});
 
 const mergeTitle = computed(() => {
+  const row = store.selectedRows[0];
   if (!single.value) return "Choose one model to merge the copies of";
-  const copies = store.selectedRows[0]?.copies ?? 0;
+  if (row?.members) return "Open the run and choose one of its models";
+  const copies = row?.copies ?? 0;
   if (copies < 2) {
     return "There is only one copy of this model on the disk";
   }
