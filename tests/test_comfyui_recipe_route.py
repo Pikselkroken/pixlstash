@@ -38,6 +38,10 @@ from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 
 import pixlstash.routes.comfyui as comfyui_module
+from pixlstash.services.workflow_hash import (
+    topology_hash as api_topology_hash,
+    ui_topology_hash,
+)
 from pixlstash.db_models import Picture
 from pixlstash.hub import workflow_cards
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
@@ -1010,18 +1014,45 @@ EXPECTED_REBUILD = {
 }
 
 
-def _editor_png_bytes(graph: dict, colour: tuple[int, int, int]) -> bytes:
+def _editor_png_bytes(
+    graph: dict, colour: tuple[int, int, int], parameters: str | None = None
+) -> bytes:
     """A PNG carrying *graph* in the ``workflow`` chunk and nothing else.
 
     Deliberately no ``prompt`` chunk: this is the file the whole section is
     about, and adding one would let the route answer from it instead.
+
+    ``parameters`` adds A1111 infotext beside the editor graph. Real files do
+    carry both - several "save with metadata" nodes write it - and that
+    combination is the one where the picture's STORED topology describes a
+    reading the Recipe tab is not showing.
     """
     img = Image.new("RGB", (256, 256), colour)
     meta = PngInfo()
     meta.add_text("workflow", json.dumps(graph))
+    if parameters is not None:
+        meta.add_text("parameters", parameters)
     buf = io.BytesIO()
     img.save(buf, format="PNG", pnginfo=meta)
     return buf.getvalue()
+
+
+def _stored_topology(server, pic_id: int) -> str | None:
+    """The picture's own `workflow_topology_hash`, waited for.
+
+    The extraction pass is asynchronous, and the point of the test that uses
+    this is that the column holds a value the read must NOT report - so a null
+    read here would make that test pass for the wrong reason.
+    """
+    for _ in range(120):
+        pics = server.vault.db.run_immediate_read_task(
+            Picture.find, id=pic_id, select_fields=["id", "workflow_topology_hash"]
+        )
+        value = getattr(pics[0], "workflow_topology_hash", None) if pics else None
+        if value:
+            return value
+        time.sleep(0.5)
+    return None
 
 
 @pytest.fixture(scope="module")
@@ -1218,6 +1249,73 @@ class TestAnEditorGraphIsRecognised:
         comfyui_module._forget_cached_object_info()
         client.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
         assert len(attempts) == 2
+
+
+class TestTheOpenLinkNamesTheWorkflowOnScreen:
+    """`topology_hash` is what the Recipe tab's *Open* navigates by.
+
+    It has to name the graph the tab is SHOWING. The stored
+    `picture.workflow_topology_hash` does not: the extraction pass writes it
+    from the API `prompt` chunk or from A1111 infotext, and an editor-graph
+    picture answered from neither - so Open sent the reader to a workflow they
+    were never shown, or was not offered at all.
+    """
+
+    def test_it_is_the_rebuilt_graph_s_own_topology(self, editor_env, monkeypatch):
+        _server, client, pic_id = editor_env
+        _editor_comfyui_reachable(monkeypatch)
+        body = client.get(
+            f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false"
+        ).json()
+        assert body["converted_from_editor_graph"] is True
+        # Keyed by the ordinary API path, so it is the SAME value the same
+        # workflow saved in API format would report - which is what makes Open
+        # land on the card those siblings are on.
+        assert body["topology_hash"] == api_topology_hash(EXPECTED_REBUILD)
+        # And it is offered at all, which is what the button's `v-if` needs.
+        assert body["topology_hash"]
+
+    def test_a_refused_rebuild_still_names_its_editor_graph(
+        self, editor_env, monkeypatch
+    ):
+        _server, client, pic_id = editor_env
+        partial = {k: v for k, v in EDITOR_OBJECT_INFO.items() if k != "KSampler"}
+        monkeypatch.setattr(comfyui_module, "fetch_object_info", lambda url: partial)
+        body = client.get(
+            f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false"
+        ).json()
+        assert body["reason"] == "editor_graph"
+        # No rebuild to key, so the editor serialisation is keyed directly.
+        assert body["topology_hash"] == ui_topology_hash(EDITOR_GRAPH)
+
+    def test_it_is_never_the_topology_of_the_a1111_text_beside_it(
+        self, editor_env, monkeypatch
+    ):
+        """The case that made Open open nothing.
+
+        This file carries BOTH an editor graph and A1111 infotext. The
+        extraction pass files the A1111 reduction, so the picture's stored
+        topology is that reduction's - a different workflow from the one the
+        Recipe tab draws. Following it lands the reader nowhere useful.
+        """
+        _server, client, _pic_id = editor_env
+        _editor_comfyui_reachable(monkeypatch)
+        both = _upload_one(
+            client,
+            "editor-and-a1111.png",
+            _editor_png_bytes(EDITOR_GRAPH, (70, 30, 120), A1111_PARAMETERS),
+        )
+        stored = _stored_topology(_server, both)
+        body = client.get(
+            f"{API}/comfyui/pictures/{both}/recipe?preflight=false"
+        ).json()
+        # The tab is showing the editor graph, so that is what Open must name.
+        assert body["converted_from_editor_graph"] is True
+        assert body["topology_hash"] == api_topology_hash(EXPECTED_REBUILD)
+        # The control: the column really does hold something else, so this test
+        # is about a substitution that happens and not about two nulls.
+        assert stored is not None
+        assert body["topology_hash"] != stored
 
 
 class TestAnEditorGraphCanBeRunAgain:

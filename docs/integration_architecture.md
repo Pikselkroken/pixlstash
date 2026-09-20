@@ -453,7 +453,7 @@ Two routes, and the split is by **question**, not by caller:
 
 | Route | Answers | Costs |
 |---|---|---|
-| `GET /comfyui/pictures/{id}/recipe` | **What the picture was made with** — prompts, models with strengths, settings, seed, the shelf rows, the resolution lock, `workflow_key`, `topology_hash`. Reads the graph that *executed*; for a picture carrying only the editor `workflow` chunk it rebuilds that into one first (`converted_from_editor_graph: true`), and answers for A1111 pictures through their infotext. | one file read; a ComfyUI `/object_info` read when the pre-flight is asked for, **and for an editor-graph picture either way** (from a one-minute cache) |
+| `GET /comfyui/pictures/{id}/recipe` | **What the picture was made with** — prompts, models with strengths, settings, seed, the shelf rows, the resolution lock, `workflow_key`, `topology_hash` (**derived from the graph this answer shows**, not from the picture's stored column, which describes whichever chunk the extraction pass read). Reads the graph that *executed*; for a picture carrying only the editor `workflow` chunk it rebuilds that into one first (`converted_from_editor_graph: true`), and answers for A1111 pictures through their infotext. | one file read; a ComfyUI `/object_info` read when the pre-flight is asked for, **and for an editor-graph picture either way** (from a one-minute cache) |
 | `GET /comfyui/pictures/{id}/workflow` | **The graph's bytes**, in the editor's format — what Copy, Download and paste-into-ComfyUI need. | one file read |
 
 `?preflight=false` on the recipe read skips the ComfyUI round-trip. The

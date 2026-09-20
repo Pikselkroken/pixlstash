@@ -74,7 +74,11 @@ from pixlstash.services import (
     workflow_parameters,
 )
 from pixlstash.services.workflow_events import announce_changed_workflows
-from pixlstash.services.workflow_hash import WorkflowGraphError
+from pixlstash.services.workflow_hash import (
+    WorkflowGraphError,
+    topology_hash as api_topology_hash,
+    ui_topology_hash,
+)
 from pixlstash.services.workflow_io import api_graph, detect_workflow_io
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
@@ -1074,6 +1078,44 @@ def _editor_graph_recipe_payload(workflow: dict, problems: list[str]) -> dict:
     }
 
 
+def _editor_graph_topology(rebuilt: dict | None, editor_graph: dict) -> str | None:
+    """The topology of the graph the Recipe tab is actually showing.
+
+    **Deliberately NOT the picture's stored ``workflow_topology_hash``.** That
+    column is written by the extraction pass, which reads the API ``prompt``
+    chunk or A1111 infotext and nothing else - neither of which this answer
+    came from. So on a picture carrying an editor graph *and* A1111 text the
+    column names a different reading of the same file, and the Recipe tab's
+    Open sends the reader to a workflow they were never shown; on a picture
+    carrying only an editor graph it is NULL, and Open is not offered at all.
+    Reporting the stored value either way is how Open came to open nothing.
+
+    A rebuilt graph is keyed by the ordinary API path, so it agrees exactly
+    with the same workflow saved in API format and Open reaches the card those
+    siblings are on. Without a rebuild the editor serialisation is keyed
+    directly - which is what :func:`ui_topology_hash` is for - and that agrees
+    with the API twin for most graphs but not all, so it is the fallback and
+    not the rule.
+
+    Never raises: this is one link in an advisory panel, and a graph the hash
+    layer will not reduce must not be what breaks the whole recipe read.
+    """
+    try:
+        if rebuilt is not None:
+            return api_topology_hash(rebuilt)
+        return ui_topology_hash(editor_graph)
+    except WorkflowGraphError as exc:
+        logger.info(
+            "[comfyui] Editor graph will not reduce, so the recipe reports no "
+            "topology to open: %s",
+            exc,
+        )
+        return None
+    except Exception as exc:
+        logger.warning("[comfyui] Could not key this editor graph's topology: %s", exc)
+        return None
+
+
 def _describe_preflight_failure(preflight: dict) -> str:
     """Turn a failed pre-flight into a sentence naming what to go and fix.
 
@@ -1956,6 +1998,9 @@ def create_router(server) -> APIRouter:
                     "source_label": source_label,
                     "workflow_key": _picture_workflow_key(server, pic_id),
                     **_recipe_extras(server, request, pic_id, None),
+                    # After the extras on purpose: it replaces the stored
+                    # column, which describes a different reading of this file.
+                    "topology_hash": _editor_graph_topology(None, editor_graph),
                 }
             # An A1111 picture carries its recipe as text, and the same fields
             # can be read off it.
@@ -2036,6 +2081,14 @@ def create_router(server) -> APIRouter:
             # flattering one. Returning this owner-only would close it.
             "workflow_key": _picture_workflow_key(server, pic_id),
             **_recipe_extras(server, request, pic_id, graph),
+            # A rebuilt graph is keyed from the rebuild, not from the column
+            # the extraction pass wrote about a chunk this picture does not
+            # have. Placed after the extras so it replaces theirs.
+            **(
+                {"topology_hash": _editor_graph_topology(graph, editor_graph)}
+                if from_editor_graph
+                else {}
+            ),
             "seed": gen_info["seed"],
             # The seed as text as well as a number: ComfyUI draws seeds up to
             # 2**64-1 and a JavaScript Number loses digits above 2**53, so a
