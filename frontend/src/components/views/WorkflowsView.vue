@@ -1103,6 +1103,10 @@ async function filesChosen(event) {
   font-size: var(--text-sm);
 }
 .wfv-note-clear {
+  /* The inline-button reset again — without `font: inherit` this one also
+     loses `.wfv-note`'s `--text-sm` to the UA's button size. */
+  padding: 0;
+  font: inherit;
   color: rgb(var(--v-theme-on-surface));
   text-decoration: underline;
 }

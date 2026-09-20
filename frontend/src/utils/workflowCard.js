@@ -50,6 +50,14 @@
 //                                       // order` is addressed by it and
 //                                       // nothing else on the card derives
 //                                       // it (F2, #1405).
+//     ghosts, model_ghosts,             // what the card keeps of something
+//                                       // deleted, for F7's Ghosts row.
+//                                       // `ghosts` are this library's picture
+//                                       // ghosts; `model_ghosts` counts
+//                                       // VALUES the shelf does not hold (a
+//                                       // filename or a digest), so it is not
+//                                       // a count of models. Neither is a
+//                                       // library total - see the route.
 //     last_used,                        // ISO, or null when the card has no
 //                                       // kept pictures. The *Recently used*
 //                                       // sort; null sorts below every date.

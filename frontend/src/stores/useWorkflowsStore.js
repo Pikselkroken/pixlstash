@@ -214,6 +214,20 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * Over `cards` and not `filteredCards`: a count that narrowed as its
    * neighbours were picked would go to zero on the row you are reading and
    * read as "this library has none", which is the opposite of true.
+   *
+   * **`cards` is one card per STACK, so these lists describe covers.** A
+   * checkpoint carried only by a stacked member is absent from the Checkpoint
+   * list, and a stack of six on one checkpoint counts 1. That is what the
+   * payload holds: `GET /workflows/cards` sends covers and names the members
+   * in `member_keys`, and a member's card arrives only when somebody opens
+   * that stack — so building the lists from what has been opened would grow
+   * them as the reader browsed, which is worse than being consistently about
+   * the grid. Making them library-wide needs the members in the payload, or a
+   * facet count beside it, and that is a read this step does not add.
+   *
+   * The same seam is why `filteredCards` filters top-level cards only: an
+   * open stack shows its whole stack. Filtering inside the panel would mean a
+   * stack card saying "6 workflows" over a panel drawing two.
    */
   const filterOptions = computed(() => {
     const types = new Map();
@@ -602,6 +616,19 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     const before = filters.value;
     const next = { ...before, ...changes };
     filters.value = next;
+    // **A filter that removes the open stack's COVER closes it.** The grid
+    // draws the panel inside the cover's row, so a cover filtered out takes
+    // the panel and the reader's cursor off the screen while `openStackKey`,
+    // `openMembers` and the row's `aria-expanded` all go on saying a stack is
+    // open - and the members, which were never filtered, would come back the
+    // moment an unrelated filter moved. Closing it is the state the screen is
+    // already in.
+    if (
+      openStackKey.value &&
+      !filteredCards.value.some((card) => card.key === openStackKey.value)
+    ) {
+      closeStack();
+    }
     if (
       next.hideOneOffs !== before.hideOneOffs ||
       next.showHidden !== before.showHidden

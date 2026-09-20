@@ -409,8 +409,12 @@ class WorkflowCard(BaseModel):
     model_ghosts: int = Field(
         0,
         description=(
-            "How many of the models this card names are not on the shelf. "
-            "With `ghosts`, what the Filters panel's Ghosts row asks about."
+            "How many VALUES this card's variants name that the shelf does "
+            "not hold - a model filename, or a `*_sha256` digest, which is "
+            "what the shelf judges. A card naming one missing model by both "
+            "counts 2, so this is not a count of models: read it as "
+            "'something here is gone'. With `ghosts`, what the Filters "
+            "panel's Ghosts row asks about."
         ),
     )
 

@@ -747,8 +747,14 @@ watch(selectedKey, (key) => loadDetail(key), { immediate: true });
 /* Underlined, not just coloured: it sits inside a line of secondary text, and
    a hue change alone would not say which words are the control. */
 .wftab-pictures {
+  /* `padding: 0; font: inherit` is the shipped inline-button reset
+     (`EmptyScrapHeap.vue`): the global one drops the border and background
+     but a <button> still inherits neither the UA padding nor its typeface,
+     and this one sits mid-sentence in a line the template glues together
+     whitespace-free. */
+  padding: 0;
+  font: inherit;
   color: rgb(var(--v-theme-on-surface));
-  font-size: inherit;
   text-decoration: underline;
 }
 .wftab-pictures:hover {

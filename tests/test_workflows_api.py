@@ -3603,11 +3603,23 @@ def test_a_card_counts_the_ghosts_its_own_variants_keep(workflow_env):
             ),
         ],
     )
+    # A second missing model, on the card's OTHER variant. This is what makes
+    # the count a card-wide answer: `_describe_slots` resolves names for the
+    # first variant alone (and leaves a recipe LoRA anonymous), so an
+    # implementation reading the ghosts off `models`/`loras` sees exactly one
+    # of these two whatever the variant order is.
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_recipe_asset "
+            "(structural_hash, widget_name, normalized_filename) "
+            "VALUES (?, 'lora_name', 'test-gone-from-the-shelf.safetensors')",
+            (BUSY_RECIPE_B,),
+        )
+
     cards = _by_key(_cards(workflow_env.owner))
     assert cards[BUSY_CARD]["ghosts"] == 1
-    # The forgotten LoRA name is the model ghost the shelf fixture already
-    # carries, and it sits on BUSY's slots.
-    assert cards[BUSY_CARD]["model_ghosts"] == 1
+    # One missing LoRA per variant: the fixture's own, and the one just filed.
+    assert cards[BUSY_CARD]["model_ghosts"] == 2
 
     # Same topology, no variant of its own that anything was filed against.
     sibling = _detail(workflow_env.owner, sibling_card)["card"]

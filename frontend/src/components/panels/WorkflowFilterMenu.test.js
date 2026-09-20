@@ -95,9 +95,14 @@ async function mountMenu({ cards = CARDS, oneOffs = 7, hidden = 4 } = {}) {
 /** One checkbox row's `<input>`. */
 const check = (wrapper, key) => wrapper.find(`[data-testid="wff-${key}"]`);
 
-/** A checkbox row's whole line, count included. */
+/** A checkbox row's whole line. */
 const rowText = (wrapper, key) =>
   check(wrapper, key).element.closest("label").textContent.replace(/\s+/g, " ");
+
+/** Just that row's count, exactly — `toContain("2")` also passes on 12. */
+const rowCount = (wrapper, key) =>
+  check(wrapper, key).element.closest("label").querySelector(".fm-n")
+    .textContent;
 
 /** The rows of one pick-one section, by its label. */
 function section(wrapper, label) {
@@ -129,9 +134,9 @@ describe("the Workflows filter panel", () => {
   it("labels the two server-side checkboxes with the counts the payload sent", async () => {
     const { wrapper } = await mountMenu();
     expect(rowText(wrapper, "hideOneOffs")).toContain("Hide one-offs");
-    expect(rowText(wrapper, "hideOneOffs")).toContain("7");
+    expect(rowCount(wrapper, "hideOneOffs")).toBe("7");
     expect(rowText(wrapper, "showHidden")).toContain("Show hidden workflows");
-    expect(rowText(wrapper, "showHidden")).toContain("4");
+    expect(rowCount(wrapper, "showHidden")).toBe("4");
     expect(check(wrapper, "hideOneOffs").element.checked).toBe(true);
     expect(check(wrapper, "showHidden").element.checked).toBe(false);
   });
@@ -163,21 +168,30 @@ describe("the Workflows filter panel", () => {
     });
   });
 
-  // The count keeps meaning "how many one-offs this library has", so the
-  // checkbox goes on being labelled while it is the one letting them in.
-  it("keeps the counts steady when a checkbox is ticked", async () => {
-    const { wrapper } = await mountMenu();
+  // That the SERVER keeps the counts steady across the flags is
+  // `tests/test_workflows_api.py`'s to prove, and it does. What is left for
+  // this end is narrower and was being claimed as the other: a ticked row
+  // must go on drawing the payload's number rather than blanking, or
+  // switching to counting what it can see.
+  it("keeps drawing the payload's count on a row that is ticked", async () => {
+    const { wrapper, store } = await mountMenu();
     await check(wrapper, "hideOneOffs").setValue(false);
     await flushPromises();
-    expect(rowText(wrapper, "hideOneOffs")).toContain("7");
-    expect(rowText(wrapper, "showHidden")).toContain("4");
+    expect(check(wrapper, "hideOneOffs").element.checked).toBe(false);
+    expect(rowCount(wrapper, "hideOneOffs")).toBe(String(store.oneOffs));
+    expect(rowCount(wrapper, "showHidden")).toBe(String(store.hidden));
+    // And not the number of cards on screen, which is the wrong source it
+    // would be natural to reach for.
+    expect(rowCount(wrapper, "hideOneOffs")).not.toBe(
+      String(store.filteredCards.length),
+    );
   });
 
   it("keeps a workflow that holds a ghost of either kind", async () => {
     const { wrapper, store } = await mountMenu();
     expect(rowText(wrapper, "ghosts")).toContain("Keeps something deleted");
     // Two of the three: one picture ghost, one model ghost.
-    expect(rowText(wrapper, "ghosts")).toContain("2");
+    expect(rowCount(wrapper, "ghosts")).toBe("2");
 
     await check(wrapper, "ghosts").setValue(true);
     expect(store.filteredCards.map((entry) => entry.name)).toEqual([
@@ -230,6 +244,50 @@ describe("the Workflows filter panel", () => {
     expect(store.filteredCards).toHaveLength(3);
   });
 
+  // `Boolean(card.imported) !== imported` is one character from being its own
+  // opposite, and nothing asserted which side of it a card landed on.
+  it("keeps the imported cards on Source, and the found ones on the other", async () => {
+    const { wrapper, store } = await mountMenu();
+    const pick = (label) =>
+      section(wrapper, "Source")
+        .findAll(".optrow")
+        .find((row) => row.find(".optrow__label").text() === label)
+        .trigger("click");
+
+    await pick("Imported file");
+    expect(store.filteredCards.map((entry) => entry.name)).toEqual([
+      "Upscale 2×",
+    ]);
+
+    await pick("Found in your pictures");
+    expect(store.filteredCards.map((entry) => entry.name)).toEqual([
+      "Cinematic portrait",
+      "Sketch to image",
+    ]);
+  });
+
+  // The checkpoint is picked by `checkpointModel`, which prefers the BASE
+  // model over document order — the exact preference that drifted in #1416.
+  // "Upscale 2×" carries an `upscale` slot and no base model, so an
+  // implementation reading `models[0]` would offer it here as a checkpoint.
+  it("offers the base models as checkpoints, and narrows to the one picked", async () => {
+    const { wrapper, store } = await mountMenu();
+    expect(optionLabels(wrapper, "Checkpoint")).toEqual([
+      ["realvisXL_v5.safetensors", "2"],
+    ]);
+
+    await section(wrapper, "Checkpoint")
+      .findAll(".optrow")[0]
+      .trigger("click");
+    expect(store.filteredCards.map((entry) => entry.name)).toEqual([
+      "Cinematic portrait",
+      "Sketch to image",
+    ]);
+    expect(store.filterChips.map((chip) => [chip.kind, chip.value])).toEqual([
+      ["Checkpoint", "realvisXL_v5.safetensors"],
+    ]);
+  });
+
   it("keeps a card at or above the minimum rating, unrated ones included out", async () => {
     const { wrapper, store } = await mountMenu();
     const four = section(wrapper, "Min rating")
@@ -259,5 +317,38 @@ describe("the Workflows filter panel", () => {
       includeHidden: false,
       includeOneOffs: false,
     });
+  });
+});
+
+// A filter that removes the open stack's cover. The panel is drawn inside the
+// cover's row, so it leaves the screen either way — what must not survive is
+// the store going on saying a stack is open, with members nothing filtered.
+describe("the open stack and the filters", () => {
+  const STACKED = [
+    { ...CARDS[0], stack_size: 2, member_keys: ["b".repeat(64)] },
+    ...CARDS.slice(1),
+  ];
+
+  it("closes a stack whose cover the filter takes away", async () => {
+    const { store } = await mountMenu({ cards: STACKED });
+    store.openStackKey = STACKED[0].key;
+    store.members = { [STACKED[0].key]: [STACKED[0], CARDS[1]] };
+
+    // "Cinematic portrait" is the only Text to Image card, so Upscale drops it.
+    store.setFilters({ type: "upscale" });
+
+    expect(store.openStackKey).toBeNull();
+    expect(store.openMembers).toEqual([]);
+  });
+
+  it("leaves a stack open when the filter keeps its cover", async () => {
+    const { store } = await mountMenu({ cards: STACKED });
+    store.openStackKey = STACKED[0].key;
+    store.members = { [STACKED[0].key]: [STACKED[0], CARDS[1]] };
+
+    store.setFilters({ type: "txt2img" });
+
+    expect(store.openStackKey).toBe(STACKED[0].key);
+    expect(store.openMembers).toHaveLength(2);
   });
 });

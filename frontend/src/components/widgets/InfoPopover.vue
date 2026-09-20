@@ -161,8 +161,10 @@ const models = computed(() => [
 /* The one control in a panel that otherwise holds none, so it carries the
    underline that says so rather than relying on colour alone. */
 .info-popover__link {
+  /* The inline-button reset, as `.wftab-pictures` carries it. */
+  padding: 0;
+  font: inherit;
   color: rgb(var(--v-theme-on-surface));
-  font-size: inherit;
   text-decoration: underline;
 }
 .info-popover__link:hover {

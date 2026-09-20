@@ -6,14 +6,18 @@ queries in one session - one ``GROUP BY workflow_structural_hash``, one
 recipes - and a fourth only on a library where somebody has actually chosen a
 cover. Beside them are eight hub statements, of which one (``card_index``)
 scans the variant table and the rest are small; everything else here is
-arithmetic over their results. An aggregate table would have to be invalidated by every rating,
+arithmetic over their results, plus F7's ghost pass - one grouped count, and
+the five reads ``model_ghost_names`` makes, two of them whole-table scans.
+An aggregate table would have to be invalidated by every rating,
 every import, every soft delete and every re-run of the card backfill, and
 would be a second source of truth for numbers the vault can already produce
 inside the frame budget.
 
 Measured on the owner's library (13k kept pictures, 629 variants, 245 cards):
 about 75 ms, of which the largest single part is ``describe_differences``
-reducing one graph per stacked card.
+reducing one graph per stacked card. **That figure predates F7's ghost pass**
+and has not been re-measured with it; the pass adds two whole-table scans of
+hub tables, so treat 75 ms as a floor rather than the number.
 
 Three orderings are decided here and nowhere else:
 
@@ -561,8 +565,16 @@ def read_grid(
     covered = {key for stack in stacks for key in stack.member_keys[1:]}
     drawn = [figure for figure in visible if figure.card.workflow_key not in covered]
     drawn.sort(key=_rank_order)
-    _describe_slots(hub, figures)
-    _describe_ghosts(hub, vault, figures)
+    # One read of `workflow_recipe_asset` for both passes. Every variant, which
+    # is what the ghost pass needs and a superset of the first variants the
+    # slot pass reads - the two called it separately when the ghost pass
+    # arrived, which was the same table twice for no answer the first read
+    # could not give.
+    names = asset_names(
+        hub, [variant for figure in figures for variant in figure.card.variants]
+    )
+    _describe_slots(hub, figures, names)
+    _describe_ghosts(hub, vault, figures, names)
     return Grid(
         cards=drawn,
         stacks=stacks,
@@ -572,13 +584,16 @@ def read_grid(
     )
 
 
-def _describe_slots(hub: HubDatabase, figures: list[CardFigures]) -> None:
+def _describe_slots(
+    hub: HubDatabase, figures: list[CardFigures], names: dict[str, list[tuple]]
+) -> None:
     """Fill in each card's models and LoRAs from the cached slot list.
 
-    Two hub reads for the whole grid and no document reduced: the slot list and
+    One hub read for the whole grid and no document reduced: the slot list and
     its marks are what B2 cached per topology precisely so a card read does not
-    have to re-derive them, and the readable filenames come from the one table
-    that holds them.
+    have to re-derive them. ``names`` is :func:`read_grid`'s one
+    :func:`~pixlstash.hub.workflow_card_reads.asset_names` read, the table that
+    holds the readable filenames, shared with :func:`_describe_ghosts`.
 
     **A recipe LoRA is a slot, not a file.** It is drawn as an anonymous dashed
     chip (`utils/workflowCard.js`), because which character LoRA happened to be
@@ -587,10 +602,6 @@ def _describe_slots(hub: HubDatabase, figures: list[CardFigures]) -> None:
     :func:`~pixlstash.hub.workflow_card_reads.asset_names`).
     """
     marks = slot_marks(hub, [figure.card.topology_hash for figure in figures])
-    names = asset_names(
-        hub,
-        [figure.card.variants[0] for figure in figures if figure.card.variants],
-    )
     for figure in figures:
         card = figure.card
         by_widget: dict[str, list[str]] = {}
@@ -633,32 +644,46 @@ def _describe_slots(hub: HubDatabase, figures: list[CardFigures]) -> None:
                 )
 
 
-def _describe_ghosts(hub: HubDatabase, vault, figures: list[CardFigures]) -> None:
+def _describe_ghosts(
+    hub: HubDatabase,
+    vault,
+    figures: list[CardFigures],
+    names: dict[str, list[tuple]],
+) -> None:
     """Fill in what each card keeps of something deleted (F7's Ghosts filter).
 
-    Two kinds, counted apart because forgetting them is two different purges
-    in Settings › Privacy: a **picture ghost** is the thumbnail and prompt of a
-    picture this library no longer has, and a **model ghost** is the name of a
-    model the shelf does not hold. The Filters row asks only whether a card
-    keeps either, so the two are summed by the client; they are reported
-    separately because ⓘ can say which.
+    Two kinds, counted apart because forgetting them is two different purges in
+    Settings › Privacy: a **picture ghost** is the thumbnail and prompt of a
+    picture this library no longer has, and a **model ghost** is a VALUE naming
+    a model the shelf does not hold - a filename, or a ``*_sha256`` digest,
+    which is what :func:`~pixlstash.hub.workflows.model_ghost_names` judges.
+    So a card that names a missing model by both counts two, and
+    ``model_ghosts`` is "how many of this card's model values are ghosts"
+    rather than a number of models. The Filters row asks only whether a card
+    keeps either kind, so nothing on screen depends on the distinction; ⓘ,
+    which could say which kind, must not spell it as a model count.
 
-    Three hub reads for the whole grid, all of them counts or name sets.
+    **Its cost is the reason it is the last thing** ``read_grid`` **does.**
+    ``picture_ghosts_by_variant`` is one grouped count, but
+    ``model_ghost_names`` is five reads including a scan of ``model_file`` and
+    a ``DISTINCT`` over the whole of ``workflow_recipe_asset``. That is paid by
+    the grid AND by :func:`read_grid`'s other caller, ``_read_detail``, which
+    is what every workflow write answers with - so a rename now pays a
+    shelf-wide scan it did not before. It is left that way rather than made
+    conditional because a detail card carrying ``ghosts: 0`` when the card does
+    hold one is a wrong answer, and a card is the same object on both routes.
+    If a write's latency becomes the complaint, the fix is to cache the ghost
+    name set per hub generation, not to let one route lie.
 
-    **The names are read off the variants and not off** :attr:`CardFigures.
-    models` **and** :attr:`~CardFigures.loras`, which is why this makes its own
-    ``asset_names`` call rather than reusing the one :func:`_describe_slots`
-    makes. Those two lists are what the CARD is drawn as: they cover the
-    card's first variant alone, and a recipe LoRA is deliberately anonymous
-    there, so a forgotten character LoRA - the commonest model ghost of all -
-    would never be counted.
+    **The names come from** ``names`` **- every variant - and not from**
+    :attr:`CardFigures.models` **and** :attr:`~CardFigures.loras`. Those two
+    lists are what the CARD is drawn as: they cover the card's first variant
+    alone, and a recipe LoRA is deliberately anonymous there, so a forgotten
+    character LoRA - the commonest model ghost of all - would never be counted.
     """
     library_uuid = getattr(vault, "library_uuid", None)
     by_variant = picture_ghosts_by_variant(hub, library_uuid) if library_uuid else {}
     ghost_names = model_ghost_names(hub)
-    names = asset_names(
-        hub, [variant for figure in figures for variant in figure.card.variants]
-    )
     for figure in figures:
         figure.ghosts = sum(
             by_variant.get(variant, 0) for variant in figure.card.variants
