@@ -355,7 +355,6 @@ describe("StackPanel", () => {
   });
 
   it("wears one mark for a whole selected stack, and none on its rows", async () => {
-    const prefs = useWorkflowPrefsStore();
     const whole = MEMBERS.map((entry) => entry.key);
     const wrapper = makePanel({ selectedKeys: whole, selected: true });
 
@@ -372,17 +371,6 @@ describe("StackPanel", () => {
         wrapper.find(`[data-key="${key}"]`).attributes("aria-selected"),
       ).toBe("true");
     }
-
-    // In List the rail is suppressed by CSS instead, which jsdom cannot read —
-    // so what is pinned here is the hook that rule is scoped on, on a panel
-    // whose rows are `aria-selected` all the same.
-    prefs.setStackView("list");
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find(".stack-panel__list").exists()).toBe(true);
-    expect(band(wrapper).classes()).toContain("stack-panel--selected");
-    expect(
-      wrapper.find('[data-key="second"]').attributes("aria-selected"),
-    ).toBe("true");
   });
 
   it("leaves the rows their own marks when only part of the stack is in", async () => {

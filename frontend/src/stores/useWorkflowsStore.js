@@ -397,17 +397,15 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * drew the mark on its first row and on none of the others. The stack is the
    * thing on screen, so it is the thing selected.
    *
-   * Read off `cards`, which is the top-level list, and answering `[key]` for
-   * anything it does not hold or anything that is not a stack. The CALLER says
-   * whether to expand at all (`select`'s `whole`), because the one key that
-   * needs both answers is the cover's: it is the grid's stack card AND the
-   * panel's first member row, and only the caller knows which of the two was
-   * clicked.
+   * Read off `cards`, the top-level list, so a key it does not hold answers
+   * `[key]`. No `isStack` test: `routes/workflows.py` fills `member_keys` only
+   * for a stack and always excludes the card itself, so a non-stack card's list
+   * is empty and spreading it is the same answer the test would give.
    *
-   * `stack_size` and `member_keys` are derived from one list server-side
-   * (`workflow_card_service.read_grid`), so a stack card always carries
-   * `stack_size === member_keys.length + 1`; `?? []` is for a card that has
-   * not been through that route at all.
+   * The CALLER says whether to expand at all (`select`'s `whole`), because the
+   * one key that needs both answers is the cover's: it is the grid's stack card
+   * AND the panel's first member row, and only the caller knows which was
+   * clicked.
    *
    * @param {string|null} key
    * @returns {Array<string>}
@@ -415,19 +413,19 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   function stackKeys(key) {
     if (!key) return [];
     const card = cards.value.find((entry) => entry.key === key);
-    if (!card || !isStack(card)) return [key];
-    return [key, ...(card.member_keys ?? [])];
+    return [key, ...(card?.member_keys ?? [])];
   }
 
   /**
    * Replace the selection, or toggle one key into it (Ctrl/Cmd).
    *
-   * `whole` expands a stack card into its whole stack; the caller passes false
-   * for a row inside the open panel, where the key names that one workflow —
-   * the cover row included, which is the only way the cover is separable from
-   * the stack it heads.
+   * **`whole` is opt-in.** It expands a stack card into its whole stack, and
+   * every caller that means the stack says so: the two gesture callers pass
+   * `entry.kind === "card"`. Defaulting it to true made the `?topology=` deep
+   * link — which names ONE workflow, from one picture's Recipe panel — select
+   * the whole stack that workflow happens to sit in.
    */
-  function select(key, { additive = false, whole = true } = {}) {
+  function select(key, { additive = false, whole = false } = {}) {
     const keys = whole ? stackKeys(key) : [key];
     if (!additive) {
       selectedKeys.value = keys;

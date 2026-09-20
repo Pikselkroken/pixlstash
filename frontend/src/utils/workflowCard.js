@@ -29,10 +29,12 @@
 //                                       // prepend API_BASE_URL and append the
 //                                       // share token itself (WorkflowCard).
 //     stack_size,                       // 2 or more makes the card a stack
-//     member_keys,                      // the stack's OTHER cards, this one
-//                                       // excluded, so it is `stack_size - 1`
-//                                       // long; both are derived from one
-//                                       // list in `workflow_card_service`
+//     member_keys,                      // the stack's OTHER cards, so it is
+//                                       // `stack_size - 1` long. The service
+//                                       // sets the whole list INCLUDING this
+//                                       // card; `routes/workflows.py` is what
+//                                       // excludes self on the way out, and
+//                                       // fills it for a stack only.
 //     saved_recipe_count,
 //     defaults: [{ label, slot_label, input_name, value, provenance }],
 //                                       // `provenance` is best | all | edited

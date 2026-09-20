@@ -767,6 +767,19 @@ describe("arriving on ?topology=", () => {
     expect(cursorKey(wrapper)).toBe("d");
   });
 
+  // The link names ONE workflow — it is pushed by one picture's Recipe panel —
+  // so it selects one card even when that card heads a stack. Whole-stack
+  // selection is a GESTURE on the stack card, which is why `select`'s `whole`
+  // is opt-in: defaulting it to true made this link select "b", "b1" and "b2"
+  // for a picture made by "b" alone.
+  it("selects one workflow, not its stack, when the link lands on a cover", async () => {
+    route.query = { topology: "topology-b" };
+    const wrapper = await grid();
+
+    expect(useWorkflowsStore().selectedKeys).toEqual(["b"]);
+    expect(cursorKey(wrapper)).toBe("b");
+  });
+
   // The grid is not every card: `GET /workflows/cards` leaves out the hidden
   // ones and the one-offs, which is the ordinary state of a workflow used
   // once. Saying nothing would drop the reader at the top of a grid that does
