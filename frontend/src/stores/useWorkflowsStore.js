@@ -2,10 +2,14 @@ import { computed, onScopeDispose, ref } from "vue";
 import { defineStore } from "pinia";
 
 import {
+  deleteWorkflowFile,
+  dissolveStack,
+  duplicateWorkflow,
   getWorkflowCard,
   listWorkflowCards,
   patchWorkflowCard,
   reorderStack,
+  stackWorkflows,
   unstackWorkflow,
 } from "../api/workflows";
 import {
@@ -150,6 +154,52 @@ export const useWorkflowsStore = defineStore("workflows", () => {
 
   /** Selected card keys; a member's key mixes freely with a top-level one. */
   const selectedKeys = ref([]);
+
+  /**
+   * Where the reader was, for the one journey that leaves this screen and
+   * comes back: a cover tile opening its picture (#1455).
+   *
+   * `App.vue` mounts the view under `v-else-if` with no `<KeepAlive>`, so the
+   * return is a fresh mount — the scroller starts at 0 and the view's local
+   * `cursorId` starts empty. The SELECTION is in this store and survives, so
+   * without this the reader came back to a pill counting a card that is a
+   * screen and a half up, with the cursor on the first row of the grid rather
+   * than on the card whose picture they had just been looking at.
+   *
+   * Here rather than in the view for exactly that reason: it has to outlive
+   * the component. `{cursorId, scrollTop}`, or null when nothing is parked.
+   */
+  const parkedPlace = ref(null);
+
+  /** Remember where the reader is, on the way out to a picture. */
+  function park(place) {
+    parkedPlace.value = place;
+  }
+
+  /** Take back what was parked, once. A second read gets nothing. */
+  function unpark() {
+    const place = parkedPlace.value;
+    parkedPlace.value = null;
+    return place;
+  }
+
+  /**
+   * The bulk verb that is running, or `""`.
+   *
+   * **One at a time, and the surfaces read it.** Every verb below writes once
+   * per key and each write runs a whole `read_grid()` on the server, so a
+   * selection of forty is forty serial round trips with nothing on screen
+   * saying so — and a second press part-way through re-issues writes against
+   * state the first press has already changed. That is not merely wasted: the
+   * second pass 404s on a stack already dissolved or a file already trashed,
+   * and the refusal count then reports a FAILURE for an operation that
+   * succeeded.
+   *
+   * Named rather than a boolean, so a surface can show the spinner on the
+   * control that was actually pressed (`WorkflowTab` already does this with a
+   * local `busy` of its own shape).
+   */
+  const verbBusy = ref("");
 
   /**
    * The cards the grid draws, after the four narrowing filters.
@@ -641,6 +691,208 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     }
   }
 
+  // ── The selection's own verbs (v1.12 F3, #1455) ───────────────────────
+  //
+  // The grid's selection bar and the rail's Workflow tab offer the same bulk
+  // verbs, so they live here and not in either surface: two copies of "hide
+  // every selected card" is the drift a second copy of anything in this file
+  // has already caused once.
+  //
+  // Every one of them re-reads the grid the way the stack writes above do,
+  // for the same reason: hiding, stacking and deleting all change what the
+  // cards SAY - the stacking, the cover, `differs_by` - and none of that can
+  // be re-derived from a response that only names what was written.
+
+  /**
+   * The selected cards, wherever they sit.
+   *
+   * A member is never in `cards` — the grid lists one card per stack — so the
+   * fetched member lists are searched too, and a key neither holds is dropped
+   * rather than becoming an `undefined` every gate would then have to guard.
+   */
+  const selectedCards = computed(() => {
+    const found = [];
+    for (const key of selectedKeys.value) {
+      const top = cards.value.find((entry) => entry.key === key);
+      if (top) {
+        found.push(top);
+        continue;
+      }
+      for (const list of Object.values(members.value)) {
+        const member = list.find((entry) => entry.key === key);
+        if (member) {
+          found.push(member);
+          break;
+        }
+      }
+    }
+    return found;
+  });
+
+  /**
+   * Run one write per key, then re-read the grid ONCE.
+   *
+   * **Every key is attempted and the count of refusals comes back.** A plain
+   * loop that threw on the first refusal left the ones before it written on
+   * the server, still drawn and still selected, under one sentence saying
+   * none of it worked — `WorkflowTab.hideSelected` learned that first and this
+   * is that lesson moved somewhere both surfaces reach.
+   *
+   * Serial, not `Promise.all`: each write runs a whole `read_grid()` on the
+   * server, and the hub is single-writer.
+   *
+   * @returns {Promise<{done: number, refused: number}>}
+   */
+  async function writeEach(verb, keys, write) {
+    verbBusy.value = verb;
+    let refused = 0;
+    let firstError = null;
+    try {
+      for (const key of keys) {
+        try {
+          await write(key);
+        } catch (err) {
+          refused += 1;
+          firstError = firstError ?? err;
+        }
+      }
+      if (firstError)
+        console.warn("[workflows] some writes were refused", firstError);
+      forgetMembers();
+      await fetchCards();
+    } finally {
+      // In a `finally`, so a throw from `fetchCards` cannot leave every verb
+      // on this screen disabled for the rest of the session.
+      verbBusy.value = "";
+    }
+    return { done: keys.length - refused, refused };
+  }
+
+  /**
+   * Put every selected card in one stack. The first selected stays the cover.
+   *
+   * The selection is cleared on success, as the rail's button already did: the
+   * cards it named have become one card, so a selection still naming all of
+   * them would light a stack and its members at once.
+   */
+  async function stackSelected() {
+    const keys = [...selectedKeys.value];
+    if (keys.length < 2 || verbBusy.value) return false;
+    verbBusy.value = "stack";
+    try {
+      await stackWorkflows(keys);
+      forgetMembers();
+      await fetchCards();
+      clearSelection();
+      return true;
+    } catch (err) {
+      console.warn("[workflows] could not stack the selection", err);
+      error.value = errorMessage(err, "Could not stack those workflows.");
+      return false;
+    } finally {
+      verbBusy.value = "";
+    }
+  }
+
+  /**
+   * Hide, or unhide, every selected card.
+   *
+   * Both directions through one function because they are one route and one
+   * gesture — the bar's button says which, from whether everything selected is
+   * already hidden. Hiding takes the cards off the grid, so the selection goes
+   * with them; unhiding leaves them there and the selection stands.
+   */
+  async function hideSelected(hidden = true) {
+    const keys = [...selectedKeys.value];
+    if (!keys.length || verbBusy.value) return { done: 0, refused: 0 };
+    const result = await writeEach("hide", keys, (key) =>
+      patchWorkflowCard(key, { hidden }),
+    );
+    if (hidden && !result.refused) clearSelection();
+    return result;
+  }
+
+  /** The distinct stacks the selection covers, which is what Unstack all acts on. */
+  const selectedStackIds = computed(() => [
+    ...new Set(
+      selectedCards.value
+        .map((card) => card.stack_id)
+        .filter((id) => id != null),
+    ),
+  ]);
+
+  /**
+   * Dissolve every stack the selection touches.
+   *
+   * Addressed by STACK and not by card: selecting one member of a run and
+   * pressing this breaks up the run, which is what the verb says. Taking one
+   * card out is `unstackMember`, which the panel's own menu offers.
+   */
+  async function unstackSelected() {
+    const ids = [...selectedStackIds.value];
+    if (!ids.length || verbBusy.value) return { done: 0, refused: 0 };
+    return writeEach("unstack", ids, (id) => dissolveStack(id));
+  }
+
+  /** Give one card a name of the owner's own. `null` clears it. */
+  async function renameCard(key, name) {
+    if (verbBusy.value) return false;
+    verbBusy.value = "rename";
+    try {
+      await patchWorkflowCard(key, { name: name || null });
+      forgetMembers();
+      await fetchCards();
+      return true;
+    } catch (err) {
+      console.warn(`[workflows] could not rename ${key}`, err);
+      error.value = errorMessage(err, "Could not rename that workflow.");
+      return false;
+    } finally {
+      verbBusy.value = "";
+    }
+  }
+
+  /**
+   * Copy one card's workflow into the user's folder, under a free name.
+   *
+   * The copy is a card of its own, so the grid is re-read; the answer's
+   * `workflow_key` is where it landed and is handed back for the notice.
+   */
+  async function duplicateCard(key) {
+    if (verbBusy.value) return null;
+    verbBusy.value = "duplicate";
+    try {
+      const body = await duplicateWorkflow(key);
+      forgetMembers();
+      await fetchCards();
+      return body;
+    } catch (err) {
+      console.warn(`[workflows] could not duplicate ${key}`, err);
+      error.value = errorMessage(err, "Could not duplicate that workflow.");
+      return null;
+    } finally {
+      verbBusy.value = "";
+    }
+  }
+
+  /**
+   * Send every selected card's workflow FILE to the system trash.
+   *
+   * The cards and their pictures stay: this deletes the file that runs them.
+   * A card the library knows only from its pictures has none and the route
+   * 409s, which is why the bar offers this only when every selected card is
+   * `imported`.
+   */
+  async function deleteSelected() {
+    // Off `selectedCards`, not `selectedKeys`: those are the cards the bar's
+    // `imported` gate actually vetted, and a key the grid can no longer
+    // resolve was never in that check. The one verb here that touches bytes
+    // acts on exactly what was looked at.
+    const keys = selectedCards.value.map((card) => card.key);
+    if (!keys.length || verbBusy.value) return { done: 0, refused: 0 };
+    return writeEach("delete", keys, (key) => deleteWorkflowFile(key));
+  }
+
   function toggleStack(coverKey) {
     if (openStackKey.value === coverKey) collapseStack();
     else openStack(coverKey);
@@ -870,6 +1122,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     browsingStacks.value = false;
     openStackKey.value = null;
     selectedKeys.value = [];
+    parkedPlace.value = null;
   }
 
   onScopeDispose(onSessionReset(reset));
@@ -897,6 +1150,12 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     openMembers,
     openStackId,
     openStackSize,
+    selectedCards,
+    selectedStackIds,
+    parkedPlace,
+    park,
+    unpark,
+    verbBusy,
     fetchCards,
     openStack,
     closeStack,
@@ -910,6 +1169,12 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     makeCover,
     unstackMember,
     hideMember,
+    stackSelected,
+    hideSelected,
+    unstackSelected,
+    renameCard,
+    duplicateCard,
+    deleteSelected,
     stackKeys,
     select,
     selectRange,

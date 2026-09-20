@@ -38,23 +38,24 @@ import App from "../App.vue";
 //   ?overlay=<pictureId>         → Open ImageOverlay for that picture
 //   ?from=<path>                 → Where closing that overlay goes, for the
 //                                  destinations that replace the grid the
-//                                  lightbox lives in. NOTHING SETS IT TODAY:
-//                                  the workflow shelf's picture tiles were its
-//                                  only producer and went with the shelf in
-//                                  F1b, so every close takes the absent
-//                                  branch - stay put, drop ?overlay=.
-//                                  **F7's "Show all N pictures" was expected
-//                                  to be the new producer and deliberately is
-//                                  not.** The shelf's tiles opened a PICTURE
-//                                  from a screen with no grid, so a close had
-//                                  nowhere to land; F7's chip navigates to the
-//                                  grid itself and the grid is the
-//                                  destination. Setting `from` there would
-//                                  send the first close back to /workflows and
-//                                  out of the 184 pictures the reader just
-//                                  asked to browse. A producer is still
-//                                  wanted, from a link that opens one picture
-//                                  directly.
+//                                  lightbox lives in. Its producer is the
+//                                  Workflows grid's COVER TILES (#1455): a
+//                                  cover opens the picture it draws on the
+//                                  library route, and the close comes back to
+//                                  /workflows. The shelf's picture tiles were
+//                                  the first producer and went with the shelf
+//                                  in F1b; anything else opening the overlay
+//                                  sends no `from`, and its close takes the
+//                                  absent branch - stay put, drop ?overlay=.
+//                                  **F7's "Show all N pictures" deliberately
+//                                  does not set it.** A cover tile opens one
+//                                  PICTURE from a screen with no grid, so the
+//                                  close has nowhere to land; F7's chip
+//                                  navigates to the grid itself and the grid
+//                                  IS the destination. Setting `from` there
+//                                  would send the first close back to
+//                                  /workflows and out of the 184 pictures the
+//                                  reader just asked to browse.
 //                                  (see utils/overlayRoute.js)
 //   ?review=board                → Open the tag-review overlay on the health board
 //   ?review=<reviewId>           → …on that review (open session or archived receipt)

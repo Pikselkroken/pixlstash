@@ -1433,8 +1433,8 @@ The uniform workflow card and its two parts. Mounted by `WorkflowsView.vue` (F1a
 
 - **The card shape is snake_case and uses B1's slot vocabulary** (`mark: "structural" | "recipe"`, #1390), documented at the top of `utils/workflowCard.js`, so `GET /workflows/cards` (B3) needs no mapping layer and cannot invert the solid/dashed meaning in translation. `models` carries **every** non-LoRA slot (checkpoint, unet, vae, clip), because a stack whose difference reads "other models" has to have those models behind it in ⓘ; a card row still names the BASE MODEL only — the checkpoint, or the `unet` a Flux or SD3 graph carries instead. `checkpointModel` walks `BASE_MODEL_KINDS` and never falls back to "the first slot": slot order is document order, and that fallback showed a Flux card its VAE. The list is kept identical to the server's (`workflow_card_service.BASE_MODEL_KINDS`, derived from `CHECKPOINT_WIDGETS`) and asserted by `test_base_model_kinds_agree_across_the_stack`, because the server names the card from the same order and a disagreement makes one card say two things.
 - **A card with no recipe covers itself with its models** (#1466). An editor-format workflow file — which is what ComfyUI saves by default — is filed as a topology and nothing else, so its card has no pictures to cover it and no cached slot list; its `models` and `loras` are recovered from the file itself and carry the shelf's `title`, `icon` and `base_model` like any other slot. The empty cover draws each as a `ModelMark`, the shelf's own identity slot, so a model with a chosen picture shows it and one the shelf has never scanned shows initials off its filename. **Only that card**: every other pictureless card keeps the shipped "No pictures yet" cover, because a card whose pictures were all binned is a different state from one nothing has ever run. **And empty is "not read", never "has none"** — `modelsUnread` is what the model rows and the accessible name branch on, and the shipped empty cover is still the last resort.
-- **`WorkflowCard`** takes one `card`, `expanded`, `panelId`, `member` and `selected`; emits `toggle` (▸) and `run` (*Run it…* on a card with no pictures). **The CONTENT cannot grow the card, but its column can**: a cover at `aspect-ratio: 6 / 5`, then four `--control-h-sm` rows (name, base model, LoRAs, special facts) that clip rather than wrap, summing to a fixed `--wf-meta-h` (118px). The cover is a ratio and not a pixel height because it used to be a flat 132px against a fluid card width, so its cells drifted from 1.2:1 at the 240px column floor to 1.8:1 by 360px — nobody had chosen landscape; it fell out. Cards still line up because every card in a row is the same width, which is what the old fixed total was really protecting.
-- **The cover's TRACKS come from the strip, one cell per picture** (#1456). It used to be `v-for="i in 3"` with only the `<img>` conditional, so a workflow with one or two pictures showed its picture beside painted `input-background` rectangles and read as a card that had failed to load — and a card under three pictures is not the rare case it looks like, since `one_off` also requires unrated, not imported and no saved recipe, so the partial card on the grid is one somebody cared about. The box stays 6:5 at every count and only the tracks inside it change: `--1` is one cell at **6:5**, `--2` a pair of **3:5** columns, `--3` today's 2fr/1fr mosaic with every cell at **4:5** (the big one spans two columns and two rows, so it keeps the cover's own proportion). The strip is capped at three by a `slice(0, 3)` in the component, matching the server's own `COVER_DEPTH = 3`, so four and up are the mosaic. A card whose covers have not arrived keeps `min(picture_count, 3)` empty cells rather than a collapsed cover, so the placeholder is the arrangement the pictures are about to land in and not one box the size of the whole cover, which is what `--empty` looks like. An entry with no `url` is dropped before the count, because there is no picture behind it to draw. The shape decides how much of the picture a cell keeps: of an 832×1216 generation, 6:5 keeps 57% of the height, 4:5 keeps 86%, and 3:5 keeps all of it (a cell narrower than the picture trims the sides) — so the widest cut lands on the card with one picture to show, which is what giving it the whole box costs. **WHERE that slice is taken from is the stored rectangle's business, not the anchor's** (#1465): each `covers` entry carries the face-weighted square `render_thumbnail` computed for that picture, `coverCellStyle` (`utils/workflowCard.js`) fits the cell's own ratio around its centre and clamps it to the bitmap — `cropRectForRatio` / `cropImgStyle` in `utils/squareCrop.js`, the square helper's generalisation — and the result is inline `width`/`height`/`left`/`top` on an absolutely-positioned `<img>`. The cell ratio comes from the COUNT alone, since the mosaic's three cells are all 4:5. `object-fit: cover` + `object-position: top center` survives as the fallback for a picture whose rectangle has not been computed yet (the fields are nullable), which is the half that would be a regression if it moved; the anchor itself stays the app's shipped convention (`ImageGrid.css`). The same helper draws the stack panel's List strip, so a row and its card frame a picture identically. jsdom has no layout, so `WorkflowCard.test.js` resolves the stylesheet against the token sheet and asserts the meta sum, the cell ratios of all three arrangements, the mosaic's `grid-row: 1 / 3` and that no other rule grants that span, and that row 4's right padding keeps it clear of ⓘ; the content cases (0 and 5 LoRAs, long names) were measured once in Chromium, not in CI.
+- **`WorkflowCard`** takes one `card`, `expanded`, `panelId`, `member` and `selected`; emits `toggle` (▸), `run` (*Run it…* on a card with no pictures) and `open-picture` (a cover tile, #1455). **The CONTENT cannot grow the card, but its column can**: a cover at `aspect-ratio: 6 / 5`, then four `--control-h-sm` rows (name, base model, LoRAs, special facts) that clip rather than wrap, summing to a fixed `--wf-meta-h` (118px). The cover is a ratio and not a pixel height because it used to be a flat 132px against a fluid card width, so its cells drifted from 1.2:1 at the 240px column floor to 1.8:1 by 360px — nobody had chosen landscape; it fell out. Cards still line up because every card in a row is the same width, which is what the old fixed total was really protecting.
+- **The cover's TRACKS come from the strip, one cell per picture** (#1456). It used to be `v-for="i in 3"` with only the `<img>` conditional, so a workflow with one or two pictures showed its picture beside painted `input-background` rectangles and read as a card that had failed to load — and a card under three pictures is not the rare case it looks like, since `one_off` also requires unrated, not imported and no saved recipe, so the partial card on the grid is one somebody cared about. The box stays 6:5 at every count and only the tracks inside it change: `--1` is one cell at **6:5**, `--2` a pair of **3:5** columns, `--3` today's 2fr/1fr mosaic with every cell at **4:5** (the big one spans two columns and two rows, so it keeps the cover's own proportion). The strip is capped at three by a `slice(0, 3)` in the component, matching the server's own `COVER_DEPTH = 3`, so four and up are the mosaic. A card whose covers have not arrived keeps `min(picture_count, 3)` empty cells rather than a collapsed cover, so the placeholder is the arrangement the pictures are about to land in and not one box the size of the whole cover, which is what `--empty` looks like. An entry with no `url` is dropped before the count, because there is no picture behind it to draw. The shape decides how much of the picture a cell keeps: of an 832×1216 generation, 6:5 keeps 57% of the height, 4:5 keeps 86%, and 3:5 keeps all of it (a cell narrower than the picture trims the sides) — so the widest cut lands on the card with one picture to show, which is what giving it the whole box costs. **WHERE that slice is taken from is the stored rectangle's business, not the anchor's** (#1465): each `covers` entry carries the face-weighted square `render_thumbnail` computed for that picture, `coverCellStyle` (`utils/workflowCard.js`) fits the cell's own ratio around its centre and clamps it to the bitmap — `cropRectForRatio` / `cropImgStyle` in `utils/squareCrop.js`, the square helper's generalisation — and the result is inline `width`/`height`/`left`/`top` on an absolutely-positioned `<img>`. The cell ratio comes from the COUNT alone, since the mosaic's three cells are all 4:5. `object-fit: cover` + `object-position: top center` survives as the fallback for a picture whose rectangle has not been computed yet (the fields are nullable), which is the half that would be a regression if it moved; the anchor itself stays the app's shipped convention (`ImageGrid.css`). The same helper draws the stack panel's List strip, so a row and its card frame a picture identically. jsdom has no layout, so `WorkflowCard.test.js` resolves the stylesheet against the token sheet and asserts the meta sum, the cell ratios of all three arrangements, the mosaic's `grid-row: 1 / 3` and that no other rule grants that span, and that row 4's right padding keeps it clear of ⓘ; the content cases (0 and 5 LoRAs, long names) were measured once in Chromium, not in CI. **The cells stay inert `<span>`s**, and that is a decision rather than an omission: opening a picture is a CONTEXT-MENU verb here, never a click. Making a tile a button took the card's ordinary click away from it — a press on the top half of a card stopped selecting it — and put hover chrome over the picture, for a gesture nobody had asked for. What the tiles do carry is `data-picture-id` / index / total, because a right-click anywhere on a card opens the card menu and that menu offers to open a picture, so it has to know which tile the pointer was over. Both hosts read it off the event target (`pictureUnder`) rather than the card tracking a "last right-clicked" that could go stale, and the menu row names what it will open (*Open picture 2 of 3*), falling back to *Open cover picture* when the press missed a tile or came from `⋯`, which has no pointer. `StackPanel`'s member menu carries the same row, which is the keyboard's only route to a member's pictures. **That is why the two verb menus are held equal by `data-verb` and not by their labels**: the same verb correctly saying which picture it is about to open is not the divergence #403 was about.
 - **`selected` is the card's own mark, and it is an overlay.** The shell's wash plus `--selection-ring` (`style.css` rule 3) on a `::after` at `--z-raised`, `pointer-events: none`. It was twice put somewhere it could not be seen: on the grid cell, which `.wf-card`'s opaque `surface` covers entirely, and then on the card itself, where an inset shadow paints under the element's children and the cover's `<img>`s are children — so the ring ran along the text rows and stopped dead at the thumbnails. `.selection-overlay` in `ImageGrid.css` is the shipped answer for marking something with pictures in it.
 - **A stack** (`stackSize` ≥ 2) adds ▸ before the name and a layered count on the cover; its facts row reads "differs by". ▸ and ⓘ are real `AppButton`s at `tabindex="-1"`: the Workflows grid's roving cursor owns Tab. **The layered count is a button too** (#1402) — it is the mark that says there are cards under this one, so it opens the stack as well — but it stays `aria-hidden` and off the tab order: ▸ is the announced control and a second one saying the same thing is noise, not access.
 - **A hidden card leads its facts row with `hidden`** (F7). It is drawn at all only because somebody ticked *Show hidden workflows*, and the row clips to "+N" — a mark that can be clipped away leaves a card reading as an ordinary one in the grid it was deliberately kept out of. It leads on a stack too, where the rest of the row is the members' `differs_by`.
@@ -1655,11 +1655,13 @@ watcher the model shelf uses. See §9.1b for the destination itself.
 - **Keyboard**: one tab stop with a roving cursor, the shape of
   `useGridKeyboardNav.js` but its own handler — that composable is bound to the
   picture grid's stores and its justified layout. Space selects; Enter toggles
-  a stack card's panel and otherwise opens ⓘ; Shift+F10 and the Menu key open
-  ⓘ as well, because **F1a has no card context menu** — the writes one would
-  offer (rename, hide, unstack) come with the routes that are not in `develop`
-  yet, and pointing the key at the one panel a card has beats pointing it at
-  nothing. Esc closes the innermost first: the `VMenu`s consume their own
+  a stack card's panel and otherwise opens ⓘ. **Shift+F10 and the Menu key open
+  the card menu** (#1455), which is what those keys mean everywhere else and in
+  every file manager; they opened ⓘ while F1a had no card menu, and Enter still
+  does, so nothing was lost by moving them. F2 renames. On a MEMBER row inside
+  an open panel both keys still reach `StackPanel`'s own member menu, which
+  holds the verbs that are only about a row inside a run. Esc closes the
+  innermost first: the `VMenu`s consume their own
   Escape, so what reaches the grid is the panel, then the selection. **Esc and
   the panel's Close return the cursor to the stack card**; ▸ and the layered
   count deliberately do not, being a click on a card rather than a move.
@@ -4858,7 +4860,15 @@ from the UI today and are not oversights**:
   input's mode (Selection / Picker / Fixed) and deleting an imported workflow
   were the shelf inspector's, keyed by FILENAME through
   `/comfyui/workflows/{name}/…`. The card payload carries no filename and the
-  grid is keyed by card, so there was nothing to move them onto. Stored modes
+  grid is keyed by card, so there was nothing to move them onto. **Deleting is
+  back**, by CARD: B8 added `DELETE /workflows/{workflow_key}`, which resolves
+  the file itself, so the grid's *Delete file…* gates on `imported` and needs
+  no filename in the payload (#1455). **The gate is not a guarantee**: the
+  route 409s on a card with no file row and **404s** when the row stands but
+  the file has gone from the user folder (`trash_user_workflow`), so the
+  caller counts refusals and names how many went rather than assuming the
+  gate was enough.
+  Setting a picture input's mode is still gone. Stored modes
   are still honoured — `picture_inputs()` reads them and the run pre-flight
   calls it — and `WorkflowRunPanel` still offers a `PicturePicker` per run, so
   running is unaffected; what is missing is changing the stored setup and
@@ -4867,18 +4877,20 @@ from the UI today and are not oversights**:
   the same `POST /comfyui/workflows/import`, so the capability is not lost,
   only the gesture. `useWindowFileImport` no longer has to stand aside for this
   screen.
-- **The way out to a workflow's pictures.** The shelf inspector's second tab
-  was Pictures, and its tiles opened one through `?overlay=<id>`; §F2 called
-  that tab "what stops the rail being terminal". `WorkflowTab` declares one
-  tab and `WorkflowCard`'s covers are not clickable, so a reader can see that
-  a workflow made 90 pictures and reach none of them. F7 wires the header
-  figure as the *Show all N pictures* chip. **This is the sharpest of the
-  losses here** — it is a route out of a screen, not a control on it.
+- ~~**The way out to a workflow's pictures.**~~ **Back.** The shelf
+  inspector's second tab was Pictures, and its tiles opened one through
+  `?overlay=<id>`; §F2 called that tab "what stops the rail being terminal".
+  F7 wired the header figure as the *Show all N pictures* chip, and #1455
+  made each cover tile on the card open the picture it draws — the card's
+  `cover_ids` names them, so nothing parses an id out of a thumbnail path.
+  Both are routes out of a screen, and the cover is the direct one: it goes to
+  the picture in front of the reader rather than to a filtered grid.
 - **"Export the graph…" and "Copy its identity"**, the shelf row menu's two
-  verbs. Export is owed back by F6/B8, which has to write a *runnable* file
-  and therefore needs `GET /workflows/recipes/{structural_hash}/graph` to stop
-  answering `runnable: false`; the card payload has no filename, so neither
-  verb had anything to hang on in the grid.
+  verbs. **Export is back** (B8/#1400 built `GET /workflows/{key}/export`,
+  which scrubs rather than exporting a run; the grid's verb menu calls it and
+  saves the file through a blob link). *Copy its identity* is not, and has no
+  owner: the grid is keyed by card and the shelf's identity string was a
+  topology's.
 - **The base-model widget list on the client.** `utils/workflowShelf.js` kept a
   `BASE_WIDGETS` beside the server's `CHECKPOINT_WIDGETS` and the two drifted in
   both directions (#1416); a guardrail held them equal. The grid reads the slot
@@ -4895,14 +4907,18 @@ from the UI today and are not oversights**:
   want. A function whose only test is its own unit test is not covered, it is
   only green.
 
-#### `?from=`: the way back, built here and currently unused
+#### `?from=`: the way back, and the cover click that uses it
 
-**#1446 built the return journey for the shelf's picture tiles, and F1b
-deleted the tiles.** The mechanism it added is generic and survives whole; what
-is gone is the only thing that *pushed* `?from=`. It is documented here rather
-than dropped because F7's *Show all N pictures* chip is the same journey — a
-card's pictures opened from a destination that replaces the grid — so the chip
-needs a caller, not a design.
+**#1446 built the return journey for the shelf's picture tiles, F1b deleted
+the tiles, and #1455 gave it a caller again.** A cover tile on a workflow card
+pushes `/?overlay=<pictureId>&from=/workflows`
+(`WorkflowsView.openPicture`), and the lightbox's own close brings the reader
+back — nothing new is drawn in the lightbox, because the close button already
+does this once `?from=` is on the URL.
+
+The card names the picture: `cover_ids` pairs with `covers` by position (see
+`docs/integration_architecture.md` §2), so nothing parses an id out of a
+thumbnail path.
 
 The problem it solves is structural and has not changed: the lightbox is
 mounted inside `ImageGrid`, which this destination replaces, so anything here
@@ -4914,8 +4930,8 @@ for, with Workflows two clicks away.
   `ImageGrid._removeOverlayRoute` makes.** `?from=` is a same-document absolute
   path to replace the route with; anything else (a protocol, a
   protocol-relative host, a repeated parameter) is ignored and the close drops
-  `?overlay=` and stays put as it always did. **That fallback is what the app
-  does today**, since nothing sets `?from=` any more.
+  `?overlay=` and stays put as it always did — which is still what every
+  picture opened from the grid itself does.
 - **Everything else in the query goes with the route being left — except
   `?token=`**, which belongs to the session: this close does not run through
   `useAppNavigation.withShareToken`, so it carries the share token itself or

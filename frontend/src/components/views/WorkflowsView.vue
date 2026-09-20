@@ -212,7 +212,7 @@
          track: `measure()` reads the grid's `clientWidth`, which INCLUDES its
          own padding, and a padded grid would be measured 32px wider than the
          space the columns actually have. -->
-    <div v-else class="wfv-scroll">
+    <div v-else ref="scrollEl" class="wfv-scroll">
       <!-- One `treegrid` and one tab stop: the cursor roves with the arrow
            keys and the focused row is the only one at `tabindex="0"`. -->
       <div
@@ -255,6 +255,7 @@
             @move="(key, delta) => moveMember(key, delta)"
             @unstack="store.unstackMember"
             @hide="store.hideMember"
+            @open-picture="openPicture"
           />
           <div
             v-else-if="entry.kind === 'card'"
@@ -281,6 +282,7 @@
             :data-key="entry.key"
             @click="onRowClick(index, $event)"
             @dblclick="isStack(entry.card) && store.toggleStack(entry.key)"
+            @contextmenu.prevent="openRowMenu(index, $event)"
           >
             <div class="wfv-cell" role="gridcell">
               <WorkflowCard
@@ -289,12 +291,71 @@
                 :expanded="store.openStackKey === entry.key"
                 :panel-id="store.openStackKey === entry.key ? panelId : ''"
                 @toggle="store.toggleStack(entry.key)"
+                @run="runCard(entry.card)"
               />
             </div>
           </div>
         </template>
       </div>
     </div>
+
+    <!-- The pill floats over the END of the list, exactly as the shelf's and
+         the photo grid's do: the list is what the selection was made in, and a
+         docked strip between the toolbar and the cards would push the whole
+         grid down every time a card was clicked. `.selbar-float` turns
+         `pointer-events` off on the strip and back on for the pill, so the
+         cards underneath it stay clickable. -->
+    <div class="selbar-float">
+      <WorkflowSelectionBar
+        ref="selBarRef"
+        @select-all="selectAllShown"
+        @menu-closed="focusCursorRow"
+        @open-cover="openCoverPicture"
+        @run="runSelected"
+        @stack="stackSelected"
+        @unstack="unstackSelected"
+        @rename="startRename"
+        @make-cover="makeCoverOfSelected"
+        @hide="hideSelected"
+        @export="exportSelected"
+        @duplicate="duplicateSelected"
+        @delete="confirmDelete"
+      />
+    </div>
+
+    <!-- Rename needs somewhere to type, and the card has nowhere: its name row
+         is one line of four in a fixed block, and an inline field there would
+         reflow the card it is editing. One small dialog instead — the same
+         shape `StackPanel` said its member menu was missing. -->
+    <!-- `closeRename`, not `renameOpen = false`: a dialog closing has the same
+         debt the context menu has — focus lands wherever the teleported
+         surface left it, which is outside the grid. -->
+    <AppDialog
+      :open="renameOpen"
+      title="Rename workflow"
+      size="sm"
+      @close="closeRename"
+    >
+      <AppInput
+        v-model="renameDraft"
+        label="Name"
+        autofocus
+        :placeholder="renameFallback"
+        @enter="saveRename"
+      />
+      <p class="wfv-hint">
+        It is called {{ renameFallback }} now. Leave this empty to keep the name
+        PixlStash builds from the workflow itself.
+      </p>
+      <template #footer>
+        <AppButton size="sm" variant="ghost" @click="closeRename"
+          >Cancel</AppButton
+        >
+        <AppButton size="sm" variant="primary" @click="saveRename"
+          >Rename</AppButton
+        >
+      </template>
+    </AppDialog>
   </div>
 </template>
 
@@ -334,7 +395,11 @@ import { VIcon, VMenu } from "vuetify/components";
 
 import { importWorkflow } from "../../api/comfyui";
 import { listImportFolders } from "../../api/folders";
+import { exportWorkflow, workflowCoverUrl } from "../../api/workflows";
+import { useConfirm } from "../../composables/useConfirm";
 import { useFilterStore } from "../../stores/useFilterStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import {
   SORT_KEYS,
@@ -347,8 +412,11 @@ import FilterStrip from "../panels/FilterStrip.vue";
 import StackPanel from "../panels/StackPanel.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import WorkflowFilterMenu from "../panels/WorkflowFilterMenu.vue";
+import WorkflowSelectionBar from "../panels/WorkflowSelectionBar.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
+import AppDialog from "../widgets/AppDialog.vue";
+import AppInput from "../widgets/AppInput.vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import WorkflowCard from "../widgets/WorkflowCard.vue";
 
@@ -377,16 +445,23 @@ const emit = defineEmits(["open-settings"]);
 const store = useWorkflowsStore();
 const filterStore = useFilterStore();
 const prefs = useWorkflowPrefsStore();
+const notices = useNoticeStore();
+const runDialog = useRunDialogStore();
 const router = useRouter();
 const route = useRoute();
+const { confirm } = useConfirm();
 
 const gridEl = ref(null);
 // `v-for`'d, so Vue hands back an array even though only one panel is ever
 // drawn — one stack is open at a time.
 const panelRef = ref(null);
 const fileInput = ref(null);
+const selBarRef = ref(null);
+const scrollEl = ref(null);
 const sortMenuOpen = ref(false);
 const filterMenuOpen = ref(false);
+const renameOpen = ref(false);
+const renameDraft = ref("");
 const columns = ref(1);
 // **The cursor is an entry id, not an index.** `flatRows` is rebuilt by a
 // resort, by a stack opening and by one closing, and an index held across any
@@ -612,6 +687,52 @@ onBeforeUnmount(() => {
   observer = null;
 });
 
+/**
+ * Where the reader was before they opened a picture, claimed once at SETUP.
+ *
+ * Taken here rather than read later because `unpark` clears it: claiming it
+ * synchronously is what stops a second mount — a remount for any other reason
+ * — from also thinking it is a return journey. Null on an ordinary arrival,
+ * which is every visit that did not come back from a cover click.
+ */
+const parked = store.unpark();
+
+/**
+ * Put the reader back, once the cards it names actually exist.
+ *
+ * **Not in `onMounted`.** The grid is fetched there and the answer lands a
+ * round trip later, so a restore that ran on mount would look for the cursor's
+ * card in an empty list and give up; the store's cards can also already BE
+ * there from a previous visit, which is why the watcher is `immediate` rather
+ * than waiting for a change that may never come.
+ *
+ * By ID, never by index: `flatRows` is rebuilt by the refetch this mount
+ * fires, and an index held across it names a different card or a hole. Once
+ * applied it stops, so a later refetch — a file added, a LoRA slot flipped —
+ * does not yank the cursor back to where the reader was ten minutes ago.
+ */
+let placeRestored = false;
+watch(
+  () => store.sortedCards,
+  () => {
+    if (!parked || placeRestored || !store.loaded) return;
+    placeRestored = true;
+    nextTick(() => {
+      if (scrollEl.value && parked.scrollTop) {
+        scrollEl.value.scrollTop = parked.scrollTop;
+      }
+      const at = flatRows.value.findIndex(
+        (entry) => entry.id === parked.cursorId,
+      );
+      // Only if the card is still there. A workflow hidden or deleted while
+      // the reader was in the lightbox leaves the cursor where it falls back
+      // to, which is the first row, rather than being moved to nothing.
+      if (at >= 0) moveCursor(at);
+    });
+  },
+  { immediate: true },
+);
+
 onMounted(async () => {
   store.fetchCards();
   try {
@@ -789,6 +910,9 @@ function selectToCursor(index) {
       }),
     ),
   ]);
+  // A Shift range can take in a screenful without the cursor passing over
+  // most of it, so the count is said the way Ctrl+A's is.
+  announceSelection();
 }
 
 /**
@@ -976,6 +1100,15 @@ function onKeyDown(event) {
     }
     return;
   }
+  // Select all shown, the chord the pill's count menu prints a keycap for.
+  // Checked before the switch because it is the only binding here that takes a
+  // modifier, and a keycap naming a key nothing listens for is a lie the
+  // reader can only discover by pressing it.
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+    event.preventDefault();
+    selectAllShown();
+    return;
+  }
   switch (event.key) {
     case "ArrowRight":
       event.preventDefault();
@@ -1019,21 +1152,35 @@ function onKeyDown(event) {
         activeCardButton(".wf-card__info")?.click();
       }
       return;
+    case "F2":
+      // The rename key, everywhere a list has one. Single-selection only,
+      // which is the gate the bar's button carries too.
+      event.preventDefault();
+      // `entry &&`, not `entry?.kind !== "hole"`: an absent entry passes that
+      // test (undefined is not "hole") and the next line reads `.key` off it.
+      if (entry && entry.kind !== "hole") {
+        if (!store.selectedKeys.includes(entry.key)) {
+          store.select(entry.key, { whole: entry.kind === "card" });
+        }
+        startRename();
+      }
+      return;
     case "F10":
       if (!event.shiftKey) return;
       event.preventDefault();
       // The context-menu keys reach the MEMBER MENU on a member row — the
-      // same menu right-click opens, and the only route to *Unstack* and
-      // *Hide* for somebody not using a pointer: both ⋯ buttons sit at
-      // `tabindex="-1"` because the grid owns Tab. Elsewhere they still open
-      // ⓘ, which is all a top-level card has.
+      // same menu right-click opens, and the only route to *Make it the
+      // cover*, *Move* and *Unstack* for somebody not using a pointer. On a
+      // CARD they now reach the card menu, which is what those keys mean
+      // everywhere else in this app and in every file manager; they used to
+      // open ⓘ, which Enter already does and still does (#1455).
       if (entry?.kind === "member") openMemberMenu(entry.key);
-      else activeCardButton(".wf-card__info")?.click();
+      else openMenuAtCursor();
       return;
     case "ContextMenu":
       event.preventDefault();
       if (entry?.kind === "member") openMemberMenu(entry.key);
-      else activeCardButton(".wf-card__info")?.click();
+      else openMenuAtCursor();
       return;
     case "Escape":
       // Innermost first. The popover and the card menu are `VMenu`s: they
@@ -1098,6 +1245,430 @@ function activeCardButton(selector) {
   return rowElement(flatRows.value[cursorIndex.value])?.querySelector(selector);
 }
 
+// ── The selection's verbs (#1455) ─────────────────────────────────────────
+//
+// The bar owns the gates and emits; this owns the confirmation, the dialog and
+// the store call — `ModelShelf.vue` splits the shelf's the same way, and for
+// the same reason: two confirmations half here and half there is how they
+// drift apart.
+
+/** The selected card, when exactly one is. Null otherwise. */
+const onlyCard = computed(() =>
+  store.selectedCards.length === 1 ? store.selectedCards[0] : null,
+);
+
+/**
+ * Open a picture one of a card's covers draws, in the lightbox.
+ *
+ * The lightbox is mounted inside `ImageGrid`, which this screen REPLACES, so
+ * the only way to it is the picture-grid route — and `?from=` is what makes
+ * closing it come back here instead of leaving the reader on All Pictures
+ * (#1446). This is the caller that mechanism has been waiting for.
+ *
+ * `route.path` and not the full route: `?topology=` is a one-shot instruction
+ * from a Recipe link that this view honours on mount, so carrying it back
+ * would re-select whichever workflow that link named over whichever one the
+ * reader has since chosen.
+ */
+function openPicture(pictureId) {
+  // Where the reader is, so the return lands here rather than at the top.
+  // The store holds it because this component is remounted on the way back
+  // (`App.vue` has no `<KeepAlive>` for this view), so nothing local survives.
+  store.park({
+    cursorId: cursorId.value,
+    scrollTop: scrollEl.value?.scrollTop ?? 0,
+  });
+  router.push({
+    name: "all-pictures",
+    query: { overlay: String(pictureId), from: route.path },
+  });
+}
+
+/**
+ * Run one card: the Run popup, on the card rather than on a picture (#1407).
+ *
+ * The popup is `App.vue`'s and the store is how anything reaches it. No
+ * picture behind it, so it shows the card's cover, an empty prompt and a set
+ * picker for where the output is filed — the one thing a card-sourced run has
+ * to be told and a picture-sourced one already knows.
+ */
+function runCard(card) {
+  if (!card) return;
+  runDialog.openRun({
+    kind: "card",
+    workflowKey: card.key,
+    name: card.name,
+    // Through the helper: a raw `covers` entry is API-relative and an
+    // `<img src>` would resolve it against the page origin instead.
+    coverUrl: card.covers?.[0] ? workflowCoverUrl(card.covers[0]) : "",
+    emptyPrompt: true,
+  });
+}
+
+function runSelected() {
+  runCard(onlyCard.value);
+}
+
+async function stackSelected() {
+  const count = store.selectedKeys.length;
+  if (await store.stackSelected()) {
+    announcement.value = `${count} workflows stacked together`;
+  }
+}
+
+/**
+ * Break up every stack the selection touches.
+ *
+ * **Confirmed above one**, unlike its neighbour Stack. It is bulk, it is not
+ * undoable on a screen with no undo, and what it discards is not the cards —
+ * those stay — but the member ORDER and the cover choice somebody arranged by
+ * hand. Its glyph is a near-twin of Stack's one button away, so the press is
+ * easy to make by accident; one stack is a gesture a reader can see the
+ * result of, and six is not.
+ */
+async function unstackSelected() {
+  const stacks = store.selectedStackIds.length;
+  if (stacks > 1) {
+    const ok = await confirm({
+      title: `Break up ${stacks} stacks?`,
+      message:
+        `Every workflow in ${stacks} stacks goes back to standing on its own. ` +
+        "The workflows and their pictures stay; what is lost is the order " +
+        "they were in and which one stood for each stack. There is no undo " +
+        "on this screen.",
+      confirmLabel: "Break them up",
+    });
+    if (!ok) return;
+  }
+  const { refused } = await store.unstackSelected();
+  if (refused) {
+    notices.push({
+      level: "error",
+      text:
+        refused === stacks
+          ? stacks === 1
+            ? "That stack could not be broken up."
+            : "None of those stacks could be broken up."
+          : `${stacks - refused} of ${stacks} stacks were broken up; the rest could not be.`,
+    });
+    return;
+  }
+  announcement.value =
+    stacks === 1 ? "Stack broken up" : `${stacks} stacks broken up`;
+}
+
+/**
+ * Hide, or unhide, the selection.
+ *
+ * `unhide` is the bar's reading of the selection, handed down rather than
+ * recomputed here: the button the reader pressed said which of the two it was
+ * about to do, and a second derivation could disagree with the label they
+ * just read.
+ */
+async function hideSelected(unhide) {
+  const count = store.selectedKeys.length;
+  const { refused } = await store.hideSelected(!unhide);
+  const verb = unhide ? "unhidden" : "hidden";
+  if (refused) {
+    notices.push({
+      level: "error",
+      text:
+        refused === count
+          ? `None of those workflows could be ${verb}.`
+          : `${count - refused} of ${count} workflows were ${verb}; the rest could not be.`,
+    });
+    return;
+  }
+  announcement.value =
+    count === 1 ? `Workflow ${verb}` : `${count} workflows ${verb}`;
+}
+
+/** *Make it the cover*, for a member picked inside the open stack's panel. */
+function makeCoverOfSelected() {
+  const key = store.selectedKeys[0];
+  if (key) followMove(key, store.makeCover(key));
+}
+
+// ── Rename ────────────────────────────────────────────────────────────────
+
+/**
+ * What the card is called now, shown as the field's PLACEHOLDER.
+ *
+ * **The field opens empty, and that is deliberate.** `name` is never null —
+ * the server falls back to the workflow file, then to a description built from
+ * what the card loads and does — and the payload does not say WHICH of the
+ * three it gave, so a field seeded from it would turn a generated name into a
+ * typed one the moment somebody opened Rename and pressed the button without
+ * changing anything. The card would stop following the workflow from then on,
+ * invisibly.
+ *
+ * So empty means "no name of my own", which is what an empty field looks like
+ * everywhere, and saving it clears the stored name back to the generated one.
+ * The cost is that editing a name you already typed means typing it again;
+ * the placeholder and the line under the field are what make that legible.
+ */
+const renameFallback = computed(() => onlyCard.value?.name ?? "");
+
+/**
+ * Put focus back on the roving cursor's row.
+ *
+ * Every surface this view opens is TELEPORTED — the context menu to a pair of
+ * coordinates, the rename dialog to the end of `<body>` — so none of them has
+ * an activator the browser can restore focus to on close, and it lands on
+ * `document.body`: outside the grid, with the cursor's row still marked and
+ * the next arrow key going nowhere (WCAG 2.4.3). `followMove` proved the
+ * pattern for the one path that already had it.
+ */
+function focusCursorRow() {
+  const entry = flatRows.value[cursorIndex.value];
+  if (!entry || entry.kind === "hole") return;
+  nextTick(() => rowElement(entry)?.focus());
+}
+
+/**
+ * Open whichever picture the menu's open row named.
+ *
+ * The bar decides which that is — the tile the right-click landed on, else
+ * the card's cover — so this takes the answer rather than recomputing it,
+ * which is what keeps the row's label and what it opens the same thing.
+ */
+function openCoverPicture() {
+  const id = selBarRef.value?.openTarget?.id;
+  if (id != null) openPicture(id);
+}
+
+function closeRename() {
+  renameOpen.value = false;
+  focusCursorRow();
+}
+
+function startRename() {
+  const card = onlyCard.value;
+  if (!card) return;
+  // The card's `name` is never null — the server falls back to the file, then
+  // to a built description — so the field cannot be seeded from it without
+  // turning a generated name into a typed one on the first Rename that is
+  // cancelled halfway. It opens EMPTY, with that name as the placeholder.
+  renameDraft.value = "";
+  renameOpen.value = true;
+}
+
+async function saveRename() {
+  const card = onlyCard.value;
+  closeRename();
+  if (!card) return;
+  const name = renameDraft.value.trim();
+  if (await store.renameCard(card.key, name)) {
+    // The cleared case says what the card is called NOW rather than "cleared":
+    // the server re-derives a name immediately, so "cleared" would describe a
+    // state the grid never shows. It is read back off the re-fetched card.
+    const renamed = store.cards.find((entry) => entry.key === card.key);
+    announcement.value = name
+      ? `Renamed to ${name}`
+      : `Name cleared, now ${renamed?.name ?? "unnamed"}`;
+  }
+}
+
+// ── Export, duplicate, delete ─────────────────────────────────────────────
+
+/**
+ * Save this card as a ComfyUI file somebody else can open.
+ *
+ * The scrub is the SERVER's (`GET /workflows/{key}/export`): prompts and seeds
+ * blanked, recipe LoRA slots emptied, model names this machine does not hold
+ * left out. What comes back names what it took out, and the notice says so —
+ * a file that quietly differs from the workflow it was exported from is worse
+ * than one that says which parts did not travel.
+ */
+async function exportSelected() {
+  const card = onlyCard.value;
+  if (!card) return;
+  let body;
+  try {
+    body = await exportWorkflow(card.key);
+  } catch (err) {
+    console.warn(`[workflows] could not export ${card.key}`, err);
+    notices.push({
+      level: "error",
+      text: errorMessage(err, "That workflow could not be exported."),
+    });
+    return;
+  }
+  const url = URL.createObjectURL(
+    new Blob([JSON.stringify(body.workflow, null, 2)], {
+      type: "application/json",
+    }),
+  );
+  try {
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = body.filename || "workflow.json";
+    link.click();
+  } finally {
+    // Revoked on the next frame, not immediately: the click is queued and a
+    // URL revoked in the same task can be gone before the download starts.
+    requestAnimationFrame(() => URL.revokeObjectURL(url));
+  }
+  notices.push({
+    level: "success",
+    text: body.removed?.length
+      ? `Exported ${body.filename}, without: ${body.removed.join(", ")}.`
+      : `Exported ${body.filename}.`,
+  });
+}
+
+async function duplicateSelected() {
+  const card = onlyCard.value;
+  if (!card) return;
+  const body = await store.duplicateCard(card.key);
+  if (!body) return;
+  notices.push({ level: "success", text: `Copied to ${body.name}.` });
+}
+
+/**
+ * Delete the selected cards' workflow FILES, after saying so in as many words.
+ *
+ * The one verb here that touches bytes, so the one that asks first. It is not
+ * a "permanent" delete — the file goes to the system trash — and the card and
+ * its pictures stay, which the question says, because "delete this workflow"
+ * reads like losing the pictures it made.
+ */
+async function confirmDelete() {
+  const cards = [...store.selectedCards];
+  if (!cards.length) return;
+  const what =
+    cards.length === 1
+      ? `“${cards[0].name}”`
+      : `${cards.length} workflow files`;
+  const ok = await confirm({
+    title:
+      cards.length === 1
+        ? "Delete this workflow file?"
+        : "Delete these workflow files?",
+    message:
+      `The file for ${what} goes to your system trash. The card stays in ` +
+      "this grid and so do the pictures it made — what is lost is the ability " +
+      "to run it from a file on this machine.",
+    confirmLabel: "Delete",
+    danger: true,
+  });
+  if (!ok) return;
+  const { refused } = await store.deleteSelected();
+  if (refused) {
+    notices.push({
+      level: "error",
+      text:
+        refused === cards.length
+          ? "None of those workflow files could be deleted."
+          : `${cards.length - refused} of ${cards.length} files were deleted; the rest could not be.`,
+    });
+    return;
+  }
+  announcement.value =
+    cards.length === 1
+      ? "Workflow file deleted"
+      : `${cards.length} workflow files deleted`;
+}
+
+// ── The card menu ─────────────────────────────────────────────────────────
+
+/**
+ * Right-click a card: the full verb inventory, at the pointer.
+ *
+ * The file-manager rule, which is the shelf's and the picture grid's: right-
+ * clicking a card that is NOT selected selects it and acts on it alone;
+ * right-clicking one that IS leaves the selection alone, so a menu opened on
+ * any of forty selected cards acts on all forty. Without that, the commonest
+ * gesture in a bulk edit — select, then right-click one of them — would
+ * silently drop the other thirty-nine.
+ *
+ * A MEMBER row inside an open stack panel is not reached here: it carries its
+ * own `@contextmenu` and `StackPanel`'s member menu (#1405), which holds the
+ * verbs that are only about a row inside a run.
+ */
+function openRowMenu(index, event) {
+  const entry = flatRows.value[index];
+  if (!entry || entry.kind === "hole") return;
+  cursorId.value = entry.id;
+  if (!store.selectedKeys.includes(entry.key)) {
+    store.select(entry.key, { whole: entry.kind === "card" });
+  }
+  selBarRef.value?.openContextMenu(
+    event.clientX,
+    event.clientY,
+    pictureUnder(event),
+  );
+}
+
+/**
+ * The cover tile a pointer event landed on, or null.
+ *
+ * Read off the EVENT's own target rather than tracked by the card: a
+ * right-click on a card's third thumbnail and one on its name row are the same
+ * `contextmenu` on the same row, and the only thing that tells them apart is
+ * where the pointer was. The tile carries its own id and position
+ * (`WorkflowCard.vue`), so this is a lookup rather than a second piece of
+ * state that can go stale.
+ *
+ * `closest`, not the target itself: the press lands on the `<img>` inside the
+ * cell rather than on the cell.
+ */
+function pictureUnder(event) {
+  const tile = event.target?.closest?.(".wf-card__pic");
+  const id = Number(tile?.dataset.pictureId);
+  if (!tile || !Number.isFinite(id)) return null;
+  return {
+    id,
+    index: Number(tile.dataset.pictureIndex) || 1,
+    total: Number(tile.dataset.pictureTotal) || 1,
+  };
+}
+
+/**
+ * Open the card menu over the cursor row's own box, for the keyboard's sake.
+ *
+ * **Nothing to point at is nothing to open.** On a padding hole, or with the
+ * cursor out of range of a list that has just shrunk, there is no card the
+ * menu would act on — it opened all-disabled at viewport (0, 0), which is a
+ * menu about nothing in the corner of the screen.
+ */
+function openMenuAtCursor() {
+  const entry = flatRows.value[cursorIndex.value];
+  if (!entry || entry.kind === "hole") return;
+  if (!store.selectedKeys.includes(entry.key)) {
+    store.select(entry.key, { whole: entry.kind === "card" });
+  }
+  const box = rowElement(entry)?.getBoundingClientRect();
+  selBarRef.value?.openContextMenu(
+    box ? box.left + 24 : 0,
+    box ? box.bottom : 0,
+  );
+}
+
+/**
+ * *Select all shown*, from the pill's count menu and from Ctrl/Cmd+A.
+ *
+ * Whole stacks: a stack card on screen stands for its members, so "all shown"
+ * means the cards the grid is drawing, expanded the way clicking each of them
+ * would expand them.
+ */
+function selectAllShown() {
+  store.selectRange([
+    ...new Set(store.sortedCards.flatMap((card) => store.stackKeys(card.key))),
+  ]);
+  // **Said aloud, because nothing else says it.** Ctrl/Cmd+A can select the
+  // whole grid without moving the cursor or changing a single visible row a
+  // screen reader is on, and the pill is a `role="toolbar"` rather than a live
+  // region — so the selection it counts changed in silence.
+  announceSelection();
+}
+
+/** How many cards are selected, for the live region. */
+function announceSelection() {
+  const n = store.selectedKeys.length;
+  announcement.value = n === 1 ? "1 workflow selected" : `${n} workflows selected`;
+}
+
 // ── Add a workflow file ───────────────────────────────────────────────────
 
 /** Larger than any real workflow; a bigger file is not read into memory. */
@@ -1138,6 +1709,10 @@ async function filesChosen(event) {
   min-height: 0;
   height: 100%;
   overflow: hidden;
+  /* The positioned ancestor `.selbar-float` is absolute against: only the
+     container knows where its list ends, which is why the shared float rule
+     is absolute rather than fixed (`App.css`). */
+  position: relative;
 }
 
 /* The retired workflow shelf's box recipe, carried over so the screen that
@@ -1214,6 +1789,16 @@ async function filesChosen(event) {
   color: rgba(var(--v-theme-on-surface), 0.6);
   font-size: var(--text-sm);
 }
+/* The rename dialog's helper line. Deliberately NOT `.wfv-note`: that class is
+   a band the GRID shows when it has something to say, and this is body copy
+   inside a dialog. */
+.wfv-hint {
+  margin: 0;
+  padding-top: var(--space-3);
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  font-size: var(--text-sm);
+}
+
 .wfv-note-clear {
   /* The inline-button reset again — without `font: inherit` this one also
      loses `.wfv-note`'s `--text-sm` to the UA's button size. */

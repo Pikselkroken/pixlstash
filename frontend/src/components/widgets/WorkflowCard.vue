@@ -15,7 +15,20 @@
       class="wf-card__cover"
       :class="`wf-card__cover--${coverCells.length}`"
     >
-      <span v-for="(cell, i) in coverCells" :key="i" class="wf-card__pic">
+      <!-- Inert, as they have always been: a cell is a `<span>` and a click
+           on it selects the card like a click anywhere else. The tiles carry
+           their picture's identity only so a RIGHT-CLICK can tell the host
+           which one the pointer was over (#1455) - opening a picture is a
+           context-menu verb, never a click, so nothing here takes a press and
+           nothing is drawn over the picture. -->
+      <span
+        v-for="(cell, i) in coverCells"
+        :key="i"
+        class="wf-card__pic"
+        :data-picture-id="cell.id ?? undefined"
+        :data-picture-index="cell.id == null ? undefined : i + 1"
+        :data-picture-total="cell.id == null ? undefined : coverCells.length"
+      >
         <img
           v-if="cell.src"
           :src="cell.src"
@@ -278,11 +291,15 @@ const coverCells = computed(() => {
     return Array(Math.min(props.card.picture_count ?? 1, 3)).fill({
       src: "",
       style: null,
+      id: null,
     });
   }
   return covers.value.map((cover) => ({
     src: workflowCoverUrl(cover),
     style: coverCellStyle(cover, count),
+    // `?? null`, so a payload served before #1455 offers the menu no picture
+    // rather than one named `undefined`.
+    id: cover.picture_id ?? null,
   }));
 });
 // Ratings run 1-5; 0 or null is "not rated".

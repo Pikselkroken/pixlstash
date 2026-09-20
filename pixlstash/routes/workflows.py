@@ -399,6 +399,17 @@ class WorkflowCover(BaseModel):
     """
 
     url: str
+    picture_id: int = Field(
+        description=(
+            "The picture this cover draws, so a client can OPEN it (#1455). "
+            "The id is inside `url` and parsing it back out is a path shape "
+            "rather than an interface. It sits on the cover rather than in a "
+            "`cover_ids` list beside `covers` - which is what it was before "
+            "this model existed - because two lists paired by position are "
+            "two lists that can come apart, and nothing but their "
+            "construction would keep them in step."
+        )
+    )
     thumbnail_width: int | None = None
     thumbnail_height: int | None = None
     square_crop_x: int | None = None
@@ -1005,6 +1016,7 @@ def _covers(covers) -> list[WorkflowCover]:
         strip.append(
             WorkflowCover(
                 url=f"/pictures/thumbnails/{cover.picture_id}.webp?v={version}",
+                picture_id=cover.picture_id,
                 thumbnail_width=cover.thumbnail_width,
                 thumbnail_height=cover.thumbnail_height,
                 square_crop_x=cover.square_crop_x,

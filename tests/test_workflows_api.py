@@ -3914,6 +3914,32 @@ def test_the_cover_strip_is_the_cards_best_three_across_its_variants(workflow_en
     ]
 
 
+def test_a_cover_names_the_picture_it_draws(workflow_env):
+    """Every cover carries `picture_id`, and it is the one in its own URL.
+
+    The Workflows grid opens the picture a cover draws (#1455), and the only
+    other way to that id is to parse it back out of the thumbnail path - which
+    is a path shape, not an interface.
+
+    **It is a field ON the cover, not a `cover_ids` list beside `covers`**,
+    which is what it was until #1465 gave each cover an object of its own. Two
+    lists paired by position are two lists that can come apart, and a strip
+    that dropped an entry without its id would open picture 2 from the tile
+    showing picture 3. One object cannot do that - so what is left to assert
+    is that the id and the URL name the same picture, which is checked on
+    every cover of every card the grid serves.
+    """
+    cards = _cards(workflow_env.owner)["cards"]
+    assert cards, "the grid served no cards - the comparison below is vacuous"
+    drawn = 0
+    for card in cards:
+        for cover in card["covers"]:
+            in_url = int(cover["url"].split("/")[-1].split(".webp")[0])
+            assert cover["picture_id"] == in_url, card["key"]
+            drawn += 1
+    assert drawn, "no card in the fixture has a cover - nothing was compared"
+
+
 def test_a_cover_carries_the_stored_crop_rectangle_or_nothing(workflow_env):
     """The face-weighted rectangle travels with the cover, per picture (#1465).
 
@@ -3954,6 +3980,8 @@ def test_a_cover_carries_the_stored_crop_rectangle_or_nothing(workflow_env):
                 f"/pictures/thumbnails/{ids['busy_one.png']}.webp"
                 f"?v={ImageUtils.thumbnail_cache_version(384, 561, None)}"
             ),
+            # The picture the cover draws, so a client can open it (#1455).
+            "picture_id": ids["busy_one.png"],
             **rectangle,
         }
         for cover in covers[1:]:
@@ -4000,6 +4028,16 @@ def test_an_owner_chosen_cover_leads_the_strip(workflow_env):
     assert _cover_urls(card)[1:] == [
         f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
         f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
+    ]
+    # And each cover's `picture_id` follows the REBUILT strip, not the computed
+    # one (#1455). This is the one card in the fixture whose strip is
+    # deliberately not in id order - busy_four was imported last and now leads
+    # - so it is the only place an id taken before the owner's choice was
+    # applied shows up as wrong rather than as coincidentally right.
+    assert [cover["picture_id"] for cover in card["covers"]] == [
+        ids["busy_four.png"],
+        ids["busy_one.png"],
+        ids["busy_two.png"],
     ]
 
     # Bin the chosen cover and the card falls back to its computed strip rather
@@ -4113,6 +4151,8 @@ def test_an_owner_chosen_cover_carries_its_crop_rectangle_too(workflow_env):
                 f"/pictures/thumbnails/{ids['forgotten.png']}.webp"
                 f"?v={ImageUtils.thumbnail_cache_version(512, 384, None)}"
             ),
+            # The picture the cover draws, so a client can open it (#1455).
+            "picture_id": ids["forgotten.png"],
             **rectangle,
         }
     finally:

@@ -83,7 +83,7 @@
           @contextmenu.prevent="openMenu(member, index, $event)"
         >
           <div class="stack-panel__cell" role="gridcell">
-            <WorkflowCard
+              <WorkflowCard
               :card="member"
               member
               :selected="!selected && selectedKeys.includes(member.key)"
@@ -362,6 +362,7 @@ const emit = defineEmits([
   "move",
   "unstack",
   "hide",
+  "open-picture",
 ]);
 
 const prefs = useWorkflowPrefsStore();
@@ -508,6 +509,8 @@ function factChips(member, index) {
 const menuOpen = ref(false);
 const menuAt = ref([0, 0]);
 const menuMember = ref(null);
+/** The cover tile the menu was opened on, or null. See `pictureUnder`. */
+const menuPicture = ref(null);
 const menuIndex = ref(0);
 
 /**
@@ -522,12 +525,36 @@ const menuIndex = ref(0);
  * on open and not on change, so reopening is also the only thing that moves
  * it.
  */
+/**
+ * The cover tile a pointer event landed on, or null.
+ *
+ * A member card's covers are buttons (#1455), so a right-click on the third
+ * thumbnail and one on the row's name are the same `contextmenu` on the same
+ * row — the pointer's position is the only thing that tells them apart. The
+ * tile carries its own id and position, so this is a lookup rather than state.
+ *
+ * Always null in List, which draws its own inert thumbs rather than mounting
+ * a card; the menu then offers the member's cover, which is what "this row's
+ * picture" means when nothing narrower was pointed at.
+ */
+function pictureUnder(event) {
+  const tile = event.target?.closest?.(".wf-card__pic");
+  const id = Number(tile?.dataset.pictureId);
+  if (!tile || !Number.isFinite(id)) return null;
+  return {
+    id,
+    index: Number(tile.dataset.pictureIndex) || 1,
+    total: Number(tile.dataset.pictureTotal) || 1,
+  };
+}
+
 async function openMenu(member, index, event) {
   emit("select", member.key, {});
   menuOpen.value = false;
   await nextTick();
   menuMember.value = member;
   menuIndex.value = index;
+  menuPicture.value = pictureUnder(event);
   menuAt.value = [event.clientX, event.clientY];
   menuOpen.value = true;
 }
@@ -573,7 +600,23 @@ const menuItems = computed(() => {
   if (!member) return [];
   const index = menuIndex.value;
   const last = props.members.length - 1;
+  const picture = menuPicture.value;
+  const openId = picture?.id ?? member.covers?.[0]?.picture_id ?? null;
   return [
+    // **The keyboard's only route to a member's pictures**, and the pointer's
+    // way to say WHICH one. The tiles are at `tabindex="-1"` because the grid
+    // owns Tab, so without this row a member card's covers could be opened by
+    // pointer alone — the same gap the grid's own menu had (#1455).
+    {
+      id: "open-picture",
+      label:
+        picture && picture.total > 1
+          ? `Open picture ${picture.index} of ${picture.total}`
+          : "Open picture",
+      icon: "image-outline",
+      disabled: openId == null,
+      run: () => emit("open-picture", openId),
+    },
     {
       id: "cover",
       label: "Make it the cover",
