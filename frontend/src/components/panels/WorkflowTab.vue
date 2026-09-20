@@ -43,7 +43,19 @@
     <template v-else>
       <div class="inspector-section wftab-head">
         <p class="wftab-title">{{ card.name }}</p>
-        <p class="wftab-sub">{{ subtitle }}</p>
+        <p class="wftab-sub">
+          {{ subtitlePrefix
+          }}<button
+            v-if="card.picture_count"
+            class="wftab-pictures"
+            type="button"
+            data-testid="wftab-show-pictures"
+            :aria-label="`Show all ${picturesLabel}`"
+            @click="showPictures(card)"
+          >
+            {{ picturesLabel }}</button
+          ><template v-else>{{ picturesLabel }}</template>
+        </p>
       </div>
 
       <div class="inspector-section">
@@ -251,6 +263,7 @@ import {
   stackWorkflows,
   workflowCoverUrl,
 } from "../../api/workflows";
+import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
@@ -278,6 +291,7 @@ const MARK_OPTIONS = [
 const DEFAULT_PINS = ["steps", "cfg", "guidance", "width", "height"];
 
 const store = useWorkflowsStore();
+const { showPictures } = useWorkflowPictures();
 const sidebarStore = useSidebarStore();
 const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
@@ -338,18 +352,19 @@ const parentStack = computed(() => {
   );
 });
 
-const subtitle = computed(() => {
-  // Plain numbers, as `WorkflowsView`'s own subtitle writes them: the shelf's
-  // grouped spelling went with the shelf in F1b, and this screen never used it.
+// Plain numbers, as `WorkflowsView`'s own subtitle writes them: the shelf's
+// grouped spelling went with the shelf in F1b, and this screen never used it.
+// Split from its prefix so the figure alone is F7's *Show all N pictures*
+// link, and the words that place the card stay text.
+const picturesLabel = computed(() => {
   const count = card.value?.picture_count ?? 0;
-  const pictures = `${count} ${count === 1 ? "picture" : "pictures"}`;
-  if (parentStack.value) {
-    return `In the ${parentStack.value.name} stack · ${pictures}`;
-  }
-  if ((card.value?.stack_size ?? 1) > 1) {
-    return `Showing the cover · ${pictures}`;
-  }
-  return pictures;
+  return `${count} ${count === 1 ? "picture" : "pictures"}`;
+});
+
+const subtitlePrefix = computed(() => {
+  if (parentStack.value) return `In the ${parentStack.value.name} stack · `;
+  if ((card.value?.stack_size ?? 1) > 1) return "Showing the cover · ";
+  return "";
 });
 
 const checkpointLabel = computed(() => {
@@ -742,6 +757,22 @@ watch(selectedKey, (key) => loadDetail(key), { immediate: true });
   margin: 0;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+/* Underlined, not just coloured: it sits inside a line of secondary text, and
+   a hue change alone would not say which words are the control. */
+.wftab-pictures {
+  /* `padding: 0; font: inherit` is the shipped inline-button reset
+     (`EmptyScrapHeap.vue`): the global one drops the border and background
+     but a <button> still inherits neither the UA padding nor its typeface,
+     and this one sits mid-sentence in a line the template glues together
+     whitespace-free. */
+  padding: 0;
+  font: inherit;
+  color: rgb(var(--v-theme-on-surface));
+  text-decoration: underline;
+}
+.wftab-pictures:hover {
+  color: rgb(var(--v-theme-primary));
 }
 
 .wftab-head {

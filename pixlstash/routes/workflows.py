@@ -378,6 +378,19 @@ class WorkflowCard(BaseModel):
     imported: bool = Field(
         False, description="A workflow file on this machine runs this card."
     )
+    hidden: bool = Field(
+        False,
+        description=(
+            "The owner has hidden this card. **On the GRID** it is true only "
+            "for a card `include_hidden` let in, so a client that did not ask "
+            "never sees it set - but one that did has to mark those cards, or "
+            "the checkbox silently mixes them into the grid they were kept "
+            "out of. **On the detail route it is always the card's own "
+            "state**, with no flag involved: `GET /workflows/cards/{key}` "
+            "opens a hidden card by design, which is how it can be unhidden. "
+            "`WorkflowCardDetail.hidden` is the same fact beside it."
+        ),
+    )
     models: list[WorkflowSlotModel] = Field(default_factory=list)
     loras: list[WorkflowSlotModel] = Field(default_factory=list)
     differs_by: list[str] = Field(default_factory=list)
@@ -423,6 +436,24 @@ class WorkflowCard(BaseModel):
             "The Bayesian cover rank the grid is ordered by. Not `rating`: "
             "it is smoothed towards the library's mean so cards can be "
             "ordered against each other, and is meaningless on its own."
+        ),
+    )
+    ghosts: int = Field(
+        0,
+        description=(
+            "Picture ghosts this card's variants keep for the active library: "
+            "the thumbnail and prompt of a picture the library no longer has."
+        ),
+    )
+    model_ghosts: int = Field(
+        0,
+        description=(
+            "How many VALUES this card's variants name that the shelf does "
+            "not hold - a model filename, or a `*_sha256` digest, which is "
+            "what the shelf judges. A card naming one missing model by both "
+            "counts 2, so this is not a count of models: read it as "
+            "'something here is gone'. With `ghosts`, what the Filters "
+            "panel's Ghosts row asks about."
         ),
     )
 
@@ -1014,6 +1045,7 @@ def _card(figure, defaults=()) -> WorkflowCard:
         type=figure.card.workflow_type,
         type_label=_TYPE_LABELS.get(figure.card.workflow_type),
         imported=figure.card.imported,
+        hidden=figure.card.hidden,
         models=_slot_models(figure.models),
         loras=_slot_models(figure.loras),
         differs_by=figure.differs_by,
@@ -1040,6 +1072,8 @@ def _card(figure, defaults=()) -> WorkflowCard:
             key for key in figure.member_keys if key != figure.card.workflow_key
         ],
         stack_id=figure.stack_id,
+        ghosts=figure.ghosts,
+        model_ghosts=figure.model_ghosts,
     )
 
 
@@ -1260,13 +1294,34 @@ def create_router(server) -> APIRouter:
         description=(
             "Every workflow card this machine holds, in cover-rank order, one "
             "card per stack. Hidden cards and one-offs are counted rather than "
-            "listed."
+            "listed, unless the two flags ask for them."
         ),
         response_model=WorkflowCards,
     )
-    def list_cards(request: Request):
+    def list_cards(
+        request: Request,
+        include_hidden: bool = Query(
+            False,
+            description=(
+                "List hidden cards too - the Filters panel's *Show hidden "
+                "workflows*. `hidden` still counts them either way."
+            ),
+        ),
+        include_one_offs: bool = Query(
+            False,
+            description=(
+                "List one-offs too - *Hide one-offs* unticked. `one_offs` "
+                "still counts them either way."
+            ),
+        ),
+    ):
         server.auth.ensure_secure_when_required(request)
-        grid = read_grid(_hub(), server.vault)
+        grid = read_grid(
+            _hub(),
+            server.vault,
+            include_hidden=include_hidden,
+            include_one_offs=include_one_offs,
+        )
         return WorkflowCards(
             cards=[_card(figure) for figure in grid.cards],
             one_offs=grid.one_offs,

@@ -7,7 +7,13 @@
 // nothing translates between the two and inverts a meaning on the way:
 //
 //   {
-//     key, name, type, type_label, imported,
+//     key, name, type, type_label, imported, hidden,
+//                                       // `hidden` is only ever true when the
+//                                       // grid asked for the hidden cards
+//                                       // (F7's *Show hidden workflows*), and
+//                                       // `factChips` leads the row with it:
+//                                       // unmarked, such a card reads as an
+//                                       // ordinary one.
 //                                       // `type_label` is `type` as ComfyUI
 //                                       // spells it ("Text to Image"); the
 //                                       // name row and the type chip both
@@ -37,6 +43,12 @@
 //                                       // three are null together until the
 //                                       // picture has been processed (#1465).
 //     stack_size,                       // 2 or more makes the card a stack
+//     member_keys,                      // the stack's OTHER cards, so it is
+//                                       // `stack_size - 1` long. The service
+//                                       // sets the whole list INCLUDING this
+//                                       // card; `routes/workflows.py` is what
+//                                       // excludes self on the way out, and
+//                                       // fills it for a stack only.
 //     saved_recipe_count,
 //     defaults: [{ label, slot_label, input_name, value, provenance }],
 //                                       // `provenance` is best | all | edited
@@ -52,6 +64,14 @@
 //                                       // order` is addressed by it and
 //                                       // nothing else on the card derives
 //                                       // it (F2, #1405).
+//     ghosts, model_ghosts,             // what the card keeps of something
+//                                       // deleted, for F7's Ghosts row.
+//                                       // `ghosts` are this library's picture
+//                                       // ghosts; `model_ghosts` counts
+//                                       // VALUES the shelf does not hold (a
+//                                       // filename or a digest), so it is not
+//                                       // a count of models. Neither is a
+//                                       // library total - see the route.
 //     last_used,                        // ISO, or null when the card has no
 //                                       // kept pictures. The *Recently used*
 //                                       // sort; null sorts below every date.
@@ -187,8 +207,15 @@ export function loraChips(card) {
  */
 export function factChips(card) {
   const labels = isStack(card)
-    ? (card.differs_by ?? [])
+    ? // **First, and on a stack too.** A hidden card is only ever drawn
+      // because somebody ticked *Show hidden workflows* (F7), and the row
+      // clips to "+N" — a mark that can be clipped away is a card that reads
+      // as an ordinary one in the grid it was deliberately kept out of.
+      [card.hidden ? "hidden" : null, ...(card.differs_by ?? [])].filter(
+        Boolean,
+      )
     : [
+        card.hidden ? "hidden" : null,
         ...(card.differs_by ?? []),
         // The SERVED label, so the chip and a generated name say the type in
         // one vocabulary rather than reading `Text to Image` on row 1 and

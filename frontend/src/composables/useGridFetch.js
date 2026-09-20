@@ -203,6 +203,9 @@ export function useGridFetch(
       similarityCharacter: sortStore.selectedSimilarityCharacter ?? null,
       comfyuiModelFilter: filterStore.comfyuiModelFilter ?? [],
       comfyuiLoraFilter: filterStore.comfyuiLoraFilter ?? [],
+      // Changes which pictures the grid shows, so an unforced fetch must not
+      // early-return as a no-op against the previous state's key.
+      workflowFilter: filterStore.workflowFilter?.key ?? null,
       referenceFolderIdFilter: referenceFolderIdFilter.value ?? null,
       filePathPrefixFilter: filePathPrefixFilter.value ?? null,
       importSourceFolderFilter: importSourceFolderFilter.value ?? null,
@@ -385,6 +388,9 @@ export function useGridFetch(
     (filterStore.comfyuiLoraFilter || []).forEach((l) =>
       params.append("comfyui_lora", l),
     );
+    if (filterStore.workflowFilter) {
+      params.append("workflow_key", filterStore.workflowFilter.key);
+    }
     if (filterStore.minScoreFilter != null) {
       params.append("min_score", filterStore.minScoreFilter);
     }
@@ -506,6 +512,9 @@ export function useGridFetch(
     (filterStore.comfyuiLoraFilter || []).forEach((l) =>
       params.append("comfyui_lora", l),
     );
+    if (filterStore.workflowFilter) {
+      params.append("workflow_key", filterStore.workflowFilter.key);
+    }
     if (filterStore.minScoreFilter != null) {
       params.append("min_score", filterStore.minScoreFilter);
     }
@@ -1036,6 +1045,10 @@ export function useGridFetch(
         (filterStore.comfyuiLoraFilter || []).forEach((l) =>
           _filterP.append("comfyui_lora", l),
         );
+        // Filter params: one workflow card's pictures (F7)
+        if (filterStore.workflowFilter) {
+          _filterP.set("workflow_key", filterStore.workflowFilter.key);
+        }
         // Filter params: tag filters
         (filterStore.tagFilter || []).forEach((t) => _filterP.append("tag", t));
         (filterStore.tagRejectedFilter || []).forEach((t) =>

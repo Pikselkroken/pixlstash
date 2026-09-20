@@ -255,6 +255,85 @@ describe("one stack open at a time", () => {
   });
 });
 
+describe("a stack is selected whole", () => {
+  it("one click on a stack takes its members with it", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    // The cover key alone was the bug: a card marked "3 workflows" selected
+    // one of them, the one at the top of the pile.
+    store.select("the-stack", { whole: true });
+    expect(store.selectedKeys).toEqual(["the-stack", "m1", "m2"]);
+  });
+
+  it("a key means one card unless the caller asks for the stack", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    // A member card is not in `cards` at all.
+    store.select("m1");
+    expect(store.selectedKeys).toEqual(["m1"]);
+
+    // The cover IS, under the very key the panel's first row carries — so
+    // leaving `whole` off is what keeps that row separable from the stack it
+    // heads, and what keeps the `?topology=` deep link naming one workflow.
+    store.select("the-stack");
+    expect(store.selectedKeys).toEqual(["the-stack"]);
+  });
+
+  it("Ctrl adds the whole stack, and takes the whole stack back out", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    store.select("workhorse");
+    store.select("the-stack", { additive: true, whole: true });
+    expect(store.selectedKeys).toEqual(["workhorse", "the-stack", "m1", "m2"]);
+
+    store.select("the-stack", { additive: true, whole: true });
+    expect(store.selectedKeys).toEqual(["workhorse"]);
+  });
+
+  it("Ctrl on a half-selected stack completes it rather than emptying it", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    // The half-selected state you actually reach: select the stack, then take
+    // one member out. Toggling on the CLICKED key alone emptied this, because
+    // the cover is still in — so the gesture that means "make this whole" did
+    // the opposite.
+    store.select("the-stack", { whole: true });
+    store.select("m1", { additive: true });
+    expect(store.selectedKeys).toEqual(["the-stack", "m2"]);
+
+    store.select("the-stack", { additive: true, whole: true });
+    expect(store.selectedKeys).toEqual(["the-stack", "m2", "m1"]);
+
+    // Whole now, so the next Ctrl does empty it.
+    store.select("the-stack", { additive: true, whole: true });
+    expect(store.selectedKeys).toEqual([]);
+  });
+
+  it("the other half-selected state completes too, and no key lands twice", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    store.select("m1");
+    store.select("the-stack", { additive: true, whole: true });
+    expect(store.selectedKeys).toEqual(["m1", "the-stack", "m2"]);
+  });
+
+  it("stackKeys answers nothing for no stack, and itself for an unknown key", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    expect(store.stackKeys(null)).toEqual([]);
+    expect(store.stackKeys("not-a-card")).toEqual(["not-a-card"]);
+    expect(store.stackKeys("never-kept-a-picture")).toEqual([
+      "never-kept-a-picture",
+    ]);
+  });
+});
+
 describe("a session reset stops the old session's answers landing", () => {
   it("drops a fetch and a member request that resolve after the reset", async () => {
     // Without an epoch stamp both of these write the previous credential's

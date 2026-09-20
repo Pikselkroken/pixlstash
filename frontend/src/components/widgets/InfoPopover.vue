@@ -14,9 +14,11 @@
     </template>
 
     <!-- Focused on open, so a screen reader announces the panel and its virtual
-         cursor lands inside it. VMenu's own focus handling only moves focus to
-         the first FOCUSABLE child, and this panel holds none; VOverlay returns
-         focus to ⓘ on Escape or a click outside. -->
+         cursor lands at the TOP of it. The panel holds one focusable child
+         since F7 - the picture count is a link - and VMenu's own handling
+         would move focus to it, landing the reader mid-panel on a control
+         instead of on the thing they asked to read. VOverlay returns focus to
+         ⓘ on Escape or a click outside. -->
     <div
       ref="panelEl"
       class="tbm info-popover"
@@ -27,7 +29,19 @@
     >
       <span class="tbm-caret tbm-caret--icon-sm-end" aria-hidden="true"></span>
       <p class="info-popover__title">{{ card.name }}</p>
-      <p class="info-popover__sub">{{ subtitle }}</p>
+      <p class="info-popover__sub">
+        {{ subtitlePrefix
+        }}<button
+          v-if="card.picture_count"
+          class="info-popover__link"
+          type="button"
+          data-testid="info-show-pictures"
+          :aria-label="`Show all ${picturesLabel}`"
+          @click="showPictures(card)"
+        >
+          {{ picturesLabel }}</button
+        ><template v-else>{{ picturesLabel }}</template>
+      </p>
 
       <section class="info-popover__group">
         <span class="tbm-label">Models</span>
@@ -81,12 +95,15 @@
 import { computed, nextTick, ref, watch } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
+import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { isStack } from "../../utils/workflowCard";
 
 const props = defineProps({
   /** One workflow card (see utils/workflowCard.js for the shape). */
   card: { type: Object, required: true },
 });
+
+const { showPictures } = useWorkflowPictures();
 
 const open = ref(false);
 const panelEl = ref(null);
@@ -97,13 +114,19 @@ watch(open, async (isOpen) => {
   panelEl.value?.focus();
 });
 
-const subtitle = computed(() => {
+// Split in two so the figure can be the link (F7) while the words around it
+// stay text. "Found in" leads the line on a lone card and follows the stack
+// count on a stack, which is the only reason the prefix is not a constant.
+const picturesLabel = computed(() => {
   const n = props.card.picture_count ?? 0;
-  const pictures = n === 1 ? "found in 1 picture" : `found in ${n} pictures`;
-  return isStack(props.card)
-    ? `Stack of ${props.card.stack_size} workflows · ${pictures}`
-    : pictures.charAt(0).toUpperCase() + pictures.slice(1);
+  return n === 1 ? "1 picture" : `${n} pictures`;
 });
+
+const subtitlePrefix = computed(() =>
+  isStack(props.card)
+    ? `Stack of ${props.card.stack_size} workflows · found in `
+    : "Found in ",
+);
 
 // Every slot, not just the checkpoint: a stack whose difference reads "other
 // models" has to have those models listed somewhere, and this is the somewhere.
@@ -133,6 +156,19 @@ const models = computed(() => [
   margin: 0;
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
+}
+
+/* The one control in a panel that otherwise holds none, so it carries the
+   underline that says so rather than relying on colour alone. */
+.info-popover__link {
+  /* The inline-button reset, as `.wftab-pictures` carries it. */
+  padding: 0;
+  font: inherit;
+  color: rgb(var(--v-theme-on-surface));
+  text-decoration: underline;
+}
+.info-popover__link:hover {
+  color: rgb(var(--v-theme-primary));
 }
 
 .info-popover__sub {

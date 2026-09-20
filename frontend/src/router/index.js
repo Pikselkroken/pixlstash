@@ -42,8 +42,19 @@ import App from "../App.vue";
 //                                  the workflow shelf's picture tiles were its
 //                                  only producer and went with the shelf in
 //                                  F1b, so every close takes the absent
-//                                  branch - stay put, drop ?overlay= - until
-//                                  F7's "Show all N pictures" chip.
+//                                  branch - stay put, drop ?overlay=.
+//                                  **F7's "Show all N pictures" was expected
+//                                  to be the new producer and deliberately is
+//                                  not.** The shelf's tiles opened a PICTURE
+//                                  from a screen with no grid, so a close had
+//                                  nowhere to land; F7's chip navigates to the
+//                                  grid itself and the grid is the
+//                                  destination. Setting `from` there would
+//                                  send the first close back to /workflows and
+//                                  out of the 184 pictures the reader just
+//                                  asked to browse. A producer is still
+//                                  wanted, from a link that opens one picture
+//                                  directly.
 //                                  (see utils/overlayRoute.js)
 //   ?review=board                → Open the tag-review overlay on the health board
 //   ?review=<reviewId>           → …on that review (open session or archived receipt)

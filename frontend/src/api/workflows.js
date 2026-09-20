@@ -44,10 +44,22 @@ export function workflowCoverUrl(cover) {
 /**
  * The Workflows grid: one card per stack, plus what it left out (v1.12 B3).
  *
+ * `one_offs` and `hidden` are counted over the same sets whatever the two
+ * flags say, so the Filters panel can label a ticked checkbox with the number
+ * it is letting in (F7).
+ *
+ * @param {{includeHidden?: boolean, includeOneOffs?: boolean}} [options]
  * @returns {Promise<{cards: Array<Object>, one_offs: number, hidden: number}>}
  */
-export async function listWorkflowCards() {
-  const body = await unwrap(apiClient.get("/workflows/cards"));
+export async function listWorkflowCards({
+  includeHidden = false,
+  includeOneOffs = false,
+} = {}) {
+  const params = new URLSearchParams();
+  if (includeHidden) params.set("include_hidden", "true");
+  if (includeOneOffs) params.set("include_one_offs", "true");
+  const query = params.size ? `?${params}` : "";
+  const body = await unwrap(apiClient.get(`/workflows/cards${query}`));
   return {
     cards: Array.isArray(body?.cards) ? body.cards : [],
     one_offs: body?.one_offs ?? 0,
