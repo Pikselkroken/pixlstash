@@ -1060,7 +1060,9 @@ def editor_env():
     """A server holding one picture whose only graph is the editor's.
 
     Module-scoped: standing the server up costs more than every assertion in
-    this section put together, and none of them writes to the picture.
+    this section put together, and none of them changes the picture it yields.
+    Two of them import a SECOND picture into it, which is why the assertions
+    here name ids rather than counting rows.
     """
     temp_dir = tempfile.TemporaryDirectory()
     config_path = os.path.join(temp_dir.name, "server-config.json")
@@ -1098,20 +1100,6 @@ def editor_env():
         gc.collect()
 
 
-@pytest.fixture(autouse=True)
-def _forget_object_info():
-    """Drop the route's `/object_info` cache around every test in this file.
-
-    The editor read reuses a map for a minute, and these tests change what
-    ComfyUI answers between them - so without this a test asserting "ComfyUI is
-    unreachable" would be served the previous test's map and pass for the wrong
-    reason.
-    """
-    comfyui_module._forget_cached_object_info()
-    yield
-    comfyui_module._forget_cached_object_info()
-
-
 def _editor_comfyui_reachable(monkeypatch):
     monkeypatch.setattr(
         comfyui_module, "fetch_object_info", lambda url: dict(EDITOR_OBJECT_INFO)
@@ -1143,6 +1131,10 @@ class TestAnEditorGraphIsRecognised:
         assert body["models"] == ["sd_xl_base_1.0.safetensors"]
         assert body["node_classes"] == EXPECTED_CLASSES
         assert body["seed_inputs"], "a rebuilt graph must still offer a new seed"
+        # The map was read to REBUILD the graph, not to judge it. `?preflight=
+        # false` asked for no check, and a verdict from a map up to a minute
+        # old is not one this answer may report as made.
+        assert body["preflight"]["checked"] is False
 
     def test_the_editor_read_does_ask_comfyui_even_with_preflight_off(
         self, editor_env, monkeypatch
@@ -1214,11 +1206,29 @@ class TestAnEditorGraphIsRecognised:
         r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["reason"] == "editor_graph"
+        # **Its own reason.** "This workflow cannot be rebuilt" and "start
+        # ComfyUI" send the reader to two different places, and the first read
+        # as permanent when it was said about the second.
+        assert body["reason"] == "comfyui_unreachable"
         assert body["conversion_problems"] == [
             "PixlStash could not ask ComfyUI which nodes it has"
         ]
         assert body["positive_prompt"] == "a cat in a hat"
+
+    def test_a_graph_this_comfyui_cannot_read_keeps_the_other_reason(
+        self, editor_env, monkeypatch
+    ):
+        """The control for the split above: a reachable ComfyUI that is missing
+        a node pack is a fact about the file, not about the machine."""
+        _server, client, pic_id = editor_env
+        partial = {
+            k: v for k, v in EDITOR_OBJECT_INFO.items() if k != "CheckpointLoaderSimple"
+        }
+        monkeypatch.setattr(comfyui_module, "fetch_object_info", lambda url: partial)
+        body = client.get(
+            f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false"
+        ).json()
+        assert body["reason"] == "editor_graph"
 
     def test_a_comfyui_that_is_down_is_not_asked_again_per_arrow_key(
         self, editor_env, monkeypatch
@@ -1241,7 +1251,7 @@ class TestAnEditorGraphIsRecognised:
         for _ in range(4):
             r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
             assert r.status_code == 200, r.text
-            assert r.json()["reason"] == "editor_graph"
+            assert r.json()["reason"] == "comfyui_unreachable"
         assert len(attempts) == 1, "a ComfyUI that is down must be asked once"
 
         # The control: forgetting the cache asks again, so the caching is what

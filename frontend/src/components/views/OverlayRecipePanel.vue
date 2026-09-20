@@ -207,7 +207,11 @@
         <p v-if="runReason" :id="runReasonId" class="recipe-run-reason">
           {{ runReason }}
         </p>
-        <ul v-if="conversionProblems.length" class="recipe-run-problems">
+        <ul
+          v-if="conversionProblems.length"
+          :id="problemsId"
+          class="recipe-run-problems"
+        >
           <li v-for="problem in conversionProblems" :key="problem">
             {{ problem }}
           </li>
@@ -233,7 +237,7 @@
             class="recipe-run"
             block
             :aria-disabled="runReason ? 'true' : undefined"
-            :aria-describedby="runReason ? runReasonId : undefined"
+            :aria-describedby="runDescribedBy"
             @click="onRun"
           >
             <Tooltip :text="runTooltip" activator="parent" :describe="false" />
@@ -307,6 +311,7 @@ const emit = defineEmits(["run", "use-as-input"]);
 
 const runReasonId = useId();
 const inputReasonId = useId();
+const problemsId = useId();
 
 /**
  * Why this recipe cannot be run again, or null when it can.
@@ -330,6 +335,12 @@ const RUN_REASONS = {
   editor_graph:
     "This picture carries only ComfyUI's editor view of its workflow, and " +
     "PixlStash could not rebuild that into a graph ComfyUI can run.",
+  // Not `editor_graph`: nothing is wrong with this workflow, ComfyUI was not
+  // running to be asked about it. Saying the first about the second reads as
+  // permanent and sends the reader looking at their file.
+  comfyui_unreachable:
+    "PixlStash needs ComfyUI to read this picture's workflow, and could not " +
+    "reach it. Start ComfyUI and open this picture again.",
 };
 
 /**
@@ -348,7 +359,10 @@ const conversionProblems = computed(() => props.recipe?.conversionProblems || []
  * Only the editor-graph refusal: an A1111 picture's fields ARE read, and an
  * ordinary ComfyUI one's are too.
  */
-const unreadable = computed(() => props.recipe?.reason === "editor_graph");
+const UNRESOLVED_REASONS = new Set(["editor_graph", "comfyui_unreachable"]);
+const unreadable = computed(() =>
+  UNRESOLVED_REASONS.has(props.recipe?.reason),
+);
 
 const runReason = computed(() => {
   if (!props.recipe) return null;
@@ -415,6 +429,21 @@ const useAsInputReason = computed(() =>
  * agree; when they differ each button gets its own, so neither is described by
  * a sentence about the other.
  */
+/**
+ * What describes the Run button, refusal AND reasons.
+ *
+ * `aria-describedby` takes a list, and shipping only the sentence gives a
+ * screen-reader user the half that - by the list's own reason for existing -
+ * sends them nowhere: they hear that the rebuild failed and never which node
+ * class is missing.
+ */
+const runDescribedBy = computed(() => {
+  if (!runReason.value) return undefined;
+  return conversionProblems.value.length
+    ? `${runReasonId} ${problemsId}`
+    : runReasonId;
+});
+
 const inputReasonIsOwn = computed(
   () => !!useAsInputReason.value && useAsInputReason.value !== runReason.value,
 );
@@ -969,6 +998,11 @@ async function copyPrompt() {
 .recipe-run-problems {
   margin: 0;
   padding-left: var(--space-4);
+  /* The footer is `flex: none` against the scrolling body, so an unbounded
+     list would push the prompt and the models off the pane. One uninstalled
+     pack is one sentence, but two packs is easily a dozen. */
+  max-height: var(--space-9);
+  overflow-y: auto;
   font-size: var(--text-xs);
   line-height: var(--leading-snug);
   color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));

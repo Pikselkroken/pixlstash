@@ -507,11 +507,19 @@ describe("OverlayRecipePanel", () => {
   // exact is refused, and the refusal has to say which node stopped it, or the
   // reader is sent nowhere.
 
+  // Shaped like the server's own `_editor_graph_recipe_payload`, not like
+  // RECIPE with two fields changed: that payload carries NO settings, no
+  // negative prompt and no model slots, and a fixture that kept them proved
+  // the panel *can* render a full recipe rather than what it does here.
   const EDITOR_REFUSAL = {
     ...RECIPE,
     available: false,
     reason: "editor_graph",
     summary: "Editor Workflow · 4 nodes · 3 links",
+    settings: {},
+    negativePrompt: null,
+    modelSlots: [],
+    inputs: [],
     conversionProblems: [
       "this ComfyUI has no node class 'SomeCustomPackNode'",
       "KSampler (node 3) carries 5 widget values, and its inputs account for 4",
@@ -557,7 +565,7 @@ describe("OverlayRecipePanel", () => {
   it("says the negative prompt was not read, never that there is none", () => {
     // "none" is a claim about the workflow. This workflow was not read, so
     // making it would be telling the reader something PixlStash does not know.
-    const wrapper = render({ recipe: { ...EDITOR_REFUSAL, negativePrompt: null } });
+    const wrapper = render({ recipe: EDITOR_REFUSAL });
     const negative = settingsOf(wrapper).find(([label]) => label === "Negative");
     expect(negative).toBeDefined();
     expect(negative[1]).toBe("not read");

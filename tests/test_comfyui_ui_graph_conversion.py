@@ -168,9 +168,19 @@ class TestItConvertsExactly:
         assert prompt["3"]["inputs"]["positive"] == ["6", 0]
         assert prompt["9"]["inputs"]["images"] == ["3", 0]
 
-    def test_an_unconnected_optional_socket_is_simply_absent(self, simple_editor_graph):
-        """The encoder's `clip` is drawn but unwired, and `negative` has no
-        socket at all. Neither may be invented as a value."""
+    def test_a_socket_the_file_never_wired_is_simply_absent(self, simple_editor_graph):
+        """Drawn and unwired, and `negative` has no socket at all.
+
+        **`clip` here is a REQUIRED input, and that is deliberate.** An input
+        the file never wired is rebuilt faithfully by leaving it out - the file
+        really does say nothing feeds it - so refusing would refuse an exact
+        rebuild. That is the opposite of a required input wired to a MUTED
+        node, which the file says IS fed and the rebuild cannot reproduce; that
+        one is refused by name. ComfyUI rejects this graph with a per-node
+        error naming the socket, which is a better message than any this could
+        invent. An earlier name for this test said "optional", which the
+        fixture never was.
+        """
         prompt, _ = convert_ui_graph_to_api(simple_editor_graph, OBJECT_INFO)
         assert "clip" not in prompt["6"]["inputs"]
         assert "negative" not in prompt["3"]["inputs"]
@@ -361,6 +371,65 @@ class TestItConvertsExactly:
         prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
         assert problems == []
         assert prompt["11"]["inputs"] == {"first": "hello", "second": 3}
+
+    def test_an_optional_widget_takes_its_slot_after_every_required_one(self):
+        """Required first, optional second - the order `/object_info` gives.
+
+        The fixtures' only optional input was a link, so nothing exercised an
+        optional WIDGET holding a position; getting that order wrong shifts a
+        node exactly as a miscounted extra widget does.
+        """
+        object_info = dict(OBJECT_INFO)
+        object_info["WithAnOptionalWidget"] = {
+            "input": {
+                "required": {"name": ["STRING", {}]},
+                "optional": {"scale": ["FLOAT", {}]},
+            },
+            "input_order": {"required": ["name"], "optional": ["scale"]},
+        }
+        graph = _graph(
+            [_node(12, "WithAnOptionalWidget", widgets=["a name", 0.75])], []
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, object_info)
+        assert problems == []
+        assert prompt["12"]["inputs"] == {"name": "a name", "scale": 0.75}
+
+    def test_a_bypassed_node_whose_only_wire_is_the_wrong_type_stops_it(self):
+        """The guard `_chase_through`'s docstring exists to justify.
+
+        One connected input, of a type the asked-for output does not carry.
+        "First connected input" would splice it and report an exact rebuild.
+        """
+        graph = _graph(
+            [
+                _node(
+                    41,
+                    "CheckpointLoaderSimple",
+                    outputs=[{"name": "CLIP", "type": "CLIP", "links": [4]}],
+                    widgets=["sd_xl_base_1.0.safetensors"],
+                ),
+                _node(
+                    7,
+                    "LoraStub",
+                    mode=4,
+                    inputs=[{"name": "clip", "type": "CLIP", "link": 4}],
+                    outputs=[{"name": "MODEL", "type": "MODEL", "links": [2]}],
+                ),
+                _node(
+                    3,
+                    "KSampler",
+                    inputs=[{"name": "model", "type": "MODEL", "link": 2}],
+                    widgets=[1, "fixed", 20, 7.0],
+                ),
+            ],
+            [[4, 41, 0, 7, 0, "CLIP"], [2, 7, 0, 3, 0, "MODEL"]],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert problems == [
+            "KSampler (node 3) has its 'model' input wired to something that "
+            "does not run"
+        ]
 
     def test_the_dict_spelling_of_a_link_is_read_too(self):
         graph = {

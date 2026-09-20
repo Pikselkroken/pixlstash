@@ -465,7 +465,14 @@ asked* — never that the recipe passed. **The one exception is a picture whose
 only graph is the editor `workflow` chunk**: rebuilding that needs
 `/object_info`, so without it there is nothing to report at all rather than
 merely nothing to judge, and the flag cannot switch the read off. The map is
-reused for a minute, so the filmstrip still steps for the cost of one file read. The tab fetches the graph route
+reused for a minute, so the filmstrip still steps for the cost of one file
+read — and the graph is still not *judged* against it, so `preflight.checked`
+stays `false` on a request that asked for no check. A ComfyUI that cannot be
+reached at all answers `reason: "comfyui_unreachable"` rather than
+`"editor_graph"`: one is a machine to start and the other is a fact about the
+file, and reporting the second for the first reads as permanent.
+
+The tab fetches the graph route
 separately and **only when the workflow box is opened**: the graph is the one
 large thing here.
 

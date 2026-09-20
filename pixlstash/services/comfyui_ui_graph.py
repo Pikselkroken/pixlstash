@@ -94,6 +94,12 @@ _MODE_BYPASSED = 4
 # long; a cycle in a hand-edited file would otherwise not terminate.
 _MAX_LINK_DEPTH = 64
 
+# The one refusal that is about the MACHINE rather than about the graph, and
+# the only one that goes away by itself. Named so a caller can rank it: "start
+# ComfyUI" and "this workflow cannot be rebuilt" send a reader to different
+# places, and reporting the second for the first reads as permanent.
+NO_OBJECT_INFO = "PixlStash could not ask ComfyUI which nodes it has"
+
 
 def is_ui_graph(workflow) -> bool:
     """Return True when *workflow* is an editor graph with nodes to convert."""
@@ -452,7 +458,7 @@ def convert_ui_graph_to_api(workflow, object_info) -> tuple[dict | None, list[st
     if not is_ui_graph(workflow):
         return None, ["this is not a ComfyUI editor graph"]
     if not isinstance(object_info, dict) or not object_info:
-        return None, ["PixlStash could not ask ComfyUI which nodes it has"]
+        return None, [NO_OBJECT_INFO]
     # Refused by name rather than by its symptom. A subgraph instance's class
     # is the definition's uuid, so without this the report would be "this
     # ComfyUI has no node class '6e0f8...'", which tells the reader nothing.

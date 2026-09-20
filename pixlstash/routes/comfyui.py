@@ -53,6 +53,7 @@ from pixlstash.services.comfyui_recipe_service import (
     unchecked_preflight,
 )
 from pixlstash.services.comfyui_ui_graph import (
+    NO_OBJECT_INFO,
     convert_ui_graph_to_api,
     is_ui_graph,
 )
@@ -1092,7 +1093,14 @@ def _editor_graph_recipe_payload(workflow: dict, problems: list[str]) -> dict:
         summary_parts.append(f"{stats['link_count']} links")
     return {
         "available": False,
-        "reason": "editor_graph",
+        # **Two different "no", because they send the reader to two different
+        # places.** A graph this ComfyUI cannot be asked about is a machine
+        # that is switched off, which the reader fixes by starting it; a graph
+        # that would not rebuild is a fact about the file. Collapsing them told
+        # somebody with no ComfyUI running that their workflow was unrebuildable.
+        "reason": (
+            "comfyui_unreachable" if problems == [NO_OBJECT_INFO] else "editor_graph"
+        ),
         "source": "comfyui",
         "summary": " · ".join(summary_parts),
         "positive_prompt": gen_info["positive_prompt"],
@@ -1236,7 +1244,10 @@ def _read_object_info(
         for url, entry in list(_object_info_cache.items()):
             if (now - entry[0]) >= OBJECT_INFO_CACHE_TTL_S:
                 del _object_info_cache[url]
-        _object_info_cache[comfyui_url] = (now, result[0], result[1])
+        # Stamped when the answer ARRIVED, not when the request left: a fetch
+        # can take `OBJECT_INFO_TIMEOUT_S`, and stamping it `now` would file an
+        # entry a quarter of its own lifetime old.
+        _object_info_cache[comfyui_url] = (time.monotonic(), result[0], result[1])
     return result
 
 
@@ -2057,7 +2068,17 @@ def create_router(server) -> APIRouter:
                 if preflight
                 else (None, "the pre-flight was not asked for")
             )
-        preflight, seed_targets = _inspect_graph(graph, object_info, object_info_error)
+        # **A map read to REBUILD a graph does not become a pre-flight.** The
+        # editor branch above reads `/object_info` whether or not the flag asked
+        # for it, and from a cache up to a minute old; judging the graph against
+        # that would answer `checked: true` on a request that asked for no check
+        # and hand the reader a verdict about a ComfyUI that may have changed.
+        # `preflight=false` keeps meaning "the question was not asked".
+        judged_against = object_info if preflight else None
+        judged_error = (
+            object_info_error if preflight else "the pre-flight was not asked for"
+        )
+        preflight, seed_targets = _inspect_graph(graph, judged_against, judged_error)
         source_is_imported, source_label = _picture_source_origin(server, pic_id)
         # A graph that calls back into PixlStash cannot be replayed as "a
         # variant of this picture" - see the run route's refusal for why. Reported

@@ -1124,6 +1124,21 @@ const sidebarTab = computed({
 // by another name, which is the thing hiding Recipe was meant to avoid. With
 // no tabs the band is gone and the pane is the plain inspector every other
 // screen uses.
+// **The band taking focus with it when it goes.** Arrow keys are a window
+// listener, so a reader can step the filmstrip with focus sitting on a tab
+// button; the next picture having no recipe then unmounts the button under
+// them and focus falls to `document.body`, where the ring is gone and the
+// shortcuts that check for an editable target keep working - so nothing says
+// it happened. It catches Info as well as Recipe, which means a reader who
+// never opened Recipe loses focus the same way. The canvas is where the
+// receipt's Escape path already sends it.
+watch(recipeTabShown, (shown) => {
+  if (shown) return;
+  const active = document.activeElement;
+  if (!active || !active.closest?.(".inspector-tabs")) return;
+  nextTick(() => overlayCanvasRef.value?.focus?.());
+});
+
 const sidebarTabs = computed(() =>
   recipeTabShown.value
     ? [

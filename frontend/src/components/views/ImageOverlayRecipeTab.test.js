@@ -55,8 +55,16 @@ const recipeBody = (id) =>
     conversion_problems: [],
   };
 
+// Set by the test that drives the read's failure path.
+let recipeThrows = false;
+
 const getMock = vi.fn(async (url) => {
   if (typeof url === "string" && url.includes("/recipe")) {
+    if (recipeThrows) {
+      const error = new Error("gone");
+      error.response = { status: 404 };
+      throw error;
+    }
     const id = Number(url.match(/pictures\/(\d+)\/recipe/)[1]);
     const answer = picturesWithARecipe.has(id)
       ? recipeBody(id)
@@ -121,8 +129,11 @@ const tabLabels = (wrapper) =>
 
 const activeTab = (wrapper) => labelOf(wrapper.find(".inspector-tab--active"));
 
-async function openOn(id, allImages) {
+async function openOn(id, allImages, { attach = false } = {}) {
   const wrapper = mount(ImageOverlay, {
+    // Focus only moves for real in an attached tree, so the test that is
+    // about focus asks for one; the rest do not pay for it.
+    ...(attach ? { attachTo: document.body } : {}),
     props: {
       open: false,
       initialImageId: id,
@@ -145,6 +156,7 @@ beforeEach(() => {
   picturesWithARecipe = new Set([7]);
   pendingRecipe = null;
   recipeRefusal = null;
+  recipeThrows = false;
   getMock.mockClear();
 });
 
@@ -252,6 +264,47 @@ describe("the lightbox Recipe tab follows the picture", () => {
     const wrapper = await openOn(7);
     await wrapper.findAll(".inspector-tab")[1].trigger("click");
     expect(recipePanel(wrapper).props("recipe").conversionProblems).toEqual([]);
+  });
+
+  it("moves focus off the tab band before it unmounts", async () => {
+    // Arrow keys are a window listener, so a reader can walk the filmstrip
+    // with focus on a tab button. Losing it to `document.body` is silent:
+    // the shortcuts keep working and only the focus ring goes.
+    const wrapper = await openOn(
+      7,
+      [
+        { id: 7, tags: [] },
+        { id: 8, tags: [] },
+      ],
+      { attach: true },
+    );
+    const recipeTab = wrapper.findAll(".inspector-tab")[1];
+    recipeTab.element.focus();
+    expect(document.activeElement).toBe(recipeTab.element);
+
+    await wrapper.setProps({ initialImageId: 8 });
+    await flush();
+    await flush();
+    expect(tabLabels(wrapper)).toEqual([]);
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement).toBe(
+      wrapper.find(".overlay-canvas").element,
+    );
+  });
+
+  it("takes the tab away when the recipe read fails outright", async () => {
+    // The `catch` path. A 404 means the picture or its file is gone, so the
+    // tab must not stay up over a recipe that will never arrive.
+    const wrapper = await openOn(7, [
+      { id: 7, tags: [] },
+      { id: 8, tags: [] },
+    ]);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
+    recipeThrows = true;
+    await wrapper.setProps({ initialImageId: 8 });
+    await flush();
+    await flush();
+    expect(tabLabels(wrapper)).toEqual([]);
   });
 
   it("does not blink out while the next picture's recipe is being read", async () => {
