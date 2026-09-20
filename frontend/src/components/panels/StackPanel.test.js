@@ -6,6 +6,7 @@
 // it is asserted: the next person to add an item can make them differ in one
 // edit, and nothing else in the suite would notice.
 
+import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -371,5 +372,146 @@ describe("StackPanel", () => {
     expect(
       wrapper.find('[data-key="second"]').attributes("aria-selected"),
     ).toBe("true");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The List row's thumbnail trio, read out of the stylesheet.
+//
+// jsdom has no layout, so a mounted row cannot say how big anything is and
+// every assertion about the trio's SHAPE has to come from the source. This is
+// `WorkflowCard.test.js`'s harness pointed at this file: the card pins its
+// cover's 6:5 and its cells' 4:5 the same way, and that is the pair this row
+// got wrong — a 56×36 box made all three cells square, and a centred crop took
+// the heads off the ones that are much wider than they are tall.
+// ---------------------------------------------------------------------------
+
+// Read from the project root: the suite runs in jsdom, where `import.meta.url`
+// is an http: URL and `fileURLToPath` refuses it.
+const read = (path) => readFileSync(`${process.cwd()}/${path}`, "utf8");
+
+const readSource = () => read("src/components/panels/StackPanel.vue");
+
+/** Token name → px, from the shipped sheet and this component's local ones. */
+function tokens() {
+  const values = {};
+  const sources = read("src/styles/design-tokens.css") + readSource();
+  for (const [, name, value] of sources.matchAll(/(--[\w-]+):\s*(\d+)px;/g)) {
+    values[name] = Number(value);
+  }
+  return values;
+}
+
+/** The declarations of one rule in the panel's stylesheet. */
+function rule(selector) {
+  const css = readSource()
+    .split("<style scoped>")[1]
+    .replace(/\/\*[\s\S]*?\*\//g, "");
+  const body = css
+    .split("}")
+    .find((r) => r.split("{")[0].trim() === selector)
+    ?.split("{")[1];
+  expect(body, selector).toBeTruthy();
+  return Object.fromEntries(
+    body
+      .split(";")
+      .map((d) => d.split(":").map((s) => s.trim()))
+      .filter(([k, v]) => k && v),
+  );
+}
+
+/**
+ * The cell shapes one arrangement produces, as width ÷ height.
+ *
+ * `WorkflowCard.test.js`'s own helper, over this panel's strip: the box is 6:5
+ * at every count, so a column track worth `c` of the columns' total and `r` of
+ * the rows' total is `c·W` wide by `r·(5/6)W` tall. With two rows the first
+ * cell spans both of them — the mosaic's big cell — and the second column
+ * holds one cell per row.
+ */
+function cellRatios(count) {
+  const box = rule(".stack-panel__thumbs");
+  const tracks = rule(`.stack-panel__thumbs--${count}`);
+  const [w, h] = box["aspect-ratio"].split("/").map(Number);
+  const boxH = h / w; // the box's height as a fraction of its width
+  const fr = (key) => tracks[key].split(" ").map((n) => parseFloat(n));
+  const cols = fr("grid-template-columns");
+  const rows = fr("grid-template-rows");
+  const sum = (list) => list.reduce((total, one) => total + one, 0);
+  const shape = (col, rowSpan) =>
+    cols[col] / sum(cols) / ((rowSpan / sum(rows)) * boxH);
+
+  if (rows.length === 1) return cols.map((_, col) => shape(col, sum(rows)));
+  return [shape(0, sum(rows)), ...rows.map((row) => shape(1, row))];
+}
+
+describe("StackPanel List thumbnails", () => {
+  // The box is 6:5 at every count and only the tracks inside it change, so
+  // what each arrangement is worth is the shape of the cells it produces —
+  // the same three numbers the card's cover is asserted at (#1456), because
+  // the row is the card's arrangement one size down and a row and a card
+  // showing the same workflow differently is the bug both fixed.
+  //
+  // The 56×36 box this replaces was 14:9, at which the mosaic's cells came out
+  // 1:1 and 1.06:1 — square, for a library of portrait pictures.
+  it.each([
+    ["1", [1.2]],
+    ["2", [0.6, 0.6]],
+    ["3", [0.8, 0.8, 0.8]],
+  ])("gives %s picture(s) cells of %s (width ÷ height)", (count, expected) => {
+    expect(cellRatios(count)).toEqual(
+      expected.map((ratio) => expect.closeTo(ratio, 5)),
+    );
+  });
+
+  it("spans the mosaic's big cell over both rows, and only there", () => {
+    // Unscoped, this rule puts every arrangement's first cell across two rows
+    // that only the mosaic has.
+    expect(
+      rule(".stack-panel__thumbs--3 .stack-panel__thumb:first-child"),
+    ).toEqual({ "grid-row": "1 / 3" });
+  });
+
+  // The height is a real number here, unlike the card's, and it is a NAMED
+  // one: the row's height follows the strip, so a bare literal is the panel's
+  // row height written where nothing can find it.
+  it("takes its height from the panel's own named size, big enough to read", () => {
+    const t = tokens();
+    const box = rule(".stack-panel__thumbs");
+
+    expect(box.height).toBe("var(--stack-thumb-h)");
+    expect(box["aspect-ratio"]).toBe("6 / 5");
+    expect(t["--stack-thumb-h"]).toBe(80);
+    // The mosaic's small cells are the smallest thing the strip ever draws:
+    // half the box's height less the gap. Below ~30px they stop being
+    // pictures and become grey chips, which is the defect. At 36 they were 17.
+    expect((t["--stack-thumb-h"] - t["--space-1"]) / 2).toBeGreaterThanOrEqual(
+      30,
+    );
+  });
+
+  // The app's shipped crop (`ImageGrid.css`, `utils/squareCrop.js`, and the
+  // card's own cover): a centred crop takes the same slice off the top and the
+  // bottom, so on a picture of a person the head goes.
+  it("crops from the top, not the centre", () => {
+    expect(rule(".stack-panel__thumb img")["object-position"]).toBe(
+      "top center",
+    );
+    expect(rule(".stack-panel__thumb img")["object-fit"]).toBe("cover");
+  });
+
+  // The strip cannot shrink, so the column it sits in has to clip; without
+  // this it paints over Checkpoint on a narrow panel.
+  it("clips the workflow column like the two columns beside it", () => {
+    expect(rule(".stack-panel__ident").overflow).toBe("hidden");
+    expect(rule(".stack-panel__thumbs").flex).toBe("none");
+  });
+
+  // The row's waiting cell and the card's are the same grey. At 36px nobody
+  // could tell; at 80 two different greys sat side by side on one screen.
+  it("paints a waiting cell in the card's own fill", () => {
+    expect(rule(".stack-panel__thumb").background).toBe(
+      "rgb(var(--v-theme-input-background))",
+    );
   });
 });

@@ -1603,16 +1603,24 @@ watcher the model shelf uses. See §9.1b for the destination itself.
   `treegrid`; a table would nest a second grid structure in it and break the
   rowgroup → row → gridcell chain `aria-owns` depends on. The rows are the same
   `aria-level="2"` rows Grid draws, with six `role="gridcell"` columns —
-  workflow (a 56×36 thumbnail strip at `--space-1` / `--radius-sm` with
+  workflow (an 80px-tall thumbnail strip at `--space-1` / `--radius-sm` with
   `alt=""`, the name and the Cover pill), checkpoint, differs by, pictures,
   rating, ⋯ — over a header row of `columnheader`s carrying `.section-label`.
-  **The strip is one cell per picture, in the card cover's own arrangement one
-  size down** (#1456): one fills the 56×36 box, two split it, three keep the
-  2fr/1fr mosaic, and the box itself does not change size, so the column stays
-  aligned down the list. A fixed three put a one-picture member's picture
-  beside two painted boxes and made Grid and List disagree about the same
-  workflow. The `<img>` is conditional on top of that, so an unfilled cell is
-  not a broken-image glyph. **Its `src` goes through `workflowCoverUrl`**, like the
+  **The strip is one cell per picture, in the card cover's own arrangement and
+  its own 6:5 box, one size down** (#1456): one picture fills the box, two
+  split it, three keep the 2fr/1fr mosaic, and the box does not change size
+  with the count, so the column stays aligned down the list. A fixed three put
+  a one-picture member's picture beside two painted boxes and made Grid and
+  List disagree about the same workflow. 6:5 is what makes each arrangement's
+  cells the shape the pictures are — 6:5, 3:5 and 4:5 respectively — and the
+  crop is `ImageGrid.css` / `utils/squareCrop.js`'s top-anchored one; the
+  56×36 box it replaces was 14:9 at every count, so the mosaic's cells came out
+  square and a centred crop took the heads off. The box's HEIGHT is fixed
+  (`--stack-thumb-h`, local to the panel) where the card's cover is fluid,
+  because the card's WIDTH is fluid and a row's is not: a strip that grew with
+  the panel would move every row's height as the window moved. The `<img>` is
+  conditional on top of that, so an unfilled cell is not a broken-image glyph.
+  **Its `src` goes through `workflowCoverUrl`**, like the
   card's own: `covers` arrives API-relative and an `<img src>` bypasses Axios,
   so the raw value asks the page origin for a path no route serves. Reading
   the payload directly here reintroduced the broken covers F1b had just fixed

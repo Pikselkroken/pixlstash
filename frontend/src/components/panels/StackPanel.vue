@@ -122,17 +122,19 @@
              reads all of it, including whatever "+N" clipped, exactly as the
              card does in Grid. -->
         <span class="stack-panel__ident" role="gridcell" aria-hidden="true">
-          <!-- Up to three thumbnails at 56×36, `alt=""`: they are the same
-               pictures the card shows and the row is named by its workflow, so
-               they carry nothing a reader would otherwise miss. -->
-          <!-- The cover's own arrangement one size down, which since #1456
-               means ONE CELL PER PICTURE: the card divides its cover by what
-               the member actually has, and a row drawing a fixed three would
-               put its one picture beside two painted boxes and disagree with
-               the same stack's Grid view. `v-if` on the image, not `v-show`:
-               an `<img>` with no `src` is a broken-image glyph in some
-               browsers, and empty ones would make any assertion about the
-               row's pictures vacuous. -->
+          <!-- Up to three thumbnails, `alt=""`: they are the same pictures
+               the card shows and the row is named by its workflow, so they
+               carry nothing a reader would otherwise miss. -->
+          <!-- The cover's own arrangement AND its 6:5 box, one size down.
+               Since #1456 the arrangement means ONE CELL PER PICTURE: the card
+               divides its cover by what the member actually has, and a row
+               drawing a fixed three would put its one picture beside two
+               painted boxes and disagree with the same stack's Grid view. The
+               box is 6:5 for the same reason it is on the card — it is what
+               makes each arrangement's cells the shape the pictures are.
+               `v-if` on the image, not `v-show`: an `<img>` with no `src` is a
+               broken-image glyph in some browsers, and empty ones would make
+               any assertion about the row's pictures vacuous. -->
           <span
             class="stack-panel__thumbs"
             :class="`stack-panel__thumbs--${thumbsOf(member).length}`"
@@ -626,6 +628,14 @@ const notchStyle = computed(() => {
    would be measured per row and the columns would step sideways down the
    list. */
 .stack-panel__list {
+  /* Local on purpose, the way `WorkflowCard.vue` keeps `--wf-meta-h` local:
+     one component's one size, named so the rule below is not a bare literal
+     and the stylesheet can be read for it. NOT `--entity-thumb` (24px): that
+     token is the sidebar's identity mark on a one-line tree row
+     (`docs/design/visual-language.md` §5.1), and this is a six-column data row
+     whose first column is a picture trio rather than a mark beside a label. */
+  --stack-thumb-h: 80px;
+
   padding: var(--space-2) 0 var(--space-3);
 }
 
@@ -671,22 +681,44 @@ const notchStyle = computed(() => {
   border-left-color: var(--active-bar);
 }
 
+/* `overflow: hidden` like `__ckpt` and `__facts`: the trio is `flex: none` and
+   the workflow track is `minmax(0, 1fr)`, so under width pressure something
+   has to give. Clipped at the column edge rather than painted over Checkpoint
+   — and the trio is 96px wide now, so the squeeze starts sooner than it did. */
 .stack-panel__ident {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
+  overflow: hidden;
 }
 
-/* 56×36, and the cover's own arrangement one size down, so a row and a card
-   show the same pictures in the same arrangement: one fills the box, two split
-   it, three keep the 2fr/1fr mosaic (#1456). The box itself does not change
-   size with the count, so the column stays aligned down the list. */
+/* The cover's own arrangement AND its 6:5 box, one size down, so a row and a
+   card show the same pictures in the same arrangement AND crop them the same
+   way: one fills the box, two split it, three keep the 2fr/1fr mosaic
+   (#1456). 6:5 at every count is what makes each arrangement's cells the shape
+   the pictures are — 6:5 for one, 3:5 twice for two, 4:5 for the mosaic's
+   three. The arithmetic is in `WorkflowCard.vue`; the `--space-1` gap leaves
+   it ~2% out at this size rather than the fraction of a pixel it is on a card.
+
+   The 56×36 box this replaces was 14:9 whatever the count, which made the
+   mosaic's three cells SQUARE (36×36 and 18×17), and the pictures here are
+   mostly portrait or square (832×1216, 1024×1024) — the same shape mismatch
+   that threw away most of every card cover before F1b fixed it. The box is
+   still one size at every count, so the column stays aligned down the list.
+
+   A pixel HEIGHT here where the card forbids one on its cover, deliberately:
+   the card's cover is fluid because the card's WIDTH is, and a strip that grew
+   with the panel would move every row's height as the window moved. Fixing the
+   height and the ratio fixes the cells' shape at every width, which is what
+   the card's rule is protecting. At 36 the mosaic's small cells were 17px and
+   held nothing a reader could recognise; at 80 they are 31×39, and a single
+   picture gets the whole 96×80 box. */
 .stack-panel__thumbs {
   display: grid;
   gap: var(--space-1);
-  width: 56px;
-  height: 36px;
+  height: var(--stack-thumb-h);
+  aspect-ratio: 6 / 5;
   flex: none;
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -711,15 +743,24 @@ const notchStyle = computed(() => {
   grid-row: 1 / 3;
 }
 
+/* Still painted, because a cell exists before its `<img>` has loaded — and in
+   `--v-theme-input-background`, which is the grey `.wf-card__pic` paints the
+   same waiting cell with. At 36px the two were near enough; at 80 a row and
+   its card were visibly two different greys. */
 .stack-panel__thumb {
   overflow: hidden;
-  background: rgba(var(--v-theme-on-panel), 0.06);
+  background: rgb(var(--v-theme-input-background));
 }
 
+/* TOP-anchored, the app's shipped crop (`ImageGrid.css`, `utils/squareCrop.js`,
+   and `WorkflowCard.vue`'s cover): a centre crop takes the same slice off the
+   top and the bottom, so on a picture of a person the head comes off. */
 .stack-panel__thumb img {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: top center;
 }
 
 .stack-panel__rowname {
