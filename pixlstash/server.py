@@ -184,9 +184,9 @@ def _log_install_detection_once(level: int, message: str, *args: object) -> None
     of the *same* explanation and nothing else: if the situation genuinely
     changes - a marker file created under a running server, a different
     unreadable-path errno - that is a new key and it is still said out loud.
-    Unbounded on purpose: the set of templates is closed (six, all in this
-    module) and their arguments come from the environment and one fixed path,
-    so there is nothing here to evict.
+    Unbounded on purpose: the set of templates is closed (seven today, every
+    one of them in this module) and their arguments come from the environment
+    and one fixed path, so there is nothing here to evict.
 
     Two consequences worth knowing. Arguments must be hashable **by value**, so
     callers pass ``str(exc)`` rather than the exception object, which would hash
