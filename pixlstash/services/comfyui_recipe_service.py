@@ -414,6 +414,131 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
     }
 
 
+def advertised_model_names(object_info: dict) -> set[str]:
+    """Every model filename this ComfyUI says it can load, normalized.
+
+    The question "does that ComfyUI read this file" answered by the only party
+    who knows: the combo lists ComfyUI publishes for the loader fields in
+    :data:`MODEL_FILENAME_FIELDS`. PixlStash holds a ComfyUI **URL** and no path
+    to its ``models/`` tree, so comparing registered folders against it is not
+    available - and would be the wrong answer anyway, because what matters is
+    what the install can load, symlinks, ``extra_model_paths.yaml`` and all.
+
+    Both the option as listed and its basename are in the set: an entry is a
+    path relative to one of ComfyUI's model folders (``sdxl/base.safetensors``),
+    and a caller holding a registered folder's relpath has no way to know which
+    prefix that ComfyUI puts in front of it.
+
+    Args:
+        object_info: The map from :func:`fetch_object_info`.
+
+    Returns:
+        The normalized names, empty for a map that advertises no loader.
+    """
+    names: set[str] = set()
+    for class_type, fields in MODEL_FILENAME_FIELDS.items():
+        spec = (object_info or {}).get(class_type)
+        if spec is None:
+            continue
+        for field in fields:
+            for option in _combo_options(spec, field) or ():
+                normalized = _normalize_filename(option)
+                names.add(normalized)
+                names.add(normalized.rsplit("/", 1)[-1])
+    return names
+
+
+def detect_model_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
+    """Every model-loader field naming a file this ComfyUI does not advertise.
+
+    The detect half of the detect-then-patch pair
+    :func:`detect_seed_targets`/:func:`apply_seeds` and
+    :func:`detect_lora_targets`/:func:`apply_adapter` already are (#1439); the
+    patch half is :func:`apply_model_swap`.
+
+    It is :func:`preflight_prompt`'s ``missing_models`` and nothing else, which
+    is the point rather than laziness: the swap has to be aimed at exactly the
+    fields the pre-flight would report, or it would either patch a field ComfyUI
+    was perfectly happy with or leave one it will refuse.
+
+    Args:
+        prompt_graph: The API-format graph.
+        object_info: The map from :func:`fetch_object_info`.
+
+    Returns:
+        ``{node_id, class_type, field, value, note}`` per unloadable field.
+    """
+    return preflight_prompt(prompt_graph, object_info)["missing_models"]
+
+
+def apply_model_swap(
+    prompt_graph: dict,
+    targets: list[dict],
+    aliases: dict[str, list[str]],
+    object_info: dict,
+) -> list[dict]:
+    """Point each target at another name for the same model, where one loads.
+
+    The patch half of :func:`detect_model_targets`. *aliases* maps a normalized
+    basename to the other names the shelf knows the **same** model by - another
+    copy of the identical bytes, which is what makes this a substitution and not
+    a suggestion (a same-weights-different-precision file is a different output
+    and stays a hint the owner accepts).
+
+    **Every candidate is verified against ``object_info`` before it is written.**
+    A swap PixlStash believes in and ComfyUI does not advertise only moves the
+    failure from the pre-flight to the queue, so the accepted candidate is one
+    this install's own combo list contains - which is also why the aliases may
+    be generous: the combo list, not this function, decides.
+
+    The graph is mutated in place, which is what the caller wants for the graph
+    it is about to submit; nothing is written back to the stored recipe, whose
+    filenames remain the picture's provenance.
+
+    Args:
+        prompt_graph: The API-format graph, mutated in place.
+        targets: :func:`detect_model_targets`' output.
+        aliases: normalized basename -> other names for the same model.
+        object_info: The map from :func:`fetch_object_info`.
+
+    Returns:
+        One ``{node_id, class_type, field, was, now}`` per field patched, for the
+        caller to report and log. A run that quietly loaded a different file
+        makes its own lineage a lie, so this list is the whole point of the
+        return value.
+    """
+    substitutions: list[dict] = []
+    for target in targets or []:
+        node = (prompt_graph or {}).get(str(target.get("node_id")))
+        if not isinstance(node, dict):
+            continue
+        inputs = node.get("inputs")
+        field = str(target.get("field") or "")
+        value = target.get("value")
+        if not isinstance(inputs, dict) or not field or not isinstance(value, str):
+            continue
+        options = _combo_options(object_info.get(node.get("class_type")), field)
+        if not options:
+            continue
+        candidates = aliases.get(_normalize_filename(value).rsplit("/", 1)[-1]) or ()
+        for candidate in candidates:
+            match = _match_option(candidate, options)
+            if match is not None:
+                continue
+            inputs[field] = candidate
+            substitutions.append(
+                {
+                    "node_id": str(target.get("node_id")),
+                    "class_type": node.get("class_type"),
+                    "field": field,
+                    "was": value,
+                    "now": candidate,
+                }
+            )
+            break
+    return substitutions
+
+
 def detect_seed_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
     """Find every patchable seed input in *prompt_graph*.
 

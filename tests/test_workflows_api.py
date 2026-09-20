@@ -6158,6 +6158,136 @@ def test_a_model_this_comfyui_does_not_have_names_the_file_and_the_folder(runnab
     )
 
 
+@pytest.fixture
+def merged_checkpoint(runnable):
+    """The shelf after a duplicate merge: one model, one name gone, one kept.
+
+    ``realvisxl.safetensors`` is the copy that was removed - its ``model_file``
+    row survives at ``state = 'removed'``, which is the whole point - and the
+    keeper is the copy that is still on the disk. One ``model`` row, because the
+    hub is content-addressed: same bytes, one row, two paths.
+
+    A fixture rather than a helper because the rows it writes outlive the test in
+    this module's shared server, and `_seed_hub` deletes that `model` row by
+    filename - which a surviving `model_file` child turns into a foreign-key
+    failure in the NEXT test's setup.
+    """
+    folders: list[int] = []
+
+    def seed(*, keeper: str) -> None:
+        folders.append(_seed_merged_checkpoint(runnable.server, keeper=keeper))
+
+    try:
+        yield seed
+    finally:
+        with runnable.server.hub.transaction() as conn:
+            for folder_id in folders:
+                conn.execute(
+                    "DELETE FROM model_file WHERE model_folder_id = ?", (folder_id,)
+                )
+                conn.execute("DELETE FROM model_folder WHERE id = ?", (folder_id,))
+
+
+def _seed_merged_checkpoint(server, *, keeper: str) -> int:
+    """Write the merged shelf rows; returns the folder id they live under."""
+    with server.hub.transaction() as conn:
+        # The module's own shelf row for that filename, not a second one: two
+        # models of one name is the ambiguity `model_name_aliases` refuses to
+        # resolve, which would make this test pass for the wrong reason.
+        model_id = int(
+            conn.execute(
+                "SELECT id FROM model WHERE filename = ?", (_SHELF_FILENAME,)
+            ).fetchone()[0]
+        )
+        conn.execute(
+            "INSERT INTO model_folder (path, kind, movable) "
+            "VALUES ('/models/checkpoints', 'user', 'per_item')"
+        )
+        folder_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+            "VALUES (?, ?, 'realvisxl.safetensors', 'removed')",
+            (model_id, folder_id),
+        )
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+            "VALUES (?, ?, ?, 'present')",
+            (model_id, folder_id, keeper),
+        )
+    return folder_id
+
+
+def test_a_run_loads_the_copy_that_is_left_and_says_it_did(runnable, merged_checkpoint):
+    """The submit half of "merge duplicates, resolve at use" (#1439).
+
+    The graph names the copy a merge removed; the same bytes are still on the
+    shelf under another name, and this ComfyUI advertises THAT one. So the run
+    goes ahead on the copy that is there instead of refusing with a missing
+    model - and it says so, on the plan and in the submitted graph, because a
+    run that quietly loaded a different file makes its own lineage a lie.
+    """
+    merged_checkpoint(keeper="kept.safetensors")
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    # This install lists only the copy that survived.
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [
+        ["kept.safetensors"],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    assert _reasons(payload) == set(), payload
+    assert payload["groups"][0]["substitutions"] == [
+        {
+            "node_id": "1",
+            "class_type": "CheckpointLoaderSimple",
+            "field": "ckpt_name",
+            "was": "realvisxl.safetensors",
+            "now": "kept.safetensors",
+        }
+    ], payload
+
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    assert len(runnable.submitted) == 1, "the run was refused over a copy that is there"
+    assert (
+        runnable.submitted[0]["graph"]["1"]["inputs"]["ckpt_name"] == "kept.safetensors"
+    )
+    assert r.json()["groups"][0]["substitutions"][0]["now"] == "kept.safetensors"
+
+
+def test_a_model_no_copy_of_which_is_left_is_still_a_missing_model(
+    runnable, merged_checkpoint
+):
+    """The negative half, and what keeps the swap honest.
+
+    Nothing on this shelf offers a name this ComfyUI advertises, so there is
+    nothing to substitute and the run refuses exactly as it did before - rather
+    than swapping to a file PixlStash believes in and ComfyUI does not list,
+    which would only move the failure to the queue.
+    """
+    merged_checkpoint(keeper="also-not-there.safetensors")
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [
+        ["something-else.safetensors"],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    assert "missing_models" in _reasons(payload), payload
+    assert payload["groups"][0]["substitutions"] == []
+
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.json()["status"] == "refused", r.json()
+    assert runnable.submitted == []
+
+
 def test_an_unreachable_comfyui_is_reported_and_a_configured_one_says_so(runnable):
     """The two ComfyUI codes are different questions with different fixes.
 

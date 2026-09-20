@@ -497,6 +497,74 @@ def recipe_asset_index(
     return by_name, by_digest, filenames
 
 
+def model_name_aliases(hub) -> dict[str, list[str]]:
+    """The other names a recipe's model filename can be loaded under (#1439).
+
+    Keyed by a normalized basename, valued by the names of that model's copies
+    that are actually **present** - the full relpath as the scanner recorded it
+    and its basename, because a ComfyUI combo entry is a path relative to one of
+    ComfyUI's own model folders and nothing here knows which prefix it puts in
+    front. Both forms are offered and the caller's ``object_info`` decides;
+    generosity here costs nothing because the verification is downstream.
+
+    **Same model, therefore same bytes.** The hub is content-addressed - one
+    ``model`` row per SHA-256 - so every name under one key names one file's
+    contents, which is what makes this a substitution rather than the suggestion
+    a same-weights-different-precision match would have to stay.
+
+    The keys include names no copy of which is present, which is the whole point:
+    a copy removed to keep one of several (``POST /model-files/merge``) keeps its
+    row in ``state = 'removed'``, and the name a recipe recorded is the one a
+    graph still asks for.
+
+    A name two models share is dropped rather than resolved, the same rule
+    ``picture_recipe_service._resolve_against_shelf`` applies to a name that
+    matches two rows: it names neither of them, and swapping to a coin-flip
+    would substitute a different model's weights into somebody's run.
+
+    Returns:
+        ``{normalized basename: [name, ...]}``, the key's own spelling excluded,
+        and no entry at all for a model with nothing present to offer.
+    """
+    names_by_model: dict[int, set[str]] = {}
+    present_by_model: dict[int, list[str]] = {}
+    for row in hub.fetchall(
+        "SELECT id, filename FROM model WHERE filename IS NOT NULL"
+    ):
+        names_by_model.setdefault(int(row["id"]), set()).add(row["filename"])
+    for row in hub.fetchall("SELECT model_id, relpath, state FROM model_file"):
+        model_id = int(row["model_id"])
+        names_by_model.setdefault(model_id, set()).add(row["relpath"])
+        if row["state"] != "present":
+            continue
+        offered = present_by_model.setdefault(model_id, [])
+        for name in (row["relpath"], normalized_filename(row["relpath"])):
+            if name not in offered:
+                offered.append(name)
+
+    claimants: dict[str, set[int]] = {}
+    for model_id, names in names_by_model.items():
+        for name in names:
+            claimants.setdefault(normalized_filename(name), set()).add(model_id)
+
+    aliases: dict[str, list[str]] = {}
+    for model_id, names in names_by_model.items():
+        offered = present_by_model.get(model_id)
+        if not offered:
+            continue
+        for name in names:
+            key = normalized_filename(name)
+            if len(claimants[key]) != 1:
+                continue
+            for candidate in offered:
+                if candidate == name:
+                    continue
+                aliases.setdefault(key, [])
+                if candidate not in aliases[key]:
+                    aliases[key].append(candidate)
+    return aliases
+
+
 def models_for_digest(
     value: str, by_digest: dict[str, int], sorted_digests: list[str]
 ) -> set[int]:

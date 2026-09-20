@@ -95,8 +95,10 @@ from pixlstash.services.a1111_recipe import reduce_a1111
 from pixlstash.services.comfyui_recipe_service import (
     MAX_SEED_64,
     apply_adapter,
+    apply_model_swap,
     apply_seeds,
     detect_lora_targets,
+    detect_model_targets,
     detect_seed_targets,
     insert_adapter,
     plan_lora_insertion,
@@ -114,6 +116,7 @@ from pixlstash.services.workflow_card_service import (
     read_grid,
 )
 from pixlstash.services import saved_recipe_service
+from pixlstash.services.model_shelf_service import model_name_aliases
 from pixlstash.services.workflow_events import announce_changed_workflows
 from pixlstash.routes.comfyui import (
     MAX_RUNS_PER_REQUEST,
@@ -795,6 +798,12 @@ class RunGroup(BaseModel):
     picture_ids: list[int] = Field(default_factory=list)
     runs: int = 0
     reasons: list[dict] = Field(default_factory=list)
+    # A model loaded from a different file than the graph names, because the copy
+    # it names is gone and another copy of the same bytes is not (#1439). Never
+    # silent: a run that quietly loaded a different file makes its own lineage a
+    # lie, so it is reported here on the pre-flight and on the run alike, and
+    # logged. The stored recipe keeps the name it recorded.
+    substitutions: list[dict] = Field(default_factory=list)
 
 
 class RunPreflight(BaseModel):
@@ -2280,6 +2289,11 @@ def create_router(server) -> APIRouter:
             pictures = [pid for _, ids, _ in groups for pid in ids]
             groups = [(target, pictures, [])]
 
+        # Read once for the whole request, and only when there is a ComfyUI to
+        # verify a swap against: two shelf scans per group would be two scans of
+        # `model` and `model_file` for an answer that cannot change mid-request.
+        aliases = model_name_aliases(hub) if object_info is not None else {}
+
         planned: list[RunGroup] = []
         submittable: list[tuple[dict, RunGroup]] = []
         for workflow_key, picture_ids, reasons in groups:
@@ -2373,6 +2387,32 @@ def create_router(server) -> APIRouter:
                         "seed_mode 'new' or 'fixed'."
                     ),
                 )
+
+            # Before `judge`, because the whole point is that the graph it
+            # judges is the graph that will be submitted: a swap applied after it
+            # would be a substitution nothing verified, and one reported as a
+            # missing model the owner then cannot find (#1439). Applied to the
+            # copy being submitted and never written back to the stored recipe,
+            # whose filenames are the picture's provenance.
+            if object_info is not None:
+                group.substitutions = apply_model_swap(
+                    graph,
+                    detect_model_targets(graph, object_info),
+                    aliases,
+                    object_info,
+                )
+                for swap in group.substitutions:
+                    logger.info(
+                        "[workflows] Card %s loads %s in place of %s on node %s "
+                        "(%s.%s): the same model, from the copy this shelf still "
+                        "has.",
+                        workflow_key,
+                        swap["now"],
+                        swap["was"],
+                        swap["node_id"],
+                        swap["class_type"],
+                        swap["field"],
+                    )
 
             judged, _preflight = run_service.judge(
                 graph,
