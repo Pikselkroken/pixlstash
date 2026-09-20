@@ -174,3 +174,33 @@ export async function unstackWorkflow(workflowKey) {
     apiClient.post(`/workflows/${encodeURIComponent(workflowKey)}/unstack`),
   );
 }
+
+/**
+ * What a run would do, doing none of it (v1.12 B7).
+ *
+ * The same body `runWorkflowCard` takes. Every card the request resolves to
+ * comes back as a group with the reasons it would not run; `reasons` empty is
+ * the only thing that means "this would run".
+ *
+ * @param {Object} body - see `runWorkflowCard`.
+ * @returns {Promise<{ok: boolean, runs: number, groups: Array<Object>}>}
+ */
+export async function preflightWorkflowRun(body) {
+  return unwrap(apiClient.post("/workflows/run/preflight", body));
+}
+
+/**
+ * Run a workflow card.
+ *
+ * Exactly ONE source: `picture_ids` ("run what made these"), `saved_recipe_id`
+ * ("run this look") or `workflow_key` ("run this card"). `target` overrides
+ * which card actually runs, which is how a stack's other member is chosen.
+ * `prompt` / `negative` / `loras` / `values` are overrides applied to the graph
+ * at run time and are never written back into it.
+ *
+ * @param {Object} body
+ * @returns {Promise<{status: string, runs: number, groups: Array<Object>, prompts: Array<Object>}>}
+ */
+export async function runWorkflowCard(body) {
+  return unwrap(apiClient.post("/workflows/run", body));
+}

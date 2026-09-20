@@ -1,17 +1,15 @@
-// "Use as input for…" from the lightbox (#1406): the Recipe tab's second
-// action and the lightbox right-click menu both land here.
+// "Use as input for…" from the lightbox (#1406), now the Run popup with its
+// workflow picker unset (#1407). The Recipe tab's second action and the
+// lightbox right-click menu both land here.
 //
-// The act is three things at once - close the lightbox, narrow the selection,
-// open the run panel - and the middle one is the part that is easy to ship
-// wrong, because the obvious rule is the wrong one here.
-//
-// `handleImageContextMenu` keeps a selection the right-clicked picture is
-// already part of. That is right in the GRID, where the selection is on screen
-// and the user can see what the menu is about to act on. It is wrong in the
-// lightbox: `openOverlay` never touches `selectedImageIds`, so the selection is
-// invisible, and both ways into this function name exactly one picture. Keeping
-// an unseen 50-picture selection would hand the run panel all 50 from a control
-// whose tooltip says "this picture".
+// The part that is easy to ship wrong is WHICH pictures the popup opens on,
+// because the obvious rule is the wrong one here. `handleImageContextMenu`
+// keeps a selection the right-clicked picture is already part of, which is
+// right in the GRID where the selection is on screen. It is wrong in the
+// lightbox: `openOverlay` never touches `selectedImageIds`, so the selection
+// is invisible, and both ways in name exactly one picture. Handing the popup
+// an unseen 50-picture selection from a control whose tooltip says "this
+// picture" is the regression this file exists to catch.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
@@ -20,10 +18,7 @@ import { ref } from "vue";
 import { useSelectionStore } from "../../stores/useSelectionStore.js";
 import { useProjectStore } from "../../stores/useProjectStore.js";
 import { useSortStore } from "../../stores/useSortStore.js";
-import {
-  FROM_SELECTION,
-  useWorkflowRunStore,
-} from "../../stores/useWorkflowRunStore.js";
+import { useRunDialogStore } from "../../stores/useRunDialogStore.js";
 
 vi.mock("../../utils/apiClient", async () => {
   const { ref: makeRef, computed: makeComputed } = await import("vue");
@@ -112,78 +107,65 @@ beforeEach(() => {
 });
 
 describe("using the lightbox picture as a workflow's input", () => {
-  it("narrows to the picture, and moves the shift-click anchor with it", () => {
+  it("opens the popup on that picture alone, with the workflow picker unset", () => {
     const wrapper = mountGrid();
-    wrapper.vm.selectedImageIds = [11, 12, 13];
-    wrapper.vm.lastSelectedImageId = 13;
+    const runDialog = useRunDialogStore();
 
-    wrapper.vm.useOverlayPictureAsInput(42);
+    wrapper.vm.runWorkflowOnPicture(42);
 
-    expect(wrapper.vm.selectedImageIds).toEqual([42]);
-    // Left on 13, this is the anchor the next shift-click ranges from - a
-    // picture that is no longer in the selection at all.
-    expect(wrapper.vm.lastSelectedImageId).toBe(42);
+    expect(runDialog.source).toMatchObject({
+      pictureIds: [42],
+      pickWorkflow: true,
+    });
   });
 
-  it("narrows even when the picture is already in the selection", () => {
+  it("opens on that picture even when others are selected", () => {
     // The case the grid's own rule would preserve, and the reason it must not
-    // here: the lightbox does not show the selection, so those other 12
+    // here: the lightbox does not show the selection, so those other two
     // pictures are ones the reader cannot see and did not ask to run.
-    // `workflowRunStore.selectionIds` is the live grid selection and
-    // `WorkflowRunPanel` reads it at run time, so leaving them in decides what
-    // actually runs.
     const wrapper = mountGrid();
+    const runDialog = useRunDialogStore();
     wrapper.vm.selectedImageIds = [11, 42, 13];
-    wrapper.vm.lastSelectedImageId = 11;
 
-    wrapper.vm.useOverlayPictureAsInput(42);
+    wrapper.vm.runWorkflowOnPicture(42);
 
-    expect(wrapper.vm.selectedImageIds).toEqual([42]);
-    expect(wrapper.vm.lastSelectedImageId).toBe(42);
+    expect(runDialog.source.pictureIds).toEqual([42]);
   });
 
-  it("opens the run panel on the selection", () => {
-    const wrapper = mountGrid();
-    const runStore = useWorkflowRunStore();
-    runStore.open = false;
-
-    wrapper.vm.useOverlayPictureAsInput(42);
-
-    expect(runStore.open).toBe(true);
-    expect(runStore.origin).toBe(FROM_SELECTION);
-  });
-
-  it("closes the lightbox, because the run panel is the rail it covers", () => {
+  it("closes the lightbox, which the popup would otherwise open behind", () => {
     const wrapper = mountGrid();
     wrapper.vm.overlayOpen = true;
     wrapper.vm.overlayImageId = 42;
 
-    wrapper.vm.useOverlayPictureAsInput(42);
+    wrapper.vm.runWorkflowOnPicture(42);
 
     expect(wrapper.vm.overlayOpen).toBe(false);
   });
 
-  it("falls back to the open picture when no id is passed", () => {
+  it("falls back to NOTHING with no picture, never to the hidden selection", () => {
     const wrapper = mountGrid();
-    wrapper.vm.overlayOpen = true;
+    const runDialog = useRunDialogStore();
     wrapper.vm.overlayImageId = 7;
-    wrapper.vm.selectedImageIds = [];
+    wrapper.vm.selectedImageIds = [11, 12];
 
-    wrapper.vm.useOverlayPictureAsInput();
+    // Seeded with something recognisable first: `source` is null on a fresh
+    // store, so asserting null against an untouched default would pass just as
+    // well with the whole function body deleted.
+    runDialog.openRun({ kind: "picture", pictureIds: [99] });
+    wrapper.vm.runWorkflowOnPicture(null);
 
-    expect(wrapper.vm.selectedImageIds).toEqual([7]);
+    expect(runDialog.source.pictureIds).toEqual([99]);
   });
 
-  it("does nothing at all with no picture to act on", () => {
+  it("does take the whole selection from the grid's own menu entry", () => {
+    // The sibling path, asserted here so the narrowing above cannot be
+    // "fixed" into narrowing both: "Run a workflow on these…" means these.
     const wrapper = mountGrid();
-    const runStore = useWorkflowRunStore();
-    runStore.open = false;
-    wrapper.vm.overlayImageId = null;
-    wrapper.vm.selectedImageIds = [11];
+    const runDialog = useRunDialogStore();
+    wrapper.vm.selectedImageIds = [11, 12, 13];
 
-    wrapper.vm.useOverlayPictureAsInput(null);
+    wrapper.vm.runWorkflowOnSelection();
 
-    expect(wrapper.vm.selectedImageIds).toEqual([11]);
-    expect(runStore.open).toBe(false);
+    expect(runDialog.source.pictureIds).toEqual([11, 12, 13]);
   });
 });

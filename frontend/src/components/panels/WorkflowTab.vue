@@ -249,10 +249,11 @@ import {
   setWorkflowPins,
   setWorkflowSlots,
   stackWorkflows,
+  workflowCoverUrl,
 } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
-import { useWorkflowRunStore } from "../../stores/useWorkflowRunStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import AppButton from "../widgets/AppButton.vue";
@@ -279,7 +280,7 @@ const DEFAULT_PINS = ["steps", "cfg", "guidance", "width", "height"];
 const store = useWorkflowsStore();
 const sidebarStore = useSidebarStore();
 const notices = useNoticeStore();
-const runStore = useWorkflowRunStore();
+const runDialog = useRunDialogStore();
 
 const tab = ref("workflow");
 const tabs = [
@@ -679,16 +680,29 @@ function hideSelected() {
 }
 
 /**
- * Run the selected workflow.
+ * Run… opens the Run popup on THIS card (v1.12 F5).
  *
- * Until F5 lands the Run popup, this opens the shipped run panel, which is
- * the app's only way to start a run today. Refused outright while several are
- * selected: the button stays on screen and `aria-disabled` says why, rather
- * than disappearing and leaving nothing to explain.
+ * No picture behind it, so the popup shows the card's cover, an empty prompt
+ * and a set picker for where the output is filed - which is the one thing a
+ * card-sourced run has to be told and a picture-sourced one already knows.
+ *
+ * Refused outright while several are selected: the button stays on screen and
+ * `aria-disabled` says why, rather than disappearing and leaving nothing to
+ * explain.
  */
 function run() {
-  if (multiple.value) return;
-  runStore.openFor("toolbar");
+  if (multiple.value || !card.value) return;
+  runDialog.openRun({
+    kind: "card",
+    workflowKey: card.value.key,
+    name: card.value.name,
+    // Through the helper: a raw `covers` entry is API-relative and an
+    // `<img src>` resolves it against the page origin instead.
+    coverUrl: card.value.covers?.[0]
+      ? workflowCoverUrl(card.value.covers[0])
+      : "",
+    emptyPrompt: true,
+  });
 }
 
 watch(selectedKey, (key) => loadDetail(key), { immediate: true });

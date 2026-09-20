@@ -908,18 +908,21 @@ describe("the app-wide toolbar tail", () => {
     expect(tag).toContain('@open-settings="openSettingsDialog"');
   });
 
-  // A run force-opens this rail (`useWorkflowRunStore.openFor`), so the run
-  // panel has to outrank the inspector or the rail opens on "Pick a workflow"
-  // while the run is in progress. Source-asserted for the reason above.
-  it("leaves a running workflow's panel ahead of the inspector", async () => {
+  // Nothing contends for this rail any more. The run panel that used to
+  // outrank it became a popup in v1.12 F5 (#1407) - mounted in App.vue over
+  // everything rather than in the rail - so `/workflows` is the one branch
+  // left ahead of the stats panel, and a second one reappearing here would
+  // mean the rail could open on the wrong thing again. Source-asserted for
+  // the reason above.
+  it("gives the rail to the Workflow tab, with nothing contending", async () => {
     const { readFileSync } = await import("node:fs");
     const app = readFileSync(`${process.cwd()}/src/App.vue`, "utf8");
-    const run = app.indexOf("<WorkflowRunPanel");
-    const rail = app.indexOf("<WorkflowTab");
-    expect(run).toBeGreaterThan(-1);
-    expect(run).toBeLessThan(rail);
-    expect(app.slice(run, rail)).toContain('v-if="workflowRunStore.open"');
-    expect(app.slice(rail, rail + 80)).toContain("v-else-if");
+    expect(app).not.toContain("WorkflowRunPanel");
+    const rail = app.indexOf("<WorkflowTab v-if");
+    expect(rail).toBeGreaterThan(-1);
+    expect(app.slice(rail, rail + 80)).toContain('v-if="isWorkflowsView"');
+    // The stats panel is still the fallback, not a second branch above it.
+    expect(app.slice(rail, rail + 200)).toContain("<StatsSidebar v-else");
   });
 });
 

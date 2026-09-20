@@ -468,10 +468,16 @@ defineExpose({ openMenuAt });
 /**
  * The menu, built once from the member under the pointer.
  *
- * *Run…* and *Rename* are the design's other two items and are not here: one
- * wants the run panel, which nothing on this screen opens yet, and the other
- * wants somewhere to type. Both are writes this panel can reach once those
- * exist; neither is drawn disabled, because an item that has never done
+ * *Run…* and *Rename* are the design's other two items and are not here.
+ * *Rename* wants somewhere to type, which this panel still has nowhere for.
+ *
+ * *Run…* no longer wants for a surface: F5 (#1407) made running a popup,
+ * mounted in `App.vue` and opened for a card by the Workflow tab on this very
+ * screen (`runDialogStore.openRun({kind: "card", workflowKey})`). What it
+ * wants now is the member menu's own decision - a member is a stack's other
+ * card, so the popup would open on that key rather than on the cover's - and
+ * that belongs to whoever adds the item rather than to the step that built
+ * the popup. Neither is drawn disabled, because an item that has never done
  * anything is not a control a reader should have to discount.
  */
 const menuItems = computed(() => {

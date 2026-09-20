@@ -196,10 +196,10 @@
       </div>
 
       <!-- The footer the design pins at the bottom. It holds Run… and Save;
-           Save needs saved recipes and Run… is the Run popup, neither of which
-           exists yet, so today this is the one replay the app already has.
-           *Use as input for…* is beside it (#1406): it is what an A1111
-           picture, and any picture at all, can always do. -->
+           Save needs saved recipes, so today it is Run… (the Run popup, #1407)
+           and, beside it, *Run another workflow…* (#1406) - the same popup with
+           its workflow picker unset, which is what an A1111 picture, and any
+           picture at all, can still do. -->
       <div class="recipe-foot">
         <!-- The reason in prose as well as on the button. A tooltip is not a
              sentence everyone gets: it needs a hover or a focus, and the
@@ -229,11 +229,11 @@
             block
             :aria-disabled="runReason ? 'true' : undefined"
             :aria-describedby="runReason ? runReasonId : undefined"
-            @click="onGenerateVariants"
+            @click="onRun"
           >
             <Tooltip :text="runTooltip" activator="parent" :describe="false" />
             <v-icon size="16">mdi-play</v-icon>
-            Generate variants…
+            Run…
           </AppButton>
           <AppButton
             v-if="comfyuiConfigured"
@@ -243,12 +243,13 @@
             :aria-disabled="useAsInputReason ? 'true' : undefined"
             :aria-describedby="inputDescribedBy"
             :tooltip="
-              useAsInputReason || 'Run a workflow with this picture as its input'
+              useAsInputReason ||
+              'Run another workflow, starting from this picture\'s recipe'
             "
             @click="onUseAsInput"
           >
-            <v-icon size="16">mdi-image-plus</v-icon>
-            Use as input for…
+            <v-icon size="16">mdi-sitemap-outline</v-icon>
+            Run another workflow…
           </AppButton>
         </div>
       </div>
@@ -270,9 +271,9 @@
  * **Four things the design draws are absent rather than faked**, because the
  * data behind each is a later step of that plan: the "Matches your saved recipe
  * X" banner and the Save button (saved recipes), the workflow's name and the
- * stack it is in (the workflow cards read), the workflow's own value beside an
- * overridden setting (the workflow defaults read), and Run… as the Run popup.
- * Generate variants is the replay the app ships today and stands in its place.
+ * stack it is in (the workflow cards read), and the workflow's own value beside
+ * an overridden setting (the workflow defaults read). Run… itself is the Run
+ * popup (F5, #1407).
  */
 import { computed, reactive, ref, useId, watch } from "vue";
 import { useRouter } from "vue-router";
@@ -297,7 +298,7 @@ const props = defineProps({
   comfyuiConfigured: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["generate-variants", "use-as-input"]);
+const emit = defineEmits(["run", "use-as-input"]);
 
 const runReasonId = useId();
 const inputReasonId = useId();
@@ -357,7 +358,14 @@ const runReason = computed(() => {
 });
 
 /**
- * Why the picture cannot be offered as a workflow's input, or null when it can.
+ * Why another workflow cannot be run from this picture, or null when it can.
+ *
+ * **It is not "use this picture as an input", whatever the control used to
+ * say.** That went with the rail run panel in v1.12 F5: `POST /workflows/run`
+ * has no `inputs` field and uploads nothing into ComfyUI's input folder, so a
+ * button promising it would send a picture and get a run that never read it -
+ * the backend's own words for why it declines to take the field. What the
+ * button does now is open the Run popup with its workflow picker unset.
  *
  * The two context menus that carry the same action are the contract: both
  * fence the entry on `comfyuiConfigured` (no ComfyUI, nothing to be an input
@@ -389,10 +397,10 @@ const inputDescribedBy = computed(() => {
   return inputReasonIsOwn.value ? inputReasonId : runReasonId;
 });
 
-function onGenerateVariants() {
+function onRun() {
   // `aria-disabled` leaves the button clickable, so the refusal is here.
   if (runReason.value) return;
-  emit("generate-variants");
+  emit("run");
 }
 
 function onUseAsInput() {
@@ -521,7 +529,7 @@ function formatStrength(strength) {
 }
 
 const runTooltip = computed(
-  () => runReason.value || "Run this recipe again with a fresh seed",
+  () => runReason.value || "Run this recipe again, with everything editable",
 );
 
 function modelTooltip(model) {

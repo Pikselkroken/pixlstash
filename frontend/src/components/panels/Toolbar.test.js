@@ -543,21 +543,46 @@ describe("Toolbar - the ⋯ overflow mirrors its controls", () => {
     const panel = await openOverflow(wrapper);
     const labels = panel.findAll(".ctx-item").map((b) => b.text());
     expect(labels).toEqual([
+      "Generate with ComfyUI…",
       "Export grid to zip",
       "Import photos…",
-      "Generate with ComfyUI…",
       "View options…",
     ]);
   });
 
-  // The rows honour the SAME v-ifs as the buttons they mirror: no ComfyUI
-  // configured, no row; read-only drops Import (owner-only dialog) and
-  // History (there is no UndoControl to open).
-  it("mirrors the v-ifs: ComfyUI row only when configured", async () => {
+  // The rail panel this used to open is gone (v1.12 F5); the entry stays and
+  // opens the Run popup instead. Without a door here, starting a run with
+  // nothing selected meant navigating to Workflows first - every other entry
+  // point is selection-scoped or needs a picture open.
+  it("opens the Run popup with no selection, picker unset", async () => {
+    const filterStore = useFilterStore();
+    filterStore.comfyuiConfigured = true;
+    const wrapper = mountToolbar();
+    const { useRunDialogStore } = await import("../../stores/useRunDialogStore");
+    const runDialog = useRunDialogStore();
+
+    await wrapper
+      .find('button[aria-label^="Generate new pictures"]')
+      .trigger("click");
+
+    expect(runDialog.source).toMatchObject({
+      kind: "card",
+      pickWorkflow: true,
+    });
+    // No pictures, so the card is the run's own source and the popup picks
+    // where the output is filed.
+    expect(runDialog.source.pictureIds).toEqual([]);
+  });
+
+  it("hides the entry entirely when ComfyUI is not configured", async () => {
     const wrapper = mountToolbar();
     const panel = await openOverflow(wrapper);
-    const labels = panel.findAll(".ctx-item").map((b) => b.text());
-    expect(labels).not.toContain("Generate with ComfyUI…");
+    expect(panel.findAll(".ctx-item").map((b) => b.text())).not.toContain(
+      "Generate with ComfyUI…",
+    );
+    expect(
+      wrapper.find('button[aria-label^="Generate new pictures"]').exists(),
+    ).toBe(false);
   });
 
   it("honours read-only: the Import row is gone", async () => {

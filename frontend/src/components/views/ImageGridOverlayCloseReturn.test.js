@@ -153,13 +153,16 @@ describe("closing the lightbox opened from the workflow library", () => {
   });
 
   it("stays on the grid when the grid closes it to show its own result", () => {
-    // "Use as input" closes the lightbox because the run panel it opens is the
-    // rail the lightbox covers. Leaving for the shelf would open that panel on a
-    // screen with no grid and no selection to run against.
+    // The Run popup closes the lightbox so the popup is not opened behind it.
+    // (This was "use as input" and the rail run panel until #1407.) Leaving for
+    // the shelf would be worse here than on the other such paths: the popup is
+    // App.vue's, but the progress runner and the view context are this grid's
+    // and `onUnmounted` closes the popup with them - so the jump would shut the
+    // popup the reader had just opened.
     Object.assign(routeQuery, { overlay: "812", from: "/workflows" });
     const wrapper = mountGrid();
 
-    wrapper.vm.useOverlayPictureAsInput(812);
+    wrapper.vm.runWorkflowOnPicture(812);
 
     // Still here - and `?from=` is spent, so the reader's NEXT close does not
     // jump either.

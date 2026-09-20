@@ -924,8 +924,8 @@ its own, a CLIP source that reads the model, no model, a node this ComfyUI
 lacks or that does not say what it hands on, ComfyUI unreachable).
 `has_lora_loader` is `null` for a UI-format file. `pixlstash_loader` says the
 digest loader could be the one inserted, which leaves the outputs unreplayable
-by "Generate variants"; the recipe read reports it `false`, since that route
-never inserts it. `GET /comfyui/pictures/{id}/recipe` carries
+by a later replay of the same recipe; the recipe read reports it `false`, since
+that route never inserts it. `GET /comfyui/pictures/{id}/recipe` carries
 the same `{plan, reason}` as `lora_insertion` when its `lora_slots` is empty. The
 run recomputes the plan rather than trusting one sent back. The loader added is
 `LoraLoader` (`LoraLoaderModelOnly` where nothing reads a CLIP) when this ComfyUI
@@ -1474,9 +1474,11 @@ The **Segment** action runs Florence-2 object detection over the selected pictur
        "elements":[{"type":"obj","bbox":[y_min,x_min,y_max,x_max],"desc":"dog"}]}}
     ```
 
-### 11.2 Remix — "Generate variants" (v1.9)
+### 11.2 Replaying a picture's recipe (v1.9; the popup is v1.12 F5)
 
-Right-clicking a grid image offers **Generate variants…**, which runs one picture through the shipped ComfyUI engine. It follows the WebSocket branch of the rule above: the dialog submits, closes, and the app-wide `ComfyUiRunner` owns progress; the output arrives as a normal `picture_imported` event and is inserted in place (§8).
+A picture's own recipe can be run again through the shipped ComfyUI engine. It follows the WebSocket branch of the rule above: the dialog submits, closes, and the app-wide `ComfyUiRunner` owns progress; the output arrives as a normal `picture_imported` event and is inserted in place (§8).
+
+**The dialog that owned this pair of round trips was `RemixDialog` ("Generate variants…"), deleted in v1.12 F5 (#1407).** The recipe read below is unchanged and is still what the lightbox's Recipe tab and the Run popup prefill from; what changed is the *submit*. The Run popup sends `POST /api/v1/workflows/run` (§ the one run route, B7) rather than `POST /comfyui/run_recipe`, so the reason codes it renders are that route's, not this one's `preflight`. `run_recipe` itself is unchanged and still shipped.
 
 Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_POLICIES`):
 
@@ -1519,7 +1521,7 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
 **But the graph is still untrusted input, and the contract reflects that** (review finding R3, CWE-829). It is authored by whoever made the image file; replaying it executes it on the owner's ComfyUI, bounded only by their installed node packs. The owner is the trust anchor, so the two sides split the job:
 
 - **Server side.** `run_recipe` returns **400** when `preflight.checked` is false and the body carries no `allow_unchecked: true`. The refusal is enforced on the server, not only in the dialog — a UI-only gate is not a gate. `allow_unchecked` is accepted as `allow_unchecked` or `allowUnchecked`, matching the existing `client_id`/`clientId` pair, and an accepted override is logged with the node classes that ran.
-- **Client side.** The SPA must render `node_classes` before the run button is usable, must send `allow_unchecked` **only** for a run the user explicitly acknowledged (never as a constant, never when `preflight.checked` is true), and must surface `source_is_imported` as information rather than a gate (it is the Source row in the disclosure; it was a banner until 2026-08-06, which fired on the common watched-folder case). See the `RemixDialog.vue` consent section in `frontend_architecture.md` for why the gate is deliberately narrow: an acknowledgement in front of a common state becomes a reflex and stops protecting the rare one.
+- **Client side.** The SPA must render `node_classes` before the run button is usable, must send `allow_unchecked` **only** for a run the user explicitly acknowledged (never as a constant, never when `preflight.checked` is true), and must surface `source_is_imported` as information rather than a gate (it is the Source row in the disclosure; it was a banner until 2026-08-06, which fired on the common watched-folder case). The gate is deliberately narrow: an acknowledgement in front of a common state becomes a reflex and stops protecting the rare one. **The v1.12 Run popup goes one step further and never sends `allow_unchecked` at all** — an uninspectable ComfyUI blocks the run, and the backend refuses independently — so `allow_unchecked` now has no caller in this app and remains for programmatic ones.
 
 **Seed ranges differ between the routes** — 32-bit for the template paths, 64-bit for replay (the shipped Flux2 Klein template's own `noise_seed` exceeds 2³²). The dialog caps its input at `Number.MAX_SAFE_INTEGER` regardless, because above 2⁵³ a JavaScript number cannot carry the value the user typed.
 

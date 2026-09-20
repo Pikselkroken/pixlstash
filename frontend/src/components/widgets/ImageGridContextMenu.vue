@@ -167,9 +167,15 @@
             <v-icon class="ctx-icon">mdi-image-search-outline</v-icon>
             Reverse image search
           </button>
-          <!-- 4. Use as input for a workflow (#1406). Acts on the overlay
-               picture and closes the lightbox, because the run panel it opens
-               is the rail the lightbox covers. -->
+          <!-- 4. Run another workflow from this picture (#1406, reworded in
+               #1407). Acts on the overlay picture and closes the lightbox,
+               which the popup would otherwise open behind.
+
+               It used to say "Use as input for…", and it must not: the Run
+               popup sends `POST /workflows/run`, which has no `inputs` field
+               and uploads nothing into ComfyUI's input folder. The picture
+               chooses the recipe to start from; it is not fed into the
+               graph. -->
           <button
             v-if="comfyuiConfigured && contextImage?.id"
             class="ctx-item"
@@ -178,11 +184,11 @@
             @click="delegateWith('use-as-input', contextImage?.id)"
           >
             <Tooltip
-              text="Run a workflow with this picture as its input"
+              text="Run another workflow, starting from this picture's recipe"
               activator="parent"
             />
-            <v-icon class="ctx-icon">mdi-image-plus</v-icon>
-            Use as input for…
+            <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
+            Run another workflow…
           </button>
           <!-- 5. Segment -->
           <button
@@ -489,27 +495,30 @@
           <v-icon class="ctx-icon">mdi-tune-variant</v-icon>
           Filters
         </button>
+        <!-- The two run entries, mirrored word for word in SelectionMenu.vue
+             and asserted by frontend/e2e/specs/menu-parity.spec.js: both act
+             on the SELECTION, so neither is context-only. -->
         <button
           v-if="comfyuiConfigured"
           class="ctx-item"
-          :disabled="!contextImage || isReadOnly"
-          @click="delegateWith('open-remix-dialog', contextImage?.id)"
+          :disabled="!selectedImageIds.length || isReadOnly"
+          @click="delegate('make-more')"
         >
           <Tooltip
-            text="Generate variants from this image"
+            text="Run each picture's own recipe again, with a new seed"
             activator="parent"
           />
-          <v-icon class="ctx-icon">mdi-auto-fix</v-icon>
-          Generate variants…
+          <v-icon class="ctx-icon">mdi-content-copy</v-icon>
+          Make more like these…
         </button>
         <button
           v-if="comfyuiConfigured"
           class="ctx-item"
           :disabled="!selectedImageIds.length || isReadOnly"
-          @click="delegate('open-comfyui-panel')"
+          @click="delegate('run-workflow')"
         >
-          <v-icon class="ctx-icon">mdi-image-plus</v-icon>
-          Use as input for…
+          <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
+          Run a workflow on these…
         </button>
         <button
           class="ctx-item"
@@ -874,8 +883,8 @@ const emit = defineEmits([
   "delete-selected",
   "open-tag-panel",
   "open-plugin-panel",
-  "open-comfyui-panel",
-  "open-remix-dialog",
+  "make-more",
+  "run-workflow",
   "use-as-input",
   "segment",
   "auto-tag",
