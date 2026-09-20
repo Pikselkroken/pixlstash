@@ -4381,19 +4381,32 @@ def test_full_restore_drains_an_admitted_share_before_swap(server, monkeypatch):
     share_thread = threading.Thread(target=_share_request, daemon=True)
     restore_thread = threading.Thread(target=_restore, daemon=True)
     share_thread.start()
-    if not admitted.wait(10):
-        raise AssertionError(
-            "share request never acquired its admission lease: "
-            f"{share_outcome.get('error')!r}"
+    try:
+        if not admitted.wait(10):
+            raise AssertionError(
+                "share request never acquired its admission lease: "
+                f"{share_outcome.get('error')!r}"
+            )
+        restore_thread.start()
+        assert close_started.wait(20), "restore never began the admission drain"
+        assert server.auth.is_auth_closed_for_restore()
+        assert not swap_started.wait(0.2), (
+            "database swapped before share request drained"
         )
-    restore_thread.start()
-    assert close_started.wait(20), "restore never began the admission drain"
-    assert server.auth.is_auth_closed_for_restore()
-    assert not swap_started.wait(0.2), "database swapped before share request drained"
+    finally:
+        # Inside the try, so an orchestration assertion that fires still
+        # releases and joins the paused handler: left blocked it sits on
+        # release_share.wait(120) holding the scratch snapshot.sqlite open,
+        # and the next test's snapshots rmtree fails on Windows.
+        release_share.set()
+        share_thread.join(timeout=10)
+        if restore_thread.ident is not None:  # never started if admission failed
+            # Past the 30 s _RESTORE_DRAIN_TIMEOUT_SECONDS with room for the
+            # swap: on the passing path the is_alive assert below then reports
+            # a wedged restore rather than a join that quietly expired. When an
+            # assertion above fired, this is only the drain being let finish.
+            restore_thread.join(timeout=90)
 
-    release_share.set()
-    share_thread.join(timeout=10)
-    restore_thread.join(timeout=30)
     assert not share_thread.is_alive(), "share request did not finish"
     assert not restore_thread.is_alive(), "restore did not finish after share drain"
     assert "error" not in share_outcome, share_outcome.get("error")
@@ -4495,17 +4508,30 @@ def test_full_restore_drains_an_admitted_http_request_before_swap(server, monkey
     blocked_thread = threading.Thread(target=_blocked_request, daemon=True)
     restore_thread = threading.Thread(target=_restore_request, daemon=True)
     blocked_thread.start()
-    assert admitted.wait(10), "request never acquired its admission lease"
-    restore_thread.start()
-    assert close_started.wait(20), "restore never began the admission drain"
-    assert server.auth.is_auth_closed_for_restore()
-    assert not swap_started.wait(0.2), "database swapped before prior request drained"
-    unavailable = TestClient(server.api).get("/api/v1/session/context")
-    assert unavailable.status_code == 503, unavailable.text
+    try:
+        assert admitted.wait(10), "request never acquired its admission lease"
+        restore_thread.start()
+        assert close_started.wait(20), "restore never began the admission drain"
+        assert server.auth.is_auth_closed_for_restore()
+        assert not swap_started.wait(0.2), (
+            "database swapped before prior request drained"
+        )
+        unavailable = TestClient(server.api).get("/api/v1/session/context")
+        assert unavailable.status_code == 503, unavailable.text
+    finally:
+        # Inside the try, so an orchestration assertion that fires still
+        # releases and joins the paused handler: left blocked it sits on
+        # release_request.wait(120) holding the scratch snapshot.sqlite open,
+        # and the next test's snapshots rmtree fails on Windows.
+        release_request.set()
+        blocked_thread.join(timeout=10)
+        if restore_thread.ident is not None:  # never started if admission failed
+            # Past the 30 s _RESTORE_DRAIN_TIMEOUT_SECONDS with room for the
+            # swap: on the passing path the is_alive assert below then reports
+            # a wedged restore rather than a join that quietly expired. When an
+            # assertion above fired, this is only the drain being let finish.
+            restore_thread.join(timeout=90)
 
-    release_request.set()
-    blocked_thread.join(timeout=10)
-    restore_thread.join(timeout=30)
     assert not blocked_thread.is_alive(), "admitted request did not finish"
     assert not restore_thread.is_alive(), "restore did not finish after drain"
     assert blocked_outcome["response"].status_code == 200

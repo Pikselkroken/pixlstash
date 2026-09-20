@@ -24,9 +24,8 @@ import App from "../App.vue";
 //   /models                                 → Model shelf (adapters/checkpoints)
 //   /models?model=<id>                      → …opened on that model (a Recipe chip's link)
 //   /models/runs                            → ai-toolkit training runs, the shelf's second view
-//   /workflows                              → the workflow library (topologies)
+//   /workflows                              → the Workflows grid (one card per workflow)
 //   /workflows?topology=<hash>              → …opened on that workflow (the Recipe section's Open)
-//   /workflows-next                         → the new Workflows grid (v1.12 F1a, temporary, no sidebar entry)
 //   /ref-folder/:id                         → Reference folder view (id = numeric)
 //   /import-folder/:id                      → Import folder view (id = numeric)
 //
@@ -37,6 +36,15 @@ import App from "../App.vue";
 //                                  have no id of their own (a subfolder, or a
 //                                  folder an insight points at).
 //   ?overlay=<pictureId>         → Open ImageOverlay for that picture
+//   ?from=<path>                 → Where closing that overlay goes, for the
+//                                  destinations that replace the grid the
+//                                  lightbox lives in. NOTHING SETS IT TODAY:
+//                                  the workflow shelf's picture tiles were its
+//                                  only producer and went with the shelf in
+//                                  F1b, so every close takes the absent
+//                                  branch - stay put, drop ?overlay= - until
+//                                  F7's "Show all N pictures" chip.
+//                                  (see utils/overlayRoute.js)
 //   ?review=board                → Open the tag-review overlay on the health board
 //   ?review=<reviewId>           → …on that review (open session or archived receipt)
 //   ?review_project=<id>         → Board scope: project
@@ -62,9 +70,6 @@ const routes = [
   { path: "/models", name: "models", component: App },
   { path: "/models/runs", name: "models-runs", component: App },
   { path: "/workflows", name: "workflows", component: App },
-  // v1.12 F1a: the new Workflows grid, with no sidebar entry. F1b moves it
-  // onto `/workflows` and deletes this line.
-  { path: "/workflows-next", name: "workflows-next", component: App },
   // The runs were briefly a destination of their own. They are a view of the
   // shelf, so the old path redirects rather than 404s - it was published.
   { path: "/training-runs", redirect: "/models/runs" },

@@ -7,22 +7,35 @@
 // nothing translates between the two and inverts a meaning on the way:
 //
 //   {
-//     key, name, type, imported,
-//     models: [{ name, kind, mark? }],  // every non-LoRA slot: checkpoint,
+//     key, name, type, type_label, imported,
+//                                       // `type_label` is `type` as ComfyUI
+//                                       // spells it ("Text to Image"); the
+//                                       // name row and the type chip both
+//                                       // read it, so one fact has one voice
+//     models: [{ name, kind, mark?, slot_label? }],
+//                                       // every non-LoRA slot: checkpoint,
 //                                       // unet, vae, clip… `kind` is the slot
-//     loras:  [{ name, mark }],         // "structural" = in the workflow
+//     loras:  [{ name, mark, slot_label? }],
+//                                       // "structural" = in the workflow
 //                                       // (a filled chip), "recipe" = a slot
-//                                       // the recipe fills (dashed)
+//                                       // the recipe fills (dashed).
+//                                       // `slot_label` is the address
+//                                       // `PUT /workflows/{key}/slots` marks
 //     differs_by: [string],             // a stack: the union over its members
 //     picture_count, rating,            // rating 1-5; 0 or null is unrated
-//     covers: [url],                    // up to 3, the cover first
+//     covers: [url],                    // up to 3, the cover first. An
+//                                       // API-RELATIVE path, so a consumer
+//                                       // putting one in an <img src> has to
+//                                       // prepend API_BASE_URL and append the
+//                                       // share token itself (WorkflowCard).
 //     stack_size,                       // 2 or more makes the card a stack
 //     member_keys,                      // the stack's OTHER cards, this one
 //                                       // excluded, so it is `stack_size - 1`
 //                                       // long; both are derived from one
 //                                       // list in `workflow_card_service`
 //     saved_recipe_count,
-//     defaults: [{ label, value }],
+//     defaults: [{ label, slot_label, input_name, value, provenance }],
+//                                       // `provenance` is best | all | edited
 //     // Read by the Workflows grid rather than by the card itself, and listed
 //     // here because this block is the shape's one description (F1a, #1402):
 //     rank,                             // the Bayesian cover rank the grid is
@@ -30,13 +43,19 @@
 //                                       // smoothed towards the library mean,
 //                                       // so it orders cards against each
 //                                       // other and means nothing alone.
+//     stack_id,                         // the stack this card sits in, or
+//                                       // null. `PUT /workflows/stacks/{id}/
+//                                       // order` is addressed by it and
+//                                       // nothing else on the card derives
+//                                       // it (F2, #1405).
 //     last_used,                        // ISO, or null when the card has no
 //                                       // kept pictures. The *Recently used*
 //                                       // sort; null sorts below every date.
 //   }
 //
-// A card row names the checkpoint only; ⓘ lists every model, so a stack whose
-// difference is "other models" always has the models behind it.
+// A card row names the BASE MODEL only (checkpoint, or the unet a Flux or SD3
+// graph carries instead); ⓘ lists every model, so a stack whose difference is
+// "other models" always has the models behind it.
 
 const RECIPE = "recipe";
 
@@ -65,12 +84,45 @@ export function isStack(card) {
   return (card.stack_size ?? 0) > 1;
 }
 
-/** The model the card's second row names: the checkpoint, or the first slot. */
+/**
+ * The slot kinds that name the BASE MODEL, most preferred first.
+ *
+ * **Kept identical to `BASE_MODEL_KINDS`** in
+ * `services/workflow_card_service.py`, which the server derives from
+ * `CHECKPOINT_WIDGETS`, and asserted by
+ * `tests/test_architecture_guardrails.py::test_base_model_kinds_agree_across_the_stack`.
+ *
+ * A list here at all because this is a PREFERENCE among slots the payload
+ * already carries, not a fact about the graph - but a preference that has to
+ * agree with the one the card was NAMED by, or the name row and the model row
+ * describe different models. That pair is exactly what drifted before (#1416),
+ * so it is asserted rather than agreed.
+ */
+const BASE_MODEL_KINDS = [
+  "checkpoint",
+  "unet",
+  "checkpoint_id",
+  "diffusion_model",
+  "model_path",
+];
+
+/**
+ * The model the card's second row names: its base model.
+ *
+ * **Never "the first slot".** It was, and slot order is document order, so a
+ * Flux or SD3 graph - which has no `checkpoint` kind at all, only `unet` -
+ * showed its VAE or a text encoder as the model the card is about, and said so
+ * to a screen reader too. The card's name row learned this first and the two
+ * halves of one card then disagreed. `null` when a graph loads no base model,
+ * so the row can say so rather than name an accessory.
+ */
 export function checkpointModel(card) {
   const models = card.models ?? [];
-  return (
-    models.find((model) => model.kind === "checkpoint") ?? models[0] ?? null
-  );
+  for (const kind of BASE_MODEL_KINDS) {
+    const match = models.find((model) => model.kind === kind && model.name);
+    if (match) return match;
+  }
+  return null;
 }
 
 /** The LoRA row: a filled chip per workflow LoRA, a dashed one per recipe slot. */
@@ -92,7 +144,11 @@ export function factChips(card) {
     ? (card.differs_by ?? [])
     : [
         ...(card.differs_by ?? []),
-        card.type,
+        // The SERVED label, so the chip and a generated name say the type in
+        // one vocabulary rather than reading `Text to Image` on row 1 and
+        // `txt2img` on row 4. Falls back to the token for a payload that
+        // predates `type_label`.
+        card.type_label ?? card.type,
         card.imported ? "imported" : null,
       ].filter(Boolean);
   return labels.map((label, i) => ({ key: `fact-${i}`, label, fact: true }));

@@ -55,6 +55,7 @@ from pixlstash.hub.workflow_card_reads import (
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.services.workflow_identity import (
+    CHECKPOINT_WIDGETS,
     RECIPE,
     differs_by_reduced,
     reduce_stored_document,
@@ -117,16 +118,43 @@ _SLOT_KINDS = {
     "control_net_name": "controlnet",
 }
 
+# The slot kinds that name the BASE MODEL, most preferred first.
+#
+# **Derived from `CHECKPOINT_WIDGETS`, never hand-copied.** That set, in
+# `workflow_identity`, is where "what counts as a base model" is actually
+# decided - it is what makes `differs_by` say *other checkpoint* - and a second
+# copy of the answer is the exact drift `CHECKPOINT_WIDGETS` itself was written
+# to end (#1416). A sixth widget added there is a base model here the same day,
+# with no edit and nothing to remember.
+#
+# `checkpoint` then `unet` by hand because those two have a real order: a graph
+# carrying both is led by its checkpoint. The rest are alphabetical, which is
+# arbitrary and says so - they are alternative spellings of the same slot and
+# no graph carries two of them.
+BASE_MODEL_KINDS = ("checkpoint", "unet") + tuple(
+    sorted(
+        _SLOT_KINDS.get(widget, widget)
+        for widget in CHECKPOINT_WIDGETS - {"ckpt_name", "unet_name"}
+    )
+)
+
 _EPOCH = datetime.min
 
 
 @dataclass(frozen=True)
 class SlotModel:
-    """One model a card names: its file, and which slot it sits in."""
+    """One model a card names: its file, and which slot it sits in.
+
+    ``label`` is the slot's address - the same one ``PUT /workflows/{key}/
+    slots`` marks and ``workflow_default_override`` is keyed on. It travels
+    with the slot because a client that draws a LoRA's Workflow/Recipe switch
+    has nothing else to name the slot it just flipped.
+    """
 
     name: Optional[str]
     kind: str
     mark: Optional[str] = None
+    label: Optional[str] = None
 
 
 @dataclass
@@ -449,7 +477,41 @@ def read_grid(hub: HubDatabase, vault) -> Grid:
     # on the detail route, and it would otherwise show a cover the owner has
     # already replaced. The same single query either way.
     _apply_chosen_covers(hub, vault, figures)
-    stacks, belongs = effective_stacks(visible, stack_rows(hub))
+    rows = stack_rows(hub)
+    # **The id is served only where the grid drew the WHOLE stack.**
+    # `PUT /workflows/stacks/{id}/order` takes a complete member list and
+    # refuses one that names anything less, deliberately - a key left out
+    # would leave the stack with no record that it had gone. It counts the
+    # hidden cards and the one-offs this listing dropped above, so a client
+    # ordering what the grid gave it would be refused with a sentence about
+    # keys it was never told existed. Grouping the whole set alongside the
+    # drawn one is how that is detected: same pure function, same rows, no
+    # second query. A client reads the null as "this stack cannot be
+    # addressed from here" and offers no reorder at all, which is the one
+    # honest answer while the panel can only show part of it.
+    whole = {
+        stack.stack_id: set(stack.member_keys)
+        for stack in effective_stacks(figures, rows)[0]
+    }
+    # **That pass WROTE `stack_id` onto every figure it grouped**, hidden
+    # cards and one-offs included, and nothing below would clear them: the
+    # drawn pass only ever sets ids, and a card whose group collapses below
+    # two once the dropped cards are taken is in no drawn stack to be
+    # revisited. It would be served `stack_size: 1` beside a non-null id -
+    # the one state the field's contract says cannot happen. Cleared here,
+    # before the grouping whose answer is served.
+    for figure in figures:
+        figure.stack_id = None
+    stacks, belongs = effective_stacks(visible, rows)
+    partial = {
+        key
+        for stack in stacks
+        if whole.get(stack.stack_id) != set(stack.member_keys)
+        for key in stack.member_keys
+    }
+    for figure in figures:
+        if figure.card.workflow_key in partial:
+            figure.stack_id = None
     describe_differences(hub, visible, stacks)
     # Every member, not only the cover. The grid draws the cover alone, so this
     # costs it nothing - but a member opened on its own carries the difference
@@ -527,7 +589,10 @@ def _describe_slots(hub: HubDatabase, figures: list[CardFigures]) -> None:
                 name = next_name(widget)
                 figure.loras.append(
                     SlotModel(
-                        name=None if mark == RECIPE else name, kind="lora", mark=mark
+                        name=None if mark == RECIPE else name,
+                        kind="lora",
+                        mark=mark,
+                        label=str(slot.get("label") or "") or None,
                     )
                 )
             else:
@@ -535,6 +600,7 @@ def _describe_slots(hub: HubDatabase, figures: list[CardFigures]) -> None:
                     SlotModel(
                         name=next_name(widget),
                         kind=_SLOT_KINDS.get(widget, widget or "model"),
+                        label=str(slot.get("label") or "") or None,
                     )
                 )
 

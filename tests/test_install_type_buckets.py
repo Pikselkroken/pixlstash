@@ -45,7 +45,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from pixlstash.server import Server
+from pixlstash.server import Server, _log_install_detection_once
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VERSION_CHECK_JS = REPO_ROOT / "frontend" / "src" / "composables" / "useVersionCheck.js"
@@ -73,6 +73,9 @@ def isolate_the_machine(tmp_path, monkeypatch):
     )
     monkeypatch.delenv(Server.DEV_MACHINE_ENV_VAR, raising=False)
     monkeypatch.delenv("PIXLSTASH_INSTALL_TYPE", raising=False)
+    # Detection lines are logged once per distinct message for the life of the
+    # process, so one test's line would silence the next test's assertion on it.
+    _log_install_detection_once.cache_clear()
     return tmp_path
 
 
@@ -362,6 +365,71 @@ def test_marker_file_absent_falls_back_to_detection(isolate_the_machine):
     result = Server.detect_install_type()
     assert result in Server.INSTALL_TYPES
     assert result != "dev"
+
+
+def test_detection_explains_itself_once_not_once_per_request(monkeypatch, caplog):
+    """The reason for the bucket is logged once, not on every request.
+
+    ``detect_install_type()`` runs per request - ``GET /version`` and every SPA
+    document the frontend fallback answers - and it used to log its reasoning
+    each time. On a machine declaring ``PIXLSTASH_TELEMETRY_DEV`` a grid of
+    thumbnails produced thousands of identical INFO lines and the log became
+    unreadable. The value still has to be explained; it has to be explained
+    once.
+    """
+    monkeypatch.setenv(Server.DEV_MACHINE_ENV_VAR, "1")
+
+    with caplog.at_level(logging.INFO, logger="pixlstash.server"):
+        for _ in range(5):
+            assert Server.detect_install_type() == "dev"
+
+    said = [r for r in caplog.records if "declares a development machine" in r.message]
+    assert len(said) == 1, (
+        f"the reason was logged {len(said)} times for 5 detections; this is the "
+        "flood the once-only logging exists to stop"
+    )
+
+
+@pytest.mark.parametrize(
+    ("setup", "needle"),
+    [
+        pytest.param(
+            {"PIXLSTASH_INSTALL_TYPE": "electron"},
+            "Using PIXLSTASH_INSTALL_TYPE override",
+            id="channel-override",
+        ),
+        pytest.param(
+            {"PIXLSTASH_INSTALL_TYPE": "not-a-bucket"},
+            "Ignoring invalid PIXLSTASH_INSTALL_TYPE",
+            id="invalid-override",
+        ),
+    ],
+)
+def test_every_detection_line_is_said_once_not_per_request(
+    monkeypatch, caplog, setup, needle
+):
+    """The once-only treatment covers the whole class, not just the dev line.
+
+    The dev-machine line is the one that was reported, and it is the one
+    nobody but a maintainer ever sees. The desktop shell exports
+    ``PIXLSTASH_INSTALL_TYPE=electron`` on *every* launch
+    (``electron/src/backend/ServerProcess.ts``), so the override line is the
+    same flood in every shipped desktop install; the invalid-override warning
+    is the same flood for a mistyped declaration. Deduplicating only the
+    reported instance would have left both of them running.
+    """
+    for name, value in setup.items():
+        monkeypatch.setenv(name, value)
+
+    with caplog.at_level(logging.INFO, logger="pixlstash.server"):
+        for _ in range(5):
+            Server.detect_install_type()
+
+    said = [r for r in caplog.records if needle in r.message]
+    assert len(said) == 1, (
+        f"{needle!r} was logged {len(said)} times for 5 detections; every "
+        "detection line has to be once-only, not just the one that was reported"
+    )
 
 
 def test_an_unreadable_app_data_path_is_said_out_loud(monkeypatch, tmp_path, caplog):

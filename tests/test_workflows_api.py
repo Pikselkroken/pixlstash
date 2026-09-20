@@ -3039,6 +3039,10 @@ _CONTRACT_FIELDS = {
     "member_keys",
     "saved_recipe_count",
     "defaults",
+    # Not in the shared shape document, and here anyway: without it a client
+    # can draw a stack and address no write to it, and the null is a decision
+    # it has to be able to read (F2, #1405).
+    "stack_id",
 }
 
 
@@ -3096,7 +3100,20 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
     assert card["models"][0]["name"] == "realvisxl.safetensors"
     # One LoRA slot, guessed `recipe` from its filename, so it is an anonymous
     # slot rather than a named file: a character LoRA is the recipe's business.
-    assert card["loras"] == [{"name": None, "kind": "lora", "mark": "recipe"}]
+    # `slot_label` is the address `PUT /workflows/{key}/slots` marks, and it
+    # travels with the slot because the Workflow tab's Workflow/Recipe switch
+    # (F3) has nothing else to name the slot it just flipped.
+    lora_label = next(
+        slot.label for slot in slots(_DOCUMENTS[BUSY_RECIPE_A]) if slot.is_lora
+    )
+    assert card["loras"] == [
+        {
+            "name": None,
+            "kind": "lora",
+            "mark": "recipe",
+            "slot_label": lora_label,
+        }
+    ]
 
 
 def test_a_card_says_when_it_was_last_used_so_the_grid_can_sort_by_it(
@@ -3127,11 +3144,88 @@ def test_a_card_is_never_nameless(workflow_env):
     the row renders empty and the label reads "About null".
 
     The fallback is the workflow file that runs the card, without its
-    extension; a card with neither a name nor a file gets a stand-in.
+    extension; then a description built from what the card loads; and only a
+    card with none of those gets the stand-in.
+
+    **The built one exists because the stand-in used to be the common case.**
+    A name is written only on an explicit rename and most cards come from
+    pictures rather than a dropped file, so a whole grid read "Untitled
+    workflow" and the one identifying row identified nothing.
     """
     cards = _by_key(_cards(workflow_env.owner))
-    # BUSY has no name and no file: the stand-in, not an empty string.
-    assert cards[BUSY_CARD]["name"] == "Untitled workflow"
+    # BUSY has no name and no file, so it is named for what it loads - and the
+    # extension is off, which a guess-by-length gets wrong on `.safetensors`.
+    assert cards[BUSY_CARD]["name"] == "realvisxl: Text to Image"
+
+    # **`type_label` is SERVED, not mirrored.** The card shows its type twice -
+    # in a generated name and in its own chip - and a second copy of these
+    # labels on the client is the drift `CHECKPOINT_WIDGETS` was written to
+    # end. One map, on the wire, so the two strings are equal by construction.
+    busy = cards[BUSY_CARD]
+    assert busy["type"] == "txt2img"
+    assert busy["type_label"] == "Text to Image"
+    assert busy["type_label"] in busy["name"]
+
+    # The stand-in is still the floor, for a card with nothing to be named
+    # after: no name, no file, and every model name forgotten. Asserted on the
+    # helper, because the fixture has no such card and inventing one to prove a
+    # two-line branch costs more than it tells anybody.
+    class _Nameless:
+        name = None
+        file_name = None
+        workflow_type = None
+
+    assert workflows_routes._display_name(_Nameless(), []) == UNNAMED_CARD
+
+    # A graph whose names survive but which loads no checkpoint still gets a
+    # name: the first slot it does load.
+    class _UnetOnly(_Nameless):
+        workflow_type = "txt2img"
+
+    only = [SimpleNamespace(name="flux1-dev.safetensors", kind="unet")]
+    assert (
+        workflows_routes._display_name(_UnetOnly(), only) == "flux1-dev: Text to Image"
+    )
+
+    # **The base model names the card, and nothing else may.** A Flux or SD3
+    # graph has no `checkpoint` kind at all - only `unet` - and slot order is
+    # document order, so a fallback of "the first slot with a name" named such
+    # a card after its VAE or one of its text encoders. Nobody calls a
+    # workflow by its VAE.
+    flux = [
+        SimpleNamespace(name="ae.safetensors", kind="vae"),
+        SimpleNamespace(name="t5xxl_fp16.safetensors", kind="clip"),
+        SimpleNamespace(name="flux1-dev.safetensors", kind="unet"),
+    ]
+    assert (
+        workflows_routes._display_name(_UnetOnly(), flux) == "flux1-dev: Text to Image"
+    )
+
+    # A graph that loads a VAE and an upscaler but no base model at all takes
+    # the stand-in rather than being named after either.
+    accessories = [
+        SimpleNamespace(name="ae.safetensors", kind="vae"),
+        SimpleNamespace(name="4x-UltraSharp.pth", kind="upscale"),
+    ]
+    assert workflows_routes._display_name(_Nameless(), accessories) == UNNAMED_CARD
+
+    # **An empty stem is as nameless as a null one.** These are graph widget
+    # values - third-party strings out of whatever workflow was imported - so
+    # a name that is nothing but an extension, or that ends in a separator,
+    # reaches here and would render the row blank and read "About null".
+    for hostile in (".safetensors", "SDXL/", "loras\\"):
+        slots = [SimpleNamespace(name=hostile, kind="checkpoint")]
+        assert workflows_routes._display_name(_UnetOnly(), slots) == UNNAMED_CARD
+
+    # A checkpoint outranks a unet where a graph carries both.
+    both = [
+        SimpleNamespace(name="flux1-dev.safetensors", kind="unet"),
+        SimpleNamespace(name="juggernautXL.safetensors", kind="checkpoint"),
+    ]
+    assert (
+        workflows_routes._display_name(_UnetOnly(), both)
+        == "juggernautXL: Text to Image"
+    )
     # The hidden card has both a name and a file, and the owner's name wins.
     assert _detail(workflow_env.owner, HIDDEN_CARD)["card"]["name"] == (
         "A workflow I hid"
@@ -3465,6 +3559,110 @@ def test_cards_sharing_a_core_hash_stack_behind_the_higher_ranked(workflow_env):
     assert cards[BUSY_CARD]["stack_size"] == 2
     assert cards[BUSY_CARD]["member_keys"] == [FORGOTTEN_CARD]
     assert FORGOTTEN_CARD not in cards
+
+
+def test_a_card_carries_the_stack_id_its_reorder_is_addressed_by(workflow_env):
+    """Without it a client can draw a stack and not write to one (F2, #1405).
+
+    `PUT /workflows/stacks/{stack_id}/order` and its `unstack` sibling are the
+    only way to reorder or dissolve a stack, and the id they take is either a
+    stored stack's or `auto:<core hash>` -- neither of which is derivable from
+    anything else the card carries. `topology_hash` is not it: a core hash is
+    the topology with the recipe LoRAs taken out.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    cards = _by_key(_cards(owner))
+    # BUSY and FORGOTTEN share a core hash with no stack row behind them, so
+    # this is the automatic half: the id names the group rather than a row.
+    auto_id = cards[BUSY_CARD]["stack_id"]
+    assert auto_id and auto_id.startswith(AUTO_STACK_PREFIX)
+    # A card in no stack carries none. Read on the detail route because this
+    # library's grid is one stack and nothing else, so the listing has no
+    # unstacked card to read it off.
+    alone = _detail(owner, BINNED_CARD)["card"]
+    assert alone["stack_size"] == 1
+    assert alone["stack_id"] is None
+
+    # The id the payload gives is the id the route ACCEPTS, which is the whole
+    # point of carrying it and is not provable from the string's shape. The
+    # write is left standing: `fresh_library` re-seeds the hub before every
+    # test in this module, `workflow_stack` and `workflow_stack_member`
+    # included, so nothing this writes reaches the next one.
+    r = owner.put(
+        f"{API}/workflows/stacks/{auto_id}/order",
+        json={"keys": [FORGOTTEN_CARD, BUSY_CARD]},
+    )
+    assert r.status_code == 200, r.text
+    assert effective_stack_keys(server.hub, BUSY_CARD)[0] == FORGOTTEN_CARD
+    # Ordering an automatic group materialises its row and the id stands: a
+    # panel that re-read the grid must still be able to address it.
+    assert _by_key(_cards(owner))[FORGOTTEN_CARD]["stack_id"] == auto_id
+
+
+def test_a_partly_drawn_stack_carries_no_stack_id_to_reorder_it_by(workflow_env):
+    """The grid drops hidden cards and one-offs; the order route does not.
+
+    `PUT /workflows/stacks/{id}/order` validates the caller's list against the
+    hub's membership, which still counts what the listing left out -- so a
+    panel ordering the members it was given is refused with a sentence about
+    keys it was never told existed. Serving no id at all is the honest answer
+    while the panel can show only part of the stack, and it is what makes the
+    Workflows panel offer no reorder rather than one that always fails.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    stack_id = _by_key(_cards(owner))[BUSY_CARD]["stack_id"]
+    assert stack_id, "the drawn stack should start out addressable"
+
+    # HIDDEN joins the group BUSY and FORGOTTEN share. It is hidden, so the
+    # grid keeps drawing a stack of two -- and the hub now holds three.
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET core_hash = ? WHERE topology_hash = ?",
+            (SHARED_CORE, HIDDEN_TOPOLOGY),
+        )
+    drawn = _by_key(_cards(owner))[BUSY_CARD]
+    assert drawn["stack_size"] == 2
+    assert drawn["stack_id"] is None
+
+    # And the refusal this prevents is real: ordering what the grid drew is
+    # exactly the 400 the null exists to keep a client away from.
+    r = owner.put(
+        f"{API}/workflows/stacks/{stack_id}/order",
+        json={"keys": [drawn["key"], *drawn["member_keys"]]},
+    )
+    assert r.status_code == 400, r.text
+
+
+def test_a_stack_that_collapses_to_one_drawn_card_carries_no_stack_id(workflow_env):
+    """`stack_size: 1` and a non-null id is the one state the field forbids.
+
+    Deriving which stacks the grid drew whole means grouping the WHOLE card
+    set as well as the drawn one, and that grouping writes an id onto every
+    figure it touches. A card whose group falls below two once the hidden
+    cards and one-offs are taken is then in no drawn stack at all, so nothing
+    downstream revisits it -- and it would be served standing alone while
+    carrying the id of a group it is the only visible member of. A client
+    reads a non-null id as "this card is in a stack"; here it is not.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    assert _by_key(_cards(owner))[BUSY_CARD]["stack_id"], "expected a drawn stack"
+
+    # BUSY and FORGOTTEN are the shared-core pair. Hide one and the other is
+    # a lone card whose group still holds two.
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_attr (workflow_key, hidden) VALUES (?, 1) "
+            "ON CONFLICT(workflow_key) DO UPDATE SET hidden = 1",
+            (FORGOTTEN_CARD,),
+        )
+    drawn = _by_key(_cards(owner))[BUSY_CARD]
+    assert drawn["stack_size"] == 1
+    assert drawn["stack_id"] is None
+    # The hidden card is served the same way on its own route: it is in no
+    # stack anybody can see, so it names none either.
+    hidden = _detail(owner, FORGOTTEN_CARD)["card"]
+    assert hidden["stack_size"] == 1
+    assert hidden["stack_id"] is None
 
 
 def test_a_stack_shows_the_union_of_its_members_difference_chips(workflow_env):
@@ -4005,8 +4203,13 @@ def test_naming_a_card_shows_on_the_grid_and_clearing_it_goes_back(workflow_env)
 
     r = owner.patch(f"{API}/workflows/{BUSY_CARD}", json={"name": None})
     assert r.status_code == 200, r.text
-    # Back to the fallback, which is the file that runs it or the stand-in.
-    assert r.json()["card"]["name"] == UNNAMED_CARD
+    # Back to the fallback - whatever it is - rather than to null or to the
+    # name that was just cleared. What the fallback SAYS is pinned by
+    # `test_a_card_is_never_nameless`; this asserts the clearing round-trips.
+    cleared = r.json()["card"]["name"]
+    assert cleared and cleared != "My portrait workflow"
+    grid = _by_key(_cards(owner))
+    assert grid[BUSY_CARD]["name"] == cleared
 
 
 def test_hiding_a_card_takes_it_off_the_grid_and_it_still_opens(workflow_env):
@@ -4093,8 +4296,18 @@ def test_a_cards_overrides_pins_and_inputs_are_written_whole(workflow_env):
             "SELECT pins FROM workflow_key_pins WHERE workflow_key = ?", (BUSY_CARD,)
         )["pins"]
     ) == [["slot-a", "steps"]]
+    # And READ BACK on the detail route, which is the only thing that makes
+    # the pin a control rather than a write into the dark: the Workflow tab
+    # draws the pin it sets from here (v1.12 F3).
+    assert owner.get(f"{API}/workflows/cards/{BUSY_CARD}").json()["pins"] == [
+        {"slot_label": "slot-a", "input_name": "steps"}
+    ]
     # `[]` is somebody who unpinned everything; null forgets the choice.
     owner.put(f"{API}/workflows/{BUSY_CARD}/pins", json={"pins": []})
+    # The same two answers survive the round trip, because a client renders
+    # them differently: `[]` shows nothing above "All N", `null` applies its
+    # own default pins.
+    assert owner.get(f"{API}/workflows/cards/{BUSY_CARD}").json()["pins"] == []
     assert (
         json.loads(
             hub.fetchone(
@@ -4111,6 +4324,28 @@ def test_a_cards_overrides_pins_and_inputs_are_written_whole(workflow_env):
         )
         is None
     )
+    assert owner.get(f"{API}/workflows/cards/{BUSY_CARD}").json()["pins"] is None
+
+    # A row that is not a pin list reads as NO CHOICE, never as `[]`. Both
+    # halves matter: iterating a stored scalar used to raise out of the
+    # handler, which is a 500 on the panel the pins are drawn in; and
+    # answering `[]` would say "the owner unpinned everything" about a
+    # corrupt row, which puts a card's whole parameter list behind a
+    # collapsed disclosure and looks deliberate.
+    for corrupt in ("null", "5", '{"a": 1}', "not json"):
+        with hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_key_pins (workflow_key, pins) VALUES (?, ?) "
+                "ON CONFLICT(workflow_key) DO UPDATE SET pins = excluded.pins",
+                (BUSY_CARD, corrupt),
+            )
+        r = owner.get(f"{API}/workflows/cards/{BUSY_CARD}")
+        assert r.status_code == 200, f"{corrupt!r}: {r.text}"
+        assert r.json()["pins"] is None, corrupt
+    with hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM workflow_key_pins WHERE workflow_key = ?", (BUSY_CARD,)
+        )
 
     assert (
         owner.put(
