@@ -294,6 +294,29 @@ describe("SaveRecipeDialog", () => {
     );
   });
 
+  it("waits for the collision lookup before accepting a save", async () => {
+    let settle;
+    listSavedRecipes.mockImplementation(
+      () => new Promise((resolve) => {
+        settle = resolve;
+      }),
+    );
+    const wrapper = open();
+    await flushPromises();
+
+    const primary = wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Save recipe"));
+    expect(primary.attributes("disabled")).toBeDefined();
+    await primary.trigger("click");
+    await flushPromises();
+    expect(createSavedRecipe).not.toHaveBeenCalled();
+
+    settle([]);
+    await flushPromises();
+    expect(primary.attributes("disabled")).toBeUndefined();
+  });
+
   it("offers Replace, naming the row, when the name is already taken", async () => {
     const wrapper = await openAndType();
     const said = wrapper.text().replace(/\s+/g, " ");

@@ -100,7 +100,7 @@
         variant="primary"
         :icon-left="collision ? 'content-save-edit-outline' : 'bookmark-plus-outline'"
         :loading="saving"
-        :disabled="!name.trim() || !workflowKey"
+        :disabled="!name.trim() || !workflowKey || existingPending"
         @click="save"
       >
         {{ collision ? `Replace “${collision.name}”` : "Save recipe" }}
@@ -196,6 +196,8 @@ const stackName = ref("");
  * a dialog somebody deliberately opened is the cheaper half of that trade.
  */
 const existing = ref([]);
+/** A suggested or typed name cannot save until its stack collision check settles. */
+const existingPending = ref(false);
 
 /** The LoRAs a run will not apply, because the shelf cannot identify them. */
 const unknownLoras = computed(() =>
@@ -301,23 +303,25 @@ watch(
   async () => {
     stackName.value = "";
     existing.value = [];
+    existingPending.value = Boolean(props.open && props.workflowKey);
     if (!props.open || !props.workflowKey) return;
     const wanted = props.workflowKey;
-    try {
-      const body = await getWorkflowCard(wanted);
-      if (wanted !== props.workflowKey) return;
-      stackName.value = body?.card?.name || "";
-      // A caller with no name to suggest opened this over an empty box and a
-      // disabled primary, one press after a button that said "Save as recipe".
-      // Never over anything the owner has typed.
-      if (!name.value) name.value = stackName.value;
-      unproposeATakenName();
-    } catch (err) {
-      // The line it feeds is not load-bearing: without a name the dialog drops
-      // the sentence rather than printing a blank one, and the save is
-      // unaffected.
-      console.warn("Could not read the card a recipe would be saved to:", err);
-    }
+    void getWorkflowCard(wanted)
+      .then((body) => {
+        if (wanted !== props.workflowKey) return;
+        stackName.value = body?.card?.name || "";
+        // A caller with no name to suggest opened this over an empty box and a
+        // disabled primary, one press after a button that said "Save as recipe".
+        // Never over anything the owner has typed.
+        if (!name.value) name.value = stackName.value;
+        unproposeATakenName();
+      })
+      .catch((err) => {
+        // The line it feeds is not load-bearing: without a name the dialog drops
+        // the sentence rather than printing a blank one, and the save is
+        // unaffected.
+        console.warn("Could not read the card a recipe would be saved to:", err);
+      });
     try {
       const rows = await listSavedRecipes(wanted);
       if (wanted !== props.workflowKey) return;
@@ -328,6 +332,8 @@ watch(
       // offering Save - which is what it did before #1480 and is the safe way
       // round: a failed read must not turn a save into an overwrite.
       console.warn("Could not read this card's saved recipes:", err);
+    } finally {
+      if (wanted === props.workflowKey) existingPending.value = false;
     }
   },
   { immediate: true },
@@ -412,7 +418,9 @@ function replacement() {
 
 async function save() {
   const label = name.value.trim();
-  if (!label || !props.workflowKey || saving.value) return;
+  if (!label || !props.workflowKey || saving.value || existingPending.value) {
+    return;
+  }
   const replacing = collision.value;
   saveError.value = "";
   // **Set before the await, not after.** The confirm below is the first thing
