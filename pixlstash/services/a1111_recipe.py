@@ -28,9 +28,20 @@ field is classified HERE, by name, into the four buckets the hash spec uses:
   of one instance, and the hash summaries that repeat what the asset widgets
   already say. A credential-named field is dropped outright, as in a graph.
 
-**Known ceiling:** a model named inside a compound value (ControlNet's
-``"Module: canny, Model: control_x [hash], Weight: 1"``) stays in that value,
-so it reaches the instance document and forgetting the model does not.
+**A model named inside a compound value is an asset too** (#1375). ControlNet
+writes its whole setup into one field (``"Module: canny, Model: control_x
+[hash], Weight: 1"``), where the field is not named for a model and the name
+inside carries no extension, so neither rule above sees it. Its ``Model:``
+sub-fields are taken out of the value into asset widgets of their own, which is
+what keeps the name out of the instance document -- forgetting a model is a row
+delete and never rewrites a stored document. Only the fields
+:data:`_COMPOUND_MODEL_FIELD_RE` names are read this way; any other compound
+keeps its name, which is the old behaviour and the safe direction --
+``X Values`` on a checkpoint-name sweep and Tiled Diffusion's ``Upscaler`` key
+are the two that matter, the second having ControlNet's shape but values
+(``Latent``, ``None``) that are as often not files. A name holding a comma is
+truncated at it, because A1111's grammar is comma-separated and the extension
+has written a value its own re-import misparses too.
 
 **A short hash is stored as it is and resolved when read**
 (:func:`pixlstash.services.workflow_hash.digests_with_prefix`). A1111's
@@ -52,6 +63,7 @@ from typing import Any, Optional
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import (
     DIGEST_PREFIX_RE,
+    MAX_FILENAME_LENGTH,
     MODEL_EXTENSIONS,
     SECRET_FIELD_RE,
     ReducedNode,
@@ -90,6 +102,35 @@ _MODEL_FIELD_RE = re.compile(
     r"(^|\s)(model|checkpoint|upscaler|vae|module|lora)(\s+(\d+|\d*(st|nd|rd|th)))?$",
     re.IGNORECASE,
 )
+
+# The fields whose value is a compound written by an extension, one `Key:
+# value` list inside one field, with a model named in the middle of it:
+# ``ControlNet 0: "Module: canny, Model: control_x [hash], Weight: 1"``.
+#
+# **A NAMED SET, never "any field that is not prose".** A1111 fields hold
+# prose in more places than `carries_prose` knows about -- the X/Y/Z plot
+# script writes prompt fragments into `X Values`, sd-dynamic-prompts writes
+# the raw template into `Template` -- and reading `model: someone` in one of
+# those as a filename would file a person's words as a `workflow_recipe_asset`
+# row, which is hub-wide, permanent, and offered on the ghost screen as a
+# model. That is a worse leak than the one this closes, and in the direction
+# the spec calls unrecoverable, so a field earns its place here by being known
+# to write a model into a compound.
+_COMPOUND_MODEL_FIELD_RE = re.compile(r"^controlnet\b", re.IGNORECASE)
+
+# Which of `_MODEL_FIELD_RE`'s keywords name a FILE, and so take the filename
+# spelling every other asset here gets. `upscaler` and `module` are left out:
+# `Hires upscaler: Latent` and ControlNet's `Module: canny` name a method, and
+# `latent.safetensors` would be a model ghost for a model that never existed.
+_MODEL_FILE_KEYWORDS = frozenset({"model", "checkpoint", "vae", "lora"})
+
+# A ``Model:`` sub-field inside such a value, at a comma boundary so a key of
+# another name (``Model hash:``, ``Base Model:``) is left where it is.
+_NESTED_MODEL_RE = re.compile(r"(?:^|,)\s*model:\s*([^,]*)", re.IGNORECASE)
+
+# What an extension writes for "no model chosen". Naming it an asset would file
+# a row called `none.safetensors` and offer the owner a ghost to forget.
+_NO_MODEL = frozenset({"", "none"})
 
 # A ceiling on the line handed to the regex. It was set when that regex was
 # quadratic, on an extrapolation that undercounted (8,000 characters measured
@@ -363,14 +404,90 @@ def _widgets(fields: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any]]:
             continue
         widget = _widget_name(field)
         widgets[widget] = value
-        if value and _MODEL_FIELD_RE.search(field):
-            match = _NAME_WITH_HASH_RE.match(value)
-            assets[widget] = widgets[widget] = match.group(1) if match else value
+        if value and (model_field := _MODEL_FIELD_RE.search(field)):
+            widgets[widget] = name = _named_model(value)
+            if name.lower() in _NO_MODEL:
+                # `ControlNet Model: None`. A model called `none` is a row on
+                # the ghost screen offering to forget a name of nothing.
+                continue
+            # **One model, one spelling.** `_asset_name` is how a checkpoint, a
+            # LoRA, a refiner, an embedding and a model lifted out of a
+            # compound are all written, and this branch was the only holdout:
+            # `ControlNet Model: x` filed `x` where `ControlNet 0: "... Model:
+            # x ..."` files `x.safetensors`, two rows for one file, so
+            # forgetting one missed the other. Only the keywords that name a
+            # FILE are normalized: `upscaler` and ControlNet's `module` name a
+            # method as often as a file (`Latent`, `canny`), and giving those
+            # an extension would invent a model ghost for something that was
+            # never a model.
+            if model_field.group(2).lower() in _MODEL_FILE_KEYWORDS:
+                name = _asset_name(name) or name
+            assets[widget] = widgets[widget] = name
         # And by the rule a ComfyUI widget of unknown meaning gets: a value
         # with a model extension (ADetailer's `face_yolov8n.pt`).
         elif structural_widget_value(widget, value) is not None:
             assets[widget] = value
+        elif _COMPOUND_MODEL_FIELD_RE.match(field):
+            # A compound value names its model inside itself (#1375).
+            widgets[widget], nested = _nested_model_names(value)
+            for index, name in enumerate(nested):
+                # `controlnet_0_model`, then `_model_2`: a second model in one
+                # value is forgotten on its own row, not folded into the first.
+                key = f"{widget}_model" + (f"_{index + 1}" if index else "")
+                assets[key] = widgets[key] = name
     return widgets, assets
+
+
+def _named_model(value: str) -> str:
+    """``name [hash]`` as the name; anything else unchanged."""
+    match = _NAME_WITH_HASH_RE.match(value)
+    return (match.group(1) if match else value).strip()
+
+
+def _nested_model_names(value: str) -> tuple[str, list[str]]:
+    """A compound value without its ``Model:`` sub-fields, and the names they held.
+
+    Called for :data:`_COMPOUND_MODEL_FIELD_RE` fields only.
+    ``"Module: canny, Model: control_x [d14c016b], Weight: 1"`` becomes
+    ``("Module: canny, Weight: 1", ["control_x.safetensors"])``. The caller
+    files each name as an asset, so the stored document names it by reference
+    like any other model and forgetting the model -- a row delete in
+    ``workflow_recipe_asset``, with no stored graph rewritten -- reaches it.
+    Leaving it in the value is what made that partly untrue (#1375).
+    """
+    names: list[str] = []
+
+    def take(match: re.Match) -> str:
+        name = _named_model(match.group(1).strip())
+        # BOTH halves of the backstop `structural_widget_value` puts under a
+        # widget of unknown meaning: a filename is one path component, so it
+        # holds no newline and no more than 255 bytes. The newline half is not
+        # theoretical here -- A1111 escapes a real newline into its one-line
+        # infotext and `_parse_fields` unescapes it through `json.loads`, so a
+        # compound can carry one, and prose is exactly what it would file as a
+        # model name. Measured on the name, not on the whole sub-field: the
+        # `[hash]` suffix is not part of it.
+        refused = (
+            name.lower() in _NO_MODEL or "\n" in name or len(name) > MAX_FILENAME_LENGTH
+        )
+        asset = None if refused else _asset_name(name)
+        if asset is None:
+            # One refusal, not two: `Model: None`, `Model: [d14c016b]` (a hash
+            # with no name, as for `Refiner`) and a name no filename could be
+            # all leave the sub-field exactly where it was, which is the old
+            # behaviour rather than an invented asset.
+            logger.debug(
+                "Left a `Model:` sub-field where it was: %r names no model file.",
+                name[:64],
+            )
+            return match.group(0)
+        names.append(asset)
+        return ""
+
+    # A value that named no model is returned untouched: the strip below is for
+    # the comma a removed sub-field leaves behind, not a rule about values.
+    stripped = _NESTED_MODEL_RE.sub(take, value)
+    return (stripped.strip(" ,") if names else value), names
 
 
 def _checkpoint_widgets(value: str) -> tuple[dict[str, Any], dict[str, Any]]:

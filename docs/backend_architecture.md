@@ -3200,11 +3200,47 @@ tensor data, not the file, so it could never resolve); a credential-named field
 is dropped; **everything else is a parameter**, unknown fields included, and a
 parameter is not even *named* in the recipe, because A1111 omits a field that
 holds its default. `<lora:…>` tags are cut from every value, hires and ADetailer
-prompts included. Two known limits: a model named inside a compound value
-(ControlNet's `Model: … [hash]`) stays in the instance document, where forgetting
-the model does not reach it (#1375); and an embedding is a node only when `TI
-hashes` was written, so the same generation keys as two topologies depending on
-whether the owner had hash summaries switched on. The fields line is the last
+prompts included. **A model named inside a ControlNet compound value is an asset
+too** (#1375): the extension writes its whole setup into one field
+(`ControlNet 0: "Module: canny, Model: control_x [hash], Weight: 1"`), where
+the field is not named for a model and the name inside carries no extension, so
+neither rule above saw it and it was stored verbatim in the instance document —
+the one place forgetting a model, a row delete, never reaches. Each `Model:`
+sub-field is lifted out of the value into an asset widget of its own
+(`controlnet_0_model`, `…_model_2` for a second), so the document names it by
+reference like any other model. **The fields read this way are a named set
+(`_COMPOUND_MODEL_FIELD_RE`), not "every field that is not prose"**: A1111
+holds prose in fields nothing here has a list of — the X/Y/Z plot script writes
+prompt fragments into `X Values`, sd-dynamic-prompts the raw template into
+`Template` — and reading `model: …` in one of those as a filename would file
+what a person wrote as a hub-wide `workflow_recipe_asset` row that outlives the
+pictures, which is a worse leak than the one being closed. `Model: None`, a
+bare hash, a name carrying a newline (A1111 escapes one into its single line and
+`_parse_fields` unescapes it, so a compound can hold one) and a name past
+`MAX_FILENAME_LENGTH` all stay where they are for the same reason: one refusal,
+which leaves the sub-field exactly as it was. **One model is one asset however
+the field spelled it**: the flat `ControlNet Model: x` goes through
+`_asset_name` like the compound, the checkpoint, the LoRAs, the refiner and the
+embeddings, since `x` beside `x.safetensors` is two rows for one file and
+forgetting either leaves the other. Only the keywords naming a *file*
+(`_MODEL_FILE_KEYWORDS`) are normalized — `Hires upscaler: Latent` and
+ControlNet's `Module: canny` name a method, and `latent.safetensors` would be a
+ghost for a model that never existed — and a `None` value files nothing at all.
+Migration `0122` clears the scanned marker on every picture carrying a workflow,
+as `0118` did: nothing re-keys a filed row in place (the finder selects on
+`workflow_hash_version IS NULL`), so without it the fix would reach future
+imports only and every A1111 ControlNet picture already in a library would keep
+the name in its instance document. It is deliberately broad, because no column
+says which recipe came from A1111. `HASH_VERSION` stays **v2**: after the rescan
+nothing is keyed by the old rule for a new stamp to name. Three known limits: a
+model name containing a comma is truncated at it (A1111's grammar is
+comma-separated, so the extension has written a value its own re-import
+misparses too), and the tail stays in the compound; other compounds keep their
+names — `X Values` on a checkpoint-name sweep, and Tiled Diffusion's `Upscaler`
+key, which has ControlNet's shape but values (`Latent`, `None`) that are as
+often not files; and an embedding is a node only when `TI hashes` was written,
+so the same generation keys as two topologies depending on whether the owner had
+hash summaries switched on. The fields line is the last
 line that *parses*, not simply the last, and the **first** occurrence of a
 repeated key wins — A1111 quotes any value holding a comma, so a repeat means
 another tool shredded a compound value into pairs, and taking the last would let
