@@ -437,3 +437,23 @@ describe("the cover crop", () => {
     expect(grid).toContain("object-position: top center");
   });
 });
+
+// ── The stack badge says what its number counts ──────────────────────────
+describe("the layered count", () => {
+  it("says the number is workflows, not pictures", () => {
+    const wrapper = mountCard({ ...CROWDED, stack_size: 3 });
+    const badge = wrapper.find(".wf-card__badge--button");
+
+    expect(badge.text()).toContain("3");
+    // Two glyph-and-number badges sit at opposite ends of the same cover, so
+    // which one counts workflows is otherwise a guess.
+    expect(badge.findComponent({ name: "Tooltip" }).props("text")).toBe(
+      "3 workflows in this stack",
+    );
+  });
+
+  it("puts no layered badge on a card that is not a stack", () => {
+    const wrapper = mountCard({ ...BARE, stack_size: 1 });
+    expect(wrapper.find(".wf-card__badge--button").exists()).toBe(false);
+  });
+});

@@ -3136,11 +3136,39 @@ def test_a_card_is_never_nameless(workflow_env):
     the row renders empty and the label reads "About null".
 
     The fallback is the workflow file that runs the card, without its
-    extension; a card with neither a name nor a file gets a stand-in.
+    extension; then a description built from what the card loads; and only a
+    card with none of those gets the stand-in.
+
+    **The built one exists because the stand-in used to be the common case.**
+    A name is written only on an explicit rename and most cards come from
+    pictures rather than a dropped file, so a whole grid read "Untitled
+    workflow" and the one identifying row identified nothing.
     """
     cards = _by_key(_cards(workflow_env.owner))
-    # BUSY has no name and no file: the stand-in, not an empty string.
-    assert cards[BUSY_CARD]["name"] == "Untitled workflow"
+    # BUSY has no name and no file, so it is named for what it loads - and the
+    # extension is off, which a guess-by-length gets wrong on `.safetensors`.
+    assert cards[BUSY_CARD]["name"] == "txt2img \u00b7 realvisxl"
+
+    # The stand-in is still the floor, for a card with nothing to be named
+    # after: no name, no file, and every model name forgotten. Asserted on the
+    # helper, because the fixture has no such card and inventing one to prove a
+    # two-line branch costs more than it tells anybody.
+    class _Nameless:
+        name = None
+        file_name = None
+        workflow_type = None
+
+    assert workflows_routes._display_name(_Nameless(), []) == UNNAMED_CARD
+
+    # A graph whose names survive but which loads no checkpoint still gets a
+    # name: the first slot it does load.
+    class _UnetOnly(_Nameless):
+        workflow_type = "txt2img"
+
+    only = [SimpleNamespace(name="flux1-dev.safetensors", kind="unet")]
+    assert (
+        workflows_routes._display_name(_UnetOnly(), only) == "txt2img \u00b7 flux1-dev"
+    )
     # The hidden card has both a name and a file, and the owner's name wins.
     assert _detail(workflow_env.owner, HIDDEN_CARD)["card"]["name"] == (
         "A workflow I hid"
@@ -4014,8 +4042,13 @@ def test_naming_a_card_shows_on_the_grid_and_clearing_it_goes_back(workflow_env)
 
     r = owner.patch(f"{API}/workflows/{BUSY_CARD}", json={"name": None})
     assert r.status_code == 200, r.text
-    # Back to the fallback, which is the file that runs it or the stand-in.
-    assert r.json()["card"]["name"] == UNNAMED_CARD
+    # Back to the fallback - whatever it is - rather than to null or to the
+    # name that was just cleared. What the fallback SAYS is pinned by
+    # `test_a_card_is_never_nameless`; this asserts the clearing round-trips.
+    cleared = r.json()["card"]["name"]
+    assert cleared and cleared != "My portrait workflow"
+    grid = _by_key(_cards(owner))
+    assert grid[BUSY_CARD]["name"] == cleared
 
 
 def test_hiding_a_card_takes_it_off_the_grid_and_it_still_opens(workflow_env):

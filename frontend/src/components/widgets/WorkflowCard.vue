@@ -57,6 +57,7 @@
       aria-hidden="true"
       @click="emit('toggle')"
     >
+      <Tooltip :text="stackLabel" activator="parent" />
       <v-icon size="12">mdi-layers</v-icon>{{ card.stack_size }}
     </button>
 
@@ -148,6 +149,7 @@ import {
 import AppButton from "./AppButton.vue";
 import ChipRow from "./ChipRow.vue";
 import InfoPopover from "./InfoPopover.vue";
+import Tooltip from "./Tooltip.vue";
 
 const props = defineProps({
   /** One workflow card (see utils/workflowCard.js for the shape). */
@@ -176,6 +178,18 @@ const stack = computed(() => isStack(props.card));
  * "differs by" chips are exactly what a member row exists to show.
  */
 const stackMark = computed(() => stack.value && !props.member);
+/**
+ * What the layered badge means, in words.
+ *
+ * The badge is a glyph and a bare number sitting opposite another glyph and
+ * another bare number (the picture count), so which of the two is "how many
+ * workflows" is a guess. The accessible name has said "stack of N workflows"
+ * all along; this is the same sentence for the reader who can see it, and it
+ * costs the card no layout.
+ */
+const stackLabel = computed(
+  () => `${props.card.stack_size} workflows in this stack`,
+);
 /**
  * The cover thumbnails, made absolute.
  *

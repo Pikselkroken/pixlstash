@@ -121,7 +121,11 @@ from pixlstash.routes.comfyui import (
     _shelf_adapter,
 )
 from pixlstash.services.workflow_identity import RECIPE, STRUCTURAL
-from pixlstash.services.workflow_hash import WorkflowGraphError, structural_document
+from pixlstash.services.workflow_hash import (
+    MODEL_EXTENSIONS,
+    WorkflowGraphError,
+    structural_document,
+)
 from pixlstash.services.workflow_identity import topology_node_labels
 from pixlstash.services.workflow_io import api_graph, detect_workflow_io
 from pixlstash.services.workflow_library_service import (
@@ -788,23 +792,58 @@ def _cover_urls(covers) -> list[str]:
     return urls
 
 
-# What a card is called when the owner has not named it. The card's name row
-# is its only identifying text and the ⓘ panel puts it in an `aria-label`, so
-# this may not be null: `{{ card.name }}` renders empty and the label reads
-# "About null". The fallback is the workflow FILE that runs it, because that is
-# what a person calls their workflow and it is the one identifying string not
-# already on the card (the checkpoint has its own row, the type its own chip).
+# The last resort, when a card has nothing identifying at all.
+#
+# **It is a last resort and not the ordinary answer.** It used to be reached by
+# every card that was not imported from a file - which is most of a library
+# built from pictures - so a grid of forty workflows read "Untitled workflow"
+# forty times, and the name row, which is the card's only identifying text,
+# identified nothing. Duplicating the checkpoint onto the name row was avoided
+# on the grounds that it has a row of its own; a constant is worse than a
+# duplicate, because a duplicate at least tells two cards apart.
 UNNAMED_CARD = "Untitled workflow"
 
 
-def _display_name(card) -> str:
-    """The owner's name for a card, else the file that runs it, else a stand-in."""
+def _model_stem(name: str) -> str:
+    """A model filename as a person says it: no folders, no extension.
+
+    Against ``MODEL_EXTENSIONS`` rather than "whatever follows the last dot":
+    a version in the name (``juggernaut_v9.1``) is not an extension, and a
+    guess by length gets ``.safetensors`` -- eleven characters, and the one
+    that matters -- exactly wrong.
+    """
+    stem = name.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    lowered = stem.lower()
+    for ext in MODEL_EXTENSIONS:
+        if lowered.endswith(ext):
+            return stem[: -len(ext)]
+    return stem
+
+
+def _display_name(card, models=()) -> str:
+    """What a card is called: the owner's name, else its file, else its models.
+
+    That order is how much the name is *theirs*: one they typed, then the file
+    they dropped, then a description built here. The built one is
+    ``type · checkpoint`` (``txt2img · juggernautXL``). It is deliberately not
+    unique - two cards differing only by a post-processing node share it - but
+    it is the difference between forty identical rows and a grid that can be
+    scanned, and the ⓘ panel carries what actually separates them.
+    """
     if card.name:
         return card.name
     if card.file_name:
         stem = card.file_name.rsplit("/", 1)[-1]
         return stem[: -len(".json")] if stem.lower().endswith(".json") else stem
-    return UNNAMED_CARD
+    base = next(
+        (slot.name for slot in models if slot.kind == "checkpoint" and slot.name),
+        None,
+    ) or next((slot.name for slot in models if slot.name), None)
+    if not base:
+        # Every model name forgotten, or a graph that loads none.
+        return UNNAMED_CARD
+    stem = _model_stem(base)
+    return f"{card.workflow_type} · {stem}" if card.workflow_type else stem
 
 
 def _slot_models(slots) -> list[WorkflowSlotModel]:
@@ -820,7 +859,7 @@ def _card(figure, defaults=()) -> WorkflowCard:
     """Render one card's figures in the shape ``workflowCard.js`` documents."""
     return WorkflowCard(
         key=figure.card.workflow_key,
-        name=_display_name(figure.card),
+        name=_display_name(figure.card, figure.models),
         type=figure.card.workflow_type,
         imported=figure.card.imported,
         models=_slot_models(figure.models),
