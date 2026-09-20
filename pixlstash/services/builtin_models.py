@@ -4,7 +4,7 @@ The shelf catalogues model files by **reading** them: the scanner walks a
 registered folder, reads each ``.safetensors`` header and decides what the file
 is. That is the right approach for a folder of LoRAs the owner assembled, and
 the wrong one for our own engines - half of them are ONNX or ``.pt``, which the
-scanner does not even yield (``MODEL_SUFFIX`` is ``.safetensors``), and all of
+scanner does not even yield (it walks ``SHELF_MODEL_SUFFIXES``), and all of
 them are files *we* chose to download. We do not have to guess what they are.
 We know.
 
@@ -100,8 +100,10 @@ STATE_NOT_DOWNLOADED = "not_downloaded"
 # reported as unclaimed - it is simply not a model file.
 TOOLING_DIRS = (".cache",)
 
-# What counts as weights, for the unclaimed readout. Wider than the scanner's
-# `MODEL_SUFFIX` (`.safetensors` alone), because this folder is precisely where
+# What counts as weights, for the unclaimed readout. **Not the scanner's
+# `SHELF_MODEL_SUFFIXES`, and not named after it**: that tuple answers "what
+# does the shelf catalogue by reading it", and this one answers "what in OUR
+# folder is a model file at all". Wider, because this folder is precisely where
 # the other formats land - our own tagger is ONNX and both scorers are `.pth` -
 # and the leftover that prompted #927 is a `.pt`.
 #

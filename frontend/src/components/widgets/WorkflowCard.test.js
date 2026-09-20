@@ -803,20 +803,24 @@ describe("WorkflowCard", () => {
   });
 
   it("puts the precision on every model the ⓘ popover lists", () => {
-    const text = mountCard({
+    const popover = mountCard({
       ...BARE,
       models: [
         { name: "flux1 dev", kind: "unet", quant: "q4_k_m" },
         { name: "ae", kind: "vae", quant: null },
       ],
       loras: [{ name: "detail", mark: "structural", quant: "bf16" }],
-    })
-      .find('[data-testid="workflow-info-popover"]')
-      .text();
-    expect(text).toContain("Q4_K_M");
-    expect(text).toContain("BF16");
-    // The one with nothing recorded gets nothing, rather than an empty chip.
-    expect(text).toMatch(/ae\s*vae/);
+    }).find('[data-testid="workflow-info-popover"]');
+    // Per LINE, not over the whole panel's text: a chip on the wrong row, or
+    // an empty chip on the row that records nothing, both satisfy a substring
+    // search of the panel and neither is what this asserts.
+    const lines = popover.findAll(".info-popover__line");
+    expect(
+      lines.map((line) => {
+        const chip = line.find(".info-popover__chip");
+        return chip.exists() ? chip.text() : null;
+      }),
+    ).toEqual(["Q4_K_M", null, "BF16"]);
   });
 
   it("lists every model, not just the checkpoint, in the ⓘ popover", () => {

@@ -359,6 +359,13 @@ QUANT_VOCABULARY = [
     ("flux1-dev-Q4_K_M.gguf", "flux1 dev", "q4_k_m"),
     ("Qwen_Image-Q6_K.gguf", "Qwen Image", "q6_k"),
     ("flux_q8_0.gguf", "flux", "q8_0"),
+    # The I-quant family, which is most of what city96 publishes for Flux and
+    # Qwen-Image - i.e. the image-model GGUF this feature is actually for.
+    ("flux1-dev-IQ4_XS.gguf", "flux1 dev", "iq4_xs"),
+    ("flux1-dev-IQ3_M.gguf", "flux1 dev", "iq3_m"),
+    ("Qwen-Image-IQ2_XXS.gguf", "Qwen Image", "iq2_xxs"),
+    ("Qwen_Image-Q3_K_XL.gguf", "Qwen Image", "q3_k_xl"),
+    ("flux_iq4_nl.gguf", "flux", "iq4_nl"),
     # A modifier next to a real quant token goes with it.
     ("umt5_xxl_fp8_e4m3fn_scaled.safetensors", "umt5 xxl", "fp8_e4m3"),
     # Quant first, then training: real names put the quant last.
@@ -380,6 +387,11 @@ QUANT_NON_VOCABULARY = [
     ("sdxl_1.safetensors", "sdxl 1"),
     ("sd_xl_base_1.0.safetensors", "sd xl base 1.0"),
     ("portrait_mix_v2.safetensors", "portrait mix v2"),
+    # A GGUF level only ever matches as the tail of an explicit `q<n>` or
+    # `iq<n>` head, so `xl` in a real name survives - and `XL` is in a great
+    # many of them.
+    ("juggernaut_xl_v9.safetensors", "juggernaut xl v9"),
+    ("Anything-XL.safetensors", "Anything XL"),
 ]
 
 

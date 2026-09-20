@@ -22,8 +22,19 @@ import { ICON_CARDS, SET_COLORS } from "./setAppearance";
 // ordinary token in a real name, so it is only ever eaten as the tail of an
 // explicit `q<n>` head; the rest (`scaled`, `awq`, `gptq`, `fast`) are
 // distinctive enough to pop next to any real quant token, and never alone.
-const GGUF_HEAD_RE = /^q\d+$/i;
-const GGUF_LEVELS = new Set(["k", "s", "m", "l", "0", "1"]);
+const GGUF_HEAD_RE = /^i?q\d+$/i;
+const GGUF_LEVELS = new Set([
+  "k",
+  "s",
+  "m",
+  "l",
+  "xs",
+  "xl",
+  "xxs",
+  "nl",
+  "0",
+  "1",
+]);
 
 /** Filename spelling -> canonical id. The refinement wins where both appear. */
 const QUANT_TOKENS = {

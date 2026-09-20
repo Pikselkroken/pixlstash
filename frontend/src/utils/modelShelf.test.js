@@ -124,6 +124,11 @@ const QUANT_VOCABULARY = [
   ["flux1-dev-Q4_K_M.gguf", "flux1 dev", "q4_k_m"],
   ["Qwen_Image-Q6_K.gguf", "Qwen Image", "q6_k"],
   ["flux_q8_0.gguf", "flux", "q8_0"],
+  ["flux1-dev-IQ4_XS.gguf", "flux1 dev", "iq4_xs"],
+  ["flux1-dev-IQ3_M.gguf", "flux1 dev", "iq3_m"],
+  ["Qwen-Image-IQ2_XXS.gguf", "Qwen Image", "iq2_xxs"],
+  ["Qwen_Image-Q3_K_XL.gguf", "Qwen Image", "q3_k_xl"],
+  ["flux_iq4_nl.gguf", "flux", "iq4_nl"],
   ["umt5_xxl_fp8_e4m3fn_scaled.safetensors", "umt5 xxl", "fp8_e4m3"],
   ["model-step00004500-fp16.safetensors", "model", "fp16"],
   // Mixed case, because every shelf fixture in this repo is lowercase and a
@@ -141,6 +146,8 @@ const QUANT_NON_VOCABULARY = [
   ["sdxl_1.safetensors", "sdxl 1"],
   ["sd_xl_base_1.0.safetensors", "sd xl base 1.0"],
   ["portrait_mix_v2.safetensors", "portrait mix v2"],
+  ["juggernaut_xl_v9.safetensors", "juggernaut xl v9"],
+  ["Anything-XL.safetensors", "Anything XL"],
 ];
 
 describe("the quant postfix", () => {

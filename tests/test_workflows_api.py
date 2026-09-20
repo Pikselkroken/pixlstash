@@ -1628,12 +1628,14 @@ def test_a_card_is_never_nameless(workflow_env):
     # document order, so a fallback of "the first slot with a name" named such
     # a card after its VAE or one of its text encoders. Nobody calls a
     # workflow by its VAE.
+    # Built the way `_describe_slots` now builds them: `name` is derived, so
+    # these are the strings `_display_name` actually receives.
     flux = [
-        SlotModel(name="ae.safetensors", kind="vae"),
-        SlotModel(name="t5xxl_fp16.safetensors", kind="clip"),
-        SlotModel(name="flux1-dev.safetensors", kind="unet"),
+        SlotModel(name="ae", kind="vae"),
+        SlotModel(name="t5xxl", kind="clip"),
+        SlotModel(name="flux1 dev", kind="unet"),
     ]
-    assert workflows_routes._display_name(unet_only, flux) == "flux1-dev: Text to Image"
+    assert workflows_routes._display_name(unet_only, flux) == "flux1 dev: Text to Image"
 
     # A graph that loads a VAE and an upscaler but no base model at all takes
     # the stand-in rather than being named after either.
@@ -1770,6 +1772,34 @@ def test_a_card_never_calls_one_model_two_different_things(workflow_env):
     plain_ckpt = next(s for s in plain["models"] if s["kind"] == "checkpoint")
     assert plain_ckpt["title"] is None
     assert plain["name"] == "realvisxl: Text to Image"
+
+
+def test_a_card_names_itself_without_the_precision(workflow_env):
+    """The name row is built from the slot, so it loses the postfix too.
+
+    BUSY has no stored file, so `_display_name` really does reach its base
+    model - which is what makes this an assertion rather than the tautology it
+    would be on a card named after `something.json`. Two things have to move
+    for the derived name to be what answers: the RECIPE's asset value, which
+    is the string the slot carries, and the shelf's own title, which would
+    otherwise answer first.
+    """
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_asset SET normalized_filename = ? "
+            "WHERE normalized_filename = ?",
+            ("realvisxl_fp8_e4m3fn.safetensors", _SHELF_FILENAME),
+        )
+        conn.execute(
+            "UPDATE model SET display_name = NULL WHERE filename = ?",
+            (_SHELF_FILENAME,),
+        )
+
+    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    # The postfix is gone from both the chip and the row built out of it.
+    assert card["models"][0]["name"] == _SHELF_DERIVED
+    assert card["models"][0]["quant"] == "fp8_e4m3"
+    assert card["name"] == "realvisxl: Text to Image"
 
 
 def test_a_card_says_the_post_processing_it_carries_and_when_it_cannot(
@@ -2156,9 +2186,11 @@ def test_a_slots_quant_comes_from_the_shelf_first_and_the_filename_after(
         "Flux1 Dev",
         "q4_k_m",
     )
-    # And the card's own name row lost the postfix with it, so the row and the
-    # chip under it do not read one model two different ways.
-    assert "f8" not in card["name"] and "fp8" not in card["name"]
+    # The card's own name row is NOT asserted here: this card was filed from
+    # `quantised.json`, so `_display_name` returns the file stem and never
+    # reaches a model slot. The name row's own strip is pinned in
+    # `test_a_card_names_itself_without_the_precision`, on a card that has no
+    # file to be named after.
 
 
 def test_an_editor_format_card_answers_the_same_on_its_own_route(

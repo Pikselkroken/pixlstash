@@ -92,7 +92,7 @@ STATE_REMOVED = "removed"
 # same fields a `.safetensors` with an unreadable header would have, plus the
 # one its name can answer. Parsing the GGUF header is a real subsystem and
 # deliberately not built: the name is enough to shelve and badge the file.
-MODEL_SUFFIXES = (".safetensors", ".gguf")
+SHELF_MODEL_SUFFIXES = (".safetensors", ".gguf")
 
 # The one suffix a safetensors header can be read from. Everything else on the
 # shelf is described from its filename alone.
@@ -485,7 +485,7 @@ class ModelFolderScanner:
 
         for directory, _dirs, files in os.walk(root, onerror=on_error):
             for name in sorted(files):
-                if not name.lower().endswith(MODEL_SUFFIXES):
+                if not name.lower().endswith(SHELF_MODEL_SUFFIXES):
                     continue
                 abs_path = os.path.join(directory, name)
                 yield abs_path, os.path.relpath(abs_path, root)
@@ -580,7 +580,9 @@ class ModelFolderScanner:
                 )
                 result.unreadable += 1
                 return None
-            return self._describe_from_name(abs_path, relpath, size, mtime_ns, result)
+            return self._describe_from_name(
+                abs_path, relpath, size, mtime_ns, result, known_digest
+            )
 
         record = _FileRecord(
             relpath=relpath,
@@ -661,10 +663,11 @@ class ModelFolderScanner:
         size: int,
         mtime_ns: int,
         result: FolderScanResult,
+        known_digest: Optional[str] = None,
     ) -> Optional[_FileRecord]:
         """Return the row for a model file whose header this build cannot read.
 
-        A ``.gguf`` today, and any future suffix added to ``MODEL_SUFFIXES``
+        A ``.gguf`` today, and any future suffix added to ``SHELF_MODEL_SUFFIXES``
         without a reader. Everything the header would have answered is left
         NULL - which is the same thing a ``.safetensors`` carrying no metadata
         records, and reads on the shelf as "the file did not say" rather than
@@ -683,6 +686,14 @@ class ModelFolderScanner:
         or more to ``MissingCheckpointHashFinder``, which is every GGUF
         checkpoint, so turning the suffix on does not put tens of gigabytes of
         reading into the scan itself.
+
+        ``known_digest`` is honoured here for the same reason :meth:`_describe`
+        honours it: ``register_file``'s caller has just written and verified
+        these bytes, so the read the deferral exists to avoid has already been
+        paid for. Dropping it would be worse than a second read - a row written
+        with no digest misses ``_upsert_model``'s ``ON CONFLICT(sha256)`` join,
+        so one file registered into two folders would be two shelf rows until
+        the hash finder got round to merging them.
         """
         file_kind = classify_model_file((), 0, abs_path)
         record = _FileRecord(
@@ -696,7 +707,9 @@ class ModelFolderScanner:
             filename=os.path.basename(abs_path),
             quant=quant_from_filename(abs_path),
         )
-        if file_kind == FILE_CHECKPOINT or size >= _DEFER_HASH_BYTES:
+        if known_digest is not None:
+            digest = known_digest
+        elif file_kind == FILE_CHECKPOINT or size >= _DEFER_HASH_BYTES:
             digest = None
         else:
             try:

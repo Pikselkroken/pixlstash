@@ -145,8 +145,12 @@ def clean_asset_name(filename: str) -> str:
 # ``re.ASCII`` for the same reason `_VERSION_SUFFIX_RE` carries it: Python's
 # ``\d`` matches every Unicode decimal and JavaScript's does not, and
 # `frontend/src/utils/modelShelf.js` mirrors this rule token for token.
-_GGUF_HEAD_RE = re.compile(r"^q\d+$", re.IGNORECASE | re.ASCII)
-_GGUF_LEVELS = frozenset({"k", "s", "m", "l", "0", "1"})
+# ``iq`` as well as ``q``: the I-quant family (``IQ3_M``, ``IQ4_XS``,
+# ``IQ2_XXS``) is most of what city96 publishes for Flux and Qwen-Image, which
+# is the image-model GGUF this feature is actually for. ``xs``/``xl``/``xxs``/
+# ``nl`` are levels for the same reason ``k``/``s``/``m`` are.
+_GGUF_HEAD_RE = re.compile(r"^i?q\d+$", re.IGNORECASE | re.ASCII)
+_GGUF_LEVELS = frozenset({"k", "s", "m", "l", "xs", "xl", "xxs", "nl", "0", "1"})
 
 # Filename spelling -> canonical id. The refinement wins where both are
 # present (`fp8_e4m3fn` is `fp8_e4m3`), which the rightmost-token rule in
@@ -239,12 +243,16 @@ def _split_quant(tokens: list[str]) -> tuple[list[str], str | None]:
     :func:`quant_from_filename` run, so the name a row shows and the badge
     beside it can never disagree about where the name ended.
 
+    **Pure**: *tokens* is never mutated, on any branch. The JS mirror cannot
+    mutate its argument at all, and a helper whose side effect depends on which
+    branch ran is the kind of difference the parity tests would not catch.
+
     Args:
         tokens: ``clean_asset_name(...).split()``.
 
     Returns:
-        ``(tokens with the postfix removed, canonical id or None)``. The
-        tokens are returned unchanged when nothing was recognised.
+        ``(tokens with the postfix removed, canonical id or None)``. The list
+        is a new one, equal to *tokens* when nothing was recognised.
     """
     # The GGUF tail first: `q<n>` plus up to two level tokens, longest match
     # first so `Q4 K M` beats the bare `Q4` inside it.
@@ -255,12 +263,12 @@ def _split_quant(tokens: list[str]) -> tuple[list[str], str | None]:
         if all(level.casefold() in _GGUF_LEVELS for level in levels):
             return tokens[:-width], "_".join(t.casefold() for t in tokens[-width:])
 
+    kept = list(tokens)
     popped: list[str] = []
-    while tokens and (
-        tokens[-1].casefold() in _QUANT_TOKENS
-        or tokens[-1].casefold() in _QUANT_MODIFIERS
+    while kept and (
+        kept[-1].casefold() in _QUANT_TOKENS or kept[-1].casefold() in _QUANT_MODIFIERS
     ):
-        popped.append(tokens.pop())
+        popped.append(kept.pop())
     # The guard the whole safety of this rests on. `scaled` and `fast` are
     # ordinary tokens in real model names, and may only be eaten when a genuine
     # quant token was eaten with them: without this,
@@ -270,8 +278,8 @@ def _split_quant(tokens: list[str]) -> tuple[list[str], str | None]:
         None,
     )
     if quant is None:
-        tokens.extend(reversed(popped))
-    return tokens, quant
+        return list(tokens), None
+    return kept, quant
 
 
 def quant_from_filename(filename: str) -> str | None:

@@ -809,7 +809,7 @@ the two sides have agreed:
    `frontend_architecture.md` promises it needs no mapping layer, so the field
    names are the ones written down there — `key`, `name`, `type`, `imported`,
    `models`, `loras` (each slot `{name, title, icon, base_model,
-   base_model_folded, kind, mark?, slot_label?}`), `differs_by`,
+   base_model_folded, kind, quant, mark?, slot_label?}`), `differs_by`,
    `picture_count`, `rating`, `covers`,
    `stack_size`, `saved_recipe_count`, `defaults` — and `mark` carries B1's own
    `structural` | `recipe` vocabulary rather than a translation of it, which is
@@ -840,6 +840,26 @@ the two sides have agreed:
    the base model as the model shelf names it and falls back to the filename
    stem for a model this machine has never scanned; it is deliberately not
    unique, and the ⓘ panel carries what a shared name does not separate.
+
+   **A slot's `name` is DERIVED, and `quant` is what was taken out of it.** The
+   server serves `model_utils.derive_model_name(...)` — no folder, no
+   extension, no quantization postfix — so a chip reads `t5xxl` rather than
+   `t5xxl_fp8_e4m3fn.safetensors`, and the card's own generated `name` row
+   (`_display_name`) loses the postfix with it. `null`, never `""`, for a slot
+   whose name the recipe did not record; a name that is *nothing but* its
+   quant falls back to the file's own string, the way a model shelf row does.
+   `quant` is one canonical id (`bf16`, `fp8_e4m3`, `q4_k_m`, `int8`,
+   `mixed`), null where nothing records it — the model shelf's own column
+   where this machine holds the file, the filename postfix otherwise. **It is
+   an id and not a label**: `FP8 E4M3` is display copy and lives in the client
+   (`utils/modelShelf.quantBadge`), the way slot kinds already do. A client
+   showing the name must show the badge beside it, or two quantization builds
+   of one model read identically.
+
+   `GET /pictures/{id}/recipe`'s `model_slots` carry the same `quant` under
+   the same rules, so the overlay and the card agree; its `name` stays RAW
+   there, because it is the model shelf lookup's own key and what the chip's
+   hover text shows.
 2. **A card is not a topology and not a variant.** `key` is the topology plus
    the non-LoRA models plus the LoRA slots marked *structural*
    (`services/workflow_identity.py`), so adding a character LoRA keeps the same
@@ -927,7 +947,8 @@ the two sides have agreed:
 
    **Its `models` and `loras` are recovered from the file, not read off a
    recipe**, and they carry the same fields as any other card's: `name` is the
-   graph's own string, `title`, `icon` and the two `base_model` spellings are
+   graph's own string put through `derive_model_name` (see §2.3's slot note),
+   `title`, `icon` and the two `base_model` spellings are
    the model shelf's where the shelf holds the file, and `kind` is the loader's real slot
    (`unet` for a Flux graph, never `checkpoint` by default). `slot_label` is
    null on every one of them, because a slot label is an address inside a

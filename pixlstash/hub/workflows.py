@@ -24,9 +24,7 @@ from typing import Callable, Optional
 
 from pixlstash.hub import workflow_cards
 from pixlstash.hub.db import HubDatabase
-from pixlstash.services.model_folder_scanner import (
-    MODEL_SUFFIXES as SHELF_MODEL_SUFFIXES,
-)
+from pixlstash.services.model_folder_scanner import SHELF_MODEL_SUFFIXES
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.workflow_hash import (
@@ -466,9 +464,10 @@ def model_ghost_names(hub: HubDatabase) -> set[str]:
     ``*_sha256`` value no model's digest equals or, for an A1111 short hash,
     starts with (a digest identifies a model on a public registry as surely as
     its name does).
-    Only what the shelf can hold is judged: a ``.ckpt`` is never on it and
-    calling one a ghost would forget the name of a model still on disk. A model that was never added to the shelf
-    counts — a picture made elsewhere names one — and the Privacy copy says so.
+    Only what the shelf can hold is judged: a ``.ckpt`` is never on it, and
+    calling one a ghost would forget the name of a model still on disk. A
+    model that was never added to the shelf counts — a picture made elsewhere
+    names one — and the Privacy copy says so.
     Hub-wide, like the recipes: a model name is not a fact about one library.
     """
     return _model_ghost_names(hub.fetchall)
@@ -590,11 +589,18 @@ def recipes_missing_a_model(hub: HubDatabase, structural_hashes: list[str]) -> s
 
     **A model the shelf cannot judge counts as missing here, which is the
     opposite of what the ghost screen does, deliberately.** The shelf scans
-    ``.safetensors`` alone, so :func:`model_ghost_names` will not call a
-    ``.ckpt``, ``.gguf`` or ``.pt`` a ghost: forgetting the name of a model
-    still on disk would be the damage there. The question here is whether to
-    *delete a picture*, and an unjudgeable name answers "we do not know", which
-    on a destructive action has to fail toward keeping the picture.
+    ``SHELF_MODEL_SUFFIXES``, so :func:`model_ghost_names` will not call a
+    ``.ckpt`` or a ``.pt`` a ghost: forgetting the name of a model still on
+    disk would be the damage there. The question here is whether to *delete a
+    picture*, and an unjudgeable name answers "we do not know", which on a
+    destructive action has to fail toward keeping the picture.
+
+    ``.gguf`` moved from the first list to the second when the scan started
+    catalogueing it, and the move is safe on both screens: a GGUF the shelf
+    holds stops counting as missing here, because the model really is there;
+    one it does not hold is a ghost like any other unscanned file, which is
+    the state a ``.safetensors`` in an unregistered folder has always been in,
+    with the same remedy — scan the folder.
 
     One blind spot stays, and it is the ghost screen's: ``_model_ghost_names``
     suspends digest judgement entirely while any shelf model still has a NULL

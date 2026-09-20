@@ -1138,6 +1138,31 @@ class TestFilesWithNoReadableHeader:
 
         assert len(models(hub)) == 1
 
+    def test_register_file_keeps_the_digest_its_caller_already_verified(
+        self, hub, scanner, tmp_path, monkeypatch
+    ):
+        """`POST /model-files` copies the bytes through a hash on the way in.
+
+        Recomputing it is a second full read of a file that may be 24 GB, and
+        DROPPING it is worse than that: a row with no digest misses
+        `_upsert_model`'s `ON CONFLICT(sha256)` join, so one file registered
+        into two folders would be two shelf rows until the hash finder merged
+        them.
+        """
+        folder = tmp_path / "unet"
+        folder.mkdir()
+        path = self._gguf(folder / "flux1-dev-Q4_K_M.gguf")
+        folder_id = register_folder(hub, folder)
+
+        def no_hash(_path):
+            raise AssertionError("re-read a file the caller had already hashed")
+
+        monkeypatch.setattr(scanner_module, "sha256_file", no_hash)
+        scanner.register_file(folder_id, path, "flux1-dev-Q4_K_M.gguf", sha256="a" * 64)
+
+        (row,) = models(hub).values()
+        assert (row["sha256"], row["quant"]) == ("a" * 64, "q4_k_m")
+
     def test_a_safetensors_whose_header_will_not_read_is_still_refused(
         self, hub, scanner, tmp_path
     ):

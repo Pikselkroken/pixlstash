@@ -1934,7 +1934,7 @@ Three guards on it, none of them authz:
 shelf catalogues by *reading* — the scanner walks a folder, reads each
 `.safetensors` header and decides. That is right for a folder of LoRAs the owner
 assembled and wrong for our own engines: half of them are ONNX or `.pt`, which
-the scanner does not even yield (`MODEL_SUFFIX` is `.safetensors`), and every one
+the scanner does not even yield (it walks `SHELF_MODEL_SUFFIXES`), and every one
 of them is a file we chose to fetch. `services/builtin_models.py` declares them
 and writes the rows; nothing is parsed and nothing is hashed, so a 339 MB tagger
 costs an existence check at start-up.
@@ -1947,9 +1947,9 @@ constraints bind only `adapter`. `kind` holds the **primary** label only; the
 full set lives in `model_capability` (below).
 
 **The scanner must skip these folders**, which is what `model_folder.owner`
-marks. It yields only `.safetensors` and sweeps whatever it did not see to
-`missing`, so pointed here it would mark the ONNX tagger and both `.pth` scorers
-missing on every pass. `POST /model-folders/{id}/rescan` answers `skipped` for
+marks. It yields `SHELF_MODEL_SUFFIXES` only and sweeps whatever it did not see
+to `missing`, so pointed here it would mark the ONNX tagger and both `.pth`
+scorers missing on every pass. `POST /model-folders/{id}/rescan` answers `skipped` for
 them, as it already does for a `source` folder.
 
 **The filenames are restated rather than imported.** Every downloader names its
@@ -2020,9 +2020,10 @@ per unclaimed file, and two choices carry the fix:
   ours would be visible and still untouchable — half a fix that reads like a
   whole one. `unknown` is what the shelf already calls *Unclassified*, and it is
   the honest reading of "present, and nothing in this build claims it".
-- **Weights only** (`MODEL_SUFFIXES`: `.safetensors .ckpt .pt .pth .bin .onnx
-  .gguf`, wider than the scanner's lone `.safetensors` because this folder is
-  where the other formats land). Every hit is now a row rather than a line in a
+- **Weights only** (`builtin_models.MODEL_SUFFIXES`: `.safetensors .ckpt .pt
+  .pth .bin .onnx .gguf` — a different question from the scanner's
+  `SHELF_MODEL_SUFFIXES`, and wider, because this folder is where the other
+  formats land). Every hit is now a row rather than a line in a
   log, and a shelf that also lists a label CSV and a revision sidecar is one
   nobody reads closely enough to notice the `.pt`. Bytes are unaffected: the
   folder's total is read off the disk, not summed from these rows.
@@ -2050,7 +2051,8 @@ so the shelf was showing the smallest of the three and the owner had no way to
 see where the disk had gone. `services/builtin_caches.py` declares both.
 
 **Declared, never scanned, for the reason above and one more.** The scanner
-yields only `.safetensors`: InsightFace holds ONNX and would list as *empty*,
+yields `SHELF_MODEL_SUFFIXES` only: InsightFace holds ONNX and would list as
+*empty*,
 and the HuggingFace cache is content-addressed, with its 37 `.safetensors` behind
 `snapshots/` symlinks onto hashed blobs. A walk would read 116 GB to learn what
 the cache's own index already knows. Both therefore carry `owner`, which is the
@@ -2507,7 +2509,8 @@ the shelf when the call returns and the owner never has to rescan.
   point is a file in a folder nobody registered. So the containment is on the
   **write** — `resolve_path_within(destination.path, basename)`, which also
   refuses a symlink standing at the destination name — and the read is bounded
-  instead: a regular file, `MODEL_SUFFIX`, and refused outright when it already
+  instead: a regular file of a `SHELF_MODEL_SUFFIXES` suffix, and refused
+  outright when it already
   sits inside a registered folder, because copying it would put a second copy of
   a catalogued file into the store forever and a rescan is what the owner wants.
   It is `LOCAL_OWNER_ONLY` for both halves at once (§16.3): it takes a path like
@@ -2972,10 +2975,12 @@ band can only put a row in one place.
   evidence, and every claim the UI makes about a pair reads it rather than the
   union drawn on top.
 
-`model.family`, `model.quant` and `model.weights_id` are the header half,
-written by the scanner from the header it already
-reads (`adapter_header.family_from_header`, `quant_from_header`,
-`weights_id_from_header`). None of them is a group. `family` is the
+`model.family`, `model.quant` and `model.weights_id` are what the scanner reads
+off a file rather than off the shelf — `family` and `weights_id` from the
+safetensors header alone (`adapter_header.family_from_header`,
+`weights_id_from_header`), and `quant` from the header where there is one and
+from the filename postfix where there is not (see below). None of them is a
+group. `family` is the
 architecture the tensors show for a support file (`vae_4ch`, `vae_16ch`,
 `clip_l`, `clip_g`, `t5_xxl`, `umt5_xxl`), read only from top-level tensors so a
 full checkpoint's baked-in VAE never files the checkpoint as one; the shelf
@@ -3012,8 +3017,11 @@ families and tensor layouts), and joining a checkpoint's `flux1` to a
 
 #### The shelf catalogues more than one suffix
 
-`model_folder_scanner.MODEL_SUFFIXES` is the one answer to "is this a model
-file", and it is a **tuple**: `.safetensors` and `.gguf`. Every consumer asks
+`model_folder_scanner.SHELF_MODEL_SUFFIXES` is the one answer to "is this a
+model file the shelf catalogues", and it is a **tuple**: `.safetensors` and
+`.gguf`. It is deliberately *not* named `MODEL_SUFFIXES`, which
+`services/builtin_models.py` already uses for a different and wider question —
+what in PixlStash's own engine folder counts as weights at all. Every consumer asks
 it rather than spelling an extension — the folder picker's listing
 (`routes/filesystem`), the upload rule (`routes/model_files._source_file`) and
 the model-ghost judgement (`hub/workflows`) — so the three move together and a
@@ -4716,7 +4724,7 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
     **Scope of that guarantee (do not over-read it).** Loopback enforcement inherits the pre-existing proxy caveat in CSO Condition 2 below, shared with the other four loopback routes: a reverse proxy that sets no `X-Forwarded-For`, or passes an inbound one through, can make a remote caller resolve to loopback. So the correct claim is that safety depends on the flag being off **or** the proxy being configured correctly — *not* that it stops depending on the flag entirely. Container port-mapping is **not** a bypass (Docker bridge / slirp present `172.17.x` / `10.0.2.x`, which are not loopback).
 
-  - **Updated 2026-08-12 (shelf plan F6's remainder, `Add file`) — the locality total is now `31 = 26 local + 5 loopback`.** `POST /api/v1/model-files` copies one loose model file from anywhere on this machine into a registered folder — the managed store unless another is named — and registers it, so a single adapter that belongs to no training run reaches the shelf without a folder being registered for it. It is the **second** route on this tier for both reasons at once (the relocate above is the first): it takes a caller-supplied host path like `POST /model-folders` and writes a file into a registered folder like `POST /model-moves`. It is also the first shelf route that takes a host path in its **body**, which the import block deliberately does not — and that cannot be avoided here, because the file is by definition somewhere nobody registered. So the containment moves to the write (`resolve_path_within` against the destination folder, which also refuses a symlink standing at the destination name) and the read is bounded instead: one regular `MODEL_SUFFIX` file, refused outright when it already lies inside a registered folder, since a second copy of a catalogued file is not what the owner meant and a rescan is. It never unlinks anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_26_local_5_loopback` *(renamed with the change below; the live assertion is always the one named in the last update)*. Arithmetic, not judgement.
+  - **Updated 2026-08-12 (shelf plan F6's remainder, `Add file`) — the locality total is now `31 = 26 local + 5 loopback`.** `POST /api/v1/model-files` copies one loose model file from anywhere on this machine into a registered folder — the managed store unless another is named — and registers it, so a single adapter that belongs to no training run reaches the shelf without a folder being registered for it. It is the **second** route on this tier for both reasons at once (the relocate above is the first): it takes a caller-supplied host path like `POST /model-folders` and writes a file into a registered folder like `POST /model-moves`. It is also the first shelf route that takes a host path in its **body**, which the import block deliberately does not — and that cannot be avoided here, because the file is by definition somewhere nobody registered. So the containment moves to the write (`resolve_path_within` against the destination folder, which also refuses a symlink standing at the destination name) and the read is bounded instead: one regular file of a `SHELF_MODEL_SUFFIXES` suffix, refused outright when it already lies inside a registered folder, since a second copy of a catalogued file is not what the owner meant and a rescan is. It never unlinks anything. Pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_26_local_5_loopback` *(renamed with the change below; the live assertion is always the one named in the last update)*. Arithmetic, not judgement.
 
   - **Updated 2026-08-15 (#326, user tagger plugins) — the locality total is now `32 = 27 local + 5 loopback`.** `GET /api/v1/taggers/plugin-diagnostics` is the first route on this tier for **disclosure alone**. It takes no path, walks nothing, reads no file and writes nothing. It returns two things, and both name paths on the server's disk: the folder the tagger registry scans for user-supplied plugins, which lives under the owner's home directory, and the import failures of the plugins in it, whose message is `str(exc)` from third-party code and therefore carries whatever absolute path that code was reaching for. Every other member of the tier is here for an authority it *exercises* or a path it *accepts*; this one is here because the route that used to carry both — `ANY_TOKEN` `GET /api/v1/taggers` — was handing them to every resource-scoped share-link holder, to render a settings screen they cannot act on. The split costs a remote owner nothing real, since acting on either means editing a file in that folder and restarting.
 
