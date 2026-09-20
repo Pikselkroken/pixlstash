@@ -48,6 +48,7 @@ import { useFilterStore } from "../../stores/useFilterStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 
 const KEY = "a".repeat(64);
@@ -407,8 +408,11 @@ describe("with several workflows selected", () => {
     // Generate button is gone, and it was unguarded: `function run() { return; }`
     // kept the whole suite green.
     const { wrapper } = await mountWith([KEY], [card()]);
-    const { useRunDialogStore } = await import("../../stores/useRunDialogStore");
-    const run = wrapper.findAll("button").find((b) => b.text().includes("Run…"));
+    const { useRunDialogStore } =
+      await import("../../stores/useRunDialogStore");
+    const run = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Run…"));
 
     await run.trigger("click");
     await flush(wrapper);
@@ -432,9 +436,8 @@ describe("with several workflows selected", () => {
       .find((b) => b.text().includes("Run…"));
     await run.trigger("click");
     await flush(wrapper);
-    const { useRunDialogStore } = await import(
-      "../../stores/useRunDialogStore"
-    );
+    const { useRunDialogStore } =
+      await import("../../stores/useRunDialogStore");
     // Seeded first: `source` is null on a fresh store, so asserting null
     // against an untouched default would pass with `run()` deleted entirely.
     const runDialog = useRunDialogStore();
@@ -709,5 +712,55 @@ describe("which card the rail shows", () => {
     const text = textOf(wrapper);
     expect(text).toContain("SDXL portrait (lightning)");
     expect(text).toContain("In the Cinematic portrait stack");
+  });
+});
+
+describe("the Tasks tab", () => {
+  // The rail on /workflows is the only thing on that screen, so without this
+  // tab a run started here cannot be watched from here (#1472).
+  it("offers Tasks last, and shows the task manager instead of the workflow", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    const band = wrapper.findAll("button.inspector-tab");
+    expect(band.map((t) => t.text())).toEqual(["Workflow", "Tasks"]);
+
+    await band[1].trigger("click");
+    await flush(wrapper);
+    const text = textOf(wrapper);
+    // The task manager's own empty state, and none of the workflow.
+    expect(text).toContain("No active tasks");
+    expect(text).not.toContain("Cinematic portrait");
+    // Run… acts on the workflow, so it goes with the workflow: a footer left
+    // behind would run a card the reader can no longer see.
+    expect(wrapper.find(".wftab-foot").exists()).toBe(false);
+
+    await wrapper.findAll("button.inspector-tab")[0].trigger("click");
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("Cinematic portrait");
+    expect(wrapper.find(".wftab-foot").exists()).toBe(true);
+  });
+
+  it("pulses the tab while work is running, and only then", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    const tasksStore = useTasksStore();
+    expect(
+      wrapper
+        .findAll("button.inspector-tab")[1]
+        .find(".inspector-tab-pulse")
+        .exists(),
+    ).toBe(false);
+
+    tasksStore.setComfyuiRun("run-1", {
+      status: "running",
+      percent: 10,
+      message: "sampling",
+      label: "Cinematic portrait",
+    });
+    await flush(wrapper);
+    expect(
+      wrapper
+        .findAll("button.inspector-tab")[1]
+        .find(".inspector-tab-pulse")
+        .exists(),
+    ).toBe(true);
   });
 });
