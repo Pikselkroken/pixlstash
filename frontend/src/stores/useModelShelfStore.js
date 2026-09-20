@@ -1272,6 +1272,27 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     completionsAttemptedAt = 0;
   }
 
+  /**
+   * One raw row with the fields the list and the verbs read off it.
+   *
+   * Extracted because `visibleRows` is no longer the only screen: the set grid
+   * draws models the `Show` narrowing leaves out of it, and a row selected there
+   * has to reach the verb bar wearing the same shape as one picked off the list.
+   */
+  function displayRow(row) {
+    return {
+      ...row,
+      name: modelName(row),
+      locState: locationState(row.locations),
+      // Counted HERE, off the row's whole `locations`, and carried on the row
+      // from then on. The folder axis narrows a draw to the one copy that
+      // folder holds, so a template calling `presentCopies` at render time
+      // would report `1` for exactly the rows this is meant to mark.
+      copies: presentCopies(row.locations),
+      isNew: newIds.value.has(row.id),
+    };
+  }
+
   /** The rows the current selection actually shows, with display fields. */
   const visibleRows = computed(() => {
     const kinds = filters.adapterKinds;
@@ -1322,17 +1343,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         }
         return true;
       })
-      .map((row) => ({
-        ...row,
-        name: modelName(row),
-        locState: locationState(row.locations),
-        // Counted HERE, off the row's whole `locations`, and carried on the row
-        // from then on. The folder axis narrows a draw to the one copy that
-        // folder holds, so a template calling `presentCopies` at render time
-        // would report `1` for exactly the rows this is meant to mark.
-        copies: presentCopies(row.locations),
-        isNew: newIds.value.has(row.id),
-      }));
+      .map(displayRow);
     // Folded LAST, so the filters narrow individual models and the stack is
     // then built from what survived. Folding first would let a stack whose
     // cover matches drag hidden members back into view.
@@ -1612,6 +1623,35 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     );
   });
 
+  /**
+   * Every model the set grid can act on: the cards' base models and their trays.
+   *
+   * **Not the same set as `shownModelIds`, which is why it exists.** A
+   * combination survives the `Show` narrowing when ANY of its members is visible
+   * and is then drawn WHOLE, so a tray routinely holds files the row list is
+   * hiding - untick Adapters and a checkpoint's card still lists the LoRAs that
+   * ran with it. Those are on screen, the reader can point at them, and without
+   * this the verb bar would take the click and then show nothing, because
+   * `selectedRows` is built from `visibleRows`.
+   *
+   * Intersected with `rows` because a verb writes a SHELF ROW: a combination can
+   * name a model from a block this session has never fetched, and there is
+   * nothing to rename, move or delete for one of those.
+   *
+   * The `In no set` models are deliberately NOT here: that card states a count
+   * and offers `List the N`, so there is no row on this screen to point at.
+   */
+  const setGridModelIds = computed(() => {
+    const known = new Set(rows.value.map((row) => row.id));
+    const ids = new Set();
+    for (const group of setGroupList.value) {
+      for (const model of group.models ?? []) {
+        if (known.has(model.id)) ids.add(model.id);
+      }
+    }
+    return ids;
+  });
+
   /** Open or close one group's tray. One at a time, like the workflows grid's. */
   function toggleSet(key) {
     openSetKey.value = openSetKey.value === key ? "" : key;
@@ -1840,6 +1880,23 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         if (chosen.has(member.id)) out.push(member);
       }
     }
+    // The set grid is a second screen over the same models, and `visibleRows` is
+    // not what it draws: a combination survives `Show` on any one visible member
+    // and is then drawn whole, so a tray holds files the row list is hiding. A
+    // model picked there is one the reader is looking at, which is the test the
+    // invariant above is actually made of - so it is added, wearing the same
+    // display shape a listed row has. Gated on the axis, because the same model
+    // is NOT on screen once the row list is back and a verb must not be able to
+    // reach it there.
+    if (view.groupBy === GRID_GROUP_BY) {
+      const already = new Set(out.flatMap((row) => row.memberIds ?? [row.id]));
+      const drawn = setGridModelIds.value;
+      for (const row of rows.value) {
+        if (!chosen.has(row.id) || already.has(row.id)) continue;
+        if (!drawn.has(row.id)) continue;
+        out.push(displayRow(row));
+      }
+    }
     return out;
   });
 
@@ -1970,8 +2027,22 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     anchorId.value = id;
   }
 
-  /** Select every model the current filters show, ungrouped duplicates and all. */
+  /**
+   * Select every model the screen shows, ungrouped duplicates and all.
+   *
+   * Two screens, two answers to "shown". On the row list it is every drawn row,
+   * runs taken whole; on the set grid it is every base model and every tray
+   * member, which is a different set in both directions - it leaves out a model
+   * no recipe names, and it takes in one the `Show` narrowing hides from the
+   * list while a card still lists it.
+   */
   function selectVisible() {
+    if (view.groupBy === GRID_GROUP_BY) {
+      const ids = [...setGridModelIds.value];
+      selectedIds.value = new Set(ids);
+      anchorId.value = ids[0] ?? null;
+      return;
+    }
     selectedIds.value = new Set(
       visibleRows.value.flatMap((row) => row.memberIds ?? [row.id]),
     );
@@ -2466,6 +2537,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     shownModelIds,
     visibleCombinations,
     setGroups: setGroupList,
+    setGridModelIds,
     noSetRows,
     openSetKey,
     toggleSet,

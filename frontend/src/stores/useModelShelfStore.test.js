@@ -1151,6 +1151,9 @@ describe("stacks are atomic", () => {
 
   it("selects every member with Select visible", () => {
     const store = shelfWithARun();
+    // On the ROW LIST. `selectVisible` answers the screen it is on, and the
+    // default axis is the set grid, where "shown" is the cards and their trays.
+    store.setView({ groupBy: "none" });
     store.selectVisible();
     expect([...store.selectedIds].sort()).toEqual([1, 2, 3, 4]);
   });
@@ -1512,6 +1515,7 @@ describe("the thumbnail verb", () => {
         stack_position: 2,
       }),
     ];
+    store.setView({ groupBy: "none" });
     store.selectVisible();
     expect(store.selectedRows).toHaveLength(1);
 
@@ -1527,6 +1531,7 @@ describe("the thumbnail verb", () => {
     store.rows = Array.from({ length: 501 }, (_, i) =>
       adapter({ id: i + 1, sha256: String(i).padStart(64, "0") }),
     );
+    store.setView({ groupBy: "none" });
     store.selectVisible();
 
     expect(await store.setIconOnSelected(new Blob(["x"]))).toBe(false);
@@ -2837,5 +2842,113 @@ describe("the workflow sets", () => {
     store.setView({ trayView: "list" });
     setActivePinia(createPinia());
     expect(useModelShelfStore().view.trayView).toBe("list");
+  });
+
+  /**
+   * A checkpoint the row list shows and a VAE it does not, both in one tray.
+   *
+   * The shape `setGridModelIds` exists for: a combination survives `Show` on any
+   * one visible member and is then drawn WHOLE, so unticking the support files
+   * takes the VAE off the row list and leaves it on the card.
+   */
+  async function shelfWithAHiddenCompanion() {
+    listCheckpoints.mockResolvedValue([
+      adapter({
+        id: 1,
+        sha256: "a".repeat(64),
+        filename: "ckpt.st",
+        file_kind: "checkpoint",
+        kind: null,
+      }),
+    ]);
+    // `/adapters` is one route serving both support kinds, so the double has to
+    // answer `vae` and `text_encoder` differently or the VAE arrives twice.
+    listSupport.mockImplementation((args) =>
+      Promise.resolve(
+        args?.fileKind === "vae"
+          ? [
+              adapter({
+                id: 2,
+                sha256: "b".repeat(64),
+                filename: "vae.st",
+                file_kind: "vae",
+                kind: null,
+              }),
+            ]
+          : [],
+      ),
+    );
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        {
+          key: "1,2",
+          models: [
+            { id: 1, name: "ckpt.st", kind: "checkpoint" },
+            { id: 2, name: "vae.st", kind: "vae" },
+          ],
+          recipes: 2,
+          picture_count: 4,
+          covers: [],
+        },
+      ],
+      no_set: [],
+    });
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    return store;
+  }
+
+  it("counts a tray's models as actionable, hidden from the row list or not", async () => {
+    const store = await shelfWithAHiddenCompanion();
+    expect([...store.setGridModelIds].sort()).toEqual([1, 2]);
+
+    store.setFilters({ support: false });
+    expect(store.visibleRows.map((r) => r.id)).toEqual([1]);
+    // Still on the card, so still something a verb can be aimed at.
+    expect([...store.setGridModelIds].sort()).toEqual([1, 2]);
+  });
+
+  it("hands the verbs a model picked off a card the row list is hiding", async () => {
+    const store = await shelfWithAHiddenCompanion();
+    store.setFilters({ support: false });
+    store.toggleSelected(2);
+
+    // `selectedRows` is built from `visibleRows`, which does not hold it - so
+    // without the grid's own reach the click would tick a row the bar then
+    // could not see, and every verb would be aimed at nothing.
+    expect(store.selectedRows.map((r) => r.id)).toEqual([2]);
+    // Wearing the shape a listed row has, because the verbs read these fields:
+    // `name` is `modelName`'s `{text, state}` pair and not the raw column, and
+    // the location state is reduced. A raw `rows` entry has neither.
+    expect(store.selectedRows[0].name).toMatchObject({
+      text: "Cyanwood Style",
+    });
+    expect(store.selectedRows[0].locState).toBe("present");
+  });
+
+  it("takes that reach away again the moment the row list is back", async () => {
+    // The invariant the row list rests on: a verb may only ever act on
+    // something the reader can SEE, and off the grid they cannot see it.
+    const store = await shelfWithAHiddenCompanion();
+    store.setFilters({ support: false });
+    store.toggleSelected(2);
+    expect(store.selectedRows).toHaveLength(1);
+
+    store.setView({ groupBy: "none" });
+    expect(store.selectedRows).toHaveLength(0);
+  });
+
+  it("answers Select all shown with the grid's models, on the grid", async () => {
+    const store = await shelfWithAHiddenCompanion();
+    store.setFilters({ support: false });
+
+    store.selectVisible();
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+
+    // And with the row list's own answer, on the row list.
+    store.setView({ groupBy: "none" });
+    store.selectVisible();
+    expect([...store.selectedIds]).toEqual([1]);
   });
 });

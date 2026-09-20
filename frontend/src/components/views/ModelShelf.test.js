@@ -220,7 +220,7 @@ const globalOpts = {
       // whether the shelf puts it on screen instead of the row list.
       ModelSetGrid: {
         name: "ModelSetGrid",
-        emits: ["works-with"],
+        emits: ["works-with", "menu"],
         template: "<div class='set-grid-stub'></div>",
       },
       // The host-path picker `Add file` opens. Real, it would drag Vuetify's
@@ -5205,59 +5205,71 @@ describe("the set grid is what the shelf opens on", () => {
     expect(textOf(wrapper.find(".shelf-sub"))).toContain("1 model");
   });
 
-  it("floats no verb bar over the grid, whatever is selected", async () => {
-    // A card is a SET. The bar's verbs are per model and two of them destroy
-    // bytes, so a Delete aimed at a card could take a shared VAE with it. The
-    // selection survives in the store and the bar comes back with the list.
+  it("floats the verb bar over the grid, as it does over the list", async () => {
+    // It did not, while a card stood for a whole SET: a Delete aimed at one
+    // could have taken a shared VAE with it. A card stands for its BASE MODEL
+    // now and a tray row for one file, so everything the bar can be aimed at
+    // there is one model - which is what its verbs write.
     const wrapper = await mountDefaultShelf();
     const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
     store.toggleSelected(1);
     await wrapper.vm.$nextTick();
 
-    expect(store.selectedIds.size).toBe(1);
-    expect(wrapper.find(".selbar-float").exists()).toBe(false);
-
-    store.setView({ groupBy: "none" });
-    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(1);
     expect(wrapper.find(".selbar-float").exists()).toBe(true);
   });
 
-  it("takes the destructive keys away, exactly as the runs tab does", async () => {
-    // **The same hazard one axis over, and this is the DEFAULT screen.** The key
-    // handler is on the WINDOW and the grid renders inside the shelf tab, so with
-    // the tab guard alone Ctrl+A built a selection with no bar on screen to show
-    // it and Delete then opened the real confirmation for cards nobody can point
-    // at. The bar half of the runs-tab precedent was ported when the grid landed
-    // and the keys half was not (#1479 review).
+  it("opens the verb menu where the grid says the pointer was", async () => {
+    const wrapper = await mountDefaultShelf();
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    await wrapper
+      .findComponent({ name: "ModelSetGrid" })
+      .vm.$emit("menu", { x: 210, y: 64 });
+    await wrapper.vm.$nextTick();
+
+    // One bar for both views, so there is one set of refusals rather than two
+    // that can drift. The menu is its own, opened through its exposed method.
+    expect(
+      wrapper.findComponent({ name: "ShelfSelectionBar" }).vm.contextOpen,
+    ).toBe(true);
+  });
+
+  it("keeps Escape and Ctrl+A live on the grid, now the bar is over it", async () => {
+    // They were taken away while nothing on the grid was selectable: Ctrl+A
+    // built a selection with no bar on screen to show it, and Delete then
+    // opened a real confirmation for cards nobody could point at. Both halves
+    // of that reasoning went with the card standing for its base model.
     const wrapper = await mountDefaultShelf([
       adapter({ id: 1, sha256: "a".repeat(64) }),
       adapter({ id: 2, sha256: "b".repeat(64) }),
     ]);
     document.body.appendChild(wrapper.element);
     const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
+    await wrapper.vm.$nextTick();
 
+    // Ctrl+A on the grid takes what the GRID shows, which with no combinations
+    // read is nothing - the row list's two rows are not on that screen.
     window.dispatchEvent(
       new KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
     );
     await wrapper.vm.$nextTick();
     expect(store.selectedRows).toHaveLength(0);
 
-    // And with a selection made before the switch, Delete is still refused -
-    // the selection survives, which is what makes it safe to keep.
-    store.selectVisible();
-    expect(store.selectedRows).toHaveLength(2);
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    await wrapper.vm.$nextTick();
-    expect(deleteModels).not.toHaveBeenCalled();
-    expect(store.selectedRows).toHaveLength(2);
-
-    // The keys come back with the row list, like the bar does.
+    // A selection made on the row list and carried over still clears on Escape.
     store.setView({ groupBy: "none" });
+    store.selectVisible();
+    store.setView({ groupBy: "workflow_set" });
     await wrapper.vm.$nextTick();
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     await wrapper.vm.$nextTick();
     expect(store.selectedRows).toHaveLength(0);
+    expect(deleteModels).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
