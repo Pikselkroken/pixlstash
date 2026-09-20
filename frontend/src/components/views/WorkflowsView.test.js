@@ -725,15 +725,41 @@ describe("the panel follows a change of selection", () => {
 
   const panel = (wrapper) => wrapper.find('[data-testid="stack-panel"]');
 
-  it("opens the stack a plain click selects, and moves it to the next", async () => {
+  /**
+   * Open a stack the way a reader does: the double-click, and the click that
+   * comes with it. `trigger("dblclick")` alone fires no `click`, so a test
+   * that skips it opens the panel with the stack NOT selected — a state no
+   * gesture produces, and one that makes the rules below vacuous.
+   */
+  const openByGesture = async (wrapper, key) => {
+    await row(wrapper, key).trigger("click");
+    await row(wrapper, key).trigger("dblclick");
+    await flush();
+  };
+
+  it("a plain click selects a stack without opening it", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
 
     await row(wrapper, "b").trigger("click");
     await flush();
+    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
+    // Wrong if a panel appears: a click is a selection, and ▸, Enter and a
+    // double-click are the ways in. Every click down the grid would otherwise
+    // throw a band open under it.
+    expect(panel(wrapper).exists()).toBe(false);
+  });
+
+  it("moves an open panel to the next stack that is clicked", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+
+    // Opened the way a reader opens one.
+    await openByGesture(wrapper, "b");
     expect(store.openStackKey).toBe("b");
     expect(memberKeys(wrapper)).toEqual(["b", "b1", "b2"]);
 
+    // And now a PLAIN click on the other stack moves the band there.
     await row(wrapper, "e").trigger("click");
     await flush();
     expect(store.openStackKey).toBe("e");
@@ -744,8 +770,7 @@ describe("the panel follows a change of selection", () => {
   it("holds the panel on screen, shrinking, while it closes", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
-    await row(wrapper, "b").trigger("click");
-    await flush();
+    await openByGesture(wrapper, "b");
 
     await row(wrapper, "f").trigger("click", { ctrlKey: true });
     // Wrong if the panel has already gone: the rows the collapse is drawn on
@@ -762,8 +787,7 @@ describe("the panel follows a change of selection", () => {
   it("keeps the panel open while the picking stays inside it", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
-    await row(wrapper, "b").trigger("click");
-    await flush();
+    await openByGesture(wrapper, "b");
 
     const member = (key) =>
       wrapper
@@ -807,8 +831,7 @@ describe("the panel follows a change of selection", () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
     const gridEl = wrapper.find(".wfv-grid");
-    await row(wrapper, "b").trigger("click");
-    await flush();
+    await openByGesture(wrapper, "b");
 
     await gridEl.trigger("keydown", { key: "Escape" });
     expect(store.panelClosing).toBe(true);

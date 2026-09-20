@@ -339,13 +339,22 @@ describe("the panel follows a change of selection", () => {
   // asserts on members, so one microtask is enough to let the flip land.
   const settle = () => Promise.resolve();
 
-  it("opens the stack that was picked, and moves to the next one", async () => {
+  it("does not open anything: selecting is not a way in", async () => {
+    // ▸, Enter and a double-click open a stack. A plain click is a selection,
+    // and a rule that opened on one would make every click down the grid throw
+    // a band open under it.
     const store = useWorkflowsStore();
     await store.fetchCards();
 
     store.select("the-stack", { whole: true });
     await settle();
-    expect(store.openStackKey).toBe("the-stack");
+    expect(store.openStackKey).toBe(null);
+  });
+
+  it("moves an open panel to the stack that was picked", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
 
     // The band MOVES. A second panel would put itself a screen below the card
     // that opened it, which is why there is only ever one.
@@ -372,15 +381,15 @@ describe("the panel follows a change of selection", () => {
 
     // And the cover key ALONE, which is what `?topology=` selects: it names
     // one workflow, not the pile it sits in.
-    store.closeStack();
     store.select("few-but-loved");
     await settle();
-    expect(store.openStackKey).toBe(null);
+    expect(store.openStackKey).toBe("the-stack");
   });
 
   it("closes the panel when the selection reaches outside the stack", async () => {
     const store = useWorkflowsStore();
     await store.fetchCards();
+    await store.openStack("the-stack");
     store.select("the-stack", { whole: true });
     await settle();
 
@@ -536,19 +545,6 @@ describe("the collapse's backstop", () => {
     await store.openStack("few-but-loved");
     vi.advanceTimersByTime(PANEL_COLLAPSE_MS * 2);
     expect(store.openStackKey).toBe("few-but-loved");
-  });
-
-  it("and so does the store being torn down", async () => {
-    // The timer is the one thing here that outlives the store's scope: fired
-    // afterwards it writes `openStackKey` on a store nothing is watching.
-    const store = useWorkflowsStore();
-    await store.fetchCards();
-    await store.openStack("the-stack");
-    store.collapseStack();
-
-    store.$dispose();
-    vi.advanceTimersByTime(PANEL_COLLAPSE_MS * 2);
-    expect(store.openStackKey).toBe("the-stack");
   });
 });
 

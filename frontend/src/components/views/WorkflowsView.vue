@@ -280,6 +280,7 @@
             :tabindex="index === cursorIndex ? 0 : -1"
             :data-key="entry.key"
             @click="onRowClick(index, $event)"
+            @dblclick="isStack(entry.card) && store.toggleStack(entry.key)"
           >
             <div class="wfv-cell" role="gridcell">
               <WorkflowCard
@@ -302,15 +303,15 @@
  * The Workflows grid (v1.12 Workflows & Recipes, F1a) — on `/workflows` since
  * F1b retired the shelf. See `docs/frontend_architecture.md` §5.
  *
- * THE PANEL FOLLOWS A CHANGE OF SELECTION
- * (`useWorkflowsStore.syncPanelToSelection`): clicking a stack card selects the
- * stack whole and opens it, clicking another stack moves the band there, and a
- * selection reaching outside the open stack closes it. Both transitions
- * animate, which is why the store holds the open key until the panel reports
- * its collapse finished. **The row's `dblclick` toggle went with this**: the
- * first click of the pair now opens the stack and the toggle then shut it
- * again, so a double-click on a closed stack was open-then-closed. Selecting
- * is the gesture; ▸, Enter and Close remain the ways to shut one.
+ * AN OPEN PANEL FOLLOWS A CHANGE OF SELECTION
+ * (`useWorkflowsStore.syncPanelToSelection`) — it never opens one. ▸, Enter and
+ * a double-click on the card are still the only ways in, because a plain click
+ * is a selection and not a request to look inside. What the rule settles is the
+ * state those two used to contradict: a band standing open under one stack
+ * while the reader has gone and selected another, or several. Selecting another
+ * stack moves the band there; selecting anything outside the open stack shuts
+ * it. Both animate, which is why the store holds the open key until the panel
+ * reports its collapse finished.
  *
  * ONE FLAT LIST. The cards, and — while a stack is open — its members, are one
  * index space, so the roving cursor crosses the panel boundary with the same

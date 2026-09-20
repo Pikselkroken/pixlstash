@@ -692,18 +692,21 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   }
 
   /**
-   * The panel follows a CHANGE of selection.
+   * An OPEN panel follows a change of selection.
    *
-   * Two rules, and both are about the selection having just moved rather than
-   * about what it holds: selecting one stack — the whole stack, which is what
-   * `select`'s `whole` makes a click on a stack card mean — opens it and
-   * replaces whatever was open; selecting anything that reaches OUTSIDE the
-   * open stack closes it, because a band belonging to one of the selected
-   * cards says nothing true about the rest of them.
+   * **It never opens one.** Opening a stack is the caret, Enter, or a
+   * double-click on its card — a gesture that says "show me inside this" —
+   * and a plain click is a selection, not that. What this rule settles is the
+   * state the two used to contradict: a panel standing open under one stack
+   * while the reader has gone and selected another, or several. So it moves
+   * the band to the stack that was just selected, or shuts it, and when
+   * nothing is open it does nothing at all.
    *
-   * **Reaching outside, not "more than one".** A count would make Ctrl-click
-   * and Shift-click inside an open panel impossible — the second pick would
-   * destroy the rows being picked from — and the grid declares
+   * Moving it wants the WHOLE stack selected, which is what `select`'s
+   * `whole` makes a click on a stack card mean. Closing it wants a selection
+   * reaching OUTSIDE the open stack — outside, not "more than one": a count
+   * would make Ctrl-click and Shift-click inside an open panel impossible, the
+   * second pick destroying the rows being picked from, and the grid declares
    * `aria-multiselectable`, so multi-selecting a stack's members is a gesture
    * it promises.
    *
@@ -711,13 +714,16 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * refuses a card with nothing under it, and every row inside the panel is
    * exactly that. So is a stack's cover key ALONE, which is what the
    * `?topology=` deep link selects: it names one workflow rather than the pile
-   * it sits in, and opening the pile is not what was linked to.
+   * it sits in.
    *
    * Because this is about a change, it is not an invariant over
    * `selectedKeys`: ▸ can leave a stack selected with no panel, and nothing
    * here re-opens it. That is the same state the caret has always produced.
    */
   function syncPanelToSelection() {
+    // Nothing open, nothing to follow. This is what keeps a plain click a
+    // selection rather than a way in.
+    if (!openStackKey.value) return;
     const keys = selectedKeys.value;
     if (!keys.length) return;
     // The one card the whole selection is: a stack taken whole, or a single
@@ -733,7 +739,6 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       void openStack(only);
       return;
     }
-    if (!openStackKey.value) return;
     const inside = new Set(stackKeys(openStackKey.value));
     if (keys.every((key) => inside.has(key))) return;
     collapseStack();
@@ -835,9 +840,6 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   }
 
   onScopeDispose(onSessionReset(reset));
-  // The collapse's backstop timer is the one thing here that outlives the
-  // store: it would fire against a torn-down session and write `openStackKey`.
-  onScopeDispose(cancelCollapse);
 
   return {
     cards,
