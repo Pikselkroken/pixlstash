@@ -407,3 +407,33 @@ describe("cover thumbnail URLs", () => {
     );
   });
 });
+
+// ── The cover crop is top-anchored ───────────────────────────────────────
+//
+// jsdom applies no scoped CSS, so this reads the SFC's own `<style>` text -
+// the shape `Toolbar.test.js` uses to pin a bar recipe. Worth pinning because
+// the defect is invisible to every other test: a centred crop renders, it
+// just takes the heads off, and the two short cells are far wider than tall.
+describe("the cover crop", () => {
+  const styleOf = async (path) => {
+    const { readFileSync } = await import("node:fs");
+    return readFileSync(`${process.cwd()}/${path}`, "utf8");
+  };
+
+  it("anchors to the top, as the picture grid's cropped tiles do", async () => {
+    const source = await styleOf("src/components/widgets/WorkflowCard.vue");
+    const block = source.slice(
+      source.indexOf(".wf-card__pic img {"),
+      source.indexOf("}", source.indexOf(".wf-card__pic img {")),
+    );
+    expect(block).toContain("object-fit: cover");
+    expect(block).toContain("object-position: top center");
+  });
+
+  it("uses the same anchor the shipped grid does", async () => {
+    // One convention, not two: if the grid's moves, this should move with it
+    // rather than quietly becoming the odd one out.
+    const grid = await styleOf("src/components/views/ImageGrid.css");
+    expect(grid).toContain("object-position: top center");
+  });
+});

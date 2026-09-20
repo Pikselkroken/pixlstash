@@ -261,11 +261,24 @@ const accessibleName = computed(() =>
   grid-row: 1 / 3;
 }
 
+/* TOP-anchored, not centred, and that is the shipped convention rather than a
+   choice made here: the picture grid's own cropped tiles carry
+   `object-position: top center` (`ImageGrid.css`), and `utils/squareCrop.js`
+   documents it as what the app's cover crop means. A centre crop takes the
+   same slice off the top and the bottom of a portrait, and on a picture of a
+   person the top is the face — so every head came off in the two short cells,
+   which are much wider than they are tall.
+
+   It does not make the crop face-AWARE: nothing here knows where the face is.
+   That needs the face box on the card payload, which the covers do not carry
+   (see docs/frontend_architecture.md §5). Top-anchoring is the cheap half that
+   is right most of the time. */
 .wf-card__pic img {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: top center;
 }
 
 /* The shipped scrim badge: a dark chip over an arbitrary photo. */
