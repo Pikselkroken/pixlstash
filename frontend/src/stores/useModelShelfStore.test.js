@@ -30,6 +30,7 @@ const listBaseModelCompletions = vi.fn();
 const forgetModels = vi.fn();
 const deleteModels = vi.fn();
 const setAdapterAttachments = vi.fn();
+const fetchWorkflowSets = vi.fn();
 const setModelIcon = vi.fn();
 const clearModelIcons = vi.fn();
 
@@ -49,6 +50,7 @@ vi.mock("../api/modelShelf", () => ({
   forgetModels: (...args) => forgetModels(...args),
   deleteModels: (...args) => deleteModels(...args),
   setAdapterAttachments: (...args) => setAdapterAttachments(...args),
+  fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
 }));
 
 const mergeModelCopies = vi.fn();
@@ -100,6 +102,10 @@ beforeEach(() => {
   listUnclassified.mockReset().mockResolvedValue([]);
   listSupport.mockReset().mockResolvedValue([]);
   listBaseModelCompletions.mockReset().mockResolvedValue([]);
+  fetchWorkflowSets.mockReset().mockResolvedValue({
+    combinations: [],
+    no_set: [],
+  });
 });
 
 describe("defaults", () => {
@@ -724,9 +730,13 @@ describe("grouping", () => {
   });
 
   it("still renders one group when nothing is grouped, so the list has one shape", async () => {
+    // `none` is no longer the default axis (#1438), so it is chosen here: the
+    // one-group shape is what keeps the flat list and the banded list from
+    // being two copies of the row markup, and that still has to hold.
     listAdapters.mockResolvedValue([adapter()]);
     const store = useModelShelfStore();
     await store.fetchRows();
+    store.setView({ groupBy: "none" });
     expect(store.view.groupBy).toBe("none");
     expect(store.groups.length).toBe(1);
     expect(store.groups[0].label).toBe("");
@@ -872,17 +882,70 @@ describe("the view is remembered", () => {
       JSON.stringify({ v: 99, groupBy: "folder", sortKey: "name" }),
     );
     const store = useModelShelfStore();
-    expect(store.view.groupBy).toBe("none");
+    expect(store.view.groupBy).toBe("workflow_set");
     expect(store.view.sortKey).toBe("added_at");
+  });
+
+  it("migrates a blob from before the set grid instead of discarding it", () => {
+    // The default of `groupBy` changed, and nothing else in the blob did. A
+    // version 1 blob could only ever say `none`, so that field is not evidence
+    // of a choice and is the one thing not carried forward; the widths, the
+    // collapsed groups, the sort and the folder layout are exactly what the
+    // reader set and survive. The first version of #1438 bumped the version and
+    // threw all of it away for a change to one field.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({
+        v: 1,
+        groupBy: "none",
+        sortKey: "name",
+        sortDirection: "asc",
+        folderLayout: "alpha",
+        columnWidths: { kind: 120, base: 84, size: 74, date: 96 },
+        collapsed: { base_model: ["sdxl"] },
+      }),
+    );
+
+    const store = useModelShelfStore();
+
+    expect(store.view.groupBy).toBe("workflow_set");
+    expect(store.view.sortKey).toBe("name");
+    expect(store.view.sortDirection).toBe("asc");
+    expect(store.view.folderLayout).toBe("alpha");
+    expect(store.view.columnWidths.kind).toBe(120);
+    store.setView({ groupBy: "base_model" });
+    expect(store.isCollapsed("sdxl")).toBe(true);
+  });
+
+  it("still discards a blob from a version it does not know", () => {
+    // The migration table names the versions this build can read. A future shape
+    // change that leaves itself out of it falls through to the defaults whole,
+    // which is what a bump is for.
+    window.localStorage.setItem(
+      "pixlstash:modelShelfView",
+      JSON.stringify({
+        v: 99,
+        sortKey: "name",
+        columnWidths: { kind: 120 },
+        collapsed: { base_model: ["sdxl"] },
+      }),
+    );
+
+    const store = useModelShelfStore();
+
+    expect(store.view.sortKey).toBe("added_at");
+    expect(store.view.columnWidths.kind).toBe(64);
+    store.setView({ groupBy: "base_model" });
+    expect(store.isCollapsed("sdxl")).toBe(false);
   });
 
   it("refuses a grouping or sort key it does not recognise", () => {
     window.localStorage.setItem(
       "pixlstash:modelShelfView",
-      JSON.stringify({ v: 1, groupBy: "colour", sortKey: "vibes" }),
+      JSON.stringify({ v: 2, groupBy: "colour", sortKey: "vibes" }),
     );
     const store = useModelShelfStore();
-    expect(store.view.groupBy).toBe("none");
+    expect(store.view.groupBy).toBe("workflow_set");
     expect(store.view.sortKey).toBe("added_at");
   });
 });
@@ -2471,5 +2534,308 @@ describe("mergeReceipt", () => {
       "Trash",
     );
     expect(text).toContain("left alone");
+  });
+});
+
+describe("the workflow sets", () => {
+  /** Two adapters on the shelf; one has run in a recipe and one has not. */
+  function shelfWithASet() {
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, sha256: "a".repeat(64), filename: "used.st" }),
+      adapter({ id: 2, sha256: "b".repeat(64), filename: "never.st" }),
+    ]);
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        {
+          key: "1",
+          models: [{ id: 1, name: "used.st", kind: "checkpoint" }],
+          recipes: 3,
+          picture_count: 12,
+          covers: [],
+        },
+      ],
+      no_set: [2],
+    });
+    return useModelShelfStore();
+  }
+
+  it("reads the sets once, however many times something asks", async () => {
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    await store.loadWorkflowSets();
+    expect(fetchWorkflowSets).toHaveBeenCalledTimes(1);
+    // With the rows in hand, so "once" is not standing in for "the payload was
+    // never used": the second call found the first one's answer, not an empty
+    // grid.
+    expect(store.setGroups).toHaveLength(1);
+  });
+
+  it("discards a read the reader has already overtaken", async () => {
+    // The epoch guard. A `force` read fired while an earlier one is in flight
+    // must win whatever order they resolve in - a session reset or a scan is
+    // what fires the second, and landing the stale answer over it puts the
+    // previous credential's or the pre-scan sets back on screen. Deleting the
+    // guard left the whole store suite green (#1479 review).
+    const store = shelfWithASet();
+    await store.fetchRows();
+
+    let releaseFirst;
+    fetchWorkflowSets.mockImplementationOnce(
+      () => new Promise((resolve) => (releaseFirst = resolve)),
+    );
+    const stale = store.loadWorkflowSets();
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        {
+          key: "9",
+          models: [{ id: 1, name: "used.st", kind: "checkpoint" }],
+          recipes: 1,
+          picture_count: 99,
+          covers: [],
+        },
+      ],
+      no_set: [],
+    });
+    await store.loadWorkflowSets({ force: true });
+    // Now let the OVERTAKEN request answer, with the older payload.
+    releaseFirst({ combinations: [], no_set: [] });
+    await stale;
+
+    expect(store.workflowSets.combinations.map((c) => c.key)).toEqual(["9"]);
+    expect(store.setsLoaded).toBe(true);
+  });
+
+  it("drops a second read made while the first is still on the wire", async () => {
+    // Reachable: the grid asks on mount and the dialog asks when it opens, and
+    // each request is a window over every kept picture in the vault.
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await Promise.all([store.loadWorkflowSets(), store.loadWorkflowSets()]);
+    expect(fetchWorkflowSets).toHaveBeenCalledTimes(1);
+  });
+
+  it("finds a set that reached the shelf through a run's second step", async () => {
+    // **`visibleRows` is not a list of models.** A run is drawn as its cover, so
+    // a stacked row's `id` is the cover's and the rest live in `memberIds`.
+    // Matching a combination's members on `row.id` alone dropped every set that
+    // reached the shelf through any other step - and dropped the model from
+    // `no_set` too, so it appeared on no card at all and the grid's empty state
+    // claimed no picture recorded it. That is the one outcome the payload is
+    // built to prevent.
+    listAdapters.mockResolvedValue([
+      adapter({
+        id: 1,
+        sha256: "a".repeat(64),
+        filename: "cover.st",
+        stack_id: 9,
+      }),
+      adapter({
+        id: 2,
+        sha256: "b".repeat(64),
+        filename: "step-two.st",
+        stack_id: 9,
+      }),
+      adapter({
+        id: 3,
+        sha256: "c".repeat(64),
+        filename: "lonely.st",
+        stack_id: 9,
+      }),
+    ]);
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        {
+          key: "2",
+          models: [{ id: 2, name: "step-two.st", kind: "checkpoint" }],
+          recipes: 2,
+          picture_count: 500,
+          covers: [],
+        },
+      ],
+      no_set: [3],
+    });
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+
+    // One drawn row, three models behind it.
+    expect(store.visibleRows.map((row) => row.id)).toEqual([1]);
+    expect(store.visibleRows[0].memberIds).toEqual([1, 2, 3]);
+
+    expect(store.visibleCombinations).toHaveLength(1);
+    expect(store.setGroups[0].card.pictures).toBe(500);
+    expect(store.noSetRows.map((row) => row.id)).toEqual([3]);
+  });
+
+  it("draws a card per base model and one for the models with no set", async () => {
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+
+    expect(store.setGroups.map((group) => group.card.name)).toEqual([
+      "used.st",
+    ]);
+    expect(store.setGroups[0].card.pictures).toBe(12);
+    expect(store.noSetRows.map((row) => row.id)).toEqual([2]);
+  });
+
+  it("does not refetch the sets when a filter refetches the rows", async () => {
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    // `refetch: true` is what a `Show` checkbox passes, so this really does
+    // re-run the row query: the sets must NOT ride along with it, or every tick
+    // costs a window over every picture in the vault.
+    await store.setFilters({ checkpoints: false }, { refetch: true });
+    expect(fetchWorkflowSets).toHaveBeenCalledTimes(1);
+  });
+
+  it("does refetch after a scan, because a scan can add a model", async () => {
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    await store.fetchRows({ markNew: true });
+    expect(fetchWorkflowSets).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves a card out when Show hides every one of its members", async () => {
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    expect(store.visibleCombinations).toHaveLength(1);
+
+    await store.setFilters({ adapters: false });
+
+    expect(store.visibleCombinations).toEqual([]);
+    expect(store.noSetRows).toEqual([]);
+  });
+
+  it("answers Works with from the whole payload, not from what Show draws", async () => {
+    listAdapters.mockResolvedValue([adapter({ id: 1, filename: "a.st" })]);
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        {
+          key: "1,2",
+          models: [
+            { id: 1, name: "a.st", kind: "checkpoint" },
+            { id: 2, name: "b.st", kind: "vae" },
+          ],
+          recipes: 4,
+          picture_count: 9,
+          covers: [],
+        },
+      ],
+      no_set: [],
+    });
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    // Untick the block the anchor is in: the grid now draws no card at all, and
+    // the question "what has this file run with" is unchanged by that. Reading
+    // the grid's own narrowed list here would answer it with silence.
+    await store.setFilters({ adapters: false });
+    expect(store.visibleCombinations).toEqual([]);
+
+    const { companions, recipes } = store.worksWithModel(1);
+
+    expect(companions.map((c) => c.name)).toEqual(["b.st"]);
+    expect(recipes).toBe(4);
+  });
+
+  it("reports a failed read and leaves the last payload standing", async () => {
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    fetchWorkflowSets.mockRejectedValue(new Error("hub is busy"));
+
+    await store.loadWorkflowSets({ force: true });
+
+    expect(store.setsError).toContain("hub is busy");
+    expect(store.visibleCombinations).toHaveLength(1);
+  });
+
+  it("opens one stack at a time and closes the one that is open", async () => {
+    const store = shelfWithASet();
+    store.toggleSet("1,2");
+    expect(store.openSetKey).toBe("1,2");
+    store.toggleSet("3,4");
+    expect(store.openSetKey).toBe("3,4");
+    store.toggleSet("3,4");
+    expect(store.openSetKey).toBe("");
+  });
+
+  it("forgets the sets when the credential changes", async () => {
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    store.resetForSession();
+    expect(store.workflowSets.combinations).toEqual([]);
+    expect(store.setsLoaded).toBe(false);
+    await store.loadWorkflowSets();
+    expect(fetchWorkflowSets).toHaveBeenCalledTimes(2);
+  });
+
+  it("groups every combination under its own base model, off one payload", async () => {
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, sha256: "a".repeat(64), filename: "ckpt.st" }),
+      adapter({ id: 2, sha256: "b".repeat(64), filename: "vae.st" }),
+      adapter({ id: 3, sha256: "c".repeat(64), filename: "lora.st" }),
+    ]);
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        {
+          key: "1,2",
+          models: [
+            { id: 1, name: "ckpt.st", kind: "checkpoint" },
+            { id: 2, name: "vae.st", kind: "vae" },
+          ],
+          recipes: 5,
+          picture_count: 20,
+          covers: [],
+        },
+        {
+          key: "1,2,3",
+          models: [
+            { id: 1, name: "ckpt.st", kind: "checkpoint" },
+            { id: 2, name: "vae.st", kind: "vae" },
+            { id: 3, name: "lora.st", kind: "adapter" },
+          ],
+          recipes: 2,
+          picture_count: 5,
+          covers: [],
+        },
+      ],
+      no_set: [],
+    });
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+
+    // Two combinations, ONE base model: one card, whose tray holds all three
+    // models, with both combinations' evidence summed onto it.
+    expect(store.setGroups).toHaveLength(1);
+    expect(store.setGroups[0].models.map((m) => m.name)).toEqual([
+      "ckpt.st",
+      "vae.st",
+      "lora.st",
+    ]);
+    expect(store.setGroups[0].card.facts).toEqual([
+      "3 models",
+      "7 recipes",
+      "25 pictures",
+    ]);
+    // The LoRA carries its OWN evidence rather than the group's.
+    const lora = store.setGroups[0].models.find((m) => m.name === "lora.st");
+    expect([lora.recipes, lora.pictures]).toEqual([2, 5]);
+    expect(fetchWorkflowSets).toHaveBeenCalledTimes(1);
+  });
+
+  it("remembers how the tray draws its models between visits", () => {
+    const store = useModelShelfStore();
+    expect(store.view.trayView).toBe("grid");
+    store.setView({ trayView: "list" });
+    setActivePinia(createPinia());
+    expect(useModelShelfStore().view.trayView).toBe("list");
   });
 });

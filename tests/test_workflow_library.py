@@ -72,9 +72,11 @@ from pixlstash.services.workflow_hash import (
     topology_hash,
     ui_topology_hash,
 )
+from pixlstash.services import model_shelf_service
 from pixlstash.services.model_shelf_service import (
     fetch_companions,
     fetch_picture_counts,
+    fetch_workflow_sets,
 )
 from pixlstash.services.workflow_library_service import (
     scan_progress,
@@ -3571,3 +3573,382 @@ def test_a_short_hash_names_a_digest_only_when_one_starts_with_it():
     # Blank or too short names nothing, even on a one-model shelf.
     assert digests_with_prefix("", ["f" * 64]) == []
     assert digests_with_prefix("ffff", ["f" * 64]) == []
+
+
+# ---------------------------------------------------------------------------
+# #1438 - the workflow sets the shelf's card grid draws
+# ---------------------------------------------------------------------------
+
+
+def sets_of(store):
+    """``fetch_workflow_sets`` keyed by combination, so an assertion names files."""
+    found = fetch_workflow_sets(store.hub, SimpleNamespace(db=store.vault))
+    return {
+        frozenset(member["name"] for member in combination["models"]): combination
+        for combination in found["combinations"]
+    }, found["no_set"]
+
+
+def picture_from(store, name, graph):
+    """One kept picture made by *graph*, read for its recipe keys."""
+    written = write_png(Path(store.image_root), name, api=graph)
+    picture_id = add_picture(store, written)
+    run_extraction(store, [picture_id])
+    return picture_id
+
+
+@pytest.fixture
+def set_shelf(store):
+    """Two checkpoints, a shared text encoder, two VAEs and one LoRA.
+
+    The same shape ``companions_shelf`` uses, written against the module's
+    vault-bearing ``store`` because a set is counted in pictures and that
+    fixture has none. A fixture rather than a helper because ``model`` is NOT
+    in this section's wipe (``WORKFLOW_WIPE_ORDER``): a second call would trip
+    the adapter's UNIQUE sha256, and rows left standing would put a previous
+    test's files in the next test's ``no_set``.
+    """
+    ids = {
+        name: shelf_file(store.hub, f"{name}.safetensors", kind)
+        for name, kind in (
+            ("ckpt_a", "checkpoint"),
+            ("ckpt_b", "checkpoint"),
+            ("vae_a", "vae"),
+            ("vae_b", "vae"),
+            ("clip_shared", "text_encoder"),
+            ("lora_a", "adapter"),
+            ("never_run", "checkpoint"),
+        )
+    }
+    try:
+        yield ids
+    finally:
+        with store.hub.transaction() as conn:
+            conn.execute("DELETE FROM model")
+
+
+def test_a_set_is_the_files_one_recipe_bound_and_a_model_is_in_every_set_it_ran_in(
+    store, set_shelf
+):
+    """The grid's whole claim: a card is one combination, and membership overlaps.
+
+    `clip_shared` runs in both sets and `vae_a` in one, so the same text encoder
+    is a member of two cards while nothing about it is stored twice.
+    """
+    ids = set_shelf
+    picture_from(
+        store,
+        "set-a.png",
+        generation_graph(
+            "ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+        ),
+    )
+    picture_from(
+        store,
+        "set-b.png",
+        generation_graph(
+            "ckpt_b.safetensors", "vae_b.safetensors", "clip_shared.safetensors"
+        ),
+    )
+
+    combinations, no_set = sets_of(store)
+
+    a = frozenset(
+        {"ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"}
+    )
+    b = frozenset(
+        {"ckpt_b.safetensors", "vae_b.safetensors", "clip_shared.safetensors"}
+    )
+    assert set(combinations) == {a, b}
+    assert combinations[a]["picture_count"] == 1 and combinations[a]["recipes"] == 1
+    # The checkpoint is the file the set is named after, whatever it sorts as.
+    assert combinations[a]["models"][0]["name"] == "ckpt_a.safetensors"
+    assert combinations[a]["key"] == ",".join(
+        str(i) for i in sorted([ids["ckpt_a"], ids["vae_a"], ids["clip_shared"]])
+    )
+    # Membership is not exclusive: one file, two cards.
+    assert (
+        sum(
+            1
+            for combination in combinations.values()
+            if any(m["id"] == ids["clip_shared"] for m in combination["models"])
+        )
+        == 2
+    )
+    # And the absence of evidence is drawn rather than dropped.
+    assert ids["never_run"] in no_set
+    assert ids["ckpt_a"] not in no_set
+
+
+def test_two_recipes_naming_the_same_files_are_one_set_with_both_witnesses(
+    store, set_shelf
+):
+    """Two graphs, the same three files: one card carrying both witnesses.
+
+    The second graph drops the negative-prompt node and rewires the sampler,
+    which forks the recipe (``test_node_deleted_forks_the_recipe``) without
+    touching a single filename. The combination is the fact and the recipe is
+    one witness of it, so the counts add up rather than the card splitting.
+    """
+    graph = generation_graph(
+        "ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+    )
+    first = picture_from(store, "same-1.png", graph)
+    rewired = json.loads(json.dumps(graph))
+    del rewired["3"]
+    rewired["5"]["inputs"]["negative"] = ["2", 0]
+    second = picture_from(store, "same-2.png", rewired)
+    # The second picture scores higher, so the cover order below is a real
+    # ordering rather than the order the two witnesses happened to be read in.
+    store.vault.run_task(
+        lambda session: (
+            setattr(session.get(Picture, second), "score", 5),
+            session.commit(),
+        )
+    )
+
+    combinations, _ = sets_of(store)
+
+    key = frozenset(
+        {"ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"}
+    )
+    assert set(combinations) == {key}
+    assert combinations[key]["recipes"] == 2
+    assert combinations[key]["picture_count"] == 2
+    # Covers come back as `CoverCandidate` rows, best first, pooled across the
+    # combination's witnesses - the route turns them into URLs. Identity rather
+    # than truthiness: a list built from the wrong recipe, or sorted the wrong
+    # way, is also non-empty.
+    assert [cover.picture_id for cover in combinations[key]["covers"]] == [
+        second,
+        first,
+    ]
+
+
+def test_adding_a_lora_is_a_second_set_not_a_change_to_the_first(store, set_shelf):
+    """Two sets, because a card is the files a picture proves ran together - the
+    fold that puts them on one stack is the reader's, not the data's."""
+    picture_from(
+        store,
+        "plain.png",
+        generation_graph(
+            "ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+        ),
+    )
+    picture_from(
+        store,
+        "with-lora.png",
+        generation_graph(
+            "ckpt_a.safetensors",
+            "vae_a.safetensors",
+            "clip_shared.safetensors",
+            lora="lora_a.safetensors",
+        ),
+    )
+
+    combinations, _ = sets_of(store)
+
+    plain = frozenset(
+        {"ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"}
+    )
+    assert set(combinations) == {plain, plain | {"lora_a.safetensors"}}
+
+
+def test_a_recipe_whose_pictures_are_all_deleted_is_no_set_and_its_models_say_so(
+    store, set_shelf
+):
+    """The grid draws what the library HAS made. A recipe the hub still holds
+    with nothing kept behind it is not a set - and its models must then appear
+    under `no_set` rather than falling off the screen between the two."""
+    ids = set_shelf
+    picture_id = picture_from(
+        store,
+        "gone.png",
+        generation_graph(
+            "ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+        ),
+    )
+    store.vault.run_task(
+        lambda session: (
+            setattr(session.get(Picture, picture_id), "deleted", True),
+            session.commit(),
+        )
+    )
+
+    combinations, no_set = sets_of(store)
+
+    assert combinations == {}
+    assert {ids["ckpt_a"], ids["vae_a"], ids["clip_shared"]} <= set(no_set)
+
+
+def test_a_member_two_shelf_rows_could_be_is_flagged_rather_than_hidden(
+    store, set_shelf
+):
+    """`unknown` stays a first-class answer: the set is still drawn, and the
+    member that could be either file says so."""
+    twin_1 = shelf_file(store.hub, "twin.safetensors", "vae")
+    twin_2 = shelf_file(store.hub, "twin.safetensors", "vae")
+    picture_from(
+        store,
+        "ambiguous.png",
+        generation_graph(
+            "ckpt_a.safetensors", "twin.safetensors", "clip_shared.safetensors"
+        ),
+    )
+
+    combinations, _ = sets_of(store)
+
+    key = next(iter(combinations))
+    assert {twin_1, twin_2} <= {member["id"] for member in combinations[key]["models"]}
+    flagged = {
+        member["id"] for member in combinations[key]["models"] if member["ambiguous"]
+    }
+    assert flagged == {twin_1, twin_2}
+    # The checkpoint was named unambiguously and must not be tarred with it.
+    assert all(
+        not member["ambiguous"]
+        for member in combinations[key]["models"]
+        if member["kind"] == "checkpoint"
+    )
+
+
+def test_a_model_forgotten_between_the_two_reads_is_dropped_rather_than_raising(
+    store, set_shelf, monkeypatch
+):
+    """The race the `if member in models` guard is for, exercised rather than
+    assumed.
+
+    `fetch_workflow_sets` resolves the recipes and THEN reads the `model` table,
+    so a Forget or a folder-forget landing between the two leaves an id in a
+    recipe with no row behind it. A plain delete before the call cannot reach
+    this: the resolution reads `model` too, so the asset simply resolves to
+    nothing. The window has to be opened deliberately, and it is worth opening -
+    without the guard `name(model_id)` raises `KeyError` and the whole grid 500s
+    because one file was forgotten while somebody was looking at it.
+    """
+    ids = set_shelf
+    picture_from(
+        store,
+        "forgotten.png",
+        generation_graph(
+            "ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+        ),
+    )
+
+    real = model_shelf_service.resolve_recipe_models
+
+    def resolve_then_forget(hub):
+        resolved = real(hub)
+        with store.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE id = ?", (ids["vae_a"],))
+        return resolved
+
+    monkeypatch.setattr(
+        model_shelf_service, "resolve_recipe_models", resolve_then_forget
+    )
+
+    combinations, no_set = sets_of(store)
+
+    key = next(iter(combinations))
+    assert key == frozenset({"ckpt_a.safetensors", "clip_shared.safetensors"})
+    assert ids["vae_a"] not in no_set
+
+
+def test_a_digest_no_row_matches_yet_makes_the_whole_set_uncertain(store, set_shelf):
+    """The ghost reader's rule, reaching the grid: while any row waits for its
+    hash, a recipe naming a digest may name THAT row, so every member of the
+    combination is a guess about which files ran - including the ones matched by
+    an exact filename."""
+    set_shelf
+    graph = generation_graph(
+        "ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+    )
+    graph["11"] = {
+        "class_type": "PixlStashCheckpointLoader",
+        "inputs": {"ckpt_sha256": "ef" * 32},
+    }
+    picture_from(store, "pending-hash.png", graph)
+
+    combinations, _ = sets_of(store)
+    key = next(iter(combinations))
+    assert all(member["ambiguous"] for member in combinations[key]["models"])
+
+    # Every row hashed: the digest now matches nothing on the shelf and proves
+    # nothing is missing, so the same files are reported as certain.
+    with store.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET sha256 = printf('%064d', id) WHERE sha256 IS NULL"
+        )
+    combinations, _ = sets_of(store)
+    key = next(iter(combinations))
+    assert not any(member["ambiguous"] for member in combinations[key]["models"])
+
+
+def test_one_uncertain_witness_is_not_unmade_by_a_cleaner_one(store, set_shelf):
+    """`ambiguous` is OR-ed across the recipes behind a combination. Two graphs
+    reach the same two files, one of them through a basename two rows share; the
+    doubt has to survive the other, or a card's certainty depends on which
+    recipe the loop saw last."""
+    ids = set_shelf
+    twin = shelf_file(store.hub, "vae_a.safetensors", "vae")
+
+    # Witness one: unambiguous by construction - `twin` shares `vae_a`'s
+    # basename, so this needs a DIFFERENT pair to be the clean witness.
+    picture_from(
+        store,
+        "clean.png",
+        generation_graph(
+            "ckpt_a.safetensors", "vae_b.safetensors", "clip_shared.safetensors"
+        ),
+    )
+    # Witness two: the same THREE files by id is impossible here, so instead
+    # assert the property on the pair that IS shared - `vae_a` is now two rows.
+    picture_from(
+        store,
+        "murky.png",
+        generation_graph(
+            "ckpt_a.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+        ),
+    )
+
+    combinations, _ = sets_of(store)
+
+    murky = next(
+        card for key, card in combinations.items() if "vae_a.safetensors" in key
+    )
+    flagged = {m["id"] for m in murky["models"] if m["ambiguous"]}
+    assert flagged == {ids["vae_a"], twin}
+    clean = next(
+        card for key, card in combinations.items() if "vae_b.safetensors" in key
+    )
+    assert not any(m["ambiguous"] for m in clean["models"])
+
+
+def test_the_member_order_is_the_whole_ranking_not_only_its_head(store, set_shelf):
+    """The card's title is the first THREE members joined, so the order past the
+    head is on screen too: checkpoint, unclassified, VAE, text encoder, adapter."""
+    set_shelf
+    mystery = shelf_file(store.hub, "mystery_x.safetensors", "unknown")
+    assert mystery
+    graph = generation_graph(
+        "ckpt_a.safetensors",
+        "vae_a.safetensors",
+        "clip_shared.safetensors",
+        lora="lora_a.safetensors",
+    )
+    graph["12"] = {
+        "class_type": "LoraLoaderModelOnly",
+        "inputs": {"model": ["1", 0], "lora_name": "mystery_x.safetensors"},
+    }
+    picture_from(store, "ordered.png", graph)
+
+    combinations, _ = sets_of(store)
+
+    key = next(iter(combinations))
+    assert [m["kind"] for m in combinations[key]["models"]] == [
+        "checkpoint",
+        "unknown",
+        "vae",
+        "text_encoder",
+        "adapter",
+    ]

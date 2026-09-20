@@ -25,8 +25,8 @@
          contract, docs/design/buttons.md "Pick one"), never `role="menu"`/
          `menuitemradio`: this panel is a plain div holding other controls (the
          direction button above), so a menu role would promise a widget
-         contract nothing honours. Sort by is OptionRows; the short axes below
-         are Segmented. -->
+         contract nothing honours. Sort by and Group by are OptionRows; the one
+         remaining short axis below is Segmented. -->
     <div v-if="showsSort" class="tbm-section">
       <span class="tbm-label">Sort by</span>
       <OptionRows
@@ -38,15 +38,21 @@
       />
     </div>
 
-    <!-- Three axes, not four: Type is already a Show checkbox and is already on
-         every row as an icon and a word, so grouping by it would restate what
-         the reader can see. -->
+    <!-- Type is not an axis: it is already a Show checkbox and already on every
+         row as an icon and a word, so grouping by it would restate what the
+         reader can see.
+
+         `OptionRows` rather than `Segmented` since #1438 made it five. Five
+         segments sharing one 420px track put "Workflow set" and "Base model"
+         into permanent ellipsis, and `Segmented`'s own contract is two to five
+         SHORT options; Sort by, in this same panel, has used two-column
+         OptionRows for its five keys all along. -->
     <div v-if="showsGroup" class="tbm-section">
       <span class="tbm-label">Group by</span>
-      <Segmented
+      <OptionRows
         :options="groupOptions"
         :model-value="view.groupBy"
-        full
+        :columns="2"
         aria-label="Group by"
         @update:model-value="(key) => store.setView({ groupBy: key })"
       />
@@ -100,9 +106,9 @@ const props = defineProps({
 const store = useModelShelfStore();
 const view = store.view;
 
-// `icon` renders in the OptionRows lists; the Segmented axes take the default
-// label variant, where a glyph costs the room a label like "Drive, then folder"
-// needs. One mapper either way.
+// `icon` renders in the OptionRows lists; the one remaining Segmented axis (the
+// folder layout) takes the default label variant, where a glyph costs the room a
+// label like "Drive, then folder" needs. One mapper either way.
 const asOptions = (keys, labels) =>
   keys.map((key) => ({
     id: key,
@@ -147,10 +153,11 @@ function toggleDirection() {
   max-width: 94vw;
 }
 
-/* Only the Group section needs the extra room: its four segments share the
-   track, and "Base model" wants ~76px of label at --text-sm. Sort stays 320px, matching the Show popover
-   beside it in the same bar. Below ~447px of viewport the 94vw cap wins and
-   the label ellipsizes again, as everything in this bar already does. */
+/* Only the Group section needs the extra room: two columns of axis rows, and
+   "Workflow set" wants ~84px of label at --text-sm. Sort stays 320px, matching
+   the Show popover beside it in the same bar. Below ~447px of viewport the 94vw
+   cap wins and the label ellipsizes again, as everything in this bar already
+   does. */
 .shelf-sort-panel--wide {
   width: 420px;
 }

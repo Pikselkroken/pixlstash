@@ -118,6 +118,7 @@ from pixlstash.services.model_shelf_service import (
     fetch_model_by_hash,
     fetch_models,
     fetch_picture_counts,
+    fetch_workflow_sets,
     forget_models,
     replace_attachments,
     update_models,
@@ -131,6 +132,7 @@ from pixlstash.utils.adapter_header import (
     FILE_VAE,
 )
 from pixlstash.utils.host_open import open_in_file_manager
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.known_base_models import completions, family_of, fold
 from pixlstash.utils.path_utils import path_is_within
 
@@ -650,6 +652,108 @@ class ModelCompanionsResponse(BaseModel):
     )
 
 
+class WorkflowSetMember(BaseModel):
+    """One model inside a combination, as the set grid draws it."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: int = Field(description="Hub `model.id`.")
+    name: str = Field(description="Display name, else filename.")
+    filename: Optional[str] = Field(
+        default=None, description="The file the shelf row was registered under."
+    )
+    kind: str = Field(description="The row's `file_kind`.")
+    file_size: Optional[int] = None
+    ambiguous: bool = Field(
+        description=(
+            "The recipe reached this model only through a basename two shelf "
+            "rows share, or beside a digest the shelf cannot yet match because "
+            "a hash is pending. Drawn as a filename-only match rather than "
+            "hidden: it is still the best answer the evidence gives."
+        )
+    )
+
+
+class WorkflowSetCover(BaseModel):
+    """One picture on a combination's cover strip.
+
+    **The two facts a thumbnail needs, not a URL.** Serving a path was the first
+    shape of this and it was wrong twice over: an ``<img src>`` never reaches the
+    Axios interceptor, so nothing prepends the API base and nothing appends a
+    share token, and the browser asked the PAGE origin for a route it does not
+    serve - every cover on the grid broken. The client builds the URL with
+    ``pictureThumbnailUrl`` (``api/pictures.js``), which is the one place that
+    path is spelled, rather than this route inventing a third copy of it beside
+    ``routes/workflows.py``'s.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    picture_id: int = Field(description="The picture to load a thumbnail for.")
+    version: str = Field(
+        description=(
+            "The cache key the picture grid's own tiles use, so a cover the "
+            "browser already holds is not fetched twice and a regenerated "
+            "bitmap is not served stale."
+        )
+    )
+
+
+class WorkflowSetCombination(BaseModel):
+    """One set of files a picture proves ran together."""
+
+    model_config = ConfigDict(extra="allow")
+
+    key: str = Field(description="The member ids, sorted and comma-joined.")
+    models: list[WorkflowSetMember] = Field(
+        description=(
+            "Every member, the file the set is named after first: checkpoint, "
+            "then unclassified, then VAE, text encoder, adapter, engine."
+        )
+    )
+    recipes: int = Field(
+        description=(
+            "How many recipes resolve to exactly this set of shelf rows. Two "
+            "graphs that differ in wiring but name the same files are two "
+            "recipes and one combination; a recipe naming a file this shelf no "
+            "longer holds is counted here for the members it does resolve."
+        )
+    )
+    picture_count: int = Field(
+        description="Kept pictures in the active library those recipes made."
+    )
+    covers: list[WorkflowSetCover] = Field(
+        default_factory=list, description="Up to three cover thumbnails, best first."
+    )
+
+
+class WorkflowSetsResponse(BaseModel):
+    """Body of ``GET /models/workflow-sets``."""
+
+    model_config = ConfigDict(extra="allow")
+
+    combinations: list[WorkflowSetCombination] = Field(
+        description=(
+            "Every distinct set of shelf models a kept picture proves ran "
+            "together, most pictures first. A model appears in every set it "
+            "has run in; membership is not exclusive and is stored nowhere."
+        )
+    )
+    no_set: list[int] = Field(
+        description=(
+            "Ids that are in none of the combinations above, which is a "
+            "narrower statement than it looks: it means **no kept picture in "
+            "this library was made with them**. A recipe on the hub may name "
+            "one - from another library, or from pictures since deleted - and "
+            "this says nothing about that. **Not a verdict** either way: it "
+            "rules nothing out about what the file works with. Engines are "
+            "excluded, because no generation graph can load one and their "
+            "absence from a recipe means nothing at all. Returned so the grid "
+            "can draw them rather than quietly omitting them."
+        )
+    )
+
+
 class ModelOpenLocationResponse(BaseModel):
     """Body of ``POST /models/{model_id}/open-location``."""
 
@@ -714,6 +818,25 @@ def _present_copy(locations: list[dict]) -> Optional[str]:
             path,
         )
     return None
+
+
+def _cover_strip(covers) -> list[WorkflowSetCover]:
+    """A set card's cover strip: a picture and the cache key for its bitmap.
+
+    No path. The cache key is the one the picture grid's own tiles use
+    (``routes/pictures/_thumbnails.py``), and the client puts it through
+    ``pictureThumbnailUrl`` - which is where that URL is spelled once, with the
+    API base and the share token an ``<img src>`` cannot get for itself.
+    """
+    return [
+        WorkflowSetCover(
+            picture_id=cover.picture_id,
+            version=ImageUtils.thumbnail_cache_version(
+                cover.thumbnail_width, cover.thumbnail_height, cover.orientation
+            ),
+        )
+        for cover in covers
+    ]
 
 
 def _to_response(
@@ -1366,6 +1489,50 @@ def create_router(server) -> APIRouter:
     ):
         server.auth.ensure_secure_when_required(request)
         return ModelCompanionsResponse(**fetch_companions(server.hub, payload.ids))
+
+    @router.get(
+        "/models/workflow-sets",
+        summary="Which models have actually run together",
+        description=(
+            "One entry per **combination**: the exact set of shelf models one "
+            "or more recipes bound together, with the kept pictures they made. "
+            "A model appears in every combination it has run in, so membership "
+            "overlaps and is stored nowhere - the evidence is a self-join over "
+            "`workflow_recipe_asset`, which is read here and nowhere written.\n\n"
+            "**Co-occurrence is evidence; its absence is not.** Two models in "
+            "one recipe proves they ran together. Two models never seen "
+            "together proves nothing, so nothing is withheld for lacking a "
+            "pairing and the ids no recipe names come back under `no_set` "
+            "rather than being dropped. A member the evidence could only reach "
+            "by a basename two shelf rows share is flagged `ambiguous` and "
+            "still listed.\n\n"
+            "Scoped to the pictures of the active library, unlike "
+            "`POST /models/companions`, which counts every recipe the hub "
+            "holds: that one keeps a file some other library needs, this one "
+            "draws what the library in front of the reader has made. Changes "
+            "nothing."
+        ),
+        tags=["model_shelf"],
+        response_model=WorkflowSetsResponse,
+    )
+    def list_workflow_sets(request: Request):
+        server.auth.ensure_secure_when_required(request)
+        found = fetch_workflow_sets(server.hub, server.vault)
+        return WorkflowSetsResponse(
+            combinations=[
+                WorkflowSetCombination(
+                    key=combination["key"],
+                    models=[
+                        WorkflowSetMember(**member) for member in combination["models"]
+                    ],
+                    recipes=combination["recipes"],
+                    picture_count=combination["picture_count"],
+                    covers=_cover_strip(combination["covers"]),
+                )
+                for combination in found["combinations"]
+            ],
+            no_set=found["no_set"],
+        )
 
     @router.post(
         "/models/{model_id}/open-location",

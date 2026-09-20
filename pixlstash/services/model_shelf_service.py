@@ -54,7 +54,11 @@ from pixlstash.services.workflow_hash import (
     digests_with_prefix,
     normalized_filename,
 )
-from pixlstash.services.workflow_library_service import recipe_picture_counts
+from pixlstash.services.workflow_library_service import (
+    cover_order,
+    recipe_picture_counts,
+    variant_cover_candidates,
+)
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
     FILE_CHECKPOINT,
@@ -606,6 +610,65 @@ SUPPORT_FILE_KINDS = (FILE_VAE, FILE_TEXT_ENCODER)
 _NOT_CONSUMERS = (*SUPPORT_FILE_KINDS, FILE_ADAPTER, FILE_ENGINE)
 
 
+def resolve_recipe_models(
+    hub,
+) -> tuple[dict[str, set[int]], dict[str, set[int]], set[str]]:
+    """Which shelf models each recipe on this hub is proven to have run with.
+
+    One ``workflow_recipe`` is one graph that ran with exactly the files its
+    ``workflow_recipe_asset`` rows name, so the models one recipe resolves to
+    are models a picture proves ran together. Every recipe the hub holds
+    counts, from every library and whether or not its pictures still exist.
+
+    Returns ``(recipe_models, ambiguous, unresolved)``:
+
+    * ``recipe_models`` - ``{structural_hash: {model_id, ...}}``, recipes that
+      reached no shelf row absent;
+    * ``ambiguous`` - per recipe, the models it reached only through a name or
+      a digest prefix that several shelf rows answer to, so the membership is
+      a guess about which of them;
+    * ``unresolved`` - recipes naming a digest no shelf row matches while some
+      row is still waiting for its hash. The ghost reader's rule
+      (``hub/workflows._model_ghost_names``): that row may be the model the
+      digest names, so the recipe's membership is incomplete rather than wrong.
+
+    Shared by :func:`fetch_companions` and :func:`fetch_workflow_sets` because
+    both read co-occurrence off the same table and must agree about what a
+    recipe names - a second copy of this resolution is how the delete warning
+    and the grid would come to disagree about the same pair of files.
+    """
+    by_name, by_digest, _filenames = recipe_asset_index(hub)
+    sorted_digests = sorted(by_digest)
+    digests_are_complete = not hub.fetchall(
+        "SELECT 1 FROM model WHERE sha256 IS NULL AND file_kind <> ? LIMIT 1",
+        (FILE_ENGINE,),
+    )
+
+    recipe_models: dict[str, set[int]] = {}
+    ambiguous: dict[str, set[int]] = {}
+    unresolved: set[str] = set()
+    for row in hub.fetchall(
+        "SELECT structural_hash, widget_name, normalized_filename "
+        "FROM workflow_recipe_asset"
+    ):
+        recipe = row["structural_hash"]
+        if SHA256_FIELD_RE.search(row["widget_name"]):
+            matched = models_for_digest(
+                row["normalized_filename"], by_digest, sorted_digests
+            )
+            if not matched and not digests_are_complete:
+                unresolved.add(recipe)
+            if len(matched) > 1:
+                ambiguous.setdefault(recipe, set()).update(matched)
+        else:
+            matched = by_name.get(row["normalized_filename"], set())
+            if len(matched) > 1:
+                ambiguous.setdefault(recipe, set()).update(matched)
+        if matched:
+            recipe_models.setdefault(recipe, set()).update(matched)
+    return recipe_models, ambiguous, unresolved
+
+
 def fetch_companions(hub, ids: list[int]) -> dict:
     """What deleting *ids* would leave behind, from the recipes on this machine.
 
@@ -653,38 +716,7 @@ def fetch_companions(hub, ids: list[int]) -> dict:
             "SELECT id, file_kind, display_name, filename, file_size FROM model"
         )
     }
-    by_name, by_digest, _filenames = recipe_asset_index(hub)
-    sorted_digests = sorted(by_digest)
-    # The ghost reader's rule (`hub/workflows._model_ghost_names`): a digest that
-    # matches nothing proves nothing while a row still waits for its hash, since
-    # that row may be the model the digest names.
-    digests_are_complete = not hub.fetchall(
-        "SELECT 1 FROM model WHERE sha256 IS NULL AND file_kind <> ? LIMIT 1",
-        (FILE_ENGINE,),
-    )
-
-    recipe_models: dict[str, set[int]] = {}
-    ambiguous: dict[str, set[int]] = {}
-    unresolved: set[str] = set()
-    for row in hub.fetchall(
-        "SELECT structural_hash, widget_name, normalized_filename "
-        "FROM workflow_recipe_asset"
-    ):
-        recipe = row["structural_hash"]
-        if SHA256_FIELD_RE.search(row["widget_name"]):
-            matched = models_for_digest(
-                row["normalized_filename"], by_digest, sorted_digests
-            )
-            if not matched and not digests_are_complete:
-                unresolved.add(recipe)
-            if len(matched) > 1:
-                ambiguous.setdefault(recipe, set()).update(matched)
-        else:
-            matched = by_name.get(row["normalized_filename"], set())
-            if len(matched) > 1:
-                ambiguous.setdefault(recipe, set()).update(matched)
-        if matched:
-            recipe_models.setdefault(recipe, set()).update(matched)
+    recipe_models, ambiguous, unresolved = resolve_recipe_models(hub)
 
     recipes_of: dict[int, set[str]] = {}
     for recipe, members in recipe_models.items():
@@ -692,7 +724,13 @@ def fetch_companions(hub, ids: list[int]) -> dict:
             recipes_of.setdefault(model_id, set()).add(recipe)
 
     def kind(model_id: int) -> str:
-        return models[model_id]["file_kind"]
+        # `.get`, not an index: `models` was read before the recipe index, so a
+        # model registered by a scan between the two queries is in a recipe and
+        # not in this dict. `""` is in no kind list, so such a row is neither a
+        # consumer nor a support file - which is the safe answer, and the same
+        # guard `fetch_workflow_sets` makes with `if member in models`.
+        row = models.get(model_id)
+        return row["file_kind"] if row else ""
 
     def entry(model_id: int) -> dict:
         row = models[model_id]
@@ -770,6 +808,174 @@ def fetch_companions(hub, ids: list[int]) -> dict:
         else:
             result["orphaned"].append(entry(support_id))
     return result
+
+
+# How many of a combination's pictures the grid puts on a card's cover.
+#
+# Three, the shipped workflow card's cover depth (`workflow_card_service`'s
+# ``COVER_DEPTH``): the set grid reuses that card, so asking for more would
+# fetch bitmaps nothing draws.
+SET_COVER_DEPTH = 3
+
+
+def fetch_workflow_sets(hub, vault) -> dict:
+    """Every set of shelf models a picture in this library proves ran together.
+
+    One entry per distinct *combination* - the model ids one recipe resolves to.
+    Several recipes that name the same files are one combination, with their
+    recipe and picture counts summed, because the combination is the fact and
+    the recipe is one witness of it.
+
+    **Co-occurrence is evidence; its absence is not.** Two models in one recipe
+    proves they ran together; two models never seen together proves nothing at
+    all, so no combination is withheld and no pair is ruled out. The models no
+    recipe in this library names come back under ``no_set`` rather than being
+    dropped, so the caller can say it cannot tell rather than implying nobody
+    has tried them.
+
+    Scoped to the pictures of the ACTIVE library, unlike
+    :func:`fetch_companions`, which counts every recipe the hub holds. The two
+    differ because they answer different questions: a delete warning must keep
+    a file some other library needs, and this grid is a picture of what the
+    library in front of the reader has actually made. A recipe the hub holds
+    with no kept picture here is therefore not a set.
+
+    Returns:
+        ``{"combinations": [...], "no_set": [model_id, ...]}``. Each
+        combination carries ``key`` (its sorted member ids, joined), ``models``
+        (``id``, ``name``, ``filename``, ``kind``, ``file_size``,
+        ``ambiguous``), ``recipes``, ``picture_count`` and ``covers`` (up to
+        :data:`SET_COVER_DEPTH` cover candidates, best first).
+    """
+    recipe_models, ambiguous, unresolved = resolve_recipe_models(hub)
+    pictures = vault.db.run_immediate_read_task(
+        lambda session: (
+            recipe_picture_counts(session),
+            variant_cover_candidates(session, SET_COVER_DEPTH),
+        )
+    )
+    counts, candidates = pictures
+
+    covers_by_recipe: dict[str, list] = {}
+    for candidate in candidates:
+        covers_by_recipe.setdefault(candidate.structural_hash, []).append(candidate)
+
+    models = {
+        int(row["id"]): row
+        for row in hub.fetchall(
+            "SELECT id, file_kind, display_name, filename, file_size FROM model"
+        )
+    }
+
+    # Keyed on the frozen member set, so two recipes naming the same files are
+    # one card. `unsure` is OR-ed across the witnesses rather than AND-ed: one
+    # recipe that could only match a basename is enough to make the membership
+    # a guess, and a second, cleaner witness does not unmake the first.
+    grouped: dict[frozenset[int], dict] = {}
+    for recipe, members in recipe_models.items():
+        # Models the shelf no longer holds - a Forget between the recipe read
+        # and now - are dropped rather than drawn as an id with no name.
+        present = frozenset(member for member in members if member in models)
+        if not present:
+            continue
+        entry = grouped.setdefault(
+            present,
+            {"recipes": 0, "picture_count": 0, "covers": [], "unsure": set()},
+        )
+        entry["recipes"] += 1
+        entry["picture_count"] += counts.get(recipe, 0)
+        entry["covers"].extend(covers_by_recipe.get(recipe, ()))
+        if recipe in unresolved:
+            entry["unsure"].update(present)
+        entry["unsure"].update(ambiguous.get(recipe, set()) & present)
+
+    def name(model_id: int) -> str:
+        row = models[model_id]
+        return row["display_name"] or row["filename"] or f"model {model_id}"
+
+    combinations = []
+    for present, entry in grouped.items():
+        # A combination with no kept picture in this library is not a set here:
+        # the grid draws what the library has made, and a recipe that made
+        # nothing in it has no cover, no count and nothing to show.
+        if not entry["picture_count"]:
+            continue
+        ordered = sorted(
+            present, key=lambda m: (_set_kind_rank(models[m]), name(m).lower())
+        )
+        combinations.append(
+            {
+                "key": ",".join(str(m) for m in sorted(present)),
+                "models": [
+                    {
+                        "id": model_id,
+                        "name": name(model_id),
+                        "filename": models[model_id]["filename"],
+                        "kind": models[model_id]["file_kind"],
+                        "file_size": models[model_id]["file_size"],
+                        "ambiguous": model_id in entry["unsure"],
+                    }
+                    for model_id in ordered
+                ],
+                "recipes": entry["recipes"],
+                "picture_count": entry["picture_count"],
+                "covers": sorted(entry["covers"], key=cover_order, reverse=True)[
+                    :SET_COVER_DEPTH
+                ],
+            }
+        )
+    # Biggest evidence first, so the grid opens on the combinations the library
+    # actually leans on; the key breaks ties so a refetch draws the same order.
+    combinations.sort(key=lambda c: (-c["picture_count"], -c["recipes"], c["key"]))
+
+    # Read off the combinations that SURVIVED, not off `grouped`: a model whose
+    # only recipes made no kept picture here would otherwise be in no
+    # combination and in no `no_set` either, and so be missing from the screen
+    # altogether - the one outcome the honesty rule forbids.
+    in_a_set = {
+        member["id"] for combination in combinations for member in combination["models"]
+    }
+    return {
+        "combinations": combinations,
+        # Engines are left out, and that is the honesty rule rather than an
+        # exception to it. `no_set` means "nothing here has been made with
+        # these", which is a statement a reader can act on for a checkpoint and
+        # is simply FALSE for a tagger: PixlStash downloaded it for itself, no
+        # generation graph can load it, and it will never appear in a recipe on
+        # any machine. Listing them would pad the card with files whose absence
+        # says nothing at all - and it is the same exclusion `_NOT_CONSUMERS`
+        # and the digest-completeness probe above already make.
+        "no_set": sorted(
+            model_id
+            for model_id in set(models) - in_a_set
+            if models[model_id]["file_kind"] != FILE_ENGINE
+        ),
+    }
+
+
+# Where each kind sits in a combination's member list: the base model it is
+# named after first, then whatever we could not classify, then the support files
+# a graph loads beside it, then the adapters, then the engines.
+#
+# The card's name is taken from the HEAD of this list, so the order is what
+# decides which file a set is called after. `unknown` sits second for that
+# reason and no other: a Flux or Wan graph loads a diffusion file rather than a
+# checkpoint, `classify_model_file` files most of those as `checkpoint` and the
+# rest as `unknown`, and there is no diffusion `file_kind` to key on - so the
+# rule is "an unclassified file names a set before a VAE does", which is a
+# ranking rather than a claim about what the file is.
+_SET_KIND_RANK = {
+    FILE_CHECKPOINT: 0,
+    FILE_UNKNOWN: 1,
+    FILE_VAE: 2,
+    FILE_TEXT_ENCODER: 3,
+    FILE_ADAPTER: 4,
+    FILE_ENGINE: 5,
+}
+
+
+def _set_kind_rank(row) -> int:
+    return _SET_KIND_RANK.get(row["file_kind"], len(_SET_KIND_RANK))
 
 
 def attached_hashes(vault, entity_type: str, entity_id: int) -> set[str]:

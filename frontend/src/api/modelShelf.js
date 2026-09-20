@@ -176,6 +176,31 @@ export async function fetchModelCompanions(ids) {
 }
 
 /**
+ * Which shelf models a kept picture proves ran together.
+ *
+ * One entry per **combination**: the exact set of files one or more recipes
+ * bound together, with the pictures they made. A model appears in every
+ * combination it has run in, so membership overlaps and is stored nowhere - the
+ * grouping is derived per request from the recipes the hub has read.
+ *
+ * **Co-occurrence is evidence; its absence is not.** The ids no recipe in this
+ * library names come back under `no_set` rather than being dropped, and a
+ * member the evidence could only reach through a basename two shelf rows share
+ * is flagged `ambiguous` and still listed. Folding combinations into stacks is
+ * the CLIENT's (see `utils/workflowSets.js`): the server groups nothing, so the
+ * toolbar can price every fold setting without another request.
+ *
+ * @returns {Promise<{combinations: Array<Object>, no_set: Array<number>}>}
+ */
+export async function fetchWorkflowSets() {
+  const body = await unwrap(apiClient.get("/models/workflow-sets"));
+  return {
+    combinations: Array.isArray(body?.combinations) ? body.combinations : [],
+    no_set: Array.isArray(body?.no_set) ? body.no_set : [],
+  };
+}
+
+/**
  * Delete models from disk, and their shelf rows with them.
  *
  * The one shelf call that destroys the owner's bytes, so its caller confirms

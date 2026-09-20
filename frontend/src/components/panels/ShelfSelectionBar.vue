@@ -299,6 +299,7 @@ const emit = defineEmits([
   "move",
   "merge-copies",
   "open-location",
+  "works-with",
   "forget",
   "delete",
 ]);
@@ -1051,6 +1052,15 @@ const VerbMenu = (props) => {
           on: () => props.onVerb("open-location"),
           disabled: !props.openable,
           title: props.openTitle,
+        })
+      : null,
+    // One model at a time, because the answer is about one file: "what has THIS
+    // run with" has no reading across a selection of forty. The evidence is
+    // co-occurrence, so the dialog it opens also has to say that a companion
+    // missing from its list is untested rather than incompatible (#1438).
+    props.single
+      ? item("mdi-connection", "Works with…", {
+          on: () => props.onVerb("works-with"),
         })
       : null,
     item(

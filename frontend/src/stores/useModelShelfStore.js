@@ -1,4 +1,4 @@
-import { computed, onScopeDispose, reactive, ref } from "vue";
+import { computed, onScopeDispose, reactive, ref, watch } from "vue";
 import { defineStore } from "pinia";
 import { clearModelIcons, setModelIcon } from "../api/modelIcons";
 import { mergeModelCopies } from "../api/modelFiles";
@@ -6,6 +6,7 @@ import {
   BASE_MODEL_UNASSIGNED,
   deleteModels,
   editModels,
+  fetchWorkflowSets,
   forgetModels,
   listAdapters,
   listBaseModelCompletions,
@@ -32,6 +33,7 @@ import {
   offlineFolders,
   UNSET_GROUP_KEY,
 } from "../utils/modelShelf";
+import { setCard, setGroups, worksWith } from "../utils/workflowSets";
 
 /** Where the `Show` selection is remembered between visits. */
 const FILTERS_KEY = "pixlstash:modelShelfFilters";
@@ -56,8 +58,35 @@ const FILTERS_SCHEMA_VERSION = 1;
  */
 const VIEW_KEY = "pixlstash:modelShelfView";
 
-/** Bumped when the shape below changes; a blob from another `v` is discarded. */
-const VIEW_SCHEMA_VERSION = 1;
+/**
+ * Bumped when the shape below changes; a blob from another `v` is discarded.
+ *
+ * Bumped to 2 for #1438, where `groupBy` changed DEFAULT rather than shape - and
+ * **a version this file recognises rather than one it discards**, which is the
+ * distinction worth keeping. Every blob written under 1 carries
+ * `groupBy: "none"` whether anyone chose it or not, so the new default has to
+ * reach people who already use the shelf; but nothing else in the blob went
+ * stale, and the first version of this change threw the lot away because that is
+ * what a bump conventionally means here. It cost every existing reader their
+ * dragged column widths, their collapsed groups on five axes and their sort, for
+ * a change to one field (#1479 review).
+ *
+ * So {@link VIEW_MIGRATIONS} names the fields a version is not allowed to carry
+ * forward, and `storedView` reads every other field out of an older blob exactly
+ * as it reads a current one. A future bump that really is a shape change still
+ * discards: leave its version out of that table and it falls through to the
+ * defaults whole.
+ */
+const VIEW_SCHEMA_VERSION = 2;
+
+/**
+ * Per stored version, the `view` fields a read must NOT take from it.
+ *
+ * A blob at version 1 predates the set grid, so its `groupBy` is not evidence of
+ * a choice - `none` was the only thing it could say. Everything else it holds is
+ * still exactly what the reader set.
+ */
+const VIEW_MIGRATIONS = { 1: ["groupBy"] };
 
 /**
  * Ceiling on remembered collapsed groups, per axis, oldest dropped.
@@ -78,7 +107,36 @@ const COMPLETION_RETRY_MS = 30_000;
  * several features is listed under EACH of them, which `groupsOf` already
  * supports because `folder` needed the same fan-out for a file copied twice.
  */
-export const GROUP_BY_KEYS = ["none", "base_model", "folder", "feature"];
+export const GROUP_BY_KEYS = [
+  "none",
+  "workflow_set",
+  "base_model",
+  "folder",
+  "feature",
+];
+
+/**
+ * The one axis that is not a band over the row list.
+ *
+ * `workflow_set` swaps the list for a card grid, because its groups OVERLAP: a
+ * VAE belongs to every set it has run in, and a sticky band can only put a row
+ * in one place. The other four stay exactly as they were - `groups` is not asked
+ * to express this one, and the grid reads `setGroups` instead.
+ */
+export const GRID_GROUP_BY = "workflow_set";
+
+/**
+ * How an open set's tray draws its models.
+ *
+ * The Workflows grid's own two, by name and by behaviour (`STACK_VIEWS`,
+ * `useWorkflowPrefsStore`). Remembered HERE rather than read from that store
+ * because it documents itself as a Workflows-screen preference and its List
+ * columns are workflow columns - `Workflow`, `Checkpoint`, `Differs by` - where a
+ * set's are `Model`, `Kind`, `Size`, `In other sets`. One remembered choice
+ * across both trays would be the better product; it wants that store renaming
+ * rather than this screen reaching into it.
+ */
+export const TRAY_VIEWS = ["grid", "list"];
 
 /**
  * How folder groups are laid out, which is a sub-choice of `Folder` rather than
@@ -571,10 +629,20 @@ export function assignReceipt(done, failed, entityName, attaching) {
  */
 function defaultView() {
   return {
-    groupBy: "none",
+    // The set grid, not the flat list: "which of these work together" is the
+    // question the shelf is actually asked, and a grouping that answers it only
+    // once somebody finds the menu is not the default it deserves.
+    groupBy: GRID_GROUP_BY,
     sortKey: "added_at",
     sortDirection: "desc",
     folderLayout: "drive",
+    // How an open set's tray draws its models: as cards or as a comparison
+    // list. Carried at all times and only read under `workflow_set`, exactly as
+    // `folderLayout` is only read under `folder`. The same two views the
+    // Workflows grid's stack panel offers, and remembered the same way - for
+    // every tray rather than per tray, because the switch answers "how do I read
+    // a tray" rather than anything about the one in front of you.
+    trayView: "grid",
     columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
   };
 }
@@ -685,15 +753,23 @@ function storedFilters() {
 function storedView() {
   const parsed = readStored(VIEW_KEY);
   const view = defaultView();
-  // A blob an older build wrote is discarded whole rather than half-applied.
-  if (!parsed || parsed.v !== VIEW_SCHEMA_VERSION) return view;
-  if (GROUP_BY_KEYS.includes(parsed.groupBy)) view.groupBy = parsed.groupBy;
+  if (!parsed) return view;
+  // A blob from a version this build does not know is discarded whole rather
+  // than half-applied. One it DOES know is read field by field, minus whatever
+  // that version is not allowed to carry forward.
+  const stale =
+    parsed.v === VIEW_SCHEMA_VERSION ? [] : VIEW_MIGRATIONS[parsed.v];
+  if (!stale) return view;
+  if (!stale.includes("groupBy") && GROUP_BY_KEYS.includes(parsed.groupBy)) {
+    view.groupBy = parsed.groupBy;
+  }
   // Read per field rather than gated behind a schema bump: a blob written
   // before the layout choice existed is still a valid remembered sort, and
   // bumping the version to add one field would throw that away for everyone.
   if (FOLDER_LAYOUTS.includes(parsed.folderLayout)) {
     view.folderLayout = parsed.folderLayout;
   }
+  if (TRAY_VIEWS.includes(parsed.trayView)) view.trayView = parsed.trayView;
   if (SORT_KEYS.includes(parsed.sortKey)) view.sortKey = parsed.sortKey;
   if (parsed.sortDirection === "asc" || parsed.sortDirection === "desc") {
     view.sortDirection = parsed.sortDirection;
@@ -722,7 +798,13 @@ function storedCollapsed() {
   const parsed = readStored(VIEW_KEY);
   const collapsed = {};
   for (const axis of GROUP_BY_KEYS) collapsed[axis] = new Set();
-  if (!parsed || parsed.v !== VIEW_SCHEMA_VERSION) return collapsed;
+  // Same rule as `storedView`: a known older version is read, an unknown one is
+  // discarded. What a reader collapsed under `Base model` did not stop being
+  // true because the default axis changed.
+  if (!parsed) return collapsed;
+  if (parsed.v !== VIEW_SCHEMA_VERSION && !VIEW_MIGRATIONS[parsed.v]) {
+    return collapsed;
+  }
   for (const axis of GROUP_BY_KEYS) {
     const keys = parsed.collapsed?.[axis];
     if (!Array.isArray(keys)) continue;
@@ -1014,6 +1096,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         : new Set();
       loaded.value = true;
       pruneSelection();
+      // A scan can add a model, and a model with no card is what the reader of
+      // the set grid is looking for. Only a scan: an ordinary filter tick must
+      // not re-run a window over every picture in the vault.
+      if (markNew && setsLoaded.value) loadWorkflowSets({ force: true });
     } catch (err) {
       if (startedAt !== epoch) return;
       error.value = errorDetail(err) || err?.message || String(err);
@@ -1405,6 +1491,163 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * "offline", and the banner's count must not shrink when the reader narrows
    * the list.
    */
+  // ── The workflow sets (#1438) ─────────────────────────────────────────────
+  //
+  // Its own payload and its own epoch, because it is a DIFFERENT read from the
+  // row list: `fetchRows` runs on every `Show` checkbox and this one is a window
+  // over every kept picture in the vault. Fetched once when something needs it
+  // and again after a scan, never per filter tick.
+  const workflowSets = ref({ combinations: [], noSet: [] });
+  const setsLoading = ref(false);
+  const setsError = ref("");
+  const setsLoaded = ref(false);
+  let setsEpoch = 0;
+
+  /** The stack whose member panel is open, by its card key. */
+  const openSetKey = ref("");
+
+  /**
+   * Read which models have run together, once.
+   *
+   * `force` is what a scan passes: a scan can add a model, and a model with no
+   * card is exactly what the reader is looking at. Nothing else refetches -
+   * the fold, the sort and every filter are applied to what is in hand, so
+   * changing them costs no request.
+   *
+   * A failure leaves the previous payload standing and reports itself; the grid
+   * renders the error ahead of the cards, as the row list already does.
+   *
+   * @param {{force?: boolean}} [options]
+   */
+  async function loadWorkflowSets({ force = false } = {}) {
+    // Two guards, not one. `setsLoaded` drops a repeat AFTER the first read
+    // landed; `setsLoading` drops one made while it is still on the wire, which
+    // is the reachable case - the grid asks on mount and the dialog asks when it
+    // opens, and each request is a window over every kept picture in the vault.
+    // `force` overrides both: a scan has changed the answer.
+    if (!force && (setsLoaded.value || setsLoading.value)) return;
+    const startedAt = (setsEpoch += 1);
+    setsLoading.value = true;
+    setsError.value = "";
+    try {
+      const body = await fetchWorkflowSets();
+      if (startedAt !== setsEpoch) return;
+      workflowSets.value = {
+        combinations: body.combinations,
+        noSet: body.no_set,
+      };
+      setsLoaded.value = true;
+    } catch (err) {
+      if (startedAt !== setsEpoch) return;
+      setsError.value = errorDetail(err) || err?.message || String(err);
+    } finally {
+      if (startedAt === setsEpoch) setsLoading.value = false;
+    }
+  }
+
+  /**
+   * Every model the current `Show` selection leaves on screen, runs expanded.
+   *
+   * **`visibleRows` is not a list of models.** `collapseStacks` draws a run as
+   * its COVER, so a stacked row's `id` is the cover's and the rest of the run
+   * lives in `memberIds`. Matching a combination's members against `row.id`
+   * therefore dropped every set that reached the shelf through a non-cover step
+   * of a run - and dropped its `no_set` entry with it, so the model appeared on
+   * no card at all and the grid's empty state claimed no picture recorded it.
+   * That is the one outcome `fetch_workflow_sets` is written to prevent.
+   *
+   * The `memberIds ?? [id]` fan-out is the same one `selectVisible` and
+   * `modelsBehind` already use for the same reason.
+   */
+  const shownModelIds = computed(
+    () =>
+      new Set(visibleRows.value.flatMap((row) => row.memberIds ?? [row.id])),
+  );
+
+  /**
+   * The combinations the current `Show` selection leaves on screen.
+   *
+   * A combination survives when ANY of its members is visible, and then it is
+   * drawn WHOLE. Narrowing a card's member list to the ticked kinds would be a
+   * lie about the combination - the files ran together and the card's offer is
+   * "run exactly this" - so the filter decides which cards are shown and never
+   * what a shown card contains.
+   */
+  const visibleCombinations = computed(() => {
+    const shown = shownModelIds.value;
+    return workflowSets.value.combinations.filter((combination) =>
+      (combination.models ?? []).some((model) => shown.has(model.id)),
+    );
+  });
+
+  /**
+   * The cards the set grid draws: one per base model that has made a picture.
+   *
+   * Each entry carries the card, the group's members (the union, each with its
+   * own evidence and how widely it is shared) and the combinations behind it - so
+   * the tray under an open card needs no second lookup and nothing has to
+   * re-derive the grouping to answer a question about one member.
+   */
+  const setGroupList = computed(() =>
+    setGroups(visibleCombinations.value).map((group) => ({
+      ...group,
+      card: setCard(group),
+    })),
+  );
+
+  /**
+   * The shown rows no recipe in this library binds to anything.
+   *
+   * Drawn as a card of its own rather than omitted: absence of co-occurrence is
+   * not evidence, and a grid that quietly dropped them would be asserting the
+   * opposite. Intersected with `visibleRows` so `Show` applies to this card too.
+   */
+  const noSetRows = computed(() => {
+    const loose = new Set(workflowSets.value.noSet);
+    // The MEMBERS of a shown run, not the runs: a stack row is drawn as its
+    // cover, so filtering on `row.id` alone dropped every other step of every
+    // run from this card - and the card counts models rather than rows.
+    return rows.value.filter(
+      (row) => loose.has(row.id) && shownModelIds.value.has(row.id),
+    );
+  });
+
+  /** Open or close one group's tray. One at a time, like the workflows grid's. */
+  function toggleSet(key) {
+    openSetKey.value = openSetKey.value === key ? "" : key;
+  }
+
+  /**
+   * Forget an open stack that no longer exists.
+   *
+   * **A key is not a group.** A `Show` tick that hides a group's every member
+   * takes the card away and leaves the key behind, and the key then survives a
+   * `groupBy` switch and a post-scan refetch, silently reopening the moment some
+   * later payload happens to mint it again (#1479 review). Reconciled here rather
+   * than in the grid because the key lives here and the grid is not the only
+   * thing that can change what it names.
+   */
+  watch(setGroupList, (groups) => {
+    if (!openSetKey.value) return;
+    if (!groups.some((group) => group.key === openSetKey.value)) {
+      openSetKey.value = "";
+    }
+  });
+
+  /**
+   * What one model has been seen beside, ranked by the recipes backing each.
+   *
+   * Read from the whole payload rather than from `visibleCombinations`: the
+   * question is what this file has run with, and a `Show` checkbox is about what
+   * the grid draws. Hiding a companion because its kind is unticked would turn a
+   * view setting into a claim about the evidence.
+   *
+   * @param {number} modelId
+   */
+  function worksWithModel(modelId) {
+    return worksWith(workflowSets.value.combinations, modelId);
+  }
+
   const offlineMounts = computed(() => offlineFolders(rows.value));
 
   /**
@@ -1446,8 +1689,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * Never refetches: every field the five sort keys read is already on the list
    * payload, so a direction flip is a resort of what is in hand.
    *
-   * @param {Object} patch - any of `groupBy`, `folderLayout`, `sortKey`,
-   *   `sortDirection`.
+   * @param {Object} patch - any of `groupBy`, `folderLayout`, `fold`,
+   *   `sortKey`, `sortDirection`.
    */
   function setView(patch) {
     // A NEW sort key arrives at its own end unless the caller named one. Here
@@ -2148,6 +2391,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     // the stamp beside it would otherwise say "already fetched" forever.
     fetchedCompletions.value = [];
     invalidateBaseModelCompletions();
+    // The sets go with the rows, for the reason the completions do: they are
+    // derived from this machine's models and this library's pictures, and the
+    // credential that could read both has just changed.
+    setsEpoch += 1;
+    workflowSets.value = { combinations: [], noSet: [] };
+    setsLoaded.value = false;
+    setsLoading.value = false;
+    setsError.value = "";
+    openSetKey.value = "";
   }
 
   const unsubscribeSessionReset = onSessionReset(resetForSession);
@@ -2206,6 +2458,18 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     loadBaseModelCompletions,
     visibleRows,
     groups,
+    workflowSets,
+    setsLoading,
+    setsError,
+    setsLoaded,
+    loadWorkflowSets,
+    shownModelIds,
+    visibleCombinations,
+    setGroups: setGroupList,
+    noSetRows,
+    openSetKey,
+    toggleSet,
+    worksWithModel,
     offlineMounts,
     renderedCount,
     activeCount,

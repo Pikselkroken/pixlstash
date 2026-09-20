@@ -209,6 +209,9 @@ export function defaultSortDirection(key) {
 /** What each grouping axis is called, and the glyph that stands for it. */
 export const GROUP_BY_LABELS = {
   none: { label: "None", icon: "mdi-format-list-bulleted" },
+  // The one axis whose groups OVERLAP, and so the one that is a grid rather
+  // than a band: a VAE belongs to every set it has run in (#1438).
+  workflow_set: { label: "Workflow set", icon: "mdi-view-grid-outline" },
   base_model: { label: "Base model", icon: "mdi-cube-outline" },
   folder: { label: "Folder", icon: "mdi-folder-outline" },
   feature: { label: "Feature", icon: "mdi-star-four-points-outline" },

@@ -26,15 +26,22 @@ function layoutSection(wrapper) {
 }
 
 describe("the folder layout sub-choice", () => {
-  it("is absent on every axis but Folder", () => {
+  it("is absent on every axis but Folder", async () => {
     const wrapper = mount(ShelfSortPanel, globalOpts);
     const store = useModelShelfStore();
 
-    expect(store.view.groupBy).toBe("none");
-    expect(layoutSection(wrapper).exists()).toBe(false);
-
-    store.setView({ groupBy: "base_model" });
-    expect(layoutSection(wrapper).exists()).toBe(false);
+    // The default axis is the set grid since #1438; what this pins is that the
+    // layout sub-choice belongs to Folder and to nothing else. Every other axis
+    // is walked, and the one that DOES show it is asserted at the end, so a
+    // panel that had stopped rendering the section at all cannot pass.
+    expect(store.view.groupBy).toBe("workflow_set");
+    for (const axis of ["workflow_set", "none", "base_model", "feature"]) {
+      store.setView({ groupBy: axis });
+      expect(layoutSection(wrapper).exists()).toBe(false);
+    }
+    store.setView({ groupBy: "folder" });
+    await wrapper.vm.$nextTick();
+    expect(layoutSection(wrapper).exists()).toBe(true);
   });
 
   it("appears under Folder and sets the layout when pressed", async () => {

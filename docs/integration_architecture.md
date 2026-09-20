@@ -490,6 +490,57 @@ B5 (#1397) landed the recipe read; serving the same facts twice from two
 implementations is how two vocabularies drift permanently apart, so the recipe
 half was moved onto `/recipe` and deleted here.
 
+### 2.2c The `/models/workflow-sets` contract (#1438)
+
+One route behind the model shelf's `Workflow set` axis, and the split of work
+across the seam is the whole of the contract: **the server resolves the evidence
+and groups nothing; the client folds.**
+
+| Route | Answers | Costs |
+|---|---|---|
+| `GET /models/workflow-sets` | **Which shelf models a kept picture proves ran together** — one entry per *combination* (the exact model ids one or more recipes bound), with its recipe count, its picture count and up to three cover thumbnails as `{picture_id, version}`, plus `no_set`: the ids in none of those combinations, i.e. the models **no kept
+picture in this library was made with** (engines excluded - see rule 1). | one pass over `workflow_recipe_asset`, plus the `GROUP BY workflow_structural_hash` and the `ROW_NUMBER()` cover window the shelf's `used by` counts and the workflows grid already run |
+
+Rules neither side may drift from:
+
+1. **Co-occurrence is evidence; its absence is not.** No combination is withheld
+   for lacking a pairing, `no_set` is returned rather than dropped, and a member
+   the evidence could only reach through a basename several shelf rows answer to
+   carries `ambiguous: true` and is still listed. A client may not render a
+   missing companion as incompatible, which is why the grid and the *Works with*
+   dialog both close with that sentence in as many words.
+2. **Membership is not stored and overlaps.** A model appears in every
+   combination it has run in; nothing is written, no column on `model` names a
+   set, and the answer is derived per request. A client must not cache it as a
+   property of a row.
+3. **`models` arrives in ONE order and the client reads its head.** Checkpoint,
+   then `unknown`, then VAE, text encoder, adapter, engine. The head is the file
+   the set is named after, which is how a Flux or Wan set with no `checkpoint`
+   row gets a name without the client inventing a second fallback rule.
+4. **The GROUPING is the client's, and the payload stays per-combination.** The
+   server proposes no grouping at all: `setGroups` (`utils/workflowSets.js`) unions
+   the combinations under each head to make the cards, while the combinations
+   themselves stay in hand — `worksWith` needs them to answer a pairwise question
+   exactly, since a union would report two VAEs as each other's companions on the
+   strength of sharing a checkpoint, and each member's own recipe and picture
+   counts come from the combinations that name it. **A client must not collapse
+   this payload to unions on the way in.**
+5. **Scoped to the ACTIVE library**, unlike `POST /models/companions`, which
+   counts every recipe the hub holds. A delete warning must keep a file some
+   other library needs; this grid is a picture of what the library in front of
+   the reader has made, so a recipe with no kept picture here is not a set.
+6. **A cover is two facts, not a path.** `{picture_id, version}`, and the client
+   builds the URL with `pictureThumbnailUrl` (`api/pictures.js`). An `<img src>`
+   never reaches the Axios interceptor, so a path served from here arrives with
+   no `/api/v1` prefix and no share token appended, and the browser asks the page
+   origin for a route it does not serve — every cover broken. It is also why this
+   route spells no URL of its own beside `routes/workflows.py`'s; that one sends a
+   path and pays for it with `workflowCoverUrl` on the client to put it right.
+7. **Owner-only, and read once.** It sizes the whole vault one card at a time and
+   names a picture per cover, so it is on the shelf's owner tier with no
+   per-object scope to narrow it to. The client fetches it when something needs
+   it and again after a scan, never on a filter tick.
+
 ### 2.3 The `/workflows` contract (v1.11)
 
 The Workflows view (implementation plan §F1/§F2, plus the v1.12 card grid and

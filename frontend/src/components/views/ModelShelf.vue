@@ -312,7 +312,14 @@
             <ShelfSortPanel section="group" />
           </v-menu>
 
+          <!-- Hidden on the set grid, not disabled, exactly as the whole
+               cluster is hidden on the training-runs tab and for the same
+               reason: the five sort keys order the ROW LIST, and that list is
+               not on screen. The grid orders itself by evidence. A control that
+               is live and does nothing is worse than one that is absent - it
+               reads "Sort: Added" over a grid it has no effect on. -->
           <v-menu
+            v-if="!isSetGrid"
             v-model="sortMenuOpen"
             :close-on-content-click="false"
             location="bottom end"
@@ -474,7 +481,14 @@
           @click="offlineDismissed = true"
         />
       </p>
-      <p v-if="store.loading" class="shelf-state">Reading the shelf…</p>
+      <!-- The set grid, ahead of every row-list state: its groups OVERLAP, so
+           it is a different screen rather than a banded version of this one. It
+           still reads `visibleRows`, so Show and the filters keep applying. -->
+      <ModelSetGrid
+        v-if="isSetGrid && !store.loading && !store.error"
+        @works-with="showWorksWith"
+      />
+      <p v-else-if="store.loading" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
         {{ store.error }}
       </p>
@@ -1337,7 +1351,12 @@
          a row was clicked. This wrapper is the float; the pill owns its own
          shape. `pointer-events` is off on the strip and back on for the pill,
          so the rows underneath it stay clickable. -->
-    <div v-if="isShelfTab" class="selbar-float">
+    <!-- Not over the set grid: a card there is a SET, and the bar's verbs are
+         per model - two of them destroy bytes. A selection made in the row list
+         survives the switch in the store, so it is still there when the reader
+         goes back; it simply has no floating bar over a screen where the thing
+         under the pointer is not what the bar would act on. -->
+    <div v-if="isShelfTab && !isSetGrid" class="selbar-float">
       <ShelfSelectionBar
         ref="selBarRef"
         @rename="startRenameSelected"
@@ -1354,9 +1373,11 @@
         @clear-icons="confirmClearIcons"
         @forget="confirmForget"
         @delete="confirmDelete"
+        @works-with="openWorksWith"
       />
     </div>
 
+    <ModelWorksWithDialog :model="worksWithModel" @close="closeWorksWith" />
     <ShelfEditDialog :verb="editVerb" @close="editVerb = ''" />
     <MergeCopiesDialog
       :open="mergeRow !== null"
@@ -1493,6 +1514,8 @@ import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import MergeCopiesDialog from "../panels/MergeCopiesDialog.vue";
 import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
+import ModelWorksWithDialog from "../panels/ModelWorksWithDialog.vue";
+import ModelSetGrid from "./ModelSetGrid.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import TbOverflowMenu from "../panels/TbOverflowMenu.vue";
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
@@ -1519,6 +1542,7 @@ import {
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import {
   DEFAULT_COLUMN_WIDTHS,
+  GRID_GROUP_BY,
   MAX_COLUMN_WIDTH,
   MIN_COLUMN_WIDTHS,
   useModelShelfStore,
@@ -1593,6 +1617,14 @@ const folderMenuFolder = ref(null);
 const folderMenuInvoker = ref(null);
 const addMenuOpen = ref(false);
 const groupMenuOpen = ref(false);
+/** The model whose companions the Works with dialog is answering for, or null. */
+const worksWithModel = ref(null);
+// Held raw like `folderInvoker`: a DOM node, not reactive state. `VDialog`
+// restores focus to its own `activatorEl` and this dialog has none - it opens
+// from a prop - so without this, closing it dropped focus to <body> (WCAG
+// 2.4.3). Both openers are transient: the context-menu item unmounts with the
+// menu, and the grid's file button can go with a re-render.
+const worksWithInvoker = shallowRef(null);
 // The toolbar buttons behind the dialogs its left half opens, so focus has a
 // place to come back to however the reader got there. A menu item cannot be
 // that place - it unmounts with the menu.
@@ -2207,6 +2239,16 @@ function shelfOwnsTheKey(event) {
   // confirmation for rows the reader cannot see and `Escape` would silently
   // clear a selection they did not know they still had.
   if (!isShelfTab.value) return false;
+  // **The set grid is the same hazard one axis over, and it is the DEFAULT
+  // screen.** A card there stands for several models and nothing on it is
+  // selectable, so `ShelfSelectionBar` is not floated over it - which means
+  // Ctrl+A would build a selection with no control on screen showing it, and
+  // Delete would then open a real confirmation for rows nobody can see. The
+  // same reasoning as the line above, reached by the axis rather than the tab:
+  // the bar half of it was ported when the grid landed and the keys half was
+  // not (#1479 review). The selection itself survives in the store, so the
+  // keys work again the moment the row list is back.
+  if (isSetGrid.value) return false;
   if (
     moveOpen.value ||
     addSourceOpen.value ||
@@ -3843,6 +3885,18 @@ const offlineMountPaths = computed(() =>
  * other: `models` is distinct files on the shelf, `copies` is rows on screen.
  */
 const countLabel = computed(() => {
+  // On the set axis the row count is about a list that is not on screen. The two
+  // figures a reader needs are how many sets there are and how much evidence is
+  // behind them, which is the combination count rather than a second card count.
+  if (isSetGrid.value) {
+    const sets = store.setGroups.length;
+    const recipes = store.visibleCombinations.length;
+    const setsLabel = sets === 1 ? "1 set" : `${sets.toLocaleString()} sets`;
+    if (!recipes) return setsLabel;
+    return `${setsLabel} · ${recipes.toLocaleString()} ${
+      recipes === 1 ? "combination" : "combinations"
+    }`;
+  }
   const models = modelCount(store.visibleRows.length);
   const drawn = store.renderedCount;
   if (drawn === store.visibleRows.length) return models;
@@ -3851,6 +3905,47 @@ const countLabel = computed(() => {
 
 /** True while the list is cut into groups, i.e. headers are drawn. */
 const grouped = computed(() => store.view.groupBy !== "none");
+
+/**
+ * True while the set grid has the content area instead of the row list.
+ *
+ * The one axis whose groups overlap, so the one that cannot be a band: see
+ * `GRID_GROUP_BY`. Gated on the tab as well, because the training runs own the
+ * area on the other one.
+ */
+const isSetGrid = computed(
+  () => isShelfTab.value && store.view.groupBy === GRID_GROUP_BY,
+);
+
+/**
+ * Answer "what else has this run with" for one model.
+ *
+ * The selection bar's own verb, so it reads the selection; the grid hands its
+ * file up through `@works-with` instead, because a card there is not a row and
+ * there is no selection on that screen to read. Both land on
+ * {@link showWorksWith}, which is where the focus return is remembered - and
+ * the dialog normalises the two row shapes itself, because a shelf row's `name`
+ * is `modelName`'s `{text, state}` pair and a set member's is a string.
+ */
+function openWorksWith() {
+  showWorksWith(store.selectedRows[0] ?? null);
+}
+
+/** Open the dialog, remembering what to hand focus back to. */
+function showWorksWith(model) {
+  if (!model) return;
+  worksWithInvoker.value =
+    document.activeElement === document.body ? null : document.activeElement;
+  worksWithModel.value = model;
+}
+
+function closeWorksWith() {
+  const returnTo = worksWithInvoker.value;
+  worksWithModel.value = null;
+  worksWithInvoker.value = null;
+  // The row or the card the reader was on, then the shelf root - never <body>.
+  nextTick(() => restoreFocus(returnTo, rootEl.value));
+}
 
 const activeSort = computed(
   () => SORT_LABELS[store.view.sortKey] || SORT_LABELS.added_at,

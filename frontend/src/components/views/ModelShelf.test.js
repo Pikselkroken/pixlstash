@@ -208,6 +208,21 @@ const globalOpts = {
       ShelfEditDialog: true,
       ShelfMoveDialog: true,
       MergeCopiesDialog: true,
+
+      // Same reason, for the same provider: it wraps `AppDialog`. Its own suite
+      // mounts it against the companions payload.
+      ModelWorksWithDialog: {
+        name: "ModelWorksWithDialog",
+        props: ["model"],
+        template: "<div class='ww-stub'>{{ model?.filename }}</div>",
+      },
+      // Its own suite mounts it against a payload; here what matters is only
+      // whether the shelf puts it on screen instead of the row list.
+      ModelSetGrid: {
+        name: "ModelSetGrid",
+        emits: ["works-with"],
+        template: "<div class='set-grid-stub'></div>",
+      },
       // The host-path picker `Add file` opens. Real, it would drag Vuetify's
       // dialog provider into a suite that installs none; stubbed, it still
       // emits `select`, which is the whole of what this view listens for.
@@ -259,6 +274,11 @@ async function mountShelf(
   listEngines.mockResolvedValue([]);
   listUnclassified.mockResolvedValue(unclassified);
   listSupport.mockResolvedValue([]);
+  // The ROW LIST is what this suite is about, and since #1438 the default axis
+  // is the set grid, which replaces it. Chosen here rather than per test, so a
+  // new test lands on the list without having to know that; the grid's own
+  // screen is covered by `ModelSetGrid.test.js`.
+  useModelShelfStore().setView({ groupBy: "none" });
   const wrapper = mount(ModelShelf, { ...globalOpts, ...extra });
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();
@@ -728,9 +748,7 @@ describe("location state", () => {
     ]);
     useModelShelfStore().setView({ groupBy: "folder" });
     await wrapper.vm.$nextTick();
-    const titles = wrapper
-      .findAll(".shelf-row-file")
-      .map((el) => tip(el));
+    const titles = wrapper.findAll(".shelf-row-file").map((el) => tip(el));
     expect(titles).toEqual([
       "/home/me/models/a.st",
       "/media/me/spare/a.st · not where it was",
@@ -753,9 +771,9 @@ describe("location state", () => {
       }),
     ]);
     await wrapper.find(".shelf-row").trigger("keydown", { key: "ArrowRight" });
-    expect(
-      tip(wrapper.find(".shelf-row--member .shelf-row-file")),
-    ).toBe("/media/me/spare/b.st");
+    expect(tip(wrapper.find(".shelf-row--member .shelf-row-file"))).toBe(
+      "/media/me/spare/b.st",
+    );
   });
 
   it("offers no tooltip at all when every copy has been forgotten", async () => {
@@ -1662,9 +1680,7 @@ describe("selecting rows", () => {
 
     await rowAt(wrapper, 0).trigger("click");
     await wrapper.vm.$nextTick();
-    expect(tip(wrapper.find(".selbar-count"))).toContain(
-      "1 model selected",
-    );
+    expect(tip(wrapper.find(".selbar-count"))).toContain("1 model selected");
   });
 
   it("drops a selected model that the shelf no longer holds", async () => {
@@ -2329,9 +2345,7 @@ describe("selection and drive bands together", () => {
 
     await rows[0].trigger("click");
     await wrapper.vm.$nextTick();
-    expect(tip(wrapper.find(".selbar-count"))).toContain(
-      "1 model selected",
-    );
+    expect(tip(wrapper.find(".selbar-count"))).toContain("1 model selected");
     // The band is a header, not a row: it must not have become selectable.
     expect(wrapper.find(".shelf-band").attributes("role")).not.toBe("option");
   });
@@ -3166,9 +3180,7 @@ describe("the date column", () => {
     let wrapper = await mountShelf([adapter({ added_at: ADDED })]);
     let cell = wrapper.find(".shelf-col--date");
     expect(cell.text()).toBe("30/07/2026");
-    expect(tip(cell)).toBe(
-      `Date added: ${formatUserDate(ADDED, "eu")}`,
-    );
+    expect(tip(cell)).toBe(`Date added: ${formatUserDate(ADDED, "eu")}`);
 
     prefs.dateFormat = "iso";
     wrapper = await mountShelf([adapter({ added_at: ADDED })]);
@@ -3473,8 +3485,18 @@ describe("the thumbnail verb", () => {
     });
     const wrapper = await mountShelf([
       adapter({ id: 1, stack_id: 9, stack_position: 0 }),
-      adapter({ id: 2, sha256: "b".repeat(64), stack_id: 9, stack_position: 1 }),
-      adapter({ id: 3, sha256: "c".repeat(64), stack_id: 9, stack_position: 2 }),
+      adapter({
+        id: 2,
+        sha256: "b".repeat(64),
+        stack_id: 9,
+        stack_position: 1,
+      }),
+      adapter({
+        id: 3,
+        sha256: "c".repeat(64),
+        stack_id: 9,
+        stack_position: 2,
+      }),
     ]);
     const store = useModelShelfStore();
     store.selectVisible();
@@ -3495,7 +3517,9 @@ describe("the thumbnail verb", () => {
     store.toggleSelected(1);
     await wrapper.vm.$nextTick();
     const clear = () =>
-      wrapper.findAll("button").find((b) => b.text().includes("Clear thumbnail"));
+      wrapper
+        .findAll("button")
+        .find((b) => b.text().includes("Clear thumbnail"));
     expect(clear()).toBeUndefined();
 
     store.rows = [adapter({ id: 1, icon_sha256: "a".repeat(64) })];
@@ -3509,7 +3533,10 @@ describe("the thumbnail verb", () => {
     // route has to copy pixels, and the thumbnail is the copy it sends.
     const bytes = new Blob(["webp"], { type: "image/webp" });
     getPictureThumbnailBlob.mockResolvedValue(bytes);
-    setModelIcon.mockResolvedValue({ model_id: 1, icon_sha256: "c".repeat(64) });
+    setModelIcon.mockResolvedValue({
+      model_id: 1,
+      icon_sha256: "c".repeat(64),
+    });
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const store = useModelShelfStore();
     store.toggleSelected(1);
@@ -3561,7 +3588,10 @@ describe("the thumbnail verb", () => {
     // chooser must land the reader back in the picker rather than on a bare
     // shelf, so the picker is closed by a file ARRIVING, never by the chooser
     // opening.
-    setModelIcon.mockResolvedValue({ model_id: 1, icon_sha256: "d".repeat(64) });
+    setModelIcon.mockResolvedValue({
+      model_id: 1,
+      icon_sha256: "d".repeat(64),
+    });
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const store = useModelShelfStore();
     store.toggleSelected(1);
@@ -4316,7 +4346,9 @@ describe("the app-wide toolbar tail", () => {
   it("asks App.vue for Settings and toggles the stats sidebar itself", async () => {
     const wrapper = await mountShelf([adapter({ id: 1 })]);
     const sidebar = useSidebarStore();
-    const settings = wrapper.find(".shelf-toolbar button[aria-label='Settings']");
+    const settings = wrapper.find(
+      ".shelf-toolbar button[aria-label='Settings']",
+    );
 
     await settings.trigger("click");
     expect(wrapper.emitted("open-settings")).toHaveLength(1);
@@ -4441,7 +4473,9 @@ describe("Delete", () => {
 
     expect(fetchModelCompanions).toHaveBeenCalledWith([1]);
     const said = confirmSpy.mock.calls[0][0];
-    expect(said).toContain("ae.safetensors ran only with models you are deleting");
+    expect(said).toContain(
+      "ae.safetensors ran only with models you are deleting",
+    );
     expect(said).toContain("clip_l.safetensors is still used by other models");
     expect(deleteModels).not.toHaveBeenCalled();
     wrapper.unmount();
@@ -4459,7 +4493,13 @@ describe("Delete", () => {
 
     await pressDelete();
     await pressDelete();
-    answer({ orphaned: [], shared: [], unknown: [], in_use: [], no_evidence: [] });
+    answer({
+      orphaned: [],
+      shared: [],
+      unknown: [],
+      in_use: [],
+      no_evidence: [],
+    });
     await pressDelete();
 
     expect(fetchModelCompanions).toHaveBeenCalledTimes(1);
@@ -5102,5 +5142,163 @@ describe("acting inside a run", () => {
     expect(removeStackMember).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
     wrapper.unmount();
+  });
+});
+
+// ===========================================================================
+// The shipped DEFAULT (#1438)
+//
+// `mountShelf` chooses `groupBy: "none"` for every test above, because the row
+// list is what they are about. Nothing then mounted this view in the state a
+// reader actually opens it in, which is how a live-but-inert Sort control got
+// as far as review. These mount it as shipped.
+// ===========================================================================
+
+async function mountDefaultShelf(rows = [adapter()]) {
+  listAdapters.mockResolvedValue(rows);
+  listCheckpoints.mockResolvedValue([]);
+  listEngines.mockResolvedValue([]);
+  listUnclassified.mockResolvedValue([]);
+  listSupport.mockResolvedValue([]);
+  const wrapper = mount(ModelShelf, globalOpts);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await wrapper.vm.$nextTick();
+  return wrapper;
+}
+
+describe("the set grid is what the shelf opens on", () => {
+  const rowAt = (wrapper, i) => wrapper.findAll(".shelf-row")[i];
+
+  it("draws the grid rather than the row list, with no axis chosen", async () => {
+    const wrapper = await mountDefaultShelf();
+    const store = useModelShelfStore();
+
+    expect(store.view.groupBy).toBe("workflow_set");
+    expect(wrapper.find(".set-grid-stub").exists()).toBe(true);
+    expect(wrapper.find(".shelf-row").exists()).toBe(false);
+  });
+
+  it("hides Sort, because it steers a list that is not on screen", async () => {
+    const wrapper = await mountDefaultShelf();
+    const store = useModelShelfStore();
+
+    // The shipped split-button, which is what `Sort` actually is.
+    const hasSort = () => wrapper.find(".bar-split-button").exists();
+
+    // A live control with no effect reads "Sort: Added" over a grid it cannot
+    // reorder, so it is absent here and back the moment the row list is. The grid
+    // orders itself by the weight of the evidence behind each set.
+    expect(hasSort()).toBe(false);
+
+    store.setView({ groupBy: "none" });
+    await wrapper.vm.$nextTick();
+    expect(hasSort()).toBe(true);
+  });
+
+  it("counts sets rather than models while the grid is on screen", async () => {
+    const wrapper = await mountDefaultShelf();
+
+    expect(textOf(wrapper.find(".shelf-sub"))).toContain("0 sets");
+
+    useModelShelfStore().setView({ groupBy: "none" });
+    await wrapper.vm.$nextTick();
+    expect(textOf(wrapper.find(".shelf-sub"))).toContain("1 model");
+  });
+
+  it("floats no verb bar over the grid, whatever is selected", async () => {
+    // A card is a SET. The bar's verbs are per model and two of them destroy
+    // bytes, so a Delete aimed at a card could take a shared VAE with it. The
+    // selection survives in the store and the bar comes back with the list.
+    const wrapper = await mountDefaultShelf();
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    expect(store.selectedIds.size).toBe(1);
+    expect(wrapper.find(".selbar-float").exists()).toBe(false);
+
+    store.setView({ groupBy: "none" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".selbar-float").exists()).toBe(true);
+  });
+
+  it("takes the destructive keys away, exactly as the runs tab does", async () => {
+    // **The same hazard one axis over, and this is the DEFAULT screen.** The key
+    // handler is on the WINDOW and the grid renders inside the shelf tab, so with
+    // the tab guard alone Ctrl+A built a selection with no bar on screen to show
+    // it and Delete then opened the real confirmation for cards nobody can point
+    // at. The bar half of the runs-tab precedent was ported when the grid landed
+    // and the keys half was not (#1479 review).
+    const wrapper = await mountDefaultShelf([
+      adapter({ id: 1, sha256: "a".repeat(64) }),
+      adapter({ id: 2, sha256: "b".repeat(64) }),
+    ]);
+    document.body.appendChild(wrapper.element);
+    const store = useModelShelfStore();
+
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
+    );
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(0);
+
+    // And with a selection made before the switch, Delete is still refused -
+    // the selection survives, which is what makes it safe to keep.
+    store.selectVisible();
+    expect(store.selectedRows).toHaveLength(2);
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await wrapper.vm.$nextTick();
+    expect(deleteModels).not.toHaveBeenCalled();
+    expect(store.selectedRows).toHaveLength(2);
+
+    // The keys come back with the row list, like the bar does.
+    store.setView({ groupBy: "none" });
+    await wrapper.vm.$nextTick();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("titles Works with from the row list with a name, not a serialised object", async () => {
+    // A shelf row's `name` is `modelName`'s `{text, state}` pair; a set member's
+    // is a plain string. Bound straight into the heading, the row list's own
+    // entry point rendered the title as JSON - and every dialog test fabricated
+    // a flat object, so the suite never saw the shape the row list sends
+    // (#1479 review).
+    const wrapper = await mountDefaultShelf([
+      adapter({ id: 1, display_name: "Cyanwood Style" }),
+    ]);
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "none" });
+    await wrapper.vm.$nextTick();
+    await rowAt(wrapper, 0).trigger("click");
+
+    wrapper.findComponent({ name: "ShelfSelectionBar" }).vm.$emit("works-with");
+    await wrapper.vm.$nextTick();
+
+    const handed = wrapper
+      .findComponent({ name: "ModelWorksWithDialog" })
+      .props().model;
+    // The ROW is handed over whole - the dialog is what normalises the two
+    // shapes - so this asserts the shape really does reach it.
+    expect(handed.id).toBe(1);
+    expect(handed.name).toMatchObject({ text: "Cyanwood Style" });
+    wrapper.unmount();
+  });
+
+  it("hands the grid's file to the one Works with dialog", async () => {
+    const wrapper = await mountDefaultShelf();
+
+    await wrapper
+      .findComponent({ name: "ModelSetGrid" })
+      .vm.$emit("works-with", { id: 7, filename: "handed-up.st" });
+    await wrapper.vm.$nextTick();
+
+    // One dialog, owned here: two mounted copies with a ref each is two dialogs
+    // that can disagree about which is open.
+    expect(wrapper.findAll(".ww-stub")).toHaveLength(1);
+    expect(wrapper.find(".ww-stub").text()).toBe("handed-up.st");
   });
 });
