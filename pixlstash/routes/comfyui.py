@@ -4,6 +4,7 @@ import json
 import math
 import os
 import sqlite3
+import time
 import uuid
 from urllib.parse import quote
 
@@ -37,6 +38,7 @@ from pixlstash.utils.comfyui_utilities import (
     NotAWorkflowError,
     check_comfy_workflow,
     find_comfy_api_prompt,
+    find_comfy_workflow,
     summarize_comfy_workflow,
 )
 from pixlstash.services.a1111_recipe import A1111Recipe, reduce_a1111
@@ -49,6 +51,10 @@ from pixlstash.services.comfyui_recipe_service import (
     preflight_prompt,
     sanitize_prompt_graph,
     unchecked_preflight,
+)
+from pixlstash.services.comfyui_ui_graph import (
+    convert_ui_graph_to_api,
+    is_ui_graph,
 )
 from pixlstash.services.model_shelf_service import (
     fetch_locations,
@@ -1030,15 +1036,115 @@ def _a1111_recipe_payload(recipe: A1111Recipe) -> dict:
     }
 
 
-def _read_object_info(comfyui_url: str) -> tuple[dict | None, str | None]:
+def _editor_graph_recipe_payload(workflow: dict, problems: list[str]) -> dict:
+    """The recipe an editor graph answers with when it would not convert.
+
+    The picture WAS made in ComfyUI and its graph is right there, so the Recipe
+    tab fills in - the prompt, the models, the seed - and only the offer to run
+    it again is withheld, with the reason named. That is the difference this
+    payload exists to draw: "nothing was made in ComfyUI here" and "this is a
+    ComfyUI picture PixlStash cannot hand back to ComfyUI" are two answers, and
+    a UI-only picture used to get the first one.
+
+    ``settings`` and ``negative_prompt`` stay empty: both are read off the
+    resolved API graph, and reading them off the editor's positional widget
+    array is the guessing this whole path refuses to do.
+    """
+    gen_info = extract_generation_info(workflow)
+    stats = summarize_comfy_workflow(workflow)
+    summary_parts = [f"Editor Workflow · {stats['node_count']} nodes"]
+    if stats["link_count"] is not None:
+        summary_parts.append(f"{stats['link_count']} links")
+    return {
+        "available": False,
+        "reason": "editor_graph",
+        "source": "comfyui",
+        "summary": " · ".join(summary_parts),
+        "positive_prompt": gen_info["positive_prompt"],
+        "negative_prompt": None,
+        "settings": {},
+        "seed": gen_info["seed"],
+        "seed_text": None if gen_info["seed"] is None else str(gen_info["seed"]),
+        "models": gen_info["models"],
+        "loras": gen_info["loras"],
+        "node_count": stats["node_count"],
+        # One sentence per thing that could not be read, so the tab can say why
+        # rather than "it did not work".
+        "conversion_problems": problems,
+    }
+
+
+def _describe_preflight_failure(preflight: dict) -> str:
+    """Turn a failed pre-flight into a sentence naming what to go and fix.
+
+    The three buckets get three different sentences on purpose: a missing node
+    pack, a missing model file and a missing input image send the user to three
+    different places, and collapsing them into "something is missing" is the
+    difference between an actionable message and a support ticket.
+    """
+    parts: list[str] = []
+    classes = preflight.get("missing_node_classes") or []
+    if classes:
+        parts.append("missing node types: " + ", ".join(str(c) for c in classes))
+    models = [
+        str(item.get("value")) for item in preflight.get("missing_models") or [] if item
+    ]
+    if models:
+        parts.append("missing models: " + ", ".join(models))
+    inputs = [
+        str(item.get("value"))
+        for item in preflight.get("missing_input_images") or []
+        if item
+    ]
+    if inputs:
+        parts.append(
+            "the source image this recipe loads is no longer in ComfyUI's input "
+            "folder: " + ", ".join(inputs)
+        )
+    if not parts:
+        return "This recipe cannot run on your ComfyUI."
+    return "Your ComfyUI cannot run this recipe - " + "; ".join(parts) + "."
+
+
+# How long a fetched `/object_info` map may be reused, and by whom. It is
+# several megabytes on an install with a few node packs, so the one caller that
+# asks as fast as a person presses an arrow key - converting the editor graph
+# of each picture the lightbox steps onto - cannot fetch it per step. A minute
+# is short enough that a node or model installed while the app is open shows up
+# on the next look rather than after a restart.
+OBJECT_INFO_CACHE_TTL_S = 60.0
+_object_info_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _forget_cached_object_info() -> None:
+    """Drop the cached maps. For tests, which change what ComfyUI answers."""
+    _object_info_cache.clear()
+
+
+def _read_object_info(
+    comfyui_url: str, *, cached: bool = False
+) -> tuple[dict | None, str | None]:
     """Return ``(object_info, error)``; ``(None, why)`` when ComfyUI cannot be asked.
 
     Kept apart from :func:`_inspect_graph` so one fetch can serve both the
     pre-flight and a LoRA swap or insertion on the same run, and so the swap
     can be applied *before* the graph is judged.
+
+    ``cached`` reuses a map read in the last minute. **Only for reading an
+    editor graph**, which needs the map to be readable at all; never for
+    deciding whether a graph may run, where the question is what ComfyUI has
+    now. A failure is not cached, so a ComfyUI that comes back up is picked up
+    at once.
     """
+    if cached:
+        entry = _object_info_cache.get(comfyui_url)
+        if (
+            entry is not None
+            and (time.monotonic() - entry[0]) < OBJECT_INFO_CACHE_TTL_S
+        ):
+            return entry[1], None
     try:
-        return fetch_object_info(comfyui_url), None
+        payload = fetch_object_info(comfyui_url)
     except RuntimeError as exc:
         logger.info(
             "[comfyui] Recipe pre-flight skipped, ComfyUI not reachable at %s: %s",
@@ -1046,6 +1152,9 @@ def _read_object_info(comfyui_url: str) -> tuple[dict | None, str | None]:
             exc,
         )
         return None, str(exc)
+    if cached:
+        _object_info_cache[comfyui_url] = (time.monotonic(), payload)
+    return payload, None
 
 
 def _inspect_graph(
@@ -1265,6 +1374,15 @@ class ComfyUIPictureRecipeResponse(BaseModel):
     # "a1111" for a picture whose recipe is A1111 infotext.
     source: str = "comfyui"
     summary: Optional[str] = None
+    # True when the graph behind this answer was rebuilt from the picture's
+    # EDITOR chunk rather than read from the API one ComfyUI executed. It is a
+    # faithful rebuild or no rebuild at all, but it is a rebuild, and a reader
+    # deciding whether to trust a settings value is entitled to know.
+    converted_from_editor_graph: bool = False
+    # Why an editor graph could not be rebuilt, one sentence each - empty for
+    # every other answer. Read by the Recipe tab, which prints them under its
+    # refusal to run.
+    conversion_problems: list[str] = []
     positive_prompt: Optional[str] = None
     negative_prompt: Optional[str] = None
     seed: Optional[int] = None
@@ -1748,8 +1866,16 @@ def create_router(server) -> APIRouter:
             "Reports whether a picture carries a replayable recipe - the "
             "embedded API-format `prompt` chunk, i.e. the graph the ComfyUI "
             "server actually executed - and pre-flights it against the target "
-            "ComfyUI's /object_info. The UI `workflow` chunk is deliberately "
-            "NOT considered: it is not submittable and is never converted. "
+            "ComfyUI's /object_info. A picture carrying only the editor "
+            "`workflow` chunk is converted to an API prompt against that same "
+            "/object_info and answers exactly like one that carried the API "
+            "chunk, with `converted_from_editor_graph: true`; a graph that "
+            "cannot be rebuilt exactly is NOT approximated, and answers "
+            '`available: false` with `reason: "editor_graph"`, its prompt and '
+            "models still filled in and `conversion_problems` naming what "
+            "could not be read. That conversion needs /object_info, so it is "
+            "the one case where `preflight=false` still reads ComfyUI (from a "
+            "one-minute cache). "
             "A picture with no graph but with A1111 infotext answers from that "
             'instead, as `source: "a1111"` with `available: false`: its recipe '
             "is readable but not submittable to ComfyUI. "
@@ -1782,9 +1908,47 @@ def create_router(server) -> APIRouter:
 
         embedded_metadata = _read_embedded_metadata(server, pic_id)
         prompt_graph = find_comfy_api_prompt(embedded_metadata)
+        user = server.auth.get_user_for_request(request)
+        comfyui_url = _comfyui_url(user)
+        object_info: dict | None = None
+        object_info_error: str | None = None
+        editor_graph = None
+        conversion_problems: list[str] = []
+        from_editor_graph = False
         if not prompt_graph:
-            # No graph is not the end of the question: an A1111 picture carries
-            # its recipe as text, and the same fields can be read off it.
+            # No API chunk is not the end of the question. The editor graph is
+            # the same workflow in the frontend's own serialisation, and
+            # ComfyUI's /object_info says how to read it - so it is converted
+            # here rather than declared unreadable.
+            #
+            # **This is the one case `preflight=false` still costs a round
+            # trip**, because without the map there is nothing to report at
+            # all, not merely nothing to judge. The map is reused for a minute
+            # so walking the filmstrip does not re-fetch several megabytes per
+            # arrow key.
+            editor_graph = find_comfy_workflow(embedded_metadata)
+            if is_ui_graph(editor_graph):
+                object_info, object_info_error = _read_object_info(
+                    comfyui_url, cached=True
+                )
+                prompt_graph, conversion_problems = convert_ui_graph_to_api(
+                    editor_graph, object_info
+                )
+                from_editor_graph = prompt_graph is not None
+        if not prompt_graph:
+            if is_ui_graph(editor_graph):
+                source_is_imported, source_label = _picture_source_origin(
+                    server, pic_id
+                )
+                return {
+                    **_editor_graph_recipe_payload(editor_graph, conversion_problems),
+                    "source_is_imported": source_is_imported,
+                    "source_label": source_label,
+                    "workflow_key": _picture_workflow_key(server, pic_id),
+                    **_recipe_extras(server, request, pic_id, None),
+                }
+            # An A1111 picture carries its recipe as text, and the same fields
+            # can be read off it.
             a1111 = reduce_a1111(embedded_metadata)
             if a1111 is None:
                 return {"available": False, "reason": "no_prompt_chunk"}
@@ -1797,18 +1961,16 @@ def create_router(server) -> APIRouter:
                 **_recipe_extras(server, request, pic_id, None),
             }
 
-        user = server.auth.get_user_for_request(request)
-        comfyui_url = _comfyui_url(user)
-
         graph = sanitize_prompt_graph(prompt_graph)
         gen_info = extract_generation_info(graph)
         extras = extract_recipe_extras(graph)
         stats = summarize_comfy_workflow(graph)
-        object_info, object_info_error = (
-            _read_object_info(comfyui_url)
-            if preflight
-            else (None, "the pre-flight was not asked for")
-        )
+        if not from_editor_graph:
+            object_info, object_info_error = (
+                _read_object_info(comfyui_url)
+                if preflight
+                else (None, "the pre-flight was not asked for")
+            )
         preflight, seed_targets = _inspect_graph(graph, object_info, object_info_error)
         source_is_imported, source_label = _picture_source_origin(server, pic_id)
         # A graph that calls back into PixlStash cannot be replayed as "a
@@ -1828,7 +1990,15 @@ def create_router(server) -> APIRouter:
                 else (None if seed_targets else "no_seed_input")
             ),
             "source": "comfyui",
-            "summary": f"API Workflow · {stats['node_count']} nodes",
+            # Named for the chunk it came out of, because the two are not
+            # equally trustworthy: the API chunk is what ComfyUI executed, the
+            # editor one is what PixlStash rebuilt from the editor's view.
+            "summary": (
+                f"Editor Workflow · {stats['node_count']} nodes"
+                if from_editor_graph
+                else f"API Workflow · {stats['node_count']} nodes"
+            ),
+            "converted_from_editor_graph": from_editor_graph,
             "positive_prompt": gen_info["positive_prompt"],
             "negative_prompt": extras["negative_prompt"],
             "settings": extras["settings"],

@@ -207,6 +207,11 @@
         <p v-if="runReason" :id="runReasonId" class="recipe-run-reason">
           {{ runReason }}
         </p>
+        <ul v-if="conversionProblems.length" class="recipe-run-problems">
+          <li v-for="problem in conversionProblems" :key="problem">
+            {{ problem }}
+          </li>
+        </ul>
         <!-- Only when it is not the sentence above: the two refusals coincide
              on a read-only session, and printing it twice would read as two
              separate problems. -->
@@ -322,7 +327,19 @@ const RUN_REASONS = {
     "same picture.",
   pixlstash_nodes:
     "This graph calls back into PixlStash, so PixlStash will not replay it.",
+  editor_graph:
+    "This picture carries only ComfyUI's editor view of its workflow, and " +
+    "PixlStash could not rebuild that into a graph ComfyUI can run.",
 };
+
+/**
+ * What stopped the rebuild, one sentence each.
+ *
+ * Printed under the refusal because every one of them is actionable in a way
+ * the refusal itself is not: an uninstalled node pack is a thing to go and
+ * install, and "could not rebuild it" on its own sends the reader nowhere.
+ */
+const conversionProblems = computed(() => props.recipe?.conversionProblems || []);
 
 const runReason = computed(() => {
   if (!props.recipe) return null;
@@ -914,6 +931,16 @@ async function copyPrompt() {
 /* The same secondary ink the rest of the pane's prose uses. */
 .recipe-run-reason {
   margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+/* The same voice as the refusal above it, indented as its detail rather than
+   set apart as a warning: these are things to go and fix, not an alarm. */
+.recipe-run-problems {
+  margin: 0;
+  padding-left: var(--space-4);
   font-size: var(--text-xs);
   line-height: var(--leading-snug);
   color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));

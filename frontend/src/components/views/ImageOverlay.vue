@@ -1096,17 +1096,35 @@ const sidebarOpen = ref(true);
 // The choice is remembered as the lightbox walks the filmstrip: somebody
 // reading recipes wants the next picture's recipe, not its description.
 //
-// **Never disabled, on a picture with no recipe either.** The design gives an
-// A1111 picture "the same Recipe tab", and a disabled tab is a dead control: a
-// disabled button fires no pointer events, so the tooltip explaining why would
-// never open for a mouse. The panel says it in a sentence instead, which is
-// also what stops the tab appearing and disappearing under the cursor as the
-// reader walks the filmstrip.
-const sidebarTab = ref("info");
-const sidebarTabs = [
+// **Never disabled - absent instead, on a picture that has no recipe at all.**
+// A disabled tab is a dead control: a disabled button fires no pointer events,
+// so the tooltip explaining why would never open for a mouse. The design gives
+// an A1111 picture "the same Recipe tab" and it still gets one, because it HAS
+// a recipe; a holiday photo has nothing behind the tab but a sentence saying
+// so, and a tab whose only content is its own denial is not worth a tab.
+const chosenSidebarTab = ref("info");
+// Held across the read rather than cleared with the recipe: clearing it would
+// take the tab away for the length of one file read on every filmstrip step
+// and put it back, under the reader's cursor.
+const recipeTabShown = ref(false);
+// The reader's CHOICE is remembered even while the tab it names is gone, so
+// stepping over a photo in a run of ComfyUI pictures does not silently move
+// them to Info for the rest of the walk.
+const sidebarTab = computed({
+  get: () =>
+    chosenSidebarTab.value === "recipe" && !recipeTabShown.value
+      ? "info"
+      : chosenSidebarTab.value,
+  set: (value) => {
+    chosenSidebarTab.value = value;
+  },
+});
+const sidebarTabs = computed(() => [
   { value: "info", label: "Info", icon: "mdi-information-outline" },
-  { value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" },
-];
+  ...(recipeTabShown.value
+    ? [{ value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" }]
+    : []),
+]);
 
 const chromeHidden = ref(false);
 const chromeRevealTimestamp = ref(0);
@@ -3408,14 +3426,19 @@ async function fetchComfyWorkflow(imageId) {
             settings: data.settings || {},
             inputs: data.inputs || [],
             topologyHash: data.topology_hash || null,
+            // Why the editor graph could not be rebuilt into something
+            // runnable. Empty for every other answer.
+            conversionProblems: data.conversion_problems || [],
           }
         : null;
+    recipeTabShown.value = comfyMetadata.value !== null;
   } catch (e) {
     // The recipe read answers 200 for a picture with no recipe, so a 404 here
     // means the picture or its file is gone, which is worth a line.
     console.error("Failed to fetch the picture's recipe:", e);
     if (comfyWorkflowRequestId !== requestId) return;
     comfyMetadata.value = null;
+    recipeTabShown.value = false;
   }
 }
 
@@ -4017,6 +4040,7 @@ watch(
       videoError.value = null;
       fullImageErrorSrc.value = "";
       comfyMetadata.value = null;
+      recipeTabShown.value = false;
     }
   },
   { immediate: true },

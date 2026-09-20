@@ -878,3 +878,382 @@ def test_the_lightbox_read_asks_comfyui_nothing(env, monkeypatch):
     r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe")
     assert r.status_code == 200, r.text
     assert r.json()["preflight"]["checked"] is True
+
+
+# ── The editor graph ────────────────────────────────────────────────────────
+#
+# A ComfyUI picture does not always carry the API `prompt` chunk: a file
+# exported from the editor, or re-saved by a node that writes only `workflow`,
+# carries the editor's own serialisation instead. Those pictures used to answer
+# `no_prompt_chunk` - the same answer as a holiday photo - and so lost their
+# whole recipe and the offer to run it again.
+#
+# They are now converted against ComfyUI's own `/object_info`, exactly or not
+# at all. The conversion itself is covered in
+# `tests/test_comfyui_ui_graph_conversion.py`; what is asserted here is the
+# route's half: that the picture answers like an API-chunk one when the
+# rebuild works, that it still fills in the recipe and names the reason when it
+# does not, and that a run submits the rebuilt graph rather than the file's.
+
+# Declares the wiring as well as the widgets, so the rebuilt graph is a real
+# graph and not a set of loose values.
+EDITOR_OBJECT_INFO = {
+    "CheckpointLoaderSimple": {
+        "input": {"required": {"ckpt_name": [["sd_xl_base_1.0.safetensors"], {}]}},
+        "input_order": {"required": ["ckpt_name"]},
+    },
+    "CLIPTextEncode": {
+        "input": {"required": {"text": ["STRING", {"multiline": True}]}},
+        "input_order": {"required": ["text"]},
+    },
+    "KSampler": {
+        "input": {
+            "required": {
+                "model": ["MODEL", {}],
+                "seed": ["INT", {"default": 0, "control_after_generate": True}],
+                "steps": ["INT", {"default": 20}],
+                "positive": ["CONDITIONING", {}],
+            }
+        },
+        "input_order": {"required": ["model", "seed", "steps", "positive"]},
+    },
+    "SaveImage": {
+        "input": {
+            "required": {
+                "images": ["IMAGE", {}],
+                "filename_prefix": ["STRING", {}],
+            }
+        },
+        "input_order": {"required": ["images", "filename_prefix"]},
+    },
+}
+
+# The same picture as RECIPE_GRAPH, in the editor's serialisation: widgets in a
+# positional array with the control-after-generate row between the seed and the
+# steps, and wires in a link table.
+EDITOR_GRAPH = {
+    "last_node_id": 9,
+    "last_link_id": 3,
+    "nodes": [
+        {
+            "id": 4,
+            "type": "CheckpointLoaderSimple",
+            "mode": 0,
+            "inputs": [],
+            "outputs": [{"name": "MODEL", "type": "MODEL", "links": [1]}],
+            "widgets_values": ["sd_xl_base_1.0.safetensors"],
+        },
+        {
+            "id": 6,
+            "type": "CLIPTextEncode",
+            "mode": 0,
+            "inputs": [],
+            "outputs": [{"name": "CONDITIONING", "type": "CONDITIONING", "links": [2]}],
+            "widgets_values": ["a cat in a hat"],
+        },
+        {
+            "id": 3,
+            "type": "KSampler",
+            "mode": 0,
+            "inputs": [
+                {"name": "model", "type": "MODEL", "link": 1},
+                {"name": "positive", "type": "CONDITIONING", "link": 2},
+            ],
+            "outputs": [{"name": "LATENT", "type": "LATENT", "links": [3]}],
+            "widgets_values": [12345, "randomize", 20],
+        },
+        {
+            "id": 9,
+            "type": "SaveImage",
+            "mode": 0,
+            "inputs": [{"name": "images", "type": "IMAGE", "link": 3}],
+            "outputs": [],
+            "widgets_values": ["ComfyUI"],
+        },
+    ],
+    "links": [
+        [1, 4, 0, 3, 0, "MODEL"],
+        [2, 6, 0, 3, 1, "CONDITIONING"],
+        [3, 3, 0, 9, 0, "IMAGE"],
+    ],
+}
+
+# What the editor graph above must rebuild into, in full. Asserted whole rather
+# than field by field: the failure this guards against is a value landing on
+# the wrong input, which a spot-check of two fields would not see.
+EXPECTED_REBUILD = {
+    "4": {
+        "inputs": {"ckpt_name": "sd_xl_base_1.0.safetensors"},
+        "class_type": "CheckpointLoaderSimple",
+        "_meta": {"title": "CheckpointLoaderSimple"},
+    },
+    "6": {
+        "inputs": {"text": "a cat in a hat"},
+        "class_type": "CLIPTextEncode",
+        "_meta": {"title": "CLIPTextEncode"},
+    },
+    "3": {
+        "inputs": {
+            "model": ["4", 0],
+            "seed": 12345,
+            "steps": 20,
+            "positive": ["6", 0],
+        },
+        "class_type": "KSampler",
+        "_meta": {"title": "KSampler"},
+    },
+    "9": {
+        "inputs": {"images": ["3", 0], "filename_prefix": "ComfyUI"},
+        "class_type": "SaveImage",
+        "_meta": {"title": "SaveImage"},
+    },
+}
+
+
+def _editor_png_bytes(graph: dict, colour: tuple[int, int, int]) -> bytes:
+    """A PNG carrying *graph* in the ``workflow`` chunk and nothing else.
+
+    Deliberately no ``prompt`` chunk: this is the file the whole section is
+    about, and adding one would let the route answer from it instead.
+    """
+    img = Image.new("RGB", (256, 256), colour)
+    meta = PngInfo()
+    meta.add_text("workflow", json.dumps(graph))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", pnginfo=meta)
+    return buf.getvalue()
+
+
+@pytest.fixture(scope="module")
+def editor_env():
+    """A server holding one picture whose only graph is the editor's.
+
+    Module-scoped: standing the server up costs more than every assertion in
+    this section put together, and none of them writes to the picture.
+    """
+    temp_dir = tempfile.TemporaryDirectory()
+    config_path = os.path.join(temp_dir.name, "server-config.json")
+    with open(config_path, "w") as fh:
+        fh.write(json.dumps({"port": 8000}))
+    server = Server(config_path)
+    server.__enter__()
+    try:
+        client = TestClient(server.api, raise_server_exceptions=True)
+        r = client.post(
+            f"{API}/login",
+            json={"username": "owner", "password": "example-owner-password"},
+        )
+        assert r.status_code == 200, r.text
+        files = [
+            (
+                "file",
+                (
+                    "editor-only.png",
+                    _editor_png_bytes(EDITOR_GRAPH, (40, 160, 90)),
+                    "image/png",
+                ),
+            )
+        ]
+        st = upload_pictures_and_wait(client, files, timeout_s=60)
+        assert st["status"] == "completed", st
+        r = client.get(f"{API}/pictures")
+        assert r.status_code == 200, r.text
+        picture_ids = [p["id"] for p in r.json()]
+        assert picture_ids, "The editor-graph picture did not import"
+        yield server, client, picture_ids[0]
+    finally:
+        server.__exit__(None, None, None)
+        temp_dir.cleanup()
+        gc.collect()
+
+
+@pytest.fixture(autouse=True)
+def _forget_object_info():
+    """Drop the route's `/object_info` cache around every test in this file.
+
+    The editor read reuses a map for a minute, and these tests change what
+    ComfyUI answers between them - so without this a test asserting "ComfyUI is
+    unreachable" would be served the previous test's map and pass for the wrong
+    reason.
+    """
+    comfyui_module._forget_cached_object_info()
+    yield
+    comfyui_module._forget_cached_object_info()
+
+
+def _editor_comfyui_reachable(monkeypatch):
+    monkeypatch.setattr(
+        comfyui_module, "fetch_object_info", lambda url: dict(EDITOR_OBJECT_INFO)
+    )
+
+
+class TestAnEditorGraphIsRecognised:
+    def test_it_answers_like_a_picture_that_carried_the_api_chunk(
+        self, editor_env, monkeypatch
+    ):
+        _server, client, pic_id = editor_env
+        _editor_comfyui_reachable(monkeypatch)
+        r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        # Not `no_prompt_chunk`, which is what this picture used to answer.
+        assert body["available"] is True, body
+        assert body["reason"] is None
+        assert body["source"] == "comfyui"
+        assert body["converted_from_editor_graph"] is True
+        assert body["conversion_problems"] == []
+        # Named for the chunk it came out of, so a reader can tell a rebuilt
+        # graph from the one ComfyUI executed.
+        assert body["summary"] == "Editor Workflow · 4 nodes"
+        assert body["positive_prompt"] == "a cat in a hat"
+        assert body["seed"] == 12345
+        assert body["seed_text"] == "12345"
+        assert body["settings"]["steps"] == 20
+        assert body["models"] == ["sd_xl_base_1.0.safetensors"]
+        assert body["node_classes"] == EXPECTED_CLASSES
+        assert body["seed_inputs"], "a rebuilt graph must still offer a new seed"
+
+    def test_the_editor_read_does_ask_comfyui_even_with_preflight_off(
+        self, editor_env, monkeypatch
+    ):
+        """The one exception to `?preflight=false` costing no network.
+
+        Without `/object_info` there is nothing to report about an editor
+        graph at all - not merely nothing to judge - so the flag cannot switch
+        this read off. Asserted rather than assumed, because the sibling test
+        above asserts the opposite for an API-chunk picture and the two
+        contracts have to be told apart.
+        """
+        _server, client, pic_id = editor_env
+        asked = []
+
+        def counted(url):
+            asked.append(url)
+            return dict(EDITOR_OBJECT_INFO)
+
+        monkeypatch.setattr(comfyui_module, "fetch_object_info", counted)
+        r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
+        assert r.status_code == 200, r.text
+        assert len(asked) == 1
+        # And the second read is served from the cache, which is what makes
+        # walking the filmstrip affordable.
+        r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
+        assert r.status_code == 200, r.text
+        assert len(asked) == 1, "the map must be reused, not re-fetched per step"
+
+    def test_a_rebuild_that_cannot_be_exact_still_reports_the_recipe(
+        self, editor_env, monkeypatch
+    ):
+        """The distinction the whole change turns on.
+
+        "Nothing here was made in ComfyUI" and "this is a ComfyUI picture
+        PixlStash cannot hand back to ComfyUI" are two different answers, and
+        only the second one is true of this file.
+        """
+        _server, client, pic_id = editor_env
+        partial = {
+            k: v for k, v in EDITOR_OBJECT_INFO.items() if k != "CheckpointLoaderSimple"
+        }
+        monkeypatch.setattr(comfyui_module, "fetch_object_info", lambda url: partial)
+        r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["available"] is False
+        assert body["reason"] == "editor_graph"
+        assert body["source"] == "comfyui"
+        assert body["converted_from_editor_graph"] is False
+        assert body["conversion_problems"] == [
+            "this ComfyUI has no node class 'CheckpointLoaderSimple'"
+        ]
+        # The recipe itself is still there: read off the editor graph, which is
+        # what the file actually says.
+        assert body["summary"] == "Editor Workflow · 4 nodes · 3 links"
+        assert body["positive_prompt"] == "a cat in a hat"
+        assert body["models"] == ["sd_xl_base_1.0.safetensors"]
+
+    def test_an_unreachable_comfyui_is_a_refusal_not_a_guess(
+        self, editor_env, monkeypatch
+    ):
+        _server, client, pic_id = editor_env
+        _comfyui_unreachable(monkeypatch)
+        r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["reason"] == "editor_graph"
+        assert body["conversion_problems"] == [
+            "PixlStash could not ask ComfyUI which nodes it has"
+        ]
+        assert body["positive_prompt"] == "a cat in a hat"
+
+
+class TestAnEditorGraphCanBeRunAgain:
+    def test_the_run_submits_the_rebuilt_graph(self, editor_env, monkeypatch):
+        _server, client, pic_id = editor_env
+        _editor_comfyui_reachable(monkeypatch)
+        submitted = _capture_submissions(monkeypatch)
+        r = client.post(
+            f"{API}/comfyui/run_recipe",
+            json={
+                "picture_id": pic_id,
+                "seed_mode": "fixed",
+                "seed": 777,
+                "stack": False,
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert len(submitted) == 1
+        graph = submitted[0]
+        # The seed is the one the request pinned; everything else is the
+        # rebuild, asserted whole.
+        assert graph["3"]["inputs"]["seed"] == 777
+        expected = json.loads(json.dumps(EXPECTED_REBUILD))
+        expected["3"]["inputs"]["seed"] = 777
+        assert graph == expected
+
+    def test_a_graph_that_cannot_be_rebuilt_is_refused_by_name(
+        self, editor_env, monkeypatch
+    ):
+        """Refused with what to go and fix, not with "no executable workflow".
+
+        The file HAS a workflow; what it does not have is a node class this
+        ComfyUI can run, and the two send the reader to different places.
+        """
+        _server, client, pic_id = editor_env
+        partial = {k: v for k, v in EDITOR_OBJECT_INFO.items() if k != "KSampler"}
+        monkeypatch.setattr(comfyui_module, "fetch_object_info", lambda url: partial)
+        submitted = _capture_submissions(monkeypatch)
+        r = client.post(
+            f"{API}/comfyui/run_recipe", json={"picture_id": pic_id, "stack": False}
+        )
+        assert r.status_code == 400, r.text
+        assert "KSampler" in r.json()["detail"]
+        assert submitted == [], "nothing may be submitted when the rebuild failed"
+
+    def test_the_run_never_trusts_a_map_the_read_cached(self, editor_env, monkeypatch):
+        """A run decides what executes, so it asks ComfyUI itself every time.
+
+        The read may serve a minute-old map; a run that did the same could
+        submit a graph against node definitions that have since changed.
+        """
+        _server, client, pic_id = editor_env
+        _editor_comfyui_reachable(monkeypatch)
+        # Warm the read's cache.
+        assert (
+            client.get(
+                f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false"
+            ).status_code
+            == 200
+        )
+        asked = []
+
+        def counted(url):
+            asked.append(url)
+            return dict(EDITOR_OBJECT_INFO)
+
+        monkeypatch.setattr(comfyui_module, "fetch_object_info", counted)
+        _capture_submissions(monkeypatch)
+        r = client.post(
+            f"{API}/comfyui/run_recipe", json={"picture_id": pic_id, "stack": False}
+        )
+        assert r.status_code == 200, r.text
+        assert asked, "the run must read /object_info rather than reuse the cache"
