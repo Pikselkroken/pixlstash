@@ -63,13 +63,6 @@ const globalOpts = {
       Tooltip: {
         template: "<span><slot name='activator' :props='{}' /><slot /></span>",
       },
-      // Its own suite mounts it; real here it drags Vuetify's dialog provider
-      // into a suite that installs none. The stub records the model it was
-      // handed, which is the whole of what the grid is responsible for.
-      ModelWorksWithDialog: {
-        props: ["model"],
-        template: "<div class='ww-stub'>{{ model?.name }}</div>",
-      },
     },
   },
 };
@@ -84,13 +77,23 @@ function row(id, filename, fileKind = "adapter") {
     display_name: null,
     filename,
     base_model: null,
-    locations: [{ state: "present", folder_id: 1, folder_path: "/m", relpath: filename }],
+    locations: [
+      { state: "present", folder_id: 1, folder_path: "/m", relpath: filename },
+    ],
     attachments: [],
   };
 }
 
 function member(id, name, kind, extra = {}) {
-  return { id, name, kind, filename: name, file_size: 1000, ambiguous: false, ...extra };
+  return {
+    id,
+    name,
+    kind,
+    filename: name,
+    file_size: 1000,
+    ambiguous: false,
+    ...extra,
+  };
 }
 
 function combination(key, models, { recipes = 1, pictures = 1 } = {}) {
@@ -129,7 +132,9 @@ beforeEach(() => {
   window.localStorage.clear();
   listAdapters.mockReset().mockResolvedValue([]);
   listSupport.mockReset().mockResolvedValue([]);
-  fetchWorkflowSets.mockReset().mockResolvedValue({ combinations: [], no_set: [] });
+  fetchWorkflowSets
+    .mockReset()
+    .mockResolvedValue({ combinations: [], no_set: [] });
 });
 
 describe("the cards", () => {
@@ -137,7 +142,9 @@ describe("the cards", () => {
     const { wrapper } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],
       support: [row(2, "sdxl_vae", "vae")],
-      combinations: [combination("1,2", [CKPT, VAE], { recipes: 4, pictures: 12 })],
+      combinations: [
+        combination("1,2", [CKPT, VAE], { recipes: 4, pictures: 12 }),
+      ],
     });
 
     const cards = wrapper.findAll('[data-testid="model-set-card"]');
@@ -152,8 +159,15 @@ describe("the cards", () => {
     });
 
     expect(wrapper.text()).toContain("nothing to fold");
-    // And offers no ▸, because there is nothing behind it.
-    expect(wrapper.find('[role="row"]').attributes("aria-expanded")).toBeUndefined();
+    // And no ▸ at all, because there is nothing behind it. The row's existence
+    // is asserted first, so this cannot pass on an absent element, and the two
+    // stack marks are asserted absent rather than only the ARIA attribute.
+    // Not `row`, which is this suite's row-fixture helper.
+    const cardRow = wrapper.find('[role="row"]');
+    expect(cardRow.exists()).toBe(true);
+    expect(cardRow.attributes("aria-expanded")).toBeUndefined();
+    expect(wrapper.find(".msc__toggle").exists()).toBe(false);
+    expect(wrapper.find(".msc__badge--start").exists()).toBe(false);
   });
 
   it("opens the folded combinations under the card, listing every file", async () => {
@@ -184,7 +198,10 @@ describe("the cards", () => {
       rows: [row(1, "realvisXL_v5")],
       support: [row(2, "sdxl_vae", "vae")],
       combinations: [
-        combination("1,2", [CKPT, member(2, "sdxl_vae", "vae", { ambiguous: true })]),
+        combination("1,2", [
+          CKPT,
+          member(2, "sdxl_vae", "vae", { ambiguous: true }),
+        ]),
       ],
     });
     store.toggleSet("1,2");
@@ -197,7 +214,7 @@ describe("the cards", () => {
     expect(combo.find(".combo__warn").exists()).toBe(true);
   });
 
-  it("asks a file what else it has run with", async () => {
+  it("asks a file what else it has run with, naming that file", async () => {
     const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5")],
       support: [row(2, "sdxl_vae", "vae")],
@@ -208,7 +225,53 @@ describe("the cards", () => {
 
     await wrapper.findAll(".combo__filename")[1].trigger("click");
 
-    expect(wrapper.find(".ww-stub").text()).toBe("sdxl_vae");
+    // The MODEL, by identity, not a rendered stub: the shelf owns the one
+    // dialog, so what this grid is responsible for is handing up the right file.
+    expect(wrapper.emitted("works-with")).toHaveLength(1);
+    expect(wrapper.emitted("works-with")[0][0]).toMatchObject({
+      id: 2,
+      name: "sdxl_vae",
+      kind: "vae",
+    });
+  });
+
+  it("reaches the same answer from the keyboard, which has no button to press", async () => {
+    // Every file button inside a combination is at `tabindex="-1"` because the
+    // grid owns Tab, so Enter on a row is the ONLY keyboard route to the
+    // companions of a file. Without it the dialog is pointer-only.
+    const { wrapper } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [combination("1,2", [CKPT, VAE])],
+    });
+
+    await wrapper
+      .find('[role="treegrid"]')
+      .trigger("keydown", { key: "Enter" });
+
+    // A card with nothing to fold answers for the file it is NAMED after.
+    expect(wrapper.emitted("works-with")[0][0]).toMatchObject({
+      id: 1,
+      name: "realvisXL_v5",
+    });
+  });
+
+  it("opens and closes a stack from the keyboard", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5"), row(3, "filmgrain_xl")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [
+        combination("1,2", [CKPT, VAE], { pictures: 20 }),
+        combination("1,2,3", [CKPT, VAE, LORA], { pictures: 5 }),
+      ],
+    });
+    const grid = wrapper.find('[role="treegrid"]');
+
+    await grid.trigger("keydown", { key: "Enter" });
+    expect(store.openSetKey).toBe("1,2");
+
+    await grid.trigger("keydown", { key: "Escape" });
+    expect(store.openSetKey).toBe("");
   });
 });
 
@@ -224,7 +287,13 @@ describe("the models no recipe names", () => {
     const ghost = wrapper.find(".msg__ghost");
     expect(ghost.exists()).toBe(true);
     expect(ghost.text()).toContain("In no set — 1 model");
-    expect(ghost.text()).toContain("Nothing follows from that");
+    // The NARROW claim, and no more: `no_set` means no kept picture here was
+    // made with them, which is not "no recipe names them" and is not a verdict.
+    expect(ghost.text()).toContain("No kept picture in this library was made");
+    expect(ghost.text()).toContain(
+      "nothing here rules out what they work with",
+    );
+    expect(ghost.text()).not.toContain("No recipe in this library binds");
   });
 
   it("is narrowed by Show, like every other card", async () => {
@@ -275,7 +344,11 @@ describe("what this screen does not offer", () => {
 
 describe("when there is nothing to group", () => {
   it("says no picture records its models, and does not call that a verdict", async () => {
-    const { wrapper } = await mountGrid({ rows: [], combinations: [], noSet: [] });
+    const { wrapper } = await mountGrid({
+      rows: [],
+      combinations: [],
+      noSet: [],
+    });
 
     expect(wrapper.text()).toContain("No picture in this library records");
     expect(wrapper.find('[role="treegrid"]').exists()).toBe(false);

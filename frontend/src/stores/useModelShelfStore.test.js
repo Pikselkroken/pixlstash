@@ -2508,10 +2508,61 @@ describe("the workflow sets", () => {
 
   it("reads the sets once, however many times something asks", async () => {
     const store = shelfWithASet();
+    await store.fetchRows();
     await store.loadWorkflowSets();
     await store.loadWorkflowSets();
     expect(fetchWorkflowSets).toHaveBeenCalledTimes(1);
-    expect(store.setStacks).toHaveLength(0); // no rows fetched yet
+    // With the rows in hand, so "once" is not standing in for "the payload was
+    // never used": the second call found the first one's answer, not an empty
+    // grid.
+    expect(store.setStacks).toHaveLength(1);
+  });
+
+  it("drops a second read made while the first is still on the wire", async () => {
+    // Reachable: the grid asks on mount and the dialog asks when it opens, and
+    // each request is a window over every kept picture in the vault.
+    const store = shelfWithASet();
+    await store.fetchRows();
+    await Promise.all([store.loadWorkflowSets(), store.loadWorkflowSets()]);
+    expect(fetchWorkflowSets).toHaveBeenCalledTimes(1);
+  });
+
+  it("finds a set that reached the shelf through a run's second step", async () => {
+    // **`visibleRows` is not a list of models.** A run is drawn as its cover, so
+    // a stacked row's `id` is the cover's and the rest live in `memberIds`.
+    // Matching a combination's members on `row.id` alone dropped every set that
+    // reached the shelf through any other step - and dropped the model from
+    // `no_set` too, so it appeared on no card at all and the grid's empty state
+    // claimed no picture recorded it. That is the one outcome the payload is
+    // built to prevent.
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, sha256: "a".repeat(64), filename: "cover.st", stack_id: 9 }),
+      adapter({ id: 2, sha256: "b".repeat(64), filename: "step-two.st", stack_id: 9 }),
+      adapter({ id: 3, sha256: "c".repeat(64), filename: "lonely.st", stack_id: 9 }),
+    ]);
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        {
+          key: "2",
+          models: [{ id: 2, name: "step-two.st", kind: "checkpoint" }],
+          recipes: 2,
+          picture_count: 500,
+          covers: [],
+        },
+      ],
+      no_set: [3],
+    });
+    const store = useModelShelfStore();
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+
+    // One drawn row, three models behind it.
+    expect(store.visibleRows.map((row) => row.id)).toEqual([1]);
+    expect(store.visibleRows[0].memberIds).toEqual([1, 2, 3]);
+
+    expect(store.visibleCombinations).toHaveLength(1);
+    expect(store.setStacks[0].card.pictures).toBe(500);
+    expect(store.noSetRows.map((row) => row.id)).toEqual([3]);
   });
 
   it("draws a card per stack and one for the models no recipe names", async () => {
@@ -2663,7 +2714,9 @@ describe("the workflow sets", () => {
       checkpoint: 1,
     });
     store.setView({ fold: "none" });
-    expect(store.setStacks).toHaveLength(2);
+    // By identity: the two cards are the two combinations, each on its own.
+    expect(store.setStacks.map((stack) => stack.key)).toEqual(["1,2", "1,2,3"]);
+    expect(store.setStacks.map((stack) => stack.card.size)).toEqual([1, 1]);
     expect(fetchWorkflowSets).toHaveBeenCalledTimes(1);
   });
 

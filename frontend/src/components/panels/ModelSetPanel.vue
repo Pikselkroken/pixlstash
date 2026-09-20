@@ -112,6 +112,8 @@ const props = defineProps({
   cursorKey: { type: String, default: "" },
   /** Some folding is in force, so *Don't fold* has something to undo. */
   foldable: { type: Boolean, default: false },
+  /** The grid's column gutter in px, so the members line up with the cards. */
+  gap: { type: Number, default: 12 },
 });
 
 const emit = defineEmits(["close", "unfold", "pick"]);
@@ -133,7 +135,7 @@ const note = computed(() =>
 // column the caret falls back to the shipped `--start` class instead, so nothing
 // here hand-copies that rule's inset.
 const notchStyle = computed(() => {
-  const style = { "--wf-columns": props.columns };
+  const style = { "--wf-columns": props.columns, "--wf-gap": `${props.gap}px` };
   if (props.columns > 1) {
     style["--notch"] = `${((props.columnIndex + 0.5) / props.columns) * 100}%`;
   }
@@ -205,7 +207,11 @@ const notchStyle = computed(() => {
 .msp__grid {
   display: grid;
   grid-template-columns: repeat(var(--wf-columns), minmax(0, 1fr));
-  gap: var(--space-4);
+  /* The GRID's own gutter, inherited through `--wf-gap`, not `--space-4`: the
+     panel shares the grid's column count so that a member's index names the
+     column it is drawn in, and a different gutter breaks the alignment that
+     makes true. Falls back to `--space-4` for a host that sets neither. */
+  gap: var(--wf-gap, var(--space-4));
   padding: var(--space-4);
   align-items: start;
 }

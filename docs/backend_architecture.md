@@ -2927,19 +2927,33 @@ band can only put a row in one place.
   because `unknown` is a first-class answer on this shelf.
 - **Members arrive in ONE order and the client reads its head.** Checkpoint,
   then `unknown`, then VAE, text encoder, adapter, engine. The head is what the
-  set is named after, so a Flux or Wan set with no `checkpoint` row is named by
-  its diffusion file without the client inventing a second fallback rule.
+  set is named after, so the naming rule is one decision in one place rather than
+  two that can disagree. `unknown` sits second for that reason and no other:
+  `file_kind` is closed to six values and there is no diffusion kind, so a Flux
+  or Wan diffusion file arrives as `checkpoint` (most of them) or as `unknown`
+  (the rest), and second place is what keeps such a set named after its model
+  rather than after whichever VAE sorted first. It is a ranking, not a claim
+  about what the file is.
 - **Counts and covers are two vault queries, not one per card.**
   `recipe_picture_counts` is the existing `GROUP BY workflow_structural_hash`;
   the covers come from `variant_cover_candidates`, the workflows grid's own
   `ROW_NUMBER()` window, and the per-combination pick re-sorts them with
   `cover_order` — moved out of `workflow_card_service` to
   `workflow_library_service`, beside the `CoverCandidate` it orders, so both
-  grids treat a NULL score the same way the window did.
+  grids treat a NULL score the same way the window did. **The window is new work
+  on this screen and is the expensive half**: `fetch_picture_counts`, which every
+  shelf list already runs, runs only the `GROUP BY` — so this is one more pass
+  over the kept pictures than the shelf used to pay, on what is now the default
+  screen, and it is the figure to watch if the grid ever feels slow.
 - **Nothing is stored.** Membership overlaps and is derived per request; no
   column on `model` names a set, and there is no table to migrate. The cost is
-  one pass over `workflow_recipe_asset` plus the two vault queries, which is the
-  cost `fetch_picture_counts` already pays on every shelf list.
+  four unbounded hub reads (the `model` table twice — once for the asset index,
+  once for the member rows — `workflow_recipe_asset` whole, and the pending-hash
+  probe) plus the two vault queries above. None of them is paginated, because
+  every one of them is aggregated into the answer: a page of combinations cannot
+  be computed from a page of assets. The read is bounded by the size of the shelf
+  and the library rather than by a parameter, which is the same bound
+  `fetch_picture_counts` and the workflows grid already accept.
 - **The fold is the client's.** Near-identical combinations are folded into
   stacks in `frontend/src/utils/workflowSets.js`, so the toolbar can price every
   fold setting in cards without another request and *Don't fold* costs nothing.

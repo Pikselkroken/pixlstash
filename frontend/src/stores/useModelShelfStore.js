@@ -69,10 +69,16 @@ const VIEW_KEY = "pixlstash:modelShelfView";
  *
  * Bumped to 2 for #1438, where `groupBy` changed DEFAULT rather than shape:
  * every blob written before this carries `groupBy: "none"` whether anyone chose
- * it or not, so reading them per field would leave the new default reaching
- * only people who had never opened the shelf. Same trade
- * `FILTERS_SCHEMA_VERSION` documents, and the cost is the same: a remembered
- * sort is forgotten once.
+ * it or not, so reading them per field would leave the new default reaching only
+ * people who had never opened the shelf. Same trade `FILTERS_SCHEMA_VERSION`
+ * documents.
+ *
+ * **The cost is the WHOLE blob, once.** `storedView` and `storedCollapsed` both
+ * fall back whole on a mismatch, so this also forgets the dragged column widths,
+ * the collapsed groups on every axis and `folderLayout` - not only the sort. Say
+ * that at its real size wherever it is described: a reader who has spent time
+ * sizing the Name column deserves to know it is going, and the honest figure is
+ * what makes the next person weigh a bump rather than reach for one.
  */
 const VIEW_SCHEMA_VERSION = 2;
 
@@ -1480,7 +1486,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * @param {{force?: boolean}} [options]
    */
   async function loadWorkflowSets({ force = false } = {}) {
-    if (setsLoaded.value && !force) return;
+    // Two guards, not one. `setsLoaded` drops a repeat AFTER the first read
+    // landed; `setsLoading` drops one made while it is still on the wire, which
+    // is the reachable case - the grid asks on mount and the dialog asks when it
+    // opens, and each request is a window over every kept picture in the vault.
+    // `force` overrides both: a scan has changed the answer.
+    if (!force && (setsLoaded.value || setsLoading.value)) return;
     const startedAt = (setsEpoch += 1);
     setsLoading.value = true;
     setsError.value = "";
@@ -1501,6 +1512,24 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }
 
   /**
+   * Every model the current `Show` selection leaves on screen, runs expanded.
+   *
+   * **`visibleRows` is not a list of models.** `collapseStacks` draws a run as
+   * its COVER, so a stacked row's `id` is the cover's and the rest of the run
+   * lives in `memberIds`. Matching a combination's members against `row.id`
+   * therefore dropped every set that reached the shelf through a non-cover step
+   * of a run - and dropped its `no_set` entry with it, so the model appeared on
+   * no card at all and the grid's empty state claimed no picture recorded it.
+   * That is the one outcome `fetch_workflow_sets` is written to prevent.
+   *
+   * The `memberIds ?? [id]` fan-out is the same one `selectVisible` and
+   * `modelsBehind` already use for the same reason.
+   */
+  const shownModelIds = computed(
+    () => new Set(visibleRows.value.flatMap((row) => row.memberIds ?? [row.id])),
+  );
+
+  /**
    * The combinations the current `Show` selection leaves on screen.
    *
    * A combination survives when ANY of its members is visible, and then it is
@@ -1510,7 +1539,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * what a shown card contains.
    */
   const visibleCombinations = computed(() => {
-    const shown = new Set(visibleRows.value.map((row) => row.id));
+    const shown = shownModelIds.value;
     return workflowSets.value.combinations.filter((combination) =>
       (combination.models ?? []).some((model) => shown.has(model.id)),
     );
@@ -1542,7 +1571,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   const noSetRows = computed(() => {
     const loose = new Set(workflowSets.value.noSet);
-    return visibleRows.value.filter((row) => loose.has(row.id));
+    // The MEMBERS of a shown run, not the runs: a stack row is drawn as its
+    // cover, so filtering on `row.id` alone dropped every other step of every
+    // run from this card - and the card counts models rather than rows.
+    return rows.value.filter(
+      (row) => loose.has(row.id) && shownModelIds.value.has(row.id),
+    );
   });
 
   /** Open or close one stack's member panel. One at a time, like the grid's. */
@@ -2379,6 +2413,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsError,
     setsLoaded,
     loadWorkflowSets,
+    shownModelIds,
     visibleCombinations,
     setStacks,
     setFoldCounts,

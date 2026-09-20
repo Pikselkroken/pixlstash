@@ -1490,11 +1490,21 @@ proves ran together, with a model free to appear in more than one.
   symmetric difference would call it two and separate the pair a reader most
   wants side by side); folding is greedy against the stack's SEED rather than
   single-linkage, or A-B-C chains onto a card whose name describes none of them;
-  and a fold **never swaps the head**, so the four settings are a hierarchy and
-  the menu's counts fall as the fold loosens rather than crossing over.
-- **The models no recipe names get a card too**, dashed, last, worded so it
-  cannot be read as a verdict, and outside the treegrid — it is not a set, and
-  inside the grid it would be the last thing the arrow keys walk into.
+  and a fold **never swaps the head**, so every stack is inside one head's group
+  and `By checkpoint only` stays the coarsest setting. The four are **not** nested
+  partitions, and nothing in the UI says they are: seeding means the seed set
+  itself changes with the distance, so loosening can move a member onto a
+  different card rather than only merging cards (`foldSets`' docstring works the
+  three-combination case). That is why the menu states a card COUNT per setting -
+  the count is what changes under the reader, and it is what they can see.
+- **The models with no set get a card too**, dashed, last, and outside the
+  treegrid — it is not a set, and inside the grid it would be the last thing the
+  arrow keys walk into. Its copy states the narrow fact and not the wide one:
+  `no_set` means no KEPT PICTURE IN THIS LIBRARY was made with them, which is
+  not "no recipe names them" (a recipe on the hub may, from another library or
+  from pictures since deleted) and is emphatically not a verdict about what they
+  work with. The engines are excluded server-side, because no generation graph
+  can load a tagger and its absence from a recipe means nothing.
 - **`ModelWorksWithDialog.vue` is a dialog rather than an inspector section.**
   The approved design draws *Works with* inside a model inspector with `Model`
   and `Copies` tabs, and this shelf has no inspector: it is a row list with a
@@ -3264,8 +3274,9 @@ Two rules are inherited from the API and are easy to undo:
 
 **`groups` always returns at least one group**, so the flat list and the grouped
 list are one piece of markup with the header switched off rather than two copies
-of the row template. Grouping offers `Workflow set`, `None`, `Base model`,
-`Folder` and `Feature`. **Type** is deliberately absent: four buckets, already a
+of the row template. Grouping offers `None`, `Workflow set`, `Base model`,
+`Folder` and `Feature`, in that order — `GROUP_BY_KEYS`, which the panel renders
+straight through. **Type** is deliberately absent: four buckets, already a
 `Show` checkbox, and already on every row as an icon and a word.
 
 **`Workflow set` is the one axis that is not a band, and it is the DEFAULT
@@ -3281,8 +3292,14 @@ component Sort by in the same panel has used for its five keys all along.
 `VIEW_SCHEMA_VERSION` went to 2 for that default, not for a shape change: every
 blob written before it carries `groupBy: "none"` whether anybody chose it or not,
 so reading the field per blob would leave the new default reaching only people
-who had never opened the shelf. The cost is a remembered sort forgotten once,
-which is the trade `FILTERS_SCHEMA_VERSION` already documents.
+who had never opened the shelf. **The cost is the whole blob, once**, not only
+the sort: `storedView` and `storedCollapsed` both fall back whole on a version
+mismatch, so the dragged column widths, the collapsed groups on every axis and
+`folderLayout` go with it. That is the trade `FILTERS_SCHEMA_VERSION` already
+documents, stated at its real size.
+
+`fold` defaults to `one` (`1 file apart`) and is carried in `view` at all times,
+read only under this axis — the same contract `folderLayout` has under `Folder`.
 
 `Feature` is not that axis, though the two are easy to confuse now that it files
 an adapter under its **algorithm**. Type is `file_kind` — `adapter |

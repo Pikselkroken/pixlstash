@@ -37,10 +37,8 @@
             <span v-if="companion.kindLabel" class="ww__kind">{{
               companion.kindLabel
             }}</span>
-            <Tooltip
-              v-if="companion.ambiguous"
-              text="A recipe named this file by a basename more than one model on the shelf answers to, so which of them ran is not recorded."
-            >
+            <!-- Same three causes, same one sentence: see `ModelComboCard`. -->
+            <Tooltip v-if="companion.ambiguous" :text="UNSURE_REASON">
               <template #activator="{ props: tipProps }">
                 <v-icon v-bind="tipProps" size="14" class="ww__warn"
                   >mdi-alert-outline</v-icon
@@ -65,9 +63,9 @@
         </li>
       </ul>
       <p v-else class="ww__state">
-        No recipe in this library names this file beside another one. That is not
-        a verdict on what it works with — only a record of what has been tried
-        here.
+        No recipe in this library names this file beside another one. That is
+        not a verdict on what it works with — only a record of what has been
+        tried here.
       </p>
 
       <AppButton
@@ -119,6 +117,10 @@ import AppButton from "../widgets/AppButton.vue";
 import ChipRow from "../widgets/ChipRow.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
+/** Why a companion is drawn as uncertain; all three causes, one sentence. */
+const UNSURE_REASON =
+  "The recipe does not pin this down to one file on the shelf — a basename several rows answer to, a short digest that matches more than one, or a model still waiting for its hash. It is listed because it is the best answer the evidence gives, not hidden because it is not the only one.";
+
 /** How many companions are drawn before *Show all* is offered. */
 const FIRST_FEW = 4;
 
@@ -163,7 +165,10 @@ const shown = computed(() =>
 );
 
 const subtitle = computed(() => {
-  const parts = [props.model?.kindLabel || "", formatModelSize(props.model?.file_size)];
+  const parts = [
+    props.model?.kindLabel || "",
+    formatModelSize(props.model?.file_size),
+  ];
   return parts.filter(Boolean).join(" · ");
 });
 

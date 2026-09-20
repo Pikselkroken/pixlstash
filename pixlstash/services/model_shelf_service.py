@@ -724,7 +724,13 @@ def fetch_companions(hub, ids: list[int]) -> dict:
             recipes_of.setdefault(model_id, set()).add(recipe)
 
     def kind(model_id: int) -> str:
-        return models[model_id]["file_kind"]
+        # `.get`, not an index: `models` was read before the recipe index, so a
+        # model registered by a scan between the two queries is in a recipe and
+        # not in this dict. `""` is in no kind list, so such a row is neither a
+        # consumer nor a support file - which is the safe answer, and the same
+        # guard `fetch_workflow_sets` makes with `if member in models`.
+        row = models.get(model_id)
+        return row["file_kind"] if row else ""
 
     def entry(model_id: int) -> dict:
         row = models[model_id]
@@ -931,16 +937,33 @@ def fetch_workflow_sets(hub, vault) -> dict:
     }
     return {
         "combinations": combinations,
-        "no_set": sorted(set(models) - in_a_set),
+        # Engines are left out, and that is the honesty rule rather than an
+        # exception to it. `no_set` means "nothing here has been made with
+        # these", which is a statement a reader can act on for a checkpoint and
+        # is simply FALSE for a tagger: PixlStash downloaded it for itself, no
+        # generation graph can load it, and it will never appear in a recipe on
+        # any machine. Listing them would pad the card with files whose absence
+        # says nothing at all - and it is the same exclusion `_NOT_CONSUMERS`
+        # and the digest-completeness probe above already make.
+        "no_set": sorted(
+            model_id
+            for model_id in set(models) - in_a_set
+            if models[model_id]["file_kind"] != FILE_ENGINE
+        ),
     }
 
 
 # Where each kind sits in a combination's member list: the base model it is
-# named after first, then the support files a graph loads beside it, then the
-# adapters, then whatever we could not classify. The card's name is taken from
-# the head of this list, so the order is what decides which file a set is
-# called after - and it is why a Flux set with no checkpoint row is named by
-# its diffusion file rather than by whichever VAE sorted first.
+# named after first, then whatever we could not classify, then the support files
+# a graph loads beside it, then the adapters, then the engines.
+#
+# The card's name is taken from the HEAD of this list, so the order is what
+# decides which file a set is called after. `unknown` sits second for that
+# reason and no other: a Flux or Wan graph loads a diffusion file rather than a
+# checkpoint, `classify_model_file` files most of those as `checkpoint` and the
+# rest as `unknown`, and there is no diffusion `file_kind` to key on - so the
+# rule is "an unclassified file names a set before a VAE does", which is a
+# ranking rather than a claim about what the file is.
 _SET_KIND_RANK = {
     FILE_CHECKPOINT: 0,
     FILE_UNKNOWN: 1,

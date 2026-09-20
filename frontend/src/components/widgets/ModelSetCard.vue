@@ -8,7 +8,12 @@
   >
     <div v-if="card.covers.length" class="msc__cover">
       <span v-for="i in 3" :key="i" class="msc__pic">
-        <img v-if="card.covers[i - 1]" :src="card.covers[i - 1]" alt="" loading="lazy" />
+        <img
+          v-if="card.covers[i - 1]"
+          :src="card.covers[i - 1]"
+          alt=""
+          loading="lazy"
+        />
       </span>
       <span class="msc__badge msc__badge--end" aria-hidden="true">
         <v-icon size="12">mdi-image-multiple</v-icon
@@ -19,21 +24,18 @@
       <span class="msc__empty-line">No picture to show</span>
     </div>
 
-    <!-- The layered count says there are more sets under this one, and opens
-         them: it is the mark a reader reaches for first. `aria-hidden` and off
-         the tab order like the rest of the card's decoration - ▸ below is the
-         announced control, and hiding this one is only defensible while the two
-         do exactly the same thing. -->
-    <button
+    <!-- The layered count says there are more sets under this one. Inert
+         decoration, not a second control: `aria-hidden` on a focusable
+         `<button>` is an axe violation whichever way the tab order is set, and
+         the card already has one announced control for this - ▸ below, which the
+         whole name row is beside. The count is in the card's accessible name. -->
+    <span
       v-if="stacked"
-      type="button"
-      class="msc__badge msc__badge--start msc__badge--button"
-      tabindex="-1"
+      class="msc__badge msc__badge--start"
       aria-hidden="true"
-      @click="emit('toggle')"
     >
       <v-icon size="12">mdi-layers</v-icon>{{ card.size }} sets
-    </button>
+    </span>
 
     <!-- The visible rows are hidden from assistive tech: the card's own label
          already reads all of them, including what "+N" clipped. -->
@@ -49,7 +51,9 @@
           icon-only
           tabindex="-1"
           :tooltip="
-            expanded ? 'Hide the sets in this stack' : 'Show the sets in this stack'
+            expanded
+              ? 'Hide the sets in this stack'
+              : 'Show the sets in this stack'
           "
           :aria-expanded="String(expanded)"
           :aria-controls="panelId || undefined"
@@ -58,14 +62,24 @@
         <span class="msc__name" aria-hidden="true">{{ card.name }}</span>
       </div>
       <div class="msc__row">
-        <ChipRow v-if="kindChips.length" :items="kindChips" aria-hidden="true" />
+        <ChipRow
+          v-if="kindChips.length"
+          :items="kindChips"
+          aria-hidden="true"
+        />
       </div>
       <div class="msc__row">
-        <ChipRow v-if="loraChips.length" :items="loraChips" aria-hidden="true" />
+        <ChipRow
+          v-if="loraChips.length"
+          :items="loraChips"
+          aria-hidden="true"
+        />
         <span v-else class="msc__none" aria-hidden="true">No adapters</span>
       </div>
       <div class="msc__row msc__row--facts">
-        <span v-if="stacked" class="msc__none" aria-hidden="true">differs by</span>
+        <span v-if="stacked" class="msc__none" aria-hidden="true"
+          >differs by</span
+        >
         <ChipRow :items="factChips" aria-hidden="true" />
       </div>
     </div>
@@ -159,20 +173,26 @@ const accessibleName = computed(() => {
 </script>
 
 <style scoped>
-/* 252 = 1 border + 132 cover + (8 + 4 × 24 + 3 × 2 + 8) meta + 1 border - the
-   shipped workflow card's own two figures, so the two grids' cards are the same
-   height and a reader moving between them meets one rhythm. Both are local, and
-   the meta block is `flex: none` so a change to that sum shows as a wrong
-   height rather than being absorbed. */
+/* 118 = 8 + 4 × 24 + 3 × 2 + 8: the meta block, fixed whatever the card holds
+   and `flex: none` so a change to that sum shows as a wrong height rather than
+   being absorbed. The figure and the `6 / 5` cover below are `WorkflowCard`'s
+   own, so the two grids' cards are the same shape and a reader moving between
+   them meets one rhythm. Local on purpose, as that card's are.
+
+   **The COVER is not a fixed height, and that is the whole point of copying
+   this rather than a round number.** A flat 132px against an `1fr` width grows
+   steadily more landscape as the window widens - 1.2:1 at the 240px column
+   floor, 1.8:1 by 360px - and nobody chose landscape; generated pictures here
+   are mostly portrait or square. `WorkflowCard.vue` records removing exactly
+   that, so reintroducing it here would have been the same bug on a second
+   screen. */
 .msc {
-  --msc-h: 252px;
-  --msc-cover-h: 132px;
+  --msc-meta-h: 118px;
 
   position: relative;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
-  height: var(--msc-h);
   overflow: hidden;
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
@@ -195,7 +215,7 @@ const accessibleName = computed(() => {
   grid-template-columns: 2fr 1fr;
   grid-template-rows: 1fr 1fr;
   gap: var(--space-1);
-  height: var(--msc-cover-h);
+  aspect-ratio: 6 / 5;
 }
 
 .msc__pic {
@@ -255,18 +275,10 @@ const accessibleName = computed(() => {
   right: var(--space-3);
 }
 
-/* The badge family is inert decoration; this one is a control, so it takes the
-   clicks back and drops the button chrome that would paint a second border over
-   the pill. */
-.msc__badge--button {
-  border: 0;
-  font-family: inherit;
-  pointer-events: auto;
-  cursor: pointer;
-}
-
 .msc__meta {
   flex: none;
+  box-sizing: border-box;
+  height: var(--msc-meta-h);
   display: grid;
   grid-template-rows: repeat(4, var(--control-h-sm));
   row-gap: var(--space-1);

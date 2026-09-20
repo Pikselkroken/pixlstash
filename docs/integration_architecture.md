@@ -498,7 +498,8 @@ and groups nothing; the client folds.**
 
 | Route | Answers | Costs |
 |---|---|---|
-| `GET /models/workflow-sets` | **Which shelf models a kept picture proves ran together** — one entry per *combination* (the exact model ids one or more recipes bound), with its recipe count, its picture count and up to three cover thumbnail URLs, plus `no_set`: the ids no recipe in this library names. | one pass over `workflow_recipe_asset`, plus the `GROUP BY workflow_structural_hash` and the `ROW_NUMBER()` cover window the shelf's `used by` counts and the workflows grid already run |
+| `GET /models/workflow-sets` | **Which shelf models a kept picture proves ran together** — one entry per *combination* (the exact model ids one or more recipes bound), with its recipe count, its picture count and up to three cover thumbnail URLs, plus `no_set`: the ids in none of those combinations, i.e. the models **no kept
+picture in this library was made with** (engines excluded - see rule 1). | one pass over `workflow_recipe_asset`, plus the `GROUP BY workflow_structural_hash` and the `ROW_NUMBER()` cover window the shelf's `used by` counts and the workflows grid already run |
 
 Rules neither side may drift from:
 

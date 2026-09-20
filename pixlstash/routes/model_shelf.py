@@ -700,7 +700,14 @@ class WorkflowSetCombination(BaseModel):
             "then unclassified, then VAE, text encoder, adapter, engine."
         )
     )
-    recipes: int = Field(description="How many recipes name exactly this set of files.")
+    recipes: int = Field(
+        description=(
+            "How many recipes resolve to exactly this set of shelf rows. Two "
+            "graphs that differ in wiring but name the same files are two "
+            "recipes and one combination; a recipe naming a file this shelf no "
+            "longer holds is counted here for the members it does resolve."
+        )
+    )
     picture_count: int = Field(
         description="Kept pictures in the active library those recipes made."
     )
@@ -723,10 +730,15 @@ class WorkflowSetsResponse(BaseModel):
     )
     no_set: list[int] = Field(
         description=(
-            "Ids no recipe in this library binds to anything. **Not a verdict**: "
-            "it means no picture here has been made with them, which rules "
-            "nothing out. Returned so the grid can draw them rather than "
-            "quietly omitting them."
+            "Ids that are in none of the combinations above, which is a "
+            "narrower statement than it looks: it means **no kept picture in "
+            "this library was made with them**. A recipe on the hub may name "
+            "one - from another library, or from pictures since deleted - and "
+            "this says nothing about that. **Not a verdict** either way: it "
+            "rules nothing out about what the file works with. Engines are "
+            "excluded, because no generation graph can load one and their "
+            "absence from a recipe means nothing at all. Returned so the grid "
+            "can draw them rather than quietly omitting them."
         )
     )
 

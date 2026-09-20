@@ -211,7 +211,17 @@ const globalOpts = {
 
       // Same reason, for the same provider: it wraps `AppDialog`. Its own suite
       // mounts it against the companions payload.
-      ModelWorksWithDialog: true,
+      ModelWorksWithDialog: {
+        props: ["model"],
+        template: "<div class='ww-stub'>{{ model?.filename }}</div>",
+      },
+      // Its own suite mounts it against a payload; here what matters is only
+      // whether the shelf puts it on screen instead of the row list.
+      ModelSetGrid: {
+        name: "ModelSetGrid",
+        emits: ["works-with"],
+        template: "<div class='set-grid-stub'></div>",
+      },
       // The host-path picker `Add file` opens. Real, it would drag Vuetify's
       // dialog provider into a suite that installs none; stubbed, it still
       // emits `select`, which is the whole of what this view listens for.
@@ -5111,5 +5121,100 @@ describe("acting inside a run", () => {
     expect(removeStackMember).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
     wrapper.unmount();
+  });
+});
+
+// ===========================================================================
+// The shipped DEFAULT (#1438)
+//
+// `mountShelf` chooses `groupBy: "none"` for every test above, because the row
+// list is what they are about. Nothing then mounted this view in the state a
+// reader actually opens it in, which is how a live-but-inert Sort control got
+// as far as review. These mount it as shipped.
+// ===========================================================================
+
+async function mountDefaultShelf(rows = [adapter()]) {
+  listAdapters.mockResolvedValue(rows);
+  listCheckpoints.mockResolvedValue([]);
+  listEngines.mockResolvedValue([]);
+  listUnclassified.mockResolvedValue([]);
+  listSupport.mockResolvedValue([]);
+  const wrapper = mount(ModelShelf, globalOpts);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await wrapper.vm.$nextTick();
+  return wrapper;
+}
+
+describe("the set grid is what the shelf opens on", () => {
+  it("draws the grid rather than the row list, with no axis chosen", async () => {
+    const wrapper = await mountDefaultShelf();
+    const store = useModelShelfStore();
+
+    expect(store.view.groupBy).toBe("workflow_set");
+    expect(wrapper.find(".set-grid-stub").exists()).toBe(true);
+    expect(wrapper.find(".shelf-row").exists()).toBe(false);
+  });
+
+  it("offers Fold and hides Sort, because one steers the grid and one does not", async () => {
+    const wrapper = await mountDefaultShelf();
+    const store = useModelShelfStore();
+
+    const hasFold = () =>
+      wrapper
+        .findAll("button")
+        .some((b) => textOf(b).includes("Fold:"));
+    // The shipped split-button, which is what `Sort` actually is.
+    const hasSort = () => wrapper.find(".bar-split-button").exists();
+
+    expect(hasFold()).toBe(true);
+    // A live control with no effect reads "Sort: Added" over a grid it cannot
+    // reorder, so it is absent here and back the moment the row list is.
+    expect(hasSort()).toBe(false);
+
+    store.setView({ groupBy: "none" });
+    await wrapper.vm.$nextTick();
+    expect(hasFold()).toBe(false);
+    expect(hasSort()).toBe(true);
+  });
+
+  it("counts sets rather than models while the grid is on screen", async () => {
+    const wrapper = await mountDefaultShelf();
+
+    expect(textOf(wrapper.find(".shelf-sub"))).toContain("0 sets");
+
+    useModelShelfStore().setView({ groupBy: "none" });
+    await wrapper.vm.$nextTick();
+    expect(textOf(wrapper.find(".shelf-sub"))).toContain("1 model");
+  });
+
+  it("floats no verb bar over the grid, whatever is selected", async () => {
+    // A card is a SET. The bar's verbs are per model and two of them destroy
+    // bytes, so a Delete aimed at a card could take a shared VAE with it. The
+    // selection survives in the store and the bar comes back with the list.
+    const wrapper = await mountDefaultShelf();
+    const store = useModelShelfStore();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+
+    expect(store.selectedIds.size).toBe(1);
+    expect(wrapper.find(".selbar-float").exists()).toBe(false);
+
+    store.setView({ groupBy: "none" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".selbar-float").exists()).toBe(true);
+  });
+
+  it("hands the grid's file to the one Works with dialog", async () => {
+    const wrapper = await mountDefaultShelf();
+
+    await wrapper
+      .findComponent({ name: "ModelSetGrid" })
+      .vm.$emit("works-with", { id: 7, filename: "handed-up.st" });
+    await wrapper.vm.$nextTick();
+
+    // One dialog, owned here: two mounted copies with a ref each is two dialogs
+    // that can disagree about which is open.
+    expect(wrapper.findAll(".ww-stub")).toHaveLength(1);
+    expect(wrapper.find(".ww-stub").text()).toBe("handed-up.st");
   });
 });

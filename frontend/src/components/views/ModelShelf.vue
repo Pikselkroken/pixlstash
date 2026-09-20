@@ -368,7 +368,14 @@
             </div>
           </v-menu>
 
+          <!-- Hidden on the set grid, not disabled, exactly as the whole
+               cluster is hidden on the training-runs tab and for the same
+               reason: the five sort keys order the ROW LIST, and that list is
+               not on screen. The grid orders itself by evidence. A control that
+               is live and does nothing is worse than one that is absent - it
+               reads "Sort: Added" over a grid it has no effect on. -->
           <v-menu
+            v-if="!isSetGrid"
             v-model="sortMenuOpen"
             :close-on-content-click="false"
             location="bottom end"
@@ -533,7 +540,10 @@
       <!-- The set grid, ahead of every row-list state: its groups OVERLAP, so
            it is a different screen rather than a banded version of this one. It
            still reads `visibleRows`, so Show and the filters keep applying. -->
-      <ModelSetGrid v-if="isSetGrid && !store.loading && !store.error" />
+      <ModelSetGrid
+        v-if="isSetGrid && !store.loading && !store.error"
+        @works-with="worksWithModel = $event"
+      />
       <p v-else-if="store.loading" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
         {{ store.error }}
@@ -3973,7 +3983,13 @@ function foldCountLabel(key) {
   return count === 1 ? "1 stack" : `${count} stacks`;
 }
 
-/** Answer "what else has this run with" for one model. */
+/**
+ * Answer "what else has this run with" for one model.
+ *
+ * The selection bar's own verb, so it reads the selection; the grid hands its
+ * file up through `@works-with` instead, because a card there is not a row and
+ * there is no selection on that screen to read.
+ */
 function openWorksWith() {
   worksWithModel.value = store.selectedRows[0] ?? null;
 }

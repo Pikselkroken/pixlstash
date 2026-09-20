@@ -82,7 +82,9 @@ async function mountDialog(model, combinations) {
 beforeEach(() => {
   setActivePinia(createPinia());
   window.localStorage.clear();
-  fetchWorkflowSets.mockReset().mockResolvedValue({ combinations: [], no_set: [] });
+  fetchWorkflowSets
+    .mockReset()
+    .mockResolvedValue({ combinations: [], no_set: [] });
 });
 
 describe("the companion list", () => {
@@ -120,7 +122,9 @@ describe("the companion list", () => {
   it("closes with the notice that a missing companion is untested", async () => {
     const wrapper = await mountDialog({ ...VAE }, SETS);
 
-    expect(wrapper.find(".ww__notice").text()).toContain("Nothing is ruled out");
+    expect(wrapper.find(".ww__notice").text()).toContain(
+      "Nothing is ruled out",
+    );
   });
 
   it("offers the rest behind one press rather than drawing twenty", async () => {
@@ -140,8 +144,19 @@ describe("the companion list", () => {
     ];
     const wrapper = await mountDialog({ ...VAE }, many);
 
-    expect(wrapper.findAll(".ww__name")).toHaveLength(4);
-    await wrapper.find("button").trigger("click");
+    // Identity, not a count: which four are drawn is the ranking's promise.
+    // Every companion here shares the one recipe, so the tie-break is the name
+    // - which is the branch a count-only assertion would never reach.
+    expect(wrapper.findAll(".ww__name").map((el) => el.text())).toEqual([
+      "clip_l",
+      "extra_a",
+      "extra_b",
+      "juggernautXL_v9",
+    ]);
+    // The named control, not whichever button the dialog renders first.
+    const more = wrapper.find(".ww__more");
+    expect(more.text()).toContain("Show all 5 companions");
+    await more.trigger("click");
     expect(wrapper.findAll(".ww__name")).toHaveLength(5);
   });
 });
@@ -152,7 +167,9 @@ describe("a model no recipe names", () => {
       combination("1,4", [CKPT, CLIP]),
     ]);
 
-    expect(wrapper.text()).toContain("No recipe in this library names this file");
+    expect(wrapper.text()).toContain(
+      "No recipe in this library names this file",
+    );
     expect(wrapper.text()).toContain("only a record of what has been tried");
     // And no notice: there is no list for it to qualify, and the sentence above
     // already carries the caveat.
@@ -207,7 +224,7 @@ describe("the dialog itself", () => {
       ),
     ];
     const wrapper = await mountDialog({ ...VAE }, many);
-    await wrapper.find("button").trigger("click");
+    await wrapper.find(".ww__more").trigger("click");
     expect(wrapper.findAll(".ww__name")).toHaveLength(5);
 
     await wrapper.setProps({ model: { ...CLIP } });

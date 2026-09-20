@@ -15,11 +15,7 @@
     </div>
 
     <div v-if="card.covers.length" class="combo__strip" aria-hidden="true">
-      <span
-        v-for="url in card.covers"
-        :key="url"
-        class="combo__pic"
-      >
+      <span v-for="url in card.covers" :key="url" class="combo__pic">
         <img :src="url" alt="" loading="lazy" />
       </span>
     </div>
@@ -48,14 +44,19 @@
         <span v-if="file.kindLabel" class="combo__kind">{{
           file.kindLabel
         }}</span>
-        <!-- The evidence could not tell this file from another of the same
-             name. Said on the card rather than hidden: the shelf already treats
-             not knowing as an answer, and a set drawn without the warning would
-             be claiming a certainty the recipe does not have. -->
-        <Tooltip
-          v-if="file.ambiguous"
-          text="A recipe named a file by this basename and more than one model on the shelf answers to it, so which of them ran is not recorded."
-        >
+        <!-- The evidence does not pin this file down. Said on the card rather
+             than hidden: the shelf already treats not knowing as an answer, and
+             a set drawn without the warning would claim a certainty the recipe
+             does not have.
+
+             Worded for ALL THREE causes, not just the common one. `ambiguous`
+             is set by a shared basename, by a short digest matching more than
+             one row, AND for every member of a recipe naming a digest no row
+             matches while some row still waits for its hash - and in that last
+             case it is true of files identified by an exact unique name. Saying
+             "filename match only" there would be a specific wrong reason, which
+             is worse than an honest general one. -->
+        <Tooltip v-if="file.ambiguous" :text="UNSURE_REASON">
           <template #activator="{ props: tipProps }">
             <v-icon v-bind="tipProps" size="14" class="combo__warn"
               >mdi-alert-outline</v-icon
@@ -88,6 +89,15 @@ import { VIcon } from "vuetify/components";
 
 import Tooltip from "./Tooltip.vue";
 
+/**
+ * Why a member is drawn as uncertain.
+ *
+ * One sentence for all three causes `ambiguous` has, because the flag does not
+ * say which: see the comment on its glyph above.
+ */
+const UNSURE_REASON =
+  "The recipe does not pin this down to one file on the shelf — a basename several rows answer to, a short digest that matches more than one, or a model still waiting for its hash. It is listed because it is the best answer the evidence gives, not hidden because it is not the only one.";
+
 const props = defineProps({
   /** One card from `comboCard` (see `utils/workflowSets.js`). */
   card: { type: Object, required: true },
@@ -100,7 +110,13 @@ const emit = defineEmits(["pick"]);
 // reader hears them - and the only place it hears which files are in the set.
 const accessibleName = computed(() => {
   const files = props.card.files.map((file) =>
-    [file.kindLabel, file.name, file.ambiguous ? "filename match only" : null]
+    [
+      file.kindLabel,
+      file.name,
+      // Not "filename match only": the flag has three causes and that is only
+      // one of them.
+      file.ambiguous ? "which file ran is not recorded" : null,
+    ]
       .filter(Boolean)
       .join(" "),
   );

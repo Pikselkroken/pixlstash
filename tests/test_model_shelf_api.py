@@ -50,6 +50,7 @@ from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
 from pixlstash.db_models.adapter_attachment import AdapterAttachment
+from pixlstash.db_models.picture import Picture
 from pixlstash.routes import model_files as model_files_routes
 from pixlstash.routes import model_folders as model_folders_routes
 from pixlstash.routes import model_shelf as model_shelf_routes
@@ -61,6 +62,7 @@ from pixlstash.routes.model_shelf import MAX_ATTACHMENTS_PER_MODEL
 from pixlstash.server import Server
 from pixlstash.services import builtin_models
 from pixlstash.services.model_folder_scanner import ModelFolderScanner
+from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.model_mover import SHELF_IO_LOCK
 from tests.authz_guard import assert_real_route, no_spa_fallback  # noqa: F401
 from tests.network_vectors import LAN_IPV4
@@ -704,6 +706,69 @@ def test_companions_answers_the_owner_and_refuses_a_share_token(shelf_env):
     )
 
 
+# ---------------------------------------------------------------------------
+# The set grid's read (#1438), end to end through the route.
+#
+# Seeded at the TABLES rather than by importing a picture, because what needs
+# exercising here is the route's own mapping - `_cover_strip`, the cache-buster
+# and the service-dict-to-schema hop - and an import would spend a scan and a
+# hash to reach the same three rows. The grouping itself is exercised against
+# real graphs in `tests/test_workflow_library.py`.
+# ---------------------------------------------------------------------------
+
+
+def _seed_recipe(server, structural_hash: str, assets: list[tuple[str, str]]) -> None:
+    """One recipe on the hub, naming *assets* as ``(widget_name, filename)``."""
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_topology "
+            "(topology_hash, hash_version, node_count, first_seen_at) "
+            "VALUES (?, 'v1', 3, '2026-09-01T00:00:00Z')",
+            (f"topo-{structural_hash}",),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_recipe "
+            "(structural_hash, topology_hash, hash_version, node_count, first_seen_at) "
+            "VALUES (?, ?, 'v1', 3, '2026-09-01T00:00:00Z')",
+            (structural_hash, f"topo-{structural_hash}"),
+        )
+        conn.executemany(
+            "INSERT OR IGNORE INTO workflow_recipe_asset "
+            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
+            [(structural_hash, widget, name) for widget, name in assets],
+        )
+
+
+def _seed_picture(server, structural_hash: str, **fields) -> int:
+    """One kept picture made by *structural_hash*, with the bitmap fields the
+    cover URL's cache-buster is computed from."""
+
+    def insert(session: Session):
+        picture = Picture(
+            file_path=f"{structural_hash}-{fields.get('score') or 0}.png",
+            deleted=False,
+            workflow_structural_hash=structural_hash,
+            **fields,
+        )
+        session.add(picture)
+        session.commit()
+        return picture.id
+
+    return server.vault.db.run_task(insert, priority=DBPriority.IMMEDIATE)
+
+
+def _wipe_recipes(server) -> None:
+    with server.hub.transaction() as conn:
+        for table in ("workflow_recipe_asset", "workflow_recipe", "workflow_topology"):
+            conn.execute(f"DELETE FROM {table}")
+
+    def wipe(session: Session):
+        session.exec(delete(Picture))
+        session.commit()
+
+    server.vault.db.run_task(wipe, priority=DBPriority.IMMEDIATE)
+
+
 def test_workflow_sets_answers_the_owner_and_refuses_a_share_token(shelf_env):
     """Both directions on the read behind the set grid. The grouping itself is
     exercised in depth in `tests/test_workflow_library.py`; this pins that the
@@ -732,6 +797,151 @@ def test_workflow_sets_answers_the_owner_and_refuses_a_share_token(shelf_env):
         TestClient(shelf_env.server.api).get(f"{API}/models/workflow-sets").status_code
         == 401
     )
+
+
+def test_workflow_sets_serves_the_whole_card_through_the_route(shelf_env):
+    """**The route's own mapping, executed.** Everything below the service is
+    shape: `_cover_strip` builds the thumbnail URL and its cache-buster, and the
+    handler copies a dict of Python into three Pydantic models. A test that only
+    ever sees `combinations: []` exercises none of it, so a renamed key would be
+    a 500 in front of the reader and a green suite here.
+    """
+    ids = shelf_env.model_ids
+    # One of PixlStash's own downloads, for the `no_set` exclusion below. Added
+    # here rather than to `_SEED_MODELS`, so no other test's counts move.
+    with shelf_env.server.hub.transaction() as conn:
+        engine_id = conn.execute(
+            "INSERT INTO model (file_kind, kind, sha256, filename, provenance, "
+            "created_at) VALUES ('engine', 'tagger', ?, 'wd-tagger.onnx', "
+            "'internal', '2026-08-08T00:00:00Z')",
+            (_h("enginetagger"),),
+        ).lastrowid
+    try:
+        _seed_recipe(
+            shelf_env.server,
+            "sh-base",
+            [
+                ("ckpt_name", "base_xl.safetensors"),
+                ("lora_name", "alice.safetensors"),
+            ],
+        )
+        # Two pictures, so the count is not 1 by accident, and different scores
+        # so the cover order is a real ordering rather than insertion order.
+        best = _seed_picture(
+            shelf_env.server,
+            "sh-base",
+            score=5,
+            thumbnail_width=320,
+            thumbnail_height=240,
+            orientation=1,
+        )
+        worst = _seed_picture(
+            shelf_env.server,
+            "sh-base",
+            score=1,
+            thumbnail_width=64,
+            thumbnail_height=64,
+        )
+
+        r = shelf_env.owner.get(f"{API}/models/workflow-sets")
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert len(body["combinations"]) == 1
+        card = body["combinations"][0]
+
+        # The key, and the member list in the server's own order: the checkpoint
+        # names the set, the adapter comes last.
+        assert card["key"] == ",".join(
+            str(i)
+            for i in sorted([ids["base_xl.safetensors"], ids["alice.safetensors"]])
+        )
+        assert [(m["name"], m["kind"]) for m in card["models"]] == [
+            ("Base XL", "checkpoint"),
+            ("Alice", "adapter"),
+        ]
+        assert card["models"][0]["filename"] == "base_xl.safetensors"
+        assert card["models"][0]["file_size"] == 9000
+        assert all(m["ambiguous"] is False for m in card["models"])
+        assert (card["recipes"], card["picture_count"]) == (1, 2)
+
+        # The covers: the higher-scored picture first, and each URL carrying the
+        # SAME cache-buster the picture grid's own tiles use - so a cover the
+        # browser holds is not fetched twice and a regenerated one is not stale.
+        assert [c["picture_id"] for c in card["covers"]] == [best, worst]
+        version = ImageUtils.thumbnail_cache_version(320, 240, 1)
+        assert card["covers"][0]["url"] == (
+            f"/pictures/thumbnails/{best}.webp?v={version}"
+        )
+        assert "?v=" in card["covers"][1]["url"]
+
+        # Every model NOT in the set - and no engine. PixlStash's own downloads
+        # can never appear in a generation graph, so "no picture was made with
+        # this" is not an unproven claim about a tagger, it is a false one; the
+        # card that states it must not be padded with them.
+        assert ids["mystery.safetensors"] in body["no_set"]
+        assert ids["base_xl.safetensors"] not in body["no_set"]
+        assert engine_id not in body["no_set"]
+    finally:
+        _wipe_recipes(shelf_env.server)
+        with shelf_env.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE id = ?", (engine_id,))
+
+
+def test_workflow_sets_orders_the_strongest_evidence_first(shelf_env):
+    """The grid opens on the combinations the library leans on, so the order is
+    part of the contract rather than whatever the dict iterated as."""
+    try:
+        for name, pictures in (("sh-small", 1), ("sh-big", 4)):
+            _seed_recipe(shelf_env.server, name, [("ckpt_name", "base_xl.safetensors")])
+            # A second asset apiece, so the two are different combinations.
+            _seed_recipe(
+                shelf_env.server,
+                name,
+                [
+                    (
+                        "lora_name",
+                        f"{'alice' if name == 'sh-big' else 'dana'}.safetensors",
+                    )
+                ],
+            )
+            for _ in range(pictures):
+                _seed_picture(shelf_env.server, name, score=3)
+
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+        assert [c["picture_count"] for c in body["combinations"]] == [4, 1]
+    finally:
+        _wipe_recipes(shelf_env.server)
+
+
+def test_workflow_sets_flags_a_member_two_shelf_rows_answer_to(shelf_env):
+    """A filename-only match is drawn, and said to be one. The route has to
+    carry the flag out: a card that dropped it would claim a certainty the
+    recipe does not have."""
+    try:
+        # Two shelf rows recording the same basename. `model.filename` rather
+        # than `model_file.relpath`, because that table is keyed
+        # `(model_folder_id, relpath)` and so cannot hold the collision twice in
+        # one folder - while `recipe_asset_index` reads both, which is exactly
+        # why the ambiguity is reachable at all.
+        with shelf_env.server.hub.transaction() as conn:
+            conn.executemany(
+                "UPDATE model SET filename = 'twin.safetensors' WHERE id = ?",
+                [
+                    (shelf_env.model_ids["alice.safetensors"],),
+                    (shelf_env.model_ids["dana.safetensors"],),
+                ],
+            )
+        _seed_recipe(shelf_env.server, "sh-twin", [("lora_name", "twin.safetensors")])
+        _seed_picture(shelf_env.server, "sh-twin", score=3)
+
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+        card = body["combinations"][0]
+        assert {m["name"] for m in card["models"]} == {"Alice", "Dana"}
+        assert all(m["ambiguous"] is True for m in card["models"])
+    finally:
+        _wipe_recipes(shelf_env.server)
 
 
 # ===========================================================================

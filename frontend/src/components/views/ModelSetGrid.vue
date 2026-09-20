@@ -8,8 +8,24 @@
     <p v-else-if="store.setsError" class="msg__state" role="alert">
       {{ store.setsError }}
     </p>
-    <div v-else-if="nothingAtAll" class="msg__state">
-      <p class="msg__lead">No picture in this library records the models it used.</p>
+    <!-- Two empty states, deliberately distinct, for the reason the row list
+         keeps three: "you filtered everything out" is one click from fixed and
+         "no picture records its models" is not, and stating the second when the
+         first is true tells the reader something false about their library. -->
+    <div v-else-if="nothingShown && store.activeCount" class="msg__state">
+      <p class="msg__lead">No workflow set matches these filters.</p>
+      <p>
+        {{ store.workflowSets.combinations.length.toLocaleString() }} set{{
+          store.workflowSets.combinations.length === 1 ? "" : "s"
+        }}
+        are being left out by Show.
+      </p>
+      <AppButton @click="store.resetFilters()">Reset filters</AppButton>
+    </div>
+    <div v-else-if="nothingShown" class="msg__state">
+      <p class="msg__lead">
+        No picture in this library records the models it used.
+      </p>
       <p>
         A set is read off a recipe, and a recipe arrives with a picture that
         carries its workflow. Until one does, there is nothing here to group —
@@ -42,6 +58,7 @@
             :column-index="openColumnIndex"
             :cursor-key="cursorKey"
             :foldable="store.view.fold !== 'none'"
+            :gap="COLUMN_GAP"
             @close="closePanel"
             @unfold="store.setView({ fold: 'none' })"
             @pick="openWorksWith"
@@ -60,7 +77,9 @@
             :aria-controls="
               store.openSetKey === entry.key ? PANEL_ID : undefined
             "
-            :aria-owns="store.openSetKey === entry.key ? memberRowIds : undefined"
+            :aria-owns="
+              store.openSetKey === entry.key ? memberRowIds : undefined
+            "
             :aria-posinset="entry.cardIndex + 1"
             :aria-setsize="store.setStacks.length"
             :tabindex="index === cursorIndex ? 0 : -1"
@@ -90,9 +109,15 @@
           In no set — {{ store.noSetRows.length.toLocaleString() }}
           {{ store.noSetRows.length === 1 ? "model" : "models" }}
         </h3>
+        <!-- The exact claim, and no more. "No recipe names them" would be
+             wrong: a recipe on this machine may name one from another library,
+             or from pictures since deleted. What is true is the narrower thing,
+             and it is worded so it cannot be read as a verdict. -->
         <p class="msg__ghost-note">
-          No recipe in this library binds them to anything. Nothing follows from
-          that except that no picture here has been made with them.
+          No kept picture in this library was made with them, so there is no set
+          to draw. That is all it means — nothing here rules out what they work
+          with, and a model may well have been used somewhere this library
+          cannot see.
         </p>
         <AppButton
           variant="outline"
@@ -103,8 +128,6 @@
         >
       </section>
     </div>
-
-    <ModelWorksWithDialog :model="worksWithModel" @close="worksWithModel = null" />
   </div>
 </template>
 
@@ -138,9 +161,12 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
-import { comboCard } from "../../utils/workflowSets";
+import {
+  comboCard,
+  headModel,
+  memberKindLabel,
+} from "../../utils/workflowSets";
 import ModelSetPanel from "../panels/ModelSetPanel.vue";
-import ModelWorksWithDialog from "../panels/ModelWorksWithDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import ModelSetCard from "../widgets/ModelSetCard.vue";
 
@@ -157,6 +183,8 @@ const COLUMN_GAP = 12;
 
 const PANEL_ID = "msg-set-panel";
 
+const emit = defineEmits(["works-with"]);
+
 const store = useModelShelfStore();
 
 const gridEl = ref(null);
@@ -167,16 +195,14 @@ const columns = ref(1);
 // takes the grid's only tab stop with it.
 const cursorId = ref("");
 const announcement = ref("");
-const worksWithModel = ref(null);
 
-const nothingAtAll = computed(
+const nothingShown = computed(
   () => !store.setStacks.length && !store.noSetRows.length,
 );
 
 /** The open stack, or null. */
 const openStack = computed(
-  () =>
-    store.setStacks.find((stack) => stack.key === store.openSetKey) ?? null,
+  () => store.setStacks.find((stack) => stack.key === store.openSetKey) ?? null,
 );
 
 /** The open stack's combinations, as the panel's cards. */
@@ -307,6 +333,13 @@ watch(
   },
 );
 
+/** The file a stack's own card is named after, for the keyboard's Enter. */
+function headFileOf(key) {
+  const stack = store.setStacks.find((candidate) => candidate.key === key);
+  const head = headModel(stack?.members?.[0] ?? {});
+  return head ? { ...head, kindLabel: memberKindLabel(head) } : null;
+}
+
 function toggle(entry) {
   if (entry?.kind === "card" && entry.card.size > 1) {
     store.toggleSet(entry.key);
@@ -329,9 +362,16 @@ function closePanel() {
   if (at >= 0) moveCursor(at);
 }
 
-/** One file inside a combination: what else has this run with? */
+/**
+ * One file inside a combination: what else has this run with?
+ *
+ * Emitted rather than answered here. `ModelShelf.vue` mounts the one dialog for
+ * both entry points - this grid and the row list's context menu - because two
+ * mounted copies with a ref each is two dialogs that can disagree about which
+ * is open, and this component is the shelf's own child.
+ */
 function openWorksWith(file) {
-  worksWithModel.value = file;
+  if (file) emit("works-with", file);
 }
 
 // ── The roving cursor ─────────────────────────────────────────────────────
@@ -406,11 +446,17 @@ function onKeyDown(event) {
       return;
     case "Enter":
       event.preventDefault();
-      // A stack opens. A card with nothing to fold has nothing to open, and
-      // rather than inventing a gesture for it the key simply does nothing:
-      // everything that card knows is already drawn on it.
+      // A stack opens. Anything else asks "what else has this run with" about
+      // the file the row is named after - which is the ONLY keyboard route to
+      // that answer on this screen: the file buttons inside a combination are
+      // at `tabindex="-1"` because the grid owns Tab, so without this the
+      // dialog was reachable by pointer alone.
       if (entry?.kind === "card" && entry.card.size > 1) {
         store.toggleSet(entry.key);
+      } else if (entry?.kind === "card") {
+        openWorksWith(headFileOf(entry.key));
+      } else if (entry?.kind === "member") {
+        openWorksWith(openMembers.value[entry.memberIndex]?.files?.[0]);
       }
       return;
     case "Escape":

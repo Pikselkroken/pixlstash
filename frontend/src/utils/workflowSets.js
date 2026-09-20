@@ -34,6 +34,16 @@ export const FOLD_LABELS = {
   checkpoint: { label: "By checkpoint only", icon: "mdi-cube-outline" },
 };
 
+/**
+ * How many covers a card's mosaic draws.
+ *
+ * Three, the depth the server serves per combination (`SET_COVER_DEPTH`) and the
+ * one the shipped workflow card draws: a folded stack pools its members' covers
+ * and then cuts back to this, so a card of six sets is not six bitmaps for three
+ * holes.
+ */
+const COVER_DEPTH = 3;
+
 /** How many files a setting lets two combinations differ by. */
 const FOLD_DISTANCE = { none: 0, one: 1, two: 2 };
 
@@ -108,9 +118,18 @@ function byEvidence(combinations) {
  * only when they share a head, whatever the distance says: exchanging the
  * checkpoint is one file by the arithmetic and a different set by every other
  * reading, and a card whose name is one checkpoint must not hold another's
- * pictures. It is also what makes the four settings a hierarchy rather than
- * four unrelated answers - each one is a refinement of the next, so the menu's
- * card counts fall as the reader loosens the fold and never rise.
+ * pictures. Every stack is therefore inside one head's group, which is what
+ * keeps `By checkpoint only` the coarsest setting.
+ *
+ * **The settings are NOT nested partitions, and the menu does not claim they
+ * are.** Seeding is what breaks it: the seed set itself changes with the
+ * distance, so loosening the fold can move a member onto a different card
+ * rather than only merging cards. Three combinations A, B, C under one head
+ * with A-B = 2, A-C = 3, B-C = 1 fold to `{A} {B,C}` at one file apart and
+ * `{A,B} {C}` at two - B and C pulled apart by a looser setting. That is a real
+ * cost of seeding and it is why the menu states a CARD COUNT per setting rather
+ * than promising anything about what is inside them: the count is what changes
+ * under the reader, and it is the thing they can see.
  *
  * `checkpoint` is not a distance at all: it collapses every combination under
  * the file it is named after, which is the one-card-per-checkpoint reading of
@@ -150,7 +169,8 @@ export function foldSets(combinations, fold) {
         )
       : undefined;
     if (home) home.members.push(combination);
-    else stacks.push({ key: combination.key, ids, head, members: [combination] });
+    else
+      stacks.push({ key: combination.key, ids, head, members: [combination] });
   }
   return stacks.map(({ key, members }) => ({ key, members }));
 }
@@ -257,7 +277,9 @@ export function setCard(stack) {
     differsBy: folded
       ? [
           ...new Set(
-            stack.members.slice(1).flatMap((member) => differences(seed, member)),
+            stack.members
+              .slice(1)
+              .flatMap((member) => differences(seed, member)),
           ),
         ]
       : // "Nothing to fold" is said in as many words, so the absence of a deck
@@ -266,7 +288,17 @@ export function setCard(stack) {
         [recipeCount(recipes), "nothing to fold"],
     pictures,
     recipes,
-    covers: (seed.covers ?? []).map((cover) => cover.url),
+    // Pooled across the whole stack, seed first, not taken from the seed alone:
+    // the count beside them sums every member, so a mosaic drawn from one of
+    // them under-represents its own number. Deduplicated by picture, because two
+    // recipes of one combination can nominate the same best picture.
+    covers: [
+      ...new Map(
+        stack.members
+          .flatMap((member) => member.covers ?? [])
+          .map((cover) => [cover.picture_id, cover.url]),
+      ).values(),
+    ].slice(0, COVER_DEPTH),
     size: stack.members.length,
   };
 }
@@ -329,7 +361,9 @@ function diffNote(diff) {
   if (!diff.length) return "the same files";
   const swap = diff.length === 1 && diff[0].includes("→");
   if (swap) return "one file swapped";
-  return diff.length === 1 ? "1 file from the set above" : `${diff.length} files differ`;
+  return diff.length === 1
+    ? "1 file from the set above"
+    : `${diff.length} files differ`;
 }
 
 /**
@@ -341,7 +375,9 @@ function diffNote(diff) {
  * one kind a reader most wants to see unlabelled.
  */
 export function memberKindLabel(model) {
-  return fileKindLabel(model?.kind) || (model?.kind === "adapter" ? "LoRA" : "");
+  return (
+    fileKindLabel(model?.kind) || (model?.kind === "adapter" ? "LoRA" : "")
+  );
 }
 
 /**

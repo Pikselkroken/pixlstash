@@ -19,7 +19,11 @@ function model(id, name, kind = "checkpoint", extra = {}) {
   return { id, name, kind, filename: `${name}.safetensors`, ...extra };
 }
 
-function combination(key, models, { recipes = 1, pictures = 1, covers = [] } = {}) {
+function combination(
+  key,
+  models,
+  { recipes = 1, pictures = 1, covers = [] } = {},
+) {
   return {
     key,
     models,
@@ -89,9 +93,16 @@ describe("foldSets", () => {
     const stacks = foldSets(all, "one");
     // UNRELATED has the most pictures, so it seeds the first stack; BASE seeds
     // the second and takes the LoRA and the VAE swap with it.
-    expect(stacks.map((stack) => stack.members[0].key)).toEqual(["2,4,6", "1,2,4"]);
+    expect(stacks.map((stack) => stack.members[0].key)).toEqual([
+      "2,4,6",
+      "1,2,4",
+    ]);
     const folded = stacks.find((stack) => stack.key === "1,2,4");
-    expect(folded.members.map((m) => m.key)).toEqual(["1,2,4", "1,2,4,5", "1,3,4"]);
+    expect(folded.members.map((m) => m.key)).toEqual([
+      "1,2,4",
+      "1,2,4,5",
+      "1,3,4",
+    ]);
   });
 
   it("never chains a combination onto a stack it is two files from", () => {
@@ -99,9 +110,13 @@ describe("foldSets", () => {
     // linkage would put C under A's name; seeded folding must not.
     const a = combination("1,2,4", [CKPT, VAE, CLIP], { pictures: 90 });
     const b = combination("1,2,4,5", [CKPT, VAE, CLIP, LORA], { pictures: 50 });
-    const c = combination("1,2,4,5,7", [CKPT, VAE, CLIP, LORA, model(7, "x", "adapter")], {
-      pictures: 10,
-    });
+    const c = combination(
+      "1,2,4,5,7",
+      [CKPT, VAE, CLIP, LORA, model(7, "x", "adapter")],
+      {
+        pictures: 10,
+      },
+    );
 
     const stacks = foldSets([a, b, c], "one");
 
@@ -143,12 +158,53 @@ describe("foldCounts", () => {
     });
   });
 
-  it("is a hierarchy: loosening the fold never adds a card", () => {
-    // The claim `foldSets` makes in as many words. It holds only because a fold
-    // never swaps the head, so each setting is a refinement of the next.
+  it("keeps By checkpoint only the coarsest setting, whatever the distance", () => {
+    // The one ordering the fold really guarantees, and it holds because a fold
+    // never swaps the head: every stack is inside one head's group, so nothing
+    // finer than `checkpoint` can produce fewer cards than it does.
     const counts = foldCounts([BASE, WITH_LORA, SWAPPED_VAE, UNRELATED]);
-    const order = FOLD_KEYS.map((key) => counts[key]);
-    expect(order).toEqual([...order].sort((a, b) => b - a));
+    for (const key of ["none", "one", "two"]) {
+      expect(counts[key]).toBeGreaterThanOrEqual(counts.checkpoint);
+    }
+    expect(counts.checkpoint).toBe(2); // two heads in the fixture
+  });
+
+  it("does NOT promise nested partitions, and this is the case that proves it", () => {
+    // Seeding has a real cost and the docs state it rather than hiding it: the
+    // seed set changes with the distance, so loosening can move a member onto a
+    // different card instead of only merging cards. Pinned so the claim in
+    // `foldSets`' docstring stays true of the code, and so that anybody who
+    // later makes the settings genuinely nested finds this test and deletes it
+    // deliberately.
+    const head = model(20, "one_ckpt");
+    const a = combination("20,21", [head, model(21, "a", "vae")], {
+      pictures: 30,
+    });
+    const b = combination(
+      "20,22,23",
+      [head, model(22, "b", "vae"), model(23, "c", "adapter")],
+      {
+        pictures: 20,
+      },
+    );
+    const c = combination(
+      "20,22,23,24",
+      [
+        head,
+        model(22, "b", "vae"),
+        model(23, "c", "adapter"),
+        model(24, "d", "adapter"),
+      ],
+      { pictures: 10 },
+    );
+
+    const at = (fold) =>
+      foldSets([a, b, c], fold).map((stack) => stack.members.map((m) => m.key));
+
+    // A seeds, B is 2 away, C is 1 from B: at "1 file apart" B seeds its own.
+    expect(at("one")).toEqual([["20,21"], ["20,22,23", "20,22,23,24"]]);
+    // At "2 files apart" A takes B, and C - 3 from A - is left on its own.
+    expect(at("two")).toEqual([["20,21", "20,22,23"], ["20,22,23,24"]]);
   });
 });
 
@@ -168,10 +224,9 @@ describe("differences", () => {
   it("does not let an added adapter take a removed encoder's place", () => {
     const without = combination("1,2", [CKPT, VAE]);
     const swapped = combination("1,2,5", [CKPT, VAE, LORA]);
-    expect(differences(combination("1,2,4", [CKPT, VAE, CLIP]), swapped)).toEqual([
-      "+ filmgrain_xl",
-      "− clip_l",
-    ]);
+    expect(
+      differences(combination("1,2,4", [CKPT, VAE, CLIP]), swapped),
+    ).toEqual(["+ filmgrain_xl", "− clip_l"]);
     expect(differences(without, without)).toEqual([]);
   });
 });
@@ -204,7 +259,18 @@ describe("setCard", () => {
     expect(card.covers).toEqual(["/t/11.webp", "/t/12.webp", "/t/13.webp"]);
   });
 
+  it("keeps an adapter out of the name even when it would fit", () => {
+    // The filter, exercised. With the adapter SECOND, `.slice(0, 3)` would
+    // include it, so this is the fixture that can tell the filter from the cut:
+    // a set that differs only by its LoRA must not be named after that LoRA,
+    // because the chip row below already names it and the title has to identify
+    // the set.
+    const lora_first = combination("1,5,2,4", [CKPT, LORA, VAE, CLIP]);
+    expect(setName(lora_first)).toBe("realvisXL_v5 · sdxl_vae · clip_l");
+  });
+
   it("falls back to the members it has when a set is all adapters", () => {
+    // Otherwise a set of adapters alone would be titled "Unnamed set".
     const adapters = combination("5", [LORA]);
     expect(setName(adapters)).toBe("filmgrain_xl");
   });
@@ -235,7 +301,9 @@ describe("comboCard", () => {
   });
 
   it("names the seed by its files and the rest by what changed", () => {
-    expect(comboCard(BASE, BASE, 0).name).toBe("realvisXL_v5 · sdxl_vae · clip_l");
+    expect(comboCard(BASE, BASE, 0).name).toBe(
+      "realvisXL_v5 · sdxl_vae · clip_l",
+    );
     expect(comboCard(BASE, BASE, 0).note).toBe("most used · 5 recipes");
     expect(comboCard(WITH_LORA, BASE, 1).name).toBe("… + filmgrain_xl");
     expect(comboCard(WITH_LORA, BASE, 1).note).toBe(
@@ -277,10 +345,16 @@ describe("worksWith", () => {
       recipes: 1,
       pictures: 1,
     });
-    expect(worksWith([sure, unsure], CKPT.id).companions[0].ambiguous).toBe(true);
+    expect(worksWith([sure, unsure], CKPT.id).companions[0].ambiguous).toBe(
+      true,
+    );
   });
 
   it("answers for a model no recipe names without throwing", () => {
-    expect(worksWith(all, 999)).toEqual({ companions: [], recipes: 0, sets: [] });
+    expect(worksWith(all, 999)).toEqual({
+      companions: [],
+      recipes: 0,
+      sets: [],
+    });
   });
 });
