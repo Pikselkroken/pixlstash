@@ -1162,8 +1162,12 @@ class TestAnEditorGraphIsRecognised:
         assert body["reason"] == "editor_graph"
         assert body["source"] == "comfyui"
         assert body["converted_from_editor_graph"] is False
+        # Both: the class this ComfyUI does not have, and the input that is
+        # therefore wired to nothing. Each names a different thing to look at.
         assert body["conversion_problems"] == [
-            "this ComfyUI has no node class 'CheckpointLoaderSimple'"
+            "this ComfyUI has no node class 'CheckpointLoaderSimple'",
+            "KSampler (node 3) has its 'model' input wired to something that "
+            "does not run",
         ]
         # The recipe itself is still there: read off the editor graph, which is
         # what the file actually says.
@@ -1184,6 +1188,36 @@ class TestAnEditorGraphIsRecognised:
             "PixlStash could not ask ComfyUI which nodes it has"
         ]
         assert body["positive_prompt"] == "a cat in a hat"
+
+    def test_a_comfyui_that_is_down_is_not_asked_again_per_arrow_key(
+        self, editor_env, monkeypatch
+    ):
+        """The failure is cached too, and that is an availability rule.
+
+        `OBJECT_INFO_TIMEOUT_S` is 15 seconds and this route is synchronous, so
+        a ComfyUI that is merely not running would otherwise hold one worker
+        thread per filmstrip step for 15 seconds each - enough presses and
+        nothing else in the API gets a thread.
+        """
+        _server, client, pic_id = editor_env
+        attempts = []
+
+        def boom(url):
+            attempts.append(url)
+            raise RuntimeError(f"Could not reach ComfyUI at {url}")
+
+        monkeypatch.setattr(comfyui_module, "fetch_object_info", boom)
+        for _ in range(4):
+            r = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
+            assert r.status_code == 200, r.text
+            assert r.json()["reason"] == "editor_graph"
+        assert len(attempts) == 1, "a ComfyUI that is down must be asked once"
+
+        # The control: forgetting the cache asks again, so the caching is what
+        # made the count 1 and not some other refusal short-circuiting it.
+        comfyui_module._forget_cached_object_info()
+        client.get(f"{API}/comfyui/pictures/{pic_id}/recipe?preflight=false")
+        assert len(attempts) == 2
 
 
 class TestAnEditorGraphCanBeRunAgain:
@@ -1209,6 +1243,32 @@ class TestAnEditorGraphCanBeRunAgain:
         expected = json.loads(json.dumps(EXPECTED_REBUILD))
         expected["3"]["inputs"]["seed"] = 777
         assert graph == expected
+
+    def test_a_picture_with_no_workflow_at_all_is_refused_without_asking_comfyui(
+        self, editor_env, monkeypatch
+    ):
+        """The file settles this, so ComfyUI is not waited on to say it.
+
+        A `run_recipe` on a holiday photo used to 400 at once; reading
+        /object_info first would make it 400 after a connect timeout instead.
+        """
+        _server, client, _pic_id = editor_env
+        buf = io.BytesIO()
+        Image.new("RGB", (64, 64), (3, 3, 3)).save(buf, format="PNG")
+        plain = _upload_one(client, "plain-for-run.png", buf.getvalue())
+        asked = []
+
+        def boom(url):
+            asked.append(url)
+            raise AssertionError("ComfyUI must not be asked about a photo")
+
+        monkeypatch.setattr(comfyui_module, "fetch_object_info", boom)
+        r = client.post(
+            f"{API}/comfyui/run_recipe", json={"picture_id": plain, "stack": False}
+        )
+        assert r.status_code == 400, r.text
+        assert "no executable workflow embedded" in r.json()["detail"]
+        assert asked == []
 
     def test_a_graph_that_cannot_be_rebuilt_is_refused_by_name(
         self, editor_env, monkeypatch

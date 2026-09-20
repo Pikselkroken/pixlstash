@@ -62,6 +62,29 @@ OBJECT_INFO = {
         "input": {"required": {"samples": ["LATENT", {}], "vae": ["VAE", {}]}},
         "input_order": {"required": ["samples", "vae"]},
     },
+    # The upload button is a widget of its own in the editor and no input at
+    # all in the API graph - the same shape as control_after_generate, and the
+    # commonest i2i node there is.
+    "LoadImage": {
+        "input": {"required": {"image": [["a.png", "b.png"], {"image_upload": True}]}},
+        "input_order": {"required": ["image"]},
+    },
+    # `forceInput` is "this one is a socket even though its type could be typed
+    # in", so it takes no slot in the widget array.
+    "CLIPTextEncodeForced": {
+        "input": {
+            "required": {
+                "text": ["STRING", {"forceInput": True}],
+                "weight": ["FLOAT", {}],
+            }
+        },
+        "input_order": {"required": ["text", "weight"]},
+    },
+    # No `input_order`: the declaration order of the dict is the fallback, and
+    # a refusal here would refuse every ComfyUI that does not publish one.
+    "UnorderedLoader": {
+        "input": {"required": {"first": ["STRING", {}], "second": ["INT", {}]}}
+    },
 }
 
 
@@ -198,8 +221,15 @@ class TestItConvertsExactly:
         assert "5" not in prompt, "the reroute is not a node ComfyUI would run"
         assert prompt["3"]["inputs"]["model"] == ["4", 0]
 
-    def test_a_bypassed_node_hands_its_input_straight_on(self):
-        """Mode 4 is bypass: the node does not run and its wire passes through."""
+    def test_a_bypassed_node_hands_the_matching_input_straight_on(self):
+        """Mode 4 is bypass: the node does not run and its wire passes through.
+
+        **The OUTPUT's type picks which input is passed through**, which is the
+        whole difficulty: the node below is bypassed with two live inputs of
+        different types, and only one of them is what the sampler asked for.
+        A converter that took "the first connected input" would wire the
+        sampler's MODEL socket to a CLIP producer and report an exact rebuild.
+        """
         graph = _graph(
             [
                 _node(
@@ -209,11 +239,24 @@ class TestItConvertsExactly:
                     widgets=["sd_xl_base_1.0.safetensors"],
                 ),
                 _node(
+                    41,
+                    "CheckpointLoaderSimple",
+                    outputs=[{"name": "CLIP", "type": "CLIP", "links": [4]}],
+                    widgets=["sd_xl_base_1.0.safetensors"],
+                ),
+                _node(
                     7,
-                    "VAEDecode",
+                    "LoraStub",
                     mode=4,
-                    inputs=[{"name": "samples", "type": "MODEL", "link": 1}],
-                    outputs=[{"name": "IMAGE", "type": "MODEL", "links": [2]}],
+                    inputs=[
+                        # CLIP first on purpose: position must not decide it.
+                        {"name": "clip", "type": "CLIP", "link": 4},
+                        {"name": "model", "type": "MODEL", "link": 1},
+                    ],
+                    outputs=[
+                        {"name": "MODEL", "type": "MODEL", "links": [2]},
+                        {"name": "CLIP", "type": "CLIP", "links": []},
+                    ],
                 ),
                 _node(
                     3,
@@ -222,12 +265,158 @@ class TestItConvertsExactly:
                     widgets=[1, "fixed", 20, 7.0],
                 ),
             ],
-            [[1, 4, 0, 7, 0, "MODEL"], [2, 7, 0, 3, 0, "MODEL"]],
+            [
+                [1, 4, 0, 7, 1, "MODEL"],
+                [4, 41, 0, 7, 0, "CLIP"],
+                [2, 7, 0, 3, 0, "MODEL"],
+            ],
         )
         prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
         assert problems == []
         assert "7" not in prompt
+        assert prompt["3"]["inputs"]["model"] == ["4", 0], (
+            "the sampler must be wired to the MODEL producer, not the CLIP one"
+        )
+
+    def test_a_wired_widget_input_still_holds_its_slot_in_the_array(self):
+        """The rule most likely to shift a whole node's values.
+
+        The editor keeps the last typed value behind a socket that has been
+        wired up, so the array still carries it. Counting it as consumed is
+        what keeps `weight` reading 0.5 rather than the leftover text.
+        """
+        graph = _graph(
+            [
+                _node(
+                    6,
+                    "CLIPTextEncode",
+                    outputs=[{"name": "COND", "type": "STRING", "links": [1]}],
+                    widgets=["feeds the socket"],
+                ),
+                _node(
+                    8,
+                    "CLIPTextEncodeForced",
+                    inputs=[{"name": "text", "type": "STRING", "link": 1}],
+                    widgets=[0.5],
+                ),
+            ],
+            [[1, 6, 0, 8, 0, "STRING"]],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert problems == []
+        # `text` is forceInput, so it takes NO slot and `weight` reads the
+        # first and only value.
+        assert prompt["8"]["inputs"] == {"text": ["6", 0], "weight": 0.5}
+
+    def test_a_wired_WIDGET_input_keeps_the_slot_it_left_behind(self):
+        """The rule the whole positional read turns on.
+
+        `text` is an ordinary STRING widget that the owner has since wired a
+        socket into. The editor keeps the last typed value in the array behind
+        that socket, so the array is `["leftover", 0.7]` and `weight` is the
+        SECOND entry. A converter that skipped the slot would read `weight` as
+        the string, and every later value in the node with it.
+        """
+        graph = _graph(
+            [
+                _node(
+                    6,
+                    "CLIPTextEncode",
+                    outputs=[{"name": "OUT", "type": "STRING", "links": [1]}],
+                    widgets=["feeds the socket"],
+                ),
+                _node(
+                    9,
+                    "WidgetThenWeight",
+                    inputs=[{"name": "text", "type": "STRING", "link": 1}],
+                    widgets=["leftover", 0.7],
+                ),
+            ],
+            [[1, 6, 0, 9, 0, "STRING"]],
+        )
+        object_info = dict(OBJECT_INFO)
+        object_info["WidgetThenWeight"] = {
+            "input": {
+                "required": {
+                    "text": ["STRING", {"multiline": True}],
+                    "weight": ["FLOAT", {}],
+                }
+            },
+            "input_order": {"required": ["text", "weight"]},
+        }
+        prompt, problems = convert_ui_graph_to_api(graph, object_info)
+        assert problems == []
+        assert prompt["9"]["inputs"] == {"text": ["6", 0], "weight": 0.7}
+
+    def test_an_upload_button_consumes_a_slot_the_api_graph_has_no_input_for(self):
+        """LoadImage: `["picture.png", "image"]` is one input and one button."""
+        graph = _graph([_node(10, "LoadImage", widgets=["a.png", "image"])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert problems == []
+        assert prompt["10"]["inputs"] == {"image": "a.png"}
+
+    def test_a_class_that_publishes_no_input_order_uses_its_declaration_order(self):
+        """A refusal here would refuse every ComfyUI that omits the field."""
+        graph = _graph([_node(11, "UnorderedLoader", widgets=["hello", 3])], [])
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert problems == []
+        assert prompt["11"]["inputs"] == {"first": "hello", "second": 3}
+
+    def test_the_dict_spelling_of_a_link_is_read_too(self):
+        graph = {
+            "nodes": [
+                _node(
+                    4,
+                    "CheckpointLoaderSimple",
+                    outputs=[{"name": "MODEL", "type": "MODEL", "links": [1]}],
+                    widgets=["sd_xl_base_1.0.safetensors"],
+                ),
+                _node(
+                    3,
+                    "KSampler",
+                    inputs=[{"name": "model", "type": "MODEL", "link": 1}],
+                    widgets=[1, "fixed", 20, 7.0],
+                ),
+            ],
+            "links": [{"id": 1, "origin_id": 4, "origin_slot": 0}],
+        }
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert problems == []
         assert prompt["3"]["inputs"]["model"] == ["4", 0]
+
+    def test_a_muted_node_on_an_OPTIONAL_input_is_left_alone(self):
+        """Muting a branch off is an ordinary gesture; the editor submits it.
+
+        The control for `test_a_muted_node_on_a_required_input_is_refused`
+        below: refusing this one would refuse a workflow that runs.
+        """
+        graph = _graph(
+            [
+                _node(
+                    6,
+                    "CLIPTextEncode",
+                    mode=2,
+                    outputs=[{"name": "COND", "type": "COND", "links": [1]}],
+                    widgets=["off"],
+                ),
+                _node(
+                    12,
+                    "OptionalTaker",
+                    inputs=[{"name": "extra", "type": "COND", "link": 1}],
+                    widgets=[],
+                ),
+            ],
+            [[1, 6, 0, 12, 0, "COND"]],
+        )
+        object_info = dict(OBJECT_INFO)
+        object_info["OptionalTaker"] = {
+            "input": {"optional": {"extra": ["COND", {}]}},
+            "input_order": {"optional": ["extra"]},
+        }
+        prompt, problems = convert_ui_graph_to_api(graph, object_info)
+        assert problems == []
+        assert prompt["12"]["inputs"] == {}
+        assert "6" not in prompt
 
     def test_editor_annotations_are_dropped_rather_than_refused(self):
         graph = _graph(
@@ -302,6 +491,163 @@ class TestItRefusesRatherThanGuesses:
         )
         assert prompt is None
         assert problems == ["this is not a ComfyUI editor graph"]
+
+    def test_the_class_is_the_node_type_and_never_a_litegraph_property(self):
+        """`Node name for S&R` is attacker-authorable, so it is never read.
+
+        The severe case: the editor graph is file metadata, the workflow box
+        the owner reads shows `type`, and `class_type` is what gets submitted.
+        If they could differ, a crafted picture would show one node and run
+        another on the owner's ComfyUI.
+        """
+        node = _node(
+            4, "CheckpointLoaderSimple", widgets=["sd_xl_base_1.0.safetensors"]
+        )
+        node["properties"] = {"Node name for S&R": "SomeOtherLoader"}
+        prompt, problems = convert_ui_graph_to_api(_graph([node], []), OBJECT_INFO)
+        assert problems == []
+        assert prompt["4"]["class_type"] == "CheckpointLoaderSimple"
+
+    def test_two_nodes_sharing_an_id_stop_it(self):
+        """Keying by id would drop one and call the smaller graph exact."""
+        graph = _graph(
+            [
+                _node(
+                    4, "CheckpointLoaderSimple", widgets=["sd_xl_base_1.0.safetensors"]
+                ),
+                _node(4, "CLIPTextEncode", widgets=["a cat"]),
+            ],
+            [],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert problems == ["two nodes in this editor graph share the id 4"]
+
+    def test_a_bypassed_node_that_does_not_say_what_it_carries_stops_it(self):
+        """With no output type there is nothing to match, so nothing is picked.
+
+        The inverse of `test_a_bypassed_node_hands_the_matching_input_straight_on`:
+        the same two producers, and an `outputs` array the file does not carry.
+        Taking the first connected input here is how the sampler's MODEL socket
+        ends up on a CLIP producer.
+        """
+        graph = _graph(
+            [
+                _node(
+                    41,
+                    "CheckpointLoaderSimple",
+                    outputs=[{"name": "CLIP", "type": "CLIP", "links": [4]}],
+                    widgets=["sd_xl_base_1.0.safetensors"],
+                ),
+                _node(
+                    7,
+                    "LoraStub",
+                    mode=4,
+                    inputs=[{"name": "clip", "type": "CLIP", "link": 4}],
+                    outputs=[],
+                ),
+                _node(
+                    3,
+                    "KSampler",
+                    inputs=[{"name": "model", "type": "MODEL", "link": 2}],
+                    widgets=[1, "fixed", 20, 7.0],
+                ),
+            ],
+            [[4, 41, 0, 7, 0, "CLIP"], [2, 7, 0, 3, 0, "MODEL"]],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert "is bypassed and does not say what its output carries" in problems[0]
+
+    def test_a_muted_node_on_a_required_input_is_refused(self):
+        """ComfyUI would take this graph and reject it; saying so now is the
+        same answer sooner, with the node named."""
+        graph = _graph(
+            [
+                _node(
+                    4,
+                    "CheckpointLoaderSimple",
+                    mode=2,
+                    outputs=[{"name": "MODEL", "type": "MODEL", "links": [1]}],
+                    widgets=["sd_xl_base_1.0.safetensors"],
+                ),
+                _node(
+                    3,
+                    "KSampler",
+                    inputs=[{"name": "model", "type": "MODEL", "link": 1}],
+                    widgets=[1, "fixed", 20, 7.0],
+                ),
+            ],
+            [[1, 4, 0, 3, 0, "MODEL"]],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert problems == [
+            "KSampler (node 3) has its 'model' input wired to something that "
+            "does not run"
+        ]
+
+    def test_a_widget_value_keyed_by_a_name_the_node_does_not_have_stops_it(self):
+        """The dict spelling gets the same accounting as the array.
+
+        It cannot SHIFT, but a key this ComfyUI's version of the node does not
+        declare still means the file and `/object_info` disagree - and the
+        value would be dropped in silence.
+        """
+        graph = _graph(
+            [
+                _node(
+                    3,
+                    "KSampler",
+                    widgets={"seed": 7, "steps": 30, "cfg": 4.0, "eta": 1},
+                )
+            ],
+            [],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert problems == [
+            "KSampler (node 3) carries a widget value for 'eta', which this "
+            "ComfyUI's version of the node does not have"
+        ]
+
+    def test_a_widget_the_node_needs_and_the_dict_omits_stops_it(self):
+        graph = _graph([_node(3, "KSampler", widgets={"seed": 7})], [])
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert problems == [
+            "KSampler (node 3) has no value for 'cfg', 'steps', which this "
+            "ComfyUI's version of the node needs"
+        ]
+
+    def test_a_wire_that_runs_in_a_circle_stops_it(self):
+        """Two reroutes feeding each other: the depth guard, not a hang."""
+        graph = _graph(
+            [
+                _node(
+                    50,
+                    "Reroute",
+                    inputs=[{"name": "", "type": "*", "link": 2}],
+                    outputs=[{"name": "", "type": "MODEL", "links": [1]}],
+                ),
+                _node(
+                    51,
+                    "Reroute",
+                    inputs=[{"name": "", "type": "*", "link": 1}],
+                    outputs=[{"name": "", "type": "MODEL", "links": [2]}],
+                ),
+                _node(
+                    3,
+                    "KSampler",
+                    inputs=[{"name": "model", "type": "MODEL", "link": 1}],
+                    widgets=[1, "fixed", 20, 7.0],
+                ),
+            ],
+            [[1, 50, 0, 3, 0, "MODEL"], [2, 51, 0, 50, 0, "MODEL"]],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert prompt is None
+        assert "a wire runs in a circle" in problems
 
     def test_a_graph_of_nothing_but_annotations_converts_to_nothing(self):
         graph = _graph([_node(1, "Note", widgets=["hello"])], [])

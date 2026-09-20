@@ -1119,12 +1119,19 @@ const sidebarTab = computed({
     chosenSidebarTab.value = value;
   },
 });
-const sidebarTabs = computed(() => [
-  { value: "info", label: "Info", icon: "mdi-information-outline" },
-  ...(recipeTabShown.value
-    ? [{ value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" }]
-    : []),
-]);
+// Empty, not one tab: `AppInspector` draws the band on `tabs.length`, so a
+// lone Info button would be a control with nothing to switch to - a dead tab
+// by another name, which is the thing hiding Recipe was meant to avoid. With
+// no tabs the band is gone and the pane is the plain inspector every other
+// screen uses.
+const sidebarTabs = computed(() =>
+  recipeTabShown.value
+    ? [
+        { value: "info", label: "Info", icon: "mdi-information-outline" },
+        { value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" },
+      ]
+    : [],
+);
 
 const chromeHidden = ref(false);
 const chromeRevealTimestamp = ref(0);
@@ -3402,7 +3409,13 @@ async function fetchComfyWorkflow(imageId) {
   try {
     const data = await getPictureRecipe(imageId, { preflight: false });
     if (comfyWorkflowRequestId !== requestId) return;
-    if (!image.value || image.value.id !== requestedImageId) return;
+    if (!image.value || image.value.id !== requestedImageId) {
+      // The picture went away under the read. `comfyMetadata` was cleared
+      // before it started, so leaving the tab shown would leave it shown over
+      // nothing until some later read lands.
+      recipeTabShown.value = false;
+      return;
+    }
     // `reason: "no_prompt_chunk"` is the recipe read's honest "this picture was
     // not generated", not an error - and unlike the workflow read it is a 200,
     // so the Recipe tab's empty state comes from here rather than from a 404.

@@ -1113,7 +1113,13 @@ def _describe_preflight_failure(preflight: dict) -> str:
 # is short enough that a node or model installed while the app is open shows up
 # on the next look rather than after a restart.
 OBJECT_INFO_CACHE_TTL_S = 60.0
-_object_info_cache: dict[str, tuple[float, dict]] = {}
+# `{url: (read_at, object_info, error)}`. A FAILURE is cached too: the read this
+# serves is fired per arrow-key, `OBJECT_INFO_TIMEOUT_S` is 15 seconds, and the
+# route is synchronous - so a ComfyUI that is merely not running would otherwise
+# hold one worker thread per keypress for 15 seconds each and take the rest of
+# the API down with it. A ComfyUI that comes back is picked up within the
+# minute.
+_object_info_cache: dict[str, tuple[float, dict | None, str | None]] = {}
 
 
 def _forget_cached_object_info() -> None:
@@ -1130,31 +1136,35 @@ def _read_object_info(
     pre-flight and a LoRA swap or insertion on the same run, and so the swap
     can be applied *before* the graph is judged.
 
-    ``cached`` reuses a map read in the last minute. **Only for reading an
-    editor graph**, which needs the map to be readable at all; never for
-    deciding whether a graph may run, where the question is what ComfyUI has
-    now. A failure is not cached, so a ComfyUI that comes back up is picked up
-    at once.
+    ``cached`` reuses the last minute's answer - the map OR the failure; see
+    the cache's own note for why a failure counts. **Only for reading an editor
+    graph**, which needs the map to be readable at all; never for deciding
+    whether a graph may run, where the question is what ComfyUI has now.
     """
+    now = time.monotonic()
     if cached:
         entry = _object_info_cache.get(comfyui_url)
-        if (
-            entry is not None
-            and (time.monotonic() - entry[0]) < OBJECT_INFO_CACHE_TTL_S
-        ):
-            return entry[1], None
+        if entry is not None and (now - entry[0]) < OBJECT_INFO_CACHE_TTL_S:
+            return entry[1], entry[2]
+    result: tuple[dict | None, str | None]
     try:
-        payload = fetch_object_info(comfyui_url)
+        result = (fetch_object_info(comfyui_url), None)
     except RuntimeError as exc:
         logger.info(
             "[comfyui] Recipe pre-flight skipped, ComfyUI not reachable at %s: %s",
             comfyui_url,
             exc,
         )
-        return None, str(exc)
+        result = (None, str(exc))
     if cached:
-        _object_info_cache[comfyui_url] = (time.monotonic(), payload)
-    return payload, None
+        # Pruned on write rather than on a timer: these maps are megabytes, the
+        # keys are ComfyUI URLs, and one the owner has changed away from must
+        # not be pinned for the life of the process.
+        for url, entry in list(_object_info_cache.items()):
+            if (now - entry[0]) >= OBJECT_INFO_CACHE_TTL_S:
+                del _object_info_cache[url]
+        _object_info_cache[comfyui_url] = (now, result[0], result[1])
+    return result
 
 
 def _inspect_graph(

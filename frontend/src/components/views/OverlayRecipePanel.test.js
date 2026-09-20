@@ -500,6 +500,65 @@ describe("OverlayRecipePanel", () => {
     );
   });
 
+  // ── The editor graph ──────────────────────────────────────────────────
+  //
+  // A picture that carries ComfyUI's editor graph and not the API one the
+  // server ran. PixlStash rebuilds it to run it; a rebuild that could not be
+  // exact is refused, and the refusal has to say which node stopped it, or the
+  // reader is sent nowhere.
+
+  const EDITOR_REFUSAL = {
+    ...RECIPE,
+    available: false,
+    reason: "editor_graph",
+    summary: "Editor Workflow · 4 nodes · 3 links",
+    conversionProblems: [
+      "this ComfyUI has no node class 'SomeCustomPackNode'",
+      "KSampler (node 3) carries 5 widget values, and its inputs account for 4",
+    ],
+  };
+
+  it("explains an editor graph that could not be rebuilt", () => {
+    const wrapper = render({
+      recipe: EDITOR_REFUSAL,
+      canGenerateVariants: true,
+    });
+    expect(wrapper.find(".recipe-run-reason").text()).toContain(
+      "could not rebuild",
+    );
+    // Not the fallback sentence: an unmapped reason reads "cannot be run
+    // again", which would say nothing about what to go and fix.
+    expect(wrapper.find(".recipe-run-reason").text()).not.toContain(
+      "This picture's recipe cannot be run again",
+    );
+  });
+
+  it("lists each thing that stopped the rebuild", () => {
+    const wrapper = render({
+      recipe: EDITOR_REFUSAL,
+      canGenerateVariants: true,
+    });
+    const problems = wrapper
+      .findAll(".recipe-run-problems li")
+      .map((li) => li.text());
+    expect(problems).toEqual(EDITOR_REFUSAL.conversionProblems);
+  });
+
+  it("shows the recipe itself even though it cannot be run", () => {
+    // The distinction the whole path exists for: this picture WAS made in
+    // ComfyUI, so the prompt and the models are there to read.
+    const wrapper = render({ recipe: EDITOR_REFUSAL });
+    expect(wrapper.find(".recipe-workflow").text()).toBe(
+      "Editor Workflow · 4 nodes · 3 links",
+    );
+    expect(wrapper.find(".recipe-prompt").text()).toBe(RECIPE.positive_prompt);
+  });
+
+  it("prints no problem list for every other recipe", () => {
+    const wrapper = render({ recipe: RECIPE, canGenerateVariants: true });
+    expect(wrapper.find(".recipe-run-problems").exists()).toBe(false);
+  });
+
   it("offers the picture as a workflow's input, whatever Run… says", async () => {
     const wrapper = render({
       recipe: { ...RECIPE, source: "a1111", available: false, reason: "a1111" },

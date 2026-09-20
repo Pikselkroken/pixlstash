@@ -25,8 +25,8 @@ node must be a class this ComfyUI declares, and its widget values must be
 accounted for exactly; one unexplained value means the model of the frontend is
 off and every later value in that node is suspect, so the whole conversion is
 abandoned and the caller is told why. Measured over the 15 editor/API workflow
-pairs shipped by comfyui-multigpu, that rule converts 9 exactly and refuses the
-other 6 - and produces no graph that differs from the real one.
+pairs shipped by comfyui-multigpu: 8 rebuilt, all 8 byte-identical to the API
+half, 0 wrong, 7 refused with a reason.
 """
 
 from __future__ import annotations
@@ -73,8 +73,8 @@ def is_ui_graph(workflow) -> bool:
     return isinstance(workflow, dict) and isinstance(workflow.get("nodes"), list)
 
 
-def _declared_inputs(node_spec: dict) -> list[tuple[str, object, dict]]:
-    """``[(name, type_field, options)]`` for a class, in declaration order.
+def _declared_inputs(node_spec: dict) -> list[tuple[str, object, dict, bool]]:
+    """``[(name, type_field, options, required)]`` for a class, in order.
 
     ``input_order`` is ComfyUI's own answer to "which widget comes first",
     which is the only thing that makes a positional ``widgets_values`` array
@@ -86,7 +86,7 @@ def _declared_inputs(node_spec: dict) -> list[tuple[str, object, dict]]:
         return []
     order = node_spec.get("input_order")
     order = order if isinstance(order, dict) else {}
-    declared: list[tuple[str, object, dict]] = []
+    declared: list[tuple[str, object, dict, bool]] = []
     for group in ("required", "optional"):
         group_spec = inputs.get(group)
         if not isinstance(group_spec, dict):
@@ -99,7 +99,7 @@ def _declared_inputs(node_spec: dict) -> list[tuple[str, object, dict]]:
             if not isinstance(entry, list) or not entry:
                 continue
             options = entry[1] if len(entry) > 1 and isinstance(entry[1], dict) else {}
-            declared.append((str(name), entry[0], options))
+            declared.append((str(name), entry[0], options, group == "required"))
     return declared
 
 
@@ -121,16 +121,15 @@ def _extra_widget_slots(options: dict) -> int:
 
 
 def _node_class(node: dict) -> str:
-    """The server class of an editor node.
+    """The server class of an editor node: its ``type``, and only that.
 
-    ``Node name for S&R`` is what the editor records when a node was renamed by
-    a pack that also renamed its class; ``type`` is the ordinary answer.
+    **Never ``properties["Node name for S&R"]``.** That is a litegraph property
+    - a node pack writes it, the owner can edit it in the properties panel, and
+    the editor graph is file metadata, so it is attacker-authorable. Preferring
+    it would let a crafted file show one class in the workflow box the owner
+    reads and submit another to their ComfyUI. ComfyUI's own ``graphToPrompt``
+    reads ``comfyClass ?? type``, never that property, and this follows it.
     """
-    properties = node.get("properties")
-    if isinstance(properties, dict):
-        recorded = properties.get("Node name for S&R")
-        if isinstance(recorded, str) and recorded:
-            return recorded
     return str(node.get("type") or "")
 
 
@@ -150,13 +149,21 @@ class _Converter:
 
     def __init__(self, workflow: dict, object_info: dict):
         self.object_info = object_info
-        self.nodes = {
-            node.get("id"): node
-            for node in workflow.get("nodes") or []
-            if isinstance(node, dict) and node.get("id") is not None
-        }
-        self.links = _index_links(workflow)
         self.problems: list[str] = []
+        self.nodes: dict = {}
+        for node in workflow.get("nodes") or []:
+            if not isinstance(node, dict) or node.get("id") is None:
+                continue
+            node_id = node.get("id")
+            if node_id in self.nodes:
+                # A hand-edited or badly merged file. Keying by id would drop
+                # one of them and report an exact rebuild of a smaller graph.
+                self.problems.append(
+                    f"two nodes in this editor graph share the id {node_id!r}"
+                )
+                continue
+            self.nodes[node_id] = node
+        self.links = _index_links(workflow)
 
     def _resolve(self, link_id, depth: int = 0) -> list | None:
         """``[node_id, slot]`` for a wire, chasing reroutes and bypasses.
@@ -187,16 +194,31 @@ class _Converter:
         return [str(origin_id), origin_slot]
 
     def _chase_through(self, node: dict, origin_slot, depth: int) -> list | None:
-        """Follow a bypassed or rerouted node to whatever feeds its output."""
+        """Follow a bypassed or rerouted node to whatever feeds its output.
+
+        **The output's own type decides which input is passed through**, and a
+        node that does not declare the slot being asked for is refused rather
+        than guessed at. Taking "the first connected input of any type" when
+        the type is unknown is how a sampler's MODEL input ends up wired to a
+        CLIP producer with nothing reported.
+        """
         outputs = node.get("outputs") or []
-        wanted = None
-        if isinstance(origin_slot, int) and 0 <= origin_slot < len(outputs):
-            entry = outputs[origin_slot]
-            wanted = entry.get("type") if isinstance(entry, dict) else None
+        entry = (
+            outputs[origin_slot]
+            if isinstance(origin_slot, int) and 0 <= origin_slot < len(outputs)
+            else None
+        )
+        wanted = entry.get("type") if isinstance(entry, dict) else None
+        if not wanted:
+            self.problems.append(
+                f"node {node.get('id')} ({_node_class(node)!r}) is bypassed and "
+                "does not say what its output carries"
+            )
+            return None
         for candidate in node.get("inputs") or []:
             if not isinstance(candidate, dict) or candidate.get("link") is None:
                 continue
-            if wanted in (None, "*") or candidate.get("type") in (wanted, "*"):
+            if wanted == "*" or candidate.get("type") in (wanted, "*"):
                 return self._resolve(candidate["link"], depth + 1)
         return None
 
@@ -208,21 +230,44 @@ class _Converter:
         }
 
     def _node_inputs(self, node: dict, node_class: str) -> dict | None:
-        """The API ``inputs`` map for one node, or None when it cannot be read."""
+        """The API ``inputs`` map for one node, or None when it cannot be read.
+
+        **Both spellings of ``widgets_values`` are accounted for.** The list is
+        positional, so an unexplained entry shifts every value after it; the
+        dict is keyed by name and cannot shift, but a key this class does not
+        declare, or a widget this class declares and the file does not carry,
+        still means the file and ``/object_info`` disagree about the node - and
+        a rebuild from a disagreement is not the rebuild it claims to be.
+        """
         declared = _declared_inputs(self.object_info[node_class])
         connected = self._connected_inputs(node)
         widget_values = node.get("widgets_values")
-        # Newer editor saves key the widget values by name, which needs no
-        # positional accounting at all.
         by_name = isinstance(widget_values, dict)
         positional = widget_values if isinstance(widget_values, list) else []
+        where = f"{node_class} (node {node.get('id')})"
         inputs: dict = {}
         consumed = 0
-        for name, type_field, options in declared:
+        widget_names: set[str] = set()
+        for name, type_field, options, required in declared:
             is_widget = _is_widget(type_field, options)
+            if is_widget:
+                widget_names.add(name)
             if name in connected:
                 resolved = self._resolve(connected[name])
-                if resolved is not None:
+                if resolved is None and required:
+                    # Muted, dangling, or a bypass that could not be chased.
+                    # **Only a REQUIRED input is refused over this.** Muting a
+                    # node to switch an optional branch off is an ordinary
+                    # gesture and the editor submits that graph too, so
+                    # refusing it would refuse a workflow that runs. A required
+                    # input with nothing behind it is the other case: ComfyUI
+                    # would take the graph and reject it, so saying so now is
+                    # the same answer sooner and with the node named.
+                    self.problems.append(
+                        f"{where} has its {name!r} input wired to something "
+                        "that does not run"
+                    )
+                elif resolved is not None:
                     inputs[name] = resolved
                 # A widget input that has been wired up still holds its slot in
                 # the array: the editor keeps the last typed value behind the
@@ -239,11 +284,29 @@ class _Converter:
             if consumed < len(positional):
                 inputs[name] = positional[consumed]
             consumed += 1 + _extra_widget_slots(options)
-        if not by_name and consumed != len(positional):
+        if by_name:
+            declared_names = {name for name, _t, _o, _r in declared}
+            unknown = sorted(k for k in widget_values if k not in declared_names)
+            missing = sorted(widget_names - set(widget_values) - set(connected))
+            if unknown:
+                self.problems.append(
+                    f"{where} carries a widget value for "
+                    + ", ".join(repr(k) for k in unknown)
+                    + ", which this ComfyUI's version of the node does not have"
+                )
+            if missing:
+                self.problems.append(
+                    f"{where} has no value for "
+                    + ", ".join(repr(k) for k in missing)
+                    + ", which this ComfyUI's version of the node needs"
+                )
+            if unknown or missing:
+                return None
+            return inputs
+        if consumed != len(positional):
             self.problems.append(
-                f"{node_class} (node {node.get('id')}) carries "
-                f"{len(positional)} widget values, and its inputs account for "
-                f"{consumed}"
+                f"{where} carries {len(positional)} widget values, and its "
+                f"inputs account for {consumed}"
             )
             return None
         return inputs
@@ -303,7 +366,9 @@ def convert_ui_graph_to_api(workflow, object_info) -> tuple[dict | None, list[st
     # for a run.
     # ponytail: subgraphs and the deprecated `PrimitiveNode` are the two things
     # this refuses that the editor can resolve; expand them here if real
-    # pictures turn out to carry them.
+    # pictures turn out to carry them. `PrimitiveNode` is refused only as an
+    # undeclared class ("this ComfyUI has no node class 'PrimitiveNode'"),
+    # which is true and is the reason a reader gets.
     if (workflow.get("definitions") or {}).get("subgraphs"):
         return None, ["this editor graph uses subgraphs, which PixlStash cannot run"]
     converter = _Converter(workflow, object_info)

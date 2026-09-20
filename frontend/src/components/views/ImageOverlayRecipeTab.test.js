@@ -41,14 +41,19 @@ let picturesWithARecipe = new Set([7]);
 // while the answer is still in flight.
 let pendingRecipe = null;
 
-const recipeBody = (id) => ({
-  available: true,
-  reason: null,
-  source: "comfyui",
-  summary: `Editor Workflow · 4 nodes`,
-  positive_prompt: `prompt for ${id}`,
-  conversion_problems: [],
-});
+// Set by a test that wants the "this is a ComfyUI picture PixlStash cannot
+// hand back to ComfyUI" answer instead of the runnable one.
+let recipeRefusal = null;
+
+const recipeBody = (id) =>
+  recipeRefusal ?? {
+    available: true,
+    reason: null,
+    source: "comfyui",
+    summary: `Editor Workflow · 4 nodes`,
+    positive_prompt: `prompt for ${id}`,
+    conversion_problems: [],
+  };
 
 const getMock = vi.fn(async (url) => {
   if (typeof url === "string" && url.includes("/recipe")) {
@@ -88,7 +93,14 @@ const STUBS = {
   OverlayFilmstrip: true,
   OverlayDescriptionPanel: true,
   OverlayMetadataPanel: true,
-  OverlayRecipePanel: true,
+  // Real-but-thin, so the payload the overlay hands the panel can be read off
+  // its prop. A `true` stub swallows it, and the field the whole refusal path
+  // exists to deliver could then be deleted with the suite still green.
+  OverlayRecipePanel: {
+    name: "OverlayRecipePanel",
+    props: ["recipe", "pictureId", "canGenerateVariants", "comfyuiConfigured"],
+    template: "<div class='recipe-stub'></div>",
+  },
   AddToEntityControl: true,
   CharacterEditor: true,
   StarRatingOverlay: true,
@@ -132,8 +144,12 @@ beforeEach(() => {
   setActivePinia(createPinia());
   picturesWithARecipe = new Set([7]);
   pendingRecipe = null;
+  recipeRefusal = null;
   getMock.mockClear();
 });
+
+const recipePanel = (wrapper) =>
+  wrapper.findComponent({ name: "OverlayRecipePanel" });
 
 describe("the lightbox Recipe tab follows the picture", () => {
   it("is offered for a picture that has a recipe", async () => {
@@ -141,12 +157,14 @@ describe("the lightbox Recipe tab follows the picture", () => {
     expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
   });
 
-  it("is absent for a picture that has none", async () => {
+  it("takes the whole tab band away for a picture that has none", async () => {
     picturesWithARecipe = new Set();
     const wrapper = await openOn(7);
     // The regression this replaces: a tab whose whole content was "nothing
-    // here was made in ComfyUI".
-    expect(tabLabels(wrapper)).toEqual(["Info"]);
+    // here was made in ComfyUI". And NOT a lone Info button either - a tab
+    // band with one tab is a control with nothing to switch to.
+    expect(tabLabels(wrapper)).toEqual([]);
+    expect(wrapper.find(".inspector-tabs").exists()).toBe(false);
   });
 
   it("goes away when the reader steps onto a picture without one", async () => {
@@ -161,9 +179,10 @@ describe("the lightbox Recipe tab follows the picture", () => {
     await wrapper.setProps({ initialImageId: 8 });
     await flush();
     await flush();
-    expect(tabLabels(wrapper)).toEqual(["Info"]);
-    // And the reader is looking at Info rather than at a pane with no tab.
-    expect(activeTab(wrapper)).toBe("Info");
+    expect(tabLabels(wrapper)).toEqual([]);
+    // And the reader is looking at the Info panel rather than at a pane whose
+    // tab has gone.
+    expect(wrapper.find(".overlay-sidebar-group").isVisible()).toBe(true);
   });
 
   it("comes back, still selected, on the next picture that has one", async () => {
@@ -178,7 +197,7 @@ describe("the lightbox Recipe tab follows the picture", () => {
     await wrapper.setProps({ initialImageId: 8 });
     await flush();
     await flush();
-    expect(tabLabels(wrapper)).toEqual(["Info"]);
+    expect(tabLabels(wrapper)).toEqual([]);
 
     await wrapper.setProps({ initialImageId: 9 });
     await flush();
@@ -188,6 +207,51 @@ describe("the lightbox Recipe tab follows the picture", () => {
     // useless.
     expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
     expect(activeTab(wrapper)).toBe("Recipe");
+  });
+
+  it("keeps the tab for a recipe that could not be rebuilt", async () => {
+    // The case the change exists for. `available: false` is not `no recipe`:
+    // the picture was made in ComfyUI, its prompt and models are readable, and
+    // only the offer to run it again is withheld.
+    recipeRefusal = {
+      available: false,
+      reason: "editor_graph",
+      source: "comfyui",
+      summary: "Editor Workflow · 4 nodes · 3 links",
+      positive_prompt: "a cat in a hat",
+      conversion_problems: ["this ComfyUI has no node class 'SomePackNode'"],
+    };
+    const wrapper = await openOn(7);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
+  });
+
+  it("hands the panel the reasons the rebuild failed", async () => {
+    recipeRefusal = {
+      available: false,
+      reason: "editor_graph",
+      source: "comfyui",
+      summary: "Editor Workflow · 4 nodes · 3 links",
+      conversion_problems: [
+        "this ComfyUI has no node class 'SomePackNode'",
+        "KSampler (node 3) carries 5 widget values, and its inputs account for 4",
+      ],
+    };
+    const wrapper = await openOn(7);
+    await wrapper.findAll(".inspector-tab")[1].trigger("click");
+    const recipe = recipePanel(wrapper).props("recipe");
+    expect(recipe.reason).toBe("editor_graph");
+    // Read straight off the response's snake_case field: the panel prints
+    // these under its refusal, and a dropped mapping would leave it saying
+    // "could not rebuild it" with nothing to act on.
+    expect(recipe.conversionProblems).toEqual(
+      recipeRefusal.conversion_problems,
+    );
+  });
+
+  it("gives an ordinary recipe an empty problem list, not undefined", async () => {
+    const wrapper = await openOn(7);
+    await wrapper.findAll(".inspector-tab")[1].trigger("click");
+    expect(recipePanel(wrapper).props("recipe").conversionProblems).toEqual([]);
   });
 
   it("does not blink out while the next picture's recipe is being read", async () => {
@@ -208,6 +272,6 @@ describe("the lightbox Recipe tab follows the picture", () => {
     pendingRecipe = null;
     await flush();
     await flush();
-    expect(tabLabels(wrapper)).toEqual(["Info"]);
+    expect(tabLabels(wrapper)).toEqual([]);
   });
 });
