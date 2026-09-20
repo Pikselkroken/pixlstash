@@ -824,11 +824,16 @@ def _display_name(card, models=()) -> str:
     """What a card is called: the owner's name, else its file, else its models.
 
     That order is how much the name is *theirs*: one they typed, then the file
-    they dropped, then a description built here. The built one is
-    ``type · checkpoint`` (``txt2img · juggernautXL``). It is deliberately not
-    unique - two cards differing only by a post-processing node share it - but
-    it is the difference between forty identical rows and a grid that can be
-    scanned, and the ⓘ panel carries what actually separates them.
+    they dropped, then a description built here.
+
+    The built one is **the model first, then what the workflow does** -
+    ``juggernautXL txt2img`` - because the model is what a person calls the
+    workflow and the verb only tells two of them apart once the model already
+    has. It is deliberately not unique: two cards differing only by a
+    post-processing node share a name, and naming THAT difference (the
+    "… + FaceDetailer" half of the intended scheme) needs a per-card
+    derivation the hub does not cache yet - see ``docs/backend_architecture.md``.
+    Until then the ⓘ panel carries what actually separates them.
     """
     if card.name:
         return card.name
@@ -843,7 +848,7 @@ def _display_name(card, models=()) -> str:
         # Every model name forgotten, or a graph that loads none.
         return UNNAMED_CARD
     stem = _model_stem(base)
-    return f"{card.workflow_type} · {stem}" if card.workflow_type else stem
+    return f"{stem} {card.workflow_type}" if card.workflow_type else stem
 
 
 def _slot_models(slots) -> list[WorkflowSlotModel]:

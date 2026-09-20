@@ -3147,7 +3147,7 @@ def test_a_card_is_never_nameless(workflow_env):
     cards = _by_key(_cards(workflow_env.owner))
     # BUSY has no name and no file, so it is named for what it loads - and the
     # extension is off, which a guess-by-length gets wrong on `.safetensors`.
-    assert cards[BUSY_CARD]["name"] == "txt2img \u00b7 realvisxl"
+    assert cards[BUSY_CARD]["name"] == "realvisxl txt2img"
 
     # The stand-in is still the floor, for a card with nothing to be named
     # after: no name, no file, and every model name forgotten. Asserted on the
@@ -3166,9 +3166,7 @@ def test_a_card_is_never_nameless(workflow_env):
         workflow_type = "txt2img"
 
     only = [SimpleNamespace(name="flux1-dev.safetensors", kind="unet")]
-    assert (
-        workflows_routes._display_name(_UnetOnly(), only) == "txt2img \u00b7 flux1-dev"
-    )
+    assert workflows_routes._display_name(_UnetOnly(), only) == "flux1-dev txt2img"
     # The hidden card has both a name and a file, and the owner's name wins.
     assert _detail(workflow_env.owner, HIDDEN_CARD)["card"]["name"] == (
         "A workflow I hid"
