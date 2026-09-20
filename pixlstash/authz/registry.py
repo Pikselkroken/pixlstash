@@ -1833,6 +1833,16 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Reorder saved recipes; PUT blocked for READ tokens; owner only",
     ),
+    ("GET", "/api/v1/recipes/used"): RoutePolicy(
+        _OWNER,
+        justification=(
+            "The looks the stack's own pictures carry, prompts in full. A "
+            "SUPERSET of the credit figure on GET /recipes, which counts these "
+            "same rows: that route says how many pictures a saved recipe "
+            "accounts for, this one says what the unsaved ones were made with. "
+            "Owner only for the reason the listing is, and more so"
+        ),
+    ),
     ("PATCH", "/api/v1/recipes/{recipe_id}"): RoutePolicy(
         _OWNER,
         justification="Edit a saved recipe; PATCH blocked for READ tokens; owner only",

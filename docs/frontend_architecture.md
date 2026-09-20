@@ -143,7 +143,7 @@ frontend/src/
     │   └── tagHealthBoardLogic.js     # Pure board estimate/threshold helpers (+ *.test.js)
     ├── editors/     # Entity create / edit / delete dialogs
     ├── settings/    # UserSettingsDialog, its section sub-components (Appearance, Behaviour, SmartScore, Workflows, Account, Snapshots, Compute, Libraries, Layout), and the Settings* layout primitives (SettingsRow, SettingsSection, SettingsChip/ChipGrid, SettingsFieldBlock, SettingsSliderRow, SettingsTwoCol, SettingsInfoCard, SettingsAddTagRow)
-    ├── io/          # Import / export / external-service connection, ComfyUiRunner, RunDialog
+    ├── io/          # Import / export / external-service connection, ComfyUiRunner, RunDialog, SaveRecipeDialog, ExportRecipeDialog
     └── widgets/     # Reusable primitives, including the App* design-system layer (AppButton/AppDialog/AppInput/AppSelect/AppStepper/AppTextarea + FieldLabel, and the two pick-one shapes `Segmented` and `OptionRows`), the two undo receipts (ActionReceipt over the grid, OverlayActionReceipt inside the lightbox), the Dedup* family (the duplicate queue's row, the picture strip both queue rows are built on, compare dialog, auto-stack dialog, tier menu, the shared threshold control, scan banner, scope pill, why-pills and confidence pill), `MixedQueueRow` (one row of the Duplicates destination's third page, which is a queue of its own), `KeepCoverOnlyDialog` (the one consent for collapsing stacks to their covers; see §5 "Confirming a destructive action"), the Stack* family (badge, edge ticks, expansion strip), `AdapterTray` (the adapters one person or set uses, read-only, inside the two editors), `BaseModelInput` (the completing base-model field, shared by the shelf's bulk dialog and its inline row editor), `PicturePicker` (one faceted, single-select library picker: the shelf's thumbnail verb today, the workflow Fixed and run-time modes next), and `AiToolkitIcon` (the one non-mdi glyph in the app: ai-toolkit's mark, traced as a `currentColor` path because they publish it only as raster)
 ```
 
@@ -689,7 +689,7 @@ The overlay's right-hand panels, extracted from `ImageOverlay.vue` so each owns 
 - `OverlayDescriptionPanel.vue` (493 lines) — inline description editing (uses `utils/descriptions.js`) and copy. **Description and Text are label tabs in its one header** (#1197, text in pictures): `role="tablist"`, arrow keys switch, the selected tab takes full ink and the `dark-surface-primary` bar, and only one panel is ever on screen. The header's refresh/copy/count act on the open tab (Text: *Read the text again* → `POST /pictures/{id}/text/read`, copy the whole text with lines joined by `\n`, its character count; no per-model menu, there is one reader). The Text tab exists only when the reader found words (`state: "read"` with at least one word); `pending` shows it disabled with a spinner; `none` keeps today's plain Description header with no empty state. The Text panel is read-only: monospace, one row per line, each word a `<button>` (click selects it alone, clicking the only selected word clears, shift-click toggles; the list is one tab stop with roving focus, Left/Right move by word and Up/Down by line, and arrow keys are stopped there so they never reach the overlay's picture navigation), search matches dotted-underlined, and an `aria-live` strip under it shows the hint or the selected words with Copy / Clear. The panel is presentational: state comes in as props from ImageOverlay.
 - `OverlayMetadataPanel.vue` (267 lines) — metadata, score, dates, file info, penalised-tag indicator. **One list, no tab band:** the ComfyUI tab that used to sit beside Picture information moved whole into the Recipe tab (#1313), which is where everything about how the picture was made now lives. It is one of the panels under **Info**.
 - **The lightbox sidebar is `AppInspector`'s own tab band, Info | Recipe** (#1313, the v1.12 design). Info holds everything the pane showed before — Description, Faces, Tags, Metadata — wrapped in one `.overlay-sidebar-group` flex column so Description keeps its `flex: 1 1 114px` share of the fixed-height pane. That group is `v-show`, never `v-if`: the panels hold editing state and the refs the overlay reaches into for `T` (open the tag field) and Escape, and unmounting them behind the Recipe tab would take those with it — `T` also switches back to Info, because the field it focuses lives there. The Recipe tab is `v-if`: read-only, nothing worth preserving, and building it on demand keeps `AppButton` (and so Vuetify) out of every overlay mount. **The tab band is drawn only for a picture that has a recipe at all** — `sidebarTabs` returns `[]` otherwise, so `AppInspector`'s `v-if="tabs.length"` takes the whole band away rather than leaving a lone Info button, which would be a dead tab by another name. It is never *disabled*: a disabled tab fires no pointer events, so the tooltip explaining it would never open for a mouse. An A1111 picture keeps its tab, because it has a recipe; a holiday photo had nothing behind it but a sentence saying so, which is not worth a tab. Two things make hiding it safe rather than merely tidy, and `ImageOverlayRecipeTab.test.js` guards both. `recipeTabShown` is held across the read rather than cleared with the recipe, so the tab is not taken away and put back under the cursor for the length of one file read on every filmstrip step. And `sidebarTab` is a writable computed over `chosenSidebarTab`, so the reader's *choice* survives a picture that has no recipe: stepping over one shows Info and stepping off it shows Recipe again, rather than silently moving them to Info for the rest of the walk. `AppInspector` gained the on-dark inks for its tab band in the same change — its own prop documentation had said a lightbox pane needing `tabs` must add them first. **A consequence for tests:** that band renders a `VIcon` imported from the `vuetify/components` barrel, so any suite that mounts `ImageOverlay` without the Vuetify plugin must stub the barrel through `testing/vuetifyStubs.js` — five overlay suites now carry that four-line `vi.mock`. It cannot be hoisted into `testing/setup.js` (the helper's own docstring explains why: some suites need the real `AppButton` / `AppDialog`) and `vi.mock` is per-file by construction, so a sixth overlay suite will need it too.
-- `OverlayRecipePanel.vue` (~675 lines) — the body of the sidebar's **Recipe** tab (#1313), read-only. Fed from `GET /comfyui/pictures/{id}/recipe?preflight=false` — the one recipe read, asked without its ComfyUI round-trip because the tab re-reads on every filmstrip step. Drawn to the v1.12 Workflows & Recipes design ("From a picture: an Info tab and a Recipe tab"): **Workflow** with *Open* (→ `/workflows?topology=<hash>`), **Prompt** with a Copy action, **Models** as chips carrying the strength each LoRA was loaded at plus a `mdi-check-decagram` badge when the recipe named the file by its digest (a chip with a `model_id` is a button to `/models?model=<id>`; one without is the same chip inert, because "not on your shelf" is information), then **Settings, Seed and Negative** in one `.inspector-kv` grid, rendered from `extract_recipe_extras`' `{field: value}` dict in a preferred order with anything unmapped following — so an A1111 picture's own vocabulary renders through the same grid without the panel branching on `source`. `Size` is `width`×`height` written as the design writes it ("832×1216"), and Seed and Negative are always present because their absence is a fact worth reading. The seed is rendered from `seed_text`, never the number: a 64-bit seed loses digits as a JS `Number`. Below that the **resolution lock** (#1313's `inputs`, which the design does not draw) and the **workflow JSON with Copy and Download** — fetched from `/workflow` lazily, only when the box is opened, because the graph is the one large thing here — kept from the Metadata panel's old ComfyUI box at the owner's direction — the design drops it in favour of *Open*, but pasting a graph into ComfyUI and saving the file are real uses. A footer pins the two actions (#1406): **Run…**, which opens the Run popup on this picture's own recipe (#1407), and *Use as input for…*, which opens the same popup with its workflow picker unset and is what a picture that cannot be replayed can always do. `RUN_REASONS` maps the read's own `reason` onto the sentence under the button so the words cannot drift from the server's decision, and `conversion_problems` is printed as a list beneath it. **On that refusal the Negative row reads "not read", never "none"**: the negative prompt and the settings are read off a *resolved* graph, and a picture whose editor graph would not rebuild has none — so "none" would be a claim about the workflow rather than about what PixlStash knows. The seed keeps its own answer, because it IS read off the editor graph — an uninstalled node pack is something to go and install, and "PixlStash could not rebuild it" on its own sends the reader nowhere.
+- `OverlayRecipePanel.vue` (~1160 lines) — the body of the sidebar's **Recipe** tab (#1313), read-only. Fed from `GET /comfyui/pictures/{id}/recipe?preflight=false` — the one recipe read, asked without its ComfyUI round-trip because the tab re-reads on every filmstrip step. Drawn to the v1.12 Workflows & Recipes design ("From a picture: an Info tab and a Recipe tab"): **Workflow** with *Open* (→ `/workflows?topology=<hash>`), **Prompt** with a Copy action, **Models** as chips carrying the strength each LoRA was loaded at plus a `mdi-check-decagram` badge when the recipe named the file by its digest (a chip with a `model_id` is a button to `/models?model=<id>`; one without is the same chip inert, because "not on your shelf" is information), then **Settings, Seed and Negative** in one `.inspector-kv` grid, rendered from `extract_recipe_extras`' `{field: value}` dict in a preferred order with anything unmapped following — so an A1111 picture's own vocabulary renders through the same grid without the panel branching on `source`. `Size` is `width`×`height` written as the design writes it ("832×1216"), and Seed and Negative are always present because their absence is a fact worth reading. The seed is rendered from `seed_text`, never the number: a 64-bit seed loses digits as a JS `Number`. Below that the **resolution lock** (#1313's `inputs`, which the design does not draw) and the **workflow JSON with Copy and Download** — fetched from `/workflow` lazily, only when the box is opened, because the graph is the one large thing here — kept from the Metadata panel's old ComfyUI box at the owner's direction — the design drops it in favour of *Open*, but pasting a graph into ComfyUI and saving the file are real uses. A footer pins three actions: **Run…**, which opens the Run popup on this picture's own recipe (#1407), **Save as recipe** (#1408, `io/SaveRecipeDialog.vue`) when the hub has keyed the picture onto a card and the session can write — inert **Saved** once one of the card's saved recipes already keeps this look, which the **"Matches your saved recipe X" banner** above the reading says too — and *Use as input for…* (#1406), which opens the same popup with its workflow picker unset and is what a picture that cannot be replayed can always do. `RUN_REASONS` maps the read's own `reason` onto the sentence under the button so the words cannot drift from the server's decision, and `conversion_problems` is printed as a list beneath it. **On that refusal the Negative row reads "not read", never "none"**: the negative prompt and the settings are read off a *resolved* graph, and a picture whose editor graph would not rebuild has none — so "none" would be a claim about the workflow rather than about what PixlStash knows. The seed keeps its own answer, because it IS read off the editor graph — an uninstalled node pack is something to go and install, and "PixlStash could not rebuild it" on its own sends the reader nowhere.
 
   **Run… is `aria-disabled`, never `disabled`, with the reason in prose above it.** A natively-disabled button is out of the tab order, so a keyboard reader could never reach the reason `aria-describedby` points at; `AppButton` inks both spellings the same way and the click is refused in the handler instead. Four reasons, and they are not interchangeable to the reader, so they are ranked by what the reader can do about them. **The picture first**: an A1111 or Forge picture (`source: "a1111"`) fills the tab in completely and is still not a graph any ComfyUI could be handed, so naming this machine or this session would send the reader to fix something that is not the problem; then a graph the server itself called unrunnable (`available: false`, whose `reason` — `no_seed_input`, `pixlstash_nodes` — supplies the words, so they cannot drift from the decision). **Then the session**: the recipe route is `PICTURE_SCOPED`, so a share link reads it, and "ComfyUI is not connected" would be false on a machine where it is and would send that reader to a settings screen they cannot open. **Then the machine.** `available` is read as `=== false`, not falsy: a payload without the field is not a refusal, and `ImageOverlay` passes the server's value straight through rather than coercing an absent one into `false`.
 
@@ -697,7 +697,7 @@ The overlay's right-hand panels, extracted from `ImageOverlay.vue` so each owns 
 
   *Use as input for…* is also in the lightbox's right-click menu, and both go to `ImageGrid.runWorkflowOnPicture`: it closes the lightbox and opens the Run popup on **that one picture**, with no id at all falling back to nothing rather than to the selection. **It narrows unconditionally, which `handleImageContextMenu` deliberately does not**: that one keeps a selection the right-clicked picture is already in, because in the grid the selection is on screen. `openOverlay` never touches `selectedImageIds`, so in the lightbox it is invisible, and both ways in name one picture — handing the popup fifty unseen pictures from a control whose tooltip says "this picture" is the regression `ImageGridUseAsInput.test.js` exists to catch. The sibling entry *Run a workflow on these…* does take the whole selection, which is what it says; the same file pins that too, so the narrowing above cannot be "fixed" into narrowing both.
 
-  **Three things the design draws are absent rather than faked**, each waiting on a later step of that plan: the *"Matches your saved recipe X"* banner and **Save** (saved recipes), the workflow's name and the stack it is in (the workflow cards read, #1395), and the workflow's own value beside an overridden setting — *"workflow: 8"* — (#1397's owner-only route). **Run…** is the Run popup as of #1407, and stays visible and disabled with the reason as its tooltip when it cannot run, which is the shape the design gives an A1111 picture.
+  **Two things the design draws are still absent rather than faked**, each waiting on a later step of that plan: the workflow's name and the stack it is in (the workflow cards read, #1395), and the workflow's own value beside an overridden setting — *"workflow: 8"* — (#1397's owner-only route). The *"Matches your saved recipe X"* banner and **Save** shipped with F6 (#1408). **Run…** is the Run popup as of #1407, and stays visible and `aria-disabled` with the reason when it cannot run, which is the shape the design gives an A1111 picture.
 - `OverlayFilmstrip.vue` (338 lines) — the frozen-navigation filmstrip strip (reads `overlayImages`, see §9.1).
 
 #### `Toolbar.vue` (`panels/`, ~1 410 lines)
@@ -1412,7 +1412,7 @@ ComfyUI workflow executor embedded in `ImageGrid` and `ImageOverlay`. Connects t
 
 Load-bearing behaviours:
 
-- **Exactly one source in the body.** `POST /workflows/run` takes one of `picture_ids` / `saved_recipe_id` / `workflow_key` and refuses two with a 400 before it reads anything. With pictures the chosen card is `target` ("run this stack member over what I selected"); with no pictures the card *is* the source. `RunDialog.test.js` pins both shapes.
+- **Exactly one source in the body.** `POST /workflows/run` takes one of `picture_ids` / `saved_recipe_id` / `workflow_key` and refuses two with a 400 before it reads anything. With pictures the chosen card is `target` ("run this stack member over what I selected"); with no pictures the card *is* the source. Since F6 the Recipes tab opens the popup on a saved recipe, which is the `saved_recipe_id` source — `target` still rides along, because a recipe runs on any member of its stack and the picker chooses which. The route fills the row's prompt, LoRAs, overrides and seed in *underneath* the body, so the form is prefilled from the row as well: `runBody` sends every parameter it displays, and a recipe value the form did not show would be overwritten by the card's own default. `RunDialog.test.js` pins the shapes.
 - **Every edit is an override, never a write-back.** Edited fields go out as `values: [{slot_label, input_name, value}]` — the address the card's defaults use, never a node id, which every re-serialisation renumbers. Nothing here writes `PUT /workflows/{key}/defaults`: the stored document is content-addressed and rewriting it would change the identity of the card being run.
 - **An edited field is marked IN ITS LABEL ROW** (`RunResetChip.vue`): a ↺ chip carrying the value the field started at, which puts it back. Beside the control it would change a cell's height and knock the four-column grid out of alignment the moment one field was edited. The value it carries is the picture's own setting where there is one, else the card's default — what the popup opened showing, not the card's value and not the current one.
 - **Switching to another stack member keeps the edits and NAMES the ones it cannot keep.** The new card's `defaults` are re-read, edits whose address survives are kept, and the rest are listed ("Denoise went back to this workflow's own value"). Dropping them silently is what makes a run quietly use 8 steps when the form said 16.
@@ -1426,7 +1426,7 @@ Load-bearing behaviours:
 - **A pre-flight 4xx is a refusal and is shown at once.** The route answers 400/404/422 on the dry run exactly as on the run, "so the two never disagree". Anything else - the network, a 5xx - is the question not being asked, which is not a refusal: the button stays live and the run itself answers. Over-blocking is its own regression.
 - **`allow_unchecked` is never sent.** An uninspectable ComfyUI blocks, the backend refuses independently, and there is no consent checkbox on this surface. (The same decision `RemixDialog` reached on 2026-07-29 and kept until it was deleted.)
 - **A submit failure is a form error**: the popup stays open with every input intact and the message in a `role="alert"`. A success emits `run` with the prompts, which `App.vue` hands to the grid's `ComfyUiRunner` and reports as a toast whose **Show** action deep-links to the Tasks tab (`sidebarStore.showTasksTab()`).
-- **Save as recipe** is an inline name field in the footer rather than a second dialog: it `POST /recipes` with the prompt, the LoRAs and the edits as `overrides`, addressed `"<slot_label>/<input_name>"` — the form `POST /workflows/run` unpacks back into `values` when that recipe is run. The design's full Save-as-recipe dialog (with its per-part checkboxes) belongs to the saved-recipes step, not this one.
+- **Save as recipe** opens `io/SaveRecipeDialog.vue` from the footer (F6, #1408; F5 shipped it as an inline name field, which that step replaced). It `POST /recipes` with the prompt, the LoRAs and the edits as `overrides`, addressed `"<slot_label>/<input_name>"` — the form `POST /workflows/run` unpacks back into `values` when that recipe is run.
 
 #### `WorkflowCard.vue`, `ChipRow.vue`, `InfoPopover.vue` (`widgets/`, v1.12 Workflows & Recipes)
 The uniform workflow card and its two parts. Mounted by `WorkflowsView.vue` (F1a, below) and by its `StackPanel`. In this code a `workflow_recipe` / structural hash is a **variant**; a user's Recipe is a **saved recipe**.
@@ -1931,10 +1931,15 @@ watcher the model shelf uses. See §9.1b for the destination itself.
 
 #### `WorkflowTab.vue` + `WorkflowDefaultRow.vue` (`panels/`), v1.12 F3
 
-The Workflows grid's right rail: two `AppInspector` tabs, **Workflow** and
-**Tasks**, mounted by `App.vue` on `/workflows` in place of `StatsSidebar`.
-There is **no Run tab** — Run… is an action, so it belongs in the footer and
-opens a popup (F5).
+The Workflows grid's right rail, mounted by `App.vue` on `/workflows` in place
+of `StatsSidebar`. Three `AppInspector` tabs — **Recipes | Workflow | Tasks**,
+Recipes and Workflow in the design's order and Tasks always last — and **no Run
+tab**: Run… is an action, so it belongs in the footer and opens a popup (F5).
+**Workflow** is still the tab a selection opens on; it is the one that says what
+the card is, and a card with no saved recipe yet would otherwise open on an
+empty list. The footer is the Workflow tab's alone: Recipes runs a recipe from
+its own row, and Tasks replaces the body, so Run… would act on a card the reader
+can no longer see.
 
 - **Tasks is the shared `TasksPanel`, and always last.** This view replaces
   the grid, and its rail replaces the grid's, so without the tab a run started
@@ -2009,16 +2014,12 @@ opens a popup (F5).
   *has*, which is derived from the graph and is served only by the file-keyed
   `GET /comfyui/workflows/{name}/inputs`. Without it there is nothing to draw
   a mode control against.
-- **The "N pictures" figure is plain text, not a link.** F7 wires the chip;
-  `GET /workflows/{key}/pictures` exists, but the picture grid has no
-  client-side `workflow_key` filter yet, so a link would leave the rail and
-  land on an unfiltered library.
-- **One tab, and no way out to the pictures.** §F2's rule for the shipped
-  shelf's rail — "the second tab is always the way out to the pictures, which
-  is what stops the rail being terminal" — does not survive this design: round
-  2 draws **Recipes | Workflow** and no Pictures tab, and the way to a card's
-  pictures becomes the header figure above once F7 wires it. Until then this
-  rail is terminal, which is a known cost of shipping F3 before F7 rather than
+- **The "N pictures" figure is the way out to the pictures**, wired by F7
+  (#1409) into `useWorkflowPictures`. §F2's rule for the shipped shelf's rail —
+  "the second tab is always the way out to the pictures, which is what stops
+  the rail being terminal" — is met by the header figure rather than by a tab:
+  round 2 draws **Recipes | Workflow** and no Pictures tab. The rail was
+  terminal between F3 and F7, which was a known cost of that order rather than
   an oversight.
 - **Run… with several selected stays on screen and refuses**: `aria-disabled`
   plus `aria-describedby` pointing at "Run one workflow at a time". A control
@@ -2026,6 +2027,108 @@ opens a popup (F5).
   together* and *Hide*. With one selected, Run… opens the Run popup on that
   card (F5, #1407): no picture behind it, so it shows the card's cover, an
   empty prompt box and a set picker for where the output is filed.
+
+#### `WorkflowRecipesTab.vue` (`panels/`) + `SaveRecipeDialog.vue` / `ExportRecipeDialog.vue` (`io/`), v1.12 F6
+
+The **saved recipe** — the user's Recipe, which is a prompt, its LoRAs with
+strengths and the parameters they changed. Not a `workflow_recipe` row, which
+new code calls a *variant*. Owner-only, like everything under `/workflows`.
+
+- **The tab has two halves, and the second is why it is not empty.** A saved
+  recipe is a look somebody pressed Save on; `GET /recipes/used` answers with
+  every look the stack's own pictures were *actually made with*, grouped from
+  the same picture rows credit is counted from. Without it the tab showed "no
+  recipes yet" on every workflow of a full library, because saved recipes are
+  a concept that ships empty. The server leaves out any look a saved recipe
+  already keeps, on the same `prompt_key`/`lora_key` pair, so the two halves
+  can never both claim one — which is why **Save… keys the new recipe off the
+  look and not off the cover picture's re-read**: the look was keyed on the
+  stored `comfyui_*` columns, the live extraction can differ from them, and a
+  recipe carrying the re-read's prompt would leave the look in the used half
+  AND be credited 0. Only the LoRA strengths and the seed come from the
+  picture, because the columns do not hold them. The server merges groups on
+  that key too, because the SQL groups by the stored `comfyui_loras` *text*
+  and one look written two ways (`ada.safetensors`,
+  `characters/Ada.safetensors`) arrives as two rows. A group with neither a
+  prompt nor a LoRA is dropped: it is the key of every picture whose metadata
+  has not been read, it matches everything and identifies nothing, and being
+  the biggest group it would sort first. **Run…** on an unsaved look opens the
+  Run popup on its cover picture, because there is no `saved_recipe_id` to
+  name and "run what made this" is exactly what the look is.
+- **A selection of several is the union of their stacks.** `workflow_key`
+  repeats on both reads, capped at `MAX_UNION_KEYS` (spelled on both sides, so
+  the client refuses in words rather than letting the server 422 and wiping the
+  panel). Both reads chunk through `utils/sql_chunking` and **merge** across
+  chunks: one card accumulates a variant per structural change, so a hundred
+  selected cards resolve to thousands of structural hashes and an unchunked
+  `IN` crosses SQLite's bound-parameter floor — the database limit surfacing
+  as a 500.
+- **A recipe belongs to one card and runs on its whole stack** (backend
+  decision D10). `GET /recipes?workflow_key=` resolves the stack server-side,
+  so the tab passes the **selected** card's key and a selected member lists its
+  stack's recipes; only the header names the stack, from `parentStack ?? card`
+  and its `stack_size` (never `member_keys.length`, which leaves the card's own
+  key out and would call a stack of six "five workflows").
+- **The order is written back whole on every move.** `PUT /recipes/order` takes
+  the complete ordered id list and refuses it entirely if one id is unknown, so
+  a half-applied order is never left behind. The rail moves first and is put
+  back if the write is refused — guarded on the load token, or switching cards
+  mid-write would render the previous card's list under the new card's header.
+  Drag is the **handle's** HTML5 drag, not the card's (a draggable card makes
+  the prompt unselectable and turns every press on Run… into a drag); the same
+  handle takes **Alt+↑/↓**, named in its `aria-label` rather than a tooltip,
+  and one polite live region carries every move, drop and rollback.
+- **The thumbnail is one picture, not five.** A recipe row carries
+  `source_picture_id` and a `pictures` **count**, never a list of ids, so the
+  design's five-tile strip would be four tiles of invention: the picture the
+  row names is a `1 / 1` square at the head of the card's first line — a band
+  across the card would have needed an aspect ratio this app does not have —
+  and the credit is the number on the line below ("31 pictures · steps 12", the
+  override's `input_name` only, since the slot label is a node name that means
+  nothing outside the graph).
+- **`SaveRecipeDialog` is a list of checkboxes, and the seed is off.** "What
+  the recipe keeps" is a promise about the row, so every line can be unticked
+  and an unticked line is not sent. **`keep_seed` is what makes a stored seed
+  live** — the run route reads one only when that flag is set, so digits with
+  the flag off would be a checkbox that does nothing. The seed row says why it
+  is off ("every run varies"). It is opened from the Run popup's footer (it
+  replaced F5's inline naming mode), from the lightbox Recipe tab's **Save as
+  recipe**, and from an unsaved look; it reads `GET /workflows/cards/{key}`
+  itself for "Saved to X" and falls back to that name when a caller has none to
+  suggest. **It does not preview credit**: the count of pictures that already
+  match exists only once the row does, so the banner says what is certain and
+  the notice after the save carries the number.
+- **A LoRA the shelf cannot name is kept and named, never dropped.** The run
+  route applies only saved LoRAs carrying a `sha256`, so an unresolved one will
+  not reach the graph — but dropping it made the recipe's key disagree with the
+  picture's, so the saved row never matched the picture it came from: no
+  banner, no **Saved**, the same look kept over and over, and 0 credited
+  pictures for the same reason. The list stays whole and the dialog says which
+  row a run will ignore; removing it is #1478.
+- **`ExportRecipeDialog` never composes its own list.** The file is written by
+  `GET /recipes/{id}/export` and only that route knows what went into it, so
+  the dialog prints the route's `shares` line by line — a summary here would go
+  on saying "your prompt" the day the export changed. Beside it, **Export
+  workflow** (`GET /workflows/{key}/export`, B8) is the share that keeps the
+  look back, and it reports what the scrub removed rather than going out
+  silently.
+- **The lightbox's match banner is computed on the client.** No route answers
+  "which recipe does this picture match", so the panel reads the card's saved
+  recipes once per `workflowKey` — never for a read-only reader, since every
+  `/recipes` route is owner-only — and applies the server's own credit keys.
+  Those live in **`utils/recipeKey.js`** (`promptKey`, `loraKey`,
+  `keepsTheSameLook`) as one function per side, because two copies is how it
+  first went wrong. A match turns *Save as recipe* into an `aria-disabled`
+  **Saved**, never a native `disabled`, so the sentence saying why stays
+  reachable. `GET /comfyui/pictures/{id}/recipe` now carries `workflow_key` and
+  `loras` into the overlay's recipe object for all of it.
+- **A save made anywhere re-reads the tab.** `useWorkflowsStore.recipesEpoch`
+  is bumped by `SaveRecipeDialog`; the tab watches it beside its own keys,
+  because the Run popup opened *from that tab* saves onto the card the
+  selection never moves off. The backend announces this as `workflows_changed`
+  with reason `"recipes"` and nothing in the client listens to that stream yet
+  — this is the in-process half until something does. The tab does **not** bump
+  it for its own delete or rename: it is the writer there.
 
 #### Shared shell pieces (issue #1301)
 Four pieces every screen builds on, to the design system's shell contract (`ui_kits/app/unified-shell.html`, rules 2, 3, 8 and 9). Reuse them; do not re-roll them.

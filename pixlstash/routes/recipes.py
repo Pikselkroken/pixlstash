@@ -19,10 +19,10 @@ pictures across the whole stack, which is the whole-library disclosure class
 from __future__ import annotations
 
 import json
-from typing import Any, Optional
+from typing import Annotated, Any, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from pixlstash.hub.workflow_cards import effective_stack_keys, variant_hashes_for_keys
 from pixlstash.hub.workflows import shelf_model_names
@@ -52,6 +52,16 @@ MAX_SEED_LENGTH = 64
 # long enough one exhausts SQLite's host parameters — a database limit surfacing
 # as a 500, which is the class the unknown-source-picture check above closes.
 MAX_REORDER_IDS = 500
+# How many workflows one selection may ask about at once. The Workflows grid
+# selects with shift and ctrl, so this is a gesture's worth of cards, not a
+# library's; each key costs a stack resolution and every stack's variants go
+# into one ``IN`` on the picture table.
+MAX_UNION_KEYS = 100
+# A workflow key is a 64-character digest. Declared on the ITEM: `max_length`
+# on a `list[str]` bounds the list, so a ceiling written there would leave
+# every individual key unbounded - which is exactly what happened when this
+# parameter stopped being a single string.
+WorkflowKey = Annotated[str, StringConstraints(max_length=200)]
 
 
 def _bounded_overrides(value: Optional[dict]) -> Optional[dict]:
@@ -133,6 +143,21 @@ class SavedRecipeOut(BaseModel):
             "are the recipe's. Computed on read; 0 on a write's own response."
         ),
     )
+
+
+class UsedLook(BaseModel):
+    """One look this stack's pictures were made with, that nobody has saved.
+
+    Not a saved recipe: it has no id, no name and no place in the tab's order,
+    because nothing was authored. ``loras`` are file names with no strength -
+    a picture row stores none - and ``cover_picture_id`` is the newest picture
+    of the group, which is where the Save dialog reads the strengths back from.
+    """
+
+    prompt: str = ""
+    loras: list[dict] = Field(default_factory=list)
+    pictures: int = 0
+    cover_picture_id: Optional[int] = None
 
 
 class RecipeOrder(BaseModel):
@@ -263,14 +288,18 @@ def create_router(server) -> APIRouter:
     )
     def list_recipes(
         request: Request,
-        workflow_key: Optional[str] = Query(
-            None,
-            max_length=200,
-            description="Show the recipes of this workflow's whole stack.",
+        workflow_key: list[WorkflowKey] = Query(
+            default_factory=list,
+            max_length=MAX_UNION_KEYS,
+            description=(
+                "Show the recipes of this workflow's whole stack. Repeat it "
+                "for a selection of several; the answer is the union."
+            ),
         ),
     ):
         server.auth.ensure_secure_when_required(request)
-        if not workflow_key:
+        workflow_keys = [key for key in workflow_key if key]
+        if not workflow_keys:
             # Every recipe in the library, with no credit: crediting them would
             # mean resolving a stack per workflow, which is a query per card for
             # a number this listing is not the place for. The tab, which is what
@@ -278,7 +307,11 @@ def create_router(server) -> APIRouter:
             return saved_recipe_service.read_recipes(server.vault)
 
         hub = _hub()
-        keys = effective_stack_keys(hub, workflow_key)
+        keys: list[str] = []
+        for key in workflow_keys:
+            for member in effective_stack_keys(hub, key):
+                if member not in keys:
+                    keys.append(member)
         recipes = saved_recipe_service.read_recipes(server.vault, keys)
         if not recipes:
             return []
@@ -337,6 +370,51 @@ def create_router(server) -> APIRouter:
         # cards. The event still says "look again", which is all it promises.
         _announce(request, None)
         return {"recipe_ids": ordered}
+
+    @router.get(
+        "/recipes/used",
+        summary="Looks this workflow's pictures were made with",
+        description=(
+            "Every distinct prompt-and-LoRAs combination the kept pictures of "
+            "this workflow's stack carry, with how many pictures each accounts "
+            "for, **minus the ones a saved recipe already keeps**. A library "
+            "that has never saved a recipe still has these, so the Recipes tab "
+            "has something to show and something to save from. Name several "
+            "workflows to get the union across all of their stacks."
+        ),
+        response_model=list[UsedLook],
+    )
+    def list_used_looks(
+        request: Request,
+        workflow_key: list[WorkflowKey] = Query(
+            default_factory=list,
+            max_length=MAX_UNION_KEYS,
+            description=(
+                "A workflow whose stack to read. Repeat it for a selection of "
+                "several; the answer is the union, counted once per look."
+            ),
+        ),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        keys = [key for key in workflow_key if key]
+        if not keys:
+            return []
+        hub = _hub()
+        # The union of every named workflow's stack. Deduplicated for the size
+        # of the query and not for the answer: two members of one stack resolve
+        # to the same keys, and both reads end in an ``IN``, which already
+        # counts a row once however many times its key was listed. Keeping the
+        # list short is what this is for.
+        stack_keys: list[str] = []
+        for key in keys:
+            for member in effective_stack_keys(hub, key):
+                if member not in stack_keys:
+                    stack_keys.append(member)
+        recipes = saved_recipe_service.read_recipes(server.vault, stack_keys)
+        groups = saved_recipe_service.read_credit_groups(
+            server.vault, variant_hashes_for_keys(hub, stack_keys)
+        )
+        return saved_recipe_service.used_looks(groups, recipes)
 
     @router.patch(
         "/recipes/{recipe_id}",

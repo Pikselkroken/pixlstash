@@ -64,6 +64,9 @@ _RECIPE_ROUTES = (
     # Export (v1.12 B8): the one route here that hands back the prompt as a
     # file, which is the single thing the workflow export exists to strip.
     ("GET", "/api/v1/recipes/{recipe_id}/export"),
+    # The looks the pictures themselves carry (v1.12 F6): the same picture
+    # rows credit is grouped from, returned as groups instead of a count.
+    ("GET", "/api/v1/recipes/used"),
 )
 
 
@@ -1220,3 +1223,371 @@ def test_a_lora_saved_without_its_extension_is_still_warned_about(recipe_env):
         "shares"
     ]
     assert any("no longer holds" in line and bare in line for line in shares), shares
+
+
+# ===========================================================================
+# Used looks — what the stack's own pictures were made with (v1.12 F6)
+# ===========================================================================
+
+
+def _used(client, *keys: str) -> list[dict]:
+    r = client.get(f"{API}/recipes/used", params={"workflow_key": list(keys)})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_used_looks_are_the_stacks_own_pictures_and_no_outsiders(recipe_env):
+    """A library that has saved nothing still has looks to show.
+
+    This is the whole point of the route: the Recipes tab was empty for every
+    workflow on a full library, because "recipe" meant only what somebody had
+    pressed Save on.
+    """
+    looks = _used(recipe_env.owner, CARD_A)
+
+    # The stack's three distinct looks, and neither card C's picture nor the
+    # soft-deleted one. Compared on the base name: the two pictures of the
+    # first look spell their LoRA differently, and which spelling survives the
+    # merge is the database's grouping order, not a promise.
+    assert [
+        (
+            look["prompt"],
+            [x["filename"].rsplit("/", 1)[-1].lower() for x in look["loras"]],
+            look["pictures"],
+        )
+        for look in looks
+    ] == [
+        # Most pictures first, then by prompt: there is no order the owner
+        # chose on this half of the tab, so the busiest look leads.
+        (PROMPT, [ADA], 2),
+        (PROMPT, ["other_style.safetensors"], 1),
+        (OTHER_PROMPT, [ADA], 1),
+    ]
+
+
+def test_one_look_spelled_two_ways_is_one_row(recipe_env):
+    """`a_match` and `b_match` load the same file under different names.
+
+    They arrive as two SQL groups, because the column is grouped as text.
+    Listing both would offer the same look twice with its pictures split
+    between them, and credit already sums on the normalized key.
+    """
+    looks = _used(recipe_env.owner, CARD_A)
+    matching = [
+        look
+        for look in looks
+        if look["prompt"] == PROMPT
+        and len(look["loras"]) == 1
+        and look["loras"][0]["filename"].lower().endswith(ADA)
+    ]
+    assert len(matching) == 1, looks
+    assert matching[0]["pictures"] == 2
+
+
+def test_a_saved_recipe_takes_its_look_off_the_used_half(recipe_env):
+    """The two halves of the tab can never both claim one look."""
+    before = _used(recipe_env.owner, CARD_A)
+    assert any(look["prompt"] == PROMPT and look["pictures"] == 2 for look in before)
+
+    _save(recipe_env.owner, CARD_A, prompt=PROMPT, loras=_ada())
+
+    after = _used(recipe_env.owner, CARD_A)
+    assert not any(
+        look["prompt"] == PROMPT
+        and len(look["loras"]) == 1
+        and look["loras"][0]["filename"].lower().endswith(ADA)
+        for look in after
+    ), after
+    # And the others are untouched: saving one look does not hide the rest.
+    assert {look["prompt"] for look in after} == {PROMPT, OTHER_PROMPT}
+
+
+def test_a_selection_of_several_workflows_is_the_union_counted_once(recipe_env):
+    """The multi-selection ask, and the double-count it must not make.
+
+    A and B are one stack, so naming both must answer exactly as naming one:
+    the stacks are deduplicated before the pictures are read. Naming C as well
+    adds C's own picture.
+    """
+    one = _used(recipe_env.owner, CARD_A)
+    both = _used(recipe_env.owner, CARD_A, CARD_B)
+    assert both == one, "naming two members of one stack counted its looks twice"
+
+    with_c = _used(recipe_env.owner, CARD_A, CARD_C)
+    assert (
+        sum(look["pictures"] for look in with_c)
+        == sum(look["pictures"] for look in one) + 1
+    )
+    # C's picture carries the same look as the stack's own, so the union folds
+    # them into one row rather than listing it twice.
+    matching = [
+        look
+        for look in with_c
+        if look["prompt"] == PROMPT
+        and len(look["loras"]) == 1
+        and look["loras"][0]["filename"].lower().endswith(ADA)
+    ]
+    assert len(matching) == 1 and matching[0]["pictures"] == 3, with_c
+
+
+def test_a_look_names_a_cover_picture_to_read_its_strengths_back_from(recipe_env):
+    """The card's thumbnail, and where the Save dialog gets the strengths.
+
+    A picture row stores LoRA names and no strength, so a look cannot carry
+    one; the cover is a real picture of the group, so the dialog can read the
+    graph's own strengths when the owner saves it.
+    """
+    looks = _used(recipe_env.owner, CARD_A)
+    assert all(look["cover_picture_id"] for look in looks), looks
+
+    def paths(session):
+        return {
+            picture.id: picture.file_path for picture in session.exec(select(Picture))
+        }
+
+    by_id = recipe_env.server.vault.db.run_immediate_read_task(paths)
+    covers = {by_id[look["cover_picture_id"]] for look in looks}
+    # Never the soft-deleted picture, which is in no group at all.
+    assert "a_binned.png" not in covers, covers
+
+
+def test_used_looks_need_a_workflow_and_answer_empty_without_one(recipe_env):
+    """No key is no question: this route never lists the whole library.
+
+    `GET /recipes` with no key deliberately answers the library's saved rows;
+    the equivalent here would be a group-by over every picture that exists.
+    """
+    r = recipe_env.owner.get(f"{API}/recipes/used")
+    assert r.status_code == 200, r.text
+    assert r.json() == []
+
+
+def test_no_scoped_token_can_read_the_used_looks(recipe_env):
+    """The **gate** refuses it, not the verb belt in front of the gate.
+
+    A bare READ token is refused by `READ_BLOCKED_GET_PREFIXES` before routing,
+    so asserting 403 on one proves nothing about this route's declaration: with
+    the entry loosened to `ANY_TOKEN` that assertion still passes. A token
+    RESTRICTED to one picture gets past no belt and is refused by the gate on
+    the declaration alone, which is the thing under test.
+    """
+    assert_real_route(recipe_env.server.api, "GET", "/api/v1/recipes/used")
+
+    def write_one_picture(session):
+        picture = session.exec(select(Picture)).first()
+        return picture.id
+
+    picture_id = recipe_env.server.vault.db.run_immediate_read_task(write_one_picture)
+    scoped = _bearer(
+        recipe_env.server,
+        _mint(recipe_env.owner, "used-looks probe", picture_id=picture_id),
+    )
+    r = scoped.get(f"{API}/recipes/used", params={"workflow_key": CARD_A})
+    assert r.status_code == 403, r.text
+
+    # The positive control, on the same seeded library: over-blocking would be
+    # its own regression and this assertion is what tells the two apart.
+    assert _used(recipe_env.owner, CARD_A)
+
+
+def test_the_read_token_belt_also_closes_the_used_looks(recipe_env):
+    """The belt in front of the gate, asserted as itself.
+
+    `/api/v1/recipes/` is in `READ_BLOCKED_GET_PREFIXES`, which is what keeps
+    this route closed if `AUTHZ_GATE_ENFORCING` is ever rolled back. Separate
+    from the test above so neither can stand in for the other.
+    """
+    assert "/api/v1/recipes/" in auth.READ_BLOCKED_GET_PREFIXES, (
+        "the prefix that closes this route to every scoped token is gone"
+    )
+    # And by its own path, which is what an untemplated owner-class GET needs
+    # to survive the `AUTHZ_GATE_ENFORCING = False` rollback.
+    assert "/api/v1/recipes/used" in auth.READ_BLOCKED_GET_PATHS
+    scoped = _bearer(recipe_env.server, _mint(recipe_env.owner, "belt probe"))
+    r = scoped.get(f"{API}/recipes/used", params={"workflow_key": CARD_A})
+    assert r.status_code == 403, r.text
+
+
+def test_the_gate_alone_refuses_the_used_looks_with_the_belt_lifted(recipe_env):
+    """The declaration, proved behaviourally rather than only pinned.
+
+    **Every scoped token is refused on this path before routing**, whatever
+    its scope and whatever it is restricted to: `/api/v1/recipes/` is in
+    `READ_BLOCKED_GET_PREFIXES` and that check does not consult the scope. So
+    an ordinary 403 here proves the belt and says nothing about
+    `ROUTE_POLICIES` — loosen the entry to `ANY_TOKEN` and the plain assertion
+    above still passes, which is the silent coverage loss §16 designs against.
+
+    Lifting the belt for the length of this test is what puts the gate in the
+    path, so the refusal measured is the declaration's. Both are wanted: the
+    belt keeps this closed if `AUTHZ_GATE_ENFORCING` is ever rolled back, and
+    the gate closes it while enforcement is on.
+    """
+    # **Both halves of the belt, or this test dies again.** The prefix holds
+    # the templated routes and the frozenset holds this one by its own path;
+    # lifting either alone leaves the other refusing, and the assertion below
+    # would pass on the belt while claiming to measure the gate.
+    without_prefix = tuple(
+        prefix
+        for prefix in auth.READ_BLOCKED_GET_PREFIXES
+        if prefix != "/api/v1/recipes/"
+    )
+    without_path = auth.READ_BLOCKED_GET_PATHS - {"/api/v1/recipes/used"}
+    assert len(without_prefix) == len(auth.READ_BLOCKED_GET_PREFIXES) - 1, (
+        "the prefix this test lifts is no longer there; the belt has moved"
+    )
+    assert len(without_path) == len(auth.READ_BLOCKED_GET_PATHS) - 1, (
+        "this route is no longer on the exact-path belt; the belt has moved"
+    )
+    scoped = _bearer(recipe_env.server, _mint(recipe_env.owner, "gate probe"))
+    original = auth.READ_BLOCKED_GET_PREFIXES
+    original_paths = auth.READ_BLOCKED_GET_PATHS
+    auth.READ_BLOCKED_GET_PREFIXES = without_prefix
+    auth.READ_BLOCKED_GET_PATHS = without_path
+    try:
+        r = scoped.get(f"{API}/recipes/used", params={"workflow_key": CARD_A})
+        assert r.status_code == 403, (
+            "with the READ-token belt lifted the gate let a scoped token read "
+            f"the owner's prompts: {r.status_code} {r.text}"
+        )
+        # The owner is unaffected by the lift, so the 403 above is the scope
+        # being refused and not the route having broken.
+        assert _used(recipe_env.owner, CARD_A)
+    finally:
+        auth.READ_BLOCKED_GET_PREFIXES = original
+        auth.READ_BLOCKED_GET_PATHS = original_paths
+
+    # And the belt is back, so every later test measures the shipped shape.
+    assert (
+        scoped.get(f"{API}/recipes/used", params={"workflow_key": CARD_A}).status_code
+        == 403
+    )
+
+
+def test_used_looks_survive_sqlites_variable_ceiling(recipe_env):
+    """A selection whose stacks hold more variants than SQLite takes at once.
+
+    One card accumulates a variant per structural change, so a hundred selected
+    cards resolve to thousands of structural hashes. Unchunked that is one
+    `IN` over the bound-parameter floor and a 500 — the database limit
+    surfacing as a fault, which is what the caps in this module exist to stop.
+    Pinned to the historical 999 because this machine's SQLite is far above it
+    and a green run here would otherwise prove nothing.
+    """
+    import sqlite3
+
+    from sqlalchemy import event as sa_event
+
+    extra = 1200
+    with recipe_env.server.hub.transaction() as conn:
+        for index in range(extra):
+            structural = _h(f"ceiling-variant-{index}")
+            conn.execute(
+                "INSERT INTO workflow_recipe "
+                "(structural_hash, topology_hash, hash_version, node_count, "
+                "first_seen_at) VALUES (?, ?, 'v1', 12, '2026-09-01T00:00:00Z')",
+                (structural, TOPO_A),
+            )
+            conn.execute(
+                "INSERT INTO workflow_variant "
+                "(structural_hash, topology_hash, workflow_key, key_version) "
+                "VALUES (?, ?, ?, 'v1')",
+                (structural, TOPO_A, CARD_A),
+            )
+
+    engine = recipe_env.server.vault.db._engine
+
+    def _set_limit(dbapi_conn, _record):
+        dbapi_conn.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
+
+    sa_event.listen(engine, "connect", _set_limit)
+    engine.dispose()
+    try:
+        looks = _used(recipe_env.owner, CARD_A)
+        # The answer is unchanged: chunking must merge, not concatenate, or a
+        # look straddling two chunks is listed twice with its pictures split.
+        assert [(look["prompt"], look["pictures"]) for look in looks] == [
+            (PROMPT, 2),
+            (PROMPT, 1),
+            (OTHER_PROMPT, 1),
+        ]
+        listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_key": CARD_A})
+        assert listed.status_code == 200, listed.text
+    finally:
+        sa_event.remove(engine, "connect", _set_limit)
+        engine.dispose()
+
+
+def test_a_workflow_key_longer_than_a_digest_is_refused(recipe_env):
+    """The per-key ceiling the list rewrite must not have dropped.
+
+    A workflow key is a 64-character digest. `max_length` on a `list[str]`
+    bounds the LIST, so the string ceiling has to be declared on the item or
+    it silently disappears — which is what happened when this parameter
+    stopped being a single string.
+    """
+    for path in (f"{API}/recipes", f"{API}/recipes/used"):
+        r = recipe_env.owner.get(path, params={"workflow_key": "a" * 4000})
+        assert r.status_code == 422, f"{path} took a 4000-character key: {r.text}"
+
+
+def test_a_picture_with_no_prompt_is_not_a_look(recipe_env):
+    """The group that would otherwise lead the list saying nothing.
+
+    A graph that was read but yielded no prompt leaves `comfyui_loras = "[]"`
+    and `comfyui_positive_prompt = NULL`. Every such picture in the stack folds
+    into one group, which would be the biggest one and would render as a
+    thumbnail, "Not kept yet" and a count — nothing identifying, at the top of
+    the feature's headline surface.
+    """
+
+    def add_promptless(session):
+        for index in range(3):
+            session.add(
+                Picture(
+                    file_path=f"no_prompt_{index}.png",
+                    deleted=False,
+                    created_at=datetime(2026, 9, 2),
+                    workflow_structural_hash=VARIANT_A,
+                    workflow_hash_version="v1",
+                    comfyui_positive_prompt=None,
+                    comfyui_loras=json.dumps([]),
+                    comfyui_models=json.dumps([]),
+                )
+            )
+        session.commit()
+
+    recipe_env.server.vault.db.run_task(add_promptless, priority=DBPriority.IMMEDIATE)
+
+    looks = _used(recipe_env.owner, CARD_A)
+    assert all(look["prompt"] or look["loras"] for look in looks), looks
+    # The stack's real looks are untouched; only the nameless group goes.
+    assert len(looks) == 3
+
+
+def test_a_picture_with_no_prompt_but_a_lora_is_still_a_look(recipe_env):
+    """Only the group with nothing at all goes: a LoRA names a look too."""
+
+    def add_lora_only(session):
+        session.add(
+            Picture(
+                file_path="lora_only.png",
+                deleted=False,
+                created_at=datetime(2026, 9, 2),
+                workflow_structural_hash=VARIANT_A,
+                workflow_hash_version="v1",
+                comfyui_positive_prompt=None,
+                comfyui_loras=json.dumps(["lonely.safetensors"]),
+                comfyui_models=json.dumps([]),
+            )
+        )
+        session.commit()
+
+    recipe_env.server.vault.db.run_task(add_lora_only, priority=DBPriority.IMMEDIATE)
+
+    looks = _used(recipe_env.owner, CARD_A)
+    assert any(
+        not look["prompt"]
+        and [row["filename"] for row in look["loras"]] == ["lonely.safetensors"]
+        for look in looks
+    ), looks

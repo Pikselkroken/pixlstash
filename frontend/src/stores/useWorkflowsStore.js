@@ -1127,7 +1127,26 @@ export const useWorkflowsStore = defineStore("workflows", () => {
 
   onScopeDispose(onSessionReset(reset));
 
+  /**
+   * Bumped whenever a saved recipe is written from anywhere (v1.12 F6).
+   *
+   * The Recipes tab watches the selected card, which is not enough: saving
+   * from the Run popup opened *from that tab* changes the list behind a dialog
+   * the selection never moved off, so the tab stayed stale until the owner
+   * clicked away and back. The backend announces this as `workflows_changed`
+   * with reason "recipes"; nothing in the client listens to that stream yet,
+   * and this is the in-process half of the same signal until something does.
+   */
+  const recipesEpoch = ref(0);
+
+  /** Say a recipe was saved, renamed or deleted. */
+  function notedRecipesChanged() {
+    recipesEpoch.value += 1;
+  }
+
   return {
+    recipesEpoch,
+    notedRecipesChanged,
     cards,
     oneOffs,
     hidden,

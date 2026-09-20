@@ -25,6 +25,10 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    *   workflowKey   - the card to run, when it is already known.
    *   pickWorkflow  - open with the workflow picker unset ("Run a workflow on
    *                   these…"), so nothing runs until one is chosen.
+   *   savedRecipe   - the saved recipe row to run (v1.12 F6). It is a SOURCE,
+   *                   not a prefill: the run body carries `saved_recipe_id`
+   *                   and the route fills the row's own prompt, LoRAs,
+   *                   overrides and seed in underneath the form.
    */
   const source = ref(null);
   /**

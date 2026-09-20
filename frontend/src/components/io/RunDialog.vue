@@ -317,52 +317,50 @@
       <p v-if="runBlocker" :id="blockerId" class="rund-note rund-note--bad">
         {{ runBlocker }}
       </p>
-      <template v-if="naming">
-        <AppInput
-          v-model="recipeName"
-          aria-label="Name for the saved recipe"
-          placeholder="Name this recipe"
-          autofocus
-          @keydown.stop.enter="saveRecipe"
-        />
-        <AppButton :disabled="saving" @click="naming = false">Cancel</AppButton>
-        <AppButton
-          variant="primary"
-          :loading="saving"
-          :disabled="!recipeName.trim()"
-          @click="saveRecipe"
-        >
-          Save
-        </AppButton>
-      </template>
-      <template v-else>
-        <AppButton
-          icon-left="bookmark-plus-outline"
-          :disabled="!activeKey || submitting"
-          @click="startNaming"
-        >
-          Save as recipe
-        </AppButton>
-        <span class="rund-sp" />
-        <AppButton :disabled="submitting" @click="onRequestClose">Cancel</AppButton>
-        <!-- `aria-disabled`, not `disabled`: a natively-disabled button is
-             out of the tab order, so a keyboard reader could never reach the
-             reason `aria-describedby` points at. `submit()` does the actual
-             refusing. Same shape as the Recipe tab's own Run button. -->
-        <AppButton
-          variant="primary"
-          icon-left="play"
-          :loading="submitting"
-          :class="{ 'run-refused': !canRun }"
-          :aria-disabled="canRun ? undefined : 'true'"
-          :aria-describedby="runBlocker ? blockerId : undefined"
-          @click="submit"
-        >
-          {{ runLabel }}
-        </AppButton>
-      </template>
+      <AppButton
+        icon-left="bookmark-plus-outline"
+        :disabled="!activeKey || submitting"
+        @click="saveOpen = true"
+      >
+        Save as recipe
+      </AppButton>
+      <span class="rund-sp" />
+      <AppButton :disabled="submitting" @click="onRequestClose">Cancel</AppButton>
+      <!-- `aria-disabled`, not `disabled`: a natively-disabled button is out of
+           the tab order, so a keyboard reader could never reach the reason
+           `aria-describedby` points at. `submit()` does the actual refusing.
+           Same shape as the Recipe tab's own Run button. -->
+      <AppButton
+        variant="primary"
+        icon-left="play"
+        :loading="submitting"
+        :class="{ 'run-refused': !canRun }"
+        :aria-disabled="canRun ? undefined : 'true'"
+        :aria-describedby="runBlocker ? blockerId : undefined"
+        @click="submit"
+      >
+        {{ runLabel }}
+      </AppButton>
     </template>
   </AppDialog>
+
+  <!-- Its own dialog rather than a mode in this footer: "what the recipe
+       keeps" is a list the owner reads and argues with, and a run form is
+       already the densest surface in the app. -->
+  <SaveRecipeDialog
+    v-if="saveOpen"
+    :open="saveOpen"
+    :workflow-key="activeKey"
+    :suggested-name="card?.name || ''"
+    :prompt="prompt"
+    :negative="negative"
+    :loras="recipeLoras"
+    :overrides="recipeOverrides"
+    :seed="seedMode === 'fixed' ? String(seed).trim() : ''"
+    :settings-aside="seedMode === 'keep' ? KEEP_SEED_ASIDE : ''"
+    :source-picture-id="pictureIds[0] ?? null"
+    @close="saveOpen = false"
+  />
 </template>
 
 <script setup>
@@ -384,7 +382,6 @@ import { VIcon } from "vuetify/components";
 
 import { getPictureRecipe } from "../../api/comfyui";
 import { listAdapters } from "../../api/modelShelf";
-import { createSavedRecipe } from "../../api/recipes";
 import {
   getWorkflowCard,
   listWorkflowCards,
@@ -394,9 +391,9 @@ import {
 } from "../../api/workflows";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
-import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorMessage } from "../../utils/apiError";
 import { reasonsBlock } from "../../utils/runReasons";
+import SaveRecipeDialog from "./SaveRecipeDialog.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -434,12 +431,22 @@ const MAX_VALUES = 200;
 const SCALAR_PINNED = ["steps", "cfg", "cfg_scale", "guidance"];
 const SIZE_INPUTS = ["width", "height"];
 const CHECKPOINT_INPUT = "ckpt_name";
+/**
+ * Said in the Save dialog when the form is set to keep the source's seed.
+ *
+ * A saved recipe's seed is one number it holds, and "the seed of whatever
+ * picture this run started from" is not a number - `seed_mode` is the run's
+ * own choice and no column keeps it. So that choice is dropped on save, and
+ * dropping it in silence is what this line stops.
+ */
+const KEEP_SEED_ASIDE =
+  "This run is set to keep the source picture's seed. A recipe cannot hold that choice, so it is not kept: runs from this recipe draw a new seed.";
+
 const SEPARATOR = "/";
 
 const blockerId = useId();
 /** Bumped per open, so a slower earlier read cannot write over a later one. */
 let loadToken = 0;
-const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
 const entityLists = useEntityListsStore();
 
@@ -524,9 +531,8 @@ const dirty = computed(
 /** How many LoRA rows the form opened with, for `dirty`. */
 const initialLoraCount = ref(0);
 
-const naming = ref(false);
-const saving = ref(false);
-const recipeName = ref("");
+/** Whether the Save as recipe dialog is up over this one. */
+const saveOpen = ref(false);
 
 const LAST_SET_KEY = "pixlstash:runDialogSetId";
 
@@ -570,6 +576,17 @@ const hasRecipe = computed(() => Boolean(recipe.value));
 const loraSlots = computed(() => recipe.value?.lora_slots || []);
 const pictureIds = computed(() => props.source?.pictureIds || []);
 const kind = computed(() => props.source?.kind || "picture");
+/**
+ * The saved recipe this popup was opened on, when it was opened from one.
+ *
+ * It is a SOURCE, not a prefill: `POST /workflows/run` takes
+ * `saved_recipe_id` and fills the row's prompt, LoRAs, overrides and seed in
+ * underneath whatever this form sends, so the form shows the recipe and the
+ * owner's edits win over it. The form is prefilled all the same, because
+ * `runBody` sends every parameter it displays and a row the form did not show
+ * would otherwise be overwritten by the card's own default.
+ */
+const savedRecipe = computed(() => props.source?.savedRecipe || null);
 /** A card with no source picture picks where its output is filed. */
 const picksDestination = computed(() => !pictureIds.value.length);
 
@@ -727,7 +744,9 @@ function resetSize() {
   sizeFields.value.forEach(resetValue);
 }
 
-const basePrompt = computed(() => recipe.value?.positive_prompt || "");
+const basePrompt = computed(
+  () => recipe.value?.positive_prompt || savedRecipe.value?.prompt || "",
+);
 
 /**
  * What to send as `prompt`, or `null` to leave the graph's own alone.
@@ -741,7 +760,45 @@ const promptOverride = computed(() => {
   if (typed) return typed;
   return basePrompt.value ? "" : null;
 });
-const baseNegative = computed(() => recipe.value?.negative_prompt || "");
+const baseNegative = computed(
+  () => recipe.value?.negative_prompt || savedRecipe.value?.negative || "",
+);
+
+/**
+ * The LoRAs as a recipe keeps them: by name and strength, not by slot.
+ *
+ * Only the rows the shelf could name. A saved LoRA is found again by its
+ * digest after a rename, and a slot with no digest has nothing to save that
+ * would still mean anything on another machine.
+ */
+const recipeLoras = computed(() =>
+  loras.value
+    .filter((row) => row.sha256)
+    .map((row) => {
+      const shelf = adapters.value.find((item) => item.sha256 === row.sha256);
+      return {
+        filename:
+          shelf?.filename || shelf?.display_name || row.graphValue || row.sha256,
+        sha256: row.sha256,
+        strength: Number(row.strength) || 1,
+      };
+    }),
+);
+
+/**
+ * The parameters the owner changed, each with the value it was changed from.
+ *
+ * The Save as recipe dialog prints "Steps 12 instead of the workflow's 8", so
+ * it needs both numbers; `edits` alone carries only the new one.
+ */
+const recipeOverrides = computed(() =>
+  defaults.value.filter(isEdited).map((field) => ({
+    address: address(field),
+    label: field.label,
+    value: edits[address(field)],
+    base: baseOf(field),
+  })),
+);
 
 const seedOptions = [
   { value: "new", label: "New for each picture" },
@@ -890,9 +947,16 @@ function runBody() {
     // the run look followable when it is not.
     client_id: runDialog.hasRunner ? props.context?.client_id || null : null,
   };
-  // Exactly one source, which the route checks before it reads anything: with
-  // pictures the card is `target`, and without them it IS the source.
-  if (pictureIds.value.length) {
+  // Exactly one source, which the route checks before it reads anything: a
+  // saved recipe names its own card, with pictures the card is `target`, and
+  // without either it IS the source.
+  if (savedRecipe.value) {
+    body.saved_recipe_id = savedRecipe.value.id;
+    // The picker still chooses which member of the stack runs: a recipe runs
+    // on any workflow in the stack it was saved from, and `target` replaces
+    // the group's card whatever named it.
+    body.target = activeKey.value;
+  } else if (pictureIds.value.length) {
     body.picture_ids = pictureIds.value;
     body.target = activeKey.value;
   } else {
@@ -1117,8 +1181,7 @@ async function load() {
   loras.value = [];
   count.value = 1;
   seedMode.value = "new";
-  naming.value = false;
-  recipeName.value = "";
+  saveOpen.value = false;
   try {
     if (props.source?.pickWorkflow) {
       cards.value = (await listWorkflowCards()).cards;
@@ -1150,6 +1213,7 @@ async function load() {
     await loadAdapters();
     loras.value = loraSlots.value.map((slot) => loraRow(slot));
     initialLoraCount.value = loras.value.length;
+    applySavedRecipe();
     destinationSetId.value =
       readLastSet() || (props.context?.set_id ? String(props.context.set_id) : "");
     void loadAdapters();
@@ -1163,6 +1227,47 @@ async function load() {
     }
   } finally {
     if (mine()) loading.value = false;
+  }
+}
+
+/**
+ * Show the saved recipe this popup was opened on.
+ *
+ * Each override is written into `edits` rather than merely displayed, because
+ * `runBody` sends every parameter the form shows: a recipe value left out of
+ * `edits` would be sent as the card's own default and the recipe's own value
+ * would never reach the graph.
+ *
+ * LoRAs are deliberately NOT written here. A saved LoRA names a file and a
+ * strength but no slot, and the slot only exists once the graph is resolved;
+ * the route fills them in itself when the body carries none, which is what
+ * this form sends when it was opened on a card with no picture behind it.
+ *
+ * **That is all-or-nothing on the route's side**: `body.loras` non-empty makes
+ * the request's rows the whole LoRA set and the recipe's are not merged under
+ * them. So editing one row of a saved recipe's LoRAs in this form replaces the
+ * lot. It only arises once a card with no picture behind it shows LoRA rows at
+ * all, which needs the card's own slots (`recipe.lora_slots` is the picture's).
+ */
+function applySavedRecipe() {
+  const row = savedRecipe.value;
+  if (!row) return;
+  prompt.value = row.prompt || "";
+  negative.value = row.negative || "";
+  const byAddress = new Map(defaults.value.map((field) => [address(field), field]));
+  for (const [key, value] of Object.entries(row.overrides || {})) {
+    const field = byAddress.get(key);
+    // An address this card does not carry is left alone rather than invented:
+    // the recipe may have been saved on another member of the stack.
+    if (!field) continue;
+    setValue(field, value);
+  }
+  // A kept seed is shown as the chosen seed, so the form both says what the
+  // recipe does and sends it: `POST /workflows/run` lets a request that names
+  // `seed_mode` win over the row, and this form always names one.
+  if (row.keep_seed && row.seed != null && row.seed !== "") {
+    seedMode.value = "fixed";
+    seed.value = String(row.seed);
   }
 }
 
@@ -1182,69 +1287,22 @@ function rememberSet(value) {
   }
 }
 
-function startNaming() {
-  recipeName.value = card.value?.name || "";
-  naming.value = true;
-}
-
-async function saveRecipe() {
-  if (!recipeName.value.trim() || saving.value) return;
-  saving.value = true;
-  try {
-    const body = runBody();
-    await createSavedRecipe({
-      workflow_key: activeKey.value,
-      name: recipeName.value.trim(),
-      prompt: prompt.value,
-      negative: body.negative,
-      loras: loras.value
-        .filter((row) => row.sha256)
-        .map((row) => ({
-          filename: adapterName(row.sha256),
-          sha256: row.sha256,
-          strength: Number(row.strength) || 1,
-        })),
-      overrides: { ...edits },
-      seed: seedMode.value === "fixed" ? String(seed.value).trim() : null,
-      keep_seed: seedMode.value === "keep",
-      source_picture_id: pictureIds.value[0] ?? null,
-    });
-    naming.value = false;
-    notices.push({ level: "success", text: `Saved “${recipeName.value.trim()}”.` });
-  } catch (err) {
-    notices.push({
-      level: "error",
-      text: errorMessage(err, "Could not save that recipe."),
-    });
-  } finally {
-    saving.value = false;
-  }
-}
-
-function adapterName(sha256) {
-  const row = adapters.value.find((item) => item.sha256 === sha256);
-  return row?.filename || row?.display_name || sha256;
-}
-
 function onRequestClose() {
   if (submitting.value) return;
   emit("close");
 }
 
 /**
- * Escape backs out one level, then closes.
+ * Escape closes this popup.
  *
- * While naming a recipe the footer is a nested mode; Escape there used to close
- * the whole popup and lose the run form along with the name. A persistent
- * dialog suppresses `AppDialog`'s own Escape, so the close is made here.
+ * A persistent dialog suppresses `AppDialog`'s own Escape, so the close is made
+ * here. Saving a recipe is its own dialog now and answers its own Escape from
+ * its own teleported subtree, so there is no nested mode in this footer left
+ * to back out of first.
  */
 function onEscape(event) {
   if (submitting.value) return;
   event.stopPropagation();
-  if (naming.value) {
-    naming.value = false;
-    return;
-  }
   emit("close");
 }
 

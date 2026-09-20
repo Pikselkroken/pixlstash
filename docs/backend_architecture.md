@@ -687,6 +687,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/recipes                                                               | recipes         | List saved recipes                                          |
 | POST   | /api/v1/recipes                                                               | recipes         | Save a recipe                                               |
 | PUT    | /api/v1/recipes/order                                                         | recipes         | Reorder saved recipes                                       |
+| GET    | /api/v1/recipes/used                                                          | recipes         | Looks this workflow's pictures were made with               |
 | PATCH  | /api/v1/recipes/{recipe_id}                                                   | recipes         | Edit a saved recipe                                         |
 | DELETE | /api/v1/recipes/{recipe_id}                                                   | recipes         | Delete a saved recipe                                       |
 | GET    | /api/v1/recipes/{recipe_id}/export                                            | recipes         | Export a saved recipe                                       |
