@@ -4772,10 +4772,25 @@ and the strengths are this run's, applied over whatever the graph carried. The
 slots come from the source picture's `lora_slots`, which is why a card opened
 with no picture behind it shows **no** LoRA rows at all and says so ("Open one
 of this workflow's pictures to change its LoRAs") rather than showing them
-uneditable: with no recipe there is nothing to address a slot by. Only
-`by: "digest"` slots are prefilled - `RunLora.sha256` is required and a
-filename slot names a file rather than a digest, so matching the name against
-the shelf would be a guess that loads somebody else's file of that name.
+uneditable: with no recipe there is nothing to address a slot by.
+
+**Every slot is shown, not only the `by: "digest"` ones.** That filter was a
+bug: `digest` is PixlStash's own loader node, and every stock `LoraLoader`
+names its file in a `lora_name` widget and is `by: "filename"` - so an ordinary
+workflow opened the popup with no LoRAs at all. A filename is resolved against
+the model shelf the way `apply_adapter` does it, the whole recorded name and
+then the basename, and **only when exactly one shelf row matches**: two files
+of that name is a coin toss over which one loads, not a resolution. A slot the
+shelf cannot name is still drawn, with its own filename in the select and a
+line naming it, because it is a fact about the graph.
+
+**Only the rows that DIFFER from the graph are sent.** An untouched slot needs
+no override - ComfyUI loads what the graph already names - and a slot the shelf
+could not name has no digest to put in `RunLora.sha256`, so sending it back
+would refuse the run over a LoRA nobody touched. The × is on rows the owner
+ADDED: `POST /workflows/run` overrides a slot and cannot delete one, so an × on
+a graph's own row would promise a removal the run does not perform. Removing
+one means bypassing its loader, which is #1463.
 
 **Four capabilities went with `WorkflowRunPanel.vue` and have no replacement.**
 `POST /comfyui/workflows/{name}/run` now has **no frontend caller at all**

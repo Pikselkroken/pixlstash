@@ -34,6 +34,9 @@
 - Gone for now: "stack new pictures with the ones they came from" for ComfyUI
   runs — new pictures arrive in the grid unstacked. The same setting for plugin
   *Filters* runs is unaffected.
+- The Run popup lists the LoRAs the workflow already loads, matched to your
+  model shelf, so you can swap one or change its strength. A LoRA the shelf has
+  never seen is still shown, named, and left exactly as the workflow has it.
 - Gone for now: putting a LoRA into a workflow that has **no** LoRA loader.
   *Generate variants…* could add a loader for you; the new popup tells you the
   workflow has none and offers to run without the LoRA. Workflows that already

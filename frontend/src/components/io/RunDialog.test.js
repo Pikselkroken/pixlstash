@@ -34,7 +34,10 @@ vi.mock("../../api/workflows", () => ({
 vi.mock("../../api/comfyui", () => ({
   getPictureRecipe: (...args) => getPictureRecipe(...args),
 }));
-vi.mock("../../api/modelShelf", () => ({ listAdapters: vi.fn(async () => []) }));
+const listAdapters = vi.fn();
+vi.mock("../../api/modelShelf", () => ({
+  listAdapters: (...args) => listAdapters(...args),
+}));
 vi.mock("../../api/recipes", () => ({ createSavedRecipe: vi.fn() }));
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
@@ -133,6 +136,10 @@ beforeEach(() => {
     status: "success",
     prompts: [{ prompt_id: "p1" }],
   });
+  listAdapters.mockResolvedValue([
+    { sha256: "s".repeat(64), filename: "mira_v2.safetensors", display_name: "mira_v2" },
+    { sha256: "t".repeat(64), filename: "loras/film-grain-35mm.safetensors" },
+  ]);
   getPictureRecipe.mockResolvedValue({
     available: true,
     workflow_key: KEY,
@@ -333,6 +340,167 @@ describe("a number field that has been emptied", () => {
     const steps = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
     wrapper.vm.setValue(steps, wrapper.vm.coerce(steps, "twelve"));
     expect(wrapper.vm.currentValue(steps)).toBe(12);
+  });
+});
+
+describe("the LoRAs a graph already loads", () => {
+  /** A stock `LoraLoader`: names its file in a `lora_name` widget. */
+  function filenameSlot(value, node = "7") {
+    return {
+      node_id: node,
+      class_type: "LoraLoader",
+      field: "lora_name",
+      value,
+      by: "filename",
+      strengths: { model: 0.85 },
+    };
+  }
+
+  it("shows the ordinary filename slots, which are all of them in practice", async () => {
+    // `by: "digest"` is only PixlStash's own loader node. Filtering on it
+    // meant every stock workflow opened the popup with no LoRAs at all.
+    getPictureRecipe.mockResolvedValue({
+      available: true,
+      workflow_key: KEY,
+      settings: {},
+      lora_slots: [filenameSlot("mira_v2.safetensors")],
+    });
+    const wrapper = await mountRun();
+
+    expect(wrapper.vm.loras).toHaveLength(1);
+    expect(wrapper.vm.loras[0]).toMatchObject({
+      node_id: "7",
+      field: "lora_name",
+      by: "filename",
+      graphValue: "mira_v2.safetensors",
+      strength: 0.85,
+    });
+  });
+
+  it("resolves the graph's filename to a shelf digest", async () => {
+    getPictureRecipe.mockResolvedValue({
+      available: true,
+      workflow_key: KEY,
+      settings: {},
+      lora_slots: [filenameSlot("mira_v2.safetensors")],
+    });
+    const wrapper = await mountRun();
+    expect(wrapper.vm.loras[0].sha256).toBe("s".repeat(64));
+  });
+
+  it("matches on the basename, since ComfyUI counts from its own folder", async () => {
+    // The shelf recorded `loras/film-grain-35mm.safetensors`; the graph names
+    // it relative to ComfyUI's `loras` folder.
+    getPictureRecipe.mockResolvedValue({
+      available: true,
+      workflow_key: KEY,
+      settings: {},
+      lora_slots: [filenameSlot("film-grain-35mm.safetensors")],
+    });
+    const wrapper = await mountRun();
+    expect(wrapper.vm.loras[0].sha256).toBe("t".repeat(64));
+  });
+
+  it("still shows a LoRA the shelf cannot name, and says so", async () => {
+    getPictureRecipe.mockResolvedValue({
+      available: true,
+      workflow_key: KEY,
+      settings: {},
+      lora_slots: [filenameSlot("somebody-elses.safetensors")],
+    });
+    const wrapper = await mountRun();
+
+    expect(wrapper.vm.loras).toHaveLength(1);
+    expect(wrapper.vm.loras[0].sha256).toBe("");
+    expect(wrapper.vm.unresolvedLoras).toEqual(["somebody-elses.safetensors"]);
+    expect(wrapper.text()).toContain("Not on your model shelf");
+    // And its own value is in the select, or the row reads as an empty slot
+    // nobody filled when in fact the graph fills it.
+    expect(wrapper.vm.optionsFor(wrapper.vm.loras[0])[0].label).toContain(
+      "somebody-elses.safetensors",
+    );
+  });
+
+  it("refuses to guess when two shelf rows carry the same name", async () => {
+    listAdapters.mockResolvedValue([
+      { sha256: "a".repeat(64), filename: "dupe.safetensors" },
+      { sha256: "b".repeat(64), filename: "other/dupe.safetensors" },
+    ]);
+    getPictureRecipe.mockResolvedValue({
+      available: true,
+      workflow_key: KEY,
+      settings: {},
+      lora_slots: [filenameSlot("dupe.safetensors")],
+    });
+    const wrapper = await mountRun();
+    // A coin toss over which file loads is not a resolution.
+    expect(wrapper.vm.loras[0].sha256).toBe("");
+  });
+
+  it("sends NOTHING for a LoRA nobody touched", async () => {
+    // The graph already names it; an override would only repeat the graph, and
+    // for an unresolvable slot there is no digest to repeat it with - which
+    // would refuse the run over a LoRA nobody changed.
+    getPictureRecipe.mockResolvedValue({
+      available: true,
+      workflow_key: KEY,
+      settings: {},
+      lora_slots: [
+        filenameSlot("mira_v2.safetensors"),
+        filenameSlot("somebody-elses.safetensors", "8"),
+      ],
+    });
+    const wrapper = await mountRun();
+    expect(wrapper.vm.loras).toHaveLength(2);
+
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].loras).toEqual([]);
+  });
+
+  it("sends the row the owner swapped, and only that one", async () => {
+    getPictureRecipe.mockResolvedValue({
+      available: true,
+      workflow_key: KEY,
+      settings: {},
+      lora_slots: [
+        filenameSlot("mira_v2.safetensors"),
+        filenameSlot("film-grain-35mm.safetensors", "8"),
+      ],
+    });
+    const wrapper = await mountRun();
+    wrapper.vm.loras[0].sha256 = "t".repeat(64);
+    await wrapper.vm.$nextTick();
+
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].loras).toEqual([
+      {
+        node_id: "7",
+        field: "lora_name",
+        sha256: "t".repeat(64),
+        strength_model: 0.85,
+      },
+    ]);
+  });
+
+  it("sends a strength the owner changed on an otherwise untouched row", async () => {
+    getPictureRecipe.mockResolvedValue({
+      available: true,
+      workflow_key: KEY,
+      settings: {},
+      lora_slots: [filenameSlot("mira_v2.safetensors")],
+    });
+    const wrapper = await mountRun();
+    wrapper.vm.loras[0].strength = 0.4;
+    await wrapper.vm.$nextTick();
+
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].loras[0]).toMatchObject({
+      sha256: "s".repeat(64),
+      strength_model: 0.4,
+    });
   });
 });
 

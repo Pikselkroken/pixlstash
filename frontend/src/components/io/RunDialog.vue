@@ -108,7 +108,7 @@
               :label="`LoRA ${index + 1}`"
               hide-label
               compact
-              :options="adapterOptions"
+              :options="optionsFor(row)"
               :disabled="submitting"
             />
             <AppInput
@@ -120,13 +120,24 @@
               :disabled="submitting"
               @keydown.stop
             />
+            <!-- Only a row the owner ADDED can be taken away again. A slot the
+                 graph carries is in the graph: `POST /workflows/run` overrides
+                 a slot, it cannot delete one, so an × here would promise a
+                 removal the run does not perform. -->
             <AppBarButton
+              v-if="row.added"
               icon="close"
               :tooltip="`Remove LoRA ${index + 1}`"
               :disabled="submitting"
               @click="removeLora(index)"
             />
+            <span v-else class="rund-x-gap" />
           </div>
+          <p v-if="unresolvedLoras.length" class="rund-note">
+            Not on your model shelf, so {{ unresolvedLoras.length === 1 ? "it stays" : "they stay" }}
+            as the workflow has {{ unresolvedLoras.length === 1 ? "it" : "them" }}:
+            {{ unresolvedLoras.join(", ") }}.
+          </p>
           <AppButton
             v-if="loraSlots.length"
             size="sm"
@@ -485,12 +496,29 @@ const destinationSetId = ref("");
  * wired at all here for the same reason; Escape is handled below so dismissing
  * an untouched form still works.
  */
+/** The LoRA rows the owner changed, as `RunLora` takes them. */
+const changedLoras = computed(() =>
+  loras.value
+    .filter(
+      (row) =>
+        row.sha256 &&
+        (row.sha256 !== row.baseSha || row.strength !== row.baseStrength),
+    )
+    .map((row) => ({
+      node_id: row.node_id,
+      field: row.field,
+      sha256: row.sha256,
+      strength_model: Number.isFinite(row.strength) ? row.strength : null,
+    })),
+);
+
 const dirty = computed(
   () =>
     prompt.value !== basePrompt.value ||
     negative.value !== baseNegative.value ||
     Object.keys(edits).length > 0 ||
-    loras.value.length !== initialLoraCount.value,
+    loras.value.length !== initialLoraCount.value ||
+    changedLoras.value.length > 0,
 );
 
 /** How many LoRA rows the form opened with, for `dirty`. */
@@ -844,14 +872,12 @@ function runBody() {
     // prompt node in the graph and generate from no prompt at all.
     prompt: promptOverride.value,
     negative: baseNegative.value ? negative.value : null,
-    loras: loras.value
-      .filter((row) => row.sha256)
-      .map((row) => ({
-        node_id: row.node_id,
-        field: row.field,
-        sha256: row.sha256,
-        strength_model: Number.isFinite(row.strength) ? row.strength : null,
-      })),
+    // Only the rows that DIFFER from the graph. An untouched slot needs no
+    // override - ComfyUI loads what the graph already names - and a slot the
+    // shelf could not name has no digest to send, which `RunLora.sha256`
+    // requires. Sending those back would refuse the run over a LoRA nobody
+    // touched.
+    loras: changedLoras.value,
     values,
     count: count.value,
     seed_mode: seedMode.value,
@@ -914,17 +940,79 @@ function addLora() {
     (item) => !used.has(`${item.field}@${item.node_id}`),
   );
   if (!slot) return;
-  loras.value.push(loraRow(slot));
+  loras.value.push(loraRow(slot, { added: true }));
 }
 
-function loraRow(slot, sha256 = "") {
+/**
+ * One LoRA row, with the graph's own file resolved to a shelf digest.
+ *
+ * `baseSha` / `baseStrength` are what the GRAPH has. A row equal to them is
+ * not sent at all, which is how a slot the shelf cannot name still works: the
+ * run carries no override for it and ComfyUI loads what the graph already
+ * says. Only a row the owner actually changed becomes a `RunLora`.
+ */
+function loraRow(slot, { added = false } = {}) {
+  const graphValue = String(slot.value ?? "");
+  const sha256 =
+    slot.by === "digest" ? graphValue : shelfDigestFor(graphValue);
+  const strength = Number(slot.strengths?.model ?? 1);
   return {
     key: `${slot.field}@${slot.node_id}`,
     node_id: String(slot.node_id),
     field: String(slot.field),
+    by: String(slot.by || "filename"),
+    graphValue,
+    added,
+    baseSha: sha256,
+    baseStrength: strength,
     sha256,
-    strength: Number(slot.strengths?.model ?? 1),
+    strength,
   };
+}
+
+/**
+ * The shelf digest for a filename a graph names, or `""`.
+ *
+ * The same two tiers `apply_adapter` matches on and in the same order - the
+ * whole recorded name, then the basename - because ComfyUI counts from its
+ * `loras` folder and the shelf from whatever folder it scanned. Matched on
+ * exactly one row: two files of that name on the shelf is not a resolution,
+ * it is a coin toss over which one the run would load.
+ */
+function shelfDigestFor(filename) {
+  const wanted = filename.trim().toLowerCase();
+  if (!wanted) return "";
+  const base = wanted.split(/[\\/]/).pop();
+  for (const key of [wanted, base]) {
+    const hits = adapters.value.filter((adapter) => {
+      const name = String(adapter.filename || "").toLowerCase();
+      return adapter.sha256 && (name === key || name.split(/[\\/]/).pop() === key);
+    });
+    if (hits.length === 1) return String(hits[0].sha256);
+  }
+  return "";
+}
+
+/** The graph's LoRAs the shelf could not name, for the line under the rows. */
+const unresolvedLoras = computed(() =>
+  loras.value
+    .filter((row) => !row.added && !row.baseSha && row.graphValue)
+    .map((row) => row.graphValue),
+);
+
+/**
+ * A row's options, with the graph's own unresolvable file among them.
+ *
+ * Without its current value in the list the select would render empty and read
+ * as a slot nobody has filled, when in fact the graph fills it with a file the
+ * shelf has never seen.
+ */
+function optionsFor(row) {
+  if (row.baseSha || !row.graphValue || row.added) return adapterOptions.value;
+  return [
+    { value: "", label: `${row.graphValue} (not on your shelf)` },
+    ...adapterOptions.value,
+  ];
 }
 
 function removeLora(index) {
@@ -1049,16 +1137,18 @@ async function load() {
     prompt.value = props.source?.emptyPrompt ? "" : basePrompt.value;
     negative.value = baseNegative.value;
     seed.value = seedText.value || "0";
-    // Only the DIGEST slots are prefilled. `RunLora.sha256` is required, and a
-    // filename slot names a file rather than a digest, so there is nothing to
-    // fill it with that the run could address; matching the name against the
-    // shelf would be a guess, and the wrong guess loads somebody else's file of
-    // that name. Such a slot is left out, which is not a loss: an entry the
-    // run does not carry is the graph keeping its own LoRA, and Add LoRA is
-    // there to override it deliberately.
-    loras.value = loraSlots.value
-      .filter((slot) => slot.by === "digest" && slot.value)
-      .map((slot) => loraRow(slot, String(slot.value)));
+    // EVERY slot the graph carries, not only the digest ones.
+    //
+    // `by: "digest"` is PixlStash's own loader node; every stock `LoraLoader`
+    // names its file in a `lora_name` widget and is `by: "filename"`, so
+    // filtering on digest showed no LoRAs at all on any ordinary workflow.
+    // A filename is resolved against the shelf the way the backend's own
+    // `apply_adapter` does it - exact, then basename - and a slot the shelf
+    // cannot name is still SHOWN, because it is a fact about the graph; it
+    // simply has no digest to send, which is exactly what leaving it untouched
+    // means anyway.
+    await loadAdapters();
+    loras.value = loraSlots.value.map((slot) => loraRow(slot));
     initialLoraCount.value = loras.value.length;
     destinationSetId.value =
       readLastSet() || (props.context?.set_id ? String(props.context.set_id) : "");
