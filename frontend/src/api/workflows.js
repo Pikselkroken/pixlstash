@@ -6,7 +6,9 @@
 // `listWorkflowPictures` and `getWorkflowGraph`. They are gone from here
 // rather than kept warm for a screen that does not exist: the ROUTES stay, so
 // F6's Export and F7's pictures link re-add the three lines they need against
-// whatever shape those steps actually want.
+// whatever shape those steps actually want. `exportWorkflow`,
+// `duplicateWorkflow`, `deleteWorkflowFile` and `dissolveStack` at the foot of
+// this file are that, added for the grid's own verb menu (#1455).
 //
 // Every route here is owner-only: the counts are read across the whole vault,
 // so a scoped session gets 403 rather than a narrowed answer.
@@ -221,4 +223,67 @@ export async function preflightWorkflowRun(body) {
  */
 export async function runWorkflowCard(body) {
   return unwrap(apiClient.post("/workflows/run", body));
+}
+
+/**
+ * Dissolve a whole stack: every member stands on its own afterwards.
+ *
+ * The plural counterpart of {@link unstackWorkflow}, and addressed by the
+ * STACK rather than by a card - `stack_id` off any member is what names it.
+ *
+ * @param {string} stackId
+ * @returns {Promise<{stack_id: ?string, keys: Array<string>}>}
+ */
+export async function dissolveStack(stackId) {
+  return unwrap(
+    apiClient.post(`/workflows/stacks/${encodeURIComponent(stackId)}/unstack`),
+  );
+}
+
+/**
+ * This card as a ComfyUI file somebody else can open (v1.12 B8).
+ *
+ * Scrubbed by the server - prompts and seeds blanked, recipe LoRA slots
+ * emptied, model names this machine does not hold left out - so what comes
+ * back is the graph, not a run of it.
+ *
+ * @param {string} workflowKey
+ * @returns {Promise<{filename: string, workflow: Object, removed: Array<string>, source: string}>}
+ */
+export async function exportWorkflow(workflowKey) {
+  return unwrap(
+    apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}/export`),
+  );
+}
+
+/**
+ * Write this workflow into the user's workflow folder under a free name.
+ *
+ * Unscrubbed, unlike the export: the copy stays on this machine and is meant
+ * to run. A card the library only knows from its pictures gets a file of its
+ * own this way, so the answer's `workflow_key` can be a NEW card.
+ *
+ * @param {string} workflowKey
+ * @returns {Promise<{name: string, workflow_key: ?string}>}
+ */
+export async function duplicateWorkflow(workflowKey) {
+  return unwrap(
+    apiClient.post(`/workflows/${encodeURIComponent(workflowKey)}/duplicate`),
+  );
+}
+
+/**
+ * Send this card's workflow file to the system trash.
+ *
+ * Only a card with a file has one: a workflow the library knows from its
+ * pictures answers 409, which is why every caller gates on `imported`. The
+ * card and its pictures stay either way - this deletes a file, not a card.
+ *
+ * @param {string} workflowKey
+ * @returns {Promise<{deleted: string, workflow_key: string}>}
+ */
+export async function deleteWorkflowFile(workflowKey) {
+  return unwrap(
+    apiClient.delete(`/workflows/${encodeURIComponent(workflowKey)}`),
+  );
 }

@@ -10,33 +10,30 @@
       Pick a workflow to see what it is made of.
     </p>
 
-    <!-- Several selected: the tab says so and offers the two things that can
-         be done to a set of workflows. Run… is still in the footer below,
-         disabled, because a control that vanishes teaches nothing. -->
+    <!-- Several selected: the tab says so, and the VERBS ARE THE PILL'S.
+         They were here first, as two buttons of this tab's own; #1455 gave
+         the grid a selection bar that offers the same two and eight more, and
+         two surfaces deriving the same verb independently disagreed within a
+         week — this Hide was hardcoded `Hide` while the pill's is a toggle
+         reading Unhide on an all-hidden selection, and this Stack said "Stack
+         together" where the pill says "Fuse into one stack" for a selection
+         that already holds one. Two live controls on one screen, one of them
+         saying the wrong thing about what it is about to do.
+
+         So one owner. The pill is always on screen when this block is (both
+         are gated on a selection, and it is docked over the grid this rail
+         sits beside), so nothing became unreachable — and the reader is told
+         where the verbs are rather than left to find them. -->
     <template v-else-if="multiple">
       <div class="inspector-section">
         <span class="section-label">Selected</span>
         <p class="wftab-title">
           {{ store.selectedKeys.length }} workflows selected
         </p>
-        <div class="wftab-actions">
-          <AppButton
-            size="sm"
-            icon-left="layers-outline"
-            :loading="busy === 'stack'"
-            @click="stackSelected"
-          >
-            Stack together
-          </AppButton>
-          <AppButton
-            size="sm"
-            icon-left="eye-off-outline"
-            :loading="busy === 'hide'"
-            @click="hideSelected"
-          >
-            Hide
-          </AppButton>
-        </div>
+        <p class="wftab-note wftab-quiet">
+          What you can do with them is on the bar at the bottom of the grid, or
+          under a right-click on any of them.
+        </p>
       </div>
     </template>
 
@@ -260,7 +257,6 @@ import {
   setWorkflowDefaults,
   setWorkflowPins,
   setWorkflowSlots,
-  stackWorkflows,
   workflowCoverUrl,
 } from "../../api/workflows";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
@@ -639,62 +635,6 @@ function toggleHidden() {
         hiding ? "Could not hide that workflow." : "Could not unhide it.",
       );
     }
-  });
-}
-
-function stackSelected() {
-  const keys = [...store.selectedKeys];
-  return queueWrite("stack", async () => {
-    try {
-      await stackWorkflows(keys);
-      store.forgetMembers();
-      await store.fetchCards();
-      store.clearSelection();
-    } catch (err) {
-      fail(err, "Could not stack those workflows.");
-    }
-  });
-}
-
-/**
- * Hide every selected workflow.
- *
- * **One at a time, and every one attempted.** There is no bulk-hide route,
- * and each PATCH runs a whole `read_grid()` inside `_read_detail` — whose own
- * docstring says the grid read is paid once per gesture rather than per card
- * — so firing N of them at once maximises both grid reads and single-writer
- * contention on the hub. A plain loop that threw on the first refusal was
- * worse again: it left the ones before it hidden on the server, still drawn
- * and still selected, under one sentence saying none of it worked. So the
- * loop runs to the end and the message names how many actually went.
- */
-function hideSelected() {
-  const keys = [...store.selectedKeys];
-  return queueWrite("hide", async () => {
-    let refused = 0;
-    let firstError = null;
-    for (const key of keys) {
-      try {
-        await patchWorkflowCard(key, { hidden: true });
-      } catch (err) {
-        refused += 1;
-        firstError = firstError ?? err;
-      }
-    }
-    store.forgetMembers();
-    await store.fetchCards();
-    if (!refused) {
-      store.clearSelection();
-      return;
-    }
-    console.warn("[workflows] some cards would not hide", firstError);
-    notices.push({
-      level: "error",
-      text:
-        refused === keys.length
-          ? "None of those workflows could be hidden."
-          : `${keys.length - refused} of ${keys.length} workflows were hidden; the rest could not be.`,
-    });
   });
 }
 

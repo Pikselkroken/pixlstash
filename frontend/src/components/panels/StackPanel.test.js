@@ -44,7 +44,16 @@ const member = (key, extra = {}) => ({
   // A `covers` entry is an object since #1465: the URL, plus the stored
   // face-weighted rectangle where the picture has one. These carry none, so
   // they are also the fallback case the strip must keep drawing as before.
-  covers: [{ url: `/thumb/${key}/1` }, { url: `/thumb/${key}/2` }],
+  //
+  // `picture_id` is on each of them because a member card is read through
+  // `GET /workflows/cards/{key}`, which serves the shape the grid does. The
+  // fixture had the URLs alone, so every test here exercised the INERT cover
+  // that shipped before #1455 and none would have noticed a member card
+  // losing its click.
+  covers: [
+    { url: `/thumb/${key}/1`, picture_id: Number(`${key.length}1`) },
+    { url: `/thumb/${key}/2`, picture_id: Number(`${key.length}2`) },
+  ],
   stack_size: 3,
   member_keys: [],
   ...extra,
@@ -337,6 +346,12 @@ describe("StackPanel", () => {
       }
     }
     expect(seen[0]).toEqual([
+      // A member card's covers are buttons (#1455), so its menu is where a
+      // keyboard reaches them — the tiles are at `tabindex="-1"`. The label
+      // is positional when a TILE was right-clicked ("Open picture 2 of 3");
+      // these four opens all land on the row rather than a tile, so all four
+      // read the plain form and stay comparable.
+      "Open picture",
       "Make it the cover",
       "Move earlier",
       "Move later",
@@ -349,44 +364,70 @@ describe("StackPanel", () => {
   });
 
   it("emits the menu's verbs for the member under the pointer", async () => {
+    // By `data-item`, not by position: the rows are a list somebody will add
+    // to, and an index-based assertion silently starts testing its neighbour
+    // when they do — which is exactly what happened when *Open picture* was
+    // added at the top.
+    const row = (wrapper, id) => wrapper.find(`.ctx-item[data-item="${id}"]`);
     const wrapper = makePanel();
-    await rightClick(wrapper, "third");
-    const items = wrapper.findAll(".ctx-item");
 
-    await items[0].trigger("click");
+    await rightClick(wrapper, "third");
+    await row(wrapper, "cover").trigger("click");
     expect(wrapper.emitted("make-cover")).toEqual([["third"]]);
     await rightClick(wrapper, "third");
-    await wrapper.findAll(".ctx-item")[1].trigger("click");
+    await row(wrapper, "earlier").trigger("click");
     expect(wrapper.emitted("move")).toEqual([["third", -1]]);
     await rightClick(wrapper, "third");
-    await wrapper.findAll(".ctx-item")[3].trigger("click");
+    await row(wrapper, "unstack").trigger("click");
     expect(wrapper.emitted("unstack")).toEqual([["third"]]);
   });
 
   it("refuses the moves that have nowhere to go, and all of them with no stack id", async () => {
+    // Keyed by `data-item` rather than by position, for the reason above.
+    const refused = (wrapper) =>
+      Object.fromEntries(
+        wrapper
+          .findAll(".ctx-item")
+          .map((item) => [
+            item.attributes("data-item"),
+            item.attributes("disabled") !== undefined,
+          ]),
+      );
     const wrapper = makePanel();
     await rightClick(wrapper, "cover");
-    let disabled = wrapper
-      .findAll(".ctx-item")
-      .map((item) => item.attributes("disabled") !== undefined);
     // The cover cannot become the cover, nor move earlier; later it can.
-    expect(disabled).toEqual([true, true, false, false, false]);
+    expect(refused(wrapper)).toEqual({
+      "open-picture": false,
+      cover: true,
+      earlier: true,
+      later: false,
+      unstack: false,
+      hide: false,
+    });
 
     // …and the last member is the mirror of it: nowhere later to go.
     await rightClick(wrapper, "third");
-    disabled = wrapper
-      .findAll(".ctx-item")
-      .map((item) => item.attributes("disabled") !== undefined);
-    expect(disabled).toEqual([false, false, true, false, false]);
+    expect(refused(wrapper)).toEqual({
+      "open-picture": false,
+      cover: false,
+      earlier: false,
+      later: true,
+      unstack: false,
+      hide: false,
+    });
 
     await wrapper.setProps({ canReorder: false });
     await rightClick(wrapper, "second");
-    disabled = wrapper
-      .findAll(".ctx-item")
-      .map((item) => item.attributes("disabled") !== undefined);
-    // Nothing to address a reorder by: the three ordering verbs go, the two
-    // that name a card alone stay.
-    expect(disabled).toEqual([true, true, true, false, false]);
+    // Nothing to address a reorder by: the three ordering verbs go, the rest
+    // — which name a card alone — stay.
+    expect(refused(wrapper)).toEqual({
+      "open-picture": false,
+      cover: true,
+      earlier: true,
+      later: true,
+      unstack: false,
+      hide: false,
+    });
   });
 
   it("tears the menu down and back up when another row is right-clicked", async () => {
@@ -406,7 +447,7 @@ describe("StackPanel", () => {
     await reopening;
     expect(wrapper.find('[data-testid="member-menu"]').exists()).toBe(true);
 
-    await wrapper.findAll(".ctx-item")[3].trigger("click");
+    await wrapper.find('.ctx-item[data-item="unstack"]').trigger("click");
     expect(wrapper.emitted("unstack")).toEqual([["third"]]);
   });
 
@@ -419,7 +460,7 @@ describe("StackPanel", () => {
     await wrapper.vm.$nextTick();
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-testid="member-menu"]').exists()).toBe(true);
-    await wrapper.findAll(".ctx-item")[4].trigger("click");
+    await wrapper.find('.ctx-item[data-item="hide"]').trigger("click");
     expect(wrapper.emitted("hide")).toEqual([["third"]]);
   });
 
@@ -648,71 +689,44 @@ describe("StackPanel List thumbnails", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// The collapse is CSS, and nothing that runs proves it.
+// ── The member menu opens pictures too (#1455) ────────────────────────────
 //
-// jsdom animates nothing, so deleting the collapse animation leaves the whole
-// suite green: the store's backstop timer still fires, the panel still goes,
-// and the only thing lost is the band shrinking — the point of the change.
-// These read the sheet the way the shape tests above do.
-// ---------------------------------------------------------------------------
+// A member card's covers are buttons at `tabindex="-1"`, so this menu is the
+// keyboard's only route to them — the same gap the grid's own menu had — and
+// the pointer's way of saying WHICH tile it meant.
+describe("a member's menu opens its pictures", () => {
+  beforeEach(() => useWorkflowPrefsStore().setStackView("grid"));
 
-/** One `@keyframes` block's body, by name. */
-function keyframes(name) {
-  const css = readSource().split("<style scoped>")[1];
-  const block = css.match(
-    new RegExp(`@keyframes ${name}\\s*\\{([\\s\\S]*?)\\n\\}`),
-  );
-  expect(block, name).toBeTruthy();
-  return block[1];
-}
+  const openRow = (wrapper) =>
+    wrapper.find('.ctx-item[data-item="open-picture"]');
 
-describe("the band grows and shrinks", () => {
-  it("is one collapsing grid row, open by default and closing on the class", () => {
-    const panel = rule(".stack-panel");
-    expect(panel.display).toBe("grid");
-    expect(panel["grid-template-rows"]).toBe("1fr");
-    expect(panel.animation).toContain("stack-panel-open");
-    expect(panel.animation).toContain("var(--dur-2)");
+  it("names and opens the tile the menu was opened on", async () => {
+    const wrapper = makePanel();
+    const tile = band(wrapper).findAll(
+      '.stack-panel__member[data-key="second"] .wf-card__pic',
+    )[1];
+    await tile.trigger("contextmenu", { clientX: 1, clientY: 2 });
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
 
-    // `min-height: 0` or a grid item refuses to be shorter than its content
-    // and the track never collapses. `clip`, not `hidden`: hidden makes this a
-    // programmatic scroll container that `moveCursor`'s `.focus()` can move,
-    // with no scrollbar and no way back.
-    const body = rule(".stack-panel__body");
-    expect(body["min-height"]).toBe("0");
-    expect(body.overflow).toBe("clip");
+    expect(openRow(wrapper).find(".ctx-label-text").text()).toBe(
+      "Open picture 2 of 2",
+    );
+    await openRow(wrapper).trigger("click");
+    expect(wrapper.emitted("open-picture")?.at(-1)).toEqual([62]);
   });
 
-  it("qualifies the closing rule so it cannot lose to source order", () => {
-    // Both rules set `animation`. As two single-class selectors the collapse
-    // would win only because it is written second, and a sheet reordered later
-    // would silently put the open animation back on a panel that is closing.
-    const closing = rule(".stack-panel.stack-panel--closing");
-    expect(closing.animation).toContain("stack-panel-collapse");
-    expect(closing.animation).toContain("var(--dur-2)");
-    expect(closing.animation).toContain("forwards");
-  });
+  it("falls back to the member's cover when no tile was pointed at", async () => {
+    const wrapper = makePanel();
+    // Shift+F10 has no pointer at all, so "this row's picture" is its cover.
+    wrapper.vm.openMenuAt("second");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
 
-  it("travels to 0fr both ways, and fades neither", () => {
-    for (const name of ["stack-panel-open", "stack-panel-collapse"]) {
-      const body = keyframes(name);
-      expect(body).toContain("grid-template-rows: 0fr");
-      // The margin goes with the row, or what is left after the panel has
-      // finished shrinking is 12px of empty grid.
-      expect(body).toContain("margin-bottom: 0");
-      // No `opacity`: `.tbm-caret` masks the panel's top border with the
-      // panel's own colour, and fading the band fades the mask, so the border
-      // shows through the notch for as long as it runs.
-      expect(body).not.toContain("opacity");
-    }
-  });
-
-  it("reports the end of the collapse to the store", () => {
-    // The class is what plays it; this is what ends it. `.self`, or a
-    // descendant's animation would be read as the band having finished.
-    const template = readSource().split("<script setup>")[0];
-    expect(template).toContain("@animationend.self");
-    expect(template).toContain("emit('collapsed')");
+    expect(openRow(wrapper).find(".ctx-label-text").text()).toBe(
+      "Open picture",
+    );
+    await openRow(wrapper).trigger("click");
+    expect(wrapper.emitted("open-picture")?.at(-1)).toEqual([61]);
   });
 });
