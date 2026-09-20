@@ -190,6 +190,46 @@ beforeEach(() => {
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
+describe("the models the panel names", () => {
+  it("calls the checkpoint what the SHELF calls it, not what the file is", async () => {
+    // The same preference the card's generated name row was built from
+    // (#1454). This panel opens from that card, so a Checkpoint line reading
+    // `realvisXL_v5.safetensors` under a title reading `Krea 2` is one model
+    // named twice.
+    const named = card({
+      models: [
+        {
+          name: "realvisxl_v5.safetensors",
+          title: "Krea 2",
+          kind: "checkpoint",
+          slot_label: "m1",
+        },
+        // The VAE line reads the shelf too: it is the same sentence one row
+        // down, and half a panel agreeing is the drift, not the fix.
+        {
+          name: "ae.safetensors",
+          title: "Flux Autoencoder",
+          kind: "vae",
+          slot_label: "m2",
+        },
+      ],
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    const { wrapper } = await mountWith([KEY], [named]);
+    const text = textOf(wrapper);
+    expect(text).toContain("Krea 2");
+    expect(text).not.toContain("realvisxl_v5.safetensors");
+    expect(text).toContain("Flux Autoencoder");
+    expect(text).not.toContain("ae.safetensors");
+  });
+
+  it("falls back to the filename where the shelf has no name", async () => {
+    // The ordinary case - the line must say the file, never go blank.
+    const { wrapper } = await mountWith([KEY]);
+    expect(textOf(wrapper)).toContain("realvisXL_v5.safetensors");
+  });
+});
+
 describe("a default's provenance and reset", () => {
   it("says where each value came from, on the row it belongs to", async () => {
     getWorkflowCard.mockResolvedValue(

@@ -162,6 +162,7 @@ import {
   factChips,
   isStack,
   loraChips,
+  modelDisplayName,
 } from "../../utils/workflowCard";
 import AppButton from "./AppButton.vue";
 import ChipRow from "./ChipRow.vue";
@@ -270,7 +271,7 @@ const hasPictures = computed(
 const checkpointChips = computed(() => {
   const model = checkpointModel(props.card);
   return model
-    ? [{ key: "checkpoint", label: model.name, icon: "cube-outline" }]
+    ? [{ key: "checkpoint", label: modelDisplayName(model), icon: "cube-outline" }]
     : [];
 });
 const loras = computed(() => loraChips(props.card));

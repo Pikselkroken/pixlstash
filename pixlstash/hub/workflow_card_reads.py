@@ -56,12 +56,17 @@ class Card:
     topology, or has reached it under a superseded rule. Such a card stacks
     with nothing rather than falling into a NULL bucket that would read as one
     enormous stack - the same choice ``workflow_cards.card_grouping`` makes.
+
+    ``specials`` is the same shape of answer one column over, and ``None`` is
+    NOT the empty tuple: ``None`` means the pass has not said yet, ``()`` means
+    it said "none". Only the second lets a name claim the workflow is plain.
     """
 
     workflow_key: str
     topology_hash: str
     core_hash: Optional[str] = None
     workflow_type: Optional[str] = None
+    specials: Optional[tuple[str, ...]] = None
     name: Optional[str] = None
     notes: Optional[str] = None
     hidden: bool = False
@@ -98,6 +103,7 @@ def card_index(hub: HubDatabase) -> list[Card]:
         "SELECT v.workflow_key AS workflow_key, v.topology_hash AS topology_hash, "
         "v.structural_hash AS structural_hash, c.core_hash AS core_hash, "
         "c.workflow_type AS workflow_type, c.slots AS slots, "
+        "c.specials AS specials, "
         "a.name AS name, a.notes AS notes, "
         "a.hidden AS hidden, f.workflow_key IS NOT NULL AS imported, "
         "f.workflow_name AS file_name "
@@ -120,6 +126,7 @@ def card_index(hub: HubDatabase) -> list[Card]:
                 topology_hash=row["topology_hash"],
                 core_hash=row["core_hash"],
                 workflow_type=row["workflow_type"],
+                specials=_specials(row["specials"]),
                 slots=_slots(row["slots"], row["workflow_key"]),
                 name=row["name"],
                 notes=row["notes"],
@@ -129,6 +136,18 @@ def card_index(hub: HubDatabase) -> list[Card]:
             )
         card.variants.append(row["structural_hash"])
     return list(cards.values())
+
+
+def _specials(raw: Optional[str]) -> Optional[tuple[str, ...]]:
+    """The cached post-processing list, or ``None`` where the pass has not run.
+
+    The empty string is a real answer ("this graph has none") and comes back as
+    an empty tuple, which is why this cannot be ``raw.split(",") if raw else
+    None``: that spelling loses the difference the column exists to keep.
+    """
+    if raw is None:
+        return None
+    return tuple(part for part in raw.split(",") if part)
 
 
 def _slots(raw: Optional[str], workflow_key: str) -> list[dict]:

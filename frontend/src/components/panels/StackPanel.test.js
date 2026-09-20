@@ -166,6 +166,33 @@ describe("StackPanel", () => {
     expect(checkpoints).toEqual(["", "", "juggernautXL_v9"]);
   });
 
+  it("names the differing checkpoint the way the SHELF names it", async () => {
+    // Same preference as the card's own name row (#1454): a panel chip saying
+    // the filename while the grid card above it says the shelf name is one
+    // model called two things, one click apart.
+    useWorkflowPrefsStore().setStackView("list");
+    const wrapper = makePanel({
+      members: [
+        MEMBERS[0],
+        {
+          ...MEMBERS[2],
+          models: [
+            {
+              name: "juggernautxl_v9.safetensors",
+              title: "Juggernaut XL",
+              kind: "checkpoint",
+            },
+          ],
+        },
+      ],
+    });
+    await wrapper.vm.$nextTick();
+
+    const rows = wrapper.findAll(".stack-panel__row");
+    const chip = rows[1].find(".stack-panel__ckpt .chip-row__label");
+    expect(chip.text()).toBe("Juggernaut XL");
+  });
+
   it("draws a thumbnail per cover the member has, and no empty images", async () => {
     useWorkflowPrefsStore().setStackView("list");
     const wrapper = makePanel({

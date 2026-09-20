@@ -58,6 +58,10 @@ from pixlstash.hub.workflow_card_reads import (
 )
 from pixlstash.hub.workflows import model_ghost_names, picture_ghosts_by_variant
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.model_shelf_service import (
+    models_for_digest,
+    recipe_asset_index,
+)
 from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.services.workflow_identity import (
     CHECKPOINT_WIDGETS,
@@ -160,6 +164,11 @@ class SlotModel:
     kind: str
     mark: Optional[str] = None
     label: Optional[str] = None
+    # What the model shelf calls this file - the trainer's own name, or the one
+    # the owner typed - where the shelf knows it. ``None`` otherwise, and that
+    # is the ordinary case: it means only that this machine has not scanned the
+    # file, never that the slot is empty.
+    title: Optional[str] = None
 
 
 @dataclass
@@ -584,6 +593,58 @@ def read_grid(
     )
 
 
+def model_titles(hub: HubDatabase, names: list[str]) -> dict[str, str]:
+    """``{slot name: model.display_name}`` - what the SHELF calls each model.
+
+    A card's stored slot value is one of three things
+    (``services.workflow_hash.structural_widget_value``): a lowercased
+    basename, a SHA-256 digest (whole, or the 10- or 12-hex prefix A1111
+    writes), or a shelf id. The card cannot say which it holds, so all three
+    are resolved.
+
+    **Resolved through :func:`recipe_asset_index`, not against ``model`` by
+    hand.** That index is the shelf's own answer to "which model could this
+    recipe asset name be" and it knows two things a hand-written join does
+    not: every *copy*'s basename via ``model_file.relpath``, so a second copy
+    filed under a different spelling still resolves; and, through
+    :func:`models_for_digest`, an A1111 short hash, which is a digest this
+    hub holds the long form of.
+
+    **A name that could be more than one model names none.** The index maps a
+    name to a *set* of models deliberately, and a set is ambiguous here unless
+    every member of it is named and they all agree - an unnamed rival is not a
+    tie-break, it is a second file this card might equally have used. Naming a
+    card after the wrong model is worse than naming it after its file, so the
+    entry is dropped and the caller keeps the filename.
+    """
+    wanted = {name.lower() for name in names if name}
+    if not wanted:
+        return {}
+    by_name, by_digest, _filenames = recipe_asset_index(hub)
+    sorted_digests = sorted(by_digest)
+    # Every model, named or not: the unnamed ones are what make a shared name
+    # ambiguous, so filtering them out in SQL would hand back a confident
+    # title for a name two files answer to.
+    titles = {
+        row["id"]: (row["display_name"] or "").strip() or None
+        for row in hub.fetchall("SELECT id, display_name FROM model")
+    }
+    found: dict[str, str] = {}
+    for value in wanted:
+        candidates = set(by_name.get(value, ()))
+        candidates |= models_for_digest(value, by_digest, sorted_digests)
+        # A shelf id is the one asset value that is not a name at all
+        # (`SHELF_ID_FIELD`), and the node refuses anything but digits.
+        if value.isdigit() and int(value) in titles:
+            candidates.add(int(value))
+        if not candidates:
+            continue
+        claimed = {titles.get(model_id) for model_id in candidates}
+        if len(claimed) == 1 and None not in claimed:
+            found[value] = claimed.pop()
+    return found
+
+
 def _describe_slots(
     hub: HubDatabase, figures: list[CardFigures], names: dict[str, list[tuple]]
 ) -> None:
@@ -600,8 +661,20 @@ def _describe_slots(
     in it is the recipe's business and not the workflow's - so its name is left
     off here rather than paired to a slot the hub cannot address (see
     :func:`~pixlstash.hub.workflow_card_reads.asset_names`).
+
+    A second hub read puts the shelf's own name beside each filename, once for
+    the whole grid rather than per card. It is a join inside one database and
+    not a derivation, which is why it can be afforded on a grid read at all.
     """
     marks = slot_marks(hub, [figure.card.topology_hash for figure in figures])
+    # Off `read_grid`'s shared `names` rather than a read of its own: that one
+    # covers EVERY variant where this pass only draws the first, so it is a
+    # superset and resolving a few filenames no chip shows is cheaper than a
+    # second pass over the same table.
+    titles = model_titles(
+        hub,
+        [filename for pairs in names.values() for _, filename in pairs],
+    )
     for figure in figures:
         card = figure.card
         by_widget: dict[str, list[str]] = {}
@@ -632,14 +705,19 @@ def _describe_slots(
                         kind="lora",
                         mark=mark,
                         label=str(slot.get("label") or "") or None,
+                        title=titles.get((name or "").lower())
+                        if mark != RECIPE
+                        else None,
                     )
                 )
             else:
+                name = next_name(widget)
                 figure.models.append(
                     SlotModel(
-                        name=next_name(widget),
+                        name=name,
                         kind=_SLOT_KINDS.get(widget, widget or "model"),
                         label=str(slot.get("label") or "") or None,
+                        title=titles.get((name or "").lower()),
                     )
                 )
 

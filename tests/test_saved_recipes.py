@@ -142,9 +142,12 @@ def _seed_hub(server) -> None:
                 (structural, topology, key),
             )
             conn.execute(
+                # `specials` empty rather than NULL: NULL is "not derived
+                # yet" and would have the backfill finder re-derive this
+                # hand-written row out from under the test.
                 "INSERT INTO workflow_topology_core "
-                "(topology_hash, core_hash, core_version, workflow_type, slots) "
-                "VALUES (?, ?, ?, 'txt2img', '[]')",
+                "(topology_hash, core_hash, core_version, workflow_type, "
+                "slots, specials) VALUES (?, ?, ?, 'txt2img', '[]', '')",
                 (topology, core, CORE_RULE_VERSION),
             )
 
@@ -971,8 +974,8 @@ def test_a_variant_keyed_by_a_superseded_rule_neither_stacks_nor_credits(recipe_
                 )
                 conn.execute(
                     "INSERT INTO workflow_topology_core "
-                    "(topology_hash, core_hash, core_version, workflow_type, slots) "
-                    "VALUES (?, ?, ?, 'txt2img', '[]')",
+                    "(topology_hash, core_hash, core_version, workflow_type, "
+                    "slots, specials) VALUES (?, ?, ?, 'txt2img', '[]', '')",
                     (topology, CORE_SHARED, CORE_RULE_VERSION),
                 )
             conn.execute(

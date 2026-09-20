@@ -269,6 +269,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
+import { modelDisplayName } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
 import Segmented from "../widgets/Segmented.vue";
@@ -367,15 +368,18 @@ const subtitlePrefix = computed(() => {
   return "";
 });
 
+// Both read the MODEL SHELF's name where it has one, the same preference the
+// card's name row was built from, so the panel and the row do not describe one
+// model twice (`modelDisplayName`).
 const checkpointLabel = computed(() => {
   const models = card.value?.models ?? [];
   const found = models.find((model) => model.kind === "checkpoint");
-  return found?.name || "Not recorded";
+  return modelDisplayName(found) || "Not recorded";
 });
 
 const vaeLabel = computed(() => {
   const found = (card.value?.models ?? []).find((model) => model.kind === "vae");
-  return found?.name || "From the checkpoint";
+  return modelDisplayName(found) || "From the checkpoint";
 });
 
 const loraSlots = computed(() =>

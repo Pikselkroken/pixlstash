@@ -528,6 +528,33 @@ describe("WorkflowCard", () => {
     );
   });
 
+  it("puts the SHELF's name on the model chip, not the filename", () => {
+    // The card's `name` row is generated from `title` server-side, so a chip
+    // built from `name` reads `realvisxl.safetensors` under a row reading
+    // `Krea 2` - one model, two names, on one card (#1416, #1454).
+    const text = mountCard({
+      ...BARE,
+      name: "Krea 2: Outpaint",
+      models: [
+        { name: "realvisxl.safetensors", title: "Krea 2", kind: "checkpoint" },
+      ],
+    }).text();
+    expect(text).toContain("Krea 2");
+    expect(text).not.toContain("realvisxl.safetensors");
+  });
+
+  it("falls back to the filename for a model the shelf does not know", () => {
+    // The ordinary case: plenty of files carry no name of their own, and the
+    // chip must say the filename rather than go blank.
+    const text = mountCard({
+      ...BARE,
+      models: [
+        { name: "realvisxl.safetensors", title: null, kind: "checkpoint" },
+      ],
+    }).text();
+    expect(text).toContain("realvisxl.safetensors");
+  });
+
   it("lists every model, not just the checkpoint, in the ⓘ popover", () => {
     const text = mountCard({
       ...BARE,

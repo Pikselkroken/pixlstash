@@ -285,6 +285,18 @@ class WorkflowSlotModel(BaseModel):
     """
 
     name: str | None = None
+    title: str | None = Field(
+        None,
+        description=(
+            "What the model shelf calls this file — the trainer's own name, "
+            "or the one the owner typed — or null where the shelf does not "
+            "know it. **A client showing the model shows this in preference "
+            "to `name`**, because the card's generated `name` was built from "
+            "it: a chip reading `realvisxl.safetensors` under a name row "
+            "reading `Krea 2` is one model described twice, which is the "
+            "drift #1416 already cost this pair once."
+        ),
+    )
     kind: str
     mark: str | None = None
     slot_label: str | None = Field(
@@ -415,6 +427,17 @@ class WorkflowCard(BaseModel):
     # Beyond the shared shape, and additive: a caller that only knows
     # `workflowCard.js` ignores these and needs no translation for the rest.
     topology_hash: str
+    specials: list[str] | None = Field(
+        None,
+        description=(
+            "The post-processing this workflow carries, from `upscale` and "
+            "`face_detailer`. **Null and `[]` are different answers**: null "
+            "means the card's document has not been read for it yet, `[]` "
+            "means it was read and the graph has none. The generated `name` "
+            "says `+ FaceDetailer` only on `[]`'s side of that line, so a "
+            "consumer drawing its own chip has to keep the two apart too."
+        ),
+    )
     variant_count: int = 0
     member_keys: list[str] = Field(default_factory=list)
     stack_id: str | None = Field(
@@ -988,13 +1011,47 @@ _TYPE_LABELS = {
 }
 
 
-def _base_model_name(models) -> str | None:
-    """The base model a card is named after, or ``None`` if it loads none."""
+# What a post-processing group is called in a generated name. ComfyUI's own
+# node name for the detailer, because that is what the person sees in the graph;
+# `upscale` has no single node to be named after and reads as the plain word.
+#
+# A group this build does not know - a value written by a newer PixlStash and
+# read back here - is left out rather than printed raw: a name is the card's
+# only identifying text, and an unexplained token in it is worse than a shorter
+# name.
+_SPECIAL_LABELS = {
+    "upscale": "Upscale",
+    "face_detailer": "FaceDetailer",
+}
+
+
+def _base_model_slot(models):
+    """The slot a card is named after, or ``None`` if it loads no base model."""
     for kind in BASE_MODEL_KINDS:
         for slot in models:
             if slot.kind == kind and slot.name:
-                return slot.name
+                return slot
     return None
+
+
+def _specials_suffix(card) -> str:
+    """`` + FaceDetailer`` and friends, or the empty string.
+
+    Empty for a card whose document has not been read for its groups
+    (``specials`` is ``None``) as well as for one that genuinely has none. The
+    two are not the same fact and the payload keeps them apart, but a name has
+    nowhere to say "not known yet" and claiming the shorter name is the honest
+    thing to do with an unknown.
+
+    A group that IS the workflow's type is left off: an upscale workflow is
+    already called ``Upscale`` by ``_TYPE_LABELS``, and "Upscale + Upscale" says
+    one fact twice.
+    """
+    return "".join(
+        f" + {_SPECIAL_LABELS[group]}"
+        for group in card.specials or ()
+        if group in _SPECIAL_LABELS and group != card.workflow_type
+    )
 
 
 def _display_name(card, models=()) -> str:
@@ -1003,27 +1060,36 @@ def _display_name(card, models=()) -> str:
     That order is how much the name is *theirs*: one they typed, then the file
     they dropped, then a description built here.
 
-    The built one is **the model first, then what the workflow does** -
-    ``juggernautXL txt2img`` - because the model is what a person calls the
-    workflow and the verb only tells two of them apart once the model already
-    has. It is deliberately not unique: two cards differing only by a
-    post-processing node share a name, and naming THAT difference (the
-    "… + FaceDetailer" half of the intended scheme) needs a per-card
-    derivation the hub does not cache yet (#1454). The card contract, this
-    fallback chain included, is ``docs/integration_architecture.md`` §2.
-    Until then the ⓘ panel carries what actually separates them.
+    The built one is **the model, then what the workflow does, then what it
+    does extra** - ``Krea 2: Text to Image + FaceDetailer`` - because the model
+    is what a person calls the workflow, the verb only tells two of them apart
+    once the model already has, and the post-processing is what separates two
+    cards that agree on both. The card contract, this fallback chain included,
+    is ``docs/integration_architecture.md`` §2.
+
+    **The model is named as the shelf names it, not as the file is spelled.**
+    ``realvisxl`` is a filename stem; ``Krea 2`` is what the trainer wrote in
+    the header or what the owner typed, and it is in the same database as the
+    card. A model this machine has never scanned still falls back to its stem.
+
+    The suffix is on the generated name only. A card named after its workflow
+    FILE keeps the owner's spelling untouched: appending to a name somebody
+    chose is inventing, not describing.
     """
     if card.name:
         return card.name
     if card.file_name:
         stem = card.file_name.rsplit("/", 1)[-1]
         return stem[: -len(".json")] if stem.lower().endswith(".json") else stem
-    base = _base_model_name(models)
-    if not base:
+    slot = _base_model_slot(models)
+    if slot is None:
         # No base model: every name forgotten, or a graph that loads none. The
         # stand-in, deliberately, rather than the VAE.
         return UNNAMED_CARD
-    stem = _model_stem(base)
+    # The shelf's name first. Stripped, because `display_name` is free text off
+    # a safetensors header or a text field, and a name of three spaces renders
+    # the row blank exactly as the empty stem below would.
+    stem = (slot.title or "").strip() or _model_stem(slot.name)
     if not stem:
         # These are graph widget values - third-party strings out of whatever
         # workflow was imported - so the stem can come back empty where the
@@ -1032,13 +1098,18 @@ def _display_name(card, models=()) -> str:
         # in the label, which is the hole `UNNAMED_CARD` exists to close.
         return UNNAMED_CARD
     label = _TYPE_LABELS.get(card.workflow_type)
-    return f"{stem}: {label}" if label else stem
+    named = f"{stem}: {label}" if label else stem
+    return named + _specials_suffix(card)
 
 
 def _slot_models(slots) -> list[WorkflowSlotModel]:
     return [
         WorkflowSlotModel(
-            name=slot.name, kind=slot.kind, mark=slot.mark, slot_label=slot.label
+            name=slot.name,
+            title=slot.title,
+            kind=slot.kind,
+            mark=slot.mark,
+            slot_label=slot.label,
         )
         for slot in slots
     ]
@@ -1055,6 +1126,7 @@ def _card(figure, defaults=()) -> WorkflowCard:
         hidden=figure.card.hidden,
         models=_slot_models(figure.models),
         loras=_slot_models(figure.loras),
+        specials=None if figure.card.specials is None else list(figure.card.specials),
         differs_by=figure.differs_by,
         picture_count=figure.pictures,
         rating=figure.rating,
