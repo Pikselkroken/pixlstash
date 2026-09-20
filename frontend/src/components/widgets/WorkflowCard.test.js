@@ -491,3 +491,38 @@ describe("the layered count", () => {
     expect(wrapper.find(".wf-card__badge--button").exists()).toBe(false);
   });
 });
+
+// ── The selection mark is the card's own ─────────────────────────────────
+//
+// It used to be on the CELL each host wraps around this component, where it
+// could never be seen: `.wf-card` paints an opaque `surface` across the whole
+// cell, so the wash and the ring were drawn underneath the card. Nothing
+// failed - the rule was valid, applied, and invisible - which is exactly why
+// this is pinned on the painted class rather than on the host's markup.
+describe("the selection mark", () => {
+  it("marks the card itself, not something behind it", () => {
+    expect(
+      mountCard(BARE, { selected: true }).find(".wf-card").classes(),
+    ).toContain("wf-card--selected");
+    expect(mountCard(BARE).find(".wf-card").classes()).not.toContain(
+      "wf-card--selected",
+    );
+  });
+
+  it("wears the shell's wash and ring, over its own surface", () => {
+    const selected = rule(".wf-card--selected");
+
+    expect(selected["box-shadow"]).toBe("var(--selection-ring)");
+    // Layered, not replaced: `--active-wash` alone would drop a selected card
+    // onto the page colour and make it read as LESS raised than its
+    // neighbours.
+    expect(selected["background-color"]).toBe("rgb(var(--v-theme-surface))");
+    expect(selected["background-image"]).toContain("var(--active-wash)");
+  });
+
+  // The reason the mark cannot live on an ancestor, stated as a fact about
+  // this file so that moving it back fails here.
+  it("paints an opaque background, which is why an ancestor cannot mark it", () => {
+    expect(rule(".wf-card").background).toBe("rgb(var(--v-theme-surface))");
+  });
+});

@@ -55,7 +55,11 @@
         @click="emit('select', member.key, $event)"
       >
         <div class="stack-panel__cell" role="gridcell">
-          <WorkflowCard :card="member" member />
+          <WorkflowCard
+            :card="member"
+            member
+            :selected="selectedKeys.includes(member.key)"
+          />
           <!-- The cover is what the others are compared against, so it is the
                one member whose special row is empty; without the flag its row
                reads as "this one differs by nothing". -->
@@ -220,11 +224,8 @@ const notchStyle = computed(() => {
   border-radius: var(--radius-md);
 }
 
-/* The shell's selection mark (`style.css`, "THE SELECTION MARK"): the wash,
-   plus `--selection-ring` for a card with no left edge to rail. The same mark
-   the top-level cards wear, so a mixed selection reads as one. */
-.stack-panel__member[aria-selected="true"] .stack-panel__cell {
-  background: var(--active-wash);
-  box-shadow: var(--selection-ring);
-}
+/* The selection mark is the CARD's own (`WorkflowCard.vue`,
+   `.wf-card--selected`) - the same mark the top-level cards wear, so a mixed
+   selection reads as one. It was here, on the cell, and never showed: the
+   card paints an opaque surface across the whole cell and covered it. */
 </style>

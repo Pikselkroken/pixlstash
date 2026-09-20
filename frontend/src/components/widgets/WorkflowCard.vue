@@ -1,7 +1,7 @@
 <template>
   <article
     class="wf-card"
-    :class="{ 'wf-card--stack': stackMark }"
+    :class="{ 'wf-card--stack': stackMark, 'wf-card--selected': selected }"
     role="group"
     :aria-label="accessibleName"
     data-testid="workflow-card"
@@ -162,6 +162,18 @@ const props = defineProps({
   panelId: { type: String, default: "" },
   /** This card is a row inside its own stack's open panel. */
   member: { type: Boolean, default: false },
+  /**
+   * The card is selected.
+   *
+   * **The mark is the CARD's, not its cell's.** Both hosts wrapped a cell
+   * around this component and put the shell's wash and `--selection-ring` on
+   * that - and `.wf-card` paints an opaque `surface` across the whole of it,
+   * so the mark was painted underneath the card and nothing showed. An
+   * `outline` on the cell would not have helped either: children paint above
+   * their parent's border box. It has to be drawn by whatever is on top, and
+   * that is this.
+   */
+  selected: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["toggle", "run"]);
@@ -271,6 +283,20 @@ const accessibleName = computed(() =>
    carrying a `calc` for. Every card in a row is the same width, so they are
    all still exactly as tall as each other - that is what the old fixed height
    was protecting, and it survives. */
+/* The shell's selection mark (`style.css` rule 3): the wash, plus
+   `--selection-ring` because a card has no left edge to rail.
+
+   `background-image` over `background-color` rather than replacing the
+   background: the wash is `rgba(primary, .16)`, so setting it alone would
+   drop the card onto the page colour and a selected card would read as LESS
+   raised than its neighbours. Layered, it stays a surface that has been
+   tinted, which is what the mark means. */
+.wf-card--selected {
+  background-color: rgb(var(--v-theme-surface));
+  background-image: linear-gradient(var(--active-wash), var(--active-wash));
+  box-shadow: var(--selection-ring);
+}
+
 .wf-card__cover {
   position: relative;
   flex: none;

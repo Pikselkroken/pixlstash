@@ -902,3 +902,43 @@ describe("the app-wide toolbar tail", () => {
     expect(app.slice(rail, rail + 80)).toContain("v-else-if");
   });
 });
+
+// ── Selection is visible ─────────────────────────────────────────────────
+//
+// `aria-selected` on the row was right all along; what was missing was
+// anything a sighted reader could see, because the mark sat on the cell under
+// an opaque card. These assert the PAINTED class, on both sides of the panel
+// boundary, since a mixed selection has to read as one thing.
+describe("the selection mark", () => {
+  const markedKeys = (wrapper) =>
+    wrapper
+      .findAll(".wf-card--selected")
+      .map((el) => el.element.closest("[data-key]")?.dataset.key);
+
+  it("marks a selected grid card", async () => {
+    const wrapper = await grid();
+
+    await wrapper.find('[data-key="c"]').trigger("click");
+
+    expect(useWorkflowsStore().selectedKeys).toEqual(["c"]);
+    expect(markedKeys(wrapper)).toEqual(["c"]);
+  });
+
+  it("marks selected members inside an open stack", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    await store.openStack("b");
+    await flush();
+
+    await wrapper.find('.stack-panel__member[data-key="b1"]').trigger("click");
+    await flush();
+
+    expect(store.selectedKeys).toEqual(["b1"]);
+    expect(markedKeys(wrapper)).toEqual(["b1"]);
+  });
+
+  it("marks nothing when nothing is selected", async () => {
+    const wrapper = await grid();
+    expect(wrapper.findAll(".wf-card--selected")).toHaveLength(0);
+  });
+});

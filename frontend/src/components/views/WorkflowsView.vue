@@ -210,6 +210,7 @@
             <div class="wfv-cell" role="gridcell">
               <WorkflowCard
                 :card="entry.card"
+                :selected="store.selectedKeys.includes(entry.key)"
                 :expanded="store.openStackKey === entry.key"
                 :panel-id="store.openStackKey === entry.key ? panelId : ''"
                 @toggle="store.toggleStack(entry.key)"
@@ -275,7 +276,12 @@ import WorkflowCard from "../widgets/WorkflowCard.vue";
  * its column is wide plus the fixed meta block.
  */
 const COLUMN_MIN = 240;
-const COLUMN_GAP = 12;
+// `--space-3`. It was `--space-4` (12), which is the "comfortable gap inside a
+// group" and is what the reading surfaces use; this is a grid of cards, and
+// its siblings are dense - the picture grid sets its thumbnails `--space-2`
+// apart and the model shelf's rows touch. 8 is the small gap between
+// bordered things, which is what these are.
+const COLUMN_GAP = 8;
 
 // Settings is App.vue's dialog; TbGlobalActions flips the sidebar store itself.
 const emit = defineEmits(["open-settings"]);
@@ -900,7 +906,21 @@ async function filesChosen(event) {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-5);
+  /* `--space-3`, not the `--space-5` this shipped with. 16 down every side is
+     what Moves and Insights use, and those say in as many words that they are
+     reading surfaces; the picture grid, which this is actually a sibling of,
+     carries no side padding at all and lets the scrollbar's own gutter be the
+     gap. Cards have a border, so bleeding them to the window edge would look
+     like a mistake - 8 is the smallest inset that still reads as deliberate.
+
+     `scrollbar-gutter: stable` is reserved as the model shelf reserves it,
+     though for a smaller reason than the shelf's: nothing here breaks without
+     it - the grid's `clientWidth` shrinks, the `ResizeObserver` fires and the
+     columns recompute correctly - but the whole track jumps sideways the
+     moment the grid crosses one screen. Reserved, the only movement is the
+     vertical one the reader asked for. */
+  scrollbar-gutter: stable;
+  padding: var(--space-3);
 }
 
 /* `--wf-columns` is set from the measured width, so the painted grid and the
@@ -922,12 +942,9 @@ async function filesChosen(event) {
   border-radius: var(--radius-md);
 }
 
-/* The shell's selection mark (`style.css`): the wash plus `--selection-ring`,
-   for a card with no left edge to rail. */
-.wfv-row[aria-selected="true"] .wfv-cell {
-  background: var(--active-wash);
-  box-shadow: var(--selection-ring);
-}
+/* The selection mark is the CARD's own (`WorkflowCard.vue`,
+   `.wf-card--selected`). It was here, on the cell, and never showed: the card
+   paints an opaque surface across the whole cell and covered it. */
 
 .wfv-file-input {
   position: absolute;
