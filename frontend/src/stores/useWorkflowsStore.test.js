@@ -363,7 +363,7 @@ describe("the panel follows a change of selection", () => {
     expect(store.openStackKey).toBe("few-but-loved");
   });
 
-  it("leaves the panel alone for a card with nothing under it", async () => {
+  it("leaves the panel alone while the selection stays inside it", async () => {
     const store = useWorkflowsStore();
     await store.fetchCards();
     await store.openStack("the-stack");
@@ -373,17 +373,45 @@ describe("the panel follows a change of selection", () => {
     store.select("m1");
     await settle();
     expect(store.openStackKey).toBe("the-stack");
+    expect(store.panelClosing).toBe(false);
 
-    // A plain card elsewhere in the grid.
+    // The cover key ALONE — one workflow, not the pile it sits in, which is
+    // what the `?topology=` deep link selects. It is still inside.
+    store.select("the-stack");
+    await settle();
+    expect(store.openStackKey).toBe("the-stack");
+    expect(store.panelClosing).toBe(false);
+  });
+
+  it("closes the panel for a lone card that is not this stack", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+
+    // One workflow with nothing under it. The band belongs to a stack the
+    // reader has stopped looking at, exactly as it does for five cards.
     store.select("workhorse");
     await settle();
     expect(store.openStackKey).toBe("the-stack");
+    expect(store.panelClosing).toBe(true);
 
-    // And the cover key ALONE, which is what `?topology=` selects: it names
-    // one workflow, not the pile it sits in.
+    store.finishCollapse();
+    expect(store.openStackKey).toBe(null);
+  });
+
+  it("closes it for another stack's cover key alone, which opens nothing", async () => {
+    // `?topology=` names ONE workflow. Pointed at a card outside the open
+    // stack it is a selection that has left, so the band goes — but it does
+    // not become a way of opening the stack that workflow happens to sit in.
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+
     store.select("few-but-loved");
     await settle();
-    expect(store.openStackKey).toBe("the-stack");
+    expect(store.panelClosing).toBe(true);
+    store.finishCollapse();
+    expect(store.openStackKey).toBe(null);
   });
 
   it("closes the panel when the selection reaches outside the stack", async () => {
@@ -460,7 +488,12 @@ describe("the panel follows a change of selection", () => {
     await store.fetchCards();
     await store.openStack("the-stack");
 
-    store.collapseStack();
+    // A plain card starts the band collapsing; the next stack arrives before
+    // it has finished.
+    store.select("workhorse");
+    await settle();
+    expect(store.panelClosing).toBe(true);
+
     store.select("few-but-loved", { whole: true });
     await settle();
     expect(store.openStackKey).toBe("few-but-loved");
@@ -470,6 +503,34 @@ describe("the panel follows a change of selection", () => {
     // the reader had just opened.
     store.finishCollapse();
     expect(store.openStackKey).toBe("few-but-loved");
+  });
+
+  it("keeps the mode when the band goes, and loses it when the reader says so", async () => {
+    // Selecting a workflow with nothing under it takes the panel off the
+    // screen; it does not mean "stop showing me stacks". ▸, Escape and Close
+    // mean that.
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+
+    store.select("workhorse");
+    await settle();
+    store.finishCollapse();
+    expect(store.openStackKey).toBe(null);
+    expect(store.browsingStacks).toBe(true);
+
+    // So the next stack picked opens with no second double-click.
+    store.select("few-but-loved", { whole: true });
+    await settle();
+    expect(store.openStackKey).toBe("few-but-loved");
+
+    // The caret, on the other hand, ends it.
+    store.toggleStack("few-but-loved");
+    store.finishCollapse();
+    expect(store.browsingStacks).toBe(false);
+    store.select("the-stack", { whole: true });
+    await settle();
+    expect(store.openStackKey).toBe(null);
   });
 
   it("does not put the failure of a stack you have left over the one you are on", async () => {
@@ -535,11 +596,18 @@ describe("the collapse's backstop", () => {
     const store = useWorkflowsStore();
     await store.fetchCards();
     await store.openStack("the-stack");
-    store.collapseStack();
+    // Collapsed by the RULE, so the mode is still on and the timer is armed —
+    // the state a reset actually has to clear both halves of.
+    store.select("workhorse");
+    await Promise.resolve();
     expect(store.panelClosing).toBe(true);
+    expect(store.browsingStacks).toBe(true);
 
     store.reset();
     expect(store.panelClosing).toBe(false);
+    // And the mode goes with the credential: the next session's first click on
+    // a stack should be a click, not a way in.
+    expect(store.browsingStacks).toBe(false);
 
     await store.fetchCards();
     await store.openStack("few-but-loved");

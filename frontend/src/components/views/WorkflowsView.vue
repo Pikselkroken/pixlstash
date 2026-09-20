@@ -303,15 +303,15 @@
  * The Workflows grid (v1.12 Workflows & Recipes, F1a) — on `/workflows` since
  * F1b retired the shelf. See `docs/frontend_architecture.md` §5.
  *
- * AN OPEN PANEL FOLLOWS A CHANGE OF SELECTION
- * (`useWorkflowsStore.syncPanelToSelection`) — it never opens one. ▸, Enter and
- * a double-click on the card are still the only ways in, because a plain click
- * is a selection and not a request to look inside. What the rule settles is the
- * state those two used to contradict: a band standing open under one stack
- * while the reader has gone and selected another, or several. Selecting another
- * stack moves the band there; selecting anything outside the open stack shuts
- * it. Both animate, which is why the store holds the open key until the panel
- * reports its collapse finished.
+ * THE PANEL FOLLOWS THE SELECTION ONCE THE READER IS BROWSING STACKS
+ * (`useWorkflowsStore.syncPanelToSelection`) — a click is never the way IN. ▸,
+ * Enter and a double-click on the card are still the only ones, because a plain
+ * click is a selection and not a request to look inside. Afterwards, selecting
+ * another stack moves the band there and selecting anything outside the open
+ * stack takes it off the screen — and the MODE outlives the band, so the next
+ * stack picked opens with no second double-click. Both transitions animate,
+ * which is why the store holds the open key until the panel reports its
+ * collapse finished.
  *
  * ONE FLAT LIST. The cards, and — while a stack is open — its members, are one
  * index space, so the roving cursor crosses the panel boundary with the same

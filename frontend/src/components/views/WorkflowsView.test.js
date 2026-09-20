@@ -800,6 +800,56 @@ describe("the panel follows a change of selection", () => {
     expect(panel(wrapper).classes()).not.toContain("stack-panel--closing");
   });
 
+  it("closes an open panel when a plain card is clicked", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    await openByGesture(wrapper, "b");
+
+    // "a" is an ordinary workflow, not a stack. Clicking it is a selection
+    // that has left the open stack, so the band goes — wrong if it sits there
+    // over a card nobody is looking at any more.
+    await row(wrapper, "a").trigger("click");
+    expect(panel(wrapper).classes()).toContain("stack-panel--closing");
+
+    await settleClose(wrapper);
+    expect(store.openStackKey).toBe(null);
+    expect(panel(wrapper).exists()).toBe(false);
+  });
+
+  it("opens the next stack without a second double-click", async () => {
+    // The mode outlives the band: "a" takes the panel off the screen, and the
+    // stack picked after it opens on a plain click. Wrong if it needs another
+    // double-click — that is the reader being put back where they started.
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    await openByGesture(wrapper, "b");
+
+    await row(wrapper, "a").trigger("click");
+    await settleClose(wrapper);
+    expect(store.openStackKey).toBe(null);
+    expect(store.browsingStacks).toBe(true);
+
+    await row(wrapper, "e").trigger("click");
+    await flush();
+    expect(store.openStackKey).toBe("e");
+    expect(memberKeys(wrapper)).toEqual(["e", "e1", "e2"]);
+  });
+
+  it("stops following once Escape has shut the panel", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    await openByGesture(wrapper, "b");
+
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "Escape" });
+    await settleClose(wrapper);
+    expect(store.browsingStacks).toBe(false);
+
+    // A plain click is a click again.
+    await row(wrapper, "e").trigger("click");
+    await flush();
+    expect(store.openStackKey).toBe(null);
+  });
+
   it("brings the cursor back out of a panel it closes", async () => {
     // The grid has ONE tab stop. Ctrl-clicking a member while a card outside
     // the stack is selected shuts the panel from under a cursor standing on a
@@ -1450,7 +1500,12 @@ describe("the cursor in List", () => {
     const wrapper = await listGrid();
     // Down from a card in the stack's row: every member sits in one column,
     // so "keep your column" has exactly one answer — the first of them.
-    await wrapper.find('.wfv-row[data-key="a"]').trigger("click");
+    //
+    // The cursor is placed directly rather than by clicking "a": selecting a
+    // workflow outside the open stack now takes the band off the screen, and
+    // this test is about walking into a panel that is still there.
+    wrapper.vm.cursorId = "card:a";
+    await flush();
     await arrow(wrapper, "ArrowDown");
     expect(cursorKey(wrapper)).toBe("b");
 
@@ -1482,8 +1537,10 @@ describe("the cursor in List", () => {
     await flush();
 
     // `d` is the fourth card, the last of the stack's row: its column holds
-    // no member row at all.
-    await wrapper.find('.wfv-row[data-key="d"]').trigger("click");
+    // no member row at all. Placed rather than clicked, for the reason the
+    // test above gives.
+    wrapper.vm.cursorId = "card:d";
+    await flush();
     await arrow(wrapper, "ArrowDown");
     expect(cursorKey(wrapper)).toBe("b");
 

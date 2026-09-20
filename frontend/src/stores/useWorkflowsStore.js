@@ -26,10 +26,12 @@ import { errorMessage } from "../utils/apiError";
  * stack expands in place and has no such cost. See
  * `docs/frontend_architecture.md` §5.
  *
- * **The panel follows a CHANGE of selection** (`syncPanelToSelection`), which
- * is what its rule is about and not an invariant over `selectedKeys`: picking
- * one stack opens it, picking something outside the open one closes it, and ▸
- * may leave a stack selected with no panel because nothing was picked.
+ * **Once the reader has opened a stack, the panel follows the selection**
+ * (`browsingStacks` + `syncPanelToSelection`): picking another stack moves the
+ * band there, picking anything outside the open one takes it off the screen.
+ * A gesture opens the first one and a gesture — ▸, Escape, Close — ends the
+ * mode; the rule is about the selection CHANGING and not an invariant over
+ * `selectedKeys`.
  */
 
 /**
@@ -105,6 +107,17 @@ export const useWorkflowsStore = defineStore("workflows", () => {
 
   /** The open stack's cover key, or null. At most one, ever. */
   const openStackKey = ref(null);
+  /**
+   * The reader has opened a stack and has not said they are done.
+   *
+   * **The mode outlives the panel.** Selecting a workflow that is not a stack
+   * takes the band off the screen, but it does not mean "stop showing me
+   * stacks" — so selecting a stack after that opens it again, with no second
+   * double-click. Only shutting the panel by hand (▸, Escape, its Close) says
+   * that, and only a gesture turns it on, which is what keeps a plain click
+   * from being a way in.
+   */
+  const browsingStacks = ref(false);
   /** True while the open panel is collapsing: still drawn, and shrinking. */
   const panelClosing = ref(false);
   let collapseTimer = null;
@@ -355,11 +368,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   async function openStack(coverKey) {
     const card = cards.value.find((entry) => entry.key === coverKey);
     if (!card || !isStack(card)) return;
-    // **A collapse of THIS stack is left to finish.** ▸ does not stop its
-    // click, so closing a stack from its caret also selects that card, and
-    // `syncPanelToSelection` then asks for the same stack — cancelling here
-    // would leave the caret unable to close anything at all.
-    if (openStackKey.value === coverKey && panelClosing.value) return;
+    browsingStacks.value = true;
     cancelCollapse();
     openStackKey.value = coverKey;
     if (members.value[coverKey] || inflight.value.has(coverKey)) return;
@@ -434,7 +443,13 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * go with `openStackKey`, so dropping it first leaves nothing on screen to
    * animate. Calling it twice is a no-op rather than a restart.
    */
-  function collapseStack() {
+  function collapseStack({ keepBrowsing = false } = {}) {
+    // **`keepBrowsing` is for the rule, not for a reader.** ▸, Escape and the
+    // panel's Close mean "I am done with stacks" and leave the mode; the
+    // selection rule taking the band off the screen for a workflow with
+    // nothing under it does not, or the next stack picked would need a second
+    // double-click to open.
+    if (!keepBrowsing) browsingStacks.value = false;
     if (!openStackKey.value || panelClosing.value) return;
     panelClosing.value = true;
     collapseTimer = setTimeout(finishCollapse, PANEL_COLLAPSE_MS);
@@ -692,56 +707,66 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   }
 
   /**
-   * An OPEN panel follows a change of selection.
+   * While the reader is browsing stacks, the panel follows the selection.
    *
-   * **It never opens one.** Opening a stack is the caret, Enter, or a
-   * double-click on its card — a gesture that says "show me inside this" —
-   * and a plain click is a selection, not that. What this rule settles is the
-   * state the two used to contradict: a panel standing open under one stack
-   * while the reader has gone and selected another, or several. So it moves
-   * the band to the stack that was just selected, or shuts it, and when
-   * nothing is open it does nothing at all.
+   * **A click is never the way IN.** Opening the first stack is the caret,
+   * Enter, or a double-click on its card — a gesture that says "show me inside
+   * this" — and until one of those has happened this does nothing at all. What
+   * it settles afterwards is the state a gesture-only panel used to contradict:
+   * a band standing open under one stack while the reader had gone and selected
+   * another, or several.
    *
-   * Moving it wants the WHOLE stack selected, which is what `select`'s
-   * `whole` makes a click on a stack card mean. Closing it wants a selection
-   * reaching OUTSIDE the open stack — outside, not "more than one": a count
-   * would make Ctrl-click and Shift-click inside an open panel impossible, the
-   * second pick destroying the rows being picked from, and the grid declares
-   * `aria-multiselectable`, so multi-selecting a stack's members is a gesture
-   * it promises.
+   * **The mode outlives the panel** (`browsingStacks`). Selecting a workflow
+   * with nothing under it takes the band off the screen without ending the
+   * mode, so picking a stack after that opens it straight away. Only ▸, Escape
+   * or the panel's own Close says "done".
    *
-   * **A single card that is NOT a stack leaves the panel alone.** `openStack`
-   * refuses a card with nothing under it, and every row inside the panel is
-   * exactly that. So is a stack's cover key ALONE, which is what the
-   * `?topology=` deep link selects: it names one workflow rather than the pile
-   * it sits in.
+   * Moving it wants a STACK, selected whole, which is what `select`'s `whole`
+   * makes a click on a stack card mean. Everything else that reaches OUTSIDE
+   * the open stack closes it — a workflow with nothing under it just as much
+   * as five cards, because the band belongs to a stack the reader has stopped
+   * looking at either way.
+   *
+   * **Outside, not "more than one".** What is left alone is a selection that
+   * stays INSIDE the open stack: its member rows, its cover, any mix of them.
+   * Counting instead would make Ctrl-click and Shift-click inside an open
+   * panel impossible — the second pick destroying the rows being picked from —
+   * and the grid declares `aria-multiselectable`, so multi-selecting a stack's
+   * members is a gesture it promises. It is also what keeps the `?topology=`
+   * deep link, which selects a cover key ALONE, from shutting the very panel
+   * it pointed somebody at.
    *
    * Because this is about a change, it is not an invariant over
    * `selectedKeys`: ▸ can leave a stack selected with no panel, and nothing
    * here re-opens it. That is the same state the caret has always produced.
    */
   function syncPanelToSelection() {
-    // Nothing open, nothing to follow. This is what keeps a plain click a
-    // selection rather than a way in.
-    if (!openStackKey.value) return;
+    // Not browsing yet, so a click is just a click. This is the whole of what
+    // keeps a plain click from being a way in.
+    if (!browsingStacks.value) return;
     const keys = selectedKeys.value;
     if (!keys.length) return;
-    // The one card the whole selection is: a stack taken whole, or a single
-    // row standing for itself.
-    const only = keys.find((key) => {
+    // A STACK, and the whole of it — `covered.length > 1` is the test for
+    // "this key has something under it", so a lone card cannot match here and
+    // fall out of the close below.
+    const stack = keys.find((key) => {
       const covered = stackKeys(key);
       return (
+        covered.length > 1 &&
         covered.length === keys.length &&
         covered.every((entry) => keys.includes(entry))
       );
     });
-    if (only) {
-      void openStack(only);
+    if (stack) {
+      void openStack(stack);
       return;
     }
+    // With no band on screen `stackKeys(null)` is empty, so this falls to a
+    // `collapseStack` that refuses — the mode stays on, waiting for the next
+    // stack.
     const inside = new Set(stackKeys(openStackKey.value));
     if (keys.every((key) => inside.has(key))) return;
-    collapseStack();
+    collapseStack({ keepBrowsing: true });
   }
 
   /**
@@ -835,6 +860,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     inflight.value = new Set();
     membersFailed.value = new Set();
     cancelCollapse();
+    browsingStacks.value = false;
     openStackKey.value = null;
     selectedKeys.value = [];
   }
@@ -851,6 +877,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     sortKey,
     filters,
     openStackKey,
+    browsingStacks,
     panelClosing,
     members,
     membersLoading,
