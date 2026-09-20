@@ -4,7 +4,7 @@
 // best-rated card has the fewest pictures and the oldest use — so a sort that
 // reads the wrong field cannot come out in the right order by accident.
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 
 const listWorkflowCards = vi.fn();
@@ -14,7 +14,7 @@ vi.mock("../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
 }));
 
-import { useWorkflowsStore } from "./useWorkflowsStore";
+import { PANEL_COLLAPSE_MS, useWorkflowsStore } from "./useWorkflowsStore";
 
 // Input order is none of the three sorted orders, and the undated card leads:
 // a comparator that reads NaN (`Date.parse(null)`) leaves it where it started,
@@ -331,6 +331,224 @@ describe("a stack is selected whole", () => {
     expect(store.stackKeys("never-kept-a-picture")).toEqual([
       "never-kept-a-picture",
     ]);
+  });
+});
+
+describe("the panel follows a change of selection", () => {
+  // `select` starts the member fetch and does not wait for it; nothing here
+  // asserts on members, so one microtask is enough to let the flip land.
+  const settle = () => Promise.resolve();
+
+  it("opens the stack that was picked, and moves to the next one", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    store.select("the-stack", { whole: true });
+    await settle();
+    expect(store.openStackKey).toBe("the-stack");
+
+    // The band MOVES. A second panel would put itself a screen below the card
+    // that opened it, which is why there is only ever one.
+    store.select("few-but-loved", { whole: true });
+    await settle();
+    expect(store.openStackKey).toBe("few-but-loved");
+  });
+
+  it("leaves the panel alone for a card with nothing under it", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+
+    // A member row. Every row inside the panel is one of these, so a rule that
+    // closed here would shut the panel as somebody picked out of it.
+    store.select("m1");
+    await settle();
+    expect(store.openStackKey).toBe("the-stack");
+
+    // A plain card elsewhere in the grid.
+    store.select("workhorse");
+    await settle();
+    expect(store.openStackKey).toBe("the-stack");
+
+    // And the cover key ALONE, which is what `?topology=` selects: it names
+    // one workflow, not the pile it sits in.
+    store.closeStack();
+    store.select("few-but-loved");
+    await settle();
+    expect(store.openStackKey).toBe(null);
+  });
+
+  it("closes the panel when the selection reaches outside the stack", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    store.select("the-stack", { whole: true });
+    await settle();
+
+    store.select("workhorse", { additive: true });
+    expect(store.selectedKeys).toEqual(["the-stack", "m1", "m2", "workhorse"]);
+    // Still open, and marked as collapsing: the member rows are what the
+    // animation is drawn on, so they outlive the gesture.
+    expect(store.openStackKey).toBe("the-stack");
+    expect(store.panelClosing).toBe(true);
+
+    store.finishCollapse();
+    expect(store.openStackKey).toBe(null);
+    expect(store.panelClosing).toBe(false);
+  });
+
+  it("closes it for a range that leaves the stack too", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+
+    store.selectRange(["the-stack", "m1", "m2", "workhorse"]);
+    expect(store.panelClosing).toBe(true);
+    store.finishCollapse();
+    expect(store.openStackKey).toBe(null);
+  });
+
+  it("keeps the panel open while the selection stays inside it", async () => {
+    // The grid declares `aria-multiselectable`, so Ctrl and Shift inside an
+    // open stack are gestures it promises. A rule counting selected keys
+    // instead of asking where they are would destroy the rows being picked
+    // from on the second pick.
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+
+    store.select("m1");
+    store.select("m2", { additive: true });
+    expect(store.selectedKeys).toEqual(["m1", "m2"]);
+    expect(store.openStackKey).toBe("the-stack");
+    expect(store.panelClosing).toBe(false);
+
+    // The cover counts as inside: it is the panel's first row as well as the
+    // grid's stack card.
+    store.selectRange(["the-stack", "m2"]);
+    expect(store.openStackKey).toBe("the-stack");
+    expect(store.panelClosing).toBe(false);
+  });
+
+  it("lets the caret close the stack it also selects", async () => {
+    // ▸ deliberately does not stop its click, so closing a stack from the
+    // caret also selects that card — and that selection asks for the same
+    // stack. Reopening on it would leave the caret unable to close anything.
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+
+    store.toggleStack("the-stack");
+    store.select("the-stack", { whole: true });
+    await settle();
+    expect(store.panelClosing).toBe(true);
+
+    store.finishCollapse();
+    expect(store.openStackKey).toBe(null);
+  });
+
+  it("abandons a collapse in progress when another stack is picked", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+
+    store.collapseStack();
+    store.select("few-but-loved", { whole: true });
+    await settle();
+    expect(store.openStackKey).toBe("few-but-loved");
+    expect(store.panelClosing).toBe(false);
+
+    // Wrong if this nulls the key: the abandoned collapse would shut the panel
+    // the reader had just opened.
+    store.finishCollapse();
+    expect(store.openStackKey).toBe("few-but-loved");
+  });
+
+  it("does not put the failure of a stack you have left over the one you are on", async () => {
+    // A plain click moves the panel, so a member read for the stack the reader
+    // has already left is routinely still on the wire when it fails. Its
+    // failure is worth recording; it is never worth telling them the stack
+    // they are now looking at could not be read.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let fail;
+    getWorkflowCard.mockImplementation(
+      (key) =>
+        new Promise((resolve, reject) => {
+          if (key === "m1" || key === "m2")
+            fail = () => reject(new Error("no"));
+          else resolve({ card: { key, member_keys: [] } });
+        }),
+    );
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    const left = store.openStack("the-stack");
+    await store.openStack("few-but-loved");
+    expect(store.openStackKey).toBe("few-but-loved");
+
+    fail();
+    await left;
+    expect(store.error).toBe("");
+    warn.mockRestore();
+  });
+
+  it("does not animate a close that has nothing left to draw", async () => {
+    // `forgetMembers` and a filter that takes the cover off the grid both call
+    // `closeStack`, and both mean the panel's CONTENT has stopped being true.
+    // Collapsing would spend the animation drawing a stack being torn down.
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+
+    store.forgetMembers();
+    expect(store.openStackKey).toBe(null);
+    expect(store.panelClosing).toBe(false);
+  });
+});
+
+describe("the collapse's backstop", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("drops the panel on its own if the animation never reports", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+
+    store.collapseStack();
+    vi.advanceTimersByTime(PANEL_COLLAPSE_MS);
+    expect(store.openStackKey).toBe(null);
+    expect(store.panelClosing).toBe(false);
+  });
+
+  it("a session reset takes the timer with it", async () => {
+    // Left armed it fires against the new credential's store and closes a
+    // panel that belongs to a different library.
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+    store.collapseStack();
+    expect(store.panelClosing).toBe(true);
+
+    store.reset();
+    expect(store.panelClosing).toBe(false);
+
+    await store.fetchCards();
+    await store.openStack("few-but-loved");
+    vi.advanceTimersByTime(PANEL_COLLAPSE_MS * 2);
+    expect(store.openStackKey).toBe("few-but-loved");
+  });
+
+  it("and so does the store being torn down", async () => {
+    // The timer is the one thing here that outlives the store's scope: fired
+    // afterwards it writes `openStackKey` on a store nothing is watching.
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+    store.collapseStack();
+
+    store.$dispose();
+    vi.advanceTimersByTime(PANEL_COLLAPSE_MS * 2);
+    expect(store.openStackKey).toBe("the-stack");
   });
 });
 

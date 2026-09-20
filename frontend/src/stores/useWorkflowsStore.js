@@ -25,7 +25,25 @@ import { errorMessage } from "../utils/apiError";
  * second one a screen and a half below the card that opened it; a picture
  * stack expands in place and has no such cost. See
  * `docs/frontend_architecture.md` §5.
+ *
+ * **The panel follows a CHANGE of selection** (`syncPanelToSelection`), which
+ * is what its rule is about and not an invariant over `selectedKeys`: picking
+ * one stack opens it, picking something outside the open one closes it, and ▸
+ * may leave a stack selected with no panel because nothing was picked.
  */
+
+/**
+ * The longest the panel's collapse is allowed to hold the stack open, in ms.
+ *
+ * A ceiling, not the duration: the panel reports its own `animationend` and
+ * `finishCollapse` usually runs long before this. `--dur-2` is what it
+ * animates over, and a machine asking for reduced motion runs that in
+ * microseconds — which is exactly why the end has to be read off the animation
+ * rather than counted here, or a motion preference would silently gate input
+ * for a fifth of a second. This is only the backstop for an animation that
+ * never starts at all.
+ */
+export const PANEL_COLLAPSE_MS = 200;
 
 export const SORT_KEYS = ["rating", "used", "pictures"];
 
@@ -87,6 +105,9 @@ export const useWorkflowsStore = defineStore("workflows", () => {
 
   /** The open stack's cover key, or null. At most one, ever. */
   const openStackKey = ref(null);
+  /** True while the open panel is collapsing: still drawn, and shrinking. */
+  const panelClosing = ref(false);
+  let collapseTimer = null;
   /** `{coverKey: [cover, …members]}` — a stack's cards, once fetched. */
   const members = ref({});
   /** Keys whose member requests are in flight, so a second open is a no-op. */
@@ -334,6 +355,12 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   async function openStack(coverKey) {
     const card = cards.value.find((entry) => entry.key === coverKey);
     if (!card || !isStack(card)) return;
+    // **A collapse of THIS stack is left to finish.** ▸ does not stop its
+    // click, so closing a stack from its caret also selects that card, and
+    // `syncPanelToSelection` then asks for the same stack — cancelling here
+    // would leave the caret unable to close anything at all.
+    if (openStackKey.value === coverKey && panelClosing.value) return;
+    cancelCollapse();
     openStackKey.value = coverKey;
     if (members.value[coverKey] || inflight.value.has(coverKey)) return;
     const mine = epoch;
@@ -361,7 +388,14 @@ export const useWorkflowsStore = defineStore("workflows", () => {
         err,
       );
       if (mine !== epoch) return;
-      error.value = errorMessage(err, "Could not read this stack.");
+      // **Only the stack still on screen gets to put up the banner.** A plain
+      // click moves the panel from one stack to another, so a member read for
+      // the stack the reader has already left is routinely still on the wire;
+      // its failure is worth recording, never worth telling them that the
+      // stack they are looking at could not be read.
+      if (openStackKey.value === coverKey) {
+        error.value = errorMessage(err, "Could not read this stack.");
+      }
       // The failure is RECORDED, not written into `members` as an answer.
       // Writing the cover alone there satisfied the "already have them" guard
       // above, so one dropped request made the panel say "N could not be
@@ -378,8 +412,47 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     }
   }
 
+  /**
+   * Drop the panel now, with no animation.
+   *
+   * The immediate close is the right one wherever the panel's CONTENT has
+   * stopped being true — members invalidated, the cover filtered off the grid
+   * — because there is nothing left worth watching shrink, and a collapse
+   * would spend a fifth of a second drawing "N could not be read" over a stack
+   * that is being torn down. A gesture wants `collapseStack` instead.
+   */
   function closeStack() {
+    cancelCollapse();
     openStackKey.value = null;
+  }
+
+  /**
+   * Close the panel, letting it collapse first.
+   *
+   * The stack stays open, marked `panelClosing`, until the panel reports the
+   * animation finished — the member rows the grid splices in around the panel
+   * go with `openStackKey`, so dropping it first leaves nothing on screen to
+   * animate. Calling it twice is a no-op rather than a restart.
+   */
+  function collapseStack() {
+    if (!openStackKey.value || panelClosing.value) return;
+    panelClosing.value = true;
+    collapseTimer = setTimeout(finishCollapse, PANEL_COLLAPSE_MS);
+  }
+
+  /** The panel has finished collapsing (or never started): drop it. */
+  function finishCollapse() {
+    if (!panelClosing.value) return;
+    closeStack();
+  }
+
+  /** Abandon a collapse in progress and leave the panel open. */
+  function cancelCollapse() {
+    if (collapseTimer !== null) {
+      clearTimeout(collapseTimer);
+      collapseTimer = null;
+    }
+    panelClosing.value = false;
   }
 
   /**
@@ -549,7 +622,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   }
 
   function toggleStack(coverKey) {
-    if (openStackKey.value === coverKey) closeStack();
+    if (openStackKey.value === coverKey) collapseStack();
     else openStack(coverKey);
   }
 
@@ -595,6 +668,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     const keys = whole ? stackKeys(key) : [key];
     if (!additive) {
       selectedKeys.value = keys;
+      syncPanelToSelection();
       return;
     }
     // Ctrl removes only what is ALREADY there in full. Toggling on the clicked
@@ -606,6 +680,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       selectedKeys.value = selectedKeys.value.filter(
         (entry) => !dropped.has(entry),
       );
+      syncPanelToSelection();
       return;
     }
     const held = new Set(selectedKeys.value);
@@ -613,6 +688,55 @@ export const useWorkflowsStore = defineStore("workflows", () => {
       ...selectedKeys.value,
       ...keys.filter((entry) => !held.has(entry)),
     ];
+    syncPanelToSelection();
+  }
+
+  /**
+   * The panel follows a CHANGE of selection.
+   *
+   * Two rules, and both are about the selection having just moved rather than
+   * about what it holds: selecting one stack — the whole stack, which is what
+   * `select`'s `whole` makes a click on a stack card mean — opens it and
+   * replaces whatever was open; selecting anything that reaches OUTSIDE the
+   * open stack closes it, because a band belonging to one of the selected
+   * cards says nothing true about the rest of them.
+   *
+   * **Reaching outside, not "more than one".** A count would make Ctrl-click
+   * and Shift-click inside an open panel impossible — the second pick would
+   * destroy the rows being picked from — and the grid declares
+   * `aria-multiselectable`, so multi-selecting a stack's members is a gesture
+   * it promises.
+   *
+   * **A single card that is NOT a stack leaves the panel alone.** `openStack`
+   * refuses a card with nothing under it, and every row inside the panel is
+   * exactly that. So is a stack's cover key ALONE, which is what the
+   * `?topology=` deep link selects: it names one workflow rather than the pile
+   * it sits in, and opening the pile is not what was linked to.
+   *
+   * Because this is about a change, it is not an invariant over
+   * `selectedKeys`: ▸ can leave a stack selected with no panel, and nothing
+   * here re-opens it. That is the same state the caret has always produced.
+   */
+  function syncPanelToSelection() {
+    const keys = selectedKeys.value;
+    if (!keys.length) return;
+    // The one card the whole selection is: a stack taken whole, or a single
+    // row standing for itself.
+    const only = keys.find((key) => {
+      const covered = stackKeys(key);
+      return (
+        covered.length === keys.length &&
+        covered.every((entry) => keys.includes(entry))
+      );
+    });
+    if (only) {
+      void openStack(only);
+      return;
+    }
+    if (!openStackKey.value) return;
+    const inside = new Set(stackKeys(openStackKey.value));
+    if (keys.every((key) => inside.has(key))) return;
+    collapseStack();
   }
 
   /**
@@ -623,6 +747,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    */
   function selectRange(keys) {
     selectedKeys.value = [...keys];
+    syncPanelToSelection();
   }
 
   function clearSelection() {
@@ -704,11 +829,15 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     members.value = {};
     inflight.value = new Set();
     membersFailed.value = new Set();
+    cancelCollapse();
     openStackKey.value = null;
     selectedKeys.value = [];
   }
 
   onScopeDispose(onSessionReset(reset));
+  // The collapse's backstop timer is the one thing here that outlives the
+  // store: it would fire against a torn-down session and write `openStackKey`.
+  onScopeDispose(cancelCollapse);
 
   return {
     cards,
@@ -720,6 +849,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     sortKey,
     filters,
     openStackKey,
+    panelClosing,
     members,
     membersLoading,
     selectedKeys,
@@ -734,6 +864,8 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     fetchCards,
     openStack,
     closeStack,
+    collapseStack,
+    finishCollapse,
     forgetMembers,
     invalidate,
     toggleStack,

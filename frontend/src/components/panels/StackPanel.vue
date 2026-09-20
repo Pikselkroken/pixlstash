@@ -5,10 +5,14 @@
   <div
     :id="panelId"
     class="stack-panel"
-    :class="{ 'stack-panel--selected': selected }"
+    :class="{
+      'stack-panel--selected': selected,
+      'stack-panel--closing': closing,
+    }"
     role="rowgroup"
     :style="notchStyle"
     data-testid="stack-panel"
+    @animationend.self="closing && emit('collapsed')"
   >
     <!-- One column has no centre worth pointing at, so the caret takes the
          shipped `--start` inset rather than a hand-copy of its 22px. -->
@@ -18,168 +22,190 @@
       aria-hidden="true"
     ></span>
 
-    <div class="stack-panel__header" role="row" aria-level="2">
-      <div role="gridcell">
-        <div class="stack-panel__bar" role="toolbar" :aria-label="toolbarName">
-          <span class="stack-panel__name">{{ name }}</span>
-          <span class="stack-panel__count num">{{ countLabel }}</span>
-          <span v-if="pending" class="stack-panel__pending">{{ pending }}</span>
-          <span class="stack-panel__spacer"></span>
-          <Segmented
-            :options="VIEW_OPTIONS"
-            :model-value="view"
-            variant="icon-label"
-            aria-label="Show the stack as"
-            @update:model-value="prefs.setStackView"
-          />
-          <AppButton
-            variant="ghost"
-            size="sm"
-            icon-left="close"
-            icon-only
-            tooltip="Close this stack"
-            @click="emit('close')"
-          />
-        </div>
-      </div>
-    </div>
-
-    <!-- `presentation`, so the member rows below are exposed to the
-         rowgroup above rather than to an unroled div, which would break the
-         chain a treegrid needs: rowgroup owns rows, rows own gridcells. -->
-    <div v-if="view === 'grid'" class="stack-panel__grid" role="presentation">
-      <div
-        v-for="(member, index) in members"
-        :id="`${panelId}-row-${member.key}`"
-        :key="member.key"
-        class="stack-panel__member"
-        role="row"
-        aria-level="2"
-        :aria-posinset="index + 1"
-        :aria-setsize="size || members.length"
-        :aria-selected="selectedKeys.includes(member.key)"
-        :tabindex="cursorKey === member.key ? 0 : -1"
-        :data-key="member.key"
-        @click="emit('select', member.key, $event)"
-        @contextmenu.prevent="openMenu(member, index, $event)"
-      >
-        <div class="stack-panel__cell" role="gridcell">
-          <WorkflowCard
-            :card="member"
-            member
-            :selected="!selected && selectedKeys.includes(member.key)"
-          />
-          <!-- The cover is what the others are compared against, so it is the
-               one member whose special row is empty; without the flag its row
-               reads as "this one differs by nothing". -->
-          <span v-if="index === 0" class="stack-cover-flag">Cover</span>
-          <AppButton
-            class="stack-panel__more"
-            variant="ghost"
-            size="sm"
-            icon-left="dots-horizontal"
-            icon-only
-            tabindex="-1"
-            tooltip="What you can do with this workflow"
-            @click.stop="openMenu(member, index, $event)"
-          />
-        </div>
-      </div>
-    </div>
-
-    <!-- List. The SAME level-2 rows with the same gridcells, drawn on a CSS
-         grid rather than a `<table>`: the panel already sits inside the view's
-         `treegrid`, and a table here would put a second, conflicting grid
-         structure inside it. The header row is one of the treegrid's rows too,
-         so its cells are `columnheader`. -->
-    <div v-else class="stack-panel__list" role="presentation">
-      <div class="stack-panel__listhead" role="row" aria-level="2">
-        <span
-          v-for="column in COLUMNS"
-          :key="column.id"
-          class="section-label"
-          :class="column.cls"
-          role="columnheader"
-          >{{ column.label }}</span
-        >
-      </div>
-      <div
-        v-for="(member, index) in members"
-        :id="`${panelId}-row-${member.key}`"
-        :key="member.key"
-        class="stack-panel__member stack-panel__row"
-        role="row"
-        aria-level="2"
-        :aria-posinset="index + 1"
-        :aria-setsize="size || members.length"
-        :aria-selected="selectedKeys.includes(member.key)"
-        :aria-label="rowName(member, index)"
-        :tabindex="cursorKey === member.key ? 0 : -1"
-        :data-key="member.key"
-        @click="emit('select', member.key, $event)"
-        @contextmenu.prevent="openMenu(member, index, $event)"
-      >
-        <!-- Everything the row draws is `aria-hidden`: the row's own label
-             reads all of it, including whatever "+N" clipped, exactly as the
-             card does in Grid. -->
-        <span class="stack-panel__ident" role="gridcell" aria-hidden="true">
-          <!-- Up to three thumbnails, `alt=""`: they are the same pictures
-               the card shows and the row is named by its workflow, so they
-               carry nothing a reader would otherwise miss. -->
-          <!-- The cover's own arrangement AND its 6:5 box, one size down.
-               Since #1456 the arrangement means ONE CELL PER PICTURE: the card
-               divides its cover by what the member actually has, and a row
-               drawing a fixed three would put its one picture beside two
-               painted boxes and disagree with the same stack's Grid view. The
-               box is 6:5 for the same reason it is on the card — it is what
-               makes each arrangement's cells the shape the pictures are.
-               `v-if` on the image, not `v-show`: an `<img>` with no `src` is a
-               broken-image glyph in some browsers, and empty ones would make
-               any assertion about the row's pictures vacuous. -->
-          <span
-            class="stack-panel__thumbs"
-            :class="`stack-panel__thumbs--${thumbsOf(member).length}`"
+    <!-- The one grid row the open and collapse animations size. Its role
+         is `presentation` for the same reason the member grid inside it
+         is: the rows below have to reach the rowgroup above, and an
+         unroled div between the two breaks the chain a treegrid needs.
+         `overflow: clip` rather than `hidden` — hidden would make this a
+         programmatic scroll container, and `moveCursor`'s `.focus()` on a
+         row while the box is still shorter than its content would scroll
+         it internally, with no scrollbar and no way back. -->
+    <div class="stack-panel__body" role="presentation">
+      <div class="stack-panel__header" role="row" aria-level="2">
+        <div role="gridcell">
+          <div
+            class="stack-panel__bar"
+            role="toolbar"
+            :aria-label="toolbarName"
           >
+            <span class="stack-panel__name">{{ name }}</span>
+            <span class="stack-panel__count num">{{ countLabel }}</span>
+            <span v-if="pending" class="stack-panel__pending">{{
+              pending
+            }}</span>
+            <span class="stack-panel__spacer"></span>
+            <Segmented
+              :options="VIEW_OPTIONS"
+              :model-value="view"
+              variant="icon-label"
+              aria-label="Show the stack as"
+              @update:model-value="prefs.setStackView"
+            />
+            <AppButton
+              variant="ghost"
+              size="sm"
+              icon-left="close"
+              icon-only
+              tooltip="Close this stack"
+              @click="emit('close')"
+            />
+          </div>
+        </div>
+      </div>
+
+      <!-- `presentation`, so the member rows below are exposed to the
+           rowgroup above rather than to an unroled div, which would break the
+           chain a treegrid needs: rowgroup owns rows, rows own gridcells. -->
+      <div v-if="view === 'grid'" class="stack-panel__grid" role="presentation">
+        <div
+          v-for="(member, index) in members"
+          :id="`${panelId}-row-${member.key}`"
+          :key="member.key"
+          class="stack-panel__member"
+          role="row"
+          aria-level="2"
+          :aria-posinset="index + 1"
+          :aria-setsize="size || members.length"
+          :aria-selected="selectedKeys.includes(member.key)"
+          :tabindex="cursorKey === member.key ? 0 : -1"
+          :data-key="member.key"
+          @click="emit('select', member.key, $event)"
+          @contextmenu.prevent="openMenu(member, index, $event)"
+        >
+          <div class="stack-panel__cell" role="gridcell">
+            <WorkflowCard
+              :card="member"
+              member
+              :selected="!selected && selectedKeys.includes(member.key)"
+            />
+            <!-- The cover is what the others are compared against, so it is the
+                 one member whose special row is empty; without the flag its row
+                 reads as "this one differs by nothing". -->
+            <span v-if="index === 0" class="stack-cover-flag">Cover</span>
+            <AppButton
+              class="stack-panel__more"
+              variant="ghost"
+              size="sm"
+              icon-left="dots-horizontal"
+              icon-only
+              tabindex="-1"
+              tooltip="What you can do with this workflow"
+              @click.stop="openMenu(member, index, $event)"
+            />
+          </div>
+        </div>
+      </div>
+
+      <!-- List. The SAME level-2 rows with the same gridcells, drawn on a CSS
+           grid rather than a `<table>`: the panel already sits inside the view's
+           `treegrid`, and a table here would put a second, conflicting grid
+           structure inside it. The header row is one of the treegrid's rows too,
+           so its cells are `columnheader`. -->
+      <div v-else class="stack-panel__list" role="presentation">
+        <div class="stack-panel__listhead" role="row" aria-level="2">
+          <span
+            v-for="column in COLUMNS"
+            :key="column.id"
+            class="section-label"
+            :class="column.cls"
+            role="columnheader"
+            >{{ column.label }}</span
+          >
+        </div>
+        <div
+          v-for="(member, index) in members"
+          :id="`${panelId}-row-${member.key}`"
+          :key="member.key"
+          class="stack-panel__member stack-panel__row"
+          role="row"
+          aria-level="2"
+          :aria-posinset="index + 1"
+          :aria-setsize="size || members.length"
+          :aria-selected="selectedKeys.includes(member.key)"
+          :aria-label="rowName(member, index)"
+          :tabindex="cursorKey === member.key ? 0 : -1"
+          :data-key="member.key"
+          @click="emit('select', member.key, $event)"
+          @contextmenu.prevent="openMenu(member, index, $event)"
+        >
+          <!-- Everything the row draws is `aria-hidden`: the row's own label
+               reads all of it, including whatever "+N" clipped, exactly as the
+               card does in Grid. -->
+          <span class="stack-panel__ident" role="gridcell" aria-hidden="true">
+            <!-- Up to three thumbnails, `alt=""`: they are the same pictures
+                 the card shows and the row is named by its workflow, so they
+                 carry nothing a reader would otherwise miss. -->
+            <!-- The cover's own arrangement AND its 6:5 box, one size down.
+                 Since #1456 the arrangement means ONE CELL PER PICTURE: the card
+                 divides its cover by what the member actually has, and a row
+                 drawing a fixed three would put its one picture beside two
+                 painted boxes and disagree with the same stack's Grid view. The
+                 box is 6:5 for the same reason it is on the card — it is what
+                 makes each arrangement's cells the shape the pictures are.
+                 `v-if` on the image, not `v-show`: an `<img>` with no `src` is a
+                 broken-image glyph in some browsers, and empty ones would make
+                 any assertion about the row's pictures vacuous. -->
             <span
-              v-for="(src, i) in thumbsOf(member)"
-              :key="i"
-              class="stack-panel__thumb"
+              class="stack-panel__thumbs"
+              :class="`stack-panel__thumbs--${thumbsOf(member).length}`"
             >
-              <img v-if="src" :src="src" alt="" loading="lazy" />
+              <span
+                v-for="(src, i) in thumbsOf(member)"
+                :key="i"
+                class="stack-panel__thumb"
+              >
+                <img v-if="src" :src="src" alt="" loading="lazy" />
+              </span>
             </span>
+            <span class="stack-panel__rowname">{{ member.name }}</span>
+            <span v-if="index === 0" class="stack-panel__pill">Cover</span>
           </span>
-          <span class="stack-panel__rowname">{{ member.name }}</span>
-          <span v-if="index === 0" class="stack-panel__pill">Cover</span>
-        </span>
-        <!-- A chip only when it DIFFERS from the cover's: a column repeating
-             one model name down every row says nothing about the stack, and
-             the whole point of List is what is not shared. -->
-        <span class="stack-panel__ckpt" role="gridcell" aria-hidden="true">
-          <ChipRow
-            v-if="checkpointChips(member, index).length"
-            :items="checkpointChips(member, index)"
-          />
-        </span>
-        <span class="stack-panel__facts" role="gridcell" aria-hidden="true">
-          <ChipRow :items="factChips(member, index)" />
-        </span>
-        <span class="stack-panel__num num" role="gridcell" aria-hidden="true">{{
-          member.picture_count ?? 0
-        }}</span>
-        <span class="stack-panel__num num" role="gridcell" aria-hidden="true">{{
-          member.rating > 0 ? member.rating.toFixed(1) : "—"
-        }}</span>
-        <span class="stack-panel__end" role="gridcell">
-          <AppButton
-            variant="ghost"
-            size="sm"
-            icon-left="dots-horizontal"
-            icon-only
-            tabindex="-1"
-            tooltip="What you can do with this workflow"
-            @click.stop="openMenu(member, index, $event)"
-          />
-        </span>
+          <!-- A chip only when it DIFFERS from the cover's: a column repeating
+               one model name down every row says nothing about the stack, and
+               the whole point of List is what is not shared. -->
+          <span class="stack-panel__ckpt" role="gridcell" aria-hidden="true">
+            <ChipRow
+              v-if="checkpointChips(member, index).length"
+              :items="checkpointChips(member, index)"
+            />
+          </span>
+          <span class="stack-panel__facts" role="gridcell" aria-hidden="true">
+            <ChipRow :items="factChips(member, index)" />
+          </span>
+          <span
+            class="stack-panel__num num"
+            role="gridcell"
+            aria-hidden="true"
+            >{{ member.picture_count ?? 0 }}</span
+          >
+          <span
+            class="stack-panel__num num"
+            role="gridcell"
+            aria-hidden="true"
+            >{{ member.rating > 0 ? member.rating.toFixed(1) : "—" }}</span
+          >
+          <span class="stack-panel__end" role="gridcell">
+            <AppButton
+              variant="ghost"
+              size="sm"
+              icon-left="dots-horizontal"
+              icon-only
+              tabindex="-1"
+              tooltip="What you can do with this workflow"
+              @click.stop="openMenu(member, index, $event)"
+            />
+          </span>
+        </div>
       </div>
     </div>
 
@@ -231,6 +257,17 @@
  * those cards are in fact all selected: a stack is selected whole, so one mark
  * round the band is the mark for the stack, and what the wash stands for is now
  * exactly what it reads as.
+ *
+ * **It grows and shrinks rather than appearing.** `.stack-panel` is one grid
+ * row over a collapsing body, so opening and closing interpolate `0fr` to `1fr`
+ * over `--dur-2`. Opening needs nothing but the element mounting; closing is
+ * driven by `closing`, because the member rows the grid splices in around the
+ * panel go with the open key and the store therefore holds both until this
+ * component reports `collapsed`. That report is the animation's own
+ * `animationend` and not a timer: under `prefers-reduced-motion` the shell
+ * zeroes the duration, and a timer would go on holding the stack — and the
+ * keys that act on it — for a fifth of a second after there was anything to
+ * watch.
  *
  * **Grid | List** (F2) is remembered for every stack, not per stack, in
  * `useWorkflowPrefsStore`: the switch answers "how do I read a stack" rather
@@ -299,10 +336,17 @@ const props = defineProps({
   cursorKey: { type: String, default: "" },
   /** False while the stack has no id to address a reorder by. */
   canReorder: { type: Boolean, default: false },
+  /** The store is shutting this panel: play the collapse, then it goes. */
+  closing: { type: Boolean, default: false },
 });
 
 const emit = defineEmits([
   "close",
+  // The collapse is finished and the store may drop the stack. Read off the
+  // animation rather than counted in JS: a machine asking for reduced motion
+  // runs it in microseconds, and a timer would gate input for a fifth of a
+  // second on a preference that is about motion, not about speed.
+  "collapsed",
   "select",
   "make-cover",
   "move",
@@ -557,14 +601,59 @@ const notchStyle = computed(() => {
 </script>
 
 <style scoped>
+/* ONE grid row holding `.stack-panel__body`, so the band can grow and shrink
+   by interpolating `0fr` to `1fr` — the one way to animate a box whose height
+   is whatever its content comes to. The band is what pushes every later row
+   down the screen, and since a selection can open it, move it to another card
+   or shut it without anybody having touched the panel, the rows have to be
+   seen travelling or the grid reads as having jumped.
+
+   No `opacity` in either keyframe: `.tbm-caret` exists to mask the panel's top
+   border with the panel's own colour, and fading the band fades the mask, so
+   the border shows through the notch for as long as it runs. */
 .stack-panel {
   position: relative;
   grid-column: 1 / -1;
+  display: grid;
+  grid-template-rows: 1fr;
   margin-bottom: var(--space-4);
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-lg);
   background: rgb(var(--v-theme-panel));
   color: rgb(var(--v-theme-on-panel));
+  animation: stack-panel-open var(--dur-2) var(--ease-decelerate);
+}
+
+/* `min-height: 0` or a grid item refuses to be shorter than its content and
+   the track never collapses. `clip`, not `hidden`: see the template. */
+.stack-panel__body {
+  min-height: 0;
+  overflow: clip;
+}
+
+/* Qualified by `.stack-panel` on purpose. Both rules set `animation`, and left
+   as two single-class selectors the collapse would win on source order alone —
+   a sheet reordered later would silently put the open animation back on a
+   panel that is closing. `forwards` holds it collapsed for the frames between
+   the animation ending and the store dropping the rows. */
+.stack-panel.stack-panel--closing {
+  animation: stack-panel-collapse var(--dur-2) var(--ease-accelerate) forwards;
+}
+
+/* The margin goes with the row, or what is left behind after the panel has
+   finished shrinking is 12px of empty grid. */
+@keyframes stack-panel-open {
+  from {
+    grid-template-rows: 0fr;
+    margin-bottom: 0;
+  }
+}
+
+@keyframes stack-panel-collapse {
+  to {
+    grid-template-rows: 0fr;
+    margin-bottom: 0;
+  }
 }
 
 /* The whole stack selected: one mark round the band, because the stack is what

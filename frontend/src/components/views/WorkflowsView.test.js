@@ -148,6 +148,20 @@ const keys = (wrapper) =>
     .findAll(".wfv-grid [data-key]")
     .map((el) => el.attributes("data-key"));
 
+/**
+ * Let a collapsing panel finish.
+ *
+ * A gesture close holds the stack open until the panel reports its animation
+ * done, so jsdom — which runs no animations — has to say so itself. Firing the
+ * real event rather than reaching for `finishCollapse` keeps the wiring under
+ * test: a panel that stopped reporting would leave these red.
+ */
+const settleClose = async (wrapper) => {
+  const panel = wrapper.find('[data-testid="stack-panel"]');
+  if (panel.exists()) panel.element.dispatchEvent(new Event("animationend"));
+  await flush();
+};
+
 const cardKeys = (wrapper) =>
   wrapper.findAll(".wfv-row").map((el) => el.attributes("data-key"));
 
@@ -499,6 +513,7 @@ describe("Esc closes the innermost thing first", () => {
     expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
 
     await gridEl.trigger("keydown", { key: "Escape" });
+    await settleClose(wrapper);
     expect(store.openStackKey).toBe(null);
     // The selection survives the first Escape: it is the outer thing.
     expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
@@ -594,6 +609,7 @@ describe("the cursor survives the list being rebuilt", () => {
     // member block and every index after it shifts.
     store.toggleStack("b");
     await wrapper.vm.$nextTick();
+    await settleClose(wrapper);
     expect(store.openStackKey).toBe(null);
     // The grid must still have exactly one tab stop, and it must still be "f".
     const stops = wrapper
@@ -700,6 +716,106 @@ describe("what a screen reader is told", () => {
     await wrapper.vm.$nextTick();
     // Every row below the panel moves on the way back too.
     expect(live()).toBe("b closed");
+  });
+});
+
+describe("the panel follows a change of selection", () => {
+  const row = (wrapper, key) =>
+    wrapper.findAll(".wfv-row").find((el) => el.attributes("data-key") === key);
+
+  const panel = (wrapper) => wrapper.find('[data-testid="stack-panel"]');
+
+  it("opens the stack a plain click selects, and moves it to the next", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+
+    await row(wrapper, "b").trigger("click");
+    await flush();
+    expect(store.openStackKey).toBe("b");
+    expect(memberKeys(wrapper)).toEqual(["b", "b1", "b2"]);
+
+    await row(wrapper, "e").trigger("click");
+    await flush();
+    expect(store.openStackKey).toBe("e");
+    expect(wrapper.findAll('[data-testid="stack-panel"]')).toHaveLength(1);
+    expect(memberKeys(wrapper)).toEqual(["e", "e1", "e2"]);
+  });
+
+  it("holds the panel on screen, shrinking, while it closes", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    await row(wrapper, "b").trigger("click");
+    await flush();
+
+    await row(wrapper, "f").trigger("click", { ctrlKey: true });
+    // Wrong if the panel has already gone: the rows the collapse is drawn on
+    // go with the open key, so dropping it first leaves nothing to animate.
+    expect(panel(wrapper).exists()).toBe(true);
+    expect(panel(wrapper).classes()).toContain("stack-panel--closing");
+    expect(memberKeys(wrapper)).toEqual(["b", "b1", "b2"]);
+
+    await settleClose(wrapper);
+    expect(store.openStackKey).toBe(null);
+    expect(panel(wrapper).exists()).toBe(false);
+  });
+
+  it("keeps the panel open while the picking stays inside it", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    await row(wrapper, "b").trigger("click");
+    await flush();
+
+    const member = (key) =>
+      wrapper
+        .findAll(".stack-panel__member")
+        .find((el) => el.attributes("data-key") === key);
+    await member("b1").trigger("click");
+    await member("b2").trigger("click", { ctrlKey: true });
+    expect(store.selectedKeys).toEqual(["b1", "b2"]);
+    expect(store.openStackKey).toBe("b");
+    expect(panel(wrapper).classes()).not.toContain("stack-panel--closing");
+  });
+
+  it("brings the cursor back out of a panel it closes", async () => {
+    // The grid has ONE tab stop. Ctrl-clicking a member while a card outside
+    // the stack is selected shuts the panel from under a cursor standing on a
+    // member row, and without this the stop, and the focus with it, leaves the
+    // screen entirely.
+    const wrapper = await grid();
+    await row(wrapper, "f").trigger("click");
+    await flush();
+    const store = useWorkflowsStore();
+    await store.openStack("b");
+    await flush();
+
+    await wrapper
+      .findAll(".stack-panel__member")
+      .find((el) => el.attributes("data-key") === "b1")
+      .trigger("click", { ctrlKey: true });
+    expect(store.selectedKeys).toEqual(["f", "b1"]);
+    expect(cursorKey(wrapper)).toBe("b1");
+
+    await settleClose(wrapper);
+    const stops = wrapper
+      .findAll(".wfv-grid [data-key]")
+      .filter((el) => el.attributes("tabindex") === "0");
+    expect(stops).toHaveLength(1);
+    expect(stops[0].attributes("data-key")).toBe("b");
+  });
+
+  it("gives the second Escape to the selection while the panel shuts", async () => {
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    const gridEl = wrapper.find(".wfv-grid");
+    await row(wrapper, "b").trigger("click");
+    await flush();
+
+    await gridEl.trigger("keydown", { key: "Escape" });
+    expect(store.panelClosing).toBe(true);
+    // Wrong if this is swallowed by the panel a second time: the collapse is
+    // already running, so the innermost thing left is the selection.
+    await gridEl.trigger("keydown", { key: "Escape" });
+    expect(store.selectedKeys).toEqual([]);
   });
 });
 

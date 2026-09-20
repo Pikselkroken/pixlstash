@@ -247,6 +247,8 @@
             :selected="openStackSelected"
             :cursor-key="cursorKey"
             :can-reorder="Boolean(store.openStackId)"
+            :closing="store.panelClosing"
+            @collapsed="store.finishCollapse"
             @close="closePanel"
             @select="(key, event) => onRowClick(memberRowIndex(key), event)"
             @make-cover="(key) => followMove(key, store.makeCover(key))"
@@ -278,7 +280,6 @@
             :tabindex="index === cursorIndex ? 0 : -1"
             :data-key="entry.key"
             @click="onRowClick(index, $event)"
-            @dblclick="isStack(entry.card) && store.toggleStack(entry.key)"
           >
             <div class="wfv-cell" role="gridcell">
               <WorkflowCard
@@ -300,6 +301,16 @@
 /**
  * The Workflows grid (v1.12 Workflows & Recipes, F1a) — on `/workflows` since
  * F1b retired the shelf. See `docs/frontend_architecture.md` §5.
+ *
+ * THE PANEL FOLLOWS A CHANGE OF SELECTION
+ * (`useWorkflowsStore.syncPanelToSelection`): clicking a stack card selects the
+ * stack whole and opens it, clicking another stack moves the band there, and a
+ * selection reaching outside the open stack closes it. Both transitions
+ * animate, which is why the store holds the open key until the panel reports
+ * its collapse finished. **The row's `dblclick` toggle went with this**: the
+ * first click of the pair now opens the stack and the toggle then shut it
+ * again, so a double-click on a closed stack was open-then-closed. Selecting
+ * is the gesture; ▸, Enter and Close remain the ways to shut one.
  *
  * ONE FLAT LIST. The cards, and — while a stack is open — its members, are one
  * index space, so the roving cursor crosses the panel boundary with the same
@@ -767,7 +778,7 @@ function selectToCursor(index) {
  */
 function closePanel() {
   const key = store.openStackKey;
-  store.closeStack();
+  store.collapseStack();
   if (!key) return;
   const at = flatRows.value.findIndex(
     (entry) => entry.kind === "card" && entry.key === key,
@@ -799,6 +810,17 @@ watch(
     }
     const closed = store.cards.find((entry) => entry.key === previous);
     announcement.value = `${closed?.name || "Stack"} closed`;
+    // **The panel can close from under the cursor.** Ctrl-clicking a member
+    // while a card outside the stack is already selected reaches outside the
+    // open stack, which closes it — and the member row the cursor was standing
+    // on goes with it, taking the grid's only tab stop and the focus off the
+    // screen. `closePanel` has already put the cursor back when Esc or Close
+    // did it; this only catches a cursor left naming a row that is gone.
+    if (flatRows.value.some((entry) => entry.id === cursorId.value)) return;
+    const at = flatRows.value.findIndex(
+      (entry) => entry.kind === "card" && entry.key === previous,
+    );
+    if (at >= 0) moveCursor(at);
   },
 );
 
@@ -995,7 +1017,7 @@ function onKeyDown(event) {
       // Innermost first. The popover and the card menu are `VMenu`s: they
       // consume their own Escape and it never reaches here, so what is left is
       // the panel, then the selection.
-      if (store.openStackKey) {
+      if (store.openStackKey && !store.panelClosing) {
         event.preventDefault();
         closePanel();
       } else if (store.selectedKeys.length) {
