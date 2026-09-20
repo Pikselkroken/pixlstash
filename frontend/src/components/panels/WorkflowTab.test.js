@@ -36,11 +36,13 @@ vi.mock("../../api/workflows", () => ({
   stackWorkflows: (...args) => stackWorkflows(...args),
 }));
 
-// *Show all N pictures* (F7) leaves this screen for the library.
+// *Show all N pictures* (F7) leaves this screen for the library, and
+// `?tab=recipes` (#1480) arrives on it from the lightbox's match banner.
 const push = vi.fn();
+const route = vi.hoisted(() => ({ name: "workflows", query: {} }));
 vi.mock("vue-router", () => ({
   useRouter: () => ({ push }),
-  useRoute: () => ({ name: "workflows", query: {} }),
+  useRoute: () => route,
 }));
 
 import WorkflowTab from "./WorkflowTab.vue";
@@ -176,6 +178,7 @@ function textOf(wrapper) {
 beforeEach(() => {
   setActivePinia(createPinia());
   window.localStorage.clear();
+  route.query = {};
   useSidebarStore().statsOpen = true;
   getWorkflowCard.mockReset().mockResolvedValue(detail());
   listWorkflowCards.mockReset().mockResolvedValue({
@@ -387,6 +390,29 @@ describe("marking a LoRA slot", () => {
 });
 
 describe("the Recipes tab (v1.12 F6)", () => {
+  // The other half of the lightbox banner's link (#1480): `?topology=` selects
+  // the card in `WorkflowsView`, and this opens the rail on its recipes.
+  it("lands on the recipes, with the rail open, from ?tab=recipes", async () => {
+    route.query = { topology: "f00d", tab: "recipes" };
+    const sidebar = useSidebarStore();
+    // Shut, which is the state that made the link a dead end of its own: the
+    // card would be selected behind a rail nobody opened.
+    sidebar.statsOpen = false;
+    const { wrapper } = await mountWith([KEY]);
+
+    expect(sidebar.statsOpen).toBe(true);
+    expect(wrapper.findComponent({ name: "WorkflowRecipesTab" }).exists()).toBe(
+      true,
+    );
+  });
+
+  it("opens on the Workflow tab without that query", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.findComponent({ name: "WorkflowRecipesTab" }).exists()).toBe(
+      false,
+    );
+  });
+
   it("shows the stack's recipes, and the footer belongs to Workflow", async () => {
     const { wrapper } = await mountWith([KEY]);
     const tab = wrapper

@@ -13,9 +13,15 @@ import { setActivePinia, createPinia } from "pinia";
 
 const createSavedRecipe = vi.fn();
 const listSavedRecipes = vi.fn();
+const editSavedRecipe = vi.fn();
 vi.mock("../../api/recipes", () => ({
   createSavedRecipe: (...args) => createSavedRecipe(...args),
   listSavedRecipes: (...args) => listSavedRecipes(...args),
+  editSavedRecipe: (...args) => editSavedRecipe(...args),
+}));
+const confirmed = vi.hoisted(() => ({ value: true }));
+vi.mock("../../composables/useConfirm", () => ({
+  useConfirm: () => ({ confirm: async () => confirmed.value }),
 }));
 const getWorkflowCard = vi.fn();
 vi.mock("../../api/workflows", () => ({
@@ -55,8 +61,10 @@ describe("SaveRecipeDialog", () => {
     setActivePinia(createPinia());
     vi.clearAllMocks();
     createSavedRecipe.mockResolvedValue({ id: 3, name: "Cinematic portrait" });
+    editSavedRecipe.mockResolvedValue({ id: 9, name: "Cinematic Portrait" });
     listSavedRecipes.mockResolvedValue([{ id: 3, pictures: 31 }]);
     getWorkflowCard.mockResolvedValue({ card: { name: "Cinematic portrait" } });
+    confirmed.value = true;
   });
 
   it("lists what the recipe keeps, and leaves the seed off", async () => {
@@ -219,6 +227,93 @@ describe("SaveRecipeDialog", () => {
     const wrapper = open({ overrides: [], settingsAside: "Not kept: the seed choice." });
     await flushPromises();
     expect(wrapper.text()).toContain("Not kept: the seed choice.");
+  });
+
+  // ── A name already on this stack (#1480) ─────────────────────────
+  //
+  // Nothing makes a recipe name unique - not the column, not `POST /recipes`,
+  // not this box - so without the collision the same two presses make two rows
+  // reading exactly the same thing, with no undo.
+
+  /** The recipes already on the card, as the callers hold them. */
+  const EXISTING = [
+    // Deliberately mixed-case and spaced: the fixtures in this suite are all
+    // lowercase, so a case-folding bug in the match would pass every one of
+    // them. "Cinematic Portrait" is the name the dialog opens on.
+    { id: 9, name: " Cinematic Portrait ", prompt: "something else" },
+  ];
+
+  it("offers Replace, naming the row, when the name is already taken", async () => {
+    const wrapper = open({ existing: EXISTING });
+    await flushPromises();
+    const said = wrapper.text().replace(/\s+/g, " ");
+    // The ROW's own spelling, not what was typed: it is what is about to go.
+    expect(said).toContain("“ Cinematic Portrait ” is already saved here");
+    expect(said).toContain("Saving replaces it");
+    expect(
+      wrapper.findAll("button").some((b) => b.text().includes("Replace")),
+    ).toBe(true);
+    expect(
+      wrapper.findAll("button").some((b) => b.text().trim() === "Save recipe"),
+    ).toBe(false);
+  });
+
+  it("replaces that row rather than adding a second one", async () => {
+    const wrapper = open({ existing: EXISTING });
+    await flushPromises();
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Replace"))
+      .trigger("click");
+    await flushPromises();
+
+    expect(createSavedRecipe).not.toHaveBeenCalled();
+    expect(editSavedRecipe).toHaveBeenCalledTimes(1);
+    const [id, body] = editSavedRecipe.mock.calls[0];
+    expect(id).toBe(9);
+    // The whole look, not only the name: a replace re-keeps what is on screen.
+    expect(body.name).toBe("Cinematic portrait");
+    expect(body.prompt).toBe("cinematic portrait of a rainy tram platform");
+    expect(body.overrides).toEqual({ "KSampler/steps": 12 });
+    // Not settable on a PATCH, and the recipe does not move between cards.
+    expect(body).not.toHaveProperty("workflow_key");
+    expect(wrapper.emitted("saved")?.[0]?.[0]).toEqual({
+      id: 9,
+      name: "Cinematic Portrait",
+    });
+  });
+
+  it("writes nothing when the replace is not confirmed", async () => {
+    confirmed.value = false;
+    const wrapper = open({ existing: EXISTING });
+    await flushPromises();
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Replace"))
+      .trigger("click");
+    await flushPromises();
+
+    expect(editSavedRecipe).not.toHaveBeenCalled();
+    expect(createSavedRecipe).not.toHaveBeenCalled();
+    // And the form still holds the work.
+    expect(wrapper.emitted("close")).toBeFalsy();
+  });
+
+  it("goes back to Save the moment the name is changed", async () => {
+    const wrapper = open({ existing: EXISTING });
+    await flushPromises();
+    await wrapper.find("input[type=text]").setValue("Another name");
+    await flushPromises();
+    expect(
+      wrapper.findAll("button").some((b) => b.text().includes("Replace")),
+    ).toBe(false);
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Save recipe"))
+      .trigger("click");
+    await flushPromises();
+    expect(createSavedRecipe).toHaveBeenCalledTimes(1);
+    expect(editSavedRecipe).not.toHaveBeenCalled();
   });
 
   it("tells every surface showing this card that a recipe was saved", async () => {

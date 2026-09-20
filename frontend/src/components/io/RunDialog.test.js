@@ -38,9 +38,11 @@ const listAdapters = vi.fn();
 vi.mock("../../api/modelShelf", () => ({
   listAdapters: (...args) => listAdapters(...args),
 }));
+const listSavedRecipes = vi.fn();
 vi.mock("../../api/recipes", () => ({
   createSavedRecipe: vi.fn(),
-  listSavedRecipes: vi.fn(() => Promise.resolve([])),
+  editSavedRecipe: vi.fn(),
+  listSavedRecipes: (...args) => listSavedRecipes(...args),
 }));
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
@@ -134,6 +136,7 @@ beforeEach(() => {
       : { card: card() },
   );
   listWorkflowCards.mockResolvedValue({ cards: [] });
+  listSavedRecipes.mockResolvedValue([]);
   preflightWorkflowRun.mockResolvedValue({ ok: true, runs: 1, groups: [] });
   runWorkflowCard.mockResolvedValue({
     status: "success",
@@ -742,5 +745,80 @@ describe("the body it sends", () => {
       prompts: [{ prompt_id: "p1" }],
       pictureIds: [42],
     });
+  });
+});
+
+// ── Is this look already kept? (#1480) ─────────────────────────────────────
+//
+// The lightbox's Recipe tab has refused the second identical recipe since F6
+// and this popup had no match state at all, so the duplicate it refuses was
+// one press away from here.
+describe("Save as recipe, when the look is already kept", () => {
+  /** The saved row the default picture recipe's look matches. */
+  const KEPT = {
+    id: 12,
+    name: "Rainy tram platform",
+    // Trimmed and empty-LoRA'd the way `utils/recipeKey.js` keys both sides.
+    prompt: "  a rainy tram platform  ",
+    loras: [],
+  };
+
+  function footer(wrapper, text) {
+    return wrapper.findAll("button").find((b) => b.text().trim() === text);
+  }
+
+  it("offers the save when nothing on the card keeps this look", async () => {
+    listSavedRecipes.mockResolvedValue([
+      { id: 1, name: "Something else", prompt: "a different prompt", loras: [] },
+    ]);
+    const wrapper = await mountRun();
+    expect(listSavedRecipes).toHaveBeenCalledWith(KEY);
+    expect(footer(wrapper, "Save as recipe")).toBeTruthy();
+    expect(footer(wrapper, "Saved")).toBeFalsy();
+  });
+
+  it("says Saved, reachably and inertly, and will not open the dialog", async () => {
+    listSavedRecipes.mockResolvedValue([KEPT]);
+    const wrapper = await mountRun();
+
+    const saved = footer(wrapper, "Saved");
+    expect(saved).toBeTruthy();
+    // `aria-disabled`, never `disabled`: the sentence saying why has to stay
+    // reachable by a keyboard reader.
+    expect(saved.attributes("aria-disabled")).toBe("true");
+    expect(saved.attributes("disabled")).toBeUndefined();
+    // The sentence itself, not merely somewhere on screen: `aria-describedby`
+    // pointing at the wrong note is the failure this catches.
+    const described = wrapper.get(`#${saved.attributes("aria-describedby")}`);
+    expect(described.text()).toBe("Already kept as “Rainy tram platform”.");
+    // And it is status, not a run refusal.
+    expect(described.classes()).not.toContain("rund-note--bad");
+
+    await saved.trigger("click");
+    await flushPromises();
+    expect(wrapper.vm.saveOpen).toBe(false);
+  });
+
+  it("offers the save again the moment the look is edited", async () => {
+    listSavedRecipes.mockResolvedValue([KEPT]);
+    const wrapper = await mountRun();
+    expect(footer(wrapper, "Saved")).toBeTruthy();
+
+    wrapper.vm.prompt = "a rainy tram platform at dusk";
+    await wrapper.vm.$nextTick();
+    expect(footer(wrapper, "Saved")).toBeFalsy();
+    expect(footer(wrapper, "Save as recipe")).toBeTruthy();
+  });
+
+  it("hands the dialog the rows a typed name could collide with", async () => {
+    listSavedRecipes.mockResolvedValue([
+      { id: 1, name: "Something else", prompt: "a different prompt", loras: [] },
+    ]);
+    const wrapper = await mountRun();
+    await footer(wrapper, "Save as recipe").trigger("click");
+    await flushPromises();
+    const dialog = wrapper.findComponent({ name: "SaveRecipeDialog" });
+    expect(dialog.props("existing")).toHaveLength(1);
+    expect(dialog.props("existing")[0].name).toBe("Something else");
   });
 });

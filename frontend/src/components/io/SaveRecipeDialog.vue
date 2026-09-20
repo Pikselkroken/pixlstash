@@ -14,6 +14,17 @@
       @enter="save"
     />
 
+    <!-- A warning, not an input error: the name is perfectly valid, it is the
+         save that has changed meaning. Red-outlining the field would say the
+         owner typed something wrong. -->
+    <p v-if="collision" class="svr-note svr-warn">
+      <v-icon size="14">mdi-alert-circle-outline</v-icon>
+      <span
+        >“{{ collision.name }}” is already saved here. Saving replaces
+        it.</span
+      >
+    </p>
+
     <div>
       <span class="section-label">What the recipe keeps</span>
       <div
@@ -87,12 +98,12 @@
       <AppButton :disabled="saving" @click="emit('close')">Cancel</AppButton>
       <AppButton
         variant="primary"
-        icon-left="bookmark-plus-outline"
+        :icon-left="collision ? 'content-save-edit-outline' : 'bookmark-plus-outline'"
         :loading="saving"
         :disabled="!name.trim() || !workflowKey"
         @click="save"
       >
-        Save recipe
+        {{ collision ? `Replace “${collision.name}”` : "Save recipe" }}
       </AppButton>
     </template>
   </AppDialog>
@@ -111,12 +122,22 @@
  * **The seed is off by default** and says why on the row: a recipe with a
  * fixed seed makes the same picture every time, which is almost never what
  * keeping a look means.
+ *
+ * **A name already on this card's stack turns Save into Replace** (#1480).
+ * Nothing makes a recipe name unique, so the alternative was a second row
+ * reading exactly the same thing as the first, with nothing to tell them
+ * apart and no undo.
  */
 import { computed, reactive, ref, useId, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
-import { createSavedRecipe, listSavedRecipes } from "../../api/recipes";
+import {
+  createSavedRecipe,
+  editSavedRecipe,
+  listSavedRecipes,
+} from "../../api/recipes";
 import { getWorkflowCard } from "../../api/workflows";
+import { useConfirm } from "../../composables/useConfirm";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
@@ -146,12 +167,22 @@ const props = defineProps({
    */
   settingsAside: { type: String, default: "" },
   sourcePictureId: { type: Number, default: null },
+  /**
+   * The recipes already saved on this card's stack, for the name collision.
+   *
+   * Handed over rather than read here: every caller already holds this list -
+   * the Recipes tab lists it, the lightbox and the Run popup read it to decide
+   * whether the look is already kept - and a read of its own would be a third
+   * round trip answering a question two surfaces have already asked.
+   */
+  existing: { type: Array, default: () => [] },
 });
 
 const emit = defineEmits(["close", "saved"]);
 
 const notices = useNoticeStore();
 const workflows = useWorkflowsStore();
+const { confirm } = useConfirm();
 const nameId = useId();
 
 const name = ref("");
@@ -166,6 +197,31 @@ const stackName = ref("");
 const unknownLoras = computed(() =>
   props.loras.filter((lora) => !lora.sha256).map((lora) => lora.filename),
 );
+
+/**
+ * The saved recipe this name would collide with, or null.
+ *
+ * **Nothing makes a recipe name unique** - not the column, not `POST
+ * /recipes`, not this dialog - so without this two visits to the same card
+ * make two rows reading the same thing and no way to tell them apart. The
+ * answer is not to refuse the name but to change what the button does: the
+ * owner naming a recipe that already exists means the one that exists.
+ *
+ * **Matched case-insensitively, and the row's OWN spelling is what the button
+ * and the warning print.** "Portrait" and "portrait" are one name to anybody
+ * reading the list, so treating them as two would leave exactly the pair this
+ * closes; saying which spelling is about to be replaced is what keeps the
+ * folding honest.
+ */
+const collision = computed(() => {
+  const wanted = name.value.trim().toLowerCase();
+  if (!wanted) return null;
+  return (
+    props.existing.find(
+      (row) => (row.name || "").trim().toLowerCase() === wanted,
+    ) || null
+  );
+});
 
 const rows = computed(() => {
   const out = [];
@@ -276,43 +332,71 @@ async function creditOf(recipeId) {
   }
 }
 
+/** What the recipe keeps, in the shape both the POST and the PATCH take. */
+function body() {
+  return {
+    name: name.value.trim(),
+    prompt: kept.prompt ? props.prompt : "",
+    negative: kept.negative ? props.negative : null,
+    loras: kept.loras
+      ? props.loras.map((lora) => ({
+          filename: lora.filename,
+          sha256: lora.sha256 ?? null,
+          strength: Number(lora.strength) || 1,
+        }))
+      : [],
+    overrides: Object.fromEntries(
+      props.overrides
+        .filter((row) => kept[`o:${row.address}`])
+        .map((row) => [row.address, row.value]),
+    ),
+    seed: kept.seed && props.seed ? props.seed : null,
+    // **`keep_seed` is what makes the seed live.** `POST /workflows/run`
+    // reads a saved seed only when this is true, so a row with the digits
+    // and the flag off keeps a seed nothing will ever use — the checkbox
+    // would be decoration and every run would still draw a new one.
+    keep_seed: Boolean(kept.seed && props.seed),
+    source_picture_id: props.sourcePictureId ?? null,
+  };
+}
+
 async function save() {
   const label = name.value.trim();
   if (!label || !props.workflowKey || saving.value) return;
+  const replacing = collision.value;
+  // **The same gate the Recipes tab's Delete has, for the same reason.** A
+  // replace overwrites a saved row's prompt, LoRAs and settings and there is
+  // no undo; naming the row on the button is an affordance, not a second
+  // press. `PATCH /recipes/{id}` keeps the row's id, so its place in the tab
+  // and the pictures it is credited with survive.
+  if (
+    replacing &&
+    !(await confirm({
+      title: `Replace “${replacing.name}”?`,
+      message:
+        "Its prompt, LoRAs and settings are overwritten. This cannot be undone.",
+      confirmLabel: "Replace",
+      danger: true,
+    }))
+  ) {
+    return;
+  }
   saving.value = true;
   saveError.value = "";
   try {
-    const saved = await createSavedRecipe({
-      workflow_key: props.workflowKey,
-      name: label,
-      prompt: kept.prompt ? props.prompt : "",
-      negative: kept.negative ? props.negative : null,
-      loras: kept.loras
-        ? props.loras.map((lora) => ({
-            filename: lora.filename,
-            sha256: lora.sha256 ?? null,
-            strength: Number(lora.strength) || 1,
-          }))
-        : [],
-      overrides: Object.fromEntries(
-        props.overrides
-          .filter((row) => kept[`o:${row.address}`])
-          .map((row) => [row.address, row.value]),
-      ),
-      seed: kept.seed && props.seed ? props.seed : null,
-      // **`keep_seed` is what makes the seed live.** `POST /workflows/run`
-      // reads a saved seed only when this is true, so a row with the digits
-      // and the flag off keeps a seed nothing will ever use — the checkbox
-      // would be decoration and every run would still draw a new one.
-      keep_seed: Boolean(kept.seed && props.seed),
-      source_picture_id: props.sourcePictureId ?? null,
-    });
+    const saved = replacing
+      ? await editSavedRecipe(replacing.id, body())
+      : await createSavedRecipe({
+          workflow_key: props.workflowKey,
+          ...body(),
+        });
     const credited = await creditOf(saved?.id);
+    const verb = replacing ? "Replaced" : "Saved";
     notices.push({
       level: "success",
       text: credited
-        ? `Saved “${label}”. ${credited} picture${credited === 1 ? "" : "s"} already match it.`
-        : `Saved “${label}”.`,
+        ? `${verb} “${label}”. ${credited} picture${credited === 1 ? "" : "s"} already match it.`
+        : `${verb} “${label}”.`,
     });
     // Every surface showing this card's recipes re-reads, wherever the save
     // was made from: the Recipes tab is often the screen behind this dialog.
@@ -320,7 +404,12 @@ async function save() {
     emit("saved", saved);
     emit("close");
   } catch (err) {
-    saveError.value = errorMessage(err, "Could not save that recipe.");
+    saveError.value = errorMessage(
+      err,
+      replacing
+        ? "Could not replace that recipe."
+        : "Could not save that recipe.",
+    );
   } finally {
     saving.value = false;
   }

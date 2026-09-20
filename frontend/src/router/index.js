@@ -26,6 +26,9 @@ import App from "../App.vue";
 //   /models/runs                            → ai-toolkit training runs, the shelf's second view
 //   /workflows                              → the Workflows grid (one card per workflow)
 //   /workflows?topology=<hash>              → …opened on that workflow (the Recipe section's Open)
+//   /workflows?topology=<hash>&tab=recipes  → …with the rail open on its Recipes tab
+//                                            (the Recipe tab's "Matches your saved recipe X"
+//                                            banner, #1480; honoured by WorkflowTab)
 //   /ref-folder/:id                         → Reference folder view (id = numeric)
 //   /import-folder/:id                      → Import folder view (id = numeric)
 //
