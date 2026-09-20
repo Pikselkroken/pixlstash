@@ -987,6 +987,10 @@ const COPY_STATE_NOTE = {
   missing: "not where it was",
   unreachable: "out of reach",
   not_downloaded: "not downloaded yet",
+  // A copy removed to keep one of several (#1439). Its own word rather than
+  // `missing`, which is the scanner saying it looked and the file was gone: this
+  // one is gone because the reader said so, and the row is still here on purpose.
+  removed: "removed as a duplicate",
 };
 
 /**
@@ -1309,7 +1313,11 @@ export function companionsSentences(companions, count) {
   const unseen = companions.no_evidence?.length ?? 0;
   if (unseen) {
     const subject =
-      count === 1 ? "this model" : unseen === count ? "these models" : `${unseen} of these models`;
+      count === 1
+        ? "this model"
+        : unseen === count
+          ? "these models"
+          : `${unseen} of these models`;
     said.push(
       `No workflow PixlStash has read uses ${subject}, so which support files ` +
         `${unseen === 1 ? "it needs" : "they need"} is unknown.`,

@@ -51,6 +51,12 @@ vi.mock("../api/modelShelf", () => ({
   setAdapterAttachments: (...args) => setAdapterAttachments(...args),
 }));
 
+const mergeModelCopies = vi.fn();
+
+vi.mock("../api/modelFiles", () => ({
+  mergeModelCopies: (...args) => mergeModelCopies(...args),
+}));
+
 vi.mock("../api/modelIcons", () => ({
   setModelIcon: (...args) => setModelIcon(...args),
   clearModelIcons: (...args) => clearModelIcons(...args),
@@ -61,6 +67,7 @@ import {
   assignReceipt,
   COLUMN_KEYS,
   deleteReceipt,
+  mergeReceipt,
   editReceipt,
   forgetReceipt,
   useModelShelfStore,
@@ -1429,8 +1436,18 @@ describe("the thumbnail verb", () => {
     const store = useModelShelfStore();
     store.rows = [
       adapter({ id: 1, stack_id: 9, stack_position: 0 }),
-      adapter({ id: 2, sha256: "b".repeat(64), stack_id: 9, stack_position: 1 }),
-      adapter({ id: 3, sha256: "c".repeat(64), stack_id: 9, stack_position: 2 }),
+      adapter({
+        id: 2,
+        sha256: "b".repeat(64),
+        stack_id: 9,
+        stack_position: 1,
+      }),
+      adapter({
+        id: 3,
+        sha256: "c".repeat(64),
+        stack_id: 9,
+        stack_position: 2,
+      }),
     ];
     store.selectVisible();
     expect(store.selectedRows).toHaveLength(1);
@@ -2346,5 +2363,94 @@ describe("duplicate copies", () => {
       "qwen_3_4b.st",
       "zimage_te.st",
     ]);
+  });
+});
+
+describe("mergeCopies", () => {
+  it("sends the keeper the reader chose and re-reads the row it kept", async () => {
+    // The row is NOT removed from the list: the model is still on the shelf with
+    // one fewer copy, so the list is re-read rather than the row taken out of it.
+    listAdapters.mockResolvedValue({ models: [] });
+    listCheckpoints.mockResolvedValue({ models: [] });
+    listEngines.mockResolvedValue({ models: [] });
+    listUnclassified.mockResolvedValue({ models: [] });
+    listSupport.mockResolvedValue({ models: [] });
+    mergeModelCopies.mockResolvedValue({
+      merged: [7],
+      files_removed: 1,
+      permanent: false,
+      dry_run: false,
+      trash_name: "Trash",
+      comfyui_reads: [],
+      refused: [],
+    });
+    const store = useModelShelfStore();
+    const keep = [{ model_id: 7, folder_id: 2, relpath: "b.safetensors" }];
+
+    expect(await store.mergeCopies(keep)).toBe(true);
+    expect(mergeModelCopies).toHaveBeenCalledWith(keep, { permanent: false });
+    expect(useNoticeStore().notices.at(-1).text).toContain("down to one copy");
+  });
+
+  it("says so when the call fails and keeps the shelf as it was", async () => {
+    mergeModelCopies.mockRejectedValue(new Error("nope"));
+    const store = useModelShelfStore();
+    expect(
+      await store.mergeCopies([
+        { model_id: 7, folder_id: 2, relpath: "b.safetensors" },
+      ]),
+    ).toBe(false);
+    expect(useNoticeStore().notices.at(-1).level).toBe("error");
+  });
+
+  it("makes no call with nothing to merge", async () => {
+    mergeModelCopies.mockClear();
+    const store = useModelShelfStore();
+    expect(await store.mergeCopies([])).toBe(false);
+    expect(mergeModelCopies).not.toHaveBeenCalled();
+  });
+});
+
+describe("mergeReceipt", () => {
+  it("leads with what survived, because that is what a merge is", () => {
+    // A reader who has just removed a copy of a 20 GB checkpoint needs to know
+    // the model is still there, or this reads like the delete they did not ask
+    // for.
+    const text = mergeReceipt(1, [], false, "Trash", 1);
+    expect(text).toContain("down to one copy");
+    expect(text).toContain("still on the shelf");
+    expect(text).toContain("in your Trash");
+  });
+
+  it("names where the bytes went, and does not name a place on a permanent one", () => {
+    expect(mergeReceipt(1, [], true, "Trash", 2)).toContain("gone for good");
+    expect(mergeReceipt(1, [], true, "Trash", 2)).not.toContain("Trash.");
+  });
+
+  it("tells the two refusals this route owns apart", () => {
+    // "The copy you chose is gone" is the refusal that saved the reader from a
+    // redownload; "only one copy" is a duplicate list that was a minute old.
+    // Rolling them together would leave them guessing which happened.
+    expect(
+      mergeReceipt(
+        0,
+        [{ id: 1, reason: "keeper_not_present" }],
+        false,
+        "Trash",
+      ),
+    ).toContain("the copy you chose to keep is not on the disk");
+    expect(
+      mergeReceipt(0, [{ id: 1, reason: "not_a_duplicate" }], false, "Trash"),
+    ).toContain("only one copy left");
+  });
+
+  it("reports a reason it has never seen as kept rather than dropping it", () => {
+    const text = mergeReceipt(
+      0,
+      [{ id: 1, reason: "sundered" }],
+      false,
+      "Trash",
+    );
+    expect(text).toContain("left alone");
   });
 });
