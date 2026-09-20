@@ -820,6 +820,47 @@ def _model_stem(name: str) -> str:
     return stem
 
 
+# The slot kinds that name the BASE MODEL, in the order a card is named after
+# them. `_SLOT_KINDS` (`workflow_card_service`) maps `ckpt_name` to
+# ``checkpoint`` and `unet_name` to ``unet``, and passes a widget it does not
+# know through under its own name - which is how `diffusion_model`,
+# `model_path` and `checkpoint_id` arrive. All five are what
+# `CHECKPOINT_WIDGETS` calls a base model.
+#
+# **A card is named after one of these or after nothing.** It used to fall
+# through to "the first slot with a name", and slot order is document order,
+# so a Flux or SD3 graph - which has no ``checkpoint`` kind at all, only
+# ``unet`` - was routinely named after its VAE or one of its text encoders.
+# The VAE is not what anybody calls the workflow.
+_BASE_MODEL_KINDS = (
+    "checkpoint",
+    "unet",
+    "diffusion_model",
+    "model_path",
+    "checkpoint_id",
+)
+
+# ComfyUI's own template names read "Krea 2: Text to Image", and a workflow
+# library is read beside ComfyUI rather than instead of it, so the type is
+# spelled the way the person already sees it spelled.
+_TYPE_LABELS = {
+    "txt2img": "Text to Image",
+    "img2img": "Image to Image",
+    "inpaint": "Inpaint",
+    "outpaint": "Outpaint",
+    "upscale": "Upscale",
+}
+
+
+def _base_model_name(models) -> str | None:
+    """The base model a card is named after, or ``None`` if it loads none."""
+    for kind in _BASE_MODEL_KINDS:
+        for slot in models:
+            if slot.kind == kind and slot.name:
+                return slot.name
+    return None
+
+
 def _display_name(card, models=()) -> str:
     """What a card is called: the owner's name, else its file, else its models.
 
@@ -840,15 +881,14 @@ def _display_name(card, models=()) -> str:
     if card.file_name:
         stem = card.file_name.rsplit("/", 1)[-1]
         return stem[: -len(".json")] if stem.lower().endswith(".json") else stem
-    base = next(
-        (slot.name for slot in models if slot.kind == "checkpoint" and slot.name),
-        None,
-    ) or next((slot.name for slot in models if slot.name), None)
+    base = _base_model_name(models)
     if not base:
-        # Every model name forgotten, or a graph that loads none.
+        # No base model: every name forgotten, or a graph that loads none. The
+        # stand-in, deliberately, rather than the VAE.
         return UNNAMED_CARD
     stem = _model_stem(base)
-    return f"{stem} {card.workflow_type}" if card.workflow_type else stem
+    label = _TYPE_LABELS.get(card.workflow_type)
+    return f"{stem}: {label}" if label else stem
 
 
 def _slot_models(slots) -> list[WorkflowSlotModel]:

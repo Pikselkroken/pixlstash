@@ -3147,7 +3147,7 @@ def test_a_card_is_never_nameless(workflow_env):
     cards = _by_key(_cards(workflow_env.owner))
     # BUSY has no name and no file, so it is named for what it loads - and the
     # extension is off, which a guess-by-length gets wrong on `.safetensors`.
-    assert cards[BUSY_CARD]["name"] == "realvisxl txt2img"
+    assert cards[BUSY_CARD]["name"] == "realvisxl: Text to Image"
 
     # The stand-in is still the floor, for a card with nothing to be named
     # after: no name, no file, and every model name forgotten. Asserted on the
@@ -3166,7 +3166,41 @@ def test_a_card_is_never_nameless(workflow_env):
         workflow_type = "txt2img"
 
     only = [SimpleNamespace(name="flux1-dev.safetensors", kind="unet")]
-    assert workflows_routes._display_name(_UnetOnly(), only) == "flux1-dev txt2img"
+    assert (
+        workflows_routes._display_name(_UnetOnly(), only) == "flux1-dev: Text to Image"
+    )
+
+    # **The base model names the card, and nothing else may.** A Flux or SD3
+    # graph has no `checkpoint` kind at all - only `unet` - and slot order is
+    # document order, so a fallback of "the first slot with a name" named such
+    # a card after its VAE or one of its text encoders. Nobody calls a
+    # workflow by its VAE.
+    flux = [
+        SimpleNamespace(name="ae.safetensors", kind="vae"),
+        SimpleNamespace(name="t5xxl_fp16.safetensors", kind="clip"),
+        SimpleNamespace(name="flux1-dev.safetensors", kind="unet"),
+    ]
+    assert (
+        workflows_routes._display_name(_UnetOnly(), flux) == "flux1-dev: Text to Image"
+    )
+
+    # A graph that loads a VAE and an upscaler but no base model at all takes
+    # the stand-in rather than being named after either.
+    accessories = [
+        SimpleNamespace(name="ae.safetensors", kind="vae"),
+        SimpleNamespace(name="4x-UltraSharp.pth", kind="upscale"),
+    ]
+    assert workflows_routes._display_name(_Nameless(), accessories) == UNNAMED_CARD
+
+    # A checkpoint outranks a unet where a graph carries both.
+    both = [
+        SimpleNamespace(name="flux1-dev.safetensors", kind="unet"),
+        SimpleNamespace(name="juggernautXL.safetensors", kind="checkpoint"),
+    ]
+    assert (
+        workflows_routes._display_name(_UnetOnly(), both)
+        == "juggernautXL: Text to Image"
+    )
     # The hidden card has both a name and a file, and the owner's name wins.
     assert _detail(workflow_env.owner, HIDDEN_CARD)["card"]["name"] == (
         "A workflow I hid"
