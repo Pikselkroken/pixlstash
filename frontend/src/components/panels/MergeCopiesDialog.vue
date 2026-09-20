@@ -9,7 +9,9 @@
       The same file is on this machine
       {{ copies.length }} times. Choose the one to keep; the others go to your
       {{ trash }}. The model stays on the shelf with everything you recorded
-      about it, and anything you run through PixlStash keeps working.
+      about it, and PixlStash keeps the record that these files were the same
+      model — so a workflow naming the copy you remove is put on the one you
+      keep when PixlStash can see that it will load.
     </p>
 
     <!-- A radio group, and nothing is pre-selected: the wrong default here is a
@@ -127,10 +129,6 @@ const chosen = computed(() =>
   ),
 );
 
-const canSubmit = computed(
-  () => !working.value && !checking.value && !!chosen.value,
-);
-
 /** One copy's path, joined the way the shelf's tooltips join one. */
 function copyPath(copy) {
   const folder = String(copy?.folder_path || "");
@@ -184,6 +182,19 @@ const refusal = computed(() => {
   }
   return "This cannot be merged right now; the shelf will say why if you try.";
 });
+
+/**
+ * Whether the press may go ahead.
+ *
+ * `refusal` is in it, not merely displayed beside it: the server would refuse
+ * this keeper, so a live button with the reason printed under it invites the
+ * reader to press it and read the same sentence again as a failure. The dry run
+ * has to have come back too (`checking`), because until it has, neither the
+ * refusal nor the ComfyUI warning has been asked.
+ */
+const canSubmit = computed(
+  () => !working.value && !checking.value && !!chosen.value && !refusal.value,
+);
 
 /**
  * Ask the server what it would do, removing nothing.

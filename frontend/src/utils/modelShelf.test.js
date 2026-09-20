@@ -330,6 +330,24 @@ describe("locationState", () => {
     // ...and so does a state this build has never heard of.
     expect(locationState([{ state: "banana" }])).toBe("missing");
   });
+
+  it("does not call a copy the reader removed themselves a fault", () => {
+    // #1439: a copy removed to keep one of several has a row ON PURPOSE - it is
+    // what keeps a recipe naming that file resolving to the model - so drawing
+    // it as `missing` would report a fault about the tidy-up the reader just
+    // asked for. This is what the folder axis hands in: that draw stands for the
+    // removed copy alone.
+    expect(locationState([{ state: "removed" }])).toBe("removed");
+    // A model that still has a copy is simply fine...
+    expect(locationState([{ state: "removed" }, { state: "present" }])).toBe(
+      "present",
+    );
+    // ...and a genuinely missing copy beside a removed one is still a fault,
+    // because reporting the pair as a tidy-up would hide one.
+    expect(locationState([{ state: "removed" }, { state: "missing" }])).toBe(
+      "missing",
+    );
+  });
 });
 
 describe("offlineFolders", () => {
@@ -1757,7 +1775,13 @@ describe("trashName", () => {
 });
 
 describe("companionsSentences", () => {
-  const none = { orphaned: [], shared: [], unknown: [], in_use: [], no_evidence: [] };
+  const none = {
+    orphaned: [],
+    shared: [],
+    unknown: [],
+    in_use: [],
+    no_evidence: [],
+  };
   const named = (...names) => names.map((name, id) => ({ id, name }));
 
   it("says nothing when the delete affects nothing it knows of", () => {
@@ -1786,15 +1810,20 @@ describe("companionsSentences", () => {
   });
 
   it("cuts a long list to three names and a count", () => {
-    expect(companionsSentences({ ...none, orphaned: named("a", "b", "c", "d", "e") }, 1)).toContain(
-      "read, a, b, c and 2 more ran only",
-    );
+    expect(
+      companionsSentences(
+        { ...none, orphaned: named("a", "b", "c", "d", "e") },
+        1,
+      ),
+    ).toContain("read, a, b, c and 2 more ran only");
   });
 
   it("says kept models with no workflow on record may still need an orphan", () => {
     expect(
       companionsSentences({ ...none, orphaned: named("ae"), unrecorded: 3 }, 1),
-    ).toContain("3 other base models have no workflow on record and may still need it.");
+    ).toContain(
+      "3 other base models have no workflow on record and may still need it.",
+    );
   });
 
   it("says when it cannot tell, rather than saying nothing", () => {

@@ -2389,6 +2389,10 @@ describe("mergeCopies", () => {
 
     expect(await store.mergeCopies(keep)).toBe(true);
     expect(mergeModelCopies).toHaveBeenCalledWith(keep, { permanent: false });
+    // The refetch is the "re-reads" half of the title, and it is asserted rather
+    // than assumed: the row survives a merge with one fewer copy, so the list has
+    // to be re-read or the copy count on screen stays wrong until the next visit.
+    expect(listAdapters).toHaveBeenCalled();
     expect(useNoticeStore().notices.at(-1).text).toContain("down to one copy");
   });
 

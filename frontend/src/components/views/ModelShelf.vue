@@ -2972,11 +2972,18 @@ async function closeFolders() {
 // `not_downloaded` is a fourth thing and wears no status colour either: it is
 // one of PixlStash's own engines that nothing has needed yet, which is the
 // normal state of about half of them. A download glyph, not a broken-file one.
+//
+// `removed` is a fifth, and the only absence that is not an absence to report: a
+// copy the reader deleted themselves to keep another (#1439). Its row is here on
+// purpose - it is what keeps a recipe naming that file resolving to the model -
+// so drawing it with the broken-file glyph would report a fault about the
+// tidy-up the reader just asked for. A merge glyph, and no status colour.
 const LOC_ICON = {
   present: "mdi-check",
   missing: "mdi-file-remove-outline",
   not_downloaded: "mdi-cloud-download-outline",
   unreachable: "mdi-help-circle-outline",
+  removed: "mdi-call-merge",
   forgotten: "mdi-folder-off-outline",
 };
 
@@ -2988,6 +2995,7 @@ const LOC_NOTE = {
   present: "",
   missing: "file is not where it was",
   unreachable: "out of reach",
+  removed: "removed as a duplicate",
   forgotten: "every registered copy forgotten",
 };
 
@@ -3000,6 +3008,9 @@ const LOC_TITLE = {
   // scan could not list lands here too, and naming a cause we did not observe
   // is the same overclaim the muted glyph exists to avoid.
   unreachable: "Out of reach: this location could not be read",
+  removed:
+    "You removed this copy to keep another. The shelf still records that they " +
+    "were the same model, so anything naming this file still finds it",
   forgotten: "Every registered copy has been forgotten",
 };
 

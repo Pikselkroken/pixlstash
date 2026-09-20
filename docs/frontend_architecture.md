@@ -3912,14 +3912,25 @@ and at the pointer with them.
   narrows a draw to one of them) is above one. Listed always and disabled with
   its reason, like the two run verbs: a reader whose shelf shows no duplicates is
   the one who most needs to learn the verb exists.
+  A removed copy is drawn as itself, not as a fault: `locationState` reports
+  `removed` when every copy of a draw is one — which is exactly what the folder
+  axis hands in, since that draw stands for the removed copy alone — and the
+  view's three vocabularies (`LOC_ICON`, `LOC_NOTE`, `LOC_TITLE`) carry a merge
+  glyph and "removed as a duplicate" for it. It is deliberately NOT in
+  `BROKEN_STATES`: the row is there on purpose, and drawing the red rail and "the
+  file is not where it was" over it would report a fault about the tidy-up the
+  reader just asked for. Ranked after `unreachable`, so a removed copy beside a
+  genuinely missing one still states the fault rather than hiding it.
   `MergeCopiesDialog.vue` is where the choice is made, and three things about it
   are the issue's rules rather than taste. **Nothing is pre-selected**, as
   everywhere else on this shelf, because the wrong default here is a 20 GB
   redownload. **It runs the route's own `dry_run` on every change of the keeper**,
   so the refusal and the ComfyUI warning are in front of the reader while they
   decide instead of in the receipt once the bytes have gone — which also means
-  the gates are the server's rather than a second implementation of them here,
-  and the confirm waits for the answer. And the **ComfyUI warning has two
+  the gates are the server's rather than a second implementation of them here.
+  The confirm waits for that answer AND is disabled by a refusal in it: a live
+  button under "that copy is not on the disk any more" invites the reader to
+  press it and read the same sentence back as a failure. And the **ComfyUI warning has two
   sentences**, because `keeper_advertised` is two situations: that install lists
   the copy being kept, so a run through PixlStash is put on it and only a graph
   queued inside ComfyUI breaks; or it does not, and nothing can be substituted

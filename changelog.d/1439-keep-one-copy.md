@@ -5,9 +5,9 @@
 - The model stays on the shelf with its name, base model, triggers and people
   intact, and PixlStash remembers that the copy you removed was the same model —
   so a picture's recipe still names it, and a workflow you run through PixlStash
-  is put on the copy you kept instead of reporting a missing model. It says which
-  file it loaded rather than swapping silently, and it checks with your ComfyUI
-  first rather than assuming.
+  is put on the copy you kept rather than reporting a missing model. It checks
+  with your ComfyUI that the copy you kept is one it can load rather than
+  assuming, and it says which file it loaded rather than swapping silently.
 - Before the copies go, PixlStash tells you if your ComfyUI is one of the things
   reading the copy you are removing. A workflow you open in ComfyUI and queue
   there still names the file that went; that is the one case this cannot fix.

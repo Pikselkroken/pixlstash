@@ -159,6 +159,11 @@ describe("the keep-one-copy dialog", () => {
   });
 
   it("shows the refusal the real call would make, and refuses the press", async () => {
+    // Both halves, because the sentence on its own is not the gate: a live
+    // button under "that copy is not on the disk any more" invites the reader to
+    // press it and read the same words back as a failure.
+    const store = useModelShelfStore();
+    const merge = vi.spyOn(store, "mergeCopies").mockResolvedValue(true);
     mergeModelCopies.mockResolvedValue({
       ...CLEAN_PLAN,
       refused: [{ id: 7, reason: "keeper_not_present" }],
@@ -166,7 +171,31 @@ describe("the keep-one-copy dialog", () => {
     const wrapper = open();
     await wrapper.findAll('input[type="radio"]')[0].setValue();
     await new Promise((r) => setTimeout(r, 0));
+
     expect(wrapper.text()).toContain("not on the disk any more");
+    expect(confirm(wrapper).attributes("disabled")).toBeDefined();
+    await confirm(wrapper).trigger("click");
+    await new Promise((r) => setTimeout(r, 0));
+    expect(merge).not.toHaveBeenCalled();
+  });
+
+  it("refuses the press until the dry run has answered", async () => {
+    // The warning has to be in front of the reader, so the button cannot be live
+    // while the question is still in the air.
+    let release;
+    mergeModelCopies.mockReturnValue(
+      new Promise((resolve) => {
+        release = () => resolve(CLEAN_PLAN);
+      }),
+    );
+    const wrapper = open();
+    await wrapper.findAll('input[type="radio"]')[0].setValue();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(confirm(wrapper).attributes("disabled")).toBeDefined();
+
+    release();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(confirm(wrapper).attributes("disabled")).toBeUndefined();
   });
 
   it("sends the copy the reader chose and closes", async () => {

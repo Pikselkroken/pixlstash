@@ -2716,25 +2716,42 @@ and then the row. This keeps the copy the caller names and removes the rest.
 The design is **resolve at use, do not rewrite on delete**, and every rule below
 follows from it.
 
+- **One file under two names is refused, not merged.** Two `model_file` rows are
+  one `model` row whenever the bytes match — and a symlink or a hard link makes
+  them match *because they are the same file*. A symlinked model is ordinary
+  practice on this shelf (`_present_copy` contains lexically for exactly that
+  reason), and `_contained_path` unlinks the link rather than its target on
+  purpose, which is right for the whole-model delete because every copy goes
+  anyway and exactly inverted here: keep the link, remove the target, and the
+  bytes are gone while the shelf still calls the keeper `present`. `_same_file`
+  asks `os.path.samefile` — `st_dev`/`st_ino`, so a hard link counts too — and
+  the model is refused as `keeper_is_that_copy`. A path it cannot stat answers
+  "the same", because that is the answer that removes nothing.
 - **The keeper is what the request names**, one entry per model, and every other
-  `present` copy of that model is what goes. That is structural, not arithmetic:
+  `present` copy of that model is what goes. Two entries for one model is a 400
+  rather than a choice made on a confused client's behalf. That is structural, not arithmetic:
   no body can empty a model, and one that names a keeper the shelf does not hold
   as `present` is refused (`keeper_not_present`) rather than acted on — removing
   every other copy on the word of one that is not there is a 20 GB redownload.
 - **No row is deleted.** The removed copies keep their `model_file` rows at
   `state = 'removed'`, so the record of *which files were the same model*
-  outlives the files. Three readers depend on it and none needed a line of new
-  code: `recipe_asset_index` still resolves the removed copy's filename to this
-  model, so a picture's recipe panel still names it; `_shelf_model_names` still
+  outlives the files. Two existing readers then need no change at all:
+  `recipe_asset_index` still resolves the removed copy's filename to this model,
+  so a picture's recipe panel still names it, and `_shelf_model_names` still
   counts it, so `model_ghost_names` does not offer the owner a name to forget
-  forever; and `model_name_aliases` can say what to load instead. This is the
-  whole reason the delete stops being the thing you have to be right about.
-- **`removed` is its own state, and every scanner sweep skips it.** `missing` is
+  forever. The third reader is new — `model_name_aliases`, which is what says
+  *what to load instead*. This is the whole reason the delete stops being the
+  thing you have to be right about.
+- **`removed` is its own state, and every sweep that writes `state` skips it.**
+  Four of them: the scanner's missing sweep, its two unreachable sweeps, and
+  `builtin_models.declare_folder`'s, which runs on every start and matters here
+  because `deletes_unclaimed_files` lets the merge act on the unclaimed files in
+  PixlStash's own download folder — one of the roots that function declares. `missing` is
   the scanner saying "I looked and the file was gone", and it would keep saying
   it about this copy for the rest of the folder's life — so without the
-  exclusion the first unattended scan after a merge destroys the distinction.
-  `_known_files` reads `present` rows only, so a file the owner puts back is
-  re-read and re-registered rather than skipped.
+  exclusion the first unattended scan — or the next boot — after a merge destroys
+  the distinction. `_known_files` reads `present` rows only, so a file the owner
+  puts back is re-read and re-registered rather than skipped.
 - **Only the copies being REMOVED need a folder whose contents are the owner's.**
   That is the one place this differs from the whole-model delete, which refuses a
   model that has *any* copy outside `user`/`managed`. Keeping the copy in the
@@ -2780,7 +2797,12 @@ so `POST /workflows/run/preflight` and `POST /workflows/run` can never disagree.
   failure to the queue. This is why `model_name_aliases` may be generous — it
   offers each present copy's relpath *and* its basename, because a combo entry is
   relative to one of ComfyUI's own model folders and nothing on this side knows
-  which prefix it puts in front — and the combo list decides.
+  which prefix it puts in front — and the combo list decides. **Its keys are
+  folded and its candidates are not.** The key is `normalized_filename`, which
+  lowercases, so `apply_model_swap` folds its lookup the same way (`_alias_key`)
+  or the whole feature misses every mixed-case filename, which is most real ones;
+  the candidates are the scanner's own spelling, because ComfyUI compares exactly
+  and a lowercased candidate is one it would refuse.
 - **Same model, therefore same bytes.** The aliases come from one `model` row's
   copies, and the hub is content-addressed. A name two models share is dropped
   rather than resolved, the rule `picture_recipe_service` already applies: it
@@ -2793,6 +2815,14 @@ so `POST /workflows/run/preflight` and `POST /workflows/run` can never disagree.
   keyed on the topology assets: a swap written there would make a picture's
   provenance claim a model it was not made with. The substitution is a fact
   about *this run*.
+- **A substituted run lands on its own card.** A loader filename is a topology
+  asset (`structural_widget_value`, rule 5), so the picture a substituted run
+  produces carries an embedded graph naming the copy that was loaded and reduces
+  to a different `structural_hash` from the card it was launched from. That
+  follows from the issue's own ruling — a graph may be changed at submit and
+  never in storage — and it is the price of the run working at all; the
+  alternative is a refusal. It is a fork of the card, not a lie about
+  provenance: the picture's recipe names the file that really was loaded.
 - **The honest limit.** A graph opened in ComfyUI and queued there runs nothing
   of ours, so it still names the file that went — which is what the merge's
   `comfyui_reads` warning is for. A graph on the `ComfyUI-PixlStash` loaders
