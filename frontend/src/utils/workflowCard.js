@@ -23,7 +23,7 @@
 //                                       // unet, vae, clip… `kind` is the slot.
 //                                       // `title` is the MODEL SHELF's name
 //                                       // for the file and is what a client
-//                                       // shows (`modelLabel`): the card's
+//                                       // shows (`modelDisplayName`): the card's
 //                                       // `name` row was built from it, so
 //                                       // showing `name` beside it describes
 //                                       // one model twice. Null where the
@@ -166,8 +166,14 @@ export function checkpointModel(card) {
  * twice and is exactly the pair that drifted in #1416. `title` is null for
  * every model the shelf has not scanned, which is the ordinary case, so this
  * falls through to the filename rather than blanking the chip.
+ *
+ * **Not `modelLabel`**, which `utils/filterChips.js` already exports and which
+ * takes a NAME and strips its extension for the Filters menu. Two same-named
+ * exports with incompatible arguments fail quietly in both directions - a
+ * string through this one is `null`, an object through that one is
+ * `[object Object]` - so the newcomer is the one that renames.
  */
-export function modelLabel(model) {
+export function modelDisplayName(model) {
   return model?.title || model?.name || null;
 }
 
@@ -175,7 +181,7 @@ export function modelLabel(model) {
 export function loraChips(card) {
   return (card.loras ?? []).map((lora, i) => ({
     key: `lora-${i}`,
-    label: lora.mark === RECIPE ? "recipe LoRA" : modelLabel(lora),
+    label: lora.mark === RECIPE ? "recipe LoRA" : modelDisplayName(lora),
     icon: lora.mark === RECIPE ? "plus" : "layers",
     dashed: lora.mark === RECIPE,
   }));
@@ -229,13 +235,13 @@ export function cardAccessibleName(card, { member = false } = {}) {
   const loras = (card.loras ?? []).map((lora) =>
     lora.mark === RECIPE
       ? "recipe LoRA slot"
-      : `${modelLabel(lora)}, workflow LoRA`,
+      : `${modelDisplayName(lora)}, workflow LoRA`,
   );
   const facts = factChips(card).map((chip) => chip.label);
   const parts = [
     card.name,
     isStack(card) && !member ? `stack of ${card.stack_size} workflows` : null,
-    checkpoint ? `${checkpoint.kind} ${modelLabel(checkpoint)}` : null,
+    checkpoint ? `${checkpoint.kind} ${modelDisplayName(checkpoint)}` : null,
     loras.length ? `LoRAs: ${loras.join("; ")}` : "no LoRAs",
     facts.length
       ? `${isStack(card) ? "differs by" : "facts"}: ${facts.join(", ")}`

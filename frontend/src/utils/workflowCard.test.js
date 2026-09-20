@@ -11,7 +11,7 @@ import {
   loraChips,
   ratingLabel,
   checkpointModel,
-  modelLabel,
+  modelDisplayName,
 } from "./workflowCard";
 
 describe("fitChipCount", () => {
@@ -75,18 +75,18 @@ describe("card chips", () => {
     // The card's `name` row was built from `title` server-side, so a chip
     // showing `name` beside it describes one model twice - the pair that
     // drifted in #1416.
-    expect(modelLabel({ name: "realvisxl.safetensors", title: "Krea 2" })).toBe(
+    expect(modelDisplayName({ name: "realvisxl.safetensors", title: "Krea 2" })).toBe(
       "Krea 2",
     );
     // Null title is the ORDINARY case (the shelf has not scanned the file),
     // so it falls through to the filename rather than blanking the chip.
-    expect(modelLabel({ name: "realvisxl.safetensors", title: null })).toBe(
+    expect(modelDisplayName({ name: "realvisxl.safetensors", title: null })).toBe(
       "realvisxl.safetensors",
     );
     // A payload that predates `title` at all behaves the same way.
-    expect(modelLabel({ name: "flux1-dev" })).toBe("flux1-dev");
-    expect(modelLabel({ name: null, title: null })).toBeNull();
-    expect(modelLabel(null)).toBeNull();
+    expect(modelDisplayName({ name: "flux1-dev" })).toBe("flux1-dev");
+    expect(modelDisplayName({ name: null, title: null })).toBeNull();
+    expect(modelDisplayName(null)).toBeNull();
   });
 
   it("speaks the shelf's name in the accessible name too", () => {

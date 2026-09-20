@@ -96,7 +96,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
-import { isStack, modelLabel } from "../../utils/workflowCard";
+import { isStack, modelDisplayName } from "../../utils/workflowCard";
 
 const props = defineProps({
   /** One workflow card (see utils/workflowCard.js for the shape). */
@@ -131,7 +131,7 @@ const subtitlePrefix = computed(() =>
 // Every slot, not just the checkpoint: a stack whose difference reads "other
 // models" has to have those models listed somewhere, and this is the somewhere.
 //
-// Named by `modelLabel`, like every other surface that shows a model: this
+// Named by `modelDisplayName`, like every other surface that shows a model: this
 // panel sits directly under the card's own name row, so a list calling the
 // checkpoint `realvisxl.safetensors` under a title reading `Krea 2` is the
 // same model named twice, a hand's breadth apart.
@@ -139,13 +139,13 @@ const models = computed(() => [
   ...(props.card.models ?? []).map((model, i) => ({
     key: `model-${i}`,
     icon: "cube-outline",
-    name: modelLabel(model),
+    name: modelDisplayName(model),
     note: model.kind,
   })),
   ...(props.card.loras ?? []).map((lora, i) => ({
     key: `lora-${i}`,
     icon: lora.mark === "recipe" ? "plus" : "layers",
-    name: lora.mark === "recipe" ? "LoRA slot" : modelLabel(lora),
+    name: lora.mark === "recipe" ? "LoRA slot" : modelDisplayName(lora),
     note: lora.mark === "recipe" ? "filled by the recipe" : "in the workflow",
   })),
 ]);

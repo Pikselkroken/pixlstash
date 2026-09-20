@@ -264,7 +264,7 @@ import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import {
   cardAccessibleName,
   checkpointModel,
-  modelLabel,
+  modelDisplayName,
   factChips as cardFactChips,
 } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
@@ -421,7 +421,7 @@ function checkpointChips(member, index) {
   // `name`; the chip says what the card's name row says, so the panel and the
   // grid do not call one model two things.
   if (cover?.name === model.name) return [];
-  return [{ key: "ckpt", label: modelLabel(model), icon: "cube-outline" }];
+  return [{ key: "ckpt", label: modelDisplayName(model), icon: "cube-outline" }];
 }
 
 /**
