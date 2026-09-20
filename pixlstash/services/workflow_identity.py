@@ -299,6 +299,26 @@ def workflow_key(
     return _digest([WORKFLOW_KEY_VERSION, topology_hash, pairs])
 
 
+# The post-processing groups a card says it has, in the order a name lists
+# them. A tuple and not the set itself: the cached value is a string, and two
+# derivations of one topology have to compare equal byte for byte.
+SPECIAL_GROUPS = (UPSCALE, FACE_DETAILER)
+
+
+def special_groups(document: dict) -> tuple[str, ...]:
+    """Which of :data:`SPECIAL_GROUPS` this document actually contains.
+
+    The same classification ``core_hash`` strips and ``differs_by`` chips, asked
+    of one graph on its own rather than of a pair: a lone card has no cover to
+    differ from, and what a card *has* is what its name is allowed to say.
+
+    Raises:
+        WorkflowGraphError: The document is a raw graph rather than a stored one.
+    """
+    present = set(node_groups(_reduce(document)).values())
+    return tuple(group for group in SPECIAL_GROUPS if group in present)
+
+
 def node_groups(nodes: dict[str, ReducedNode]) -> dict[str, Optional[str]]:
     """Each node's taxonomy group, or ``None`` for one that does real work.
 

@@ -44,6 +44,7 @@ from pixlstash.services.workflow_identity import (
     core_hash,
     guess_mark,
     slots,
+    special_groups,
     workflow_key,
     workflow_type,
 )
@@ -82,7 +83,17 @@ _VARIANT_JOIN = (
     "AND c.core_version = ? "
 )
 _VARIANT_VERSIONS = (WORKFLOW_KEY_VERSION, CORE_RULE_VERSION)
-_VARIANT_PENDING = "(v.structural_hash IS NULL OR c.topology_hash IS NULL)"
+# `c.specials IS NULL` is the third case and it is not redundant: a topology
+# cached before that column existed joins on the current rule and is still
+# missing a value this build's cards read. Re-queuing on the column itself,
+# rather than bumping CORE_VERSION, is what keeps the re-derivation invisible -
+# the row keeps its stack key, its type and its slots the whole time, so no
+# grid goes blank while the pass runs. The finder is the once-only-ness here
+# (see WorkflowCardBackfillFinder): work exists exactly while a stored document
+# has no current row, so nothing has to remember to run anything.
+_VARIANT_PENDING = (
+    "(v.structural_hash IS NULL OR c.topology_hash IS NULL OR c.specials IS NULL)"
+)
 
 
 def topology_only_key(topology_hash: str) -> str:
@@ -113,16 +124,20 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
     """
     row = hub.fetchone(
         "SELECT r.topology_hash AS topology_hash, g.document AS document, "
-        "v.workflow_key AS workflow_key, c.topology_hash AS core_cached "
+        "v.workflow_key AS workflow_key, c.topology_hash AS core_cached, "
+        "c.specials AS core_specials "
         f"{_VARIANT_JOIN} WHERE r.structural_hash = ?",
         (*_VARIANT_VERSIONS, structural_hash),
     )
     if row is None:
         return None
-    # Both halves, and on the same rule the finder selects by: returning early
-    # on a current card while the topology cache is stale would leave the finder
-    # handing this variant out on every sweep, for a pass that does nothing.
-    if row["workflow_key"] is not None and row["core_cached"] is not None:
+    # The same three conditions `_VARIANT_PENDING` selects on, spelled here as
+    # the early return. Both halves, and on the same rule the finder selects by:
+    # returning early on a current card while the topology cache is stale would
+    # leave the finder handing this variant out on every sweep, for a pass that
+    # does nothing.
+    core_current = row["core_cached"] is not None and row["core_specials"] is not None
+    if row["workflow_key"] is not None and core_current:
         return row["workflow_key"]
     try:
         document = json.loads(row["document"])
@@ -144,7 +159,7 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
     # 200 times in a single pass.
     core = (
         None
-        if row["core_cached"] is not None
+        if core_current
         else core_hash(document, strip_loras=STRIP_LORAS_FOR_STACKS)
     )
     with hub.transaction() as conn:
@@ -234,11 +249,15 @@ def _cache_topology(
     ``slots`` is JSON and holds no filename and no asset reference: a model's
     readable name lives in ``workflow_recipe_asset`` and nowhere else, so
     forgetting it stays one delete.
+
+    ``specials`` is written on every pass and is never left NULL here: NULL is
+    reserved for a row this pass has not touched, and a graph with no
+    post-processing writes the empty string.
     """
     conn.execute(
         "INSERT OR REPLACE INTO workflow_topology_core "
-        "(topology_hash, core_hash, core_version, workflow_type, slots) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "(topology_hash, core_hash, core_version, workflow_type, slots, specials) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         (
             topology_hash,
             core,
@@ -256,6 +275,7 @@ def _cache_topology(
                 ],
                 separators=(",", ":"),
             ),
+            ",".join(special_groups(document)),
         ),
     )
 

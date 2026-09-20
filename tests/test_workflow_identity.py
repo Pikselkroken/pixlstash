@@ -16,12 +16,15 @@ from pixlstash.services.workflow_hash import (
     topology_hash,
 )
 from pixlstash.services.workflow_identity import (
+    FACE_DETAILER,
     RECIPE,
     STRUCTURAL,
+    UPSCALE,
     core_hash,
     differs_by,
     guess_mark,
     slots,
+    special_groups,
     workflow_key,
     workflow_type,
 )
@@ -278,6 +281,41 @@ def test_differs_by_names_post_processing_in_both_directions():
     assert differs_by(upscaled, plain) == ["− upscale"]
     assert differs_by(plain, _doc(_graph(face_detailer=True))) == ["+ face detailer"]
     assert differs_by(plain, _doc(_graph(hires=True))) == ["+ upscale"]
+
+
+def test_special_groups_says_what_one_graph_has_rather_than_how_two_differ():
+    """The same taxonomy `differs_by` chips, asked of a card standing alone.
+
+    A lone card has no cover to differ from, so `differs_by` never runs for it
+    and nothing computes what it *has* - which is the half its generated name
+    needs (#1454).
+
+    The empty tuple is a real answer and not a failure to look: a plain txt2img
+    graph genuinely carries no post-processing, which is what lets a name claim
+    the workflow is plain.
+    """
+    assert special_groups(_doc(_graph())) == ()
+    assert special_groups(_doc(_graph(face_detailer=True))) == (FACE_DETAILER,)
+    assert special_groups(_doc(_graph(upscale=True))) == (UPSCALE,)
+    # A hires fix is an upscale: the second sampler goes with the latent
+    # upscale it refines, exactly as `core_hash` strips it.
+    assert special_groups(_doc(_graph(hires=True))) == (UPSCALE,)
+    # Plumbing is not post-processing, and a LoRA is not either.
+    assert special_groups(_doc(_graph(preview=True))) == ()
+    assert special_groups(_doc(_graph(loras=("alice.safetensors",)))) == ()
+    # **Declaration order, never the graph's.** The cached value is a string
+    # and two derivations of one topology have to compare byte for byte, so a
+    # set's iteration order would make the cache churn at random.
+    both = _doc(_graph(upscale=True, face_detailer=True))
+    assert special_groups(both) == (UPSCALE, FACE_DETAILER)
+
+
+def test_special_groups_refuses_a_raw_graph_like_every_other_rule_here():
+    """A raw graph names its models by value; every rule here needs the stored
+    document. Reading one anyway would report no groups for a graph that has
+    them."""
+    with pytest.raises(WorkflowGraphError):
+        special_groups(_graph(face_detailer=True))
 
 
 def test_plumbing_only_when_only_plumbing_differs():

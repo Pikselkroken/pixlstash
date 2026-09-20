@@ -52,6 +52,7 @@ from pixlstash.hub.workflow_card_reads import (
     chosen_covers,
     default_overrides,
     instance_documents,
+    model_titles,
     slot_marks,
     stack_rows,
     variant_documents,
@@ -160,6 +161,11 @@ class SlotModel:
     kind: str
     mark: Optional[str] = None
     label: Optional[str] = None
+    # What the model shelf calls this file - the trainer's own name, or the one
+    # the owner typed - where the shelf knows it. ``None`` otherwise, and that
+    # is the ordinary case: it means only that this machine has not scanned the
+    # file, never that the slot is empty.
+    title: Optional[str] = None
 
 
 @dataclass
@@ -600,8 +606,20 @@ def _describe_slots(
     in it is the recipe's business and not the workflow's - so its name is left
     off here rather than paired to a slot the hub cannot address (see
     :func:`~pixlstash.hub.workflow_card_reads.asset_names`).
+
+    A second hub read puts the shelf's own name beside each filename, once for
+    the whole grid rather than per card. It is a join inside one database and
+    not a derivation, which is why it can be afforded on a grid read at all.
     """
     marks = slot_marks(hub, [figure.card.topology_hash for figure in figures])
+    # Off `read_grid`'s shared `names` rather than a read of its own: that one
+    # covers EVERY variant where this pass only draws the first, so it is a
+    # superset and resolving a few filenames no chip shows is cheaper than a
+    # second pass over the same table.
+    titles = model_titles(
+        hub,
+        [filename for pairs in names.values() for _, filename in pairs],
+    )
     for figure in figures:
         card = figure.card
         by_widget: dict[str, list[str]] = {}
@@ -632,14 +650,19 @@ def _describe_slots(
                         kind="lora",
                         mark=mark,
                         label=str(slot.get("label") or "") or None,
+                        title=titles.get((name or "").lower())
+                        if mark != RECIPE
+                        else None,
                     )
                 )
             else:
+                name = next_name(widget)
                 figure.models.append(
                     SlotModel(
-                        name=next_name(widget),
+                        name=name,
                         kind=_SLOT_KINDS.get(widget, widget or "model"),
                         label=str(slot.get("label") or "") or None,
+                        title=titles.get((name or "").lower()),
                     )
                 )
 

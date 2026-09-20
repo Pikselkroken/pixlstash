@@ -34,6 +34,14 @@
 //                                       // putting one in an <img src> has to
 //                                       // prepend API_BASE_URL and append the
 //                                       // share token itself (WorkflowCard).
+//     specials: [string] | null,        // the post-processing the workflow
+//                                       // carries ("upscale",
+//                                       // "face_detailer"), which `name`
+//                                       // already spells as "+ FaceDetailer".
+//                                       // NULL IS NOT []: null means nothing
+//                                       // has read the card's document for
+//                                       // it yet, [] means it has and the
+//                                       // graph carries none
 //     stack_size,                       // 2 or more makes the card a stack
 //     member_keys,                      // the stack's OTHER cards, so it is
 //                                       // `stack_size - 1` long. The service

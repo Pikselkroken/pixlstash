@@ -29,7 +29,7 @@ from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_identity import WORKFLOW_KEY_VERSION
-from pixlstash.utils.sql_chunking import chunked
+from pixlstash.utils.sql_chunking import SQLITE_ID_CHUNK, chunked
 
 logger = get_logger(__name__)
 
@@ -56,12 +56,17 @@ class Card:
     topology, or has reached it under a superseded rule. Such a card stacks
     with nothing rather than falling into a NULL bucket that would read as one
     enormous stack - the same choice ``workflow_cards.card_grouping`` makes.
+
+    ``specials`` is the same shape of answer one column over, and ``None`` is
+    NOT the empty tuple: ``None`` means the pass has not said yet, ``()`` means
+    it said "none". Only the second lets a name claim the workflow is plain.
     """
 
     workflow_key: str
     topology_hash: str
     core_hash: Optional[str] = None
     workflow_type: Optional[str] = None
+    specials: Optional[tuple[str, ...]] = None
     name: Optional[str] = None
     notes: Optional[str] = None
     hidden: bool = False
@@ -98,6 +103,7 @@ def card_index(hub: HubDatabase) -> list[Card]:
         "SELECT v.workflow_key AS workflow_key, v.topology_hash AS topology_hash, "
         "v.structural_hash AS structural_hash, c.core_hash AS core_hash, "
         "c.workflow_type AS workflow_type, c.slots AS slots, "
+        "c.specials AS specials, "
         "a.name AS name, a.notes AS notes, "
         "a.hidden AS hidden, f.workflow_key IS NOT NULL AS imported, "
         "f.workflow_name AS file_name "
@@ -120,6 +126,7 @@ def card_index(hub: HubDatabase) -> list[Card]:
                 topology_hash=row["topology_hash"],
                 core_hash=row["core_hash"],
                 workflow_type=row["workflow_type"],
+                specials=_specials(row["specials"]),
                 slots=_slots(row["slots"], row["workflow_key"]),
                 name=row["name"],
                 notes=row["notes"],
@@ -129,6 +136,18 @@ def card_index(hub: HubDatabase) -> list[Card]:
             )
         card.variants.append(row["structural_hash"])
     return list(cards.values())
+
+
+def _specials(raw: Optional[str]) -> Optional[tuple[str, ...]]:
+    """The cached post-processing list, or ``None`` where the pass has not run.
+
+    The empty string is a real answer ("this graph has none") and comes back as
+    an empty tuple, which is why this cannot be ``raw.split(",") if raw else
+    None``: that spelling loses the difference the column exists to keep.
+    """
+    if raw is None:
+        return None
+    return tuple(part for part in raw.split(",") if part)
 
 
 def _slots(raw: Optional[str], workflow_key: str) -> list[dict]:
@@ -204,6 +223,60 @@ def asset_names(
         ):
             names.setdefault(structural_hash, []).append((widget, filename))
     return names
+
+
+def model_titles(hub: HubDatabase, names: list[str]) -> dict[str, str]:
+    """``{slot name: model.display_name}`` for the shelf's own name for a model.
+
+    The slot name is what ``workflow_recipe_asset`` stored, which is one of
+    three things (``services.workflow_hash.structural_widget_value``): a
+    lowercased basename, a SHA-256 digest, or a shelf id. All three are looked
+    up in one query per batch, because a card cannot say which of them it holds
+    and a caller that guessed would silently miss the graphs using the other
+    two.
+
+    **Hub to hub.** ``model`` and the workflow tables are the same database, so
+    this is a join rather than a derivation, and a model the shelf has never
+    scanned simply has no entry - the caller keeps the filename.
+
+    A name two shelf rows claim with *different* titles is dropped rather than
+    resolved: naming a card after the wrong model is worse than naming it after
+    its file, and there is nothing here that could tell the two apart.
+
+    Only the names that were asked for come back. A row matched on its digest
+    also has a filename and an id, and volunteering those would make the answer
+    depend on which of a model's three names some other card happened to hold -
+    including by marking a name ambiguous that nobody asked about.
+    """
+    titles: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    wanted = {name.lower() for name in names if name}
+    # A THIRD of the usual chunk: the statement binds each batch three times,
+    # once per column it might match, so the default 900 would carry 2,700
+    # parameters and fail outright on a SQLite built to the 999 floor.
+    for batch in chunked(sorted(wanted), SQLITE_ID_CHUNK // 3):
+        placeholders = ",".join("?" * len(batch))
+        rows = hub.fetchall(
+            "SELECT display_name, filename, sha256, id FROM model "
+            f"WHERE display_name IS NOT NULL AND display_name <> '' AND ("
+            f"LOWER(filename) IN ({placeholders}) "
+            f"OR sha256 IN ({placeholders}) "
+            f"OR CAST(id AS TEXT) IN ({placeholders}))",
+            (*batch, *batch, *batch),
+        )
+        for row in rows:
+            title = row["display_name"]
+            for key in (
+                (row["filename"] or "").lower(),
+                (row["sha256"] or "").lower(),
+                str(row["id"]),
+            ):
+                if key not in wanted or key in ambiguous:
+                    continue
+                if titles.setdefault(key, title) != title:
+                    del titles[key]
+                    ambiguous.add(key)
+    return titles
 
 
 def find_card(hub: HubDatabase, workflow_key: str) -> Optional[Card]:

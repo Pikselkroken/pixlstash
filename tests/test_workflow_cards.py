@@ -18,10 +18,13 @@ from pixlstash.hub.workflows import (
     record_api_graph,
     record_ui_graph,
 )
+from pixlstash.hub.workflow_card_reads import card_index
 from pixlstash.services.workflow_identity import (
     CORE_VERSION,
+    FACE_DETAILER,
     RECIPE,
     STRUCTURAL,
+    UPSCALE,
     WORKFLOW_KEY_VERSION,
 )
 from pixlstash.task_runner import TaskCancelledError
@@ -321,6 +324,74 @@ def test_a_superseded_core_rule_re_queues_the_topologies_it_cached(hub):
     assert row["core_hash"] != "stale"
     assert finder.progress() == (1, 0)
     assert workflow_cards.card_grouping(hub)["ungrouped"] == 0
+
+
+def test_the_cache_records_what_post_processing_a_topology_carries(hub):
+    """The card's `+ FaceDetailer` half, cached rather than derived per read.
+
+    Doing it live in `read_grid` means walking every card's stored document on
+    every grid read; `workflow_type` and `core_hash` are cached on this row for
+    exactly that reason, so this belongs beside them.
+    """
+    plain = record_api_graph(hub, _graph())
+    fancy = record_api_graph(hub, _graph(upscale=True, face_detailer=True))
+
+    def specials_of(topology_hash):
+        return hub.fetchone(
+            "SELECT specials FROM workflow_topology_core WHERE topology_hash = ?",
+            (topology_hash,),
+        )["specials"]
+
+    # **The empty string, never NULL.** NULL is reserved for a row this pass
+    # has not touched, and a graph with no post-processing has to be able to
+    # say so - a name may only claim a workflow is plain on the second.
+    assert specials_of(plain.topology_hash) == ""
+    assert specials_of(fancy.topology_hash) == f"{UPSCALE},{FACE_DETAILER}"
+
+    # And the card read gives the same two answers apart, as a tuple and never
+    # as None.
+    by_topology = {card.topology_hash: card.specials for card in card_index(hub)}
+    assert by_topology[plain.topology_hash] == ()
+    assert by_topology[fancy.topology_hash] == (UPSCALE, FACE_DETAILER)
+
+
+def test_a_topology_cached_before_the_specials_column_is_re_derived(hub):
+    """A row written by an older build reads "not known yet", then fills.
+
+    NULLing the column is what such a row looks like to every query here: the
+    ALTER adds it nullable, so every topology an existing hub already cached
+    arrives this way. It must be re-queued **without** the row losing its stack
+    key, its type or its slots in the meantime - that is the whole reason this
+    re-derives on the column rather than on a bumped `CORE_VERSION`, which
+    would blank the grid while the pass ran.
+    """
+    keys = record_api_graph(hub, _graph(face_detailer=True))
+    with hub.transaction() as conn:
+        conn.execute("UPDATE workflow_topology_core SET specials = NULL")
+    before = hub.fetchone("SELECT * FROM workflow_topology_core")
+    assert before["specials"] is None
+    # Not known yet, and that is not the same answer as "has none".
+    assert card_index(hub)[0].specials is None
+
+    finder = WorkflowCardBackfillFinder(hub=hub)
+    assert finder.progress() == (1, 1)
+    # The card key is current, so only a specials-aware early return hands this
+    # variant back at all. A stale one would return the key and leave the
+    # column NULL forever, with the finder re-offering it on every sweep.
+    assert finder.find_task()._run_task()["identified"] == 1
+
+    after = hub.fetchone("SELECT * FROM workflow_topology_core")
+    assert after["specials"] == FACE_DETAILER
+    # Nothing else moved: the grid saw the same stack key, type and slots
+    # throughout.
+    assert (after["core_hash"], after["workflow_type"], after["slots"]) == (
+        before["core_hash"],
+        before["workflow_type"],
+        before["slots"],
+    )
+    assert card_of(hub, keys.structural_hash) is not None
+    assert finder.progress() == (1, 0)
+    assert finder.find_task() is None
 
 
 def test_flipping_the_lora_strip_is_a_new_core_rule(hub):
