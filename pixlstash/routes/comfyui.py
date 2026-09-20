@@ -457,13 +457,11 @@ def _file_in_hub(hub, name: str, workflow: dict) -> tuple[str | None, str | None
     if hub is None:
         return None, None
     try:
-        if isinstance(workflow.get("nodes"), list):
+        graph = api_graph(workflow)
+        if graph is None:
             topology_hash = record_ui_graph(hub, workflow)
             structural_hash = None
         else:
-            graph = workflow.get("prompt")
-            if not isinstance(graph, dict):
-                graph = workflow
             keys = record_api_graph(hub, graph)
             topology_hash, structural_hash = keys.topology_hash, keys.structural_hash
         return topology_hash, _card_the_file(hub, name, topology_hash, structural_hash)
