@@ -500,6 +500,98 @@ describe("OverlayRecipePanel", () => {
     );
   });
 
+  // ── The editor graph ──────────────────────────────────────────────────
+  //
+  // A picture that carries ComfyUI's editor graph and not the API one the
+  // server ran. PixlStash rebuilds it to run it; a rebuild that could not be
+  // exact is refused, and the refusal has to say which node stopped it, or the
+  // reader is sent nowhere.
+
+  // Shaped like the server's own `_editor_graph_recipe_payload`, not like
+  // RECIPE with two fields changed: that payload carries NO settings, no
+  // negative prompt and no model slots, and a fixture that kept them proved
+  // the panel *can* render a full recipe rather than what it does here.
+  const EDITOR_REFUSAL = {
+    ...RECIPE,
+    available: false,
+    reason: "editor_graph",
+    summary: "Editor Workflow · 4 nodes · 3 links",
+    settings: {},
+    negativePrompt: null,
+    modelSlots: [],
+    inputs: [],
+    conversionProblems: [
+      "this ComfyUI has no node class 'SomeCustomPackNode'",
+      "KSampler (node 3) carries 5 widget values, and its inputs account for 4",
+    ],
+  };
+
+  it("explains an editor graph that could not be rebuilt", () => {
+    const wrapper = render({
+      recipe: EDITOR_REFUSAL,
+      canGenerateVariants: true,
+    });
+    expect(wrapper.find(".recipe-run-reason").text()).toContain(
+      "could not rebuild",
+    );
+    // Not the fallback sentence: an unmapped reason reads "cannot be run
+    // again", which would say nothing about what to go and fix.
+    expect(wrapper.find(".recipe-run-reason").text()).not.toContain(
+      "This picture's recipe cannot be run again",
+    );
+  });
+
+  it("lists each thing that stopped the rebuild", () => {
+    const wrapper = render({
+      recipe: EDITOR_REFUSAL,
+      canGenerateVariants: true,
+    });
+    const problems = wrapper
+      .findAll(".recipe-run-problems li")
+      .map((li) => li.text());
+    expect(problems).toEqual(EDITOR_REFUSAL.conversionProblems);
+  });
+
+  it("shows the recipe itself even though it cannot be run", () => {
+    // The distinction the whole path exists for: this picture WAS made in
+    // ComfyUI, so the prompt and the models are there to read.
+    const wrapper = render({ recipe: EDITOR_REFUSAL });
+    expect(wrapper.find(".recipe-workflow").text()).toBe(
+      "Editor Workflow · 4 nodes · 3 links",
+    );
+    expect(wrapper.find(".recipe-prompt").text()).toBe(RECIPE.positive_prompt);
+  });
+
+  it("says the negative prompt was not read, never that there is none", () => {
+    // "none" is a claim about the workflow. This workflow was not read, so
+    // making it would be telling the reader something PixlStash does not know.
+    const wrapper = render({ recipe: EDITOR_REFUSAL });
+    const negative = settingsOf(wrapper).find(([label]) => label === "Negative");
+    expect(negative).toBeDefined();
+    expect(negative[1]).toBe("not read");
+  });
+
+  it("still says none on a graph it DID read", () => {
+    // The control: over-reporting "not read" would hide a real fact, which is
+    // its own regression.
+    const wrapper = render({ recipe: { ...RECIPE, negativePrompt: null } });
+    const negative = settingsOf(wrapper).find(([label]) => label === "Negative");
+    expect(negative[1]).toBe("none");
+  });
+
+  it("keeps the seed it did read off a refused editor graph", () => {
+    // The seed comes off the editor graph directly, so it is known even when
+    // the rebuild failed - blanket "not read" would throw that away.
+    const wrapper = render({ recipe: EDITOR_REFUSAL });
+    const seed = settingsOf(wrapper).find(([label]) => label === "Seed");
+    expect(seed[1]).toBe(RECIPE.seedText);
+  });
+
+  it("prints no problem list for every other recipe", () => {
+    const wrapper = render({ recipe: RECIPE, canGenerateVariants: true });
+    expect(wrapper.find(".recipe-run-problems").exists()).toBe(false);
+  });
+
   it("offers the picture as a workflow's input, whatever Run… says", async () => {
     const wrapper = render({
       recipe: { ...RECIPE, source: "a1111", available: false, reason: "a1111" },

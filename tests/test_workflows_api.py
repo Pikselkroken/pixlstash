@@ -4726,9 +4726,9 @@ def test_a_kept_pictures_embedded_graph_is_the_second_source(runnable, monkeypat
     embedded["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
     read: list[int] = []
 
-    def fake_embedded(server, picture_id):
+    def fake_embedded(server, picture_id, object_info=None):
         read.append(picture_id)
-        return embedded
+        return embedded, []
 
     monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", fake_embedded)
     r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
@@ -4748,7 +4748,7 @@ def test_a_picture_whose_file_has_gone_falls_through_instead_of_erroring(
     is exactly when the next tier is wanted.
     """
 
-    def gone(server, picture_id):
+    def gone(server, picture_id, object_info=None):
         raise HTTPException(status_code=404, detail="Picture file missing")
 
     monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", gone)
@@ -4900,6 +4900,123 @@ def test_a_picture_on_no_card_reports_a1111_or_nothing_to_run(runnable, monkeypa
     monkeypatch.setattr(workflows_routes, "reduce_a1111", lambda metadata: object())
     payload = _preflight(runnable.owner, picture_ids=[unscanned.id])
     assert _reasons(payload) == {"a1111"}, payload
+
+
+# The editor serialisation of RUN_DOCUMENT's loader, sampler and writer, with
+# the widget values positional the way ComfyUI's editor writes them. Convertible
+# against RUN_OBJECT_INFO, which is what makes it a source.
+RUN_EDITOR_GRAPH = {
+    "last_node_id": 4,
+    "last_link_id": 0,
+    "links": [],
+    "nodes": [
+        {
+            "id": 1,
+            "type": "CheckpointLoaderSimple",
+            "mode": 0,
+            "inputs": [],
+            "outputs": [],
+            "widgets_values": ["realvisxl.safetensors"],
+        },
+        {
+            "id": 3,
+            "type": "KSampler",
+            "mode": 0,
+            "inputs": [],
+            "outputs": [],
+            "widgets_values": [123, 20, 7.0],
+        },
+        {
+            "id": 4,
+            "type": "SaveImage",
+            "mode": 0,
+            "inputs": [],
+            "outputs": [],
+            "widgets_values": ["ComfyUI"],
+        },
+    ],
+}
+
+
+def _only_an_editor_graph(monkeypatch, graph=None):
+    """Every picture answers with an editor `workflow` chunk and no API one.
+
+    Patched on `comfyui_module`, not on `workflows_routes`: the reader lives in
+    `routes/comfyui.py` and `_load_embedded_api_prompt` resolves it in ITS
+    namespace, so patching the name this module imported would leave the real
+    file read in place and the test would pass or fail for the wrong reason.
+    """
+    payload = {"png": {"workflow": json.dumps(graph or RUN_EDITOR_GRAPH)}}
+    monkeypatch.setattr(
+        comfyui_module,
+        "_read_embedded_metadata",
+        lambda server, pid: json.loads(json.dumps(payload)),
+    )
+
+
+def test_a_picture_whose_only_graph_is_the_editors_is_still_a_source(runnable):
+    """The card run rebuilds an editor graph, like the recipe replay does.
+
+    **This is the path that outlives `POST /comfyui/run_recipe`.** The rebuild
+    lives in `_load_embedded_api_prompt`, which both callers come through, so
+    retiring that route cannot take the capability with it - and this test is
+    in the run route's own file so the coverage does not go either.
+    """
+    _only_an_editor_graph(runnable.monkeypatch)
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["groups"][0]["source"] == "picture", body
+    assert body["groups"][0]["reasons"] == [], body
+    assert len(runnable.submitted) == 1, runnable.submitted
+    graph = runnable.submitted[0]["graph"]
+    # The rebuild, read off `/object_info` rather than guessed: the widget
+    # array `[123, 20, 7.0]` lands on seed, steps and cfg in that order.
+    assert set(graph) == {"1", "3", "4"}, graph
+    assert graph["3"]["class_type"] == "KSampler"
+    assert graph["3"]["inputs"]["steps"] == 20
+    assert graph["3"]["inputs"]["cfg"] == 7.0
+    assert graph["1"]["inputs"]["ckpt_name"] == "realvisxl.safetensors"
+    assert graph["4"]["inputs"]["filename_prefix"] == "ComfyUI"
+
+
+def test_an_editor_graph_that_will_not_rebuild_is_not_a_source(runnable):
+    """A refusal makes the resolver move on; it must not fail the run.
+
+    The other half of the contract `_load_embedded_api_prompt` returns problems
+    for: this caller is walking candidates, so "this one cannot be rebuilt"
+    means take the next tier, while the recipe replay - which is replaying that
+    one picture - answers 400 and names what stopped it.
+    """
+    broken = json.loads(json.dumps(RUN_EDITOR_GRAPH))
+    broken["nodes"][1]["widgets_values"] = [123, 20, 7.0, "one too many"]
+    _only_an_editor_graph(runnable.monkeypatch, broken)
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    # The instance tier answers instead, and nothing raised on the way past.
+    assert payload["groups"][0]["source"] != "picture", payload
+
+
+def test_the_run_reads_object_info_itself_rather_than_a_cached_map(runnable):
+    """A run decides what executes, so it asks ComfyUI now.
+
+    The recipe READ may serve a map up to a minute old - that is what makes
+    stepping the filmstrip affordable - and a run that reused it could submit
+    a graph against node definitions that have since changed. Ported here from
+    the recipe route's own file when #1410 retired `POST /comfyui/run_recipe`;
+    the property belongs to whichever route runs things.
+    """
+    asked = []
+
+    def spy(url, **kwargs):
+        asked.append(kwargs)
+        return json.loads(json.dumps(RUN_OBJECT_INFO)), None
+
+    runnable.monkeypatch.setattr(workflows_routes, "_read_object_info", spy)
+    _only_an_editor_graph(runnable.monkeypatch)
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.status_code == 200, r.text
+    assert asked, "the run must read /object_info"
+    assert all(not call.get("cached") for call in asked), asked
 
 
 def test_a_missing_node_pack_is_reported_by_name(runnable):
@@ -5548,7 +5665,9 @@ def test_keeping_a_seed_a_stored_recipe_does_not_have_is_refused(runnable):
     embedded["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
     embedded["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
     runnable.monkeypatch.setattr(
-        workflows_routes, "_load_embedded_api_prompt", lambda server, pid: embedded
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (embedded, []),
     )
     r = runnable.owner.post(
         f"{API}/workflows/run",
@@ -5871,7 +5990,9 @@ def exportable(runnable):
     """
     graph = _embedded_export_graph()
     runnable.monkeypatch.setattr(
-        workflows_routes, "_load_embedded_api_prompt", lambda server, pid: graph
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
     )
     return SimpleNamespace(graph=graph, **vars(runnable))
 
@@ -5930,7 +6051,9 @@ def test_a_structural_lora_that_is_on_the_shelf_travels_with_the_workflow(
     """The positive control: a lightning LoRA IS the workflow, so it is kept."""
     graph = _embedded_export_graph(lora=RUN_ADAPTER_FILENAME)
     monkeypatch.setattr(
-        workflows_routes, "_load_embedded_api_prompt", lambda server, pid: graph
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
     )
     _mark_slot(runnable.server, _lora_slot_label(graph), "structural")
     payload = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/export").json()
@@ -5965,7 +6088,10 @@ def test_an_export_refuses_a_graph_it_cannot_read_rather_than_publishing_it(
         "_load_embedded_api_prompt",
         # Node-shaped enough to survive `sanitize_prompt_graph` and refused by
         # the reducer: `inputs` is not a mapping.
-        lambda server, pid: {"1": {"class_type": "KSampler", "inputs": ["nope"]}},
+        lambda server, pid, object_info=None: (
+            {"1": {"class_type": "KSampler", "inputs": ["nope"]}},
+            [],
+        ),
     )
     r = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/export")
     assert r.status_code == 409, r.text
@@ -6106,7 +6232,10 @@ def loaderless(runnable, tmp_path):
     runnable.monkeypatch.setattr(
         workflows_routes,
         "_load_embedded_api_prompt",
-        lambda server, pid: json.loads(json.dumps(LOADERLESS_DOCUMENT)),
+        lambda server, pid, object_info=None: (
+            json.loads(json.dumps(LOADERLESS_DOCUMENT)),
+            [],
+        ),
     )
     runnable.monkeypatch.setattr(
         workflows_routes,
@@ -6164,7 +6293,7 @@ def test_inserting_a_loader_into_a_workflow_that_has_one_is_refused_with_the_rea
     runnable.monkeypatch.setattr(
         workflows_routes,
         "_load_embedded_api_prompt",
-        lambda server, pid: _embedded_export_graph(),
+        lambda server, pid, object_info=None: (_embedded_export_graph(), []),
     )
     r = runnable.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
     assert r.status_code == 409, r.text
@@ -6177,7 +6306,10 @@ def test_inserting_a_loader_without_comfyui_is_a_503_not_a_guess(runnable, tmp_p
     runnable.monkeypatch.setattr(
         workflows_routes,
         "_load_embedded_api_prompt",
-        lambda server, pid: json.loads(json.dumps(LOADERLESS_DOCUMENT)),
+        lambda server, pid, object_info=None: (
+            json.loads(json.dumps(LOADERLESS_DOCUMENT)),
+            [],
+        ),
     )
     runnable.monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
@@ -6529,9 +6661,10 @@ def test_a_graph_too_deeply_nested_to_walk_is_refused_not_a_500(runnable, monkey
     monkeypatch.setattr(
         workflows_routes,
         "_load_embedded_api_prompt",
-        lambda server, pid: {
-            "1": {"class_type": "KSampler", "inputs": {"whatever": nested}}
-        },
+        lambda server, pid, object_info=None: (
+            {"1": {"class_type": "KSampler", "inputs": {"whatever": nested}}},
+            [],
+        ),
     )
     r = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/export")
     assert r.status_code == 409, r.text

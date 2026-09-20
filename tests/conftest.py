@@ -534,6 +534,26 @@ def sandbox_the_recorded_model_locations(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def no_object_info_map_outlives_its_test():
+    """Clear the route's cached ComfyUI ``/object_info`` between tests.
+
+    Suite-wide rather than in the one module that reads it: the cache is a
+    process global keyed by ComfyUI URL, every test server uses the same
+    default URL, and a shard runs many modules in one process. A module that
+    patched ComfyUI to answer one thing would otherwise be served whatever the
+    previous module's patch left behind - and the tests that assert a refusal
+    are exactly the ones a stale map makes pass for the wrong reason.
+
+    Both sides, because the leak runs in both directions.
+    """
+    from pixlstash.routes import comfyui as comfyui_routes
+
+    comfyui_routes._forget_cached_object_info()
+    yield
+    comfyui_routes._forget_cached_object_info()
+
+
+@pytest.fixture(autouse=True)
 def no_model_move_outlives_its_test():
     """Fail a test that leaves a model move running rather than the next one.
 

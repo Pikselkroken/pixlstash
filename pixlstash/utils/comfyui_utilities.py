@@ -919,12 +919,14 @@ def find_comfy_api_prompt(metadata: dict) -> dict | None:
       executed*. This is the only executable one.
 
     Only the ``prompt`` chunk is considered here, and it must additionally pass
-    :func:`is_api_format`. There is deliberately **no fallback to the UI graph
-    and no UI→API conversion**: converting requires re-resolving widget values,
-    links, muted/bypassed nodes and subgraphs exactly as the ComfyUI frontend
-    does, and a near-miss produces a graph that runs and silently generates
-    something else. Absent an executable ``prompt`` chunk the honest answer is
-    "no executable workflow embedded".
+    :func:`is_api_format`. **This function never falls back to the UI graph**,
+    and that is not the same thing as PixlStash refusing to read one: a caller
+    that wants the editor chunk rebuilt into a runnable graph asks
+    :func:`pixlstash.services.comfyui_ui_graph.convert_ui_graph_to_api`, which
+    needs ComfyUI's ``/object_info`` to do it and refuses rather than
+    approximates. Keeping the two apart is what lets a caller say which it got:
+    the answer here is the graph ComfyUI actually executed, and the answer there
+    is PixlStash's reading of the editor's view of it.
 
     Args:
         metadata: Raw embedded metadata as returned by
