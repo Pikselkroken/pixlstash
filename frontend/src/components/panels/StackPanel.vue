@@ -263,11 +263,12 @@
  * over `--dur-2`. Opening needs nothing but the element mounting; closing is
  * driven by `closing`, because the member rows the grid splices in around the
  * panel go with the open key and the store therefore holds both until this
- * component reports `collapsed`. That report is the animation's own
- * `animationend` and not a timer: under `prefers-reduced-motion` the shell
- * zeroes the duration, and a timer would go on holding the stack — and the
- * keys that act on it — for a fifth of a second after there was anything to
- * watch.
+ * component reports `collapsed`, which is the animation's own `animationend`.
+ * The store keeps a timer behind it, but set well clear of `--dur-2` so the
+ * event wins: under `prefers-reduced-motion` the shell zeroes the duration
+ * rather than switching the animation off, so the event fires at once and the
+ * keys the collapse gates come straight back, where a timer would hold them
+ * for a fifth of a second after there was anything to watch.
  *
  * **Grid | List** (F2) is remembered for every stack, not per stack, in
  * `useWorkflowPrefsStore`: the switch answers "how do I read a stack" rather
@@ -343,9 +344,10 @@ const props = defineProps({
 const emit = defineEmits([
   "close",
   // The collapse is finished and the store may drop the stack. Read off the
-  // animation rather than counted in JS: a machine asking for reduced motion
-  // runs it in microseconds, and a timer would gate input for a fifth of a
-  // second on a preference that is about motion, not about speed.
+  // animation rather than counted in JS, so that a machine asking for reduced
+  // motion — where the duration is zeroed and this fires at once — does not
+  // have input gated for a fifth of a second by a preference that is about
+  // motion, not about speed. The store's timer is only a backstop behind it.
   "collapsed",
   "select",
   "make-cover",

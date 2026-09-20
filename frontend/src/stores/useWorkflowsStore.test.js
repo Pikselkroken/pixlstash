@@ -5,6 +5,7 @@
 // reads the wrong field cannot come out in the right order by accident.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { createPinia, setActivePinia } from "pinia";
 
 const listWorkflowCards = vi.fn();
@@ -505,6 +506,21 @@ describe("the panel follows a change of selection", () => {
     expect(store.openStackKey).toBe("few-but-loved");
   });
 
+  it("does not read a selection as a stack just because it is the same size", async () => {
+    // `few-but-loved` is a stack of two, so a selection of two keys matches it
+    // on COUNT. Without the membership half of the test the band would move to
+    // a stack the reader never picked.
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    await store.openStack("the-stack");
+
+    store.selectRange(["few-but-loved", "workhorse"]);
+    expect(store.openStackKey).toBe("the-stack");
+    expect(store.panelClosing).toBe(true);
+    store.finishCollapse();
+    expect(store.openStackKey).toBe(null);
+  });
+
   it("keeps the mode when the band goes, and loses it when the reader says so", async () => {
     // Selecting a workflow with nothing under it takes the panel off the
     // screen; it does not mean "stop showing me stacks". ▸, Escape and Close
@@ -578,6 +594,21 @@ describe("the panel follows a change of selection", () => {
 describe("the collapse's backstop", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
+
+  it("sits clear of the animation it stands behind", () => {
+    // The `--closing` class reaches the DOM a flush after the timer is armed
+    // and the animation starts a frame after that, so `animationend` lands at
+    // `--dur-2` plus a frame or two. A backstop set to `--dur-2` itself wins
+    // every race: the collapse is cut a few percent short, and the path the
+    // store and the panel both document — the end read off the animation —
+    // would only ever run under `prefers-reduced-motion`.
+    const sheet = readFileSync(
+      `${process.cwd()}/src/styles/design-tokens.css`,
+      "utf8",
+    );
+    const [, dur2] = sheet.match(/--dur-2:\s*(\d+)ms/);
+    expect(PANEL_COLLAPSE_MS).toBeGreaterThan(Number(dur2) * 2);
+  });
 
   it("drops the panel on its own if the animation never reports", async () => {
     const store = useWorkflowsStore();

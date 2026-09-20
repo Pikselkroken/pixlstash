@@ -35,17 +35,22 @@ import { errorMessage } from "../utils/apiError";
  */
 
 /**
- * The longest the panel's collapse is allowed to hold the stack open, in ms.
+ * The longest the panel's collapse may hold the stack open, in ms.
  *
- * A ceiling, not the duration: the panel reports its own `animationend` and
- * `finishCollapse` usually runs long before this. `--dur-2` is what it
- * animates over, and a machine asking for reduced motion runs that in
- * microseconds — which is exactly why the end has to be read off the animation
- * rather than counted here, or a motion preference would silently gate input
- * for a fifth of a second. This is only the backstop for an animation that
- * never starts at all.
+ * **A backstop, and it has to sit clear of `--dur-2`.** The panel reports its
+ * own `animationend` and that is what normally ends the collapse; the class
+ * reaches the DOM a flush after `collapseStack` arms this, and the animation
+ * starts a frame after that, so the event lands at `--dur-2` plus a frame or
+ * two. Set to `--dur-2` itself this timer wins every race, the animation is
+ * cut a few percent short, and the read-it-off-the-animation path only ever
+ * runs under `prefers-reduced-motion` — where the shell zeroes the duration
+ * rather than switching the animation off, so the event still fires
+ * immediately and the keys the collapse gates come back at once. That is the
+ * behaviour worth having, so this is three times the duration rather than
+ * equal to it; `useWorkflowsStore.test.js` reads `--dur-2` out of the sheet
+ * and fails if the two ever meet.
  */
-export const PANEL_COLLAPSE_MS = 200;
+export const PANEL_COLLAPSE_MS = 600;
 
 export const SORT_KEYS = ["rating", "used", "pictures"];
 
@@ -744,8 +749,10 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     // Not browsing yet, so a click is just a click. This is the whole of what
     // keeps a plain click from being a way in.
     if (!browsingStacks.value) return;
+    // No guard on an empty selection: `find` answers nothing and `every` on no
+    // keys is true, so it leaves by the same door as a selection that never
+    // left the stack.
     const keys = selectedKeys.value;
-    if (!keys.length) return;
     // A STACK, and the whole of it — `covered.length > 1` is the test for
     // "this key has something under it", so a lone card cannot match here and
     // fall out of the close below.
