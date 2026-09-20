@@ -41,6 +41,9 @@ const getWorkflowCard = vi.fn();
 vi.mock("../../api/workflows", () => ({
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   getWorkflowCard: (...args) => getWorkflowCard(...args),
+  // `WorkflowCard` renders its covers through this, so a mock without it
+  // throws in the render and every assertion in the file goes with it.
+  workflowCoverUrl: (cover) => cover,
 }));
 const listImportFolders = vi.fn();
 vi.mock("../../api/folders", () => ({

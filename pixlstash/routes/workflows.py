@@ -103,6 +103,7 @@ from pixlstash.services.comfyui_service import (
 )
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
+    BASE_MODEL_KINDS,
     BEST_SCORE,
     card_defaults,
     read_grid,
@@ -331,6 +332,15 @@ class WorkflowCard(BaseModel):
         None, description="The owner's own name, if they gave one."
     )
     type: str | None = None
+    type_label: str | None = Field(
+        None,
+        description=(
+            "`type` spelled the way ComfyUI spells it on its own templates "
+            "(`txt2img` -> `Text to Image`). The card's name row and its type "
+            "chip both read this, so the two cannot say the same fact in two "
+            "vocabularies. Null exactly when `type` is."
+        ),
+    )
     imported: bool = Field(
         False, description="A workflow file on this machine runs this card."
     )
@@ -820,29 +830,15 @@ def _model_stem(name: str) -> str:
     return stem
 
 
-# The slot kinds that name the BASE MODEL, in the order a card is named after
-# them. `_SLOT_KINDS` (`workflow_card_service`) maps `ckpt_name` to
-# ``checkpoint`` and `unet_name` to ``unet``, and passes a widget it does not
-# know through under its own name - which is how `diffusion_model`,
-# `model_path` and `checkpoint_id` arrive. All five are what
-# `CHECKPOINT_WIDGETS` calls a base model.
-#
-# **A card is named after one of these or after nothing.** It used to fall
-# through to "the first slot with a name", and slot order is document order,
-# so a Flux or SD3 graph - which has no ``checkpoint`` kind at all, only
-# ``unet`` - was routinely named after its VAE or one of its text encoders.
-# The VAE is not what anybody calls the workflow.
-_BASE_MODEL_KINDS = (
-    "checkpoint",
-    "unet",
-    "diffusion_model",
-    "model_path",
-    "checkpoint_id",
-)
-
 # ComfyUI's own template names read "Krea 2: Text to Image", and a workflow
 # library is read beside ComfyUI rather than instead of it, so the type is
 # spelled the way the person already sees it spelled.
+#
+# **One map, and it is served rather than mirrored.** The card shows its type
+# twice - in a generated name and in its own chip - and a second copy of these
+# labels on the client is the drift this file has already been bitten by once
+# (`CHECKPOINT_WIDGETS`). `WorkflowCard.type_label` carries the answer, so the
+# chip and the name are the same string by construction.
 _TYPE_LABELS = {
     "txt2img": "Text to Image",
     "img2img": "Image to Image",
@@ -854,7 +850,7 @@ _TYPE_LABELS = {
 
 def _base_model_name(models) -> str | None:
     """The base model a card is named after, or ``None`` if it loads none."""
-    for kind in _BASE_MODEL_KINDS:
+    for kind in BASE_MODEL_KINDS:
         for slot in models:
             if slot.kind == kind and slot.name:
                 return slot.name
@@ -873,7 +869,8 @@ def _display_name(card, models=()) -> str:
     has. It is deliberately not unique: two cards differing only by a
     post-processing node share a name, and naming THAT difference (the
     "… + FaceDetailer" half of the intended scheme) needs a per-card
-    derivation the hub does not cache yet - see ``docs/backend_architecture.md``.
+    derivation the hub does not cache yet (#1454). The card contract, this
+    fallback chain included, is ``docs/integration_architecture.md`` §2.
     Until then the ⓘ panel carries what actually separates them.
     """
     if card.name:
@@ -887,6 +884,13 @@ def _display_name(card, models=()) -> str:
         # stand-in, deliberately, rather than the VAE.
         return UNNAMED_CARD
     stem = _model_stem(base)
+    if not stem:
+        # These are graph widget values - third-party strings out of whatever
+        # workflow was imported - so the stem can come back empty where the
+        # whole name was an extension (".safetensors") or ended in a separator
+        # ("SDXL/"). An empty name renders the row blank and reads "About null"
+        # in the label, which is the hole `UNNAMED_CARD` exists to close.
+        return UNNAMED_CARD
     label = _TYPE_LABELS.get(card.workflow_type)
     return f"{stem}: {label}" if label else stem
 
@@ -906,6 +910,7 @@ def _card(figure, defaults=()) -> WorkflowCard:
         key=figure.card.workflow_key,
         name=_display_name(figure.card, figure.models),
         type=figure.card.workflow_type,
+        type_label=_TYPE_LABELS.get(figure.card.workflow_type),
         imported=figure.card.imported,
         models=_slot_models(figure.models),
         loras=_slot_models(figure.loras),

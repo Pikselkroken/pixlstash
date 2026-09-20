@@ -140,7 +140,7 @@
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
-import { API_BASE_URL, appendShareToken } from "../../utils/apiClient";
+import { workflowCoverUrl } from "../../api/workflows";
 import {
   cardAccessibleName,
   checkpointModel,
@@ -207,26 +207,12 @@ const stackLabel = computed(
 /**
  * The cover thumbnails, made absolute.
  *
- * **`GET /workflows/cards` sends an API-RELATIVE path** — `_cover_urls` builds
- * `/pictures/thumbnails/{id}.webp?v={version}` — and an `<img src>` never
- * reaches the `apiClient` interceptor, so nothing prepends `/api/v1` and
- * nothing appends the share token the way it does for an axios call. Dropped
- * into `src` as it arrives, the browser asks the PAGE origin for a path no
- * route serves and every cover on the screen breaks. `pictureThumbnailUrl`
- * states the same rule for the id-keyed form; this is the server-built-path
- * form of it.
- *
- * An absolute URL is left alone, so the day the payload carries one this does
- * not corrupt it.
+ * The join is `api/workflows.js`'s, not this component's: `covers` arrives
+ * API-relative and an `<img src>` never reaches the Axios interceptor that
+ * would prefix it. See `workflowCoverUrl` for why that lives on the api layer.
  */
 const covers = computed(() =>
-  (props.card.covers ?? [])
-    .slice(0, 3)
-    .map((url) =>
-      /^([a-z][a-z\d+.-]*:|\/\/)/i.test(url)
-        ? url
-        : appendShareToken(`${API_BASE_URL}${url}`),
-    ),
+  (props.card.covers ?? []).slice(0, 3).map(workflowCoverUrl),
 );
 // Ratings run 1-5; 0 or null is "not rated".
 const rating = computed(() => props.card.rating > 0);

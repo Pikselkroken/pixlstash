@@ -2733,6 +2733,45 @@ def test_frontend_import_extensions_match_the_staging_allowlist():
     )
 
 
+def test_base_model_kinds_agree_across_the_stack():
+    """One order for "which model is this card about", not two that drift.
+
+    The server names a card after its base model; the client's
+    ``checkpointModel`` picks the model row the card SHOWS and reads it to a
+    screen reader. Both walk a preference order over slot kinds, and when they
+    disagree one card says two things: #1449 shipped with the name row reading
+    ``flux1-dev`` and the model row reading ``ae.safetensors``, its VAE,
+    because the client still took "the first slot".
+
+    A guardrail of this shape guarded ``BASE_WIDGETS`` until F1b deleted the
+    shelf that held it, and it was removed on the grounds that no second list
+    was left. One is: this is that list, and this is that guardrail.
+
+    The server's own copy needs no assertion - it is derived from
+    ``CHECKPOINT_WIDGETS`` at import - so a widget added there reaches the
+    server for free and fails HERE until the client follows.
+    """
+    from pixlstash.services.workflow_card_service import BASE_MODEL_KINDS
+
+    card_js = (REPO_ROOT / "frontend" / "src" / "utils" / "workflowCard.js").read_text(
+        encoding="utf-8"
+    )
+    match = re.search(r"const BASE_MODEL_KINDS = \[(.*?)\];", card_js, re.DOTALL)
+    assert match, (
+        "BASE_MODEL_KINDS is gone from frontend/src/utils/workflowCard.js - the "
+        "model row is choosing its slot against something else, and this "
+        "guardrail can no longer see what."
+    )
+    frontend_kinds = tuple(re.findall(r'"([^"]+)"', match.group(1)))
+
+    assert frontend_kinds == tuple(BASE_MODEL_KINDS), (
+        "the base-model preference orders disagree: "
+        f"client={list(frontend_kinds)}, server={list(BASE_MODEL_KINDS)}. "
+        "ORDER matters as much as membership: a graph carrying both a "
+        "checkpoint and a unet is named after one and draws the other."
+    )
+
+
 def _assemble_changelog_module():
     """The release's changelog assembler, loaded from ``scripts/`` by path.
 

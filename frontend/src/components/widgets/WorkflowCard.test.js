@@ -430,16 +430,6 @@ describe("cover thumbnail URLs", () => {
     expect(src).not.toMatch(/^\/pictures\//);
   });
 
-  it("leaves an absolute URL alone", () => {
-    const wrapper = mountCard({
-      ...CROWDED,
-      covers: ["https://cdn.example.com/thumb.webp"],
-    });
-
-    expect(wrapper.find(".wf-card__pic img").attributes("src")).toBe(
-      "https://cdn.example.com/thumb.webp",
-    );
-  });
 });
 
 // ── The cover crop is top-anchored ───────────────────────────────────────

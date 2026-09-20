@@ -11,8 +11,29 @@
 // Every route here is owner-only: the counts are read across the whole vault,
 // so a scoped session gets 403 rather than a narrowed answer.
 
-import { apiClient } from "../utils/apiClient";
+import { apiClient, appendShareToken, API_BASE_URL } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
+
+/**
+ * The URL a browser loads one of a card's `covers` from.
+ *
+ * `_cover_urls` (`routes/workflows.py`) sends an API-RELATIVE path -
+ * `/pictures/thumbnails/{id}.webp?v={version}` - and an `<img src>` bypasses
+ * Axios entirely, so nothing prepends `/api/v1` and nothing appends the share
+ * token. Used verbatim, the browser asks the PAGE origin for a path no route
+ * serves and every cover on the Workflows grid breaks.
+ *
+ * Here rather than in the component for `pictureThumbnailUrl`'s stated reason:
+ * the path is part of a contract, and a second spelling of it elsewhere is
+ * exactly the drift the api layer exists to prevent. This is the second
+ * spelling of THAT path, so the two live one file apart on purpose.
+ *
+ * @param {string} cover - a `covers` entry, exactly as the payload sends it.
+ * @returns {string}
+ */
+export function workflowCoverUrl(cover) {
+  return appendShareToken(`${API_BASE_URL}${cover}`);
+}
 
 /**
  * The Workflows grid: one card per stack, plus what it left out (v1.12 B3).
@@ -53,10 +74,7 @@ export async function getWorkflowCard(workflowKey) {
  */
 export async function patchWorkflowCard(workflowKey, changes) {
   return unwrap(
-    apiClient.patch(
-      `/workflows/${encodeURIComponent(workflowKey)}`,
-      changes,
-    ),
+    apiClient.patch(`/workflows/${encodeURIComponent(workflowKey)}`, changes),
   );
 }
 

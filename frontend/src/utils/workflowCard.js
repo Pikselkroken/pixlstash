@@ -7,7 +7,11 @@
 // nothing translates between the two and inverts a meaning on the way:
 //
 //   {
-//     key, name, type, imported,
+//     key, name, type, type_label, imported,
+//                                       // `type_label` is `type` as ComfyUI
+//                                       // spells it ("Text to Image"); the
+//                                       // name row and the type chip both
+//                                       // read it, so one fact has one voice
 //     models: [{ name, kind, mark?, slot_label? }],
 //                                       // every non-LoRA slot: checkpoint,
 //                                       // unet, vae, clip… `kind` is the slot
@@ -40,8 +44,9 @@
 //                                       // sort; null sorts below every date.
 //   }
 //
-// A card row names the checkpoint only; ⓘ lists every model, so a stack whose
-// difference is "other models" always has the models behind it.
+// A card row names the BASE MODEL only (checkpoint, or the unet a Flux or SD3
+// graph carries instead); ⓘ lists every model, so a stack whose difference is
+// "other models" always has the models behind it.
 
 const RECIPE = "recipe";
 
@@ -70,12 +75,45 @@ export function isStack(card) {
   return (card.stack_size ?? 0) > 1;
 }
 
-/** The model the card's second row names: the checkpoint, or the first slot. */
+/**
+ * The slot kinds that name the BASE MODEL, most preferred first.
+ *
+ * **Kept identical to `BASE_MODEL_KINDS`** in
+ * `services/workflow_card_service.py`, which the server derives from
+ * `CHECKPOINT_WIDGETS`, and asserted by
+ * `tests/test_architecture_guardrails.py::test_base_model_kinds_agree_across_the_stack`.
+ *
+ * A list here at all because this is a PREFERENCE among slots the payload
+ * already carries, not a fact about the graph - but a preference that has to
+ * agree with the one the card was NAMED by, or the name row and the model row
+ * describe different models. That pair is exactly what drifted before (#1416),
+ * so it is asserted rather than agreed.
+ */
+const BASE_MODEL_KINDS = [
+  "checkpoint",
+  "unet",
+  "checkpoint_id",
+  "diffusion_model",
+  "model_path",
+];
+
+/**
+ * The model the card's second row names: its base model.
+ *
+ * **Never "the first slot".** It was, and slot order is document order, so a
+ * Flux or SD3 graph - which has no `checkpoint` kind at all, only `unet` -
+ * showed its VAE or a text encoder as the model the card is about, and said so
+ * to a screen reader too. The card's name row learned this first and the two
+ * halves of one card then disagreed. `null` when a graph loads no base model,
+ * so the row can say so rather than name an accessory.
+ */
 export function checkpointModel(card) {
   const models = card.models ?? [];
-  return (
-    models.find((model) => model.kind === "checkpoint") ?? models[0] ?? null
-  );
+  for (const kind of BASE_MODEL_KINDS) {
+    const match = models.find((model) => model.kind === kind && model.name);
+    if (match) return match;
+  }
+  return null;
 }
 
 /** The LoRA row: a filled chip per workflow LoRA, a dashed one per recipe slot. */
@@ -97,7 +135,11 @@ export function factChips(card) {
     ? (card.differs_by ?? [])
     : [
         ...(card.differs_by ?? []),
-        card.type,
+        // The SERVED label, so the chip and a generated name say the type in
+        // one vocabulary rather than reading `Text to Image` on row 1 and
+        // `txt2img` on row 4. Falls back to the token for a payload that
+        // predates `type_label`.
+        card.type_label ?? card.type,
         card.imported ? "imported" : null,
       ].filter(Boolean);
   return labels.map((label, i) => ({ key: `fact-${i}`, label, fact: true }));

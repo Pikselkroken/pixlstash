@@ -270,7 +270,7 @@ import WorkflowCard from "../widgets/WorkflowCard.vue";
  * They are written onto the grid as `--wf-column-min` and `--wf-gap` rather
  * than read back out of the sheet, so the arithmetic here and the track the
  * browser paints are the same two numbers by construction. `COLUMN_GAP` is
- * `--space-4`; `COLUMN_MIN` is the card's width, the partner of the
+ * `--space-3` (see below); `COLUMN_MIN` is the card's width, the partner of the
  * `--wf-meta-h` `WorkflowCard.vue` keeps locally. The card's HEIGHT is not a
  * number either side holds: the cover is a 6:5 box, so a card is as tall as
  * its column is wide plus the fixed meta block.

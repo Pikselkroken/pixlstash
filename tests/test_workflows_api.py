@@ -3149,6 +3149,15 @@ def test_a_card_is_never_nameless(workflow_env):
     # extension is off, which a guess-by-length gets wrong on `.safetensors`.
     assert cards[BUSY_CARD]["name"] == "realvisxl: Text to Image"
 
+    # **`type_label` is SERVED, not mirrored.** The card shows its type twice -
+    # in a generated name and in its own chip - and a second copy of these
+    # labels on the client is the drift `CHECKPOINT_WIDGETS` was written to
+    # end. One map, on the wire, so the two strings are equal by construction.
+    busy = cards[BUSY_CARD]
+    assert busy["type"] == "txt2img"
+    assert busy["type_label"] == "Text to Image"
+    assert busy["type_label"] in busy["name"]
+
     # The stand-in is still the floor, for a card with nothing to be named
     # after: no name, no file, and every model name forgotten. Asserted on the
     # helper, because the fixture has no such card and inventing one to prove a
@@ -3191,6 +3200,14 @@ def test_a_card_is_never_nameless(workflow_env):
         SimpleNamespace(name="4x-UltraSharp.pth", kind="upscale"),
     ]
     assert workflows_routes._display_name(_Nameless(), accessories) == UNNAMED_CARD
+
+    # **An empty stem is as nameless as a null one.** These are graph widget
+    # values - third-party strings out of whatever workflow was imported - so
+    # a name that is nothing but an extension, or that ends in a separator,
+    # reaches here and would render the row blank and read "About null".
+    for hostile in (".safetensors", "SDXL/", "loras\\"):
+        slots = [SimpleNamespace(name=hostile, kind="checkpoint")]
+        assert workflows_routes._display_name(_UnetOnly(), slots) == UNNAMED_CARD
 
     # A checkpoint outranks a unet where a graph carries both.
     both = [
