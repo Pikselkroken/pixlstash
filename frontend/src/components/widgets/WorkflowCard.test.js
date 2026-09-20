@@ -16,6 +16,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { generatedMark } from "../../utils/modelShelf";
 import { createPinia, setActivePinia } from "pinia";
 
 // ⓘ carries *Show all N pictures* (F7), so the card now reaches the filter
@@ -80,10 +81,15 @@ const FILE_ONLY = {
   name: "z image",
   models: [
     {
+      // `title` is deliberately nothing like the filename's derived name:
+      // `deriveModelName("z_image_bf16.safetensors")` is "Z Image Bf16", and
+      // both would give the same initials, so an initials assertion alone
+      // cannot tell which of the two the mark used.
       name: "z_image_bf16.safetensors",
-      title: "Z Image",
+      title: "Borrowed Light",
       icon: null,
       base_model: null,
+      base_model_folded: null,
       kind: "unet",
     },
   ],
@@ -94,8 +100,25 @@ const FILE_ONLY = {
   variant_count: 0,
 };
 
+// The same card on a model the shelf holds a chosen picture for.
+const FILE_ONLY_WITH_ICON = {
+  ...FILE_ONLY,
+  key: "w11",
+  models: [{ ...FILE_ONLY.models[0], icon: "a".repeat(64) }],
+};
+
 // The same card on a file the recovery could read nothing out of.
 const UNREAD = { ...FILE_ONLY, key: "w10", models: [] };
+
+// And one where the recovery found a LoRA but missed the loader beside it:
+// `models` is empty while `loras` is not, so "non-empty" cannot stand in for
+// "read".
+const HALF_READ = {
+  ...FILE_ONLY,
+  key: "w12",
+  models: [],
+  loras: [{ name: "add_detail.safetensors", mark: "structural" }],
+};
 
 const CROWDED = {
   ...BARE,
@@ -542,22 +565,142 @@ describe("WorkflowCard", () => {
     }
   });
 
+  // `base_model` and `base_model_folded` travel the wire so a model takes the
+  // SAME colour on a card as on the shelf. Both were unobserved by this suite
+  // until #1483 - every fixture left them null and nothing asserted a mark's
+  // colour, so deleting either line from `coverMarks` kept it green. These
+  // assert identity between renders rather than a literal colour, because the
+  // token is `hsl()` and jsdom reports it back as `rgb()`.
+  const colourOf = (models) =>
+    mountCard({ ...FILE_ONLY, key: `w-${Math.random()}`, models })
+      .find(".wf-card__mark .mmark-initials")
+      .attributes("style");
+  const CHECKPOINT = { kind: "checkpoint", title: "Borrowed Light" };
+
+  it("colours a cover mark by the base model, not by the file name", () => {
+    const one = colourOf([
+      { ...CHECKPOINT, name: "a.safetensors", base_model_folded: "flux.1-dev" },
+    ]);
+    const other = colourOf([
+      { ...CHECKPOINT, name: "b.safetensors", base_model_folded: "flux.1-dev" },
+    ]);
+    const different = colourOf([
+      { ...CHECKPOINT, name: "a.safetensors", base_model_folded: "sdxl-1.0" },
+    ]);
+    // Same base model, different files: one colour.
+    expect(one).toBe(other);
+    // Same file, different base model: not that colour.
+    expect(one).not.toBe(different);
+  });
+
+  it("prefers the folded spelling, so one model is one colour everywhere", () => {
+    // Why BOTH fields travel rather than one: `baseModelKey` folds to the
+    // canonical spelling first, and a card keying on the raw one would colour
+    // the same model differently from the shelf.
+    const folded = colourOf([
+      {
+        ...CHECKPOINT,
+        name: "a.safetensors",
+        base_model: "Flux.1 D",
+        base_model_folded: "flux.1-dev",
+      },
+    ]);
+    const rawOnly = colourOf([
+      { ...CHECKPOINT, name: "a.safetensors", base_model: "Flux.1 D" },
+    ]);
+    expect(folded).not.toBe(rawOnly);
+  });
+
+  it("still reads the raw spelling when the shelf folded nothing", () => {
+    // The `base_model` line of the mapping, on its own: a model the fold
+    // table does not know still colours by its base model rather than by its
+    // file name.
+    const raw = colourOf([
+      { ...CHECKPOINT, name: "a.safetensors", base_model: "Flux.1 D" },
+    ]);
+    const none = colourOf([{ ...CHECKPOINT, name: "a.safetensors" }]);
+    expect(raw).not.toBe(none);
+  });
+
+  it("falls back to the file name when the shelf has no title for it", () => {
+    // `filename` is the third line of the same mapping and had no observer
+    // either: a model the shelf cannot name draws its initials off the file.
+    const mark = mountCard({
+      ...FILE_ONLY,
+      key: "w-untitled",
+      models: [
+        { name: "quiet_river_v2.safetensors", kind: "checkpoint", title: null },
+      ],
+    }).find(".wf-card__mark .mmark-initials");
+    expect(mark.text()).toBe(
+      generatedMark({ filename: "quiet_river_v2.safetensors" }).initials,
+    );
+  });
+
   it("covers a card with no recipe with the models its file names", () => {
     const wrapper = mountCard(FILE_ONLY);
     const marks = wrapper.findAll(".wf-card__mark");
     expect(marks).toHaveLength(1);
     // The shelf's own identity slot, on its initials because this model
     // reached no shelf row with a picture on it.
-    expect(marks[0].find(".mmark-initials").text()).toBe("ZI");
+    expect(marks[0].find(".mmark-initials").text()).toBe("BL");
     expect(wrapper.find(".wf-card__empty-line").exists()).toBe(false);
     // "Run it…" stays: the cover says what the workflow loads, not that it ran.
     expect(wrapper.find(".wf-card__cover--empty").text()).toContain("Run it");
     // And the row names the model rather than claiming there is none. The
     // SHELF's name for it, as every other card's model row does (#1454).
-    expect(wrapper.findAll(".wf-card__row")[1].text()).toContain("Z Image");
+    expect(wrapper.findAll(".wf-card__row")[1].text()).toContain(
+      "Borrowed Light",
+    );
     expect(wrapper.findAll(".wf-card__row")[1].text()).not.toContain(
       "z_image_bf16",
     );
+  });
+
+  it("leads the cover with the base model, however the file listed them", () => {
+    // Five loaders and four marks: the one the card is ABOUT must not be the
+    // one the slice drops. A real Z-Image graph lists its VAE and its text
+    // encoder before its UNET.
+    const many = {
+      ...FILE_ONLY,
+      key: "w13",
+      models: [
+        { name: "ae.safetensors", kind: "vae" },
+        { name: "qwen_3_4b.safetensors", kind: "clip" },
+        { name: "clip_l.safetensors", kind: "clip" },
+        { name: "controlnet.safetensors", kind: "controlnet" },
+        {
+          name: "z_image_bf16.safetensors",
+          title: "Borrowed Light",
+          kind: "unet",
+        },
+      ],
+    };
+    const wrapper = mountCard(many);
+    const marks = wrapper.findAll(".wf-card__mark");
+    expect(marks).toHaveLength(4);
+    expect(marks[0].find(".mmark-initials").text()).toBe("BL");
+    expect(wrapper.find(".wf-card__mark-more").text()).toBe("+1");
+  });
+
+  it("draws the shelf's own picture for a model that has one", () => {
+    // The whole point of carrying `icon` on the slot: without it every mark
+    // on every card falls to initials and the field is decoration.
+    const wrapper = mountCard(FILE_ONLY_WITH_ICON);
+    const img = wrapper.find(".wf-card__mark .mmark-img");
+    expect(img.exists()).toBe(true);
+    expect(img.attributes("src")).toContain("a".repeat(64));
+    expect(wrapper.find(".wf-card__mark .mmark-initials").exists()).toBe(false);
+  });
+
+  it("will not say No checkpoint about a loader it could not read", () => {
+    // The recovery found the LoRA and missed the base model beside it, so
+    // `models` is empty on a card that plainly loads one.
+    const wrapper = mountCard(HALF_READ);
+    const rows = wrapper.findAll(".wf-card__row");
+    expect(rows[1].text()).toBe("Base model not read");
+    expect(rows[2].text()).toContain("add_detail");
+    expect(wrapper.attributes("aria-label")).toContain("base model not read");
   });
 
   it("leaves every other pictureless cover exactly as it was", () => {
@@ -575,9 +718,11 @@ describe("WorkflowCard", () => {
     // The last resort: the shipped empty cover, unchanged.
     expect(wrapper.find(".wf-card__empty-line").text()).toBe("No pictures yet");
     const rows = wrapper.findAll(".wf-card__row");
-    expect(rows[1].text()).toBe("Checkpoint not read");
+    expect(rows[1].text()).toBe("Base model not read");
     expect(rows[2].text()).toBe("LoRAs not read");
-    expect(wrapper.attributes("aria-label")).toContain("models not read");
+    const label = wrapper.attributes("aria-label");
+    expect(label).toContain("base model not read");
+    expect(label).toContain("LoRAs not read");
   });
 
   it("hides the pictureless cover's own words too", () => {

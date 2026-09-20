@@ -123,13 +123,23 @@ DEFAULT_SAMPLE = 200
 _SLOT_KINDS = {
     "ckpt_name": "checkpoint",
     "unet_name": "unet",
+    # The other three spellings of a base model: Diffusers' folder, ComfyUI's
+    # newer UNETLoader widget, and PixlStash's own node naming a shelf row.
+    # Mapped rather than left to fall through, because `kind` is spoken aloud.
+    "model_path": "checkpoint",
+    "diffusion_model": "unet",
+    "checkpoint_id": "checkpoint",
     "vae_name": "vae",
     "clip_name": "clip",
     "clip_name1": "clip",
     "clip_name2": "clip",
+    "clip_name3": "clip",
     "model_name": "upscale",
     "style_model_name": "style",
     "control_net_name": "controlnet",
+    "gligen_name": "gligen",
+    "hypernetwork_name": "hypernetwork",
+    "photomaker_model_name": "photomaker",
 }
 
 # The slot kinds that name the BASE MODEL, most preferred first.
@@ -142,14 +152,21 @@ _SLOT_KINDS = {
 # with no edit and nothing to remember.
 #
 # `checkpoint` then `unet` by hand because those two have a real order: a graph
-# carrying both is led by its checkpoint. The rest are alphabetical, which is
-# arbitrary and says so - they are alternative spellings of the same slot and
-# no graph carries two of them.
+# carrying both is led by its checkpoint. Every widget in `CHECKPOINT_WIDGETS`
+# now maps to one of those two - they ARE the two kinds a base model comes in,
+# and the other three widget names are spellings of them - so the derived tail
+# is empty today. It is kept, and deduplicated, because the set is the thing
+# that decides: a sixth widget naming a genuinely new kind appears here on its
+# own, and a sixth that is another spelling correctly adds nothing.
 BASE_MODEL_KINDS = ("checkpoint", "unet") + tuple(
-    sorted(
-        _SLOT_KINDS.get(widget, widget)
-        for widget in CHECKPOINT_WIDGETS - {"ckpt_name", "unet_name"}
+    kind
+    for kind in dict.fromkeys(
+        sorted(
+            _SLOT_KINDS.get(widget, widget)
+            for widget in CHECKPOINT_WIDGETS - {"ckpt_name", "unet_name"}
+        )
     )
+    if kind not in {"checkpoint", "unet"}
 )
 
 
@@ -609,48 +626,15 @@ def read_grid(
     )
 
 
-def model_titles(hub: HubDatabase, names: list[str]) -> dict[str, str]:
-    """``{slot name: model.display_name}`` - what the SHELF calls each model.
-
-    A card's stored slot value is one of three things
-    (``services.workflow_hash.structural_widget_value``): a lowercased
-    basename, a SHA-256 digest (whole, or the 10- or 12-hex prefix A1111
-    writes), or a shelf id. The card cannot say which it holds, so all three
-    are resolved.
-
-    **Resolved through :func:`recipe_asset_index`, not against ``model`` by
-    hand.** That index is the shelf's own answer to "which model could this
-    recipe asset name be" and it knows two things a hand-written join does
-    not: every *copy*'s basename via ``model_file.relpath``, so a second copy
-    filed under a different spelling still resolves; and, through
-    :func:`models_for_digest`, an A1111 short hash, which is a digest this
-    hub holds the long form of.
-
-    **A name that could be more than one model names none.** The index maps a
-    name to a *set* of models deliberately, and a set is ambiguous here unless
-    every member of it is named and they all agree - an unnamed rival is not a
-    tie-break, it is a second file this card might equally have used. Naming a
-    card after the wrong model is worse than naming it after its file, so the
-    entry is dropped and the caller keeps the filename.
-    """
-    candidates, titles = _shelf_candidates(hub, names)
-    found: dict[str, str] = {}
-    for value, models in candidates.items():
-        claimed = {titles.get(model_id) for model_id in models}
-        if len(claimed) == 1 and None not in claimed:
-            found[value] = claimed.pop()
-    return found
-
-
 def _shelf_candidates(
     hub: HubDatabase, names: list[str]
 ) -> tuple[dict[str, set[int]], dict[int, Optional[str]]]:
     """``({name: every shelf model it could be}, {model id: its title})``.
 
-    The resolution :func:`model_titles` and :func:`model_marks` share; the
-    first says why all three spellings of an asset value are tried, why the
-    index rather than a hand-written join answers it, and why the answer is a
-    set. A name with no candidate at all is left out.
+    The resolution behind :func:`model_marks`, which says why all three
+    spellings of an asset value are tried, why the index rather than a
+    hand-written join answers it, and why the answer is a set. A name with no
+    candidate at all is left out.
     """
     wanted = {name.lower() for name in names if name}
     if not wanted:
@@ -703,16 +687,29 @@ class ShelfMark:
 def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
     """``{slot name: ShelfMark}`` - how the shelf would draw each model.
 
-    :func:`model_titles`' resolution, carrying the model's picture as well as
-    its name, for the one place a card is drawn out of its models rather than
-    out of its pictures (#1466).
+    **The one place the shelf is asked about a card's models**, and therefore
+    where the rule lives.
 
-    **The picture needs a single candidate, where the title only needs
-    agreement.** Two shelf rows that agree on a name are still two files, and
-    a thumbnail is a picture *of one of them*: showing the wrong file's
-    sample is a claim the title rule never makes. So an ambiguous name keeps
-    whatever title the agreement rule allows and takes no icon, which leaves
-    the client on the initials it derives from the filename.
+    A card's stored slot value is one of three things
+    (``services.workflow_hash.structural_widget_value``): a lowercased
+    basename, a SHA-256 digest (whole, or the 10- or 12-hex prefix A1111
+    writes), or a shelf id. The card cannot say which it holds, so all three
+    are resolved, through :func:`recipe_asset_index` rather than against
+    ``model`` by hand: that index knows every *copy*'s basename via
+    ``model_file.relpath``, so a second copy filed under a different spelling
+    still resolves, and, through :func:`models_for_digest`, an A1111 short
+    hash of a digest this hub holds the long form of.
+
+    **A name that could be more than one model is ambiguous, and the two
+    halves of a mark answer that differently.** The index maps a name to a
+    *set* deliberately, and for the NAME a set is ambiguous unless every
+    member is named and they all agree - an unnamed rival is not a tie-break,
+    it is a second file this card might equally have used. The PICTURE is
+    stricter still: two rows that agree on a name are two files, and a
+    thumbnail is a picture *of one of them*, so an ambiguous name takes none
+    and the client falls back to the initials it derives from the filename.
+    Naming a card after the wrong model is worse than naming it after its
+    file, and showing the wrong file's sample is worse than showing neither.
 
     A name this shelf has never seen is absent rather than present-and-empty,
     so a caller can tell "not on this machine" from "here, with no picture".
@@ -745,10 +742,6 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
                 )
     marks = {}
     for value, models in candidates.items():
-        # `model_titles`' rule, applied to the candidates already in hand
-        # rather than by calling it: that would re-run `recipe_asset_index`,
-        # which is three scans of the shelf, for an answer this function has
-        # already paid for.
         claimed = {titles.get(model_id) for model_id in models}
         title = claimed.pop() if len(claimed) == 1 and None not in claimed else None
         marks[value] = ShelfMark(title, *pictures.get(value, (None, None, None)))

@@ -934,11 +934,13 @@ the two sides have agreed:
    of `PUT /workflows/{key}/slots`. A LoRA recovered this way is `structural`:
    it is in the file, which is what the mark means.
 
-   **Empty is "not read", never "has none".** The recovery reads a real file
-   and reads nothing at all from a template-style export whose loaders were
-   never filled in, so a `variant_count: 0` card with no models is one nobody
-   has read. A client must not render that as "no checkpoint"; `modelsUnread`
-   in `utils/workflowCard.js` is the shipped reading of the pair.
+   **An empty row is "not read", never "has none" — and that is per ROW.**
+   The recovery finds loaders by class, over `MODEL_FILENAME_FIELDS`, and no
+   list of classes is every loader there is: a graph can have its LoRAs
+   recovered and its base model missed, so a non-empty `models` does not mean
+   the card was read either. A client renders any empty row on a
+   `variant_count: 0` card as unread; `checkpointUnread` and `lorasUnread` in
+   `utils/workflowCard.js` are the shipped reading of it.
 
    `icon`, `base_model` and `base_model_folded` are served on **every** card's
    slots, not only

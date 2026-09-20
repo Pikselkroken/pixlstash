@@ -636,6 +636,46 @@ def test_a_ui_file_lands_on_a_card_with_no_assets(hub):
     ]
 
 
+def test_a_file_never_forks_a_card_a_variant_already_holds(hub):
+    """The dedup guard: one key, one Card, and it keeps its variants.
+
+    A graph that names NO model keys on ``topology_only_key`` - that is what
+    that key means - so a topology can have a variant on the very key the file
+    pass derives. Yielding it twice would put two Cards under one key on the
+    grid, and the second, built from the file alone, carries no variants: the
+    card would lose its pictures, its defaults and its stack depending on
+    which of the two a reader reached first.
+    """
+    modelless = {
+        "1": {
+            "class_type": "EmptyLatentImage",
+            "inputs": {"width": 512, "height": 512, "batch_size": 1},
+        },
+        "2": {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["1", 0], "filename_prefix": "x"},
+        },
+    }
+    keys = record_api_graph(hub, modelless)
+    assert card_of(hub, keys.structural_hash) == workflow_cards.topology_only_key(
+        keys.topology_hash
+    )
+    # A file of the same topology whose own variant is missing - an
+    # editor-format export of that graph, which files no recipe.
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_file "
+            "(workflow_name, topology_hash, structural_hash, workflow_key) "
+            "VALUES (?, ?, NULL, ?)",
+            ("modelless.json", keys.topology_hash, card_of(hub, keys.structural_hash)),
+        )
+
+    cards = card_index(hub)
+    assert len(cards) == 1
+    assert cards[0].variants == [keys.structural_hash]
+    assert cards[0].file_name == "modelless.json"
+
+
 def test_a_files_card_is_derived_rather_than_read_back(hub):
     """The key `card_index` puts a file-only card on is computed, not stored.
 
@@ -693,3 +733,56 @@ def test_replacing_a_file_moves_it_to_the_new_card(hub):
     assert len(rows) == 1
     assert rows[0]["structural_hash"] == second.structural_hash
     assert rows[0]["workflow_key"] == card_of(hub, second.structural_hash)
+
+
+def test_a_workflow_file_past_the_cap_is_refused_by_the_loader(tmp_path, monkeypatch):
+    """The size cap lives on the loader, so every caller gets it (#1483).
+
+    It guarded one of ten `_load_workflow_json` call sites when it was added -
+    the grid's per-card read - while the sibling that reads the same watched
+    folder on every workflow-list and menu open had none. Asserted on the
+    loader rather than on a route so it holds for all ten.
+
+    The cap is monkeypatched rather than written to: a real 32 MB file would
+    be a 32 MB write on every run of this suite for one branch.
+    """
+    from pixlstash.routes import comfyui as comfyui_routes
+
+    path = tmp_path / "big.json"
+    path.write_text(json.dumps({"nodes": []}), encoding="utf-8")
+
+    # Reads fine as it is.
+    assert comfyui_routes._load_workflow_json(str(path)) == {"nodes": []}
+
+    monkeypatch.setattr(comfyui_routes, "MAX_WORKFLOW_FILE_BYTES", 4)
+    with pytest.raises(comfyui_routes.WorkflowFileTooLarge):
+        comfyui_routes._load_workflow_json(str(path))
+
+
+def test_a_card_whose_file_is_past_the_cap_is_described_with_no_models(
+    tmp_path, monkeypatch, caplog
+):
+    """And the refusal reaches the card as "no models", not as a 500.
+
+    `WorkflowFileTooLarge` is a `ValueError` precisely so the callers that
+    already handle one from `json.load` treat it the same way - the document
+    did not read - rather than each needing to learn a new exception.
+    """
+    from pixlstash.routes import comfyui as comfyui_routes
+    from pixlstash.routes import workflows as workflow_routes
+
+    path = tmp_path / "card.json"
+    path.write_text(json.dumps({"nodes": []}), encoding="utf-8")
+    stat = path.stat()
+
+    monkeypatch.setattr(comfyui_routes, "MAX_WORKFLOW_FILE_BYTES", 4)
+    workflow_routes._file_model_widgets.cache_clear()
+    with caplog.at_level(logging.WARNING):
+        assert (
+            workflow_routes._file_model_widgets(
+                str(path), stat.st_mtime_ns, stat.st_size
+            )
+            == ()
+        )
+    assert "will not load" in caplog.text
+    workflow_routes._file_model_widgets.cache_clear()

@@ -163,8 +163,31 @@ def _normalize_workflow_name(name: str) -> str:
     return safe
 
 
+# The largest workflow document this process will parse.
+#
+# On the LOADER rather than on one caller, because all ten call sites read the
+# same watched-folder files: the grid's per-card read, the workflow list, the
+# menu, import, the inbox. A cap on one of them is a cap on one screen (#1483).
+# Measured off the open handle so the size that is checked is the size that is
+# read - a stat before the open races a rewrite.
+MAX_WORKFLOW_FILE_BYTES = 32 * 1024 * 1024
+
+
+class WorkflowFileTooLarge(ValueError):
+    """*path* is past :data:`MAX_WORKFLOW_FILE_BYTES`, so it was not parsed.
+
+    A ``ValueError`` because every caller already handles one from
+    ``json.load`` and treats it the same way - the document did not read.
+    """
+
+
 def _load_workflow_json(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as handle:
+        size = os.fstat(handle.fileno()).st_size
+        if size > MAX_WORKFLOW_FILE_BYTES:
+            raise WorkflowFileTooLarge(
+                f"{size} bytes, past the {MAX_WORKFLOW_FILE_BYTES} this reads"
+            )
         return json.load(handle)
 
 

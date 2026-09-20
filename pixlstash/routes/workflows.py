@@ -1120,6 +1120,12 @@ def _display_name(card, models=()) -> str:
     return named + _specials_suffix(card)
 
 
+# What a workflow file may be before the grid declines to parse it. A real one
+# is tens to hundreds of kilobytes; the largest in this repo's own fixtures is
+# under 300 KB, and the watched folder is a place anything can be dropped. The
+# size is already in hand from the ``stat`` the cache key needs, so refusing
+# costs nothing - and this read now happens on the grid and on every workflow
+# write, where it used to happen on neither.
 # ponytail: one entry per file version; stale versions age out of the LRU.
 @functools.lru_cache(maxsize=256)
 def _file_model_widgets(path: str, mtime_ns: int, size: int) -> tuple:

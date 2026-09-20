@@ -11,8 +11,9 @@ import {
   loraChips,
   ratingLabel,
   checkpointModel,
+  checkpointUnread,
+  lorasUnread,
   modelDisplayName,
-  modelsUnread,
 } from "./workflowCard";
 
 describe("fitChipCount", () => {
@@ -179,38 +180,65 @@ describe("cardAccessibleName", () => {
       variant_count: 0,
       picture_count: 0,
     });
-    expect(name).toBe("Template, models not read, 0 pictures");
+    expect(name).toBe(
+      "Template, base model not read, LoRAs not read, 0 pictures",
+    );
   });
 });
 
-describe("modelsUnread", () => {
-  // The whole point of the helper: a card with a recipe that loads no LoRAs
-  // HAS none, and a card with no recipe and nothing recovered was never read.
-  it("is true only for a card with no recipe and nothing recovered", () => {
-    expect(modelsUnread({ variant_count: 0, models: [], loras: [] })).toBe(
-      true,
-    );
-    expect(modelsUnread({ variant_count: 1, models: [], loras: [] })).toBe(
-      false,
-    );
+describe("checkpointUnread / lorasUnread", () => {
+  // The rule: on a card with a recipe an empty row is a fact, and on a card
+  // without one it is a silence. Each row is asked separately, because the
+  // recovery can find one and miss the other.
+  const withRecipe = { variant_count: 1, models: [], loras: [] };
+  const noRecipe = { variant_count: 0, models: [], loras: [] };
+
+  it("is true only where there is no recipe behind the empty row", () => {
+    expect(checkpointUnread(noRecipe)).toBe(true);
+    expect(lorasUnread(noRecipe)).toBe(true);
+    expect(checkpointUnread(withRecipe)).toBe(false);
+    expect(lorasUnread(withRecipe)).toBe(false);
   });
 
-  it("is false once the recovery has read anything at all", () => {
-    // A model was read, so the empty LoRA row means this workflow loads none:
-    // the recovery finds LoRA loaders by class, so none found is none.
-    expect(
-      modelsUnread({ variant_count: 0, models: [{ name: "a" }], loras: [] }),
-    ).toBe(false);
-    expect(
-      modelsUnread({ variant_count: 0, models: [], loras: [{ name: "b" }] }),
-    ).toBe(false);
+  it("answers per row, so a half-read card still declines to claim", () => {
+    // A LoRA recovered and the loader beside it missed: `models` is empty on
+    // a workflow that has one, and "No checkpoint" would be a lie. This is the
+    // case a single whole-card flag got wrong.
+    const halfRead = {
+      variant_count: 0,
+      models: [],
+      loras: [{ name: "add_detail.safetensors", mark: "structural" }],
+    };
+    expect(checkpointUnread(halfRead)).toBe(true);
+    expect(lorasUnread(halfRead)).toBe(false);
+
+    // And the other way round: a base model found, no LoRA loader in the file.
+    const modelOnly = {
+      variant_count: 0,
+      models: [{ name: "base.safetensors", kind: "checkpoint" }],
+      loras: [],
+    };
+    expect(checkpointUnread(modelOnly)).toBe(false);
+    expect(lorasUnread(modelOnly)).toBe(true);
+  });
+
+  it("only counts a BASE model, never an accessory slot", () => {
+    // A recovered VAE is not an answer to "which model is this workflow
+    // about": `checkpointModel` walks `BASE_MODEL_KINDS` and this is not one.
+    const vaeOnly = {
+      variant_count: 0,
+      models: [{ name: "ae.safetensors", kind: "vae" }],
+      loras: [],
+    };
+    expect(checkpointUnread(vaeOnly)).toBe(true);
   });
 
   it("reads a card carrying no variant_count at all as having a recipe", () => {
     // Every card the route serves carries one, so the missing case is a
     // caller that predates the field - and it must not be told that every
     // card it holds is unread.
-    expect(modelsUnread({ models: [], loras: [] })).toBe(false);
+    expect(checkpointUnread({ models: [], loras: [] })).toBe(false);
+    expect(lorasUnread({ models: [], loras: [] })).toBe(false);
   });
 });
 
