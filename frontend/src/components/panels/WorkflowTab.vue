@@ -6,7 +6,13 @@
     :open="sidebarStore.statsOpen"
     :tabs="tabs"
   >
-    <p v-if="!card && !multiple" class="wftab-empty">
+    <!-- The task manager, last tab and on its own: what the app is working on
+         is not part of a workflow, so it replaces the body rather than sitting
+         under it. Here so that a run started from this screen can be watched
+         from this screen. -->
+    <TasksPanel v-if="tab === 'tasks'" />
+
+    <p v-else-if="!card && !multiple" class="wftab-empty">
       Pick a workflow to see what it is made of.
     </p>
 
@@ -190,7 +196,7 @@
 
     <!-- The footer is the last thing in the body and sticks to its bottom, so
          Run… is where the design puts it without a second scroll container. -->
-    <div v-if="card || multiple" class="wftab-foot">
+    <div v-if="tab === 'workflow' && (card || multiple)" class="wftab-foot">
       <AppButton
         variant="primary"
         icon-left="play"
@@ -263,12 +269,14 @@ import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { modelDisplayName } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
 import Segmented from "../widgets/Segmented.vue";
+import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import WorkflowDefaultRow from "./WorkflowDefaultRow.vue";
 
@@ -292,11 +300,25 @@ const { showPictures } = useWorkflowPictures();
 const sidebarStore = useSidebarStore();
 const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
+const tasksStore = useTasksStore();
 
 const tab = ref("workflow");
-const tabs = [
+// A deep link to the Tasks tab, from a notice or a banner (`showTasksTab`).
+// This rail is the one a run is usually started from, so it is the one the
+// toast's *Show* has to land on.
+watch(
+  () => sidebarStore.tasksTabRequest,
+  () => {
+    tab.value = "tasks";
+  },
+);
+
+// Tasks last, and never anything but last: it is the app's business, not this
+// workflow's.
+const tabs = computed(() => [
   { value: "workflow", label: "Workflow", icon: "mdi-sitemap-outline" },
-];
+  tasksTabFor(tasksStore),
+]);
 
 /** The detail of the selected card, and whether its read is still out. */
 const detail = ref(null);

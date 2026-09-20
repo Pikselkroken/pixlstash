@@ -156,7 +156,6 @@ const theme = useTheme();
 // --- Component & DOM refs ---
 const gridContainer = ref(null);
 const sidebarRef = ref(null);
-const statsSidebarRef = ref(null);
 const mainAreaRef = ref(null);
 const gridWrapperRef = ref(null);
 
@@ -275,10 +274,8 @@ const {
   handleUpdateCheckForUpdates,
   handleEmptyScrapheapFromSidebar,
   handleSuggestPicturesForCharacter,
-  focusTasksTabPanel,
 } = useAppSettingsHandlers({
   gridContainer,
-  statsSidebarRef,
   pushAppRoute,
 });
 
@@ -401,7 +398,7 @@ function onRunStarted({ prompts = [], pictureIds = [] } = {}) {
       prompts.length === 1
         ? "Started 1 run in ComfyUI."
         : `Started ${prompts.length} runs in ComfyUI.`,
-    action: { label: "Show", handler: focusTasksTabPanel },
+    action: { label: "Show", handler: () => sidebarStore.showTasksTab() },
   });
 }
 
@@ -669,7 +666,7 @@ defineExpose({
            leaving the left rail alone. -->
       <ThumbnailUpgradeBanner
         :inert="librarySwitchOverlayOpen"
-        @view-progress="focusTasksTabPanel"
+        @view-progress="sidebarStore.showTasksTab()"
       />
       <div
         class="file-manager"
@@ -873,7 +870,7 @@ defineExpose({
              both became a popup in F5, so `/workflows` is the one branch left
              ahead of the stats panel. -->
         <WorkflowTab v-if="isWorkflowsView" />
-        <StatsSidebar v-else ref="statsSidebarRef" />
+        <StatsSidebar v-else />
       </div>
       <RunDialog
         v-if="runDialogStore.source"

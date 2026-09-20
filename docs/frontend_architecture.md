@@ -128,7 +128,7 @@ frontend/src/
     ├── TitleBar.vue             # Shared library chrome plus Electron title bar: active-library entry point, breadcrumb, window controls, update alert
     ├── WordmarkLogo.vue         # "PixlStash" brand wordmark in the Tiny5 pixel font (two-tone via --wordmark-accent)
     ├── views/       # Full-page / full-screen UI surfaces: ImageGrid, ImageOverlay + extracted OverlayTagsPanel/OverlayDescriptionPanel/OverlayRecipePanel/OverlayMetadataPanel/OverlayFilmstrip, ReviewSessionsOverlay, DuplicateQueue, ModelShelf, LibraryInsights, MovesReview, TrainingRuns, WorkflowsView, LoginScreen
-    ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbExportPanel/TbImportPanel/FilterMenu/FilterStrip/WorkflowFilterMenu/UndoControl, SelectionBar, SelectionMenu, StatsSidebar, ProjectFiles, …
+    ├── panels/      # Large structural panels that form the app shell: SideBar, Toolbar + extracted TbTagPanel/TbExportPanel/TbImportPanel/FilterMenu/FilterStrip/WorkflowFilterMenu/UndoControl, SelectionBar, SelectionMenu, StatsSidebar, TasksPanel, ProjectFiles, …
     ├── reviews/     # Tag-review surfaces (see below)
     │   ├── ReviewSessionView.vue      # One open review session: header, rail, and card queue
     │   ├── ReviewRail.vue             # Rail of open review sessions
@@ -263,10 +263,10 @@ Sub-components that manage independent data (e.g. `AccountSection`, `SmartScoreS
 - **Backend workers** (quality scoring, tagging, embeddings, faces, likeness, folder scans…) — fetched from `/workers/progress`. The store accumulates per-worker throughput `series` and applies the same grace-period active-state logic the Tasks tab used to own.
 - **ComfyUI runs** — frontend-driven (each `ComfyUiRunner` talks to ComfyUI's own WebSocket), so they can't be polled. Every runner instance mirrors its `progress` reactive into the store via `setComfyuiRun(runId, …)` / `clearComfyuiRun(runId)`, and registers an abort handler so the Tasks-tab row can cancel a run that lives in a different component (`ImageGrid` / `ImageOverlay`).
 
-**Adaptive poll.** `App.vue` calls `tasksStore.startPolling()` on mount (and `stopPolling()` on unmount) so the indicators are live app-wide, not only while the Tasks tab is open. The store self-throttles: paused while `document.hidden`, ~2 s when the Tasks tab is open or work is active, ~5 s when merely idle-watching. Share / read-only sessions skip the fetch (the endpoint is owner-only). This is the only always-on background poll in the app.
+**Adaptive poll.** `App.vue` calls `tasksStore.startPolling()` on mount (and `stopPolling()` on unmount) so the indicators are live app-wide, not only while the Tasks tab is open. The store self-throttles: paused while `document.hidden`, ~2 s when the Tasks tab is open or work is active, ~5 s when merely idle-watching. `setTasksTabOpen` **counts mounted panels rather than holding a flag**, because the Tasks panel is shared: with a boolean, one host unmounting would drop the cadence back to idle under another host still showing it. Share / read-only sessions skip the fetch (the endpoint is owner-only). This is the only always-on background poll in the app.
 
 **Consumers (deny nothing, just read):**
-- `StatsSidebar` renders the **Tasks tab** purely from `tasksStore.activeEntries` — backend workers as a throughput sparkline + rate, ComfyUI runs as a progress bar + abort. It owns only the canvas drawing and label formatting now; it no longer fetches or polls. Its **Tasks-tab button pulses** when `hasActiveTasks`.
+- `panels/TasksPanel.vue` renders the **Tasks tab** purely from `tasksStore.activeEntries` — backend workers as a throughput sparkline + rate, ComfyUI runs as a progress bar + abort. It owns only the canvas drawing and label formatting; it never fetches or polls. It exports `tasksTabFor(tasksStore)`, the tab descriptor its hosts declare — one function so the two cannot drift on the wording or on when the light comes on — and sets the store's fast cadence (`setTasksTabOpen`) for as long as it is mounted — which is exactly while the tab is on screen, since an inspector unmounts its body when the rail collapses. **Two inspectors offer the tab, last in their band**: `StatsSidebar` (everywhere the grid's rail is shown, the model shelf included) and `WorkflowTab` (`/workflows`), which the descriptor marks `busy` while `hasActiveTasks`, pulsing the tab. The image overlay's inspector deliberately does not: it is one picture's pane, laid over that picture. **A deep link to the tab goes through `sidebarStore.showTasksTab()`**, a counter both hosts watch: it used to be `statsSidebarRef.value.focusTasksTab()`, which reached nothing on `/workflows` — the one screen a run is usually started from, and so the one screen the "Started N runs" toast's *Show* silently did nothing on.
 - `Toolbar`'s **stats toggle** pulses its whole icon in `accent` when `hasActiveTasks`, so background work is visible even with the stats sidebar collapsed.
 - `ComfyUiRunner` retired its inline in-progress banner (progress now lives in the Tasks tab). It still renders an **inline banner for the failed state only**, so an error is never buried in a collapsed sidebar.
 
@@ -756,8 +756,8 @@ The dropdown menu of bulk actions for the current selection, rendered by `Select
 - Exposes: `focusFirst()`, `containsFocus()`.
 - Key emits: same action set as `SelectionBar` plus `open-tag-input`, `open-plugin-panel`, `make-more` / `run-workflow` (v1.12 F5, replacing `open-comfyui-panel`), `rotate-left` / `rotate-right`, `close`.
 
-#### `StatsSidebar.vue` (3152 lines)
-Right-side statistics panel, built on `AppInspector` (see "Shared shell pieces"). Responsibilities:
+#### `StatsSidebar.vue` (2037 lines)
+Right-side statistics panel, built on `AppInspector` (see "Shared shell pieces"). Its Tasks tab is the shared `TasksPanel` (§4.4); everything below is its own. Responsibilities:
 - Tag frequency charts (top tags, tag co-occurrence).
 - Confidence-score histogram.
 - Tag-count histogram.
@@ -1425,7 +1425,7 @@ Load-bearing behaviours:
 - **The ceiling is on the TOTAL, and it is 200.** `MAX_RUNS_PER_REQUEST` (`routes/comfyui.py`) is checked by `_plan` against the sum over every group, so two recipes at 150 each is a 400 although each count is legal. Both popups guard the product and name the number rather than letting the owner find it by pressing Run.
 - **A pre-flight 4xx is a refusal and is shown at once.** The route answers 400/404/422 on the dry run exactly as on the run, "so the two never disagree". Anything else - the network, a 5xx - is the question not being asked, which is not a refusal: the button stays live and the run itself answers. Over-blocking is its own regression.
 - **`allow_unchecked` is never sent.** An uninspectable ComfyUI blocks, the backend refuses independently, and there is no consent checkbox on this surface. (The same decision `RemixDialog` reached on 2026-07-29 and kept until it was deleted.)
-- **A submit failure is a form error**: the popup stays open with every input intact and the message in a `role="alert"`. A success emits `run` with the prompts, which `App.vue` hands to the grid's `ComfyUiRunner` and reports as a toast whose **Show** action deep-links to the Tasks tab (`focusTasksTabPanel`).
+- **A submit failure is a form error**: the popup stays open with every input intact and the message in a `role="alert"`. A success emits `run` with the prompts, which `App.vue` hands to the grid's `ComfyUiRunner` and reports as a toast whose **Show** action deep-links to the Tasks tab (`sidebarStore.showTasksTab()`).
 - **Save as recipe** is an inline name field in the footer rather than a second dialog: it `POST /recipes` with the prompt, the LoRAs and the edits as `overrides`, addressed `"<slot_label>/<input_name>"` — the form `POST /workflows/run` unpacks back into `values` when that recipe is run. The design's full Save-as-recipe dialog (with its per-part checkboxes) belongs to the saved-recipes step, not this one.
 
 #### `WorkflowCard.vue`, `ChipRow.vue`, `InfoPopover.vue` (`widgets/`, v1.12 Workflows & Recipes)
@@ -1850,9 +1850,17 @@ watcher the model shelf uses. See §9.1b for the destination itself.
 
 #### `WorkflowTab.vue` + `WorkflowDefaultRow.vue` (`panels/`), v1.12 F3
 
-The Workflows grid's right rail: one `AppInspector` tab, **Workflow**, mounted
-by `App.vue` on `/workflows` in place of `StatsSidebar`. There is **no Run
-tab** — Run… is an action, so it belongs in the footer and opens a popup (F5).
+The Workflows grid's right rail: two `AppInspector` tabs, **Workflow** and
+**Tasks**, mounted by `App.vue` on `/workflows` in place of `StatsSidebar`.
+There is **no Run tab** — Run… is an action, so it belongs in the footer and
+opens a popup (F5).
+
+- **Tasks is the shared `TasksPanel`, and always last.** This view replaces
+  the grid, and its rail replaces the grid's, so without the tab a run started
+  from this screen could not be watched from this screen: the reader had to
+  leave the workflows they were browsing to see the work they had just asked
+  for. It replaces the body rather than sitting under it, and the footer goes
+  with the body — Run… acts on a card the reader can no longer see.
 
 - **Built as a sibling of the shelf's own inspector, not a reshaping of it**,
   though the implementation plan names that file: every step of this feature
@@ -1943,7 +1951,7 @@ Four pieces every screen builds on, to the design system's shell contract (`ui_k
 
 - **Section label: the global `.section-label`** (`style.css`). The one name for a group: `--text-2xs`, semibold, uppercase, `--tracking-label`, ink at `--opacity-text-secondary`. The lightbox panels add `.section-label--on-dark`, because that surface is dark in both themes. Inspector sections, the lightbox's Description / Faces / Tags / Metadata, and the dedup menu titles are built on it, and a local rule keeps only layout. `.tbm-label` and `.shortcuts-section` still carry their own copies of the rule, now at the same ink. Settings keeps its 14px section and field titles for now: it has two heading levels, and a single 11px label would flatten them, so it waits for the Settings screen's own design.
 - **Selection mark: `--active-wash` plus `--selection-edge` or `--selection-ring`** (`style.css`, on the theme classes). The edge (`--rail-w`) is for rows, list cards and grid tiles; the 2px ring is for cells and cards with no left edge. Words stay `--active-text`. Drop targets and the undo range preview borrow the vocabulary but are not selections, and spell their own shadows. The sidebar's rows keep the transparent-border rail from `visual-language.md` §5, which is the same mark drawn as a border. The lightbox keeps `dark-surface-primary`, because its surface is dark in both themes and `--active-bar` is not.
-- **Inspector: `widgets/AppInspector.vue`.** The right-edge pane, `--stats-panel-w` on the sidebar surface, collapsing to zero width in place. Props: `open`, `label` (the `aria-label`), `tabs` (`[{ value, label, icon, disabled, tooltip }]`) and `v-model` for the active tab. A `#tab="{ tab }"` slot replaces a tab's content (Stats uses it for the Tasks pulse). The tab band is `--toolbar-height`, so it shares the toolbar's bottom rule, and has no title row. Inside, a group is `.inspector-section` with a `.section-label`, and values sit in `dl.inspector-kv` (two columns, name over value). `StatsSidebar`, `WorkflowTab` and the image overlay's sidebar are built on it. The overlay passes `lightbox`: the pane is a translucent `dark-surface` laid over the canvas (dark in both themes), its content stays mounted while closed (hidden with `v-show`, because the overlay reaches into the description panel as it opens), and it is a fixed-height column whose sections bound and scroll themselves rather than the pane scrolling. Its Metadata box uses the inspector's tab band one level down and `dl.inspector-kv` for the picture information. The model detail and duplicates evidence panes do not exist yet, and take this component when they are built (#1321, #1319).
+- **Inspector: `widgets/AppInspector.vue`.** The right-edge pane, `--stats-panel-w` on the sidebar surface, collapsing to zero width in place. Props: `open`, `label` (the `aria-label`), `tabs` (`[{ value, label, icon, disabled, tooltip, busy, busyTooltip }]`) and `v-model` for the active tab. `busy` is a tab's live-work light — the icon pulses accent and an accent dot sits beside the label, and `busyTooltip` then becomes the button's description in place of `tooltip`. It lives here rather than in a host so the Tasks tab pulses identically in every inspector that offers it; a `#tab` slot used to carry it and went when the second host arrived. The tab band is `--toolbar-height`, so it shares the toolbar's bottom rule, and has no title row. Inside, a group is `.inspector-section` with a `.section-label`, and values sit in `dl.inspector-kv` (two columns, name over value). `StatsSidebar`, `WorkflowTab` and the image overlay's sidebar are built on it. The overlay passes `lightbox`: the pane is a translucent `dark-surface` laid over the canvas (dark in both themes), its content stays mounted while closed (hidden with `v-show`, because the overlay reaches into the description panel as it opens), and it is a fixed-height column whose sections bound and scroll themselves rather than the pane scrolling. Its Metadata box uses the inspector's tab band one level down and `dl.inspector-kv` for the picture information. The model detail and duplicates evidence panes do not exist yet, and take this component when they are built (#1321, #1319).
 - **Selection pill: the global `.selbar`** (`App.css`). `--panel`, a 1px `--border`, `--radius-pill`, `--elevation-4`. Count first, then round `AppBarButton` verbs split by `.selbar-sep`, destructive last. `GridActionPill`, `ShelfSelectionBar` and the training runs all wear it. Each host positions it (`GridActionPill` centres itself; the shelves use `.selbar-float`), at `--z-floating`. The dedup queue's `.qselchip` is not this pill: it states the bulk scope of the row verdicts and carries no verbs, so moving it would change the flow.
 
 #### `GridActionPill.vue` (`panels/`, ~200 lines)
