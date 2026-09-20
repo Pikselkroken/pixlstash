@@ -145,6 +145,7 @@
             :columns="columns"
             :column-index="openColumnIndex"
             :selected-keys="store.selectedKeys"
+            :selected="openStackSelected"
             :cursor-key="cursorKey"
             @close="closePanel"
             @select="(key, event) => onRowClick(memberRowIndex(key), event)"
@@ -152,6 +153,10 @@
           <div
             v-else-if="entry.kind === 'card'"
             class="wfv-row"
+            :class="{
+              'wfv-row--banded':
+                store.openStackKey === entry.key && openStackSelected,
+            }"
             role="row"
             aria-level="1"
             :aria-selected="store.selectedKeys.includes(entry.key)"
@@ -357,6 +362,25 @@ const openStackName = computed(
     "Stack",
 );
 
+/**
+ * Whether the open stack is selected WHOLE — every one of its cards.
+ *
+ * The panel wears the mark then, and its rows wear none: the stack is the thing
+ * that was selected. `every`, not `some`: one member of three is not this
+ * stack, and only the rows can say which one it is.
+ *
+ * Computed from the stack's own key set rather than from the rows on screen, so
+ * a member request still in flight — or one that failed — cannot make a fully
+ * selected stack read as a partly selected one. Both readers of this also
+ * require a stack to be open, so the vacuous `true` an empty key set would give
+ * reaches nothing and is not guarded against.
+ */
+const openStackSelected = computed(() =>
+  store
+    .stackKeys(store.openStackKey)
+    .every((key) => store.selectedKeys.includes(key)),
+);
+
 /** Where the cursor is now. Always a real row: it falls back to the first. */
 const cursorIndex = computed(() => {
   const at = flatRows.value.findIndex((entry) => entry.id === cursorId.value);
@@ -449,7 +473,11 @@ function onRowClick(index, event) {
   if (!entry || entry.kind === "hole") return;
   cursorId.value = entry.id;
   if (event?.shiftKey) selectToCursor(index);
-  else store.select(entry.key, { additive: event?.ctrlKey || event?.metaKey });
+  else
+    store.select(entry.key, {
+      additive: event?.ctrlKey || event?.metaKey,
+      whole: entry.kind === "card",
+    });
 }
 
 /**
@@ -465,14 +493,18 @@ function selectToCursor(index) {
   );
   const from = anchor < 0 ? index : anchor;
   const [start, end] = from <= index ? [from, index] : [index, from];
-  // Deduplicated: a cover inside the range is both a card row and a member
-  // row, and selecting it twice would make the count lie.
+  // A card row in the range brings its whole stack; a MEMBER row brings only
+  // itself, or a range ending two rows into an open panel would drag the rest
+  // of that stack back in — including members the reader had just Ctrl-clicked
+  // out. Deduplicated because a cover is in the range twice, as the grid's
+  // stack card and as the panel's first member row, and because expanding the
+  // card row already named every member the range then meets.
   store.selectRange([
     ...new Set(
-      flatRows.value
-        .slice(start, end + 1)
-        .filter((entry) => entry.kind === "card" || entry.kind === "member")
-        .map((entry) => entry.key),
+      flatRows.value.slice(start, end + 1).flatMap((entry) => {
+        if (entry.kind === "card") return store.stackKeys(entry.key);
+        return entry.kind === "member" ? [entry.key] : [];
+      }),
     ),
   ]);
 }
@@ -600,7 +632,10 @@ function onKeyDown(event) {
     case " ":
       event.preventDefault();
       if (entry && entry.kind !== "hole") {
-        store.select(entry.key, { additive: true });
+        store.select(entry.key, {
+          additive: true,
+          whole: entry.kind === "card",
+        });
       }
       return;
     case "Enter":
@@ -770,6 +805,18 @@ async function filesChosen(event) {
 .wfv-row[aria-selected="true"] .wfv-cell {
   background: var(--active-wash);
   box-shadow: var(--selection-ring);
+}
+
+/* ONE closed box per selected thing. A selected stack whose panel is open is
+   drawn as two boxes — this card and the band below it — and ringing both read
+   as two selected objects sitting one above the other rather than as one stack
+   drawn twice. The band keeps the ring, because a border round the whole stack
+   is what the ring is; the card drops to `--selection-edge`, the shell's OTHER
+   mark shape, so it still carries wash + a shape as the contract in
+   `style.css` requires ("the wash under it, plus ONE of these two shapes") and
+   the rail does not close a second box around it. */
+.wfv-row--banded[aria-selected="true"] .wfv-cell {
+  box-shadow: var(--selection-edge);
 }
 
 .wfv-file-input {

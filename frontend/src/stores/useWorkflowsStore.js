@@ -204,20 +204,75 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     else openStack(coverKey);
   }
 
-  /** Replace the selection, or toggle one key into it (Ctrl/Cmd). */
-  function select(key, { additive = false } = {}) {
+  /**
+   * Every card a selection of the stack card `key` covers: the cover and its
+   * members.
+   *
+   * **A stack is selected whole.** Its cover key alone left the whole gesture
+   * naming the one workflow at the top of the pile: a reader who clicked a
+   * card marked "3 workflows" had selected one of them, and the panel then
+   * drew the mark on its first row and on none of the others. The stack is the
+   * thing on screen, so it is the thing selected.
+   *
+   * Read off `cards`, which is the top-level list, and answering `[key]` for
+   * anything it does not hold or anything that is not a stack. The CALLER says
+   * whether to expand at all (`select`'s `whole`), because the one key that
+   * needs both answers is the cover's: it is the grid's stack card AND the
+   * panel's first member row, and only the caller knows which of the two was
+   * clicked.
+   *
+   * `stack_size` and `member_keys` are derived from one list server-side
+   * (`workflow_card_service.read_grid`), so a stack card always carries
+   * `stack_size === member_keys.length + 1`; `?? []` is for a card that has
+   * not been through that route at all.
+   *
+   * @param {string|null} key
+   * @returns {Array<string>}
+   */
+  function stackKeys(key) {
+    if (!key) return [];
+    const card = cards.value.find((entry) => entry.key === key);
+    if (!card || !isStack(card)) return [key];
+    return [key, ...(card.member_keys ?? [])];
+  }
+
+  /**
+   * Replace the selection, or toggle one key into it (Ctrl/Cmd).
+   *
+   * `whole` expands a stack card into its whole stack; the caller passes false
+   * for a row inside the open panel, where the key names that one workflow —
+   * the cover row included, which is the only way the cover is separable from
+   * the stack it heads.
+   */
+  function select(key, { additive = false, whole = true } = {}) {
+    const keys = whole ? stackKeys(key) : [key];
     if (!additive) {
-      selectedKeys.value = [key];
+      selectedKeys.value = keys;
       return;
     }
-    selectedKeys.value = selectedKeys.value.includes(key)
-      ? selectedKeys.value.filter((entry) => entry !== key)
-      : [...selectedKeys.value, key];
+    // Ctrl removes only what is ALREADY there in full. Toggling on the clicked
+    // key alone emptied a half-selected stack — take one member out, then Ctrl
+    // the cover, and the cover's own membership dropped all of it — where what
+    // that gesture means is "make this whole".
+    if (keys.every((entry) => selectedKeys.value.includes(entry))) {
+      const dropped = new Set(keys);
+      selectedKeys.value = selectedKeys.value.filter(
+        (entry) => !dropped.has(entry),
+      );
+      return;
+    }
+    const held = new Set(selectedKeys.value);
+    selectedKeys.value = [
+      ...selectedKeys.value,
+      ...keys.filter((entry) => !held.has(entry)),
+    ];
   }
 
   /**
    * Select a run of keys (Shift). The caller hands the run because only it
-   * knows the flat order, which interleaves a stack's members into the grid.
+   * knows the flat order, which interleaves a stack's members into the grid —
+   * and, for the same reason, which of those keys is a stack card to expand and
+   * which is a member row standing for itself.
    */
   function selectRange(keys) {
     selectedKeys.value = [...keys];
@@ -270,6 +325,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     openStack,
     closeStack,
     toggleStack,
+    stackKeys,
     select,
     selectRange,
     clearSelection,

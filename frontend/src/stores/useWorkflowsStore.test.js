@@ -44,7 +44,11 @@ const CARDS = [
     rating: 4.2,
     picture_count: 90,
     last_used: "2026-06-30T00:00:00Z",
-    member_keys: [],
+    // `stack_size` 1 AND member keys: what a card looks like once its stack is
+    // unstacked (`test_unstacking_a_card_takes_it_out_of_the_automatic_group`
+    // serves exactly this), so the guard that reads `stack_size` rather than
+    // the list has something to refuse.
+    member_keys: ["m9"],
   },
   {
     key: "the-stack",
@@ -252,6 +256,122 @@ describe("one stack open at a time", () => {
     release.m3();
     await second;
     expect(store.membersLoading).toBe(false);
+  });
+});
+
+describe("a stack is selected whole", () => {
+  it("one click on a stack takes its members with it", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    // The cover key alone was the bug: a card marked "3 workflows" selected
+    // one of them, the one at the top of the pile.
+    store.select("the-stack");
+    expect(store.selectedKeys).toEqual(["the-stack", "m1", "m2"]);
+  });
+
+  it("a card that is not a stack takes nothing, even carrying member keys", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    // `workhorse` is `stack_size: 1` with `member_keys: ["m9"]` — an unstacked
+    // card. Expanding on the list rather than on `stack_size` would select a
+    // card the grid draws separately and the panel never opens.
+    store.select("workhorse");
+    expect(store.selectedKeys).toEqual(["workhorse"]);
+  });
+
+  it("a member's own key stands for itself, the cover row included", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    // A member card is not in `cards` at all.
+    store.select("m1", { whole: false });
+    expect(store.selectedKeys).toEqual(["m1"]);
+
+    // And the cover IS, under the very key the panel's first row carries — so
+    // only `whole: false` keeps that row separable from the stack it heads.
+    store.select("the-stack", { whole: false });
+    expect(store.selectedKeys).toEqual(["the-stack"]);
+  });
+
+  it("Ctrl adds the whole stack, and takes the whole stack back out", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    store.select("workhorse");
+    store.select("the-stack", { additive: true });
+    expect(store.selectedKeys).toEqual(["workhorse", "the-stack", "m1", "m2"]);
+
+    store.select("the-stack", { additive: true });
+    expect(store.selectedKeys).toEqual(["workhorse"]);
+  });
+
+  it("Ctrl on a half-selected stack completes it rather than emptying it", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    // The half-selected state you actually reach: select the stack, then take
+    // one member out. Toggling on the CLICKED key alone emptied this, because
+    // the cover is still in — so the gesture that means "make this whole" did
+    // the opposite.
+    store.select("the-stack");
+    store.select("m1", { additive: true, whole: false });
+    expect(store.selectedKeys).toEqual(["the-stack", "m2"]);
+
+    store.select("the-stack", { additive: true });
+    expect(store.selectedKeys).toEqual(["the-stack", "m2", "m1"]);
+
+    // Whole now, so the next Ctrl does empty it.
+    store.select("the-stack", { additive: true });
+    expect(store.selectedKeys).toEqual([]);
+  });
+
+  it("the other half-selected state completes too, and no key lands twice", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    store.select("m1", { whole: false });
+    store.select("the-stack", { additive: true });
+    expect(store.selectedKeys).toEqual(["m1", "the-stack", "m2"]);
+  });
+
+  it("selectRange takes the run it is handed, expanding nothing itself", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    // The view expands per row, because only it knows which key came from a
+    // stack CARD and which from a member row inside an open panel. A range
+    // that expanded here would drag a stack's other members back in behind a
+    // reader who had just taken them out.
+    store.selectRange(["the-stack", "m1"]);
+    expect(store.selectedKeys).toEqual(["the-stack", "m1"]);
+  });
+
+  it("stackKeys answers nothing for no stack, and itself for an unknown key", async () => {
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+
+    expect(store.stackKeys(null)).toEqual([]);
+    expect(store.stackKeys("not-a-card")).toEqual(["not-a-card"]);
+    expect(store.stackKeys("never-kept-a-picture")).toEqual([
+      "never-kept-a-picture",
+    ]);
+  });
+
+  it("a stack card with no member keys expands to itself", async () => {
+    const store = useWorkflowsStore();
+    listWorkflowCards.mockResolvedValue({
+      // The server derives both from one list, so this cannot arrive from
+      // `/workflows/cards` — but `?? []` is the difference between "the cover
+      // alone" and a crash if it ever does.
+      cards: [{ key: "bare", rank: 1, stack_size: 3 }],
+      one_offs: 0,
+      hidden: 0,
+    });
+    await store.fetchCards();
+
+    expect(store.stackKeys("bare")).toEqual(["bare"]);
   });
 });
 

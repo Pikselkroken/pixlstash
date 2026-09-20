@@ -17,6 +17,10 @@
 //     picture_count, rating,            // rating 1-5; 0 or null is unrated
 //     covers: [url],                    // up to 3, the cover first
 //     stack_size,                       // 2 or more makes the card a stack
+//     member_keys,                      // the stack's OTHER cards, this one
+//                                       // excluded, so it is `stack_size - 1`
+//                                       // long; both are derived from one
+//                                       // list in `workflow_card_service`
 //     saved_recipe_count,
 //     defaults: [{ label, value }],
 //     // Read by the Workflows grid rather than by the card itself, and listed

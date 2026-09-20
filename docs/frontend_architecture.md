@@ -1498,9 +1498,41 @@ same watcher the shelf uses.
 - **`StackPanel` is one element at `grid-column: 1 / -1`**, so opening a stack
   pushes the later rows down rather than floating over them. Neutral ground —
   `--panel`, a hairline border, `--radius-lg`, `--space-4` below — and **no
-  olive wash**: the open card is marked by its rotated ▸ alone. The notch is
-  the shipped `.tbm-caret` aimed by `--notch`, recomputed from the stack card's
-  COLUMN INDEX on every resize and never stored as a pixel offset.
+  olive wash for merely being open**: the open card is marked by its rotated ▸
+  alone. The notch is the shipped `.tbm-caret` aimed by `--notch`, recomputed
+  from the stack card's COLUMN INDEX on every resize and never stored as a
+  pixel offset.
+- **A stack is selected WHOLE, and wears one mark.** `store.stackKeys(key)`
+  expands a stack card's key into the cover plus its `member_keys`, and `select`
+  takes `whole` to say whether to expand at all. The cover key alone — what
+  shipped first — had a card marked "3 workflows" select one of them, the one at
+  the top of the pile, and the open panel then drew the mark on its first row
+  and on none of the others. **The caller decides, because the cover key names
+  two rows** (see the bullet above): the grid's stack card passes `whole`, the
+  panel's rows do not, so the cover is separable from the stack it heads instead
+  of being the one card in a stack that cannot be singled out. Ctrl removes only
+  a stack that is already in *in full*, or taking one member out and then
+  Ctrl-clicking the cover emptied the selection where it means "make this
+  whole". `selectRange` expands nothing itself: `selectToCursor` expands per row
+  kind, or a Shift range ending two rows into an open panel drags back the
+  members a Ctrl-click just removed.
+- **The mark follows the unit.** `StackPanel` takes `selected` — the view's
+  `openStackSelected`, `every` key of the stack rather than `some`, computed
+  from the stack's key set rather than from the rows on screen so an in-flight
+  member request cannot make a full selection read as partial — and wears the
+  shell's wash + `--selection-ring` round the whole band. The per-row rule is
+  scoped `:not(.stack-panel--selected)`, so a partly selected stack marks its
+  rows instead, that being the only way to see which of them are in. Rows keep
+  `aria-selected` either way: they are selected whichever box the olive is on.
+  **One closed box per selected thing** — the grid card takes
+  `.wfv-row--banded` and drops to `--selection-edge` while the band carries the
+  ring, because ringing both read as two selected objects stacked on each other;
+  it keeps wash + a shape, as `style.css`'s selection contract requires. The
+  band's wash is a `background-image` layer over `--panel` (the way
+  `--hover-shade` layers over a filled control), which is also why the
+  `.tbm-caret` notch needs the layer restated — it hardcodes `--panel` and would
+  otherwise seam. Header text over the wash measures 4.98:1 light / 4.63:1 dark
+  at secondary alpha.
 - **ARIA**: one `treegrid`. Cards are `role="row"` with `aria-selected`, stack
   rows add `aria-expanded`/`aria-controls`; the panel is a `rowgroup` holding a
   header row (one gridcell, one `role="toolbar"` named after the stack) and

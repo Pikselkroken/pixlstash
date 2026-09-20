@@ -5,6 +5,7 @@
   <div
     :id="panelId"
     class="stack-panel"
+    :class="{ 'stack-panel--selected': selected }"
     role="rowgroup"
     :style="notchStyle"
     data-testid="stack-panel"
@@ -77,9 +78,13 @@
  * container resizes, never stored as a pixel offset, which is what would leave
  * it pointing at the wrong card after a resize.
  *
- * Neutral ground on purpose — `--panel`, a hairline border, `--radius-lg`. The
- * open card is marked by its rotated ▸ alone; an olive wash over the band said
- * "selected" about six cards nobody had selected.
+ * Neutral ground for being merely OPEN — `--panel`, a hairline border,
+ * `--radius-lg` — because the wash it used to wear on opening said "selected"
+ * about six cards nobody had selected, and the open card is marked by its
+ * rotated ▸ alone. The band takes the wash and the ring when `selected` says
+ * those cards are in fact all selected: a stack is selected whole, so one mark
+ * round the band is the mark for the stack, and what the wash stands for is now
+ * exactly what it reads as.
  *
  * The Grid|List switch, *Unstack all* and the hidden-member count are not here.
  * The switch is F2's. The other two are blocked on the READ side rather than
@@ -110,6 +115,12 @@ const props = defineProps({
   columnIndex: { type: Number, default: 0 },
   /** Keys of the selected cards, top-level and member alike. */
   selectedKeys: { type: Array, default: () => [] },
+  /**
+   * The WHOLE stack is selected, so the band wears one mark and its rows wear
+   * none. A partly selected stack leaves this false and the rows mark
+   * themselves, which is the only way a reader can see which of them are in.
+   */
+  selected: { type: Boolean, default: false },
   /** The roving cursor's key, when it is inside this panel. */
   cursorKey: { type: String, default: "" },
 });
@@ -220,10 +231,41 @@ const notchStyle = computed(() => {
   border-radius: var(--radius-md);
 }
 
-/* The shell's selection mark (`style.css`, "THE SELECTION MARK"): the wash,
-   plus `--selection-ring` for a card with no left edge to rail. The same mark
-   the top-level cards wear, so a mixed selection reads as one. */
-.stack-panel__member[aria-selected="true"] .stack-panel__cell {
+/* The whole stack selected: one mark round the band, because the stack is what
+   was selected. The shell's mark (`style.css`, "THE SELECTION MARK") — the wash
+   plus `--selection-ring` rather than `--selection-edge`, because what is
+   wanted here is a border round the whole stack and not a rail down one side
+   of it; the grid card above takes the edge instead, so the pair carries one
+   closed box between them.
+
+   The wash is a `background-image` layer over `--panel` rather than a
+   `background`, the same way `--hover-shade` layers over a filled control:
+   replacing the colour would put a translucent olive over whatever is behind
+   the band instead of over its own ground. The header's `on-panel` text sits on
+   that layer, at 4.98:1 light and 4.63:1 dark for the secondary figures
+   (11.22:1 / 7.52:1 at full ink) — above the 4.5:1 this system asks of small
+   text, so the wash costs the header nothing. */
+.stack-panel--selected {
+  background-image: linear-gradient(var(--active-wash), var(--active-wash));
+  box-shadow: var(--selection-ring);
+}
+
+/* The notch follows the band. `.tbm-caret` (`App.css`) hardcodes
+   `background: rgb(var(--v-theme-panel))`, so without this a selected stack
+   draws a bare panel-coloured caret against a washed band — a visible seam at
+   the one point the design means as the join to the card. The shorthand there
+   is lower specificity, so it cannot take this layer back off. */
+.stack-panel--selected .tbm-caret {
+  background-image: linear-gradient(var(--active-wash), var(--active-wash));
+}
+
+/* A PARTLY selected stack marks its rows instead — the same mark the top-level
+   cards wear, so a mixed selection reads as one. Suppressed while the band
+   carries it, or a row the reader had taken back out of the selection would
+   still be wearing olive inside a washed band. */
+.stack-panel:not(.stack-panel--selected)
+  .stack-panel__member[aria-selected="true"]
+  .stack-panel__cell {
   background: var(--active-wash);
   box-shadow: var(--selection-ring);
 }

@@ -3033,6 +3033,10 @@ _CONTRACT_FIELDS = {
     "rating",
     "covers",
     "stack_size",
+    # The grid opens a stack from this and, since #1402's selection fix, selects
+    # one from it too, so it is as load-bearing as `stack_size` and belongs in
+    # the same named assertion.
+    "member_keys",
     "saved_recipe_count",
     "defaults",
 }
