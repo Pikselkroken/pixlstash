@@ -1036,6 +1036,15 @@ def insert_adapter(
         loader = "LoraLoader" if clip is not None else "LoraLoaderModelOnly"
         if loader not in object_info:
             raise LookupError(f"This ComfyUI has no {loader} node.")
+        if not _combo_options(object_info[loader], "lora_name"):
+            # The same check `_inserted_loader` makes below, for the same
+            # reason: with no options `_widget_defaults` yields no `lora_name`
+            # key at all, so the copy would be written and answered 201 and
+            # then refused by ComfyUI on a missing required input — after the
+            # owner was told it was ready to pick a LoRA in.
+            raise LookupError(
+                f"This ComfyUI does not say which LoRA files {loader} can load."
+            )
         field = value = None
     else:
         loader, field, value = _inserted_loader(

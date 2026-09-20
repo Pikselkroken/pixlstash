@@ -2358,8 +2358,31 @@ def create_router(server) -> APIRouter:
     # same thing.
 
     def _card_source(card):
-        """One card's runnable graph, or the 409 that says why there is none."""
-        source, reason = _source_graph_for(card)
+        """One card's runnable graph, or the 409 that says why there is none.
+
+        ``RecursionError`` is caught here rather than at each gesture because
+        all three resolve through this one function and share the exposure: an
+        embedded graph comes out of a picture that arrived from somewhere else,
+        so its nesting depth is not ours to trust, and ``sanitize_prompt_graph``
+        deep-copies it before anything of ours has looked at it.
+        ``_store_workflow`` and ``_trash_stored_workflow`` already name this
+        class for the same reason.
+        """
+        try:
+            source, reason = _source_graph_for(card)
+        except RecursionError as exc:
+            logger.warning(
+                "Card %s has a source graph too deeply nested to read: %s",
+                card.workflow_key,
+                exc,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "PixlStash cannot read this workflow: its graph is nested "
+                    "too deeply to walk."
+                ),
+            ) from exc
         if source is None:
             raise HTTPException(
                 status_code=409,
@@ -2382,6 +2405,12 @@ def create_router(server) -> APIRouter:
         """
         stem = os.path.splitext(card.file_name)[0] if card.file_name else ""
         return download_stem(stem or _display_name(card)) or "workflow"
+
+    # Which of the two cleanings is the authority: for a file written on THIS
+    # machine it is `_normalize_workflow_name` + `resolve_path_within` in
+    # `routes/comfyui.py`, and `download_stem` above is advisory. For the
+    # export's `filename` there is no server-side backstop at all, because the
+    # client writes that file — so there `download_stem` is the authority.
 
     def _structural_lora_slots(card, graph: dict) -> set[tuple[str, str]]:
         """``(node id, widget)`` of every LoRA slot the owner marked structural.
@@ -2452,10 +2481,13 @@ def create_router(server) -> APIRouter:
                 structural_lora_slots=_structural_lora_slots(card, source.graph),
                 unvouched=unvouched_model_values(hub),
             )
-        except WorkflowGraphError as exc:
-            # Refused rather than exported unscrubbed. Which nodes carry prose
-            # comes out of the reduction, so without it the prompt would be
-            # published - the one thing this route exists to prevent.
+        except (WorkflowGraphError, RecursionError) as exc:
+            # Refused rather than exported unscrubbed. A graph PixlStash cannot
+            # read is one it can promise nothing about, and the promise is the
+            # route. `RecursionError` is the same answer and the same class of
+            # input: an embedded graph comes out of a picture that arrived from
+            # somewhere else, which is why `_store_workflow` and
+            # `_trash_stored_workflow` both name it too.
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -2598,7 +2630,7 @@ def create_router(server) -> APIRouter:
                     "knows it from its pictures. Hide it instead."
                 ),
             )
-        deleted = trash_user_workflow(server, card.file_name)
+        deleted = trash_user_workflow(hub, card.file_name)
         _announce(request, [workflow_key], "changed")
         return WorkflowDeleted(deleted=deleted, workflow_key=workflow_key)
 

@@ -348,6 +348,18 @@ def _shelf_model_digests(fetchall: Callable[[str], list]) -> list[str]:
     )
 
 
+def shelf_model_names(hub: HubDatabase) -> set[str]:
+    """Every model filename the shelf holds, normalized (rule 5).
+
+    Public for the recipe export, which asks a narrower question than
+    :func:`unvouched_model_values`: a saved recipe's ``filename`` is a model
+    name by construction, so it needs no extension test to be judged - and the
+    extension test is exactly what would let one saved without its suffix be
+    exported with no warning beside it.
+    """
+    return _shelf_model_names(hub.fetchall)
+
+
 def unvouched_model_values(hub: HubDatabase) -> Callable[[str, str], bool]:
     """Ask, of one widget's value, whether this machine can vouch for the model.
 

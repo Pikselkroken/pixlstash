@@ -77,6 +77,7 @@ from pixlstash.services.workflow_identity import (
 )
 from pixlstash.services.workflow_export import (
     download_name,
+    download_stem,
     scrub_for_export,
 )
 from pixlstash.services.workflow_io import detect_workflow_io
@@ -6777,4 +6778,193 @@ def test_an_export_download_name_is_cleaned_for_the_client_that_writes_it():
     assert download_name("../../evil") == "evil.json"
     assert download_name(None) == "recipe.json"
     assert download_name("a\tb") == "a b.json"
-    assert len(download_name("x" * 400)) <= 105
+    # Bounded in BYTES, with room for the ".json" — see
+    # `test_a_download_name_is_bounded_in_bytes_not_characters` for why the
+    # unit matters and for the non-Latin case this ASCII one cannot show.
+    assert len(download_name("x" * 400).encode("utf-8")) <= 205
+
+
+# --- what the backend review found the scrub still published ----------------
+
+
+def test_a_prompt_wired_in_from_a_string_primitive_is_blanked():
+    """`PrimitiveStringMultiline` hands its prompt on in a `value` widget.
+
+    `carries_prose` cannot be widened to cover it: that rule is the REDUCER's
+    too, and a `value` widget feeding a LoadImage its filename is a topology
+    asset there, so calling it prose would re-key every workflow built that
+    way. The export carries the extra rule instead.
+    """
+    graph = _sdxl_graph()
+    graph["9"] = {"class_type": "PrimitiveStringMultiline", "inputs": {"value": LEAKED}}
+    graph["10"] = {"class_type": "String Literal", "inputs": {"string": "catgirl"}}
+    graph["2"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": ["9", 0], "clip": ["1", 1]},
+    }
+    exported, removed = scrub_for_export(graph)
+    assert exported["9"]["inputs"]["value"] == ""
+    # A ONE-WORD prompt too: the length and whitespace backstops both miss it,
+    # so this is the assertion that needs the class list.
+    assert exported["10"]["inputs"]["string"] == ""
+    assert LEAKED not in json.dumps(exported)
+    assert "prompts" in removed
+
+
+def test_a_sentence_in_a_widget_no_rule_names_is_still_blanked():
+    """The reducer's own backstop: that is not a filename, so a person wrote it."""
+    graph = _sdxl_graph()
+    graph["9"] = {
+        "class_type": "SomeCustomNode",
+        "inputs": {"notes": LEAKED, "long_one": "x" * 300},
+    }
+    exported, removed = scrub_for_export(graph)
+    assert exported["9"]["inputs"]["notes"] == ""
+    assert exported["9"]["inputs"]["long_one"] == ""
+    assert "prompts" in removed
+
+
+def test_the_enum_tokens_that_make_a_file_loadable_are_left_alone():
+    """The positive control for the rule above: over-blanking is a regression.
+
+    A sampler name, a scheduler and an upscale method are what ComfyUI matches
+    against its own combo lists. Blank them and the export opens to a graph
+    nobody can run, which is not a safer export.
+    """
+    graph = _sdxl_graph()
+    graph["4"]["inputs"].update(
+        {"sampler_name": "dpmpp_2m_sde_gpu", "scheduler": "karras"}
+    )
+    graph["9"] = {
+        "class_type": "UpscaleModelLoader",
+        # A model filename WITH SPACES, which is ordinary — 5,066 real ones in
+        # this library have them — so the filename test has to answer first.
+        "inputs": {
+            "model_name": "4x Ultra Sharp.pth",
+            "upscale_method": "nearest-exact",
+        },
+    }
+    exported, _removed = scrub_for_export(graph)
+    assert exported["4"]["inputs"]["sampler_name"] == "dpmpp_2m_sde_gpu"
+    assert exported["4"]["inputs"]["scheduler"] == "karras"
+    assert exported["9"]["inputs"]["upscale_method"] == "nearest-exact"
+    assert exported["9"]["inputs"]["model_name"] == "4x Ultra Sharp.pth"
+
+
+def test_a_credential_in_a_widget_never_leaves_the_machine():
+    """`SECRET_FIELD_RE` drops these from a stored document; a file given away
+    is the stronger case, and the two tiers this route resolves from most
+    often are raw ComfyUI output the reducer never touched."""
+    graph = _sdxl_graph()
+    graph["9"] = {
+        "class_type": "SomeUploader",
+        "inputs": {
+            "api_key": "example-not-a-real-key",
+            "auth_token": "example-token",
+            "password": "placeholder-pw",
+        },
+    }
+    exported, removed = scrub_for_export(graph)
+    assert list(exported["9"]["inputs"].values()) == ["", "", ""]
+    assert "values in fields named like a key or a password" in removed
+
+
+def test_a_dict_widget_is_scrubbed_by_its_own_key_not_its_parents():
+    """What `workflow_hash`'s nested-asset walk does, and for the same reason.
+
+    A list is positional and inherits the widget's meaning; a dict key is a
+    name and may mean something else entirely.
+    """
+    graph = _sdxl_graph()
+    # A ONE-WORD prompt, deliberately: with whitespace in it the backstop
+    # blanks it whatever name the recursion carried, and this test would pass
+    # while saying nothing about the key.
+    graph["9"] = {
+        "class_type": "SomeCustomNode",
+        "inputs": {"config": {"positive_prompt": "catgirl", "steps": 30}},
+    }
+    exported, removed = scrub_for_export(graph)
+    assert exported["9"]["inputs"]["config"]["positive_prompt"] == ""
+    assert exported["9"]["inputs"]["config"]["steps"] == 30
+    assert "prompts" in removed
+    # A list is positional and DOES inherit its widget's meaning, which is the
+    # other half of the same rule.
+    graph["10"] = {"class_type": "CLIPTextEncode", "inputs": {"text": ["catgirl"]}}
+    exported, _removed = scrub_for_export(graph)
+    assert exported["10"]["inputs"]["text"] == [""]
+
+
+def test_comfyuis_own_default_node_title_is_not_reported_as_something_removed():
+    """`removed` is the only list the dialog renders, so it must mean something.
+
+    ComfyUI writes `_meta: {"title": "<class name>"}` on almost every node, so
+    reporting those would put "node titles" on nearly every export and tell the
+    owner nothing. The `_meta` block still goes either way.
+    """
+    graph = _sdxl_graph()
+    graph["4"]["_meta"] = {"title": "KSampler"}
+    exported, removed = scrub_for_export(graph)
+    assert "_meta" not in exported["4"]
+    assert "node titles" not in removed
+    # A title a person actually wrote is reported.
+    graph["4"]["_meta"] = {"title": "her second pass"}
+    _exported, removed = scrub_for_export(graph)
+    assert "node titles" in removed
+
+
+def test_a_download_name_is_bounded_in_bytes_not_characters():
+    """A filesystem counts bytes: 100 CJK characters are 300 of them.
+
+    Past ext4's 255-byte component limit, `store_workflow_copy` raises OSError
+    and `POST /duplicate` can only answer 500 — for that card, for good.
+    """
+    stem = download_stem("人" * 200)
+    assert len(stem.encode("utf-8")) <= 200
+    assert stem, "a long non-Latin name must still produce a usable stem"
+    # Not truncated mid-character.
+    stem.encode("utf-8").decode("utf-8")
+
+
+def test_a_graph_too_deeply_nested_to_walk_is_refused_not_a_500(runnable, monkeypatch):
+    """An embedded graph arrived from outside, so its depth is not ours to trust.
+
+    `deepcopy` and the scrub's own recursion both raise `RecursionError` on
+    one, and the honest answer is the same 409 an unreadable graph gets —
+    `_store_workflow` and `_trash_stored_workflow` already name this class too.
+    """
+    nested: list = []
+    cursor = nested
+    for _ in range(6000):
+        deeper: list = []
+        cursor.append(deeper)
+        cursor = deeper
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid: {
+            "1": {"class_type": "KSampler", "inputs": {"whatever": nested}}
+        },
+    )
+    r = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/export")
+    assert r.status_code == 409, r.text
+
+
+def test_a_comfyui_with_no_lora_files_refuses_the_insert_rather_than_writing_one(
+    loaderless,
+):
+    """`_widget_defaults` yields no `lora_name` when the combo is empty.
+
+    The file would be written, answered 201 and then refused by ComfyUI on a
+    missing required input — after the owner was told it was ready to pick a
+    LoRA in. The adapter path has always made this check; the empty-slot path
+    did not.
+    """
+    empty = json.loads(json.dumps(LOADERLESS_OBJECT_INFO))
+    empty["LoraLoaderModelOnly"]["input"]["required"]["lora_name"] = [[], {}]
+    loaderless.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (empty, None)
+    )
+    r = loaderless.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
+    assert r.status_code == 409, r.text
+    assert "which LoRA files" in r.json()["detail"]
+    assert list(loaderless.tmp_path.glob("*.json")) == [], "a file was written anyway"

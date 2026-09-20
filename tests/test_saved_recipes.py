@@ -1196,3 +1196,24 @@ def test_the_belt_and_not_only_the_gate_is_what_refuses_the_export(recipe_env):
     finally:
         auth.READ_BLOCKED_GET_PREFIXES = previously_blocked
         server.authz._enforcing = previously_enforcing
+
+
+def test_a_lora_saved_without_its_extension_is_still_warned_about(recipe_env):
+    """`shares` judges the name against the shelf, not against its suffix.
+
+    `unvouched_model_values` ends in an extension test, which is right for a
+    graph widget — where a string may be an enum token rather than a filename —
+    and wrong here, where the field IS a model name. A recipe saved as "ada"
+    rather than "ada.safetensors" would otherwise be exported in plain text
+    with nothing said about it.
+    """
+    bare = ADA.removesuffix(".safetensors")
+    saved = _save(
+        recipe_env.owner,
+        CARD_A,
+        loras=[{"filename": bare, "sha256": None, "strength": 1.0}],
+    )
+    shares = recipe_env.owner.get(f"{API}/recipes/{saved['id']}/export").json()[
+        "shares"
+    ]
+    assert any("no longer holds" in line and bare in line for line in shares), shares

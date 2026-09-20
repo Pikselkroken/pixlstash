@@ -25,9 +25,10 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
 from pixlstash.hub.workflow_cards import effective_stack_keys, variant_hashes_for_keys
-from pixlstash.hub.workflows import unvouched_model_values
+from pixlstash.hub.workflows import shelf_model_names
 from pixlstash.services.workflow_export import download_name
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.workflow_hash import normalized_filename
 from pixlstash.services import saved_recipe_service
 from pixlstash.services.workflow_events import announce_changed_workflows
 
@@ -166,7 +167,7 @@ class RecipeExport(BaseModel):
     shares: list[str] = Field(default_factory=list)
 
 
-def _shares(recipe: dict, unvouched) -> list[str]:
+def _shares(recipe: dict, on_the_shelf: set[str]) -> list[str]:
     """Plainly what the exported file tells whoever opens it.
 
     The LoRA line names the files, because the file itself names them and an
@@ -195,7 +196,15 @@ def _shares(recipe: dict, unvouched) -> list[str]:
         shares.append("the seed it keeps")
     if recipe.get("created_at"):
         shares.append("when you saved it")
-    forgotten = sorted({name for name in names if unvouched("lora_name", name)})
+    # Judged against the shelf directly rather than through
+    # `unvouched_model_values`: that one ends in an extension test, which is
+    # right for a graph widget (where a value may be an enum token rather than
+    # a filename) and wrong here, where the field IS a model name — a recipe
+    # saved with "ada" rather than "ada.safetensors" would otherwise be
+    # exported in plain text with nothing said about it.
+    forgotten = sorted(
+        {name for name in names if normalized_filename(name) not in on_the_shelf}
+    )
     if forgotten:
         shares.append(
             "a model name this machine no longer holds, which you may have "
@@ -377,7 +386,7 @@ def create_router(server) -> APIRouter:
         # from are this library's bookkeeping and mean nothing anywhere else.
         for local in ("id", "position", "source_picture_id", "pictures"):
             recipe.pop(local, None)
-        shares = _shares(recipe, unvouched_model_values(_hub()))
+        shares = _shares(recipe, shelf_model_names(_hub()))
         logger.info(
             "Saved recipe %s was exported; it shares %d thing(s).",
             recipe_id,

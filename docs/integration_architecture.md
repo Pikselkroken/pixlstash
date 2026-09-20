@@ -628,19 +628,24 @@ Five rules the client must not re-derive:
 
 1. **The workflow export is scrubbed and the recipe export is not, and that is
    the whole difference between them.** The export blanks the prompt and
-   caption targets, nulls seeds, empties every LoRA slot the owner has not
-   marked `structural` — **by filename and by digest** — strips `_meta` titles,
-   blanks picture file names, resets output paths (`filename_prefix` names a
-   folder on the owner's disk), drops `checkpoint_id` (a row id in this
-   machine's database), and drops any model name the model shelf cannot vouch
-   for along with the *folder* of the ones it can. A recipe
+   caption targets **and every other widget a person could have written in**,
+   nulls seeds, empties every LoRA slot the owner has not marked `structural` —
+   **by filename and by digest** — strips `_meta` titles, blanks picture file
+   names and anything in a widget named like a key or a password, resets output
+   paths (`filename_prefix` names a folder on the owner's disk), drops
+   `checkpoint_id` (a row id in this machine's database), and drops any model
+   name the model shelf cannot vouch for along with the *folder* of the ones it
+   can. A recipe
    *is* the prompt and the LoRA names, so its export withholds nothing and
    says so in `shares` instead — which is the list the export dialog puts in
    front of the owner before they agree to it.
 2. **`removed` names categories, never values.** "prompts", "seeds", "LoRA
    slots that are part of the look", "node titles", "picture file names",
    "where the pictures were saved", "the folders your models are filed in",
-   "model names this machine does not hold". A forgotten model name sitting in
+   "model names this machine does not hold", "values in fields named like a key
+   or a password". "node titles" appears only when a title is not ComfyUI's own
+   default (the node's class name), so a category in this list always means
+   something a person put there. A forgotten model name sitting in
    a LoRA widget reports as the **model** category, not the LoRA one: it is a
    forgotten model name, and calling it "part of the look" would tell the owner
    the opposite of what happened. A response repeating the prompt
@@ -658,7 +663,12 @@ Five rules the client must not re-derive:
    name across the whole graph**, never by asking which node the sampler
    reads: that question returns nothing for a hires-fix graph with two
    samplers, and names widgets (`text`) that an SDXL encoder (`text_g`,
-   `text_l`) does not have.
+   `text_l`) does not have. Three further rules catch prose no widget name
+   announces: a raw-string primitive (`PrimitiveStringMultiline`, `String
+   Literal`) handing its value into an encoder, the reducer's own backstop (a
+   newline, or longer than a filename can be), and whitespace — a combo token
+   ComfyUI would offer has none, and a filename is tested for first. What is
+   left is a single word, on an unknown node, in a widget no rule names.
 4. **Duplicate and Insert loader write a file and never change one.** Both
    land in the user's workflow folder under a free name (`… (copy).json`,
    `… (copy) (2).json`), both are **unscrubbed** — they stay on this machine

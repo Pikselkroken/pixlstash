@@ -148,7 +148,7 @@ TEXT_FIELD_SUFFIX_RE = re.compile(r"_(text|prompt|caption|query|search)$", re.I)
 # real TA values trip either. They are the backstop for a prose field this
 # module has not been told about - 5,066 genuine `lora_name` and `image` values
 # DO contain spaces, which is why "has a space" is not one of these rules.
-_MAX_FILENAME_LENGTH = 255
+MAX_FILENAME_LENGTH = 255
 
 # The ComfyUI-PixlStash loaders name their asset by digest rather than by
 # filename (`lora_sha256`, `adapter_sha256`, `vae_sha256`, `clip_sha256`), so
@@ -354,7 +354,7 @@ def structural_widget_value(name: str, value: Any) -> Optional[str]:
         return lowered if DIGEST_PREFIX_RE.match(lowered) else None
     if carries_prose(name):
         return None
-    if "\n" in value or len(value) > _MAX_FILENAME_LENGTH:
+    if "\n" in value or len(value) > MAX_FILENAME_LENGTH:
         return None
     lowered = value.lower()
     if lowered.endswith(MODEL_EXTENSIONS) or lowered.endswith(IMAGE_EXTENSIONS):

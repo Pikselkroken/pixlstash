@@ -287,15 +287,23 @@ def store_workflow_copy(hub, name: str, workflow: dict) -> tuple[str, str | None
     stored = _normalize_workflow_name(name) or "workflow.json"
     workflow_dir = workflow_user_dir()
     os.makedirs(workflow_dir, exist_ok=True)
-    path = resolve_path_within(workflow_dir, stored)
-    stem = os.path.splitext(stored)[0]
-    counter = 2
-    while os.path.exists(path):
-        stored = f"{stem} ({counter}).json"
+    # Under the lock the import and the delete take. Finding a free name and
+    # then writing it is a check-then-act, and these handlers are sync, so
+    # FastAPI runs two of them on the thread pool at once: without this, two
+    # duplicates both see `… (copy).json` absent, both write it, and one 201
+    # hands back a key pointing at the other's bytes. It also stops a delete
+    # landing between the write and the filing and leaving a hub row naming a
+    # file already in the trash.
+    with workflow_inbox.INBOX_LOCK:
         path = resolve_path_within(workflow_dir, stored)
-        counter += 1
-    _save_workflow_json(path, workflow)
-    _topology_hash, card_key = _file_in_hub(hub, stored, workflow)
+        stem = os.path.splitext(stored)[0]
+        counter = 2
+        while os.path.exists(path):
+            stored = f"{stem} ({counter}).json"
+            path = resolve_path_within(workflow_dir, stored)
+            counter += 1
+        _save_workflow_json(path, workflow)
+        _topology_hash, card_key = _file_in_hub(hub, stored, workflow)
     logger.info("Stored a copy of a workflow as %s.", stored)
     return stored, card_key
 
@@ -324,7 +332,7 @@ def _trash_stored_workflow(path: str, name: str) -> None:
     os.remove(path)
 
 
-def trash_user_workflow(server, workflow_name: str) -> str:
+def trash_user_workflow(hub, workflow_name: str) -> str:
     """Send one stored workflow to the trash and forget its rows.
 
     Shared with ``DELETE /workflows/{key}``, so the card route and the file
@@ -332,6 +340,13 @@ def trash_user_workflow(server, workflow_name: str) -> str:
     migration backup, the input modes, the pins and the place on its card
     each forgotten on its own. Only the **user** folder resolves here, so a
     built-in is a 404 rather than a deletion nobody can undo.
+
+    Args:
+        hub: The hub, or ``None``. The file goes either way; the rows it
+            leaves behind are forgotten only if there is somewhere to forget
+            them. Takes the hub rather than the whole server so it matches
+            :func:`store_workflow_copy` above and needs no server to test.
+        workflow_name: The stored file to delete.
 
     Returns:
         The normalized name that was deleted.
@@ -365,7 +380,6 @@ def trash_user_workflow(server, workflow_name: str) -> str:
                 backup,
                 exc,
             )
-    hub = getattr(server, "hub", None)
     if hub is not None:
         # The file is already gone, so its rows describe nothing; they would
         # only come back into force if a file of the same name is imported
@@ -2067,7 +2081,7 @@ def create_router(server) -> APIRouter:
         # Sync on purpose: the trash is file I/O, so this runs on the thread pool.
         return {
             "status": "success",
-            "name": trash_user_workflow(server, workflow_name),
+            "name": trash_user_workflow(getattr(server, "hub", None), workflow_name),
         }
 
     def _load_stored_workflow(workflow_name: str) -> tuple[str, str, dict]:

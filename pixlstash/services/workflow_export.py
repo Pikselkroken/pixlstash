@@ -59,21 +59,22 @@ from pixlstash.services.comfyui_recipe_service import (
     LORA_FILENAME_FIELD_RE,
 )
 from pixlstash.services.workflow_hash import (
+    IMAGE_EXTENSIONS,
+    MAX_FILENAME_LENGTH,
     MODEL_EXTENSIONS,
     OUTPUT_PATH_RE,
     OUTPUT_PREFIX_FIELD,
+    SECRET_FIELD_RE,
     SEED_FIELD_RE,
     SHELF_ID_FIELD,
     carries_prose,
     is_link,
     normalized_filename,
+    structural_document,
 )
-from pixlstash.services.workflow_io import (
-    detect_workflow_io,
-    is_picture_loader,
-    picture_fields,
-)
+from pixlstash.services.workflow_io import is_picture_loader, picture_fields
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
+from pixlstash.utils.comfyui_utilities import PRIMITIVE_STRING_CLASSES
 
 logger = get_logger(__name__)
 
@@ -91,6 +92,19 @@ NULLED_SEED = 0
 # (:data:`~pixlstash.services.workflow_hash.OUTPUT_PREFIX_FIELD`).
 DEFAULT_OUTPUT_PREFIX = "PixlStash"
 
+# How much of a name the owner typed a download or a copy may carry, in BYTES.
+# 255 is the component limit on every filesystem PixlStash runs on, and the
+# rest is room for the longest suffix `store_workflow_copy` appends,
+# `` (copy) (2).json``.
+_MAX_STEM_BYTES = 200
+
+# What a node of :data:`PRIMITIVE_STRING_CLASSES` calls the string it hands on.
+# `carries_prose` cannot be widened to these: it is the reducer's rule too, and
+# a `value` widget feeding a LoadImage its filename is a topology asset there —
+# calling it prose would re-key every workflow built that way. So the export
+# adds them, and only the export.
+_PRIMITIVE_STRING_WIDGETS = frozenset({"value", "string"})
+
 # The categories :func:`scrub_for_export` reports. Named rather than spelled at
 # each site so the route, the tests and the UI copy agree on the vocabulary -
 # and so nothing here is ever a VALUE. What was taken out of a file is the
@@ -103,6 +117,7 @@ PICTURE_NAMES = "picture file names"
 OUTPUT_PATHS = "where the pictures were saved"
 MODEL_NAMES = "model names this machine does not hold"
 MODEL_FOLDERS = "the folders your models are filed in"
+CREDENTIALS = "values in fields named like a key or a password"
 
 
 def scrub_for_export(
@@ -135,17 +150,11 @@ def scrub_for_export(
             it well enough to promise anything about what leaves in it.
     """
     exported = deepcopy(graph)
-    detected = detect_workflow_io(exported)
-    if detected.ambiguities:
-        # Not a refusal and not a gap: prose is blanked by widget name below,
-        # so an ambiguous graph is scrubbed exactly like an unambiguous one.
-        # Logged because the ambiguity is real, and because this is the line a
-        # reader looking for "was that case thought about" will want.
-        logger.info(
-            "Exporting a workflow whose run inputs are ambiguous (%s); the "
-            "scrub does not depend on them.",
-            "; ".join(detected.ambiguities),
-        )
+    # The refusal, and nothing else: `structural_document` raises on a graph
+    # PixlStash cannot read, which is the whole reason to reduce here. It used
+    # to be `detect_workflow_io`, a second full reduction whose only other
+    # product was a log line about an ambiguity the scrub does not consult.
+    structural_document(exported)
     keep_lora = {
         (str(node_id), str(widget)) for node_id, widget in structural_lora_slots
     }
@@ -154,13 +163,22 @@ def scrub_for_export(
     for node_id, node in exported.items():
         if not isinstance(node, dict):
             continue
-        if node.pop("_meta", None) is not None:
+        meta = node.pop("_meta", None)
+        if isinstance(meta, dict) and str(meta.get("title") or "") not in (
+            "",
+            str(node.get("class_type") or ""),
+        ):
+            # Reported only when the title is not ComfyUI's own default, which
+            # is the node's class name. `removed` is the only thing the dialog
+            # can render, and a category present on almost every export is
+            # noise in the one list the owner actually reads.
             removed.add(NODE_TITLES)
         inputs = node.get("inputs")
         if not isinstance(inputs, dict):
             continue
         class_type = str(node.get("class_type") or "")
         pictures = picture_fields(class_type) if is_picture_loader(class_type) else ()
+        raw_string = class_type in PRIMITIVE_STRING_CLASSES
         for widget in list(inputs):
             name = str(widget)
             # A LoRA slot is one BY BOTH SPELLINGS: the ComfyUI-PixlStash
@@ -176,6 +194,7 @@ def scrub_for_export(
                 removed,
                 is_picture=name in pictures,
                 is_lora_slot=is_lora and (str(node_id), name) not in keep_lora,
+                primitive_string=raw_string and name in _PRIMITIVE_STRING_WIDGETS,
                 unvouched=unvouched,
             )
 
@@ -187,6 +206,45 @@ def scrub_for_export(
     return exported, sorted(removed)
 
 
+def _names_a_file(value: str) -> bool:
+    """True when this string is shaped like a model or picture filename.
+
+    The line between "a name ComfyUI will look up" and "something a person
+    typed". Everything past it in :func:`_scrub` is judged as prose, which is
+    only safe because this returns first for every value the shelf check has
+    already had its say about.
+    """
+    lowered = normalized_filename(value)
+    return lowered.endswith(MODEL_EXTENSIONS) or lowered.endswith(IMAGE_EXTENSIONS)
+
+
+def _is_prose(value: str, *, primitive_string: bool) -> bool:
+    """True when a leftover string is something a person wrote.
+
+    Three rules, none of them invented here:
+
+    * the node is one of :data:`PRIMITIVE_STRING_CLASSES` handing on its raw
+      string, which is where a prompt lives when it is wired into an encoder
+      rather than typed into one;
+    * the reducer's own backstop — a newline, or longer than
+      :data:`MAX_FILENAME_LENGTH` — which it applies for exactly this reason,
+      that such a value cannot be a filename;
+    * whitespace. A combo token ComfyUI would offer (``dpmpp_2m``, ``normal``,
+      ``nearest-exact``, ``randomize``) has none; a sentence does. Filenames do
+      contain spaces — 5,066 real ones in this library — which is why
+      :func:`_names_a_file` gets to answer first.
+
+    The residual is a single word, on an unknown node, in a widget no rule
+    names. It is the narrowest shape left, and widening past it would start
+    blanking the enum tokens that make an exported file loadable.
+    """
+    if primitive_string:
+        return True
+    if "\n" in value or len(value.encode("utf-8", "ignore")) > MAX_FILENAME_LENGTH:
+        return True
+    return any(character.isspace() for character in value)
+
+
 def _scrub(
     name: str,
     value: Any,
@@ -194,45 +252,39 @@ def _scrub(
     *,
     is_picture: bool,
     is_lora_slot: bool,
+    primitive_string: bool,
     unvouched: Callable[[str, str], bool],
 ) -> Any:
     """One widget's value, scrubbed, recording what it cost in *removed*.
 
     Recursive, because a widget's value is not always a scalar. A link is a
     two-element list and is left alone, but a custom node can hold a list of
-    prompts or a dict of assets, and
-    ``workflow_hash``'s own nested-asset walk exists because that population is
-    real. The widget's name carries down into the nesting: what a value MEANS
-    is what its widget is called.
+    prompts or a dict of assets, and ``workflow_hash``'s own nested-asset walk
+    exists because that population is real. **A dict recurses on its KEY and a
+    list on its parent's name**, which is what that walk does: a list is
+    positional and inherits the widget's meaning, while a dict key is a name
+    and may mean something else entirely.
     """
     if is_link(value):
         # A wired input carries no value of its own; overwriting one would drop
         # the link and leave a graph that no longer runs anywhere.
         return value
+
+    def recurse(inner_name: str, item: Any) -> Any:
+        return _scrub(
+            inner_name,
+            item,
+            removed,
+            is_picture=is_picture,
+            is_lora_slot=is_lora_slot,
+            primitive_string=primitive_string,
+            unvouched=unvouched,
+        )
+
     if isinstance(value, dict):
-        return {
-            key: _scrub(
-                name,
-                item,
-                removed,
-                is_picture=is_picture,
-                is_lora_slot=is_lora_slot,
-                unvouched=unvouched,
-            )
-            for key, item in value.items()
-        }
+        return {key: recurse(str(key), item) for key, item in value.items()}
     if isinstance(value, list):
-        return [
-            _scrub(
-                name,
-                item,
-                removed,
-                is_picture=is_picture,
-                is_lora_slot=is_lora_slot,
-                unvouched=unvouched,
-            )
-            for item in value
-        ]
+        return [recurse(name, item) for item in value]
 
     # Seeds are judged on the widget's NAME alone, the way the reducer judges
     # them: a seed stored as a string is still the seed that made this picture,
@@ -244,6 +296,15 @@ def _scrub(
         return NULLED_SEED
     if not isinstance(value, str) or not value:
         return value
+    # First, and before anything that could decide to keep it. The reducer
+    # drops these outright from a stored document because it "is kept forever
+    # and shared"; an exported file is handed to somebody on purpose, and the
+    # two tiers this route resolves from most often — a stored file and a
+    # picture's embedded metadata — are raw ComfyUI output the reducer never
+    # touched.
+    if SECRET_FIELD_RE.search(name):
+        removed.add(CREDENTIALS)
+        return BLANK
     if carries_prose(name):
         removed.add(PROMPTS)
         return BLANK
@@ -278,17 +339,22 @@ def _scrub(
     if is_lora_slot:
         removed.add(LORA_SLOTS)
         return BLANK
-    # Vouched for, so the name travels — but as the basename it was JUDGED by.
-    # ComfyUI files models in subfolders and a person names a folder after what
-    # is in it, so "characters/<a person>/base.safetensors" would otherwise go
-    # out whole on the strength of a check that only ever read the last
-    # component. The recipient's own ComfyUI has its own layout regardless.
-    # Split rather than normalized: `normalized_filename` also lowercases, and
-    # ComfyUI looks a model up by the name it has on a filesystem that may care.
-    basename = value.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
-    if basename != value and normalized_filename(value).endswith(MODEL_EXTENSIONS):
-        removed.add(MODEL_FOLDERS)
-        return basename
+    if _names_a_file(value):
+        # Vouched for, so the name travels — but as the basename it was JUDGED
+        # by. ComfyUI files models in subfolders and a person names a folder
+        # after what is in it, so "characters/<a person>/base.safetensors"
+        # would otherwise go out whole on the strength of a check that only
+        # ever read the last component. The recipient's ComfyUI has its own
+        # layout regardless. Split rather than normalized: the latter also
+        # lowercases, and a filesystem may care.
+        basename = value.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        if basename != value:
+            removed.add(MODEL_FOLDERS)
+            return basename
+        return value
+    if _is_prose(value, primitive_string=primitive_string):
+        removed.add(PROMPTS)
+        return BLANK
     return value
 
 
@@ -301,6 +367,10 @@ def download_stem(name: str | None) -> str:
     separators go, so do the relative-path components and the control
     characters a shell or a file dialog would act on, and what is left is
     bounded — a name the owner typed has no length limit and a file name does.
+    **Bounded in BYTES**, because that is the unit a filesystem counts in: 100
+    CJK characters are 300 of them, past ext4's 255-byte component limit, and
+    `store_workflow_copy` would then fail with an ``OSError`` the duplicate
+    route can only answer 500 to — for that card, permanently.
 
     Here rather than in either route because both name a download this
     way, and a second spelling is a second rule to get wrong.
@@ -309,7 +379,7 @@ def download_stem(name: str | None) -> str:
         " " if character < " " else character for character in (name or "")
     )
     cleaned = cleaned.replace("/", " ").replace("\\", " ").strip(" .")
-    return cleaned[:100].strip()
+    return cleaned.encode("utf-8")[:_MAX_STEM_BYTES].decode("utf-8", "ignore").strip()
 
 
 def download_name(name: str | None) -> str:
