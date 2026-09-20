@@ -800,14 +800,24 @@ tokens today — proven by the `AuthzGate(enforcing=True)` decoy tests in
 
 The plan carry-forward text lists "`tagger_runs` endpoints → `PICTURE_SCOPED`", but neither endpoint has a picture id: `POST /tagger-runs` upserts a vault-wide `TaggerRun` (model-eval report), `GET /tagger-runs` lists those rows (`db_models/tagger_run.py` has no `picture_id`). **`PICTURE_SCOPED` is not implementable here.** I declared by actual behaviour — `POST` → `owner_only` (write, middleware-blocked for READ), `GET` → `any_token` — which **matches the prior CSO sign-off** (2026-07-18): the ingest should be owner-gated and `GET /tagger-runs` is a scoped-reachable **info-exposure** (model-eval metadata), not a BOLA leak. See §Existing-exposure F-b below.
 
-### N6. `run_t2i` body id is single + optional
+### N6. A scalar `body_ids` is supported, and nothing declares one
 
-`POST /api/v1/comfyui/run_t2i` calls `enforce_picture_scope(source_picture_id)` only when a `source_picture_id` is present in the body (t2i may have none). I recorded `body_ids="source_picture_id"` (a single, optional field, not a list) so the declaration validates and Step 4 knows where to look. The gate's batch `body_ids` resolution must tolerate a single/absent value here. **Retired in B9 (#1410)** along with the rest of the old run routes; the gate keeps the scalar handling for the next declaration that needs it, and no route declares a scalar `body_ids` today.
+**Retired.** `POST /api/v1/comfyui/run_t2i` was the only route that declared a
+single, optional scalar `body_ids` (`source_picture_id`, checked with
+`enforce_picture_scope` only when the body carried one), and #1410 deleted it
+along with the rest of the old run routes. **No declaration in `ROUTE_POLICIES`
+uses the scalar shape today.**
 
-**Step-4 resolution:** the gate's `_read_body_ids` handles a single scalar (checked
-as one id) and an absent/`None` value (no-op), in addition to a list — so `run_t2i`
-with no `source_picture_id` passes and with an out-of-scope one is 403'd. Covered
-by `test_body_ids_single_optional_scalar_run_t2i`.
+The gate keeps handling it: `_read_body_ids` takes a single scalar (checked as
+one id) and an absent/`None` value (no-op) beside a list, so the next route that
+needs the shape is covered the day it declares it rather than silently passing
+its body unchecked. That is a deliberate retention, recorded at
+`pixlstash/authz/gate.py::_read_body_ids` and `authz/policy.py`'s `body_ids`
+docstring, and it is pinned on a decoy route by
+`tests/test_authz_gate_step4.py::test_body_ids_single_optional_scalar` — a decoy
+precisely because there is no real route left to exercise it against, and an
+unexercised branch of the gate is how a shape stops working without anyone
+noticing.
 
 ---
 

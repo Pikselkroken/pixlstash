@@ -293,6 +293,11 @@ def assets_for_recipe(hub: HubDatabase, structural_hash: str) -> list[sqlite3.Ro
     Empty is a legitimate answer, not a missing row: forgetting a model name is
     a delete here, and the stored document keeps working with its references
     unresolved.
+
+    **No production caller** - it had none before #1410 either, so this is not
+    that retirement's doing - but ``tests/test_workflow_library.py`` exercises
+    it directly, so it is covered behaviour rather than dead code. Delete the
+    test with it if it goes.
     """
     return hub.fetchall(
         "SELECT widget_name, normalized_filename FROM workflow_recipe_asset "
@@ -652,7 +657,14 @@ def assets_for_topology_recipes(
 
 
 def topology_exists(hub: HubDatabase, topology_hash: str) -> bool:
-    """Whether this hub has heard of a topology at all."""
+    """Whether this hub has heard of a topology at all.
+
+    **No production caller since #1410**, and kept rather than deleted with its
+    route: it is the content-address lookup the retired variants route
+    made, and ``tests/test_workflow_io.py`` exercises it directly, so it is
+    covered behaviour
+    rather than dead code. Delete the test with it if it goes.
+    """
     return (
         hub.fetchone(
             "SELECT 1 FROM workflow_topology WHERE topology_hash = ?",

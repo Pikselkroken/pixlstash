@@ -88,6 +88,12 @@ def topology_activity(session: Session) -> dict[str, WorkflowActivity]:
     has recurred here. ``GET /workflows`` is declared ``OWNER_ONLY`` for exactly
     this reason. A caller that needs a scoped answer adds the narrowing
     parameter then, against a real policy.
+
+    **No production caller since #1410**, and kept rather than deleted with its
+    route: the per-topology count is the vault half the retired list
+    merged, and ``tests/test_workflow_library.py`` exercises it directly, so it
+    is covered behaviour
+    rather than dead code. Delete the test with it if it goes.
     """
     return _activity(session, Picture.workflow_topology_hash)
 
@@ -131,7 +137,14 @@ def recipe_picture_counts(session: Session) -> dict[str, int]:
 
 
 def scan_progress(session: Session) -> ScanProgress:
-    """How many kept pictures exist, and how many have been read for a workflow."""
+    """How many kept pictures exist, and how many have been read for a workflow.
+
+    **No production caller since #1410**, and kept rather than deleted with its
+    route: the three near-empty states it distinguishes went with
+    ``WorkflowScan``, and ``tests/test_workflow_library.py`` exercises it
+    directly, so it is covered behaviour
+    rather than dead code. Delete the test with it if it goes.
+    """
     pictures, scanned = session.exec(
         select(
             func.count(Picture.id),

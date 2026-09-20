@@ -4817,6 +4817,27 @@ def test_several_pictures_with_no_target_group_by_their_recipe(runnable):
     assert sorted(by_key[BUSY_CARD]["picture_ids"]) == sorted(busy[:2])
 
 
+def test_a_picture_selected_twice_is_run_once(runnable):
+    """The de-duplication `_int_list` did for the retired `run_i2i` (#1410).
+
+    A selection can hand the same id in twice, and grouping whatever arrives
+    put it in the group twice - never a second submission, because `count`
+    governs those, but a group REPORTING it covers a picture twice is a wrong
+    answer to "what would this run". Asserted on the pre-flight and the run
+    together, since `RunRequest` is one body for both.
+    """
+    twice = [runnable.picture_id, runnable.picture_id]
+    payload = _preflight(runnable.owner, picture_ids=twice)
+    (group,) = payload["groups"]
+    assert group["picture_ids"] == [runnable.picture_id], payload
+    assert group["runs"] == 1, payload
+
+    r = runnable.owner.post(f"{API}/workflows/run", json={"picture_ids": twice})
+    assert r.status_code == 200, r.text
+    assert r.json()["runs"] == 1, r.json()
+    assert len(runnable.submitted) == 1, "the repeat submitted a second run"
+
+
 def test_a_target_runs_that_card_instead_of_the_ones_selected(runnable):
     """`target` is how a stack's other member is chosen."""
     payload = _preflight(

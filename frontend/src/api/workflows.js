@@ -5,10 +5,12 @@
 // the last caller of `listWorkflows`, `listWorkflowVariants`,
 // `listWorkflowPictures` and `getWorkflowGraph`. B9 (#1410) then deleted the
 // topology routes themselves and moved the cards onto `/workflows`, so the
-// grid, the detail and the picture ids are what this module fronts.
-// `exportWorkflow`, `duplicateWorkflow`, `deleteWorkflowFile` and
-// `dissolveStack` at the foot of this file were added for the grid's own verb
-// menu (#1455).
+// grid and the detail are what this module fronts, with `exportWorkflow`,
+// `duplicateWorkflow`, `deleteWorkflowFile` and `dissolveStack` at the foot of
+// the file for the grid's own verb menu (#1455). `GET /workflows/{key}/
+// pictures` is served and has no caller in the app - the picture grid reaches
+// a card's pictures through `GET /pictures?workflow_key=`, which filters like
+// every other facet - so there is deliberately no function for it here.
 //
 // Every route here is owner-only: the counts are read across the whole vault,
 // so a scoped session gets 403 rather than a narrowed answer.

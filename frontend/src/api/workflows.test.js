@@ -10,6 +10,14 @@
 // and the view all assert the ARGUMENTS the store passed and none of them can
 // see whether a flag became a URL. Deleting the query build left the whole
 // suite green and both Filters checkboxes inert (F7).
+//
+// The same argument covers the PATHS, which is why `getWorkflowCard` is here
+// too. B9 (#1410) moved both reads off `/workflows/cards`, and with every
+// consumer mocking this module, putting the detail read back on the old path
+// left the whole suite green - 4593 of 4593 - because nothing else in
+// `frontend/src` asserts a `/workflows/` request path. The backend's own
+// coverage cannot close that: it sees what the route serves, never what the
+// client asks for.
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -25,7 +33,11 @@ vi.mock("../utils/apiClient", () => ({
   },
 }));
 
-import { listWorkflowCards, workflowCoverUrl } from "./workflows";
+import {
+  getWorkflowCard,
+  listWorkflowCards,
+  workflowCoverUrl,
+} from "./workflows";
 
 describe("workflowCoverUrl", () => {
   // The payload's own shape, from `_covers`: an object since #1465, of which
@@ -106,5 +118,27 @@ describe("listWorkflowCards", () => {
       one_offs: 3,
       hidden: 2,
     });
+  });
+
+  it("asks for the grid on `/workflows`, not the retired `/workflows/cards`", async () => {
+    get.mockResolvedValue(answer);
+    await listWorkflowCards();
+    expect(get).toHaveBeenCalledWith("/workflows");
+  });
+});
+
+describe("getWorkflowCard", () => {
+  it("opens a card on `/workflows/{key}`, not the retired `/workflows/cards/{key}`", async () => {
+    get.mockResolvedValue({ data: { card: {} } });
+    await getWorkflowCard("abc123");
+    expect(get).toHaveBeenCalledWith("/workflows/abc123");
+  });
+
+  // A key is a hex digest today, so nothing needs escaping - which is exactly
+  // why the encode would go unnoticed if it were dropped.
+  it("encodes the key rather than pasting it into the path", async () => {
+    get.mockResolvedValue({ data: { card: {} } });
+    await getWorkflowCard("a/b c");
+    expect(get).toHaveBeenCalledWith("/workflows/a%2Fb%20c");
   });
 });

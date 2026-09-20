@@ -789,16 +789,32 @@ class RunRequest(BaseModel):
     # NO `inputs` field. A card's picture-input setup is READ here - a fixed
     # input whose picture has gone is `fixed_input_deleted` - but nothing
     # FILLS one yet, because filling it means uploading pictures into
-    # ComfyUI's input folder, which is the whole i2i path the shipped
-    # `/comfyui/workflows/{name}/run` already owns. Taking the field and
-    # ignoring it would be worse than not offering it: a caller would send a
-    # picture and get a run that never read it.
+    # ComfyUI's input folder. `/comfyui/workflows/{name}/run` owned that path
+    # and #1410 retired it, so **nothing in the product fills a picture input
+    # by mode today**; #1457 tracks this route learning to, and
+    # `comfyui_service._upload_image_to_comfyui` is held unused for it. Taking
+    # the field and ignoring it would be worse than not offering it: a caller
+    # would send a picture and get a run that never read it.
 
     # A new run is a new picture, NOT a variant of the one it was made from
     # (v1.12 B7). The shipped run routes stack by default and this one does
     # not: those replay one picture's own recipe, where the output genuinely
     # is another take of that picture, while this runs a card and the pictures
     # that named it are its source rather than its subject.
+    @field_validator("picture_ids")
+    @classmethod
+    def _one_run_per_picture(cls, value: list[int]) -> list[int]:
+        """Drop repeats, keeping first-seen order.
+
+        The retired `run_i2i` de-duplicated its `picture_ids` (`_int_list`) and
+        this route grouped whatever it was handed, so `[5, 5]` put picture 5 in
+        a group twice. It never multiplied the submissions - `count` governs
+        those - but the group REPORTED covering a picture twice, which is a
+        wrong answer to "what would this run", and the pre-flight and the run
+        share this body.
+        """
+        return list(dict.fromkeys(value))
+
     stack: bool = False
     # `StrictBool`, not `bool`: consent to running a graph nobody could inspect
     # is the CWE-829 control (review finding R3b), and a lax cast reads `"yes"`,
@@ -2516,7 +2532,11 @@ def create_router(server) -> APIRouter:
             "graph at run time and never written back into it. New runs are "
             "NOT stacked with their source unless stack: true. A missing model "
             "blocks the whole batch. See /workflows/run/preflight for the "
-            "reason codes."
+            "reason codes. allow_unchecked consents to running a graph the "
+            "server could not inspect and must be the literal JSON true: any "
+            "other spelling is a 422, and the camelCase allowUnchecked the "
+            "retired run_recipe also took is not a field here, so sending it "
+            "consents to nothing."
         ),
         response_model=RunResult,
     )

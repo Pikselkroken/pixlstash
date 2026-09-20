@@ -14,7 +14,6 @@ function itself and in ``docs/backend_architecture.md`` §15. Preserve it exactl
 import json
 import mimetypes
 import os
-import random
 import time
 import uuid
 from datetime import datetime
@@ -159,41 +158,14 @@ def _extract_history_status_and_error(
     return status_str, (error_text or None)
 
 
-def _randomize_seeds(workflow: dict) -> None:
-    """Replace seed values in sampler/noise nodes with a fresh random integer.
-
-    This mirrors what the ComfyUI frontend does when 'randomize' is enabled,
-    ensuring repeated runs on the same prompt produce different images.
-    """
-    for node in workflow.values():
-        if not isinstance(node, dict):
-            continue
-        if node.get("class_type") not in SEED_NODE_CLASSES:
-            continue
-        inputs = node.get("inputs")
-        if not isinstance(inputs, dict):
-            continue
-        for field in SEED_FIELDS:
-            if field in inputs and isinstance(inputs[field], (int, float)):
-                inputs[field] = random.randint(0, 2**32 - 1)
-
-
-def _apply_fixed_seed(workflow: dict, seed: int) -> None:
-    """Set seed values in sampler/noise nodes to a specific fixed integer."""
-    for node in workflow.values():
-        if not isinstance(node, dict):
-            continue
-        if node.get("class_type") not in SEED_NODE_CLASSES:
-            continue
-        inputs = node.get("inputs")
-        if not isinstance(inputs, dict):
-            continue
-        for field in SEED_FIELDS:
-            if field in inputs and isinstance(inputs[field], (int, float)):
-                inputs[field] = seed
-
-
 def _apply_filename_prefix(workflow: dict, prefix: str) -> bool:
+    """Write *prefix* onto every ``SaveImage`` node, reporting whether one took it.
+
+    **No caller since #1410**, and held for the same reason as
+    :func:`pixlstash.stacking.build_stack_filename_prefix`, whose tag it writes:
+    the pair is the whole of "stack the outputs with the picture they came
+    from", which went with the retired run route and which #1457 restores.
+    """
     updated = False
     for node in workflow.values():
         if not isinstance(node, dict):
@@ -215,6 +187,14 @@ def _upload_image_to_comfyui(
     """Upload a picture to ComfyUI's input folder, returning the name to load it by.
 
     ``upload_name`` names it there instead of the file's own name.
+
+    **No caller since #1410**, and held on purpose. This is the only code that
+    POSTs to ComfyUI's ``/upload/image``, so a picture cannot reach a run
+    without it: it went dead when the file-keyed run route was retired, and
+    #1457 - the Run popup learning to fill a card's picture inputs - is the
+    thing that brings it back. Deleting it would make that step rewrite this
+    from scratch rather than wire it up. Delete it if #1457 is closed as
+    won't-do.
     """
     mime_type, _ = mimetypes.guess_type(file_path)
     if not mime_type:
@@ -402,6 +382,11 @@ def graph_has_pixlstash_saver(workflow: dict) -> bool:
     Such a graph needs no ``filename_prefix`` tagging to be stacked: the saver
     reports the picture ids it created and ``_process_comfyui_outputs`` adopts
     them directly.
+
+    **No production caller since #1410** - it was the exemption from the
+    filename tagging above, so it went dead with it - but
+    ``tests/test_comfyui_pixlstash_saver.py`` exercises it directly, so it is
+    covered behaviour rather than dead code. Delete the test with it if it goes.
     """
     if not isinstance(workflow, dict):
         return False
