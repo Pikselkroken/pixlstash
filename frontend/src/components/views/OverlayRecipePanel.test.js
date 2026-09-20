@@ -2,6 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
+import { setActivePinia, createPinia } from "pinia";
 
 // Mocked rather than given a real router: the panel is mounted alone, and a
 // real one would have to carry every app route to resolve two names.
@@ -26,6 +27,10 @@ const copyText = vi.hoisted(() => vi.fn(async () => true));
 vi.mock("../../utils/clipboard", () => ({ copyText }));
 const getPictureWorkflow = vi.hoisted(() => vi.fn());
 vi.mock("../../api/comfyui", () => ({ getPictureWorkflow }));
+const listSavedRecipes = vi.hoisted(() => vi.fn(async () => []));
+vi.mock("../../api/recipes", () => ({ listSavedRecipes }));
+const listAdapters = vi.hoisted(() => vi.fn(async () => []));
+vi.mock("../../api/modelShelf", () => ({ listAdapters }));
 
 import OverlayRecipePanel from "./OverlayRecipePanel.vue";
 
@@ -115,6 +120,22 @@ function render(props = {}) {
           props: ["disabled"],
           template: '<button :disabled="disabled"><slot/></button>',
         },
+        // Stubbed for its PROPS, not its pixels: it is a real Vuetify dialog
+        // and this suite mounts no Vuetify. What the panel hands it is the
+        // contract worth pinning here.
+        SaveRecipeDialog: {
+          name: "SaveRecipeDialog",
+          props: [
+            "open",
+            "workflowKey",
+            "prompt",
+            "negative",
+            "loras",
+            "seed",
+            "sourcePictureId",
+          ],
+          template: "<div />",
+        },
       },
     },
   });
@@ -130,6 +151,8 @@ function settingsOf(wrapper) {
 const GRAPH = { 4: { class_type: "CheckpointLoaderSimple" } };
 
 beforeEach(() => {
+  // The Save dialog this panel now opens is a Pinia consumer.
+  setActivePinia(createPinia());
   nav.push.mockClear();
   copyText.mockClear();
   getPictureWorkflow.mockReset();
@@ -137,6 +160,10 @@ beforeEach(() => {
     workflow: GRAPH,
     is_api_format: false,
   });
+  listSavedRecipes.mockReset();
+  listSavedRecipes.mockResolvedValue([]);
+  listAdapters.mockReset();
+  listAdapters.mockResolvedValue([]);
 });
 
 /** Open the workflow box and let its lazy read land. */
@@ -642,5 +669,216 @@ describe("OverlayRecipePanel", () => {
     expect(useAsInput).toBeDefined();
     await useAsInput.trigger("click");
     expect(wrapper.emitted("use-as-input")).toHaveLength(1);
+  });
+
+  // ── Saved recipes (v1.12 F6) ──────────────────────────────────────────────
+  //
+  // The banner and the button answer the same question, so they are asserted
+  // together: a picture whose prompt and LoRA file names are a saved recipe's
+  // is a picture that recipe already keeps, and offering to keep it again is
+  // the bug.
+
+  /** The recipe payload as the overlay now builds it, with a card behind it. */
+  const ON_A_CARD = {
+    ...RECIPE,
+    workflowKey: "c".repeat(64),
+    loraNames: ["style.safetensors", "gone.safetensors"],
+  };
+
+  it("says nothing about saved recipes for a picture on no card", async () => {
+    const wrapper = render();
+    await flushPromises();
+    expect(listSavedRecipes).not.toHaveBeenCalled();
+    expect(wrapper.find(".recipe-match").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("Save as recipe");
+  });
+
+  it("offers to keep the look of a picture no recipe matches", async () => {
+    listSavedRecipes.mockResolvedValue([
+      { id: 1, name: "Something else", prompt: "a different prompt", loras: [] },
+    ]);
+    const wrapper = render({ recipe: ON_A_CARD });
+    await flushPromises();
+    expect(listSavedRecipes).toHaveBeenCalledWith(ON_A_CARD.workflowKey);
+    expect(wrapper.find(".recipe-match").exists()).toBe(false);
+    expect(wrapper.text()).toContain("Save as recipe");
+    expect(wrapper.text()).not.toContain("Saved");
+  });
+
+  it("names the saved recipe this picture matches, and says Saved", async () => {
+    listSavedRecipes.mockResolvedValue([
+      {
+        id: 4,
+        name: "Rainy tram platform",
+        // The same prompt, and the same LoRA file names in the other order
+        // and with a folder in front: the server's own key normalises both.
+        prompt: "  a castle on a hill  ",
+        loras: [
+          { filename: "loras/GONE.safetensors" },
+          { filename: "style.safetensors" },
+        ],
+      },
+    ]);
+    const wrapper = render({ recipe: ON_A_CARD });
+    await flushPromises();
+
+    const banner = wrapper.find(".recipe-match");
+    expect(banner.exists()).toBe(true);
+    expect(banner.text()).toContain("Matches your saved recipe");
+    expect(banner.text()).toContain("Rainy tram platform");
+
+    const saved = wrapper
+      .findAll("button")
+      .find((button) => button.text().trim() === "Saved");
+    expect(saved).toBeTruthy();
+  });
+
+  it("does not offer to save from a read-only view", async () => {
+    isReadOnly.value = true;
+    try {
+      const wrapper = render({ recipe: ON_A_CARD });
+      await flushPromises();
+      expect(wrapper.text()).not.toContain("Save as recipe");
+    } finally {
+      isReadOnly.value = false;
+    }
+  });
+
+  it("asks nothing of an owner-only route on a read-only view", async () => {
+    isReadOnly.value = true;
+    try {
+      const wrapper = render({ recipe: ON_A_CARD });
+      await flushPromises();
+      // Every route under /recipes is OWNER_ONLY, so this is a guaranteed 403
+      // — and the filmstrip would fire it on every step.
+      expect(listSavedRecipes).not.toHaveBeenCalled();
+      expect(wrapper.text()).not.toContain("Save as recipe");
+    } finally {
+      isReadOnly.value = false;
+    }
+  });
+
+  it("reads the card's recipes once, not once per filmstrip step", async () => {
+    const wrapper = render({ recipe: ON_A_CARD });
+    await flushPromises();
+    expect(listSavedRecipes).toHaveBeenCalledTimes(1);
+
+    // What stepping actually looks like: `ImageOverlay` nulls the recipe
+    // before each read, so the key goes key → undefined → key.
+    await wrapper.setProps({ recipe: null });
+    await wrapper.setProps({ recipe: { ...ON_A_CARD } });
+    await flushPromises();
+    expect(listSavedRecipes).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches nothing when the recipe keeps neither prompt nor LoRA", async () => {
+    // The key of an empty recipe is also the key of every picture PixlStash
+    // has not read the metadata out of, which the server refuses to credit.
+    listSavedRecipes.mockResolvedValue([
+      { id: 9, name: "Empty", prompt: "", loras: [] },
+    ]);
+    const wrapper = render({
+      recipe: { ...ON_A_CARD, positive_prompt: null, loraNames: [] },
+    });
+    await flushPromises();
+    expect(wrapper.find(".recipe-match").exists()).toBe(false);
+    expect(wrapper.text()).toContain("Save as recipe");
+  });
+
+  it("keeps the Saved button reachable, and inert, for a keyboard reader", async () => {
+    listSavedRecipes.mockResolvedValue([
+      { id: 4, name: "Rainy tram platform", prompt: "a castle on a hill", loras: [] },
+    ]);
+    const wrapper = render({ recipe: { ...ON_A_CARD, loraNames: [] } });
+    await flushPromises();
+    const saved = wrapper
+      .findAll("button")
+      .find((button) => button.text().trim() === "Saved");
+    expect(saved).toBeTruthy();
+    // Never native `disabled`: that takes the button out of the tab order, so
+    // the sentence `aria-describedby` points at could never be reached.
+    expect(saved.attributes("disabled")).toBeUndefined();
+    expect(saved.attributes("aria-disabled")).toBe("true");
+    expect(wrapper.text()).toContain("Already kept as");
+  });
+
+  it("resolves a LoRA's digest and strength before saving it", async () => {
+    // The graph names the file with a folder and a capital; `model_slots`
+    // carries the same file already normalized, and only the shelf has the
+    // digest that `POST /workflows/run` needs to apply it at all.
+    listAdapters.mockResolvedValue([
+      { filename: "loras/Style.safetensors", sha256: "deadbeef" },
+    ]);
+    const wrapper = render({
+      recipe: { ...ON_A_CARD, loraNames: ["Styles/Style.SAFETENSORS"] },
+    });
+    await flushPromises();
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Save as recipe"))
+      .trigger("click");
+    await flushPromises();
+
+    const dialog = wrapper.findComponent({ name: "SaveRecipeDialog" });
+    expect(dialog.exists()).toBe(true);
+    expect(dialog.props("loras")).toEqual([
+      {
+        filename: "Styles/Style.SAFETENSORS",
+        sha256: "deadbeef",
+        // 0.8 from the matching `model_slots` row, not the 1 an identity
+        // comparison would silently fall back to.
+        strength: 0.8,
+      },
+    ]);
+  });
+
+  it("says Saved straight after a save, without another read", async () => {
+    const wrapper = render({ recipe: { ...ON_A_CARD, loraNames: [] } });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Save as recipe");
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Save as recipe"))
+      .trigger("click");
+    await flushPromises();
+    listSavedRecipes.mockClear();
+
+    // What `SaveRecipeDialog` hands back. The panel folds it into the list it
+    // already holds, so the footer answers the gesture that just happened
+    // rather than waiting on a round trip.
+    wrapper.findComponent({ name: "SaveRecipeDialog" }).vm.$emit("saved", {
+      id: 7,
+      name: "Just kept",
+      prompt: "a castle on a hill",
+      loras: [],
+    });
+    await flushPromises();
+
+    expect(listSavedRecipes).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("Saved");
+    expect(wrapper.find(".recipe-match").text()).toContain("Just kept");
+  });
+
+  it("saves a LoRA the shelf cannot name, so the recipe matches the picture", async () => {
+    // The key is what F6 is for. Dropping the undigested row made the saved
+    // recipe never match the picture it came from: no banner, no Saved, and
+    // the same look kept again and again.
+    listAdapters.mockResolvedValue([]);
+    const wrapper = render({
+      recipe: { ...ON_A_CARD, loraNames: ["style.safetensors"] },
+    });
+    await flushPromises();
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Save as recipe"))
+      .trigger("click");
+    await flushPromises();
+
+    const loras = wrapper
+      .findComponent({ name: "SaveRecipeDialog" })
+      .props("loras");
+    expect(loras).toEqual([
+      { filename: "style.safetensors", sha256: "", strength: 0.8 },
+    ]);
   });
 });

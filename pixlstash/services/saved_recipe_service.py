@@ -34,6 +34,7 @@ from sqlmodel import Session, select
 
 from pixlstash.db_models import Picture, SavedRecipe
 from pixlstash.pixl_logging import get_logger
+from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.workflow_hash import normalized_filename
 
 logger = get_logger(__name__)
@@ -174,12 +175,25 @@ def list_in_session(
     recipes together and their positions are only unique within the list the
     owner last ordered, so the id is what keeps the order total and stable.
     """
-    statement = select(SavedRecipe)
-    if workflow_keys is not None:
-        if not workflow_keys:
-            return []
-        statement = statement.where(SavedRecipe.workflow_key.in_(workflow_keys))
-    rows = session.exec(statement.order_by(SavedRecipe.position, SavedRecipe.id)).all()
+    if workflow_keys is None:
+        rows = session.exec(
+            select(SavedRecipe).order_by(SavedRecipe.position, SavedRecipe.id)
+        ).all()
+        return [serialize(row) for row in rows]
+    if not workflow_keys:
+        return []
+    # Chunked: a multiple selection expands every selected card to its whole
+    # stack, so this list is the caller's gesture times the stacks behind it
+    # and can cross SQLite's bound-parameter floor. Re-sorted after the merge
+    # because the order is the tab's, not any one chunk's.
+    rows = []
+    for chunk in chunked(list(workflow_keys)):
+        rows.extend(
+            session.exec(
+                select(SavedRecipe).where(SavedRecipe.workflow_key.in_(chunk))
+            ).all()
+        )
+    rows.sort(key=lambda row: (row.position, row.id))
     return [serialize(row) for row in rows]
 
 
@@ -257,7 +271,7 @@ def counts_by_workflow_key(session: Session) -> dict[str, int]:
 
 def credit_groups_in_session(
     session: Session, structural_hashes: list[str]
-) -> list[tuple[Optional[str], Optional[str], int]]:
+) -> list[tuple[Optional[str], Optional[str], int, Optional[int]]]:
     """Kept pictures of these variants, grouped by what credit matches on.
 
     **Only pictures that have been read for ComfyUI metadata.** A NULL
@@ -267,21 +281,49 @@ def credit_groups_in_session(
     is exactly the key of a recipe saved with neither, and credit it a library's
     worth of pictures it never made. A picture that was read and loaded no LoRAs
     holds ``"[]"`` and is counted.
+
+    The fourth column is the **newest** picture of the group, which is what a
+    look with no saved recipe behind it shows as its cover (:func:`used_looks`)
+    and what the Save dialog reads the LoRA strengths back from. Credit ignores
+    it. ``MAX(id)`` rather than a rating: a group is one look, so any of its
+    pictures represents it, and the newest is the one the owner just made.
     """
     if not structural_hashes:
         return []
-    rows = session.exec(
-        select(
-            Picture.comfyui_positive_prompt,
-            Picture.comfyui_loras,
-            func.count(Picture.id),
-        )
-        .where(Picture.workflow_structural_hash.in_(structural_hashes))
-        .where(Picture.comfyui_loras.is_not(None))
-        .where(Picture.deleted.is_(False))
-        .group_by(Picture.comfyui_positive_prompt, Picture.comfyui_loras)
-    ).all()
-    return [(prompt, loras, count) for prompt, loras, count in rows]
+    # **Chunked, and the chunks are merged rather than concatenated.** One
+    # card accumulates a variant per structural change, so a selection of a
+    # hundred cards resolves to thousands of hashes and a single unchunked
+    # ``IN`` crosses SQLite's 999-parameter floor - the database limit
+    # surfacing as a 500 that ``MAX_REORDER_IDS`` exists to prevent. A group
+    # can also straddle two chunks, so the counts are summed and the newest
+    # picture is taken across all of them; concatenating would list one look
+    # twice with its pictures split.
+    merged: dict[tuple[Optional[str], Optional[str]], list] = {}
+    for chunk in chunked(list(structural_hashes)):
+        rows = session.exec(
+            select(
+                Picture.comfyui_positive_prompt,
+                Picture.comfyui_loras,
+                func.count(Picture.id),
+                func.max(Picture.id),
+            )
+            .where(Picture.workflow_structural_hash.in_(chunk))
+            .where(Picture.comfyui_loras.is_not(None))
+            .where(Picture.deleted.is_(False))
+            .group_by(Picture.comfyui_positive_prompt, Picture.comfyui_loras)
+        ).all()
+        for prompt, loras, count, newest in rows:
+            seen = merged.get((prompt, loras))
+            if seen is None:
+                merged[(prompt, loras)] = [int(count), newest]
+                continue
+            seen[0] += int(count)
+            if newest is not None and (seen[1] is None or newest > seen[1]):
+                seen[1] = newest
+    return [
+        (prompt, loras, count, newest)
+        for (prompt, loras), (count, newest) in merged.items()
+    ]
 
 
 def _require_source_picture(session: Session, picture_id: Optional[int]) -> None:
@@ -418,7 +460,8 @@ def reorder_in_session(session: Session, recipe_ids: list[int]) -> Optional[list
 
 
 def credit_by_recipe(
-    recipes: list[dict], groups: list[tuple[Optional[str], Optional[str], int]]
+    recipes: list[dict],
+    groups: list[tuple[Optional[str], Optional[str], int, Optional[int]]],
 ) -> dict[int, int]:
     """How many of the stack's kept pictures each recipe accounts for.
 
@@ -428,7 +471,7 @@ def credit_by_recipe(
     silently crediting one of them would be a guess.
     """
     matched: dict[tuple[str, tuple[str, ...]], int] = {}
-    for prompt, loras, count in groups:
+    for prompt, loras, count, _newest in groups:
         # The group is already narrowed to pictures that were read, so "[]"
         # here means a picture that loaded no LoRAs and matches a recipe with
         # none.
@@ -454,6 +497,82 @@ def credit_by_recipe(
     return credit
 
 
+def used_looks(
+    groups: list[tuple[Optional[str], Optional[str], int, Optional[int]]],
+    recipes: list[dict],
+) -> list[dict]:
+    """The looks this stack's own pictures were made with.
+
+    **A saved recipe is a look the owner chose to keep; this is every look they
+    actually ran.** A library that has never saved a recipe still has hundreds
+    of these, which is why the Recipes tab lists them beside the saved ones
+    instead of showing an empty panel to somebody with a full library.
+
+    A group whose prompt and LoRA names match a saved recipe is left out: it is
+    already on the tab, above, with its name and its credit. Matching is
+    :func:`prompt_key` / :func:`lora_key`, the same pair credit uses, so the two
+    halves of the tab can never both claim one group.
+
+    ``loras`` here are **file names only**. The picture column stores no
+    strength, so a look carries the names it loaded and nothing about how
+    strongly; the strengths come back when the owner saves one, from the cover
+    picture's own recipe. Ordered by picture count, because on this half of the
+    tab there is no order the owner chose.
+    """
+    taken = {
+        (prompt_key(recipe.get("prompt")), lora_key(recipe.get("loras") or []))
+        for recipe in recipes
+    }
+    # **Merged on the key, not on the column.** The SQL groups by the stored
+    # `comfyui_loras` text, so one look written two ways - `ada.safetensors` on
+    # one picture and `characters/Ada.safetensors` on another - arrives as two
+    # groups, and listing both would offer the owner the same look twice with
+    # its pictures split between them. Credit already sums on the key; this
+    # sums the same way, so the two halves of the tab count alike.
+    merged: dict[tuple[str, tuple[str, ...]], dict] = {}
+    for prompt, loras, count, newest in groups:
+        names = _decode(
+            loras,
+            [],
+            field="comfyui_loras",
+            where=f"the picture group with prompt {prompt_key(prompt)[:60]!r}",
+        )
+        key = (prompt_key(prompt), lora_key(names))
+        if key in taken:
+            continue
+        # **A look that is neither a prompt nor a LoRA is not a look.** This
+        # module reasons carefully about the `comfyui_loras` NULL sentinel and
+        # nothing about `comfyui_positive_prompt`, which is NULL whenever the
+        # graph was read but no prompt could be pulled out of it. Every such
+        # picture in the stack collapses into one group whose card would show
+        # a thumbnail and nothing else - and, being the biggest group, would
+        # sort first. It is also the key `keepsTheSameLook` refuses on the
+        # client, for the same reason credit refuses it: it matches everything.
+        if not key[0] and not key[1]:
+            continue
+        look = merged.get(key)
+        if look is None:
+            merged[key] = {
+                "prompt": prompt or "",
+                "loras": [
+                    {"filename": str(name)} for name in names if isinstance(name, str)
+                ],
+                "pictures": int(count),
+                "cover_picture_id": newest,
+            }
+            continue
+        look["pictures"] += int(count)
+        # The newest picture of the whole look, so the cover and the strengths
+        # the Save dialog reads back come from one picture that really made it.
+        if newest is not None and (
+            look["cover_picture_id"] is None or newest > look["cover_picture_id"]
+        ):
+            look["cover_picture_id"] = newest
+    looks = list(merged.values())
+    looks.sort(key=lambda look: (-look["pictures"], look["prompt"]))
+    return looks
+
+
 # ---------------------------------------------------------------------------
 # The vault-level entry points the route calls, so the route owns no db call.
 # ---------------------------------------------------------------------------
@@ -466,7 +585,7 @@ def read_recipes(vault, workflow_keys: Optional[list[str]] = None) -> list[dict]
 
 def read_credit_groups(
     vault, structural_hashes: list[str]
-) -> list[tuple[Optional[str], Optional[str], int]]:
+) -> list[tuple[Optional[str], Optional[str], int, Optional[int]]]:
     """The grouped picture rows :func:`credit_by_recipe` matches against."""
     return vault.db.run_immediate_read_task(credit_groups_in_session, structural_hashes)
 

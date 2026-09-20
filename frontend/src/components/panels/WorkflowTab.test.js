@@ -386,6 +386,73 @@ describe("marking a LoRA slot", () => {
   });
 });
 
+describe("the Recipes tab (v1.12 F6)", () => {
+  it("shows the stack's recipes, and the footer belongs to Workflow", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    const tab = wrapper
+      .findAll("button")
+      .find((b) => b.text().trim() === "Recipes");
+    expect(tab).toBeTruthy();
+    await tab.trigger("click");
+    await flush(wrapper);
+
+    expect(
+      wrapper.findComponent({ name: "WorkflowRecipesTab" }).exists(),
+    ).toBe(true);
+    // Run… is the Workflow tab's; the Recipes tab runs a recipe from its row.
+    expect(
+      wrapper.findAll("button").some((b) => b.text().includes("Run…")),
+    ).toBe(false);
+  });
+
+  it("answers for a selection of several, as the union of their stacks", async () => {
+    const { wrapper, store } = await mountWith([KEY]);
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text().trim() === "Recipes")
+      .trigger("click");
+    await flush(wrapper);
+
+    store.selectedKeys = [KEY, OTHER];
+    await flush(wrapper);
+
+    // Still the Recipes body, now asking about both cards: selecting several
+    // is the owner asking what they have between them.
+    const tab = wrapper.findComponent({ name: "WorkflowRecipesTab" });
+    expect(tab.exists()).toBe(true);
+    expect(tab.props("workflowKeys")).toEqual([KEY, OTHER]);
+  });
+
+  it("puts the refused Run… back when the Workflow tab is chosen", async () => {
+    // The footer belongs to the Workflow body, and Run… has to stay on screen
+    // and refuse rather than vanish. Leaving the Recipes tab is what brings
+    // that screen — and so that control — back.
+    const { wrapper, store } = await mountWith([KEY]);
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text().trim() === "Recipes")
+      .trigger("click");
+    await flush(wrapper);
+    store.selectedKeys = [KEY, OTHER];
+    await flush(wrapper);
+    expect(
+      wrapper.findAll("button").some((b) => b.text().includes("Run…")),
+    ).toBe(false);
+
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text().trim() === "Workflow")
+      .trigger("click");
+    await flush(wrapper);
+
+    const run = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Run…"));
+    expect(run).toBeTruthy();
+    expect(run.attributes("aria-disabled")).toBe("true");
+  });
+});
+
 describe("with several workflows selected", () => {
   it("keeps Run… on screen, refused, with the reason attached", async () => {
     const { wrapper } = await mountWith(
@@ -719,9 +786,11 @@ describe("the Tasks tab", () => {
   it("offers Tasks last, and shows the task manager instead of the workflow", async () => {
     const { wrapper } = await mountWith([KEY]);
     const band = wrapper.findAll("button.inspector-tab");
-    expect(band.map((t) => t.text())).toEqual(["Workflow", "Tasks"]);
+    // Recipes joined the band in F6 (#1408); Tasks stays last, which is the
+    // property this test is about.
+    expect(band.map((t) => t.text())).toEqual(["Recipes", "Workflow", "Tasks"]);
 
-    await band[1].trigger("click");
+    await band[2].trigger("click");
     await flush(wrapper);
     const text = textOf(wrapper);
     // The task manager's own empty state, and none of the workflow.
@@ -731,7 +800,7 @@ describe("the Tasks tab", () => {
     // behind would run a card the reader can no longer see.
     expect(wrapper.find(".wftab-foot").exists()).toBe(false);
 
-    await wrapper.findAll("button.inspector-tab")[0].trigger("click");
+    await wrapper.findAll("button.inspector-tab")[1].trigger("click");
     await flush(wrapper);
     expect(textOf(wrapper)).toContain("Cinematic portrait");
     expect(wrapper.find(".wftab-foot").exists()).toBe(true);
@@ -755,7 +824,7 @@ describe("the Tasks tab", () => {
     const tasksStore = useTasksStore();
     expect(
       wrapper
-        .findAll("button.inspector-tab")[1]
+        .findAll("button.inspector-tab").at(-1)
         .find(".inspector-tab-pulse")
         .exists(),
     ).toBe(false);
@@ -769,7 +838,7 @@ describe("the Tasks tab", () => {
     await flush(wrapper);
     expect(
       wrapper
-        .findAll("button.inspector-tab")[1]
+        .findAll("button.inspector-tab").at(-1)
         .find(".inspector-tab-pulse")
         .exists(),
     ).toBe(true);
