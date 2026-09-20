@@ -923,7 +923,7 @@ def test_the_stored_row_records_which_rule_keyed_it(hub):
     )
     # The literal the spec names, not the module's own constant: comparing a
     # written value against the thing that wrote it asserts nothing.
-    assert row["hash_version"] == "v2"
+    assert row["hash_version"] == "v3"
     assert row["node_count"] == len(TXT2IMG)
 
 
@@ -3385,6 +3385,78 @@ def test_a_shredded_compound_value_never_replaces_the_checkpoint():
         value for widget, value in assets_from_reduction(nodes) if widget == "ckpt_name"
     }
     assert names == {"my_real_checkpoint.safetensors"}
+
+
+def test_a_model_named_inside_a_compound_value_is_an_asset():
+    """A quoted ControlNet value hides a model name from both asset rules (#1375).
+
+    The field is not named for a model and the name inside carries no
+    extension, so the name used to be stored verbatim in the instance
+    document, where forgetting the model -- a row delete in
+    `workflow_recipe_asset`, with no stored graph rewritten -- never reached
+    it.
+    """
+    fields = (
+        A1111_FIELDS + ', ControlNet 0: "Module: canny, '
+        'Model: control_v11p_sd15_canny [d14c016b], Weight: 1", '
+        'ControlNet 1: "Module: none, Model: None, Weight: 1", '
+        "Hires upscale: 2"
+    )
+    nodes = reduce_a1111({"png": {"parameters": infotext(fields=fields)}}).nodes
+    assets = set(assets_from_reduction(nodes))
+    assert ("controlnet_0_model", "control_v11p_sd15_canny.safetensors") in assets
+    # "no model chosen" names no file.
+    assert "none.safetensors" not in {name for _, name in assets}
+
+    document = json.dumps(instance_document_from_reduction(nodes))
+    assert "control_v11p_sd15_canny" not in document
+    assert asset_reference("control_v11p_sd15_canny.safetensors") in document
+    # The rest of the compound survives, with no comma left where the model was.
+    assert '"controlnet_0": "Module: canny, Weight: 1"' in document
+
+
+def test_a_second_model_in_one_value_gets_its_own_row():
+    """Each name is forgotten on its own row, so one value can hold two.
+
+    Also the leading position: the model first in the value must not leave the
+    comma that separated it behind.
+    """
+    fields = (
+        A1111_FIELDS + ', ControlNet 0: "Model: control_a, '
+        'Module: canny, Model: control_b [d14c016b]"'
+    )
+    nodes = reduce_a1111({"png": {"parameters": infotext(fields=fields)}}).nodes
+    assets = set(assets_from_reduction(nodes))
+    assert ("controlnet_0_model", "control_a.safetensors") in assets
+    assert ("controlnet_0_model_2", "control_b.safetensors") in assets
+    document = json.dumps(instance_document_from_reduction(nodes))
+    assert '"controlnet_0": "Module: canny"' in document
+
+
+def test_a_field_that_is_not_a_known_compound_keeps_its_value_whole():
+    """Only ControlNet's fields are read this way, and for a reason (#1375).
+
+    A1111 writes prose into fields this module has no list of: the X/Y/Z plot
+    script puts prompt fragments in `X Values`, sd-dynamic-prompts puts the raw
+    template in `Template`. Reading `model: ...` in one of those as a filename
+    would file what a person wrote as a `workflow_recipe_asset` row -- hub-wide,
+    kept after the pictures are forgotten, and offered on the ghost screen as a
+    model. A long value is refused for the same reason.
+    """
+    long_name = "x" * 300
+    fields = (
+        A1111_FIELDS + ', X Values: "model: someone, model: someone else", '
+        'Template: "a castle, model: someone", '
+        f'ControlNet 0: "Module: canny, Model: {long_name}, Weight: 1"'
+    )
+    nodes = reduce_a1111({"png": {"parameters": infotext(fields=fields)}}).nodes
+    names = {name for _, name in assets_from_reduction(nodes)}
+    assert not {n for n in names if "someone" in n or n.startswith("x" * 10)}
+    document = json.dumps(instance_document_from_reduction(nodes))
+    # Untouched, both of them: not cut up, and nothing taken out.
+    assert "model: someone, model: someone else" in document
+    assert "a castle, model: someone" in document
+    assert long_name in document
 
 
 def test_a_line_after_the_fields_line_does_not_lose_the_picture():

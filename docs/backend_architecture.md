@@ -3200,11 +3200,32 @@ tensor data, not the file, so it could never resolve); a credential-named field
 is dropped; **everything else is a parameter**, unknown fields included, and a
 parameter is not even *named* in the recipe, because A1111 omits a field that
 holds its default. `<lora:…>` tags are cut from every value, hires and ADetailer
-prompts included. Two known limits: a model named inside a compound value
-(ControlNet's `Model: … [hash]`) stays in the instance document, where forgetting
-the model does not reach it (#1375); and an embedding is a node only when `TI
-hashes` was written, so the same generation keys as two topologies depending on
-whether the owner had hash summaries switched on. The fields line is the last
+prompts included. **A model named inside a ControlNet compound value is an asset
+too** (#1375): the extension writes its whole setup into one field
+(`ControlNet 0: "Module: canny, Model: control_x [hash], Weight: 1"`), where
+the field is not named for a model and the name inside carries no extension, so
+neither rule above saw it and it was stored verbatim in the instance document —
+the one place forgetting a model, a row delete, never reaches. Each `Model:`
+sub-field is lifted out of the value into an asset widget of its own
+(`controlnet_0_model`, `…_model_2` for a second), so the document names it by
+reference like any other model. **The fields read this way are a named set
+(`_COMPOUND_MODEL_FIELD_RE`), not "every field that is not prose"**: A1111
+holds prose in fields nothing here has a list of — the X/Y/Z plot script writes
+prompt fragments into `X Values`, sd-dynamic-prompts the raw template into
+`Template` — and reading `model: …` in one of those as a filename would file
+what a person wrote as a hub-wide `workflow_recipe_asset` row that outlives the
+pictures, which is a worse leak than the one being closed. `Model: None`, a
+bare hash and a name past `MAX_FILENAME_LENGTH` are left where they are for the
+same reason. `HASH_VERSION` moves to **v3**, because such a picture now keys
+differently and nothing re-keys a filed row in place: `WHERE hash_version =
+'v2'` names the rows the old rule produced. **No migration re-scans**, unlike
+`0118` and `0119`: re-reading would re-key the picture but leave its old
+instance row behind uncollected — only a picture delete queues the ghost
+cascade — and a stored document is never rewritten by design, so the old name
+goes when the instance row does, with the library's last picture and ghost for
+it. One known limit is left: an embedding is a node only when `TI hashes` was
+written, so the same generation keys as two topologies depending on whether the
+owner had hash summaries switched on. The fields line is the last
 line that *parses*, not simply the last, and the **first** occurrence of a
 repeated key wins — A1111 quotes any value holding a comma, so a repeat means
 another tool shredded a compound value into pairs, and taking the last would let
