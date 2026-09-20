@@ -24,7 +24,9 @@ from typing import Callable, Optional
 
 from pixlstash.hub import workflow_cards
 from pixlstash.hub.db import HubDatabase
-from pixlstash.services.model_folder_scanner import MODEL_SUFFIX as SHELF_MODEL_SUFFIX
+from pixlstash.services.model_folder_scanner import (
+    MODEL_SUFFIXES as SHELF_MODEL_SUFFIXES,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.services.workflow_hash import (
@@ -451,7 +453,7 @@ def _model_ghost_names(fetchall: Callable[[str], list]) -> set[str]:
                 and not digests_with_prefix(value, shelf_digests)
             ):
                 ghosts.add(value)
-        elif value.endswith(SHELF_MODEL_SUFFIX) and value not in shelf_names:
+        elif value.endswith(SHELF_MODEL_SUFFIXES) and value not in shelf_names:
             ghosts.add(value)
     return ghosts
 
@@ -459,13 +461,13 @@ def _model_ghost_names(fetchall: Callable[[str], list]) -> set[str]:
 def model_ghost_names(hub: HubDatabase) -> set[str]:
     """What recipes keep that names a model the shelf does not hold.
 
-    These are **model ghosts**: a ``.safetensors`` filename matching no model on
-    the shelf, or a ``*_sha256`` value no model's digest equals or, for an A1111
-    short hash, starts with (a digest identifies a model on a public registry as
-    surely as its name does).
-    Only what the shelf can hold is judged: it scans ``.safetensors`` alone, so
-    a ``.ckpt`` or ``.gguf`` is never on it and calling one a ghost would forget
-    the name of a model still on disk. A model that was never added to the shelf
+    These are **model ghosts**: a filename the shelf catalogues
+    (``SHELF_MODEL_SUFFIXES``) matching no model on the shelf, or a
+    ``*_sha256`` value no model's digest equals or, for an A1111 short hash,
+    starts with (a digest identifies a model on a public registry as surely as
+    its name does).
+    Only what the shelf can hold is judged: a ``.ckpt`` is never on it and
+    calling one a ghost would forget the name of a model still on disk. A model that was never added to the shelf
     counts — a picture made elsewhere names one — and the Privacy copy says so.
     Hub-wide, like the recipes: a model name is not a fact about one library.
     """
@@ -604,7 +606,9 @@ def recipes_missing_a_model(hub: HubDatabase, structural_hashes: list[str]) -> s
     if not wanted:
         return set()
     ghosts = model_ghost_names(hub)
-    unjudgeable = tuple(ext for ext in MODEL_EXTENSIONS if ext != SHELF_MODEL_SUFFIX)
+    unjudgeable = tuple(
+        ext for ext in MODEL_EXTENSIONS if ext not in SHELF_MODEL_SUFFIXES
+    )
     missing: set[str] = set()
     for batch in chunked(sorted(wanted)):
         placeholders = ",".join("?" for _ in batch)

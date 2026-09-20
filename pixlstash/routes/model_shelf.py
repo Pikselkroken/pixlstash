@@ -134,6 +134,7 @@ from pixlstash.utils.adapter_header import (
 from pixlstash.utils.host_open import open_in_file_manager
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.known_base_models import completions, family_of, fold
+from pixlstash.utils.model_utils import canonical_quant
 from pixlstash.utils.path_utils import path_is_within
 
 logger = get_logger(__name__)
@@ -316,9 +317,21 @@ class ModelResponse(BaseModel):
     quant: Optional[str] = Field(
         default=None,
         description=(
-            "The header dtype holding most of the parameters (`f16`, `bf16`, "
-            "`f8_e4m3`, ...), or `mixed`. Read from the header, never from the "
-            "filename."
+            "The precision the file was stored at, as one canonical id "
+            "(`fp16`, `bf16`, `fp8_e4m3`, `int8`, `q4_k_m`, `mixed`), or null "
+            "where nothing records it.\n\n"
+            "**Two sources folded into one vocabulary.** The safetensors "
+            "header - the dtype holding most of the parameters, weighted by "
+            "parameter count - wherever there is one, because it is the only "
+            "thing that knows what a file called `nvfp4_awq` is actually "
+            "stored at; the filename postfix otherwise, which is the only "
+            "source a `.gguf` has. The header spells a dtype (`f16`, "
+            "`f8_e4m3`) and a filename spells a precision (`fp16`); this "
+            "serves the folded id either way, so one screen cannot read `f16` "
+            "where the next reads `FP16`.\n\n"
+            "An id, not a label: `FP8 E4M3` is display copy and belongs in the "
+            "client. A GGUF level is kept whole (`q4_k_m`), because the level "
+            "is the name a person recognises."
         ),
     )
     weights_id: Optional[str] = Field(
@@ -857,7 +870,7 @@ def _to_response(
         base_model=row["base_model"],
         base_model_folded=fold(row["base_model"]),
         family=family_of(row["base_model"]) or row["family"],
-        quant=row["quant"],
+        quant=canonical_quant(row["quant"]),
         weights_id=row["weights_id"],
         trigger_words=row["trigger_words"],
         provenance=row["provenance"],

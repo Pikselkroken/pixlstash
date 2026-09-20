@@ -8,7 +8,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.model_folder_scanner import MODEL_SUFFIX
+from pixlstash.services.model_folder_scanner import MODEL_SUFFIXES
 from pixlstash.utils.media_files import is_supported_media_file
 from pixlstash.utils.reference_folder_validator import validate_reference_folder_path
 from pixlstash.utils.path_utils import resolve_path_within
@@ -196,7 +196,7 @@ def create_router(server) -> APIRouter:
             if (
                 is_file
                 and include_model_files
-                and entry.name.lower().endswith(MODEL_SUFFIX)
+                and entry.name.lower().endswith(MODEL_SUFFIXES)
             ):
                 entries.append(
                     FilesystemEntry(

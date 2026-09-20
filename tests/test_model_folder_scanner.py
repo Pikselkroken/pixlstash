@@ -1025,3 +1025,130 @@ class TestHeaderFacts:
         (row,) = models(hub, "vae").values()
         assert (row["family"], row["quant"]) == ("vae_16ch", "bf16")
         assert row["weights_id"]
+
+
+class TestFilesWithNoReadableHeader:
+    """``.gguf``: on the shelf, named and badged off its filename alone.
+
+    A GGUF header is a real subsystem and deliberately not parsed, so
+    everything the safetensors header answers is NULL here. The two facts the
+    file still carries are the two that make it shelvable: the folder's
+    declared role, and the quant postfix in its own name.
+    """
+
+    @staticmethod
+    def _gguf(path, size=64):
+        # GGUF's own magic, so nothing in this test passes because the bytes
+        # happened to be unparseable: they are a valid start of a real format
+        # whose header this build does not read.
+        path.write_bytes(b"GGUF" + struct.pack("<I", 3) + b"\0" * size)
+        return str(path)
+
+    def test_a_gguf_is_registered_with_the_quant_from_its_name(
+        self, hub, scanner, tmp_path
+    ):
+        folder = tmp_path / "unet"
+        folder.mkdir()
+        self._gguf(folder / "flux1-dev-Q4_K_M.gguf")
+        folder_id = register_folder(hub, folder)
+
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert result.unreadable == 0
+        (row,) = models(hub).values()
+        assert row["filename"] == "flux1-dev-Q4_K_M.gguf"
+        # The level kept whole and lowercased: `Q4_K_M` is the name a person
+        # recognises, so it is not folded into a family the way `f16` is.
+        assert row["quant"] == "q4_k_m"
+        # Everything the header would have said stays NULL - "the file did not
+        # say", which is what an undescribed `.safetensors` records too.
+        assert (row["family"], row["weights_id"], row["kind"]) == (None, None, None)
+
+    def test_a_gguf_outside_a_role_folder_is_unknown_rather_than_a_guess(
+        self, hub, scanner, tmp_path
+    ):
+        # No parameter count to reason from, so there is no evidence for any
+        # kind at all. `unknown` is a state the shelf shows and the owner can
+        # correct; `checkpoint` would be a guess stored as a fact.
+        folder = tmp_path / "downloads"
+        folder.mkdir()
+        self._gguf(folder / "mystery.gguf")
+        folder_id = register_folder(hub, folder)
+
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        (row,) = models(hub).values()
+        assert (row["file_kind"], row["quant"]) == ("unknown", None)
+
+    def test_a_gguf_the_folder_calls_a_vae_takes_the_folders_word(
+        self, hub, scanner, tmp_path
+    ):
+        folder = tmp_path / "vae"
+        folder.mkdir()
+        self._gguf(folder / "ae-Q8_0.gguf")
+        folder_id = register_folder(hub, folder)
+
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        (row,) = models(hub).values()
+        assert (row["file_kind"], row["quant"]) == ("vae", "q8_0")
+
+    def test_a_large_gguf_is_left_for_the_hash_finder_like_any_other(
+        self, hub, scanner, tmp_path, monkeypatch
+    ):
+        """The scan must not read tens of gigabytes to shelve one file.
+
+        The size rule is the same one every non-adapter kind already follows,
+        so turning the suffix on adds no reading the shelf was not already
+        deferring - which is the whole answer to "can a folder of GGUF
+        checkpoints be scanned at all".
+        """
+        folder = tmp_path / "unet"
+        folder.mkdir()
+        self._gguf(folder / "huge-Q6_K.gguf")
+        folder_id = register_folder(hub, folder)
+        monkeypatch.setattr(scanner_module, "_DEFER_HASH_BYTES", 1)
+
+        def no_hash(path):
+            raise AssertionError(f"a large file was hashed inline: {path}")
+
+        monkeypatch.setattr(scanner_module, "sha256_file", no_hash)
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        (row,) = models(hub).values()
+        assert (row["sha256"], row["quant"]) == (None, "q6_k")
+
+    def test_a_rescan_does_not_keep_reaching_for_a_header_that_is_not_there(
+        self, hub, scanner, tmp_path, monkeypatch
+    ):
+        """`weights_id` is NULL by construction here, which is the backfill's
+        own signal - so without the suffix check a GGUF would be re-opened on
+        every sweep for a header it will never have."""
+        folder = tmp_path / "unet"
+        folder.mkdir()
+        self._gguf(folder / "flux1-dev-Q4_K_M.gguf")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        def no_describe(path):
+            raise AssertionError(f"a headerless file was re-opened: {path}")
+
+        monkeypatch.setattr(scanner_module, "describe_adapter", no_describe)
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert len(models(hub)) == 1
+
+    def test_a_safetensors_whose_header_will_not_read_is_still_refused(
+        self, hub, scanner, tmp_path
+    ):
+        """The filename fallback is for a suffix with no reader, never a
+        licence to shelve a broken file of the one suffix that has one."""
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        (folder / "broken_fp16.safetensors").write_bytes(b"not a header at all")
+        folder_id = register_folder(hub, folder)
+
+        result = scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert result.unreadable == 1
+        assert models(hub) == {}

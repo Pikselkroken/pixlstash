@@ -2978,16 +2978,75 @@ architecture the tensors show for a support file (`vae_4ch`, `vae_16ch`,
 `clip_l`, `clip_g`, `t5_xxl`, `umt5_xxl`), read only from top-level tensors so a
 full checkpoint's baked-in VAE never files the checkpoint as one; the shelf
 serves the family of `base_model` instead whenever that folds, so a corrected
-base model is never contradicted by the column. `quant` is the dtype holding
-most of the **parameters** (not tensors), or `mixed`. `weights_id` hashes tensor
+base model is never contradicted by the column. `weights_id` hashes tensor
 names and shapes without dtypes, so clean casts of one model share it and a
 repack with scale tensors does not. Rows registered before the columns get them
 on the next scan: the unchanged-file fast path re-reads the header, never the
 bytes, for a row whose `weights_id` is NULL. `CheckpointHashTask._merge`
-carries them to the surviving row like the other scan-derived columns. Nothing
-reads them to decide a delete yet: `family` speaks two vocabularies (base-model
+carries them to the surviving row like the other scan-derived columns.
+
+`quant` is **two sources folded into one vocabulary**, and the fold happens on
+the way out rather than on the way in. The column holds whichever source wrote
+it: the safetensors header's own dtype spelling (`f16`, `f8_e4m3`, `i32`, or
+`mixed` where no dtype holds a majority of the **parameters** — not tensors),
+or, for a file with no readable header, the precision its filename records
+(`fp16`, `q4_k_m`). `ModelResponse` serves
+`model_utils.canonical_quant(row["quant"])`, so a row scanned before the
+filename source existed and one scanned after it read as one id, and a client
+never has to know which branch ran. Writing folded instead would have left
+every already-scanned row unfolded, which is the same problem one migration
+later.
+
+The filename half is `model_utils.quant_from_filename`, the same parser
+`derive_model_name` pops the postfix with — so the name a row shows and the
+badge beside it can never disagree about where the name ended. The header wins
+wherever there is one: it is the only thing that knows what a file called
+`nvfp4_awq` is actually stored at. See §*The shelf catalogues more than one
+suffix* below for the file kinds that have no header at all.
+
+Nothing reads them to decide a delete yet: `family` speaks two vocabularies (base-model
 families and tensor layouts), and joining a checkpoint's `flux1` to a
 `vae_16ch` needs a compatibility table this change does not invent.
+
+#### The shelf catalogues more than one suffix
+
+`model_folder_scanner.MODEL_SUFFIXES` is the one answer to "is this a model
+file", and it is a **tuple**: `.safetensors` and `.gguf`. Every consumer asks
+it rather than spelling an extension — the folder picker's listing
+(`routes/filesystem`), the upload rule (`routes/model_files._source_file`) and
+the model-ghost judgement (`hub/workflows`) — so the three move together and a
+`.gguf` cannot be shelved by the scan while being called a ghost by the
+recipes.
+
+`HEADER_SUFFIX` is the narrower question: which of them a safetensors header
+can be read from. A file that fails that test is described by
+`_describe_from_name`, which fills in only what its **name and its folder**
+answer:
+
+- the **quant postfix** (`flux1-dev-Q4_K_M.gguf`), the only source such a file
+  has;
+- the **folder's declared role**, through `classify_model_file((), 0, path)` —
+  which already trusts a folder above a parameter count, precisely because a
+  VAE and a text encoder carry no marker to find. A GGUF outside a role folder
+  is `unknown`, which the shelf shows and the owner can correct; it is never
+  guessed into `checkpoint`.
+
+Everything else (`family`, `weights_id`, `kind`, `param_count`, the trainer
+metadata) stays NULL, which is what an undescribed `.safetensors` records too.
+**GGUF header parsing is deliberately not built**: it is a real subsystem, and
+the filename is enough to shelve and badge the file.
+
+Two consequences worth stating:
+
+- **Hashing is unchanged.** `_describe_from_name` follows the same
+  `_DEFER_HASH_BYTES` rule as every other non-adapter kind, so a multi-gigabyte
+  GGUF is registered instantly with `sha256` NULL and left to
+  `MissingCheckpointHashFinder`. Turning the suffix on adds no reading the
+  scan was not already deferring.
+- **The unchanged-file fast path skips the header re-read for it.**
+  `has_header_facts` is `weights_id IS NOT NULL`, which is false by
+  construction here, so without the `_reads_a_header` check a GGUF would be
+  re-opened on every sweep for a header it will never have.
 
 #### The unlink is authorised by exactly one committed row (#1017)
 

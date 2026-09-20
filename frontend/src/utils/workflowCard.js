@@ -19,9 +19,27 @@
 //                                       // name row and the type chip both
 //                                       // read it, so one fact has one voice
 //     models: [{ name, title, icon, base_model, base_model_folded, kind,
-//               mark?, slot_label? }],
+//               quant, mark?, slot_label? }],
 //                                       // every non-LoRA slot: checkpoint,
 //                                       // unet, vae, clip… `kind` is the slot.
+//                                       // `name` is DERIVED, not the raw
+//                                       // widget value: no folder, no
+//                                       // extension and no quant postfix
+//                                       // (`t5xxl`, not
+//                                       // `t5xxl_fp8_e4m3fn.safetensors`).
+//                                       // Null for a slot whose name the
+//                                       // recipe never recorded.
+//                                       // `quant` is the precision that was
+//                                       // stripped off it, as one canonical
+//                                       // id (`bf16`, `fp8_e4m3`, `q4_k_m`,
+//                                       // `mixed`) - the shelf's own column
+//                                       // where it holds the file, the
+//                                       // filename postfix otherwise, and
+//                                       // null where neither says. `quantBadge`
+//                                       // (utils/modelShelf.js) turns it into
+//                                       // words; it is what keeps two quant
+//                                       // variants of one model apart once
+//                                       // their names have collapsed into one
 //                                       // `title` is the MODEL SHELF's name
 //                                       // for the file and is what a client
 //                                       // shows (`modelDisplayName`): the card's
@@ -38,8 +56,8 @@
 //                                       // shelf serves them by. A card with
 //                                       // no pictures draws itself out of
 //                                       // these (#1466). Usually all null
-//     loras:  [{ name, title, icon, base_model, base_model_folded, mark,
-//               slot_label? }],
+//     loras:  [{ name, title, icon, base_model, base_model_folded, quant,
+//               mark, slot_label? }],
 //                                       // "structural" = in the workflow
 //                                       // (a filled chip), "recipe" = a slot
 //                                       // the recipe fills (dashed).
@@ -121,6 +139,7 @@
 // graph carries instead); ⓘ lists every model, so a stack whose difference is
 // "other models" always has the models behind it.
 
+import { quantBadge } from "./modelShelf.js";
 import { cropImgStyle } from "./squareCrop.js";
 
 const RECIPE = "recipe";
@@ -354,7 +373,19 @@ export function cardAccessibleName(card, { member = false } = {}) {
   const parts = [
     card.name,
     isStack(card) && !member ? `stack of ${card.stack_size} workflows` : null,
-    checkpoint ? `${checkpoint.kind} ${modelDisplayName(checkpoint)}` : null,
+    // The precision is SPOKEN, not just drawn. Every chip on the card is
+    // `aria-hidden` and this string is the whole of what a screen reader gets,
+    // so a badge left out here is a badge that does not exist for that reader -
+    // and it is the one thing telling two quant variants of one model apart.
+    checkpoint
+      ? [
+          checkpoint.kind,
+          modelDisplayName(checkpoint),
+          quantBadge(checkpoint.quant)?.title,
+        ]
+          .filter(Boolean)
+          .join(" ")
+      : null,
     // "not read" rather than "no LoRAs" where nothing was read at all: such a
     // card is silent about its models, not certain it has none.
     loras.length

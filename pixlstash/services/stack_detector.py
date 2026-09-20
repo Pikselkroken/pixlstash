@@ -53,6 +53,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.adapter_header import FILE_ADAPTER
 from pixlstash.utils.model_utils import (
     _TRAINING_SUFFIX_RE,
+    _split_quant,
     clean_asset_name,
     split_model_version,
     version_sort_key,
@@ -117,8 +118,15 @@ def _step_of(filename: str) -> int | None:
     never grouped by a name whose suffix this cannot also explain. ``step00500``
     and ``000000500`` both yield 500; ``portrait mix v2`` yields None, because
     ``v2`` is not a training suffix and the name keeps it.
+
+    **Past the quant postfix first, for exactly that reason.** Real names put
+    the precision last (``Foxglove-step00000500-fp16``), and
+    :func:`derive_model_name` pops it before the step - so reading the raw last
+    token here would report no step for a file the grouping key was built from
+    the step of, and a run exported at two precisions would be a group with no
+    difference it could name.
     """
-    tokens = clean_asset_name(filename).split()
+    tokens, _quant = _split_quant(clean_asset_name(filename).split())
     if not tokens or not _TRAINING_SUFFIX_RE.match(tokens[-1]):
         return None
     digits = "".join(ch for ch in tokens[-1] if ch.isdigit())

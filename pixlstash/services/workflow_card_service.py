@@ -82,6 +82,11 @@ from pixlstash.services.workflow_library_service import (
 )
 from pixlstash.services.workflow_parameters import FEATURED_NAMES
 from pixlstash.utils.known_base_models import fold
+from pixlstash.utils.model_utils import (
+    canonical_quant,
+    derive_model_name,
+    quant_from_filename,
+)
 from pixlstash.utils.sql_chunking import chunked
 
 logger = get_logger(__name__)
@@ -161,12 +166,29 @@ class SlotModel:
     slots`` marks and ``workflow_default_override`` is keyed on. It travels
     with the slot because a client that draws a LoRA's Workflow/Recipe switch
     has nothing else to name the slot it just flipped.
+
+    ``name`` is the graph's filename put through
+    :func:`~pixlstash.utils.model_utils.derive_model_name`, so a card's
+    checkpoint chip reads ``t5xxl`` rather than
+    ``t5xxl_fp8_e4m3fn.safetensors``. The shelf lookup is done on the RAW
+    value before that (:func:`model_titles` keys on it), which is the one
+    ordering rule here: strip early and every shelf title silently stops
+    resolving.
     """
 
     name: Optional[str]
     kind: str
     mark: Optional[str] = None
     label: Optional[str] = None
+    # The precision the file was stored at, as one canonical id
+    # (:func:`~pixlstash.utils.model_utils.canonical_quant`): the shelf's own
+    # column where this machine has scanned the file, the filename postfix
+    # otherwise. ``None`` where neither says, which is most models.
+    #
+    # It is a field rather than part of ``name`` because ``name`` has just had
+    # it stripped: two quant variants of one model collapse to one name, and
+    # this is what keeps them apart.
+    quant: Optional[str] = None
     # What the model shelf calls this file - the trainer's own name, or the one
     # the owner typed - where the shelf knows it. ``None`` otherwise, and that
     # is the ordinary case: it means only that this machine has not scanned the
@@ -687,6 +709,9 @@ class ShelfMark:
     field would give the same model two colours in two places, which is the
     one thing a mark exists not to do. ``base_model_folded`` is null whenever
     ``known_base_models`` does not recognise the string, raw included.
+    ``quant`` is the shelf's own column, read from the safetensors header
+    where there is one - so it is the authoritative answer, and the filename
+    postfix a card falls back to is only for a file nothing has scanned.
 
     All of it is null far more often than not: PixlStash generates no sample
     for a checkpoint it registers in place, and most adapters carry no base
@@ -698,6 +723,7 @@ class ShelfMark:
     icon: Optional[str] = None
     base_model: Optional[str] = None
     base_model_folded: Optional[str] = None
+    quant: Optional[str] = None
 
 
 def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
@@ -733,7 +759,7 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
     for batch in chunked(sorted(single)):
         placeholders = ",".join("?" * len(batch))
         for row in hub.fetchall(
-            "SELECT id, icon_sha256, base_model "
+            "SELECT id, icon_sha256, base_model, quant "
             f"FROM model WHERE id IN ({placeholders})",
             tuple(batch),
         ):
@@ -742,6 +768,7 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
                     row["icon_sha256"],
                     row["base_model"],
                     fold(row["base_model"]),
+                    canonical_quant(row["quant"]),
                 )
     marks = {}
     for value, models in candidates.items():
@@ -751,7 +778,7 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
         # already paid for.
         claimed = {titles.get(model_id) for model_id in models}
         title = claimed.pop() if len(claimed) == 1 and None not in claimed else None
-        marks[value] = ShelfMark(title, *pictures.get(value, (None, None, None)))
+        marks[value] = ShelfMark(title, *pictures.get(value, (None, None, None, None)))
     return marks
 
 
@@ -850,14 +877,19 @@ def _describe_slots(
                 name = next_name(widget)
                 figure.loras.append(
                     SlotModel(
-                        name=None if mark == RECIPE else name,
+                        # Derived, not raw: a LoRA chip reads `Foxglove`
+                        # rather than `Foxglove_fp8.safetensors`. The shelf
+                        # lookup below still keys on the RAW value.
+                        name=_derived(None if mark == RECIPE else name),
                         kind="lora",
                         mark=mark,
                         label=str(slot.get("label") or "") or None,
                         **(
                             {}
                             if mark == RECIPE
-                            else _mark_fields(marks_by_name.get((name or "").lower()))
+                            else _mark_fields(
+                                marks_by_name.get((name or "").lower()), name
+                            )
                         ),
                     )
                 )
@@ -865,10 +897,10 @@ def _describe_slots(
                 name = next_name(widget)
                 figure.models.append(
                     SlotModel(
-                        name=name,
+                        name=_derived(name),
                         kind=_SLOT_KINDS.get(widget, widget or "model"),
                         label=str(slot.get("label") or "") or None,
-                        **_mark_fields(marks_by_name.get((name or "").lower())),
+                        **_mark_fields(marks_by_name.get((name or "").lower()), name),
                     )
                 )
 
@@ -882,35 +914,65 @@ def _describe_slots(
         # the mark means; `recipe` is a slot some recipe fills, and this card
         # has no recipe.
         for widget, filename in recovered.get(card.workflow_key, ()):
-            fields = _mark_fields(marks_by_name.get(filename.lower()))
+            fields = _mark_fields(marks_by_name.get(filename.lower()), filename)
+            name = _derived(filename)
             if widget == "lora_name":
                 figure.loras.append(
-                    SlotModel(name=filename, kind="lora", mark=STRUCTURAL, **fields)
+                    SlotModel(name=name, kind="lora", mark=STRUCTURAL, **fields)
                 )
             else:
                 figure.models.append(
                     SlotModel(
-                        name=filename,
+                        name=name,
                         kind=_SLOT_KINDS.get(widget, widget or "model"),
                         **fields,
                     )
                 )
 
 
-def _mark_fields(mark: Optional[ShelfMark]) -> dict:
+def _derived(name: Optional[str]) -> Optional[str]:
+    """A slot's filename as a card shows it: no folders, no extension, no quant.
+
+    **``None`` stays ``None``.** A slot whose name the recipe never recorded
+    serves null, and it has to keep doing so: ``derive_model_name(None)``
+    answers ``""``, which reads as a model called nothing rather than as a
+    model nobody named, and every client that tests the name for truth would
+    then draw an empty chip where it draws "no checkpoint" today.
+
+    A name that does not survive the strip falls back to the file's own
+    string, which is the shelf's own ``derived -> from-file`` chain
+    (``utils/modelShelf.modelName``) rather than a second rule: ``nvfp4_awq``
+    is a real filename that is nothing but its quant, and the raw string is
+    the only honest thing left to show for it.
+    """
+    if not name:
+        return None
+    return derive_model_name(name) or name
+
+
+def _mark_fields(mark: Optional[ShelfMark], name: Optional[str] = None) -> dict:
     """The shelf's fields for one model, as :class:`SlotModel` keywords.
 
-    An empty dict for a model the shelf does not hold, so the slot keeps the
+    Only ``quant`` for a model the shelf does not hold, so the slot keeps the
     dataclass's own defaults rather than being told three times that a file
     this machine has never scanned has no title, no picture and no base model.
+
+    **``quant`` is the one field a card can answer without the shelf**, which
+    is why it is computed here rather than left to the caller: the header wins
+    where there is one (the shelf's column is read from it), and the filename
+    postfix fills the gap for a ``.gguf``, and for every model in a workflow
+    this machine has never scanned - which is most of them on a freshly
+    imported graph.
     """
+    quant = (mark.quant if mark else None) or quant_from_filename(name or "")
     if mark is None:
-        return {}
+        return {"quant": quant}
     return {
         "title": mark.title,
         "icon": mark.icon,
         "base_model": mark.base_model,
         "base_model_folded": mark.base_model_folded,
+        "quant": quant,
     }
 
 

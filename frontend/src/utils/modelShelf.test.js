@@ -22,6 +22,8 @@ import {
   collapseStacks,
   copyPathsTitle,
   dateColumnKey,
+  quantBadge,
+  quantFromFilename,
   modelDate,
   withEmptyFolders,
   cleanAssetName,
@@ -97,6 +99,101 @@ describe("deriveModelName", () => {
 
   it("returns nothing when nothing survives the strip", () => {
     expect(deriveModelName("000002750.safetensors")).toBe("");
+  });
+});
+
+// (filename, the name a row shows, the canonical quant id or null).
+//
+// **Mirrors `QUANT_VOCABULARY` in `tests/test_model_file_classification.py`
+// case for case.** That is what the parity guarantee between the two halves
+// of the parser means: the shelf derives its names here and the workflow card
+// is served them from there, so a vocabulary the two disagree about is two
+// spellings of one model, a screen apart.
+const QUANT_VOCABULARY = [
+  ["model_fp32.safetensors", "model", "fp32"],
+  ["model_f32.safetensors", "model", "fp32"],
+  ["model_fp16.safetensors", "model", "fp16"],
+  ["z_image_turbo_bf16.safetensors", "z image turbo", "bf16"],
+  ["t5xxl_fp8_e4m3fn.safetensors", "t5xxl", "fp8_e4m3"],
+  ["clip_l_fp8_e5m2.safetensors", "clip l", "fp8_e5m2"],
+  ["model_fp8.safetensors", "model", "fp8"],
+  ["flux_nvfp4_awq.safetensors", "flux", "nvfp4"],
+  ["model_nf4.safetensors", "model", "nf4"],
+  ["model_int8.safetensors", "model", "int8"],
+  ["model_i4.safetensors", "model", "int4"],
+  ["flux1-dev-Q4_K_M.gguf", "flux1 dev", "q4_k_m"],
+  ["Qwen_Image-Q6_K.gguf", "Qwen Image", "q6_k"],
+  ["flux_q8_0.gguf", "flux", "q8_0"],
+  ["umt5_xxl_fp8_e4m3fn_scaled.safetensors", "umt5 xxl", "fp8_e4m3"],
+  ["model-step00004500-fp16.safetensors", "model", "fp16"],
+  // Mixed case, because every shelf fixture in this repo is lowercase and a
+  // case-folding bug in the lookup would otherwise pass the whole suite.
+  ["Flux1-Dev-FP8_E4M3FN.safetensors", "Flux1 Dev", "fp8_e4m3"],
+  ["Clementine_BF16.safetensors", "Clementine", "bf16"],
+];
+
+// Names that must come back untouched: `scaled`, `fast`, `m`, `l`, `1` and `0`
+// are ordinary tokens in real model names.
+const QUANT_NON_VOCABULARY = [
+  ["some_model_scaled.safetensors", "some model scaled"],
+  ["clementine_fast.safetensors", "clementine fast"],
+  ["clementine_m.safetensors", "clementine m"],
+  ["sdxl_1.safetensors", "sdxl 1"],
+  ["sd_xl_base_1.0.safetensors", "sd xl base 1.0"],
+  ["portrait_mix_v2.safetensors", "portrait mix v2"],
+];
+
+describe("the quant postfix", () => {
+  it.each(QUANT_VOCABULARY)("%s reads as %s", (filename, name, quant) => {
+    expect(deriveModelName(filename)).toBe(name);
+    expect(quantFromFilename(filename)).toBe(quant);
+  });
+
+  it.each(QUANT_NON_VOCABULARY)("%s keeps its name", (filename, name) => {
+    // Without the "at least one real quant token" guard,
+    // `some_model_scaled` silently becomes `some model`.
+    expect(deriveModelName(filename)).toBe(name);
+    expect(quantFromFilename(filename)).toBe(null);
+  });
+
+  it("falls back to the filename when the name was only a quant", () => {
+    expect(deriveModelName("nvfp4_awq.safetensors")).toBe("");
+    expect(modelName({ filename: "nvfp4_awq.safetensors" })).toEqual({
+      text: "nvfp4_awq.safetensors",
+      state: "from-file",
+    });
+  });
+});
+
+describe("quantBadge", () => {
+  it("turns the served id into words, not the raw dtype", () => {
+    // The API serves `fp8_e4m3`, folded from the header's own `f8_e4m3`. A
+    // chip reading the dtype is the drift this map exists to stop.
+    expect(quantBadge("fp8_e4m3")).toEqual({
+      label: "FP8",
+      title: "FP8 E4M3",
+    });
+    expect(quantBadge("bf16")).toEqual({ label: "BF16", title: "bfloat16" });
+  });
+
+  it("shows a GGUF level verbatim, because the level is the name", () => {
+    expect(quantBadge("q4_k_m")).toEqual({
+      label: "Q4_K_M",
+      title: "GGUF Q4_K_M quantisation",
+    });
+  });
+
+  it("shows an id it has never seen rather than swallowing it", () => {
+    expect(quantBadge("f64")).toEqual({ label: "F64", title: "Stored as F64" });
+  });
+
+  it("gives a model with no recorded precision NO badge", () => {
+    // Null and not an empty chip: a blank badge reads as a rendering gap and
+    // an `UNKNOWN` one reads like a fact nobody established.
+    expect(quantBadge(null)).toBe(null);
+    expect(quantBadge("")).toBe(null);
+    expect(quantBadge("   ")).toBe(null);
+    expect(quantBadge(undefined)).toBe(null);
   });
 });
 

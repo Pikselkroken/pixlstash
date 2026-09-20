@@ -1144,6 +1144,24 @@
                         activator="parent"
                       />Cover</span
                     >
+                    <!-- The precision the file was stored at, which
+                         `deriveModelName` has just taken out of the name to
+                         its left. Two quant variants of one model are two rows
+                         reading the same name, and this chip is the whole of
+                         what tells them apart - so it is drawn on EVERY row
+                         that records one, never only where two of them meet: a
+                         name that changed when an unrelated file was
+                         downloaded would be worse than no badge at all.
+                         A row recording no precision gets no chip - not an
+                         empty one and not `UNKNOWN`. -->
+                    <span
+                      v-if="quantBadge(row.quant)"
+                      class="shelf-chip shelf-chip--quant"
+                      ><Tooltip
+                        :text="quantBadge(row.quant).title"
+                        activator="parent"
+                      />{{ quantBadge(row.quant).label }}</span
+                    >
                     <!-- The step, on any row that is not a stack cover.
                          `deriveModelName` strips the trailing step from the
                          filename on the stated grounds that "the step is parsed
@@ -1580,6 +1598,7 @@ import {
   GROUP_BY_LABELS,
   modelVersion,
   movableCopies,
+  quantBadge,
   releaseReceipt,
   SORT_LABELS,
   stackReceipt,
@@ -5454,6 +5473,14 @@ button.shelf-head-cell:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   color: rgba(var(--v-theme-on-background), 0.7);
+}
+
+/* The precision, in the app's mono face because it is a machine word read
+   character by character (`Q4_K_M`, `FP8`) rather than a phrase - the same
+   reason the filename line under it is monospaced. Nothing else changes: it is
+   the row's own chip, at the row's own size and border. */
+.shelf-chip--quant {
+  font-family: var(--font-mono);
 }
 
 /* Not set is a DASHED chip, not a blank cell: a blank under a column that

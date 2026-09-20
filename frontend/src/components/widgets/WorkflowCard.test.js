@@ -617,6 +617,63 @@ describe("WorkflowCard", () => {
     expect(text).toContain("realvisxl.safetensors");
   });
 
+  it("draws the precision beside the checkpoint, as its own chip", () => {
+    // The name has had the postfix taken off it server-side, so two quant
+    // builds of one model are two cards reading one name - this chip is the
+    // whole of what tells them apart. `fact`, because a precision is not a
+    // model, and a separate chip so it clips to "+1" instead of eating the
+    // name it qualifies.
+    const row = mountCard({
+      ...BARE,
+      models: [{ name: "t5xxl", kind: "checkpoint", quant: "fp8_e4m3" }],
+    }).findAll(".wf-card__row")[1];
+    const chips = row.findAll(".chip-row > .chip-row__chip");
+    expect(chips.map((chip) => chip.find(".chip-row__label").text())).toEqual([
+      "t5xxl",
+      "FP8",
+    ]);
+    expect(chips[1].classes()).toContain("chip-row__chip--fact");
+  });
+
+  it("draws no precision chip at all when nothing recorded one", () => {
+    // Not an empty chip and not `UNKNOWN`: a badge that is always there stops
+    // meaning anything, and most models record no precision.
+    const row = mountCard({
+      ...BARE,
+      models: [{ name: "t5xxl", kind: "checkpoint", quant: null }],
+    }).findAll(".wf-card__row")[1];
+    expect(row.findAll(".chip-row > .chip-row__chip")).toHaveLength(1);
+  });
+
+  it("speaks the precision, since every chip on the card is aria-hidden", () => {
+    // The accessible name is the whole of what a screen reader gets off this
+    // card, so a badge missing from it does not exist for that reader.
+    const label = mountCard({
+      ...BARE,
+      models: [{ name: "t5xxl", kind: "checkpoint", quant: "fp8_e4m3" }],
+    })
+      .find("article")
+      .attributes("aria-label");
+    expect(label).toContain("checkpoint t5xxl FP8 E4M3");
+  });
+
+  it("puts the precision on every model the ⓘ popover lists", () => {
+    const text = mountCard({
+      ...BARE,
+      models: [
+        { name: "flux1 dev", kind: "unet", quant: "q4_k_m" },
+        { name: "ae", kind: "vae", quant: null },
+      ],
+      loras: [{ name: "detail", mark: "structural", quant: "bf16" }],
+    })
+      .find('[data-testid="workflow-info-popover"]')
+      .text();
+    expect(text).toContain("Q4_K_M");
+    expect(text).toContain("BF16");
+    // The one with nothing recorded gets nothing, rather than an empty chip.
+    expect(text).toMatch(/ae\s*vae/);
+  });
+
   it("lists every model, not just the checkpoint, in the ⓘ popover", () => {
     const text = mountCard({
       ...BARE,
