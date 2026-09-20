@@ -557,3 +557,14 @@ def test_reading_waits_for_scoring_only_and_runs_with_captioning_off(server, pic
         MissingOcrFinder(server.vault.db, engine_getter=lambda: None).find_task()
         is None
     )
+
+
+def test_the_bar_sits_below_a_real_screenshot():
+    """Measured over a library of 12k pictures, not chosen by taste.
+
+    Dense phone screenshots scored 0.16-0.36 (a screenful of chat text: 0.23),
+    while the photographs that clear the scorer's hard gates at all topped out
+    near 0.16. At 0.25 two of 81 screen-sized pictures qualified and a random
+    sample of 1200 produced none, so reading had almost nothing to read.
+    """
+    assert OCR_MIN_TEXT_SCORE < 0.16

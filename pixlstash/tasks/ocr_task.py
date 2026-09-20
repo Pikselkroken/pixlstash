@@ -25,10 +25,15 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-# Only pictures that look like they carry text get read. ``text_score`` is 0 for
-# nearly every photograph, so anything past its hard gates and a little way up
-# the ramp is worth the model's time.
-OCR_MIN_TEXT_SCORE = 0.25
+# Only pictures that look like they carry text get read. ``text_score`` is
+# exactly 0 for nearly every photograph, so the bar sits just above the hard
+# gates rather than a long way up the ramp: measured over a real library, dense
+# phone screenshots score 0.16-0.36 and a page of chat text scores 0.23, while
+# the photographs that get past the gates at all (a blown-out sky over sand, a
+# facade of windows) top out near 0.16. 0.25 read almost nothing; the two
+# populations overlap, so this keeps the screenshots and pays for a few photos
+# that read as nothing and are never tried again.
+OCR_MIN_TEXT_SCORE = 0.10
 
 
 class OcrTask(BaseTask):
