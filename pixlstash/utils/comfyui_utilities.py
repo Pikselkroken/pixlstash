@@ -504,6 +504,11 @@ def extract_generation_info(workflow: dict) -> dict:
           the ``seed`` widget of ``KSampler``/``KSamplerAdvanced`` or the
           ``noise_seed`` input of ``RandomNoise``.
     """
+    # The format check used to sit outside this `try`, so a non-dict raised
+    # `AttributeError` at the caller. `is_api_format` answers for one instead
+    # ("not the API format"), the UI reader then raises inside the `try`, and
+    # such a caller now gets the empty result and a logged traceback. No
+    # caller passes one; the widened `except` is the cost of the single sniff.
     try:
         if not is_api_format(workflow):
             return _extract_generation_info_ui(workflow)
@@ -783,7 +788,9 @@ def is_comfy_workflow(value: Any) -> bool:
     """
     if not isinstance(value, dict):
         return False
-    # UI format - the same four hints, and only `is_api_format` knows them.
+    # UI format: the same four hints, and `is_api_format` is their one reader.
+    # Sound as an inversion only because a non-dict was refused two lines up -
+    # `is_api_format` answers "not the API format" for one of those as well.
     if not is_api_format(value):
         return True
     # API format: most top-level entries must be node dicts
