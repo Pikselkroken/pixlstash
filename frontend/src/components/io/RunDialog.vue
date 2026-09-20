@@ -379,6 +379,7 @@ import {
   listWorkflowCards,
   preflightWorkflowRun,
   runWorkflowCard,
+  workflowCoverUrl,
 } from "../../api/workflows";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
@@ -551,9 +552,20 @@ const subtitle = computed(() => card.value?.name || "");
 const sourceName = computed(
   () => props.source?.name || card.value?.name || "This run",
 );
-const coverUrl = computed(
-  () => props.source?.coverUrl || card.value?.covers?.[0] || "",
-);
+/**
+ * The picture beside the form, as a browser can actually load it.
+ *
+ * A card's `covers` are API-RELATIVE (`_cover_urls`, `routes/workflows.py`) and
+ * an `<img src>` bypasses Axios, so nothing prepends `/api/v1` and nothing
+ * appends the share token: used verbatim the browser asks the page origin for
+ * a path no route serves and the cover is broken. `workflowCoverUrl` is the
+ * one spelling of that fix (F1b hit it on the grid first).
+ */
+const coverUrl = computed(() => {
+  if (props.source?.coverUrl) return props.source.coverUrl;
+  const cover = card.value?.covers?.[0];
+  return cover ? workflowCoverUrl(cover) : "";
+});
 const seedText = computed(() => recipe.value?.seed_text || "");
 
 const sourceKindLine = computed(() => {

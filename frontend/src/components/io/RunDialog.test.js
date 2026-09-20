@@ -29,6 +29,7 @@ vi.mock("../../api/workflows", () => ({
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   preflightWorkflowRun: (...args) => preflightWorkflowRun(...args),
   runWorkflowCard: (...args) => runWorkflowCard(...args),
+  workflowCoverUrl: (cover) => `/api/v1${cover}`,
 }));
 vi.mock("../../api/comfyui", () => ({
   getPictureRecipe: (...args) => getPictureRecipe(...args),
@@ -332,6 +333,31 @@ describe("a number field that has been emptied", () => {
     const steps = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
     wrapper.vm.setValue(steps, wrapper.vm.coerce(steps, "twelve"));
     expect(wrapper.vm.currentValue(steps)).toBe(12);
+  });
+});
+
+describe("the picture beside the form", () => {
+  it("resolves a card's cover through the api helper, not raw", async () => {
+    // `covers` are API-relative and an `<img src>` bypasses Axios, so a raw
+    // path is asked of the page origin and the cover is simply broken. F1b hit
+    // this on the Workflows grid first; the popup draws the same paths.
+    getWorkflowCard.mockResolvedValue({
+      card: card({ covers: ["/pictures/thumbnails/812.webp?v=3"] }),
+    });
+    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+
+    expect(wrapper.vm.coverUrl).toBe("/api/v1/pictures/thumbnails/812.webp?v=3");
+  });
+
+  it("keeps a caller's own url as given", async () => {
+    // The Workflow tab resolves it before handing it over, so the popup must
+    // not put the prefix on twice.
+    const wrapper = await mountRun({
+      kind: "card",
+      workflowKey: KEY,
+      coverUrl: "/api/v1/pictures/thumbnails/9.webp",
+    });
+    expect(wrapper.vm.coverUrl).toBe("/api/v1/pictures/thumbnails/9.webp");
   });
 });
 

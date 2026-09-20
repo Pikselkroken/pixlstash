@@ -249,6 +249,7 @@ import {
   setWorkflowPins,
   setWorkflowSlots,
   stackWorkflows,
+  workflowCoverUrl,
 } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
@@ -699,7 +700,11 @@ function run() {
     kind: "card",
     workflowKey: card.value.key,
     name: card.value.name,
-    coverUrl: card.value.covers?.[0] || "",
+    // Through the helper: a raw `covers` entry is API-relative and an
+    // `<img src>` resolves it against the page origin instead.
+    coverUrl: card.value.covers?.[0]
+      ? workflowCoverUrl(card.value.covers[0])
+      : "",
     emptyPrompt: true,
   });
 }
