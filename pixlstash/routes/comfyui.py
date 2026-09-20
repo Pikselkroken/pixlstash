@@ -250,6 +250,64 @@ def _store_workflow(
     }
 
 
+def store_workflow_copy(hub, name: str, workflow: dict) -> tuple[str, str | None]:
+    """Write *workflow* into the user folder beside whatever is already there.
+
+    What ``POST /workflows/{key}/duplicate`` and
+    ``POST /workflows/{key}/insert-lora-loader`` write with, and deliberately
+    **not** :func:`_store_workflow`: that one matches an identical stored copy
+    and hands its name back, which is right for an import (a file the library
+    already has is not a second workflow) and is exactly wrong here, where a
+    second copy of the same workflow is the whole request.
+
+    The name is made free by the same ``(2)`` counter the import uses, so a
+    duplicate of a duplicate lands beside its sibling rather than over it.
+
+    **The shape check and the placeholder migration are NOT skipped**, only the
+    match: a file written here has to be as loadable as an imported one, and
+    ``_store_workflow``'s own comment says why the migration matters - a
+    workflow stored with placeholder tokens beside migrated siblings is one
+    that will not run.
+
+    Args:
+        hub: The hub, or ``None``; filing is secondary to storing.
+        name: The name asked for, with or without its ``.json``.
+        workflow: The document to write.
+
+    Returns:
+        ``(stored name, card key)`` - the key being ``None`` when the graph
+        could not be filed, which does not stop the file being written.
+
+    Raises:
+        NotAWorkflowError: *workflow* is not shaped like a ComfyUI workflow.
+        OSError: The file could not be written.
+    """
+    check_comfy_workflow(workflow)
+    workflow, _migrated = workflow_bindings.migrate_placeholders(workflow)
+    stored = _normalize_workflow_name(name) or "workflow.json"
+    workflow_dir = workflow_user_dir()
+    os.makedirs(workflow_dir, exist_ok=True)
+    # Under the lock the import and the delete take. Finding a free name and
+    # then writing it is a check-then-act, and these handlers are sync, so
+    # FastAPI runs two of them on the thread pool at once: without this, two
+    # duplicates both see `… (copy).json` absent, both write it, and one 201
+    # hands back a key pointing at the other's bytes. It also stops a delete
+    # landing between the write and the filing and leaving a hub row naming a
+    # file already in the trash.
+    with workflow_inbox.INBOX_LOCK:
+        path = resolve_path_within(workflow_dir, stored)
+        stem = os.path.splitext(stored)[0]
+        counter = 2
+        while os.path.exists(path):
+            stored = f"{stem} ({counter}).json"
+            path = resolve_path_within(workflow_dir, stored)
+            counter += 1
+        _save_workflow_json(path, workflow)
+        _topology_hash, card_key = _file_in_hub(hub, stored, workflow)
+    logger.info("Stored a copy of a workflow as %s.", stored)
+    return stored, card_key
+
+
 def _trash_stored_workflow(path: str, name: str) -> None:
     """Move a stored workflow to the system trash by way of the inbox.
 
@@ -272,6 +330,81 @@ def _trash_stored_workflow(path: str, name: str) -> None:
         return
     workflow_inbox.trash_workflow(workflow_inbox.workflow_inbox_dir(), name, workflow)
     os.remove(path)
+
+
+def trash_user_workflow(hub, workflow_name: str) -> str:
+    """Send one stored workflow to the trash and forget its rows.
+
+    Shared with ``DELETE /workflows/{key}``, so the card route and the file
+    route delete a workflow the same way: through the inbox, with the
+    migration backup, the input modes, the pins and the place on its card
+    each forgotten on its own. Only the **user** folder resolves here, so a
+    built-in is a 404 rather than a deletion nobody can undo.
+
+    Args:
+        hub: The hub, or ``None``. The file goes either way; the rows it
+            leaves behind are forgotten only if there is somewhere to forget
+            them. Takes the hub rather than the whole server so it matches
+            :func:`store_workflow_copy` above and needs no server to test.
+        workflow_name: The stored file to delete.
+
+    Returns:
+        The normalized name that was deleted.
+    """
+    normalized = _normalize_workflow_name(workflow_name)
+    if not normalized:
+        raise HTTPException(status_code=400, detail="workflow_name is required")
+    workflow_dir = workflow_user_dir()
+    try:
+        path = resolve_path_within(workflow_dir, normalized)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid workflow name")
+    if not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="Workflow not found in user")
+    stored_name = _on_disk_name(path)
+    try:
+        with workflow_inbox.INBOX_LOCK:
+            _trash_stored_workflow(path, normalized)
+    except (TrashPermissionError, OSError, RecursionError, ValueError) as exc:
+        logger.warning("Failed to delete workflow %s: %s", normalized, exc)
+        raise HTTPException(status_code=500, detail="Failed to delete workflow")
+    # The placeholder migration's backup goes with the workflow it copied.
+    backup = f"{path}{workflow_bindings.BACKUP_SUFFIX}"
+    if os.path.exists(backup):
+        try:
+            os.remove(backup)
+        except OSError as exc:
+            logger.warning(
+                "Deleted workflow %s but not its migration backup %s: %s",
+                normalized,
+                backup,
+                exc,
+            )
+    if hub is not None:
+        # The file is already gone, so its rows describe nothing; they would
+        # only come back into force if a file of the same name is imported
+        # later. Each is forgotten on its own, so one failing keeps the other.
+        for what, forget in (
+            ("picture-input modes", lambda: forget_input_modes(hub, stored_name)),
+            (
+                "parameter pins",
+                lambda: replace_parameter_pins(hub, stored_name, None),
+            ),
+            (
+                "place on its workflow card",
+                lambda: workflow_cards.forget_file(hub, stored_name),
+            ),
+        ):
+            try:
+                forget()
+            except Exception as exc:
+                logger.warning(
+                    "Deleted workflow %s but could not forget its %s: %s",
+                    normalized,
+                    what,
+                    exc,
+                )
+    return normalized
 
 
 def _find_stored_copy(wanted: str) -> str | None:
@@ -1946,61 +2079,10 @@ def create_router(server) -> APIRouter:
     )
     def delete_comfyui_workflow(workflow_name: str):
         # Sync on purpose: the trash is file I/O, so this runs on the thread pool.
-        normalized = _normalize_workflow_name(workflow_name)
-        if not normalized:
-            raise HTTPException(status_code=400, detail="workflow_name is required")
-        workflow_dir = workflow_user_dir()
-        try:
-            path = resolve_path_within(workflow_dir, normalized)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid workflow name")
-        if not os.path.isfile(path):
-            raise HTTPException(status_code=404, detail="Workflow not found in user")
-        stored_name = _on_disk_name(path)
-        try:
-            with workflow_inbox.INBOX_LOCK:
-                _trash_stored_workflow(path, normalized)
-        except (TrashPermissionError, OSError, RecursionError, ValueError) as exc:
-            logger.warning("Failed to delete workflow %s: %s", normalized, exc)
-            raise HTTPException(status_code=500, detail="Failed to delete workflow")
-        # The placeholder migration's backup goes with the workflow it copied.
-        backup = f"{path}{workflow_bindings.BACKUP_SUFFIX}"
-        if os.path.exists(backup):
-            try:
-                os.remove(backup)
-            except OSError as exc:
-                logger.warning(
-                    "Deleted workflow %s but not its migration backup %s: %s",
-                    normalized,
-                    backup,
-                    exc,
-                )
-        hub = getattr(server, "hub", None)
-        if hub is not None:
-            # The file is already gone, so its rows describe nothing; they would
-            # only come back into force if a file of the same name is imported
-            # later. Each is forgotten on its own, so one failing keeps the other.
-            for what, forget in (
-                ("picture-input modes", lambda: forget_input_modes(hub, stored_name)),
-                (
-                    "parameter pins",
-                    lambda: replace_parameter_pins(hub, stored_name, None),
-                ),
-                (
-                    "place on its workflow card",
-                    lambda: workflow_cards.forget_file(hub, stored_name),
-                ),
-            ):
-                try:
-                    forget()
-                except Exception as exc:
-                    logger.warning(
-                        "Deleted workflow %s but could not forget its %s: %s",
-                        normalized,
-                        what,
-                        exc,
-                    )
-        return {"status": "success", "name": normalized}
+        return {
+            "status": "success",
+            "name": trash_user_workflow(getattr(server, "hub", None), workflow_name),
+        }
 
     def _load_stored_workflow(workflow_name: str) -> tuple[str, str, dict]:
         """``(on-disk name, path, document)`` of a stored workflow, or raise 4xx."""

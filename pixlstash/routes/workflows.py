@@ -43,6 +43,7 @@ privacy purge that lives with the retention setting in ``routes/config.py``.
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 from copy import deepcopy
@@ -60,6 +61,7 @@ from pixlstash.hub.workflow_card_reads import (
     key_pins,
     keys_in_stack,
     picture_inputs,
+    slot_marks,
 )
 from pixlstash.hub.workflow_card_writes import (
     AUTO_STACK_PREFIX,
@@ -86,6 +88,7 @@ from pixlstash.hub.workflows import (
     recipes_for_topology,
     topology_exists,
     topology_index,
+    unvouched_model_values,
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.a1111_recipe import reduce_a1111
@@ -95,6 +98,8 @@ from pixlstash.services.comfyui_recipe_service import (
     apply_seeds,
     detect_lora_targets,
     detect_seed_targets,
+    insert_adapter,
+    plan_lora_insertion,
 )
 from pixlstash.services.comfyui_service import (
     _extract_output_node_ids,
@@ -120,7 +125,10 @@ from pixlstash.routes.comfyui import (
     _read_object_info,
     _resolve_workflow_path,
     _shelf_adapter,
+    store_workflow_copy,
+    trash_user_workflow,
 )
+from pixlstash.services.workflow_export import download_stem, scrub_for_export
 from pixlstash.services.workflow_identity import RECIPE, STRUCTURAL
 from pixlstash.services.workflow_hash import (
     MODEL_EXTENSIONS,
@@ -750,6 +758,49 @@ class RunResult(BaseModel):
     runs: int = 0
     groups: list[RunGroup] = Field(default_factory=list)
     prompts: list[dict] = Field(default_factory=list)
+
+
+class WorkflowExport(BaseModel):
+    """``GET /workflows/{key}/export``: a ComfyUI file, minus every run of it.
+
+    ``removed`` names the CATEGORIES that were taken out and never the values:
+    the point of the route is that those values do not travel, and an answer
+    listing the prompt it withheld would be the leak the scrub exists to stop.
+    """
+
+    filename: str = Field(description="What to call the file when it is saved.")
+    workflow: dict = Field(description="The ComfyUI API-format graph.")
+    removed: list[str] = Field(
+        default_factory=list,
+        description="What the export left out, as categories, never values.",
+    )
+    source: str = Field(
+        description="Where the graph was resolved from: file, picture or instance."
+    )
+
+
+class WorkflowFile(BaseModel):
+    """One workflow file this machine now holds, and the card it landed on."""
+
+    name: str = Field(description="What the file is called in the user folder.")
+    workflow_key: str | None = Field(
+        None,
+        description="The card it was filed on, or null when it could not be filed.",
+    )
+
+
+class InsertedLoader(WorkflowFile):
+    """The file written by ``POST /workflows/{key}/insert-lora-loader``."""
+
+    node_id: str = Field(description="The id the new loader has in the graph.")
+    class_type: str = Field(description="Which loader node was added.")
+
+
+class WorkflowDeleted(BaseModel):
+    """Which file went to the trash, and which card it came off."""
+
+    deleted: str
+    workflow_key: str
 
 
 @dataclass
@@ -2420,5 +2471,295 @@ def create_router(server) -> APIRouter:
                 prompts.append(
                     {"workflow_key": group.workflow_key, "prompt_id": prompt_id}
                 )
+
+    # ── The file gestures (v1.12 B8) ──────────────────────────────────────
+    #
+    # Export, Duplicate, Insert loader and Delete: the four gestures that write
+    # or read a FILE, against a card that may never have had one. Each starts
+    # from `_source_graph_for`, so a card the library only knows from its
+    # pictures exports and duplicates like any other - that is most of what
+    # makes them worth having.
+    #
+    # Edited defaults are NOT applied to any of these. A default is an override
+    # the run path puts in at submit time (implementation plan rule 1), and
+    # writing one into a graph would make the workflow and the override the
+    # same thing.
+
+    def _card_source(card):
+        """One card's runnable graph, or the 409 that says why there is none.
+
+        ``RecursionError`` is caught here rather than at each gesture because
+        all three resolve through this one function and share the exposure: an
+        embedded graph comes out of a picture that arrived from somewhere else,
+        so its nesting depth is not ours to trust, and ``sanitize_prompt_graph``
+        deep-copies it before anything of ours has looked at it.
+        ``_store_workflow`` and ``_trash_stored_workflow`` already name this
+        class for the same reason.
+        """
+        try:
+            source, reason = _source_graph_for(card)
+        except RecursionError as exc:
+            logger.warning(
+                "Card %s has a source graph too deeply nested to read: %s",
+                card.workflow_key,
+                exc,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "PixlStash cannot read this workflow: its graph is nested "
+                    "too deeply to walk."
+                ),
+            ) from exc
+        if source is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "PixlStash has no graph for this workflow "
+                    f"({reason.code if reason else run_service.NO_RUNNABLE_SOURCE})."
+                ),
+            )
+        return source
+
+    def _file_stem(card) -> str:
+        """What a file written for this card should be called, without .json.
+
+        Sanitised, because a card's name is the owner's own text and it goes
+        both into a path under the user folder and into a download name the
+        CLIENT writes with — so the cleaning has to hold on the client's
+        platform too, which ``os.path.basename`` on Linux does not do for a
+        Windows separator. ``resolve_path_within`` is still the backstop on
+        this side (``routes/comfyui.py``); this is the half that leaves.
+        """
+        stem = os.path.splitext(card.file_name)[0] if card.file_name else ""
+        return download_stem(stem or _display_name(card)) or "workflow"
+
+    # Which of the two cleanings is the authority: for a file written on THIS
+    # machine it is `_normalize_workflow_name` + `resolve_path_within` in
+    # `routes/comfyui.py`, and `download_stem` above is advisory. For the
+    # export's `filename` there is no server-side backstop at all, because the
+    # client writes that file — so there `download_stem` is the authority.
+
+    def _structural_lora_slots(card, graph: dict) -> set[tuple[str, str]]:
+        """``(node id, widget)`` of every LoRA slot the owner marked structural.
+
+        Everything else the export empties, which is why this reads the
+        STRUCTURAL marks rather than the recipe ones: an unmarked slot, a
+        topology the backfill has not frozen yet and a loader the label map
+        does not reach all then fall on the side that publishes nothing.
+
+        A mark is keyed by ``<node label>/<widget>`` (``workflow_identity``'s
+        own slot label), so the widget is carried through rather than the node
+        alone — a stacker's three slots are three marks on one node.
+        """
+        keep = {
+            label
+            for (topology_hash, label), mark in slot_marks(
+                _hub(), [card.topology_hash]
+            ).items()
+            if topology_hash == card.topology_hash and mark == STRUCTURAL
+        }
+        if not keep:
+            return set()
+        try:
+            labels = topology_node_labels(structural_document(graph))
+        except WorkflowGraphError as exc:
+            # No labels means no node is known to be structural, so every LoRA
+            # slot is emptied. Logged rather than raised: a less useful export
+            # is the right failure here, and `scrub_for_export` refuses the
+            # graph on its own if the reduction is what it needed.
+            logger.info(
+                "Card %s exports with every LoRA slot emptied, its graph will "
+                "not reduce to slot labels: %s",
+                card.workflow_key,
+                exc,
+            )
+            return set()
+        return {
+            (node_id, widget)
+            for node_id, label in labels.items()
+            for widget in ((graph.get(node_id) or {}).get("inputs") or {})
+            if f"{label}/{widget}" in keep
+        }
+
+    @router.get(
+        "/workflows/{workflow_key}/export",
+        summary="Export a workflow",
+        description=(
+            "This workflow as a ComfyUI file somebody else can open: prompts "
+            "and caption targets blank, seeds nulled, the LoRA slots that are "
+            "part of the look emptied, node titles stripped, picture file "
+            "names blanked, and any model name this machine does not hold "
+            "left out. Export a recipe instead to share what was actually run."
+        ),
+        response_model=WorkflowExport,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "There is no graph to export, or it will not read."},
+        },
+    )
+    def export_workflow(request: Request, workflow_key: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        source = _card_source(card)
+        try:
+            document, removed = scrub_for_export(
+                source.graph,
+                structural_lora_slots=_structural_lora_slots(card, source.graph),
+                unvouched=unvouched_model_values(hub),
+            )
+        except (WorkflowGraphError, RecursionError) as exc:
+            # Refused rather than exported unscrubbed. A graph PixlStash cannot
+            # read is one it can promise nothing about, and the promise is the
+            # route. `RecursionError` is the same answer and the same class of
+            # input: an embedded graph comes out of a picture that arrived from
+            # somewhere else, which is why `_store_workflow` and
+            # `_trash_stored_workflow` both name it too.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "PixlStash cannot read this workflow well enough to make it "
+                    f"safe to share: {exc}"
+                ),
+            ) from exc
+        return WorkflowExport(
+            filename=f"{_file_stem(card)}.json",
+            workflow=document,
+            removed=removed,
+            source=source.origin,
+        )
+
+    @router.post(
+        "/workflows/{workflow_key}/duplicate",
+        summary="Duplicate a workflow",
+        description=(
+            "Write this workflow into the user's workflow folder under a free "
+            "name, so it can be opened and changed in ComfyUI without touching "
+            "the original. A card the library only knows from its pictures "
+            "gets a file this way for the first time."
+        ),
+        response_model=WorkflowFile,
+        status_code=201,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "There is no graph to duplicate."},
+            500: {"description": "The copy could not be written."},
+        },
+    )
+    def duplicate_workflow(request: Request, workflow_key: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        source = _card_source(card)
+        # Unscrubbed on purpose: this file stays on the owner's machine and is
+        # meant to RUN, and a copy with its models blanked would not.
+        name, key = _store_copy(hub, f"{_file_stem(card)} (copy)", source.graph)
+        _announce(request, sorted({workflow_key, key} - {None}), "imported")
+        return WorkflowFile(name=name, workflow_key=key)
+
+    @router.post(
+        "/workflows/{workflow_key}/insert-lora-loader",
+        summary="Add a LoRA loader to a workflow",
+        description=(
+            "Write a copy of this workflow with a LoRA loader spliced in right "
+            "after the model source, so a workflow that had nowhere to put a "
+            "LoRA now has a slot to swap into. The loader starts at ComfyUI's "
+            "own widget defaults — no LoRA is chosen here — so pick one before "
+            "running the copy as it is. The original file is not changed; the "
+            "copy is a card of its own."
+        ),
+        response_model=InsertedLoader,
+        status_code=201,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "No graph, or nowhere a loader can honestly go."},
+            503: {"description": "ComfyUI could not be reached."},
+        },
+    )
+    def insert_lora_loader(request: Request, workflow_key: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        source = _card_source(card)
+        # ComfyUI types the links (#1376): an API-format link carries no type,
+        # so without `object_info` an input reading the model could be missed
+        # and that branch would run without the LoRA, silently.
+        object_info, error = _read_object_info(_comfyui_url(_user(request)))
+        if object_info is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "PixlStash could not ask ComfyUI what its nodes hand on, so "
+                    f"it cannot tell where a LoRA loader would go: {error}"
+                ),
+            )
+        graph = deepcopy(source.graph)
+        try:
+            plan = plan_lora_insertion(graph, object_info)
+            loader = insert_adapter(graph, plan, None, object_info)
+        except LookupError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        name, key = _store_copy(hub, f"{_file_stem(card)} (LoRA)", graph)
+        _announce(request, sorted({workflow_key, key} - {None}), "imported")
+        return InsertedLoader(
+            name=name,
+            workflow_key=key,
+            node_id=loader["node_id"],
+            class_type=loader["class_type"],
+        )
+
+    def _store_copy(hub, stem: str, graph: dict) -> tuple[str, str | None]:
+        """Write one graph into the user folder, or raise the 500 that says why."""
+        try:
+            return store_workflow_copy(hub, f"{stem}.json", graph)
+        except (OSError, ValueError) as exc:
+            logger.error(
+                "A workflow copy named %r could not be written to the user folder: %s",
+                stem,
+                exc,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="PixlStash could not write the workflow file.",
+            ) from exc
+
+    @router.delete(
+        "/workflows/{workflow_key}",
+        summary="Delete an imported workflow",
+        description=(
+            "Send this card's workflow file to the system trash and take it "
+            "off the card. Only a file this machine holds can be deleted: a "
+            "workflow the library knows from its pictures has no file, and is "
+            "hidden rather than deleted. The card itself and its pictures stay."
+        ),
+        response_model=WorkflowDeleted,
+        responses={
+            404: {
+                "description": (
+                    "This machine has no such card, or the card names a file "
+                    "the user folder does not hold — a built-in, or one "
+                    "already gone from disk."
+                )
+            },
+            409: {"description": "This card has no workflow file to delete."},
+            500: {"description": "The file could not be moved to the trash."},
+        },
+    )
+    def delete_workflow(request: Request, workflow_key: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        if not card.file_name:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This workflow has no file on this machine — the library "
+                    "knows it from its pictures. Hide it instead."
+                ),
+            )
+        deleted = trash_user_workflow(hub, card.file_name)
+        _announce(request, [workflow_key], "changed")
+        return WorkflowDeleted(deleted=deleted, workflow_key=workflow_key)
 
     return router

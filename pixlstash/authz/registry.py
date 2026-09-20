@@ -1780,6 +1780,30 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Take one card out of its stack; POST blocked for READ tokens; owner only",
     ),
+    # The four file gestures (v1.12 B8). Every one of them resolves the card's
+    # graph the way the run route does - from the linked file, from the whole
+    # library's best picture, or from a stored instance document - so each one
+    # discloses a workflow assembled out of the library rather than out of any
+    # one object a scoped token could hold. The export is the sharpest of them:
+    # it hands back a graph in full, and the scrub that keeps the prompt and
+    # the forgotten model names out of it is a privacy measure for the file's
+    # READER, never a reason a scoped token could be allowed to ask.
+    ("GET", "/api/v1/workflows/{workflow_key}/export"): RoutePolicy(
+        _OWNER,
+        justification="Export a card's graph, resolved from the whole library; owner only",
+    ),
+    ("POST", "/api/v1/workflows/{workflow_key}/duplicate"): RoutePolicy(
+        _OWNER,
+        justification="Write a copy of a card's workflow to disk; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/workflows/{workflow_key}/insert-lora-loader"): RoutePolicy(
+        _OWNER,
+        justification="Write a copy of a card's workflow with a LoRA loader added; POST blocked for READ tokens; owner only",
+    ),
+    ("DELETE", "/api/v1/workflows/{workflow_key}"): RoutePolicy(
+        _OWNER,
+        justification="Send a card's imported workflow file to the trash; DELETE blocked for READ tokens; owner only",
+    ),
     # The run route and its dry run (v1.12 B7). OWNER_ONLY, which is NARROWER
     # than the PICTURE_SCOPED run routes in comfyui.py it will eventually
     # replace, and deliberately so: those replay one named picture's own
@@ -1837,6 +1861,13 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("DELETE", "/api/v1/recipes/{recipe_id}"): RoutePolicy(
         _OWNER,
         justification="Delete a saved recipe; DELETE blocked for READ tokens; owner only",
+    ),
+    # Export (v1.12 B8) shares the listing's reasoning and adds one of its own:
+    # it returns the prompt the owner wrote in full, which is the single thing
+    # the workflow export exists to strip.
+    ("GET", "/api/v1/recipes/{recipe_id}/export"): RoutePolicy(
+        _OWNER,
+        justification="Export a saved recipe, prompt included; owner only",
     ),
     # ── test_hooks.py (mounted ONLY when enable_test_hooks=True) ─────────────
     # Conditionally mounted, but ALWAYS declared: the gate resolves declarations

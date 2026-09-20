@@ -612,6 +612,80 @@ dissolves** (the row goes, and the card stands on its own), and a
 `{stack_id}` is either a minted 32-hex id or `auto:` followed by a 64-hex core
 hash — anything else is a 422.
 
+The four file gestures (v1.12 B8), all `OWNER_ONLY`. Each one resolves the
+card's graph the same three tiers the run does, so a card the library only
+knows from its pictures exports and duplicates like any other:
+
+| Route | Purpose | Response |
+|---|---|---|
+| `GET /api/v1/workflows/{workflow_key}/export` | The workflow as a file to give away | `{filename, workflow, removed: [string], source: "file" \| "picture" \| "instance"}` |
+| `POST /api/v1/workflows/{workflow_key}/duplicate` | A second copy in the user's workflow folder | `201 {name, workflow_key}` |
+| `POST /api/v1/workflows/{workflow_key}/insert-lora-loader` | A copy with a LoRA loader spliced in | `201 {name, workflow_key, node_id, class_type}` |
+| `DELETE /api/v1/workflows/{workflow_key}` | Send the imported file to the trash | `{deleted, workflow_key}` |
+| `GET /api/v1/recipes/{recipe_id}/export` | The saved recipe as a file | `{filename, recipe, shares: [string]}` |
+
+Five rules the client must not re-derive:
+
+1. **The workflow export is scrubbed and the recipe export is not, and that is
+   the whole difference between them.** The export blanks the prompt and
+   caption targets **and every other widget a person could have written in**,
+   nulls seeds, empties every LoRA slot the owner has not marked `structural` —
+   **by filename and by digest** — strips `_meta` titles, blanks picture file
+   names and anything in a widget named like a key or a password, resets output
+   paths (`filename_prefix` names a folder on the owner's disk), drops
+   `checkpoint_id` (a row id in this machine's database), and drops any model
+   name the model shelf cannot vouch for along with the *folder* of the ones it
+   can. A recipe
+   *is* the prompt and the LoRA names, so its export withholds nothing and
+   says so in `shares` instead — which is the list the export dialog puts in
+   front of the owner before they agree to it.
+2. **`removed` names categories, never values.** "prompts", "seeds", "LoRA
+   slots that are part of the look", "node titles", "picture file names",
+   "where the pictures were saved", "the folders your models are filed in",
+   "model names this machine does not hold", "values in fields named like a key
+   or a password". "node titles" appears only when a title is not ComfyUI's own
+   default (the node's class name), so a category in this list always means
+   something a person put there. A forgotten model name sitting in
+   a LoRA widget reports as the **model** category, not the LoRA one: it is a
+   forgotten model name, and calling it "part of the look" would tell the owner
+   the opposite of what happened. A response repeating the prompt
+   it withheld would be the leak the scrub exists to stop, so a client wanting
+   to tell the owner what came out renders these strings and has nothing else
+   to render.
+3. **A model name the shelf does not hold does not travel, and that is
+   stricter than the Ghosts filter on purpose.** Forgetting a model's name
+   deletes its hub rows and rewrites no graph, so a picture's embedded
+   metadata still names the forgotten LoRA in full and resolving a source from
+   that picture would carry it straight back out. The export checks the shelf
+   rather than the ghost list, so a name nobody on this machine holds is blank
+   in the file — including a name the ghost list can no longer see because
+   forgetting it is what removed it from there. **Prose is found by widget
+   name across the whole graph**, never by asking which node the sampler
+   reads: that question returns nothing for a hires-fix graph with two
+   samplers, and names widgets (`text`) that an SDXL encoder (`text_g`,
+   `text_l`) does not have. Three further rules catch prose no widget name
+   announces: a raw-string primitive (`PrimitiveStringMultiline`, `String
+   Literal`) handing its value into an encoder, the reducer's own backstop (a
+   newline, or longer than a filename can be), and whitespace — a combo token
+   ComfyUI would offer has none, and a filename is tested for first. What is
+   left is a single word, on an unknown node, in a widget no rule names.
+4. **Duplicate and Insert loader write a file and never change one.** Both
+   land in the user's workflow folder under a free name (`… (copy).json`,
+   `… (copy) (2).json`), both are **unscrubbed** — they stay on this machine
+   and are meant to run — and both emit `workflows_changed` with
+   `reason: "imported"`. Insert loader reaches the owner's ComfyUI for
+   `object_info` (503 when it cannot) and answers 409, with the sentence, where
+   the splice cannot be made honestly: no model source, several models or text
+   encoders, a graph that already loads a LoRA PixlStash cannot swap. **It
+   chooses no LoRA**: the loader lands at ComfyUI's own widget defaults, the
+   way dropping the node in ComfyUI would leave it, so the client tells the
+   owner to pick one rather than presenting the copy as ready to run.
+5. **Delete is for an imported file only.** A card the library knows from its
+   pictures has no file, and `DELETE` answers 409 telling the client to hide it
+   instead — the card, its variants and its pictures always stay either way.
+   The file goes to the system trash through the watched inbox, the same path
+   `DELETE /comfyui/workflows/{name}` takes.
+
 Five things the two sides have agreed and neither may drift from:
 
 1. **The list is one row per topology, never per recipe.** ~192 rows against
@@ -654,8 +728,9 @@ Five things the two sides have agreed and neither may drift from:
    comment.** The stored document has its parameters, seeds and prompts nulled
    and names its assets by an opaque reference — which is what lets a workflow
    outlive the pictures it made — so it describes the graph and will not open in
-   ComfyUI. A verbatim export is §B5's and is not shipped; anything offering
-   this as a download says so at the moment of the download.
+   ComfyUI. What ships as a download is
+   `GET /workflows/{key}/export` above, which resolves a runnable graph and
+   scrubs it; this route's document is for reading, not for opening.
 
 Every route is `OWNER_ONLY`. That is a decision, not a default: the counts are
 read across every non-deleted picture in the vault, so a scoped token holding

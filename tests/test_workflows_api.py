@@ -58,7 +58,11 @@ from pixlstash.hub.workflow_card_reads import (
 from pixlstash.hub.workflow_card_writes import set_stack_order
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, effective_stack_keys
 from pixlstash.hub.workflows import PictureGhost, get_document, record_picture_ghosts
-from pixlstash.services.workflow_hash import WorkflowGraphError, asset_reference
+from pixlstash.services.workflow_hash import (
+    WorkflowGraphError,
+    asset_reference,
+    structural_document,
+)
 from pixlstash.services import workflow_card_service
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
@@ -70,6 +74,11 @@ from pixlstash.services.workflow_identity import (
     slots,
     topology_node_labels,
     workflow_key,
+)
+from pixlstash.services.workflow_export import (
+    download_name,
+    download_stem,
+    scrub_for_export,
 )
 from pixlstash.services.workflow_io import detect_workflow_io
 import pixlstash.routes.comfyui as comfyui_module
@@ -105,6 +114,9 @@ _WORKFLOW_ROUTES = (
     # Where a LoRA loader would go (#1376): it reaches the owner's ComfyUI, and
     # its refusal is measured with the GET belts emptied in the test below.
     ("GET", "/api/v1/comfyui/workflows/{workflow_name}/lora-insertion"),
+    # Export (v1.12 B8): the sharpest read here, because it hands back a whole
+    # graph rather than a count of one.
+    ("GET", "/api/v1/workflows/{workflow_key}/export"),
 )
 
 # The card and stack writes (v1.12 B4), pinned in their own tuple: the reads
@@ -126,6 +138,11 @@ _WORKFLOW_WRITE_ROUTES = (
     # picture's own graph, this resolves one from the whole library.
     ("POST", "/api/v1/workflows/run"),
     ("POST", "/api/v1/workflows/run/preflight"),
+    # The file gestures (v1.12 B8). Each resolves the card's graph out of the
+    # whole library the way the run route does, and two of them write a file.
+    ("POST", "/api/v1/workflows/{workflow_key}/duplicate"),
+    ("POST", "/api/v1/workflows/{workflow_key}/insert-lora-loader"),
+    ("DELETE", "/api/v1/workflows/{workflow_key}"),
 )
 
 
@@ -849,6 +866,7 @@ def test_no_scoped_token_can_read_the_workflow_library(workflow_env):
         f"{API}/workflows/cards",
         f"{API}/workflows/cards/{BUSY_CARD}",
         f"{API}/workflows/cards/{BUSY_CARD}/pictures",
+        f"{API}/workflows/{BUSY_CARD}/export",
     )
     for path in paths:
         assert_real_route(workflow_env.server.api, "GET", path)
@@ -1227,6 +1245,9 @@ _TEMPLATED_PATHS = (
     f"{API}/workflows/{BUSY_TOPOLOGY}/variants",
     f"{API}/workflows/{BUSY_TOPOLOGY}/pictures",
     f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
+    # The export (v1.12 B8) hands back a whole graph, so it is the one here
+    # with most to lose from the rollback.
+    f"{API}/workflows/{BUSY_CARD}/export",
 )
 
 
@@ -4163,6 +4184,9 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
         ("POST", f"{API}/workflows/stacks/{stack_id}/unstack", None),
         ("POST", f"{API}/workflows/run", {"workflow_key": BUSY_CARD}),
         ("POST", f"{API}/workflows/run/preflight", {"workflow_key": BUSY_CARD}),
+        ("POST", f"{API}/workflows/{BUSY_CARD}/duplicate", None),
+        ("POST", f"{API}/workflows/{BUSY_CARD}/insert-lora-loader", None),
+        ("DELETE", f"{API}/workflows/{BUSY_CARD}", None),
     ):
         assert_real_route(workflow_env.server.api, method, path)
         r = client.request(method, path, json=body)
@@ -6423,3 +6447,759 @@ def test_one_stack_holds_every_run_of_a_group(runnable):
     # One write task, not one per run: it is idempotent, so a per-run call was
     # two wasted writes rather than a wrong answer - but it was still two.
     assert stacked == [runnable.picture_id], stacked
+
+
+# ===========================================================================
+# The file gestures (v1.12 B8) — export, duplicate, insert loader, delete
+# ===========================================================================
+
+# What a run of RUN_CARD looks like as a PICTURE's embedded graph: the tier
+# that carries real filenames, a real prompt and a real seed, and therefore
+# the tier the export exists for. `gone_one.safetensors` is the fixture's
+# FORGOTTEN name — its `workflow_recipe_asset` rows were never written, so
+# `model_ghost_names` cannot see it and only the shelf can say it is unknown,
+# which is exactly the acceptance case (§5.7).
+EXPORT_PROMPT = "a portrait of someone the owner knows"
+FORGOTTEN_LORA = "gone_one.safetensors"
+
+
+def _embedded_export_graph(lora: str = FORGOTTEN_LORA) -> dict:
+    """RUN_DOCUMENT as a real run: prompts, a seed, a title and a picture."""
+    graph = json.loads(json.dumps(RUN_DOCUMENT))
+    graph["1"]["inputs"]["ckpt_name"] = _SHELF_FILENAME
+    graph["2"]["inputs"].update({"lora_name": lora, "clip": ["1", 1]})
+    graph["3"]["inputs"].update(
+        {
+            "steps": 33,
+            "cfg": 3.5,
+            "seed": 4242,
+            "positive": ["5", 0],
+            "negative": ["6", 0],
+        }
+    )
+    graph["4"]["inputs"]["filename_prefix"] = "portraits/someone/2026-09"
+    graph["5"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": EXPORT_PROMPT, "clip": ["2", 1]},
+        "_meta": {"title": "the subject's name"},
+    }
+    graph["6"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "blurry, watermark", "clip": ["2", 1]},
+    }
+    graph["7"] = {"class_type": "LoadImage", "inputs": {"image": "a-private-photo.png"}}
+    return graph
+
+
+def _lora_slot_label(graph: dict) -> str:
+    """The `<node label>/<widget>` a slot mark is keyed by, for this graph."""
+    labels = topology_node_labels(structural_document(graph))
+    return f"{labels['2']}/lora_name"
+
+
+def _mark_slot(server, label: str, mark: str) -> None:
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_slot_mark "
+            "(topology_hash, slot_label, mark) VALUES (?, ?, ?)",
+            (RUN_TOPOLOGY, label, mark),
+        )
+
+
+@pytest.fixture
+def exportable(runnable):
+    """RUN_CARD whose only source is a picture's embedded graph, as a real run.
+
+    The picture tier and not the file tier on purpose: a stored file is the
+    workflow as authored and carries none of this, so exporting one would pass
+    with the whole scrub deleted.
+    """
+    graph = _embedded_export_graph()
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_load_embedded_api_prompt", lambda server, pid: graph
+    )
+    return SimpleNamespace(graph=graph, **vars(runnable))
+
+
+def test_an_export_carries_no_prompt_no_seed_no_title_and_no_picture_name(exportable):
+    """§5.7: everything that is about a RUN rather than about the workflow goes."""
+    r = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/export")
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    graph = payload["workflow"]
+    assert payload["source"] == "picture"
+    assert graph["5"]["inputs"]["text"] == ""
+    assert graph["6"]["inputs"]["text"] == ""
+    assert graph["3"]["inputs"]["seed"] == 0
+    assert "_meta" not in graph["5"]
+    assert graph["7"]["inputs"]["image"] == ""
+    # Where the run landed on the owner's disk: a folder a person names after
+    # what is in it, so it is reset rather than carried out of the house.
+    assert graph["4"]["inputs"]["filename_prefix"] == "PixlStash"
+    # The workflow itself survives: the checkpoint is on the shelf, the wiring
+    # and the parameters are untouched. Over-blanking is its own regression —
+    # an export nobody can run is not a safer export.
+    assert graph["1"]["inputs"]["ckpt_name"] == _SHELF_FILENAME
+    assert graph["3"]["inputs"]["steps"] == 33
+    assert graph["3"]["inputs"]["model"] == ["2", 0]
+    # Whatever is in the source, no exported string may be the prompt.
+    assert EXPORT_PROMPT not in json.dumps(payload)
+
+
+def test_an_export_leaves_out_a_forgotten_lora_a_picture_still_names(exportable):
+    """The acceptance case: the name is in the picture and not in the file."""
+    payload = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/export").json()
+    assert exportable.graph["2"]["inputs"]["lora_name"] == FORGOTTEN_LORA
+    assert payload["workflow"]["2"]["inputs"]["lora_name"] == ""
+    assert FORGOTTEN_LORA not in json.dumps(payload)
+
+
+def test_a_structural_lora_the_shelf_does_not_hold_is_still_left_out(exportable):
+    """Marking the slot structural keeps the slot, never an unknown name.
+
+    This is the assertion the LoRA rule alone cannot make. A structural mark
+    says "this LoRA is part of the workflow", so the slot is not emptied for
+    being a look — and the name still goes, because the shelf cannot vouch for
+    it. Without `unvouched_model_values` this test goes red and the one above
+    stays green, which is why both exist.
+    """
+    _mark_slot(exportable.server, _lora_slot_label(exportable.graph), "structural")
+    payload = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/export").json()
+    assert payload["workflow"]["2"]["inputs"]["lora_name"] == ""
+    assert FORGOTTEN_LORA not in json.dumps(payload)
+
+
+def test_a_structural_lora_that_is_on_the_shelf_travels_with_the_workflow(
+    runnable, monkeypatch
+):
+    """The positive control: a lightning LoRA IS the workflow, so it is kept."""
+    graph = _embedded_export_graph(lora=RUN_ADAPTER_FILENAME)
+    monkeypatch.setattr(
+        workflows_routes, "_load_embedded_api_prompt", lambda server, pid: graph
+    )
+    _mark_slot(runnable.server, _lora_slot_label(graph), "structural")
+    payload = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/export").json()
+    assert payload["workflow"]["2"]["inputs"]["lora_name"] == RUN_ADAPTER_FILENAME
+    assert "LoRA slots that are part of the look" not in payload["removed"]
+
+
+def test_an_export_names_the_categories_it_removed_and_never_the_values(exportable):
+    """`removed` is what a client renders; a value in it would be the leak itself."""
+    payload = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/export").json()
+    assert set(payload["removed"]) == {
+        "model names this machine does not hold",
+        "node titles",
+        "picture file names",
+        "prompts",
+        "seeds",
+        "where the pictures were saved",
+    }, payload["removed"]
+    # The forgotten LoRA is reported as a MODEL NAME and not as "a LoRA that is
+    # part of the look", which is the opposite fact. Both blank it; only one of
+    # them tells the owner what actually happened in the case this feature
+    # leads with.
+    assert "LoRA slots that are part of the look" not in payload["removed"]
+
+
+def test_an_export_refuses_a_graph_it_cannot_read_rather_than_publishing_it(
+    runnable, monkeypatch
+):
+    """Which nodes carry prose comes out of the reduction: no reduction, no export."""
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        # Node-shaped enough to survive `sanitize_prompt_graph` and refused by
+        # the reducer: `inputs` is not a mapping.
+        lambda server, pid: {"1": {"class_type": "KSampler", "inputs": ["nope"]}},
+    )
+    r = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/export")
+    assert r.status_code == 409, r.text
+
+
+def test_exporting_a_card_with_no_graph_at_all_says_so(workflow_env):
+    """A card whose three tiers all answer nothing is a 409, not an empty file.
+
+    BINNED_CARD is the one: no file, its only picture soft-deleted (so no
+    embedded graph is reachable) and no instance document of its own.
+    """
+    r = workflow_env.owner.get(f"{API}/workflows/{BINNED_CARD}/export")
+    assert r.status_code == 409, r.text
+    assert "no graph" in r.json()["detail"].lower()
+
+
+def test_exporting_an_unknown_card_is_a_404(workflow_env):
+    assert (
+        workflow_env.owner.get(f"{API}/workflows/{_h('nope')}/export").status_code
+        == 404
+    )
+
+
+def test_duplicating_writes_a_runnable_file_the_original_does_not_lose(
+    exportable, tmp_path
+):
+    """Duplicate is for the owner's own machine, so it is NOT scrubbed.
+
+    A copy with its prompt and its models blanked would not run, and running it
+    in ComfyUI is the entire reason the gesture exists.
+    """
+    _isolate_workflow_folders(tmp_path, exportable.monkeypatch)
+    r = exportable.owner.post(f"{API}/workflows/{RUN_CARD}/duplicate")
+    assert r.status_code == 201, r.text
+    name = r.json()["name"]
+    written = json.loads((tmp_path / name).read_text())
+    assert written["5"]["inputs"]["text"] == EXPORT_PROMPT
+    assert written["2"]["inputs"]["lora_name"] == FORGOTTEN_LORA
+    assert written["3"]["inputs"]["seed"] == 4242
+
+
+def test_duplicating_twice_puts_a_second_file_beside_the_first(exportable, tmp_path):
+    """The `(2)` counter, so a duplicate never overwrites the one before it."""
+    _isolate_workflow_folders(tmp_path, exportable.monkeypatch)
+    first = exportable.owner.post(f"{API}/workflows/{RUN_CARD}/duplicate").json()[
+        "name"
+    ]
+    second = exportable.owner.post(f"{API}/workflows/{RUN_CARD}/duplicate").json()[
+        "name"
+    ]
+    assert first != second, "the second duplicate overwrote the first"
+    assert (tmp_path / first).is_file() and (tmp_path / second).is_file()
+
+
+def test_deleting_a_card_the_library_knows_from_its_pictures_is_refused(workflow_env):
+    """Found workflows are hide-only, and the refusal says which gesture to use."""
+    r = workflow_env.owner.delete(f"{API}/workflows/{BUSY_CARD}")
+    assert r.status_code == 409, r.text
+    assert "hide" in r.json()["detail"].lower()
+    # Nothing went: the card is still on the grid.
+    assert (
+        workflow_env.owner.get(f"{API}/workflows/cards/{BUSY_CARD}").status_code == 200
+    )
+
+
+def test_deleting_an_imported_workflow_trashes_it_and_takes_it_off_the_card(
+    runnable, tmp_path
+):
+    """The file goes, the card and its variants stay: they are made by pictures."""
+    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
+    (tmp_path / "imported.json").write_text(json.dumps(RUN_DOCUMENT))
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_file "
+            "(workflow_name, workflow_key, topology_hash, structural_hash) "
+            "VALUES ('imported.json', ?, ?, ?)",
+            (RUN_CARD, RUN_TOPOLOGY, RUN_RECIPE),
+        )
+    r = runnable.owner.delete(f"{API}/workflows/{RUN_CARD}")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"deleted": "imported.json", "workflow_key": RUN_CARD}
+    assert not (tmp_path / "imported.json").exists()
+    assert (
+        runnable.server.hub.fetchall(
+            "SELECT 1 FROM workflow_file WHERE workflow_name = 'imported.json'"
+        )
+        == []
+    )
+    assert runnable.owner.get(f"{API}/workflows/cards/{RUN_CARD}").status_code == 200
+
+
+# A graph with no LoRA loader at all: the state `no_lora_loader` names and the
+# only one a loader can be spliced into. RUN_DOCUMENT already has one, and
+# `plan_lora_insertion` refuses to stack a second.
+LOADERLESS_DOCUMENT = {
+    "1": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": "realvisxl.safetensors"},
+    },
+    "2": {
+        "class_type": "KSampler",
+        "inputs": {"steps": 20, "cfg": 7.0, "seed": 1, "model": ["1", 0]},
+    },
+    "3": {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "P", "images": ["2", 0]},
+    },
+}
+
+LOADERLESS_OBJECT_INFO = {
+    "CheckpointLoaderSimple": {
+        "input": {"required": {"ckpt_name": [["realvisxl.safetensors"], {}]}},
+        "output": ["MODEL", "CLIP", "VAE"],
+    },
+    "KSampler": {
+        "input": {"required": {"seed": ["INT", {"default": 0}]}},
+        "output": ["LATENT"],
+    },
+    "SaveImage": {
+        "input": {"required": {"filename_prefix": ["STRING", {}]}},
+        "output": [],
+    },
+    "LoraLoaderModelOnly": {
+        "input": {
+            "required": {
+                "model": ["MODEL", {}],
+                "lora_name": [["add_detail.safetensors"], {}],
+                "strength_model": ["FLOAT", {"default": 1.0}],
+            }
+        },
+        "output": ["MODEL"],
+    },
+}
+
+
+@pytest.fixture
+def loaderless(runnable, tmp_path):
+    """RUN_CARD sourced from a graph with nowhere to put a LoRA, on this ComfyUI."""
+    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid: json.loads(json.dumps(LOADERLESS_DOCUMENT)),
+    )
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url: (json.loads(json.dumps(LOADERLESS_OBJECT_INFO)), None),
+    )
+    return SimpleNamespace(tmp_path=tmp_path, **vars(runnable))
+
+
+def test_inserting_a_lora_loader_writes_a_copy_with_a_slot_to_swap_into(loaderless):
+    """The #1376 splice, kept: a new file whose LoRA slot is there to be filled."""
+    r = loaderless.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["class_type"] == "LoraLoaderModelOnly"
+    written = json.loads((loaderless.tmp_path / body["name"]).read_text())
+    loader = written[body["node_id"]]
+    # ComfyUI's own widget default, the way dropping the node there would
+    # leave it. The gesture adds the slot; which LoRA goes in it is a later
+    # gesture, which is why the route says so and the client must too.
+    assert loader["inputs"]["lora_name"] == "add_detail.safetensors"
+    assert loader["inputs"]["strength_model"] == 1.0
+    assert loader["inputs"]["model"] == ["1", 0]
+    # The sampler now reads the loader rather than the checkpoint, or the run
+    # would go through without the LoRA and say nothing.
+    assert written["2"]["inputs"]["model"] == [body["node_id"], 0]
+
+
+def test_inserting_a_loader_leaves_the_original_workflow_alone(loaderless):
+    """The stored file is never rewritten: the loader goes into a NEW file.
+
+    Asserts what it can observe — the original's bytes, and that the new file
+    is a different file with one more node in it. The dedupe bypass this route
+    also depends on is guarded where it IS observable, by
+    ``test_duplicating_twice_puts_a_second_file_beside_the_first``, where the
+    two documents are identical; here the spliced graph would not match the
+    original anyway, so asserting it would prove nothing.
+    """
+    original = loaderless.tmp_path / "original.json"
+    original.write_text(json.dumps(LOADERLESS_DOCUMENT))
+    body = loaderless.owner.post(
+        f"{API}/workflows/{RUN_CARD}/insert-lora-loader"
+    ).json()
+    assert json.loads(original.read_text()) == LOADERLESS_DOCUMENT
+    written = json.loads((loaderless.tmp_path / body["name"]).read_text())
+    assert written != LOADERLESS_DOCUMENT
+    assert len(written) == len(LOADERLESS_DOCUMENT) + 1
+
+
+def test_inserting_a_loader_into_a_workflow_that_has_one_is_refused_with_the_reason(
+    runnable, tmp_path
+):
+    """Stacking a second adapter silently is the failure #1376 refuses."""
+    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid: _embedded_export_graph(),
+    )
+    r = runnable.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
+    assert r.status_code == 409, r.text
+    assert "lora" in r.json()["detail"].lower()
+
+
+def test_inserting_a_loader_without_comfyui_is_a_503_not_a_guess(runnable, tmp_path):
+    """An API link carries no type, so with no `object_info` a reader could be missed."""
+    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid: json.loads(json.dumps(LOADERLESS_DOCUMENT)),
+    )
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
+    )
+    r = runnable.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
+    assert r.status_code == 503, r.text
+    assert list(tmp_path.glob("*.json")) == [], "a file was written anyway"
+
+
+# --- the shapes one hand-written graph never asks about ---------------------
+#
+# Every test above runs against a single-sampler graph whose prompts sit in a
+# plain `CLIPTextEncode`. An adversarial pass found four leaks that shape
+# cannot see, each of which published the owner's own writing. They are
+# asserted here against `scrub_for_export` directly rather than through the
+# route: the route adds a card, a source tier and a shelf, none of which is
+# what these are about, and the leak is in the scrub.
+
+LEAKED = "a portrait of SOMEONE-REAL"
+
+
+def _sdxl_graph() -> dict:
+    """An SDXL graph: its prompt widgets are `text_g` and `text_l`."""
+    return {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "base.safetensors"},
+        },
+        "2": {
+            "class_type": "CLIPTextEncodeSDXL",
+            "inputs": {"text_g": LEAKED, "text_l": LEAKED, "clip": ["1", 1]},
+        },
+        "3": {
+            "class_type": "CLIPTextEncode",
+            "inputs": {"text": "blurry", "clip": ["1", 1]},
+        },
+        "4": {
+            "class_type": "KSampler",
+            "inputs": {
+                "seed": 7,
+                "model": ["1", 0],
+                "positive": ["2", 0],
+                "negative": ["3", 0],
+            },
+        },
+        "5": {
+            "class_type": "SaveImage",
+            "inputs": {"filename_prefix": "x", "images": ["4", 0]},
+        },
+    }
+
+
+def test_the_sdxl_encoders_own_prompt_widgets_are_blanked():
+    """`text_g` / `text_l`, which no run-time binding names.
+
+    The bug this replaces reported `"prompts"` in `removed` — because the
+    plain negative encoder beside it WAS blanked — while writing the positive
+    prompt into the file. A scrub that says it removed the prompt and did not
+    is worse than one that never claimed to.
+    """
+    exported, removed = scrub_for_export(_sdxl_graph())
+    assert exported["2"]["inputs"]["text_g"] == ""
+    assert exported["2"]["inputs"]["text_l"] == ""
+    assert LEAKED not in json.dumps(exported)
+    assert "prompts" in removed
+
+
+def test_two_samplers_reading_different_prompts_are_still_blanked():
+    """`detect_workflow_io` reports NO prompt node here, which is the trap.
+
+    A hires-fix graph — two samplers, two positive prompts — makes the detector
+    return an ambiguity and an empty prompt set. Blanking by widget name is
+    what makes that case identical to the simple one.
+    """
+    graph = _sdxl_graph()
+    graph["2"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": LEAKED, "clip": ["1", 1]},
+    }
+    graph["6"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": f"second pass, {LEAKED}", "clip": ["1", 1]},
+    }
+    graph["7"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": 9,
+            "model": ["1", 0],
+            "positive": ["6", 0],
+            "negative": ["3", 0],
+        },
+    }
+    assert detect_workflow_io(graph).positive_prompts == (), (
+        "the detector must still find nothing here, or this test has stopped "
+        "asking its question"
+    )
+    exported, removed = scrub_for_export(graph)
+    assert LEAKED not in json.dumps(exported)
+    assert "prompts" in removed
+
+
+def test_a_lora_named_by_digest_is_a_lora_slot_too():
+    """The ComfyUI-PixlStash loaders name their adapter in `lora_sha256`.
+
+    `unvouched` says nothing about it — the owner HAS that LoRA, so the shelf
+    vouches for the digest — and a digest identifies a model on a public
+    registry as surely as a filename does. Only the slot rule can take it out,
+    and it only can if it knows both spellings (#1416's lesson).
+    """
+    digest = "a" * 64
+    graph = _sdxl_graph()
+    graph["8"] = {
+        "class_type": "PixlStashAdapterLoader",
+        "inputs": {"lora_sha256": digest, "lora_sha256_2": digest, "model": ["1", 0]},
+    }
+    exported, removed = scrub_for_export(graph)
+    assert exported["8"]["inputs"]["lora_sha256"] == ""
+    assert exported["8"]["inputs"]["lora_sha256_2"] == ""
+    assert "LoRA slots that are part of the look" in removed
+
+
+def test_a_model_the_shelf_vouches_for_travels_without_its_folder():
+    """ComfyUI files models in folders, and a person names a folder.
+
+    The shelf check reads the basename, so `characters/<a person>/base.safetensors`
+    is vouched for on the strength of `base.safetensors` alone. Emitting what
+    was judged is the only honest answer; the recipient's ComfyUI has its own
+    layout regardless.
+    """
+    graph = _sdxl_graph()
+    graph["1"]["inputs"]["ckpt_name"] = "characters/someone/Base.safetensors"
+    exported, removed = scrub_for_export(graph)
+    assert exported["1"]["inputs"]["ckpt_name"] == "Base.safetensors"
+    assert "the folders your models are filed in" in removed
+
+
+def test_a_seed_kept_as_a_string_is_nulled_like_any_other():
+    """The reducer judges a seed on the widget's name; so does this."""
+    graph = _sdxl_graph()
+    graph["4"]["inputs"]["seed"] = "987654321"
+    exported, removed = scrub_for_export(graph)
+    assert exported["4"]["inputs"]["seed"] == 0
+    assert "seeds" in removed
+
+
+def test_prose_nested_in_a_list_or_a_dict_is_blanked_and_a_link_is_not():
+    """A list is not always a wire, and `is_link` is what tells them apart."""
+    graph = _sdxl_graph()
+    graph["2"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": [LEAKED, {"prompt": LEAKED}], "clip": ["1", 1]},
+    }
+    exported, removed = scrub_for_export(graph)
+    assert LEAKED not in json.dumps(exported)
+    assert "prompts" in removed
+    # The wire is untouched, or the graph no longer runs anywhere.
+    assert exported["2"]["inputs"]["clip"] == ["1", 1]
+    assert exported["4"]["inputs"]["model"] == ["1", 0]
+
+
+def test_a_shelf_row_id_does_not_leave_the_machine():
+    """`checkpoint_id` names a row in this machine's database and nothing else."""
+    graph = _sdxl_graph()
+    graph["1"]["inputs"]["checkpoint_id"] = "412"
+    exported, removed = scrub_for_export(graph)
+    assert exported["1"]["inputs"]["checkpoint_id"] == ""
+    assert "model names this machine does not hold" in removed
+
+
+def test_the_forgotten_model_sentinel_never_reaches_the_file():
+    """A source resolved from a stored instance carries it where a name was."""
+    graph = _sdxl_graph()
+    graph["1"]["inputs"]["ckpt_name"] = FORGOTTEN_MODEL
+    exported, removed = scrub_for_export(graph)
+    assert exported["1"]["inputs"]["ckpt_name"] == ""
+    assert "model names this machine does not hold" in removed
+
+
+def test_an_export_download_name_is_cleaned_for_the_client_that_writes_it():
+    """The client writes the file, so the cleaning must hold on ITS platform.
+
+    `os.path.basename` on Linux leaves a Windows separator alone, which is the
+    one traversal it would have been reached for.
+    """
+    assert download_name("..\\..\\evil") == "evil.json"
+    assert download_name("../../evil") == "evil.json"
+    assert download_name(None) == "recipe.json"
+    assert download_name("a\tb") == "a b.json"
+    # Bounded in BYTES, with room for the ".json" — see
+    # `test_a_download_name_is_bounded_in_bytes_not_characters` for why the
+    # unit matters and for the non-Latin case this ASCII one cannot show.
+    assert len(download_name("x" * 400).encode("utf-8")) <= 205
+
+
+# --- what the backend review found the scrub still published ----------------
+
+
+def test_a_prompt_wired_in_from_a_string_primitive_is_blanked():
+    """`PrimitiveStringMultiline` hands its prompt on in a `value` widget.
+
+    `carries_prose` cannot be widened to cover it: that rule is the REDUCER's
+    too, and a `value` widget feeding a LoadImage its filename is a topology
+    asset there, so calling it prose would re-key every workflow built that
+    way. The export carries the extra rule instead.
+    """
+    graph = _sdxl_graph()
+    graph["9"] = {"class_type": "PrimitiveStringMultiline", "inputs": {"value": LEAKED}}
+    graph["10"] = {"class_type": "String Literal", "inputs": {"string": "catgirl"}}
+    graph["2"] = {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": ["9", 0], "clip": ["1", 1]},
+    }
+    exported, removed = scrub_for_export(graph)
+    assert exported["9"]["inputs"]["value"] == ""
+    # A ONE-WORD prompt too: the length and whitespace backstops both miss it,
+    # so this is the assertion that needs the class list.
+    assert exported["10"]["inputs"]["string"] == ""
+    assert LEAKED not in json.dumps(exported)
+    assert "prompts" in removed
+
+
+def test_a_sentence_in_a_widget_no_rule_names_is_still_blanked():
+    """The reducer's own backstop: that is not a filename, so a person wrote it."""
+    graph = _sdxl_graph()
+    graph["9"] = {
+        "class_type": "SomeCustomNode",
+        "inputs": {"notes": LEAKED, "long_one": "x" * 300},
+    }
+    exported, removed = scrub_for_export(graph)
+    assert exported["9"]["inputs"]["notes"] == ""
+    assert exported["9"]["inputs"]["long_one"] == ""
+    assert "prompts" in removed
+
+
+def test_the_enum_tokens_that_make_a_file_loadable_are_left_alone():
+    """The positive control for the rule above: over-blanking is a regression.
+
+    A sampler name, a scheduler and an upscale method are what ComfyUI matches
+    against its own combo lists. Blank them and the export opens to a graph
+    nobody can run, which is not a safer export.
+    """
+    graph = _sdxl_graph()
+    graph["4"]["inputs"].update(
+        {"sampler_name": "dpmpp_2m_sde_gpu", "scheduler": "karras"}
+    )
+    graph["9"] = {
+        "class_type": "UpscaleModelLoader",
+        # A model filename WITH SPACES, which is ordinary — 5,066 real ones in
+        # this library have them — so the filename test has to answer first.
+        "inputs": {
+            "model_name": "4x Ultra Sharp.pth",
+            "upscale_method": "nearest-exact",
+        },
+    }
+    exported, _removed = scrub_for_export(graph)
+    assert exported["4"]["inputs"]["sampler_name"] == "dpmpp_2m_sde_gpu"
+    assert exported["4"]["inputs"]["scheduler"] == "karras"
+    assert exported["9"]["inputs"]["upscale_method"] == "nearest-exact"
+    assert exported["9"]["inputs"]["model_name"] == "4x Ultra Sharp.pth"
+
+
+def test_a_credential_in_a_widget_never_leaves_the_machine():
+    """`SECRET_FIELD_RE` drops these from a stored document; a file given away
+    is the stronger case, and the two tiers this route resolves from most
+    often are raw ComfyUI output the reducer never touched."""
+    graph = _sdxl_graph()
+    graph["9"] = {
+        "class_type": "SomeUploader",
+        "inputs": {
+            "api_key": "example-not-a-real-key",
+            "auth_token": "example-token",
+            "password": "placeholder-pw",
+        },
+    }
+    exported, removed = scrub_for_export(graph)
+    assert list(exported["9"]["inputs"].values()) == ["", "", ""]
+    assert "values in fields named like a key or a password" in removed
+
+
+def test_a_dict_widget_is_scrubbed_by_its_own_key_not_its_parents():
+    """What `workflow_hash`'s nested-asset walk does, and for the same reason.
+
+    A list is positional and inherits the widget's meaning; a dict key is a
+    name and may mean something else entirely.
+    """
+    graph = _sdxl_graph()
+    # A ONE-WORD prompt, deliberately: with whitespace in it the backstop
+    # blanks it whatever name the recursion carried, and this test would pass
+    # while saying nothing about the key.
+    graph["9"] = {
+        "class_type": "SomeCustomNode",
+        "inputs": {"config": {"positive_prompt": "catgirl", "steps": 30}},
+    }
+    exported, removed = scrub_for_export(graph)
+    assert exported["9"]["inputs"]["config"]["positive_prompt"] == ""
+    assert exported["9"]["inputs"]["config"]["steps"] == 30
+    assert "prompts" in removed
+    # A list is positional and DOES inherit its widget's meaning, which is the
+    # other half of the same rule.
+    graph["10"] = {"class_type": "CLIPTextEncode", "inputs": {"text": ["catgirl"]}}
+    exported, _removed = scrub_for_export(graph)
+    assert exported["10"]["inputs"]["text"] == [""]
+
+
+def test_comfyuis_own_default_node_title_is_not_reported_as_something_removed():
+    """`removed` is the only list the dialog renders, so it must mean something.
+
+    ComfyUI writes `_meta: {"title": "<class name>"}` on almost every node, so
+    reporting those would put "node titles" on nearly every export and tell the
+    owner nothing. The `_meta` block still goes either way.
+    """
+    graph = _sdxl_graph()
+    graph["4"]["_meta"] = {"title": "KSampler"}
+    exported, removed = scrub_for_export(graph)
+    assert "_meta" not in exported["4"]
+    assert "node titles" not in removed
+    # A title a person actually wrote is reported.
+    graph["4"]["_meta"] = {"title": "her second pass"}
+    _exported, removed = scrub_for_export(graph)
+    assert "node titles" in removed
+
+
+def test_a_download_name_is_bounded_in_bytes_not_characters():
+    """A filesystem counts bytes: 100 CJK characters are 300 of them.
+
+    Past ext4's 255-byte component limit, `store_workflow_copy` raises OSError
+    and `POST /duplicate` can only answer 500 — for that card, for good.
+    """
+    stem = download_stem("人" * 200)
+    assert len(stem.encode("utf-8")) <= 200
+    assert stem, "a long non-Latin name must still produce a usable stem"
+    # Not truncated mid-character.
+    stem.encode("utf-8").decode("utf-8")
+
+
+def test_a_graph_too_deeply_nested_to_walk_is_refused_not_a_500(runnable, monkeypatch):
+    """An embedded graph arrived from outside, so its depth is not ours to trust.
+
+    `deepcopy` and the scrub's own recursion both raise `RecursionError` on
+    one, and the honest answer is the same 409 an unreadable graph gets —
+    `_store_workflow` and `_trash_stored_workflow` already name this class too.
+    """
+    nested: list = []
+    cursor = nested
+    for _ in range(6000):
+        deeper: list = []
+        cursor.append(deeper)
+        cursor = deeper
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid: {
+            "1": {"class_type": "KSampler", "inputs": {"whatever": nested}}
+        },
+    )
+    r = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/export")
+    assert r.status_code == 409, r.text
+
+
+def test_a_comfyui_with_no_lora_files_refuses_the_insert_rather_than_writing_one(
+    loaderless,
+):
+    """`_widget_defaults` yields no `lora_name` when the combo is empty.
+
+    The file would be written, answered 201 and then refused by ComfyUI on a
+    missing required input — after the owner was told it was ready to pick a
+    LoRA in. The adapter path has always made this check; the empty-slot path
+    did not.
+    """
+    empty = json.loads(json.dumps(LOADERLESS_OBJECT_INFO))
+    empty["LoraLoaderModelOnly"]["input"]["required"]["lora_name"] = [[], {}]
+    loaderless.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (empty, None)
+    )
+    r = loaderless.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
+    assert r.status_code == 409, r.text
+    assert "which LoRA files" in r.json()["detail"]
+    assert list(loaderless.tmp_path.glob("*.json")) == [], "a file was written anyway"
