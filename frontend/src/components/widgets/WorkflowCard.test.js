@@ -88,6 +88,14 @@ const styleBlock = () =>
     .split("<style scoped>")[1]
     .replace(/\/\*[\s\S]*?\*\//g, "");
 
+/** Every selector in the card's stylesheet that matches `pattern`. */
+function selectorsMatching(pattern) {
+  return styleBlock()
+    .split("}")
+    .map((block) => block.split("{")[0].trim())
+    .filter((selector) => pattern.test(selector));
+}
+
 /** The declarations of one rule in the card's stylesheet. */
 function rule(selector) {
   const css = styleBlock();
@@ -187,12 +195,19 @@ describe("WorkflowCard height", () => {
   });
 
   it("spans the big cell over both rows only where there are two rows", () => {
-    // The row span is what makes the three-picture mosaic a mosaic. Left on
-    // every cover it would silently apply to the one- and two-picture ones,
-    // where there is no second row to span into.
-    const css = styleBlock();
-    expect(css).toContain(".wf-card__cover--3 .wf-card__pic:first-child");
-    expect(css).not.toMatch(/\n\.wf-card__pic:first-child \{/);
+    // The row span is what makes the three-picture mosaic a mosaic: without it
+    // the three cells auto-place as (1,1), (1,2), (2,1) and a whole track row
+    // is empty. The ratios above cannot see that - they read the tracks, not
+    // the placement - so the declaration itself is asserted here, and the
+    // ABSENCE of it anywhere that would reach the other two arrangements.
+    expect(
+      rule(".wf-card__cover--3 .wf-card__pic:first-child")["grid-row"],
+    ).toBe("1 / 3");
+    for (const selector of selectorsMatching(/\.wf-card__pic:first-child$/)) {
+      expect(selector, "spans a cover that has one row").toBe(
+        ".wf-card__cover--3 .wf-card__pic:first-child",
+      );
+    }
   });
 
   it("keeps row 4 clear of the ⓘ button", () => {
@@ -348,15 +363,46 @@ describe("WorkflowCard", () => {
     expect(cover.classes()).toContain(`wf-card__cover--${cells}`);
   });
 
-  it("keeps one cell for a card whose covers have not arrived", () => {
-    // `picture_count` says there are pictures, so this is not the "No pictures
-    // yet" cover; it must still be a box of the cover's own size rather than a
-    // collapsed nothing.
-    const cover = mountCard({ ...BARE, covers: [] }).find(".wf-card__cover");
+  // `picture_count` says there are pictures, so this is not the "No pictures
+  // yet" cover; it must still be a box of the cover's own size rather than a
+  // collapsed nothing, and it should hold the shape the pictures are about to
+  // land in. One cell for every count would make a one-picture-wide card's
+  // placeholder the whole 6:5 box, which is what the `--empty` cover looks
+  // like and reads as "there is nothing here".
+  it.each([
+    [22, 3],
+    [2, 2],
+    [1, 1],
+  ])(
+    "draws a %i-picture card whose covers have not arrived as %i cell(s)",
+    (pictureCount, cells) => {
+      const cover = mountCard({
+        ...BARE,
+        covers: [],
+        picture_count: pictureCount,
+      }).find(".wf-card__cover");
+
+      expect(cover.findAll(".wf-card__pic")).toHaveLength(cells);
+      expect(cover.find(".wf-card__pic img").exists()).toBe(false);
+      expect(cover.classes()).toContain(`wf-card__cover--${cells}`);
+    },
+  );
+
+  it("does not count a cover entry it cannot show", () => {
+    // `workflowCoverUrl` does not guard an empty entry - it would join one into
+    // the truthy `/api/v1null`, a broken-image glyph - and since the
+    // arrangement is counted from this list, such an entry would also buy
+    // itself a cell.
+    const cover = mountCard({
+      ...BARE,
+      covers: ["/a.webp", null, ""],
+    }).find(".wf-card__cover");
 
     expect(cover.findAll(".wf-card__pic")).toHaveLength(1);
-    expect(cover.find(".wf-card__pic img").exists()).toBe(false);
     expect(cover.classes()).toContain("wf-card__cover--1");
+    expect(cover.find(".wf-card__pic img").attributes("src")).toContain(
+      "/a.webp",
+    );
   });
 
   it("shows no rating for an unrated workflow", () => {

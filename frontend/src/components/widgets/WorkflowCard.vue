@@ -218,19 +218,30 @@ const stackLabel = computed(
  * The join is `api/workflows.js`'s, not this component's: `covers` arrives
  * API-relative and an `<img src>` never reaches the Axios interceptor that
  * would prefix it. See `workflowCoverUrl` for why that lives on the api layer.
+ *
+ * Empty entries are dropped BEFORE the join, because the join does not guard
+ * them: `workflowCoverUrl(null)` is the truthy string `/api/v1null`, which is
+ * a broken-image glyph rather than a missing picture. Since #1456 the cover's
+ * arrangement is counted from this list, so an entry that cannot be shown must
+ * not be counted either.
  */
 const covers = computed(() =>
-  (props.card.covers ?? []).slice(0, 3).map(workflowCoverUrl),
+  (props.card.covers ?? []).filter(Boolean).slice(0, 3).map(workflowCoverUrl),
 );
 /**
  * The cells the cover draws, which is one per picture it was handed.
  *
  * A card can know it has pictures without having their covers yet
- * (`picture_count` arrives with the card, the strip can be empty), and that
- * card still needs a cover box rather than a collapsed one - so it keeps a
- * single empty cell, which is the old loading look at the count it applies to.
+ * (`picture_count` arrives with the card, the strip can be empty). That card
+ * still needs a cover, and the honest placeholder is the arrangement its
+ * pictures are about to land in - not one box the size of the whole cover,
+ * which is the `--empty` cover's own look and says "there is nothing here".
  */
-const coverCells = computed(() => (covers.value.length ? covers.value : [""]));
+const coverCells = computed(() =>
+  covers.value.length
+    ? covers.value
+    : Array(Math.min(props.card.picture_count ?? 1, 3)).fill(""),
+);
 // Ratings run 1-5; 0 or null is "not rated".
 const rating = computed(() => props.card.rating > 0);
 // Pictures, not loaded covers, decide "No pictures yet".

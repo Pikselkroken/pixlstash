@@ -122,23 +122,27 @@
              reads all of it, including whatever "+N" clipped, exactly as the
              card does in Grid. -->
         <span class="stack-panel__ident" role="gridcell" aria-hidden="true">
-          <!-- Three thumbnails at 56×36, `alt=""`: they are the same pictures
-               the card shows and the row is named by its workflow, so they
-               carry nothing a reader would otherwise miss. -->
-          <!-- The cover's own 2fr/1fr shape one size down, and the three
-               cells are always laid out so a card with one picture does not
-               draw it across the whole box. `v-if` on the image, not
-               `v-show`: an `<img>` with no `src` is a broken-image glyph in
-               some browsers, and three empty ones would make any assertion
-               about the row's pictures vacuous. -->
-          <span class="stack-panel__thumbs">
-            <span v-for="i in 3" :key="i" class="stack-panel__thumb">
-              <img
-                v-if="coversOf(member)[i - 1]"
-                :src="coversOf(member)[i - 1]"
-                alt=""
-                loading="lazy"
-              />
+          <!-- Up to three thumbnails at 56×36, `alt=""`: they are the same
+               pictures the card shows and the row is named by its workflow, so
+               they carry nothing a reader would otherwise miss. -->
+          <!-- The cover's own arrangement one size down, which since #1456
+               means ONE CELL PER PICTURE: the card divides its cover by what
+               the member actually has, and a row drawing a fixed three would
+               put its one picture beside two painted boxes and disagree with
+               the same stack's Grid view. `v-if` on the image, not `v-show`:
+               an `<img>` with no `src` is a broken-image glyph in some
+               browsers, and empty ones would make any assertion about the
+               row's pictures vacuous. -->
+          <span
+            class="stack-panel__thumbs"
+            :class="`stack-panel__thumbs--${thumbsOf(member).length}`"
+          >
+            <span
+              v-for="(src, i) in thumbsOf(member)"
+              :key="i"
+              class="stack-panel__thumb"
+            >
+              <img v-if="src" :src="src" alt="" loading="lazy" />
             </span>
           </span>
           <span class="stack-panel__rowname">{{ member.name }}</span>
@@ -332,7 +336,27 @@ const toolbarName = computed(() => `${props.name || "Stack"} stack`);
  * that join; a second one here is exactly the drift it exists to prevent.
  */
 function coversOf(member) {
-  return (member.covers ?? []).slice(0, 3).map(workflowCoverUrl);
+  return (member.covers ?? [])
+    .filter(Boolean)
+    .slice(0, 3)
+    .map(workflowCoverUrl);
+}
+
+/**
+ * The cells one row's strip draws: one per picture, as the card's cover does.
+ *
+ * Empty entries are dropped above rather than counted, because
+ * `workflowCoverUrl` does not guard them - it joins one into the truthy
+ * `/api/v1null` - and a cell it cannot fill is the thing #1456 removed.
+ * A member whose covers have not arrived keeps the arrangement its pictures
+ * are about to land in; one with no pictures at all keeps a single cell, so
+ * the strip is still a picture-shaped slot in the row.
+ */
+function thumbsOf(member) {
+  const covers = coversOf(member);
+  return covers.length
+    ? covers
+    : Array(Math.min(member.picture_count || 1, 3)).fill("");
 }
 
 /**
@@ -654,12 +678,12 @@ const notchStyle = computed(() => {
   min-width: 0;
 }
 
-/* 56×36, the cover's own 2fr/1fr shape one size down, so a row and a card show
-   the same three pictures in the same arrangement. */
+/* 56×36, and the cover's own arrangement one size down, so a row and a card
+   show the same pictures in the same arrangement: one fills the box, two split
+   it, three keep the 2fr/1fr mosaic (#1456). The box itself does not change
+   size with the count, so the column stays aligned down the list. */
 .stack-panel__thumbs {
   display: grid;
-  grid-template-columns: 2fr 1fr;
-  grid-template-rows: 1fr 1fr;
   gap: var(--space-1);
   width: 56px;
   height: 36px;
@@ -668,13 +692,28 @@ const notchStyle = computed(() => {
   overflow: hidden;
 }
 
+.stack-panel__thumbs--1 {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
+
+.stack-panel__thumbs--2 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+
+.stack-panel__thumbs--3 {
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.stack-panel__thumbs--3 .stack-panel__thumb:first-child {
+  grid-row: 1 / 3;
+}
+
 .stack-panel__thumb {
   overflow: hidden;
   background: rgba(var(--v-theme-on-panel), 0.06);
-}
-
-.stack-panel__thumb:first-child {
-  grid-row: 1 / 3;
 }
 
 .stack-panel__thumb img {

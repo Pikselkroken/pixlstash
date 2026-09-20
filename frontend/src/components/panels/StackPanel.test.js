@@ -165,14 +165,22 @@ describe("StackPanel", () => {
     await wrapper.vm.$nextTick();
 
     const rows = wrapper.findAll(".stack-panel__row");
-    // Three cells always, so one picture does not stretch across the box —
-    // but an `<img>` only where there is something to put in it. A `v-show`
-    // here made this assertion vacuous: three empty tags whatever `covers`
-    // held, in a browser that draws a broken-image glyph for each.
-    expect(rows[0].findAll(".stack-panel__thumb")).toHaveLength(3);
+    // ONE CELL PER PICTURE, as the card's cover does since #1456: a fixed
+    // three put this member's two pictures beside a painted box, and made the
+    // same stack's Grid and List views disagree about the same workflow.
+    // The `<img>` is still conditional on top of that. A `v-show` here made
+    // this assertion vacuous: three empty tags whatever `covers` held, in a
+    // browser that draws a broken-image glyph for each.
+    expect(rows[0].findAll(".stack-panel__thumb")).toHaveLength(2);
+    expect(rows[0].find(".stack-panel__thumbs").classes()).toContain(
+      "stack-panel__thumbs--2",
+    );
     const images = rows[0].findAll("img");
     expect(images).toHaveLength(2);
     for (const image of images) expect(image.attributes("alt")).toBe("");
+    // Its covers have not arrived, so it keeps the arrangement its four
+    // pictures are about to land in - and no <img> in any of those cells.
+    expect(rows[1].findAll(".stack-panel__thumb")).toHaveLength(3);
     expect(rows[1].findAll("img")).toHaveLength(0);
 
     // **Joined, not the payload path.** `covers` arrives API-relative and an
