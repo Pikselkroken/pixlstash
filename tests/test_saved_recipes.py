@@ -39,6 +39,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import delete, select
 
+from pixlstash import auth
 from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
@@ -1120,3 +1121,78 @@ def test_a_recipe_export_says_when_it_carries_a_name_the_shelf_cannot_vouch_for(
 
 def test_exporting_a_recipe_that_does_not_exist_is_a_404(recipe_env):
     assert recipe_env.owner.get(f"{API}/recipes/999999/export").status_code == 404
+
+
+def test_the_export_stays_closed_with_the_gate_rolled_back(recipe_env):
+    """``AUTHZ_GATE_ENFORCING = False`` is a documented rollback (§16.3).
+
+    Every other recipe route is a write, which the READ-token middleware
+    refuses on the verb whatever the gate is doing. This one is a **GET**, and
+    it returns the owner's prompt verbatim — so it is the first route in this
+    module that needs the second belt, ``auth.READ_BLOCKED_GET_PREFIXES``, and
+    the gated ``test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt``
+    is what noticed the prefix was missing.
+    """
+    saved = _save(recipe_env.owner, CARD_A, loras=_ada())
+    path = f"{API}/recipes/{saved['id']}/export"
+    server = recipe_env.server
+    scoped = _bearer(
+        server,
+        _mint(
+            recipe_env.owner,
+            "recipe rollback scoped",
+            resource_type="character",
+            resource_id=recipe_env.character_id,
+        ),
+    )
+    unscoped = _bearer(server, _mint(recipe_env.owner, "recipe rollback unscoped"))
+    previously_enforcing = server.authz._enforcing
+    server.authz._enforcing = False
+    try:
+        for client in (scoped, unscoped):
+            assert client.get(f"{API}/pictures").status_code == 200, (
+                "the token is dead; the refusal below would prove nothing"
+            )
+            assert_real_route(server.api, "GET", path)
+            r = client.get(path)
+            assert r.status_code == 403, f"GET {path}: {r.status_code} {r.text}"
+        # The positive control, with the gate still rolled back: over-blocking
+        # the owner is its own regression.
+        assert recipe_env.owner.get(path).status_code == 200
+    finally:
+        server.authz._enforcing = previously_enforcing
+
+
+def test_the_belt_and_not_only_the_gate_is_what_refuses_the_export(recipe_env):
+    """Take the prefix away and the rollback stops holding.
+
+    Without this the test above passes on the gate alone and says nothing
+    about the belt it is named for.
+    """
+    saved = _save(recipe_env.owner, CARD_A)
+    path = f"{API}/recipes/{saved['id']}/export"
+    server = recipe_env.server
+    scoped = _bearer(
+        server,
+        _mint(
+            recipe_env.owner,
+            "recipe belt probe",
+            resource_type="character",
+            resource_id=recipe_env.character_id,
+        ),
+    )
+    previously_enforcing = server.authz._enforcing
+    previously_blocked = auth.READ_BLOCKED_GET_PREFIXES
+    server.authz._enforcing = False
+    auth.READ_BLOCKED_GET_PREFIXES = tuple(
+        prefix for prefix in previously_blocked if prefix != "/api/v1/recipes/"
+    )
+    try:
+        assert scoped.get(path).status_code == 200, (
+            "with the gate rolled back AND the prefix removed this must be "
+            "reachable — if it is not, the assertion above is passing on "
+            "something else and proves nothing about the belt"
+        )
+    finally:
+        auth.READ_BLOCKED_GET_PREFIXES = previously_blocked
+        server.authz._enforcing = previously_enforcing

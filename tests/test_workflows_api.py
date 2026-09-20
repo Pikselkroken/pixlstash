@@ -1244,6 +1244,9 @@ _TEMPLATED_PATHS = (
     f"{API}/workflows/{BUSY_TOPOLOGY}/variants",
     f"{API}/workflows/{BUSY_TOPOLOGY}/pictures",
     f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
+    # The export (v1.12 B8) hands back a whole graph, so it is the one here
+    # with most to lose from the rollback.
+    f"{API}/workflows/{BUSY_CARD}/export",
 )
 
 
