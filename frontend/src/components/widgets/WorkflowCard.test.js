@@ -7,9 +7,10 @@
 // four rows are fixed, and a row clips.
 //
 // The CARD's total height is deliberately not fixed any more: the cover is a
-// 6:5 box so its cells stay 4:5 at every column width, which is the shape the
-// pictures are. Cards still line up, because every card in a row is the same
-// width - that is what the old fixed height was really protecting.
+// 6:5 box at every column width and at every picture count, so cards still
+// line up - that is what the old fixed height was really protecting. What
+// changes inside it is the tracks, one arrangement per count, so the cell
+// ratios are asserted three times rather than once.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -81,11 +82,15 @@ function tokens() {
   return values;
 }
 
-/** The declarations of one rule in the card's stylesheet. */
-function rule(selector) {
-  const css = read("./WorkflowCard.vue")
+/** The card's own stylesheet, comments stripped. */
+const styleBlock = () =>
+  read("./WorkflowCard.vue")
     .split("<style scoped>")[1]
     .replace(/\/\*[\s\S]*?\*\//g, "");
+
+/** The declarations of one rule in the card's stylesheet. */
+function rule(selector) {
+  const css = styleBlock();
   const body = css
     .split("}")
     .find((r) => r.split("{")[0].trim() === selector)
@@ -97,6 +102,30 @@ function rule(selector) {
       .map((d) => d.split(":").map((s) => s.trim()))
       .filter(([k, v]) => k && v),
   );
+}
+
+/**
+ * The cell shapes one cover arrangement produces, as width ÷ height.
+ *
+ * The cover is a 6:5 box at every count, so a column track worth `c` of the
+ * columns' total and `r` of the rows' total is `c·W` wide by `r·(5/6)W` tall.
+ * With two rows the first cell spans both of them - the mosaic's big cell - and
+ * the second column holds one cell per row.
+ */
+function cellRatios(count) {
+  const cover = rule(".wf-card__cover");
+  const tracks = rule(`.wf-card__cover--${count}`);
+  const [w, h] = cover["aspect-ratio"].split("/").map(Number);
+  const coverH = h / w; // the cover's height as a fraction of its width
+  const fr = (key) => tracks[key].split(" ").map((n) => parseFloat(n));
+  const cols = fr("grid-template-columns");
+  const rows = fr("grid-template-rows");
+  const sum = (list) => list.reduce((total, one) => total + one, 0);
+  const shape = (col, rowSpan) =>
+    cols[col] / sum(cols) / ((rowSpan / sum(rows)) * coverH);
+
+  if (rows.length === 1) return cols.map((_, col) => shape(col, sum(rows)));
+  return [shape(0, sum(rows)), ...rows.map((row) => shape(1, row))];
 }
 
 /** Resolve `var(--x)`, `calc(var(--a) + var(--b))` or `1px` to a number. */
@@ -142,29 +171,28 @@ describe("WorkflowCard height", () => {
     expect(cover["aspect-ratio"]).toBe("6 / 5");
   });
 
-  // 6:5 is not arbitrary: it is the number that makes BOTH cells 4:5, because
-  // the big one is two columns and two rows and so keeps the cover's own
-  // proportion. If the column split or the row count moves, this is the sum
-  // that says the cells are no longer the shape they were chosen to be.
-  it("puts every cell at 4:5, big and small alike", () => {
-    const cover = rule(".wf-card__cover");
-    const [w, h] = cover["aspect-ratio"].split("/").map((n) => Number(n));
-    const columns = cover["grid-template-columns"].split(" ").length;
-    const [bigFr, smallFr] = cover["grid-template-columns"]
-      .split(" ")
-      .map((n) => Number(n.replace("fr", "")));
-    const totalFr = bigFr + smallFr;
-    const rows = cover["grid-template-rows"].split(" ").length;
+  // The cover is 6:5 at every count and only the tracks inside it change, so
+  // what each arrangement is worth is the shape of the cells it produces. One
+  // assertion per count, because there are three arrangements now: a cell that
+  // is never drawn without a picture in it means the tracks follow the strip
+  // (#1456).
+  it.each([
+    ["1", [1.2]],
+    ["2", [0.6, 0.6]],
+    ["3", [0.8, 0.8, 0.8]],
+  ])("gives %s picture(s) cells of %s (width ÷ height)", (count, expected) => {
+    expect(cellRatios(count)).toEqual(
+      expected.map((r) => expect.closeTo(r, 5)),
+    );
+  });
 
-    expect(columns).toBe(2);
-    expect(rows).toBe(2);
-    // Cover height as a fraction of its width.
-    const coverH = h / w;
-    // The big cell spans every row; the small ones one row each.
-    const bigRatio = bigFr / totalFr / coverH;
-    const smallRatio = smallFr / totalFr / (coverH / rows);
-    expect(bigRatio).toBeCloseTo(0.8, 5);
-    expect(smallRatio).toBeCloseTo(0.8, 5);
+  it("spans the big cell over both rows only where there are two rows", () => {
+    // The row span is what makes the three-picture mosaic a mosaic. Left on
+    // every cover it would silently apply to the one- and two-picture ones,
+    // where there is no second row to span into.
+    const css = styleBlock();
+    expect(css).toContain(".wf-card__cover--3 .wf-card__pic:first-child");
+    expect(css).not.toMatch(/\n\.wf-card__pic:first-child \{/);
   });
 
   it("keeps row 4 clear of the ⓘ button", () => {
@@ -301,6 +329,36 @@ describe("WorkflowCard", () => {
     expect(wrapper.find(".wf-card__cover--empty").exists()).toBe(false);
   });
 
+  // The defect this replaces: three cells were drawn whatever the card had and
+  // only the <img> was conditional, so one picture sat beside two painted
+  // `input-background` rectangles and the card read as one that had failed to
+  // load rather than one showing everything it has (#1456).
+  it.each([
+    [1, ["/a.webp"]],
+    [2, ["/a.webp", "/b.webp"]],
+    [3, ["/a.webp", "/b.webp", "/c.webp"]],
+    [3, ["/a.webp", "/b.webp", "/c.webp", "/d.webp"]],
+  ])("draws %i cell(s), each with a picture in it", (cells, covers) => {
+    const wrapper = mountCard({ ...BARE, covers });
+    const cover = wrapper.find(".wf-card__cover");
+
+    expect(cover.findAll(".wf-card__pic")).toHaveLength(cells);
+    // Not one cell more than there are images: an empty one is the bug.
+    expect(cover.findAll(".wf-card__pic img")).toHaveLength(cells);
+    expect(cover.classes()).toContain(`wf-card__cover--${cells}`);
+  });
+
+  it("keeps one cell for a card whose covers have not arrived", () => {
+    // `picture_count` says there are pictures, so this is not the "No pictures
+    // yet" cover; it must still be a box of the cover's own size rather than a
+    // collapsed nothing.
+    const cover = mountCard({ ...BARE, covers: [] }).find(".wf-card__cover");
+
+    expect(cover.findAll(".wf-card__pic")).toHaveLength(1);
+    expect(cover.find(".wf-card__pic img").exists()).toBe(false);
+    expect(cover.classes()).toContain("wf-card__cover--1");
+  });
+
   it("shows no rating for an unrated workflow", () => {
     const wrapper = mountCard({ ...BARE, rating: 0 });
     expect(wrapper.find(".wf-card__badge--bottom").exists()).toBe(false);
@@ -429,7 +487,6 @@ describe("cover thumbnail URLs", () => {
     // The bare payload path is what broke it; it must not be the whole src.
     expect(src).not.toMatch(/^\/pictures\//);
   });
-
 });
 
 // ── The cover crop is top-anchored ───────────────────────────────────────
@@ -507,7 +564,7 @@ describe("the selection mark", () => {
   });
 
   // The whole point: an inset shadow paints over an element's background but
-  // UNDER its children, and the cover's three <img>s are children. On the card
+  // UNDER its children, and the cover's <img>s are children. On the card
   // itself the ring ran along the text rows and stopped dead at the
   // thumbnails. Only a layer above the content covers both.
   it("lies above the cover, so the mark crosses the thumbnails", () => {
