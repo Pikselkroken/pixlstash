@@ -374,3 +374,36 @@ describe("WorkflowCard", () => {
     expect(text).toMatch(/Saved recipes\s*3/);
   });
 });
+
+// ── The covers are API-relative and an <img> does not use axios ───────────
+//
+// `GET /workflows/cards` sends `/pictures/thumbnails/{id}.webp?v=…`, and the
+// real route is under `/api/v1`. An `<img src>` never reaches the apiClient
+// interceptor that prepends the prefix, so a card that used the payload
+// verbatim asked the page origin for a path nothing serves — every cover on
+// the Workflows grid broke at once. It shipped that way in F1a because the
+// grid was only reachable by typing `/workflows-next`.
+describe("cover thumbnail URLs", () => {
+  it("prepends the API base, so the src is a route that exists", () => {
+    const wrapper = mountCard({
+      ...CROWDED,
+      covers: ["/pictures/thumbnails/12.webp?v=3"],
+    });
+
+    const src = wrapper.find(".wf-card__pic img").attributes("src");
+    expect(src).toContain("/api/v1/pictures/thumbnails/12.webp?v=3");
+    // The bare payload path is what broke it; it must not be the whole src.
+    expect(src).not.toMatch(/^\/pictures\//);
+  });
+
+  it("leaves an absolute URL alone", () => {
+    const wrapper = mountCard({
+      ...CROWDED,
+      covers: ["https://cdn.example.com/thumb.webp"],
+    });
+
+    expect(wrapper.find(".wf-card__pic img").attributes("src")).toBe(
+      "https://cdn.example.com/thumb.webp",
+    );
+  });
+});

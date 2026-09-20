@@ -19,7 +19,11 @@
 //                                       // `PUT /workflows/{key}/slots` marks
 //     differs_by: [string],             // a stack: the union over its members
 //     picture_count, rating,            // rating 1-5; 0 or null is unrated
-//     covers: [url],                    // up to 3, the cover first
+//     covers: [url],                    // up to 3, the cover first. An
+//                                       // API-RELATIVE path, so a consumer
+//                                       // putting one in an <img src> has to
+//                                       // prepend API_BASE_URL and append the
+//                                       // share token itself (WorkflowCard).
 //     stack_size,                       // 2 or more makes the card a stack
 //     saved_recipe_count,
 //     defaults: [{ label, slot_label, input_name, value, provenance }],
