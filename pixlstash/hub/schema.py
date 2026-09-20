@@ -412,10 +412,16 @@ CREATE TABLE IF NOT EXISTS model_file (
     model_id         INTEGER NOT NULL REFERENCES model(id),
     model_folder_id  INTEGER NOT NULL REFERENCES model_folder(id),
     relpath          TEXT NOT NULL,
-    -- 'present' | 'missing' | 'unreachable' | 'not_downloaded'. The first three
-    -- are the scanner's (see model_folder_scanner); the fourth belongs to the
-    -- roots PixlStash declares rather than scans, where an absent file is one we
-    -- have not fetched yet and never one that wandered off.
+    -- 'present' | 'missing' | 'unreachable' | 'not_downloaded' | 'removed'. The
+    -- first three are the scanner's (see model_folder_scanner); 'not_downloaded'
+    -- belongs to the roots PixlStash declares rather than scans, where an absent
+    -- file is one we have not fetched yet and never one that wandered off; and
+    -- 'removed' is a copy the owner deleted to keep one of several (#1439,
+    -- POST /model-files/merge). That last one is why this column has no CHECK:
+    -- the ROW is the point of the delete rather than a leftover - it is what
+    -- keeps a recipe's filename resolving to the model after the file is gone -
+    -- and every scanner sweep skips it, or the next walk of the folder would
+    -- re-label it 'missing' and throw the distinction away.
     state            TEXT NOT NULL,
     seen_at          TEXT,
     -- st_mtime_ns of this copy at the last scan. Paired with model.file_size it

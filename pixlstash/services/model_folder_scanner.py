@@ -63,12 +63,22 @@ from pixlstash.utils.adapter_header import (
 
 logger = get_logger(__name__)
 
-# The three states a ``model_file`` row can be in. ``missing`` is a fact ("the
-# folder was readable and the file was not in it"); ``unreachable`` is the
-# absence of one ("we could not look").
+# The states a ``model_file`` row can be in. ``missing`` is a fact ("the folder
+# was readable and the file was not in it"); ``unreachable`` is the absence of
+# one ("we could not look").
 STATE_PRESENT = "present"
 STATE_MISSING = "missing"
 STATE_UNREACHABLE = "unreachable"
+
+# A copy the owner removed on purpose, to keep one of several (#1439). Not the
+# scanner's to write, and deliberately not ``missing``: a removed copy is a
+# different fact from one the scan could not find, and the row outlives its file
+# precisely so the model's identity outlives the delete - a recipe naming that
+# filename still reaches the model, and a loader resolves to a copy that is
+# still there. Which is why **every sweep below skips it**: the scan will keep
+# finding it absent, and letting that re-label the row ``missing`` would throw
+# the fact away on the next walk of the folder.
+STATE_REMOVED = "removed"
 
 MODEL_SUFFIX = ".safetensors"
 
@@ -861,15 +871,22 @@ class ModelFolderScanner:
                     # it was seen, so the whole folder is what we could not read.
                     cursor = conn.execute(
                         "UPDATE model_file SET state = ?, seen_at = ? "
-                        "WHERE model_folder_id = ?",
-                        (STATE_UNREACHABLE, scanned_at, folder_id),
+                        "WHERE model_folder_id = ? AND state != ?",
+                        (STATE_UNREACHABLE, scanned_at, folder_id, STATE_REMOVED),
                     )
                 else:
                     prefix = (relative_dir + os.sep).translate(_LIKE_ESCAPE)
                     cursor = conn.execute(
                         "UPDATE model_file SET state = ?, seen_at = ? "
-                        "WHERE model_folder_id = ? AND relpath LIKE ? ESCAPE '\\'",
-                        (STATE_UNREACHABLE, scanned_at, folder_id, prefix + "%"),
+                        "WHERE model_folder_id = ? AND relpath LIKE ? ESCAPE '\\' "
+                        "AND state != ?",
+                        (
+                            STATE_UNREACHABLE,
+                            scanned_at,
+                            folder_id,
+                            prefix + "%",
+                            STATE_REMOVED,
+                        ),
                     )
                 touched += int(cursor.rowcount or 0)
         return touched
@@ -894,8 +911,8 @@ class ModelFolderScanner:
         with self._hub.transaction() as conn:
             cursor = conn.execute(
                 "UPDATE model_file SET state = ? WHERE model_folder_id = ? "
-                "AND (seen_at IS NULL OR seen_at < ?) AND state != ?",
-                (STATE_MISSING, folder_id, scanned_at, STATE_MISSING),
+                "AND (seen_at IS NULL OR seen_at < ?) AND state NOT IN (?, ?)",
+                (STATE_MISSING, folder_id, scanned_at, STATE_MISSING, STATE_REMOVED),
             )
             return int(cursor.rowcount or 0)
 
@@ -916,8 +933,8 @@ class ModelFolderScanner:
         with self._hub.transaction() as conn:
             cursor = conn.execute(
                 "UPDATE model_file SET state = ? WHERE model_folder_id = ? "
-                "AND state != ?",
-                (STATE_UNREACHABLE, folder_id, STATE_UNREACHABLE),
+                "AND state NOT IN (?, ?)",
+                (STATE_UNREACHABLE, folder_id, STATE_UNREACHABLE, STATE_REMOVED),
             )
         self._touch_folder(folder_id, scanned_at)
         return FolderScanResult(

@@ -78,10 +78,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from send2trash import TrashPermissionError, send2trash
 
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.comfyui_recipe_service import (
+    advertised_model_names,
+    fetch_object_info,
+)
 from pixlstash.services.managed_model_store import MANAGED_KIND, deletes_unclaimed_files
 from pixlstash.services.model_folder_scanner import (
     MODEL_SUFFIX,
     STATE_PRESENT,
+    STATE_REMOVED,
     STATE_UNREACHABLE,
     ModelFolderScanner,
 )
@@ -177,6 +182,70 @@ class DeleteModelsRequest(BaseModel):
     )
 
 
+class KeepModelCopy(BaseModel):
+    """The one copy of a model to keep, addressed the way the shelf lists it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: int = Field(description="Hub `model.id` the copies belong to.")
+    folder_id: int = Field(description="`model_folder.id` of the copy to KEEP.")
+    relpath: str = Field(
+        description="That copy's path relative to its folder, as the shelf reports it."
+    )
+
+
+class MergeCopiesRequest(BaseModel):
+    """Body of ``POST /model-files/merge``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    keep: list[KeepModelCopy] = Field(
+        min_length=1,
+        max_length=MAX_MODELS_PER_EDIT,
+        description=(
+            "One entry per model: the copy that stays. Every OTHER copy of that "
+            "model that is on the disk is removed. The keeper is named rather "
+            "than the copies to remove, so no request can empty a model."
+        ),
+    )
+    permanent: bool = Field(
+        default=False,
+        description=(
+            "False (the default) moves the redundant copies to this machine's "
+            "trash, which is the undo. True unlinks them."
+        ),
+    )
+    dry_run: bool = Field(
+        default=False,
+        description=(
+            "Plan it and remove nothing. The same planner and the same refusals "
+            "as the real call, which is what lets the client show them before "
+            "the owner agrees - `comfyui_reads` in particular, which is the one "
+            "warning that has to arrive before the files go."
+        ),
+    )
+
+
+class ComfyUIReadsCopy(BaseModel):
+    """A copy about to go that a configured ComfyUI says it can load."""
+
+    model_config = ConfigDict(extra="allow")
+
+    model_id: int
+    folder_id: int
+    relpath: str = Field(description="The copy being removed.")
+    keeper_relpath: str = Field(description="The copy being kept.")
+    keeper_advertised: bool = Field(
+        description=(
+            "Whether that ComfyUI also lists the keeper. True and a graph run "
+            "**through PixlStash** is substituted onto it at submit; false and "
+            "nothing can be substituted, so every graph naming this file breaks "
+            "on that install. Either way a graph opened in ComfyUI and queued "
+            "there still names the file that went."
+        )
+    )
+
+
 class DeleteRefusal(BaseModel):
     """One id the delete declined, and why."""
 
@@ -235,6 +304,40 @@ class DeleteModelsResponse(BaseModel):
             "and failing the whole call because one model moved would be the "
             "wrong answer to good news."
         )
+    )
+
+
+class MergeCopiesResponse(BaseModel):
+    """Body of ``POST /model-files/merge``: what was removed, and what was kept."""
+
+    model_config = ConfigDict(extra="allow")
+
+    merged: list[int] = Field(
+        description=(
+            "Models now down to one copy, ascending. **The shelf row survives** "
+            "with its name, base model, kind, triggers and attachments intact; "
+            "so does every removed copy's `model_file` row, at "
+            "`state = 'removed'`, which is what keeps a recipe naming that "
+            "filename resolving to this model afterwards."
+        )
+    )
+    files_removed: int = Field(description="How many files were unlinked or trashed.")
+    permanent: bool = Field(description="What was done, echoed.")
+    dry_run: bool = Field(description="Whether anything was actually removed.")
+    trash_name: str = Field(
+        default=TRASH_NAME,
+        description="What THIS machine calls the place the files went.",
+    )
+    comfyui_reads: list[ComfyUIReadsCopy] = Field(
+        default_factory=list,
+        description=(
+            "Copies a configured ComfyUI advertises, so the owner is told before "
+            "the bytes go. Empty when no ComfyUI URL is set or it cannot be "
+            "asked - the absence of a warning is not a promise."
+        ),
+    )
+    refused: list[DeleteRefusal] = Field(
+        description="Models left alone, each with a reason. Same vocabulary as the delete."
     )
 
 
@@ -357,6 +460,204 @@ def _plan_deletions(hub, ids: list[int]) -> tuple[dict[int, list[dict]], list[di
                 )
                 refused.append({"id": model_id, "reason": "escapes_its_folder"})
     return deletable, refused
+
+
+def _plan_merge(hub, keep: list[KeepModelCopy]) -> tuple[dict[int, dict], list[dict]]:
+    """Split the requested keepers into copies-to-remove and refusals (#1439).
+
+    **The caller names the copy that stays, never the ones that go.** That is
+    what makes "keep one" structural rather than arithmetic: a request cannot
+    empty a model, because the surviving copy is the thing being addressed, and
+    it is refused unless the shelf says it is really on the disk.
+
+    The gates are per MODEL and refuse the whole of it, as
+    :func:`_plan_deletions`' do - but they are asked of the copies being
+    **removed**, which is the one place the two differ. Keeping the copy in the
+    HuggingFace cache and removing one from a user folder is a perfectly good
+    merge; it is the unlink that has to be in a folder whose contents are the
+    owner's.
+
+    One transaction for the reads, for the reason :func:`_plan_deletions` gives:
+    two ``hub.fetchall`` calls leave a window for a background
+    ``ModelFolderScanner`` to rewrite the very states being gated on.
+
+    Args:
+        hub: The open hub database.
+        keep: One keeper per model, already de-duplicated by ``model_id``.
+
+    Returns:
+        ``(plans, refused)``. ``plans`` maps a model id to
+        ``{"keeper": relpath, "remove": [{"folder_id", "relpath", "path"}]}``,
+        where every entry to remove is a ``present`` copy with a contained path.
+        ``refused`` carries ``{"id", "reason"}``.
+    """
+    ids = [item.model_id for item in keep]
+    marks = ", ".join("?" for _ in ids)
+    with hub.transaction() as conn:
+        kinds = {
+            int(row[0]): row[1]
+            for row in conn.execute(
+                f"SELECT id, file_kind FROM model WHERE id IN ({marks})", tuple(ids)
+            ).fetchall()
+        }
+        copies: dict[int, list[dict]] = {}
+        for row in conn.execute(
+            "SELECT mf.model_id, mf.model_folder_id, mf.relpath, mf.state, "
+            "f.path AS folder_path, f.kind AS folder_kind FROM model_file mf "
+            f"JOIN model_folder f ON f.id = mf.model_folder_id "
+            f"WHERE mf.model_id IN ({marks})",
+            tuple(ids),
+        ).fetchall():
+            copies.setdefault(int(row["model_id"]), []).append(dict(row))
+
+    plans: dict[int, dict] = {}
+    refused: list[dict] = []
+    for item in keep:
+        model_id = item.model_id
+        rows = copies.get(model_id, [])
+        keeper = next(
+            (
+                row
+                for row in rows
+                if int(row["model_folder_id"]) == item.folder_id
+                and row["relpath"] == item.relpath
+            ),
+            None,
+        )
+        # Present copies other than the keeper. `missing` and `not_downloaded`
+        # rows are registrations rather than bytes, so there is nothing of theirs
+        # to remove and they are left exactly as they are - a merge must not
+        # rewrite a fact the scanner established.
+        doomed = [
+            row for row in rows if row["state"] == STATE_PRESENT and row is not keeper
+        ]
+        if model_id not in kinds:
+            refused.append({"id": model_id, "reason": "no_such_model"})
+        elif kinds[model_id] == FILE_ENGINE:
+            refused.append({"id": model_id, "reason": "is_a_builtin_engine"})
+        elif keeper is None:
+            refused.append({"id": model_id, "reason": "no_such_copy"})
+        elif keeper["state"] != STATE_PRESENT:
+            # The one refusal with no counterpart on the whole-model delete, and
+            # the reason this route is safe: removing every other copy on the
+            # word of one the shelf cannot find would leave the owner with a
+            # redownload.
+            refused.append({"id": model_id, "reason": "keeper_not_present"})
+        elif any(row["state"] == STATE_UNREACHABLE for row in rows):
+            refused.append({"id": model_id, "reason": "unreachable_copy"})
+        elif not doomed:
+            refused.append({"id": model_id, "reason": "not_a_duplicate"})
+        elif any(
+            not deletes_unclaimed_files(row["folder_kind"], row["folder_path"])
+            for row in doomed
+        ):
+            refused.append({"id": model_id, "reason": "not_a_user_folder"})
+        else:
+            try:
+                plans[model_id] = {
+                    "keeper": keeper["relpath"],
+                    "remove": [
+                        {
+                            "folder_id": int(row["model_folder_id"]),
+                            "relpath": row["relpath"],
+                            "path": _contained_path(row["folder_path"], row["relpath"]),
+                        }
+                        for row in doomed
+                    ],
+                }
+            except ValueError as exc:
+                logger.error(
+                    "Refusing to merge the copies of model %s: a registered copy "
+                    "resolves outside its folder (%s). The row is wrong; nothing "
+                    "was touched.",
+                    model_id,
+                    exc,
+                )
+                refused.append({"id": model_id, "reason": "escapes_its_folder"})
+    return plans, refused
+
+
+def _mark_removed(hub, copies: list[dict]) -> None:
+    """Record that these copies were removed on purpose, keeping their rows.
+
+    **The row is what the delete is for.** ``model_file`` is the record that
+    these files were one model, and it is worth more than the row it costs: a
+    recipe naming the copy that went still reaches this model through
+    ``recipe_asset_index``, ``model_ghost_names`` still does not call that name a
+    ghost, and a run through PixlStash is substituted onto the copy that stayed.
+    Dropping the rows - which is what :func:`purge_deleted_models` does for the
+    whole-model delete, correctly, because there the model is going too - would
+    throw all three away for a few hundred bytes.
+
+    ``state`` rather than a new column, because that column already carries
+    exactly this kind of fact, and :data:`STATE_REMOVED` rather than ``missing``
+    because the scanner will keep finding the file absent and ``missing`` is its
+    word for "I looked and it was gone". ``seen_at`` and ``file_mtime`` are left
+    alone: when we last saw the file is still true.
+    """
+    with hub.transaction() as conn:
+        for copy in copies:
+            conn.execute(
+                "UPDATE model_file SET state = ? "
+                "WHERE model_folder_id = ? AND relpath = ?",
+                (STATE_REMOVED, copy["folder_id"], copy["relpath"]),
+            )
+
+
+def _comfyui_reads(comfyui_url: Optional[str], plans: dict[int, dict]) -> list[dict]:
+    """Which copies about to go a configured ComfyUI says it can load.
+
+    **Asked of ComfyUI, not of the filesystem.** PixlStash holds a URL and no
+    path into that install's ``models/`` tree, and its combo lists are the truth
+    anyway: they already account for ``extra_model_paths.yaml``, symlinks and
+    whatever else put the file within its reach. This is the delete-time half of
+    the rule the submit-time swap obeys - verify against what ComfyUI
+    advertises, never against what PixlStash believes.
+
+    An unset URL or an unreachable ComfyUI answers "nothing", and the empty list
+    is reported as exactly that by the client: the absence of a warning here is
+    not a promise that no ComfyUI reads the file.
+    """
+    if not comfyui_url:
+        return []
+    try:
+        advertised = advertised_model_names(fetch_object_info(comfyui_url))
+    except RuntimeError as exc:
+        logger.info(
+            "Could not ask ComfyUI at %s which models it reads, so the merge "
+            "warns about none of them: %s",
+            comfyui_url,
+            exc,
+        )
+        return []
+    reads: list[dict] = []
+    for model_id, plan in plans.items():
+        keeper_advertised = _is_advertised(plan["keeper"], advertised)
+        for copy in plan["remove"]:
+            if not _is_advertised(copy["relpath"], advertised):
+                continue
+            reads.append(
+                {
+                    "model_id": model_id,
+                    "folder_id": copy["folder_id"],
+                    "relpath": copy["relpath"],
+                    "keeper_relpath": plan["keeper"],
+                    "keeper_advertised": keeper_advertised,
+                }
+            )
+    return reads
+
+
+def _is_advertised(relpath: str, advertised: set[str]) -> bool:
+    """Whether ComfyUI lists this registered copy, by relpath or by basename.
+
+    Both, because a combo entry is relative to one of ComfyUI's own model
+    folders and a registered folder's relpath is relative to a root PixlStash
+    was given: ``loras/x.safetensors`` here and ``x.safetensors`` there are
+    routinely the same file.
+    """
+    normalized = relpath.replace("\\", "/")
+    return normalized in advertised or normalized.rsplit("/", 1)[-1] in advertised
 
 
 def _remove(path: str, *, permanent: bool) -> None:
@@ -827,6 +1128,120 @@ def create_router(server) -> APIRouter:
             deleted=sorted(deleted),
             files_removed=files_removed,
             permanent=payload.permanent,
+            refused=[DeleteRefusal(**item) for item in refused],
+        )
+
+    @router.post(
+        "/model-files/merge",
+        summary="Keep one copy of a model and remove the rest",
+        description=(
+            "For a model the shelf holds several copies of - the same bytes "
+            "under one name or two - keeps the copy named in `keep` and removes "
+            "every other copy that is on the disk. `permanent=false` (the "
+            "default) moves them to this machine's "
+            f"{TRASH_NAME.lower()}; `permanent=true` unlinks them. "
+            "`dry_run=true` plans it and removes nothing, which is how a client "
+            "shows the refusals and `comfyui_reads` before the owner agrees.\n\n"
+            "**The shelf row survives, and so does every removed copy's row**, "
+            "at `state = 'removed'`: the record of which files were the same "
+            "model outlives the files, so a recipe naming the copy that went "
+            "still resolves to this model on screen, and a run through "
+            "PixlStash is substituted onto the copy that is left - verified "
+            "against what that ComfyUI advertises, never assumed. The stored "
+            "workflow is left byte-identical; nothing is rewritten at delete "
+            "time. A graph opened in ComfyUI and queued there is the honest "
+            "limit, which is what `comfyui_reads` warns about.\n\n"
+            "The keeper is what the request names, so no body can empty a "
+            "model, and it is refused unless the shelf has it as `present`. "
+            "Only the copies being REMOVED must sit in a folder whose contents "
+            "are yours, so keeping the one in the shared HuggingFace cache and "
+            "removing a user-folder copy is a legitimate merge."
+        ),
+        tags=["model_shelf"],
+        response_model=MergeCopiesResponse,
+    )
+    def merge_model_copies(request: Request, payload: MergeCopiesRequest = Body(...)):
+        server.auth.ensure_secure_when_required(request)
+        # One keeper per model: two entries for one model would plan it, remove
+        # its copies and then plan it again against rows that had just gone.
+        keep: dict[int, KeepModelCopy] = {}
+        for item in payload.keep:
+            keep.setdefault(item.model_id, item)
+        user = server.auth.get_user_for_request(request)
+        comfyui_url = (getattr(user, "comfyui_url", None) or "").rstrip("/")
+
+        # The *same* slot a move, an import, an add and the delete take.
+        if not SHELF_IO_LOCK.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "A move or an import is already running. Removing copies "
+                    "out from under it would leave rows naming files neither of "
+                    "us put there."
+                ),
+            )
+        try:
+            plans, refused = _plan_merge(server.hub, list(keep.values()))
+            # Asked before anything is removed, so a dry run and the real call
+            # report the same warning about the same files.
+            reads = _comfyui_reads(comfyui_url, plans)
+            merged: list[int] = []
+            files_removed = 0
+            if not payload.dry_run:
+                for model_id, plan in plans.items():
+                    done = 0
+                    paths = [copy["path"] for copy in plan["remove"]]
+                    try:
+                        for path in paths:
+                            _remove(path, permanent=payload.permanent)
+                            done += 1
+                            # After the file, and never allowed to fail it.
+                            _remove_samples(path, permanent=payload.permanent)
+                    except (TrashPermissionError, OSError) as exc:
+                        reason = (
+                            "partly_deleted"
+                            if done
+                            else (
+                                "trash_unavailable"
+                                if isinstance(exc, TrashPermissionError)
+                                else "delete_failed"
+                            )
+                        )
+                        logger.error(
+                            "Could not remove %s (%s). Model %s keeps every row; "
+                            "%d of its %d redundant copies were already removed, "
+                            "and a rescan of that folder will mark those missing.",
+                            paths[done],
+                            exc,
+                            model_id,
+                            done,
+                            len(paths),
+                            exc_info=not isinstance(exc, TrashPermissionError),
+                        )
+                        refused.append({"id": model_id, "reason": reason})
+                    else:
+                        merged.append(model_id)
+                        _mark_removed(server.hub, plan["remove"])
+                    finally:
+                        files_removed += done
+        finally:
+            SHELF_IO_LOCK.release()
+
+        logger.info(
+            "Merged the copies of %d model(s) (%d file(s) %s), %d refused; "
+            "%d of the removed copies were advertised by ComfyUI.",
+            len(merged),
+            files_removed,
+            "unlinked" if payload.permanent else "trashed",
+            len(refused),
+            len(reads),
+        )
+        return MergeCopiesResponse(
+            merged=sorted(merged),
+            files_removed=files_removed,
+            permanent=payload.permanent,
+            dry_run=payload.dry_run,
+            comfyui_reads=[ComfyUIReadsCopy(**item) for item in reads],
             refused=[DeleteRefusal(**item) for item in refused],
         )
 

@@ -300,7 +300,7 @@
     "tests/test_authz_host_capability_16_3.py::test_export_folder_loopback_owner_only_allows_loopback": 3.43,
     "tests/test_authz_host_capability_16_3.py::test_export_folder_loopback_owner_only_public_403": 3.9,
     "tests/test_authz_host_capability_16_3.py::test_export_folder_loopback_owner_only_rfc1918_403_even_with_flag_on": 5.61,
-    "tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_49_local_7_loopback": 0.0,
+    "tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_50_local_7_loopback": 0.0,
     "tests/test_authz_host_capability_16_3.py::test_is_local_ip_not_widened_to_tailscale": 0.0,
     "tests/test_authz_host_capability_16_3.py::test_is_local_or_tailscale_ip_is_the_host_ops_predicate": 0.0,
     "tests/test_authz_host_capability_16_3.py::test_is_loopback_ip_rejects_lan_and_tailscale": 0.0,
