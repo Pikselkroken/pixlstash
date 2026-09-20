@@ -831,7 +831,9 @@ class RunGroup(BaseModel):
 
     ``reasons`` empty is the only thing that means "this would run". Each
     reason is a code and its payload, so a panel can act on it rather than
-    print it.
+    print it. ``substitutions`` and ``bypassed_loras`` are not reasons: they
+    say what this run will do differently from what the graph says, which is a
+    fact to report rather than a refusal to act on.
     """
 
     workflow_key: str
@@ -846,6 +848,13 @@ class RunGroup(BaseModel):
     # lie, so it is reported here on the pre-flight and on the run alike, and
     # logged. The stored recipe keeps the name it recorded.
     substitutions: list[dict] = Field(default_factory=list)
+    # A LoRA loader taken out of the graph because this ComfyUI does not have
+    # its file (#1463). A LoRA is optional - the graph runs without it - so it
+    # is bypassed rather than refused the way a missing checkpoint is. Reported
+    # for the same reason a substitution is: a picture made without the
+    # character LoRA the owner expected, with nothing said, is worse than a
+    # refusal, and the pre-flight is where they are told BEFORE the run.
+    bypassed_loras: list[dict] = Field(default_factory=list)
 
 
 class RunPreflight(BaseModel):
@@ -2449,6 +2458,18 @@ def create_router(server) -> APIRouter:
                         swap["class_type"],
                         swap["field"],
                     )
+                if not found:
+                    # After the swap, so a LoRA the shelf still holds under
+                    # another name is loaded rather than dropped, and before
+                    # `judge`, so the graph that is judged is the graph that
+                    # will be submitted and the loaders that are gone are not
+                    # reported as missing models. Skipped when `_apply_loras`
+                    # has already refused: the run is not happening, and
+                    # reporting a bypass beside a refusal says a run went ahead
+                    # without a LoRA when none went ahead at all.
+                    group.bypassed_loras = run_service.bypass_missing_loras(
+                        graph, object_info
+                    )
 
             judged, _preflight = run_service.judge(
                 graph,
@@ -2528,7 +2549,10 @@ def create_router(server) -> APIRouter:
             "no_lora_loader, pixlstash_nodes, no_save_node, no_runnable_source. "
             "A group runs when its reasons are empty - or when the only ones "
             "left are an uninspectable ComfyUI the body said allow_unchecked "
-            "to. A body that cannot be interpreted against the card answers "
+            "to. A LoRA this ComfyUI does not have is NOT among them: its "
+            "loader is taken out of the graph and named in bypassed_loras, "
+            "which is a fact about the run rather than a reason against it. A "
+            "body that cannot be interpreted against the card answers "
             "400/404/422 here exactly as it does on the run, so the two never "
             "disagree."
         ),

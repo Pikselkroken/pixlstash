@@ -627,9 +627,23 @@ Six rules the client must not re-derive:
    `no_lora_loader`, `pixlstash_nodes`, `no_save_node`, `no_runnable_source`.
    A code and never a sentence: one batch mixes sources, and a panel grouping
    "these four are missing the same model" cannot do it from prose.
+   **Two group fields are facts rather than refusals** and must not be read as
+   reasons: `substitutions`, and `bypassed_loras: [{file, folder, node_id,
+   class_type, field}]`. Both say what this run will do differently from what
+   the graph says, on the pre-flight and on the run alike.
 3. **A missing model blocks the whole batch**, mixed or not, and so does an
    unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
    submitted — including the groups whose own `reasons` are empty.
+   **A missing LoRA is the exception, and it is not reported as a missing model
+   at all** (#1463). A LoRA is optional: its loader is taken out of the graph
+   (its consumers rewired to its own inputs, ComfyUI's own bypass) and the run
+   goes ahead without the adapter, so nothing blocks and the file is named in
+   `bypassed_loras` instead. Everything else — a checkpoint, a VAE, a text
+   encoder, a ControlNet — still blocks, because the graph cannot run without
+   it. Two cases keep their refusal: a **stacker** holding other LoRAs that
+   *are* installed, where taking the node out would drop those too, and a
+   loader nothing can be rewired around. A LoRA the *request* asked to add is
+   also not bypassed — the owner asked for that one by name.
 4. **A new run is NOT stacked with the picture it came from** unless the body
    says `stack: true`. This is where it differs from the retired
    `POST /comfyui/run_recipe` (#1410), which stacked by default: that replayed

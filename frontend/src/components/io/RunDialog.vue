@@ -293,12 +293,12 @@
              across every group, so two groups refusing for the same reason
              would collide on the code alone. -->
         <div
-          v-if="reasons.length"
+          v-if="runNotes.length"
           class="rund-f rund-f--4 rund-reasons"
           role="alert"
         >
         <RunReasonNotice
-          v-for="(reason, index) in reasons"
+          v-for="(reason, index) in runNotes"
           :key="`${index}:${reason.code}`"
           :reason="reason"
           :busy="preflighting"
@@ -396,7 +396,7 @@ import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { errorMessage } from "../../utils/apiError";
-import { reasonsBlock } from "../../utils/runReasons";
+import { bypassNotice, reasonsBlock } from "../../utils/runReasons";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -457,6 +457,14 @@ const recipe = ref(null);
 const cards = ref([]);
 const adapters = ref([]);
 const reasons = ref([]);
+/**
+ * What this run WILL do differently, which is not a reason it would not run.
+ *
+ * Kept apart from `reasons` because `reasonsBlock` reads that list: a bypassed
+ * LoRA drawn as a refusal would block the very run the server is willing to
+ * make. They are concatenated for display and nowhere else.
+ */
+const bypassed = ref([]);
 const activeKey = ref("");
 /** address -> the label it had on the card it was edited on. */
 const editedLabels = reactive({});
@@ -833,6 +841,8 @@ const runBlocker = computed(() => {
   return "";
 });
 const canRun = computed(() => !runBlocker.value && !submitting.value);
+/** One list on screen: the refusals first, then what the run will do anyway. */
+const runNotes = computed(() => [...reasons.value, ...bypassed.value]);
 /**
  * The button's number, from the server where it has answered.
  *
@@ -1072,6 +1082,7 @@ async function runPreflight(token = loadToken) {
   const mine = () => token === loadToken;
   if (!activeKey.value) {
     reasons.value = [];
+    bypassed.value = [];
     return;
   }
   preflighting.value = true;
@@ -1080,6 +1091,7 @@ async function runPreflight(token = loadToken) {
     const answer = await preflightWorkflowRun(runBody());
     if (!mine()) return;
     reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
+    bypassed.value = (answer?.groups || []).flatMap(bypassNotice);
     plannedRuns.value = Number(answer?.runs) || 0;
   } catch (err) {
     // The route answers 400/404/422 here exactly as it does on the run, "so
@@ -1089,6 +1101,7 @@ async function runPreflight(token = loadToken) {
     // the button stays live and the run itself answers.
     if (!mine()) return;
     reasons.value = [];
+    bypassed.value = [];
     const status = err?.response?.status;
     if (status >= 400 && status < 500) {
       preflightError.value = errorMessage(err, "This run would be refused.");

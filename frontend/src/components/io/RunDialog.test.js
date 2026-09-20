@@ -293,6 +293,38 @@ describe("a refusal the popup offers to fix", () => {
     expect(wrapper.vm.canRun).toBe(true);
   });
 
+  it("names a bypassed LoRA without blocking the run it is about (#1463)", async () => {
+    // The whole point: the server WILL run this, so the notice must say so
+    // before the run rather than leaving the owner to notice the character
+    // LoRA was missing from the picture afterwards - and must not disable the
+    // button, which would put the refusal back by another route.
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 1,
+      groups: [
+        {
+          workflow_key: KEY,
+          reasons: [],
+          bypassed_loras: [{ file: "character.safetensors", folder: "loras" }],
+        },
+      ],
+    });
+
+    const wrapper = await mountRun();
+
+    expect(wrapper.vm.reasons).toEqual([]);
+    expect(wrapper.vm.canRun).toBe(true);
+    // `RunReasonNotice` is stubbed here; what it makes of this is its own
+    // test. What THIS one owns is that the notice reaches the list the popup
+    // draws while staying out of the one `reasonsBlock` reads.
+    expect(wrapper.vm.runNotes).toEqual([
+      {
+        code: "loras_bypassed",
+        models: [{ file: "character.safetensors", folder: "loras" }],
+      },
+    ]);
+  });
+
   it("shows a pre-flight 4xx instead of waiting for the run to say it", async () => {
     // The route answers 400/404/422 on the dry run exactly as on the run, "so
     // the two never disagree". Swallowing it means the owner finds out by

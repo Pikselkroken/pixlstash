@@ -2844,6 +2844,54 @@ so `POST /workflows/run/preflight` and `POST /workflows/run` can never disagree.
   pre-flight and submit; the card run path is what "run it through PixlStash"
   means for a workflow.
 
+#### A missing LoRA bypasses its loader rather than refusing the run (#1463)
+
+`bypass_missing_loras`
+([`services/workflow_run_service.py`](../pixlstash/services/workflow_run_service.py))
+and `bypass_node`
+([`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py))
+are the substitution above's neighbour and its last resort: where no copy of the
+file can be found at all, a **LoRA** is simply left out and the run happens
+anyway. Wired into `_plan` at one site, between the swap and `judge`.
+
+- **Because a LoRA is optional and nothing else in the graph is.** Installing a
+  checkpoint is a trip away from the keyboard and the graph cannot run without
+  one, so it blocks the batch and that is the kind answer. A LoRA the graph can
+  run without is not, and one absent adapter on one card used to refuse a whole
+  mixed selection. The distinction is `model_folder`'s existing answer — the
+  entry's folder is `loras` — so no new plumbing decides it.
+- **Relaxing the refusal alone would not have worked.** A graph still naming an
+  absent file is one ComfyUI's own validation refuses, so the loader has to
+  leave the chain: `bypass_node` is ComfyUI's bypass (a node set to mode 4) on
+  the API graph, each output answered by the node's **first input of the same
+  type**, typed from `object_info` for the same reason `plan_lora_insertion` is.
+  It is that function's inverse, and it rewires nothing until every consumer has
+  been checked — a graph half rewired around a node still in it is worse than
+  one that refused.
+- **Two loaders keep their refusal, and both are the honest answer.** A
+  **stacker** naming more than one LoRA of which one is gone stays, because
+  taking the node out would drop the adapters that *are* installed; and a loader
+  something reads an output of that no input of that type can stand in for stays,
+  because rewiring it would leave that consumer wired to nothing. Both are logged
+  with the file that could not be found.
+- **Before `judge`, so the graph judged is the graph submitted.** The bypassed
+  loader is gone by the time the pre-flight runs again, so it is not reported as
+  a missing model the owner would go looking for; what is left in
+  `missing_models` is what genuinely blocks. It is skipped when `_apply_loras`
+  has already refused: that run is not happening, and reporting a bypass beside a
+  refusal would describe a run nobody made.
+- **A LoRA the REQUEST asked to add is never bypassed.** `_apply_loras` reports
+  its own `missing_models` for an adapter it cannot place, which is a refusal:
+  the owner asked for that LoRA by name, and running without it silently would
+  answer a different question. The bypass is only for the loaders the stored
+  graph carries.
+- **Never silent.** Each one is reported on the group as `bypassed_loras`
+  (`{file, folder, node_id, class_type, field}`) on the pre-flight and on the run
+  alike, and logged — the rule the substitution above follows, for the same
+  reason. The Run popup draws it *before* the run: a picture generated without
+  the character LoRA the owner expected, with nothing said, is worse than a
+  refusal.
+
 #### What a delete leaves behind: companions (#1314)
 
 `POST /api/v1/models/companions` answers the question in front of Delete that

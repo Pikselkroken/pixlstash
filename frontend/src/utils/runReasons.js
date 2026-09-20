@@ -8,12 +8,28 @@
 //
 // `fix` names an action the popup offers; `null` means the sentence is all
 // there is to say and a help link stands beside it.
+//
+// Not everything drawn here is a refusal: `blocking: false` is a fact about the
+// run that IS about to happen (a bypassed LoRA, #1463), which the same notice
+// draws in the warning hue and without the "can't run" lead.
 
 /** ComfyUI never answered, so nothing at all is known about the graph. */
 export const UNCHECKED_CODES = ["comfyui_unreachable", "comfyui_not_configured"];
 
 /** Installing a file is a trip away from the keyboard, so it stops the batch. */
 export const BLOCKS_BATCH = "missing_models";
+
+/**
+ * Not a refusal: a LoRA loader the server took out of the graph (#1463).
+ *
+ * A LoRA is optional, so a missing one is bypassed and the run happens without
+ * it, where a missing checkpoint still blocks. It has no reason code of its own
+ * because it is not a reason — `RunGroup.bypassed_loras` carries it, beside
+ * `substitutions`. `bypassNotice` turns it into the reason shape so it can be
+ * drawn by the same notice the refusals use, in the one place the owner is
+ * already reading why this run is not quite what the card says.
+ */
+export const LORAS_BYPASSED = "loras_bypassed";
 
 /** One value per `fix`, so a caller switches on a constant and not on prose. */
 export const FIX_SETTINGS = "settings";
@@ -38,21 +54,33 @@ function names(list, key) {
 }
 
 /**
- * One refusal, read.
+ * One refusal, read - or one notice, when `blocking` comes back false.
  *
  * @param {{code: string}} reason - a group's reason, code plus its payload.
- * @returns {{code: string, text: string, fix: ?string, files: Array<Object>}}
+ * @returns {{code: string, text: string, fix: ?string, files: Array<Object>,
+ *   blocking: boolean, retry: boolean}}
  */
 export function readReason(reason) {
   const code = String(reason?.code || "");
-  const read = (text, fix = null, files = []) => ({
+  const read = (text, fix = null, files = [], blocking = true) => ({
     code,
     text,
     fix,
     files,
+    blocking,
     retry: RETRYABLE_CODES.includes(code),
   });
   switch (code) {
+    case LORAS_BYPASSED: {
+      const files = (reason.models || []).filter(Boolean);
+      const count = files.length;
+      return read(
+        `${count === 1 ? "A LoRA this workflow uses is" : `${count} LoRAs this workflow uses are`} not on this ComfyUI, so ${count === 1 ? "its loader is" : "their loaders are"} skipped and the run goes ahead without ${count === 1 ? "it" : "them"}. The result will look different.`,
+        null,
+        files,
+        false,
+      );
+    }
     case "comfyui_not_configured":
       return read(
         "PixlStash has no ComfyUI address to run this on.",
@@ -126,4 +154,20 @@ export function reasonsBlock(reasons, { allowUnchecked = false } = {}) {
     const code = String(reason?.code || "");
     return !(allowUnchecked && UNCHECKED_CODES.includes(code));
   });
+}
+
+/**
+ * The bypassed LoRAs of one pre-flight group, in the reason shape.
+ *
+ * Kept OUT of `reasons` on purpose: `reasons` empty is the one thing that means
+ * "this would run", on both sides of the wire, and a notice that is not a
+ * refusal must not make a runnable group look blocked. This only reaches the
+ * list a popup draws.
+ *
+ * @param {{bypassed_loras?: Array<Object>}} group
+ * @returns {Array<Object>} zero or one entry, so a caller can spread it.
+ */
+export function bypassNotice(group) {
+  const models = (group?.bypassed_loras || []).filter(Boolean);
+  return models.length ? [{ code: LORAS_BYPASSED, models }] : [];
 }

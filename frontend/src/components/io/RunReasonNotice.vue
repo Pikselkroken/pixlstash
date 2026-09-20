@@ -2,11 +2,16 @@
   <!-- No `role` of its own: several of these render at once for a mixed batch,
        and five simultaneous alerts is five interruptions for one fact. The
        dialogs wrap the list in a single live region instead. -->
-  <div class="rrn">
-    <v-icon class="rrn-glyph" size="18">mdi-alert-circle-outline</v-icon>
+  <div class="rrn" :class="{ 'rrn--notice': !read.blocking }">
+    <v-icon class="rrn-glyph" size="18">
+      {{ read.blocking ? "mdi-alert-circle-outline" : "mdi-alert-outline" }}
+    </v-icon>
     <div class="rrn-body">
       <p class="rrn-text">
-        <b v-if="subject">{{ subject }} can't run.</b>
+        <!-- Only a refusal gets the lead: "can't run" over a run that IS
+             about to happen would be the opposite of what the notice says. -->
+        <b v-if="subject && read.blocking">{{ subject }} can't run.</b>
+        <b v-else-if="subject">{{ subject }}:</b>
         {{ read.text }}
       </p>
       <ul v-if="read.files.length" class="rrn-files">
@@ -62,6 +67,11 @@
  * The notice surface's error shape: a `--rail-w` rail in `--surface-error`
  * down the left edge, the glyph in the same hue, and the sentence left as
  * ordinary text (docs/design/notice-surface.md).
+ *
+ * The same shape in `--surface-warning` for an entry that is NOT a refusal
+ * (#1463: a LoRA this ComfyUI does not have, whose loader the run leaves out).
+ * Two hues rather than two components, because the owner reads one list and a
+ * second surface would only make them work out which list to trust.
  */
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
@@ -74,7 +84,10 @@ import {
 import AppButton from "../widgets/AppButton.vue";
 
 const props = defineProps({
-  /** One entry of a pre-flight group's `reasons`: a code plus its payload. */
+  /**
+   * One entry of a pre-flight group's `reasons`, or the notice
+   * `runReasons.bypassNotice` builds: a code plus its payload.
+   */
   reason: { type: Object, required: true },
   /** Which card this is about; omitted when there is only the one. */
   subject: { type: String, default: "" },
@@ -104,8 +117,16 @@ const hasAction = computed(
   background: rgba(var(--v-theme-on-surface), 0.04);
 }
 
+.rrn--notice {
+  border-left-color: rgb(var(--v-theme-surface-warning));
+}
+
 .rrn-glyph {
   color: rgb(var(--v-theme-surface-error));
+}
+
+.rrn--notice .rrn-glyph {
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .rrn-body {
