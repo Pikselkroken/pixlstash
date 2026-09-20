@@ -524,3 +524,36 @@ def test_the_finder_probe_reads_the_partial_index(server):
     )
     assert "ix_picture_ocr_unread" in details, details
     assert "TEMP B-TREE" not in details, details
+
+
+def test_reading_waits_for_scoring_only_and_runs_with_captioning_off(server, pictures):
+    """Reading is neither queued behind captioning nor switched off with it.
+
+    Both together stalled the sweep for good: the planner holds a finder until
+    every finder it depends on reports no work left, so `DESCRIPTION` blocked
+    reading while any picture was uncaptioned, and switching captioning off to
+    clear that closed the guard instead.
+    """
+    from pixlstash.tasks.missing_ocr_finder import MissingOcrFinder
+    from pixlstash.tasks.task_type import TaskType
+
+    assert (
+        TaskType.DESCRIPTION
+        not in MissingOcrFinder(
+            server.vault.db, engine_getter=lambda: None
+        ).depends_on()
+    )
+
+    _set_files(server, {pictures["unread"]: "/home/me/unread.png"})
+    captioning_off = SimpleNamespace(tagger_settings={"active_description_plugin": ""})
+    finder = MissingOcrFinder(server.vault.db, engine_getter=lambda: captioning_off)
+
+    task = finder.find_task()
+    assert task is not None
+    assert task.params["picture_ids"] == [pictures["unread"]]
+
+    # No engine is the one thing that does stop it: the task needs one to read.
+    assert (
+        MissingOcrFinder(server.vault.db, engine_getter=lambda: None).find_task()
+        is None
+    )
