@@ -16,6 +16,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mount } from "@vue/test-utils";
+import { generatedMark } from "../../utils/modelShelf";
 import { createPinia, setActivePinia } from "pinia";
 
 // ⓘ carries *Show all N pictures* (F7), so the card now reaches the filter
@@ -531,6 +532,78 @@ describe("WorkflowCard", () => {
         "true",
       );
     }
+  });
+
+  // `base_model` and `base_model_folded` travel the wire so a model takes the
+  // SAME colour on a card as on the shelf. Both were unobserved by this suite
+  // until #1483 - every fixture left them null and nothing asserted a mark's
+  // colour, so deleting either line from `coverMarks` kept it green. These
+  // assert identity between renders rather than a literal colour, because the
+  // token is `hsl()` and jsdom reports it back as `rgb()`.
+  const colourOf = (models) =>
+    mountCard({ ...FILE_ONLY, key: `w-${Math.random()}`, models })
+      .find(".wf-card__mark .mmark-initials")
+      .attributes("style");
+  const CHECKPOINT = { kind: "checkpoint", title: "Borrowed Light" };
+
+  it("colours a cover mark by the base model, not by the file name", () => {
+    const one = colourOf([
+      { ...CHECKPOINT, name: "a.safetensors", base_model_folded: "flux.1-dev" },
+    ]);
+    const other = colourOf([
+      { ...CHECKPOINT, name: "b.safetensors", base_model_folded: "flux.1-dev" },
+    ]);
+    const different = colourOf([
+      { ...CHECKPOINT, name: "a.safetensors", base_model_folded: "sdxl-1.0" },
+    ]);
+    // Same base model, different files: one colour.
+    expect(one).toBe(other);
+    // Same file, different base model: not that colour.
+    expect(one).not.toBe(different);
+  });
+
+  it("prefers the folded spelling, so one model is one colour everywhere", () => {
+    // Why BOTH fields travel rather than one: `baseModelKey` folds to the
+    // canonical spelling first, and a card keying on the raw one would colour
+    // the same model differently from the shelf.
+    const folded = colourOf([
+      {
+        ...CHECKPOINT,
+        name: "a.safetensors",
+        base_model: "Flux.1 D",
+        base_model_folded: "flux.1-dev",
+      },
+    ]);
+    const rawOnly = colourOf([
+      { ...CHECKPOINT, name: "a.safetensors", base_model: "Flux.1 D" },
+    ]);
+    expect(folded).not.toBe(rawOnly);
+  });
+
+  it("still reads the raw spelling when the shelf folded nothing", () => {
+    // The `base_model` line of the mapping, on its own: a model the fold
+    // table does not know still colours by its base model rather than by its
+    // file name.
+    const raw = colourOf([
+      { ...CHECKPOINT, name: "a.safetensors", base_model: "Flux.1 D" },
+    ]);
+    const none = colourOf([{ ...CHECKPOINT, name: "a.safetensors" }]);
+    expect(raw).not.toBe(none);
+  });
+
+  it("falls back to the file name when the shelf has no title for it", () => {
+    // `filename` is the third line of the same mapping and had no observer
+    // either: a model the shelf cannot name draws its initials off the file.
+    const mark = mountCard({
+      ...FILE_ONLY,
+      key: "w-untitled",
+      models: [
+        { name: "quiet_river_v2.safetensors", kind: "checkpoint", title: null },
+      ],
+    }).find(".wf-card__mark .mmark-initials");
+    expect(mark.text()).toBe(
+      generatedMark({ filename: "quiet_river_v2.safetensors" }).initials,
+    );
   });
 
   it("covers a card with no recipe with the models its file names", () => {

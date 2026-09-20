@@ -733,3 +733,56 @@ def test_replacing_a_file_moves_it_to_the_new_card(hub):
     assert len(rows) == 1
     assert rows[0]["structural_hash"] == second.structural_hash
     assert rows[0]["workflow_key"] == card_of(hub, second.structural_hash)
+
+
+def test_a_workflow_file_past_the_cap_is_refused_by_the_loader(tmp_path, monkeypatch):
+    """The size cap lives on the loader, so every caller gets it (#1483).
+
+    It guarded one of ten `_load_workflow_json` call sites when it was added -
+    the grid's per-card read - while the sibling that reads the same watched
+    folder on every workflow-list and menu open had none. Asserted on the
+    loader rather than on a route so it holds for all ten.
+
+    The cap is monkeypatched rather than written to: a real 32 MB file would
+    be a 32 MB write on every run of this suite for one branch.
+    """
+    from pixlstash.routes import comfyui as comfyui_routes
+
+    path = tmp_path / "big.json"
+    path.write_text(json.dumps({"nodes": []}), encoding="utf-8")
+
+    # Reads fine as it is.
+    assert comfyui_routes._load_workflow_json(str(path)) == {"nodes": []}
+
+    monkeypatch.setattr(comfyui_routes, "MAX_WORKFLOW_FILE_BYTES", 4)
+    with pytest.raises(comfyui_routes.WorkflowFileTooLarge):
+        comfyui_routes._load_workflow_json(str(path))
+
+
+def test_a_card_whose_file_is_past_the_cap_is_described_with_no_models(
+    tmp_path, monkeypatch, caplog
+):
+    """And the refusal reaches the card as "no models", not as a 500.
+
+    `WorkflowFileTooLarge` is a `ValueError` precisely so the callers that
+    already handle one from `json.load` treat it the same way - the document
+    did not read - rather than each needing to learn a new exception.
+    """
+    from pixlstash.routes import comfyui as comfyui_routes
+    from pixlstash.routes import workflows as workflow_routes
+
+    path = tmp_path / "card.json"
+    path.write_text(json.dumps({"nodes": []}), encoding="utf-8")
+    stat = path.stat()
+
+    monkeypatch.setattr(comfyui_routes, "MAX_WORKFLOW_FILE_BYTES", 4)
+    workflow_routes._file_model_widgets.cache_clear()
+    with caplog.at_level(logging.WARNING):
+        assert (
+            workflow_routes._file_model_widgets(
+                str(path), stat.st_mtime_ns, stat.st_size
+            )
+            == ()
+        )
+    assert "will not load" in caplog.text
+    workflow_routes._file_model_widgets.cache_clear()

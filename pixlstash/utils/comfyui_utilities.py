@@ -8,6 +8,7 @@ picture tagger when building text embeddings from ComfyUI generation data.
 
 import json
 import math
+from functools import lru_cache
 from typing import Any
 
 from pixlstash.pixl_logging import get_logger
@@ -524,6 +525,28 @@ _NAME_FIRST_CLASSES = _CHECKPOINT_CLASSES | _UNET_CLASSES | _LORA_CLASSES
 _NOT_A_MODEL_WIDGET = frozenset({"config_name"})
 
 
+@lru_cache(maxsize=1)
+def _base_model_widgets() -> tuple[str, ...]:
+    """Every widget that names a BASE MODEL, in a fixed order.
+
+    Read in addition to the loader's own widgets because
+    ``CHECKPOINT_WIDGETS`` - not a list of loader classes - is where "what
+    counts as a base model" is decided. A class list cannot answer for a node
+    it has never heard of, and two of these widgets reach a card through
+    PixlStash's own ComfyUI node (``checkpoint_id``) and through Diffusers,
+    neither of which the pre-flight map names.
+
+    **Derived, never copied**, for the reason ``BASE_MODEL_KINDS`` is derived:
+    a sixth widget added to that set has to reach this the same day. The
+    import is local only because ``workflow_identity`` reaches back into this
+    module through ``workflow_io`` -> ``comfyui_service``, so a top-level one
+    is a cycle - the single case CLAUDE.md sanctions a local import for.
+    """
+    from pixlstash.services.workflow_identity import CHECKPOINT_WIDGETS
+
+    return tuple(sorted(CHECKPOINT_WIDGETS))
+
+
 def _model_widgets_of(class_type: str) -> tuple[str, ...]:
     """Every widget of this loader that holds a model file name."""
     return tuple(
@@ -580,17 +603,21 @@ def _loaded_model_widgets_ui(workflow: dict) -> list[tuple[str, str]]:
                 continue
             class_type = node.get("type", "")
             widgets = _model_widgets_of(class_type)
-            if not widgets:
-                continue
             named = [(widget, _get_widget_value_ui(node, widget)) for widget in widgets]
             if (
-                all(value is None for _, value in named)
+                widgets
+                and all(value is None for _, value in named)
                 and class_type in _NAME_FIRST_CLASSES
             ):
                 # No input declared the widget, so the array is bare and the
                 # model name is slot 0 - true of these three families only.
                 values = node.get("widgets_values") or []
                 named = [(widgets[0], values[0] if values else None)]
+            named.extend(
+                (widget, _get_widget_value_ui(node, widget))
+                for widget in _base_model_widgets()
+                if widget not in widgets
+            )
             for widget, value in named:
                 if isinstance(value, str) and value:
                     found.append((widget, value))
@@ -603,7 +630,11 @@ def _loaded_model_widgets_api(workflow: dict) -> list[tuple[str, str]]:
         if not isinstance(node, dict):
             continue
         inputs = node.get("inputs") or {}
-        for widget in _model_widgets_of(node.get("class_type", "")):
+        widgets = _model_widgets_of(node.get("class_type", ""))
+        for widget in (
+            *widgets,
+            *(w for w in _base_model_widgets() if w not in widgets),
+        ):
             value = inputs.get(widget)
             if isinstance(value, str) and value:
                 found.append((widget, value))

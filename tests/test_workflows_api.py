@@ -76,7 +76,7 @@ import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
 from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
-from pixlstash.services.workflow_card_service import SlotModel, model_titles
+from pixlstash.services.workflow_card_service import SlotModel, model_marks
 from pixlstash.services.workflow_identity import (
     FACE_DETAILER,
     UPSCALE,
@@ -839,6 +839,19 @@ def _bearer(server, token: str) -> TestClient:
 # ===========================================================================
 # Declarations — the registry entry is the route's only authorization
 # ===========================================================================
+
+
+def _titles(hub, names):
+    """``model_marks`` narrowed to the title.
+
+    Was ``model_titles`` in the service until #1483: a public function with no
+    production caller, kept alive by these tests alone. The narrowing it did
+    is one line and belongs to the one caller that wants it - here - while the
+    rule itself stays stated once, in ``model_marks``.
+    """
+    return {
+        name: mark.title for name, mark in model_marks(hub, names).items() if mark.title
+    }
 
 
 def test_the_workflow_scan_records_instances_for_the_open_library(workflow_env):
@@ -3438,7 +3451,7 @@ def test_a_card_says_the_post_processing_it_carries_and_when_it_cannot(
 def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
     workflow_env,
 ):
-    """`model_titles` over filename, digest and shelf id, and the ambiguity.
+    """the title rule over filename, digest and shelf id, and the ambiguity.
 
     A card's slot name is whichever of those three `structural_widget_value`
     kept, and the card cannot say which - so a lookup that guessed one column
@@ -3449,7 +3462,7 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
         "SELECT id, sha256 FROM model WHERE filename = ?", (_SHELF_FILENAME,)
     )
     # All three name the same model, so all three resolve to the same title.
-    found = model_titles(hub, [_SHELF_FILENAME, row["sha256"], str(row["id"])])
+    found = _titles(hub, [_SHELF_FILENAME, row["sha256"], str(row["id"])])
     assert found == {
         _SHELF_FILENAME: _SHELF_TITLE,
         row["sha256"]: _SHELF_TITLE,
@@ -3459,14 +3472,14 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
     # rather than the digest. `structural_widget_value` keeps 10 and 12 hex
     # characters as readily as 64, so a lookup matching only the long form
     # leaves every A1111-sourced card wearing a raw hex blob for a name.
-    assert model_titles(hub, [row["sha256"][:10]]) == {row["sha256"][:10]: _SHELF_TITLE}
-    assert model_titles(hub, [row["sha256"][:12]]) == {row["sha256"][:12]: _SHELF_TITLE}
+    assert _titles(hub, [row["sha256"][:10]]) == {row["sha256"][:10]: _SHELF_TITLE}
+    assert _titles(hub, [row["sha256"][:12]]) == {row["sha256"][:12]: _SHELF_TITLE}
     # A model the shelf has never scanned has no entry, which is how a card
     # keeps its filename stem rather than being renamed after something else.
-    assert model_titles(hub, ["add_detail.safetensors"]) == {}
-    assert model_titles(hub, []) == {}
+    assert _titles(hub, ["add_detail.safetensors"]) == {}
+    assert _titles(hub, []) == {}
     # A digest names only the model that carries it, never the row beside it.
-    assert model_titles(hub, [_h("nothing-on-this-shelf")]) == {}
+    assert _titles(hub, [_h("nothing-on-this-shelf")]) == {}
 
     # The rest mutates the shelf, which this module shares: the autouse reset
     # deletes the seeded row BY FILENAME, so a renamed one survives it and the
@@ -3482,7 +3495,7 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
                 "UPDATE model SET filename = 'RealVisXL.safetensors' WHERE id = ?",
                 (row["id"],),
             )
-        assert model_titles(hub, [_SHELF_FILENAME]) == {_SHELF_FILENAME: _SHELF_TITLE}
+        assert _titles(hub, [_SHELF_FILENAME]) == {_SHELF_FILENAME: _SHELF_TITLE}
 
         # **A SECOND COPY under a different spelling resolves too.**
         # `model.filename` is frozen at first sight while `model_file` holds a
@@ -3498,7 +3511,7 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
                 "VALUES (?, ?, 'SDXL/RealVisXL_v5.0.safetensors', 'present')",
                 (row["id"], folder),
             )
-        assert model_titles(hub, ["realvisxl_v5.0.safetensors"]) == {
+        assert _titles(hub, ["realvisxl_v5.0.safetensors"]) == {
             "realvisxl_v5.0.safetensors": _SHELF_TITLE
         }
 
@@ -3512,7 +3525,7 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
                 "'Something Else', 'scanned')",
                 (second,),
             )
-        assert model_titles(hub, [_SHELF_FILENAME]) == {}
+        assert _titles(hub, [_SHELF_FILENAME]) == {}
         # **An UNNAMED rival is an ambiguity too, and this is the one a filter
         # on `display_name` in SQL hides**: the rival never reaches the check,
         # so the named row wins by default and a card using the unnamed file is
@@ -3521,14 +3534,14 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
             conn.execute(
                 "UPDATE model SET display_name = NULL WHERE sha256 = ?", (second,)
             )
-        assert model_titles(hub, [_SHELF_FILENAME]) == {}
+        assert _titles(hub, [_SHELF_FILENAME]) == {}
         # ... while two rows agreeing are not an ambiguity at all.
         with hub.transaction() as conn:
             conn.execute(
                 "UPDATE model SET display_name = ? WHERE sha256 = ?",
                 (_SHELF_TITLE, second),
             )
-        assert model_titles(hub, [_SHELF_FILENAME]) == {_SHELF_FILENAME: _SHELF_TITLE}
+        assert _titles(hub, [_SHELF_FILENAME]) == {_SHELF_FILENAME: _SHELF_TITLE}
     finally:
         with hub.transaction() as conn:
             conn.execute("DELETE FROM model_file WHERE model_id = ?", (row["id"],))
@@ -3880,7 +3893,7 @@ def test_a_file_that_says_nothing_about_its_models_leaves_them_unread(
 def test_the_shelfs_picture_needs_one_candidate_where_its_name_needs_agreement(
     workflow_env,
 ):
-    """`model_marks`' rule beside `model_titles`', which it is not.
+    """`model_marks`' rule beside the narrowed title view, which it is not.
 
     Two shelf rows answering to one basename are two files. They can still
     agree on a name - and then the card may show it - but a thumbnail is a

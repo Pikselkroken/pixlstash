@@ -123,13 +123,23 @@ DEFAULT_SAMPLE = 200
 _SLOT_KINDS = {
     "ckpt_name": "checkpoint",
     "unet_name": "unet",
+    # The other three spellings of a base model: Diffusers' folder, ComfyUI's
+    # newer UNETLoader widget, and PixlStash's own node naming a shelf row.
+    # Mapped rather than left to fall through, because `kind` is spoken aloud.
+    "model_path": "checkpoint",
+    "diffusion_model": "unet",
+    "checkpoint_id": "checkpoint",
     "vae_name": "vae",
     "clip_name": "clip",
     "clip_name1": "clip",
     "clip_name2": "clip",
+    "clip_name3": "clip",
     "model_name": "upscale",
     "style_model_name": "style",
     "control_net_name": "controlnet",
+    "gligen_name": "gligen",
+    "hypernetwork_name": "hypernetwork",
+    "photomaker_model_name": "photomaker",
 }
 
 # The slot kinds that name the BASE MODEL, most preferred first.
@@ -142,14 +152,21 @@ _SLOT_KINDS = {
 # with no edit and nothing to remember.
 #
 # `checkpoint` then `unet` by hand because those two have a real order: a graph
-# carrying both is led by its checkpoint. The rest are alphabetical, which is
-# arbitrary and says so - they are alternative spellings of the same slot and
-# no graph carries two of them.
+# carrying both is led by its checkpoint. Every widget in `CHECKPOINT_WIDGETS`
+# now maps to one of those two - they ARE the two kinds a base model comes in,
+# and the other three widget names are spellings of them - so the derived tail
+# is empty today. It is kept, and deduplicated, because the set is the thing
+# that decides: a sixth widget naming a genuinely new kind appears here on its
+# own, and a sixth that is another spelling correctly adds nothing.
 BASE_MODEL_KINDS = ("checkpoint", "unet") + tuple(
-    sorted(
-        _SLOT_KINDS.get(widget, widget)
-        for widget in CHECKPOINT_WIDGETS - {"ckpt_name", "unet_name"}
+    kind
+    for kind in dict.fromkeys(
+        sorted(
+            _SLOT_KINDS.get(widget, widget)
+            for widget in CHECKPOINT_WIDGETS - {"ckpt_name", "unet_name"}
+        )
     )
+    if kind not in {"checkpoint", "unet"}
 )
 
 _EPOCH = datetime.min
@@ -629,21 +646,6 @@ def read_grid(
     )
 
 
-def model_titles(hub: HubDatabase, names: list[str]) -> dict[str, str]:
-    """``{slot name: model.display_name}`` - what the SHELF calls each model.
-
-    :func:`model_marks` narrowed to the name, for a caller that wants nothing
-    else. **A wrapper and not a second implementation**: the resolution and
-    the ambiguity rule are stated once, there, and two spellings of one rule
-    is how the card's name row and its model row came to disagree in the first
-    place (#1416). Entries whose title the rule refused are dropped, so an
-    absent key still means "this shelf cannot name that file".
-    """
-    return {
-        name: mark.title for name, mark in model_marks(hub, names).items() if mark.title
-    }
-
-
 def _shelf_candidates(
     hub: HubDatabase, names: list[str]
 ) -> tuple[dict[str, set[int]], dict[int, Optional[str]]]:
@@ -706,7 +708,7 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
     """``{slot name: ShelfMark}`` - how the shelf would draw each model.
 
     **The one place the shelf is asked about a card's models**, and therefore
-    where the rule lives; :func:`model_titles` is a narrowing of it.
+    where the rule lives.
 
     A card's stored slot value is one of three things
     (``services.workflow_hash.structural_widget_value``): a lowercased

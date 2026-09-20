@@ -189,13 +189,7 @@ export function lorasUnread(card) {
  * describe different models. That pair is exactly what drifted before (#1416),
  * so it is asserted rather than agreed.
  */
-const BASE_MODEL_KINDS = [
-  "checkpoint",
-  "unet",
-  "checkpoint_id",
-  "diffusion_model",
-  "model_path",
-];
+const BASE_MODEL_KINDS = ["checkpoint", "unet"];
 
 /**
  * The model the card's second row names: its base model.
