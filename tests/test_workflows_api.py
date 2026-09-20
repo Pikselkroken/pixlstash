@@ -3509,6 +3509,12 @@ def test_the_filters_panel_can_ask_for_the_one_offs_and_for_the_hidden(
     assert (with_one_offs["one_offs"], with_one_offs["hidden"]) == (1, 1)
 
     with_hidden = _cards(owner, "?include_hidden=true")
+    # And it says which one it is. A card let back in unmarked is
+    # indistinguishable from one that was never hidden, in the one grid it was
+    # deliberately kept out of; `frontend/src/utils/workflowCard.js` draws the
+    # chip off this field.
+    assert _by_key(with_hidden)[HIDDEN_CARD]["hidden"] is True
+    assert _by_key(with_hidden)[BUSY_CARD]["hidden"] is False
     assert HIDDEN_CARD in _by_key(with_hidden)
     assert BINNED_CARD not in _by_key(with_hidden)
     assert (with_hidden["one_offs"], with_hidden["hidden"]) == (1, 1)

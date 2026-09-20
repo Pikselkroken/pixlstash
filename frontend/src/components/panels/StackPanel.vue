@@ -232,11 +232,14 @@
  * columns are a CSS grid, shared by the header row and the member rows so the
  * two cannot drift.
  *
- * *Unstack all* and the hidden-member count are still not here, and both are
- * blocked on the READ side: `GET /workflows/cards` drops hidden cards BEFORE
- * grouping, so a hidden member is in neither `member_keys` nor the payload at
- * any level. Hide is offered because it is a write the panel can make; Unhide
- * is not, because nothing here can list what was hidden.
+ * *Unstack all* and the hidden-member count are still not here. The read side
+ * no longer blocks them outright: F7's *Show hidden workflows* asks
+ * `GET /workflows/cards` for `include_hidden`, the grouping then runs over the
+ * widened set, and a hidden member arrives in `member_keys` and draws here
+ * wearing the `hidden` fact chip. What is still missing is the COUNT — the
+ * payload says which cards are hidden, never how many a stack is holding back
+ * while the box is unticked — so the header cannot say "2 hidden · Show".
+ * Hide is offered because it is a write the panel can make; Unhide is not.
  */
 import { computed, nextTick, ref } from "vue";
 import { VIcon, VMenu } from "vuetify/components";

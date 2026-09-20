@@ -7,7 +7,13 @@
 // nothing translates between the two and inverts a meaning on the way:
 //
 //   {
-//     key, name, type, type_label, imported,
+//     key, name, type, type_label, imported, hidden,
+//                                       // `hidden` is only ever true when the
+//                                       // grid asked for the hidden cards
+//                                       // (F7's *Show hidden workflows*), and
+//                                       // `factChips` leads the row with it:
+//                                       // unmarked, such a card reads as an
+//                                       // ordinary one.
 //                                       // `type_label` is `type` as ComfyUI
 //                                       // spells it ("Text to Image"); the
 //                                       // name row and the type chip both
@@ -137,8 +143,15 @@ export function loraChips(card) {
  */
 export function factChips(card) {
   const labels = isStack(card)
-    ? (card.differs_by ?? [])
+    ? // **First, and on a stack too.** A hidden card is only ever drawn
+      // because somebody ticked *Show hidden workflows* (F7), and the row
+      // clips to "+N" — a mark that can be clipped away is a card that reads
+      // as an ordinary one in the grid it was deliberately kept out of.
+      [card.hidden ? "hidden" : null, ...(card.differs_by ?? [])].filter(
+        Boolean,
+      )
     : [
+        card.hidden ? "hidden" : null,
         ...(card.differs_by ?? []),
         // The SERVED label, so the chip and a generated name say the type in
         // one vocabulary rather than reading `Text to Image` on row 1 and

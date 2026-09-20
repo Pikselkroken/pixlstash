@@ -344,6 +344,15 @@ class WorkflowCard(BaseModel):
     imported: bool = Field(
         False, description="A workflow file on this machine runs this card."
     )
+    hidden: bool = Field(
+        False,
+        description=(
+            "The owner has hidden this card. Only ever true when the caller "
+            "asked for the hidden ones (`include_hidden`), so a client that "
+            "did not is unaffected - but one that did has to mark them, or "
+            "the checkbox silently mixes them into the grid."
+        ),
+    )
     models: list[WorkflowSlotModel] = Field(default_factory=list)
     loras: list[WorkflowSlotModel] = Field(default_factory=list)
     differs_by: list[str] = Field(default_factory=list)
@@ -937,6 +946,7 @@ def _card(figure, defaults=()) -> WorkflowCard:
         type=figure.card.workflow_type,
         type_label=_TYPE_LABELS.get(figure.card.workflow_type),
         imported=figure.card.imported,
+        hidden=figure.card.hidden,
         models=_slot_models(figure.models),
         loras=_slot_models(figure.loras),
         differs_by=figure.differs_by,
