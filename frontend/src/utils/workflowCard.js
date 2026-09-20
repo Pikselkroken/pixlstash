@@ -39,6 +39,11 @@
 //                                       // smoothed towards the library mean,
 //                                       // so it orders cards against each
 //                                       // other and means nothing alone.
+//     stack_id,                         // the stack this card sits in, or
+//                                       // null. `PUT /workflows/stacks/{id}/
+//                                       // order` is addressed by it and
+//                                       // nothing else on the card derives
+//                                       // it (F2, #1405).
 //     last_used,                        // ISO, or null when the card has no
 //                                       // kept pictures. The *Recently used*
 //                                       // sort; null sorts below every date.

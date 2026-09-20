@@ -1,7 +1,13 @@
 import { computed, onScopeDispose, ref } from "vue";
 import { defineStore } from "pinia";
 
-import { getWorkflowCard, listWorkflowCards } from "../api/workflows";
+import {
+  getWorkflowCard,
+  listWorkflowCards,
+  patchWorkflowCard,
+  reorderStack,
+  unstackWorkflow,
+} from "../api/workflows";
 import { isStack } from "../utils/workflowCard";
 import { onSessionReset } from "../utils/apiClient";
 import { errorMessage } from "../utils/apiError";
@@ -97,6 +103,21 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     if (fetched) return fetched;
     const cover = cards.value.find((entry) => entry.key === key);
     return cover ? [cover] : [];
+  });
+
+  /**
+   * The open stack's id, for the routes addressed by one.
+   *
+   * Read off the COVER card rather than kept alongside `openStackKey`: a
+   * reorder that changes the cover re-fetches the grid, and a copy taken when
+   * the panel opened would then address the stack by an id the new payload no
+   * longer agrees with. Null while the cover has not arrived, which is what
+   * `canReorder` below is for.
+   */
+  const openStackId = computed(() => {
+    const key = openStackKey.value;
+    if (!key) return null;
+    return cards.value.find((entry) => entry.key === key)?.stack_id ?? null;
   });
 
   /** How many cards the open stack HAS, which is not how many have arrived. */
@@ -247,6 +268,120 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     if (loaded.value) fetchCards();
   }
 
+  // ── Writing to a stack (v1.12 F2) ─────────────────────────────────────
+  //
+  // Every write here re-reads the grid rather than patching the store by hand.
+  // A reorder moves the cover, and the cover is what the grid draws, what the
+  // panel is keyed on and what `differs_by` is computed against — three things
+  // the server derives and no client can re-derive from the response, which
+  // only names the new order.
+
+  /**
+   * Re-read the grid after a write, and re-open the panel on `coverKey`.
+   *
+   * `forgetMembers` first, not a hand-cleared `members`: the cached members
+   * are keyed on the cover, and after a reorder that key names a different
+   * card — and the epoch bump it carries is what stops a member read still on
+   * the wire writing the PRE-write members back into the map.
+   */
+  async function refreshAfterWrite(coverKey) {
+    forgetMembers();
+    await fetchCards();
+    if (!coverKey) return;
+    // Re-read rather than trusted: a card that no longer stacks — the last
+    // unstack of a pair, or a hidden cover — must not leave the panel open
+    // over a stack that is not there any more. `openStack` refuses one
+    // anyway; this keeps the panel closed rather than flickering.
+    const cover = cards.value.find((entry) => entry.key === coverKey);
+    if (cover && isStack(cover)) await openStack(coverKey);
+  }
+
+  /**
+   * Set the open stack's member order. `keys[0]` becomes the cover.
+   *
+   * The whole list, always: the route refuses a partial one, deliberately —
+   * a key left out would leave the stack with no record that it had gone. The
+   * server serves no `stack_id` at all for a stack the grid drew only part
+   * of, exactly so this cannot be attempted and refused.
+   *
+   * **Answers whether the order actually changed**, because the callers
+   * announce it: a refusal and a stack with no id both land here, and
+   * announcing "position 2 of 6" over either tells a screen-reader user a row
+   * moved when it did not.
+   */
+  async function reorderMembers(keys) {
+    const stackId = openStackId.value;
+    if (!stackId || keys.length < 2) return false;
+    try {
+      await reorderStack(stackId, keys);
+      await refreshAfterWrite(keys[0]);
+      return true;
+    } catch (err) {
+      console.warn(`[workflows] could not reorder ${stackId}`, err);
+      error.value = errorMessage(err, "Could not reorder this stack.");
+      return false;
+    }
+  }
+
+  /**
+   * Move one member `delta` places. Position 0 is the cover.
+   *
+   * A no-op at either end rather than a wrap: Alt+Up on the cover is a reader
+   * finding the top of the list, not asking for the cover to become the last
+   * member.
+   */
+  function moveMember(key, delta) {
+    const keys = openMembers.value.map((card) => card.key);
+    const at = keys.indexOf(key);
+    const to = at + delta;
+    if (at < 0 || to < 0 || to >= keys.length) return Promise.resolve(false);
+    keys.splice(to, 0, ...keys.splice(at, 1));
+    return reorderMembers(keys);
+  }
+
+  /** Make one member the cover: position 0, the rest in the order they had. */
+  function makeCover(key) {
+    const keys = openMembers.value.map((card) => card.key);
+    if (!keys.includes(key) || keys[0] === key) return Promise.resolve(false);
+    return reorderMembers([key, ...keys.filter((entry) => entry !== key)]);
+  }
+
+  /** Take one member out of the stack; it stands on its own afterwards. */
+  async function unstackMember(key) {
+    const cover = openStackKey.value;
+    try {
+      await unstackWorkflow(key);
+      // The cover leaving makes the next member the cover, and the panel has
+      // to follow it rather than stay keyed on a card that is no longer a
+      // stack. `refreshAfterWrite` closes the panel if nothing is left.
+      const next =
+        key === cover
+          ? (openMembers.value.find((card) => card.key !== key)?.key ?? null)
+          : cover;
+      await refreshAfterWrite(next);
+    } catch (err) {
+      console.warn(`[workflows] could not unstack ${key}`, err);
+      error.value = errorMessage(err, "Could not take this card out.");
+    }
+  }
+
+  /**
+   * Hide one member. It leaves the grid, and the stack it was in with it.
+   *
+   * Nothing is deleted: the `workflow_stack_member` rows stand and the card
+   * still opens on its own URL. The view's subtitle counts it from then on.
+   */
+  async function hideMember(key) {
+    const cover = openStackKey.value;
+    try {
+      await patchWorkflowCard(key, { hidden: true });
+      await refreshAfterWrite(key === cover ? null : cover);
+    } catch (err) {
+      console.warn(`[workflows] could not hide ${key}`, err);
+      error.value = errorMessage(err, "Could not hide this card.");
+    }
+  }
+
   function toggleStack(coverKey) {
     if (openStackKey.value === coverKey) closeStack();
     else openStack(coverKey);
@@ -313,6 +448,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     selectedKeys,
     sortedCards,
     openMembers,
+    openStackId,
     openStackSize,
     fetchCards,
     openStack,
@@ -320,6 +456,11 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     forgetMembers,
     invalidate,
     toggleStack,
+    reorderMembers,
+    moveMember,
+    makeCover,
+    unstackMember,
+    hideMember,
     select,
     selectRange,
     clearSelection,

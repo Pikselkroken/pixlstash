@@ -169,6 +169,7 @@
              name live inside it. -->
           <StackPanel
             v-if="entry.kind === 'member' && entry.memberIndex === 0"
+            ref="panelRef"
             :panel-id="panelId"
             :name="openStackName"
             :members="store.openMembers"
@@ -178,8 +179,13 @@
             :column-index="openColumnIndex"
             :selected-keys="store.selectedKeys"
             :cursor-key="cursorKey"
+            :can-reorder="Boolean(store.openStackId)"
             @close="closePanel"
             @select="(key, event) => onRowClick(memberRowIndex(key), event)"
+            @make-cover="(key) => followMove(key, store.makeCover(key))"
+            @move="(key, delta) => moveMember(key, delta)"
+            @unstack="store.unstackMember"
+            @hide="store.hideMember"
           />
           <div
             v-else-if="entry.kind === 'card'"
@@ -250,6 +256,7 @@ import { VIcon, VMenu } from "vuetify/components";
 import { importWorkflow } from "../../api/comfyui";
 import { listImportFolders } from "../../api/folders";
 import { useFilterStore } from "../../stores/useFilterStore";
+import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import {
   SORT_KEYS,
   SORT_LABELS,
@@ -288,10 +295,14 @@ const emit = defineEmits(["open-settings"]);
 
 const store = useWorkflowsStore();
 const filterStore = useFilterStore();
+const prefs = useWorkflowPrefsStore();
 const router = useRouter();
 const route = useRoute();
 
 const gridEl = ref(null);
+// `v-for`'d, so Vue hands back an array even though only one panel is ever
+// drawn — one stack is open at a time.
+const panelRef = ref(null);
 const fileInput = ref(null);
 const sortMenuOpen = ref(false);
 const columns = ref(1);
@@ -714,11 +725,82 @@ function moveCursor(index) {
   nextTick(() => rowElement(entry)?.focus());
 }
 
+/**
+ * True while the open panel draws its members one per line.
+ *
+ * The flat index space does not change with the view — the member block is
+ * still padded to whole grid rows, so every card AFTER the panel keeps naming
+ * the column it is drawn in. What changes is the STEP: in List a vertical move
+ * inside the block is one member, and stepping by `columns` would walk past
+ * two of every three.
+ */
+const listMembers = computed(
+  () => prefs.stackView === "list" && Boolean(store.openStackKey),
+);
+
+/** Where the first and last member rows sit in the flat list. */
+function memberBounds() {
+  const first = flatRows.value.findIndex((entry) => entry.kind === "member");
+  if (first < 0) return null;
+  let last = first;
+  for (let i = first; i < flatRows.value.length; i += 1) {
+    if (flatRows.value[i].kind === "member") last = i;
+  }
+  return { first, last };
+}
+
+/**
+ * The row a vertical arrow should land on.
+ *
+ * Grid keeps the column, by the whole-row walk `verticalStop` does. List steps
+ * one member at a time inside the panel, and **entering** the panel from the
+ * grid lands on the member nearest the direction of travel: every member is in
+ * the same column there, so "keep your column" has only one answer.
+ */
+function verticalTarget(direction) {
+  const cols = Math.max(1, columns.value);
+  const index = cursorIndex.value;
+  const bounds = listMembers.value ? memberBounds() : null;
+  if (!bounds) return verticalStop(index + direction * cols, cols, direction);
+  if (flatRows.value[index]?.kind === "member") {
+    return firstStop(index + direction, direction);
+  }
+  const target = verticalStop(index + direction * cols, cols, direction);
+  // **Crossed, not landed on.** The block is padded to whole grid rows, so a
+  // two-member stack over four columns leaves holes in two of them — and the
+  // whole-row walk steps straight over the panel and out the other side.
+  // Testing where it came to rest reached the panel from the columns the
+  // members happened to fill and jumped it from the rest, which is a panel
+  // that is keyboard-reachable or not depending on the window's width.
+  if (direction === 1 && index < bounds.first && target >= bounds.first) {
+    return bounds.first;
+  }
+  if (direction === -1 && index > bounds.last && target <= bounds.last) {
+    return bounds.last;
+  }
+  return target;
+}
+
 function onKeyDown(event) {
   // The sort popover owns its own keys, Escape included.
   if (sortMenuOpen.value) return;
   const entry = flatRows.value[cursorIndex.value];
-  const cols = Math.max(1, columns.value);
+  // Alt+Up / Alt+Down MOVE the row rather than travelling to another, and
+  // only inside the panel: the grid's own order is the sort, which is not
+  // something a card can be dragged around in. Checked before the plain
+  // arrows so the modifier is not swallowed by the cursor.
+  if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+    event.preventDefault();
+    // Swallowed whether or not it can act. A write re-reads the grid and
+    // rebuilds every member row, so a HELD Alt+Down arrives while the cursor
+    // is briefly not on a member — and falling through would then walk the
+    // cursor down the grid instead, which is a held key that reorders twice
+    // and then leaves the panel.
+    if (entry?.kind === "member") {
+      moveMember(entry.key, event.key === "ArrowDown" ? 1 : -1);
+    }
+    return;
+  }
   switch (event.key) {
     case "ArrowRight":
       event.preventDefault();
@@ -730,11 +812,11 @@ function onKeyDown(event) {
       return;
     case "ArrowDown":
       event.preventDefault();
-      moveCursor(verticalStop(cursorIndex.value + cols, cols, 1));
+      moveCursor(verticalTarget(1));
       return;
     case "ArrowUp":
       event.preventDefault();
-      moveCursor(verticalStop(cursorIndex.value - cols, cols, -1));
+      moveCursor(verticalTarget(-1));
       return;
     case " ":
       event.preventDefault();
@@ -745,9 +827,16 @@ function onKeyDown(event) {
     case "Enter":
       event.preventDefault();
       // A stack card's Enter opens the panel; anything else opens ⓘ, which is
-      // the card's own button and the only escape hatch every card has.
+      // the card's own button and the only escape hatch every card has —
+      // except a List member row, which draws no card and so has no ⓘ. Its
+      // menu is what the row offers instead.
       if (entry?.kind === "card" && isStack(entry.card)) {
         store.toggleStack(entry.key);
+      } else if (
+        !activeCardButton(".wf-card__info") &&
+        entry?.kind === "member"
+      ) {
+        openMemberMenu(entry.key);
       } else {
         activeCardButton(".wf-card__info")?.click();
       }
@@ -755,11 +844,18 @@ function onKeyDown(event) {
     case "F10":
       if (!event.shiftKey) return;
       event.preventDefault();
-      activeCardButton(".wf-card__info")?.click();
+      // The context-menu keys reach the MEMBER MENU on a member row — the
+      // same menu right-click opens, and the only route to *Unstack* and
+      // *Hide* for somebody not using a pointer: both ⋯ buttons sit at
+      // `tabindex="-1"` because the grid owns Tab. Elsewhere they still open
+      // ⓘ, which is all a top-level card has.
+      if (entry?.kind === "member") openMemberMenu(entry.key);
+      else activeCardButton(".wf-card__info")?.click();
       return;
     case "ContextMenu":
       event.preventDefault();
-      activeCardButton(".wf-card__info")?.click();
+      if (entry?.kind === "member") openMemberMenu(entry.key);
+      else activeCardButton(".wf-card__info")?.click();
       return;
     case "Escape":
       // Innermost first. The popover and the card menu are `VMenu`s: they
@@ -775,6 +871,48 @@ function onKeyDown(event) {
       return;
     default:
   }
+}
+
+/**
+ * Follow a member that has just been reordered, and say where it landed.
+ *
+ * **Every path that moves a member goes through here** — Alt+↑/↓, and the
+ * menu's *Move earlier* / *Move later* / *Make it the cover*, which reach the
+ * same three writes by pointer or by Shift+F10. The write re-reads the grid,
+ * so every member row is torn down and rebuilt and the browser drops the
+ * focus it was holding; the menu's own activator is a pair of coordinates, so
+ * there is no element for it to fall back to. Without this a keyboard reader
+ * choosing *Move later* is left outside the grid, told only that the panel
+ * closed and reopened, and never that the row moved at all.
+ */
+async function followMove(key, write) {
+  const moved = await write;
+  const at = memberRowIndex(key);
+  if (at < 0) return;
+  moveCursor(at);
+  // **Only a move that happened is announced.** A stack with no `stack_id` —
+  // one the grid drew part of — and a refused write both come back here, and
+  // "position 2 of 6" over either tells a reader the row moved when the list
+  // in front of them is unchanged. `store.error` already carries the refusal.
+  if (!moved) return;
+  const position = store.openMembers.findIndex((card) => card.key === key);
+  const member = store.openMembers[position];
+  announcement.value = `${member?.name || "Workflow"}, position ${
+    position + 1
+  } of ${store.openMembers.length}`;
+}
+
+/** Alt+↑/↓, and the menu's two Move items. */
+function moveMember(key, delta) {
+  return followMove(key, store.moveMember(key, delta));
+}
+
+/** Open the open panel's member menu on `key`, anchored on its row. */
+function openMemberMenu(key) {
+  const panel = Array.isArray(panelRef.value)
+    ? panelRef.value[0]
+    : panelRef.value;
+  panel?.openMenuAt(key);
 }
 
 /** One of the cursor card's own `tabindex="-1"` buttons. */

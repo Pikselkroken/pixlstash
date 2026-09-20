@@ -142,3 +142,35 @@ export async function setWorkflowPins(workflowKey, pins) {
 export async function stackWorkflows(keys) {
   return unwrap(apiClient.post("/workflows/stacks", { keys }));
 }
+
+/**
+ * Set a stack's member order; `keys[0]` becomes the cover (v1.12 F2).
+ *
+ * The route refuses anything but a COMPLETE ordered list of what the stack
+ * holds: a key left out would be deleted from the stack with no record that it
+ * left, and a key added is `POST /workflows/stacks`' gesture rather than this
+ * one. So callers reorder the list they already have and send all of it.
+ *
+ * @param {string} stackId — `stack_id` from the card, or `auto:<core hash>`.
+ * @param {Array<string>} keys
+ * @returns {Promise<{stack_id: ?string, keys: Array<string>}>}
+ */
+export async function reorderStack(stackId, keys) {
+  return unwrap(
+    apiClient.put(`/workflows/stacks/${encodeURIComponent(stackId)}/order`, {
+      keys,
+    }),
+  );
+}
+
+/**
+ * Stand one card on its own. Its stack dissolves if that leaves one card.
+ *
+ * @param {string} workflowKey
+ * @returns {Promise<{stack_id: ?string, keys: Array<string>}>}
+ */
+export async function unstackWorkflow(workflowKey) {
+  return unwrap(
+    apiClient.post(`/workflows/${encodeURIComponent(workflowKey)}/unstack`),
+  );
+}

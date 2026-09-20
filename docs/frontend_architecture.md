@@ -1450,14 +1450,14 @@ The uniform workflow card and its two parts. Mounted by `WorkflowsView.vue` (F1a
 - **`selected` is the card's own mark, and it is an overlay.** The shell's wash plus `--selection-ring` (`style.css` rule 3) on a `::after` at `--z-raised`, `pointer-events: none`. It was twice put somewhere it could not be seen: on the grid cell, which `.wf-card`'s opaque `surface` covers entirely, and then on the card itself, where an inset shadow paints under the element's children and the cover's three `<img>`s are children — so the ring ran along the text rows and stopped dead at the thumbnails. `.selection-overlay` in `ImageGrid.css` is the shipped answer for marking something with pictures in it.
 - **A stack** (`stackSize` ≥ 2) adds ▸ before the name and a layered count on the cover; its facts row reads "differs by". ▸ and ⓘ are real `AppButton`s at `tabindex="-1"`: the Workflows grid's roving cursor owns Tab. **The layered count is a button too** (#1402) — it is the mark that says there are cards under this one, so it opens the stack as well — but it stays `aria-hidden` and off the tab order: ▸ is the announced control and a second one saying the same thing is noise, not access.
 - **"+N" is not a control.** The card's `aria-label` (`cardAccessibleName`) carries every chip, saying "workflow LoRA" or "recipe LoRA slot" because the solid/dashed border is not announced, and ratings as "4.8 of 5".
-- **`ChipRow`** measures its chips from a hidden natural-width copy, shows as many as fit (`fitChipCount`, which always keeps one and ellipsizes it rather than showing a bare "+N"), and emits `overflow` with the hidden count (F2's List column is the second consumer).
+- **`ChipRow`** measures its chips from a hidden natural-width copy, shows as many as fit (`fitChipCount`, which always keeps one and ellipsizes it rather than showing a bare "+N"), and emits `overflow` with the hidden count. **Nothing consumes `overflow` yet**: F2's List "Differs by" column mounts `ChipRow` but reads no count from it, because the row's own `aria-label` already carries every chip the line clipped — the event is there for a caller that wants to say so visibly, and until one exists it is unused surface.
 - **The chip is the design's `.uchip`**, not the DS Tag: a control-tier chip with a 1px `border` outline on the `input-background` surface, `--space-2`, `--text-2xs`, the label at full ink, and a muted glyph. F0 first shipped these as `Tag` xs — a 10% wash, muted, unbordered and glyphless — which is the DS component for an image *tag*; a model chip is a different object and the design draws it differently. The app kit corroborates it: `ui_kits/app/unified.css` draws `.chip`, “the shape for every small labelled datum”, as `--input-bg` behind a 1px `--border` with the label at full `--text` — this chip one size up. The workflow card's own spec lives in an artifact neither synced design project holds, so the kit is what a later session can actually check. Three variants, all from the design: a **recipe slot** is dashed and unfilled, a **fact** keeps the outline and drops the fill, and **"+N"** is a fact chip with the count muted.
 - **The glyph separates the three kinds of thing a row can name** — `cube-outline` a model, `layers` a LoRA, `plus` a slot — and says nothing finer, because `checkpointModel` falls back to the first model of *any* kind: a graph with no checkpoint draws the model glyph over its unet, which is what ⓘ already lists and what `cardAccessibleName` already says aloud.
 - **Where the chip is approximated against the design, and why.** `--tag-h-xs` (18px) where it draws 20, rather than a fourth chip height for 2px. `--space-2` for the padding and the icon gap where it draws 6px and 3px: the spacing scale has no 6, and `visual-language.md` §5 names `--space-2` for icon-to-label. The glyph box is 12px with the glyph at the inherited 11px, because `v-icon`'s numeric `size` sets the box, not the font. The glyph is muted by a **colour**, never `opacity`: `--dashed` already mutes the chip's ink, and an opacity over that draws its glyph at 0.7 × 0.7 — 3.10:1 on the light card, which `design-tokens.test.js` cannot catch because it models one application of the token. **In the light theme `input-background` and `surface` are both `#ffffff`**, so fill does not separate a model chip from a fact chip there; the outline is the same on both, so the glyph alone carries it — that is the design's own light palette, and it is the one part of this worth a designer's sign-off, as the dashed chip was before it. The cover badges are deliberately NOT the design's `color-mix(--bg 72%)` + blur: `visual-language.md` §7 *Scrims (badges over imagery)* rules a chip over an arbitrary photo onto `--scrim-photo`, which is the app-wide treatment across nine files.
 - **ⓘ's Differs-by chips are the card's fact chip, spelled a second time.** The popover wraps its chips and a `ChipRow` clips to one line, so it cannot mount one; `ChipRow.test.js` holds the two copies to the same geometry instead, because two blocks that must agree and nothing keeping them so is how they drift.
 - **`InfoPopover`** is the app's first shared popover component (Tooltip and HelpTip are hover tips): a `v-menu` holding a `.tbm` panel with `.tbm-caret--icon-sm-end`, `--stats-panel-w` wide, grouped Models, Differs by, Defaults and the saved-recipe count. The trigger comes from its `activator` slot. **The panel takes focus on open** (`tabindex="-1"` plus a focus call): `VMenu` moves focus only to the first *focusable* child and this panel has none, so without it a screen-reader user hears "expanded" and then nothing from content teleported to the end of `<body>`. `InfoPopover.a11y.test.js` mounts the real `VMenu` to hold that, since the stubbed menu elsewhere is always open and focuses nothing.
 
-#### `WorkflowsView.vue` (`views/`) + `StackPanel.vue` (`panels/`), v1.12 F1a
+#### `WorkflowsView.vue` (`views/`) + `StackPanel.vue` (`panels/`), v1.12 F1a / F2
 
 The Workflows grid, **on `/workflows`** (`WORKFLOW_ROUTES`,
 `router/routeNames.js`) since F1b (#1404) retired the shelf and its temporary
@@ -1590,14 +1590,125 @@ watcher the model shelf uses. See §9.1b for the destination itself.
   (global)** so the picture grid and this panel wear one chip rather than two
   copies. `ImageGrid.css` still owns where it sits in a picture tile's
   stacking order.
-- **Not here, and why.** The Grid|List switch is F2's. *Unstack all* and the
-  panel header's **"N hidden · Show"** are blocked on the READ side, not the
-  write side: B4 (#1396) shipped `POST /workflows/stacks/{id}/unstack` and
-  `PATCH /workflows/{key}`'s `hidden`, but `GET /workflows/cards` serves no
-  `stack_id` for the first to be addressed by, and it drops hidden cards
-  BEFORE grouping, so a **stack's** hidden-member count is not in the payload
-  at any level. Each wants one more field on the card; until then they are
-  left out rather than drawn as controls that do nothing. The **grid-level** counts are a different number and are shown: the
+- **Grid | List is one switch for every stack** (F2, #1405), a `Segmented` in
+  the panel header backed by `useWorkflowPrefsStore` — `localStorage` inside a
+  try/catch, `useGenStackPrefsStore`'s shape, and a preference that cannot be
+  written is one that does not persist rather than a screen that fails to
+  draw. Remembered for all stacks and not per stack, because the switch answers
+  "how do I read a stack" rather than anything about the one in front of you.
+  The view owns the selection and the cursor, so switching keeps both and moves
+  nothing in the grid.
+- **List is NOT a `<table>`.** The panel already sits inside the view's
+  `treegrid`; a table would nest a second grid structure in it and break the
+  rowgroup → row → gridcell chain `aria-owns` depends on. The rows are the same
+  `aria-level="2"` rows Grid draws, with six `role="gridcell"` columns —
+  workflow (a 56×36 thumbnail trio at `--space-1` / `--radius-sm` with
+  `alt=""`, the name and the Cover pill), checkpoint, differs by, pictures,
+  rating, ⋯ — over a header row of `columnheader`s carrying `.section-label`.
+  The trio is three cells always and an `<img>` only where there is a picture,
+  so one picture does not stretch across the box and an empty slot is not a
+  broken-image glyph. **Its `src` goes through `workflowCoverUrl`**, like the
+  card's own: `covers` arrives API-relative and an `<img src>` bypasses Axios,
+  so the raw value asks the page origin for a path no route serves. Reading
+  the payload directly here reintroduced the broken covers F1b had just fixed
+  for the card, and a `toBeTruthy()` on the `src` passed straight over it.
+  **One `grid-template-columns`, declared on the header and the rows alike**:
+  each row is its own grid container, so `auto` tracks would be measured per
+  row and the columns would step sideways down the list. The checkpoint column
+  draws a chip **only where it differs from the cover's**, the cover's own row
+  never; a column repeating one model name down every row says nothing, and
+  what is not shared is the whole point of List. A model whose name was
+  forgotten draws nothing rather than a label-less chip, and two forgotten
+  names are not read as the same model. **"Differs by" is blank on the cover's
+  row for the same reason**: the cover card carries the UNION of what its
+  members differ by — it is the one tile the grid draws for the stack — so
+  listing it there makes the first row claim its siblings' differences as its
+  own, beside a Checkpoint cell deliberately left empty. The Cover pill is
+  what that row says instead — **and the blanking reaches the row's accessible
+  name**, which is the whole of what a screen reader hears here, every cell but
+  ⋯ being `aria-hidden`. Left in, the label told a reader the cover differed
+  from itself by the very things its siblings differ from it by, over a row
+  that visibly said nothing of the kind.
+- **One member menu, in ⋯ and in right-click and in both views**, built from a
+  single list in `StackPanel` rather than written out per view — which is what
+  makes the four combinations identical rather than identical today, and is
+  asserted as such in `StackPanel.test.js`. It carries *Make it the cover*,
+  *Move earlier*, *Move later*, *Unstack* and *Hide*; the ordering three go
+  disabled at the ends and whenever the OPEN STACK'S COVER carries no
+  `stack_id`. The design's *Run…* and *Rename* are not drawn at all: one wants
+  the run panel, which nothing on this route opens yet, and the other somewhere
+  to type, and an item that has never done anything is not a control a reader
+  should discount.
+- **Opening the menu closes it first.** A right button press fires `mousedown`
+  and `contextmenu` but no `click`, and Vuetify's click-outside closes on
+  `click`; its location strategy reads the anchor on open and never on change.
+  So right-clicking a second row left the menu sitting at the first row's
+  coordinates while its verbs acted on the second. `openMenu` sets
+  `menuOpen = false`, awaits a tick and reopens, which is the only thing that
+  re-anchors it.
+- **`Shift+F10` and the Menu key reach the MEMBER menu on a member row**, and ⓘ
+  everywhere else; `Enter` on a member row falls through to the menu when the
+  row draws no card, which is every row in List. Without all three, *Unstack*
+  and *Hide* had no keyboard route at all — both ⋯ buttons sit at
+  `tabindex="-1"` because the grid owns Tab — and `Enter` in List was a dead
+  key, `activeCardButton` querying a `.wf-card__info` List never renders.
+- **Reorder is a complete ordered list, every time, and the server decides
+  whether one can be formed.** `PUT /workflows/stacks/{id}/order` refuses
+  anything less, deliberately: a key left out would be dropped from the stack
+  with no record that it had gone. The grid, though, drops hidden cards and
+  one-offs *before* grouping, so the members a panel can offer are not always
+  the members the hub holds — which is why `GET /workflows/cards` serves
+  `stack_id: null` for a stack it drew only part of (integration §4). The
+  client therefore never sends a partial list: it has no id to send one to, and
+  the ordering verbs go disabled instead of failing with a sentence about keys
+  the owner was never shown. A move at either end is a no-op rather than a wrap.
+- **Every path that moves a member follows it and says where it landed.**
+  Alt+↑/↓ and the menu's *Move earlier* / *Move later* / *Make it the cover*
+  reach the same three writes and all route through one `followMove` wrapper.
+  Wired straight to the store the menu skipped it: the write tears every member
+  row down, and the menu's activator is a pair of coordinates with no element
+  for focus to fall back to, so a reader choosing *Move later* was left outside
+  the grid hearing only that the panel had closed and reopened.
+- **Alt+↑/↓ moves the row and follows it**, and **swallows the arrow whether or
+  not it can act**: the write re-reads the grid, so every member row is torn
+  down and rebuilt and the browser drops its focus — without the follow, one
+  Alt+Down strands a keyboard reader outside the grid, and without the swallow
+  a HELD Alt+Down arrives while the cursor is briefly not on a member and walks
+  it off down the grid instead. **Only a move that landed is announced**:
+  `moveMember` answers a boolean, because a refusal and a stack with no id both
+  return here and "position 2 of 6" over either tells a reader the row moved
+  when the list in front of them is unchanged. Alt on a top-level row does
+  nothing; the grid's order is the sort.
+- **Vertical movement into the List panel is about CROSSING it, not landing in
+  it.** The member block is padded to whole grid rows whatever the view, so a
+  two-member stack over four columns leaves holes in two of them and the
+  whole-row walk steps clean over the full-width panel and out the other side.
+  Redirecting only when the walk happened to *land* on a member made the panel
+  keyboard-reachable from the columns the members filled and unreachable from
+  the rest — a panel that appears and disappears with the window's width.
+- **Every stack write re-reads the grid rather than patching the store.** A
+  reorder moves the cover, and the cover is what the grid draws, what the panel
+  is keyed on, what `differs_by` is computed against and what decides whether
+  `stack_id` is served at all — four things the server derives that the
+  response, which names only the new order, cannot stand in for. It goes
+  through the pre-existing `forgetMembers`, whose epoch bump is what stops a
+  member read still on the wire writing the pre-write members back into the
+  map, and the panel closes if what it was open over is no longer a stack.
+  **The cost is one grid read plus one detail read per member, per move**, so
+  walking a card from the bottom of a ten-stack to the top is nine round
+  trips. That is the honest price of the four derived values and is accepted
+  for now; the cheaper shape is a route that answers with the re-derived
+  stack, which is a change to B4's contract rather than to this screen.
+- **Not here, and why.** Drag-reorder and the grip, *Stack together*, *Unstack
+  all*, the undo toasts and the live `CHANGED_WORKFLOWS` refresh are F2's
+  remaining half and are a step of their own. The panel header's **"N hidden ·
+  Show"** is blocked on the READ side rather than the write side, and still is:
+  `GET /workflows/cards` drops hidden cards BEFORE grouping, so a hidden member
+  is in neither `member_keys` nor the payload at any level. *Hide* is offered
+  because it is a write the panel can make; **Unhide is not, because nothing
+  here can list what was hidden**. (`stack_id` itself is now on the card — F2
+  added it, since neither the reorder route nor `unstack` can be addressed
+  without it and no other field derives it.) The **grid-level** counts are a different number and are shown: the
   toolbar subtitle reads "N workflows · N hidden · N one-offs" from the
   payload's own `hidden` / `one_offs`, and the empty state says which of the
   two it is in rather than announcing "Nothing found yet" over a subtitle

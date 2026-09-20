@@ -477,7 +477,41 @@ def read_grid(hub: HubDatabase, vault) -> Grid:
     # on the detail route, and it would otherwise show a cover the owner has
     # already replaced. The same single query either way.
     _apply_chosen_covers(hub, vault, figures)
-    stacks, belongs = effective_stacks(visible, stack_rows(hub))
+    rows = stack_rows(hub)
+    # **The id is served only where the grid drew the WHOLE stack.**
+    # `PUT /workflows/stacks/{id}/order` takes a complete member list and
+    # refuses one that names anything less, deliberately - a key left out
+    # would leave the stack with no record that it had gone. It counts the
+    # hidden cards and the one-offs this listing dropped above, so a client
+    # ordering what the grid gave it would be refused with a sentence about
+    # keys it was never told existed. Grouping the whole set alongside the
+    # drawn one is how that is detected: same pure function, same rows, no
+    # second query. A client reads the null as "this stack cannot be
+    # addressed from here" and offers no reorder at all, which is the one
+    # honest answer while the panel can only show part of it.
+    whole = {
+        stack.stack_id: set(stack.member_keys)
+        for stack in effective_stacks(figures, rows)[0]
+    }
+    # **That pass WROTE `stack_id` onto every figure it grouped**, hidden
+    # cards and one-offs included, and nothing below would clear them: the
+    # drawn pass only ever sets ids, and a card whose group collapses below
+    # two once the dropped cards are taken is in no drawn stack to be
+    # revisited. It would be served `stack_size: 1` beside a non-null id -
+    # the one state the field's contract says cannot happen. Cleared here,
+    # before the grouping whose answer is served.
+    for figure in figures:
+        figure.stack_id = None
+    stacks, belongs = effective_stacks(visible, rows)
+    partial = {
+        key
+        for stack in stacks
+        if whole.get(stack.stack_id) != set(stack.member_keys)
+        for key in stack.member_keys
+    }
+    for figure in figures:
+        if figure.card.workflow_key in partial:
+            figure.stack_id = None
     describe_differences(hub, visible, stacks)
     # Every member, not only the cover. The grid draws the cover alone, so this
     # costs it nothing - but a member opened on its own carries the difference
