@@ -53,7 +53,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.plugin_install import PluginError
 from pixlstash.tagger_plugins.base import TaggerPlugin
 from pixlstash.tagger_plugins.registry import TaggerPluginManager
-from pixlstash.utils.accelerator import resolve_device
+from pixlstash.utils.accelerator import configure_metal_model_loading, resolve_device
 
 logger = get_logger(__name__)
 
@@ -394,6 +394,8 @@ def _run_over_image(plugin: TaggerPlugin, image: str) -> tuple[Any | None, list[
             ]
     except Exception as exc:
         return None, [f"needs_download() raised {type(exc).__name__}: {exc}"]
+
+    configure_metal_model_loading()
 
     try:
         # Both workflows do this pair, in this order, before every batch.

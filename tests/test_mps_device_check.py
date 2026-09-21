@@ -28,6 +28,7 @@ accelerator is its own regression, and ``--force-cpu`` is what keeps CI honest.
 """
 
 import logging
+import os
 import types
 
 import pytest
@@ -37,8 +38,10 @@ from pixlstash.startup_checks import StartupCheckOutcome, StartupChecks
 from pixlstash.utils.accelerator import (
     CPU,
     CUDA,
+    HF_ASYNC_LOAD_ENV,
     MPS,
     available_accelerator,
+    configure_metal_model_loading,
     is_accelerated,
     normalise_device,
     resolve_device,
@@ -253,3 +256,76 @@ def test_an_explicit_cpu_choice_is_honoured_at_start_up(patch_runtime):
 
     assert outcome.forced_cpu
     assert not outcome.hard_failures
+
+
+# ---------------------------------------------------------------------------
+# The transformers loader threads
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def no_async_load_env(monkeypatch):
+    """Start each case with the variable unset, and never leak one to the next."""
+    monkeypatch.delenv(HF_ASYNC_LOAD_ENV, raising=False)
+    return monkeypatch
+
+
+def test_metal_turns_off_the_transformers_loader_threads(no_async_load_env):
+    """The whole point: where Metal exists, weights load on one thread.
+
+    Unguarded, a transformers load on Metal failed 10 of 10 here (6 hangs, 3
+    SIGSEGV, 1 SIGBUS) and 0 of 10 with this set - and none of them raise, so
+    nothing downstream can recover from it.
+    """
+    assert configure_metal_model_loading(_torch(**MPS_HOST)) is True
+    assert os.environ[HF_ASYNC_LOAD_ENV] == "1"
+
+
+@pytest.mark.parametrize(
+    "host", [CUDA_HOST, BARE_HOST], ids=["cuda-host", "no-accelerator"]
+)
+def test_a_host_without_metal_is_left_alone(host, no_async_load_env):
+    """The other direction. The variable slows loading on a machine that cannot
+    hit the race, and setting it everywhere would be an unexplained tax on every
+    CUDA and CPU host."""
+    assert configure_metal_model_loading(_torch(**host)) is False
+    assert HF_ASYNC_LOAD_ENV not in os.environ
+
+
+def test_a_host_with_no_torch_at_all_sets_nothing(no_async_load_env):
+    """``_resolve_torch`` yields None when torch cannot be reached. There is no
+    Metal to protect and no loader to configure, and it must not raise."""
+    assert configure_metal_model_loading(None) is False
+    assert HF_ASYNC_LOAD_ENV not in os.environ
+
+
+@pytest.mark.parametrize("value", ["1", "true", "YES", "on"])
+def test_an_owner_who_already_set_it_keeps_their_value(value, no_async_load_env):
+    """Already true: nothing to do, and the owner's spelling survives."""
+    no_async_load_env.setenv(HF_ASYNC_LOAD_ENV, value)
+
+    assert configure_metal_model_loading(_torch(**MPS_HOST)) is False
+    assert os.environ[HF_ASYNC_LOAD_ENV] == value
+
+
+@pytest.mark.parametrize("value", ["0", "", "false", "no"])
+def test_a_value_transformers_reads_as_false_is_kept_but_warned_about(
+    value, no_async_load_env, caplog
+):
+    """``"0"`` and ``""`` both leave the loader threaded, so the host is exposed -
+    but the value is the owner's and something may depend on it. Say so loudly
+    rather than silently taking it away. A test that only checked the return
+    value would pass with no warning at all, which is the failure this guards.
+    """
+    no_async_load_env.setenv(HF_ASYNC_LOAD_ENV, value)
+
+    with caplog.at_level(logging.WARNING):
+        assert configure_metal_model_loading(_torch(**MPS_HOST)) is False
+
+    assert os.environ[HF_ASYNC_LOAD_ENV] == value
+    assert any(
+        record.levelno >= logging.WARNING and HF_ASYNC_LOAD_ENV in record.getMessage()
+        for record in caplog.records
+    ), (
+        f"no warning named {HF_ASYNC_LOAD_ENV}; records={[r.getMessage() for r in caplog.records]}"
+    )

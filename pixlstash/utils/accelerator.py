@@ -540,6 +540,68 @@ def is_device_error(error: BaseException, device=None) -> bool:
     return any(word in message for word in words)
 
 
+#: transformers loads model weights on a thread pool unless this is true. The
+#: name is transformers' own and it is read on every load, not once at import.
+HF_ASYNC_LOAD_ENV = "HF_DEACTIVATE_ASYNC_LOAD"
+
+
+def configure_metal_model_loading(torch_module: Any = _UNSET) -> bool:
+    """Make transformers load model weights on one thread wherever Metal exists.
+
+    transformers copies and casts weights on a pool of ``min(4, cpu_count)``
+    threads unless :data:`HF_ASYNC_LOAD_ENV` is true. Torch's Metal backend
+    fills its kernel-name set without a lock, and every dtype cast routes
+    through that lookup, so concurrent casts corrupt it and the process dies or
+    hangs instead of raising.
+
+    Set whenever Metal is *present*, not only when it is the inference device:
+    accelerate's ``device_map="auto"`` places weights on Metal whenever the host
+    offers it, whatever PixlStash chose for itself. transformers reads the
+    variable on every load, so setting it before the first one is enough.
+
+    A value already in the environment is the owner's and is kept, with a
+    warning when transformers would read it as false.
+
+    Args:
+        torch_module: Injected torch handle; see :func:`_resolve_torch`. An
+            import is allowed here because this runs before the first model
+            load, which is exactly when torch may not have been imported yet.
+
+    Returns:
+        ``True`` when this call set the variable.
+    """
+    torch = _resolve_torch(torch_module)
+    if torch is None or not _probe(torch, MPS):
+        return False
+
+    existing = os.environ.get(HF_ASYNC_LOAD_ENV)
+    if existing is not None:
+        if existing.lower() in ("true", "1", "y", "yes", "on"):
+            logger.debug(
+                "Apple Metal present; keeping %s=%s from the environment.",
+                HF_ASYNC_LOAD_ENV,
+                existing,
+            )
+        else:
+            logger.warning(
+                "Apple Metal present, but %s=%r from the environment leaves "
+                "transformers loading model weights on several threads, which "
+                "can crash or hang on Metal."
+                "The value is kept; unset it or set it to 1.",
+                HF_ASYNC_LOAD_ENV,
+                existing,
+            )
+        return False
+
+    os.environ[HF_ASYNC_LOAD_ENV] = "1"
+    logger.info(
+        "Apple Metal present: transformers will load model weights on one "
+        "thread (%s=1).",
+        HF_ASYNC_LOAD_ENV,
+    )
+    return True
+
+
 def coreml_cache_dir() -> str:
     """Return the directory CoreML compiles its cached models into.
 

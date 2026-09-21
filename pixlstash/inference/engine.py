@@ -9,7 +9,13 @@ from pixlstash.inference.vram_budget import VramBudget
 from pixlstash.inference.model_lifecycle import ModelLifecycleManager
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import builtin_model_dir
-from pixlstash.utils.accelerator import CUDA, MPS, normalise_device, resolve_device
+from pixlstash.utils.accelerator import (
+    CUDA,
+    MPS,
+    configure_metal_model_loading,
+    normalise_device,
+    resolve_device,
+)
 
 if TYPE_CHECKING:
     from pixlstash.tagger_plugins.clip_service import ClipService
@@ -547,6 +553,8 @@ class InferenceEngine:
         from pixlstash.tagger_plugins.florence2 import Florence2Service
 
         model_dir = builtin_model_dir()
+
+        configure_metal_model_loading()
 
         # One resolution, accelerator-blind. ``force_cpu`` wins over everything
         # here as it does everywhere else, which is what keeps CI's --force-cpu
