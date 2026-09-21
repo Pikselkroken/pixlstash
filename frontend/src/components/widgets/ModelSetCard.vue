@@ -1,7 +1,7 @@
 <template>
   <article
     class="msc"
-    :class="{ 'msc--open': expanded }"
+    :class="{ 'msc--open': expanded, 'msc--on': selected }"
     role="group"
     :aria-label="accessibleName"
     data-testid="model-set-card"
@@ -96,6 +96,11 @@
 //
 // There is no ⓘ here either: everything the card knows is already on it, and the
 // detail a reader wants next is the file list, which is one ▸ away.
+//
+// **Selected means the card's BASE MODEL is selected**, never the set: the shelf's
+// verbs write one file each and two of them destroy bytes, so a card standing for
+// its whole tray would put a shared VAE behind a Delete aimed at a checkpoint. The
+// other members are selected in the tray, one row each.
 
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
@@ -111,6 +116,8 @@ const props = defineProps({
   expanded: { type: Boolean, default: false },
   /** The id of the tray ▸ opens, for `aria-controls`. */
   panelId: { type: String, default: "" },
+  /** This card's base model is in the shelf's selection. */
+  selected: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["toggle"]);
@@ -182,10 +189,32 @@ const accessibleName = computed(() => {
   color: rgb(var(--v-theme-on-surface));
 }
 
-/* The open card is marked by its rotated ▸ and a border in the active ink -
-   never a wash, which reads as "selected" and nothing here is. */
+/* Open and selected are two states and they read differently on purpose: open is
+   a border in the active ink beside the rotated ▸, selected is the shell's own
+   wash and ring. A card can be both, and then it wears both. */
 .msc--open {
   border-color: var(--active-bar);
+}
+
+/* The shell's selection mark (`style.css` rule 3): the wash, plus
+   `--selection-ring` because a card has no left edge to rail.
+
+   **An OVERLAY, not the card's own background and shadow**, for the reason
+   `WorkflowCard.vue` records at the same rule: an inset box-shadow paints over
+   an element's background but UNDER its children, and the top 55% of this card
+   is the cover's opaque `<img>`s. Put on the card itself the mark appears along
+   the meta rows and stops dead at the pictures. `pointer-events: none` so ▸
+   underneath still takes its click, and the radius is inherited so the ring
+   follows the card's own corners. */
+.msc--on::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-raised);
+  border-radius: inherit;
+  background: var(--active-wash);
+  box-shadow: var(--selection-ring);
+  pointer-events: none;
 }
 
 .msc__cover {

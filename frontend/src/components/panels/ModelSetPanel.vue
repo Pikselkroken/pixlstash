@@ -78,12 +78,18 @@
         aria-level="2"
         :aria-posinset="index + 1"
         :aria-setsize="members.length"
+        :aria-selected="
+          selectable(member) ? String(isSelected(member)) : undefined
+        "
         :tabindex="cursorKey === String(member.id) ? 0 : -1"
         :data-key="String(member.id)"
+        @click="emit('select', { member, event: $event })"
+        @contextmenu="emit('menu', { member, event: $event })"
       >
         <div class="msp__cell" role="gridcell">
           <ModelSetMemberCard
             :member="member"
+            :selected="isSelected(member)"
             @pick="(model) => emit('pick', model)"
           />
         </div>
@@ -117,9 +123,15 @@
         :aria-posinset="index + 1"
         :aria-setsize="members.length"
         :aria-label="rowName(member)"
+        :aria-selected="
+          selectable(member) ? String(isSelected(member)) : undefined
+        "
+        :class="{ 'msp__row--on': isSelected(member) }"
         :tabindex="cursorKey === String(member.id) ? 0 : -1"
         :data-key="String(member.id)"
-        @click="emit('pick', member)"
+        @click="emit('select', { member, event: $event })"
+        @dblclick="emit('pick', member)"
+        @contextmenu="emit('menu', { member, event: $event })"
       >
         <!-- Everything the row draws is `aria-hidden`: the row's own label reads
              all of it, exactly as the card does in Grid. -->
@@ -185,9 +197,18 @@
  * view blob (`view.trayView`), which already persists, validates and migrates.
  *
  * **Not `StackPanel`.** Beyond the columns: that panel carries a per-member menu
- * of workflow verbs and a selection contract, and threading slots through all of
- * it to draw models would bend one component's contract around two screens. The
- * notch arithmetic and the treegrid roles are ~40 lines and are copied instead.
+ * of workflow verbs and its own selection contract over workflow keys, and
+ * threading slots through all of it to draw models would bend one component's
+ * contract around two screens. The notch arithmetic and the treegrid roles are
+ * ~40 lines and are copied instead.
+ *
+ * **A tray row is one model, so it selects like one.** The row reports the click
+ * and the right-click up to `ModelSetGrid.vue`, which owns the drawn order a
+ * Shift-range is measured over and the one `ShelfSelectionBar` both views feed;
+ * this component only says which rows are ticked. In List a single click selects
+ * and a DOUBLE click asks what the file has run with, because the row is the
+ * selection target and *Works with* is its default action - in Grid that question
+ * keeps its own named button on the card.
  */
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
@@ -231,9 +252,29 @@ const props = defineProps({
   cursorKey: { type: String, default: "" },
   /** The grid's column gutter in px, so the members line up with the cards. */
   gap: { type: Number, default: 12 },
+  /** The shelf's selected model ids, so a tray row can mark itself. */
+  selectedIds: { type: Object, default: () => new Set() },
+  /** The model ids this screen has a shelf row for; see `setGridModelIds`. */
+  selectableIds: { type: Object, default: () => new Set() },
 });
 
-const emit = defineEmits(["close", "view", "pick"]);
+const emit = defineEmits(["close", "view", "pick", "select", "menu"]);
+
+function isSelected(member) {
+  return props.selectedIds.has(member.id);
+}
+
+/**
+ * Is there a shelf row behind this member for a verb to write?
+ *
+ * A combination can name a file from a block this session never fetched, and a
+ * row that cannot be renamed, moved or deleted must not claim to be selectable -
+ * `aria-selected` is left off it entirely rather than reading a permanent
+ * `false`, which would announce a state it can never leave.
+ */
+function selectable(member) {
+  return props.selectableIds.has(member.id);
+}
 
 const countLabel = computed(() =>
   props.members.length === 1 ? "1 model" : `${props.members.length} models`,
@@ -399,6 +440,14 @@ const notchStyle = computed(() => {
 
 .msp__row:hover {
   background: var(--hover-wash);
+}
+
+/* The row list's own selected treatment, restated: a wash and an inset bar, not
+   a border, because a 1px outline would shift every glyph in the row by a pixel.
+   The bar is the greyscale half - the wash alone is a hue. */
+.msp__row--on {
+  background: var(--active-wash);
+  box-shadow: var(--selection-edge);
 }
 
 .msp__ident {

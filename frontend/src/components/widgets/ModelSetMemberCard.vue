@@ -1,7 +1,11 @@
 <template>
   <article
     class="msm"
-    :class="{ 'msm--head': member.head, 'msm--unsure': member.ambiguous }"
+    :class="{
+      'msm--head': member.head,
+      'msm--unsure': member.ambiguous,
+      'msm--on': selected,
+    }"
     role="group"
     :aria-label="accessibleName"
     data-testid="model-set-member"
@@ -67,8 +71,10 @@
 // tray ran together — the tray's own header says so, because a group is the union
 // of its recipes and a union is not reproducible.
 //
-// The card is inert apart from its name: the tray row around it owns the cursor,
-// and the name opens `Works with` for this file.
+// The tray row around it owns the cursor, the click and the right-click - a member
+// is one model, so it selects and takes the shelf's verbs exactly as a row in the
+// list does. The card itself draws whether it is ticked, and its name opens
+// `Works with` for this file.
 
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
@@ -98,6 +104,8 @@ const UNSURE_REASON =
 const props = defineProps({
   /** One member from a group (see `setGroups` in `utils/workflowSets.js`). */
   member: { type: Object, required: true },
+  /** This model is in the shelf's selection. */
+  selected: { type: Boolean, default: false },
 });
 
 /** The name was pressed: the grid answers with this model's companions. */
@@ -153,16 +161,30 @@ const accessibleName = computed(() =>
   color: rgb(var(--v-theme-on-surface));
 }
 
-/* The file the group is named after. A left rail rather than a fill: a fill reads
-   as "selected", and nothing in a tray is. */
+/* The file the group is named after. `--rail-w` and `--active-bar`, the same two
+   values `--selection-edge` resolves to, because a SELECTED row wears that rail
+   and a head row must not jump by a pixel or change hue when it is ticked. The
+   two marks therefore coincide on a selected head, and what tells head from
+   ticked is the `Names this set` pill above - which is text, so it survives
+   greyscale, and is always drawn. */
 .msm--head {
-  box-shadow: inset 3px 0 0 var(--active-bar);
+  box-shadow: inset var(--rail-w) 0 0 var(--active-bar);
 }
 
 /* The evidence could not pin this file down. Dashed, the shelf's own treatment
    for a row it cannot be certain about, and drawn rather than dropped. */
 .msm--unsure {
   border-style: dashed;
+}
+
+/* The row list's selected treatment: a wash and an inset bar, never a border,
+   which would shift every glyph in the card by a pixel. The wash is what this
+   adds to a head row, whose rail is already the same rail - see the note at
+   `.msm--head`. Safe as a plain background here, unlike on the card above: a
+   member draws no pictures, so nothing paints over it. */
+.msm--on {
+  background: var(--active-wash);
+  box-shadow: var(--selection-edge);
 }
 
 .msm__mark {

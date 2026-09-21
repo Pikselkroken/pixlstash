@@ -93,6 +93,20 @@ function adapter(overrides = {}) {
   };
 }
 
+/**
+ * Put the store on the ROW LIST, which is the screen these suites are about.
+ *
+ * Since #1438 the DEFAULT axis is the set grid, and it is a different screen
+ * over the same models: `selectedRows`, `selectVisible` and `modelsBehind` all
+ * read the rows THAT screen draws, so a test that seeds `store.rows` and never
+ * says which screen it is on is asking the grid about a list it does not draw.
+ * `ModelShelf.test.js` makes the same choice in `mountDefaultShelf`, and for the
+ * same reason: a new test lands on the list without having to know this.
+ */
+function onTheRowList() {
+  useModelShelfStore().setView({ groupBy: "none" });
+}
+
 beforeEach(() => {
   setActivePinia(createPinia());
   window.localStorage.clear();
@@ -1060,6 +1074,8 @@ describe("the column widths", () => {
 });
 
 describe("stacks are atomic", () => {
+  beforeEach(onTheRowList);
+
   /** A three-step run plus one loose adapter. */
   function shelfWithARun() {
     const store = useModelShelfStore();
@@ -1229,6 +1245,8 @@ describe("stacks are atomic", () => {
 });
 
 describe("the verbs", () => {
+  beforeEach(onTheRowList);
+
   beforeEach(() => {
     editModels.mockReset();
     forgetModels.mockReset();
@@ -1283,6 +1301,8 @@ describe("the verbs", () => {
 });
 
 describe("Assign", () => {
+  beforeEach(onTheRowList);
+
   beforeEach(() => {
     setAdapterAttachments.mockReset().mockResolvedValue({ attachments: [] });
     listAdapters.mockResolvedValue([]);
@@ -1416,6 +1436,8 @@ describe("Assign", () => {
 });
 
 describe("the thumbnail verb", () => {
+  beforeEach(onTheRowList);
+
   beforeEach(() => {
     setModelIcon.mockReset().mockResolvedValue({ icon_sha256: "a".repeat(64) });
     clearModelIcons.mockReset().mockResolvedValue({ cleared: [] });
@@ -1570,6 +1592,8 @@ describe("the thumbnail verb", () => {
 });
 
 describe("the receipts", () => {
+  beforeEach(onTheRowList);
+
   it("names the columns it wrote, because there is no undo to inspect", () => {
     expect(editReceipt(12, { base_model: "FLUX.2" })).toBe(
       "Set the base model on 12 models.",
@@ -1661,6 +1685,8 @@ describe("the receipts", () => {
 });
 
 describe("what a verb may reach", () => {
+  beforeEach(onTheRowList);
+
   it("drops a selected row that the filters stop showing", () => {
     // Load-bearing: `selectedRows` reads `visibleRows`, not `rows`. A verb must
     // never act on something the reader cannot see, and with no undo behind any
@@ -2123,6 +2149,8 @@ describe("what the base-model field completes against", () => {
 });
 
 describe("deleting from disk", () => {
+  beforeEach(onTheRowList);
+
   it("sends every member of the selection and says where the files went", async () => {
     const store = useModelShelfStore();
     store.rows = [adapter({ id: 1 })];
@@ -2837,5 +2865,229 @@ describe("the workflow sets", () => {
     store.setView({ trayView: "list" });
     setActivePinia(createPinia());
     expect(useModelShelfStore().view.trayView).toBe("list");
+  });
+
+  /**
+   * A checkpoint the row list shows and a VAE it does not, both in one tray.
+   *
+   * The shape `setGridModelIds` exists for: a combination survives `Show` on any
+   * one visible member and is then drawn WHOLE, so unticking the support files
+   * takes the VAE off the row list and leaves it on the card.
+   */
+  async function shelfWithAHiddenCompanion() {
+    listCheckpoints.mockResolvedValue([
+      adapter({
+        id: 1,
+        sha256: "a".repeat(64),
+        filename: "ckpt.st",
+        file_kind: "checkpoint",
+        kind: null,
+      }),
+    ]);
+    // `/adapters` is one route serving both support kinds, so the double has to
+    // answer `vae` and `text_encoder` differently or the VAE arrives twice.
+    listSupport.mockImplementation((args) =>
+      Promise.resolve(
+        args?.fileKind === "vae"
+          ? [
+              adapter({
+                id: 2,
+                sha256: "b".repeat(64),
+                filename: "vae.st",
+                file_kind: "vae",
+                kind: null,
+              }),
+            ]
+          : [],
+      ),
+    );
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        {
+          key: "1,2",
+          models: [
+            { id: 1, name: "ckpt.st", kind: "checkpoint" },
+            { id: 2, name: "vae.st", kind: "vae" },
+          ],
+          recipes: 2,
+          picture_count: 4,
+          covers: [],
+        },
+      ],
+      no_set: [],
+    });
+    const store = useModelShelfStore();
+    // The default axis, said out loud: these are the grid's own assertions.
+    store.setView({ groupBy: "workflow_set" });
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+    return store;
+  }
+
+  it("only counts a tray's models as actionable while its tray is open", async () => {
+    const store = await shelfWithAHiddenCompanion();
+    expect([...store.setGridModelIds].sort()).toEqual([1]);
+
+    store.setFilters({ support: false });
+    expect(store.visibleRows.map((r) => r.id)).toEqual([1]);
+    // Open the card: its hidden companion is now visibly represented in the
+    // tray and is safe to select.
+    store.toggleSet("model:1");
+    expect([...store.setGridModelIds].sort()).toEqual([1, 2]);
+
+    // Closing it removes the only representation of the companion again.
+    store.toggleSet("model:1");
+    expect([...store.setGridModelIds].sort()).toEqual([1]);
+  });
+
+  it("hands the verbs a model picked off a card the row list is hiding", async () => {
+    const store = await shelfWithAHiddenCompanion();
+    store.setFilters({ support: false });
+    store.toggleSet("model:1");
+    store.toggleSelected(2);
+
+    // `selectedRows` is built from `visibleRows`, which does not hold it - so
+    // without the grid's own reach the click would tick a row the bar then
+    // could not see, and every verb would be aimed at nothing.
+    expect(store.selectedRows.map((r) => r.id)).toEqual([2]);
+    // Wearing the shape a listed row has, because the verbs read these fields:
+    // `name` is `modelName`'s `{text, state}` pair and not the raw column, and
+    // the location state is reduced. A raw `rows` entry has neither.
+    expect(store.selectedRows[0].name).toMatchObject({
+      text: "Cyanwood Style",
+    });
+    expect(store.selectedRows[0].locState).toBe("present");
+  });
+
+  it("takes that reach away again the moment the row list is back", async () => {
+    // The invariant the row list rests on: a verb may only ever act on
+    // something the reader can SEE, and off the grid they cannot see it.
+    const store = await shelfWithAHiddenCompanion();
+    store.setFilters({ support: false });
+    store.toggleSet("model:1");
+    store.toggleSelected(2);
+    expect(store.selectedRows).toHaveLength(1);
+
+    store.setView({ groupBy: "none" });
+    expect(store.selectedRows).toHaveLength(0);
+  });
+
+  it("arms no verb over a model the grid draws nowhere", async () => {
+    // The hazard the hidden verb bar used to stand in for. A selection survives
+    // an axis switch on purpose, so a reader can Ctrl+A the row list, switch to
+    // the grid and find the bar still offering Delete over 1,800 models that
+    // screen shows none of. `selectedRows` reads the rows the SCREEN draws, so
+    // the offer goes with the screen.
+    const store = await shelfWithAHiddenCompanion();
+    store.setView({ groupBy: "none" });
+    store.selectVisible();
+    expect(store.selectedRows.map((r) => r.id).sort()).toEqual([1, 2]);
+
+    // A model on no card at all: `no_set` is drawn as a count, not as a row.
+    fetchWorkflowSets.mockResolvedValue({ combinations: [], no_set: [1, 2] });
+    await store.loadWorkflowSets({ force: true });
+    store.setView({ groupBy: "workflow_set" });
+
+    expect(store.noSetRows.map((r) => r.id).sort()).toEqual([1, 2]);
+    expect(store.selectedRows).toEqual([]);
+    // And the ids are still held, so going back offers them again.
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+    store.setView({ groupBy: "none" });
+    expect(store.selectedRows.map((r) => r.id).sort()).toEqual([1, 2]);
+  });
+
+  it("refuses Select all shown rather than clearing what is held", async () => {
+    // A key that says "select" must never be a silent clear. The guard used to
+    // sit at one caller and read `visibleRows`, which is the row list's list -
+    // so on the grid it passed and `selectVisible` then emptied the selection.
+    // The pill's own button never had the guard at all.
+    const store = await shelfWithAHiddenCompanion();
+    store.setView({ groupBy: "none" });
+    store.selectVisible();
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+
+    fetchWorkflowSets.mockResolvedValue({ combinations: [], no_set: [] });
+    await store.loadWorkflowSets({ force: true });
+    store.setView({ groupBy: "workflow_set" });
+    expect(store.setGridRows).toEqual([]);
+    // The row list still holds two rows, which is exactly what the old guard
+    // was reading when it let this through.
+    expect(store.visibleRows).toHaveLength(2);
+
+    store.selectVisible();
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+  });
+
+  it("takes ONE file from a card, though that file is a step of a run", async () => {
+    // **A card is one model and stands for that model alone.** An earlier draft
+    // folded runs here, on the reasoning that a run is atomic: the effect was
+    // that clicking one card lit up every other card built on the same run, and
+    // a verb aimed at the set in front of the reader reached files in sets they
+    // were not looking at. The grid's question is *what is in THIS workflow
+    // set*, and a card names exactly one file in it.
+    //
+    // Two cards on one run, which is the shape that made it visible: a recipe
+    // names step two, another names step one.
+    listAdapters.mockResolvedValue([
+      adapter({ id: 1, sha256: "a".repeat(64), stack_id: 7, stack_position: 0 }),
+      adapter({ id: 2, sha256: "b".repeat(64), stack_id: 7, stack_position: 1 }),
+    ]);
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [
+        {
+          key: "2",
+          models: [{ id: 2, name: "step-two.st", kind: "checkpoint" }],
+          recipes: 1,
+          picture_count: 1,
+          covers: [],
+        },
+        {
+          key: "1",
+          models: [{ id: 1, name: "step-one.st", kind: "checkpoint" }],
+          recipes: 1,
+          picture_count: 1,
+          covers: [],
+        },
+      ],
+      no_set: [],
+    });
+    const store = useModelShelfStore();
+    store.setView({ groupBy: "workflow_set" });
+    await store.fetchRows();
+    await store.loadWorkflowSets();
+
+    // Two cards, and two rows behind them: the grid does not fold the run.
+    expect(store.setGroups).toHaveLength(2);
+    expect(store.setGridRows.map((r) => r.id).sort()).toEqual([1, 2]);
+    expect(store.setGridRows.every((r) => !r.memberIds)).toBe(true);
+
+    store.selectFromClick(2, {}, [1, 2]);
+
+    // Asserted on identity, not on a count: the point is that the OTHER card's
+    // model did not come with it, which a length of 1 would not tell you.
+    expect([...store.selectedIds]).toEqual([2]);
+    expect(store.selectedRows.map((r) => r.id)).toEqual([2]);
+    expect(store.selectedModelIds).toEqual([2]);
+    expect(store.isSelected(1)).toBe(false);
+
+    // And the row list still takes the run whole, which is where the reader can
+    // actually see that it is one.
+    store.setView({ groupBy: "none" });
+    store.selectFromClick(1, {}, [1]);
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+  });
+
+  it("answers Select all shown with the grid's models, on the grid", async () => {
+    const store = await shelfWithAHiddenCompanion();
+    store.setFilters({ support: false });
+    store.toggleSet("model:1");
+
+    store.selectVisible();
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+
+    // And with the row list's own answer, on the row list.
+    store.setView({ groupBy: "none" });
+    store.selectVisible();
+    expect([...store.selectedIds]).toEqual([1]);
   });
 });

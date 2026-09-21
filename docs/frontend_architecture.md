@@ -1446,7 +1446,7 @@ The uniform workflow card and its two parts. Mounted by `WorkflowsView.vue` (F1a
 - **ⓘ's Differs-by chips are the card's fact chip, spelled a second time.** The popover wraps its chips and a `ChipRow` clips to one line, so it cannot mount one; `ChipRow.test.js` holds the two copies to the same geometry instead, because two blocks that must agree and nothing keeping them so is how they drift.
 - **`InfoPopover`** is the app's first shared popover component (Tooltip and HelpTip are hover tips): a `v-menu` holding a `.tbm` panel with `.tbm-caret--icon-sm-end`, `--stats-panel-w` wide, grouped Models, Differs by, Defaults and the saved-recipe count. The trigger comes from its `activator` slot. **The panel takes focus on open** (`tabindex="-1"` plus a focus call): `VMenu` moves focus to the first *focusable* child, which since F7 is the picture count — *Show all N pictures* — so without the focus call a screen-reader user is landed on a link mid-panel, and before F7 was landed nowhere at all on content teleported to the end of `<body>`. Both are the same bug. `InfoPopover.a11y.test.js` mounts the real `VMenu` to hold that, since the stubbed menu elsewhere is always open and focuses nothing.
 
-#### `ModelSetGrid.vue` (`views/`) + `ModelSetCard.vue` / `ModelComboCard.vue` (`widgets/`) + `ModelSetPanel.vue` / `ModelWorksWithDialog.vue` (`panels/`), #1438
+#### `ModelSetGrid.vue` (`views/`) + `ModelSetCard.vue` / `ModelSetMemberCard.vue` (`widgets/`) + `ModelSetPanel.vue` / `ModelWorksWithDialog.vue` (`panels/`), #1438
 
 The model shelf's `Workflow set` axis: a card grid of the sets of files a picture
 proves ran together, with a model free to appear in more than one.
@@ -1460,7 +1460,8 @@ proves ran together, with a model free to appear in more than one.
   abandoned: `WorkflowCard`'s ⓘ says *"Stack of 3 workflows"* and *"Saved
   recipes"* and lists pictures through a workflow, and `StackPanel` has grown a
   Grid|List switch backed by a remembered preference, a per-member `⋯` menu of
-  workflow verbs and a selection contract. A set is none of those, so borrowing
+  workflow verbs and a selection contract over workflow keys. A set's members
+  are models and its selection is the shelf's own, by `model.id`, so borrowing
   would have put three wrong words on every card and two dead controls in every
   panel to save two files. **`StackPanel.vue` and `WorkflowCard.vue` are
   untouched by this change**, which is the other half of the trade. The
@@ -1468,18 +1469,90 @@ proves ran together, with a model free to appear in more than one.
   padding holes, `verticalStop`) is reproduced for the same reason: ~60 lines
   that read the store beside them, where a shared version would take four
   callbacks and a store adapter.
-- **A member card lists every file.** `ModelComboCard.vue` draws each one with
-  its kind, never truncated: that card is the level at which "run exactly this"
-  is a real offer, and an offer with a hidden line is not one — which is why it
-  is not the fixed-height browsing card. A file's name is a button; it opens
-  *Works with* for that model.
-- **Nothing on this screen is selectable.** The shelf's selection is by
-  `model.id` and carries six verbs, two of which destroy bytes; a card is a
-  SET, so "selected" would have to mean every model in it and a Delete aimed at
-  a card would take a shared VAE with it. `ModelShelf.vue` therefore does not
-  float `ShelfSelectionBar` over the grid. A selection made in the row list
-  survives the switch in the store and is still there on the way back. The
-  roving cursor is kept because it is how the panel is reached from a keyboard.
+- **A tray row is one model.** `ModelSetMemberCard.vue` draws it with its kind,
+  its size and its own evidence, never truncated. Its name is a button and opens
+  *Works with* for that model; in the tray's List view, where there is no such
+  button, a single click selects the row and a DOUBLE click asks the same
+  question, because the row is the selection target and *Works with* is its
+  default action.
+- **A card stands for ONE model: the base model it is named after**, and that
+  is what makes the screen safe to act on. The shelf's selection is by
+  `model.id` and its verbs destroy bytes, so a card standing for its whole SET
+  would put a shared VAE behind a Delete aimed at a checkpoint. It stands for
+  its head instead — the file whose name, kind and mark the card already draws
+  — and the other members are selected one at a time in the tray, where a row
+  is one model. Nothing here ever selects a SET. On that footing the grid
+  carries the row list's whole contract, through the same store: click
+  replaces, Ctrl/Cmd+click toggles, Shift+click takes the range in DRAWN order
+  (`orderedIds`, read off `flatRows`, de-duplicated because an open set's head
+  is drawn twice), Space toggles, Shift+arrow extends, F2 renames what the
+  cursor is on, and right-click, the Menu key and Shift+F10 open the shelf's
+  full verb menu after making the thing under them the selection — the
+  file-manager rule, so a menu opened on one of forty selected models still acts
+  on the forty. `ModelShelf.vue` floats the one `ShelfSelectionBar` over both
+  views and `shelfOwnsTheKey` no longer excludes the grid, so Escape, Delete and
+  Ctrl+A work there; the grid emits `menu` with the pointer and the view opens
+  the bar's own context menu, so there is one set of refusals rather than two
+  that can drift. **A card's ▸ is exempt**: its click bubbles into the row, and
+  a disclosure control that replaced the selection would arm a model the reader
+  never pointed at, so `targetOwnsTheGesture` — the same test `onKeyDown`
+  already used for a press aimed at a button — now filters clicks too.
+- **`screenRows` is what "on screen" means, and it is the one place the two
+  views are told apart.** `selectedRows`, `selectVisible` and `modelsBehind` all
+  read it, so the rules they encode — a verb may only act on what the reader can
+  see, a range is measured over drawn rows, a run is atomic — hold on both
+  screens from one piece of code. On the row list it is `visibleRows`; on the
+  grid it is `setGridRows`, and the two differ in BOTH directions. A combination
+  survives the `Show` narrowing on any ONE visible member and is then drawn
+  whole, so a tray lists files the row list is hiding (untick Support and a
+  checkpoint's card still lists its VAE) and those have to be actionable. And a
+  model on no card at all — every `In no set` row, every model filtered out of
+  all its combinations — is *not* on the grid, so a selection carried in from
+  the row list arms nothing there. That second direction is the one the hidden
+  verb bar used to stand in for: reading `visibleRows` on the grid would leave
+  Delete live over models that screen shows none of. The ids survive the switch
+  either way, so the row list offers them again.
+- **`setGridRows` does not fold runs, and that is the one place it departs from
+  `visibleRows`.** `shownModelIds` fans a run out into its members, so the grid
+  can draw a card named after step 2 of 6 — and a second card named after step 1
+  beside it. Folding them was tried, on the reasoning that a run is atomic, and
+  is wrong for this screen: clicking one card lit up every other card built on
+  the same run, and a verb aimed at the set in front of the reader reached files
+  in sets they were not looking at. The grid's question is *what is in THIS
+  workflow set*, and a card names exactly one file in it. So a card resolves
+  through `modelsBehind` to itself, which is the shelf's own documented
+  exception — "a member picked out of an expanded strip stands for itself" —
+  reached by a different route: the card names the one file a recipe recorded.
+  The atomic gesture stays where the run is visible, on the row list, which
+  draws it as one row and takes it whole.
+- **`setGridModelIds` is the narrower question the VIEW asks**: which ids have a
+  card or a tray row, so a click has something to aim at. Intersected with
+  `rows`, because a verb writes a shelf row and a combination can name a model
+  from a block this session never fetched; such a row still draws and still
+  takes the cursor, but carries no `aria-selected`, takes no selection and opens
+  no menu.
+- **The empty-screen refusal lives in `selectVisible`.** It used to be a guard
+  at one caller reading `visibleRows`; on the grid that is the wrong list, so
+  Ctrl+A passed the guard and then replaced a live selection with an empty one —
+  a silent clear from a key that says *select*, with no undo. The pill's *Select
+  all shown* never had the guard at all. One refusal in the store answers both.
+- **Rename has no inline field on the grid**, because a name lives on a card and
+  the dashed rule under a row is what makes an inline field honest. The verb
+  falls through to `ShelfEditDialog`'s `rename`, which already exists for the
+  same string, rather than being a menu item that silently does nothing. The row
+  list is untouched, including its silent no-op when the selection is held but
+  the row is not drawn.
+- **The selection mark on a card is an `::after` overlay**, not the card's own
+  background and shadow, for the reason `WorkflowCard.vue` records at the same
+  rule: an inset box-shadow paints over an element's background but under its
+  children, and the top of this card is the cover's opaque `<img>`s. It is the
+  wash plus `--selection-ring`, because a card has no left edge to rail. A tray
+  member has no pictures, so it takes the plain wash plus `--selection-edge` —
+  the same rail `.msm--head` draws, so a head row gains only the wash when it is
+  ticked and what still tells head from ticked is the *Names this set* pill,
+  which is text and survives greyscale.
+- **Dragging a model to a folder is a row-list gesture only.** The drop targets
+  are the folder bands, and the grid has none.
 - **A card is one base model and its tray holds MODELS**, which is the shape the
   owner asked for over the folded-combinations one this branch first built. One
   card per checkpoint - or per diffusion file, where a graph loads one instead -
@@ -1521,9 +1594,9 @@ proves ran together, with a model free to appear in more than one.
   floating selection bar. The content is the design's — the sets above, the
   companions ranked by recipe count with a bar and a number, the closing notice
   that a missing companion is untested rather than incompatible — in the
-  container the screen actually has. It is reached from the row list's context
-  menu (*Works with…*, single selection only) and from a file line in the grid,
-  and it reads the whole payload rather than `visibleCombinations`: hiding a
+  container the screen actually has. It is reached from the context menu on
+  either screen (*Works with…*, single selection only) and from a tray row's own
+  name, and it reads the whole payload rather than `visibleCombinations`: hiding a
   companion because its kind is unticked would turn a view setting into a claim
   about the evidence.
 
@@ -3406,7 +3479,11 @@ sticky band can only put a row in one place, so choosing it swaps the row list
 for `ModelSetGrid.vue` and `groups` is not asked to express it at all
 (`GRID_GROUP_BY`, `useModelShelfStore.js`). `Show` and the filters keep applying:
 the grid reads `visibleCombinations`, which is the payload narrowed to the
-combinations with a visible member. The five axes no longer fit a `Segmented`
+combinations with a visible member. The axis is also what `screenRows` switches
+on: the shelf has two screens over the same models, so everything that asks
+"what is on screen" — `selectedRows`, `selectVisible`, `modelsBehind` — reads
+`visibleRows` on the list and `setGridRows` on the grid. See the
+`ModelSetGrid.vue` section. The five axes no longer fit a `Segmented`
 track, so `ShelfSortPanel.vue`'s Group section is two-column `OptionRows` — the
 component Sort by in the same panel has used for its five keys all along.
 

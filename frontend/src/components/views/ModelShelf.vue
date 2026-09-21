@@ -487,6 +487,8 @@
       <ModelSetGrid
         v-if="isSetGrid && !store.loading && !store.error"
         @works-with="showWorksWith"
+        @menu="openGridMenu"
+        @rename="startRenameSelected"
       />
       <p v-else-if="store.loading" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
@@ -1351,12 +1353,13 @@
          a row was clicked. This wrapper is the float; the pill owns its own
          shape. `pointer-events` is off on the strip and back on for the pill,
          so the rows underneath it stay clickable. -->
-    <!-- Not over the set grid: a card there is a SET, and the bar's verbs are
-         per model - two of them destroy bytes. A selection made in the row list
-         survives the switch in the store, so it is still there when the reader
-         goes back; it simply has no floating bar over a screen where the thing
-         under the pointer is not what the bar would act on. -->
-    <div v-if="isShelfTab && !isSetGrid" class="selbar-float">
+    <!-- Over the set grid as well as the row list. That was not always true: it
+         was held back while a card stood for a whole SET, because a Delete aimed
+         at one would have taken a shared VAE with it. A card stands for its BASE
+         MODEL now and a tray row for one file, so everything this bar can be
+         aimed at on that screen is exactly one model, which is what its verbs
+         write. One bar for both views, so the refusals cannot drift. -->
+    <div v-if="isShelfTab" class="selbar-float">
       <ShelfSelectionBar
         ref="selBarRef"
         @rename="startRenameSelected"
@@ -2239,16 +2242,11 @@ function shelfOwnsTheKey(event) {
   // confirmation for rows the reader cannot see and `Escape` would silently
   // clear a selection they did not know they still had.
   if (!isShelfTab.value) return false;
-  // **The set grid is the same hazard one axis over, and it is the DEFAULT
-  // screen.** A card there stands for several models and nothing on it is
-  // selectable, so `ShelfSelectionBar` is not floated over it - which means
-  // Ctrl+A would build a selection with no control on screen showing it, and
-  // Delete would then open a real confirmation for rows nobody can see. The
-  // same reasoning as the line above, reached by the axis rather than the tab:
-  // the bar half of it was ported when the grid landed and the keys half was
-  // not (#1479 review). The selection itself survives in the store, so the
-  // keys work again the moment the row list is back.
-  if (isSetGrid.value) return false;
+  // The set grid is NOT excluded, and the reason it once was has gone with the
+  // card standing for a whole set: every selectable thing on that screen is one
+  // model, the bar floats over it, and `selectVisible` answers the grid's own
+  // idea of "shown". So Ctrl+A builds a selection the reader can see, and Delete
+  // opens the confirmation for rows they can point at.
   if (
     moveOpen.value ||
     addSourceOpen.value ||
@@ -2298,15 +2296,15 @@ function shelfOwnsTheKey(event) {
  * Shift and Alt do not - those are chords this list does not define and are
  * left to the browser, AltGr+A among them.
  *
- * **With nothing drawn the key is swallowed and the selection left alone.**
- * Two things are true at once there and only one of them is obvious: there is
+ * **With nothing drawn the key is swallowed and the selection left alone**, and
+ * `selectVisible` is where that is decided - see the note at the call. Two
+ * things are true at once there and only one of them is obvious: there is
  * nothing to select, and `selectedIds` may still be full, because it is pruned
  * against a FETCH (`pruneSelection`) and not against the `Show` narrowing that
- * emptied the list. Running `selectVisible()` would then replace a selection
- * the reader still holds with an empty one - a silent clear, from a key that
- * says "select", with no undo and (the pill being gated on `selectedRows`) no
- * control on screen to do it deliberately. The press is still claimed, or
- * declining would hand it back to the native select-all above.
+ * emptied the list. Replacing a selection the reader still holds with an empty
+ * one is a silent clear, from a key that says "select", with no undo and (the
+ * pill being gated on `selectedRows`) no control on screen to do it
+ * deliberately.
  *
  * `event.repeat` is refused for the same reason `useDedupQueueKeyboard` refuses
  * it: a held chord would rebuild a set over every drawn row, up to 1,800 of
@@ -2325,7 +2323,14 @@ function onShelfKeydown(event) {
   if (wantsSelectAll) {
     if (event.repeat) return;
     event.preventDefault();
-    if (store.visibleRows.length) store.selectVisible();
+    // The "nothing drawn, so leave the selection alone" refusal lives in
+    // `selectVisible` now, not here: this guard read `visibleRows`, which is the
+    // ROW LIST's list, and on the set grid that is a different screen - the key
+    // would have passed the guard and then cleared the selection to nothing. The
+    // pill's *Select all shown* never had the guard at all, so moving it into
+    // the store fixed a second caller as well. The press is still claimed either
+    // way, or declining would hand it to the native select-all.
+    store.selectVisible();
     return;
   }
   // Escape and Delete are both about a selection, and the guard above no longer
@@ -3346,6 +3351,17 @@ function startRename(row) {
 function startRenameSelected() {
   const id = store.selectedRows[0]?.id;
   if (id == null) return;
+  // The set grid has no row to open a field on, ever: a name lives on a card,
+  // and the dashed rule under a row is what makes an inline field honest. It
+  // takes `ShelfEditDialog`'s `rename`, which already owns that one string, so
+  // the verb is live there rather than being a menu item that does nothing.
+  // The row list is left exactly as it was, including its silent no-op when the
+  // selection is held but the row is not drawn - that is a separate question
+  // and not this change's to answer.
+  if (isSetGrid.value) {
+    editVerb.value = "rename";
+    return;
+  }
   for (const group of shownGroups.value) {
     const row = group.rows.find((candidate) => candidate.id === id);
     if (row) {
@@ -3370,6 +3386,17 @@ function openRowMenu(row, event) {
     store.selectFromClick(row.id, {}, orderedRowIds.value);
   }
   selBarRef.value?.openContextMenu(event.clientX, event.clientY);
+}
+
+/**
+ * The set grid asked for the verb menu at a pointer.
+ *
+ * The grid has already made the card or tray row under it the selection, by the
+ * same file-manager rule {@link openRowMenu} follows; this is only the half that
+ * needs the bar's ref, which lives here because there is one bar for both views.
+ */
+function openGridMenu({ x, y }) {
+  selBarRef.value?.openContextMenu(x, y);
 }
 
 /**
@@ -3920,9 +3947,10 @@ const isSetGrid = computed(
 /**
  * Answer "what else has this run with" for one model.
  *
- * The selection bar's own verb, so it reads the selection; the grid hands its
- * file up through `@works-with` instead, because a card there is not a row and
- * there is no selection on that screen to read. Both land on
+ * The selection bar's own verb, so it reads the selection - which now answers on
+ * both screens. A tray row's own NAME still hands its file up through
+ * `@works-with` instead of going through the selection, because pressing a name
+ * is a question about that file and not a decision to act on it. Both land on
  * {@link showWorksWith}, which is where the focus return is remembered - and
  * the dialog normalises the two row shapes itself, because a shelf row's `name`
  * is `modelName`'s `{text, state}` pair and a set member's is a string.
