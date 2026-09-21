@@ -1397,6 +1397,18 @@ class ComfyUIRecipeModelSlot(BaseModel):
     name: str
     widget: str
     strength: Optional[float] = None
+    # The precision the file was stored at, as one canonical id (`bf16`,
+    # `fp8_e4m3`, `q4_k_m`, `mixed`), or null where nothing records it.
+    #
+    # **It crosses the disclosure boundary on the same rule as the rest**, and
+    # by construction rather than by a check here: a scoped token's slot
+    # carries only what `quant_from_filename(name)` derives, which is a pure
+    # function of the `name` above it and so says nothing the response did not
+    # already. The shelf's own column - read from the safetensors header, and
+    # therefore a fact about the LIBRARY - is only ever mixed in by
+    # `_resolve_against_shelf`, which the service runs for a fully-unscoped
+    # owner alone.
+    quant: Optional[str] = None
     model_id: Optional[int] = None
     verified: bool = False
 

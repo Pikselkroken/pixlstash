@@ -285,6 +285,59 @@ def test_two_files_sharing_a_name_with_no_step_are_not_a_run(hub, tmp_path):
     assert propose_stacks(hub) == []
 
 
+def test_two_quant_variants_of_one_adapter_are_not_a_run(hub, tmp_path):
+    """The refusal the quant strip has to keep intact.
+
+    Both files now strip to the subject `Foxglove`, so they land in one group
+    where before the strip they were two subjects. The group is still REFUSED,
+    and by the rule that was already there: neither carries a step, and they
+    carry the same (absent) version, so there is no difference the name can
+    account for. An fp8 export of a LoRA is not a second training run.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    _adapter(hub, folder, "Foxglove_fp16.safetensors")
+    _adapter(hub, folder, "Foxglove_fp8_e4m3fn.safetensors")
+
+    assert propose_stacks(hub) == []
+
+
+def test_a_step_and_a_quant_export_of_one_subject_do_group(hub, tmp_path):
+    """The one case the quant strip changes, pinned because it was a choice.
+
+    `Foxglove_step500` and `Foxglove_fp8` used to be two subjects and are now
+    one, and the step member satisfies the "a difference the name can account
+    for" rule on its own - so the pair is proposed. Accepted deliberately: an
+    fp8 export of a run is arguably a member of it, and the owner is being
+    asked rather than told.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    _adapter(hub, folder, "Foxglove_step00000500.safetensors")
+    _adapter(hub, folder, "Foxglove_fp8.safetensors")
+
+    (proposal,) = propose_stacks(hub)
+    assert proposal.name == "Foxglove"
+    assert {member.filename for member in proposal.members} == {
+        "Foxglove_step00000500.safetensors",
+        "Foxglove_fp8.safetensors",
+    }
+
+
+def test_a_step_is_still_read_when_the_quant_sits_after_it(hub, tmp_path):
+    """`_step_of` sees past the postfix, as the name derivation already does.
+
+    Real names put the precision last, so reading the raw last token would
+    report no step for these two - and a run exported at one precision would
+    be a group with no difference it could name, and would be refused.
+    """
+    folder = _folder(hub, str(tmp_path / "loras"))
+    _adapter(hub, folder, "Foxglove-step00000500-fp16.safetensors")
+    _adapter(hub, folder, "Foxglove-step00000800-fp16.safetensors")
+
+    (proposal,) = propose_stacks(hub)
+    assert proposal.name == "Foxglove"
+    assert sorted(member.step for member in proposal.members) == [500, 800]
+
+
 def test_a_group_never_spans_two_folders(hub, tmp_path):
     """Two runs on different disks can easily share a name.
 

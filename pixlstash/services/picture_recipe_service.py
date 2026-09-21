@@ -37,6 +37,7 @@ from pixlstash.services.workflow_hash import (
     normalized_filename,
     reduce_api_graph,
 )
+from pixlstash.utils.model_utils import canonical_quant, quant_from_filename
 
 logger = get_logger(__name__)
 
@@ -108,11 +109,24 @@ def _model_slots(
     here are the same ones the hub filed as ``workflow_recipe_asset`` - which is
     what makes the shelf lookup below a lookup rather than a second, drifting
     normalisation.
+
+    ``quant`` is the precision the *filename* records, which is all a graph
+    ever says; :func:`_resolve_against_shelf` upgrades it to the header's
+    answer for any file this machine has scanned. **``name`` stays raw**: it is
+    the key the shelf lookup runs on, and the panel shows it verbatim beside a
+    name it derives itself (``utils/modelShelf.deriveModelName``, the same
+    parser the workflow card's slot names come through), so a chip and the file
+    it names never disagree.
     """
     if not api_prompt:
         models, loras = fallback_names
         return [
-            {"name": normalized_filename(name), "widget": widget, "strength": None}
+            {
+                "name": normalized_filename(name),
+                "widget": widget,
+                "strength": None,
+                "quant": quant_from_filename(name),
+            }
             for widget, names in (("ckpt_name", models), ("lora_name", loras))
             for name in names
             if isinstance(name, str) and name
@@ -137,6 +151,7 @@ def _model_slots(
                     "name": value,
                     "widget": widget,
                     "strength": _strength(widget, values),
+                    "quant": quant_from_filename(value),
                 }
             )
     # Two nodes loading one file at one strength are one row on screen.
@@ -187,6 +202,13 @@ def _resolve_against_shelf(hub, slots: list[dict]) -> list[dict]:
     A digest slot's ``name`` is a sha256, which names nothing to a reader, so a
     resolved one is renamed to the shelf's filename. An unresolved one keeps the
     digest: that really is all this machine knows about the file.
+
+    ``quant`` is upgraded here for the same reason it is renamed: the shelf's
+    column is read from the safetensors header, so it knows what a file called
+    ``nvfp4_awq`` is actually stored at where the name only guesses, and a
+    digest slot has no filename to read at all until this resolves one. The
+    filename's answer stays where the shelf has no row and where its column is
+    null.
     """
     if hub is None:
         return slots
@@ -200,6 +222,7 @@ def _resolve_against_shelf(hub, slots: list[dict]) -> list[dict]:
         )
         return slots
     sorted_digests = sorted(by_digest)
+    shelf_quant = _shelf_quant(hub)
     resolved = []
     for slot in slots:
         by_sha = bool(SHA256_FIELD_RE.search(slot["widget"]))
@@ -208,19 +231,44 @@ def _resolve_against_shelf(hub, slots: list[dict]) -> list[dict]:
         else:
             matched = set(by_name.get(slot["name"], ()))
         model_id = matched.pop() if len(matched) == 1 else None
+        name = (
+            filenames.get(model_id, slot["name"])
+            if by_sha and model_id is not None
+            else slot["name"]
+        )
         resolved.append(
             {
                 **slot,
-                "name": (
-                    filenames.get(model_id, slot["name"])
-                    if by_sha and model_id is not None
-                    else slot["name"]
+                "name": name,
+                "quant": (
+                    shelf_quant.get(model_id)
+                    or slot.get("quant")
+                    or quant_from_filename(name)
                 ),
                 "model_id": model_id,
                 "verified": by_sha and model_id is not None,
             }
         )
     return resolved
+
+
+def _shelf_quant(hub) -> dict[int, Optional[str]]:
+    """``{model id: canonical quant}`` for every row that records one.
+
+    One read for the whole panel rather than one per slot, and the rows with a
+    null column are left out so a ``.get`` miss and a null both fall through to
+    the filename.
+    """
+    try:
+        rows = hub.fetchall("SELECT id, quant FROM model WHERE quant IS NOT NULL")
+    except Exception:
+        logger.warning(
+            "Could not read the model shelf's quant column for picture recipe "
+            "models; the slots fall back to what their filenames record.",
+            exc_info=True,
+        )
+        return {}
+    return {int(row["id"]): canonical_quant(row["quant"]) for row in rows}
 
 
 def _numeric(node_ref: str) -> tuple:

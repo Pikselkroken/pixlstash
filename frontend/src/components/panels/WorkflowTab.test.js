@@ -224,6 +224,40 @@ describe("the models the panel names", () => {
     expect(text).not.toContain("ae.safetensors");
   });
 
+  it("says the precision the server took out of the name", async () => {
+    // The panel shows `name`, which no longer carries the postfix - so without
+    // the badge two quant builds of one model read identically here, which is
+    // the exact failure stripping the name is allowed only because the badge
+    // prevents. Asserted per line, because a badge on the wrong row would
+    // satisfy a search of the whole panel.
+    const quantised = card({
+      models: [
+        {
+          name: "t5xxl",
+          title: null,
+          kind: "checkpoint",
+          quant: "fp8_e4m3",
+          slot_label: "m1",
+        },
+        // Nothing recorded: no badge, and NOT an empty separator.
+        { name: "ae", title: null, kind: "vae", quant: null, slot_label: "m2" },
+      ],
+      loras: [
+        {
+          name: "detail",
+          mark: "structural",
+          quant: "q4_k_m",
+          slot_label: "l1",
+        },
+      ],
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: quantised }));
+    const { wrapper } = await mountWith([KEY], [quantised]);
+    const values = wrapper.findAll(".wftab-value").map((el) => el.text());
+    expect(values).toEqual(["t5xxl · FP8 E4M3", "ae"]);
+    expect(wrapper.find(".wftab-chip").text()).toContain("detail · Q4_K_M");
+  });
+
   it("falls back to the filename where the shelf has no name", async () => {
     // The ordinary case - the line must say the file, never go blank.
     const { wrapper } = await mountWith([KEY]);
@@ -396,9 +430,9 @@ describe("the Recipes tab (v1.12 F6)", () => {
     await tab.trigger("click");
     await flush(wrapper);
 
-    expect(
-      wrapper.findComponent({ name: "WorkflowRecipesTab" }).exists(),
-    ).toBe(true);
+    expect(wrapper.findComponent({ name: "WorkflowRecipesTab" }).exists()).toBe(
+      true,
+    );
     // Run… is the Workflow tab's; the Recipes tab runs a recipe from its row.
     expect(
       wrapper.findAll("button").some((b) => b.text().includes("Run…")),
@@ -475,8 +509,11 @@ describe("with several workflows selected", () => {
     // Generate button is gone, and it was unguarded: `function run() { return; }`
     // kept the whole suite green.
     const { wrapper } = await mountWith([KEY], [card()]);
-    const { useRunDialogStore } = await import("../../stores/useRunDialogStore");
-    const run = wrapper.findAll("button").find((b) => b.text().includes("Run…"));
+    const { useRunDialogStore } =
+      await import("../../stores/useRunDialogStore");
+    const run = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Run…"));
 
     await run.trigger("click");
     await flush(wrapper);
@@ -500,9 +537,8 @@ describe("with several workflows selected", () => {
       .find((b) => b.text().includes("Run…"));
     await run.trigger("click");
     await flush(wrapper);
-    const { useRunDialogStore } = await import(
-      "../../stores/useRunDialogStore"
-    );
+    const { useRunDialogStore } =
+      await import("../../stores/useRunDialogStore");
     // Seeded first: `source` is null on a fresh store, so asserting null
     // against an untouched default would pass with `run()` deleted entirely.
     const runDialog = useRunDialogStore();
@@ -673,8 +709,7 @@ describe("the more menu and hiding", () => {
       wrapper.findAll("button").find((b) => b.text() === "Unhide"),
     ).toBeTruthy();
   });
-
-  });
+});
 
 describe("which card the rail shows", () => {
   it("keeps showing a card the flip moved out of the grid", async () => {
@@ -824,7 +859,8 @@ describe("the Tasks tab", () => {
     const tasksStore = useTasksStore();
     expect(
       wrapper
-        .findAll("button.inspector-tab").at(-1)
+        .findAll("button.inspector-tab")
+        .at(-1)
         .find(".inspector-tab-pulse")
         .exists(),
     ).toBe(false);
@@ -838,7 +874,8 @@ describe("the Tasks tab", () => {
     await flush(wrapper);
     expect(
       wrapper
-        .findAll("button.inspector-tab").at(-1)
+        .findAll("button.inspector-tab")
+        .at(-1)
         .find(".inspector-tab-pulse")
         .exists(),
     ).toBe(true);

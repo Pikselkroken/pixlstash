@@ -378,7 +378,11 @@ CREATE TABLE IF NOT EXISTS model (
     -- support file (vae_16ch, clip_l, t5_xxl); a row's base_model, when it
     -- folds, is the family the shelf serves instead, computed on the way out
     -- so a corrected base model is never contradicted by a stale column.
-    -- `quant` is the dtype holding most of the parameters, or 'mixed'.
+    -- `quant` is the precision the file was stored at: the dtype holding
+    -- most of the parameters (or 'mixed'), and for a file with no readable
+    -- header the postfix in its own name. Stored in whichever source's own
+    -- spelling; ModelResponse folds the two (`canonical_quant`) on the way
+    -- out, so a row written before either source existed still reads right.
     -- `weights_id` hashes tensor names and shapes without dtypes: two clean
     -- casts of one model share it, a repack that adds scale tensors does not.
     -- NULL until a scan has read the header; the scanner re-reads it for rows

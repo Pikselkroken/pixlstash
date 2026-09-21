@@ -78,7 +78,17 @@
               <v-icon size="12" class="recipe-chip-kind">{{
                 isAdapter(model) ? "mdi-layers" : "mdi-cube-outline"
               }}</v-icon>
-              <span class="recipe-chip-name">{{ model.name }}</span>
+              <span class="recipe-chip-name">{{ modelLabel(model) }}</span>
+              <!-- The precision `modelLabel` just stripped out of the name.
+                   Drawn like the strength beside it - mono, dimmed, flex:none -
+                   because it is a machine word read character by character and
+                   it must not be what the chip ellipsises. The raw filename is
+                   still in the hover text, so nothing is hidden. -->
+              <span v-if="quantBadge(model.quant)" class="recipe-chip-quant">{{
+                quantBadge(model.quant).label === "FP8"
+                  ? quantBadge(model.quant).title
+                  : quantBadge(model.quant).label
+              }}</span>
               <v-icon v-if="model.verified" size="12" class="recipe-chip-badge"
                 >mdi-check-decagram</v-icon
               >
@@ -347,6 +357,7 @@ import { pictureThumbnailUrl } from "../../api/pictures";
 import { isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
 import { downloadBlob } from "../../utils/downloadFile";
+import { deriveModelName, quantBadge } from "../../utils/modelShelf";
 import { keepsTheSameLook } from "../../utils/recipeKey";
 import { resolveRecipeLoras } from "../../utils/recipeLoras";
 
@@ -407,7 +418,9 @@ const RUN_REASONS = {
  * the refusal itself is not: an uninstalled node pack is a thing to go and
  * install, and "could not rebuild it" on its own sends the reader nowhere.
  */
-const conversionProblems = computed(() => props.recipe?.conversionProblems || []);
+const conversionProblems = computed(
+  () => props.recipe?.conversionProblems || [],
+);
 
 /**
  * Whether this recipe's graph was never resolved, so the fields read off a
@@ -417,9 +430,7 @@ const conversionProblems = computed(() => props.recipe?.conversionProblems || []
  * ordinary ComfyUI one's are too.
  */
 const UNRESOLVED_REASONS = new Set(["editor_graph", "comfyui_unreachable"]);
-const unreadable = computed(() =>
-  UNRESOLVED_REASONS.has(props.recipe?.reason),
-);
+const unreadable = computed(() => UNRESOLVED_REASONS.has(props.recipe?.reason));
 
 const runReason = computed(() => {
   if (!props.recipe) return null;
@@ -677,6 +688,25 @@ const inputs = computed(() => props.recipe?.inputs || []);
 /** A LoRA and friends wear the layers glyph; a checkpoint wears the cube. */
 function isAdapter(model) {
   return /lora|adapter/i.test(model.widget || "");
+}
+
+/**
+ * What to CALL a model here: the same derived name the model shelf and the
+ * workflow card show, off the same parser.
+ *
+ * The overlay is read a click away from the card the picture came off, so a
+ * chip reading `t5xxl_fp8_e4m3fn.safetensors` under a card chip reading
+ * `t5xxl` is one model named two ways. The raw string stays in the hover text
+ * (`modelTooltip`), which is where it is actually useful - it is what a reader
+ * pastes into a ComfyUI node, and for a slot named by digest it is the digest.
+ *
+ * Derived HERE and not served, unlike the workflow card's slot name: this
+ * response's `name` is the shelf lookup's own key and the panel needs the raw
+ * value for the tooltip, so stripping it server-side would take away the one
+ * string the chip cannot do without.
+ */
+function modelLabel(model) {
+  return deriveModelName(model.name) || model.name;
 }
 
 /**
@@ -1047,6 +1077,7 @@ async function copyPrompt() {
   flex: none;
 }
 
+.recipe-chip-quant,
 .recipe-chip-strength {
   flex: none;
   font-family: var(--font-mono);

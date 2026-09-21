@@ -189,6 +189,7 @@ import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { workflowCoverUrl } from "../../api/workflows";
+import { quantBadge } from "../../utils/modelShelf";
 import {
   cardAccessibleName,
   checkpointModel,
@@ -369,17 +370,22 @@ const coverOverflow = computed(() =>
 // beside it, and an empty row must not become a claim either way (#1466).
 const checkpointIsUnread = computed(() => checkpointUnread(props.card));
 const lorasAreUnread = computed(() => lorasUnread(props.card));
+// The precision rides the checkpoint row as a SECOND chip rather than inside
+// the first one's label. The name row above was built from this model's name,
+// and `FP8` is a different kind of thing from the name - so it wears the fact
+// treatment (no fill), and it clips to "+1" on a narrow card like every other
+// chip instead of eating the name it qualifies. A model with no recorded
+// precision gets no chip at all.
 const checkpointChips = computed(() => {
   const model = checkpointModel(props.card);
-  return model
-    ? [
-        {
-          key: "checkpoint",
-          label: modelDisplayName(model),
-          icon: "cube-outline",
-        },
-      ]
-    : [];
+  if (!model) return [];
+  const quant = quantBadge(model.quant);
+  return [
+    { key: "checkpoint", label: modelDisplayName(model), icon: "cube-outline" },
+    ...(quant
+      ? [{ key: "checkpoint-quant", label: quant.label, fact: true }]
+      : []),
+  ];
 });
 const loras = computed(() => loraChips(props.card));
 const facts = computed(() => factChips(props.card));

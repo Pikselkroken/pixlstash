@@ -90,10 +90,17 @@
           <span class="wftab-label wftab-label--group">LoRA slots</span>
           <div v-for="slot in loraSlots" :key="slot.id" class="wftab-slot">
             <div class="wftab-slot-line">
-              <span class="wftab-chip" :class="{ 'wftab-chip--empty': !slot.name }">
-                <Tooltip v-if="slot.name" :text="slot.name" activator="parent" />
+              <span
+                class="wftab-chip"
+                :class="{ 'wftab-chip--empty': !slot.name }"
+              >
+                <Tooltip
+                  v-if="slot.name"
+                  :text="slot.name"
+                  activator="parent"
+                />
                 <v-icon size="16">mdi-layers-outline</v-icon>
-                {{ slot.name || "recipe LoRA" }}
+                {{ slot.chipText || "recipe LoRA" }}
               </span>
               <!-- No strength field. The card payload carries no strength
                    (`_describe_slots` reads filenames, and `FEATURED_NAMES`
@@ -118,7 +125,9 @@
             </p>
           </div>
         </template>
-        <p v-else class="wftab-note wftab-quiet">This workflow has no LoRA slot.</p>
+        <p v-else class="wftab-note wftab-quiet">
+          This workflow has no LoRA slot.
+        </p>
       </div>
 
       <div class="inspector-section">
@@ -136,8 +145,8 @@
         </p>
         <template v-else-if="defaults.length">
           <p class="wftab-note wftab-quiet">
-            The most used values among its pictures rated 4★ and up. Edit one
-            to make it yours.
+            The most used values among its pictures rated 4★ and up. Edit one to
+            make it yours.
           </p>
           <WorkflowDefaultRow
             v-for="row in pinnedDefaults"
@@ -284,6 +293,7 @@ import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
+import { quantBadge } from "../../utils/modelShelf";
 import { modelDisplayName } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
@@ -445,18 +455,37 @@ const subtitlePrefix = computed(() => {
   return "";
 });
 
-// Both read the MODEL SHELF's name where it has one, the same preference the
-// card's name row was built from, so the panel and the row do not describe one
-// model twice (`modelDisplayName`).
+// All three read the MODEL SHELF's name where it has one, the same preference
+// the card's name row was built from, so the panel and the row do not describe
+// one model twice (`modelDisplayName`).
+//
+// **And all three carry the precision**, because the server has taken it out
+// of `name`: without the badge, two quant builds of one model read identically
+// here, which is the failure `derive_model_name`'s own docstring names. It is
+// appended to the value rather than given a chip of its own - these are
+// label/value rows, not a chip row, and `· FP8` is how the shelf's own file
+// line already says a second fact about one file.
+function withQuant(text, model) {
+  const badge = quantBadge(model?.quant);
+  // FP8's shared compact label loses E4M3 versus E5M2. Other badges already
+  // carry their full identity in their label, and keep this detail row concise.
+  const detail = badge?.label === "FP8" ? badge.title : badge?.label;
+  return detail ? `${text} · ${detail}` : text;
+}
+
 const checkpointLabel = computed(() => {
   const models = card.value?.models ?? [];
   const found = models.find((model) => model.kind === "checkpoint");
-  return modelDisplayName(found) || "Not recorded";
+  const name = modelDisplayName(found);
+  return name ? withQuant(name, found) : "Not recorded";
 });
 
 const vaeLabel = computed(() => {
-  const found = (card.value?.models ?? []).find((model) => model.kind === "vae");
-  return modelDisplayName(found) || "From the checkpoint";
+  const found = (card.value?.models ?? []).find(
+    (model) => model.kind === "vae",
+  );
+  const name = modelDisplayName(found);
+  return name ? withQuant(name, found) : "From the checkpoint";
 });
 
 const loraSlots = computed(() =>
@@ -464,6 +493,9 @@ const loraSlots = computed(() =>
     id: lora.slot_label || `lora-${index}`,
     label: lora.slot_label,
     name: lora.name,
+    // The chip shows this and its tooltip shows `name`, so the precision goes
+    // on the chip: the tooltip is the raw-ish string a reader copies.
+    chipText: lora.name ? withQuant(lora.name, lora) : null,
     mark: lora.mark,
   })),
 );
@@ -500,7 +532,9 @@ const defaults = computed(() => {
   }));
 });
 
-const pinnedDefaults = computed(() => defaults.value.filter((row) => row.pinned));
+const pinnedDefaults = computed(() =>
+  defaults.value.filter((row) => row.pinned),
+);
 const unpinnedDefaults = computed(() =>
   defaults.value.filter((row) => !row.pinned),
 );
@@ -682,7 +716,11 @@ function saveNotes() {
   const key = selectedKey.value;
   // `detail` null is a card whose notes have not arrived; the box is not
   // drawn then, and the draft belongs to whatever was read last.
-  if (!key || !detail.value || notesDraft.value === (detail.value.notes ?? "")) {
+  if (
+    !key ||
+    !detail.value ||
+    notesDraft.value === (detail.value.notes ?? "")
+  ) {
     return;
   }
   const notes = notesDraft.value || null;

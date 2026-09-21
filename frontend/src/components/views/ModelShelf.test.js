@@ -352,6 +352,52 @@ describe("a row with nothing in its header", () => {
     expect(cells).toEqual(["LoRA", "not set", "342.1 MB", ""]);
   });
 
+  it("takes the quant postfix out of the name and puts it on a chip", async () => {
+    // The two halves of one change, asserted together on purpose: stripping
+    // without badging makes two quant builds of one model read identically,
+    // which is worse than leaving the postfix in the name.
+    const wrapper = await mountShelf([
+      adapter({
+        display_name: null,
+        filename: "z_image_turbo_bf16.safetensors",
+        quant: "bf16",
+      }),
+    ]);
+    const row = wrapper.find(".shelf-row");
+    expect(row.find(".shelf-row-name").text()).toBe("z image turbo");
+    expect(row.find(".shelf-chip--quant").text()).toBe("BF16");
+    // And the file's own string is untouched on the line under it, which is
+    // what a reader pastes into a ComfyUI node.
+    expect(row.find(".shelf-row-file").text()).toContain(
+      "z_image_turbo_bf16.safetensors",
+    );
+  });
+
+  it("badges the precision even where the NAME never carried it", async () => {
+    // The column is read from the safetensors header, so a file whose name
+    // says nothing still has an answer - and a row the owner named by hand
+    // keeps THEIR name and gets the chip all the same. `fp8_e4m3` is the id
+    // the API serves, folded from the header's own `f8_e4m3`; the chip shows
+    // the short label and the hover text carries the variant.
+    const wrapper = await mountShelf([
+      adapter({
+        display_name: "Clementine",
+        filename: "clem.safetensors",
+        quant: "fp8_e4m3",
+      }),
+    ]);
+    const row = wrapper.find(".shelf-row");
+    expect(row.find(".shelf-row-name").text()).toBe("Clementine");
+    expect(row.find(".shelf-chip--quant").text()).toBe("FP8");
+  });
+
+  it("draws no quant chip on a row that records no precision", async () => {
+    const wrapper = await mountShelf([
+      adapter({ display_name: null, filename: "Foxglove.safetensors" }),
+    ]);
+    expect(wrapper.find(".shelf-chip--quant").exists()).toBe(false);
+  });
+
   it("marks the derived name by type, not by fading it", async () => {
     // Rank is size, weight and tracking, never opacity (§5.1) - and 37% of
     // rows faded would be a column of ghosts rather than a signal.

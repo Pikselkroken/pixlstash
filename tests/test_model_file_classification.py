@@ -28,7 +28,12 @@ from pixlstash.utils.adapter_header import (
     describe_adapter,
     has_adapter_markers,
 )
-from pixlstash.utils.model_utils import clean_asset_name, derive_model_name
+from pixlstash.utils.model_utils import (
+    canonical_quant,
+    clean_asset_name,
+    derive_model_name,
+    quant_from_filename,
+)
 
 
 def _write_safetensors(path, tensors, metadata=None):
@@ -327,3 +332,121 @@ class TestDerivedName:
         assert clean_asset_name("JimmyVehicle_000002750.safetensors") == (
             "JimmyVehicle 000002750"
         )
+
+
+# (filename, the name a row shows, the canonical quant id or None).
+#
+# **One table, two assertions**: `derive_model_name` and `quant_from_filename`
+# run the same parser, so a vocabulary entry that strips a token without
+# badging it - or badges one it did not strip - fails here rather than on
+# somebody's shelf. Mirrored case for case in
+# `frontend/src/utils/modelShelf.test.js`, which is what the parity guarantee
+# between the two halves means.
+QUANT_VOCABULARY = [
+    # The float families, in both spellings each source writes them in.
+    ("model_fp32.safetensors", "model", "fp32"),
+    ("model_f32.safetensors", "model", "fp32"),
+    ("model_fp16.safetensors", "model", "fp16"),
+    ("z_image_turbo_bf16.safetensors", "z image turbo", "bf16"),
+    ("t5xxl_fp8_e4m3fn.safetensors", "t5xxl", "fp8_e4m3"),
+    ("clip_l_fp8_e5m2.safetensors", "clip l", "fp8_e5m2"),
+    ("model_fp8.safetensors", "model", "fp8"),
+    ("flux_nvfp4_awq.safetensors", "flux", "nvfp4"),
+    ("model_nf4.safetensors", "model", "nf4"),
+    ("model_int8.safetensors", "model", "int8"),
+    ("model_i4.safetensors", "model", "int4"),
+    # GGUF: the level IS the name, so it is kept whole and lowercased.
+    ("flux1-dev-Q4_K_M.gguf", "flux1 dev", "q4_k_m"),
+    ("Qwen_Image-Q6_K.gguf", "Qwen Image", "q6_k"),
+    ("flux_q8_0.gguf", "flux", "q8_0"),
+    # The I-quant family, which is most of what city96 publishes for Flux and
+    # Qwen-Image - i.e. the image-model GGUF this feature is actually for.
+    ("flux1-dev-IQ4_XS.gguf", "flux1 dev", "iq4_xs"),
+    ("flux1-dev-IQ3_M.gguf", "flux1 dev", "iq3_m"),
+    ("Qwen-Image-IQ2_XXS.gguf", "Qwen Image", "iq2_xxs"),
+    ("Qwen_Image-Q3_K_XL.gguf", "Qwen Image", "q3_k_xl"),
+    ("flux_iq4_nl.gguf", "flux", "iq4_nl"),
+    # Newer llama.cpp GGUF types use a TQ head or one unsegmented FP4 token.
+    ("model-TQ1_0.gguf", "model", "tq1_0"),
+    ("model-TQ2_0.gguf", "model", "tq2_0"),
+    ("model-MXFP4.gguf", "model", "mxfp4"),
+    # A modifier next to a real quant token goes with it.
+    ("umt5_xxl_fp8_e4m3fn_scaled.safetensors", "umt5 xxl", "fp8_e4m3"),
+    # Quant first, then training: real names put the quant last.
+    ("model-step00004500-fp16.safetensors", "model", "fp16"),
+    # Mixed case, because every shelf fixture in this repo is lowercase and a
+    # case-folding bug in the lookup would otherwise pass the whole suite.
+    ("Flux1-Dev-FP8_E4M3FN.safetensors", "Flux1 Dev", "fp8_e4m3"),
+    ("Clementine_BF16.safetensors", "Clementine", "bf16"),
+]
+
+# Names that must come back untouched. `scaled`, `fast`, `m`, `l`, `1` and `0`
+# are ordinary tokens in real model names, and this is the guard that keeps
+# them: a modifier may only be eaten when a genuine quant token is eaten with
+# it, and a GGUF level only as the tail of an explicit `q<n>` head.
+QUANT_NON_VOCABULARY = [
+    ("some_model_scaled.safetensors", "some model scaled"),
+    ("clementine_fast.safetensors", "clementine fast"),
+    ("clementine_m.safetensors", "clementine m"),
+    ("sdxl_1.safetensors", "sdxl 1"),
+    ("sd_xl_base_1.0.safetensors", "sd xl base 1.0"),
+    ("portrait_mix_v2.safetensors", "portrait mix v2"),
+    # A GGUF level only ever matches as the tail of an explicit `q<n>` or
+    # `iq<n>` head, so `xl` in a real name survives - and `XL` is in a great
+    # many of them.
+    ("juggernaut_xl_v9.safetensors", "juggernaut xl v9"),
+    ("Anything-XL.safetensors", "Anything XL"),
+]
+
+
+class TestQuantPostfix:
+    """The precision in a filename: stripped from the name, kept as a fact."""
+
+    @pytest.mark.parametrize("filename,name,quant", QUANT_VOCABULARY)
+    def test_the_name_loses_the_postfix(self, filename, name, quant):
+        assert derive_model_name(filename) == name
+
+    @pytest.mark.parametrize("filename,name,quant", QUANT_VOCABULARY)
+    def test_the_postfix_is_recovered_as_a_fact(self, filename, name, quant):
+        assert quant_from_filename(filename) == quant
+
+    @pytest.mark.parametrize("filename,name", QUANT_NON_VOCABULARY)
+    def test_a_modifier_alone_is_part_of_the_name(self, filename, name):
+        # Without the "at least one real quant token" guard,
+        # `some_model_scaled` silently becomes `some model`.
+        assert derive_model_name(filename) == name
+        assert quant_from_filename(filename) is None
+
+    def test_a_name_that_is_only_a_quant_derives_to_empty(self):
+        # The caller decides what to show; the shelf falls back to the
+        # filename and marks the row as carrying the file's own name.
+        assert derive_model_name("nvfp4_awq.safetensors") == ""
+        assert quant_from_filename("nvfp4_awq.safetensors") == "nvfp4"
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            # The header's dtype spellings, which are what `quant_from_header`
+            # returns. One vocabulary, or one card reads `f16` where the next
+            # reads `FP16` for the same precision.
+            ("f32", "fp32"),
+            ("f16", "fp16"),
+            ("bf16", "bf16"),
+            ("f8_e4m3", "fp8_e4m3"),
+            ("f8_e4m3fn", "fp8_e4m3"),
+            ("f8_e5m2", "fp8_e5m2"),
+            ("i32", "int32"),
+            ("i8", "int8"),
+            ("u8", "uint8"),
+            ("F8_E4M3", "fp8_e4m3"),
+            # A real header answer, and not a failure: no dtype has a majority.
+            ("mixed", "mixed"),
+            # Never seen here, shown verbatim rather than swallowed.
+            ("f64", "f64"),
+            (None, None),
+            ("", None),
+            ("   ", None),
+        ],
+    )
+    def test_both_sources_fold_into_one_vocabulary(self, raw, expected):
+        assert canonical_quant(raw) == expected

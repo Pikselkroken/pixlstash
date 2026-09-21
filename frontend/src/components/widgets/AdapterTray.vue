@@ -31,9 +31,18 @@
         <ModelMark :row="row" />
         <span class="adapter-card__body">
           <span class="adapter-card__name">{{ nameOf(row) }}</span>
-          <span class="adapter-card__meta">{{
-            row.base_model || "Base model not set"
-          }}</span>
+          <!-- The precision rides the base-model line rather than taking a
+               chip beside the name. `nameOf` has just stripped it out of the
+               name, so it has to be somewhere - and this card is a ~180px
+               track whose name already ellipsises, where a chip on that line
+               would eat the name it qualifies. Same `·` separator the shelf's
+               own file line uses; the hover text carries the long form. -->
+          <span class="adapter-card__meta"
+            >{{ row.base_model || "Base model not set"
+            }}<template v-if="quantBadge(row.quant)">
+              · {{ quantBadge(row.quant).label }}</template
+            ></span
+          >
           <span v-if="row.trigger_words" class="adapter-card__trigger">{{
             row.trigger_words
           }}</span>
@@ -69,7 +78,7 @@ import { computed, ref, useId, watch } from "vue";
 
 import { listAdapters } from "../../api/modelShelf";
 import { errorDetail } from "../../utils/apiError";
-import { modelName } from "../../utils/modelShelf";
+import { modelName, quantBadge } from "../../utils/modelShelf";
 import ModelMark from "./ModelMark.vue";
 import Tooltip from "./Tooltip.vue";
 
@@ -167,7 +176,11 @@ function nameOf(row) {
 function cardTitle(row) {
   const name = nameOf(row);
   const filename = String(row?.filename || "").trim();
-  return filename && filename !== name ? `${name} - ${filename}` : name;
+  const quant = quantBadge(row?.quant);
+  const head = filename && filename !== name ? `${name} - ${filename}` : name;
+  // The long form of the precision, because the line above abbreviates it to
+  // `FP8` and the variant behind that is exactly what a reader hovers to find.
+  return quant ? `${head} - ${quant.title}` : head;
 }
 
 // Only the newest flight may write, or a slow read for one person lands last and

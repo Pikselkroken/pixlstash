@@ -130,6 +130,188 @@ def clean_asset_name(filename: str) -> str:
     return name.strip()
 
 
+# The precision a file was stored at, written into its name.
+#
+# `clean_asset_name` has already split on `_` and `-` by the time any of this
+# runs, so the vocabulary is TOKEN-LEVEL: `Q4_K_M` arrives as three tokens.
+#
+# Two separate rules, not one list, because the two families have different
+# safety profiles. A GGUF level is `k`, `s`, `m`, `l`, `0` or `1` - ordinary
+# tokens that appear in real names (`sdxl_1_0_fp16`, `sd_xl_base_1`) - so they
+# are only ever eaten as the tail of an explicit `q<n>` head. The rest
+# (`scaled`, `awq`, `gptq`, `fast`) are distinctive enough to pop next to any
+# real quant token, and never on their own.
+#
+# ``re.ASCII`` for the same reason `_VERSION_SUFFIX_RE` carries it: Python's
+# ``\d`` matches every Unicode decimal and JavaScript's does not, and
+# `frontend/src/utils/modelShelf.js` mirrors this rule token for token.
+# ``iq`` and ``tq`` as well as ``q``: the I-quant family (``IQ3_M``,
+# ``IQ4_XS``, ``IQ2_XXS``) is most of what city96 publishes for Flux and
+# Qwen-Image, while current llama.cpp also serves ``TQ1_0`` and ``TQ2_0``.
+# ``xs``/``xl``/``xxs``/``nl`` are levels for the same reason ``k``/``s``/``m``
+# are.
+_GGUF_HEAD_RE = re.compile(r"^(?:i?q|tq)\d+$", re.IGNORECASE | re.ASCII)
+_GGUF_LEVELS = frozenset({"k", "s", "m", "l", "xs", "xl", "xxs", "nl", "0", "1"})
+
+# Filename spelling -> canonical id. The refinement wins where both are
+# present (`fp8_e4m3fn` is `fp8_e4m3`), which the rightmost-token rule in
+# :func:`_split_quant` gets for free: real names put the refinement last.
+_QUANT_TOKENS = {
+    "fp32": "fp32",
+    "f32": "fp32",
+    "fp16": "fp16",
+    "f16": "fp16",
+    "bf16": "bf16",
+    "fp8": "fp8",
+    "f8": "fp8",
+    "e4m3": "fp8_e4m3",
+    "e4m3fn": "fp8_e4m3",
+    "e5m2": "fp8_e5m2",
+    "nvfp4": "nvfp4",
+    "mxfp4": "mxfp4",
+    "fp4": "fp4",
+    "nf4": "nf4",
+    "int8": "int8",
+    "i8": "int8",
+    "int4": "int4",
+    "i4": "int4",
+}
+
+# Popped only when a real quant token is popped with them. On their own they
+# are somebody's model name.
+_QUANT_MODIFIERS = frozenset({"scaled", "awq", "gptq", "fast"})
+
+# Spellings that are not already the canonical id. The safetensors header
+# names a dtype (`f16`, `f8_e4m3`, `i32`); a filename names a precision
+# (`fp16`); one card must not read `f16` where the next reads `FP16` for the
+# same thing, so both sources fold through :func:`canonical_quant`.
+_QUANT_FOLDS = {
+    "f32": "fp32",
+    "f16": "fp16",
+    "f8": "fp8",
+    "f8_e4m3": "fp8_e4m3",
+    "f8_e4m3fn": "fp8_e4m3",
+    "f8_e5m2": "fp8_e5m2",
+    "i4": "int4",
+    "i8": "int8",
+    "i16": "int16",
+    "i32": "int32",
+    "i64": "int64",
+    "u8": "uint8",
+    "u16": "uint16",
+    "u32": "uint32",
+    "u64": "uint64",
+}
+
+
+def canonical_quant(raw: str | None) -> str | None:
+    """Fold one source's spelling of a precision into the id clients render.
+
+    Both sources go through here: :func:`quant_from_filename` and
+    ``adapter_header.quant_from_header``, whose answer is a **safetensors
+    dtype** (``f16``, ``f8_e4m3``, ``i32``) rather than the precision a person
+    writes into a filename (``fp16``). Folding one and not the other is how one
+    card comes to read ``f16`` where the next reads ``FP16``.
+
+    An unrecognised string folds to itself, lowercased. That is deliberate:
+    ``mixed`` is a real header answer, a GGUF level (``q4_k_m``) *is* the name
+    a reader recognises, and a dtype nothing here has seen is better shown
+    verbatim than swallowed.
+
+    Args:
+        raw: A dtype, a filename postfix, or ``None``.
+
+    Returns:
+        The canonical id, or ``None`` when *raw* says nothing.
+
+    Examples:
+        >>> canonical_quant("F8_E4M3")
+        'fp8_e4m3'
+        >>> canonical_quant("bf16")
+        'bf16'
+        >>> canonical_quant("mixed")
+        'mixed'
+    """
+    key = (raw or "").strip().casefold()
+    if not key:
+        return None
+    return _QUANT_FOLDS.get(key, key)
+
+
+def _split_quant(tokens: list[str]) -> tuple[list[str], str | None]:
+    """Split a token list into its name and the quant postfix on the end.
+
+    The one parser both :func:`derive_model_name` and
+    :func:`quant_from_filename` run, so the name a row shows and the badge
+    beside it can never disagree about where the name ended.
+
+    **Pure**: *tokens* is never mutated, on any branch. The JS mirror cannot
+    mutate its argument at all, and a helper whose side effect depends on which
+    branch ran is the kind of difference the parity tests would not catch.
+
+    Args:
+        tokens: ``clean_asset_name(...).split()``.
+
+    Returns:
+        ``(tokens with the postfix removed, canonical id or None)``. The list
+        is a new one, equal to *tokens* when nothing was recognised.
+    """
+    # The GGUF tail first: `q<n>` plus up to two level tokens, longest match
+    # first so `Q4 K M` beats the bare `Q4` inside it.
+    for width in (3, 2, 1):
+        if len(tokens) < width or not _GGUF_HEAD_RE.match(tokens[-width]):
+            continue
+        levels = tokens[len(tokens) - width + 1 :]
+        if all(level.casefold() in _GGUF_LEVELS for level in levels):
+            return tokens[:-width], "_".join(t.casefold() for t in tokens[-width:])
+
+    kept = list(tokens)
+    popped: list[str] = []
+    while kept and (
+        kept[-1].casefold() in _QUANT_TOKENS or kept[-1].casefold() in _QUANT_MODIFIERS
+    ):
+        popped.append(kept.pop())
+    # The guard the whole safety of this rests on. `scaled` and `fast` are
+    # ordinary tokens in real model names, and may only be eaten when a genuine
+    # quant token was eaten with them: without this,
+    # `some_model_scaled.safetensors` silently becomes `some model`.
+    quant = next(
+        (_QUANT_TOKENS[t.casefold()] for t in popped if t.casefold() in _QUANT_TOKENS),
+        None,
+    )
+    if quant is None:
+        return list(tokens), None
+    return kept, quant
+
+
+def quant_from_filename(filename: str) -> str | None:
+    """Return the precision a model's *filename* says it was stored at.
+
+    The second of the two sources behind the shelf's ``quant`` column, and the
+    only one a ``.gguf`` file has: the header answers for ``.safetensors`` and
+    is authoritative where it does, so this fills the gap rather than competing
+    with it.
+
+    Args:
+        filename: File name or path.
+
+    Returns:
+        A canonical id (see :func:`canonical_quant`), or ``None`` when the name
+        carries no quant postfix - which is most names.
+
+    Examples:
+        >>> quant_from_filename("z_image_turbo_bf16.safetensors")
+        'bf16'
+        >>> quant_from_filename("t5xxl_fp8_e4m3fn.safetensors")
+        'fp8_e4m3'
+        >>> quant_from_filename("flux1-dev-Q4_K_M.gguf")
+        'q4_k_m'
+        >>> quant_from_filename("some_model_scaled.safetensors") is None
+        True
+    """
+    return _split_quant(clean_asset_name(filename).split())[1]
+
+
 # Trailing tokens that record where in a training run a checkpoint was saved.
 # `JimmyVehicle_000002750` and `ohwx_woman-step00004500` are one subject each, not
 # a subject called "JimmyVehicle 000002750".
@@ -146,10 +328,22 @@ _TRAINING_SUFFIX_RE = re.compile(
 def derive_model_name(filename: str) -> str:
     """Return a display name for a model file that never said what it is called.
 
-    Builds on :func:`clean_asset_name` and additionally drops trailing training
-    bookkeeping, because the step and epoch are parsed into their own fields and
-    repeating them in the name turns six checkpoints of one run into six
-    unrelated-looking rows.
+    Builds on :func:`clean_asset_name` and additionally drops the trailing
+    quant postfix and then any training bookkeeping, because both are parsed
+    into their own fields and repeating them in the name turns six checkpoints
+    of one run into six unrelated-looking rows, and puts the precision in the
+    place a person reads the model's identity.
+
+    Quant first, then training: real names put the quant last
+    (``model-step00004500-fp16``). The reverse (``model_fp16_step500``) is not
+    a convention anybody uses and is deliberately not handled.
+
+    **The precision is dropped from the NAME, never lost.** Two quant variants
+    of one model collapse to one name here, and what keeps them apart is the
+    badge the shelf and the workflow card draw from
+    :func:`quant_from_filename` (or, for a ``.safetensors``, the header's own
+    answer). A caller that strips the name without showing the badge has made
+    two rows read identically.
 
     This is a *derived* name and the caller must treat it as one: the shelf
     stores ``display_name`` as NULL and computes this at render, so
@@ -171,8 +365,12 @@ def derive_model_name(filename: str) -> str:
         'ohwx woman'
         >>> derive_model_name("portrait_mix_v2.safetensors")
         'portrait mix v2'
+        >>> derive_model_name("t5xxl_fp8_e4m3fn.safetensors")
+        't5xxl'
+        >>> derive_model_name("flux1-dev-Q4_K_M.gguf")
+        'flux1 dev'
     """
-    tokens = clean_asset_name(filename).split()
+    tokens, _quant = _split_quant(clean_asset_name(filename).split())
     while tokens and _TRAINING_SUFFIX_RE.match(tokens[-1]):
         tokens.pop()
     return " ".join(tokens)

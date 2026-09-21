@@ -61,6 +61,16 @@ const RECIPE = {
       model_id: null,
       verified: false,
     },
+    // A quant postfix on a model the shelf does not hold: its name is the only
+    // source, and the id is served folded (`fp8_e4m3`, never `f8_e4m3`).
+    {
+      name: "t5xxl_fp8_e4m3fn.safetensors",
+      widget: "clip_name",
+      strength: null,
+      quant: "fp8_e4m3",
+      model_id: null,
+      verified: false,
+    },
   ],
   negativePrompt: "blurry, watermark",
   seedText: "18446744073709551615",
@@ -176,15 +186,42 @@ describe("OverlayRecipePanel", () => {
   });
 
   it("names every model and the strength each LoRA was loaded at", () => {
+    // The DERIVED name, the same one the workflow card's chips carry: the
+    // overlay is one click from that card, and two spellings of one model that
+    // close together is the drift both are named from one parser to avoid.
     const chips = render().findAll(".recipe-chip");
     expect(chips.map((c) => c.find(".recipe-chip-name").text())).toEqual([
-      "realvis.safetensors",
-      "style.safetensors",
-      "gone.safetensors",
+      "realvis",
+      "style",
+      "gone",
+      "t5xxl",
     ]);
     // A checkpoint has no strength, so it prints none rather than a zero.
     expect(chips[0].find(".recipe-chip-strength").exists()).toBe(false);
     expect(chips[1].find(".recipe-chip-strength").text()).toBe("0.80");
+  });
+
+  it("shows the precision it stripped off the name, and only where there is one", () => {
+    // Without this the last two chips would read `t5xxl` and `gone` with
+    // nothing saying the first is an FP8 build - which is the whole of what
+    // stripping the postfix costs if the badge is missing.
+    const chips = render().findAll(".recipe-chip");
+    expect(chips.map((c) => c.find(".recipe-chip-quant").exists())).toEqual([
+      false,
+      false,
+      false,
+      true,
+    ]);
+    expect(chips[3].find(".recipe-chip-quant").text()).toBe("FP8 E4M3");
+  });
+
+  it("keeps the raw filename in the hover text", () => {
+    // The chip shows a name we made; the file's own string is what a reader
+    // pastes into a ComfyUI node, so it must not be the thing that was lost.
+    const tooltips = render()
+      .findAll(".recipe-chip")
+      .map((chip) => chip.find("tooltip-stub").attributes("text"));
+    expect(tooltips[3]).toContain("t5xxl_fp8_e4m3fn.safetensors");
   });
 
   it("ticks only the model the recipe named by its digest", () => {
@@ -194,7 +231,7 @@ describe("OverlayRecipePanel", () => {
     const badged = render()
       .findAll(".recipe-chip")
       .map((chip) => chip.find(".recipe-chip-badge").exists());
-    expect(badged).toEqual([false, true, false]);
+    expect(badged).toEqual([false, true, false, false]);
   });
 
   it("copies the prompt from the Prompt heading", async () => {
@@ -487,7 +524,9 @@ describe("OverlayRecipePanel", () => {
   it("hides the input action with no ComfyUI to run anything on", () => {
     const wrapper = render({ comfyuiConfigured: false });
     expect(
-      wrapper.findAll("button").some((b) => b.text().includes("Run another workflow")),
+      wrapper
+        .findAll("button")
+        .some((b) => b.text().includes("Run another workflow")),
     ).toBe(false);
   });
 

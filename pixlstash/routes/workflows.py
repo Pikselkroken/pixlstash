@@ -231,7 +231,18 @@ class WorkflowSlotModel(BaseModel):
     *nobody has read this workflow's models*, never *it has none*.
     """
 
-    name: str | None = None
+    name: str | None = Field(
+        None,
+        description=(
+            "The model's file as a card names it: no folder, no extension, "
+            "and no quant postfix (`t5xxl`, not "
+            "`t5xxl_fp8_e4m3fn.safetensors`). Null for a slot whose name the "
+            "recipe never recorded — never an empty string, which reads as a "
+            "model called nothing. A name that is *nothing but* its quant "
+            "falls back to the file's own string, the way a model shelf row "
+            "does."
+        ),
+    )
     title: str | None = Field(
         None,
         description=(
@@ -274,6 +285,22 @@ class WorkflowSlotModel(BaseModel):
         ),
     )
     kind: str
+    quant: str | None = Field(
+        None,
+        description=(
+            "The precision the file was stored at, as one canonical id "
+            "(`bf16`, `fp8_e4m3`, `q4_k_m`, `int8`, `mixed`), or null where "
+            "nothing records it — which is the ordinary case. **`name` has "
+            "had this stripped off it**, so two quant variants of one model "
+            "read as one name and this is what keeps them apart; a client "
+            "showing the name shows this beside it.\n\n"
+            "One vocabulary from two sources: the model shelf's own column, "
+            "read from the safetensors header, where this machine has scanned "
+            "the file, and the filename postfix otherwise — which is the only "
+            "source a `.gguf` has. The id is served rather than a label, "
+            "because `FP8 E4M3` is display copy and belongs in the client."
+        ),
+    )
     mark: str | None = None
     slot_label: str | None = Field(
         None,
@@ -1193,6 +1220,7 @@ def _slot_models(slots) -> list[WorkflowSlotModel]:
         WorkflowSlotModel(
             name=slot.name,
             title=slot.title,
+            quant=slot.quant,
             icon=slot.icon,
             base_model=slot.base_model,
             base_model_folded=slot.base_model_folded,
