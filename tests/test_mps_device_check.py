@@ -327,5 +327,6 @@ def test_a_value_transformers_reads_as_false_is_kept_but_warned_about(
         record.levelno >= logging.WARNING and HF_ASYNC_LOAD_ENV in record.getMessage()
         for record in caplog.records
     ), (
-        f"no warning named {HF_ASYNC_LOAD_ENV}; records={[r.getMessage() for r in caplog.records]}"
+        f"no warning named {HF_ASYNC_LOAD_ENV}; "
+        f"records={[r.getMessage() for r in caplog.records]}"
     )

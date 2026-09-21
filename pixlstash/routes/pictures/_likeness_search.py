@@ -19,6 +19,10 @@ from fastapi import File, HTTPException, Query, Request, UploadFile
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
+from pixlstash.inference.cpu_query_encoders import (
+    NO_GPU_WORKER_DETAIL,
+    CpuQueryEncodersNotReadyError,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.likeness.likeness_utils import LikenessUtils
 from pixlstash.services import search_query_service
@@ -59,7 +63,16 @@ def _encode_query_image(server, pil_image: Image.Image) -> np.ndarray:
 
     workflow = engine.clip_embedding_workflow
     try:
-        embeddings = workflow.encode_images([pil_image])
+        embeddings = workflow.encode_query_image(pil_image)
+    except CpuQueryEncodersNotReadyError as exc:
+        # Already a 503, but say which 503 it is: "still loading" and "no
+        # worker" need different things from the owner, and the generic
+        # message below would send them looking at CLIP instead.
+        logger.warning("likeness-search: cannot encode the query image yet: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail=str(exc) if exc.worker_running else NO_GPU_WORKER_DETAIL,
+        ) from exc
     except Exception as exc:
         logger.error("likeness-search: CLIP encoding failed for query image: %s", exc)
         raise HTTPException(

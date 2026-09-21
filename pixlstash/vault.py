@@ -34,6 +34,7 @@ from .db_models import (
 from .pixl_logging import get_logger
 from pixlstash.startup_permissions import mkdir_private
 from pixlstash.inference.engine import InferenceEngine
+from pixlstash.tasks.cpu_query_encoder_load_task import CpuQueryEncoderLoadTask
 from .utils.image_processing.image_utils import ImageUtils
 from .tasks.face_extraction_task import FaceExtractionTask
 from .tasks.image_embedding_task import ImageEmbeddingTask
@@ -410,6 +411,8 @@ class Vault:
                 tagger_settings=self._tagger_settings,
             )
             self._bind_engine_services()
+        # After the engine exists, which at boot is later than ``start()``.
+        self._queue_cpu_query_encoder_load()
 
     def start(self) -> None:
         """Start background workers.
@@ -421,10 +424,51 @@ class Vault:
         if self._disable_background_workers or self._started:
             return
         self._task_runner.start()
+        self._queue_cpu_query_encoder_load()  # first, so it heads the GPU queue
         self._work_planner.start()
         self._ref_folder_watcher.start()
         self._start_existing_folder_watches()
         self._started = True
+
+    def _queue_cpu_query_encoder_load(self) -> None:
+        """Get the CPU query-encoder copies loaded, once both halves exist.
+
+        Only Metal hosts have them (``InferenceEngine.create``). Queued rather
+        than loaded in ``create`` because every engine service is lazy: loading
+        these two inline made the engine build take 7.3 s instead of 0.003 s,
+        since they were then the first models in the process and paid the whole
+        cold-import cost.
+
+        **Called from both :meth:`ensure_ready` and :meth:`start`, because
+        neither is always the later one.** At boot ``Server.__init__`` calls
+        ``start()`` before ``app`` calls ``ensure_ready()``, so the engine does
+        not exist yet; on a library switch ``_bring_up`` calls ``ensure_ready()``
+        first, so the runner has not started yet. Whichever runs second queues
+        the load; both being too early leaves it to the first search. It is
+        idempotent, so calling it twice queues one task.
+
+        Queued rather than awaited, so nothing blocks on it. A search that
+        arrives first waits via ``CpuQueryEncoders.ensure_serving``, which
+        re-queues if this load failed or was cancelled.
+        """
+        encoders = getattr(self._engine, "query_encoders", None)
+        if encoders is None:
+            return
+
+        def _queue_load():
+            task = CpuQueryEncoderLoadTask(encoders)
+            self._task_runner.submit(task)
+            return task
+
+        encoders.bind_loader(_queue_load)
+        if not encoders.start_loading():
+            # Expected on whichever of the two calls comes first; the other one
+            # (or the first search) queues it. Debug rather than warning so a
+            # normal boot does not look broken.
+            logger.debug(
+                "CPU query-encoder load not queued yet; the task runner is not "
+                "running. It will be queued when it is."
+            )
 
     def _bind_engine_services(self) -> None:
         """Inject the engine's service instances into registry plugins.
@@ -1482,6 +1526,11 @@ class Vault:
                 tagger_settings=self._tagger_settings,
             )
             self._bind_engine_services()
+            # The third place an engine is built, and the one that is easiest
+            # to miss: without this the copies exist with no loader bound, and
+            # every later search reports "no GPU worker" for the life of the
+            # process. Caught by the multi-project authz suite.
+            self._queue_cpu_query_encoder_load()
 
         # Register the watcher BEFORE checking the DB to avoid a TOCTOU race where
         # the task completes (and fires _notify_planner_ids_processed) in the gap
