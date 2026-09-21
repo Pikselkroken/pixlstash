@@ -86,6 +86,13 @@ function submitButton(wrapper) {
 beforeEach(() => {
   setActivePinia(createPinia());
   window.localStorage.clear();
+  // The ROW LIST, said out loud. Since #1438 the shelf's DEFAULT axis is the set
+  // grid, and that is a different screen over the same models: `selectedRows`
+  // reads the rows the screen the reader is on actually draws, so a test that
+  // seeds `store.rows` and never names a screen is asking the grid about a list
+  // it does not draw. `ModelShelf.test.js` makes the same choice, for the same
+  // reason.
+  useModelShelfStore().setView({ groupBy: "none" });
 });
 
 describe("what the dialog sends", () => {

@@ -220,7 +220,7 @@ const globalOpts = {
       // whether the shelf puts it on screen instead of the row list.
       ModelSetGrid: {
         name: "ModelSetGrid",
-        emits: ["works-with"],
+        emits: ["works-with", "menu"],
         template: "<div class='set-grid-stub'></div>",
       },
       // The host-path picker `Add file` opens. Real, it would drag Vuetify's
@@ -350,6 +350,52 @@ describe("a row with nothing in its header", () => {
     // dashed - this fixture carries no `added_at`.
     const cells = row.findAll(".shelf-col").map((s) => textOf(s));
     expect(cells).toEqual(["LoRA", "not set", "342.1 MB", ""]);
+  });
+
+  it("takes the quant postfix out of the name and puts it on a chip", async () => {
+    // The two halves of one change, asserted together on purpose: stripping
+    // without badging makes two quant builds of one model read identically,
+    // which is worse than leaving the postfix in the name.
+    const wrapper = await mountShelf([
+      adapter({
+        display_name: null,
+        filename: "z_image_turbo_bf16.safetensors",
+        quant: "bf16",
+      }),
+    ]);
+    const row = wrapper.find(".shelf-row");
+    expect(row.find(".shelf-row-name").text()).toBe("z image turbo");
+    expect(row.find(".shelf-chip--quant").text()).toBe("BF16");
+    // And the file's own string is untouched on the line under it, which is
+    // what a reader pastes into a ComfyUI node.
+    expect(row.find(".shelf-row-file").text()).toContain(
+      "z_image_turbo_bf16.safetensors",
+    );
+  });
+
+  it("badges the precision even where the NAME never carried it", async () => {
+    // The column is read from the safetensors header, so a file whose name
+    // says nothing still has an answer - and a row the owner named by hand
+    // keeps THEIR name and gets the chip all the same. `fp8_e4m3` is the id
+    // the API serves, folded from the header's own `f8_e4m3`; the chip shows
+    // the short label and the hover text carries the variant.
+    const wrapper = await mountShelf([
+      adapter({
+        display_name: "Clementine",
+        filename: "clem.safetensors",
+        quant: "fp8_e4m3",
+      }),
+    ]);
+    const row = wrapper.find(".shelf-row");
+    expect(row.find(".shelf-row-name").text()).toBe("Clementine");
+    expect(row.find(".shelf-chip--quant").text()).toBe("FP8");
+  });
+
+  it("draws no quant chip on a row that records no precision", async () => {
+    const wrapper = await mountShelf([
+      adapter({ display_name: null, filename: "Foxglove.safetensors" }),
+    ]);
+    expect(wrapper.find(".shelf-chip--quant").exists()).toBe(false);
   });
 
   it("marks the derived name by type, not by fading it", async () => {
@@ -5205,59 +5251,115 @@ describe("the set grid is what the shelf opens on", () => {
     expect(textOf(wrapper.find(".shelf-sub"))).toContain("1 model");
   });
 
-  it("floats no verb bar over the grid, whatever is selected", async () => {
-    // A card is a SET. The bar's verbs are per model and two of them destroy
-    // bytes, so a Delete aimed at a card could take a shared VAE with it. The
-    // selection survives in the store and the bar comes back with the list.
-    const wrapper = await mountDefaultShelf();
-    const store = useModelShelfStore();
-    store.toggleSelected(1);
-    await wrapper.vm.$nextTick();
-
-    expect(store.selectedIds.size).toBe(1);
-    expect(wrapper.find(".selbar-float").exists()).toBe(false);
-
-    store.setView({ groupBy: "none" });
-    await wrapper.vm.$nextTick();
-    expect(wrapper.find(".selbar-float").exists()).toBe(true);
-  });
-
-  it("takes the destructive keys away, exactly as the runs tab does", async () => {
-    // **The same hazard one axis over, and this is the DEFAULT screen.** The key
-    // handler is on the WINDOW and the grid renders inside the shelf tab, so with
-    // the tab guard alone Ctrl+A built a selection with no bar on screen to show
-    // it and Delete then opened the real confirmation for cards nobody can point
-    // at. The bar half of the runs-tab precedent was ported when the grid landed
-    // and the keys half was not (#1479 review).
+  /**
+   * The shelf on the set grid, with a card actually drawn for model 1.
+   *
+   * Seeded straight onto the store rather than through the api double: this
+   * suite stubs `ModelSetGrid`, so nothing here ever calls `loadWorkflowSets`
+   * and an unseeded grid draws no cards - which is the state that made three of
+   * these assertions pass for the wrong reason.
+   */
+  async function shelfOnTheGrid() {
     const wrapper = await mountDefaultShelf([
       adapter({ id: 1, sha256: "a".repeat(64) }),
       adapter({ id: 2, sha256: "b".repeat(64) }),
     ]);
-    document.body.appendChild(wrapper.element);
     const store = useModelShelfStore();
+    store.workflowSets = {
+      combinations: [
+        {
+          key: "1",
+          models: [{ id: 1, name: "a.st", kind: "checkpoint" }],
+          recipes: 1,
+          picture_count: 1,
+          covers: [],
+        },
+      ],
+      noSet: [2],
+    };
+    store.setView({ groupBy: "workflow_set" });
+    await wrapper.vm.$nextTick();
+    return { wrapper, store };
+  }
+
+  it("floats the verb bar over the grid, as it does over the list", async () => {
+    // It did not, while a card stood for a whole SET: a Delete aimed at one
+    // could have taken a shared VAE with it. A card stands for its BASE MODEL
+    // now and a tray row for one file, so everything the bar can be aimed at
+    // there is one model - which is what its verbs write.
+    // The PILL, not the `.selbar-float` strip it docks in: the strip is the
+    // host's positioning wrapper and is always there, so asserting on it would
+    // be asserting that `isShelfTab` is true.
+    const { wrapper, store } = await shelfOnTheGrid();
+    expect(wrapper.find(".selbar").exists()).toBe(false);
+
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows.map((row) => row.id)).toEqual([1]);
+    expect(wrapper.find(".selbar").exists()).toBe(true);
+
+    // And model 2, which is on NO card, arms nothing while the grid is up.
+    store.clearSelection();
+    store.toggleSelected(2);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".selbar").exists()).toBe(false);
+    // It is still held, and the row list offers it again.
+    store.setView({ groupBy: "none" });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".selbar").exists()).toBe(true);
+  });
+
+  it("opens the verb menu where the grid says the pointer was", async () => {
+    const { wrapper, store } = await shelfOnTheGrid();
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    const bar = wrapper.findComponent({ name: "ShelfSelectionBar" });
+    expect(bar.vm.contextOpen).toBe(false);
+
+    await wrapper
+      .findComponent({ name: "ModelSetGrid" })
+      .vm.$emit("menu", { x: 210, y: 64 });
+    await wrapper.vm.$nextTick();
+
+    // One bar for both views, so there is one set of refusals rather than two
+    // that can drift. The menu is its own, opened through its exposed method.
+    expect(bar.vm.contextOpen).toBe(true);
+    expect(bar.vm.contextAt).toEqual([210, 64]);
+  });
+
+  it("takes Ctrl+A to mean the models the GRID draws", async () => {
+    // The key was taken away entirely while nothing on the grid was selectable.
+    // Back on, it has to answer the screen it is on: the row list holds two
+    // rows here and the grid draws one card, so a guard reading `visibleRows`
+    // would pass and then select the wrong set - or, with no card at all,
+    // silently clear what the reader was still holding.
+    const { wrapper, store } = await shelfOnTheGrid();
+    document.body.appendChild(wrapper.element);
 
     window.dispatchEvent(
       new KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
     );
     await wrapper.vm.$nextTick();
+    expect(store.selectedRows.map((row) => row.id)).toEqual([1]);
+    expect(store.visibleRows).toHaveLength(2);
+  });
+
+  it("clears on Escape from the grid, and refuses Delete once it has", async () => {
+    const { wrapper, store } = await shelfOnTheGrid();
+    document.body.appendChild(wrapper.element);
+    store.toggleSelected(1);
+    await wrapper.vm.$nextTick();
+    // The pre-state, asserted: without it this test is green whenever the
+    // selection happens to be empty for some other reason.
+    expect(store.selectedRows).toHaveLength(1);
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await wrapper.vm.$nextTick();
     expect(store.selectedRows).toHaveLength(0);
 
-    // And with a selection made before the switch, Delete is still refused -
-    // the selection survives, which is what makes it safe to keep.
-    store.selectVisible();
-    expect(store.selectedRows).toHaveLength(2);
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
     await wrapper.vm.$nextTick();
     expect(deleteModels).not.toHaveBeenCalled();
-    expect(store.selectedRows).toHaveLength(2);
-
-    // The keys come back with the row list, like the bar does.
-    store.setView({ groupBy: "none" });
-    await wrapper.vm.$nextTick();
-    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
-    await wrapper.vm.$nextTick();
-    expect(store.selectedRows).toHaveLength(0);
     wrapper.unmount();
   });
 

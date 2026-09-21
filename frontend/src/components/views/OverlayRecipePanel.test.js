@@ -61,6 +61,16 @@ const RECIPE = {
       model_id: null,
       verified: false,
     },
+    // A quant postfix on a model the shelf does not hold: its name is the only
+    // source, and the id is served folded (`fp8_e4m3`, never `f8_e4m3`).
+    {
+      name: "t5xxl_fp8_e4m3fn.safetensors",
+      widget: "clip_name",
+      strength: null,
+      quant: "fp8_e4m3",
+      model_id: null,
+      verified: false,
+    },
   ],
   negativePrompt: "blurry, watermark",
   seedText: "18446744073709551615",
@@ -176,15 +186,42 @@ describe("OverlayRecipePanel", () => {
   });
 
   it("names every model and the strength each LoRA was loaded at", () => {
+    // The DERIVED name, the same one the workflow card's chips carry: the
+    // overlay is one click from that card, and two spellings of one model that
+    // close together is the drift both are named from one parser to avoid.
     const chips = render().findAll(".recipe-chip");
     expect(chips.map((c) => c.find(".recipe-chip-name").text())).toEqual([
-      "realvis.safetensors",
-      "style.safetensors",
-      "gone.safetensors",
+      "realvis",
+      "style",
+      "gone",
+      "t5xxl",
     ]);
     // A checkpoint has no strength, so it prints none rather than a zero.
     expect(chips[0].find(".recipe-chip-strength").exists()).toBe(false);
     expect(chips[1].find(".recipe-chip-strength").text()).toBe("0.80");
+  });
+
+  it("shows the precision it stripped off the name, and only where there is one", () => {
+    // Without this the last two chips would read `t5xxl` and `gone` with
+    // nothing saying the first is an FP8 build - which is the whole of what
+    // stripping the postfix costs if the badge is missing.
+    const chips = render().findAll(".recipe-chip");
+    expect(chips.map((c) => c.find(".recipe-chip-quant").exists())).toEqual([
+      false,
+      false,
+      false,
+      true,
+    ]);
+    expect(chips[3].find(".recipe-chip-quant").text()).toBe("FP8 E4M3");
+  });
+
+  it("keeps the raw filename in the hover text", () => {
+    // The chip shows a name we made; the file's own string is what a reader
+    // pastes into a ComfyUI node, so it must not be the thing that was lost.
+    const tooltips = render()
+      .findAll(".recipe-chip")
+      .map((chip) => chip.find("tooltip-stub").attributes("text"));
+    expect(tooltips[3]).toContain("t5xxl_fp8_e4m3fn.safetensors");
   });
 
   it("ticks only the model the recipe named by its digest", () => {
@@ -194,7 +231,7 @@ describe("OverlayRecipePanel", () => {
     const badged = render()
       .findAll(".recipe-chip")
       .map((chip) => chip.find(".recipe-chip-badge").exists());
-    expect(badged).toEqual([false, true, false]);
+    expect(badged).toEqual([false, true, false, false]);
   });
 
   it("copies the prompt from the Prompt heading", async () => {
@@ -487,7 +524,9 @@ describe("OverlayRecipePanel", () => {
   it("hides the input action with no ComfyUI to run anything on", () => {
     const wrapper = render({ comfyuiConfigured: false });
     expect(
-      wrapper.findAll("button").some((b) => b.text().includes("Run another workflow")),
+      wrapper
+        .findAll("button")
+        .some((b) => b.text().includes("Run another workflow")),
     ).toBe(false);
   });
 
@@ -818,6 +857,73 @@ describe("OverlayRecipePanel", () => {
     expect(listSavedRecipes).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain("Saved");
     expect(wrapper.find(".recipe-match").text()).toContain("Just kept");
+  });
+
+  // ── The banner is a way there, not a full stop (#1480) ─────────────
+
+  /** The card's recipes, one of which keeps this picture's look. */
+  const MATCHING = [
+    { id: 4, name: "Rainy tram platform", prompt: "a castle on a hill", loras: [] },
+  ];
+
+  it("opens the Workflows view on the recipe the banner names", async () => {
+    listSavedRecipes.mockResolvedValue(MATCHING);
+    const wrapper = render({ recipe: { ...ON_A_CARD, loraNames: [] } });
+    await flushPromises();
+
+    const link = wrapper.find(".recipe-match-name");
+    expect(link.element.tagName).toBe("BUTTON");
+    await link.trigger("click");
+    // The card by its topology, as *Open* does, and the rail on the Recipes
+    // tab: "Saved" with nowhere to go was the dead end this closes.
+    expect(nav.push).toHaveBeenCalledWith({
+      name: "workflows",
+      query: { topology: "f00d", tab: "recipes" },
+    });
+  });
+
+  it("leaves the name inert when there is no workflow to open", async () => {
+    // Exactly where *Open* is not offered either: no topology, nowhere to go.
+    listSavedRecipes.mockResolvedValue(MATCHING);
+    const wrapper = render({
+      recipe: { ...ON_A_CARD, loraNames: [], topologyHash: null },
+    });
+    await flushPromises();
+
+    const name = wrapper.find(".recipe-match-name");
+    expect(name.text()).toContain("Rainy tram platform");
+    expect(name.element.tagName).toBe("B");
+    await name.trigger("click");
+    expect(nav.push).not.toHaveBeenCalled();
+  });
+
+  it("replaces a row the dialog replaced, rather than listing it twice", async () => {
+    listSavedRecipes.mockResolvedValue([
+      { id: 4, name: "Rainy tram platform", prompt: "an older look", loras: [] },
+    ]);
+    const wrapper = render({ recipe: { ...ON_A_CARD, loraNames: [] } });
+    await flushPromises();
+    // The old row keeps a different look, so nothing matches yet.
+    expect(wrapper.find(".recipe-match").exists()).toBe(false);
+
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Save as recipe"))
+      .trigger("click");
+    await flushPromises();
+    wrapper.findComponent({ name: "SaveRecipeDialog" }).vm.$emit("saved", {
+      id: 4,
+      name: "Rainy tram platform",
+      prompt: "a castle on a hill",
+      loras: [],
+    });
+    await flushPromises();
+
+    // Folded in BY ID. Appended, the stale row would still be in the list and
+    // the banner would go on naming a look the row no longer keeps.
+    expect(wrapper.find(".recipe-match").text()).toContain("Rainy tram platform");
+    expect(wrapper.vm.savedRecipes).toHaveLength(1);
+    expect(wrapper.vm.savedRecipes[0].prompt).toBe("a castle on a hill");
   });
 
   it("saves a LoRA the shelf cannot name, so the recipe matches the picture", async () => {

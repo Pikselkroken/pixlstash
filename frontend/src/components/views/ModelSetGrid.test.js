@@ -3,9 +3,10 @@
 //
 // The assertions worth having are the ones the honesty rule rests on - a set
 // with no evidence is DRAWN rather than dropped, an unfoldable card says so, a
-// filename-only member is flagged rather than hidden - and the one this screen
-// deliberately does not offer: there is nothing here to select, so no verb bar
-// can be aimed at a card that stands for several files.
+// filename-only member is flagged rather than hidden - and the line the
+// selection rests on: a card selects the ONE model it is named after, never the
+// set behind it, so no verb the bar carries can reach a file the reader did not
+// aim at.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
@@ -386,12 +387,54 @@ describe("the cards", () => {
       "Pictures",
       "In other sets",
     ]);
-    // A row is still a level-2 treegrid row, and clicking it asks the same
-    // question the card's name does.
+    // A row is still a level-2 treegrid row. A single click SELECTS it, as it
+    // does on the row list; the question the card's name asks in Grid is this
+    // row's default action, so it is a double click.
     await wrapper.findAll(".msp__row")[1].trigger("click");
+    expect(wrapper.emitted("works-with")).toBeUndefined();
+    await wrapper.findAll(".msp__row")[1].trigger("dblclick");
     expect(wrapper.emitted("works-with")[0][0]).toMatchObject({
       name: "sdxl_vae",
     });
+  });
+
+  it("moves one list-tray row at a time even under a multi-column card grid", async () => {
+    // Make the outer grid four columns wide. The list tray remains one column,
+    // which is the mismatch that used to make Down skip its members.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor() {}
+        observe(element) {
+          Object.defineProperty(element, "clientWidth", {
+            configurable: true,
+            value: 1000,
+          });
+        }
+        disconnect() {}
+      },
+    );
+    try {
+      const { wrapper, store } = await mountGrid({
+        rows: [row(1, "realvisXL_v5")],
+        support: [row(2, "sdxl_vae", "vae"), row(3, "clip", "text_encoder")],
+        combinations: [combination("1,2,3", [CKPT, VAE, LORA])],
+      });
+      store.toggleSet("model:1");
+      store.setView({ trayView: "list" });
+      await wrapper.vm.$nextTick();
+
+      const grid = wrapper.find('[role="treegrid"]');
+      await grid.trigger("keydown", { key: "ArrowDown" });
+      await grid.trigger("keydown", { key: "ArrowDown" });
+      await grid.trigger("keydown", { key: "Enter" });
+
+      expect(wrapper.emitted("works-with")[0][0]).toMatchObject({
+        name: "sdxl_vae",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -448,18 +491,240 @@ describe("the models no recipe names", () => {
   });
 });
 
-describe("what this screen does not offer", () => {
-  it("makes no card selectable, so no verb can be aimed at a set", async () => {
-    const { wrapper, store } = await mountGrid({
-      rows: [row(1, "realvisXL_v5")],
+describe("selection and the verbs", () => {
+  /** The grid with one card, its tray open, and three selectable models. */
+  async function openTray() {
+    const state = await mountGrid({
+      rows: [row(1, "realvisXL_v5"), row(3, "filmgrain_xl")],
       support: [row(2, "sdxl_vae", "vae")],
-      combinations: [combination("1,2", [CKPT, VAE])],
+      combinations: [combination("1,2,3", [CKPT, VAE, LORA])],
+    });
+    state.store.toggleSet("model:1");
+    await state.wrapper.vm.$nextTick();
+    return state;
+  }
+
+  it("selects the card's BASE MODEL, never the set behind it", async () => {
+    // The whole reason this screen is safe to aim a Delete at. A card standing
+    // for its tray would put a shared VAE behind a Delete meant for a
+    // checkpoint; it stands for the one file it is named after instead.
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5"), row(3, "filmgrain_xl")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [combination("1,2,3", [CKPT, VAE, LORA])],
     });
 
     const grid = wrapper.find('[role="treegrid"]');
-    expect(grid.attributes("aria-multiselectable")).toBeUndefined();
+    expect(grid.attributes("aria-multiselectable")).toBe("true");
     await grid.find('[role="row"]').trigger("click");
+
+    expect([...store.selectedIds]).toEqual([1]);
+    expect(grid.find('[role="row"]').attributes("aria-selected")).toBe("true");
+    expect(wrapper.find('[data-testid="model-set-card"]').classes()).toContain(
+      "msc--on",
+    );
+  });
+
+  it("selects one model in the tray, and marks it", async () => {
+    const { wrapper, store } = await openTray();
+
+    const members = wrapper.findAll(".msp__member");
+    await members[1].trigger("click");
+
+    expect([...store.selectedIds]).toEqual([2]);
+    expect(members[1].attributes("aria-selected")).toBe("true");
+    expect(
+      wrapper.findAll('[data-testid="model-set-member"]')[1].classes(),
+    ).toContain("msm--on");
+  });
+
+  it("toggles with Ctrl and takes a range with Shift, in DRAWN order", async () => {
+    const { wrapper, store } = await openTray();
+
+    const card = wrapper.find(".msg__row");
+    const members = wrapper.findAll(".msp__member");
+
+    await members[1].trigger("click");
+    await members[2].trigger("click", { ctrlKey: true });
+    expect([...store.selectedIds].sort()).toEqual([2, 3]);
+
+    // A range from the LoRA back up to the card spans the drawn order - the
+    // card, then the tray rows under it - and replaces the selection.
+    await card.trigger("click");
+    await members[2].trigger("click", { shiftKey: true });
+    expect([...store.selectedIds].sort()).toEqual([1, 2, 3]);
+  });
+
+  it("gives the verb menu the pointer, having first selected what is under it", async () => {
+    // The file-manager rule the row list already follows: right-clicking
+    // something not selected selects it and acts on it alone.
+    const { wrapper, store } = await openTray();
+
+    await wrapper
+      .findAll(".msp__member")[2]
+      .trigger("contextmenu", { clientX: 120, clientY: 340 });
+
+    expect([...store.selectedIds]).toEqual([3]);
+    expect(wrapper.emitted("menu")[0][0]).toEqual({ x: 120, y: 340 });
+  });
+
+  it("leaves a selection of forty alone when one of them is right-clicked", async () => {
+    const { wrapper, store } = await openTray();
+
+    await wrapper.findAll(".msp__member")[1].trigger("click");
+    await wrapper.findAll(".msp__member")[2].trigger("click", { ctrlKey: true });
+    await wrapper
+      .findAll(".msp__member")[2]
+      .trigger("contextmenu", { clientX: 1, clientY: 2 });
+
+    expect([...store.selectedIds].sort()).toEqual([2, 3]);
+    expect(wrapper.emitted("menu")).toHaveLength(1);
+  });
+
+  it("selects a model the Show narrowing hides from the row list", async () => {
+    // A combination survives `Show` on any one visible member and is drawn
+    // WHOLE, so a tray routinely lists files the row list is hiding. Untick
+    // Adapters and the LoRA is still on screen - so it still has to be
+    // selectable, and the verb bar still has to see it, or the click is a
+    // silent no-op. `setGridModelIds` is what makes that true.
+    const { wrapper, store } = await openTray();
+    store.setFilters({ adapters: false });
+    await wrapper.vm.$nextTick();
+
+    expect(store.visibleRows.some((r) => r.id === 3)).toBe(false);
+    await wrapper.findAll(".msp__member")[2].trigger("click");
+    expect(store.selectedRows.map((r) => r.id)).toEqual([3]);
+  });
+
+  it("toggles with Space and extends with Shift+arrow, off the keyboard", async () => {
+    const { wrapper, store } = await openTray();
+    const grid = wrapper.find('[role="treegrid"]');
+
+    // The cursor starts on the card. Space toggles it in, as it does on a row.
+    await grid.trigger("keydown", { key: " " });
+    expect([...store.selectedIds]).toEqual([1]);
+
+    // The first Down lands on the head's OWN tray row - a set's head is drawn
+    // twice while its tray is open, as the card and as the row marked *Names
+    // this set* - so the range is still the one model. The second reaches the
+    // VAE and extends it.
+    await grid.trigger("keydown", { key: "ArrowDown", shiftKey: true });
+    expect([...store.selectedIds]).toEqual([1]);
+    await grid.trigger("keydown", { key: "ArrowDown", shiftKey: true });
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+  });
+
+  it("measures a Shift range from the clicked tray occurrence, not its card", async () => {
+    // A occurs both as the first card and the first tray row. B and C are
+    // visible cards between those occurrences, but were not in this range.
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "a"), row(2, "b"), row(3, "c")],
+      support: [row(4, "d", "vae")],
+      combinations: [
+        combination("1,4", [member(1, "a", "checkpoint"), member(4, "d", "vae")]),
+        combination("2", [member(2, "b", "checkpoint")]),
+        combination("3", [member(3, "c", "checkpoint")]),
+      ],
+    });
+    store.toggleSet("model:1");
+    await wrapper.vm.$nextTick();
+
+    const members = wrapper.findAll(".msp__member");
+    await members[0].trigger("click");
+    await members[1].trigger("click", { shiftKey: true });
+
+    expect([...store.selectedIds].sort()).toEqual([1, 4]);
+  });
+
+  it("renames what the cursor is on when F2 is pressed", async () => {
+    // The verb menu advertises `F2` with a keycap, so it has to answer here.
+    const { wrapper, store } = await openTray();
+    const grid = wrapper.find('[role="treegrid"]');
+
+    // Something else is selected: F2 still takes the model under the cursor.
+    store.toggleSelected(3);
+    await grid.trigger("keydown", { key: "ArrowDown" });
+    await grid.trigger("keydown", { key: "ArrowDown" });
+    await grid.trigger("keydown", { key: "F2" });
+
+    expect([...store.selectedIds]).toEqual([2]);
+    expect(wrapper.emitted("rename")).toHaveLength(1);
+  });
+
+  it("opens the verb menu from the Menu key and from Shift+F10", async () => {
+    const { wrapper } = await openTray();
+    const grid = wrapper.find('[role="treegrid"]');
+
+    await grid.trigger("keydown", { key: "ContextMenu" });
+    await grid.trigger("keydown", { key: "F10", shiftKey: true });
+    expect(wrapper.emitted("menu")).toHaveLength(2);
+  });
+
+  it("lets Escape through to clear the selection once no tray is open", async () => {
+    // One Escape, one thing undone: with a tray open the press closes it and is
+    // STOPPED, so the shelf's window listener cannot also clear the selection
+    // on the way out. With nothing open it is let through.
+    const { wrapper, store } = await openTray();
+    document.body.appendChild(wrapper.element);
+    const grid = wrapper.find('[role="treegrid"]');
+    const seen = [];
+    const listen = (event) => seen.push(event.key);
+    window.addEventListener("keydown", listen);
+    try {
+      await grid.trigger("keydown", { key: "Escape" });
+      expect(store.openSetKey).toBe("");
+      expect(seen).toEqual([]);
+
+      await grid.trigger("keydown", { key: "Escape" });
+      expect(seen).toEqual(["Escape"]);
+    } finally {
+      window.removeEventListener("keydown", listen);
+    }
+  });
+
+  it("leaves the selection alone when the card's chevron is pressed", async () => {
+    // ▸ is navigation: "show me what is in this set". Its click bubbles out of
+    // the button and into the row, so unguarded it replaced the reader's
+    // selection with that card - arming a model they never pointed at for a
+    // verb that has no undo.
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5"), row(3, "filmgrain_xl")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [
+        combination("1,2", [CKPT, VAE]),
+        combination("4,2", [OTHER_CKPT, VAE]),
+      ],
+    });
+    store.toggleSelected(2);
+    store.toggleSelected(3);
+
+    await wrapper.findAll(".msc__toggle")[0].trigger("click");
+
+    expect(store.openSetKey).toBe("model:1");
+    expect([...store.selectedIds].sort()).toEqual([2, 3]);
+  });
+
+  it("offers no selection for a model the shelf has no row for", async () => {
+    // A combination can name a file from a block this session never fetched.
+    // There is nothing to rename, move or delete for one of those, so the row
+    // does not claim to be selectable and a click on it does nothing - better
+    // than a tick the verb bar then cannot honour.
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      combinations: [
+        combination("1,9", [CKPT, member(9, "never_fetched_vae", "vae")]),
+      ],
+    });
+    store.toggleSet("model:1");
+    await wrapper.vm.$nextTick();
+
+    const ghost = wrapper.findAll(".msp__member")[1];
+    expect(ghost.attributes("data-key")).toBe("9");
+    expect(ghost.attributes("aria-selected")).toBeUndefined();
+    await ghost.trigger("click");
+    await ghost.trigger("contextmenu", { clientX: 1, clientY: 1 });
     expect(store.selectedIds.size).toBe(0);
+    expect(wrapper.emitted("menu")).toBeUndefined();
   });
 });
 

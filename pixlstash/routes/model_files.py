@@ -84,7 +84,7 @@ from pixlstash.services.comfyui_recipe_service import (
 )
 from pixlstash.services.managed_model_store import MANAGED_KIND, deletes_unclaimed_files
 from pixlstash.services.model_folder_scanner import (
-    MODEL_SUFFIX,
+    SHELF_MODEL_SUFFIXES,
     STATE_PRESENT,
     STATE_REMOVED,
     STATE_UNREACHABLE,
@@ -909,11 +909,12 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=404, detail=f"No file at {raw_path!r} on this machine."
             )
-        if not resolved.lower().endswith(MODEL_SUFFIX):
+        if not resolved.lower().endswith(SHELF_MODEL_SUFFIXES):
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    f"The shelf catalogues {MODEL_SUFFIX} files. "
+                    "The shelf catalogues "
+                    f"{' and '.join(SHELF_MODEL_SUFFIXES)} files. "
                     f"{os.path.basename(resolved)} is not one."
                 ),
             )

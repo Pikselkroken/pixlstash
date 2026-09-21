@@ -11,11 +11,30 @@
       <div class="recipe-scroll">
         <!-- Design order: the "Matches your saved recipe X" banner, then
              Workflow, Prompt, Models, Settings. -->
+        <!-- The name is the way THERE. Saying a recipe keeps this look and
+             then leaving the reader to go and find it was the dead end #1480
+             names; this is the same gesture Open makes for the workflow, one
+             query further, and it stays plain text when there is no topology
+             to send anybody to - exactly where Open is not offered either. -->
         <div v-if="matched" class="recipe-match">
           <v-icon size="16">mdi-bookmark</v-icon>
           <span
             >Matches your saved recipe
-            <b class="recipe-match-name">{{ matched.name || "Untitled" }}</b>
+            <component
+              :is="recipe.topologyHash ? 'button' : 'b'"
+              class="recipe-match-name"
+              :class="{ 'recipe-match-name--linked': !!recipe.topologyHash }"
+              :type="recipe.topologyHash ? 'button' : undefined"
+              @click="recipe.topologyHash ? openSavedRecipes() : undefined"
+            >
+              <Tooltip
+                v-if="recipe.topologyHash"
+                text="Show this recipe in the Workflows view"
+                activator="parent"
+                :describe="false"
+              />
+              {{ matched.name || "Untitled" }}</component
+            >
           </span>
         </div>
         <div class="section-label section-label--on-dark recipe-sec">
@@ -78,7 +97,17 @@
               <v-icon size="12" class="recipe-chip-kind">{{
                 isAdapter(model) ? "mdi-layers" : "mdi-cube-outline"
               }}</v-icon>
-              <span class="recipe-chip-name">{{ model.name }}</span>
+              <span class="recipe-chip-name">{{ modelLabel(model) }}</span>
+              <!-- The precision `modelLabel` just stripped out of the name.
+                   Drawn like the strength beside it - mono, dimmed, flex:none -
+                   because it is a machine word read character by character and
+                   it must not be what the chip ellipsises. The raw filename is
+                   still in the hover text, so nothing is hidden. -->
+              <span v-if="quantBadge(model.quant)" class="recipe-chip-quant">{{
+                quantBadge(model.quant).label === "FP8"
+                  ? quantBadge(model.quant).title
+                  : quantBadge(model.quant).label
+              }}</span>
               <v-icon v-if="model.verified" size="12" class="recipe-chip-badge"
                 >mdi-check-decagram</v-icon
               >
@@ -347,6 +376,7 @@ import { pictureThumbnailUrl } from "../../api/pictures";
 import { isReadOnly } from "../../utils/apiClient";
 import { copyText } from "../../utils/clipboard";
 import { downloadBlob } from "../../utils/downloadFile";
+import { deriveModelName, quantBadge } from "../../utils/modelShelf";
 import { keepsTheSameLook } from "../../utils/recipeKey";
 import { resolveRecipeLoras } from "../../utils/recipeLoras";
 
@@ -407,7 +437,9 @@ const RUN_REASONS = {
  * the refusal itself is not: an uninstalled node pack is a thing to go and
  * install, and "could not rebuild it" on its own sends the reader nowhere.
  */
-const conversionProblems = computed(() => props.recipe?.conversionProblems || []);
+const conversionProblems = computed(
+  () => props.recipe?.conversionProblems || [],
+);
 
 /**
  * Whether this recipe's graph was never resolved, so the fields read off a
@@ -417,9 +449,7 @@ const conversionProblems = computed(() => props.recipe?.conversionProblems || []
  * ordinary ComfyUI one's are too.
  */
 const UNRESOLVED_REASONS = new Set(["editor_graph", "comfyui_unreachable"]);
-const unreadable = computed(() =>
-  UNRESOLVED_REASONS.has(props.recipe?.reason),
-);
+const unreadable = computed(() => UNRESOLVED_REASONS.has(props.recipe?.reason));
 
 const runReason = computed(() => {
   if (!props.recipe) return null;
@@ -670,13 +700,39 @@ watch(() => props.recipe?.workflowKey, loadSavedRecipes, { immediate: true });
 
 function onSaved(row) {
   // Straight into the list, so the footer says Saved without another read.
-  if (row) savedRecipes.value = [...savedRecipes.value, row];
+  // **By id, because the dialog may have replaced one of these rows rather
+  // than added one** - appending a replacement would leave the old content in
+  // the list under the same id, and the banner would go on naming a look the
+  // row no longer keeps.
+  if (!row) return;
+  savedRecipes.value = savedRecipes.value.some((known) => known.id === row.id)
+    ? savedRecipes.value.map((known) => (known.id === row.id ? row : known))
+    : [...savedRecipes.value, row];
 }
 const inputs = computed(() => props.recipe?.inputs || []);
 
 /** A LoRA and friends wear the layers glyph; a checkpoint wears the cube. */
 function isAdapter(model) {
   return /lora|adapter/i.test(model.widget || "");
+}
+
+/**
+ * What to CALL a model here: the same derived name the model shelf and the
+ * workflow card show, off the same parser.
+ *
+ * The overlay is read a click away from the card the picture came off, so a
+ * chip reading `t5xxl_fp8_e4m3fn.safetensors` under a card chip reading
+ * `t5xxl` is one model named two ways. The raw string stays in the hover text
+ * (`modelTooltip`), which is where it is actually useful - it is what a reader
+ * pastes into a ComfyUI node, and for a slot named by digest it is the digest.
+ *
+ * Derived HERE and not served, unlike the workflow card's slot name: this
+ * response's `name` is the shelf lookup's own key and the panel needs the raw
+ * value for the tooltip, so stripping it server-side would take away the one
+ * string the chip cannot do without.
+ */
+function modelLabel(model) {
+  return deriveModelName(model.name) || model.name;
 }
 
 /**
@@ -847,6 +903,14 @@ function openWorkflowsView() {
   });
 }
 
+/** The same place, with the rail open on the recipes rather than the card. */
+function openSavedRecipes() {
+  router.push({
+    name: "workflows",
+    query: { topology: props.recipe.topologyHash, tab: "recipes" },
+  });
+}
+
 // ── The graph's bytes, read only when the box is opened ────────────────────
 //
 // The recipe read answers what the picture was made with; the editor's graph is
@@ -987,6 +1051,27 @@ async function copyPrompt() {
   color: rgb(var(--v-theme-on-dark-surface));
 }
 
+/* All of this is the LINKED variant's alone, so the plain `<b>` is left
+   exactly as it was. `font: inherit` because the linked name is a `<button>`
+   and nothing resets a button's font app-wide - without it the name is the
+   browser's own 13.33px sans in the middle of a sentence - and the weight is
+   what `font: inherit` has just taken off the `<b>` it replaces.
+
+   Underlined rather than coloured: the banner sits on the dark panel, where
+   the theme's link colour is not one of the on-dark tokens. */
+.recipe-match-name--linked {
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.recipe-match-name--linked:hover {
+  text-decoration-thickness: 2px;
+}
+
 .recipe-workflow {
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-on-dark-surface));
@@ -1047,6 +1132,7 @@ async function copyPrompt() {
   flex: none;
 }
 
+.recipe-chip-quant,
 .recipe-chip-strength {
   flex: none;
   font-family: var(--font-mono);

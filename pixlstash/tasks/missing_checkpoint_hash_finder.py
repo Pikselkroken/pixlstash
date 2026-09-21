@@ -17,9 +17,14 @@ logger = get_logger(__name__)
 class MissingCheckpointHashFinder(BaseTaskFinder):
     """Hand out registered models whose ``sha256`` is still NULL.
 
-    In practice that is exactly the checkpoints: the schema's
+    In practice that is the checkpoints and the other long reads: the schema's
     ``CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)`` forbids an unhashed
-    adapter, and the scan hashes an ``unknown`` on sight because it is small.
+    adapter, and the scan hashes anything else **below**
+    ``model_folder_scanner._DEFER_HASH_BYTES`` on sight because it is small.
+    The rest arrive here whatever their kind, which is the point of a size rule
+    rather than a kind one: a 23 GB text encoder and a multi-gigabyte ``.gguf``
+    filed as ``unknown`` are exactly the reads this exists to keep out of the
+    scan.
     **``engine`` rows are excluded from both queries.** They are declared by
     ``services/builtin_models.py`` and carry no ``sha256`` by design - nothing
     hashes PixlStash's own tagger, because we know what it is without one.

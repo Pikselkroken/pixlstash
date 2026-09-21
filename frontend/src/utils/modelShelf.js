@@ -12,6 +12,109 @@
 
 import { ICON_CARDS, SET_COLORS } from "./setAppearance";
 
+// The precision a file was stored at, written into its name. Mirrors the
+// `_QUANT_*` vocabulary in `pixlstash/utils/model_utils.py` TOKEN FOR TOKEN:
+// `cleanAssetName` has already split on `_` and `-`, so `Q4_K_M` arrives as
+// three tokens, and the shelf row's name and the badge beside it come from one
+// parser on each side rather than two that can disagree.
+//
+// Two rules and not one list. A GGUF level (`k`, `s`, `m`, `l`, `0`, `1`) is an
+// ordinary token in a real name, so it is only ever eaten as the tail of an
+// explicit `q<n>`, `iq<n>`, or `tq<n>` head; the rest (`scaled`, `awq`, `gptq`, `fast`) are
+// distinctive enough to pop next to any real quant token, and never alone.
+const GGUF_HEAD_RE = /^(?:i?q|tq)\d+$/i;
+const GGUF_LEVELS = new Set([
+  "k",
+  "s",
+  "m",
+  "l",
+  "xs",
+  "xl",
+  "xxs",
+  "nl",
+  "0",
+  "1",
+]);
+
+/** Filename spelling -> canonical id. The refinement wins where both appear. */
+const QUANT_TOKENS = {
+  fp32: "fp32",
+  f32: "fp32",
+  fp16: "fp16",
+  f16: "fp16",
+  bf16: "bf16",
+  fp8: "fp8",
+  f8: "fp8",
+  e4m3: "fp8_e4m3",
+  e4m3fn: "fp8_e4m3",
+  e5m2: "fp8_e5m2",
+  nvfp4: "nvfp4",
+  mxfp4: "mxfp4",
+  fp4: "fp4",
+  nf4: "nf4",
+  int8: "int8",
+  i8: "int8",
+  int4: "int4",
+  i4: "int4",
+};
+
+/** Popped only alongside a real quant token; alone they are somebody's name. */
+const QUANT_MODIFIERS = new Set(["scaled", "awq", "gptq", "fast"]);
+
+/**
+ * Split a token list into its name and the quant postfix on the end.
+ *
+ * Mirrors `_split_quant`. The one parser both {@link deriveModelName} and
+ * {@link quantFromFilename} run.
+ *
+ * @param {string[]} tokens - `cleanAssetName(...)` split on whitespace.
+ * @returns {{tokens: string[], quant: string|null}}
+ */
+function splitQuant(tokens) {
+  // The GGUF tail first, longest match wins so `Q4 K M` beats the `Q4` in it.
+  for (const width of [3, 2, 1]) {
+    if (tokens.length < width) continue;
+    const tail = tokens.slice(tokens.length - width);
+    if (!GGUF_HEAD_RE.test(tail[0])) continue;
+    if (!tail.slice(1).every((t) => GGUF_LEVELS.has(t.toLowerCase()))) continue;
+    return {
+      tokens: tokens.slice(0, tokens.length - width),
+      quant: tail.map((t) => t.toLowerCase()).join("_"),
+    };
+  }
+  const kept = [...tokens];
+  const popped = [];
+  while (kept.length) {
+    const last = kept[kept.length - 1].toLowerCase();
+    if (!(last in QUANT_TOKENS) && !QUANT_MODIFIERS.has(last)) break;
+    popped.push(kept.pop());
+  }
+  // The guard the whole safety of this rests on: `scaled` and `fast` are
+  // ordinary tokens in real model names and may only be eaten when a genuine
+  // quant token was eaten with them, or `some_model_scaled` silently becomes
+  // `some model`.
+  const real = popped.find((t) => t.toLowerCase() in QUANT_TOKENS);
+  if (!real) return { tokens: [...tokens], quant: null };
+  return { tokens: kept, quant: QUANT_TOKENS[real.toLowerCase()] };
+}
+
+/**
+ * The precision a model's filename says it was stored at.
+ *
+ * Mirrors `quant_from_filename`. The shelf and the workflow card are served
+ * the canonical id by the backend; this is here so the two halves of the
+ * parser stay provably identical (`modelShelf.test.js`) and so a client with
+ * only a filename in hand can still answer.
+ *
+ * @param {string} filename - file name or path.
+ * @returns {string|null} a canonical id, or null for the usual name that
+ *   carries no quant postfix.
+ */
+export function quantFromFilename(filename) {
+  return splitQuant(cleanAssetName(filename).split(/\s+/).filter(Boolean))
+    .quant;
+}
+
 /** Trailing tokens that record where in a training run a file was saved.
  *
  * Mirrors `_TRAINING_SUFFIX_RE` in `pixlstash/utils/model_utils.py`. The
@@ -41,19 +144,88 @@ export function cleanAssetName(filename) {
 /**
  * Derive a display name for a file that never said what it is called.
  *
- * Mirrors `derive_model_name`: drops trailing training bookkeeping, because
- * the step is parsed into its own field and repeating it turns six checkpoints
- * of one run into six unrelated-looking rows.
+ * Mirrors `derive_model_name`: drops the trailing quant postfix and then any
+ * training bookkeeping, because both are parsed into their own fields and
+ * repeating them turns six checkpoints of one run into six unrelated-looking
+ * rows, and puts the precision in the place a person reads the model's
+ * identity.
+ *
+ * **The precision is dropped from the name, never lost.** Two quant variants
+ * of one model collapse to one name here, and the badge the row draws from
+ * `quant` is what keeps them apart - a caller that strips without badging has
+ * made two rows read identically.
  *
  * @param {string} filename - file name or path.
  * @returns {string} a human-readable name, or `""` when nothing survives.
  */
 export function deriveModelName(filename) {
-  const tokens = cleanAssetName(filename).split(/\s+/).filter(Boolean);
+  const { tokens } = splitQuant(
+    cleanAssetName(filename).split(/\s+/).filter(Boolean),
+  );
   while (tokens.length && TRAINING_SUFFIX_RE.test(tokens[tokens.length - 1])) {
     tokens.pop();
   }
   return tokens.join(" ");
+}
+
+/**
+ * What each canonical quant id is called on a badge, and what the badge says
+ * on hover.
+ *
+ * **The display copy lives here and not in the API**, the way slot kinds
+ * already do: the backend serves the id, one map turns it into words, and the
+ * shelf row, the workflow card, its ⓘ list and the recipe overlay all read the
+ * same one rather than each inventing a spelling.
+ *
+ * `fp8_e4m3` and `fp8_e5m2` deliberately share the label `FP8`: the variant is
+ * a detail for the tooltip, and two chips reading `FP8_E4M3` and `FP8_E5M2` in
+ * a 240px column are two chips that clip to nothing.
+ */
+const QUANT_LABELS = {
+  fp32: ["FP32", "32-bit float"],
+  fp16: ["FP16", "16-bit float"],
+  bf16: ["BF16", "bfloat16"],
+  fp8_e4m3: ["FP8", "FP8 E4M3"],
+  fp8_e5m2: ["FP8", "FP8 E5M2"],
+  fp8: ["FP8", "8-bit float"],
+  nvfp4: ["NVFP4", "NVIDIA FP4"],
+  mxfp4: ["MXFP4", "mixed FP4"],
+  fp4: ["FP4", "4-bit float"],
+  nf4: ["NF4", "4-bit NormalFloat"],
+  int8: ["INT8", "8-bit integer"],
+  int4: ["INT4", "4-bit integer"],
+  int32: ["INT32", "32-bit integer"],
+  mixed: ["MIXED", "No single dtype holds most of the parameters"],
+};
+
+/** A GGUF id (`q4_k_m`): the level IS the name a person recognises. */
+const GGUF_ID_RE = /^(?:i?q|tq)\d+(?:_[a-z0-9]+)*$/i;
+
+/**
+ * The badge for one model's `quant`, or null when there is nothing to say.
+ *
+ * Null and not an empty badge: a model whose precision nothing recorded gets
+ * NO chip, rather than a blank one or an `UNKNOWN` that reads like a fact.
+ *
+ * An id this map has never seen is shown verbatim, uppercased, rather than
+ * swallowed - a safetensors dtype nobody anticipated is still true, and a
+ * reader can look it up.
+ *
+ * @param {string|null|undefined} quant - a canonical id from the API.
+ * @returns {{label: string, title: string}|null}
+ */
+export function quantBadge(quant) {
+  const id = String(quant ?? "").trim();
+  if (!id) return null;
+  const known = QUANT_LABELS[id.toLowerCase()];
+  if (known) return { label: known[0], title: known[1] };
+  const label = id.toUpperCase();
+  return {
+    label,
+    title: GGUF_ID_RE.test(id)
+      ? `GGUF ${label} quantisation`
+      : `Stored as ${label}`,
+  };
 }
 
 /**

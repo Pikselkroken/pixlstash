@@ -58,8 +58,10 @@ from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
     FILE_CHECKPOINT,
     FILE_UNKNOWN,
+    classify_model_file,
     describe_adapter,
 )
+from pixlstash.utils.model_utils import quant_from_filename
 
 logger = get_logger(__name__)
 
@@ -80,7 +82,21 @@ STATE_UNREACHABLE = "unreachable"
 # the fact away on the next walk of the folder.
 STATE_REMOVED = "removed"
 
-MODEL_SUFFIX = ".safetensors"
+# What the shelf catalogues. **A tuple, and every consumer asks this rather
+# than spelling an extension**: "is this a model file" is one question with one
+# answer, and the upload rule, the folder picker and the model-ghost judgement
+# all have to move together when it changes.
+#
+# ``.gguf`` carries no readable header here - only its FILENAME is parsed, for
+# the display name and the quant postfix - so a GGUF is registered with the
+# same fields a `.safetensors` with an unreadable header would have, plus the
+# one its name can answer. Parsing the GGUF header is a real subsystem and
+# deliberately not built: the name is enough to shelve and badge the file.
+SHELF_MODEL_SUFFIXES = (".safetensors", ".gguf")
+
+# The one suffix a safetensors header can be read from. Everything else on the
+# shelf is described from its filename alone.
+HEADER_SUFFIX = ".safetensors"
 
 # ai-toolkit output roots are taken FROM, never catalogued in place.
 SOURCE_FOLDER_KIND = "source"
@@ -210,6 +226,17 @@ def sha256_file(path: str) -> str:
         while chunk := handle.read(_HASH_CHUNK_BYTES):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _reads_a_header(path: str) -> bool:
+    """Whether this file's own bytes can be asked what it is.
+
+    The shelf catalogues more than one suffix and only one of them carries a
+    readable header, so this is the question both the fast path and the full
+    describe ask - never "is it a GGUF", which would need editing again the
+    next time a format is added.
+    """
+    return path.lower().endswith(HEADER_SUFFIX)
 
 
 def _utcnow() -> str:
@@ -458,7 +485,7 @@ class ModelFolderScanner:
 
         for directory, _dirs, files in os.walk(root, onerror=on_error):
             for name in sorted(files):
-                if not name.lower().endswith(MODEL_SUFFIX):
+                if not name.lower().endswith(SHELF_MODEL_SUFFIXES):
                     continue
                 abs_path = os.path.join(directory, name)
                 yield abs_path, os.path.relpath(abs_path, root)
@@ -523,28 +550,39 @@ class ModelFolderScanner:
                 mtime_ns=mtime_ns,
                 model_id=previous.model_id,
             )
-            if previous.has_header_facts:
+            if previous.has_header_facts or not _reads_a_header(abs_path):
                 return record
             # A header read, never a hash: this is how a shelf registered before
             # the header facts existed gets them without re-reading its bytes.
             # An unreadable header keeps the plain touch, and is retried next
             # scan, which costs one small read.
+            #
+            # A `.gguf` is excluded above rather than here: its `weights_id` is
+            # null by construction, so it would take this branch on every sweep
+            # for a header it will never have.
             info = describe_adapter(abs_path)
             if info is None:
                 return record
             return record._replace(
-                family=info.family, quant=info.quant, weights_id=info.weights_id
+                family=info.family,
+                quant=info.quant or quant_from_filename(abs_path),
+                weights_id=info.weights_id,
             )
 
-        info = describe_adapter(abs_path)
+        info = describe_adapter(abs_path) if _reads_a_header(abs_path) else None
         if info is None:
-            logger.warning(
-                "Model scan could not read a safetensors header from %s; leaving "
-                "the file unregistered so it is retried rather than recorded wrong.",
-                abs_path,
+            if _reads_a_header(abs_path):
+                logger.warning(
+                    "Model scan could not read a safetensors header from %s; "
+                    "leaving the file unregistered so it is retried rather than "
+                    "recorded wrong.",
+                    abs_path,
+                )
+                result.unreadable += 1
+                return None
+            return self._describe_from_name(
+                abs_path, relpath, size, mtime_ns, result, known_digest
             )
-            result.unreadable += 1
-            return None
 
         record = _FileRecord(
             relpath=relpath,
@@ -564,7 +602,13 @@ class ModelFolderScanner:
             training_step=info.training_step,
             param_count=info.param_count,
             family=info.family,
-            quant=info.quant,
+            # The header wins, and the filename fills the gap it leaves. A
+            # header answers for nearly every `.safetensors`, so this fallback
+            # is for the one whose tensors declare no usable dtype - and the
+            # column is stored in whichever source's own spelling, because
+            # `canonical_quant` folds the two on the way out and folding on the
+            # way in would leave every row written before today unfolded.
+            quant=info.quant or quant_from_filename(abs_path),
             weights_id=info.weights_id,
         )
 
@@ -607,6 +651,80 @@ class ModelFolderScanner:
                 return None
 
         if info.file_kind == FILE_CHECKPOINT:
+            result.checkpoints += 1
+        else:
+            result.adapters += 1
+        return record if digest is None else record._replace(digest=digest)
+
+    def _describe_from_name(
+        self,
+        abs_path: str,
+        relpath: str,
+        size: int,
+        mtime_ns: int,
+        result: FolderScanResult,
+        known_digest: Optional[str] = None,
+    ) -> Optional[_FileRecord]:
+        """Return the row for a model file whose header this build cannot read.
+
+        A ``.gguf`` today, and any future suffix added to ``SHELF_MODEL_SUFFIXES``
+        without a reader. Everything the header would have answered is left
+        NULL - which is the same thing a ``.safetensors`` carrying no metadata
+        records, and reads on the shelf as "the file did not say" rather than
+        as a value.
+
+        Two things the filename still answers, and they are the two this file
+        exists for: the **quant postfix** (``flux1-dev-Q4_K_M.gguf``), which is
+        the only source a GGUF has, and the **folder's declared role**, which
+        :func:`classify_model_file` already trusts above a parameter count
+        precisely because a VAE and a text encoder carry no marker to find. A
+        GGUF outside a role folder is ``unknown``, which the shelf shows and
+        the owner can correct.
+
+        **Hashing follows the same size rule as everything else** and is not
+        relaxed for this branch: `_DEFER_HASH_BYTES` leaves any file of 2 GiB
+        or more to ``MissingCheckpointHashFinder``, which is every GGUF
+        checkpoint, so turning the suffix on does not put tens of gigabytes of
+        reading into the scan itself.
+
+        ``known_digest`` is honoured here for the same reason :meth:`_describe`
+        honours it: ``register_file``'s caller has just written and verified
+        these bytes, so the read the deferral exists to avoid has already been
+        paid for. Dropping it would be worse than a second read - a row written
+        with no digest misses ``_upsert_model``'s ``ON CONFLICT(sha256)`` join,
+        so one file registered into two folders would be two shelf rows until
+        the hash finder got round to merging them.
+        """
+        file_kind = classify_model_file((), 0, abs_path)
+        record = _FileRecord(
+            relpath=relpath,
+            size=size,
+            mtime_ns=mtime_ns,
+            file_kind=file_kind,
+            # NULL: `kind` is an adapter algorithm read from tensor names, and
+            # there are no tensor names here to read it from.
+            kind=None,
+            filename=os.path.basename(abs_path),
+            quant=quant_from_filename(abs_path),
+        )
+        if known_digest is not None:
+            digest = known_digest
+        elif file_kind == FILE_CHECKPOINT or size >= _DEFER_HASH_BYTES:
+            digest = None
+        else:
+            try:
+                digest = sha256_file(abs_path)
+            except OSError as exc:
+                logger.warning(
+                    "Model scan could not hash %s (%d bytes): %s. Leaving it "
+                    "unregistered; a partial hash would be a wrong identity.",
+                    abs_path,
+                    size,
+                    exc,
+                )
+                result.unreadable += 1
+                return None
+        if file_kind == FILE_CHECKPOINT:
             result.checkpoints += 1
         else:
             result.adapters += 1

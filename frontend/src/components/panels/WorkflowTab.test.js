@@ -36,11 +36,13 @@ vi.mock("../../api/workflows", () => ({
   stackWorkflows: (...args) => stackWorkflows(...args),
 }));
 
-// *Show all N pictures* (F7) leaves this screen for the library.
+// *Show all N pictures* (F7) leaves this screen for the library, and
+// `?tab=recipes` (#1480) arrives on it from the lightbox's match banner.
 const push = vi.fn();
+const route = vi.hoisted(() => ({ name: "workflows", query: {} }));
 vi.mock("vue-router", () => ({
   useRouter: () => ({ push }),
-  useRoute: () => ({ name: "workflows", query: {} }),
+  useRoute: () => route,
 }));
 
 import WorkflowTab from "./WorkflowTab.vue";
@@ -176,6 +178,7 @@ function textOf(wrapper) {
 beforeEach(() => {
   setActivePinia(createPinia());
   window.localStorage.clear();
+  route.query = {};
   useSidebarStore().statsOpen = true;
   getWorkflowCard.mockReset().mockResolvedValue(detail());
   listWorkflowCards.mockReset().mockResolvedValue({
@@ -222,6 +225,40 @@ describe("the models the panel names", () => {
     expect(text).not.toContain("realvisxl_v5.safetensors");
     expect(text).toContain("Flux Autoencoder");
     expect(text).not.toContain("ae.safetensors");
+  });
+
+  it("says the precision the server took out of the name", async () => {
+    // The panel shows `name`, which no longer carries the postfix - so without
+    // the badge two quant builds of one model read identically here, which is
+    // the exact failure stripping the name is allowed only because the badge
+    // prevents. Asserted per line, because a badge on the wrong row would
+    // satisfy a search of the whole panel.
+    const quantised = card({
+      models: [
+        {
+          name: "t5xxl",
+          title: null,
+          kind: "checkpoint",
+          quant: "fp8_e4m3",
+          slot_label: "m1",
+        },
+        // Nothing recorded: no badge, and NOT an empty separator.
+        { name: "ae", title: null, kind: "vae", quant: null, slot_label: "m2" },
+      ],
+      loras: [
+        {
+          name: "detail",
+          mark: "structural",
+          quant: "q4_k_m",
+          slot_label: "l1",
+        },
+      ],
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: quantised }));
+    const { wrapper } = await mountWith([KEY], [quantised]);
+    const values = wrapper.findAll(".wftab-value").map((el) => el.text());
+    expect(values).toEqual(["t5xxl · FP8 E4M3", "ae"]);
+    expect(wrapper.find(".wftab-chip").text()).toContain("detail · Q4_K_M");
   });
 
   it("falls back to the filename where the shelf has no name", async () => {
@@ -387,6 +424,35 @@ describe("marking a LoRA slot", () => {
 });
 
 describe("the Recipes tab (v1.12 F6)", () => {
+  // The other half of the lightbox banner's link (#1480): `?topology=` selects
+  // the card in `WorkflowsView`, and this opens the rail on its recipes.
+  it("lands on the recipes, with the rail open, from ?tab=recipes", async () => {
+    route.query = { topology: "f00d", tab: "recipes" };
+    const sidebar = useSidebarStore();
+    // Shut, which is the state that made the link a dead end of its own: the
+    // card would be selected behind a rail nobody opened.
+    sidebar.statsOpen = false;
+    const { wrapper } = await mountWith([KEY]);
+
+    expect(sidebar.statsOpen).toBe(true);
+    expect(wrapper.findComponent({ name: "WorkflowRecipesTab" }).exists()).toBe(
+      true,
+    );
+  });
+
+  it("leaves the rail alone without that query", async () => {
+    // The control for the check above: `tab` defaults to Workflow, so a
+    // watcher that fired unconditionally would only show up in the RAIL being
+    // forced open on a screen the reader had shut it on.
+    const sidebar = useSidebarStore();
+    sidebar.statsOpen = false;
+    const { wrapper } = await mountWith([KEY]);
+    expect(sidebar.statsOpen).toBe(false);
+    expect(wrapper.findComponent({ name: "WorkflowRecipesTab" }).exists()).toBe(
+      false,
+    );
+  });
+
   it("shows the stack's recipes, and the footer belongs to Workflow", async () => {
     const { wrapper } = await mountWith([KEY]);
     const tab = wrapper
@@ -396,9 +462,9 @@ describe("the Recipes tab (v1.12 F6)", () => {
     await tab.trigger("click");
     await flush(wrapper);
 
-    expect(
-      wrapper.findComponent({ name: "WorkflowRecipesTab" }).exists(),
-    ).toBe(true);
+    expect(wrapper.findComponent({ name: "WorkflowRecipesTab" }).exists()).toBe(
+      true,
+    );
     // Run… is the Workflow tab's; the Recipes tab runs a recipe from its row.
     expect(
       wrapper.findAll("button").some((b) => b.text().includes("Run…")),
@@ -475,8 +541,11 @@ describe("with several workflows selected", () => {
     // Generate button is gone, and it was unguarded: `function run() { return; }`
     // kept the whole suite green.
     const { wrapper } = await mountWith([KEY], [card()]);
-    const { useRunDialogStore } = await import("../../stores/useRunDialogStore");
-    const run = wrapper.findAll("button").find((b) => b.text().includes("Run…"));
+    const { useRunDialogStore } =
+      await import("../../stores/useRunDialogStore");
+    const run = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Run…"));
 
     await run.trigger("click");
     await flush(wrapper);
@@ -500,9 +569,8 @@ describe("with several workflows selected", () => {
       .find((b) => b.text().includes("Run…"));
     await run.trigger("click");
     await flush(wrapper);
-    const { useRunDialogStore } = await import(
-      "../../stores/useRunDialogStore"
-    );
+    const { useRunDialogStore } =
+      await import("../../stores/useRunDialogStore");
     // Seeded first: `source` is null on a fresh store, so asserting null
     // against an untouched default would pass with `run()` deleted entirely.
     const runDialog = useRunDialogStore();
@@ -673,8 +741,7 @@ describe("the more menu and hiding", () => {
       wrapper.findAll("button").find((b) => b.text() === "Unhide"),
     ).toBeTruthy();
   });
-
-  });
+});
 
 describe("which card the rail shows", () => {
   it("keeps showing a card the flip moved out of the grid", async () => {
@@ -824,7 +891,8 @@ describe("the Tasks tab", () => {
     const tasksStore = useTasksStore();
     expect(
       wrapper
-        .findAll("button.inspector-tab").at(-1)
+        .findAll("button.inspector-tab")
+        .at(-1)
         .find(".inspector-tab-pulse")
         .exists(),
     ).toBe(false);
@@ -838,7 +906,8 @@ describe("the Tasks tab", () => {
     await flush(wrapper);
     expect(
       wrapper
-        .findAll("button.inspector-tab").at(-1)
+        .findAll("button.inspector-tab")
+        .at(-1)
         .find(".inspector-tab-pulse")
         .exists(),
     ).toBe(true);

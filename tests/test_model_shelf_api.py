@@ -653,8 +653,14 @@ def test_unauthenticated_is_refused_on_every_shelf_route(shelf_env):
 
 
 def test_rows_carry_the_header_facts_and_fold_family_from_the_base_model(shelf_env):
-    """`family` follows a corrected base model; `quant` and `weights_id` are the
-    columns as the scan wrote them."""
+    """`family` follows a corrected base model; `quant` is folded on the way out.
+
+    The column holds whichever source wrote it - the header's own dtype
+    (`f16`) for a `.safetensors`, the filename's precision (`fp16`) for a
+    `.gguf` - and the response serves the ONE canonical id either way, or a
+    row scanned before today would read `f16` beside one scanned after it
+    reading `FP16` for the same precision.
+    """
     alice = shelf_env.model_ids["alice.safetensors"]
     with shelf_env.server.hub.transaction() as conn:
         conn.execute(
@@ -669,7 +675,7 @@ def test_rows_carry_the_header_facts_and_fold_family_from_the_base_model(shelf_e
     }
 
     assert rows[alice]["family"] == "sdxl"
-    assert (rows[alice]["quant"], rows[alice]["weights_id"]) == ("f16", "w")
+    assert (rows[alice]["quant"], rows[alice]["weights_id"]) == ("fp16", "w")
     dana = rows[shelf_env.model_ids["dana.safetensors"]]
     assert (dana["family"], dana["quant"], dana["weights_id"]) == (None, None, None)
 

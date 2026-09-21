@@ -55,6 +55,17 @@
             `mdi-${model.icon}`
           }}</v-icon>
           <span class="info-popover__name">{{ model.name }}</span>
+          <!-- The precision, on the card's own fact chip. It sits BEFORE the
+               slot note because it qualifies the name to its left, and it is
+               the only thing distinguishing two rows of one model listed at
+               two precisions. Its `title` is the long form, which is also
+               what a screen reader reads out of the line. -->
+          <span
+            v-if="model.quant"
+            class="info-popover__chip"
+            :title="model.quant.title"
+            >{{ model.quant.label }}</span
+          >
           <span class="info-popover__note">{{ model.note }}</span>
         </div>
       </section>
@@ -96,6 +107,7 @@ import { computed, nextTick, ref, watch } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
+import { quantBadge } from "../../utils/modelShelf";
 import { isStack, modelDisplayName } from "../../utils/workflowCard";
 
 const props = defineProps({
@@ -140,12 +152,16 @@ const models = computed(() => [
     key: `model-${i}`,
     icon: "cube-outline",
     name: modelDisplayName(model),
+    quant: quantBadge(model.quant),
     note: model.kind,
   })),
   ...(props.card.loras ?? []).map((lora, i) => ({
     key: `lora-${i}`,
     icon: lora.mark === "recipe" ? "plus" : "layers",
     name: lora.mark === "recipe" ? "LoRA slot" : modelDisplayName(lora),
+    // A recipe slot names no file, so there is nothing to read a precision
+    // off - and `quantBadge(null)` is null, which draws nothing.
+    quant: lora.mark === "recipe" ? null : quantBadge(lora.quant),
     note: lora.mark === "recipe" ? "filled by the recipe" : "in the workflow",
   })),
 ]);

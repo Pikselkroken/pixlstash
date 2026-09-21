@@ -357,6 +357,10 @@ _SHELF_FILENAME = "realvisxl.safetensors"
 # ``realvisxl``, and a card naming any model the shelf has not got still says
 # the stem.
 _SHELF_TITLE = "Krea 2"
+# The same file as a card NAMES it: no folder, no extension, no quant postfix.
+# A slot's ``name`` is derived rather than raw, so a card whose model the shelf
+# has not got still reads as a name rather than as a path somebody pasted.
+_SHELF_DERIVED = "realvisxl"
 
 # (file_path, topology, structural, deleted, created_at, score, instance)
 #
@@ -1500,7 +1504,10 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
     assert card["type"] == "txt2img"
     assert card["saved_recipe_count"] == 0
     assert [model["kind"] for model in card["models"]] == ["checkpoint"]
-    assert card["models"][0]["name"] == "realvisxl.safetensors"
+    # The DERIVED name, which is what the field promises: the extension and any
+    # quant postfix are off it, and `quant` carries the precision instead.
+    assert card["models"][0]["name"] == _SHELF_DERIVED
+    assert card["models"][0]["quant"] is None
     # One LoRA slot, guessed `recipe` from its filename, so it is an anonymous
     # slot rather than a named file: a character LoRA is the recipe's business.
     # `slot_label` is the address `PUT /workflows/{key}/slots` marks, and it
@@ -1526,6 +1533,9 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
             "base_model": None,
             "base_model_folded": None,
             "kind": "lora",
+            # A recipe slot names no file at all, so there is nothing to read a
+            # precision off either - and nothing is what it serves.
+            "quant": None,
             "mark": "recipe",
             "slot_label": lora_label,
         }
@@ -1619,12 +1629,14 @@ def test_a_card_is_never_nameless(workflow_env):
     # document order, so a fallback of "the first slot with a name" named such
     # a card after its VAE or one of its text encoders. Nobody calls a
     # workflow by its VAE.
+    # Built the way `_describe_slots` now builds them: `name` is derived, so
+    # these are the strings `_display_name` actually receives.
     flux = [
-        SlotModel(name="ae.safetensors", kind="vae"),
-        SlotModel(name="t5xxl_fp16.safetensors", kind="clip"),
-        SlotModel(name="flux1-dev.safetensors", kind="unet"),
+        SlotModel(name="ae", kind="vae"),
+        SlotModel(name="t5xxl", kind="clip"),
+        SlotModel(name="flux1 dev", kind="unet"),
     ]
-    assert workflows_routes._display_name(unet_only, flux) == "flux1-dev: Text to Image"
+    assert workflows_routes._display_name(unet_only, flux) == "flux1 dev: Text to Image"
 
     # A graph that loads a VAE and an upscaler but no base model at all takes
     # the stand-in rather than being named after either.
@@ -1743,7 +1755,7 @@ def test_a_card_never_calls_one_model_two_different_things(workflow_env):
     """
     card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
     checkpoint = next(slot for slot in card["models"] if slot["kind"] == "checkpoint")
-    assert checkpoint["name"] == _SHELF_FILENAME
+    assert checkpoint["name"] == _SHELF_DERIVED
     assert checkpoint["title"] == _SHELF_TITLE
     # The name row was built from the title, so the title is what a client has
     # to be able to show beside it.
@@ -1761,6 +1773,34 @@ def test_a_card_never_calls_one_model_two_different_things(workflow_env):
     plain_ckpt = next(s for s in plain["models"] if s["kind"] == "checkpoint")
     assert plain_ckpt["title"] is None
     assert plain["name"] == "realvisxl: Text to Image"
+
+
+def test_a_card_names_itself_without_the_precision(workflow_env):
+    """The name row is built from the slot, so it loses the postfix too.
+
+    BUSY has no stored file, so `_display_name` really does reach its base
+    model - which is what makes this an assertion rather than the tautology it
+    would be on a card named after `something.json`. Two things have to move
+    for the derived name to be what answers: the RECIPE's asset value, which
+    is the string the slot carries, and the shelf's own title, which would
+    otherwise answer first.
+    """
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_asset SET normalized_filename = ? "
+            "WHERE normalized_filename = ?",
+            ("realvisxl_fp8_e4m3fn.safetensors", _SHELF_FILENAME),
+        )
+        conn.execute(
+            "UPDATE model SET display_name = NULL WHERE filename = ?",
+            (_SHELF_FILENAME,),
+        )
+
+    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    # The postfix is gone from both the chip and the row built out of it.
+    assert card["models"][0]["name"] == _SHELF_DERIVED
+    assert card["models"][0]["quant"] == "fp8_e4m3"
+    assert card["name"] == "realvisxl: Text to Image"
 
 
 def test_a_card_says_the_post_processing_it_carries_and_when_it_cannot(
@@ -2078,12 +2118,15 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
     assert _EDITOR_BASE_MODEL_FOLDED not in (None, _EDITOR_BASE_MODEL)
     assert card["models"] == [
         {
-            "name": _SHELF_FILENAME,
+            "name": _SHELF_DERIVED,
             "title": _SHELF_TITLE,
             "icon": _EDITOR_ICON,
             "base_model": _EDITOR_BASE_MODEL,
             "base_model_folded": _EDITOR_BASE_MODEL_FOLDED,
             "kind": "unet",
+            # Null and not an empty string: neither the shelf's column nor the
+            # filename records a precision for this file.
+            "quant": None,
             "mark": None,
             # No label: a slot label is an address inside a stored topology,
             # and this card has none to address.
@@ -2095,16 +2138,60 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
     # title and null icon are the state: the shelf does not hold this file.
     assert card["loras"] == [
         {
-            "name": _EDITOR_UNRESOLVED,
+            "name": "add detail",
             "title": None,
             "icon": None,
             "base_model": None,
             "base_model_folded": None,
             "kind": "lora",
+            "quant": None,
             "mark": "structural",
             "slot_label": None,
         }
     ]
+
+
+def test_a_slots_quant_comes_from_the_shelf_first_and_the_filename_after(
+    workflow_env, tmp_path, monkeypatch
+):
+    """The precision a card shows, from whichever source can answer.
+
+    Two sources fold into one vocabulary, and the card has to prefer the right
+    one: the shelf's column is read from the safetensors header, which is the
+    only thing that knows what a file called `nvfp4_awq` is actually stored at,
+    while the filename is the only source a `.gguf` or an unscanned model has.
+    Serving the header's raw `f8_e4m3` would have one card read `f8_e4m3`
+    where the next reads `fp8_e4m3` for one precision.
+    """
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET quant = 'f8_e4m3' WHERE filename = ?",
+            (_SHELF_FILENAME,),
+        )
+    document = json.loads(json.dumps(_EDITOR_WORKFLOW))
+    # A model this shelf has never scanned, whose name is its only source.
+    document["nodes"][1]["widgets_values"] = ["Flux1-Dev-Q4_K_M.gguf", 1.0, 1.0]
+    key = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "quantised.json", document
+    )
+
+    card = _by_key(_cards(workflow_env.owner))[key]
+    # The shelf row's own column, FOLDED - the header spells it `f8_e4m3`.
+    assert (card["models"][0]["name"], card["models"][0]["quant"]) == (
+        _SHELF_DERIVED,
+        "fp8_e4m3",
+    )
+    # The filename, for the file the shelf does not hold. The level is kept
+    # whole because `Q4_K_M` is the name a person recognises.
+    assert (card["loras"][0]["name"], card["loras"][0]["quant"]) == (
+        "Flux1 Dev",
+        "q4_k_m",
+    )
+    # The card's own name row is NOT asserted here: this card was filed from
+    # `quantised.json`, so `_display_name` returns the file stem and never
+    # reaches a model slot. The name row's own strip is pinned in
+    # `test_a_card_names_itself_without_the_precision`, on a card that has no
+    # file to be named after.
 
 
 def test_an_editor_format_card_answers_the_same_on_its_own_route(
@@ -2181,7 +2268,9 @@ def test_a_loader_this_build_does_not_know_leaves_the_row_silent(
 
     card = _by_key(_cards(workflow_env.owner))[key]
     assert card["models"] == []
-    assert [lora["name"] for lora in card["loras"]] == [_EDITOR_UNRESOLVED]
+    # The DERIVED name: a slot's `name` is what the card calls the file, not
+    # the raw widget value it came off.
+    assert [lora["name"] for lora in card["loras"]] == ["add detail"]
     # Non-empty models is NOT what tells a client the card was read.
     assert card["variant_count"] == 0
 
@@ -2209,7 +2298,7 @@ def test_a_card_with_a_recipe_never_reads_its_models_off_the_file(
     )
 
     card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
-    assert [model["name"] for model in card["models"]] == [_SHELF_FILENAME]
+    assert [model["name"] for model in card["models"]] == [_SHELF_DERIVED]
     assert [lora["mark"] for lora in card["loras"]] == ["recipe"]
 
 

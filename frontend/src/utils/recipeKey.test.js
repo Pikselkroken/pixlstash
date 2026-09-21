@@ -8,7 +8,12 @@
 
 import { describe, it, expect } from "vitest";
 
-import { keepsTheSameLook, loraKey, promptKey } from "./recipeKey";
+import {
+  keepsTheSameLook,
+  loraKey,
+  promptKey,
+  wouldDuplicate,
+} from "./recipeKey";
 
 describe("promptKey", () => {
   it("strips, and treats absent as the empty prompt", () => {
@@ -79,5 +84,63 @@ describe("keepsTheSameLook", () => {
       false,
     );
     expect(keepsTheSameLook({ prompt: "", loras: [] }, {})).toBe(false);
+  });
+});
+
+// A recipe is more than its look, and the Run popup is a form that can edit
+// every part of it that the look's key leaves out (#1480). Keyed on the look
+// alone, an inert "Saved" refuses to keep a variation — which is not a
+// duplicate, and there is then no way to save it from that surface at all.
+describe("wouldDuplicate", () => {
+  /** A kept recipe, and the save that would write exactly it again. */
+  const KEPT = {
+    prompt: "a castle on a hill",
+    negative: "blurry",
+    loras: [{ filename: "Styles/Mira_v2.safetensors", strength: 0.85 }],
+    overrides: { "KSampler/steps": 12 },
+  };
+  const SAME = {
+    prompt: "  a castle on a hill  ",
+    negative: " blurry ",
+    loras: [{ filename: "mira_v2.safetensors", strength: 0.85 }],
+    overrides: { "KSampler/steps": 12 },
+  };
+
+  it("is true for the save that would write this very row again", () => {
+    expect(wouldDuplicate(KEPT, SAME)).toBe(true);
+  });
+
+  it("is false once any part the save writes differs", () => {
+    // Each of these is a part of the recipe that `keepsTheSameLook` ignores
+    // on purpose, because none of them is part of what credit groups by.
+    expect(wouldDuplicate(KEPT, { ...SAME, overrides: {} })).toBe(false);
+    expect(
+      wouldDuplicate(KEPT, { ...SAME, overrides: { "KSampler/steps": 30 } }),
+    ).toBe(false);
+    expect(wouldDuplicate(KEPT, { ...SAME, negative: "" })).toBe(false);
+    expect(
+      wouldDuplicate(KEPT, {
+        ...SAME,
+        loras: [{ filename: "mira_v2.safetensors", strength: 0.4 }],
+      }),
+    ).toBe(false);
+    // And the look itself still decides first.
+    expect(wouldDuplicate(KEPT, { ...SAME, prompt: "a castle at dusk" })).toBe(
+      false,
+    );
+  });
+
+  it("never matches a recipe that keeps a seed", () => {
+    // A save leaves the seed off unless the owner ticks the row, so the two
+    // are different recipes whatever else they share.
+    expect(wouldDuplicate({ ...KEPT, seed: "7", keep_seed: true }, SAME)).toBe(
+      false,
+    );
+  });
+
+  it("inherits the look's refusal to match nothing", () => {
+    expect(wouldDuplicate({ prompt: "", loras: [] }, { prompt: "", loras: [] })).toBe(
+      false,
+    );
   });
 });

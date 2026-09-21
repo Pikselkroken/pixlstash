@@ -65,13 +65,19 @@ class FakeHub:
     service does not silently hand a test the wrong table.
     """
 
-    def __init__(self, models=(), files=()):
+    def __init__(self, models=(), files=(), quants=None):
         self.models = models  # (id, filename, sha256)
         self.files = files  # (model_id, relpath)
+        # {model id: the header's own dtype spelling}, for the rows that have
+        # one. The real read filters `quant IS NOT NULL`, so a row absent here
+        # is a row the column says nothing about.
+        self.quants = quants or {}
 
     def fetchall(self, sql):
         if "FROM model_file" in sql:
             return [{"model_id": m, "relpath": r} for m, r in self.files]
+        if "quant IS NOT NULL" in sql:
+            return [{"id": i, "quant": q} for i, q in self.quants.items()]
         if "sha256 IS NOT NULL" in sql:
             return [{"id": i, "sha256": sha} for i, _name, sha in self.models if sha]
         return [{"id": i, "filename": name} for i, name, _sha in self.models if name]
@@ -252,6 +258,68 @@ def test_without_a_hub_no_slot_claims_a_shelf_row():
     # an empty list would make the assertion below prove nothing.
     assert len(slots) == 3
     assert all("model_id" not in slot for slot in slots)
+
+
+# ===========================================================================
+# The precision each slot was stored at
+# ===========================================================================
+
+
+def test_a_slot_reads_its_precision_off_the_filename_when_nothing_else_can():
+    """The only source a graph ever carries, and the only one a `.gguf` has."""
+    graph = {
+        "4": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "t5xxl_fp8_e4m3fn.safetensors"},
+        },
+        "5": {
+            "class_type": "UnetLoaderGGUF",
+            "inputs": {"unet_name": "flux1-dev-Q4_K_M.gguf"},
+        },
+    }
+    slots = _named(_model_slots(graph, ([], [])))
+    assert slots["t5xxl_fp8_e4m3fn.safetensors"]["quant"] == "fp8_e4m3"
+    assert slots["flux1-dev-q4_k_m.gguf"]["quant"] == "q4_k_m"
+
+
+def test_a_slot_with_no_postfix_and_no_shelf_row_records_no_precision():
+    # None, not a guess and not an empty string: the overlay draws no badge at
+    # all for a file nothing has said anything about.
+    assert _named(_model_slots(GRAPH, ([], [])))["realvis.safetensors"]["quant"] is None
+
+
+def test_the_shelf_column_beats_the_filename_and_is_folded_on_the_way():
+    """The header knows what the name only guesses, in the header's spelling.
+
+    `style.safetensors` says nothing about its precision and the shelf row for
+    it says `f8_e4m3` - which must reach the panel as `fp8_e4m3`, or one screen
+    reads the dtype where the next reads the precision.
+    """
+    hub = FakeHub(
+        models=[(7, "style.safetensors", OTHER_DIGEST)], quants={7: "F8_E4M3"}
+    )
+    slots = _named(_resolve_against_shelf(hub, _model_slots(GRAPH, ([], []))))
+    assert slots["style.safetensors"]["quant"] == "fp8_e4m3"
+
+
+def test_a_resolved_digest_takes_the_precision_of_the_row_it_resolved_to():
+    """A digest slot has no filename to read until the shelf gives it one."""
+    hub = FakeHub(models=[(7, "digest-lora.safetensors", DIGEST)], quants={7: "bf16"})
+    slots = _named(_resolve_against_shelf(hub, _model_slots(GRAPH, ([], []))))
+    assert slots["digest-lora.safetensors"]["quant"] == "bf16"
+
+
+def test_a_shelf_row_that_records_no_precision_leaves_the_filenames_answer():
+    """A row scanned before the column existed must not blank the badge."""
+    hub = FakeHub(models=[(7, "style.safetensors", OTHER_DIGEST)])
+    graph = {
+        "5": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": "Style_bf16.safetensors", "strength_model": 0.8},
+        }
+    }
+    slots = _named(_resolve_against_shelf(hub, _model_slots(graph, ([], []))))
+    assert slots["style_bf16.safetensors"]["quant"] == "bf16"
 
 
 # ===========================================================================
