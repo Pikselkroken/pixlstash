@@ -38,9 +38,11 @@ const listAdapters = vi.fn();
 vi.mock("../../api/modelShelf", () => ({
   listAdapters: (...args) => listAdapters(...args),
 }));
+const listSavedRecipes = vi.fn();
 vi.mock("../../api/recipes", () => ({
   createSavedRecipe: vi.fn(),
-  listSavedRecipes: vi.fn(() => Promise.resolve([])),
+  editSavedRecipe: vi.fn(),
+  listSavedRecipes: (...args) => listSavedRecipes(...args),
 }));
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
@@ -100,7 +102,12 @@ const globalOpts = {
       AppTextarea: true,
       AppSelect: true,
       AppInput: true,
-      AppButton: { template: "<button><slot /></button>" },
+      // Bound, not merely declared: a stub that swallows `disabled` makes
+      // "not natively disabled" pass however the dialog behaves.
+      AppButton: {
+        props: ["disabled"],
+        template: "<button :disabled='disabled'><slot /></button>",
+      },
       AppBarButton: true,
       RunReasonNotice: true,
       "v-icon": true,
@@ -134,6 +141,7 @@ beforeEach(() => {
       : { card: card() },
   );
   listWorkflowCards.mockResolvedValue({ cards: [] });
+  listSavedRecipes.mockResolvedValue([]);
   preflightWorkflowRun.mockResolvedValue({ ok: true, runs: 1, groups: [] });
   runWorkflowCard.mockResolvedValue({
     status: "success",
@@ -742,5 +750,112 @@ describe("the body it sends", () => {
       prompts: [{ prompt_id: "p1" }],
       pictureIds: [42],
     });
+  });
+});
+
+// ── Is this look already kept? (#1480) ─────────────────────────────────────
+//
+// The lightbox's Recipe tab has refused the second identical recipe since F6
+// and this popup had no match state at all, so the duplicate it refuses was
+// one press away from here.
+describe("Save as recipe, when the look is already kept", () => {
+  /** The saved row the default picture recipe's look matches. */
+  const KEPT = {
+    id: 12,
+    name: "Rainy tram platform",
+    // Trimmed and empty-LoRA'd the way `utils/recipeKey.js` keys both sides.
+    prompt: "  a rainy tram platform  ",
+    loras: [],
+  };
+
+  function footer(wrapper, text) {
+    return wrapper.findAll("button").find((b) => b.text().trim() === text);
+  }
+
+  it("offers the save when nothing on the card keeps this look", async () => {
+    listSavedRecipes.mockResolvedValue([
+      { id: 1, name: "Something else", prompt: "a different prompt", loras: [] },
+    ]);
+    const wrapper = await mountRun();
+    expect(listSavedRecipes).toHaveBeenCalledWith(KEY);
+    expect(footer(wrapper, "Save as recipe")).toBeTruthy();
+    expect(footer(wrapper, "Saved")).toBeFalsy();
+  });
+
+  it("says Saved, reachably and inertly, and will not open the dialog", async () => {
+    listSavedRecipes.mockResolvedValue([KEPT]);
+    const wrapper = await mountRun();
+
+    const saved = footer(wrapper, "Saved");
+    expect(saved).toBeTruthy();
+    // `aria-disabled`, never `disabled`: the sentence saying why has to stay
+    // reachable by a keyboard reader.
+    expect(saved.attributes("aria-disabled")).toBe("true");
+    expect(saved.attributes("disabled")).toBeUndefined();
+    // The sentence itself, not merely somewhere on screen: `aria-describedby`
+    // pointing at the wrong note is the failure this catches.
+    const described = wrapper.get(`#${saved.attributes("aria-describedby")}`);
+    expect(described.text()).toBe("Already kept as “Rainy tram platform”.");
+    // And it is status, not a run refusal.
+    expect(described.classes()).not.toContain("rund-note--bad");
+
+    await saved.trigger("click");
+    await flushPromises();
+    expect(wrapper.vm.saveOpen).toBe(false);
+  });
+
+  it("offers the save again the moment the look is edited", async () => {
+    listSavedRecipes.mockResolvedValue([KEPT]);
+    const wrapper = await mountRun();
+    expect(footer(wrapper, "Saved")).toBeTruthy();
+
+    wrapper.vm.prompt = "a rainy tram platform at dusk";
+    await wrapper.vm.$nextTick();
+    expect(footer(wrapper, "Saved")).toBeFalsy();
+    expect(footer(wrapper, "Save as recipe")).toBeTruthy();
+  });
+
+  it("offers the save for a variation the kept recipe does not hold", async () => {
+    // **The look's key is prompt and LoRA names, and a recipe is more than
+    // its look.** Keyed on the look alone, an inert Saved refuses to keep a
+    // recipe that differs from the saved one in every parameter it carries -
+    // which is not a duplicate, and on the one surface that can edit those
+    // parameters it left the variation unsaveable.
+    listSavedRecipes.mockResolvedValue([KEPT]);
+    const wrapper = await mountRun();
+    expect(footer(wrapper, "Saved")).toBeTruthy();
+
+    const steps = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
+    wrapper.vm.setValue(steps, 30);
+    await wrapper.vm.$nextTick();
+
+    expect(footer(wrapper, "Saved")).toBeFalsy();
+    expect(footer(wrapper, "Save as recipe")).toBeTruthy();
+  });
+
+  it("stays Saved when the kept recipe holds that very override", async () => {
+    // The other direction, so the check above cannot pass by never matching.
+    listSavedRecipes.mockResolvedValue([
+      { ...KEPT, overrides: { "KSampler/steps": 30 } },
+    ]);
+    const wrapper = await mountRun();
+    // Untouched, the form holds no overrides, so the kept row's one is a
+    // difference and the save is offered.
+    expect(footer(wrapper, "Save as recipe")).toBeTruthy();
+
+    const steps = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
+    wrapper.vm.setValue(steps, 30);
+    await wrapper.vm.$nextTick();
+    expect(footer(wrapper, "Saved")).toBeTruthy();
+  });
+
+  it("offers the save when the kept recipe keeps a seed", async () => {
+    // A save leaves the seed off unless the owner ticks it, so the row this
+    // would write is not the row that exists.
+    listSavedRecipes.mockResolvedValue([
+      { ...KEPT, seed: "418220931", keep_seed: true },
+    ]);
+    const wrapper = await mountRun();
+    expect(footer(wrapper, "Save as recipe")).toBeTruthy();
   });
 });

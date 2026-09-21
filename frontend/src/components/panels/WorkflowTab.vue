@@ -276,6 +276,7 @@
 // way to read a member's own defaults.
 
 import { computed, ref, watch } from "vue";
+import { useRoute } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
 import {
@@ -325,6 +326,8 @@ const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
 const tasksStore = useTasksStore();
 
+const route = useRoute();
+
 const tab = ref("workflow");
 // A deep link to the Tasks tab, from a notice or a banner (`showTasksTab`).
 // This rail is the one a run is usually started from, so it is the one the
@@ -334,6 +337,24 @@ watch(
   () => {
     tab.value = "tasks";
   },
+);
+
+// `?tab=recipes`, from the lightbox banner naming the recipe a picture matches
+// (#1480). The card itself is selected by `?topology=`, which `WorkflowsView`
+// honours; this is the other half, and **it opens the rail too** - landing on
+// a selected card with the rail shut is the same dead end the link was for.
+//
+// Honoured on the value rather than once per visit: the query is a one-shot
+// instruction the URL goes on carrying, so a watcher that re-fired on every
+// route change would take the tab back off whatever the reader had chosen.
+watch(
+  () => route.query?.tab,
+  (wanted) => {
+    if (wanted !== "recipes") return;
+    tab.value = "recipes";
+    sidebarStore.statsOpen = true;
+  },
+  { immediate: true },
 );
 
 // Tasks last, and never anything but last: it is the app's business, not this

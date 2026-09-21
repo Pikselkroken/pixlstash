@@ -11,11 +11,30 @@
       <div class="recipe-scroll">
         <!-- Design order: the "Matches your saved recipe X" banner, then
              Workflow, Prompt, Models, Settings. -->
+        <!-- The name is the way THERE. Saying a recipe keeps this look and
+             then leaving the reader to go and find it was the dead end #1480
+             names; this is the same gesture Open makes for the workflow, one
+             query further, and it stays plain text when there is no topology
+             to send anybody to - exactly where Open is not offered either. -->
         <div v-if="matched" class="recipe-match">
           <v-icon size="16">mdi-bookmark</v-icon>
           <span
             >Matches your saved recipe
-            <b class="recipe-match-name">{{ matched.name || "Untitled" }}</b>
+            <component
+              :is="recipe.topologyHash ? 'button' : 'b'"
+              class="recipe-match-name"
+              :class="{ 'recipe-match-name--linked': !!recipe.topologyHash }"
+              :type="recipe.topologyHash ? 'button' : undefined"
+              @click="recipe.topologyHash ? openSavedRecipes() : undefined"
+            >
+              <Tooltip
+                v-if="recipe.topologyHash"
+                text="Show this recipe in the Workflows view"
+                activator="parent"
+                :describe="false"
+              />
+              {{ matched.name || "Untitled" }}</component
+            >
           </span>
         </div>
         <div class="section-label section-label--on-dark recipe-sec">
@@ -681,7 +700,14 @@ watch(() => props.recipe?.workflowKey, loadSavedRecipes, { immediate: true });
 
 function onSaved(row) {
   // Straight into the list, so the footer says Saved without another read.
-  if (row) savedRecipes.value = [...savedRecipes.value, row];
+  // **By id, because the dialog may have replaced one of these rows rather
+  // than added one** - appending a replacement would leave the old content in
+  // the list under the same id, and the banner would go on naming a look the
+  // row no longer keeps.
+  if (!row) return;
+  savedRecipes.value = savedRecipes.value.some((known) => known.id === row.id)
+    ? savedRecipes.value.map((known) => (known.id === row.id ? row : known))
+    : [...savedRecipes.value, row];
 }
 const inputs = computed(() => props.recipe?.inputs || []);
 
@@ -877,6 +903,14 @@ function openWorkflowsView() {
   });
 }
 
+/** The same place, with the rail open on the recipes rather than the card. */
+function openSavedRecipes() {
+  router.push({
+    name: "workflows",
+    query: { topology: props.recipe.topologyHash, tab: "recipes" },
+  });
+}
+
 // ── The graph's bytes, read only when the box is opened ────────────────────
 //
 // The recipe read answers what the picture was made with; the editor's graph is
@@ -1015,6 +1049,27 @@ async function copyPrompt() {
 
 .recipe-match-name {
   color: rgb(var(--v-theme-on-dark-surface));
+}
+
+/* All of this is the LINKED variant's alone, so the plain `<b>` is left
+   exactly as it was. `font: inherit` because the linked name is a `<button>`
+   and nothing resets a button's font app-wide - without it the name is the
+   browser's own 13.33px sans in the middle of a sentence - and the weight is
+   what `font: inherit` has just taken off the `<b>` it replaces.
+
+   Underlined rather than coloured: the banner sits on the dark panel, where
+   the theme's link colour is not one of the on-dark tokens. */
+.recipe-match-name--linked {
+  font: inherit;
+  font-weight: var(--weight-semibold);
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.recipe-match-name--linked:hover {
+  text-decoration-thickness: 2px;
 }
 
 .recipe-workflow {

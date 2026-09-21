@@ -314,15 +314,27 @@
     </div>
 
     <template #footer>
+      <!-- Status, never an alert: it says a gesture is already done, and the
+           `--bad` spelling beside a real run refusal would read as a second
+           thing wrong. -->
+      <p v-if="keptAs" :id="savedReasonId" class="rund-note rund-kept">
+        Already kept as “{{ keptAs.name || "Untitled" }}”.
+      </p>
       <p v-if="runBlocker" :id="blockerId" class="rund-note rund-note--bad">
         {{ runBlocker }}
       </p>
+      <!-- `aria-disabled`, not `disabled`, for this dialog's own stated
+           reason: a natively-disabled button is out of the tab order, so a
+           keyboard reader could never reach the sentence saying why it is
+           inert. `onSave` does the refusing. -->
       <AppButton
-        icon-left="bookmark-plus-outline"
+        :icon-left="keptAs ? 'check' : 'bookmark-plus-outline'"
         :disabled="!activeKey || submitting"
-        @click="saveOpen = true"
+        :aria-disabled="keptAs ? 'true' : undefined"
+        :aria-describedby="keptAs ? savedReasonId : undefined"
+        @click="onSave"
       >
-        Save as recipe
+        {{ keptAs ? "Saved" : "Save as recipe" }}
       </AppButton>
       <span class="rund-sp" />
       <AppButton :disabled="submitting" @click="onRequestClose">Cancel</AppButton>
@@ -360,6 +372,7 @@
     :settings-aside="seedMode === 'keep' ? KEEP_SEED_ASIDE : ''"
     :source-picture-id="pictureIds[0] ?? null"
     @close="saveOpen = false"
+    @saved="onSaved"
   />
 </template>
 
@@ -376,12 +389,17 @@
  *
  * **An edited field is marked in its label row**, never beside the control: the
  * four-column grid stays aligned only if a chip cannot change a cell's height.
+ *
+ * **Save as recipe reads Saved once a saved recipe already keeps this look**
+ * (#1480), as the lightbox's Recipe tab has since F6 - without it the second
+ * identical row was one press away from here.
  */
 import { computed, reactive, ref, useId, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { getPictureRecipe } from "../../api/comfyui";
 import { listAdapters } from "../../api/modelShelf";
+import { listSavedRecipes } from "../../api/recipes";
 import {
   getWorkflowCard,
   listWorkflowCards,
@@ -392,6 +410,7 @@ import {
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
+import { wouldDuplicate } from "../../utils/recipeKey";
 import { reasonsBlock } from "../../utils/runReasons";
 import SaveRecipeDialog from "./SaveRecipeDialog.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -799,6 +818,90 @@ const recipeOverrides = computed(() =>
     base: baseOf(field),
   })),
 );
+
+// ── Is this look already kept? (#1480) ───────────────────────────
+//
+// The lightbox's Recipe tab has answered this since F6 and this popup did not,
+// so the duplicate the tab refuses was one press away from here. The same
+// `keepsTheSameLook` as the tab, off the same read, because two copies of that
+// comparison is how it went wrong the first time (`utils/recipeKey.js`).
+
+/** The saved recipes of `activeKey`'s stack, and the key they were read for. */
+const savedRecipes = ref([]);
+const savedForKey = ref("");
+const savedReasonId = useId();
+
+/**
+ * Exactly what pressing Save would write, which is what the match asks about.
+ *
+ * `recipeLoras`, not the graph's slots, because the save writes the digested
+ * rows and no others - and **the negative prompt and the overrides too**,
+ * because this is a form and the save writes those as well. Keying on the
+ * look alone (prompt and LoRA names, which is what credit is grouped by)
+ * would make **Saved** refuse a recipe that differs from the kept one in
+ * every parameter it carries: not a duplicate, a variation, and unsaveable.
+ * `wouldDuplicate` is that question, beside the look's own key in
+ * `utils/recipeKey.js` so the comparisons stay in one file.
+ */
+const thisSave = computed(() => ({
+  prompt: prompt.value,
+  negative: negative.value,
+  loras: recipeLoras.value,
+  overrides: Object.fromEntries(
+    recipeOverrides.value.map((row) => [row.address, row.value]),
+  ),
+}));
+
+/**
+ * The saved recipe a save from this form would duplicate, or null.
+ *
+ * It comes and goes as the owner types, which is the point: edit the prompt,
+ * a LoRA strength or a parameter and this is a new recipe again, so Save
+ * comes back.
+ */
+const keptAs = computed(() => {
+  if (!activeKey.value || activeKey.value !== savedForKey.value) return null;
+  return (
+    savedRecipes.value.find((row) => wouldDuplicate(row, thisSave.value)) ||
+    null
+  );
+});
+
+watch(
+  () => activeKey.value,
+  async (key) => {
+    savedRecipes.value = [];
+    savedForKey.value = "";
+    if (!key) return;
+    try {
+      const rows = await listSavedRecipes(key);
+      // The picker may have moved on while the read was out.
+      if (key !== activeKey.value) return;
+      savedRecipes.value = rows;
+      savedForKey.value = key;
+    } catch (err) {
+      // A footer that cannot say "Saved" is not a failure of the run form:
+      // the popup's whole job is still on screen, so this is logged and
+      // dropped, and the save goes on being offered.
+      console.warn("Could not read this workflow's saved recipes:", err);
+    }
+  },
+  { immediate: true },
+);
+
+/** The gesture, refused here rather than by a `disabled` nobody can reach. */
+function onSave() {
+  if (keptAs.value || !activeKey.value || submitting.value) return;
+  saveOpen.value = true;
+}
+
+/** Straight into the list, so the footer answers without another read. */
+function onSaved(row) {
+  if (!row) return;
+  savedRecipes.value = savedRecipes.value.some((known) => known.id === row.id)
+    ? savedRecipes.value.map((known) => (known.id === row.id ? row : known))
+    : [...savedRecipes.value, row];
+}
 
 const seedOptions = [
   { value: "new", label: "New for each picture" },
@@ -1454,6 +1557,13 @@ watch(
 
 .rund-sp {
   flex: 1;
+}
+
+/* The footer is one row that does not wrap, so a long recipe name has to be
+   allowed to shrink and wrap rather than push the buttons out of it: a flex
+   item's `min-width: auto` is what would stop it. */
+.rund-kept {
+  min-width: 0;
 }
 
 /* The "Strength" header has to sit over the strength box, so the two share one

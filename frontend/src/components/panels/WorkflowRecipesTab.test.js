@@ -20,6 +20,7 @@ const reorderSavedRecipes = vi.fn();
 const editSavedRecipe = vi.fn();
 const deleteSavedRecipe = vi.fn();
 const listUsedLooks = vi.fn();
+const getWorkflowCard = vi.fn();
 vi.mock("../../api/comfyui", () => ({
   getPictureRecipe: (...args) => getPictureRecipe(...args),
 }));
@@ -32,7 +33,10 @@ vi.mock("../../api/recipes", () => ({
   deleteSavedRecipe: (...args) => deleteSavedRecipe(...args),
   exportSavedRecipe: vi.fn(),
 }));
-vi.mock("../../api/workflows", () => ({ exportWorkflow: vi.fn() }));
+vi.mock("../../api/workflows", () => ({
+  exportWorkflow: vi.fn(),
+  getWorkflowCard: (...args) => getWorkflowCard(...args),
+}));
 vi.mock("../../api/pictures", () => ({
   pictureThumbnailUrl: (id) => `/api/v1/pictures/thumbnails/${id}.webp`,
 }));
@@ -99,6 +103,7 @@ describe("WorkflowRecipesTab", () => {
     ]);
     reorderSavedRecipes.mockImplementation(async (ids) => ids);
     listUsedLooks.mockResolvedValue([]);
+    getWorkflowCard.mockResolvedValue({});
     getPictureRecipe.mockResolvedValue({
       workflow_key: KEY,
       positive_prompt: "a look nobody kept",
