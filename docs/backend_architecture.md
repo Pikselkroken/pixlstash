@@ -2848,6 +2848,75 @@ so `POST /workflows/run/preflight` and `POST /workflows/run` can never disagree.
   pre-flight and submit; the card run path is what "run it through PixlStash"
   means for a workflow.
 
+#### A missing LoRA bypasses its loader rather than refusing the run (#1463)
+
+`bypass_missing_loras`
+([`services/workflow_run_service.py`](../pixlstash/services/workflow_run_service.py))
+and `bypass_node`
+([`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py))
+are the substitution above's neighbour and its last resort: where no copy of the
+file can be found at all, a **LoRA** is simply left out and the run happens
+anyway. Wired into `_plan` at one site, between the swap and `judge`.
+
+- **Because a LoRA is optional and nothing else in the graph is.** Installing a
+  checkpoint is a trip away from the keyboard and the graph cannot run without
+  one, so it blocks the batch and that is the kind answer. A LoRA the graph can
+  run without is not, and one absent adapter on one card used to refuse a whole
+  mixed selection. The distinction is `model_folder`'s existing answer — the
+  entry's folder is `loras` — so no new plumbing decides it.
+- **Relaxing the refusal alone would not have worked.** A graph still naming an
+  absent file is one ComfyUI's own validation refuses, so the loader has to
+  leave the chain: `bypass_node` is ComfyUI's bypass (a node set to mode 4) on
+  the API graph, each output answered by the node's **first input of the same
+  type**, typed from `object_info` for the same reason `plan_lora_insertion` is.
+  It is that function's inverse, and it rewires nothing until every consumer has
+  been checked — a graph half rewired around a node still in it is worse than
+  one that refused.
+- **Three loaders keep their refusal, and each is the honest answer.** A
+  **stacker** whose other LoRA slots are filled stays, because taking the node
+  out would drop the adapters that *are* installed — and a slot counts as filled
+  whether it names a file or is **wired** from another node, since converting
+  `lora_name` to an input is an ordinary ComfyUI gesture and `preflight_prompt`
+  skips a link, so counting only literal strings would read a live second
+  adapter as an empty slot. A loader something reads an output of that no input
+  of that type can stand in for stays, because rewiring it would leave that
+  consumer wired to nothing. And a **forgotten** LoRA stays: `FORGOTTEN_MODEL`
+  means the hub lost the reference's name, not that the file is gone, so
+  bypassing would trade `resolve_references`' intended surfacing for a run
+  quietly made without an adapter the owner has — and send them to install a
+  file called `(forgotten model)`. All three are logged with the value that
+  could not be found.
+- **Before `judge`, so the graph judged is the graph submitted.** The bypassed
+  loader is gone by the time the pre-flight runs again, so it is not reported as
+  a missing model the owner would go looking for; what is left in
+  `missing_models` is what genuinely blocks.
+- **Reported only on a group that is actually submitted.** The bypass happens
+  before `judge` because the graph needs it, but the *report* is written when
+  `group.runs` is set, and cleared again when a missing model elsewhere zeroes
+  the whole batch. What it says is "the run goes ahead without this LoRA", which
+  is a lie on a card that is about to be refused for a missing checkpoint — and
+  at the point the bypass runs, most of the refusals are not known yet.
+- **A bypassed run lands on its own card**, the same way a substituted one does,
+  and harder: deleting a node changes the **topology** hash and not only the
+  structural one, so `workflow_key` moves too. The pictures ComfyUI writes back
+  carry the submitted graph, so they are filed on a card for the LoRA-free
+  shape of this workflow rather than on the one that was run, and installing
+  the file later does not re-key them. That is the price of the run happening
+  at all; the alternative is the refusal this section exists to remove. It is
+  a fork of the card, not a lie about provenance: the picture's recipe names
+  the graph that really ran.
+- **A LoRA the REQUEST asked to add is never bypassed.** `_apply_loras` reports
+  its own `missing_models` for an adapter it cannot place, which is a refusal:
+  the owner asked for that LoRA by name, and running without it silently would
+  answer a different question. The bypass is only for the loaders the stored
+  graph carries.
+- **Never silent.** Each one is reported on the group as `bypassed_loras`
+  (`{file, folder, node_id, class_type, field}`) on the pre-flight and on the run
+  alike, and logged — the rule the substitution above follows, for the same
+  reason. The Run popup draws it *before* the run: a picture generated without
+  the character LoRA the owner expected, with nothing said, is worse than a
+  refusal.
+
 #### What a delete leaves behind: companions (#1314)
 
 `POST /api/v1/models/companions` answers the question in front of Delete that

@@ -400,7 +400,17 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
                     )
             continue
 
-        for field in MODEL_FILENAME_FIELDS.get(class_type, ()):
+        fields = list(MODEL_FILENAME_FIELDS.get(class_type, ()))
+        # Stackers spell their extra slots `lora_name_2`, `lora_name_3`, …;
+        # unlike the core loader, their class gives no fixed field list. Read
+        # the actual graph inputs so the pre-flight and the later bypass see
+        # the same missing adapters.
+        fields.extend(
+            field
+            for field in inputs
+            if LORA_FILENAME_FIELD_RE.match(str(field)) and field not in fields
+        )
+        for field in fields:
             value = inputs.get(field)
             if not isinstance(value, str) or not value:
                 # Missing, or wired from another node - not a literal filename.
@@ -1264,6 +1274,77 @@ def insert_adapter(
             outputs.index(rewire["type"]),
         ]
     return {"node_id": node_id, "class_type": loader}
+
+
+def bypass_node(prompt_graph: dict, node_id: str, object_info: dict) -> None:
+    """Take one node out of the chain, wiring its consumers to its own inputs.
+
+    This is ComfyUI's own bypass - a node set to mode 4 - carried out on the
+    API-format graph rather than in the editor: each output is answered by the
+    node's **first input of the same type**, so a ``LoraLoader``'s MODEL and
+    CLIP consumers read the checkpoint directly and the adapter is simply never
+    applied. The inverse of :func:`plan_lora_insertion` / :func:`insert_adapter`,
+    which splice a loader in, and typed from ``object_info`` for the same reason
+    they are: a link in an API graph is ``[node_id, output_index]`` with no type
+    on it, and a consumer's input name is a guess.
+
+    Mutates *prompt_graph* in place, and only once every consumer has been
+    checked: a graph half rewired around a node that is still there is worse
+    than one that refused.
+
+    Args:
+        prompt_graph: The API-format graph to mutate.
+        node_id: The node to take out.
+        object_info: The map from :func:`fetch_object_info`.
+
+    Raises:
+        LookupError: When the node is not in the graph, when this ComfyUI does
+            not say what it hands on, or when something reads an output no
+            input of the same type can stand in for - which would leave that
+            consumer wired to nothing.
+    """
+    node = (prompt_graph or {}).get(node_id)
+    if not isinstance(node, dict):
+        raise LookupError(f"Node {node_id} is not in this graph.")
+    class_type = node.get("class_type")
+    spec = object_info.get(class_type)
+    outputs = spec.get("output") if isinstance(spec, dict) else None
+    if not isinstance(outputs, list):
+        raise LookupError(
+            f"This ComfyUI does not say what {class_type} (node {node_id}) hands "
+            "on, so PixlStash cannot tell what would take its place."
+        )
+    inputs = node.get("inputs")
+    inputs = inputs if isinstance(inputs, dict) else {}
+    # Output index -> the link that answers it once this node is gone. A widget
+    # value cannot: what is being replaced is a connection.
+    passthrough: dict[int, list] = {}
+    for index, out_type in enumerate(outputs):
+        for field, value in inputs.items():
+            if not is_link(value):
+                continue
+            declared = find_input_spec(spec, field)
+            if declared is not None and declared[0] == out_type:
+                passthrough[index] = value
+                break
+    rewires: list[tuple[dict, str, list]] = []
+    for other_id, other in (prompt_graph or {}).items():
+        other_inputs = other.get("inputs") if isinstance(other, dict) else None
+        if not isinstance(other_inputs, dict):
+            continue
+        for field, value in other_inputs.items():
+            if not is_link(value) or value[0] != node_id:
+                continue
+            if value[1] not in passthrough:
+                raise LookupError(
+                    f"Node {other_id} reads output {value[1]} of {class_type} "
+                    f"(node {node_id}), which takes no input of the same kind, "
+                    "so there is nothing to put in its place."
+                )
+            rewires.append((other_inputs, field, passthrough[value[1]]))
+    for other_inputs, field, link in rewires:
+        other_inputs[field] = list(link)
+    del prompt_graph[node_id]
 
 
 def format_prompt_rejection(body: Any) -> str | None:

@@ -391,6 +391,19 @@ variant (§2.5) and the two `ImageOverlay` chips above. **Not** migrated: the ~4
 the light theme's `error` — a **pre-existing** failure unrelated to this change, and a
 mechanical migration large enough to want its own eyeball pass. Logged in §10.
 
+**One in-dialog exception, and it now has two tones.**
+`frontend/src/components/io/RunReasonNotice.vue` is not a toast — it sits inside the
+Run popups, several at a time for a mixed batch — and it has always drawn the status
+hue in the **glyph** as well as the rail, against the rule above. Since #1463 it also
+carries a second tone: `--surface-warning` with `mdi-alert-outline` for a statement
+about a run that IS going ahead (a LoRA left out), beside `--surface-error` with
+`mdi-alert-circle-outline` for a refusal. Both hues are existing tokens defined in
+both themes, and the glyph shape carries the distinction without colour, as §3 asks.
+The live region around the list follows the tone: `role="alert"` while any refusal is
+on screen, `role="status"` when only notices are. **This exception is worth a
+designer's eye rather than another copy**: a third tone here is the point at which it
+should become the host's own variants.
+
 ---
 
 ## 4. Anatomy

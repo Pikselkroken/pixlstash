@@ -276,6 +276,37 @@ describe("a selection every picture of which can run", () => {
     expect(makeButton(wrapper).text()).toBe("Make");
   });
 
+  it("still makes every run when a LoRA is only bypassed (#1463)", async () => {
+    // The reported symptom: one absent LoRA on one card refused a selection
+    // that was otherwise entirely runnable. It is not a reason, so it neither
+    // zeroes the total nor takes its own card out of it.
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 2,
+      groups: [
+        { workflow_key: GOOD, picture_ids: [1, 2], runs: 1, reasons: [] },
+        {
+          workflow_key: BAD,
+          picture_ids: [3],
+          runs: 1,
+          reasons: [],
+          bypassed_loras: [{ file: "character.safetensors", folder: "loras" }],
+        },
+      ],
+    });
+
+    const wrapper = await mountMakeMore();
+
+    expect(wrapper.vm.blocker).toBe("");
+    expect(wrapper.vm.runnable).toHaveLength(2);
+    expect(makeButton(wrapper).text()).toBe("Make 2");
+    // And it is said, on the card it is about, before the button is pressed.
+    expect(wrapper.vm.blockedReasons.map((entry) => entry.reason.code)).toEqual([
+      "loras_bypassed",
+    ]);
+    expect(wrapper.vm.blockedReasons[0].subject).toBe("Z-Image turbo");
+  });
+
   it("starts each open at a count of 1, never the last selection's", async () => {
     const wrapper = await mountMakeMore();
     wrapper.vm.count = 20;

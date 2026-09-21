@@ -858,7 +858,9 @@ class RunGroup(BaseModel):
 
     ``reasons`` empty is the only thing that means "this would run". Each
     reason is a code and its payload, so a panel can act on it rather than
-    print it.
+    print it. ``substitutions`` and ``bypassed_loras`` are not reasons: they
+    say what this run will do differently from what the graph says, which is a
+    fact to report rather than a refusal to act on.
     """
 
     workflow_key: str
@@ -873,6 +875,13 @@ class RunGroup(BaseModel):
     # lie, so it is reported here on the pre-flight and on the run alike, and
     # logged. The stored recipe keeps the name it recorded.
     substitutions: list[dict] = Field(default_factory=list)
+    # A LoRA loader taken out of the graph because this ComfyUI does not have
+    # its file (#1463). A LoRA is optional - the graph runs without it - so it
+    # is bypassed rather than refused the way a missing checkpoint is. Reported
+    # for the same reason a substitution is: a picture made without the
+    # character LoRA the owner expected, with nothing said, is worse than a
+    # refusal, and the pre-flight is where they are told BEFORE the run.
+    bypassed_loras: list[dict] = Field(default_factory=list)
 
 
 class RunPreflight(BaseModel):
@@ -2411,6 +2420,9 @@ def create_router(server) -> APIRouter:
             # slot, and an unreachable ComfyUI cannot resolve a filename slot,
             # which `apply_adapter` would report as a missing node class.
             found: list[run_service.Reason] = []
+            # LoRA loaders taken out of this graph; put on the group only if it
+            # ends up being submitted. See the assignment below.
+            bypassed: list[dict] = []
             if body.loras and slots_in_graph:
                 # NOT gated on `object_info`: skipping the application when
                 # ComfyUI could not be asked is how a consented run silently
@@ -2477,6 +2489,20 @@ def create_router(server) -> APIRouter:
                         swap["class_type"],
                         swap["field"],
                     )
+                if not found:
+                    # After the swap, so a LoRA the shelf still holds under
+                    # another name is loaded rather than dropped, and before
+                    # `judge`, so the graph that is judged is the graph that
+                    # will be submitted and the loaders that are gone are not
+                    # reported as missing models. Skipped when `_apply_loras`
+                    # has already refused: that run is not happening.
+                    #
+                    # Held in a local and NOT put on the group here. What it
+                    # says is "the run goes ahead without this LoRA", which is
+                    # a lie on a group that is about to be refused for some
+                    # other reason - and `judge` has not run yet, so most of
+                    # the refusals are still unknown at this point.
+                    bypassed = run_service.bypass_missing_loras(graph, object_info)
 
             judged, _preflight = run_service.judge(
                 graph,
@@ -2510,6 +2536,9 @@ def create_router(server) -> APIRouter:
                     ", ".join(r.code for r in found),
                 )
             group.runs = body.count
+            # Reported only now, when this group really is being submitted:
+            # every refusal is in, and what the notice claims is true.
+            group.bypassed_loras = bypassed
             planned.append(group)
             submittable.append((graph, group))
 
@@ -2526,6 +2555,10 @@ def create_router(server) -> APIRouter:
             # leave the owner repeating the gesture to catch what was skipped.
             for group in planned:
                 group.runs = 0
+                # Including the groups that WOULD have run: nothing is
+                # submitted now, so "the run goes ahead without this LoRA" is
+                # no longer true of any of them.
+                group.bypassed_loras = []
             submittable = []
         total = sum(group.runs for group in planned)
         if total > MAX_RUNS_PER_REQUEST:
@@ -2556,7 +2589,10 @@ def create_router(server) -> APIRouter:
             "no_lora_loader, pixlstash_nodes, no_save_node, no_runnable_source. "
             "A group runs when its reasons are empty - or when the only ones "
             "left are an uninspectable ComfyUI the body said allow_unchecked "
-            "to. A body that cannot be interpreted against the card answers "
+            "to. A LoRA this ComfyUI does not have is NOT among them: its "
+            "loader is taken out of the graph and named in bypassed_loras, "
+            "which is a fact about the run rather than a reason against it. A "
+            "body that cannot be interpreted against the card answers "
             "400/404/422 here exactly as it does on the run, so the two never "
             "disagree."
         ),

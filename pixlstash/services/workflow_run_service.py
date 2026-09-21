@@ -27,12 +27,13 @@ from typing import Any, Optional
 
 from pixlstash.services.comfyui_recipe_service import (
     LORA_FILENAME_FIELD_RE,
+    bypass_node,
     preflight_prompt,
     sanitize_prompt_graph,
     unchecked_preflight,
 )
 from pixlstash.services.comfyui_service import graph_has_pixlstash_nodes
-from pixlstash.services.workflow_hash import asset_reference
+from pixlstash.services.workflow_hash import asset_reference, is_link
 from pixlstash.services.workflow_io import api_graph
 from pixlstash.pixl_logging import get_logger
 
@@ -314,6 +315,132 @@ def judge(
     if preflight.get("checked") and not preflight.get("has_save_image"):
         reasons.append(Reason(NO_SAVE_NODE))
     return reasons, preflight
+
+
+def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
+    """Take every LoRA loader whose file this ComfyUI lacks out of *graph*.
+
+    **A LoRA is optional and a checkpoint is not** (#1463). Installing a
+    checkpoint is a trip away from the keyboard, so refusing the run and
+    keeping the whole batch back is the kind answer; a LoRA the graph can
+    simply run without is not worth refusing over, and the owner's answer to
+    "we must be able to progress while missing a LoRA" is to disable the node.
+    So the run happens with the adapter not applied, which is
+    :func:`~pixlstash.services.comfyui_recipe_service.bypass_node`'s whole job.
+
+    **Relaxing the refusal alone would not do it**: a graph still naming an
+    absent file is one ``POST /prompt`` refuses, so the loader has to actually
+    leave the chain.
+
+    Which entries are LoRAs is :func:`model_folder`'s existing answer, on the
+    pre-flight's own findings rather than on a reason - a reason has been
+    reduced to ``{file, folder}`` and no longer says which node to take out,
+    and a LoRA the *request* asked to add reports the same folder without being
+    a slot the graph can do without.
+
+    Three loaders keep their refusal instead, each logged: one whose file this
+    hub can no longer NAME (:data:`FORGOTTEN_MODEL` - the file may be installed
+    and only the name is lost), a stacker whose other LoRA slots are filled
+    (taking the node out would drop the adapters that are here), and one
+    nothing can be rewired around.
+
+    **Never silent**: the caller reports what went on the group and on the run
+    alike, the way a model substitution is reported, and logs it here.
+
+    Args:
+        graph: The API-format graph, mutated in place.
+        object_info: The map this ComfyUI published. Required - with no list of
+            what it holds there is no missing file to find.
+
+    Returns:
+        ``[{file, folder, node_id, class_type, field}, …]``, one per missing
+        LoRA whose loader was taken out; empty when nothing was missing or
+        nothing could be bypassed honestly.
+    """
+    missing_by_node: dict[str, list[dict]] = {}
+    for item in preflight_prompt(graph, object_info).get("missing_models") or []:
+        if not item:
+            continue
+        if model_folder(item.get("class_type"), item.get("field")) != "loras":
+            continue
+        missing_by_node.setdefault(str(item.get("node_id")), []).append(item)
+
+    bypassed: list[dict] = []
+    for node_id, missing in missing_by_node.items():
+        item = missing[0]
+        if any(item.get("value") == FORGOTTEN_MODEL for item in missing):
+            # The hub lost this reference's NAME; the file itself may well be
+            # installed. :func:`resolve_references` puts the token in on
+            # purpose so the pre-flight surfaces it, and bypassing would trade
+            # that surfacing for a run quietly made without an adapter the
+            # owner has - then send them to install a file called
+            # "(forgotten model)".
+            logger.info(
+                "Node %s (%s) names a LoRA this hub can no longer name, so it "
+                "keeps its refusal rather than being bypassed.",
+                node_id,
+                item.get("class_type"),
+            )
+            continue
+        node = graph.get(node_id)
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        # A slot counts as filled whether it names a file or is WIRED from
+        # another node. Converting `lora_name` to an input is an ordinary
+        # ComfyUI gesture, and `preflight_prompt` skips a link (it is computed
+        # at run time, not a filename), so counting only strings would read a
+        # stacker's live second adapter as an empty slot and drop it.
+        filled = [
+            field
+            for field, value in (inputs or {}).items()
+            if LORA_FILENAME_FIELD_RE.match(str(field))
+            and (is_link(value) or (isinstance(value, str) and value))
+        ]
+        missing_fields = {str(item.get("field")) for item in missing}
+        if not set(filled) <= missing_fields:
+            # A stacker holding three LoRAs of which one is gone: the node
+            # carries the two that ARE here, so taking it out would drop them
+            # too. Left to block, which is the honest answer - the owner is
+            # missing one file and would lose three adapters.
+            logger.info(
+                "Node %s (%s) holds %d LoRA slots and one of them (%s) is not "
+                "on this ComfyUI, so it is left in place: bypassing it would "
+                "drop the ones that are here.",
+                node_id,
+                item.get("class_type"),
+                len(filled),
+                ", ".join(str(item.get("value")) for item in missing),
+            )
+            continue
+        try:
+            bypass_node(graph, node_id, object_info)
+        except LookupError as exc:
+            logger.warning(
+                "LoRA %s is not on this ComfyUI and node %s (%s) cannot be "
+                "taken out of the graph, so the run is still refused: %s",
+                item.get("value"),
+                node_id,
+                item.get("class_type"),
+                exc,
+            )
+            continue
+        logger.info(
+            "Node %s (%s) is bypassed: this ComfyUI does not have %s, and a "
+            "LoRA is optional, so the run goes ahead without it.",
+            node_id,
+            item.get("class_type"),
+            ", ".join(str(item.get("value")) for item in missing),
+        )
+        bypassed.extend(
+            {
+                "file": str(item.get("value")),
+                "folder": "loras",
+                "node_id": node_id,
+                "class_type": item.get("class_type"),
+                "field": item.get("field"),
+            }
+            for item in missing
+        )
+    return bypassed
 
 
 def blocks_batch(reasons: list[Reason], *, allow_unchecked: bool = False) -> bool:

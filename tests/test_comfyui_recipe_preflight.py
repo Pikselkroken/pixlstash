@@ -21,6 +21,7 @@ from pixlstash.services.comfyui_recipe_service import (
     detect_model_targets,
     detect_seed_targets,
     format_prompt_rejection,
+    bypass_node,
     insert_adapter,
     plan_lora_insertion,
     preflight_prompt,
@@ -1171,6 +1172,73 @@ class TestLoraInsertion:
             "3",
             "10",
         ]
+
+
+class TestBypassNode:
+    """#1463: a loader taken back out again, which is the insertion's inverse."""
+
+    INFO = {
+        "CheckpointLoaderSimple": {"output": ["MODEL", "CLIP", "VAE"]},
+        "CLIPTextEncode": {"output": ["CONDITIONING"]},
+        "KSampler": {"output": ["LATENT"]},
+        "LoraLoader": _loader_spec(["MODEL", "CLIP"], ["subject-v2.safetensors"]),
+    }
+
+    def _graph(self, clip_wired=True):
+        loader_inputs = {
+            "lora_name": "gone.safetensors",
+            "strength_model": 1.0,
+            "model": ["4", 0],
+        }
+        if clip_wired:
+            loader_inputs["clip"] = ["4", 1]
+        return {
+            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "x"}},
+            "5": {"class_type": "LoraLoader", "inputs": loader_inputs},
+            "6": {"class_type": "CLIPTextEncode", "inputs": {"clip": ["5", 1]}},
+            "3": {
+                "class_type": "KSampler",
+                "inputs": {"model": ["5", 0], "positive": ["6", 0]},
+            },
+        }
+
+    def test_every_consumer_reads_what_the_loader_read(self):
+        """The whole point: the chain closes over the gap the node leaves."""
+        graph = self._graph()
+        bypass_node(graph, "5", self.INFO)
+        assert "5" not in graph
+        # MODEL and CLIP each answered by the loader's own input of that type,
+        # so the sampler and the text encoder both read the checkpoint.
+        assert graph["3"]["inputs"]["model"] == ["4", 0]
+        assert graph["6"]["inputs"]["clip"] == ["4", 1]
+        # Nothing else moved.
+        assert graph["3"]["inputs"]["positive"] == ["6", 0]
+
+    def test_an_output_with_nothing_to_take_its_place_refuses_whole(self):
+        """A CLIP reader over a loader whose own CLIP is not wired.
+
+        Rewiring what it could and dropping the node would leave the text
+        encoder connected to nothing, which ComfyUI refuses after the run is
+        queued - so the graph is left exactly as it was and the run keeps its
+        refusal.
+        """
+        graph = self._graph(clip_wired=False)
+        before = json.loads(json.dumps(graph))
+        with pytest.raises(LookupError, match="nothing to put in its place"):
+            bypass_node(graph, "5", self.INFO)
+        assert graph == before
+
+    def test_a_class_this_comfyui_does_not_describe_refuses(self):
+        """Unknown outputs means unknown wiring; guessing would be the bug."""
+        graph = self._graph()
+        info = {key: spec for key, spec in self.INFO.items() if key != "LoraLoader"}
+        with pytest.raises(LookupError, match="does not say what"):
+            bypass_node(graph, "5", info)
+        assert "5" in graph
+
+    def test_a_node_that_is_not_there_refuses(self):
+        with pytest.raises(LookupError, match="not in this graph"):
+            bypass_node(self._graph(), "99", self.INFO)
 
 
 class TestAdvertisedModelNames:
