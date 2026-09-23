@@ -1245,15 +1245,28 @@
                     />
                     <template v-else>
                       <span
-                        v-if="row.base_model"
+                        v-if="baseModelCell(row).text"
+                        class="shelf-base-text"
                         @dblclick.stop="startBaseModelEdit(row)"
-                        >{{ row.base_model }}</span
+                        >{{ baseModelCell(row).text }}</span
                       >
                       <span
                         v-else
                         class="shelf-chip shelf-chip--none"
                         @dblclick.stop="startBaseModelEdit(row)"
                         >not set</span
+                      >
+                      <!-- A value we inferred rather than one the file or a
+                           person stated. The same tag the name column uses for
+                           the file's own string, with its own word: "from
+                           filename" there already means "verbatim". -->
+                      <span
+                        v-if="baseModelCell(row).guess"
+                        class="shelf-name-tag"
+                        ><Tooltip
+                          :text="baseModelCell(row).guess"
+                          activator="parent"
+                        />guessed</span
                       >
                     </template>
                   </span>
@@ -1593,6 +1606,7 @@ import {
   deletableModels,
   fileKindLabel,
   undeletableNotice,
+  baseModelCell,
   trashName,
   withEmptyFolders,
   withFolderSignals,
@@ -5583,6 +5597,20 @@ button.shelf-head-cell:hover {
 
 .shelf-col--base {
   width: var(--shelf-col-base);
+}
+
+/* A guessed value carries a tag, and the tag is the part that must survive a
+   narrow column: the label ellipsises, the tag keeps its width. */
+.shelf-col--base:has(.shelf-name-tag) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.shelf-base-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* The field fills the cell it replaces rather than widening the row: every

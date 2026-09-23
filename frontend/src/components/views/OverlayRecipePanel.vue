@@ -732,7 +732,9 @@ function isAdapter(model) {
  * string the chip cannot do without.
  */
 function modelLabel(model) {
-  return deriveModelName(model.name) || model.name;
+  // The shelf row's own name first, where the owner gave it one: the chip
+  // then reads as the row it opens.
+  return model.display_name || deriveModelName(model.name) || model.name;
 }
 
 /**

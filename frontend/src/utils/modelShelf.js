@@ -249,6 +249,12 @@ export function quantBadge(quant) {
 export function modelName(model) {
   const given = String(model?.display_name || "").trim();
   if (given) return { text: given, state: "named" };
+  // A checkpoint whose filename simply IS a known base model
+  // (`flux1-dev.safetensors`) reads as that model's label. Still ours, so it
+  // draws as `derived`; the server sets it only for a checkpoint and never
+  // from a guessed base model, so a LoRA's name is never its base model.
+  const matched = String(model?.matched_name || "").trim();
+  if (matched) return { text: matched, state: "derived" };
   const filename = String(model?.filename || "").trim();
   const derived = deriveModelName(filename);
   // A real readable name, and OURS: `deriveModelName` rewrote the file's own
@@ -688,8 +694,10 @@ export function withEmptyFolders(groups, folders) {
 /**
  * The base model a row should be GROUPED, FILTERED and FACETED by.
  *
- * `base_model_folded` when the server recognised the string, the raw one when
- * it did not. Folding is what makes `sdxl_base_v1-0`, `SDXL`, `sdxl base` and
+ * `base_model_canonical` when the server identified one - from what the file
+ * declares, from its filename, or from what a person typed - which is also
+ * what the server sorts and filters on. Else `base_model_folded` when the
+ * server recognised the string, the raw one when it did not. Folding is what makes `sdxl_base_v1-0`, `SDXL`, `sdxl base` and
  * `stable diffusion xl` one bucket instead of four; falling back to the raw
  * value is what keeps a base model nobody has heard of selectable rather than
  * swept into "not set".
@@ -702,7 +710,45 @@ export function withEmptyFolders(groups, folders) {
  * @returns {string} the grouping key, or `""` when the row records nothing.
  */
 export function baseModelKey(row) {
-  return row?.base_model_folded || row?.base_model || "";
+  return (
+    row?.base_model_canonical || row?.base_model_folded || row?.base_model || ""
+  );
+}
+
+/** The identification sources that are a guess, not something the file said. */
+const GUESSED_BASE_SOURCES = new Set([
+  "filename",
+  "declared_fuzzy",
+  "filename_fuzzy",
+]);
+
+/**
+ * What a row's Base model cell shows, and whether it is a guess.
+ *
+ * The raw `base_model` when the file (or a person) said it, because that
+ * spelling is what the file actually says. A GUESS shows the label it was
+ * read as instead - the raw string is not the guess - and says what it was
+ * read from, for the tag's tooltip.
+ *
+ * @param {Object} row - a row from `/adapters` or `/checkpoints`.
+ * @returns {{text: string, guess: string|null}} `text` is `""` when nothing
+ *   is recorded; `guess` is the tooltip copy for a guessed value, else null.
+ */
+export function baseModelCell(row) {
+  const canonical = row?.base_model_canonical || "";
+  const source = row?.base_model_source || "";
+  if (canonical && GUESSED_BASE_SOURCES.has(source)) {
+    const raw = String(row?.base_model || "").trim();
+    const how =
+      source === "declared_fuzzy" && raw
+        ? `The file says “${raw}”, read as ${canonical}.`
+        : "Guessed from the filename. Nothing in the file says this.";
+    return {
+      text: canonical,
+      guess: `${how} Double-click, or use Set base model, to correct it.`,
+    };
+  }
+  return { text: row?.base_model || canonical, guess: null };
 }
 
 /** What each folder layout is called, and the glyph that stands for it. */

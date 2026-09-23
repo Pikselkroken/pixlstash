@@ -21,7 +21,9 @@ vi.mock("../../api/tags", () => ({
   ]),
 }));
 vi.mock("../../api/pictures", () => ({
-  listComfyuiModels: vi.fn().mockResolvedValue(["flux1-dev.safetensors"]),
+  listComfyuiModels: vi
+    .fn()
+    .mockResolvedValue([{ value: "flux1-dev.safetensors", name: null }]),
   listComfyuiLoras: vi.fn().mockResolvedValue([]),
   getPictureCount: vi.fn().mockResolvedValue({ count: 3 }),
 }));

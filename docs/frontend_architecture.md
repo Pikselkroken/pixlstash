@@ -3158,7 +3158,11 @@ undo by accident:
     face at `--weight-regular` (mono would claim the string were the file's)
     over a soft accent rule. **No tag**: it is the commonest state on the shelf,
     so a `derived` chip stamped most of the column with a word the reader could
-    not act on (owner call, 2026-08-15).
+    not act on (owner call, 2026-08-15). A **checkpoint** the server gives a
+    `matched_name` (its filename is simply a known base model,
+    `flux1-dev.safetensors` → `FLUX.1 dev`) shows that label in this same
+    state: it is still our reading, never a person's choice, and the server
+    never sets it for an adapter or from a guessed base model.
   - `from-file` — nothing survived the strip, so what is shown *is* the
     filename. `--font-mono` (§3 gives mono to file paths) plus a small **accent**
     tag reading `from filename`.
@@ -3989,13 +3993,22 @@ back rows whose `added_at` is months old and which are nonetheless new to this
 shelf. A stack is `New` when **any** member is, because a scan that adds a
 seventh step to a six-step run leaves the cover untouched.
 
-**Grouped, filtered, faceted and sorted on `base_model_folded`; displayed as
-`base_model`.** `baseModelKey()` prefers the server's canonical label and falls
-back to the raw string, so `sdxl_base_v1-0`, `SDXL`, `sdxl base` and `stable
+**Grouped, filtered, faceted and sorted on `base_model_canonical`, else
+`base_model_folded`; displayed as `base_model`.** `baseModelKey()` prefers the
+label the server identified and stored (the same value its sort and filter
+use), then its fold of the raw string, then the raw string, so `sdxl_base_v1-0`, `SDXL`, `sdxl base` and `stable
 diffusion xl` make one header, one facet and one filter match instead of four —
 while a base model the table has never heard of stays selectable in its own
 right rather than being swept into "not set". The row keeps showing the raw
 spelling, because that is what the file actually says.
+
+**A guessed base model says so.** `baseModelCell()` decides the cell: the raw
+`base_model` when the file or a person stated it, the canonical label when only
+a `declared` modelspec did, and for a guess (`base_model_source` `filename`,
+`declared_fuzzy` or `filename_fuzzy`) the label with the name column's
+`shelf-name-tag` reading `guessed`, whose tooltip says what it was read from and
+how to correct it. `guessed`, not `from filename`: in the name column that tag
+already means "this is the file's own string, verbatim".
 
 All four uses had to move together. A facet list built from folded values with a
 filter matching raw ones would offer a box that hides most of the rows it
