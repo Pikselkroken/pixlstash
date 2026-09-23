@@ -9,6 +9,15 @@ import { apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
+ * `workflow_key=a&workflow_key=b`, which is what FastAPI's `list[...]` reads.
+ *
+ * Axios' default array form is `workflow_key[]=`, a key the server does not
+ * know: the list is dropped in silence, so `/recipes/used` answers `[]` for
+ * every card and `/recipes` answers every recipe in the library.
+ */
+const REPEATED_KEYS = { indexes: null };
+
+/**
  * Keep the look a Run popup is showing.
  *
  * `overrides` is addressed `"<slot_label>/<input_name>"`, which is the form
@@ -41,6 +50,7 @@ export async function listSavedRecipes(workflowKey) {
   const body = await unwrap(
     apiClient.get("/recipes", {
       params: keys.length ? { workflow_key: keys } : {},
+      paramsSerializer: REPEATED_KEYS,
     }),
   );
   return Array.isArray(body) ? body : [];
@@ -67,7 +77,10 @@ export async function listUsedLooks(workflowKey) {
   );
   if (!keys.length) return [];
   const body = await unwrap(
-    apiClient.get("/recipes/used", { params: { workflow_key: keys } }),
+    apiClient.get("/recipes/used", {
+      params: { workflow_key: keys },
+      paramsSerializer: REPEATED_KEYS,
+    }),
   );
   return Array.isArray(body) ? body : [];
 }
