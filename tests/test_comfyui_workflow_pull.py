@@ -863,3 +863,29 @@ def test_nothing_that_keys_a_workflow_reads_the_advisory_model_names():
             "comfyui_workflow_pull_task",
         ):
             assert name not in source, f"{module.__name__} reads {name}"
+
+
+def test_both_formats_count_a_case_only_difference_as_missing():
+    """The two branches of `model_triage` agree on case (#1502 review).
+
+    ComfyUI compares file names exactly, so a model it lists only under a
+    different case will not load. The API branch hears that from
+    `_match_option` ("present under a different case", which the pre-flight
+    files as missing); the editor branch compares exactly. Both must say
+    missing, or one format would pass what the other refuses.
+    """
+    listed_as = "Flux-2-Klein-9B-FP8.safetensors"
+    object_info = {
+        "UNETLoader": {"input": {"required": {"unet_name": [[listed_as], {}]}}}
+    }
+    api = {
+        "1": {"class_type": "UNETLoader", "inputs": {"unet_name": ABSENT_MODEL}},
+    }
+    api_absent, _unread = model_triage(api, object_info, {listed_as})
+    advertised = {
+        listed_as,
+        "qwen_3_8b_fp8mixed.safetensors",
+        "flux2-vae.safetensors",
+    }
+    ui_absent, _unread = model_triage(NEEDS_PACK, object_info, advertised)
+    assert api_absent == ui_absent == [ABSENT_MODEL]

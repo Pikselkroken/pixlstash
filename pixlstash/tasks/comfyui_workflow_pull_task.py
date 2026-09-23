@@ -17,8 +17,9 @@ from, which is what keeps a workflow the owner deleted here from coming back.
 ComfyUI does not have, and those naming a model file it does not list, with
 how many model values it could not read at all (:func:`model_triage`). The
 counts are computed with the pull and never stored: they go stale the moment a
-node pack is installed, which is exactly what they prompt the owner to do. With ComfyUI's class list unavailable the answer is
-*not checked*, never a clean bill of health.
+node pack is installed, which is exactly what they prompt the owner to do. With
+ComfyUI's class list unavailable the answer is *not checked*, never a clean
+bill of health.
 """
 
 from __future__ import annotations
