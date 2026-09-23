@@ -17,7 +17,7 @@ describe("pullSummaryLines", () => {
       URL,
     );
     expect(report.headline).toBe(
-      "Pulled 3 workflows from 192.0.2.10:8188: 1 new, 1 already here, 1 shipped with PixlStash.",
+      "Found 3 workflows on 192.0.2.10:8188: 1 new, 1 already here, 1 shipped with PixlStash.",
     );
   });
 
@@ -43,13 +43,15 @@ describe("pullSummaryLines", () => {
     );
     const byKind = Object.fromEntries(report.lines.map((l) => [l.kind, l]));
     expect(byKind.error.text).toBe(
-      "2 won't run on 192.0.2.10:8188: they use nodes it doesn't have.",
+      "2 workflows won't run on 192.0.2.10:8188: they use nodes that ComfyUI doesn't have.",
     );
     expect(byKind.error.names).toEqual(["A", "B"]);
     expect(byKind.warning.text).toBe(
-      "1 names a model file 192.0.2.10:8188 doesn't list.",
+      "1 workflow names a model file 192.0.2.10:8188 doesn't list.",
     );
-    expect(byKind.unchecked.text).toContain("3 model files weren't checked");
+    expect(byKind.unchecked.text).toBe(
+      "Not checked on 192.0.2.10:8188: 3 model files in loaders PixlStash can't read.",
+    );
     for (const line of report.lines) expect(line.text).not.toMatch(/broken/i);
     // The glyph carries the kind, so no two kinds may share one.
     const glyphs = new Set(
@@ -78,9 +80,43 @@ describe("pullSummaryLines", () => {
       URL,
     );
     const text = report.lines.map((l) => l.text).join(" ");
-    expect(text).toContain("count as one-offs");
+    expect(text).toContain(
+      "The new workflow counts as a one-off until it makes a picture",
+    );
+    expect(report.lines.find((l) => l.action).action).toBe("show-one-offs");
     expect(text).toContain("1 workflow you deleted here was left out");
-    expect(text).toContain("removed from the folder by hand comes back");
+    expect(text).toContain(
+      "One removed by hand from PixlStash's workflows folder comes back.",
+    );
+  });
+
+  it("says nothing about hidden one-offs while the grid shows them", () => {
+    const report = pullSummaryLines(
+      { listed: 2, pulled: 2, nodes_checked: true },
+      URL,
+      { hideOneOffs: false },
+    );
+    expect(report.lines.some((l) => l.action)).toBe(false);
+    // The delete rule is still said: it is true whatever the filter.
+    expect(report.lines.map((l) => l.text).join(" ")).toContain(
+      "stays out of later pulls",
+    );
+  });
+
+  it("starts a sentence about an unnamed ComfyUI with a capital", () => {
+    expect(pullSummaryLines({ listed: 0 }, null).headline).toBe(
+      "This ComfyUI has no saved workflows to pull.",
+    );
+  });
+
+  it("every unchecked line says it was not checked", () => {
+    const report = pullSummaryLines(
+      { listed: 3, nodes_checked: true, nodes_unchecked: 1, models_unread: 1 },
+      URL,
+    );
+    const unchecked = report.lines.filter((l) => l.kind === "unchecked");
+    expect(unchecked).toHaveLength(2);
+    for (const line of unchecked) expect(line.text).toMatch(/^Not checked/);
   });
 });
 

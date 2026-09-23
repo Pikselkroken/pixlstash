@@ -617,3 +617,29 @@ def test_a_hub_made_before_stored_by_pull_gains_the_column(tmp_path):
         assert "stored_by_pull" in columns
     finally:
         reopened.close()
+
+
+def test_importing_a_pulled_workflow_by_hand_makes_it_the_owners(comfy, folders, hub):
+    """The one-off test reads ``stored_by_pull``; a hand import clears it.
+
+    Dropping in the same document a pull wrote is the owner saying they keep
+    this one, so its card must not stay a hideable one-off.
+    """
+    _pull(hub)
+    router = comfyui_module.create_router(MagicMock(hub=hub))
+    endpoint = next(
+        route.endpoint
+        for route in router.routes
+        if getattr(route, "path", None) == "/comfyui/workflows/import"
+    )
+    endpoint(
+        SimpleNamespace(state=SimpleNamespace(origin_client_id=None)),
+        {"name": "dropped", "workflow": NEEDS_PACK},
+    )
+    rows = {
+        row["remote_path"]: row["stored_by_pull"]
+        for row in hub.fetchall(
+            "SELECT remote_path, stored_by_pull FROM workflow_origin"
+        )
+    }
+    assert rows == {"Plain.json": 1, "Sub/Needs pack.json": 0}

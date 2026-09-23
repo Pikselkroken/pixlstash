@@ -2191,8 +2191,10 @@ describe("pulling from ComfyUI (#1440)", () => {
     expect(listWorkflowCards.mock.calls.length).toBe(reads + 1);
     const band = wrapper.find('[data-testid="wfpull"]');
     expect(band.find(".wfpull-headline").text()).toBe(
-      "Pulled 82 workflows from 127.0.0.1:8188: 21 new, 61 already here.",
+      "Found 82 workflows on 127.0.0.1:8188: 21 new, 61 already here.",
     );
+    // Said once, by the live region that was already mounted.
+    expect(wrapper.find('p[role="status"].visually-hidden').exists()).toBe(true);
     const kinds = band.findAll(".wfpull-line").map((li) => li.attributes("data-kind"));
     // Wrong if "won't run" and "not checked" ever share a kind: they must not
     // look alike (the issue's rule).
@@ -2203,8 +2205,17 @@ describe("pulling from ComfyUI (#1440)", () => {
     expect(band.text()).not.toMatch(/broken/i);
     expect(band.text()).toContain("LoRACharacterPromptBuilder");
 
-    await band.find(".wfpull-dismiss").trigger("click");
+    // The one-offs this pull added are hidden by default; the band lets them in.
+    await band.find('[data-testid="wfpull-show-one-offs"]').trigger("click");
+    expect(useWorkflowsStore().filters.hideOneOffs).toBe(false);
+
+    await band.find('[aria-label="Dismiss the ComfyUI pull result"]').trigger("click");
+    await flush();
     expect(wrapper.find('[data-testid="wfpull"]').exists()).toBe(false);
+    // Focus goes back to the control that started it, not to <body>.
+    expect(document.activeElement).toBe(
+      wrapper.find('[data-testid="wfv-pull"]').element,
+    );
   });
 
   it("says why a pull failed, in an alert", async () => {
@@ -2223,5 +2234,11 @@ describe("pulling from ComfyUI (#1440)", () => {
     expect(alert.text()).toContain(
       "Couldn't pull from 127.0.0.1:8188: ComfyUI runs with --multi-user",
     );
+    // A way to try again without hunting for the toolbar.
+    const retry = wrapper
+      .findAll('[data-testid="wfpull"] button')
+      .find((b) => b.text() === "Try again");
+    await retry.trigger("click");
+    expect(startWorkflowPull).toHaveBeenCalledTimes(2);
   });
 });

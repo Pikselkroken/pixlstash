@@ -2014,6 +2014,21 @@ def create_router(server) -> APIRouter:
                     overwrite=bool(payload.get("overwrite")),
                     keep_both=bool(payload.get("keep_both")),
                 )
+            # Handed over by the owner, so theirs even if a pull wrote it
+            # first: it no longer counts as pulled, and so is never folded
+            # into the hidden one-offs (#1440).
+            hub = getattr(server, "hub", None)
+            if hub is not None:
+                try:
+                    workflow_origin.claim_file(hub, result["name"])
+                except sqlite3.Error as exc:
+                    logger.warning(
+                        "Imported workflow %s, but could not record it as the "
+                        "owner's; if a pull wrote it first it can still be "
+                        "counted as a one-off: %s",
+                        result["name"],
+                        exc,
+                    )
             # An imported file lands on a card, so the Workflows view has a
             # new (or newly runnable) one to draw. A "look again" signal: the
             # card's counts and covers are computed per request, so nothing

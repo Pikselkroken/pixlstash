@@ -22,16 +22,22 @@ export function comfyuiHost(url) {
   }
 }
 
+const capital = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
 /**
  * `{headline, lines}` for a pull summary.
  *
  * Each line is `{kind: "error"|"warning"|"unchecked"|"info", icon, text,
- * names?}`, where `names` is the list a line can be opened to show.
+ * names?, namesLabel?, action?}`. `names` is the list a line can be opened
+ * to show; `action` names the one control a line offers
+ * (`"show-one-offs"`).
  *
  * @param {Object} summary - `GET /comfyui/workflows/pull`'s `summary`.
  * @param {?string} url - the ComfyUI it came from.
+ * @param {{hideOneOffs?: boolean}} [grid] - the grid's filters, so a line
+ *   about hidden one-offs is only shown while they ARE hidden.
  */
-export function pullSummaryLines(summary, url) {
+export function pullSummaryLines(summary, url, { hideOneOffs = true } = {}) {
   const s = summary || {};
   const host = comfyuiHost(url);
   const counted = [];
@@ -40,24 +46,27 @@ export function pullSummaryLines(summary, url) {
   if (s.already_shipped)
     counted.push(`${s.already_shipped} shipped with PixlStash`);
   const listed = s.listed ?? 0;
+  // "Found", not "Pulled": a pull whose every file failed pulled nothing.
   const headline = listed
-    ? `Pulled ${plural(listed, "workflow", "workflows")} from ${host}` +
+    ? `Found ${plural(listed, "workflow", "workflows")} on ${host}` +
       (counted.length ? `: ${counted.join(", ")}.` : ".")
-    : `${host} has no saved workflows to pull.`;
+    : `${capital(host)} has no saved workflows to pull.`;
 
   const lines = [];
   if (s.known_from_pictures) {
+    const n = s.known_from_pictures;
     lines.push({
       kind: "info",
       icon: "image-multiple-outline",
-      text: `${plural(s.known_from_pictures, "is a workflow", "are workflows")} your pictures were already made with.`,
+      text: `${n} of them ${n === 1 ? "was" : "were"} already known from your pictures.`,
     });
   }
   if (s.missing_nodes) {
+    const n = s.missing_nodes;
     lines.push({
       kind: "error",
-      icon: "alert-circle-outline",
-      text: `${s.missing_nodes} won't run on ${host}: ${s.missing_nodes === 1 ? "it uses" : "they use"} nodes it doesn't have.`,
+      icon: "puzzle-remove-outline",
+      text: `${plural(n, "workflow", "workflows")} won't run on ${host}: ${n === 1 ? "it uses" : "they use"} nodes that ComfyUI doesn't have.`,
       names: s.missing_node_classes || [],
       namesLabel: "Nodes it doesn't have",
     });
@@ -66,11 +75,13 @@ export function pullSummaryLines(summary, url) {
     lines.push({
       kind: "warning",
       icon: "file-alert-outline",
-      text: `${plural(s.missing_models, "names", "name")} a model file ${host} doesn't list.`,
+      text: `${plural(s.missing_models, "workflow names a model file", "workflows name model files")} ${host} doesn't list.`,
       names: s.missing_model_files || [],
       namesLabel: "Model files it doesn't list",
     });
   }
+  // Every unchecked line SAYS "Not checked", so none of them can be read as
+  // a plain fact about the pull.
   if (s.nodes_checked === false) {
     lines.push({
       kind: "unchecked",
@@ -82,32 +93,41 @@ export function pullSummaryLines(summary, url) {
       lines.push({
         kind: "unchecked",
         icon: "help-circle-outline",
-        text: `${plural(s.nodes_unchecked, "workflow", "workflows")} couldn't be read, so ${s.nodes_unchecked === 1 ? "it wasn't" : "they weren't"} checked.`,
+        text: `Not checked on ${host}: ${plural(s.nodes_unchecked, "workflow", "workflows")} couldn't be read.`,
       });
     }
     if (s.models_unread) {
       lines.push({
         kind: "unchecked",
         icon: "help-circle-outline",
-        text: `${plural(s.models_unread, "model file wasn't", "model files weren't")} checked: PixlStash couldn't tell which loader ${s.models_unread === 1 ? "it belongs" : "they belong"} to.`,
+        text: `Not checked on ${host}: ${plural(s.models_unread, "model file", "model files")} in loaders PixlStash can't read.`,
       });
     }
   }
-  if (s.pulled) {
+  if (s.pulled && hideOneOffs) {
     // Where they went: a pulled workflow with no pictures is a one-off
-    // (`Card.hand_imported`), and the grid hides those by default. Without
-    // this the reader sees "21 new" over a grid that looks unchanged.
+    // (`Card.hand_imported`), and the grid hides those while the filter is
+    // on. Without this the reader sees "21 new" over a grid that looks
+    // unchanged.
     lines.push({
       kind: "info",
       icon: "eye-off-outline",
-      text: `New workflows with no pictures yet count as one-offs, which the grid leaves out while Filters › Hide one-offs is on.`,
+      text: `${s.pulled === 1 ? "The new workflow counts" : "New workflows count"} as ${s.pulled === 1 ? "a one-off" : "one-offs"} until ${s.pulled === 1 ? "it makes" : "they make"} a picture, so the grid leaves ${s.pulled === 1 ? "it" : "them"} out.`,
+      action: "show-one-offs",
     });
   }
   if (s.skipped_dismissed) {
     lines.push({
       kind: "info",
-      icon: "delete-outline",
-      text: `${plural(s.skipped_dismissed, "workflow", "workflows")} you deleted here ${s.skipped_dismissed === 1 ? "was" : "were"} left out. A file removed from the folder by hand comes back on the next pull.`,
+      icon: "minus-circle-outline",
+      text: `${plural(s.skipped_dismissed, "workflow", "workflows")} you deleted here ${s.skipped_dismissed === 1 ? "was" : "were"} left out.`,
+    });
+  }
+  if (s.pulled || s.skipped_dismissed) {
+    lines.push({
+      kind: "info",
+      icon: "information-outline",
+      text: "A workflow you delete in PixlStash stays out of later pulls. One removed by hand from PixlStash's workflows folder comes back.",
     });
   }
   if (s.failed) {
@@ -121,7 +141,7 @@ export function pullSummaryLines(summary, url) {
     lines.push({
       kind: "info",
       icon: "information-outline",
-      text: `${plural(s.gone, "workflow", "workflows")} pulled before ${s.gone === 1 ? "is" : "are"} no longer in ${host}. The ${s.gone === 1 ? "copy" : "copies"} here ${s.gone === 1 ? "stays" : "stay"}.`,
+      text: `${plural(s.gone, "workflow", "workflows")} pulled before ${s.gone === 1 ? "is" : "are"} no longer on ${host}. The ${s.gone === 1 ? "copy" : "copies"} here ${s.gone === 1 ? "stays" : "stay"}.`,
     });
   }
   return { headline, lines };

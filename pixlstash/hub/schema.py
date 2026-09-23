@@ -1022,6 +1022,11 @@ _V2_WORKFLOW_INDEXES = (
     # with the code that runs them.
     "CREATE INDEX IF NOT EXISTS ix_workflow_variant_key "
     "ON workflow_variant(workflow_key)",
+    # "Which pulled paths name this file" - every card read (the one-off
+    # test's `hand_imported`), a delete's dismissal and an import's claim.
+    # The primary key is by path, so without this each is a scan.
+    "CREATE INDEX IF NOT EXISTS ix_workflow_origin_name "
+    "ON workflow_origin(workflow_name)",
 )
 
 _V2_WORKFLOW_TABLES = (

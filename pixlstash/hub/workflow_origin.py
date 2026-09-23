@@ -133,3 +133,22 @@ def dismiss_file(hub: HubDatabase, workflow_name: str) -> int:
             ).rowcount
             or 0
         )
+
+
+def claim_file(hub: HubDatabase, workflow_name: str) -> int:
+    """Record that the owner put *workflow_name* here themselves.
+
+    Called by the import route whenever it stores or matches a file: a file
+    the owner handed over is theirs, whether a pull wrote it first or not, so
+    it must stop counting as pull-written (``stored_by_pull``) and can no
+    longer be folded into the hidden one-offs. Returns how many rows changed.
+    """
+    with hub.transaction() as conn:
+        return (
+            conn.execute(
+                "UPDATE workflow_origin SET stored_by_pull = 0 "
+                "WHERE workflow_name = ? AND stored_by_pull = 1",
+                (workflow_name,),
+            ).rowcount
+            or 0
+        )

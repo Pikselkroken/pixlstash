@@ -129,3 +129,41 @@ describe("useWorkflowPullStore", () => {
     expect(pull.summary).toBeNull();
   });
 });
+
+describe("a session change mid-pull", () => {
+  it("drops an answer that arrives after the reset", async () => {
+    let answer;
+    getWorkflowPull.mockImplementation(
+      () => new Promise((resolve) => (answer = resolve)),
+    );
+    const pull = useWorkflowPullStore();
+    pull.start();
+    await settle();
+    pull.reset();
+    answer({
+      status: "completed",
+      task_id: "t1",
+      comfyui_url: "http://owner-comfy:8188",
+      summary: { listed: 1, missing_node_classes: ["OwnersPackNode"] },
+    });
+    await settle();
+    expect(pull.phase).toBe("idle");
+    expect(pull.summary).toBeNull();
+    expect(pull.comfyuiUrl).toBeNull();
+    expect(fetchCards).not.toHaveBeenCalled();
+  });
+
+  it("drops a start that answers after the reset", async () => {
+    let started;
+    startWorkflowPull.mockImplementation(
+      () => new Promise((resolve) => (started = resolve)),
+    );
+    const pull = useWorkflowPullStore();
+    pull.start();
+    pull.reset();
+    started({ status: "started", task_id: "t1" });
+    await settle();
+    expect(getWorkflowPull).not.toHaveBeenCalled();
+    expect(pull.phase).toBe("idle");
+  });
+});

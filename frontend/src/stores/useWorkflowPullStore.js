@@ -33,6 +33,11 @@ export const useWorkflowPullStore = defineStore("workflowPull", () => {
   let taskId = null;
   let timer = null;
   let misses = 0;
+  // Bumped by `reset()`. Every await re-checks it, because a request sent
+  // with the owner's credential can answer AFTER the session changed, and
+  // writing that answer would hand the new session the owner's ComfyUI URL
+  // and the node and model names it lacks (the `useOperationStore` rule).
+  let epoch = 0;
 
   function stopPolling() {
     if (timer !== null) clearTimeout(timer);
@@ -46,10 +51,13 @@ export const useWorkflowPullStore = defineStore("workflowPull", () => {
     phase.value = "pulling";
     summary.value = null;
     error.value = "";
+    const mine = epoch;
     try {
       const started = await startWorkflowPull();
+      if (mine !== epoch) return;
       taskId = started?.task_id ?? null;
     } catch (err) {
+      if (mine !== epoch) return;
       phase.value = "failed";
       error.value = errorMessage(err, "The pull could not be started.");
       return;
@@ -58,10 +66,13 @@ export const useWorkflowPullStore = defineStore("workflowPull", () => {
   }
 
   async function poll() {
+    const mine = epoch;
     let state;
     try {
       state = await getWorkflowPull();
+      if (mine !== epoch) return;
     } catch (err) {
+      if (mine !== epoch) return;
       console.warn("[workflows] could not read the pull's state", err);
       misses += 1;
       if (misses >= PULL_POLL_MAX_MISSES) {
@@ -118,6 +129,7 @@ export const useWorkflowPullStore = defineStore("workflowPull", () => {
   }
 
   function reset() {
+    epoch += 1;
     stopPolling();
     taskId = null;
     phase.value = "idle";

@@ -5336,7 +5336,16 @@ file's model names are read by position, and anything not checked is its own
 `unchecked` kind, so it can never pass for fine. Each kind has its own glyph and
 the glyph carries the hue (`surface-<status>`); the text stays in the surface's
 ink. It also says where new workflows went: with no pictures they count as
-one-offs, which the grid hides by default.
+one-offs, which the grid hides while *Hide one-offs* is on, and it offers
+*Show one-offs* right there. A failed pull offers *Try again*. The band has no
+live region of its own: a permanently mounted `role="status"` is written on
+each phase change (a region that arrives already filled is skipped by several
+screen readers), the failure is a `role="alert"`, and Dismiss hands focus back
+to the toolbar's *Pull from ComfyUI* rather than dropping it to `<body>`. Both
+pull buttons use the shared `loading` prop, which refuses a second press.
+`useWorkflowPullStore` bumps a session epoch on reset and checks it after every
+await, so an answer to the owner's poll that lands after a switch to a share
+session is dropped instead of writing the owner's ComfyUI into it.
 
 **Running a workflow is the Run popup** (#1407, `io/RunDialog.vue`), described
 in full under "The io/ dialogs" above. From this screen the Workflow tab's

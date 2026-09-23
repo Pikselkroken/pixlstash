@@ -76,10 +76,13 @@
            Only offered once ComfyUI is connected - the empty state's
            "Connect ComfyUI" is the way there - and it reads, never writes
            back. What it found lands in the band below the toolbar. -->
+      <!-- `loading` rather than a hand-rolled busy state: it refuses the
+           second press, spins the glyph and gives focus back when done. -->
       <AppBarButton
         v-if="comfyuiConfigured"
+        ref="pullButton"
         icon="tray-arrow-down"
-        :aria-busy="pull.phase === 'pulling'"
+        :loading="pull.phase === 'pulling'"
         data-testid="wfv-pull"
         @click="pull.start()"
         >{{
@@ -126,7 +129,7 @@
       class="wfv-strip"
     />
 
-    <WorkflowPullSummary />
+    <WorkflowPullSummary @dismissed="pullButton?.focus()" />
 
     <p v-if="store.error" class="wfv-error" role="alert">{{ store.error }}</p>
 
@@ -215,10 +218,11 @@
             size="sm"
             variant="secondary"
             icon-left="tray-arrow-down"
+            :loading="pull.phase === 'pulling'"
             data-testid="wfv-empty-pull"
             @click="pull.start()"
           >
-            Pull from ComfyUI
+            {{ pull.phase === "pulling" ? "Pulling…" : "Pull from ComfyUI" }}
           </AppButton>
           <!-- Gone once connected: there is nothing to offer somebody who has
                already done it. -->
@@ -487,6 +491,7 @@ const gridEl = ref(null);
 // drawn — one stack is open at a time.
 const panelRef = ref(null);
 const fileInput = ref(null);
+const pullButton = ref(null);
 const selBarRef = ref(null);
 const scrollEl = ref(null);
 const sortMenuOpen = ref(false);
