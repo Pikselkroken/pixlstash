@@ -624,13 +624,19 @@ Six rules the client must not re-derive:
    entry is `{code, …payload}` from a closed set: `comfyui_not_configured`,
    `comfyui_unreachable`, `ui_format`, `missing_nodes: {nodes}`,
    `missing_models: {models: [{file, folder}]}`, `a1111`, `fixed_input_deleted`,
-   `no_lora_loader`, `pixlstash_nodes`, `no_save_node`, `no_runnable_source`.
+   `no_lora_loader`, `pixlstash_nodes`, `no_save_node`, `no_runnable_source`,
+   `lora_not_skippable: {node_id, field, file, message}`.
    A code and never a sentence: one batch mixes sources, and a panel grouping
    "these four are missing the same model" cannot do it from prose.
-   **Two group fields are facts rather than refusals** and must not be read as
-   reasons: `substitutions`, and `bypassed_loras: [{file, folder, node_id,
-   class_type, field}]`. Both say what this run will do differently from what
-   the graph says, on the pre-flight and on the run alike.
+   **Three group fields are facts rather than refusals** and must not be read
+   as reasons: `substitutions`, `bypassed_loras: [{file, folder, node_id,
+   class_type, field, requested}]`, and `unplaced_loras: [{filename, sha256,
+   node_id, reason}]`. All three say what this run will do differently from
+   what the graph or the saved recipe says, on the pre-flight and on the run
+   alike. `requested: true` marks a loader the owner skipped with `skip_loras`
+   (#1478); `false` is one the server bypassed because this ComfyUI lacks its
+   file. `unplaced_loras` names a saved recipe's LoRA that is not applied: the
+   workflow has no loader left for it, or the shelf cannot identify it.
 3. **A missing model blocks the whole batch**, mixed or not, and so does an
    unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
    submitted — including the groups whose own `reasons` are empty.
@@ -669,7 +675,9 @@ Six rules the client must not re-derive:
    entry either: a filename slot is resolved against what that ComfyUI lists,
    so with nothing to resolve against the run is a 400 rather than one that
    quietly keeps whatever LoRA the stored graph named. A digest slot needs no
-   list and goes through.
+   list and goes through. `skip_loras` is not consented past either: with
+   ComfyUI unreachable, a skip is `lora_not_skippable`, because nothing says
+   what to wire in the loader's place.
 6. **The two routes answer identically, including their errors.** A body that
    cannot be interpreted against this card is a `400`/`404`/`422` **on both** —
    two sources named, an unknown `saved_recipe_id`, a malformed key,
@@ -706,6 +714,8 @@ knows from its pictures exports and duplicates like any other:
 | `GET /api/v1/workflows/{workflow_key}/export` | The workflow as a file to give away | `{filename, workflow, removed: [string], source: "file" \| "picture" \| "instance"}` |
 | `POST /api/v1/workflows/{workflow_key}/duplicate` | A second copy in the user's workflow folder | `201 {name, workflow_key}` |
 | `POST /api/v1/workflows/{workflow_key}/insert-lora-loader` | A copy with a LoRA loader spliced in | `201 {name, workflow_key, node_id, class_type}` |
+| `GET /api/v1/workflows/{workflow_key}/lora-chain` | The LoRA chain in apply order, for the editor (#1478) | `{workflow_key, editable, refusal, source, clip_source, sink: {summary, consumers}, loaders: [{node_id, class_type, field, filename, name, strength, strength_clip, sha256, on_shelf}], added_loader_class}`; ComfyUI down is still a 200 with `editable: false` |
+| `PUT /api/v1/workflows/{workflow_key}/lora-chain` | A copy with the chain as the owner left it: `{entries: [{node_id?, sha256?, strength?}], name?, dry_run}` | `201 {dry_run, name, workflow_key, changes: [{kind, node_id, text}]}`; a dry run is `200` with `name` and `workflow_key` null |
 | `DELETE /api/v1/workflows/{workflow_key}` | Send the imported file to the trash | `{deleted, workflow_key}` |
 | `GET /api/v1/recipes/{recipe_id}/export` | The saved recipe as a file | `{filename, recipe, shares: [string]}` |
 | `GET /api/v1/recipes/used?workflow_key=…` | The looks this workflow's own pictures were made with, minus any a saved recipe already keeps. `workflow_key` repeats for a selection of several and the answer is the union. **The half of the Recipes tab a library has without ever pressing Save** | `[{prompt, loras: [{filename}], pictures, cover_picture_id}]` |

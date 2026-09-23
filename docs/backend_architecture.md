@@ -755,6 +755,8 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/workflows/{workflow_key}/export                                       | workflows       | Export a workflow                                           |
 | PUT    | /api/v1/workflows/{workflow_key}/inputs                                       | workflows       | Set a card's picture inputs                                 |
 | POST   | /api/v1/workflows/{workflow_key}/insert-lora-loader                           | workflows       | Add a LoRA loader to a workflow                             |
+| GET    | /api/v1/workflows/{workflow_key}/lora-chain                                   | workflows       | A workflow's LoRA chain                                     |
+| PUT    | /api/v1/workflows/{workflow_key}/lora-chain                                   | workflows       | Edit a workflow's LoRA chain                                |
 | GET    | /api/v1/workflows/{workflow_key}/pictures                                     | workflows       | Pictures made with a card                                   |
 | PUT    | /api/v1/workflows/{workflow_key}/pins                                         | workflows       | Set a card's pinned parameters                              |
 | PUT    | /api/v1/workflows/{workflow_key}/slots                                        | workflows       | Mark a card's LoRA slots                                    |
@@ -2916,6 +2918,47 @@ anyway. Wired into `_plan` at one site, between the swap and `judge`.
   reason. The Run popup draws it *before* the run: a picture generated without
   the character LoRA the owner expected, with nothing said, is worse than a
   refusal.
+- **The owner can skip a LoRA for one run** (#1478): `skip_loras: [{node_id,
+  field}]` on the run body. `workflow_run_service.skip_requested_loras` takes
+  each loader out through the same `bypass_node`, on the run's copy only, before
+  a saved recipe's LoRAs are placed and before `judge`. The request is the
+  consent the automatic bypass lacks, so a `(forgotten model)` loader is skipped
+  when asked. What it cannot consent to is dropping a LoRA it did not name: a
+  stacker holding another filled slot, a loader nothing can be rewired around,
+  and any skip while ComfyUI cannot be asked become the blocking reason
+  `lora_not_skippable`. A skip is reported in `bypassed_loras` with
+  `requested: true`; the automatic ones carry `requested: false`. A slot no
+  graph of the run has is a 400; one named in both `loras` and `skip_loras` is
+  a 422.
+- **A saved recipe's LoRAs are placed by what they are, not by position**
+  (`place_recipe_loras`): digest first, then case-folded basename, then any
+  free slot in graph order, so a recipe that ran before still runs the same.
+  The positional `zip` it replaced put a recipe stored in the other order onto
+  the wrong loaders and dropped a third LoRA on a two-loader graph without a
+  word. A LoRA with nowhere to go, or one the shelf cannot identify, is reported
+  on `RunGroup.unplaced_loras` (`{filename, sha256, node_id, reason}`), a fact
+  like `bypassed_loras` and never a reason.
+
+#### Editing a workflow's LoRA chain (#1478)
+
+`GET /workflows/{key}/lora-chain` reads the card's graph as a chain: the model
+source, the LoRA loaders in the order a run applies them, and what reads the
+result. `read_lora_chain` types every link from `object_info`, as
+`plan_lora_insertion` does, and refuses (the route answers `editable: false` with
+the sentence) a graph it cannot edit honestly: several model sources, a foreign
+model type, a stacker or prompt-tag LoRA, or a branching chain. With ComfyUI
+unreachable, `read_lora_chain_untyped` follows the `model` links so the chain can
+still be looked at. Each loader carries the shelf digest it loads, when exactly
+one shelf LoRA matches.
+
+`PUT` takes the whole chain as the owner left it. An existing loader is kept by
+`node_id` (moved and re-weighted, its id kept), a new one is added by shelf
+`sha256`, and every loader left out is deleted through `bypass_node`.
+`plan_lora_chain` validates the whole edit before `apply_lora_chain` touches the
+graph, and the result is written as a **new** file through `_store_copy`, so one
+save is one new card and the original file never changes. `dry_run` answers the
+change list (`deleted`, `added`, `moved`, `strength`, `rewired`) and writes
+nothing. `insert-lora-loader` is the empty-chain case and still stands on its own.
 
 #### What a delete leaves behind: companions (#1314)
 
