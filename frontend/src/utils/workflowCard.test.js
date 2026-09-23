@@ -13,7 +13,6 @@ import {
   checkpointUnread,
   lorasUnread,
   modelDisplayName,
-  modelShortName,
 } from "./workflowCard";
 
 describe("fitChipCount", () => {
@@ -81,27 +80,6 @@ describe("card chips", () => {
     expect(modelDisplayName({ name: "flux1-dev" })).toBe("flux1-dev");
     expect(modelDisplayName({ name: null, title: null })).toBeNull();
     expect(modelDisplayName(null)).toBeNull();
-  });
-
-  it("prints the shelf's derived name on the card, not the file string", () => {
-    // What `ModelShelf` shows for the same file (#1485): no extension, no
-    // training bookkeeping, underscores as spaces.
-    expect(
-      modelShortName({ name: "ohwx_woman-step00004500.safetensors" }),
-    ).toBe("ohwx woman");
-    expect(modelShortName({ name: "juggernautXL_v9", title: null })).toBe(
-      "juggernautXL v9",
-    );
-    // The shelf's own title still wins, verbatim.
-    expect(modelShortName({ name: "realvisxl", title: "Krea 2" })).toBe(
-      "Krea 2",
-    );
-    // Nothing survives the strip: the file string, not a blank.
-    expect(modelShortName({ name: "000002750.safetensors" })).toBe(
-      "000002750.safetensors",
-    );
-    expect(modelShortName({ name: null, title: null })).toBeNull();
-    expect(modelShortName(null)).toBeNull();
   });
 
   it("speaks the shelf's name in the accessible name too", () => {

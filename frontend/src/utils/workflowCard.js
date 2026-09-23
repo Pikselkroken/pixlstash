@@ -57,14 +57,14 @@
 //                                       // base-model spellings are what a
 //                                       // generated mark takes its colour
 //                                       // from, under the same names the
-//                                       // shelf serves them by. A card with
-//                                       // no pictures draws itself out of
-//                                       // these (#1466). Usually all null
+//                                       // shelf serves them by. Row 2's
+//                                       // marks are drawn out of these
+//                                       // (#1485). Usually all null
 //     loras:  [{ name, title, icon, base_model, base_model_folded, kind,
 //               quant, mark, slot_label }],
 //                                       // "structural" = in the workflow
-//                                       // (a filled chip), "recipe" = a slot
-//                                       // the recipe fills (dashed).
+//                                       // (a mark), "recipe" = a slot the
+//                                       // recipe fills (a dashed "+" box).
 //                                       // `slot_label` is the address
 //                                       // `PUT /workflows/{key}/slots` marks
 //     differs_by: [string],             // a stack: the union over its members
@@ -144,7 +144,7 @@
 // graph carries instead); ⓘ lists every model, so a stack whose difference is
 // "other models" always has the models behind it.
 
-import { modelName, quantBadge } from "./modelShelf.js";
+import { quantBadge } from "./modelShelf.js";
 import { cropImgStyle } from "./squareCrop.js";
 
 const RECIPE = "recipe";
@@ -319,22 +319,6 @@ export function checkpointModel(card) {
  */
 export function modelDisplayName(model) {
   return model?.title || model?.name || null;
-}
-
-/**
- * What the CARD prints for a model: the shelf's name, else the name the shelf
- * would derive from the file (`modelName`), else the file itself.
- *
- * Not `modelDisplayName`, which stops at the file string: the ⓘ popover and
- * the panels keep that exact string, because `deriveModelName` is a guess and
- * two LoRAs from one run that differ only in the step collapse to one name
- * under it. The card carries the file string in the mark's tooltip instead.
- */
-export function modelShortName(model) {
-  if (!model) return null;
-  return (
-    modelName({ display_name: model.title, filename: model.name }).text || null
-  );
 }
 
 /**

@@ -136,20 +136,26 @@
           </li>
         </ul>
         <span v-else class="wf-card__none" aria-hidden="true">{{
-          checkpointIsUnread && lorasAreUnread ? "Models not read" : "No models"
+          modelsUnread ? "Models not read" : "No checkpoint"
         }}</span>
       </div>
       <!-- Row 3: the one name worth printing, the base model's, and how many
-           LoRAs the strip holds. Silent when row 2 already said "no models". -->
+           LoRAs the strip holds. The checkpoint half is left out when row 2
+           already said it, and the whole row when row 2 said both. -->
       <div class="wf-card__row">
-        <template v-if="stripMarks.length">
+        <template v-if="!modelsUnread">
           <span v-if="base" class="wf-card__base" aria-hidden="true">
             <Tooltip :text="base.label" activator="parent" :describe="false" />
             {{ base.text }}
           </span>
-          <span v-else class="wf-card__none" aria-hidden="true">{{
-            checkpointIsUnread ? "Base model not read" : "No checkpoint"
-          }}</span>
+          <span
+            v-else-if="stripMarks.length"
+            class="wf-card__none"
+            aria-hidden="true"
+            >{{
+              checkpointIsUnread ? "Base model not read" : "No checkpoint"
+            }}</span
+          >
           <span
             v-if="base?.quant"
             class="wf-card__none wf-card__quant"
@@ -213,7 +219,7 @@ import {
   isStack,
   checkpointUnread,
   lorasUnread,
-  modelShortName,
+  modelDisplayName,
 } from "../../utils/workflowCard";
 import AppButton from "./AppButton.vue";
 import ChipRow from "./ChipRow.vue";
@@ -334,6 +340,9 @@ const hasPictures = computed(
 // beside it, and an empty row must not become a claim either way (#1466).
 const checkpointIsUnread = computed(() => checkpointUnread(props.card));
 const lorasAreUnread = computed(() => lorasUnread(props.card));
+const modelsUnread = computed(
+  () => checkpointIsUnread.value && lorasAreUnread.value,
+);
 const hasRecipe = computed(() => (props.card.variant_count ?? 1) !== 0);
 /**
  * A payload slot as the shelf row `ModelMark` reads. Both base-model spellings,
@@ -350,13 +359,13 @@ function markRow(model) {
   };
 }
 /**
- * What a mark's tooltip says: the FILE's own string, since the card prints the
- * shelf's derived name and that is a guess, plus the precision the server took
- * out of it - without which two quant builds of one model read identically.
+ * What a mark's tooltip says: the model's name, plus the precision the server
+ * took out of it - without which two quant builds of one model read
+ * identically.
  */
 function markLabel(model) {
   const quant = quantBadge(model.quant);
-  const name = model.name || model.title;
+  const name = modelDisplayName(model);
   return quant ? `${name} · ${quant.label}` : name;
 }
 /**
@@ -369,7 +378,7 @@ const base = computed(() => {
   if (!model) return null;
   return {
     model,
-    text: modelShortName(model),
+    text: modelDisplayName(model),
     label: markLabel(model),
     quant: quantBadge(model.quant)?.label ?? null,
   };

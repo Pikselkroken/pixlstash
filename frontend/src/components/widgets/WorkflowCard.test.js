@@ -380,11 +380,18 @@ describe("WorkflowCard", () => {
   it("puts each model's file string in its mark's tooltip", () => {
     const tips = mountCard({
       ...BARE,
-      loras: [{ name: "add_detail_xl", mark: "structural", quant: "bf16" }],
+      loras: [
+        { name: "add detail xl", mark: "structural", quant: "bf16" },
+        { mark: "recipe" },
+      ],
     })
       .findAll(".wf-card__strip .wf-card__mark > tooltip-stub")
       .map((tip) => tip.attributes("text"));
-    expect(tips).toEqual(["flux1-fill-dev", "add_detail_xl · BF16"]);
+    expect(tips).toEqual([
+      "flux1-fill-dev",
+      "add detail xl · BF16",
+      "recipe LoRA",
+    ]);
   });
 
   it("puts the hairline after the base model only when LoRAs follow it", () => {
@@ -424,10 +431,10 @@ describe("WorkflowCard", () => {
     },
   );
 
-  it("prints the base model's derived name once, beside the LoRA count", () => {
+  it("prints the base model's name once, beside the LoRA count", () => {
     const row = mountCard({
       ...BARE,
-      models: [{ name: "juggernautXL_v9", kind: "checkpoint", title: null }],
+      models: [{ name: "juggernautXL v9", kind: "checkpoint", title: null }],
       loras: [{ name: "detail", mark: "structural" }],
     }).findAll(".wf-card__meta > .wf-card__row")[2];
     expect(row.find(".wf-card__base").text()).toBe("juggernautXL v9");
@@ -779,11 +786,15 @@ describe("WorkflowCard", () => {
     expect(label).toContain("LoRAs not read");
   });
 
-  it("says No models, not 'not read', on a recipe card that loads none", () => {
-    const rows = mountCard({ ...BARE, models: [], loras: [] }).findAll(
-      ".wf-card__meta > .wf-card__row",
-    );
-    expect(rows[1].text()).toBe("No models");
+  it("says No checkpoint, not 'not read', on a recipe card with none", () => {
+    // Only accessory slots: a VAE is loaded, so "No models" would be false.
+    const rows = mountCard({
+      ...BARE,
+      models: [{ name: "ae", kind: "vae" }],
+      loras: [],
+    }).findAll(".wf-card__meta > .wf-card__row");
+    expect(rows[1].text()).toBe("No checkpoint");
+    expect(rows[2].text()).toBe("No LoRAs");
   });
 
   it("hides the pictureless cover's own words too", () => {
@@ -809,21 +820,6 @@ describe("WorkflowCard", () => {
     }).text();
     expect(text).toContain("Krea 2");
     expect(text).not.toContain("realvisxl.safetensors");
-  });
-
-  it("derives a name for a model the shelf does not know", () => {
-    // The ordinary case: plenty of files carry no name of their own, and the
-    // card prints what the shelf would call it, never a blank.
-    const base = mountCard({
-      ...BARE,
-      models: [
-        { name: "realvisxl.safetensors", title: null, kind: "checkpoint" },
-      ],
-    }).find(".wf-card__base");
-    expect(base.text()).toBe("realvisxl");
-    expect(base.find("tooltip-stub").attributes("text")).toBe(
-      "realvisxl.safetensors",
-    );
   });
 
   it("draws the precision beside the base model's name", () => {
