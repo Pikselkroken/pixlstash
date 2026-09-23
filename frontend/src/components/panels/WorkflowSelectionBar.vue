@@ -345,13 +345,18 @@ const countTitle = computed(() => {
 // Stack tooltip named the wrong rule for half of its refusals and sent the
 // reader to fix something that was not the problem.
 
-/** `POST /workflows/run` takes one card, and the Run popup shows one run. */
+/**
+ * `POST /workflows/run` takes one card, and the Run popup shows one run. A
+ * stack selected whole runs its cover (`store.runnableCard`).
+ */
+const runnable = computed(() => Boolean(store.runnableCard));
 const runTitle = computed(() =>
-  single.value
-    ? "Run this workflow"
+  runnable.value
+    ? single.value
+      ? "Run this workflow"
+      : "Run this stack's cover workflow"
     : "Select one workflow to run it — a run is one card",
 );
-const runnable = computed(() => single.value);
 
 /**
  * The picture the selected card's cover draws, or null.

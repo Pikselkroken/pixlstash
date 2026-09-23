@@ -581,6 +581,27 @@ describe("with several workflows selected", () => {
     expect(runDialog.source.pictureIds).toEqual([99]);
   });
 
+  it("runs a stack selected whole on its cover", async () => {
+    // A click on a stack card selects the cover and its members: several keys,
+    // one card on screen, and the one Run… should take.
+    const { wrapper } = await mountWith(
+      [KEY, OTHER],
+      [card({ stack_size: 2, member_keys: [OTHER] })],
+    );
+    const run = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Run…"));
+    expect(run.attributes("aria-disabled")).toBeUndefined();
+    await run.trigger("click");
+    await flush(wrapper);
+    const { useRunDialogStore } =
+      await import("../../stores/useRunDialogStore");
+    expect(useRunDialogStore().source).toMatchObject({
+      kind: "card",
+      workflowKey: KEY,
+    });
+  });
+
   it("says how many are selected and offers no verbs of its own", async () => {
     // **The rail counts; the grid's selection pill acts** (#1455). These two
     // buttons were here first, and once the pill offered the same two they

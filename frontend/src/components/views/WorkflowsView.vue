@@ -1345,7 +1345,7 @@ function runCard(card) {
 }
 
 function runSelected() {
-  runCard(onlyCard.value);
+  runCard(store.runnableCard);
 }
 
 async function stackSelected() {

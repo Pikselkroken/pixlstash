@@ -164,6 +164,42 @@ describe("the pill's gates", () => {
     expect(tooltip(many, "rename")).toContain("Select one workflow");
   });
 
+  it("Run takes a stack selected whole, and runs its cover", async () => {
+    // A click on a stack card selects the cover AND its members, so the key
+    // count is two while the reader sees one card.
+    const { wrapper, store } = bar([]);
+    store.select("c", { whole: true });
+    await wrapper.vm.$nextTick();
+    expect(store.selectedKeys).toEqual(["c", "c1"]);
+    expect(enabled(wrapper, "run")).toBe(true);
+    expect(store.runnableCard?.key).toBe("c");
+
+    await verb(wrapper, "run").trigger("click");
+    expect(wrapper.emitted("run")).toHaveLength(1);
+
+    // A stack plus anything else is several cards again.
+    store.select("a", { additive: true });
+    await wrapper.vm.$nextTick();
+    expect(enabled(wrapper, "run")).toBe(false);
+    expect(store.runnableCard).toBeNull();
+
+    // The stack's size in the WRONG keys is not the stack either.
+    store.selectRange(["c", "a"]);
+    await wrapper.vm.$nextTick();
+    expect(enabled(wrapper, "run")).toBe(false);
+
+    // So is PART of a stack: two members is not the stack.
+    store.members = { c: [card("c"), card("c1"), card("c2")] };
+    store.cards = CARDS.map((entry) =>
+      entry.key === "c"
+        ? { ...entry, stack_size: 3, member_keys: ["c1", "c2"] }
+        : entry,
+    );
+    store.selectRange(["c", "c1"]);
+    await wrapper.vm.$nextTick();
+    expect(enabled(wrapper, "run")).toBe(false);
+  });
+
   it("Stack needs two, and says which of the two things it would do", () => {
     const one = bar(["a"]).wrapper;
     expect(enabled(one, "stack")).toBe(false);
