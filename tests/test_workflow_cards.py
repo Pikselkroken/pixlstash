@@ -793,8 +793,7 @@ def test_a_card_whose_only_file_a_pull_wrote_is_not_hand_imported(hub):
 
     The variant-backed card and the file-only one read it from different
     queries, so each is checked. A file a pull wrote is not hand-imported; a
-    second, hand-dropped file on the same card makes it so; a pull that only
-    matched a file leaves it the owner's.
+    second, hand-dropped file on the same card makes it so.
     """
     keys = record_api_graph(hub, _graph())
     workflow_cards.record_identity(hub, keys.structural_hash)
@@ -808,23 +807,19 @@ def test_a_card_whose_only_file_a_pull_wrote_is_not_hand_imported(hub):
     topology = record_ui_graph(hub, ui)
     ui_key = workflow_cards.record_file(hub, "ui.json", topology)
 
-    def origin(name, stored):
+    def pulled(name):
         with hub.transaction() as conn:
             conn.execute(
-                "INSERT INTO workflow_origin (origin, remote_path, workflow_name, "
-                "first_pulled_at, last_seen_at, stored_by_pull) "
-                "VALUES ('o', ?, ?, 'now', 'now', ?)",
-                (f"{name}-{stored}", name, stored),
+                "INSERT INTO workflow_pulled_file (workflow_name) VALUES (?)", (name,)
             )
 
     def hand():
         return {card.workflow_key: card.hand_imported for card in card_index(hub)}
 
     assert hand() == {api_key: True, ui_key: True}
-    origin("api.json", 0)
-    origin("ui.json", 1)
+    pulled("ui.json")
     assert hand() == {api_key: True, ui_key: False}
-    origin("api.json", 1)
+    pulled("api.json")
     assert hand()[api_key] is False
     workflow_cards.record_file(
         hub, "api copy.json", keys.topology_hash, keys.structural_hash

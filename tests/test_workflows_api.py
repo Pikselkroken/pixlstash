@@ -543,6 +543,7 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_slot_mark")
         conn.execute("DELETE FROM workflow_file")
         conn.execute("DELETE FROM workflow_origin")
+        conn.execute("DELETE FROM workflow_pulled_file")
         conn.execute("DELETE FROM workflow_recipe")
         conn.execute("DELETE FROM workflow_topology_core")
         conn.execute("DELETE FROM workflow_topology")
@@ -1040,7 +1041,6 @@ def test_the_comfyui_pull_routes_are_the_owners_alone(workflow_env, monkeypatch)
     server = workflow_env.server
     monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
     monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
-    monkeypatch.setattr(comfyui_module, "_last_pull", {})
     queued = []
     monkeypatch.setattr(
         server.vault, "submit_task", lambda task: queued.append(task) or task.id
@@ -2805,19 +2805,19 @@ def test_a_one_off_is_counted_and_an_imported_file_takes_it_out_of_the_count(
 
 
 @pytest.mark.parametrize(
-    ("stored_by_pull", "one_offs"),
-    [(1, 1), (0, 0)],
+    ("pull_wrote_it", "one_offs"),
+    [(True, 1), (False, 0)],
     ids=["written-by-a-pull", "matched-by-a-pull"],
 )
 def test_a_pulled_file_does_not_take_a_card_out_of_the_one_offs(
-    workflow_env, stored_by_pull, one_offs
+    workflow_env, pull_wrote_it, one_offs
 ):
     """#1440: a file a pull WROTE is not the owner's statement; one it matched is.
 
-    The same file row as the test above, plus the origin row a pull leaves.
-    Written by the pull, BINNED stays a one-off - eighty pulled workflows must
-    not all come out of the count. Matched by the pull, the file was already
-    the owner's, and it keeps the card in the grid.
+    The same file row as the test above. Written by a pull
+    (``workflow_pulled_file``), BINNED stays a one-off - eighty pulled
+    workflows must not all come out of the count. Matched by the pull, the
+    file was already the owner's, and it keeps the card in the grid.
     """
     with workflow_env.server.hub.transaction() as conn:
         conn.execute(
@@ -2826,13 +2826,11 @@ def test_a_pulled_file_does_not_take_a_card_out_of_the_one_offs(
             "VALUES ('binned.json', ?, ?, ?)",
             (BINNED_TOPOLOGY, BINNED_RECIPE, BINNED_CARD),
         )
-        conn.execute(
-            "INSERT INTO workflow_origin (origin, remote_path, workflow_name, "
-            "first_pulled_at, last_seen_at, stored_by_pull) "
-            "VALUES ('http://comfy.test', 'binned.json', 'binned.json', "
-            "'2026-01-01', '2026-01-01', ?)",
-            (stored_by_pull,),
-        )
+        if pull_wrote_it:
+            conn.execute(
+                "INSERT INTO workflow_pulled_file (workflow_name) "
+                "VALUES ('binned.json')"
+            )
     payload = _cards(workflow_env.owner, "?include_one_offs=true")
     assert payload["one_offs"] == one_offs
     assert _by_key(payload)[BINNED_CARD]["imported"] is True

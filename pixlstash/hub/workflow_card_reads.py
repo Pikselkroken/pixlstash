@@ -97,12 +97,13 @@ class StackRows:
     unstacked: frozenset[str]
 
 
-# A file row the owner put there: no pull from ComfyUI wrote it. A pull that
-# only MATCHED a file already stored leaves it the owner's, which is why the
-# test is on ``stored_by_pull`` and not on an origin row existing.
+# A file row the owner put there: no pull from ComfyUI wrote it
+# (``workflow_pulled_file``, #1440). Per file, so it holds whatever ComfyUI
+# later does to the path the file came from, and a file a pull only MATCHED is
+# never in it.
 _HAND_IMPORTED = (
-    "NOT EXISTS (SELECT 1 FROM workflow_origin o "
-    "WHERE o.workflow_name = workflow_file.workflow_name AND o.stored_by_pull = 1)"
+    "NOT EXISTS (SELECT 1 FROM workflow_pulled_file p "
+    "WHERE p.workflow_name = workflow_file.workflow_name)"
 )
 
 

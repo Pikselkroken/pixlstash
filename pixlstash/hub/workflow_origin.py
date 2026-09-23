@@ -1,23 +1,30 @@
 """Where a pulled workflow came from, and whether the owner sent it away (#1440).
 
 A pull from ComfyUI's saved workflows files each document through the same
-store as an import, which matches by **content**. This module remembers the
-other identity, the **path** over there, so that a re-pull can tell three
-things apart that content alone cannot:
+store an import uses, which matches by **content**. This module remembers the
+other identity, the **path** over there, and what was read from it:
 
 * **new** - a path with no row;
+* **changed** - a row whose path now holds different content;
 * **gone from ComfyUI** - a row whose path the listing no longer holds. The row
   is pruned; the local file is never touched;
-* **deleted here** - a row the owner dismissed by deleting the file it was
-  stored as. Later pulls skip it, so a delete is not undone by the next pull.
-
-Content and path deliberately disagree: a rename in ComfyUI is one path gone and
-one path new, both resolving to the file already stored, and a delete here must
-dismiss **every** path naming that file, not the first one.
+* **deleted here** - the owner deleted the file a pull stored. The rows naming
+  it are marked ``dismissed`` and keep the content they held, and a later pull
+  skips any document with that content **at any path and any origin**: a
+  rename in ComfyUI, another spelling of its URL, or a listing that came back
+  empty for a while is still the workflow the owner deleted. A dismissed row
+  is never pruned, since it is the only record of the decision.
 
 ``dismissed`` covers deletes made through PixlStash only. Nothing watches the
-stored-workflow folder, so a file removed from it by hand comes back on the next
-pull.
+stored-workflow folder, so a file removed from it by hand comes back on the
+next pull.
+
+**Callers hold ``workflow_inbox.INBOX_LOCK``** around a check and the write it
+decides, as the delete does around its dismissal: a check made before a delete
+and a store made after it would otherwise put the deleted file straight back.
+
+Which stored FILES a pull wrote is kept apart, in ``workflow_pulled_file``, so
+it survives whatever happens to the path: the one-off test reads it.
 """
 
 from __future__ import annotations
@@ -32,26 +39,40 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def dismissed_paths(hub: HubDatabase, origin: str) -> set[str]:
-    """The paths at *origin* the owner deleted here, which a pull skips."""
-    return {
-        row["remote_path"]
-        for row in hub.fetchall(
-            "SELECT remote_path FROM workflow_origin "
-            "WHERE origin = ? AND dismissed = 1",
-            (origin,),
+def is_dismissed(
+    hub: HubDatabase, origin: str, remote_path: str, content_hash: Optional[str]
+) -> bool:
+    """Whether the owner deleted this path, or this content anywhere.
+
+    Args:
+        content_hash: ``workflow_inbox.content_hash`` of the document just
+            read, or ``None`` when it could not be computed (then only the
+            path is checked).
+    """
+    if content_hash is not None:
+        if hub.fetchone(
+            "SELECT 1 FROM workflow_origin WHERE content_hash = ? AND dismissed = 1 "
+            "LIMIT 1",
+            (content_hash,),
+        ):
+            return True
+    return (
+        hub.fetchone(
+            "SELECT 1 FROM workflow_origin WHERE origin = ? AND remote_path = ? "
+            "AND dismissed = 1",
+            (origin, remote_path),
         )
-    }
+        is not None
+    )
 
 
-def known_paths(hub: HubDatabase, origin: str) -> set[str]:
-    """Every path at *origin* a previous pull has a row for."""
-    return {
-        row["remote_path"]
-        for row in hub.fetchall(
-            "SELECT remote_path FROM workflow_origin WHERE origin = ?", (origin,)
-        )
-    }
+def last_content(hub: HubDatabase, origin: str, remote_path: str) -> Optional[str]:
+    """The content hash last read from this path, or ``None`` for a new one."""
+    row = hub.fetchone(
+        "SELECT content_hash FROM workflow_origin WHERE origin = ? AND remote_path = ?",
+        (origin, remote_path),
+    )
+    return row["content_hash"] if row else None
 
 
 def record_pulled(
@@ -60,32 +81,28 @@ def record_pulled(
     remote_path: str,
     workflow_name: str,
     remote_modified: Optional[int],
-    stored: bool = False,
+    content_hash: Optional[str],
+    *,
+    wrote_file: bool,
 ) -> None:
     """Remember that *remote_path* at *origin* is stored as *workflow_name*.
 
-    An upsert that keeps ``first_pulled_at`` and never clears ``dismissed``:
-    the caller skips a dismissed path before it gets here, and a row written
-    anyway must not quietly un-dismiss it.
-
-    *stored* is true when this pull wrote the file rather than matching one
-    already there. It is sticky per row - a later pull that matches the file
-    it wrote itself does not make it the owner's - but it only ever describes
-    this path, so a file the owner imported first stays hand-imported.
+    An upsert that keeps ``first_pulled_at`` and never clears ``dismissed``.
+    *wrote_file* adds the file to the pull-written set; a pull that only
+    matched a stored file leaves it as it was, so the owner's own file stays
+    theirs.
     """
     now = _now()
     with hub.transaction() as conn:
         conn.execute(
             "INSERT INTO workflow_origin (origin, remote_path, workflow_name, "
-            "remote_modified, first_pulled_at, last_seen_at, stored_by_pull) "
+            "remote_modified, first_pulled_at, last_seen_at, content_hash) "
             "VALUES (?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT (origin, remote_path) DO UPDATE SET "
-            "stored_by_pull = CASE WHEN workflow_name = excluded.workflow_name "
-            "THEN MAX(stored_by_pull, excluded.stored_by_pull) "
-            "ELSE excluded.stored_by_pull END, "
             "workflow_name = excluded.workflow_name, "
             "remote_modified = excluded.remote_modified, "
-            "last_seen_at = excluded.last_seen_at",
+            "last_seen_at = excluded.last_seen_at, "
+            "content_hash = excluded.content_hash",
             (
                 origin,
                 remote_path,
@@ -93,39 +110,63 @@ def record_pulled(
                 remote_modified,
                 now,
                 now,
-                int(stored),
+                content_hash,
             ),
         )
+        if wrote_file:
+            conn.execute(
+                "INSERT OR IGNORE INTO workflow_pulled_file (workflow_name) VALUES (?)",
+                (workflow_name,),
+            )
 
 
 def prune_gone(hub: HubDatabase, origin: str, listed: Iterable[str]) -> int:
     """Forget the rows for paths *origin* no longer lists. Returns how many.
 
-    Dismissed rows go too: a path that no longer exists there cannot be pulled
-    back, so there is nothing left for the dismissal to prevent. The stored
-    file is never touched - it is the owner's now.
+    **Dismissed rows are kept**: they are the record of a delete, and a path
+    that is gone today can be listed again tomorrow. **An empty listing prunes
+    nothing**: an install that suddenly has no saved workflows (another user
+    directory, a proxy answering 404, another ComfyUI on the port) is far more
+    likely than one whose every workflow was deleted, and pruning on it would
+    forget every path at once. The stored files are never touched.
     """
-    gone = known_paths(hub, origin) - set(listed)
+    listed = set(listed)
+    if not listed:
+        return 0
+    gone = {
+        row["remote_path"]
+        for row in hub.fetchall(
+            "SELECT remote_path FROM workflow_origin WHERE origin = ? "
+            "AND dismissed = 0",
+            (origin,),
+        )
+    } - listed
     if not gone:
         return 0
     with hub.transaction() as conn:
         conn.executemany(
-            "DELETE FROM workflow_origin WHERE origin = ? AND remote_path = ?",
+            "DELETE FROM workflow_origin WHERE origin = ? AND remote_path = ? "
+            "AND dismissed = 0",
             [(origin, path) for path in sorted(gone)],
         )
     return len(gone)
 
 
 def dismiss_file(hub: HubDatabase, workflow_name: str) -> int:
-    """Mark every pulled path stored as *workflow_name* dismissed.
+    """The owner deleted *workflow_name*: mark every path naming it dismissed.
 
-    Called when the owner deletes that file, so the next pull does not bring
-    it back. **Every** row, at every origin: content matching makes the name
+    **Every** row, at every origin: content matching makes the name
     many-to-one, and dismissing only the first would let its twin restore the
-    file. Returns how many rows it marked; ``0`` for a file that was never
-    pulled.
+    file. The rows keep their ``content_hash``, which is what keeps a renamed
+    or re-addressed copy out too. The file is gone, so it leaves the
+    pull-written set as well. Returns how many origin rows it marked; ``0``
+    for a file that was never pulled.
     """
     with hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM workflow_pulled_file WHERE workflow_name = ?",
+            (workflow_name,),
+        )
         return (
             conn.execute(
                 "UPDATE workflow_origin SET dismissed = 1 WHERE workflow_name = ?",
@@ -136,18 +177,18 @@ def dismiss_file(hub: HubDatabase, workflow_name: str) -> int:
 
 
 def claim_file(hub: HubDatabase, workflow_name: str) -> int:
-    """Record that the owner put *workflow_name* here themselves.
+    """Record that the owner handed *workflow_name* over themselves.
 
-    Called by the import route whenever it stores or matches a file: a file
-    the owner handed over is theirs, whether a pull wrote it first or not, so
-    it must stop counting as pull-written (``stored_by_pull``) and can no
-    longer be folded into the hidden one-offs. Returns how many rows changed.
+    Called by both hand-over paths, the import route and the watched inbox,
+    whenever they store or match a file: a file the owner gave PixlStash is
+    theirs whether a pull wrote it first or not, so it leaves the pull-written
+    set and can no longer be folded into the hidden one-offs. Returns ``1``
+    when it was pull-written, else ``0``.
     """
     with hub.transaction() as conn:
         return (
             conn.execute(
-                "UPDATE workflow_origin SET stored_by_pull = 0 "
-                "WHERE workflow_name = ? AND stored_by_pull = 1",
+                "DELETE FROM workflow_pulled_file WHERE workflow_name = ?",
                 (workflow_name,),
             ).rowcount
             or 0

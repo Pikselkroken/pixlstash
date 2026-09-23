@@ -106,6 +106,7 @@ from pixlstash.routes.pictures import (
 )
 from pixlstash.routes.comfyui import (
     _store_workflow,
+    claim_stored_workflow,
     create_router as create_comfyui_router,
     workflow_user_dir,
 )
@@ -986,6 +987,9 @@ class Server(
         nothing, which is right - the first read of the view draws it anyway.
         """
         result = _store_workflow(self.hub, name, workflow, keep_both=True)
+        # The other hand-over path besides the import route: a file the owner
+        # put in the watched folder is theirs even if a pull wrote it first.
+        claim_stored_workflow(self.hub, result["name"])
         announce_changed_workflows(
             self,
             [key for key in (result.get("workflow_key"),) if key],

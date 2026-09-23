@@ -963,7 +963,7 @@ the two sides have agreed:
    workflow again, so a card carrying one is never folded into the count.
 
    **"Imported" means imported by hand** (#1440): a file a pull from ComfyUI
-   wrote (`workflow_origin.stored_by_pull = 1`) does not count, because a pull
+   wrote (`workflow_pulled_file`) does not count, because a pull
    brings a whole install's experiments in one gesture and exempting them all
    would bury the grid. A file the owner dropped in, or one a pull only
    matched, still takes its card out. The card's wire `imported` keeps meaning
