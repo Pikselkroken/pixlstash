@@ -7289,7 +7289,7 @@ def _seed_graph(class_type="Seed (rgthree)", value=4242, field="seed"):
 
 def test_a_seed_node_is_replaced_by_its_own_value():
     graph = _seed_graph()
-    replaced = replace_missing_seed_nodes(graph, SEED_INFO, seed_overwritten=True)
+    replaced = replace_missing_seed_nodes(graph, SEED_INFO)
     assert [n["class_type"] for n in replaced] == ["Seed (rgthree)"]
     assert "9" not in graph
     assert graph["3"]["inputs"]["seed"] == 4242
@@ -7297,7 +7297,7 @@ def test_a_seed_node_is_replaced_by_its_own_value():
 
 def test_a_seed_node_into_a_widget_the_seed_pass_skips_is_left_alone():
     graph = _seed_graph(field="steps")
-    assert replace_missing_seed_nodes(graph, SEED_INFO, seed_overwritten=True) == []
+    assert replace_missing_seed_nodes(graph, SEED_INFO) == []
     assert graph["9"]["class_type"] == "Seed (rgthree)"
     assert graph["3"]["inputs"]["steps"] == ["9", 0]
 
@@ -7305,45 +7305,84 @@ def test_a_seed_node_into_a_widget_the_seed_pass_skips_is_left_alone():
 def test_an_installed_seed_node_is_not_replaced():
     info = dict(SEED_INFO, **{"Seed (rgthree)": {"input": {}, "output": ["INT"]}})
     graph = _seed_graph()
-    assert replace_missing_seed_nodes(graph, info, seed_overwritten=True) == []
+    assert replace_missing_seed_nodes(graph, info) == []
     assert "9" in graph
 
 
 def test_a_node_outside_the_allow_list_is_never_replaced():
     """Anything that samples, conditions or loads has no standard equivalent."""
     graph = _seed_graph(class_type="Noise Injector (some pack)")
-    assert replace_missing_seed_nodes(graph, SEED_INFO, seed_overwritten=True) == []
+    assert replace_missing_seed_nodes(graph, SEED_INFO) == []
     assert "9" in graph
 
 
-def test_a_placeholder_seed_is_replaced_only_when_the_run_overwrites_it():
-    """rgthree's -1 means "random" and is no seed to keep."""
-    kept = _seed_graph(value=-1)
-    assert replace_missing_seed_nodes(kept, SEED_INFO, seed_overwritten=False) == []
-    assert "9" in kept
+def test_a_placeholder_seed_keeps_its_refusal():
+    """rgthree's -1 means "random" and is no seed to keep.
 
-    rolled = _seed_graph(value=-1)
-    assert replace_missing_seed_nodes(rolled, SEED_INFO, seed_overwritten=True)
-    assert rolled["3"]["inputs"]["seed"] == 0
+    Refused whatever the seed mode: accepting it for "new" only would make the
+    pre-flight's answer depend on a control the popups do not re-ask on, so
+    the owner could be shown "goes ahead" and then refused on Run.
+    """
+    graph = _seed_graph(value=-1)
+    assert replace_missing_seed_nodes(graph, SEED_INFO) == []
+    assert "9" in graph
+
+
+def test_a_seed_node_feeding_two_samplers_keeps_its_refusal():
+    """A shared seed would become two: the seed pass rolls each target alone."""
+    graph = _seed_graph()
+    graph["5"] = {"class_type": "KSampler", "inputs": {"seed": ["9", 0], "steps": 8}}
+    assert replace_missing_seed_nodes(graph, SEED_INFO) == []
+    assert graph["3"]["inputs"]["seed"] == ["9", 0]
+    assert graph["5"]["inputs"]["seed"] == ["9", 0]
+
+
+def test_a_later_replacement_cannot_strand_an_earlier_ones_seed():
+    """Checked on the final graph, not one node at a time.
+
+    KSampler here declares no `control_after_generate` (an older ComfyUI), so
+    its seed is only found by the fallback finder - which stops being used the
+    moment the second replacement gives `detect_seed_targets` a target of its
+    own. Checked alone, each looks safe; together the sampler's seed would
+    never be written.
+    """
+    info = json.loads(json.dumps(SEED_INFO))
+    info["KSampler"]["input"]["required"]["seed"] = ["INT", {"default": 0}]
+    info["Custom Sampler"] = {
+        "input": {
+            "required": {
+                "seed": ["INT", {"default": 0, "control_after_generate": True}]
+            }
+        },
+        "output": ["LATENT"],
+    }
+    graph = _seed_graph()
+    graph["5"] = {"class_type": "Custom Sampler", "inputs": {"seed": ["10", 0]}}
+    graph["10"] = {"class_type": "CR Seed", "inputs": {"seed": 11}}
+    before = json.loads(json.dumps(graph))
+
+    assert replace_missing_seed_nodes(graph, info) == []
+    assert graph == before, "the graph is put back whole, not half replaced"
 
 
 def test_a_seed_node_whose_own_seed_is_wired_is_left_alone():
     graph = _seed_graph()
     graph["9"]["inputs"]["seed"] = ["7", 0]
     graph["7"] = {"class_type": "PrimitiveInt", "inputs": {"value": 5}}
-    assert replace_missing_seed_nodes(graph, SEED_INFO, seed_overwritten=True) == []
+    assert replace_missing_seed_nodes(graph, SEED_INFO) == []
     assert "9" in graph
 
 
 def test_the_registry_repairs_only_what_judge_reported():
     """Keyed on reason code: a repair runs only against its own refusal."""
     graph = _seed_graph()
-    assert repair(
-        graph, SEED_INFO, [Reason(MISSING_MODELS)], seed_overwritten=True
-    ) == {"bypassed_loras": [], "replaced_nodes": []}
+    assert repair(graph, SEED_INFO, [Reason(MISSING_MODELS)]) == {
+        "bypassed_loras": [],
+        "replaced_nodes": [],
+    }
     assert "9" in graph
 
-    done = repair(graph, SEED_INFO, [Reason(MISSING_NODES)], seed_overwritten=True)
+    done = repair(graph, SEED_INFO, [Reason(MISSING_NODES)])
     assert [n["node_id"] for n in done["replaced_nodes"]] == ["9"]
     assert "9" not in graph
 

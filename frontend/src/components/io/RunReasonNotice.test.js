@@ -110,15 +110,15 @@ describe("a replaced seed node, which is not a refusal either", () => {
 
   it("says PixlStash seeds the run itself, and never that it cannot run", () => {
     const wrapper = mountNotice(reason);
-    expect(wrapper.text()).toContain("sets the seed itself");
+    expect(wrapper.text()).toContain("writes the seed straight into the sampler");
     expect(wrapper.text()).toContain("The run goes ahead without it");
     expect(wrapper.text()).not.toContain("can't run");
   });
 
-  it("names the node's class once, with no model folder beside it", () => {
+  it("names the node's class once, in the sentence rather than as a file", () => {
     const wrapper = mountNotice(reason);
-    expect(wrapper.findAll(".rrn-files li")).toHaveLength(1);
-    expect(wrapper.text()).toContain("Seed (rgthree)");
+    expect(wrapper.find(".rrn-files").exists()).toBe(false);
+    expect(wrapper.text().split("Seed (rgthree)")).toHaveLength(2);
     expect(wrapper.text()).not.toContain("models/");
   });
 

@@ -100,15 +100,14 @@ export function readReason(reason) {
       );
     }
     case NODES_REPLACED: {
-      // Named by class, once each: two seed nodes of one pack are one fact.
-      const files = [...new Set(names(reason.nodes, "class_type"))].map(
-        (file) => ({ file }),
-      );
-      const count = files.length;
+      // Named by class, once each, in the sentence: a node is not a file, and
+      // the files list would draw it as one.
+      const nodes = [...new Set(names(reason.nodes, "class_type"))];
+      const one = nodes.length === 1;
       return read(
-        `This ComfyUI does not have ${count === 1 ? "the seed node" : "the seed nodes"} this workflow uses, so PixlStash sets the seed itself instead. The run goes ahead without ${count === 1 ? "it" : "them"}.`,
+        `This ComfyUI does not have ${one ? "the seed node" : "the seed nodes"} ${nodes.join(", ")}, so PixlStash writes the seed straight into the sampler instead. The run goes ahead without ${one ? "it" : "them"}.`,
         null,
-        files,
+        [],
         false,
       );
     }

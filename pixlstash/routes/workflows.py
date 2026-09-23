@@ -2871,12 +2871,7 @@ def create_router(server) -> APIRouter:
                 # Held in a local and NOT put on the group here. What it says
                 # is "the run goes ahead with this changed", which is a lie on
                 # a group about to be refused for some other reason.
-                repaired = run_service.repair(
-                    graph,
-                    object_info,
-                    judged,
-                    seed_overwritten=body.seed_mode != "keep",
-                )
+                repaired = run_service.repair(graph, object_info, judged)
                 if any(repaired.values()):
                     judged, _preflight = run_service.judge(
                         graph,

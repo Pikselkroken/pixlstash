@@ -677,8 +677,10 @@ Seven rules the client must not re-derive:
    **A missing seed node is repaired the same way** (#1463): a custom seed node
    this ComfyUI lacks (rgthree's `Seed (rgthree)` and its kin) is dropped, its
    links become literals the run's seed pass then writes, and it is named in
-   `replaced_nodes` rather than in `missing_nodes`. Only where every input it
-   fed is a seed the run writes; otherwise it stays a `missing_nodes` refusal.
+   `replaced_nodes` rather than in `missing_nodes`. Only where it feeds exactly
+   one input, that input is a seed the run writes, and its own seed is a real
+   value (not a `-1` placeholder); otherwise it stays a `missing_nodes`
+   refusal, independent of `seed_mode`.
    `replaced_nodes` follows the same rule as `bypassed_loras`: set only on a
    submitted group, cleared when the batch is zeroed.
    **A bypassed run lands on its own card**, as a substituted one does: taking

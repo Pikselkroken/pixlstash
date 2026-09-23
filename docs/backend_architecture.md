@@ -2996,7 +2996,7 @@ answers, the `RunGroup` field that reports it, and the function that mutates the
 graph. `_plan` runs one loop over it, after the model swap:
 
 1. `judge` the graph.
-2. `repair(graph, object_info, reasons, seed_overwritten=…)` applies every entry
+2. `repair(graph, object_info, reasons)` applies every entry
    whose code is among the reasons, and returns `{report_field: entries}`.
 3. If anything changed, `judge` **again**. Only the second verdict says whether
    the graph runs: a repair can leave its refusal standing. Re-judging is pure
@@ -3016,19 +3016,22 @@ repair is a registry entry plus its `RunGroup` field. Two ship:
   hands a number to a sampler's seed widget, which the run writes itself. So
   each link from it becomes a literal and the node leaves the graph.
   **The seed pass overwriting that literal is what makes it safe, so it is
-  checked and not assumed.** The replacement is tried on a copy and kept only
-  when every inlined input is one `run_seed_targets` finds, which is the same
+  checked and not assumed**, against `run_seed_targets`, which is the same
   finder `_submit_every` writes seeds through (one function, so the check and
-  the write cannot drift). A seed node wired into `steps`, or into a pack's own
-  `SEED` dict, keeps its refusal. The literal is the node's own `seed` value
-  when that is a real seed (≥ 0), which is what `seed_mode: "keep"` then keeps:
-  a picture's embedded graph carries the value the node really handed on. A
-  placeholder (rgthree's `-1`, "random") is replaced with `0` only when the run
-  overwrites it (`new`/`fixed`), and under `keep` keeps its refusal. A node
-  whose own seed is wired from elsewhere keeps it too, because the literal would
-  cut that link. Each entry is `{node_id, class_type, replacement: "seed",
-  consumers: [{node_id, field}]}`, logged when it is made and when it is
-  declined.
+  the write cannot drift). It is checked on the **final** graph: a later
+  replacement can switch that finder from its fallback to `detect_seed_targets`
+  and strand an earlier literal, so if any inlined input is not a target once
+  all are replaced, the graph is put back whole and every node keeps its
+  refusal. A seed node wired into `steps`, or into a pack's own `SEED` dict,
+  keeps it that way. The literal is the node's own `seed` value, which is what
+  `seed_mode: "keep"` then keeps: a picture's embedded graph carries the value
+  the node really handed on. Also refused, each logged: a **placeholder** seed
+  (rgthree's `-1`, "random"), whatever the seed mode, so the pre-flight's answer
+  never depends on a control the popups do not re-ask on; a node feeding **more
+  than one** input, because the seed pass rolls each target separately and a
+  hires-fix or refiner pair built to share one seed would get two; and a node
+  whose own seed is wired from elsewhere. Each entry is `{node_id, class_type,
+  replacement: "seed", consumers: [{node_id, field}]}`.
 - **An allow-list, not a general rewriter.** A replacement that is *nearly*
   right silently changes what the picture looks like, which is worse than the
   refusal. The candidates the issue names for later (custom primitive nodes,
