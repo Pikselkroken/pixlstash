@@ -72,6 +72,20 @@
            has no drop handler, so `useWindowFileImport` no longer stands
            aside for it. -->
       <AppBarButton icon="plus" @click="fileInput?.click()">Add…</AppBarButton>
+      <!-- #1440: read every workflow ComfyUI has saved, over its own API.
+           Only offered once ComfyUI is connected - the empty state's
+           "Connect ComfyUI" is the way there - and it reads, never writes
+           back. What it found lands in the band below the toolbar. -->
+      <AppBarButton
+        v-if="comfyuiConfigured"
+        icon="tray-arrow-down"
+        :aria-busy="pull.phase === 'pulling'"
+        data-testid="wfv-pull"
+        @click="pull.start()"
+        >{{
+          pull.phase === "pulling" ? "Pulling…" : "Pull from ComfyUI"
+        }}</AppBarButton
+      >
       <input
         ref="fileInput"
         class="wfv-file-input"
@@ -111,6 +125,8 @@
       :on-clear-all="store.clearFilters"
       class="wfv-strip"
     />
+
+    <WorkflowPullSummary />
 
     <p v-if="store.error" class="wfv-error" role="alert">{{ store.error }}</p>
 
@@ -191,6 +207,18 @@
             @click="openWatchedFolder"
           >
             Open watched folder
+          </AppButton>
+          <!-- The connected half of the pair below: somebody with ComfyUI
+               connected most likely has workflows saved there already. -->
+          <AppButton
+            v-if="comfyuiConfigured"
+            size="sm"
+            variant="secondary"
+            icon-left="tray-arrow-down"
+            data-testid="wfv-empty-pull"
+            @click="pull.start()"
+          >
+            Pull from ComfyUI
           </AppButton>
           <!-- Gone once connected: there is nothing to offer somebody who has
                already done it. -->
@@ -400,6 +428,7 @@ import { useConfirm } from "../../composables/useConfirm";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { useWorkflowPullStore } from "../../stores/useWorkflowPullStore";
 import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import {
   SORT_KEYS,
@@ -412,6 +441,7 @@ import FilterStrip from "../panels/FilterStrip.vue";
 import StackPanel from "../panels/StackPanel.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import WorkflowFilterMenu from "../panels/WorkflowFilterMenu.vue";
+import WorkflowPullSummary from "../panels/WorkflowPullSummary.vue";
 import WorkflowSelectionBar from "../panels/WorkflowSelectionBar.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -447,6 +477,7 @@ const filterStore = useFilterStore();
 const prefs = useWorkflowPrefsStore();
 const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
+const pull = useWorkflowPullStore();
 const router = useRouter();
 const route = useRoute();
 const { confirm } = useConfirm();
