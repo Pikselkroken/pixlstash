@@ -87,11 +87,8 @@
               :card="member"
               member
               :selected="!selected && selectedKeys.includes(member.key)"
+              :cover-flag="index === 0"
             />
-            <!-- The cover is what the others are compared against, so it is the
-                 one member whose special row is empty; without the flag its row
-                 reads as "this one differs by nothing". -->
-            <span v-if="index === 0" class="stack-cover-flag">Cover</span>
             <AppButton
               class="stack-panel__more"
               variant="ghost"
