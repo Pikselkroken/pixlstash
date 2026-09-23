@@ -144,7 +144,7 @@
 // graph carries instead); ⓘ lists every model, so a stack whose difference is
 // "other models" always has the models behind it.
 
-import { quantBadge } from "./modelShelf.js";
+import { modelName, quantBadge } from "./modelShelf.js";
 import { cropImgStyle } from "./squareCrop.js";
 
 const RECIPE = "recipe";
@@ -321,30 +321,35 @@ export function modelDisplayName(model) {
   return model?.title || model?.name || null;
 }
 
-/** The LoRA row: a filled chip per workflow LoRA, a dashed one per recipe slot. */
-export function loraChips(card) {
-  return (card.loras ?? []).flatMap((lora, i) => {
-    const recipe = lora.mark === RECIPE;
-    const quant = recipe ? null : quantBadge(lora.quant);
-    return [
-      {
-        key: `lora-${i}`,
-        label: recipe ? "recipe LoRA" : modelDisplayName(lora),
-        icon: recipe ? "plus" : "layers",
-        dashed: recipe,
-      },
-      ...(quant
-        ? [{ key: `lora-${i}-quant`, label: quant.label, fact: true }]
-        : []),
-    ];
-  });
+/**
+ * What the CARD prints for a model: the shelf's name, else the name the shelf
+ * would derive from the file (`modelName`), else the file itself.
+ *
+ * Not `modelDisplayName`, which stops at the file string: the ⓘ popover and
+ * the panels keep that exact string, because `deriveModelName` is a guess and
+ * two LoRAs from one run that differ only in the step collapse to one name
+ * under it. The card carries the file string in the mark's tooltip instead.
+ */
+export function modelShortName(model) {
+  if (!model) return null;
+  return (
+    modelName({ display_name: model.title, filename: model.name }).text || null
+  );
 }
 
 /**
- * The special-facts row: what a stack differs by, otherwise the workflow's type
- * and whether it was imported.
+ * The two types whose served label is long enough to cost the facts row a
+ * chip, said short (#1485). The other three are one word already. Only the
+ * visible chip: the accessible name keeps `type_label`.
  */
-export function factChips(card) {
+const SHORT_TYPE_LABELS = { txt2img: "T2I", img2img: "I2I" };
+
+/**
+ * The special-facts row: what a stack differs by, otherwise the workflow's type
+ * and whether it was imported. `short` spells the type the way the card's chip
+ * does (`T2I`).
+ */
+export function factChips(card, { short = false } = {}) {
   const labels = isStack(card)
     ? // **First, and on a stack too.** A hidden card is only ever drawn
       // because somebody ticked *Show hidden workflows* (F7), and the row
@@ -358,9 +363,10 @@ export function factChips(card) {
         ...(card.differs_by ?? []),
         // The SERVED label, so the chip and a generated name say the type in
         // one vocabulary rather than reading `Text to Image` on row 1 and
-        // `txt2img` on row 4. Falls back to the token for a payload that
-        // predates `type_label`.
-        card.type_label ?? card.type,
+        // `txt2img` on row 4 - or its abbreviation, which a generated name
+        // already spells out in full. Falls back to the token for a payload
+        // that predates `type_label`.
+        (short && SHORT_TYPE_LABELS[card.type]) || card.type_label || card.type,
         card.imported ? "imported" : null,
       ].filter(Boolean);
   return labels.map((label, i) => ({ key: `fact-${i}`, label, fact: true }));

@@ -8,12 +8,12 @@ import {
   cardAccessibleName,
   factChips,
   fitChipCount,
-  loraChips,
   ratingLabel,
   checkpointModel,
   checkpointUnread,
   lorasUnread,
   modelDisplayName,
+  modelShortName,
 } from "./workflowCard";
 
 describe("fitChipCount", () => {
@@ -56,14 +56,6 @@ const STACK = {
 };
 
 describe("card chips", () => {
-  it("draws a recipe slot dashed and a workflow LoRA as a plain chip", () => {
-    // The mark is B1's own word, so nothing inverts on the way in.
-    expect(loraChips(STACK).map((c) => [c.label, !!c.dashed])).toEqual([
-      ["lightning-8step", false],
-      ["recipe LoRA", true],
-    ]);
-  });
-
   it("names the checkpoint slot, whatever order the models arrive in", () => {
     expect(checkpointModel(STACK).name).toBe("realvisXL_v5");
     // No checkpoint slot (a unet graph): the first model still names the row.
@@ -89,6 +81,27 @@ describe("card chips", () => {
     expect(modelDisplayName({ name: "flux1-dev" })).toBe("flux1-dev");
     expect(modelDisplayName({ name: null, title: null })).toBeNull();
     expect(modelDisplayName(null)).toBeNull();
+  });
+
+  it("prints the shelf's derived name on the card, not the file string", () => {
+    // What `ModelShelf` shows for the same file (#1485): no extension, no
+    // training bookkeeping, underscores as spaces.
+    expect(
+      modelShortName({ name: "ohwx_woman-step00004500.safetensors" }),
+    ).toBe("ohwx woman");
+    expect(modelShortName({ name: "juggernautXL_v9", title: null })).toBe(
+      "juggernautXL v9",
+    );
+    // The shelf's own title still wins, verbatim.
+    expect(modelShortName({ name: "realvisxl", title: "Krea 2" })).toBe(
+      "Krea 2",
+    );
+    // Nothing survives the strip: the file string, not a blank.
+    expect(modelShortName({ name: "000002750.safetensors" })).toBe(
+      "000002750.safetensors",
+    );
+    expect(modelShortName({ name: null, title: null })).toBeNull();
+    expect(modelShortName(null)).toBeNull();
   });
 
   it("speaks the shelf's name in the accessible name too", () => {
@@ -318,6 +331,22 @@ describe("the type chip", () => {
     // The card's name row says "realvisxl: Text to Image"; the chip saying
     // `txt2img` beside it is one fact in two vocabularies.
     expect(labels).not.toContain("txt2img");
+  });
+
+  it("says the two long types short on the card's chip only", () => {
+    const card = { type: "txt2img", type_label: "Text to Image" };
+    const short = (c) => factChips(c, { short: true }).map((chip) => chip.label);
+    expect(short(card)).toContain("T2I");
+    expect(short({ type: "img2img", type_label: "Image to Image" })).toContain(
+      "I2I",
+    );
+    // One word already: kept as served.
+    expect(short({ type: "inpaint", type_label: "Inpaint" })).toContain(
+      "Inpaint",
+    );
+    // The accessible name reads the served label in full.
+    expect(cardAccessibleName(card)).toContain("Text to Image");
+    expect(cardAccessibleName(card)).not.toContain("T2I");
   });
 
   it("falls back to the token when the payload has no label", () => {

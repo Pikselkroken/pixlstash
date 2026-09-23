@@ -56,26 +56,10 @@
       <span v-if="card.type" class="wf-card__type" aria-hidden="true">{{
         card.type
       }}</span>
-      <!-- The models this card's own file names, drawn the way the shelf draws
-           a model (#1466). A card with no pictures AND no recipe has nothing
-           else that identifies it, and this is the one thing about it that was
-           read rather than guessed at.
-
-           `aria-hidden` like the rest of the cover, and the label below is
-           where those models are announced. It names the BASE MODEL and the
-           LoRAs, which is what the rows say too - a recovered `vae` or `clip`
-           is drawn here and named nowhere, the same silence every other card
-           keeps about its accessory slots. -->
-      <ul v-if="coverMarks.length" class="wf-card__marks" aria-hidden="true">
-        <li v-for="mark in coverMarks" :key="mark.key" class="wf-card__mark">
-          <Tooltip :text="mark.label" activator="parent" :describe="false" />
-          <ModelMark :row="mark.row" />
-        </li>
-        <li v-if="coverOverflow" class="wf-card__mark-more">
-          +{{ coverOverflow }}
-        </li>
-      </ul>
-      <span v-else class="wf-card__empty-line" aria-hidden="true"
+      <!-- A card with no recipe says nothing more here: its models are on the
+           strip below, where every other card says what it is made of (#1485
+           retired the cover marks #1466 put here). -->
+      <span v-if="hasRecipe" class="wf-card__empty-line" aria-hidden="true"
         >No pictures yet</span
       >
       <AppButton
@@ -131,21 +115,51 @@
         />
         <span class="wf-card__name" aria-hidden="true">{{ card.name }}</span>
       </div>
+      <!-- Row 2, the strip: the base model's mark, a hairline, then one mark
+           per LoRA (#1485). Names are in each mark's tooltip, and the card's
+           accessible name reads them all. -->
       <div class="wf-card__row">
-        <ChipRow
-          v-if="checkpointChips.length"
-          :items="checkpointChips"
-          aria-hidden="true"
-        />
+        <ul v-if="stripMarks.length" class="wf-card__strip" aria-hidden="true">
+          <template v-for="mark in stripMarks" :key="mark.key">
+            <li
+              class="wf-card__mark"
+              :class="{ 'wf-card__mark--slot': mark.slot }"
+            >
+              <Tooltip :text="mark.label" activator="parent" :describe="false" />
+              <v-icon v-if="mark.slot" size="12">mdi-plus</v-icon>
+              <ModelMark v-else :row="mark.row" />
+            </li>
+            <li v-if="mark.ruled" class="wf-card__rule" />
+          </template>
+          <li v-if="stripOverflow" class="wf-card__mark-more">
+            +{{ stripOverflow }}
+          </li>
+        </ul>
         <span v-else class="wf-card__none" aria-hidden="true">{{
-          checkpointIsUnread ? "Base model not read" : "No checkpoint"
+          checkpointIsUnread && lorasAreUnread ? "Models not read" : "No models"
         }}</span>
       </div>
+      <!-- Row 3: the one name worth printing, the base model's, and how many
+           LoRAs the strip holds. Silent when row 2 already said "no models". -->
       <div class="wf-card__row">
-        <ChipRow v-if="loras.length" :items="loras" aria-hidden="true" />
-        <span v-else class="wf-card__none" aria-hidden="true">{{
-          lorasAreUnread ? "LoRAs not read" : "No LoRAs"
-        }}</span>
+        <template v-if="stripMarks.length">
+          <span v-if="base" class="wf-card__base" aria-hidden="true">
+            <Tooltip :text="base.label" activator="parent" :describe="false" />
+            {{ base.text }}
+          </span>
+          <span v-else class="wf-card__none" aria-hidden="true">{{
+            checkpointIsUnread ? "Base model not read" : "No checkpoint"
+          }}</span>
+          <span
+            v-if="base?.quant"
+            class="wf-card__none wf-card__quant"
+            aria-hidden="true"
+            >{{ base.quant }}</span
+          >
+          <span class="wf-card__none wf-card__lora-count" aria-hidden="true">{{
+            loraCount
+          }}</span>
+        </template>
       </div>
       <div class="wf-card__row wf-card__row--facts">
         <span
@@ -179,8 +193,9 @@
 // The uniform workflow card (v1.12 Workflows & Recipes, "The same in all three
 // alternatives"). A cover at a fixed 6:5 whose tracks come from the strip it
 // was handed - one picture across the whole box, two as a pair of columns,
-// three as the 2fr/1fr mosaic - then four single-line rows (name, checkpoint,
-// LoRAs, special facts) that clip to "+N" instead of wrapping, exactly
+// three as the 2fr/1fr mosaic - then four single-line rows (name, a strip of
+// model marks, the base model's name beside a LoRA count, special facts) that
+// clip to "+N" instead of wrapping, exactly
 // --wf-meta-h tall whatever the card holds. ⓘ is pinned bottom-right.
 //
 // ▸ and ⓘ are real buttons at tabindex -1: the grid's roving cursor owns Tab.
@@ -197,9 +212,8 @@ import {
   factChips,
   isStack,
   checkpointUnread,
-  loraChips,
   lorasUnread,
-  modelDisplayName,
+  modelShortName,
 } from "../../utils/workflowCard";
 import AppButton from "./AppButton.vue";
 import ChipRow from "./ChipRow.vue";
@@ -207,11 +221,11 @@ import InfoPopover from "./InfoPopover.vue";
 import ModelMark from "./ModelMark.vue";
 import Tooltip from "./Tooltip.vue";
 
-// How many marks the empty cover draws before it counts the rest. Four squares
-// at --entity-thumb and their gaps are ~108px against a cover at least 240px
-// wide. The row does not wrap and the marks do not shrink, so a fifth would
-// overflow rather than move - which is what the slice is for.
-const COVER_MARKS = 4;
+// How many marks row 2 draws before it counts the rest (#1485). At the 240px
+// column floor the row is 228px: eight 24px marks, the hairline after the base
+// and their 4px gaps are 225px. A ninth becomes "+N", which takes the eighth
+// mark's place (seven marks, the hairline and "+N" are ~217px).
+const STRIP_MARKS = 8;
 
 const props = defineProps({
   /** One workflow card (see utils/workflowCard.js for the shape). */
@@ -316,79 +330,89 @@ const rating = computed(() => props.card.rating > 0);
 const hasPictures = computed(
   () => covers.value.length > 0 || (props.card.picture_count ?? 0) > 0,
 );
-/**
- * The models an empty cover draws, as `ModelMark` rows (#1466).
- *
- * The slot IS the row: `name`, `title`, `icon` and `base_model` are what the
- * mark reads, under the names the shelf gives them, so nothing is mapped on
- * the way. `filename` because `modelName` falls through `display_name` to it,
- * which is what puts the initials on a model the shelf has never scanned.
- *
- * **Only a card with no recipe** (`variant_count: 0`), which is the card that
- * had no cover at all before #1466: it has no pictures by construction, since
- * a picture arrives attached to a recipe. Every other pictureless card keeps
- * the shipped empty cover — a card whose pictures were all binned is a
- * different state from one nothing has ever run, and widening this to both
- * would be a change to a screen this issue was not about.
- */
-const coverModels = computed(() => {
-  if ((props.card.variant_count ?? 1) !== 0) return [];
-  const named = [
-    ...(props.card.models ?? []),
-    ...(props.card.loras ?? []),
-  ].filter((model) => model.name);
-  // **The base model leads, whatever order the file listed its loaders in.**
-  // The rest is document order, and the row is clipped to COVER_MARKS: a
-  // graph that loads its VAE and both text encoders before its checkpoint
-  // would otherwise have the one model the card is *about* sliced off the
-  // end. `checkpointModel` picks the same one the name row was built from.
-  const base = checkpointModel(props.card);
-  return base ? [base, ...named.filter((model) => model !== base)] : named;
-});
-const coverMarks = computed(() =>
-  coverModels.value.slice(0, COVER_MARKS).map((model, i) => ({
-    // Indexed, because one workflow may load the same file twice and two
-    // identical keys silently collapse into one mark.
-    key: `mark-${i}`,
-    label: modelDisplayName(model),
-    // Both base-model spellings, because `baseModelKey` prefers the folded
-    // one: passing only the raw would colour the same model differently here
-    // and on the shelf.
-    row: {
-      display_name: model.title,
-      filename: model.name,
-      base_model: model.base_model,
-      base_model_folded: model.base_model_folded,
-      icon_sha256: model.icon,
-    },
-  })),
-);
-const coverOverflow = computed(() =>
-  Math.max(coverModels.value.length - COVER_MARKS, 0),
-);
 // Per ROW, not per card: the recovery can find a LoRA and miss the loader
 // beside it, and an empty row must not become a claim either way (#1466).
 const checkpointIsUnread = computed(() => checkpointUnread(props.card));
 const lorasAreUnread = computed(() => lorasUnread(props.card));
-// The precision rides the checkpoint row as a SECOND chip rather than inside
-// the first one's label. The name row above was built from this model's name,
-// and `FP8` is a different kind of thing from the name - so it wears the fact
-// treatment (no fill), and it clips to "+1" on a narrow card like every other
-// chip instead of eating the name it qualifies. A model with no recorded
-// precision gets no chip at all.
-const checkpointChips = computed(() => {
-  const model = checkpointModel(props.card);
-  if (!model) return [];
+const hasRecipe = computed(() => (props.card.variant_count ?? 1) !== 0);
+/**
+ * A payload slot as the shelf row `ModelMark` reads. Both base-model spellings,
+ * because `baseModelKey` prefers the folded one: passing only the raw would
+ * colour the same model differently here and on the shelf.
+ */
+function markRow(model) {
+  return {
+    display_name: model.title,
+    filename: model.name,
+    base_model: model.base_model,
+    base_model_folded: model.base_model_folded,
+    icon_sha256: model.icon,
+  };
+}
+/**
+ * What a mark's tooltip says: the FILE's own string, since the card prints the
+ * shelf's derived name and that is a guess, plus the precision the server took
+ * out of it - without which two quant builds of one model read identically.
+ */
+function markLabel(model) {
   const quant = quantBadge(model.quant);
+  const name = model.name || model.title;
+  return quant ? `${name} · ${quant.label}` : name;
+}
+/**
+ * The base model, as row 3 prints it. Only `checkpointModel`'s pick, never an
+ * accessory slot: a VAE or a text encoder is named in ⓘ and nowhere on the
+ * card, as it always was.
+ */
+const base = computed(() => {
+  const model = checkpointModel(props.card);
+  if (!model) return null;
+  return {
+    model,
+    text: modelShortName(model),
+    label: markLabel(model),
+    quant: quantBadge(model.quant)?.label ?? null,
+  };
+});
+/**
+ * Row 2's marks: the base model leads, whatever order the file listed its
+ * loaders in, then every LoRA in document order. A recipe slot is a dashed
+ * "+" box, as its chip was dashed. Clipped to STRIP_MARKS.
+ */
+const allMarks = computed(() => {
+  const loras = (props.card.loras ?? []).map((lora, i) =>
+    lora.mark === "recipe"
+      ? { key: `lora-${i}`, slot: true, label: "recipe LoRA" }
+      : { key: `lora-${i}`, label: markLabel(lora), row: markRow(lora) },
+  );
+  if (!base.value) return loras;
+  const model = base.value.model;
   return [
-    { key: "checkpoint", label: modelDisplayName(model), icon: "cube-outline" },
-    ...(quant
-      ? [{ key: "checkpoint-quant", label: quant.label, fact: true }]
-      : []),
+    {
+      key: "base",
+      label: base.value.label,
+      row: markRow(model),
+      // The hairline says "the base model ends here"; nothing to separate on
+      // a card with no LoRAs.
+      ruled: loras.length > 0,
+    },
+    ...loras,
   ];
 });
-const loras = computed(() => loraChips(props.card));
-const facts = computed(() => factChips(props.card));
+const stripMarks = computed(() =>
+  allMarks.value.length > STRIP_MARKS
+    ? allMarks.value.slice(0, STRIP_MARKS - 1)
+    : allMarks.value,
+);
+const stripOverflow = computed(
+  () => allMarks.value.length - stripMarks.value.length,
+);
+const loraCount = computed(() => {
+  const count = (props.card.loras ?? []).length;
+  if (count) return count === 1 ? "1 LoRA" : `${count} LoRAs`;
+  return lorasAreUnread.value ? "LoRAs not read" : "No LoRAs";
+});
+const facts = computed(() => factChips(props.card, { short: true }));
 const accessibleName = computed(() =>
   cardAccessibleName(props.card, { member: props.member }),
 );
@@ -606,25 +630,64 @@ const accessibleName = computed(() =>
   line-height: var(--leading-snug);
 }
 
-/* The model marks on an empty cover: a plain row of the shelf's own identity
-   slot, at the shared --entity-thumb rather than a local size. */
-.wf-card__marks {
+/* Row 2's strip of model marks (#1485): the shelf's own identity slot, at the
+   shared --entity-thumb rather than a local size. */
+.wf-card__strip {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  min-width: 0;
   margin: 0;
   padding: 0;
+  overflow: hidden;
   list-style: none;
 }
 
 .wf-card__mark {
   position: relative;
   display: inline-flex;
+  flex: none;
+}
+
+/* A LoRA slot the recipe fills: not a model, so no mark, only the dashed box
+   its chip used to be. */
+.wf-card__mark--slot {
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  width: var(--entity-thumb);
+  height: var(--entity-thumb);
+  border: 1px dashed rgb(var(--v-theme-border));
+  border-radius: var(--radius-sm);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The hairline after the base model: the one thing that says the first mark
+   is a different kind of thing from the rest. */
+.wf-card__rule {
+  flex: none;
+  width: 1px;
+  height: var(--gutter-glyph);
+  background: rgb(var(--v-theme-border));
 }
 
 .wf-card__mark-more {
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* Row 3's one printed name: plain text, not a chip, because it is the model
+   the card is named after rather than one datum among several. */
+.wf-card__base {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--text-xs);
+}
+
+.wf-card__lora-count {
+  margin-left: auto;
 }
 
 .wf-card__empty-line {
