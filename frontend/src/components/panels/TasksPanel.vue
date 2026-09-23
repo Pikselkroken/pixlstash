@@ -475,8 +475,9 @@ const tmSystemItems = computed(() => {
 }
 
 .tm-status-dot {
-  width: 7px;
-  height: 7px;
+  /* Sized as the attention dot (visual-language §12); amber only while running. */
+  width: var(--badge-size-dot);
+  height: var(--badge-size-dot);
   border-radius: var(--radius-pill);
   flex-shrink: 0;
   background: rgba(var(--v-theme-on-surface), 0.2);

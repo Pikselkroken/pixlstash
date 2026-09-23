@@ -209,7 +209,8 @@ defineExpose({ focus });
 
 /* Primary - amber accent, the key action. A filled control's hover darkens
    the fill 20% (`--hover-shade`, a background-image), which leaves the label
-   alone and lifts white on amber from 3.41 to 5.03:1. */
+   alone and lifts white on amber from 4.75 to 6.74:1 (light) and 3.41 to
+   5.01:1 (dark). */
 .app-btn--primary {
   background-color: rgb(var(--v-theme-accent));
   color: rgb(var(--v-theme-on-accent));

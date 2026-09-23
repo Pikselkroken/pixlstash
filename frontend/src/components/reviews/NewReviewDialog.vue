@@ -433,6 +433,8 @@ async function create() {
   background: rgba(0, 0, 0, 0.45);
 }
 .rs-dialog {
+  /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
+  --v-theme-accent: var(--v-theme-dark-surface-accent);
   width: 480px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
@@ -624,6 +626,8 @@ async function create() {
   color: rgba(var(--v-theme-on-dark-surface), 0.55);
 }
 .rs-listbox-menu {
+  /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
+  --v-theme-accent: var(--v-theme-dark-surface-accent);
   position: absolute;
   z-index: var(--z-raised);
   top: calc(100% + var(--space-1));

@@ -313,6 +313,8 @@ const hostEl = ref(null);
 
 /* ── Dark-surface variant (spec §2.5) ─────────────────────────────────────── */
 .notice-host--on-dark .notice-card {
+  /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
+  --v-theme-accent: var(--v-theme-dark-surface-accent);
   background: rgb(var(--v-theme-dark-surface));
   border-color: rgba(var(--v-theme-on-dark-surface), 0.2);
 }
