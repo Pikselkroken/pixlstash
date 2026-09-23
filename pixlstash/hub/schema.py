@@ -976,6 +976,27 @@ CREATE TABLE IF NOT EXISTS workflow_unstacked (
 )
 """
 
+# Where a stored workflow FILE came from when it was pulled from a ComfyUI's
+# saved workflows (#1440), one row per path over there. Its own table rather
+# than columns on ``workflow_file``, because ``workflow_cards.forget_file``
+# deletes that row when the file is deleted, and ``dismissed`` exists precisely
+# to outlive that delete: a workflow the owner deleted here is not pulled back.
+# ``workflow_name`` is many-to-one - a pull matches by content, so two paths
+# holding one document both name the file it was stored as. ``remote_modified``
+# is the remote machine's clock in milliseconds, a hint and never an identity.
+_V2_WORKFLOW_ORIGIN = """
+CREATE TABLE IF NOT EXISTS workflow_origin (
+    origin           TEXT NOT NULL,
+    remote_path      TEXT NOT NULL,
+    workflow_name    TEXT,
+    remote_modified  INTEGER,
+    first_pulled_at  TEXT NOT NULL,
+    last_seen_at     TEXT NOT NULL,
+    dismissed        INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (origin, remote_path)
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1024,6 +1045,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_STACK,
     _V2_WORKFLOW_STACK_MEMBER,
     _V2_WORKFLOW_UNSTACKED,
+    _V2_WORKFLOW_ORIGIN,
     *_V2_WORKFLOW_INDEXES,
 )
 
