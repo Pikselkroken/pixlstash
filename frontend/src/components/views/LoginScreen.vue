@@ -114,6 +114,8 @@ const { pending: submitting, run: handleLogin } = useSubmitGuard(submitLogin);
 
 <style scoped>
 .login-screen {
+  /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
+  --v-theme-accent: var(--v-theme-dark-surface-accent);
   display: flex;
   flex-direction: column;
   align-items: center;

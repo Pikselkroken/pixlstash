@@ -61,7 +61,7 @@ const pixlStashLight = {
     toolbar: "#f0ede9",
     "toolbar-text": "#23211d",
     // `sidebar-hover` is the accent duplicated, so it moves with it.
-    "sidebar-hover": "#c47a1e",
+    "sidebar-hover": "#9e6727",
     "on-sidebar-hover": "#f7f1ea",
     // Raised controls: inputs and buttons sit above the canvas, pure/near white.
     "input-background": "#ffffff",
@@ -85,6 +85,10 @@ const pixlStashLight = {
     "dark-surface-warning": "#e8912f",
     "dark-surface-success": "#5d9c6c",
     "dark-surface-info": "#6890cc",
+    // Amber on a deliberately-dark surface. Light's own accent is the deep
+    // #9e6727 (#1413), which measures only 3.20:1 on #242628; dark panels
+    // re-point `--v-theme-accent` at this (4.45:1). Identical in both themes.
+    "dark-surface-accent": "#c47a1e",
     // The fifth member of the family, same rationale: `primary` as a FOREGROUND
     // on a dark card. This is the dark theme's outgoing bright olive - a good
     // foreground on a dark card and a bad fill under a white label, so it moves
@@ -101,15 +105,16 @@ const pixlStashLight = {
     "on-background": "#23211d",
     // ── The action-fill tier (unified Camp B palette) ───────────────────────
     // ONE brand palette shared by both themes (design-system parity, 2026-07-24):
-    // the same four brand hues in light and dark. Olive, raspberry and teal carry
-    // the warm near-white label #f7f1ea: primary 4.86:1, secondary 4.91:1,
-    // tertiary 4.85:1 - all AA. The amber `accent` #c47a1e carries pure white at
-    // 3.41:1, an accepted exception for one short word on a 28px key action
-    // (docs/design/buttons.md); its hover darkens to 5.03:1. These fills stay
-    // label-only (buttons, chips,
-    // rails, icons - never small body text on a canvas).
-    accent: "#c47a1e", // white label 3.41:1 (brightened from #9e6727)
-    "on-accent": "#ffffff", // 3.41:1, an accepted exception; hover darkens the fill to 5.03:1 (buttons.md)
+    // the same brand hues in light and dark, except amber. Olive, raspberry and
+    // teal carry the warm near-white label #f7f1ea: primary 4.86:1, secondary
+    // 4.91:1, tertiary 4.85:1 - all AA. Amber is the one hue that differs by
+    // theme (#1413): the shared #c47a1e measured 2.93:1 on this theme's
+    // sidebar/toolbar, under the 3:1 floor for the attention dot and the busy
+    // stats icon, so light takes the deep amber. It carries pure white at 4.75:1
+    // and clears 4.07:1 on the sidebar. These fills stay label-only (buttons,
+    // chips, rails, icons - never small body text on a canvas).
+    accent: "#9e6727", // white label 4.75:1, 4.07:1 on sidebar/toolbar (#1413)
+    "on-accent": "#ffffff", // 4.75:1 on the deep light amber
     "accent-bright": "#e08a2a", // brighter, more-orange amber glow: selection / active / focus (not a text/fill token)
     primary: "#567309", // warm-white 4.86:1 (olive)
     "on-primary": "#f7f1ea",
@@ -207,6 +212,10 @@ const pixlStashDark = {
     "dark-surface-warning": "#e8912f",
     "dark-surface-success": "#5d9c6c",
     "dark-surface-info": "#6890cc",
+    // Amber on a deliberately-dark surface. Light's own accent is the deep
+    // #9e6727 (#1413), which measures only 3.20:1 on #242628; dark panels
+    // re-point `--v-theme-accent` at this (4.45:1). Identical in both themes.
+    "dark-surface-accent": "#c47a1e",
     // Identical in both themes, like the four above. Keeps the retired bright
     // olive in service as a dark-card foreground (6.25:1 on #181b20).
     "dark-surface-primary": "#8EA604",
@@ -219,9 +228,10 @@ const pixlStashDark = {
     "on-background": "#f2e5da",
     // ── The action-fill tier (unified Camp B palette) ───────────────────────
     // Identical to the light theme by design - one brand palette in both themes
-    // (design-system parity, 2026-07-24). Same labels, same contrast (primary
-    // 4.86:1, secondary 4.91:1, tertiary 4.85:1 on #f7f1ea; accent #c47a1e 3.41:1
-    // on pure white, the accepted key-action exception).
+    // (design-system parity, 2026-07-24) - except amber, which light deepens to
+    // #9e6727 (#1413). Same labels, same contrast (primary 4.86:1, secondary
+    // 4.91:1, tertiary 4.85:1 on #f7f1ea; accent #c47a1e 3.41:1 on pure white,
+    // the accepted key-action exception, and 4.34:1 on the dark sidebar).
     accent: "#c47a1e", // white label 3.41:1 (brightened, more orange)
     "on-accent": "#ffffff", // 3.41:1, an accepted exception; hover darkens the fill to 5.03:1 (buttons.md)
     "accent-bright": "#e08a2a", // brighter, more-orange amber glow: selection / active / focus (not a text/fill token)

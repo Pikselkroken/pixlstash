@@ -200,6 +200,8 @@
    it cannot take the theme's own values. Put `.ctx-menu--on-dark` on the menu
    root; teleported rows keep the plain `.ctx-*` classes. */
 .ctx-menu--on-dark {
+  /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
+  --v-theme-accent: var(--v-theme-dark-surface-accent);
   background: rgb(var(--v-theme-dark-surface));
   color: rgb(var(--v-theme-on-dark-surface));
   border-color: rgba(var(--v-theme-on-dark-surface), 0.14);

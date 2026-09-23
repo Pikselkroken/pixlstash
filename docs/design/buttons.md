@@ -48,7 +48,9 @@ and do not implement any of it without checking this table first.
 | Text contrast floor is **4:1**, not 4.5:1. Icons and marks keep 3:1 | **Approved** 2026-09-13 |
 | Olive marks, words stay text: a current value, selected tab or active bar button keeps olive on its check, underline or icon, and its words take `--text` | **Approved** 2026-09-13 |
 | Status words on a hovered row | **Closed**, no change: 4.09 to 4.45:1 clears the 4:1 floor |
-| `--accent-on` becomes pure white; amber stays `#c47a1e` | **Approved** 2026-09-12 |
+| `--accent-on` becomes pure white; amber stays `#c47a1e` | **Approved** 2026-09-12; light amber superseded 2026-09-23 |
+| Light theme amber deepens to `#9e6727` (attention dot under 3:1, #1413) | **Approved** 2026-09-23 |
+| Amber marks on a hovered or selected row may dip under 3:1 (light 2.46 - 3.32:1), an accepted exception for a transient state | **Approved** 2026-09-23 |
 | `primary_green` retired; its 16 sites become `primary` | **Approved** 2026-09-12 |
 | Focus ring gets its own per-theme token | **Approved** 2026-09-12 |
 | Pick one: `Segmented` for 2 to 5, `OptionRows` for sort by | **Approved** 2026-09-12 |
@@ -433,11 +435,11 @@ an item or a value.
 What amber keeps: the key action fill and the attention dot. Nothing that marks a selection is amber, and
 neither does focus.
 
-**The amber does not move. Its label goes to pure white, and the 3.41:1 that
+**The amber does not move (in the dark theme; light superseded 2026-09-23, below). Its label goes to pure white, and the 3.41:1 that
 leaves is an accepted exception.** Settled after all five candidates were
 rendered at button size.
 
-`--accent` keeps `#c47a1e`. `--accent-on` becomes `#ffffff` rather than the
+`--accent` keeps `#c47a1e` (light superseded 2026-09-23, see below). `--accent-on` becomes `#ffffff` rather than the
 warm near-white, which is worth 0.37 for nothing and which the handoff's §9.1
 had already queued. 3.41:1 clears the 3:1 floor WCAG applies to a UI component
 and misses the 4.5:1 it applies to normal-size text. The shortfall is accepted
@@ -457,6 +459,16 @@ rest of the tier are deliberately left on the warm near-white: olive carries
 its label at 4.86:1 and needs no help.
 
 Specimens: <https://claude.ai/code/artifact/cd5d72f8-6635-4916-b40b-8ec9bb577cf0>.
+
+**Superseded for the light theme 2026-09-23 (#1413).** Amber is also the
+attention dot and the busy stats icon, and #c47a1e measured 2.93:1 on the light
+sidebar and toolbar, under the 3:1 floor for a mark. Light `--accent` is now
+`#9e6727` everywhere, the key action fill included (white label 4.75:1, 4.07:1
+on the sidebar). One amber per theme, not a separate dot colour. Dark keeps
+`#c47a1e` and the 3.41:1 exception above. Two consequences were accepted
+with it: an amber mark on a hovered or selected light row measures 2.46 - 3.32:1
+(the pointer is already on the row, and every case beats develop), and the
+hover shade, glows and washes read browner in light than they did.
 
 **The focus ring needs its own per-theme token.** A stroke must contrast with
 the canvas, so it wants to be light on dark and dark on light; a fill must
