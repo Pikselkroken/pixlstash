@@ -290,7 +290,7 @@ const TAKE_OUT_CHOICES = [
   {
     id: "recipe",
     label: "This recipe",
-    hint: "The recipe stops listing it. Runs from this workflow still carry the loader, and still ignore it.",
+    hint: "The recipe stops listing it. Runs from this workflow still carry the loader, and ComfyUI still loads it by name.",
   },
   {
     id: "workflow",
