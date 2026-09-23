@@ -550,31 +550,59 @@ def read_best_picture_ids(vault, structural_hashes: list[str], limit: int) -> li
     return vault.db.run_immediate_read_task(best_picture_ids, structural_hashes, limit)
 
 
-def kept_pixel_shas(session: Session, pixel_shas: list[str]) -> set[str]:
-    """Which of these contents a kept picture still holds.
+def oldest_kept_by_pixel_sha(session: Session, pixel_shas: list[str]) -> dict[str, int]:
+    """``{pixel_sha: picture_id}``: the picture a pinned input resolves to (#1457).
 
-    The read behind ``fixed_input_deleted``: a card's fixed picture input names
-    its picture by ``pixel_sha`` rather than by id, so the question "is it still
-    here" is a content lookup and not a row fetch.
+    **The OLDEST kept copy, deliberately**, where
+    :func:`cover_pictures_by_pixel_sha` lets the newest win. A pin must feed a
+    run the same picture every time, and the oldest id is the one importing a
+    duplicate of the same bytes does not move. A content with no kept copy is
+    absent, which is the pin's picture having gone.
     """
     if not pixel_shas:
-        return set()
-    # `set(...)` and NOT a `for (sha,) in ...` unpack: a one-column `select()`
-    # is a `SelectOfScalar`, so `exec().all()` hands back the values themselves
-    # and unpacking one raises. Every other single-column read in this module
-    # reads it this way.
-    return set(
-        session.exec(
-            select(Picture.pixel_sha)
+        return {}
+    return {
+        pixel_sha: picture_id
+        for pixel_sha, picture_id in session.exec(
+            select(Picture.pixel_sha, func.min(Picture.id))
             .where(Picture.pixel_sha.in_(pixel_shas))
             .where(Picture.deleted.is_(False))
+            .group_by(Picture.pixel_sha)
         ).all()
-    )
+    }
 
 
-def read_kept_pixel_shas(vault, pixel_shas: list[str]) -> set[str]:
-    """Which of these contents a kept picture still holds, in its own task."""
-    return vault.db.run_immediate_read_task(kept_pixel_shas, pixel_shas)
+def read_oldest_kept_by_pixel_sha(vault, pixel_shas: list[str]) -> dict[str, int]:
+    """The picture each pinned content resolves to, in its own read task."""
+    return vault.db.run_immediate_read_task(oldest_kept_by_pixel_sha, pixel_shas)
+
+
+def kept_picture_files(
+    session: Session, picture_ids: list[int]
+) -> dict[int, tuple[str, Optional[str]]]:
+    """``{picture_id: (file_path, pixel_sha)}`` for the ones that are kept.
+
+    What a run needs to hand a picture to ComfyUI, and what a pin is written
+    from. A binned or unknown id is absent, so the caller can refuse it by
+    name rather than upload a picture the owner threw away.
+    """
+    if not picture_ids:
+        return {}
+    return {
+        picture_id: (file_path, pixel_sha)
+        for picture_id, file_path, pixel_sha in session.exec(
+            select(Picture.id, Picture.file_path, Picture.pixel_sha)
+            .where(Picture.id.in_(picture_ids))
+            .where(Picture.deleted.is_(False))
+        ).all()
+    }
+
+
+def read_kept_picture_files(
+    vault, picture_ids: list[int]
+) -> dict[int, tuple[str, Optional[str]]]:
+    """Each kept picture's file and content, in its own read task."""
+    return vault.db.run_immediate_read_task(kept_picture_files, picture_ids)
 
 
 def stack_for_picture(vault, picture_id: int) -> Optional[int]:

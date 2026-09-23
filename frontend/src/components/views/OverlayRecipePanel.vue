@@ -230,8 +230,8 @@
       </div>
 
       <!-- The footer the design pins at the bottom: Run… (the Run popup,
-           #1407), Save as recipe, and *Run another workflow…* (#1406) - the
-           same popup with its workflow picker unset, which is what an A1111
+           #1407), Save as recipe, and *Use as input for…* (#1406) - the same
+           popup with its workflow picker unset, which is what an A1111
            picture, and any picture at all, can still do. -->
       <div class="recipe-foot">
         <!-- The reason in prose as well as on the button. A tooltip is not a
@@ -315,14 +315,11 @@
             block
             :aria-disabled="useAsInputReason ? 'true' : undefined"
             :aria-describedby="inputDescribedBy"
-            :tooltip="
-              useAsInputReason ||
-              'Run another workflow, starting from this picture\'s recipe'
-            "
+            :tooltip="useAsInputReason || 'Run another workflow on this picture'"
             @click="onUseAsInput"
           >
             <v-icon size="16">mdi-sitemap-outline</v-icon>
-            Run another workflow…
+            Use as input for…
           </AppButton>
         </div>
       </div>
@@ -485,14 +482,13 @@ const runReason = computed(() => {
 });
 
 /**
- * Why another workflow cannot be run from this picture, or null when it can.
+ * Why this picture cannot be used as another workflow's input, or null.
  *
- * **It is not "use this picture as an input", whatever the control used to
- * say.** That went with the rail run panel in v1.12 F5: `POST /workflows/run`
- * has no `inputs` field and uploads nothing into ComfyUI's input folder, so a
- * button promising it would send a picture and get a run that never read it -
- * the backend's own words for why it declines to take the field. What the
- * button does now is open the Run popup with its workflow picker unset.
+ * **It is the input, since #1457.** The button opens the Run popup with its
+ * workflow picker unset and this picture as a selection of one, and
+ * `POST /workflows/run` feeds it into the chosen card's one open picture input
+ * (the Run popup's Pictures section shows where). A card with no picture input
+ * still runs, starting from this picture's recipe.
  *
  * The two context menus that carry the same action are the contract: both
  * fence the entry on `comfyuiConfigured` (no ComfyUI, nothing to be an input
