@@ -361,8 +361,14 @@ describe("Add a LoRA", () => {
       }),
     );
     const wrapper = await mountDialog({ cardName: "Character sheet" });
-    await button(wrapper, "Add a LoRA").trigger("click");
+    // An empty chain is a wire between two nodes, and the button says the
+    // loader is spliced into it; once a row stands it is an Add again.
+    const labels = () => wrapper.findAll("button").map(labelOf);
+    expect(labels()).not.toContain("Add a LoRA");
+    await button(wrapper, "Insert LoRA between these nodes").trigger("click");
     await flushPromises();
+    expect(labels()).toContain("Add a LoRA");
+    expect(labels()).not.toContain("Insert LoRA between these nodes");
     expect(textOf(wrapper)).toContain(
       "The loader goes in after #4 UNETLoader, and the 1 input reading its MODEL is rewired to it. This graph has no CLIP source, so LoraLoaderModelOnly is used.",
     );

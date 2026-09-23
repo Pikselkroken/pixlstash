@@ -29,19 +29,22 @@
         deleted for it.
       </p>
 
-      <!-- The rails say what "order" is order of, and are not rows: nothing
-           drags onto or past them. -->
-      <div class="eld-chain">
-        <div class="eld-rail" data-testid="eld-source">
+      <!-- The two ends are drawn as graph nodes with a wire between them, so
+           the list reads as what is spliced into that wire. They are not rows:
+           nothing drags onto or past them. -->
+      <div class="eld-chain" :class="{ 'eld-chain--empty': !rows.length }">
+        <div class="eld-node" data-testid="eld-source">
           <template v-if="chain?.source">
-            <span class="eld-rail-name">{{ chain.source.class_type }}</span>
-            <span class="eld-quiet"
+            <span class="eld-node-title">{{ chain.source.class_type }}</span>
+            <span class="eld-node-body eld-quiet"
               >#{{ chain.source.node_id }} · hands out
               {{ (chain.source.outputs || []).join(", ") }}</span
             >
           </template>
-          <span v-else class="eld-quiet">No model source found</span>
+          <span v-else class="eld-node-body eld-quiet">No model source found</span>
         </div>
+
+        <div class="eld-wire" aria-hidden="true"></div>
 
         <ol ref="listEl" class="eld-list" aria-label="LoRAs, in the order the chain applies them">
           <li
@@ -169,18 +172,24 @@
             :disabled="!canAdd"
             @click="add"
           >
-            Add a LoRA
+            {{ rows.length ? "Add a LoRA" : "Insert LoRA between these nodes" }}
           </AppButton>
           <span v-if="editable && !shelf.length && shelfRead" class="eld-note eld-quiet">
             Your model shelf has no LoRA to add.
           </span>
         </div>
 
-        <div class="eld-rail" data-testid="eld-sink">
-          <span v-if="chain?.sink" class="eld-rail-name">{{
+        <div class="eld-wire eld-wire--in" aria-hidden="true">
+          <v-icon size="16">mdi-arrow-down</v-icon>
+        </div>
+
+        <div class="eld-node" data-testid="eld-sink">
+          <span v-if="chain?.sink" class="eld-node-title">{{
             chain.sink.summary
           }}</span>
-          <span v-else class="eld-quiet">Nothing found reading the chain</span>
+          <span v-else class="eld-node-body eld-quiet"
+            >Nothing found reading the chain</span
+          >
         </div>
       </div>
 
@@ -837,23 +846,54 @@ defineExpose({ rows, step, changeCount });
   gap: var(--space-2);
 }
 
-/* The two ends: filled, not bordered like a row, and with no handle, so
-   they read as the frame the list sits in rather than two more entries. */
-.eld-rail {
+/* The two ends, drawn as graph nodes: a title bar over a body, narrower than
+   the rows and centred on the wire, so they read as the fixed ends of the
+   chain rather than two more entries. */
+.eld-node {
+  align-self: center;
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-3);
-  min-height: var(--control-h);
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.06);
+  flex-direction: column;
+  width: 75%;
+  overflow: hidden;
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-surface));
   font-size: var(--text-xs);
 }
 
-.eld-rail-name {
+.eld-node-title {
+  padding: var(--space-2) var(--space-3);
+  background: rgba(var(--v-theme-on-surface), 0.06);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.eld-node-body {
+  padding: var(--space-2) var(--space-3);
+}
+
+/* The wire between the nodes: a line, and an arrowhead where it enters the
+   sink, so the direction the model flows is on screen. */
+.eld-wire {
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: var(--gutter-glyph);
+  min-height: var(--space-4);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.eld-wire::before {
+  content: "";
+  flex: 1;
+  width: var(--rail-w);
+  background: currentColor;
+}
+
+.eld-wire--in > .v-icon {
+  margin-top: calc(var(--space-2) * -1);
 }
 
 .eld-list {
@@ -964,8 +1004,16 @@ defineExpose({ rows, step, changeCount });
 
 .eld-add {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
+}
+
+/* Nothing in the chain yet: the button sits on the wire itself, which is
+   where the loader is spliced in. */
+.eld-chain--empty .eld-add {
+  flex-direction: column;
+  align-self: center;
 }
 
 .eld-changes {
