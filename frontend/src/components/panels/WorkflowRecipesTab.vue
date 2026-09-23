@@ -17,11 +17,13 @@
       {{ loadError }}
     </p>
 
+    <!-- Bookmarks first: they are few, in the owner's order, and the reason
+         to come back to this tab. The list below them can run to hundreds. -->
     <div
-      v-if="!loading && !loadError && recipes.length && looks.length"
+      v-if="!loading && !loadError && recipes.length"
       class="section-label wfrt-section"
     >
-      Kept
+      Bookmarked
     </div>
 
     <!-- One list, one tab stop. The handle is the control: it is what a
@@ -30,7 +32,7 @@
 
          `v-if`, not the band's `v-else`: chaining the two made the band and
          the list alternatives, so the moment there was a used half to label,
-         the kept half it labelled disappeared. -->
+         the bookmarks it labelled disappeared. -->
     <ul
       v-if="!loading && !loadError && recipes.length"
       class="wfrt-list"
@@ -147,8 +149,8 @@
                 role="menuitem"
                 @click="removeRecipe(recipe)"
               >
-                <v-icon size="16">mdi-delete</v-icon>
-                Delete
+                <v-icon size="16">mdi-bookmark-remove-outline</v-icon>
+                Remove bookmark
               </button>
             </div>
           </v-menu>
@@ -180,13 +182,12 @@
       </li>
     </ul>
 
-    <!-- The looks the pictures themselves carry. A saved recipe is one
-         somebody chose to keep; these are the ones they actually ran, and a
-         library that has never pressed Save still has hundreds. The server
-         leaves out any look a saved recipe already keeps, so the two halves
-         never both claim one. -->
+    <!-- The looks the pictures themselves carry: every one they were made
+         with, filled in without anybody pressing anything. A bookmarked look
+         stays here too, marked, because a bookmark does not take a look out
+         of the list it was found in. -->
     <template v-if="!loading && !loadError && looks.length">
-      <div class="section-label wfrt-section">Used in your pictures</div>
+      <div class="section-label wfrt-section">From your pictures</div>
       <ul class="wfrt-list">
         <li v-for="look in looks" :key="look.key" class="wfrt-card">
           <div class="wfrt-top">
@@ -198,7 +199,10 @@
               loading="lazy"
               decoding="async"
             />
-            <span class="wfrt-name wfrt-quiet">Not kept yet</span>
+            <span v-if="look.bookmarked" class="wfrt-marked">
+              <v-icon size="16">mdi-bookmark</v-icon>
+              Bookmarked
+            </span>
           </div>
 
           <p v-if="look.prompt" class="wfrt-prompt">{{ look.prompt }}</p>
@@ -217,14 +221,15 @@
           <div class="wfrt-bot">
             <span class="wfrt-facts">{{ picturesLabel(look.pictures) }}</span>
             <AppButton
+              v-if="!look.bookmarked"
               size="sm"
               icon-left="bookmark-plus-outline"
               :loading="savingLook === look.key"
               :disabled="!look.cover_picture_id"
-              tooltip="Keep this look as a recipe you can name and reorder"
+              tooltip="Bookmark this look to name it and keep it at the top"
               @click="keepLook(look)"
             >
-              Save…
+              Bookmark…
             </AppButton>
             <AppButton
               v-if="look.cover_picture_id"
@@ -240,11 +245,14 @@
       </ul>
     </template>
 
-    <div v-if="!loading && !loadError" class="wfrt-hint">
+    <div
+      v-if="!loading && !loadError && !recipes.length && looks.length"
+      class="wfrt-hint"
+    >
       <v-icon size="16">mdi-bookmark-plus-outline</v-icon>
       <span>
-        Keep a look from any picture with <b class="wfrt-strong">Save as
-        recipe</b> on its Recipe tab.
+        <b class="wfrt-strong">Bookmark…</b> a look to name it and keep it at
+        the top.
       </span>
     </div>
 
@@ -307,7 +315,7 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
-import { loraKey, promptKey } from "../../utils/recipeKey";
+import { keepsTheSameLook, loraKey, promptKey } from "../../utils/recipeKey";
 import { resolveRecipeLoras } from "../../utils/recipeLoras";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
 import { withRef } from "../../utils/withRef";
@@ -372,11 +380,10 @@ let loadToken = 0;
 const MAX_UNION_KEYS = 100;
 
 const subtitle = computed(() => {
+  const found = looks.value.length;
   const kept = recipes.value.length;
-  const parts = [`${kept} saved recipe${kept === 1 ? "" : "s"}`];
-  // The used half is most of what a tab shows before anybody saves anything,
-  // so a header counting only the kept ones reads as "0" over a full list.
-  if (looks.value.length) parts.push(`${looks.value.length} more used`);
+  const parts = [`${found} recipe${found === 1 ? "" : "s"} from your pictures`];
+  if (kept) parts.push(`${kept} bookmarked`);
   if (props.stackSize > 1) {
     parts.push(`runs on any of its ${props.stackSize} workflows`);
   }
@@ -437,9 +444,9 @@ async function load() {
   }
   loading.value = true;
   try {
-    // Both halves together: the server leaves a look out of the second when a
-    // recipe in the first keeps it, so reading them apart could show one look
-    // twice for as long as the slower read was out.
+    // Both halves together: a look's `bookmarked` flag is about the recipes
+    // in the first, so reading them apart could mark a look against a list
+    // of bookmarks that is not the one on screen.
     const [saved, used] = await Promise.all([
       listSavedRecipes(keys),
       listUsedLooks(keys),
@@ -585,9 +592,9 @@ function closeExport() {
 async function removeRecipe(recipe) {
   menuId.value = null;
   const ok = await confirm({
-    title: "Delete this recipe?",
-    message: `“${recipe.name || "Untitled"}” goes for good. The pictures it made are untouched.`,
-    confirmLabel: "Delete",
+    title: "Remove this bookmark?",
+    message: `“${recipe.name || "Untitled"}” and the settings it keeps go for good. The pictures it made are untouched, and the look stays in the list while they carry it.`,
+    confirmLabel: "Remove",
     danger: true,
   });
   if (!ok) {
@@ -596,11 +603,15 @@ async function removeRecipe(recipe) {
   }
   try {
     await deleteSavedRecipe(recipe.id);
-    // The row goes locally and the epoch is NOT bumped: this tab is the writer
-    // here, so announcing it would only make the tab re-read what it just did.
-    // The epoch is for a save made on a surface this one cannot see.
+    // Settled locally and the epoch is NOT bumped: this tab is the writer, so
+    // announcing it would only make the tab re-read what it just did. The
+    // look stays listed below; it loses its mark unless another bookmark -
+    // one differing only in a strength - still keeps it.
     recipes.value = recipes.value.filter((row) => row.id !== recipe.id);
-    say(`${recipe.name || "Recipe"} deleted.`);
+    for (const look of looks.value) {
+      look.bookmarked = recipes.value.some((row) => keepsTheSameLook(row, look));
+    }
+    say(`${recipe.name || "Recipe"} bookmark removed.`);
   } catch (err) {
     focusMenuButton(recipe.id);
     notices.push({
@@ -642,7 +653,7 @@ async function keepLook(look) {
     // keyed on the stored `comfyui_*` columns; the live extraction can differ
     // from them (a prompt the column never got, a LoRA spelled another way).
     // Saving the re-read's version would make a recipe whose key is not this
-    // look's, so the look would stay in the used half AND the new recipe
+    // look's, so the look would stay unmarked below AND the new recipe
     // would be credited 0 - the one thing both halves promise cannot happen.
     // The picture is read for the two things the columns do not hold: the
     // LoRA strengths, and the seed.
@@ -860,9 +871,8 @@ function run(recipe) {
   white-space: nowrap;
 }
 
-/* The hint points at the gesture that fills this tab, and stays on screen
-   whether or not the tab is empty: the second recipe is saved the same way
-   the first one was. */
+/* The hint points at the one gesture this tab still asks for, and only until
+   it has been used once: the list fills itself, bookmarks do not. */
 .wfrt-hint {
   display: flex;
   align-items: center;
@@ -874,12 +884,20 @@ function run(recipe) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
+.wfrt-marked {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
 .wfrt-strong {
   color: rgb(var(--v-theme-on-surface));
 }
 
-/* The band between the two halves. The first only wears one once there is a
-   second: a tab showing kept recipes alone needs no word for "the rest". */
+/* The band over each half: Bookmarked, then From your pictures. */
 .wfrt-section {
   margin-top: var(--space-2);
 }

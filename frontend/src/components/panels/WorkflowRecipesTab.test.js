@@ -125,7 +125,7 @@ describe("WorkflowRecipesTab", () => {
       "Harbour fog",
     ]);
     expect(wrapper.find(".wfrt-sub").text()).toBe(
-      "3 saved recipes · runs on any of its 6 workflows",
+      "0 recipes from your pictures · 3 bookmarked · runs on any of its 6 workflows",
     );
     // What the card credits and what it changed, on one line.
     expect(wrapper.findAll(".wfrt-facts")[0].text()).toBe("31 pictures · steps 12");
@@ -137,7 +137,9 @@ describe("WorkflowRecipesTab", () => {
   it("leaves the stack clause out when the card is not a stack", async () => {
     const wrapper = render({ stackSize: 1 });
     await flushPromises();
-    expect(wrapper.find(".wfrt-sub").text()).toBe("3 saved recipes");
+    expect(wrapper.find(".wfrt-sub").text()).toBe(
+      "0 recipes from your pictures · 3 bookmarked",
+    );
   });
 
   it("writes the whole new order when a recipe is moved by keyboard", async () => {
@@ -222,14 +224,6 @@ describe("WorkflowRecipesTab", () => {
     expect(namesOf(wrapper)[0]).toBe("Tram, rewritten");
   });
 
-  it("points at the gesture that fills it", async () => {
-    listSavedRecipes.mockResolvedValue([]);
-    const wrapper = render();
-    await flushPromises();
-    expect(wrapper.find(".wfrt-hint").text()).toContain("Save as recipe");
-    expect(wrapper.find(".wfrt-sub").text()).toContain("0 saved recipes");
-  });
-
   // ── The looks the pictures already carry ────────────────────────────────
   //
   // The tab shipped listing only what somebody had pressed Save on, so it was
@@ -243,6 +237,22 @@ describe("WorkflowRecipesTab", () => {
     cover_picture_id: 88,
   };
 
+  it("points at Bookmark… until the first bookmark is made", async () => {
+    listSavedRecipes.mockResolvedValue([]);
+    listUsedLooks.mockResolvedValue([LOOK]);
+    const wrapper = render();
+    await flushPromises();
+    expect(wrapper.find(".wfrt-hint").text()).toContain("Bookmark…");
+    expect(wrapper.find(".wfrt-sub").text()).toBe(
+      "1 recipe from your pictures · runs on any of its 6 workflows",
+    );
+
+    listSavedRecipes.mockResolvedValue([recipe(1, "Rainy tram platform")]);
+    useWorkflowsStore().notedRecipesChanged();
+    await flushPromises();
+    expect(wrapper.find(".wfrt-hint").exists()).toBe(false);
+  });
+
   it("lists the looks the pictures carry when nothing is saved", async () => {
     listSavedRecipes.mockResolvedValue([]);
     listUsedLooks.mockResolvedValue([LOOK]);
@@ -254,7 +264,7 @@ describe("WorkflowRecipesTab", () => {
     expect(wrapper.text()).not.toContain("No looks here yet");
     expect(wrapper.text()).toContain("a look nobody kept");
     expect(wrapper.text()).toContain("12 pictures");
-    expect(wrapper.text()).toContain("Used in your pictures");
+    expect(wrapper.text()).toContain("From your pictures");
   });
 
   it("says so only when there is neither a recipe nor a look", async () => {
@@ -276,7 +286,7 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     await wrapper
       .findAll("button")
-      .find((b) => b.text().includes("Save…"))
+      .find((b) => b.text().includes("Bookmark…"))
       .trigger("click");
     await flushPromises();
 
@@ -467,7 +477,7 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     await wrapper
       .findAll("button")
-      .find((b) => b.text().includes("Save…"))
+      .find((b) => b.text().includes("Bookmark…"))
       .trigger("click");
     await flushPromises();
 
@@ -489,7 +499,7 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     await wrapper
       .findAll("button")
-      .find((b) => b.text().includes("Save…"))
+      .find((b) => b.text().includes("Bookmark…"))
       .trigger("click");
     await flushPromises();
 
@@ -501,20 +511,57 @@ describe("WorkflowRecipesTab", () => {
     expect(useNoticeStore().notices.map((n) => n.level)).toContain("error");
   });
 
-  it("renders a used look in the used list, not among the kept", async () => {
-    listSavedRecipes.mockResolvedValue([recipe(1, "Rainy tram platform")]);
-    listUsedLooks.mockResolvedValue([LOOK]);
+  it("lists bookmarks above the looks, and marks a bookmarked look in place", async () => {
+    const kept = recipe(1, "Rainy tram platform", {
+      prompt: "a kept look",
+      loras: [{ filename: "mira_v2.safetensors", strength: 0.85 }],
+    });
+    listSavedRecipes.mockResolvedValue([kept]);
+    listUsedLooks.mockResolvedValue([
+      { ...LOOK, prompt: "a kept look", bookmarked: true },
+      LOOK,
+    ]);
     const wrapper = render();
     await flushPromises();
 
+    const labels = wrapper.findAll(".section-label").map((l) => l.text());
+    expect(labels).toEqual(["Bookmarked", "From your pictures"]);
     const lists = wrapper.findAll(".wfrt-list");
     expect(lists).toHaveLength(2);
     expect(lists[0].text()).toContain("Rainy tram platform");
     expect(lists[0].text()).not.toContain("a look nobody kept");
-    expect(lists[1].text()).toContain("a look nobody kept");
-    expect(lists[1].text()).toContain("Not kept yet");
-    // And the header counts both halves, not just the kept one.
-    expect(wrapper.find(".wfrt-sub").text()).toContain("1 saved recipe");
-    expect(wrapper.find(".wfrt-sub").text()).toContain("1 more used");
+
+    // The bookmarked look is still in the list, marked, with no Bookmark…;
+    // the other one offers it.
+    const [markedRow, plainRow] = lists[1].findAll(".wfrt-card");
+    expect(markedRow.text()).toContain("a kept look");
+    expect(markedRow.find(".wfrt-marked").exists()).toBe(true);
+    expect(markedRow.text()).not.toContain("Bookmark…");
+    expect(plainRow.find(".wfrt-marked").exists()).toBe(false);
+    expect(plainRow.text()).toContain("Bookmark…");
+    expect(wrapper.find(".wfrt-sub").text()).toContain(
+      "2 recipes from your pictures · 1 bookmarked",
+    );
+  });
+
+  it("unmarks the look when its bookmark is removed, and keeps it listed", async () => {
+    deleteSavedRecipe.mockResolvedValue({ deleted: 1 });
+    const kept = recipe(1, "Rainy tram platform", { prompt: "a kept look" });
+    listSavedRecipes.mockResolvedValue([kept]);
+    listUsedLooks.mockResolvedValue([
+      { ...LOOK, prompt: "a kept look", bookmarked: true },
+    ]);
+    const wrapper = render();
+    await flushPromises();
+    expect(wrapper.find(".wfrt-marked").exists()).toBe(true);
+
+    // Rename, Export…, Remove bookmark.
+    await wrapper.findAll(".ctx-item")[2].trigger("click");
+    await flushPromises();
+
+    expect(deleteSavedRecipe).toHaveBeenCalledWith(1);
+    expect(wrapper.text()).toContain("a kept look");
+    expect(wrapper.find(".wfrt-marked").exists()).toBe(false);
+    expect(wrapper.text()).toContain("Bookmark…");
   });
 });

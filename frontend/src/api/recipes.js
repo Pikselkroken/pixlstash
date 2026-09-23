@@ -53,13 +53,13 @@ export async function listSavedRecipes(workflowKey) {
  * library that has never pressed Save still has hundreds, which is why the
  * Recipes tab lists these beside the saved ones instead of showing an empty
  * panel to somebody with a full library. A look a saved recipe already keeps
- * is left out by the server, so the two halves never both claim one.
+ * stays in, with `bookmarked` set: a bookmark does not take a look off the list.
  *
  * `loras` are file names with no strength - a picture row stores none - and
  * `cover_picture_id` is where the Save dialog reads the strengths back from.
  *
  * @param {string|Array<string>} workflowKey - one card, or a selection.
- * @returns {Promise<Array<{prompt: string, loras: Array<Object>, pictures: number, cover_picture_id: ?number}>>}
+ * @returns {Promise<Array<{prompt: string, loras: Array<Object>, pictures: number, cover_picture_id: ?number, bookmarked: boolean}>>}
  */
 export async function listUsedLooks(workflowKey) {
   const keys = (Array.isArray(workflowKey) ? workflowKey : [workflowKey]).filter(

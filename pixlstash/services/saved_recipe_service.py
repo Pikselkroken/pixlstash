@@ -508,10 +508,11 @@ def used_looks(
     of these, which is why the Recipes tab lists them beside the saved ones
     instead of showing an empty panel to somebody with a full library.
 
-    A group whose prompt and LoRA names match a saved recipe is left out: it is
-    already on the tab, above, with its name and its credit. Matching is
-    :func:`prompt_key` / :func:`lora_key`, the same pair credit uses, so the two
-    halves of the tab can never both claim one group.
+    A group whose prompt and LoRA names match a saved recipe **stays in**, with
+    ``bookmarked`` set: a saved recipe is a bookmark on a look, and a bookmark
+    does not take its look out of the list. Matching is :func:`prompt_key` /
+    :func:`lora_key`, the same pair credit uses, so the flag and the credit on
+    the bookmark agree about which pictures are the look's.
 
     ``loras`` here are **file names only**. The picture column stores no
     strength, so a look carries the names it loaded and nothing about how
@@ -538,8 +539,6 @@ def used_looks(
             where=f"the picture group with prompt {prompt_key(prompt)[:60]!r}",
         )
         key = (prompt_key(prompt), lora_key(names))
-        if key in taken:
-            continue
         # **A look that is neither a prompt nor a LoRA is not a look.** This
         # module reasons carefully about the `comfyui_loras` NULL sentinel and
         # nothing about `comfyui_positive_prompt`, which is NULL whenever the
@@ -559,6 +558,7 @@ def used_looks(
                 ],
                 "pictures": int(count),
                 "cover_picture_id": newest,
+                "bookmarked": key in taken,
             }
             continue
         look["pictures"] += int(count)
