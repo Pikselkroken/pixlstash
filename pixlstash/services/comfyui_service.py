@@ -161,10 +161,10 @@ def _extract_history_status_and_error(
 def _apply_filename_prefix(workflow: dict, prefix: str) -> bool:
     """Write *prefix* onto every ``SaveImage`` node, reporting whether one took it.
 
-    **No caller since #1410**, and held for the same reason as
-    :func:`pixlstash.stacking.build_stack_filename_prefix`, whose tag it writes:
-    the pair is the whole of "stack the outputs with the picture they came
-    from", which went with the retired run route and which #1457 restores.
+    With :func:`pixlstash.stacking.build_stack_filename_prefix`, whose tag it
+    writes, this is how ``POST /workflows/run`` stacks a run's outputs with the
+    picture they came from when they arrive through a watched folder rather
+    than through the run's own import (#1457).
     """
     updated = False
     for node in workflow.values():
@@ -188,13 +188,10 @@ def _upload_image_to_comfyui(
 
     ``upload_name`` names it there instead of the file's own name.
 
-    **No caller since #1410**, and held on purpose. This is the only code that
-    POSTs to ComfyUI's ``/upload/image``, so a picture cannot reach a run
-    without it: it went dead when the file-keyed run route was retired, and
-    #1457 - the Run popup learning to fill a card's picture inputs - is the
-    thing that brings it back. Deleting it would make that step rewrite this
-    from scratch rather than wire it up. Delete it if #1457 is closed as
-    won't-do.
+    The only code that POSTs to ComfyUI's ``/upload/image``, so the only way a
+    picture reaches a run: ``POST /workflows/run`` calls it to fill a card's
+    picture inputs (#1457), once per distinct picture and only after every
+    refusal has been decided.
     """
     mime_type, _ = mimetypes.guess_type(file_path)
     if not mime_type:
