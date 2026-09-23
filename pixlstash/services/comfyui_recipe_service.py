@@ -1777,8 +1777,10 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
     }
 
 
-def read_lora_chain_untyped(prompt_graph: dict) -> dict:
-    """The loaders as a best-effort list, for when ComfyUI cannot type the links.
+def read_lora_chain_untyped(
+    prompt_graph: dict, object_info: dict | None = None
+) -> dict:
+    """The loaders as a best-effort list, for a chain that cannot be edited.
 
     Follows each loader's ``model`` input by NAME, which is the guess
     :func:`read_lora_chain` exists not to make - so this is only ever shown
@@ -1786,9 +1788,14 @@ def read_lora_chain_untyped(prompt_graph: dict) -> dict:
     LoRA slot is listed, a stacker's numbered ones included: a list that left
     one out would be the silent drop #1478 is about.
 
+    With *object_info* (ComfyUI answered, and the chain was refused for its
+    shape) the two ends are read typed as well, best effort: the model source
+    when no loader named one, and the nodes reading the chain's end, so the
+    read-only view names what the chain runs between.
+
     Returns:
         The shape :func:`read_lora_chain` returns, with ``clip_source`` ``None``,
-        no sinks and no summary, since none of those can be known untyped.
+        and no sinks or summary unless *object_info* could type them.
     """
     graph = prompt_graph or {}
     slots: dict[str, list[dict]] = {}
@@ -1828,12 +1835,46 @@ def read_lora_chain_untyped(prompt_graph: dict) -> dict:
                 "class_type": graph[link[0]].get("class_type"),
                 "output": link[1],
             }
+    sinks: list[dict] = []
+    if object_info is not None:
+        try:
+            links = _model_links(graph, object_info)
+            if model_source is None:
+                model_source = _source_of(graph, links, "MODEL")
+        except LookupError as exc:
+            logger.info("The ends of a read-only LoRA chain cannot be typed: %s", exc)
+            links = []
+        # What the chain's end hands on: the last loader's outputs, or the model
+        # source's own when there is no loader to follow.
+        end = order[-1] if order else (model_source or {}).get("node_id")
+        sinks = sorted(
+            (
+                {key: link[key] for key in ("node_id", "class_type", "field", "type")}
+                for link in links
+                if str(link["source"][0]) == str(end)
+                and link["type"] in ("MODEL", "CLIP")
+                and link["node_id"] not in slots
+            ),
+            key=lambda s: (
+                s["type"] != "MODEL",
+                _node_order_key(s["node_id"]),
+                s["field"],
+            ),
+        )
+    summary = " · ".join(
+        phrase
+        for phrase in (
+            _readers_phrase(sinks, "MODEL", "model"),
+            _readers_phrase(sinks, "CLIP", "clip"),
+        )
+        if phrase
+    )
     return {
         "model_source": model_source,
         "clip_source": None,
         "loaders": [slot for node_id in order for slot in slots[node_id]],
-        "sinks": [],
-        "sink_summary": None,
+        "sinks": sinks,
+        "sink_summary": summary or None,
     }
 
 

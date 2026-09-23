@@ -1525,6 +1525,28 @@ class TestLoraChain:
         ]
         assert chain["model_source"]["node_id"] == "4"
 
+    def test_a_refused_chain_still_names_its_two_ends_when_comfyui_answered(self):
+        # Refused for its shape, with no loader to follow: the read-only view
+        # still says what the chain runs between, and nothing untyped does.
+        graph = self._graph(loaders=())
+        graph["6"]["inputs"]["text"] = "a cat <lora:style:0.8>"
+        with pytest.raises(LookupError, match="cannot edit"):
+            read_lora_chain(graph, self.INFO)
+        chain = read_lora_chain_untyped(graph, self.INFO)
+        assert chain["model_source"]["node_id"] == "4"
+        assert [(s["node_id"], s["type"]) for s in chain["sinks"]] == [
+            ("7", "MODEL"),
+            ("7", "MODEL"),
+            ("6", "CLIP"),
+            ("8", "CLIP"),
+        ]
+        assert chain["sink_summary"] == (
+            "TwinSampler #7 reads model · 2 text encoders read clip"
+        )
+        untyped = read_lora_chain_untyped(graph)
+        assert untyped["model_source"] is None
+        assert untyped["sinks"] == [] and untyped["sink_summary"] is None
+
 
 class TestAdvertisedModelNames:
     """What a ComfyUI says it can load, which is the only honest answer to it.

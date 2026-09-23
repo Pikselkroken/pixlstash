@@ -44,147 +44,147 @@
           <span v-else class="eld-node-body eld-quiet">No model source found</span>
         </div>
 
-        <div class="eld-wire" aria-hidden="true"></div>
-
-        <ol ref="listEl" class="eld-list" aria-label="LoRAs, in the order the chain applies them">
-          <li
-            v-for="(row, index) in rows"
-            :key="row.id"
-            class="eld-row"
-            :class="{
-              'eld-row--deleted': row.deleted,
-              'eld-row--dragging': draggingId === row.id,
-              'eld-row--over': overId === row.id && draggingId !== row.id,
-            }"
-            :data-row="row.id"
-            @dragover.prevent="onDragOver(row)"
-            @dragleave="onDragLeave(row)"
-            @drop.prevent="onDrop(index)"
-          >
-            <div class="eld-line">
-              <!-- The handle is the drag source AND the keyboard path, and the
-                   keyboard path is in its name: a tooltip needs a hover a
-                   keyboard user does not have. The Recipes tab's idiom. -->
-              <button
-                class="eld-handle"
-                type="button"
-                data-focus="handle"
-                :draggable="canReorder(row) ? 'true' : 'false'"
-                :disabled="!canReorder(row)"
-                :aria-label="`Reorder ${row.name || 'this LoRA'}: hold Alt and press the up or down arrow, or drag`"
-                @dragstart="onDragStart(row, $event)"
-                @dragend="onDragEnd"
-                @keydown.up.alt.prevent="move(index, -1)"
-                @keydown.down.alt.prevent="move(index, 1)"
-              >
-                <Tooltip
-                  text="Drag to reorder, or Alt with the arrow keys"
-                  activator="parent"
-                  :describe="false"
-                />
-                <v-icon size="16">mdi-drag-vertical</v-icon>
-              </button>
-
-              <span class="eld-pos" aria-hidden="true">{{
-                row.deleted ? "—" : positions[row.id]
-              }}</span>
-
-              <span v-if="row.isNew && !row.sha256" class="eld-name">
-                <AppSelect
-                  :model-value="row.sha256"
-                  :label="`LoRA to add, row ${positions[row.id]}`"
-                  hide-label
-                  compact
-                  :options="pickerOptions"
-                  :disabled="saving"
-                  @update:model-value="(value) => pick(row, value)"
-                />
-              </span>
-              <span v-else class="eld-name">
-                <v-icon
-                  v-if="!row.onShelf && !row.isNew"
-                  size="16"
-                  class="eld-flag-glyph"
-                  aria-hidden="true"
-                  >mdi-alert-outline</v-icon
-                >
-                <span class="eld-name-text">{{
-                  row.onShelf || row.isNew ? row.name : row.fileBase
-                }}</span>
-                <span v-if="row.isNew" class="eld-tag">new</span>
-                <span v-if="row.deleted" class="visually-hidden"
-                  >, deleted</span
-                >
-              </span>
-
-              <span v-if="row.deleted || !row.hasStrength" class="eld-strength eld-quiet">
-                {{ row.deleted ? "—" : "wired" }}
-              </span>
-              <AppInput
-                v-else
-                class="eld-strength"
-                :model-value="row.strengthText"
-                :aria-label="`Strength of ${row.name || 'this LoRA'}`"
-                type="number"
-                min="-10"
-                max="10"
-                :disabled="!editable || saving"
-                :error="strengthInvalid(row)"
-                @update:model-value="(value) => (row.strengthText = value)"
-                @keydown.stop
-              />
-
-              <!-- Delete, not ×: the entry leaves the workflow, and an × in
-                   this app closes things. A deleted row stays on screen with
-                   Restore until the dialog is saved or cancelled. -->
-              <AppButton
-                v-if="row.deleted"
-                size="sm"
-                data-focus="restore"
-                :aria-label="`Restore ${row.name || 'this LoRA'}`"
-                :disabled="saving"
-                @click="restore(row)"
-              >
-                Restore
-              </AppButton>
-              <AppBarButton
-                v-else
-                icon="delete-outline"
-                data-focus="delete"
-                :tooltip="`Delete ${row.name || 'this LoRA'}`"
-                :disabled="!editable || saving"
-                @click="remove(row)"
-              />
-            </div>
-            <p
-              v-if="!row.onShelf && !row.isNew && !row.deleted"
-              class="eld-note eld-flag"
+        <!-- The wire runs the whole span from node to node, behind the rows,
+             and ends in the arrowhead on the node that reads the chain. -->
+        <div class="eld-span">
+          <ol ref="listEl" class="eld-list" aria-label="LoRAs, in the order the chain applies them">
+            <li
+              v-for="(row, index) in rows"
+              :key="row.id"
+              class="eld-row"
+              :class="{
+                'eld-row--deleted': row.deleted,
+                'eld-row--dragging': draggingId === row.id,
+                'eld-row--over': overId === row.id && draggingId !== row.id,
+              }"
+              :data-row="row.id"
+              @dragover.prevent="onDragOver(row)"
+              @dragleave="onDragLeave(row)"
+              @drop.prevent="onDrop(index)"
             >
-              {{ row.fileBase }} is missing from your model shelf.
-            </p>
-          </li>
-        </ol>
+              <div class="eld-line">
+                <!-- The handle is the drag source AND the keyboard path, and the
+                     keyboard path is in its name: a tooltip needs a hover a
+                     keyboard user does not have. The Recipes tab's idiom. -->
+                <button
+                  class="eld-handle"
+                  type="button"
+                  data-focus="handle"
+                  :draggable="canReorder(row) ? 'true' : 'false'"
+                  :disabled="!canReorder(row)"
+                  :aria-label="`Reorder ${row.name || 'this LoRA'}: hold Alt and press the up or down arrow, or drag`"
+                  @dragstart="onDragStart(row, $event)"
+                  @dragend="onDragEnd"
+                  @keydown.up.alt.prevent="move(index, -1)"
+                  @keydown.down.alt.prevent="move(index, 1)"
+                >
+                  <Tooltip
+                    text="Drag to reorder, or Alt with the arrow keys"
+                    activator="parent"
+                    :describe="false"
+                  />
+                  <v-icon size="16">mdi-drag-vertical</v-icon>
+                </button>
 
-        <div class="eld-add">
-          <AppButton
-            size="sm"
-            icon-left="plus"
-            :disabled="!canAdd"
-            @click="add"
-          >
-            {{ spliceIn ? "Insert LoRA between these nodes" : "Add a LoRA" }}
-          </AppButton>
-          <span v-if="editable && !shelf.length && shelfRead" class="eld-note eld-quiet">
-            Your model shelf has no LoRA to add.
-          </span>
-        </div>
+                <span class="eld-pos" aria-hidden="true">{{
+                  row.deleted ? "—" : positions[row.id]
+                }}</span>
 
-        <div class="eld-wire eld-wire--in" aria-hidden="true">
-          <v-icon size="16">mdi-arrow-down</v-icon>
+                <span v-if="row.isNew && !row.sha256" class="eld-name">
+                  <AppSelect
+                    :model-value="row.sha256"
+                    :label="`LoRA to add, row ${positions[row.id]}`"
+                    hide-label
+                    compact
+                    :options="pickerOptions"
+                    :disabled="saving"
+                    @update:model-value="(value) => pick(row, value)"
+                  />
+                </span>
+                <span v-else class="eld-name">
+                  <v-icon
+                    v-if="!row.onShelf && !row.isNew"
+                    size="16"
+                    class="eld-flag-glyph"
+                    aria-hidden="true"
+                    >mdi-alert-outline</v-icon
+                  >
+                  <span class="eld-name-text">{{
+                    row.onShelf || row.isNew ? row.name : row.fileBase
+                  }}</span>
+                  <span v-if="row.isNew" class="eld-tag">new</span>
+                  <span v-if="row.deleted" class="visually-hidden"
+                    >, deleted</span
+                  >
+                </span>
+
+                <span v-if="row.deleted || !row.hasStrength" class="eld-strength eld-quiet">
+                  {{ row.deleted ? "—" : "wired" }}
+                </span>
+                <AppInput
+                  v-else
+                  class="eld-strength"
+                  :model-value="row.strengthText"
+                  :aria-label="`Strength of ${row.name || 'this LoRA'}`"
+                  type="number"
+                  min="-10"
+                  max="10"
+                  :disabled="!editable || saving"
+                  :error="strengthInvalid(row)"
+                  @update:model-value="(value) => (row.strengthText = value)"
+                  @keydown.stop
+                />
+
+                <!-- Delete, not ×: the entry leaves the workflow, and an × in
+                     this app closes things. A deleted row stays on screen with
+                     Restore until the dialog is saved or cancelled. -->
+                <AppButton
+                  v-if="row.deleted"
+                  size="sm"
+                  data-focus="restore"
+                  :aria-label="`Restore ${row.name || 'this LoRA'}`"
+                  :disabled="saving"
+                  @click="restore(row)"
+                >
+                  Restore
+                </AppButton>
+                <AppBarButton
+                  v-else
+                  icon="delete-outline"
+                  data-focus="delete"
+                  :tooltip="`Delete ${row.name || 'this LoRA'}`"
+                  :disabled="!editable || saving"
+                  @click="remove(row)"
+                />
+              </div>
+              <p
+                v-if="!row.onShelf && !row.isNew && !row.deleted"
+                class="eld-note eld-flag"
+              >
+                {{ row.fileBase }} is missing from your model shelf.
+              </p>
+            </li>
+          </ol>
+
+          <div class="eld-add">
+            <AppButton
+              size="sm"
+              icon-left="plus"
+              :disabled="!canAdd"
+              @click="add"
+            >
+              {{ spliceIn ? "Insert LoRA between these nodes" : "Add a LoRA" }}
+            </AppButton>
+            <span v-if="editable && !shelf.length && shelfRead" class="eld-note eld-quiet">
+              Your model shelf has no LoRA to add.
+            </span>
+          </div>
+
+          <span class="eld-arrow" aria-hidden="true"></span>
         </div>
 
         <div class="eld-node" data-testid="eld-sink">
-          <span v-if="chain?.sink" class="eld-node-title">{{
+          <span v-if="chain?.sink?.summary" class="eld-node-title">{{
             chain.sink.summary
           }}</span>
           <span v-else class="eld-node-body eld-quiet"
@@ -424,7 +424,9 @@ const pickerOptions = computed(() => [
  * so it keeps the list between the nodes and the button an Add.
  */
 const spliceIn = computed(
-  () => !rows.value.length && Boolean(chain.value?.source && chain.value?.sink),
+  () =>
+    !rows.value.length &&
+    Boolean(chain.value?.source && chain.value?.sink?.summary),
 );
 
 /** A new row with nothing picked yet: Add waits for it, and so does Save. */
@@ -883,27 +885,33 @@ defineExpose({ rows, step, changeCount });
   overflow-wrap: anywhere;
 }
 
-/* The wire between the nodes: a line, and an arrowhead where it enters the
-   sink, so the direction the model flows is on screen. */
-.eld-wire {
-  align-self: center;
+/* Everything between the two nodes, with the wire drawn down its middle from
+   node to node: behind the rows, which cover it, and ending in the arrowhead
+   on the node that reads the chain, so the direction the model flows is on
+   screen. The chain's gap is taken off at both ends so the line touches both
+   nodes. */
+.eld-span {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  width: var(--gutter-glyph);
-  min-height: var(--space-4);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  gap: var(--space-2);
+  margin: calc(var(--space-2) * -1) 0;
+  padding-top: var(--space-4);
+  background: linear-gradient(
+      rgba(var(--v-theme-on-surface), var(--opacity-text-secondary)),
+      rgba(var(--v-theme-on-surface), var(--opacity-text-secondary))
+    )
+    center top / var(--rail-w) calc(100% - var(--space-3)) no-repeat;
 }
 
-.eld-wire::before {
-  content: "";
-  flex: 1;
-  width: var(--rail-w);
-  background: currentColor;
-}
-
-.eld-wire--in > .v-icon {
-  margin-top: calc(var(--space-2) * -1);
+/* The arrowhead, drawn rather than an icon: a glyph's own shaft sits on the
+   line and leaves a head too small to read. */
+.eld-arrow {
+  align-self: center;
+  margin-top: var(--space-3);
+  border-top: var(--space-3) solid
+    rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  border-right: var(--space-3) solid transparent;
+  border-left: var(--space-3) solid transparent;
 }
 
 .eld-list {
@@ -1024,6 +1032,7 @@ defineExpose({ rows, step, changeCount });
 .eld-chain--empty .eld-add {
   flex-direction: column;
   align-self: center;
+  background: rgb(var(--v-theme-surface));
 }
 
 .eld-changes {

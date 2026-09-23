@@ -375,9 +375,16 @@ describe("Add a LoRA", () => {
   });
 
   it("keeps Add a LoRA on an empty chain with an end it could not read", async () => {
-    getLoraChain.mockResolvedValue(chain({ loaders: [], sink: null }));
+    // What the route sends when nothing reading the chain could be named: a
+    // sink with no summary, not a missing sink.
+    getLoraChain.mockResolvedValue(
+      chain({ loaders: [], sink: { summary: null, consumers: [] } }),
+    );
     const wrapper = await mountDialog();
     expect(button(wrapper, "Add a LoRA").exists()).toBe(true);
+    expect(wrapper.find("[data-testid='eld-sink']").text()).toBe(
+      "Nothing found reading the chain",
+    );
   });
 });
 

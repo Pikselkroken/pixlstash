@@ -3018,10 +3018,13 @@ source, the LoRA loaders in the order a run applies them, and what reads the
 result. `read_lora_chain` types every link from `object_info`, as
 `plan_lora_insertion` does, and refuses (the route answers `editable: false` with
 the sentence) a graph it cannot edit honestly: several model sources, a foreign
-model type, a stacker or prompt-tag LoRA, or a branching chain. With ComfyUI
-unreachable, `read_lora_chain_untyped` follows the `model` links so the chain can
-still be looked at. Each loader carries the shelf digest it loads, when exactly
-one shelf LoRA matches.
+model type, a stacker or prompt-tag LoRA, or a branching chain. A refused chain,
+or one read with ComfyUI unreachable, goes through `read_lora_chain_untyped`,
+which follows the `model` links so the chain can still be looked at; when
+ComfyUI did answer it also types the two ends best effort (the model source and
+what reads the chain's end), so the read-only view names what the chain runs
+between. Each loader carries the shelf digest it loads, when exactly one shelf
+LoRA matches.
 
 `PUT` takes the whole chain as the owner left it. An existing loader is kept by
 `node_id` (moved and re-weighted, its id kept), a new one is added by shelf
