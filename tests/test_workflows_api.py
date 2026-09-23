@@ -1028,6 +1028,58 @@ def _ghost_shas(server) -> set[str]:
     }
 
 
+def test_the_comfyui_pull_routes_are_the_owners_alone(workflow_env, monkeypatch):
+    """#1440: both directions on the pull and its summary, measured at the gate.
+
+    The GET belts are emptied so a refusal is the gate's (the rollback case the
+    belt exists for is covered by it being in ``READ_BLOCKED_GET_PATHS``); the
+    POST is refused to a READ token before routing either way. The runner is
+    stubbed so the owner's pull is queued and never reaches a ComfyUI.
+    """
+    server = workflow_env.server
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+    monkeypatch.setattr(comfyui_module, "_last_pull", {})
+    queued = []
+    monkeypatch.setattr(
+        server.vault, "submit_task", lambda task: queued.append(task) or task.id
+    )
+    path = f"{API}/comfyui/workflows/pull"
+    assert_real_route(server.api, "GET", path)
+    assert_real_route(server.api, "POST", path)
+    tokens = {
+        "unscoped": _mint(workflow_env.owner, "pull unscoped"),
+        "scoped": _mint(
+            workflow_env.owner,
+            "pull scoped",
+            resource_type="character",
+            resource_id=workflow_env.character_id,
+        ),
+    }
+    previously_enforcing = server.authz._enforcing
+    server.authz._enforcing = True
+    try:
+        for label, token in tokens.items():
+            client = _bearer(server, token)
+            assert client.get(f"{API}/pictures").status_code == 200, label
+            r = client.get(path)
+            assert r.status_code == 403, f"{label} GET: {r.status_code} {r.text}"
+            assert "Owner-level" in r.text, f"{label} GET not refused by the gate"
+            r = client.post(path)
+            assert r.status_code == 403, f"{label} POST: {r.status_code} {r.text}"
+        assert queued == []
+
+        r = workflow_env.owner.get(path)
+        assert r.status_code == 200 and r.json()["status"] == "idle", r.text
+        r = workflow_env.owner.post(path)
+        assert r.status_code == 202 and r.json()["status"] == "started", r.text
+        assert len(queued) == 1
+        r = workflow_env.owner.get(path)
+        assert r.status_code == 200 and r.json()["status"] == "pending", r.text
+    finally:
+        server.authz._enforcing = previously_enforcing
+
+
 def test_the_ghost_routes_are_the_owners_alone(workflow_env, monkeypatch):
     """Both directions on GET, PATCH and the erase, with the gate enforcing.
 

@@ -49,9 +49,8 @@ _UNSAFE_NAME_CHARS = re.compile(r'[<>:"|?*\x00-\x1f]')
 
 # Names Windows refuses as a file stem whatever the extension.
 _RESERVED_WINDOWS_NAMES = frozenset(
-    {"CON", "PRN", "AUX", "NUL"}
-    | {f"COM{n}" for n in range(1, 10)}
-    | {f"LPT{n}" for n in range(1, 10)}
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"{port}{n}" for port in ("COM", "LPT") for n in "123456789\u00b9\u00b2\u00b3"}
 )
 
 # Room under the usual 255-character filename limit for ``.json`` and the
@@ -81,7 +80,11 @@ def stored_name_for(remote_path: str) -> str:
     ]
     flat = " - ".join(part for part in parts if part and part not in (".", ".."))
     flat = flat[:_MAX_STEM_CHARS].rstrip(" .") or "workflow"
-    if flat.upper() in _RESERVED_WINDOWS_NAMES:
+    # Windows reads the part before the FIRST dot, so `CON.foo.json` is the
+    # console as surely as `CON.json` - and the `(2)` a collision adds lands
+    # after that part, so an exists() that answers for a device would never
+    # find a free name.
+    if flat.split(".", 1)[0].rstrip(" ").upper() in _RESERVED_WINDOWS_NAMES:
         flat = f"_{flat}"
     return f"{flat}.json"
 

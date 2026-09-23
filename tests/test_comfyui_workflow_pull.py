@@ -51,7 +51,15 @@ class _Response:
         self.content = self.text.encode("utf-8")
 
     def json(self):
+        # `fetch_object_info` reads the whole body; the userdata client streams.
         return json.loads(self.text)
+
+    def iter_content(self, chunk_size=1):
+        for start in range(0, len(self.content), chunk_size):
+            yield self.content[start : start + chunk_size]
+
+    def close(self):
+        return None
 
 
 class FakeComfyUI:
@@ -67,7 +75,7 @@ class FakeComfyUI:
         )
         self.requested: list[str] = []
 
-    def get(self, url, timeout=None):
+    def get(self, url, **_kwargs):
         self.requested.append(url)
         if not self.reachable:
             raise requests.ConnectionError("refused")
@@ -171,7 +179,7 @@ def test_the_listing_is_parsed_normalised_and_sorted(monkeypatch):
         {"size": 3},
         42,
     ]
-    monkeypatch.setattr(requests, "get", lambda url, timeout: _Response(200, payload))
+    monkeypatch.setattr(requests, "get", lambda url, **_kw: _Response(200, payload))
     listed = list_saved_workflows(BASE)
     assert [(e.path, e.size, e.modified_ms) for e in listed] == [
         ("Sub/c.json", 7, 1),
@@ -181,7 +189,7 @@ def test_the_listing_is_parsed_normalised_and_sorted(monkeypatch):
 
 
 def test_no_workflows_folder_is_an_empty_listing(monkeypatch):
-    monkeypatch.setattr(requests, "get", lambda url, timeout: _Response(404, text=""))
+    monkeypatch.setattr(requests, "get", lambda url, **_kw: _Response(404, text=""))
     assert list_saved_workflows(BASE) == []
 
 
@@ -191,7 +199,7 @@ def test_no_workflows_folder_is_an_empty_listing(monkeypatch):
     ids=["non-200", "not-a-list", "unreachable"],
 )
 def test_a_bad_listing_raises_runtime_error(monkeypatch, response):
-    def get(url, timeout):
+    def get(url, **_kw):
         if response is None:
             raise requests.ConnectionError("refused")
         return response
@@ -207,7 +215,7 @@ def test_a_bad_listing_raises_runtime_error(monkeypatch, response):
     ids=["not-an-object", "not-json", "gone"],
 )
 def test_a_bad_document_raises_runtime_error(monkeypatch, response):
-    monkeypatch.setattr(requests, "get", lambda url, timeout: response)
+    monkeypatch.setattr(requests, "get", lambda url, **_kw: response)
     with pytest.raises(RuntimeError):
         read_saved_workflow(BASE, "a.json")
 
@@ -219,7 +227,7 @@ def test_multi_user_comfyui_is_refused_and_single_user_is_not(monkeypatch):
         "old": _Response(404, text=""),
     }
     for kind, response in answers.items():
-        monkeypatch.setattr(requests, "get", lambda url, timeout, r=response: r)
+        monkeypatch.setattr(requests, "get", lambda url, r=response, **_kw: r)
         if kind == "multi":
             with pytest.raises(MultiUserComfyUIError):
                 comfyui_userdata.ensure_single_user(BASE)
@@ -236,12 +244,56 @@ def test_multi_user_comfyui_is_refused_and_single_user_is_not(monkeypatch):
         ("../../etc/passwd.json", "etc - passwd.json"),
         ("a\\b.json", "a - b.json"),
         ("con.json", "_con.json"),
+        ("CON.foo.json", "_CON.foo.json"),
+        ("NUL.txt.json", "_NUL.txt.json"),
+        ("CONIN$.json", "_CONIN$.json"),
+        ("COM\u00b9.json", "_COM\u00b9.json"),
+        ("Console.json", "Console.json"),
         ("trailing. .json", "trailing.json"),
         ("../.json", "workflow.json"),
     ],
 )
 def test_a_remote_path_is_stored_as_one_flat_safe_name(remote, stored):
     assert stored_name_for(remote) == stored
+
+
+def test_a_redirect_is_refused_rather_than_followed(monkeypatch):
+    seen = {}
+
+    def get(url, **kwargs):
+        seen.update(kwargs)
+        return _Response(302, text="")
+
+    monkeypatch.setattr(requests, "get", get)
+    with pytest.raises(RuntimeError, match="redirected"):
+        read_saved_workflow(BASE, "a.json")
+    assert seen["allow_redirects"] is False and seen["stream"] is True
+
+
+def test_a_body_past_the_cap_is_refused_without_reading_it_all(monkeypatch):
+    monkeypatch.setattr(comfyui_userdata, "MAX_SAVED_WORKFLOW_BYTES", 10)
+    big = _Response(200, {"nodes": ["x" * 100]})
+    read = []
+    chunks = big.iter_content
+
+    def counted(chunk_size=1):
+        for chunk in chunks(chunk_size=4):
+            read.append(chunk)
+            yield chunk
+
+    big.iter_content = counted
+    monkeypatch.setattr(requests, "get", lambda url, **_kw: big)
+    with pytest.raises(RuntimeError, match="past the 10 bytes"):
+        read_saved_workflow(BASE, "a.json")
+    assert sum(len(chunk) for chunk in read) < len(big.content)
+
+
+def test_a_listing_past_the_cap_is_refused(monkeypatch):
+    monkeypatch.setattr(comfyui_userdata, "MAX_LISTED_WORKFLOWS", 2)
+    listing = _Response(200, ["a.json", "b.json", "c.json"])
+    monkeypatch.setattr(requests, "get", lambda url, **_kw: listing)
+    with pytest.raises(RuntimeError, match="more than the 2"):
+        list_saved_workflows(BASE)
 
 
 # ── the pull ────────────────────────────────────────────────────────────────

@@ -27,6 +27,8 @@ caller degrades rather than fails.
 
 from __future__ import annotations
 
+import json
+import time
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import quote
@@ -37,7 +39,19 @@ from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
 
+# Per socket read, as `requests` applies it.
 USERDATA_TIMEOUT_S = 15.0
+
+# For the whole of one request, body included: the per-read timeout alone lets
+# a server that trickles bytes hold the pull open indefinitely.
+USERDATA_DEADLINE_S = 60.0
+
+# The listing and the users probe are small; a listing this large is not one.
+MAX_LISTING_BYTES = 16 * 1024 * 1024
+
+# Far past any real install (the one measured for #1440 held 82), and a bound
+# on how many files one pull can write from a listing it does not control.
+MAX_LISTED_WORKFLOWS = 5000
 
 # The folder, under ComfyUI's per-user directory, its frontend saves into.
 WORKFLOWS_DIR = "workflows"
@@ -101,10 +115,10 @@ def ensure_single_user(base_url: str) -> None:
         RuntimeError: ComfyUI could not be asked.
     """
     url = f"{base_url}/api/users"
-    response = _get(url, "users")
-    if response.status_code == 404:
+    status, body = _get(url, "users", MAX_LISTING_BYTES)
+    if status == 404:
         return
-    payload = _json(response, url, "users")
+    payload = _json(status, body, url, "users")
     if isinstance(payload, dict) and "users" in payload:
         logger.warning(
             "ComfyUI at %s runs with --multi-user; refusing to read its saved "
@@ -130,14 +144,14 @@ def list_saved_workflows(base_url: str) -> list[SavedWorkflow]:
         answers with 404: that is an empty list, not a failure.
 
     Raises:
-        RuntimeError: ComfyUI is unreachable or answers with something that is
-            not a listing.
+        RuntimeError: ComfyUI is unreachable, answers with something that is
+            not a listing, or lists more than :data:`MAX_LISTED_WORKFLOWS`.
     """
     url = f"{base_url}/api/userdata?dir={WORKFLOWS_DIR}&recurse=true&full_info=true"
-    response = _get(url, "the workflow listing")
-    if response.status_code == 404:
+    status, body = _get(url, "the workflow listing", MAX_LISTING_BYTES)
+    if status == 404:
         return []
-    payload = _json(response, url, "the workflow listing")
+    payload = _json(status, body, url, "the workflow listing")
     if not isinstance(payload, list):
         logger.warning(
             "ComfyUI's workflow listing at %s is a %s, expected a list",
@@ -145,6 +159,17 @@ def list_saved_workflows(base_url: str) -> list[SavedWorkflow]:
             type(payload).__name__,
         )
         raise RuntimeError("ComfyUI returned an unexpected workflow listing")
+    if len(payload) > MAX_LISTED_WORKFLOWS:
+        logger.warning(
+            "ComfyUI at %s lists %d saved workflows, past the %d a pull takes.",
+            base_url,
+            len(payload),
+            MAX_LISTED_WORKFLOWS,
+        )
+        raise RuntimeError(
+            f"ComfyUI lists {len(payload)} saved workflows, more than the "
+            f"{MAX_LISTED_WORKFLOWS} a pull takes"
+        )
     entries = []
     for item in payload:
         entry = _listing_entry(item)
@@ -167,13 +192,8 @@ def read_saved_workflow(base_url: str, relative_path: str) -> dict:
             too large, not JSON, or not a JSON object.
     """
     url = saved_workflow_url(base_url, relative_path)
-    response = _get(url, relative_path)
-    if len(response.content) > MAX_SAVED_WORKFLOW_BYTES:
-        raise RuntimeError(
-            f"{relative_path} is {len(response.content)} bytes, past the "
-            f"{MAX_SAVED_WORKFLOW_BYTES} this reads"
-        )
-    payload = _json(response, url, relative_path)
+    status, body = _get(url, relative_path, MAX_SAVED_WORKFLOW_BYTES)
+    payload = _json(status, body, url, relative_path)
     if not isinstance(payload, dict):
         raise RuntimeError(f"{relative_path} is not a JSON object")
     return payload
@@ -210,31 +230,68 @@ def _int_or_none(value) -> Optional[int]:
     return None
 
 
-def _get(url: str, what: str) -> requests.Response:
-    """GET *url*; raise ``RuntimeError`` on no answer or a non-404 error."""
+def _get(url: str, what: str, max_bytes: int) -> tuple[int, bytes]:
+    """GET *url* as ``(status, body)``; raise ``RuntimeError`` rather than wait.
+
+    Streamed with a running byte count and a whole-request deadline, because
+    ``timeout`` bounds each socket read and not the download: a ComfyUI that
+    trickles bytes would otherwise hold the pull, and its in-flight gate,
+    forever. Redirects are refused rather than followed to another host.
+    A 404 is returned for the caller to read; any other status past 299 raises.
+    """
+    deadline = time.monotonic() + USERDATA_DEADLINE_S
     try:
-        response = requests.get(url, timeout=USERDATA_TIMEOUT_S)
+        response = requests.get(
+            url, timeout=USERDATA_TIMEOUT_S, stream=True, allow_redirects=False
+        )
     except requests.RequestException as exc:
         logger.warning("ComfyUI request for %s failed (%s): %s", what, url, exc)
         raise RuntimeError(f"Could not reach ComfyUI for {what}") from exc
-    if response.status_code >= 300 and response.status_code != 404:
-        detail = (response.text or "").strip()[:200]
+    try:
+        status = response.status_code
+        if 300 <= status < 400:
+            logger.warning(
+                "ComfyUI redirected the request for %s (%s, status %s); not followed.",
+                what,
+                url,
+                status,
+            )
+            raise RuntimeError(f"ComfyUI redirected the request for {what}")
+        body = bytearray()
+        try:
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                body += chunk
+                if len(body) > max_bytes:
+                    raise RuntimeError(
+                        f"{what} is past the {max_bytes} bytes this reads"
+                    )
+                if time.monotonic() > deadline:
+                    raise RuntimeError(
+                        f"ComfyUI took longer than {USERDATA_DEADLINE_S:.0f} s "
+                        f"to send {what}"
+                    )
+        except requests.RequestException as exc:
+            logger.warning("ComfyUI stopped sending %s (%s): %s", what, url, exc)
+            raise RuntimeError(f"ComfyUI stopped sending {what}") from exc
+    finally:
+        response.close()
+    if status >= 300 and status != 404:
         logger.warning(
             "ComfyUI request for %s failed: url=%s status=%s detail=%s",
             what,
             url,
-            response.status_code,
-            detail,
+            status,
+            bytes(body[:200]).decode("utf-8", "replace").strip(),
         )
-        raise RuntimeError(f"ComfyUI answered {response.status_code} for {what}")
-    return response
+        raise RuntimeError(f"ComfyUI answered {status} for {what}")
+    return status, bytes(body)
 
 
-def _json(response: requests.Response, url: str, what: str):
-    if response.status_code == 404:
+def _json(status: int, body: bytes, url: str, what: str):
+    if status == 404:
         raise RuntimeError(f"ComfyUI has no {what}")
     try:
-        return response.json()
+        return json.loads(body)
     except ValueError as exc:
         logger.warning("ComfyUI returned invalid JSON for %s from %s", what, url)
         raise RuntimeError(f"ComfyUI returned invalid JSON for {what}") from exc
