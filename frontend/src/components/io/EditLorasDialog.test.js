@@ -373,6 +373,12 @@ describe("Add a LoRA", () => {
       "The loader goes in after #4 UNETLoader, and the 1 input reading its MODEL is rewired to it. This graph has no CLIP source, so LoraLoaderModelOnly is used.",
     );
   });
+
+  it("keeps Add a LoRA on an empty chain with an end it could not read", async () => {
+    getLoraChain.mockResolvedValue(chain({ loaders: [], sink: null }));
+    const wrapper = await mountDialog();
+    expect(button(wrapper, "Add a LoRA").exists()).toBe(true);
+  });
 });
 
 describe("the second step", () => {

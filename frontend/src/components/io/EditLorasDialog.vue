@@ -20,7 +20,7 @@
         <v-icon size="16" class="eld-refusal-glyph">mdi-lock-outline</v-icon>
         <p class="eld-note">
           {{ refusal || "This chain cannot be edited just now." }}
-          Delete, drag and Add are off; the list is shown as read.
+          Deleting, dragging and adding are off; the list is shown as read.
         </p>
       </div>
 
@@ -32,7 +32,7 @@
       <!-- The two ends are drawn as graph nodes with a wire between them, so
            the list reads as what is spliced into that wire. They are not rows:
            nothing drags onto or past them. -->
-      <div class="eld-chain" :class="{ 'eld-chain--empty': !rows.length }">
+      <div class="eld-chain" :class="{ 'eld-chain--empty': spliceIn }">
         <div class="eld-node" data-testid="eld-source">
           <template v-if="chain?.source">
             <span class="eld-node-title">{{ chain.source.class_type }}</span>
@@ -172,7 +172,7 @@
             :disabled="!canAdd"
             @click="add"
           >
-            {{ rows.length ? "Add a LoRA" : "Insert LoRA between these nodes" }}
+            {{ spliceIn ? "Insert LoRA between these nodes" : "Add a LoRA" }}
           </AppButton>
           <span v-if="editable && !shelf.length && shelfRead" class="eld-note eld-quiet">
             Your model shelf has no LoRA to add.
@@ -417,6 +417,15 @@ const pickerOptions = computed(() => [
     label: adapter.display_name || loraStem(adapter.filename) || adapter.sha256,
   })),
 ]);
+
+/**
+ * No row at all, and both ends read: the button sits on the wire between the
+ * two nodes and says so. A deleted row still stands on screen with Restore,
+ * so it keeps the list between the nodes and the button an Add.
+ */
+const spliceIn = computed(
+  () => !rows.value.length && Boolean(chain.value?.source && chain.value?.sink),
+);
 
 /** A new row with nothing picked yet: Add waits for it, and so does Save. */
 const unpicked = computed(() =>
@@ -871,6 +880,7 @@ defineExpose({ rows, step, changeCount });
 
 .eld-node-body {
   padding: var(--space-2) var(--space-3);
+  overflow-wrap: anywhere;
 }
 
 /* The wire between the nodes: a line, and an arrowhead where it enters the
