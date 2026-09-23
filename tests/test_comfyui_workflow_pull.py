@@ -28,11 +28,14 @@ from pixlstash.services.comfyui_userdata import (
     read_saved_workflow,
     saved_workflow_url,
 )
+from pixlstash.services.workflow_hash import ui_topology_hash
 from pixlstash.tasks.comfyui_workflow_pull_task import (
     ComfyUIWorkflowPullTask,
     missing_node_classes,
+    model_triage,
     stored_name_for,
 )
+from pixlstash.utils.comfyui_utilities import loaded_model_widgets
 
 BASE = "http://comfy.test:8188"
 FIXTURES = Path(__file__).parent / "comfyui_workflows"
@@ -42,6 +45,33 @@ FIXTURES = Path(__file__).parent / "comfyui_workflows"
 PLAIN = json.loads((FIXTURES / "image_z_image_turbo.json").read_text("utf-8"))
 NEEDS_PACK = json.loads((FIXTURES / "image_flux2_klein_t2i.json").read_text("utf-8"))
 ABSENT_CLASS = "LoRACharacterPromptBuilder"
+
+
+# What the fake ComfyUI can load: everything PLAIN names, and every model of
+# NEEDS_PACK except its UNET.
+ABSENT_MODEL = "flux-2-klein-9b-fp8.safetensors"
+_LOADERS = {
+    "UNETLoader": {
+        "input": {"required": {"unet_name": [["z_image_turbo_bf16.safetensors"], {}]}}
+    },
+    "CLIPLoader": {
+        "input": {
+            "required": {
+                "clip_name": [
+                    ["qwen_3_4b.safetensors", "qwen_3_8b_fp8mixed.safetensors"],
+                    {},
+                ]
+            }
+        }
+    },
+    "VAELoader": {
+        "input": {
+            "required": {
+                "vae_name": [["ae.safetensors", "flux2/flux2-vae.safetensors"], {}]
+            }
+        }
+    },
+}
 
 
 class _Response:
@@ -86,9 +116,9 @@ class FakeComfyUI:
         if url == f"{BASE}/object_info":
             if not self.object_info_up:
                 return _Response(500, text="boom")
-            return _Response(
-                200, {name: {} for name in self.classes if name != ABSENT_CLASS}
-            )
+            info = {name: {} for name in self.classes if name != ABSENT_CLASS}
+            info.update(_LOADERS)
+            return _Response(200, info)
         if url.startswith(f"{BASE}/api/userdata?"):
             return _Response(
                 200,
@@ -322,6 +352,44 @@ def test_the_triage_names_the_workflow_this_comfyui_cannot_run(comfy, folders, h
     assert result["missing_node_classes"] == [ABSENT_CLASS]
 
 
+def test_the_triage_names_the_model_file_this_comfyui_does_not_list(
+    comfy, folders, hub
+):
+    # `flux2-vae.safetensors` is listed under a subfolder, which is present.
+    result = _pull(hub)
+    assert result["missing_models"] == 1
+    assert result["missing_model_files"] == [ABSENT_MODEL]
+    assert result["models_unread"] == 0
+    assert result["models_unchecked"] == 0
+
+
+def test_a_model_value_no_reader_could_name_is_counted_not_dropped():
+    wan = json.loads((FIXTURES / "video_wan2_2_14B_t2v.json").read_text("utf-8"))
+    # Everything the reader names is advertised, and it names 6 of the 8
+    # model-shaped values in the file.
+    named = {value for _widget, value in loaded_model_widgets(wan)}
+    absent, unread = model_triage(wan, {"UNETLoader": {}}, named)
+    assert absent == []
+    assert unread == 2
+
+
+def test_a_pulled_workflow_a_picture_already_made_is_counted(comfy, folders, hub):
+    topology = ui_topology_hash(PLAIN)
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_topology (topology_hash, "
+            "hash_version, node_count, first_seen_at) VALUES (?, ?, ?, ?)",
+            (topology, "test", 1, "2026-01-01T00:00:00+00:00"),
+        )
+        conn.execute(
+            "INSERT INTO workflow_recipe (structural_hash, topology_hash, "
+            "hash_version, node_count, first_seen_at) VALUES (?, ?, ?, ?, ?)",
+            ("s" * 64, topology, "test", 1, "2026-01-01T00:00:00+00:00"),
+        )
+    result = _pull(hub)
+    assert result["known_from_pictures"] == 1
+
+
 def test_without_object_info_every_workflow_is_unchecked_never_fine(
     comfy, folders, hub
 ):
@@ -331,6 +399,8 @@ def test_without_object_info_every_workflow_is_unchecked_never_fine(
     assert result["nodes_checked"] is False
     assert result["missing_nodes"] == 0
     assert result["nodes_unchecked"] == 2
+    assert result["models_unchecked"] == 2
+    assert result["missing_models"] == 0
 
 
 def test_a_workflow_deleted_here_is_not_pulled_back(comfy, folders, hub):
@@ -489,3 +559,20 @@ def test_no_hub_or_no_runner_is_a_503_and_frees_the_gate(pull_routes):
     with pytest.raises(HTTPException) as no_hub:
         start(_request())
     assert no_hub.value.status_code == 503
+
+
+def test_a_model_named_with_a_folder_comfyui_lists_flat_is_present():
+    # The file was saved on a machine that kept its VAEs in a subfolder; this
+    # ComfyUI lists the same file at the top level. Present, not missing.
+    moved = json.loads(
+        json.dumps(NEEDS_PACK).replace(
+            '"flux2-vae.safetensors"', '"vae\\\\flux2-vae.safetensors"'
+        )
+    )
+    assert ("vae_name", "vae\\flux2-vae.safetensors") in loaded_model_widgets(moved)
+    advertised = {
+        "flux-2-klein-9b-fp8.safetensors",
+        "qwen_3_8b_fp8mixed.safetensors",
+        "flux2-vae.safetensors",
+    }
+    assert model_triage(moved, {"UNETLoader": {}}, advertised) == ([], 0)

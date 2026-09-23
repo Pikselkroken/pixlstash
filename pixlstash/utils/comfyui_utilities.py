@@ -13,6 +13,7 @@ from typing import Any
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import model_filename_fields
+from pixlstash.services.workflow_hash import MODEL_EXTENSIONS
 
 logger = get_logger(__name__)
 
@@ -597,6 +598,36 @@ def loaded_model_widgets(workflow: dict) -> list[tuple[str, str]]:
     if is_api_format(workflow):
         return _loaded_model_widgets_api(workflow)
     return _loaded_model_widgets_ui(workflow)
+
+
+def count_model_file_values_ui(workflow: dict) -> int:
+    """How many widget values in an editor graph look like a model file.
+
+    The denominator :func:`loaded_model_widgets` is read against: a value with
+    a model file extension, on a node that runs, whether or not any loader map
+    knows which widget it sits in. The difference between the two is how many
+    models a reader of the file could not name - the number that keeps a short
+    list from passing for a complete one. Same walk as the reader (subgraphs
+    included, muted and bypassed nodes skipped), so the two count alike.
+    """
+    if not isinstance(workflow, dict):
+        return 0
+    count = 0
+    for graph in _iter_ui_graphs(workflow):
+        for node in graph.get("nodes") or []:
+            if not isinstance(node, dict) or node.get("mode", 0) not in (0, None):
+                continue
+            values = node.get("widgets_values")
+            if isinstance(values, dict):
+                values = list(values.values())
+            if not isinstance(values, list):
+                continue
+            count += sum(
+                1
+                for value in values
+                if isinstance(value, str) and value.lower().endswith(MODEL_EXTENSIONS)
+            )
+    return count
 
 
 def _loaded_model_widgets_ui(workflow: dict) -> list[tuple[str, str]]:

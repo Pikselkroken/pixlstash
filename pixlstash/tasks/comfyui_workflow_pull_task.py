@@ -14,7 +14,8 @@ from, which is what keeps a workflow the owner deleted here from coming back.
 
 **Triage rides along for free.** The sweep already holds every document, so one
 ``object_info`` fetch lets it count the workflows naming a node class this
-ComfyUI does not have. The count is computed with the pull and never stored: it
+ComfyUI does not have, and those naming a model file it does not list (with
+how many model values it could not read at all, see :func:`model_triage`). The count is computed with the pull and never stored: it
 goes stale the moment a node pack is installed, which is exactly what it
 prompts the owner to do. With ComfyUI's class list unavailable the answer is
 *not checked*, never a clean bill of health.
@@ -31,14 +32,24 @@ from pixlstash.hub.db import HubDatabase
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services import comfyui_userdata
 from pixlstash.services.comfyui_recipe_service import (
+    advertised_model_names,
     collect_node_classes,
     fetch_object_info,
+    preflight_prompt,
 )
-from pixlstash.services.workflow_hash import WorkflowGraphError, reduce_ui_graph
+from pixlstash.services.workflow_hash import (
+    MODEL_EXTENSIONS,
+    WorkflowGraphError,
+    reduce_ui_graph,
+)
 from pixlstash.services.workflow_io import api_graph
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
 from pixlstash.tasks.task_type import TaskType
-from pixlstash.utils.comfyui_utilities import NotAWorkflowError
+from pixlstash.utils.comfyui_utilities import (
+    NotAWorkflowError,
+    count_model_file_values_ui,
+    loaded_model_widgets,
+)
 
 logger = get_logger(__name__)
 
@@ -122,6 +133,58 @@ def missing_node_classes(document: dict, object_info: dict) -> Optional[list[str
     return sorted({name for name in classes if name and name not in object_info})
 
 
+def model_triage(
+    document: dict, object_info: dict, advertised: set[str]
+) -> Optional[tuple[list[str], int]]:
+    """``(model files this ComfyUI does not have, model values not read)``.
+
+    **Advisory, and never identity.** An API graph gets the full pre-flight;
+    an editor graph names its widget values by position, so its model names
+    are recovered through :func:`loaded_model_widgets`, which reads some and
+    not others. What it could not name is counted rather than dropped, so a
+    short list never passes for a complete one. Nothing here may feed a hash.
+
+    A recovered name counts as present when ComfyUI advertises it by path or
+    by basename: the lenient reading, because a false "missing" is worse than
+    a missed one.
+
+    Returns:
+        ``None`` when the document could not be read, which is *unchecked*.
+    """
+    try:
+        graph = api_graph(document)
+        if graph is not None:
+            checked = preflight_prompt(graph, object_info)
+            absent = {miss["value"] for miss in checked["missing_models"]}
+            return sorted(absent), checked["unchecked_models"] + checked[
+                "unchecked_fields"
+            ]
+        named = [
+            value
+            for _widget, value in loaded_model_widgets(document)
+            if value.lower().endswith(MODEL_EXTENSIONS)
+        ]
+        unread = max(0, count_model_file_values_ui(document) - len(named))
+        absent = set()
+        for value in named:
+            normalized = value.replace("\\", "/")
+            if (
+                normalized not in advertised
+                and normalized.rsplit("/", 1)[-1] not in advertised
+            ):
+                absent.add(value)
+        return sorted(absent), unread
+    except Exception as exc:
+        # The readers index into whatever the file holds; a malformed one is
+        # unchecked, never fine.
+        logger.warning(
+            "Reading a pulled workflow's models failed with %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return None
+
+
 class ComfyUIWorkflowPullTask(BaseTask):
     """List ComfyUI's saved workflows and file each one in the library."""
 
@@ -193,9 +256,18 @@ class ComfyUIWorkflowPullTask(BaseTask):
             "nodes_unchecked": 0,
             "nodes_checked": object_info is not None,
             "missing_node_classes": [],
+            "known_from_pictures": 0,
+            "missing_models": 0,
+            "models_unread": 0,
+            "models_unchecked": 0,
+            "missing_model_files": [],
             "workflow_keys": [],
         }
+        advertised = (
+            advertised_model_names(object_info) if object_info is not None else None
+        )
         missing_classes: set[str] = set()
+        missing_files: set[str] = set()
         keys: list[str] = []
         for entry in entries:
             try:
@@ -215,9 +287,21 @@ class ComfyUIWorkflowPullTask(BaseTask):
                     result["pulled"] += 1
                 if outcome.get("workflow_key"):
                     keys.append(outcome["workflow_key"])
+                if self._topology_has_pictures(outcome.get("topology_hash")):
+                    result["known_from_pictures"] += 1
                 if object_info is None:
                     result["nodes_unchecked"] += 1
+                    result["models_unchecked"] += 1
                     continue
+                models = model_triage(document, object_info, advertised)
+                if models is None:
+                    result["models_unchecked"] += 1
+                else:
+                    absent, unread = models
+                    result["models_unread"] += unread
+                    if absent:
+                        result["missing_models"] += 1
+                        missing_files.update(absent)
                 missing = missing_node_classes(document, object_info)
                 if missing is None:
                     result["nodes_unchecked"] += 1
@@ -231,6 +315,7 @@ class ComfyUIWorkflowPullTask(BaseTask):
             self._hub, origin, [entry.path for entry in entries]
         )
         result["missing_node_classes"] = sorted(missing_classes, key=str.lower)
+        result["missing_model_files"] = sorted(missing_files, key=str.lower)
         result["workflow_keys"] = sorted(set(keys))
         logger.info(
             "Pulled ComfyUI workflows from %s: %d listed, %d new, %d already "
@@ -254,6 +339,30 @@ class ComfyUIWorkflowPullTask(BaseTask):
                     exc,
                 )
         return result
+
+    def _topology_has_pictures(self, topology_hash: Optional[str]) -> bool:
+        """Whether a picture already made a workflow of this shape.
+
+        The overlap the pull exists to measure: a pulled workflow on a topology
+        the library's pictures already filed is one the owner had, not a new
+        one. Recipes are written only from executed graphs, so a pulled editor
+        file does not count itself.
+        """
+        if not topology_hash:
+            return False
+        try:
+            return (
+                self._hub.fetchone(
+                    "SELECT 1 FROM workflow_recipe WHERE topology_hash = ? LIMIT 1",
+                    (topology_hash,),
+                )
+                is not None
+            )
+        except sqlite3.Error as exc:
+            logger.warning(
+                "Could not ask whether topology %s has pictures: %s", topology_hash, exc
+            )
+            return False
 
     def _pull_one(self, entry) -> Optional[tuple[dict, dict]]:
         """Read and file one saved workflow: ``(document, store result)``.

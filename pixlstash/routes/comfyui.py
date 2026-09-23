@@ -1443,6 +1443,20 @@ class ComfyUIWorkflowPullSummary(BaseModel):
     nodes_unchecked: int = 0
     # The absent classes, by name. Which pack provides one is not known here.
     missing_node_classes: list[str] = []
+    # Stored workflows whose shape a picture in the library already made: the
+    # ones the owner had, as opposed to new to PixlStash.
+    known_from_pictures: int = 0
+    # Workflows naming a model file this ComfyUI does not list. Advisory for an
+    # editor-format file, whose model names are read by position.
+    missing_models: int = 0
+    # Model values across the pull that could not be read at all, so were
+    # never checked. A short missing list is only as good as this is small.
+    models_unread: int = 0
+    # Workflows whose models were not checked (ComfyUI unreachable, or the
+    # document would not read).
+    models_unchecked: int = 0
+    # The absent model files, by name.
+    missing_model_files: list[str] = []
     # The cards the pull filed a file on.
     workflow_keys: list[str] = []
 
