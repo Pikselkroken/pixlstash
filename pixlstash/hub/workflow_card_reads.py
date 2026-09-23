@@ -71,6 +71,11 @@ class Card:
     notes: Optional[str] = None
     hidden: bool = False
     imported: bool = False
+    # At least one of its files was put here by the owner rather than written
+    # by a pull from ComfyUI (#1440). What keeps a card out of the one-offs:
+    # a file dropped by hand is a statement, eighty pulled in one gesture are
+    # not. ``imported`` keeps its meaning, "this card has a file".
+    hand_imported: bool = False
     file_name: Optional[str] = None
     variants: list[str] = field(default_factory=list)
     slots: list[dict] = field(default_factory=list)
@@ -92,6 +97,15 @@ class StackRows:
     unstacked: frozenset[str]
 
 
+# A file row the owner put there: no pull from ComfyUI wrote it. A pull that
+# only MATCHED a file already stored leaves it the owner's, which is why the
+# test is on ``stored_by_pull`` and not on an origin row existing.
+_HAND_IMPORTED = (
+    "NOT EXISTS (SELECT 1 FROM workflow_origin o "
+    "WHERE o.workflow_name = workflow_file.workflow_name AND o.stored_by_pull = 1)"
+)
+
+
 def card_index(hub: HubDatabase) -> list[Card]:
     """Every card this hub holds, with its variants and what the owner said.
 
@@ -109,12 +123,14 @@ def card_index(hub: HubDatabase) -> list[Card]:
         "c.specials AS specials, "
         "a.name AS name, a.notes AS notes, "
         "a.hidden AS hidden, f.workflow_key IS NOT NULL AS imported, "
+        "COALESCE(f.hand_imported, 0) AS hand_imported, "
         "f.workflow_name AS file_name "
         "FROM workflow_variant v "
         "LEFT JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
         "AND c.core_version = ? "
         "LEFT JOIN workflow_attr a ON a.workflow_key = v.workflow_key "
-        "LEFT JOIN (SELECT workflow_key, MIN(workflow_name) AS workflow_name "
+        "LEFT JOIN (SELECT workflow_key, MIN(workflow_name) AS workflow_name, "
+        f"MAX({_HAND_IMPORTED}) AS hand_imported "
         "FROM workflow_file GROUP BY workflow_key) f "
         "ON f.workflow_key = v.workflow_key "
         "WHERE v.key_version = ? ORDER BY v.workflow_key, v.structural_hash",
@@ -135,6 +151,7 @@ def card_index(hub: HubDatabase) -> list[Card]:
                 notes=row["notes"],
                 hidden=bool(row["hidden"]),
                 imported=bool(row["imported"]),
+                hand_imported=bool(row["hand_imported"]),
                 file_name=row["file_name"],
             )
         card.variants.append(row["structural_hash"])
@@ -181,7 +198,9 @@ def _file_only_cards(hub: HubDatabase, keyed: set[str]) -> list[Card]:
         # returning no file-only cards at all. No writer does it today; this
         # costs the same and cannot be made to.
         "SELECT f.topology_hash AS topology_hash, "
-        "MIN(f.workflow_name) AS workflow_name FROM workflow_file f "
+        "MIN(f.workflow_name) AS workflow_name, "
+        f"MAX({_HAND_IMPORTED.replace('workflow_file.', 'f.')}) AS hand_imported "
+        "FROM workflow_file f "
         "WHERE NOT EXISTS (SELECT 1 FROM workflow_variant v "
         "WHERE v.structural_hash = f.structural_hash AND v.key_version = ?) "
         "GROUP BY f.topology_hash ORDER BY f.topology_hash",
@@ -192,7 +211,11 @@ def _file_only_cards(hub: HubDatabase, keyed: set[str]) -> list[Card]:
         # very card, and the file row is on it: yielding it again would hand
         # the grid two Cards under one key.
         if key not in keyed:
-            found[key] = (row["topology_hash"], row["workflow_name"])
+            found[key] = (
+                row["topology_hash"],
+                row["workflow_name"],
+                bool(row["hand_imported"]),
+            )
     if not found:
         return []
     attrs = {}
@@ -212,9 +235,10 @@ def _file_only_cards(hub: HubDatabase, keyed: set[str]) -> list[Card]:
             notes=attrs[key]["notes"] if key in attrs else None,
             hidden=bool(attrs[key]["hidden"]) if key in attrs else False,
             imported=True,
+            hand_imported=hand_imported,
             file_name=file_name,
         )
-        for key, (topology_hash, file_name) in sorted(found.items())
+        for key, (topology_hash, file_name, hand_imported) in sorted(found.items())
     ]
 
 

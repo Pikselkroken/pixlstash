@@ -406,6 +406,7 @@ class ComfyUIWorkflowPullTask(BaseTask):
                 entry.path,
                 outcome["name"],
                 entry.modified_ms,
+                stored=not outcome.get("matched"),
             )
         except sqlite3.Error as exc:
             # The file is stored and on its card; what is lost is the memory

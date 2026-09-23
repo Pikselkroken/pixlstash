@@ -962,6 +962,13 @@ the two sides have agreed:
    B6's: saving a look is the plainest statement that somebody means to run a
    workflow again, so a card carrying one is never folded into the count.
 
+   **"Imported" means imported by hand** (#1440): a file a pull from ComfyUI
+   wrote (`workflow_origin.stored_by_pull = 1`) does not count, because a pull
+   brings a whole install's experiments in one gesture and exempting them all
+   would bury the grid. A file the owner dropped in, or one a pull only
+   matched, still takes its card out. The card's wire `imported` keeps meaning
+   "has a file"; the narrower test is server-side (`Card.hand_imported`).
+
 6. **A card can have no variant at all, and `variant_count: 0` is how a client
    knows (#1466).** ComfyUI saves in *editor* format unless somebody
    deliberately exports the API one, and an editor-format file names its widget

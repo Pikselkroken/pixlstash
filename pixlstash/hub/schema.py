@@ -984,6 +984,9 @@ CREATE TABLE IF NOT EXISTS workflow_unstacked (
 # ``workflow_name`` is many-to-one - a pull matches by content, so two paths
 # holding one document both name the file it was stored as. ``remote_modified``
 # is the remote machine's clock in milliseconds, a hint and never an identity.
+# ``stored_by_pull`` is 1 when a pull WROTE the file rather than matched one
+# already there: a file the owner imported by hand stays theirs (and so never a
+# hidden one-off) when a later pull finds the same workflow in ComfyUI.
 _V2_WORKFLOW_ORIGIN = """
 CREATE TABLE IF NOT EXISTS workflow_origin (
     origin           TEXT NOT NULL,
@@ -993,6 +996,7 @@ CREATE TABLE IF NOT EXISTS workflow_origin (
     first_pulled_at  TEXT NOT NULL,
     last_seen_at     TEXT NOT NULL,
     dismissed        INTEGER NOT NULL DEFAULT 0,
+    stored_by_pull   INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (origin, remote_path)
 )
 """
@@ -1289,6 +1293,18 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     }
     if "specials" not in core_columns:
         conn.execute("ALTER TABLE workflow_topology_core ADD COLUMN specials TEXT")
+
+    # Whether a pull wrote the file (#1440), guarded the same way. An existing
+    # row reads 0, "matched a file already there", which keeps its file the
+    # owner's until the next pull that writes one says otherwise.
+    origin_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(workflow_origin)").fetchall()
+    }
+    if "stored_by_pull" not in origin_columns:
+        conn.execute(
+            "ALTER TABLE workflow_origin "
+            "ADD COLUMN stored_by_pull INTEGER NOT NULL DEFAULT 0"
+        )
 
     # The icon column (shelf plan, the sixth verb) lands the same way the rest
     # of v2 does: amended in place rather than as a v3, because a build shipped

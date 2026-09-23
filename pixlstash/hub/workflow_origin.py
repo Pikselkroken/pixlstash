@@ -60,24 +60,41 @@ def record_pulled(
     remote_path: str,
     workflow_name: str,
     remote_modified: Optional[int],
+    stored: bool = False,
 ) -> None:
     """Remember that *remote_path* at *origin* is stored as *workflow_name*.
 
     An upsert that keeps ``first_pulled_at`` and never clears ``dismissed``:
     the caller skips a dismissed path before it gets here, and a row written
     anyway must not quietly un-dismiss it.
+
+    *stored* is true when this pull wrote the file rather than matching one
+    already there. It is sticky per row - a later pull that matches the file
+    it wrote itself does not make it the owner's - but it only ever describes
+    this path, so a file the owner imported first stays hand-imported.
     """
     now = _now()
     with hub.transaction() as conn:
         conn.execute(
             "INSERT INTO workflow_origin (origin, remote_path, workflow_name, "
-            "remote_modified, first_pulled_at, last_seen_at) "
-            "VALUES (?, ?, ?, ?, ?, ?) "
+            "remote_modified, first_pulled_at, last_seen_at, stored_by_pull) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
             "ON CONFLICT (origin, remote_path) DO UPDATE SET "
+            "stored_by_pull = CASE WHEN workflow_name = excluded.workflow_name "
+            "THEN MAX(stored_by_pull, excluded.stored_by_pull) "
+            "ELSE excluded.stored_by_pull END, "
             "workflow_name = excluded.workflow_name, "
             "remote_modified = excluded.remote_modified, "
             "last_seen_at = excluded.last_seen_at",
-            (origin, remote_path, workflow_name, remote_modified, now, now),
+            (
+                origin,
+                remote_path,
+                workflow_name,
+                remote_modified,
+                now,
+                now,
+                int(stored),
+            ),
         )
 
 

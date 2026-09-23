@@ -576,3 +576,44 @@ def test_a_model_named_with_a_folder_comfyui_lists_flat_is_present():
         "flux2-vae.safetensors",
     }
     assert model_triage(moved, {"UNETLoader": {}}, advertised) == ([], 0)
+
+
+def test_a_file_the_owner_already_had_stays_theirs_after_a_pull(comfy, folders, hub):
+    """``stored_by_pull`` is what the one-off count reads (#1440).
+
+    Written by the pull: 1, and a later pull matching its own file keeps it 1.
+    Matched to a file the owner had imported: 0, so their file does not turn
+    into a hideable one-off because ComfyUI happens to hold it too.
+    """
+    user, _builtin = folders
+    (user / "Mine.json").write_text(json.dumps(PLAIN), encoding="utf-8")
+
+    def stored_by_pull():
+        return {
+            row["remote_path"]: row["stored_by_pull"]
+            for row in hub.fetchall(
+                "SELECT remote_path, stored_by_pull FROM workflow_origin"
+            )
+        }
+
+    _pull(hub)
+    assert stored_by_pull() == {"Plain.json": 0, "Sub/Needs pack.json": 1}
+    _pull(hub)
+    assert stored_by_pull() == {"Plain.json": 0, "Sub/Needs pack.json": 1}
+
+
+def test_a_hub_made_before_stored_by_pull_gains_the_column(tmp_path):
+    path = str(tmp_path / "older.db")
+    database = HubDatabase(path)
+    with database.transaction() as conn:
+        conn.execute("ALTER TABLE workflow_origin DROP COLUMN stored_by_pull")
+    database.close()
+
+    reopened = HubDatabase(path)
+    try:
+        columns = {
+            row[1] for row in reopened.fetchall("PRAGMA table_info(workflow_origin)")
+        }
+        assert "stored_by_pull" in columns
+    finally:
+        reopened.close()
