@@ -1041,6 +1041,33 @@
                       :ring="ringFor(row)"
                       :style="ringStyle(row)"
                     />
+                    <!-- Which file the run is being drawn from, said in words
+                         rather than by position: once the strip is open the
+                         reader is looking at six rows and choosing between
+                         them, and "the top one" is not an answer a screen
+                         reader can hear. On the thumbnail's bottom-left corner,
+                         the grid's own cover chip in the grid's own place,
+                         rather than among the name's chips, where it pushed the
+                         line into the text around it. Only while the stack is
+                         OPEN - on a collapsed run the cover is the only row
+                         there is, so the chip would be noise on every stacked
+                         row of the shelf. And only on the REAL cover: a filter
+                         can hide position 0, and `collapseStacks` then draws
+                         the lowest surviving member at the top - which is the
+                         run's stand-in for the moment, not the file the owner
+                         chose. -->
+                    <span
+                      v-if="
+                        row.memberCount > 1 &&
+                        isStackOpen(row.stack_id) &&
+                        row.stack_position === 0
+                      "
+                      class="stack-cover-flag"
+                      ><Tooltip
+                        text="This file is what the shelf draws for the whole run."
+                        activator="parent"
+                      />Cover</span
+                    >
                   </span>
                   <span role="gridcell" class="shelf-row-label">
                     <!-- The absence glyph leads the line, because it changes what
@@ -1122,30 +1149,6 @@
                         >mdi-chevron-right</v-icon
                       >
                     </button>
-                    <!-- Which file the run is being drawn from, said in words
-                         rather than by position: once the strip is open the
-                         reader is looking at six rows and choosing between
-                         them, and "the top one" is not an answer a screen
-                         reader can hear. Only while the stack is OPEN - on a
-                         collapsed run the cover is the only row there is, so
-                         the chip would be noise on every stacked row of the
-                         shelf. And only on the REAL cover: a filter can hide
-                         position 0, and `collapseStacks` then draws the lowest
-                         surviving member at the top - which is the run's
-                         stand-in for the moment, not the file the owner
-                         chose. -->
-                    <span
-                      v-if="
-                        row.memberCount > 1 &&
-                        isStackOpen(row.stack_id) &&
-                        row.stack_position === 0
-                      "
-                      class="shelf-chip"
-                      ><Tooltip
-                        text="This file is what the shelf draws for the whole run."
-                        activator="parent"
-                      />Cover</span
-                    >
                     <!-- The precision the file was stored at, which
                          `deriveModelName` has just taken out of the name to
                          its left. Two quant variants of one model are two rows
@@ -5348,6 +5351,24 @@ button.shelf-head-cell:hover {
   justify-content: center;
   width: calc(var(--entity-thumb) + var(--space-4));
   flex: none;
+}
+
+/* The cover chip is the grid's (App.css), but a 24px mark is not a tile: it
+   sits on the slot's own corner rather than inset from it, and straddles the
+   mark's bottom edge so the top of the face still shows. The slot plus the row
+   gap leave 48px before the name, and "COVER" at the grid's tracking and
+   padding measures up to 53px on DejaVu, so here it drops the tracking, takes
+   the hairline padding and starts in the row's own left padding: about 42px
+   at its widest, ending short of the name. The row's bottom padding (8px) is
+   what keeps the 4px overhang out of `content-visibility`'s paint clip.
+   Hoverable, unlike the grid's, so its tooltip still says what "Cover" means;
+   a click on it still reaches the row. */
+.shelf-row-ident .stack-cover-flag {
+  left: calc(var(--space-2) * -1);
+  bottom: calc(var(--space-2) * -1);
+  padding: 0 var(--space-1);
+  letter-spacing: normal;
+  pointer-events: auto;
 }
 
 .shelf-row-label {

@@ -480,8 +480,9 @@ kbd {
    same corner and the same backing the grid's other permanent chips use, so it
    reads as one family. Global rather than scoped to `ImageGrid.css`, where it
    began: the Workflows stack panel (v1.12 F1a) flags its cover member with the
-   same chip, and the two must not drift. `ImageGrid.css` still owns where it
-   sits in a picture tile's stacking order. */
+   same chip, and the two must not drift; so does the model shelf's open run,
+   on its leading thumbnail. `ImageGrid.css` still owns where it sits in a
+   picture tile's stacking order. */
 .stack-cover-flag {
   position: absolute;
   bottom: var(--space-2);

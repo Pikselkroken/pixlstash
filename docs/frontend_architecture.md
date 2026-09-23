@@ -1862,7 +1862,9 @@ watcher the model shelf uses. See §9.1b for the destination itself.
 - **`.stack-cover-flag` moved from `ImageGrid.css` (scoped) to `App.css`
   (global)** so the picture grid and this panel wear one chip rather than two
   copies. `ImageGrid.css` still owns where it sits in a picture tile's
-  stacking order.
+  stacking order. The model shelf wears it too, on an open run's leading
+  thumbnail, with a local override (`.shelf-row-ident .stack-cover-flag`)
+  that tightens it to fit a 24px mark.
 - **Grid | List is one switch for every stack** (F2, #1405), a `Segmented` in
   the panel header backed by `useWorkflowPrefsStore` — `localStorage` inside a
   try/catch, `useGenStackPrefsStore`'s shape, and a preference that cannot be
