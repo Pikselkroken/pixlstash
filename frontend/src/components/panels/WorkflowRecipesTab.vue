@@ -10,20 +10,20 @@
       v-else-if="!loadError && !recipes.length && !looks.length"
       class="wfrt-note wfrt-quiet"
     >
-      No looks here yet. A picture shows up once PixlStash has read how it was
+      No recipes here yet. A picture shows up once PixlStash has read how it was
       made, so a fresh import takes a moment to arrive.
     </p>
     <p v-else-if="loadError" class="wfrt-note wfrt-bad" role="alert">
       {{ loadError }}
     </p>
 
-    <!-- Bookmarks first: they are few, in the owner's order, and the reason
-         to come back to this tab. The list below them can run to hundreds. -->
+    <!-- Saved first: they are few, in the owner's order, and the reason to
+         come back to this tab. The list below them can run to hundreds. -->
     <div
       v-if="!loading && !loadError && recipes.length"
       class="section-label wfrt-section"
     >
-      Bookmarked
+      Saved
     </div>
 
     <!-- One list, one tab stop. The handle is the control: it is what a
@@ -32,7 +32,7 @@
 
          `v-if`, not the band's `v-else`: chaining the two made the band and
          the list alternatives, so the moment there was a used half to label,
-         the bookmarks it labelled disappeared. -->
+         the saved list it labelled disappeared. -->
     <ul
       v-if="!loading && !loadError && recipes.length"
       class="wfrt-list"
@@ -75,14 +75,22 @@
                invention. A square at the head of the row rather than a band
                across the card, because 1/1 is a ratio this app already has
                and a one-picture band needed a new one. -->
-          <img
+          <button
             v-if="recipe.source_picture_id"
-            class="wfrt-thumb"
-            :src="thumbnail(recipe.source_picture_id)"
-            alt=""
-            loading="lazy"
-            decoding="async"
-          />
+            class="wfrt-thumb-btn"
+            type="button"
+            :aria-label="`Open the picture ${recipe.name || 'this recipe'} was saved from`"
+            @click="openPicture(recipe.source_picture_id)"
+          >
+            <Tooltip text="Open the picture" activator="parent" :describe="false" />
+            <img
+              class="wfrt-thumb"
+              :src="thumbnail(recipe.source_picture_id)"
+              alt=""
+              loading="lazy"
+              decoding="async"
+            />
+          </button>
 
           <!-- Escape backs out, as it does in every dialog here; Enter and
                blur both commit, which is what an inline field in a list has
@@ -149,8 +157,8 @@
                 role="menuitem"
                 @click="removeRecipe(recipe)"
               >
-                <v-icon size="16">mdi-bookmark-remove-outline</v-icon>
-                Remove bookmark
+                <v-icon size="16">mdi-delete</v-icon>
+                Delete
               </button>
             </div>
           </v-menu>
@@ -183,25 +191,33 @@
     </ul>
 
     <!-- The looks the pictures themselves carry: every one they were made
-         with, filled in without anybody pressing anything. A bookmarked look
-         stays here too, marked, because a bookmark does not take a look out
-         of the list it was found in. -->
+         with, filled in without anybody pressing anything. One cloned into
+         Saved stays here too, marked, because a clone is a copy and does not
+         take the original out of the list it was found in. -->
     <template v-if="!loading && !loadError && looks.length">
       <div class="section-label wfrt-section">From your pictures</div>
       <ul class="wfrt-list">
         <li v-for="look in looks" :key="look.key" class="wfrt-card">
           <div class="wfrt-top">
-            <img
+            <button
               v-if="look.cover_picture_id"
-              class="wfrt-thumb"
-              :src="thumbnail(look.cover_picture_id)"
-              alt=""
-              loading="lazy"
-              decoding="async"
-            />
-            <span v-if="look.bookmarked" class="wfrt-marked">
-              <v-icon size="16">mdi-bookmark</v-icon>
-              Bookmarked
+              class="wfrt-thumb-btn"
+              type="button"
+              aria-label="Open the newest picture made with this recipe"
+              @click="openPicture(look.cover_picture_id)"
+            >
+              <Tooltip text="Open the picture" activator="parent" :describe="false" />
+              <img
+                class="wfrt-thumb"
+                :src="thumbnail(look.cover_picture_id)"
+                alt=""
+                loading="lazy"
+                decoding="async"
+              />
+            </button>
+            <span v-if="look.saved" class="wfrt-marked">
+              <v-icon size="16">mdi-check</v-icon>
+              Saved
             </span>
           </div>
 
@@ -221,21 +237,21 @@
           <div class="wfrt-bot">
             <span class="wfrt-facts">{{ picturesLabel(look.pictures) }}</span>
             <AppButton
-              v-if="!look.bookmarked"
+              v-if="!look.saved"
               size="sm"
-              icon-left="bookmark-plus-outline"
+              icon-left="content-copy"
               :loading="savingLook === look.key"
               :disabled="!look.cover_picture_id"
-              tooltip="Bookmark this look to name it and keep it at the top"
+              tooltip="Clone this recipe into Saved, to name it and keep it at the top"
               @click="keepLook(look)"
             >
-              Bookmark…
+              Clone…
             </AppButton>
             <AppButton
               v-if="look.cover_picture_id"
               size="sm"
               icon-left="play"
-              tooltip="Run this look again, from the picture that made it"
+              tooltip="Run this recipe again, from the picture that made it"
               @click="runLook(look)"
             >
               Run…
@@ -245,16 +261,6 @@
       </ul>
     </template>
 
-    <div
-      v-if="!loading && !loadError && !recipes.length && looks.length"
-      class="wfrt-hint"
-    >
-      <v-icon size="16">mdi-bookmark-plus-outline</v-icon>
-      <span>
-        <b class="wfrt-strong">Bookmark…</b> a look to name it and keep it at
-        the top.
-      </span>
-    </div>
 
     <!-- One polite region for the whole list: a reorder made with the
          keyboard, and a refused write that slides the row back, are both
@@ -353,9 +359,9 @@ const menuId = ref(null);
 const renamingId = ref(null);
 const renameDraft = ref("");
 const exportId = ref(null);
-/** Every look the stack's own pictures carry; `bookmarked` is the server's. */
+/** Every recipe the stack's own pictures carry; `saved` is the server's. */
 const looks = ref([]);
-/** The look whose cover picture is being read, so its Bookmark… can show it. */
+/** The recipe whose cover picture is being read, so its Clone… can show it. */
 const savingLook = ref("");
 /** What the Save dialog is filled from, or null. */
 const savingSource = ref(null);
@@ -383,14 +389,14 @@ const subtitle = computed(() => {
   const found = looks.value.length;
   const kept = recipes.value.length;
   // One count per section, in the sections' order, so each reads as the size
-  // of the list under its own label: a bookmark need not have a look below it
-  // (saved from the Run popup, never run), and two may mark one look. Nothing
+  // of the list under its own label: a saved recipe need not have one below it
+  // (saved from the Run popup, never run), and two may mark one. Nothing
   // is counted before a read has answered, because 0 would be a claim.
   const parts = [];
   if (!loading.value && !loadError.value) {
-    if (kept) parts.push(`${kept} bookmarked`);
+    if (kept) parts.push(`${kept} saved`);
     if (found || !kept) {
-      parts.push(`${found} look${found === 1 ? "" : "s"} from your pictures`);
+      parts.push(`${found} recipe${found === 1 ? "" : "s"} from your pictures`);
     }
   }
   if (props.stackSize > 1) {
@@ -447,7 +453,7 @@ function keyedLooks(used) {
 /**
  * Read the looks again, for their marks, without blanking the tab.
  *
- * **The server is the only source of `bookmarked`.** Its key and the client's
+ * **The server is the only source of `saved`.** Its key and the client's
  * mirror differ at the edges (whitespace a LoRA name was written with), so a
  * mark worked out here could disagree with the one the next load shows.
  */
@@ -456,9 +462,9 @@ async function refreshLooks(token) {
     const used = await listUsedLooks(props.workflowKeys.filter(Boolean));
     if (token === loadToken) looks.value = keyedLooks(used);
   } catch (err) {
-    // The bookmark is gone either way; only a mark below may be stale until
+    // The recipe is gone either way; only a mark below may be stale until
     // the tab is next read.
-    console.warn("Could not re-read the looks after removing a bookmark:", err);
+    console.warn("Could not re-read the used recipes after a delete:", err);
   }
 }
 
@@ -484,9 +490,9 @@ async function load() {
   }
   loading.value = true;
   try {
-    // Both halves together: a look's `bookmarked` flag is about the recipes
+    // Both halves together: a look's `saved` flag is about the recipes
     // in the first, so reading them apart could mark a look against a list
-    // of bookmarks that is not the one on screen.
+    // of saved recipes that is not the one on screen.
     const [saved, used] = await Promise.all([
       listSavedRecipes(keys),
       listUsedLooks(keys),
@@ -627,9 +633,9 @@ function closeExport() {
 async function removeRecipe(recipe) {
   menuId.value = null;
   const ok = await confirm({
-    title: "Remove this bookmark?",
-    message: `“${recipe.name || "Untitled"}” and the settings it keeps go for good. The pictures it made are untouched, and the look stays in the list while they carry it.`,
-    confirmLabel: "Remove",
+    title: "Delete this recipe?",
+    message: `“${recipe.name || "Untitled"}” goes for good. The pictures it made are untouched, and the recipe they carry stays in the list below.`,
+    confirmLabel: "Delete",
     danger: true,
   });
   if (!ok) {
@@ -640,20 +646,20 @@ async function removeRecipe(recipe) {
   try {
     await deleteSavedRecipe(recipe.id);
     // Only if this is still the same card's list, as in `place()`: another
-    // selection made mid-write has its own bookmarks and looks.
+    // selection made mid-write has its own saved and used recipes.
     if (token !== loadToken) return;
     // The epoch is NOT bumped: this tab is the writer, so announcing it would
     // only make the whole tab re-read what it just did. The looks are re-read
-    // on their own, because whether the look keeps its mark (another bookmark
+    // on their own, because whether the look keeps its mark (another saved recipe
     // differing only in a strength) is the server's answer.
     recipes.value = recipes.value.filter((row) => row.id !== recipe.id);
-    say(`Bookmark “${recipe.name || "Untitled"}” removed.`);
+    say(`“${recipe.name || "Untitled"}” deleted.`);
     void refreshLooks(token);
   } catch (err) {
     focusMenuButton(recipe.id);
     notices.push({
       level: "error",
-      text: errorMessage(err, "Could not remove that bookmark."),
+      text: errorMessage(err, "Could not delete that recipe."),
     });
   }
 }
@@ -735,7 +741,19 @@ async function keepLook(look) {
  */
 function runLook(look) {
   if (!look.cover_picture_id) return;
-  runDialog.openRun({ kind: "picture", pictureIds: [look.cover_picture_id] });
+  // The prompt the row shows, as the popup's starting text: the picture's own
+  // re-read can come back without one, and the box would open empty under a
+  // row that plainly has a prompt. It stays an editable prefill.
+  runDialog.openRun({
+    kind: "picture",
+    pictureIds: [look.cover_picture_id],
+    prompt: look.prompt,
+  });
+}
+
+/** Open a recipe's picture in the lightbox, by way of the Workflows view. */
+function openPicture(pictureId) {
+  workflows.requestOpenPicture(pictureId);
 }
 
 function run(recipe) {
@@ -908,17 +926,15 @@ function run(recipe) {
   white-space: nowrap;
 }
 
-/* The hint points at the one gesture this tab still asks for, and only until
-   it has been used once: the list fills itself, bookmarks do not. */
-.wfrt-hint {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  border: 1px dashed rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+/* A bare button around the thumbnail: the picture IS the control. */
+.wfrt-thumb-btn {
+  display: block;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
 }
 
 .wfrt-marked {
@@ -930,11 +946,7 @@ function run(recipe) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.wfrt-strong {
-  color: rgb(var(--v-theme-on-surface));
-}
-
-/* The band over each half: Bookmarked, then From your pictures. */
+/* The band over each half: Saved, then From your pictures. */
 .wfrt-section {
   margin-top: var(--space-2);
 }

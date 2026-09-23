@@ -1284,24 +1284,24 @@ def test_one_look_spelled_two_ways_is_one_row(recipe_env):
     assert matching[0]["pictures"] == 2
 
 
-def test_a_saved_recipe_bookmarks_its_look_and_leaves_it_listed(recipe_env):
+def test_a_saved_recipe_marks_its_look_and_leaves_it_listed(recipe_env):
     """Saving a look marks it; it never takes the look out of the list."""
     before = _used(recipe_env.owner, CARD_A)
-    assert not any(look["bookmarked"] for look in before), before
+    assert not any(look["saved"] for look in before), before
 
     _save(recipe_env.owner, CARD_A, prompt=PROMPT, loras=_ada())
 
     after = _used(recipe_env.owner, CARD_A)
     assert [look["pictures"] for look in after] == [
         look["pictures"] for look in before
-    ], "a bookmark moved or dropped a look"
-    bookmarked = [
+    ], "saving moved or dropped a look"
+    saved = [
         (look["prompt"], len(look["loras"]), look["pictures"])
         for look in after
-        if look["bookmarked"]
+        if look["saved"]
     ]
     # Only the saved look: the same prompt with another LoRA is another look.
-    assert bookmarked == [(PROMPT, 1, 2)], after
+    assert saved == [(PROMPT, 1, 2)], after
     assert after[0]["loras"][0]["filename"].lower().endswith(ADA)
 
 

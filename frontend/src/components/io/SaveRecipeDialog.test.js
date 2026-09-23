@@ -267,22 +267,44 @@ describe("SaveRecipeDialog", () => {
     return wrapper;
   }
 
-  it("withdraws a name it suggested itself once that name is taken", async () => {
-    // The box is prefilled with the card's name, so a card whose first recipe
-    // took that name would hand every later save a destructive primary by
-    // default, one Enter away, over a dialog titled "Save as recipe".
-    alreadySaved("Cinematic portrait");
+  it("numbers a name it suggested once that name is taken", async () => {
+    // Prefilled always, and never with a name that turns Save into Replace:
+    // the next free number instead. Case-folded, like the collision.
+    listSavedRecipes.mockResolvedValue([
+      { id: 9, name: " Cinematic Portrait " },
+      { id: 10, name: "cinematic portrait 2" },
+    ]);
     const wrapper = open();
     await flushPromises();
 
-    expect(wrapper.find("input[type=text]").element.value).toBe("");
+    expect(wrapper.find("input[type=text]").element.value).toBe(
+      "Cinematic portrait 3",
+    );
     expect(
       wrapper.findAll("button").some((b) => b.text().includes("Replace")),
     ).toBe(false);
-    // And the primary is the one this dialog already has for a nameless box.
     expect(
       wrapper.findAll("button").some((b) => b.text().includes("Save recipe")),
     ).toBe(true);
+  });
+
+  it("is never empty, even with no suggestion and no card name", async () => {
+    getWorkflowCard.mockRejectedValue(new Error("no card"));
+    const wrapper = open({ suggestedName: "" });
+    await flushPromises();
+    expect(wrapper.find("input[type=text]").element.value).toBe("Recipe");
+  });
+
+  it("leaves a name the owner typed alone when the reads land", async () => {
+    let settle;
+    listSavedRecipes.mockImplementation(
+      () => new Promise((resolve) => (settle = resolve)),
+    );
+    const wrapper = open();
+    await wrapper.find("input[type=text]").setValue("My own");
+    settle([{ id: 9, name: "Cinematic portrait" }]);
+    await flushPromises();
+    expect(wrapper.find("input[type=text]").element.value).toBe("My own");
   });
 
   it("keeps a free name it suggested", async () => {

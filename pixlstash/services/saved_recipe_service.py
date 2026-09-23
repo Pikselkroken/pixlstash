@@ -284,7 +284,7 @@ def credit_groups_in_session(
 
     The fourth column is the **newest** picture of the group, which is what a
     look shows as its cover (:func:`used_looks`) and what the Save dialog
-    reads the LoRA strengths back from when it is bookmarked. Credit ignores
+    reads the LoRA strengths back from when it is cloned. Credit ignores
     it. ``MAX(id)`` rather than a rating: a group is one look, so any of its
     pictures represents it, and the newest is the one the owner just made.
     """
@@ -509,10 +509,10 @@ def used_looks(
     instead of showing an empty panel to somebody with a full library.
 
     A group whose prompt and LoRA names match a saved recipe **stays in**, with
-    ``bookmarked`` set: a saved recipe is a bookmark on a look, and a bookmark
-    does not take its look out of the list. Matching is :func:`prompt_key` /
+    ``saved`` set: a saved recipe is a clone of the look, and a clone does not
+    take the original out of the list. Matching is :func:`prompt_key` /
     :func:`lora_key`, the same pair credit uses, so the flag and the credit on
-    the bookmark agree about which pictures are the look's.
+    the saved recipe agree about which pictures are the look's.
 
     ``loras`` here are **file names only**. The picture column stores no
     strength, so a look carries the names it loaded and nothing about how
@@ -558,7 +558,7 @@ def used_looks(
                 ],
                 "pictures": int(count),
                 "cover_picture_id": newest,
-                "bookmarked": key in taken,
+                "saved": key in taken,
             }
             continue
         look["pictures"] += int(count)

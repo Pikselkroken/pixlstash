@@ -198,6 +198,8 @@ const stackName = ref("");
 const existing = ref([]);
 /** A suggested or typed name cannot save until its stack collision check settles. */
 const existingPending = ref(false);
+/** The last name this dialog put in the box itself, as opposed to the owner. */
+let proposed = "";
 
 /** The LoRAs a run will not apply, because the shelf cannot identify them. */
 const unknownLoras = computed(() =>
@@ -283,7 +285,7 @@ watch(
     saveError.value = "";
     // The card's name lands here when the caller had none to suggest; it
     // arrives with the read below, which is why this is not the only writer.
-    name.value = props.suggestedName || stackName.value || "";
+    propose();
     for (const key of Object.keys(kept)) delete kept[key];
     for (const row of rows.value) kept[row.id] = row.id !== "seed";
   },
@@ -310,11 +312,8 @@ watch(
       .then((body) => {
         if (wanted !== props.workflowKey) return;
         stackName.value = body?.card?.name || "";
-        // A caller with no name to suggest opened this over an empty box and a
-        // disabled primary, one press after a button that said "Save as recipe".
         // Never over anything the owner has typed.
-        if (!name.value) name.value = stackName.value;
-        unproposeATakenName();
+        if (name.value === proposed) propose();
       })
       .catch((err) => {
         // The line it feeds is not load-bearing: without a name the dialog drops
@@ -326,7 +325,7 @@ watch(
       const rows = await listSavedRecipes(wanted);
       if (wanted !== props.workflowKey) return;
       existing.value = rows;
-      unproposeATakenName();
+      if (name.value === proposed) propose();
     } catch (err) {
       // Without the list there is no collision to spot, so the dialog goes on
       // offering Save - which is what it did before #1480 and is the safe way
@@ -340,18 +339,26 @@ watch(
 );
 
 /**
- * Never OPEN on a name that means Replace.
+ * Fill the box with a name, and never with a taken one.
  *
- * The box is prefilled with the card's name, so a card whose first recipe took
- * that name would hand every later save a destructive primary by default, one
- * Enter away, over a dialog still titled "Save as recipe". A suggestion the
- * dialog made is withdrawn instead; a name the OWNER types is theirs, and
- * Replace is what they asked for.
+ * **Always filled**: the caller's suggestion, else the card's name, else
+ * "Recipe" - an empty box over a disabled primary is one press more than the
+ * owner asked for. **Never a name that means Replace**: a card whose first
+ * recipe took its name would otherwise hand every later save a destructive
+ * primary, one Enter away. So a taken name gets the next free number, "Name
+ * 2", "Name 3". A name the OWNER types is theirs, and Replace is what they
+ * asked for.
  */
-function unproposeATakenName() {
-  if (collision.value && name.value === (props.suggestedName || stackName.value)) {
-    name.value = "";
+function propose() {
+  const base = (props.suggestedName || stackName.value || "Recipe").trim();
+  const taken = new Set(
+    existing.value.map((row) => (row.name || "").trim().toLowerCase()),
+  );
+  let candidate = base;
+  for (let n = 2; taken.has(candidate.toLowerCase()); n += 1) {
+    candidate = `${base} ${n}`;
   }
+  name.value = proposed = candidate;
 }
 
 /**
@@ -428,7 +435,7 @@ async function save() {
   // press re-enter and queue a second confirm and a second write.
   saving.value = true;
   try {
-    // **The same gate the Recipes tab's Remove bookmark has, for the same reason.** A
+    // **The same gate the Recipes tab's Delete has, for the same reason.** A
     // replace overwrites a saved row's prompt, LoRAs and settings and there is
     // no undo; naming the row on the button is an affordance, not a second
     // press. `PATCH /recipes/{id}` keeps the row's id, so its place in the tab

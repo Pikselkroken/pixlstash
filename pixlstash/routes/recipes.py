@@ -158,7 +158,7 @@ class UsedLook(BaseModel):
     loras: list[dict] = Field(default_factory=list)
     pictures: int = 0
     cover_picture_id: Optional[int] = None
-    bookmarked: bool = Field(
+    saved: bool = Field(
         False,
         description="A saved recipe of this stack keeps this look.",
     )
@@ -381,7 +381,7 @@ def create_router(server) -> APIRouter:
         description=(
             "Every distinct prompt-and-LoRAs combination the kept pictures of "
             "this workflow's stack carry, with how many pictures each accounts "
-            "for; a look a saved recipe already keeps says so in `bookmarked`. A library "
+            "for; a look a saved recipe already keeps says so in `saved`. A library "
             "that has never saved a recipe still has these, so the Recipes tab "
             "has something to show and something to save from. Name several "
             "workflows to get the union across all of their stacks."

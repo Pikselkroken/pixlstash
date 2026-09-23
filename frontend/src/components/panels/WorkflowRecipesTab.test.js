@@ -125,7 +125,7 @@ describe("WorkflowRecipesTab", () => {
       "Harbour fog",
     ]);
     expect(wrapper.find(".wfrt-sub").text()).toBe(
-      "3 bookmarked · runs on any of its 6 workflows",
+      "3 saved · runs on any of its 6 workflows",
     );
     // What the card credits and what it changed, on one line.
     expect(wrapper.findAll(".wfrt-facts")[0].text()).toBe("31 pictures · steps 12");
@@ -138,7 +138,7 @@ describe("WorkflowRecipesTab", () => {
     const wrapper = render({ stackSize: 1 });
     await flushPromises();
     expect(wrapper.find(".wfrt-sub").text()).toBe(
-      "3 bookmarked",
+      "3 saved",
     );
   });
 
@@ -195,7 +195,7 @@ describe("WorkflowRecipesTab", () => {
     confirmed.value = false;
     const wrapper = render();
     await flushPromises();
-    // Three ⋯ entries per card, so the second card's Remove bookmark is the sixth.
+    // Three ⋯ entries per card, so the second card's Delete is the sixth.
     const deleteSecond = () => wrapper.findAll(".ctx-item")[5].trigger("click");
 
     await deleteSecond();
@@ -237,20 +237,15 @@ describe("WorkflowRecipesTab", () => {
     cover_picture_id: 88,
   };
 
-  it("points at Bookmark… until the first bookmark is made", async () => {
+  it("offers no help text, saved recipes or not", async () => {
     listSavedRecipes.mockResolvedValue([]);
     listUsedLooks.mockResolvedValue([LOOK]);
     const wrapper = render();
     await flushPromises();
-    expect(wrapper.find(".wfrt-hint").text()).toContain("Bookmark…");
-    expect(wrapper.find(".wfrt-sub").text()).toBe(
-      "1 look from your pictures · runs on any of its 6 workflows",
-    );
-
-    listSavedRecipes.mockResolvedValue([recipe(1, "Rainy tram platform")]);
-    useWorkflowsStore().notedRecipesChanged();
-    await flushPromises();
     expect(wrapper.find(".wfrt-hint").exists()).toBe(false);
+    expect(wrapper.find(".wfrt-sub").text()).toBe(
+      "1 recipe from your pictures · runs on any of its 6 workflows",
+    );
   });
 
   it("lists the looks the pictures carry when nothing is saved", async () => {
@@ -261,7 +256,7 @@ describe("WorkflowRecipesTab", () => {
 
     expect(listUsedLooks).toHaveBeenCalledWith([KEY]);
     // Not the empty sentence: a library with pictures has looks to show.
-    expect(wrapper.text()).not.toContain("No looks here yet");
+    expect(wrapper.text()).not.toContain("No recipes here yet");
     expect(wrapper.text()).toContain("a look nobody kept");
     expect(wrapper.text()).toContain("12 pictures");
     expect(wrapper.text()).toContain("From your pictures");
@@ -272,14 +267,14 @@ describe("WorkflowRecipesTab", () => {
     listUsedLooks.mockResolvedValue([]);
     const wrapper = render();
     await flushPromises();
-    expect(wrapper.text()).toContain("No looks here yet");
+    expect(wrapper.text()).toContain("No recipes here yet");
     // Never "nothing has been made with this workflow": a picture only shows
     // up once its ComfyUI metadata has been read, so an unread stack is not
     // an empty one.
     expect(wrapper.text()).not.toContain("Nothing has been made");
     // An answered read of nothing is a count, and says 0.
     expect(wrapper.find(".wfrt-sub").text()).toBe(
-      "0 looks from your pictures · runs on any of its 6 workflows",
+      "0 recipes from your pictures · runs on any of its 6 workflows",
     );
   });
 
@@ -294,7 +289,7 @@ describe("WorkflowRecipesTab", () => {
     expect(wrapper.find(".wfrt-sub").text()).toBe("");
     answer([]);
     await flushPromises();
-    expect(wrapper.find(".wfrt-sub").text()).toBe("0 looks from your pictures");
+    expect(wrapper.find(".wfrt-sub").text()).toBe("0 recipes from your pictures");
 
     listSavedRecipes.mockRejectedValue(new Error("boom"));
     useWorkflowsStore().notedRecipesChanged();
@@ -309,7 +304,7 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     await wrapper
       .findAll("button")
-      .find((b) => b.text().includes("Bookmark…"))
+      .find((b) => b.text().includes("Clone…"))
       .trigger("click");
     await flushPromises();
 
@@ -337,10 +332,27 @@ describe("WorkflowRecipesTab", () => {
 
     // No `saved_recipe_id` exists for a look, so the run's source is the
     // picture: "run what made this" is exactly what the look is.
+    // And the row's prompt as the box's editable starting text: the picture's
+    // re-read can come back without one.
     expect(openRun).toHaveBeenCalledWith({
       kind: "picture",
       pictureIds: [88],
+      prompt: "a look nobody kept",
     });
+  });
+
+  it("opens a recipe's picture from its thumbnail, in both lists", async () => {
+    listUsedLooks.mockResolvedValue([LOOK]);
+    const wrapper = render();
+    await flushPromises();
+    const store = useWorkflowsStore();
+    const thumbs = wrapper.findAll(".wfrt-thumb-btn");
+    // Three saved (source picture 7) and one used (cover 88).
+    expect(thumbs).toHaveLength(4);
+    await thumbs[0].trigger("click");
+    expect(store.pictureToOpen).toBe(7);
+    await thumbs[3].trigger("click");
+    expect(store.pictureToOpen).toBe(88);
   });
 
   it("asks about every selected workflow at once", async () => {
@@ -500,7 +512,7 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     await wrapper
       .findAll("button")
-      .find((b) => b.text().includes("Bookmark…"))
+      .find((b) => b.text().includes("Clone…"))
       .trigger("click");
     await flushPromises();
 
@@ -522,7 +534,7 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     await wrapper
       .findAll("button")
-      .find((b) => b.text().includes("Bookmark…"))
+      .find((b) => b.text().includes("Clone…"))
       .trigger("click");
     await flushPromises();
 
@@ -534,36 +546,36 @@ describe("WorkflowRecipesTab", () => {
     expect(useNoticeStore().notices.map((n) => n.level)).toContain("error");
   });
 
-  it("lists bookmarks above the looks, and marks a bookmarked look in place", async () => {
+  it("lists saved recipes above the used ones, and marks a cloned one in place", async () => {
     const kept = recipe(1, "Rainy tram platform", {
       prompt: "a kept look",
       loras: [{ filename: "mira_v2.safetensors", strength: 0.85 }],
     });
     listSavedRecipes.mockResolvedValue([kept]);
     listUsedLooks.mockResolvedValue([
-      { ...LOOK, prompt: "a kept look", bookmarked: true },
+      { ...LOOK, prompt: "a kept look", saved: true },
       LOOK,
     ]);
     const wrapper = render();
     await flushPromises();
 
     const labels = wrapper.findAll(".section-label").map((l) => l.text());
-    expect(labels).toEqual(["Bookmarked", "From your pictures"]);
+    expect(labels).toEqual(["Saved", "From your pictures"]);
     const lists = wrapper.findAll(".wfrt-list");
     expect(lists).toHaveLength(2);
     expect(lists[0].text()).toContain("Rainy tram platform");
     expect(lists[0].text()).not.toContain("a look nobody kept");
 
-    // The bookmarked look is still in the list, marked, with no Bookmark…;
+    // The cloned one is still in the list, marked Saved, with no Clone…;
     // the other one offers it.
     const [markedRow, plainRow] = lists[1].findAll(".wfrt-card");
     expect(markedRow.text()).toContain("a kept look");
     expect(markedRow.find(".wfrt-marked").exists()).toBe(true);
-    expect(markedRow.text()).not.toContain("Bookmark…");
+    expect(markedRow.text()).not.toContain("Clone…");
     expect(plainRow.find(".wfrt-marked").exists()).toBe(false);
-    expect(plainRow.text()).toContain("Bookmark…");
+    expect(plainRow.text()).toContain("Clone…");
     expect(wrapper.find(".wfrt-sub").text()).toContain(
-      "1 bookmarked · 2 looks from your pictures",
+      "1 saved · 2 recipes from your pictures",
     );
   });
 
@@ -572,13 +584,13 @@ describe("WorkflowRecipesTab", () => {
     const kept = recipe(1, "Rainy tram platform", { prompt: "a kept look" });
     listSavedRecipes.mockResolvedValue([kept]);
     listUsedLooks
-      .mockResolvedValueOnce([{ ...LOOK, prompt: "a kept look", bookmarked: true }])
-      .mockResolvedValueOnce([{ ...LOOK, prompt: "a kept look", bookmarked: false }]);
+      .mockResolvedValueOnce([{ ...LOOK, prompt: "a kept look", saved: true }])
+      .mockResolvedValueOnce([{ ...LOOK, prompt: "a kept look", saved: false }]);
     const wrapper = render();
     await flushPromises();
     expect(wrapper.find(".wfrt-marked").exists()).toBe(true);
 
-    // Rename, Export…, Remove bookmark.
+    // Rename, Export…, Delete.
     await wrapper.findAll(".ctx-item")[2].trigger("click");
     await flushPromises();
 
@@ -588,7 +600,7 @@ describe("WorkflowRecipesTab", () => {
     expect(listSavedRecipes).toHaveBeenCalledTimes(1);
     expect(wrapper.text()).toContain("a kept look");
     expect(wrapper.find(".wfrt-marked").exists()).toBe(false);
-    expect(wrapper.text()).toContain("Bookmark…");
+    expect(wrapper.text()).toContain("Clone…");
   });
 
   it("keeps a removal that lands late off another card's list", async () => {
@@ -601,7 +613,7 @@ describe("WorkflowRecipesTab", () => {
     await wrapper.findAll(".ctx-item")[2].trigger("click"); // first card's Remove
     await flushPromises();
 
-    const other = [recipe(1, "Another card's bookmark")];
+    const other = [recipe(1, "Another card's recipe")];
     listSavedRecipes.mockResolvedValue(other);
     await wrapper.setProps({ workflowKeys: ["b".repeat(64)] });
     await flushPromises();
@@ -609,7 +621,7 @@ describe("WorkflowRecipesTab", () => {
 
     finish({ deleted: 1 });
     await flushPromises();
-    expect(namesOf(wrapper)).toEqual(["Another card's bookmark"]);
+    expect(namesOf(wrapper)).toEqual(["Another card's recipe"]);
     expect(listUsedLooks).toHaveBeenCalledTimes(reads);
   });
 });

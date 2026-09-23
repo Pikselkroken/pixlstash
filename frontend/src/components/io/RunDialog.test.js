@@ -166,6 +166,31 @@ beforeEach(() => {
   });
 });
 
+describe("the prompt box", () => {
+  it("opens on a caller's prompt, editable, over the picture's re-read", async () => {
+    // The Recipes tab passes the prompt its row shows: the re-read may have
+    // none, or differ, and the box must not open on something else.
+    getPictureRecipe.mockResolvedValue({
+      available: true,
+      workflow_key: KEY,
+      positive_prompt: null,
+      lora_slots: [],
+    });
+    const wrapper = await mountRun({
+      kind: "picture",
+      pictureIds: [42],
+      prompt: "a look the row shows",
+    });
+    const box = wrapper
+      .findAllComponents({ name: "AppTextarea" })
+      .find((c) => c.props("label") === "Prompt");
+    expect(box.props("modelValue")).toBe("a look the row shows");
+    expect(box.props("disabled")).toBe(false);
+    await box.vm.$emit("update:modelValue", "edited");
+    expect(box.props("modelValue")).toBe("edited");
+  });
+});
+
 describe("the ↺ chip", () => {
   it("is absent until a field is edited", async () => {
     const wrapper = await mountRun();
