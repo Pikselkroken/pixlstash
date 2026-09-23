@@ -125,7 +125,7 @@ describe("WorkflowRecipesTab", () => {
       "Harbour fog",
     ]);
     expect(wrapper.find(".wfrt-sub").text()).toBe(
-      "0 recipes from your pictures · 3 bookmarked · runs on any of its 6 workflows",
+      "3 bookmarked · runs on any of its 6 workflows",
     );
     // What the card credits and what it changed, on one line.
     expect(wrapper.findAll(".wfrt-facts")[0].text()).toBe("31 pictures · steps 12");
@@ -138,7 +138,7 @@ describe("WorkflowRecipesTab", () => {
     const wrapper = render({ stackSize: 1 });
     await flushPromises();
     expect(wrapper.find(".wfrt-sub").text()).toBe(
-      "0 recipes from your pictures · 3 bookmarked",
+      "3 bookmarked",
     );
   });
 
@@ -195,7 +195,7 @@ describe("WorkflowRecipesTab", () => {
     confirmed.value = false;
     const wrapper = render();
     await flushPromises();
-    // Three ⋯ entries per card, so the second card's Delete is the sixth.
+    // Three ⋯ entries per card, so the second card's Remove bookmark is the sixth.
     const deleteSecond = () => wrapper.findAll(".ctx-item")[5].trigger("click");
 
     await deleteSecond();
@@ -244,7 +244,7 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     expect(wrapper.find(".wfrt-hint").text()).toContain("Bookmark…");
     expect(wrapper.find(".wfrt-sub").text()).toBe(
-      "1 recipe from your pictures · runs on any of its 6 workflows",
+      "1 look from your pictures · runs on any of its 6 workflows",
     );
 
     listSavedRecipes.mockResolvedValue([recipe(1, "Rainy tram platform")]);
@@ -540,8 +540,32 @@ describe("WorkflowRecipesTab", () => {
     expect(plainRow.find(".wfrt-marked").exists()).toBe(false);
     expect(plainRow.text()).toContain("Bookmark…");
     expect(wrapper.find(".wfrt-sub").text()).toContain(
-      "2 recipes from your pictures · 1 bookmarked",
+      "2 looks from your pictures · 1 bookmarked",
     );
+  });
+
+  it("keeps the mark while another bookmark still keeps the look", async () => {
+    deleteSavedRecipe.mockResolvedValue({ deleted: 1 });
+    // Two bookmarks differing only in a strength: one look as far as a
+    // picture can tell.
+    listSavedRecipes.mockResolvedValue([
+      recipe(1, "Soft", { prompt: "a kept look" }),
+      recipe(2, "Strong", {
+        prompt: "a kept look",
+        loras: [{ filename: "mira_v2.safetensors", strength: 1.2 }],
+      }),
+    ]);
+    listUsedLooks.mockResolvedValue([
+      { ...LOOK, prompt: "a kept look", bookmarked: true },
+    ]);
+    const wrapper = render();
+    await flushPromises();
+
+    await wrapper.findAll(".ctx-item")[2].trigger("click"); // Soft's Remove
+    await flushPromises();
+
+    expect(deleteSavedRecipe).toHaveBeenCalledWith(1);
+    expect(wrapper.find(".wfrt-marked").exists()).toBe(true);
   });
 
   it("unmarks the look when its bookmark is removed, and keeps it listed", async () => {

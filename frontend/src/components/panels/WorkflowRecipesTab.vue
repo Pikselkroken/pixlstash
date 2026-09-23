@@ -382,7 +382,11 @@ const MAX_UNION_KEYS = 100;
 const subtitle = computed(() => {
   const found = looks.value.length;
   const kept = recipes.value.length;
-  const parts = [`${found} recipe${found === 1 ? "" : "s"} from your pictures`];
+  // A look is not a recipe until it is bookmarked, and a bookmark need not
+  // have a look below it (saved from the Run popup, never run), so the two
+  // are counted apart and the first is left out when it would only say 0.
+  const parts = [];
+  if (found || !kept) parts.push(`${found} look${found === 1 ? "" : "s"} from your pictures`);
   if (kept) parts.push(`${kept} bookmarked`);
   if (props.stackSize > 1) {
     parts.push(`runs on any of its ${props.stackSize} workflows`);

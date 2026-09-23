@@ -428,7 +428,7 @@ async function save() {
   // press re-enter and queue a second confirm and a second write.
   saving.value = true;
   try {
-    // **The same gate the Recipes tab's Delete has, for the same reason.** A
+    // **The same gate the Recipes tab's Remove bookmark has, for the same reason.** A
     // replace overwrites a saved row's prompt, LoRAs and settings and there is
     // no undo; naming the row on the button is an affordance, not a second
     // press. `PATCH /recipes/{id}` keeps the row's id, so its place in the tab

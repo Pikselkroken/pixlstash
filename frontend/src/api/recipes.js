@@ -47,7 +47,7 @@ export async function listSavedRecipes(workflowKey) {
 }
 
 /**
- * The looks this workflow's own pictures were made with, that nobody saved.
+ * Every look this workflow's own pictures were made with, saved or not.
  *
  * **A saved recipe is a look somebody kept; this is every look they ran.** A
  * library that has never pressed Save still has hundreds, which is why the

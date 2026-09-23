@@ -1847,7 +1847,8 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "The looks the stack's own pictures carry, prompts in full. A "
             "SUPERSET of the credit figure on GET /recipes, which counts these "
             "same rows: that route says how many pictures a saved recipe "
-            "accounts for, this one says what the unsaved ones were made with. "
+            "accounts for, this one says what every one was made with, and "
+            "whether a saved recipe keeps it. "
             "Owner only for the reason the listing is, and more so"
         ),
     ),
