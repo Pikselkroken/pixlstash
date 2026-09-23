@@ -1,14 +1,15 @@
 - Workflows has a **Recipes** tab beside Workflow. It shows **every look your
   pictures were made with on that workflow**, not only the ones you kept: each
   distinct prompt-and-LoRAs combination, with how many of your pictures it
-  accounts for, a picture of one of them, and *Save…* to keep it as a recipe
-  you can name and reorder. Select several workflows and you get the union of
+  accounts for, a picture of one of them, and *Bookmark…* to keep it as a
+  recipe you can name and reorder. A bookmarked look stays in the list,
+  marked. Select several workflows and you get the union of
   what they have between them.
-- The looks you have kept sit above the rest, each with the picture it was
+- Your bookmarks sit above the rest, each with the picture it was
   saved from, its prompt, its LoRAs with their strengths, and how many of your
   pictures it accounts for. Run… on a card opens the Run popup already filled
   in with that recipe. Drag a card by its handle to reorder, or hold Alt and
-  use the arrow keys; ⋯ renames, exports or deletes one. A recipe runs on any
+  use the arrow keys; ⋯ renames or exports one, or removes the bookmark. A recipe runs on any
   workflow in the stack it was saved from, so picking a member of a stack
   shows the stack's recipes.
 - *Save as recipe* now opens a window listing what the recipe will keep —

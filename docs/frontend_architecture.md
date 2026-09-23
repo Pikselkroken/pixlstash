@@ -2113,19 +2113,21 @@ strengths and the parameters they changed. Not a `workflow_recipe` row, which
 new code calls a *variant*. Owner-only, like everything under `/workflows`.
 
 - **The tab has two halves: Bookmarked on top, From your pictures below.** A
-  saved recipe is a *bookmark*, a look somebody pressed Bookmark… on (the word
-  and icon the tab already used; stars are picture scores). `GET /recipes/used` answers with
-  every look the stack's own pictures were *actually made with*, grouped from
-  the same picture rows credit is counted from. Without it the tab showed "no
-  recipes yet" on every workflow of a full library, because saved recipes are
-  a concept that ships empty. A look a saved recipe keeps **stays in the list**,
-  flagged `bookmarked` on the same `prompt_key`/`lora_key` pair credit uses,
-  and shows "Bookmarked" where its Bookmark… button was; removing the bookmark
-  clears the mark locally with `keepsTheSameLook` — which is why **Bookmark… keys the new recipe off the
-  look and not off the cover picture's re-read**: the look was keyed on the
-  stored `comfyui_*` columns, the live extraction can differ from them, and a
-  recipe carrying the re-read's prompt would leave the look unmarked
-  AND be credited 0. Only the LoRA strengths and the seed come from the
+  saved recipe is a *bookmark*, a look somebody pressed Bookmark… on (the
+  word and icon the tab already used; stars are picture scores).
+  `GET /recipes/used` answers with every look the stack's own pictures were
+  *actually made with*, grouped from the same picture rows credit is counted
+  from. Without it the tab showed "no recipes yet" on every workflow of a
+  full library, because saved recipes are a concept that ships empty. A look
+  a saved recipe keeps **stays in the list**, flagged `bookmarked` on the
+  same `prompt_key`/`lora_key` pair credit uses, and shows "Bookmarked" where
+  its Bookmark… button was. **The server is the only source of that flag**:
+  removing a bookmark re-reads the looks rather than working the mark out
+  with the client's mirror of the key. Because the flag and the credit share
+  that key, **Bookmark… keys the new recipe off the look and not off the
+  cover picture's re-read**: the look was keyed on the stored `comfyui_*`
+  columns, the live extraction can differ from them, and a recipe carrying
+  the re-read's prompt would leave the look unmarked AND be credited 0. Only the LoRA strengths and the seed come from the
   picture, because the columns do not hold them. The server merges groups on
   that key too, because the SQL groups by the stored `comfyui_loras` *text*
   and one look written two ways (`ada.safetensors`,

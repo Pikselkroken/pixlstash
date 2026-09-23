@@ -315,7 +315,7 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
-import { keepsTheSameLook, loraKey, promptKey } from "../../utils/recipeKey";
+import { loraKey, promptKey } from "../../utils/recipeKey";
 import { resolveRecipeLoras } from "../../utils/recipeLoras";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
 import { withRef } from "../../utils/withRef";
@@ -353,9 +353,9 @@ const menuId = ref(null);
 const renamingId = ref(null);
 const renameDraft = ref("");
 const exportId = ref(null);
-/** The looks the stack's own pictures carry, that nobody has saved. */
+/** Every look the stack's own pictures carry; `bookmarked` is the server's. */
 const looks = ref([]);
-/** The look whose cover picture is being read, so its Save… can show it. */
+/** The look whose cover picture is being read, so its Bookmark… can show it. */
 const savingLook = ref("");
 /** What the Save dialog is filled from, or null. */
 const savingSource = ref(null);
@@ -382,12 +382,17 @@ const MAX_UNION_KEYS = 100;
 const subtitle = computed(() => {
   const found = looks.value.length;
   const kept = recipes.value.length;
-  // A look is not a recipe until it is bookmarked, and a bookmark need not
-  // have a look below it (saved from the Run popup, never run), so the two
-  // are counted apart and the first is left out when it would only say 0.
+  // One count per section, in the sections' order, so each reads as the size
+  // of the list under its own label: a bookmark need not have a look below it
+  // (saved from the Run popup, never run), and two may mark one look. Nothing
+  // is counted before a read has answered, because 0 would be a claim.
   const parts = [];
-  if (found || !kept) parts.push(`${found} look${found === 1 ? "" : "s"} from your pictures`);
-  if (kept) parts.push(`${kept} bookmarked`);
+  if (!loading.value && !loadError.value) {
+    if (kept) parts.push(`${kept} bookmarked`);
+    if (found || !kept) {
+      parts.push(`${found} look${found === 1 ? "" : "s"} from your pictures`);
+    }
+  }
   if (props.stackSize > 1) {
     parts.push(`runs on any of its ${props.stackSize} workflows`);
   }
@@ -426,6 +431,37 @@ function factsOf(recipe) {
   return parts.join(" · ");
 }
 
+/**
+ * The looks as the list keys them.
+ *
+ * A look has no id, and its prompt and LoRAs are what make it one, so the key
+ * both halves match on is also what keys the list.
+ */
+function keyedLooks(used) {
+  return used.map((look) => ({
+    ...look,
+    key: `${promptKey(look.prompt)}\u0000${loraKey(look.loras)}`,
+  }));
+}
+
+/**
+ * Read the looks again, for their marks, without blanking the tab.
+ *
+ * **The server is the only source of `bookmarked`.** Its key and the client's
+ * mirror differ at the edges (whitespace a LoRA name was written with), so a
+ * mark worked out here could disagree with the one the next load shows.
+ */
+async function refreshLooks(token) {
+  try {
+    const used = await listUsedLooks(props.workflowKeys.filter(Boolean));
+    if (token === loadToken) looks.value = keyedLooks(used);
+  } catch (err) {
+    // The bookmark is gone either way; only a mark below may be stale until
+    // the tab is next read.
+    console.warn("Could not re-read the looks after removing a bookmark:", err);
+  }
+}
+
 async function load() {
   const token = (loadToken += 1);
   const mine = () => token === loadToken;
@@ -457,12 +493,7 @@ async function load() {
     ]);
     if (!mine()) return;
     recipes.value = saved;
-    looks.value = used.map((look) => ({
-      ...look,
-      // A look has no id, and its prompt and LoRAs are what make it one, so
-      // the key both halves match on is also what keys the list.
-      key: `${promptKey(look.prompt)}\u0000${loraKey(look.loras)}`,
-    }));
+    looks.value = keyedLooks(used);
   } catch (err) {
     if (mine()) {
       recipes.value = [];
@@ -605,22 +636,24 @@ async function removeRecipe(recipe) {
     focusMenuButton(recipe.id);
     return;
   }
+  const token = loadToken;
   try {
     await deleteSavedRecipe(recipe.id);
-    // Settled locally and the epoch is NOT bumped: this tab is the writer, so
-    // announcing it would only make the tab re-read what it just did. The
-    // look stays listed below; it loses its mark unless another bookmark -
-    // one differing only in a strength - still keeps it.
+    // Only if this is still the same card's list, as in `place()`: another
+    // selection made mid-write has its own bookmarks and looks.
+    if (token !== loadToken) return;
+    // The epoch is NOT bumped: this tab is the writer, so announcing it would
+    // only make the whole tab re-read what it just did. The looks are re-read
+    // on their own, because whether the look keeps its mark (another bookmark
+    // differing only in a strength) is the server's answer.
     recipes.value = recipes.value.filter((row) => row.id !== recipe.id);
-    for (const look of looks.value) {
-      look.bookmarked = recipes.value.some((row) => keepsTheSameLook(row, look));
-    }
-    say(`${recipe.name || "Recipe"} bookmark removed.`);
+    say(`Bookmark “${recipe.name || "Untitled"}” removed.`);
+    void refreshLooks(token);
   } catch (err) {
     focusMenuButton(recipe.id);
     notices.push({
       level: "error",
-      text: errorMessage(err, "Could not delete that recipe."),
+      text: errorMessage(err, "Could not remove that bookmark."),
     });
   }
 }

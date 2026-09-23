@@ -283,8 +283,8 @@ def credit_groups_in_session(
     holds ``"[]"`` and is counted.
 
     The fourth column is the **newest** picture of the group, which is what a
-    look with no saved recipe behind it shows as its cover (:func:`used_looks`)
-    and what the Save dialog reads the LoRA strengths back from. Credit ignores
+    look shows as its cover (:func:`used_looks`) and what the Save dialog
+    reads the LoRA strengths back from when it is bookmarked. Credit ignores
     it. ``MAX(id)`` rather than a rating: a group is one look, so any of its
     pictures represents it, and the newest is the one the owner just made.
     """
