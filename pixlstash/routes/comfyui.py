@@ -1566,6 +1566,8 @@ class ComfyUIPreflightResponse(BaseModel):
     missing_input_images: list[dict] = []
     has_save_image: bool = False
     unchecked_fields: int = 0
+    # Model-shaped values on loaders PixlStash cannot read, so never checked.
+    unchecked_models: int = 0
 
 
 class ComfyUIPictureRecipeResponse(BaseModel):

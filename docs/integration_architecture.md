@@ -982,7 +982,9 @@ the two sides have agreed:
    it is in the file, which is what the mark means.
 
    **An empty row is "not read", never "has none" — and that is per ROW.**
-   The recovery finds loaders by class, over `MODEL_FILENAME_FIELDS`, and no
+   The recovery finds loaders by class, over `MODEL_FILENAME_FIELDS` (through
+   `model_filename_fields`, which also reads a ComfyUI-MultiGPU wrapper as the
+   loader it wraps), and no
    list of classes is every loader there is: a graph can have its LoRAs
    recovered and its base model missed, so a non-empty `models` does not mean
    the card was read either. A client renders any empty row on a
@@ -1575,7 +1577,8 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
    "seed_inputs": [{"node_id":"3","class_type":"KSampler","field":"seed","value":1}],
    "preflight": {"ok": true, "checked": true, "missing_node_classes": [],
                  "missing_models": [], "missing_input_images": [],
-                 "has_save_image": true, "unchecked_fields": 0}}
+                 "has_save_image": true, "unchecked_fields": 0,
+                 "unchecked_models": 0}}
   ```
   `node_classes` (distinct `class_type`, sorted) and `source_is_imported` / `source_label` exist for the owner's **consent** decision, not for display polish — see the untrusted-graph note below. `node_classes` is read from the file, so unlike everything under `preflight` it is populated even when ComfyUI was unreachable.
   **Three distinct negative answers, and the SPA must not collapse them**, because they send the user to three different places:
@@ -1592,7 +1595,7 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
 
   On the `a1111` branch the values come from the infotext instead. a value that is wholly a number is reported as one (`steps`, `cfg_scale`), and anything else stays the text A1111 wrote (`size: "512x768"`, `sampler: "Euler a"`). `settings` then carries **A1111's own field names, as an open set** — `steps`, `sampler`, `cfg_scale`, `size` and whatever else that build wrote (`denoising_strength`, `clip_skip`, ADetailer and ControlNet fields) — so render it as a list of name/value pairs rather than reaching for named keys. **One key is PixlStash's own**: a ControlNet field names its model inside its own value, and that name is lifted out into `<field>_model` (`controlnet_0_model`, `…_model_2` for a second) so it can be forgotten like any other model (#1375), which also means the `controlnet_0` beside it no longer repeats the name. Both are still rendered as ordinary name/value pairs; the lifted name is not added to `models`, which stays the checkpoint. `lora_slots[].node_id` and `.class_type` are `null` there: the reduction's ids name no node in any graph, and there is no replay to send one back to.
 
-  `unchecked_fields > 0` means the check was partial (a field ComfyUI does not enumerate, or a `remote` combo it fills lazily) and must not read as a clean bill of health. It is **not** the same state as `checked:false` and must not be gated the same way.
+  `unchecked_fields > 0` means the check was partial (a field ComfyUI does not enumerate, or a `remote` combo it fills lazily) and must not read as a clean bill of health. It is **not** the same state as `checked:false` and must not be gated the same way. `unchecked_models` counts the other gap: a model-shaped value (a model file extension) on a loader PixlStash cannot read at all, so it was never compared; a "no missing models" answer is only as good as that count is small.
 
 - **Run** `POST /api/v1/workflows/run` (§11.1). The per-picture replay routes this step used to name — `POST /api/v1/comfyui/run_recipe` and `POST /api/v1/comfyui/run_i2i` — were retired in #1410; the consent and seed rules below are unchanged and are now that route's. It returns `{status, prompts:[{picture_id, prompt_id}]}`; the SPA passes `prompts` to `ComfyUiRunner` so its ComfyUI-WebSocket progress tracking picks the run up.
 

@@ -12,7 +12,7 @@ from functools import lru_cache
 from typing import Any
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.comfyui_recipe_service import MODEL_FILENAME_FIELDS
+from pixlstash.services.comfyui_recipe_service import model_filename_fields
 
 logger = get_logger(__name__)
 
@@ -556,7 +556,7 @@ def _model_widgets_of(class_type: str) -> tuple[str, ...]:
     """Every widget of this loader that holds a model file name."""
     return tuple(
         field
-        for field in MODEL_FILENAME_FIELDS.get(class_type, ())
+        for field in model_filename_fields(class_type)
         if field not in _NOT_A_MODEL_WIDGET
     )
 
@@ -570,7 +570,9 @@ def loaded_model_widgets(workflow: dict) -> list[tuple[str, str]]:
     falls back to slot 0 only for the three loader families whose model name is
     the first widget (:data:`_NAME_FIRST_CLASSES`).
 
-    **Which widget each loader reads is ``MODEL_FILENAME_FIELDS``'**, the map
+    **Which widget each loader reads is ``MODEL_FILENAME_FIELDS``'** (through
+    ``model_filename_fields``, so a ComfyUI-MultiGPU wrapper reads as the
+    loader it wraps), the map
     the pre-flight check already uses, rather than a list of its own: a card
     built from these is read beside one built from a stored slot list, and two
     answers to "which widget names a model" is how the two drift. That map
