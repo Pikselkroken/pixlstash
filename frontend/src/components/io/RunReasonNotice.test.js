@@ -98,3 +98,47 @@ describe("a bypassed LoRA, which is not a refusal", () => {
     expect(mountNotice(reason).find(".rrn-acts").exists()).toBe(false);
   });
 });
+
+describe("a recipe LoRA with no loader, which is not a refusal (#1478)", () => {
+  const reason = {
+    code: "loras_unplaced",
+    workflowKey: "k".repeat(64),
+    loras: [
+      {
+        filename: "loras/skin-detail-xl.safetensors",
+        sha256: "c".repeat(64),
+        reason: "this workflow has no third loader",
+      },
+    ],
+  };
+
+  function mountWithButtons(entry) {
+    return mount(RunReasonNotice, {
+      props: { reason: entry, subject: "SDXL fast" },
+      global: {
+        stubs: {
+          AppButton: { template: "<button @click=\"$emit('click')\"><slot /></button>" },
+        },
+      },
+    });
+  }
+
+  it("says it is not applied, names it, and does not say the run cannot", () => {
+    const wrapper = mountWithButtons(reason);
+    const said = wrapper.text().replace(/\s+/g, " ");
+    expect(said).not.toContain("can't run");
+    expect(said).toContain(
+      "A LoRA this recipe names has no loader to go in on this workflow, so it is not applied.",
+    );
+    expect(said).toContain("skin-detail-xl.safetensors — this workflow has no third loader");
+    expect(rail(wrapper)).toContain("rrn--notice");
+  });
+
+  it("offers Edit LoRAs… for the card it is about", async () => {
+    const wrapper = mountWithButtons(reason);
+    const edit = wrapper.findAll("button").find((b) => b.text() === "Edit LoRAs…");
+    expect(edit).toBeTruthy();
+    await edit.trigger("click");
+    expect(wrapper.emitted("edit-loras")?.[0]).toEqual(["k".repeat(64)]);
+  });
+});

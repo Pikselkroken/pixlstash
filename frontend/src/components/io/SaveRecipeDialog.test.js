@@ -32,6 +32,8 @@ const getWorkflowCard = vi.fn();
 vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
 }));
+const push = vi.fn();
+vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
   return vuetifyComponentStubs();
@@ -77,10 +79,10 @@ describe("SaveRecipeDialog", () => {
     const wrapper = open();
     await flushPromises();
     const boxes = wrapper.findAll("input[type=checkbox]");
-    expect(boxes).toHaveLength(4);
-    // Prompt, LoRAs and the one override are kept; the seed is not.
+    // The LoRAs are rows of their own now (#1478), not a checkbox line.
+    expect(boxes).toHaveLength(3);
+    // Prompt and the one override are kept; the seed is not.
     expect(boxes.map((box) => box.element.checked)).toEqual([
-      true,
       true,
       true,
       false,
@@ -129,7 +131,7 @@ describe("SaveRecipeDialog", () => {
     await flushPromises();
     const boxes = wrapper.findAll("input[type=checkbox]");
     await boxes[0].setValue(false); // the prompt
-    await boxes[2].setValue(false); // the override
+    await boxes[1].setValue(false); // the override
     await wrapper
       .findAll("button")
       .find((button) => button.text().includes("Save recipe"))
@@ -146,7 +148,7 @@ describe("SaveRecipeDialog", () => {
   it("keeps the seed, and flags it, when the owner ticks it", async () => {
     const wrapper = open();
     await flushPromises();
-    await wrapper.findAll("input[type=checkbox]")[3].setValue(true);
+    await wrapper.findAll("input[type=checkbox]")[2].setValue(true);
     await wrapper
       .findAll("button")
       .find((button) => button.text().includes("Save recipe"))
@@ -204,12 +206,11 @@ describe("SaveRecipeDialog", () => {
       ],
     });
     await flushPromises();
-    const text = wrapper.text();
-    // The whole sentence, whitespace-collapsed: the template wraps it.
-    const said = text.replace(/\s+/g, " ");
-    expect(said).toContain("not on your model shelf");
+    const said = wrapper.text().replace(/\s+/g, " ");
+    expect(said).toContain(
+      "Not on your model shelf. A run ignores this one, so a recipe that lists it promises a LoRA it will not apply.",
+    );
     expect(said).toContain("mystery.safetensors");
-    expect(said).toContain("ignored when it runs");
 
     await wrapper
       .findAll("button")
@@ -450,5 +451,202 @@ describe("SaveRecipeDialog", () => {
       .trigger("click");
     await flushPromises();
     expect(store.recipesEpoch).toBe(before + 1);
+  });
+});
+
+// ── One row per LoRA, and the question (#1478) ─────────────────────────
+//
+// The saved recipe holds exactly the rows the list shows. A LoRA the shelf
+// cannot name is flagged, and its trash asks which of two different acts is
+// meant, every time.
+
+describe("SaveRecipeDialog's LoRA rows", () => {
+  const LORAS = [
+    { filename: "lightning-8step.safetensors", sha256: "d1", strength: 1 },
+    { filename: "neon-rain-v2.safetensors", sha256: "d2", strength: 0.85 },
+    { filename: "loras/Hairstyle-V3.safetensors", sha256: "", strength: 0.6 },
+  ];
+
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+    document.body.innerHTML = "";
+    createSavedRecipe.mockResolvedValue({ id: 3, name: "Rainy tram platform" });
+    listSavedRecipes.mockResolvedValue([]);
+    getWorkflowCard.mockResolvedValue({ card: { name: "SDXL fast" } });
+  });
+
+  function openRows() {
+    return mount(SaveRecipeDialog, {
+      props: {
+        open: true,
+        workflowKey: KEY,
+        suggestedName: "Rainy tram platform",
+        prompt: "a rainy tram platform",
+        loras: LORAS,
+      },
+      global: { stubs: { teleport: true } },
+      attachTo: document.body,
+    });
+  }
+
+  function labelOf(entry) {
+    const own = entry.find(".app-btn__label");
+    return (own.exists() ? own.text() : entry.text()).trim();
+  }
+
+  function press(wrapper, label) {
+    const found = wrapper.findAll("button").find((b) => labelOf(b) === label);
+    if (!found) throw new Error(`no button reading ${label}`);
+    return found.trigger("click");
+  }
+
+  function trashOf(wrapper, index) {
+    return wrapper.findAll(".svr-lora")[index].find("[data-focus='delete']");
+  }
+
+  async function save(wrapper) {
+    await press(wrapper, "Save recipe");
+    await flushPromises();
+    return createSavedRecipe.mock.calls[0][0];
+  }
+
+  it("lists one row per LoRA, the unknown one as its file, and flags it", async () => {
+    const wrapper = openRows();
+    await flushPromises();
+    const rows = wrapper.findAll(".svr-lora");
+    expect(rows.map((row) => row.find(".svr-lora-name").text())).toEqual([
+      "lightning-8step",
+      "neon-rain-v2",
+      "Hairstyle-V3.safetensors",
+    ]);
+    expect(rows.map((row) => row.find(".svr-lora-strength").text())).toEqual([
+      "1.00",
+      "0.85",
+      "0.60",
+    ]);
+    expect(rows[2].find(".svr-flag").text().replace(/\s+/g, " ")).toBe(
+      "Not on your model shelf. A run ignores this one, so a recipe that lists it promises a LoRA it will not apply.",
+    );
+    // Only the unknown one is flagged.
+    expect(rows[0].find(".svr-flag").exists()).toBe(false);
+  });
+
+  it("takes a shelf LoRA straight off, and saves exactly the rows left", async () => {
+    const wrapper = openRows();
+    await flushPromises();
+    await trashOf(wrapper, 1).trigger("click");
+    await flushPromises();
+
+    const row = wrapper.findAll(".svr-lora")[1];
+    expect(row.classes()).toContain("svr-lora--off");
+    expect(document.activeElement?.textContent?.trim()).toBe("Restore");
+    // No question for a LoRA the shelf names.
+    expect(wrapper.find("[data-testid='svr-question']").exists()).toBe(false);
+
+    const body = await save(wrapper);
+    expect(body.loras).toEqual([
+      { filename: "lightning-8step.safetensors", sha256: "d1", strength: 1 },
+      { filename: "loras/Hairstyle-V3.safetensors", sha256: null, strength: 0.6 },
+    ]);
+  });
+
+  it("puts a row back with Restore", async () => {
+    const wrapper = openRows();
+    await flushPromises();
+    await trashOf(wrapper, 0).trigger("click");
+    await flushPromises();
+    await press(wrapper, "Restore");
+    await flushPromises();
+    const body = await save(wrapper);
+    expect(body.loras).toHaveLength(3);
+  });
+
+  it("asks 'Take X out of what?' for the unknown one", async () => {
+    const wrapper = openRows();
+    await flushPromises();
+    await trashOf(wrapper, 2).trigger("click");
+    await flushPromises();
+
+    const said = wrapper.text().replace(/\s+/g, " ");
+    expect(wrapper.find("[data-testid='svr-question']").text()).toBe(
+      "Take Hairstyle-V3 out of what?",
+    );
+    expect(said).toContain(
+      "The workflow has a loader for it, and a recipe cannot delete one. These are two different acts.",
+    );
+    expect(said).toContain("This recipe");
+    expect(said).toContain("The workflow");
+    expect(said).toContain(
+      "Either way the saved recipe holds exactly the 2 LoRAs the list showed.",
+    );
+    // Nothing is chosen for the owner: no preference is stored.
+    expect(
+      wrapper.findAll("input[type=radio]").map((r) => r.element.checked),
+    ).toEqual([false, false]);
+    const takeItOut = wrapper
+      .findAll("button")
+      .find((b) => labelOf(b) === "Take it out");
+    expect(takeItOut.attributes("disabled")).toBeDefined();
+  });
+
+  it("'This recipe' drops it from the list, and the save leaves it out", async () => {
+    const wrapper = openRows();
+    await flushPromises();
+    await trashOf(wrapper, 2).trigger("click");
+    await flushPromises();
+    await wrapper.findAll("input[type=radio]")[0].setValue(true);
+    await press(wrapper, "Take it out");
+    await flushPromises();
+
+    expect(wrapper.find("[data-testid='svr-question']").exists()).toBe(false);
+    expect(wrapper.findAll(".svr-lora")[2].classes()).toContain("svr-lora--off");
+    expect(push).not.toHaveBeenCalled();
+
+    const body = await save(wrapper);
+    expect(body.loras.map((lora) => lora.filename)).toEqual([
+      "lightning-8step.safetensors",
+      "neon-rain-v2.safetensors",
+    ]);
+  });
+
+  it("'The workflow' closes and opens Edit LoRAs… with that entry deleted", async () => {
+    const wrapper = openRows();
+    await flushPromises();
+    await trashOf(wrapper, 2).trigger("click");
+    await flushPromises();
+    await wrapper.findAll("input[type=radio]")[1].setValue(true);
+    await press(wrapper, "Take it out");
+    await flushPromises();
+
+    expect(push).toHaveBeenCalledWith({
+      name: "workflows",
+      query: {
+        card: KEY,
+        edit: "loras",
+        drop_lora: "loras/Hairstyle-V3.safetensors",
+      },
+    });
+    expect(wrapper.emitted("close")).toBeTruthy();
+    expect(wrapper.emitted("handoff")?.[0]?.[0]).toEqual({
+      workflowKey: KEY,
+      filename: "loras/Hairstyle-V3.safetensors",
+    });
+    // Nothing saved here: the edit is saved as a new workflow over there.
+    expect(createSavedRecipe).not.toHaveBeenCalled();
+  });
+
+  it("goes back to the list, unchanged, from the question", async () => {
+    const wrapper = openRows();
+    await flushPromises();
+    await trashOf(wrapper, 2).trigger("click");
+    await flushPromises();
+    await press(wrapper, "Back");
+    await flushPromises();
+    expect(wrapper.findAll(".svr-lora")[2].classes()).not.toContain(
+      "svr-lora--off",
+    );
+    const body = await save(wrapper);
+    expect(body.loras).toHaveLength(3);
   });
 });

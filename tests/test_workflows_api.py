@@ -127,6 +127,9 @@ _WORKFLOW_ROUTES = (
     # Export (v1.12 B8): the sharpest read here, because it hands back a whole
     # graph rather than a count of one.
     ("GET", "/api/v1/workflows/{workflow_key}/export"),
+    # The LoRA chain editor's read (#1478): the whole-library graph, the shelf
+    # LoRA each loader loads, and the owner's ComfyUI behind it.
+    ("GET", "/api/v1/workflows/{workflow_key}/lora-chain"),
 )
 
 # The card and stack writes (v1.12 B4), pinned in their own tuple: the reads
@@ -152,6 +155,7 @@ _WORKFLOW_WRITE_ROUTES = (
     # whole library the way the run route does, and two of them write a file.
     ("POST", "/api/v1/workflows/{workflow_key}/duplicate"),
     ("POST", "/api/v1/workflows/{workflow_key}/insert-lora-loader"),
+    ("PUT", "/api/v1/workflows/{workflow_key}/lora-chain"),
     ("DELETE", "/api/v1/workflows/{workflow_key}"),
 )
 
@@ -912,6 +916,10 @@ def test_no_scoped_token_can_read_the_workflow_library(workflow_env):
         (
             f"{API}/workflows/{BUSY_CARD}/export",
             API + "/workflows/{workflow_key}/export",
+        ),
+        (
+            f"{API}/workflows/{BUSY_CARD}/lora-chain",
+            API + "/workflows/{workflow_key}/lora-chain",
         ),
     )
     for path, template in paths:
@@ -3571,6 +3579,7 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
         ("POST", f"{API}/workflows/run/preflight", {"workflow_key": BUSY_CARD}),
         ("POST", f"{API}/workflows/{BUSY_CARD}/duplicate", None),
         ("POST", f"{API}/workflows/{BUSY_CARD}/insert-lora-loader", None),
+        ("PUT", f"{API}/workflows/{BUSY_CARD}/lora-chain", {"entries": []}),
         ("DELETE", f"{API}/workflows/{BUSY_CARD}", None),
     ):
         assert_real_route(workflow_env.server.api, method, path)

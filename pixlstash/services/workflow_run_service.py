@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from pixlstash.services.comfyui_recipe_service import (
+    LORA_DIGEST_FIELD_RE,
     LORA_FILENAME_FIELD_RE,
     bypass_node,
     preflight_prompt,
@@ -33,7 +34,11 @@ from pixlstash.services.comfyui_recipe_service import (
     unchecked_preflight,
 )
 from pixlstash.services.comfyui_service import graph_has_pixlstash_nodes
-from pixlstash.services.workflow_hash import asset_reference, is_link
+from pixlstash.services.workflow_hash import (
+    asset_reference,
+    is_link,
+    normalized_filename,
+)
 from pixlstash.services.workflow_io import api_graph
 from pixlstash.pixl_logging import get_logger
 
@@ -53,6 +58,7 @@ NO_LORA_LOADER = "no_lora_loader"
 PIXLSTASH_NODES = "pixlstash_nodes"
 NO_SAVE_NODE = "no_save_node"
 NO_RUNNABLE_SOURCE = "no_runnable_source"
+LORA_NOT_SKIPPABLE = "lora_not_skippable"
 
 # A reference whose ``workflow_recipe_asset`` row is gone: the owner forgot the
 # model's name, and the stored graph still says a model went there without
@@ -437,10 +443,155 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
                 "node_id": node_id,
                 "class_type": item.get("class_type"),
                 "field": item.get("field"),
+                # Taken out because the file is not here, not because the owner
+                # asked: `skip_requested_loras` marks its own `True`.
+                "requested": False,
             }
             for item in missing
         )
     return bypassed
+
+
+def lora_slot_fields(inputs: dict) -> list[str]:
+    """Every LoRA slot a node's inputs hold, filled or not, in widget order."""
+    return [
+        str(field)
+        for field in inputs
+        if LORA_FILENAME_FIELD_RE.match(str(field))
+        or LORA_DIGEST_FIELD_RE.match(str(field))
+    ]
+
+
+def skip_requested_loras(
+    graph: dict,
+    slots: list[tuple[str, str]],
+    object_info: Optional[dict],
+) -> tuple[list[dict], list[Reason], set[tuple[str, str]]]:
+    """Skip the LoRA slots the owner asked this run to do without.
+
+    The owner's explicit "run without this LoRA" from the Run popup (#1478).
+    A skip, never a removal: *graph* is the run's own copy, and the stored
+    workflow keeps its loader - editing the workflow is the LoRA chain
+    editor's job.
+
+    It goes through :func:`bypass_node` like :func:`bypass_missing_loras`, and
+    **the request is the consent** that function has to do without: a loader
+    naming a :data:`FORGOTTEN_MODEL` is skipped when asked, because the owner
+    has said they do not want it, whatever file it is.
+
+    What the request cannot consent to is dropping a LoRA it did NOT name: a
+    stacker holding another filled slot keeps its node, and the slot is a
+    :data:`LORA_NOT_SKIPPABLE` reason instead - as is a loader nothing can be
+    rewired around, and every slot when ComfyUI cannot be asked what to wire
+    in its place. A reason and not a 400: the request made sense, this card
+    cannot honour it.
+
+    Slots the graph does not have are passed over (node ids belong to one graph,
+    and a run can span cards); the caller learns which were found from the
+    third value and refuses a slot NO graph of the run had.
+
+    Args:
+        graph: The API-format graph, mutated in place.
+        slots: ``[(node_id, field), …]`` the request named.
+        object_info: This ComfyUI's map, or ``None`` when it could not be asked.
+
+    Returns:
+        ``(skipped, reasons, found)``: ``bypassed_loras`` entries marked
+        ``"requested": True``, the refusals, and the requested slots this graph
+        holds.
+    """
+    wanted: dict[str, set[str]] = {}
+    for node_id, slot_field in slots:
+        wanted.setdefault(str(node_id), set()).add(str(slot_field))
+    skipped: list[dict] = []
+    reasons: list[Reason] = []
+    found: set[tuple[str, str]] = set()
+    for node_id, fields in wanted.items():
+        node = graph.get(node_id)
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        here = set(lora_slot_fields(inputs)) if isinstance(inputs, dict) else set()
+        asked = sorted(fields & here)
+        if not asked:
+            logger.debug(
+                "Skipping LoRA slot(s) %s on node %s does not apply here: this "
+                "graph has no such slot.",
+                ", ".join(sorted(fields)),
+                node_id,
+            )
+            continue
+        found.update((node_id, field) for field in asked)
+        class_type = node.get("class_type")
+
+        def shown(field: str) -> str:
+            value = inputs.get(field)
+            return value if isinstance(value, str) else ""
+
+        def refuse(message: str) -> None:
+            logger.info(
+                "LoRA slot(s) %s on node %s (%s) cannot be skipped as asked: %s",
+                ", ".join(asked),
+                node_id,
+                class_type,
+                message,
+            )
+            reasons.extend(
+                Reason(
+                    LORA_NOT_SKIPPABLE,
+                    {
+                        "node_id": node_id,
+                        "field": field,
+                        "file": shown(field),
+                        "message": message,
+                    },
+                )
+                for field in asked
+            )
+
+        # Filled whether it names a file or is wired, as bypass_missing_loras
+        # counts it: a wired second slot is a live adapter.
+        filled = {
+            field
+            for field in here
+            if is_link(inputs.get(field))
+            or (isinstance(inputs.get(field), str) and inputs.get(field))
+        }
+        kept = sorted(filled - set(asked))
+        if kept:
+            refuse(
+                f"Node {node_id} ({class_type}) also loads "
+                f"{', '.join(shown(f) or f for f in kept)}, and skipping the "
+                "node for this run would skip that too."
+            )
+            continue
+        if object_info is None:
+            refuse(
+                "PixlStash could not reach ComfyUI, so it cannot tell what to "
+                f"wire in place of node {node_id} ({class_type})."
+            )
+            continue
+        try:
+            bypass_node(graph, node_id, object_info)
+        except LookupError as exc:
+            refuse(str(exc))
+            continue
+        logger.info(
+            "Node %s (%s) is skipped for this run at the owner's request: %s.",
+            node_id,
+            class_type,
+            ", ".join(shown(field) or field for field in asked),
+        )
+        skipped.extend(
+            {
+                "file": shown(field),
+                "folder": "loras",
+                "node_id": node_id,
+                "class_type": class_type,
+                "field": field,
+                "requested": True,
+            }
+            for field in asked
+        )
+    return skipped, reasons, found
 
 
 def blocks_batch(reasons: list[Reason], *, allow_unchecked: bool = False) -> bool:
@@ -517,3 +668,116 @@ def saved_recipe_body(recipe) -> dict:
         "seed": recipe.seed,
         "keep_seed": bool(recipe.keep_seed),
     }
+
+
+def place_recipe_loras(
+    slots: list[dict],
+    recipe_loras: list[dict],
+    slot_digests: dict[tuple[str, str], Optional[str]],
+) -> tuple[list[tuple[dict, dict]], list[dict]]:
+    """Which LoRA slot of the graph each of a saved recipe's LoRAs goes into (#1478).
+
+    A saved LoRA names a file and a digest but no slot, so it is matched to one:
+    **digest first** (the slot already loads the same bytes), **then basename**
+    (the slot names a file of the same name, case-folded), then **any slot
+    still free, in graph order** - the positional fill the run always did, so a
+    recipe that ran before still runs the same. It replaces a positional
+    ``zip``, which put a recipe stored in the other order onto the wrong
+    loaders and dropped a third LoRA on a two-loader graph without a word, while
+    the credit matcher had matched all three by name.
+
+    A LoRA with nowhere to go is **reported, never dropped**, and so is one the
+    shelf cannot identify (no ``sha256``): PixlStash cannot load a file it
+    cannot name, so the recipe's row is not applied. That one still keeps a
+    slot naming a file of the same name out of the positional fill - the graph
+    loads it there already - and its report says so.
+
+    Args:
+        slots: :func:`detect_lora_targets`'s slots, in graph order.
+        recipe_loras: The saved ``[{filename, sha256, strength}, …]``.
+        slot_digests: ``{(node_id, field): sha256 or None}`` - which shelf LoRA
+            each slot already loads, as far as the shelf can tell.
+
+    Returns:
+        ``(placements, unplaced)``: ``[(slot, saved LoRA), …]`` to apply, and
+        ``[{"filename", "sha256", "node_id", "reason"}, …]`` for the rest.
+    """
+
+    def slot_key(slot: dict) -> tuple[str, str]:
+        return (str(slot.get("node_id")), str(slot.get("field")))
+
+    def digest_of(saved: dict) -> Optional[str]:
+        value = str(saved.get("sha256") or "").strip().lower()
+        return value or None
+
+    def basename(value: Any) -> str:
+        return normalized_filename(str(value or "").strip())
+
+    free = list(slots)
+    placed: dict[int, dict] = {}
+    for index, saved in enumerate(recipe_loras):
+        digest = digest_of(saved)
+        if digest is None:
+            continue
+        slot = next((s for s in free if slot_digests.get(slot_key(s)) == digest), None)
+        if slot is not None:
+            placed[index] = slot
+            free.remove(slot)
+    for index, saved in enumerate(recipe_loras):
+        name = basename(saved.get("filename"))
+        if index in placed or not name:
+            continue
+        slot = next(
+            (
+                s
+                for s in free
+                if s.get("by") != "digest" and basename(s.get("value")) == name
+            ),
+            None,
+        )
+        if slot is not None:
+            placed[index] = slot
+            free.remove(slot)
+    for index, saved in enumerate(recipe_loras):
+        if index not in placed and digest_of(saved) is not None and free:
+            placed[index] = free.pop(0)
+
+    placements: list[tuple[dict, dict]] = []
+    unplaced: list[dict] = []
+    for index, saved in enumerate(recipe_loras):
+        filename = str(saved.get("filename") or "")
+        shown = filename or "A LoRA"
+        digest = digest_of(saved)
+        slot = placed.get(index)
+        if digest is not None and slot is not None:
+            placements.append((slot, saved))
+            continue
+        if digest is None:
+            reason = (
+                f"Your model shelf cannot identify {shown}, so PixlStash does not "
+                "apply this recipe's setting for it"
+                + (
+                    f"; loader #{slot['node_id']} still loads a file of that name "
+                    "as the workflow has it."
+                    if slot is not None
+                    else ", and nothing in this workflow loads it."
+                )
+            )
+        elif not slots:
+            reason = f"This workflow has no LoRA loader, so {shown} is not applied."
+        else:
+            reason = (
+                f"This workflow has {len(slots)} LoRA "
+                f"{'loader' if len(slots) == 1 else 'loaders'} and the recipe's "
+                f"other LoRAs take {'it' if len(slots) == 1 else 'them all'}, so "
+                f"{shown} is not applied."
+            )
+        unplaced.append(
+            {
+                "filename": filename,
+                "sha256": digest,
+                "node_id": str(slot["node_id"]) if slot is not None else None,
+                "reason": reason,
+            }
+        )
+    return placements, unplaced

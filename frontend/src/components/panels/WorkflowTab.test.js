@@ -22,6 +22,7 @@ const setWorkflowDefaults = vi.fn();
 const setWorkflowPins = vi.fn();
 const setWorkflowSlots = vi.fn();
 const stackWorkflows = vi.fn();
+const getLoraChain = vi.fn();
 
 vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
@@ -34,14 +35,16 @@ vi.mock("../../api/workflows", () => ({
   // throws in the render and every assertion in the file goes with it.
   workflowCoverUrl: (cover) => cover?.url ?? "",
   stackWorkflows: (...args) => stackWorkflows(...args),
+  getLoraChain: (...args) => getLoraChain(...args),
 }));
 
 // *Show all N pictures* (F7) leaves this screen for the library, and
 // `?tab=recipes` (#1480) arrives on it from the lightbox's match banner.
 const push = vi.fn();
+const replace = vi.fn();
 const route = vi.hoisted(() => ({ name: "workflows", query: {} }));
 vi.mock("vue-router", () => ({
-  useRouter: () => ({ push }),
+  useRouter: () => ({ push, replace }),
   useRoute: () => route,
 }));
 
@@ -102,6 +105,25 @@ function card(overrides = {}) {
     member_keys: [],
     last_used: null,
     rank: 4.5,
+    ...overrides,
+  };
+}
+
+/** `GET /workflows/{key}/lora-chain`, as the route serves it (#1478). */
+function loraChain(overrides = {}) {
+  return {
+    workflow_key: KEY,
+    editable: true,
+    refusal: null,
+    source: { node_id: "4", class_type: "CheckpointLoaderSimple", outputs: ["MODEL", "CLIP"] },
+    sink: { summary: "KSampler #7 reads model", consumers: [] },
+    loaders: [
+      { node_id: "14", name: "lightning-8step", filename: "lightning-8step.safetensors", strength: 1, on_shelf: true, sha256: "s1" },
+      { node_id: "22", name: "neon-rain-v2", filename: "neon-rain-v2.safetensors", strength: 0.85, on_shelf: true, sha256: "s2" },
+      { node_id: "31", name: "film-grain-35mm", filename: "film-grain-35mm.safetensors", strength: 0.4, on_shelf: true, sha256: "s3" },
+      { node_id: "33", name: "hairstyle-v3", filename: "hairstyle-v3.safetensors", strength: 0.6, on_shelf: false, sha256: null },
+    ],
+    added_loader_class: "LoraLoader",
     ...overrides,
   };
 }
@@ -191,6 +213,8 @@ beforeEach(() => {
   setWorkflowPins.mockReset().mockResolvedValue({ pins: [] });
   setWorkflowSlots.mockReset().mockResolvedValue({ key: MOVED, moved: {} });
   stackWorkflows.mockReset().mockResolvedValue({ stack_id: "s", keys: [] });
+  getLoraChain.mockReset().mockResolvedValue(loraChain());
+  replace.mockReset();
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -911,5 +935,98 @@ describe("the Tasks tab", () => {
         .find(".inspector-tab-pulse")
         .exists(),
     ).toBe(true);
+  });
+});
+
+describe("the LoRA chain (#1478)", () => {
+  const chainOpts = {
+    global: {
+      stubs: {
+        ...globalOpts.global.stubs,
+        EditLorasDialog: {
+          name: "EditLorasDialog",
+          props: ["open", "workflowKey", "cardName", "pictureCount", "dropLora"],
+          template: "<div class='eld-stub' />",
+        },
+      },
+    },
+  };
+
+  async function mountChain(keys = [KEY]) {
+    const store = useWorkflowsStore();
+    store.cards = [card()];
+    store.selectedKeys = keys;
+    const wrapper = mount(WorkflowTab, chainOpts);
+    await flush(wrapper);
+    return { wrapper, store };
+  }
+
+  function editButton(wrapper) {
+    return wrapper.find("[data-testid='wftab-edit-loras']");
+  }
+
+  it("lists the loaders in apply order, with strengths and the shelf count", async () => {
+    const { wrapper } = await mountChain();
+    expect(getLoraChain).toHaveBeenCalledWith(KEY);
+    const rows = wrapper.findAll(".wftab-chain-row");
+    expect(
+      rows.map((row) => [
+        row.find(".wftab-chain-name").text(),
+        row.find(".wftab-chain-strength").text(),
+      ]),
+    ).toEqual([
+      ["lightning-8step", "1.00"],
+      ["neon-rain-v2", "0.85"],
+      ["film-grain-35mm", "0.40"],
+      // Not on the shelf, so shown as the file it is.
+      ["hairstyle-v3.safetensors", "0.60"],
+    ]);
+    expect(
+      wrapper.find("[data-testid='wftab-shelf-line']").text().replace(/\s+/g, " "),
+    ).toBe("In the order the chain applies them. 3 of 4 are on your model shelf.");
+    // B1's workflow/look mark stays beside it.
+    expect(wrapper.findComponent({ name: "Segmented" }).exists()).toBe(true);
+  });
+
+  it("offers Edit LoRAs… on a workflow with no loader at all", async () => {
+    getLoraChain.mockResolvedValue(loraChain({ loaders: [] }));
+    const { wrapper } = await mountChain();
+    expect(textOf(wrapper)).toContain("No LoRA loader. Editing adds the first one.");
+    const edit = editButton(wrapper);
+    expect(edit.exists()).toBe(true);
+    expect(edit.attributes("disabled")).toBeUndefined();
+    expect(wrapper.find("[data-testid='wftab-shelf-line']").exists()).toBe(false);
+
+    await edit.trigger("click");
+    await flush(wrapper);
+    const dialog = wrapper.findComponent({ name: "EditLorasDialog" });
+    expect(dialog.exists()).toBe(true);
+    expect(dialog.props("workflowKey")).toBe(KEY);
+    expect(dialog.props("cardName")).toBe("Cinematic portrait");
+    expect(dialog.props("pictureCount")).toBe(184);
+    expect(dialog.props("dropLora")).toBe("");
+  });
+
+  it("says so, and refuses Edit, for a card with no graph", async () => {
+    getLoraChain.mockRejectedValue({ response: { status: 409 } });
+    const { wrapper } = await mountChain();
+    expect(textOf(wrapper)).toContain("PixlStash has no graph for this workflow");
+    expect(editButton(wrapper).attributes("disabled")).toBeDefined();
+  });
+
+  it("opens Edit LoRAs… from Save-as-recipe's link, with the entry deleted", async () => {
+    route.query = { card: OTHER, edit: "loras", drop_lora: "hairstyle-v3.safetensors" };
+    const sidebar = useSidebarStore();
+    sidebar.statsOpen = false;
+    const { wrapper, store } = await mountChain([]);
+
+    expect(store.selectedKeys).toEqual([OTHER]);
+    expect(sidebar.statsOpen).toBe(true);
+    const dialog = wrapper.findComponent({ name: "EditLorasDialog" });
+    expect(dialog.exists()).toBe(true);
+    expect(dialog.props("workflowKey")).toBe(OTHER);
+    expect(dialog.props("dropLora")).toBe("hairstyle-v3.safetensors");
+    // One-shot: taken off the URL so a reload does not reopen it.
+    expect(replace).toHaveBeenCalledWith({ query: { card: OTHER } });
   });
 });

@@ -44,6 +44,8 @@ vi.mock("../../api/recipes", () => ({
   editSavedRecipe: vi.fn(),
   listSavedRecipes: (...args) => listSavedRecipes(...args),
 }));
+const push = vi.fn();
+vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
   return vuetifyComponentStubs();
@@ -336,6 +338,48 @@ describe("a refusal the popup offers to fix", () => {
     ]);
   });
 
+  it("names a recipe LoRA with no loader to go in, without blocking (#1478)", async () => {
+    // The run's sibling silent drop: a recipe LoRA that found no slot used to
+    // vanish in `zip(slots, recipe_loras)`. It is reported now, beside the
+    // bypassed ones, and it is not a reason - the run still goes ahead.
+    const unplaced = {
+      filename: "skin-detail-xl.safetensors",
+      sha256: "c".repeat(64),
+      reason: "this workflow has no third loader",
+    };
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 1,
+      groups: [
+        {
+          workflow_key: OTHER,
+          reasons: [],
+          bypassed_loras: [],
+          unplaced_loras: [unplaced],
+        },
+      ],
+    });
+
+    const wrapper = await mountRun();
+
+    expect(wrapper.vm.reasons).toEqual([]);
+    expect(wrapper.vm.canRun).toBe(true);
+    expect(wrapper.vm.runNotes).toEqual([
+      { code: "loras_unplaced", loras: [unplaced], workflowKey: OTHER },
+    ]);
+
+    // Its fix is Edit LoRAs… on THAT group's card, which closes this popup.
+    wrapper
+      .findComponent({ name: "RunReasonNotice" })
+      .vm.$emit("edit-loras", OTHER);
+    await flushPromises();
+    expect(push).toHaveBeenCalledWith({
+      name: "workflows",
+      query: { card: OTHER, edit: "loras" },
+    });
+    expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
   it("shows a pre-flight 4xx instead of waiting for the run to say it", async () => {
     // The route answers 400/404/422 on the dry run exactly as on the run, "so
     // the two never disagree". Swallowing it means the owner finds out by
@@ -462,6 +506,11 @@ describe("the LoRAs a graph already loads", () => {
     expect(wrapper.vm.optionsFor(wrapper.vm.loras[0])[0].label).toContain(
       "somebody-elses.safetensors",
     );
+    // And Save as recipe is handed it, digest-less, to flag (#1478): a row
+    // filtered out here was a LoRA that dialog never got to say anything about.
+    expect(wrapper.vm.recipeLoras).toEqual([
+      { filename: "somebody-elses.safetensors", sha256: "", strength: 0.85 },
+    ]);
   });
 
   it("refuses to guess when two shelf rows carry the same name", async () => {

@@ -501,6 +501,43 @@ def recipe_asset_index(
     return by_name, by_digest, filenames
 
 
+def adapter_digest_index(hub) -> tuple[dict[str, set[str]], set[str]]:
+    """Which shelf LoRA a graph's ``lora_name`` names, by case-folded basename.
+
+    Returns ``(by_name, digests)``: ``by_name`` maps a
+    :func:`normalized_filename` (lowercase basename) to the SHA-256 of every
+    shelf model a file of that name could be - the row's ``filename`` and each
+    copy's ``relpath`` - and ``digests`` is every such model's SHA-256. Only
+    the kinds a LoRA loader can load count (an adapter, or a file the shelf has
+    not classified), because a checkpoint sharing a LoRA's name is not the
+    LoRA, and a digest nothing can load is no answer to "which LoRA is this".
+
+    A name two models share maps to both, and the caller treats that as no
+    match: it is the frontend's ``resolveRecipeLoras`` rule and
+    ``_resolve_against_shelf``'s, so the LoRA editor, the save dialog and the
+    run all agree on what the shelf can name (#1478).
+    """
+    kinds = (FILE_ADAPTER, FILE_UNKNOWN)
+    by_name: dict[str, set[str]] = {}
+    digests: set[str] = set()
+    sha_by_id: dict[int, str] = {}
+    for row in hub.fetchall(
+        "SELECT id, filename, sha256 FROM model "
+        "WHERE sha256 IS NOT NULL AND file_kind IN (?, ?)",
+        kinds,
+    ):
+        digest = str(row["sha256"]).lower()
+        sha_by_id[int(row["id"])] = digest
+        digests.add(digest)
+        if row["filename"]:
+            by_name.setdefault(normalized_filename(row["filename"]), set()).add(digest)
+    for row in hub.fetchall("SELECT model_id, relpath FROM model_file"):
+        digest = sha_by_id.get(int(row["model_id"]))
+        if digest is not None and row["relpath"]:
+            by_name.setdefault(normalized_filename(row["relpath"]), set()).add(digest)
+    return by_name, digests
+
+
 def model_name_aliases(hub) -> dict[str, list[str]]:
     """The other names a recipe's model filename can be loaded under (#1439).
 
