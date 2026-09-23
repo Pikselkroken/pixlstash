@@ -23,7 +23,9 @@ from pixlstash.services.workflow_inputs import (
     FIXED,
     PICKER,
     SELECTION,
+    CardInput,
     node_title,
+    resolve_fills,
     resolve_input_modes,
     validate_requested_modes,
 )
@@ -1349,3 +1351,31 @@ def test_the_hints_decide_the_format_for_every_reader_of_a_picture():
     assert extract_generation_info(editor)["models"] == [
         "z_image_turbo_bf16.safetensors"
     ]
+
+
+def _card_input(label: str, mode: str = PICKER, pixel_sha=None) -> CardInput:
+    return CardInput(
+        slot_label=label,
+        input_name="image",
+        title=label,
+        mode=mode,
+        pixel_sha=pixel_sha,
+        node_ids=(label,),
+        class_type="LoadImage",
+    )
+
+
+def test_a_selection_routed_on_one_card_does_not_move_another_cards():
+    """`routed` is asked of the card's own addresses (#1457 review, L8).
+
+    A request spanning several cards names inputs of one of them; another
+    card's stored Selection must not yield to an address it does not have.
+    """
+    other_card = [_card_input("subject", SELECTION), _card_input("reference")]
+    requested = {("elsewhere", "image"): None}
+    fills = resolve_fills(other_card, requested, {}, has_selection=True)
+    assert [fill.how for fill in fills] == ["selection", None]
+    # On the card that has the address, the stored Selection does yield.
+    this_card = other_card + [_card_input("elsewhere")]
+    fills = resolve_fills(this_card, requested, {}, has_selection=True)
+    assert [fill.how for fill in fills] == [None, None, "selection"]

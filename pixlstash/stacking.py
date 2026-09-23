@@ -15,7 +15,7 @@ STACK_TAG_SEPARATOR = "__"
 def build_stack_filename_prefix(base_prefix: str, stack_id: int, source_id: int) -> str:
     """Tag a save node's filename so the watch-folder importer can place its output.
 
-    ``POST /workflows/run`` writes it on a stacked run (#1457); its reader,
+    ``POST /workflows/run`` writes it on a stacked run's save nodes (#1457); its reader,
     :func:`parse_stack_tags_from_filename`, is on the import path.
     """
     parts = []

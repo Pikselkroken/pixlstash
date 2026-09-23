@@ -33,6 +33,7 @@ from pixlstash.services.comfyui_recipe_service import (
     unchecked_preflight,
 )
 from pixlstash.services.comfyui_service import graph_has_pixlstash_nodes
+from pixlstash.services.workflow_bindings import BINDINGS_KEY
 from pixlstash.services.workflow_hash import asset_reference, is_link
 from pixlstash.services.workflow_io import api_graph
 from pixlstash.pixl_logging import get_logger
@@ -118,6 +119,11 @@ class Source:
     # True when the seeds came out of a stored instance document, where they
     # are null by design. Such a source has no seed to keep.
     seedless: bool = False
+    # A linked file's `pixlstash_bindings`, when it has them (#1303). The graph
+    # above is sanitised and has lost them, and they are how a file the old
+    # import dialog stored says which picture inputs a run may fill: `[]` is a
+    # file that opted out of every one. `None` is a file without the key.
+    bindings: Optional[list] = None
 
 
 @dataclass
@@ -222,7 +228,12 @@ def resolve_source(
     if file_document:
         graph = api_graph(file_document)
         if graph:
-            return Source(sanitize_prompt_graph(graph), FROM_FILE), None
+            bindings = file_document.get(BINDINGS_KEY)
+            return Source(
+                sanitize_prompt_graph(graph),
+                FROM_FILE,
+                bindings=bindings if isinstance(bindings, list) else None,
+            ), None
         ui_only = True
         logger.info(
             "Card %s names workflow file %s, which is in ComfyUI's UI format "

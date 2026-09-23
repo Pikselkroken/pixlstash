@@ -158,29 +158,6 @@ def _extract_history_status_and_error(
     return status_str, (error_text or None)
 
 
-def _apply_filename_prefix(workflow: dict, prefix: str) -> bool:
-    """Write *prefix* onto every ``SaveImage`` node, reporting whether one took it.
-
-    With :func:`pixlstash.stacking.build_stack_filename_prefix`, whose tag it
-    writes, this is how ``POST /workflows/run`` stacks a run's outputs with the
-    picture they came from when they arrive through a watched folder rather
-    than through the run's own import (#1457).
-    """
-    updated = False
-    for node in workflow.values():
-        if not isinstance(node, dict):
-            continue
-        if node.get("class_type") != "SaveImage":
-            continue
-        inputs = node.get("inputs") or {}
-        if not isinstance(inputs, dict):
-            inputs = {}
-        inputs["filename_prefix"] = prefix
-        node["inputs"] = inputs
-        updated = True
-    return updated
-
-
 def _upload_image_to_comfyui(
     base_url: str, file_path: str, upload_name: str | None = None
 ) -> str:

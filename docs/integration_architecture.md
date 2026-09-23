@@ -640,10 +640,10 @@ Seven rules the client must not re-derive:
    entry is `{code, …payload}` from a closed set: `comfyui_not_configured`,
    `comfyui_unreachable`, `ui_format`, `missing_nodes: {nodes}`,
    `missing_models: {models: [{file, folder}]}`, `a1111`,
-   `picture_input_unfilled: {inputs: [{slot_label, input_name}]}`,
+   `picture_input_unfilled: {inputs: [{slot_label, input_name, title}]}`,
    `no_lora_loader`, `pixlstash_nodes`, `no_save_node`, `no_runnable_source`.
    `picture_input_unfilled` replaced `fixed_input_deleted` in #1457 with the
-   same payload shape; a client that only knows the old code no longer
+   same payload shape plus each input's `title` (a slot label is a hash); a client that only knows the old code no longer
    recognises the refusal and must fall back to its generic sentence. It names
    the open inputs the graph cannot run on as they stand, and blocks its group,
    not the batch.

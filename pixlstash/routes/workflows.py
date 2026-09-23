@@ -49,7 +49,7 @@ import re
 import threading
 from copy import deepcopy
 from dataclasses import dataclass, field as dataclass_field
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, Field, StrictBool, ValidationError, field_validator
@@ -99,7 +99,6 @@ from pixlstash.services.comfyui_recipe_service import (
     plan_lora_insertion,
 )
 from pixlstash.services.comfyui_service import (
-    _apply_filename_prefix,
     _extract_output_node_ids,
     _process_comfyui_outputs,
     _submit_comfyui_prompt,
@@ -567,6 +566,9 @@ MAX_STACK_KEYS = 500
 # the shipped run route caps a selection, because it is the same gesture.
 MAX_RUN_PICTURES = MAX_RUNS_PER_REQUEST
 MAX_RUN_LORAS = 32
+# SQLite's INTEGER ceiling. An id past it is not a picture that is missing, it
+# is a request no row could answer, and the driver says so with a 500.
+MAX_PICTURE_ID = 2**63 - 1
 MAX_PROMPT_LENGTH = 20000
 
 # How deep the runnable-source resolver looks for a picture or an instance to
@@ -599,6 +601,7 @@ _STACK_ID_RE = re.compile(rf"^(?:{AUTO_STACK_PREFIX}[0-9a-f]{{64}}|[0-9a-f]{{32}
 # Anything else is dropped rather than carried into a name another program
 # resolves as a path.
 _UPLOAD_EXTENSION_RE = re.compile(r"^\.[a-z0-9]{1,8}$")
+_PIXEL_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class WorkflowCardEdit(BaseModel):
@@ -718,7 +721,7 @@ class CardPictureInput(ParameterAddress):
 
     mode: Literal["selection", "picker", "fixed"]
     pixel_sha: str | None = Field(None, max_length=64)
-    picture_id: int | None = None
+    picture_id: int | None = Field(None, ge=1, le=MAX_PICTURE_ID)
 
 
 class CardPictureInputs(BaseModel):
@@ -807,7 +810,7 @@ class RunInput(ParameterAddress):
     input a selection feeds when more than one is open.
     """
 
-    picture_id: int | None = None
+    picture_id: int | None = Field(None, ge=1, le=MAX_PICTURE_ID)
 
 
 class RunDestination(BaseModel):
@@ -831,7 +834,9 @@ class RunRequest(BaseModel):
     change the identity of the very card being run.
     """
 
-    picture_ids: list[int] = Field(default_factory=list, max_length=MAX_RUN_PICTURES)
+    picture_ids: list[Annotated[int, Field(le=MAX_PICTURE_ID)]] = Field(
+        default_factory=list, max_length=MAX_RUN_PICTURES
+    )
     saved_recipe_id: int | None = None
     workflow_key: str | None = None
 
@@ -2223,7 +2228,11 @@ def create_router(server) -> APIRouter:
         return []
 
     def _card_inputs(
-        hub, workflow_key: str, graph: dict, addressed: bool
+        hub,
+        workflow_key: str,
+        graph: dict,
+        addressed: bool,
+        bindings: list | None = None,
     ) -> list[CardInput]:
         """This card's picture inputs in *graph*, with its stored setup over them.
 
@@ -2236,7 +2245,7 @@ def create_router(server) -> APIRouter:
         library_uuid = _library_uuid()
         stored = picture_inputs(hub, library_uuid, workflow_key) if library_uuid else []
         try:
-            return card_input_modes(graph, stored)
+            inputs = card_input_modes(graph, stored)
         except WorkflowGraphError as exc:
             if addressed:
                 raise HTTPException(
@@ -2253,6 +2262,19 @@ def create_router(server) -> APIRouter:
                 exc,
             )
             return []
+        if bindings is None:
+            return inputs
+        # A file the old import dialog stored says which inputs a run fills,
+        # and `[]` is one that took no picture at all: detection must not opt
+        # an input back in that the owner opted out of (`workflow_bindings`).
+        # An input left out here is not addressable and runs as authored.
+        bound = {
+            workflow_bindings.target_node(graph, binding.get("path"))
+            for binding in bindings
+            if isinstance(binding, dict)
+            and binding.get("role") == workflow_bindings.IMAGE
+        }
+        return [item for item in inputs if bound.intersection(item.node_ids)]
 
     def _fill_inputs(
         graph: dict,
@@ -2310,8 +2332,14 @@ def create_router(server) -> APIRouter:
             ):
                 how = "graph"
             if how is None:
+                # `title` beside the address: a slot label is a topology hash,
+                # and a refusal a person reads has to name the input they see.
                 unfilled.append(
-                    {"slot_label": item.slot_label, "input_name": item.input_name}
+                    {
+                        "slot_label": item.slot_label,
+                        "input_name": item.input_name,
+                        "title": item.title,
+                    }
                 )
             pin_gone = bool(
                 item.mode == "fixed" and item.pixel_sha and item.pixel_sha not in pinned
@@ -2387,6 +2415,7 @@ def create_router(server) -> APIRouter:
         if not wanted:
             return {}
         kept = read_kept_picture_files(server.vault, wanted)
+        library = re.sub(r"[^0-9a-zA-Z]", "", _library_uuid() or "")[:8] or "library"
         files: dict[int, tuple[str, str]] = {}
         for picture_id in wanted:
             if picture_id not in kept:
@@ -2417,8 +2446,19 @@ def create_router(server) -> APIRouter:
             extension = os.path.splitext(path)[1].lower()
             if not _UPLOAD_EXTENSION_RE.match(extension):
                 extension = ""
-            stem = f"pixlstash-{picture_id}" + (f"-{pixel_sha}" if pixel_sha else "")
-            files[picture_id] = (path, f"{stem}{extension}")
+            # The content, so a name never outlives the bytes it named: a vault
+            # id is reused after a delete and one ComfyUI may serve two
+            # libraries. A picture the hashing task has not reached yet has no
+            # `pixel_sha`, and its file's size and mtime stand in for one.
+            if pixel_sha and _PIXEL_SHA_RE.match(pixel_sha):
+                content = pixel_sha
+            else:
+                stat = os.stat(path)
+                content = f"{stat.st_mtime_ns:x}-{stat.st_size:x}"
+            files[picture_id] = (
+                path,
+                f"pixlstash-{library}-{picture_id}-{content}{extension}",
+            )
         return files
 
     def _require_one_source(body: RunRequest) -> None:
@@ -2638,6 +2678,17 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail="seed_mode 'fixed' needs a seed."
             )
+        if not body.picture_ids and any(e.picture_id is None for e in body.inputs):
+            # "My selection goes here", on a run with no selection: honouring
+            # it is impossible and ignoring it would run a graph that never
+            # read the pictures the caller thinks it sent.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "An input was sent the selection, and this run has no "
+                    "selection: name a picture_id for it."
+                ),
+            )
         groups = _groups_for(body, recipe_key)
         if body.target:
             # One target replaces every group's card, keeping the pictures that
@@ -2710,7 +2761,9 @@ def create_router(server) -> APIRouter:
             # picture loader is never a model or clip consumer, and a bypass
             # keeps every other node's id - so the fill below still finds its
             # nodes in the graph the bypass left.
-            card_inputs = _card_inputs(hub, workflow_key, graph, bool(requested))
+            card_inputs = _card_inputs(
+                hub, workflow_key, graph, bool(requested), source.bindings
+            )
             reached_inputs = True
             addressed.update(item.address for item in card_inputs)
             _apply_addressed(graph, body.values)
@@ -3116,18 +3169,24 @@ def create_router(server) -> APIRouter:
         folder the owner also watches can import the file first, and then
         only the tag in its name says where it belongs. The retired run route
         did both for the same reason.
+
+        Each save node keeps its OWN prefix under the tag, so a graph saving
+        `out` and `preview` still saves two sets of files. A prefix that is
+        wired from another node is left alone: overwriting it drops the link.
         """
-        seed = next(
-            (
-                str((node.get("inputs") or {}).get("filename_prefix") or "")
-                for node in graph.values()
-                if isinstance(node, dict) and node.get("class_type") == "SaveImage"
-            ),
-            "",
-        )
-        if not _apply_filename_prefix(
-            graph, build_stack_filename_prefix(seed, stack_id, source_id)
-        ):
+        tagged = False
+        for node in graph.values():
+            if not isinstance(node, dict) or node.get("class_type") != "SaveImage":
+                continue
+            inputs = node.setdefault("inputs", {})
+            own = inputs.get("filename_prefix")
+            if isinstance(own, list):
+                continue
+            inputs["filename_prefix"] = build_stack_filename_prefix(
+                str(own or ""), stack_id, source_id
+            )
+            tagged = True
+        if not tagged:
             logger.warning(
                 "[workflows] No SaveImage node to tag for stack %s (source %s); "
                 "its outputs join the stack only if this run imports them.",

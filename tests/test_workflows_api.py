@@ -5749,6 +5749,16 @@ def i2i(runnable, monkeypatch, tmp_path):
     return state
 
 
+def _upload_name(server, picture_id: int, content: str) -> str:
+    """The name a picture is uploaded to ComfyUI under: library, id, content."""
+    library = "".join(c for c in server.vault.library_uuid if c.isalnum())[:8]
+    return f"pixlstash-{library}-{picture_id}-{content}.png"
+
+
+def _uploaded_id(name: str) -> str:
+    return name.split("-")[2]
+
+
 def _set_inputs(owner, inputs: list[dict]):
     r = owner.put(f"{API}/workflows/{RUN_CARD}/inputs", json={"inputs": inputs})
     assert r.status_code == 200, r.text
@@ -5852,7 +5862,9 @@ def test_a_pin_whose_picture_has_gone_is_an_empty_slot_that_refuses(i2i):
     assert gone["fill"] is None
     reasons = payload["groups"][0]["reasons"]
     assert [r["code"] for r in reasons] == ["picture_input_unfilled"], reasons
-    assert reasons[0]["inputs"] == [{"slot_label": reference, "input_name": "image"}]
+    assert reasons[0]["inputs"] == [
+        {"slot_label": reference, "input_name": "image", "title": "LoadImage"}
+    ]
     assert "fixed_input_deleted" not in _reasons(payload)
 
 
@@ -5909,7 +5921,7 @@ def test_a_lone_picture_input_takes_the_selection_with_nothing_in_the_body(i2i):
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "success", r.json()
     [upload] = i2i.uploads
-    assert upload["name"] == f"pixlstash-{subject}-{_h('pixels-cat.png')}.png"
+    assert upload["name"] == _upload_name(i2i.server, subject, _h("pixels-cat.png"))
     assert upload["path"] == str(i2i.tmp_path / "cat.png")
     assert i2i.submitted[0]["graph"]["5"]["inputs"]["image"] == upload["name"]
     assert _inputs_of(r.json())[_label_of(i2i.graph, "5")]["fill"] == "selection"
@@ -5950,7 +5962,7 @@ def test_a_pinned_reference_leaves_one_input_for_the_selection(i2i):
     )
     assert r.status_code == 200, r.text
     assert r.json()["runs"] == 3, r.json()
-    names = {upload["name"].split("-")[1]: upload["name"] for upload in i2i.uploads}
+    names = {_uploaded_id(upload["name"]): upload["name"] for upload in i2i.uploads}
     assert [g["graph"]["5"]["inputs"]["image"] for g in i2i.submitted] == [
         names[str(s)] for s in subjects
     ]
@@ -6037,7 +6049,7 @@ def test_the_request_beats_the_pin_and_names_the_picture_it_sends(i2i):
         },
     )
     assert r.status_code == 200, r.text
-    assert [u["name"].split("-")[1] for u in i2i.uploads] == [str(picked)]
+    assert [_uploaded_id(u["name"]) for u in i2i.uploads] == [str(picked)]
     assert _inputs_of(r.json())[label]["fill"] == "request"
 
 
@@ -6140,7 +6152,7 @@ def test_a_pinned_picture_is_uploaded_once_for_a_whole_selection(i2i):
     )
     assert r.status_code == 200, r.text
     assert r.json()["runs"] == 40
-    uploaded = [upload["name"].split("-")[1] for upload in i2i.uploads]
+    uploaded = [_uploaded_id(upload["name"]) for upload in i2i.uploads]
     assert uploaded.count(str(reference)) == 1
     assert len(uploaded) == 41
 
@@ -6240,7 +6252,7 @@ def test_the_selection_can_be_sent_to_one_input_by_name(i2i):
     )
     assert r.status_code == 200, r.text
     graph = i2i.submitted[0]["graph"]
-    assert graph["6"]["inputs"]["image"].startswith(f"pixlstash-{picture}-")
+    assert _uploaded_id(graph["6"]["inputs"]["image"]) == str(picture)
     assert graph["5"]["inputs"]["image"] == "subject.png"
     r = i2i.owner.post(
         f"{API}/workflows/run/preflight",
@@ -6254,6 +6266,133 @@ def test_the_selection_can_be_sent_to_one_input_by_name(i2i):
         },
     )
     assert r.status_code == 422, r.text
+
+
+def test_a_picture_not_yet_hashed_uploads_under_its_file_not_its_id(i2i):
+    """No `pixel_sha` yet: the name still changes when the bytes do.
+
+    An id alone is reused after a delete, and ComfyUI's upload overwrites by
+    name, so a queued run would read whichever picture was uploaded last.
+    """
+    picture = _add_picture(i2i.server, i2i.tmp_path, "fresh.png")
+
+    def unhash(session):
+        row = session.get(Picture, picture)
+        row.pixel_sha = None
+        session.add(row)
+        session.commit()
+
+    i2i.server.vault.db.run_task(unhash, priority=DBPriority.IMMEDIATE)
+    stat = os.stat(i2i.tmp_path / "fresh.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_CARD}
+    )
+    assert r.status_code == 200, r.text
+    [upload] = i2i.uploads
+    assert upload["name"] == _upload_name(
+        i2i.server, picture, f"{stat.st_mtime_ns:x}-{stat.st_size:x}"
+    )
+
+
+def test_each_save_node_keeps_its_own_prefix_under_the_stack_tag(i2i):
+    i2i.graph["9"] = {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "preview", "images": ["3", 0]},
+    }
+    picture = _add_picture(i2i.server, i2i.tmp_path, "s.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [picture], "target": RUN_CARD, "stack": True},
+    )
+    assert r.status_code == 200, r.text
+    graph = i2i.submitted[0]["graph"]
+    stack = i2i.outputs[0][4]
+    assert graph["4"]["inputs"]["filename_prefix"] == (
+        f"out__stack_{stack}__src_{picture}"
+    )
+    assert graph["9"]["inputs"]["filename_prefix"] == (
+        f"preview__stack_{stack}__src_{picture}"
+    )
+
+
+def test_the_selection_sent_to_an_input_of_a_run_without_one_is_a_400(i2i):
+    r = i2i.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={
+            "workflow_key": RUN_CARD,
+            "inputs": [
+                {
+                    "slot_label": _label_of(i2i.graph, "5"),
+                    "input_name": "image",
+                    "picture_id": None,
+                }
+            ],
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert "no selection" in r.json()["detail"]
+
+
+def test_an_id_no_sqlite_row_could_hold_is_a_422_not_a_500(i2i):
+    too_big = 2**70
+    label = _label_of(i2i.graph, "5")
+    r = i2i.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={
+            "workflow_key": RUN_CARD,
+            "inputs": [
+                {"slot_label": label, "input_name": "image", "picture_id": too_big}
+            ],
+        },
+    )
+    assert r.status_code == 422, r.text
+    r = i2i.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"picture_ids": [too_big], "target": RUN_CARD},
+    )
+    assert r.status_code == 422, r.text
+    r = i2i.owner.put(
+        f"{API}/workflows/{RUN_CARD}/inputs",
+        json={
+            "inputs": [
+                {
+                    "slot_label": label,
+                    "input_name": "image",
+                    "mode": "fixed",
+                    "picture_id": too_big,
+                }
+            ]
+        },
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_a_file_whose_bindings_opted_out_of_its_picture_is_not_filled(i2i):
+    """`pixlstash_bindings: []` is a file the old dialog stored taking no picture.
+
+    Detection must not opt that input back in, so the selection is not fed to
+    it and nothing is uploaded: the file runs as it was authored.
+    """
+    i2i.graph["pixlstash_bindings"] = []
+    picture = _add_picture(i2i.server, i2i.tmp_path, "s.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_CARD}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["picture_inputs"] == []
+    assert i2i.uploads == []
+    assert i2i.submitted[0]["graph"]["5"]["inputs"]["image"] == "subject.png"
+    # And one that bound its image is filled as before.
+    i2i.graph["pixlstash_bindings"] = [
+        {"role": "image", "path": ["5", "inputs", "image"], "recovered": True}
+    ]
+    r = i2i.owner.post(
+        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_CARD}
+    )
+    assert r.status_code == 200, r.text
+    assert _uploaded_id(i2i.submitted[-1]["graph"]["5"]["inputs"]["image"]) == str(
+        picture
+    )
 
 
 def test_a_ui_format_file_is_not_a_runnable_source(runnable, monkeypatch):

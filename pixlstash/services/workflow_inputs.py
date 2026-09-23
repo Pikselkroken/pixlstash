@@ -319,8 +319,10 @@ def resolve_fills(
     """
     # A request that sends the selection somewhere has moved it, so a stored
     # (or defaulted) Selection elsewhere yields rather than reading it twice.
+    # Asked of THIS card's addresses only: a request spanning several cards
+    # that routes the selection on one of them has said nothing about another.
     routed = has_selection and any(
-        picture_id is None for picture_id in requested.values()
+        item.address in requested and requested[item.address] is None for item in inputs
     )
     fills: list[InputFill] = []
     for item in inputs:
