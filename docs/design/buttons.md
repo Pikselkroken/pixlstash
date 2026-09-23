@@ -50,6 +50,7 @@ and do not implement any of it without checking this table first.
 | Status words on a hovered row | **Closed**, no change: 4.09 to 4.45:1 clears the 4:1 floor |
 | `--accent-on` becomes pure white; amber stays `#c47a1e` | **Approved** 2026-09-12; light amber superseded 2026-09-23 |
 | Light theme amber deepens to `#9e6727` (attention dot under 3:1, #1413) | **Approved** 2026-09-23 |
+| Amber marks on a hovered or selected row may dip under 3:1 (light 2.46 - 3.32:1), an accepted exception for a transient state | **Approved** 2026-09-23 |
 | `primary_green` retired; its 16 sites become `primary` | **Approved** 2026-09-12 |
 | Focus ring gets its own per-theme token | **Approved** 2026-09-12 |
 | Pick one: `Segmented` for 2 to 5, `OptionRows` for sort by | **Approved** 2026-09-12 |
@@ -464,7 +465,10 @@ attention dot and the busy stats icon, and #c47a1e measured 2.93:1 on the light
 sidebar and toolbar, under the 3:1 floor for a mark. Light `--accent` is now
 `#9e6727` everywhere, the key action fill included (white label 4.75:1, 4.07:1
 on the sidebar). One amber per theme, not a separate dot colour. Dark keeps
-`#c47a1e` and the 3.41:1 exception above.
+`#c47a1e` and the 3.41:1 exception above. Two consequences were accepted
+with it: an amber mark on a hovered or selected light row measures 2.46 - 3.32:1
+(the pointer is already on the row, and every case beats develop), and the
+hover shade, glows and washes read browner in light than they did.
 
 **The focus ring needs its own per-theme token.** A stroke must contrast with
 the canvas, so it wants to be light on dark and dark on light; a fill must

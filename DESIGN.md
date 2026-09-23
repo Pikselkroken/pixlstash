@@ -168,7 +168,7 @@ Both themes ship and every decision must hold in both, but the app **defaults to
 
 The brand and status hues are **one value shared by both themes**, except amber; otherwise only the neutrals switch. Consumed as tokens (`var(--accent)`, `rgb(var(--v-theme-*))`), **never a hex literal in a component.**
 
-**Contrast floors: text 4:1, icons and marks 3:1** (owner decision, 2026-09-13). 4:1 is enough; do not add tokens or treatments only to lift text from 4 to 4.5:1.
+**Contrast floors: text 4:1, icons and marks 3:1** (owner decision, 2026-09-13). Accepted exception: an amber mark on a hovered or selected row in light (2.46 - 3.32:1, 2026-09-23, #1413). 4:1 is enough; do not add tokens or treatments only to lift text from 4 to 4.5:1.
 
 ### Brand
 - **Amber** (`--accent` #c47a1e dark, **#9e6727 light**, label `--accent-on` **#ffffff**): **the action**. The key action fill (one per surface, including the verb that finishes something), links, the attention dot, and the "Stash" wordmark. Not selection, focus, hover, data or decoration. The only brand hue that differs by theme (owner decision, 2026-09-23, #1413): the shared #c47a1e measured 2.93:1 on the light sidebar, under the 3:1 floor for the attention dot, so light takes the deep amber (4.07:1 on the sidebar, white label 4.75:1). In dark the pure-white label measures 3.41:1, an accepted exception; do not flip the label dark. Dark panels (`dark-surface`) re-point `--v-theme-accent` at `dark-surface-accent` (#c47a1e in both themes), because the deep amber measures only 3.20:1 there. Known trade-off: under deuteranopia the deep amber sits close to the error red and the olive, so amber never carries meaning by hue alone; a label, shape or position always does.
