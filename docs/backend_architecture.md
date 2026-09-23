@@ -2929,7 +2929,10 @@ anyway. Wired into `_plan` at one site, between the swap and `judge`.
   `lora_not_skippable`. A skip is reported in `bypassed_loras` with
   `requested: true`; the automatic ones carry `requested: false`. A slot no
   graph of the run has is a 400; one named in both `loras` and `skip_loras` is
-  a 422.
+  a 422; and a skip on a run spanning several cards is a 400, because a node id
+  names one loader on one graph. A saved recipe's LoRAs are matched against the
+  graph as it stood before the skip, so the LoRA a skipped loader held is not
+  applied and does not move on to another loader.
 - **A saved recipe's LoRAs are placed by what they are, not by position**
   (`place_recipe_loras`): digest first, then case-folded basename, then any
   free slot in graph order, so a recipe that ran before still runs the same.

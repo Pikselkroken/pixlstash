@@ -637,6 +637,8 @@ Six rules the client must not re-derive:
    (#1478); `false` is one the server bypassed because this ComfyUI lacks its
    file. `unplaced_loras` names a saved recipe's LoRA that is not applied: the
    workflow has no loader left for it, or the shelf cannot identify it.
+   `skip_loras` is refused (400) on a run spanning several cards: a node id
+   names one loader on one graph.
 3. **A missing model blocks the whole batch**, mixed or not, and so does an
    unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
    submitted — including the groups whose own `reasons` are empty.

@@ -6996,7 +6996,7 @@ def chained(runnable, tmp_path):
     runnable.monkeypatch.setattr(
         workflows_routes,
         "_read_object_info",
-        lambda url: (json.loads(json.dumps(CHAIN_OBJECT_INFO)), None),
+        lambda url, **_: (json.loads(json.dumps(CHAIN_OBJECT_INFO)), None),
     )
     return SimpleNamespace(tmp_path=tmp_path, **vars(runnable))
 
@@ -7032,7 +7032,9 @@ def test_the_chain_is_read_in_apply_order_with_the_unknown_loader_flagged(chaine
 def test_the_chain_is_still_shown_when_comfyui_is_down(chained):
     """Read-only, with the reason, rather than a 503 the inspector cannot draw."""
     chained.monkeypatch.setattr(
-        workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (None, "connection refused"),
     )
     r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
     assert r.status_code == 200, r.text
@@ -7111,6 +7113,44 @@ def test_an_edit_without_comfyui_is_a_503_not_a_guess(chained):
     r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
     assert r.status_code == 503, r.text
     assert list(chained.tmp_path.glob("*.json")) == []
+
+
+def test_an_edit_never_changes_the_linked_workflow_file(chained):
+    """A card with a FILE behind it: the edit writes beside it, never into it.
+
+    The file differs from the picture's graph (seed 42), so the written copy
+    proves which one the edit started from, and the original's bytes are
+    compared after.
+    """
+    original = chained.tmp_path / "original.json"
+    authored = json.loads(json.dumps(CHAIN_DOCUMENT))
+    authored["3"]["inputs"]["seed"] = 42
+    original.write_text(json.dumps(authored))
+    before = original.read_bytes()
+    chained.monkeypatch.setattr(
+        workflows_routes,
+        "_resolve_workflow_path",
+        lambda name: (str(original), "user"),
+    )
+    with chained.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_file "
+            "(workflow_name, workflow_key, topology_hash, structural_hash) "
+            "VALUES (?, ?, ?, ?)",
+            ("original.json", RUN_CARD, RUN_TOPOLOGY, RUN_RECIPE),
+        )
+    try:
+        r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
+        assert r.status_code == 201, r.text
+        written = json.loads((chained.tmp_path / r.json()["name"]).read_text())
+        assert written["3"]["inputs"]["seed"] == 42, "not edited from the file"
+        assert "5" not in written
+        assert original.read_bytes() == before
+    finally:
+        with chained.server.hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_file WHERE workflow_name = 'original.json'"
+            )
 
 
 # --- skipping a LoRA for one run (#1478) ------------------------------------
@@ -7206,6 +7246,54 @@ def test_a_stacker_slot_whose_neighbour_is_live_is_not_skipped():
     assert [r.code for r in reasons] == ["lora_not_skippable"]
     assert "b.safetensors" in reasons[0].as_dict()["message"]
     assert "2" in graph, "the stacker was taken out anyway"
+
+
+def test_a_skip_is_not_undone_by_the_saved_recipes_loras(chained):
+    """The recipe LoRA a skipped loader held does not move on to the next one.
+
+    Placed after the skip, `other` (on the shelf, and in skipped node 2) fell
+    through to the positional fill and replaced node 5's LoRA, which the owner
+    had not named, while the notice still said node 2 was skipped.
+    """
+    r = chained.owner.post(
+        f"{API}/recipes",
+        json={
+            "name": "skip keeps its word",
+            "workflow_key": RUN_CARD,
+            "prompt": "a cat",
+            "loras": [
+                {
+                    "filename": RUN_ADAPTER_FILENAME,
+                    "sha256": RUN_ADAPTER_DIGEST,
+                    "strength": 0.7,
+                }
+            ],
+        },
+    )
+    assert r.status_code in {200, 201}, r.text
+    run = chained.owner.post(
+        f"{API}/workflows/run",
+        json={"saved_recipe_id": r.json()["id"], "skip_loras": [{"node_id": "2"}]},
+    )
+    assert run.status_code == 200, run.text
+    graph = chained.submitted[0]["graph"]
+    assert "2" not in graph, graph
+    assert graph["5"]["inputs"]["lora_name"] == "Mystery_Style.safetensors", graph
+
+
+def test_a_skip_on_a_run_of_several_workflows_is_refused(runnable):
+    """A node id means one loader on one graph; across cards it could be any."""
+    second = _seed_second_runnable_card(runnable.server)
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={
+            "picture_ids": [runnable.picture_id, second],
+            "skip_loras": [{"node_id": "2"}],
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert "several" in r.json()["detail"]
+    assert runnable.submitted == []
 
 
 # --- a saved recipe's LoRAs, placed by what they are (#1478) ----------------

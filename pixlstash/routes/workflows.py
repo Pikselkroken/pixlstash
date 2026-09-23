@@ -2569,6 +2569,18 @@ def create_router(server) -> APIRouter:
             target = _require_hash(body.target, "target")
             pictures = [pid for _, ids, _ in groups for pid in ids]
             groups = [(target, pictures, [])]
+        if body.skip_loras and len({key for key, _, _ in groups if key}) > 1:
+            # A skip names a loader by its node id, which only means one thing
+            # in one graph: across cards it could skip an unrelated LoRA and
+            # report it as the owner's choice.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "skip_loras names loaders by node id, which only identifies "
+                    "a loader on one workflow; this run spans several. Run one "
+                    "workflow at a time, or name it as target."
+                ),
+            )
 
         # Read once for the whole request, and only when there is a ComfyUI to
         # verify a swap against: two shelf scans per group would be two scans of
@@ -2630,10 +2642,15 @@ def create_router(server) -> APIRouter:
             graph = source.graph
             _apply_addressed(graph, body.values)
             _apply_prompts(graph, body.prompt, body.negative)
-            # The slots the owner asked this run to go without, first: before
-            # the saved recipe's LoRAs are matched to slots (a skipped one is
-            # no longer a slot to fill), before the missing-LoRA bypass and
-            # before `judge`, so the graph judged is the graph submitted.
+            # A saved recipe's LoRAs are matched against the graph as it stood
+            # BEFORE the skip: matched after it, the LoRA a skipped loader held
+            # moved on to the next free slot and replaced a LoRA the owner had
+            # not named, while the notice still said it was skipped.
+            slots_before_skip = detect_lora_targets(graph)
+            # The slots the owner asked this run to go without, next: before
+            # the saved recipe's LoRAs are applied, before the missing-LoRA
+            # bypass and before `judge`, so the graph judged is the graph
+            # submitted.
             skipped, skip_reasons, skip_seen = run_service.skip_requested_loras(
                 graph,
                 [(item.node_id, item.field) for item in body.skip_loras],
@@ -2665,12 +2682,22 @@ def create_router(server) -> APIRouter:
                 # `unplaced_loras` rather than dropped. A positional zip put a
                 # recipe stored in the other order onto the wrong loaders.
                 placements, group.unplaced_loras = run_service.place_recipe_loras(
-                    slots_in_graph,
+                    slots_before_skip,
                     recipe_loras,
-                    _slot_digests(slots_in_graph, shelf_index)
-                    if slots_in_graph
+                    _slot_digests(slots_before_skip, shelf_index)
+                    if slots_before_skip
                     else {},
                 )
+                # A recipe LoRA matched to a skipped slot is not applied: the
+                # owner skipped that loader for this run, and the skip is
+                # already reported in `bypassed_loras`.
+                skipped_slots = {(item["node_id"], item["field"]) for item in skipped}
+                placements = [
+                    (target, saved)
+                    for target, saved in placements
+                    if (str(target["node_id"]), str(target["field"]))
+                    not in skipped_slots
+                ]
                 for unplaced in group.unplaced_loras:
                     logger.info(
                         "[workflows] Card %s runs without saved LoRA %s: %s",
@@ -3353,7 +3380,13 @@ def create_router(server) -> APIRouter:
         hub = _hub()
         card = _require_card(hub, workflow_key)
         graph = _card_source(card).graph
-        object_info, error = _read_object_info(_comfyui_url(_user(request)))
+        # Cached: the inspector asks on every card it selects, the map is
+        # megabytes, and an unreachable ComfyUI would otherwise cost a full
+        # timeout per click. This read only DRAWS the chain; the PUT that
+        # rewires it reads a fresh map.
+        object_info, error = _read_object_info(
+            _comfyui_url(_user(request)), cached=True
+        )
         chain = None
         if object_info is None:
             refusal = (
