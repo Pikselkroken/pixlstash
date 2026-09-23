@@ -128,15 +128,24 @@ export function readReason(reason) {
     case LORAS_UNPLACED: {
       // Shaped like the bypass's `models` so the notice's file list draws
       // them: the file, then the server's own reason for it.
-      const files = (reason.loras || [])
-        .filter(Boolean)
-        .map((lora) => ({
-          file: String(lora.filename || "").split(/[\\/]/).pop() || "a LoRA",
-          reason: lora.reason || "",
-        }));
+      const loras = (reason.loras || []).filter(Boolean);
+      const files = loras.map((lora) => ({
+        file: String(lora.filename || "").split(/[\\/]/).pop() || "a LoRA",
+        reason: lora.reason || "",
+      }));
       const count = files.length;
+      // Two causes and two fixes: a LoRA with no loader left wants one added;
+      // one the shelf cannot identify has a loader and wants the file on the
+      // shelf. Each LoRA's own line says which it is.
+      const unnamed = loras.filter((lora) => !lora.sha256).length;
+      const lead =
+        unnamed === count
+          ? `${count === 1 ? "A LoRA this recipe names is" : `${count} LoRAs this recipe names are`} missing from your model shelf, so ${count === 1 ? "it is" : "they are"} not applied. Put the ${count === 1 ? "file" : "files"} on the shelf, or take ${count === 1 ? "it" : "them"} off the recipe.`
+          : unnamed === 0
+            ? `${count === 1 ? "A LoRA this recipe names has" : `${count} LoRAs this recipe names have`} no loader to go in on this workflow, so ${count === 1 ? "it is" : "they are"} not applied. Add a loader to the workflow, or take ${count === 1 ? "it" : "them"} off the recipe.`
+            : `${count} LoRAs this recipe names are not applied. Each one below says why.`;
       return read(
-        `${count === 1 ? "A LoRA this recipe names has" : `${count} LoRAs this recipe names have`} no loader to go in on this workflow, so ${count === 1 ? "it is" : "they are"} not applied. Add a loader to the workflow, or take ${count === 1 ? "it" : "them"} off the recipe.`,
+        lead,
         FIX_EDIT_LORAS,
         files,
         false,

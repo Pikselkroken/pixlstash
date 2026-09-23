@@ -610,6 +610,13 @@ async function creditOf(recipeId) {
   }
 }
 
+/** A row's strength, or 1 when it has none: a 0 is a strength, not a gap. */
+function strengthOr1(value) {
+  if (value === null || value === undefined || value === "") return 1;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 1;
+}
+
 /** What the recipe keeps, in the shape both the POST and the PATCH take. */
 function body() {
   return {
@@ -623,7 +630,7 @@ function body() {
       .map((row) => ({
         filename: row.filename,
         sha256: row.sha256 || null,
-        strength: Number(row.strength) || 1,
+        strength: strengthOr1(row.strength),
       })),
     overrides: Object.fromEntries(
       props.overrides

@@ -661,10 +661,15 @@ describe("skipping a graph LoRA for this run", () => {
     const body = runWorkflowCard.mock.calls[0][0];
     expect(body.skip_loras).toEqual([{ node_id: "7", field: "lora_name" }]);
     expect(body.loras).toEqual([]);
-    // Nor is it part of the look a recipe saved from here would keep.
+    // But a recipe saved from here still lists it: a saved recipe cannot hold
+    // a skip, so every run of it loads that loader from the graph, and a list
+    // leaving it out would say less than those runs do.
     expect(
-      wrapper.vm.recipeLoras.map((lora) => lora.filename),
-    ).toEqual(["somebody-elses.safetensors"]);
+      [...wrapper.vm.recipeLoras.map((lora) => lora.filename)].sort(),
+    ).toEqual([
+      "loras/film-grain-35mm.safetensors",
+      "somebody-elses.safetensors",
+    ]);
   });
 
   it("takes a skip back with Use", async () => {

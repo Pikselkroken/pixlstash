@@ -183,13 +183,15 @@ describe("the chain as read", () => {
     expect(strengths).toEqual(["1.00", "0.85", "0.40", "0.60"]);
   });
 
-  it("flags the loader that is not on the shelf, in the design's words", async () => {
+  it("flags the loader that is not on the shelf by its file name", async () => {
     const wrapper = await mountDialog();
     const said = textOf(wrapper);
+    // The owner's wording: the file, and that it is missing. Not "a run
+    // ignores that loader", which is false - ComfyUI loads it by file name.
     expect(said).toContain(
-      "Hairstyle-V3.safetensors is not on your model shelf. PixlStash cannot identify the file, so a run ignores that loader",
+      "Hairstyle-V3.safetensors is missing from your model shelf.",
     );
-    expect(said).toContain("Delete it here, or put the file on the shelf.");
+    expect(said).not.toContain("ignores that loader");
     // And says what saving does to the original.
     expect(said).toContain(
       "Saving writes a new workflow. SDXL + face detailer and its 184 pictures stay as they are.",
@@ -200,6 +202,27 @@ describe("the chain as read", () => {
 });
 
 describe("delete and restore", () => {
+  it("sends an untouched strength back exactly as read, not as displayed", async () => {
+    getLoraChain.mockResolvedValue(
+      chain({
+        loaders: [
+          loader("14", "a.safetensors", 0.855),
+          loader("22", "b.safetensors", 1.0),
+        ],
+      }),
+    );
+    const wrapper = await mountDialog();
+    await deleteButton(wrapper, 1).trigger("click");
+    await flushPromises();
+    await button(wrapper, "Save…").trigger("click");
+    await flushPromises();
+    // Shown as 0.86 (two decimals); sending that would re-weight a loader
+    // the owner never touched.
+    expect(saveLoraChain.mock.calls[0][1].entries).toEqual([
+      { node_id: "14", strength: 0.855 },
+    ]);
+  });
+
   it("strikes the row through with Restore, and leaves it out of the PUT", async () => {
     const wrapper = await mountDialog();
     await deleteButton(wrapper, 3).trigger("click");
@@ -261,6 +284,24 @@ describe("reordering by keyboard", () => {
     expect(
       saveLoraChain.mock.calls[0][1].entries.map((entry) => entry.node_id),
     ).toEqual(["14", "31", "22", "33"]);
+  });
+
+
+  it("moves past a deleted row rather than swapping with it", async () => {
+    const wrapper = await mountDialog();
+    await deleteButton(wrapper, 2).trigger("click");
+    await flushPromises();
+    const handle = wrapper.findAll(".eld-row")[1].find("[data-focus='handle']");
+    await handle.trigger("keydown", { key: "ArrowDown", altKey: true });
+    await flushPromises();
+
+    await button(wrapper, "Save…").trigger("click");
+    await flushPromises();
+    // 22 jumped the struck-through 31 and landed after 33: a real move the
+    // save writes, not a swap with a row that is going anyway.
+    expect(
+      saveLoraChain.mock.calls[0][1].entries.map((entry) => entry.node_id),
+    ).toEqual(["14", "33", "22"]);
   });
 
   it("does not move a row past the ends", async () => {

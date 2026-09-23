@@ -134,6 +134,25 @@ describe("a recipe LoRA with no loader, which is not a refusal (#1478)", () => {
     expect(rail(wrapper)).toContain("rrn--notice");
   });
 
+
+  it("says a LoRA the shelf cannot identify is missing, not loaderless", () => {
+    const wrapper = mountWithButtons({
+      ...reason,
+      loras: [
+        {
+          filename: "loras/Mystery.safetensors",
+          sha256: null,
+          reason: "Your model shelf cannot identify Mystery.safetensors",
+        },
+      ],
+    });
+    const said = wrapper.text().replace(/\s+/g, " ");
+    expect(said).toContain(
+      "A LoRA this recipe names is missing from your model shelf, so it is not applied.",
+    );
+    expect(said).not.toContain("no loader");
+  });
+
   it("offers Edit LoRAs… for the card it is about", async () => {
     const wrapper = mountWithButtons(reason);
     const edit = wrapper.findAll("button").find((b) => b.text() === "Edit LoRAs…");

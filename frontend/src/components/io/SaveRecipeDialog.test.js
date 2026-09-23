@@ -551,6 +551,26 @@ describe("SaveRecipeDialog's LoRA rows", () => {
     ]);
   });
 
+
+  it("saves a strength of 0 as 0, not as 1", async () => {
+    const wrapper = mount(SaveRecipeDialog, {
+      props: {
+        open: true,
+        workflowKey: KEY,
+        suggestedName: "Rainy tram platform",
+        prompt: "a rainy tram platform",
+        loras: [{ filename: "zero.safetensors", sha256: "d0", strength: 0 }],
+      },
+      global: { stubs: { teleport: true } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    const body = await save(wrapper);
+    expect(body.loras).toEqual([
+      { filename: "zero.safetensors", sha256: "d0", strength: 0 },
+    ]);
+  });
+
   it("puts a row back with Restore", async () => {
     const wrapper = openRows();
     await flushPromises();

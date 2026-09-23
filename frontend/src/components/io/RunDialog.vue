@@ -877,15 +877,16 @@ const recipeLoras = computed(() =>
     // A graph LoRA the shelf cannot name is KEPT, as its file with no digest:
     // Save as recipe lists and flags it (#1478), and dropping it here was the
     // silent half of that - the dialog never saw it to say so.
-    // A row skipped for this run is not part of the look being run either.
-    .filter((row) => !row.skipped)
+    // A row skipped for THIS run is still kept: a saved recipe cannot hold a
+    // skip, so every run of it loads that loader from the graph, and a list
+    // leaving it out would say less than those runs do.
     .filter((row) => row.sha256 || (!row.added && row.graphValue))
     .map((row) => {
       if (!row.sha256) {
         return {
           filename: row.graphValue,
           sha256: "",
-          strength: Number(row.strength) || 1,
+          strength: strengthOr1(row.strength),
         };
       }
       const shelf = adapters.value.find((item) => item.sha256 === row.sha256);
@@ -893,7 +894,7 @@ const recipeLoras = computed(() =>
         filename:
           shelf?.filename || shelf?.display_name || row.graphValue || row.sha256,
         sha256: row.sha256,
-        strength: Number(row.strength) || 1,
+        strength: strengthOr1(row.strength),
       };
     }),
 );
@@ -1259,6 +1260,13 @@ function shelfDigestFor(filename) {
     if (hits.length === 1) return String(hits[0].sha256);
   }
   return "";
+}
+
+/** A row's strength, or 1 when it has none: a 0 is a strength, not a gap. */
+function strengthOr1(value) {
+  if (value === null || value === undefined || value === "") return 1;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 1;
 }
 
 /** A file as it is compared across the popup and the pre-flight. */

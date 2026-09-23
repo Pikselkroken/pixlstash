@@ -157,10 +157,7 @@
               v-if="!row.onShelf && !row.isNew && !row.deleted"
               class="eld-note eld-flag"
             >
-              {{ row.fileBase }} is not on your model shelf. PixlStash cannot
-              identify the file, so a run ignores that loader — the workflow
-              claims a LoRA its pictures do not get. Delete it here, or put the
-              file on the shelf.
+              {{ row.fileBase }} is missing from your model shelf.
             </p>
           </li>
         </ol>
@@ -386,7 +383,11 @@ const positions = computed(() => {
 const effectiveRows = computed(() =>
   rows.value.map((row) => ({
     ...row,
-    strength: row.hasStrength ? Number(row.strengthText) : null,
+    strength: !row.hasStrength
+      ? null
+      : row.strengthText === fmt(row.readStrength)
+        ? row.readStrength
+        : Number(row.strengthText),
   })),
 );
 
@@ -493,6 +494,10 @@ function rowOf(loader) {
     onShelf: Boolean(loader.on_shelf),
     hasStrength,
     strengthText: hasStrength ? fmt(loader.strength) : "",
+    // The value as read, so a field left alone saves 0.855 and not the 0.86
+    // it displays: re-weighting a loader nobody touched is a change the
+    // owner did not make.
+    readStrength: hasStrength ? Number(loader.strength) : null,
     deleted: false,
     isNew: false,
   };
@@ -674,7 +679,10 @@ function onDrop(toIndex) {
 function move(index, delta) {
   const row = rows.value[index];
   if (!row || !canReorder(row)) return;
-  const to = index + delta;
+  // Past any deleted row: it stays in the list struck through, and swapping
+  // with it moves nothing the save would write while announcing a move.
+  let to = index + delta;
+  while (to >= 0 && to < rows.value.length && rows.value[to].deleted) to += delta;
   if (to < 0 || to >= rows.value.length) return;
   place(index, to, { focus: true });
 }
