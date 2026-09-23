@@ -177,11 +177,26 @@ describe("the pill's gates", () => {
     await verb(wrapper, "run").trigger("click");
     expect(wrapper.emitted("run")).toHaveLength(1);
 
+    // What is said around it names the stack's cover and the stack's rule,
+    // never "Select one workflow" for the one card the reader clicked.
+    expect(tooltip(wrapper, "run")).toContain("Run c, this stack's cover");
+    expect(verb(wrapper, "run").attributes("aria-label")).toContain(
+      "this stack's cover",
+    );
+    expect(tooltip(wrapper, "rename")).toBe(
+      "A stack is several workflows. Open it and pick one to rename",
+    );
+    expect(wrapper.text()).not.toContain("Select one workflow");
+
     // A stack plus anything else is several cards again.
     store.select("a", { additive: true });
     await wrapper.vm.$nextTick();
     expect(enabled(wrapper, "run")).toBe(false);
     expect(store.runnableCard).toBeNull();
+    expect(tooltip(wrapper, "run")).toBe(
+      "Select one workflow, or one whole stack, to run it",
+    );
+    expect(tooltip(wrapper, "rename")).toBe("Select one workflow to rename it");
 
     // The stack's size in the WRONG keys is not the stack either.
     store.selectRange(["c", "a"]);

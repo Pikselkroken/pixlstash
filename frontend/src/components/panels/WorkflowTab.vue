@@ -40,6 +40,21 @@
          are gated on a selection, and it is docked over the grid this rail
          sits beside), so nothing became unreachable — and the reader is told
          where the verbs are rather than left to find them. -->
+    <!-- A stack selected whole is one card on screen and one run: named, and
+         the sentence saying what Run… runs is the one the button points at,
+         visible rather than a hover tooltip touch never shows. -->
+    <template v-else-if="multiple && runTarget">
+      <div class="inspector-section">
+        <span class="section-label">Selected</span>
+        <p class="wftab-title">{{ runTarget.name }}</p>
+        <p id="wftab-run-target" class="wftab-note wftab-quiet">
+          A stack of {{ store.selectedKeys.length }} workflows. Run… runs
+          {{ runTarget.name }}, the cover; you can switch to another member in
+          the Run popup.
+        </p>
+      </div>
+    </template>
+
     <template v-else-if="multiple">
       <div class="inspector-section">
         <span class="section-label">Selected</span>
@@ -223,8 +238,7 @@
         icon-left="play"
         block
         :aria-disabled="runTarget ? undefined : 'true'"
-        :aria-describedby="runTarget ? undefined : 'wftab-run-reason'"
-        :tooltip="runTooltip"
+        :aria-describedby="runDescribedBy"
         @click="run"
       >
         Run…
@@ -258,7 +272,7 @@
         </div>
       </v-menu>
       <p v-if="!runTarget" id="wftab-run-reason" class="wftab-note wftab-quiet">
-        Run one workflow at a time
+        Run one workflow, or one whole stack, at a time
       </p>
     </div>
   </AppInspector>
@@ -440,6 +454,13 @@ const recipeKeys = computed(() =>
  * key out and would call a stack of six "five workflows".
  */
 const recipesStack = computed(() => {
+  // A stack selected whole heads its Recipes as the stack, not as a count.
+  if (multiple.value && runTarget.value) {
+    return {
+      name: runTarget.value.name || "",
+      size: Number(runTarget.value.stack_size) || 0,
+    };
+  }
   if (multiple.value) {
     const count = store.selectedKeys.length;
     return { name: `${count} workflows selected`, size: 0 };
@@ -787,12 +808,11 @@ const runTarget = computed(() =>
   multiple.value ? store.runnableCard : card.value,
 );
 
-/** Names the one card a stack's Run… runs, since the body counts several. */
-const runTooltip = computed(() =>
-  multiple.value && runTarget.value
-    ? `Run ${runTarget.value.name}, the stack's cover`
-    : undefined,
-);
+/** The sentence Run… is described by: why it refuses, or which stack card. */
+const runDescribedBy = computed(() => {
+  if (!runTarget.value) return "wftab-run-reason";
+  return multiple.value ? "wftab-run-target" : undefined;
+});
 
 /**
  * Run… opens the Run popup on THIS card (v1.12 F5).

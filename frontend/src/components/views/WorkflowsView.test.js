@@ -86,6 +86,7 @@ vi.mock("../../api/comfyui", () => ({
 import WorkflowCard from "../widgets/WorkflowCard.vue";
 import WorkflowsView from "./WorkflowsView.vue";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import { useFilterStore } from "../../stores/useFilterStore";
@@ -1905,6 +1906,26 @@ describe("right-clicking a card", () => {
 describe("the verbs the bar fires", () => {
   const bar = (wrapper) =>
     wrapper.findComponent({ name: "WorkflowSelectionBar" });
+
+  it("Run on a stack selected whole opens the popup on its cover", async () => {
+    // `select` with `whole` is what a click on a stack card does: the cover
+    // and both members, three keys for the one card on screen.
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.select("b", { whole: true });
+    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
+    // With the members fetched (the panel has been open), every key resolves
+    // to a card, so a gate counting cards sees three and runs nothing.
+    store.members = { b: [card("b"), card("b1"), card("b2")] };
+    expect(store.selectedCards).toHaveLength(3);
+
+    await bar(wrapper).vm.$emit("run");
+    await flush();
+    expect(useRunDialogStore().source).toMatchObject({
+      kind: "card",
+      workflowKey: "b",
+    });
+  });
 
   it("Delete asks first, and deletes nothing when the answer is no", async () => {
     const wrapper = await grid();
