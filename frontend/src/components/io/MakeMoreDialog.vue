@@ -185,19 +185,32 @@ const runnable = computed(() =>
   groups.value.filter((group) => !group.reasons.length),
 );
 /**
- * How many runs this would start - **per recipe, not per picture**.
+ * How many runs this would start: `count` per recipe, **times its pictures
+ * where they are fed into it**.
  *
- * `_submit_every` loops `for _ in range(body.count)` INSIDE its loop over the
- * groups, and `group.runs = body.count`: one graph per card, submitted `count`
- * times. The pictures choose which cards run; they are not each re-run. So
- * three pictures on two recipes at a count of four is eight, and a button
- * promising twelve would be promising four runs that never happen.
+ * `_submit_every` runs each card `count` times, and the pictures only choose
+ * which cards run - unless the card takes a picture, when the server feeds each
+ * selected picture into it and repeats the run per picture (#1457). Which of
+ * the two a card is, is the server's answer (`fill: "selection"` on one of its
+ * `picture_inputs`), never worked out here. So three pictures on two recipes at
+ * a count of four is eight when neither takes a picture, and twelve when both do.
  */
 const totalRuns = computed(() =>
   missingModels.value || !validCount.value
     ? 0
-    : runnable.value.length * count.value,
+    : runnable.value.reduce((sum, group) => sum + passesOf(group), 0) *
+      count.value,
 );
+
+/** Whether the server feeds this group's own pictures into its graph. */
+function feedsItsPictures(group) {
+  return (group.picture_inputs || []).some((input) => input.fill === "selection");
+}
+
+/** How many times one `count` runs this group: once, or once per picture. */
+function passesOf(group) {
+  return feedsItsPictures(group) ? group.picture_ids.length : 1;
+}
 
 const validCount = computed(
   () => Number.isInteger(count.value) && count.value > 0,
@@ -255,7 +268,10 @@ function nameOf(group) {
 }
 
 function subOf(group) {
-  return group.reasons.length ? "Cannot run" : "Its own recipe, with a new seed";
+  if (group.reasons.length) return "Cannot run";
+  return feedsItsPictures(group)
+    ? "Its own recipe, run on each of these pictures"
+    : "Its own recipe, with a new seed";
 }
 
 /** The body both the pre-flight and the run take, so the two never disagree. */
