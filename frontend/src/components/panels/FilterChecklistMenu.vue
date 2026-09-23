@@ -36,11 +36,36 @@
         :id="listId"
         ref="listRef"
         class="fm-list"
-        role="group"
+        :role="pickOne ? 'radiogroup' : 'group'"
         :aria-label="title"
       >
+        <!-- Pick one: a check on the chosen row, not a checkbox. Focus stays in
+             the field, which is the list's one tab stop, so a click must not
+             take it; and a radio is never unticked, the header's Clear is. -->
+        <template v-if="pickOne">
+          <button
+            v-for="(item, idx) in shown"
+            :id="`${listId}-${idx}`"
+            :key="item.value"
+            class="fm-row"
+            :class="{ 'fm-check--kbd': idx === highlight }"
+            type="button"
+            role="radio"
+            tabindex="-1"
+            :aria-checked="isChecked(item.value) ? 'true' : 'false'"
+            :title="item.label"
+            @mousedown.prevent
+            @click="emit('toggle', item.value, true)"
+          >
+            <span class="fm-row-label">{{ item.label }}</span>
+            <span class="fm-n">{{ formatCount(countOf(item)) }}</span>
+            <v-icon size="16" class="fm-row-trail">{{
+              isChecked(item.value) ? "mdi-check" : ""
+            }}</v-icon>
+          </button>
+        </template>
         <label
-          v-for="(item, idx) in shown"
+          v-for="(item, idx) in pickOne ? [] : shown"
           :id="`${listId}-${idx}`"
           :key="item.value"
           class="tbm-check fm-check"
@@ -70,7 +95,8 @@
 <script setup>
 /**
  * A filter field over a checklist with counts: the Tags, Checkpoint and
- * LoRA menus. Ticking emits `toggle`; the parent owns what that means.
+ * LoRA menus, and the Workflows screen's pick-one Checkpoint. Ticking emits
+ * `toggle`; the parent owns what that means.
  */
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 
@@ -87,6 +113,9 @@ const props = defineProps({
   clearable: { type: Boolean, default: false },
   hint: { type: String, default: "ticks the highlighted row." },
   emptyText: { type: String, default: "Nothing matches." },
+  // Rows are radios over one value: `checked` holds it, and `toggle` only
+  // ever asks for a row on.
+  pickOne: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["toggle", "clear"]);
@@ -134,7 +163,7 @@ function move(step) {
 
 function toggleHighlighted() {
   const item = shown.value[highlight.value];
-  if (item) emit("toggle", item.value, !isChecked(item.value));
+  if (item) emit("toggle", item.value, props.pickOne || !isChecked(item.value));
 }
 
 onMounted(() => nextTick(() => fieldRef.value?.focus()));

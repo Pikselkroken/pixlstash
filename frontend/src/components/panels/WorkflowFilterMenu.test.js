@@ -1,7 +1,7 @@
 // The Workflows Filters panel (v1.12 F7).
 //
 // The thing that can silently invert here is WHICH SIDE applies a filter.
-// *Hide one-offs* and *Show hidden workflows* are the server's, because
+// *Hide one-offs* and *Hidden workflows* are the server's, because
 // widening the set re-runs the stacking; the other five are the client's,
 // because they only ever remove a card. A panel that applied the first two in
 // the browser would look identical on screen and be wrong about every stack,
@@ -104,27 +104,38 @@ const rowCount = (wrapper, key) =>
   check(wrapper, key).element.closest("label").querySelector(".fm-n")
     .textContent;
 
-/** The rows of one pick-one section, by its label. */
-function section(wrapper, label) {
-  const found = wrapper
-    .findAll(".tbm-section")
-    .find(
-      (node) =>
-        node.find(".tbm-label").exists() &&
-        node.find(".tbm-label").text() === label,
-    );
-  if (!found) throw new Error(`no filter section called ${label}`);
+/** A root row of the Workflow section, by its filter key. */
+const kindRow = (wrapper, key) =>
+  wrapper.find(`[data-testid="wff-row-${key}"]`);
+
+/** What a root row says is picked; empty means "any". */
+const rowValue = (wrapper, key) => kindRow(wrapper, key).find(".fm-n").text();
+
+/** Opens a kind's flyout (if another is open, it replaces it) and returns it. */
+async function section(wrapper, key) {
+  if (kindRow(wrapper, key).attributes("aria-expanded") !== "true") {
+    await kindRow(wrapper, key).trigger("click");
+    await flushPromises();
+  }
+  const found = wrapper.find(".fm-sub-slot");
+  if (!found.exists()) throw new Error(`no flyout opened for ${key}`);
   return found;
 }
 
-/** One pick-one section as `[label, count]` pairs, in the order drawn. */
-const optionLabels = (wrapper, label) =>
-  section(wrapper, label)
+/** One Type or Source flyout as `[label, count]` pairs, in the order drawn. */
+const optionLabels = async (wrapper, key) =>
+  (await section(wrapper, key))
     .findAll(".optrow")
     .map((row) => [
       row.find(".optrow__label").text(),
       row.find(".fm-n").text(),
     ]);
+
+/** The Checkpoint flyout's rows as `[label, count]` pairs. */
+const checkpointRows = async (wrapper) =>
+  (await section(wrapper, "checkpoint"))
+    .findAll('[role="radio"]')
+    .map((row) => [row.find(".fm-row-label").text(), row.find(".fm-n").text()]);
 
 beforeEach(() => {
   listWorkflowCards.mockReset();
@@ -135,7 +146,7 @@ describe("the Workflows filter panel", () => {
     const { wrapper } = await mountMenu();
     expect(rowText(wrapper, "hideOneOffs")).toContain("Hide one-offs");
     expect(rowCount(wrapper, "hideOneOffs")).toBe("7");
-    expect(rowText(wrapper, "showHidden")).toContain("Show hidden workflows");
+    expect(rowText(wrapper, "showHidden")).toContain("Hidden workflows");
     expect(rowCount(wrapper, "showHidden")).toBe("4");
     expect(check(wrapper, "hideOneOffs").element.checked).toBe(true);
     expect(check(wrapper, "showHidden").element.checked).toBe(false);
@@ -144,7 +155,7 @@ describe("the Workflows filter panel", () => {
   it("states the one-off rule the backend actually applies", async () => {
     const { wrapper } = await mountMenu();
     expect(wrapper.text().replace(/\s+/g, " ")).toContain(
-      "fewer than 3 pictures, no rating, no saved recipe, not imported",
+      "A one-off: under 3 pictures, unrated, no recipe, not imported.",
     );
   });
 
@@ -212,14 +223,12 @@ describe("the Workflows filter panel", () => {
 
   it("counts each pick-one option over the whole grid, not the filtered one", async () => {
     const { wrapper, store } = await mountMenu();
-    expect(optionLabels(wrapper, "Type")).toEqual([
-      ["All", "3"],
+    expect(await optionLabels(wrapper, "type")).toEqual([
       ["Text to Image", "1"],
       ["Upscale", "1"],
       ["Image to Image", "1"],
     ]);
-    expect(optionLabels(wrapper, "Source")).toEqual([
-      ["Any", "3"],
+    expect(await optionLabels(wrapper, "source")).toEqual([
       ["Imported file", "1"],
       ["Found in your pictures", "2"],
     ]);
@@ -227,9 +236,8 @@ describe("the Workflows filter panel", () => {
     store.setFilters({ source: "imported" });
     await flushPromises();
     // Still every type, still counted over all three cards.
-    expect(optionLabels(wrapper, "Type")).toHaveLength(4);
-    expect(optionLabels(wrapper, "Source")).toEqual([
-      ["Any", "3"],
+    expect(await optionLabels(wrapper, "type")).toHaveLength(3);
+    expect(await optionLabels(wrapper, "source")).toEqual([
       ["Imported file", "1"],
       ["Found in your pictures", "2"],
     ]);
@@ -237,7 +245,7 @@ describe("the Workflows filter panel", () => {
 
   it("narrows the grid on a pick-one and puts one chip on the strip", async () => {
     const { wrapper, store } = await mountMenu();
-    const upscale = section(wrapper, "Type")
+    const upscale = (await section(wrapper, "type"))
       .findAll(".optrow")
       .find((row) => row.find(".optrow__label").text() === "Upscale");
     await upscale.trigger("click");
@@ -259,8 +267,8 @@ describe("the Workflows filter panel", () => {
   // opposite, and nothing asserted which side of it a card landed on.
   it("keeps the imported cards on Source, and the found ones on the other", async () => {
     const { wrapper, store } = await mountMenu();
-    const pick = (label) =>
-      section(wrapper, "Source")
+    const pick = async (label) =>
+      (await section(wrapper, "source"))
         .findAll(".optrow")
         .find((row) => row.find(".optrow__label").text() === label)
         .trigger("click");
@@ -283,13 +291,14 @@ describe("the Workflows filter panel", () => {
   // implementation reading `models[0]` would offer it here as a checkpoint.
   it("offers the base models as checkpoints, and narrows to the one picked", async () => {
     const { wrapper, store } = await mountMenu();
-    expect(optionLabels(wrapper, "Checkpoint")).toEqual([
-      ["Any", "3"],
+    expect(await checkpointRows(wrapper)).toEqual([
       ["realvisXL_v5.safetensors", "2"],
     ]);
 
-    await section(wrapper, "Checkpoint")
-      .findAll(".optrow")[1]
+    await (
+      await section(wrapper, "checkpoint")
+    )
+      .find('[role="radio"]')
       .trigger("click");
     expect(store.filteredCards.map((entry) => entry.name)).toEqual([
       "Cinematic portrait",
@@ -302,13 +311,90 @@ describe("the Workflows filter panel", () => {
 
   it("keeps a card at or above the minimum rating, unrated ones included out", async () => {
     const { wrapper, store } = await mountMenu();
-    const four = section(wrapper, "Min rating")
-      .findAll(".optrow")
-      .find((row) => row.find(".optrow__label").text() === "4★ and up");
-    await four.trigger("click");
+    await (
+      await section(wrapper, "minRating")
+    )
+      .find('[aria-label="At least 4 stars"]')
+      .trigger("click");
     expect(store.filteredCards.map((entry) => entry.name)).toEqual([
       "Cinematic portrait",
     ]);
+  });
+
+  // The row's value is the chip's, so the root and the strip cannot say one
+  // pick two ways. Empty means "any", not a stale label.
+  it("says on each root row what is picked, in the chip's words", async () => {
+    const { wrapper, store } = await mountMenu();
+    for (const key of ["type", "checkpoint", "source", "minRating"]) {
+      expect(rowValue(wrapper, key)).toBe("");
+    }
+    store.setFilters({
+      type: "upscale",
+      checkpoint: "realvisXL_v5.safetensors",
+      source: "found",
+      minRating: 3,
+    });
+    await flushPromises();
+    expect(rowValue(wrapper, "type")).toBe("Upscale");
+    expect(rowValue(wrapper, "checkpoint")).toBe("realvisXL_v5.safetensors");
+    expect(rowValue(wrapper, "source")).toBe("Found in your pictures");
+    expect(rowValue(wrapper, "minRating")).toBe("3★ and up");
+  });
+
+  it("opens one flyout at a time, and drops it when the menu closes", async () => {
+    const { wrapper } = await mountMenu();
+    expect(wrapper.find(".fm-sub-slot").exists()).toBe(false);
+    await section(wrapper, "type");
+    await section(wrapper, "source");
+    expect(wrapper.findAll(".fm-sub-slot")).toHaveLength(1);
+    expect(kindRow(wrapper, "type").attributes("aria-expanded")).toBe("false");
+    expect(kindRow(wrapper, "source").attributes("aria-expanded")).toBe("true");
+
+    await wrapper.setProps({ open: true });
+    await wrapper.setProps({ open: false });
+    expect(wrapper.find(".fm-sub-slot").exists()).toBe(false);
+  });
+
+  // The store holds ONE checkpoint: picking a second replaces the first
+  // rather than adding to it. A radio is never unticked: picking the chosen
+  // row again keeps it, and the flyout's Clear is the way back to any.
+  it("picks one checkpoint, from the keyboard as well as the pointer", async () => {
+    const two = [
+      ...CARDS,
+      card({
+        key: "e".repeat(64),
+        name: "Flux portrait",
+        models: [{ name: "flux1-dev.safetensors", kind: "checkpoint" }],
+      }),
+    ];
+    const { wrapper, store } = await mountMenu({ cards: two });
+    const flyout = await section(wrapper, "checkpoint");
+    expect(flyout.findAll('input[type="checkbox"]')).toHaveLength(0);
+
+    const field = flyout.find("input");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(store.filters.checkpoint).toBe("realvisXL_v5.safetensors");
+
+    await field.trigger("keydown", { key: "ArrowDown" });
+    await field.trigger("keydown", { key: "Enter" });
+    expect(store.filters.checkpoint).toBe("flux1-dev.safetensors");
+    expect(store.filterChips.map((chip) => chip.value)).toEqual([
+      "flux1-dev.safetensors",
+    ]);
+    const checked = flyout.findAll('[role="radio"][aria-checked="true"]');
+    expect(checked.map((row) => row.find(".fm-row-label").text())).toEqual([
+      "flux1-dev.safetensors",
+    ]);
+
+    await checked[0].trigger("click");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(store.filters.checkpoint).toBe("flux1-dev.safetensors");
+
+    await flyout
+      .findAll("button")
+      .find((button) => button.text() === "Clear")
+      .trigger("click");
+    expect(store.filters.checkpoint).toBeNull();
   });
 
   it("clears every filter at once, including the server's two", async () => {
