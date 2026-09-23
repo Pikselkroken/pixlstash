@@ -63,7 +63,10 @@ dependencies = [
     "tqdm>=4.67.3",
     "sentence_transformers~=5.2",
     "pillow-heif>=1.3.0",
-    "sqlmodel>=0.0.37",
+    # < 0.0.45: that release refuses a naive datetime on write, and 26 model
+    # defaults are `datetime.utcnow`. Lift the bound once they are made
+    # timezone-aware and existing rows are checked to compare the same way.
+    "sqlmodel>=0.0.37,<0.0.45",
     "alembic>=1.18.4",
     "python-jose[cryptography]>=3.5.0",
     "passlib>=1.7.4",
