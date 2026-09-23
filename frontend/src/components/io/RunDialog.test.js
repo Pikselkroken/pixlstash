@@ -271,6 +271,35 @@ describe("switching to another stack member", () => {
     expect(wrapper.vm.currentValue(after)).toBe(20);
   });
 
+  it("names every member in the picker, not only the cover", async () => {
+    // `GET /workflows` lists covers only, so a member's name is on its own
+    // card; a picker built from the list alone said "Stack member bbbbbbbb".
+    getWorkflowCard.mockImplementation(async (key) =>
+      key === OTHER
+        ? {
+            card: card({
+              key: OTHER,
+              name: "Cinematic portrait · detailer",
+              member_keys: [KEY],
+            }),
+          }
+        : { card: card({ member_keys: [OTHER] }) },
+    );
+    const wrapper = await mountRun();
+    expect(wrapper.vm.workflowOptions).toEqual([
+      { value: KEY, label: "Cinematic portrait" },
+      { value: OTHER, label: "Cinematic portrait · detailer" },
+    ]);
+
+    // From the member, the cover is the one in `member_keys`.
+    wrapper.vm.workflowKey = OTHER;
+    await flushPromises();
+    expect(wrapper.vm.workflowOptions).toEqual([
+      { value: OTHER, label: "Cinematic portrait · detailer" },
+      { value: KEY, label: "Cinematic portrait" },
+    ]);
+  });
+
   it("says nothing when every edit survived", async () => {
     const wrapper = await mountRun();
     const cfg = wrapper.vm.scalarFields.find((f) => f.input_name === "cfg");

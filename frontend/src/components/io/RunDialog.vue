@@ -629,6 +629,11 @@ const plannedRuns = ref(0);
 const card = ref(null);
 const recipe = ref(null);
 const cards = ref([]);
+/**
+ * Workflow key → name, for the stack members in the picker. `GET /workflows`
+ * lists covers only, so a member's name comes from reading its own card.
+ */
+const memberNames = ref({});
 const adapters = ref([]);
 const reasons = ref([]);
 /**
@@ -1131,7 +1136,33 @@ const workflowOptions = computed(() => {
 
 function memberLabel(key) {
   const known = cards.value.find((row) => row.key === key);
-  return known?.name || `Stack member ${key.slice(0, 8)}`;
+  return (
+    memberNames.value[key] || known?.name || `Stack member ${key.slice(0, 8)}`
+  );
+}
+
+/** Reads the cards of the members not yet named; one that fails keeps the fallback. */
+async function nameMembers(next) {
+  if (next?.key && next.name) {
+    memberNames.value = { ...memberNames.value, [next.key]: next.name };
+  }
+  const unnamed = (next?.member_keys || []).filter(
+    (key) => !memberNames.value[key],
+  );
+  const named = await Promise.all(
+    unnamed.map(async (key) => {
+      try {
+        return [key, (await getWorkflowCard(key))?.card?.name];
+      } catch (err) {
+        console.warn(`Could not read the name of stack member ${key}:`, err);
+        return [key, null];
+      }
+    }),
+  );
+  const found = named.filter(([, name]) => name);
+  if (found.length) {
+    memberNames.value = { ...memberNames.value, ...Object.fromEntries(found) };
+  }
 }
 
 const adapterOptions = computed(() =>
@@ -1665,6 +1696,7 @@ async function loadAdapters() {
 async function loadCard(key, { keepEdits = false } = {}) {
   const detail = await getWorkflowCard(key);
   const next = detail?.card || null;
+  void nameMembers(next);
   if (!keepEdits) {
     card.value = next;
     fellBack.value = [];
@@ -1741,6 +1773,7 @@ async function load() {
   recipe.value = null;
   card.value = null;
   cards.value = [];
+  memberNames.value = {};
   loras.value = [];
   count.value = 1;
   seedMode.value = "new";
