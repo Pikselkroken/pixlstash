@@ -1141,8 +1141,14 @@ function memberLabel(key) {
   );
 }
 
-/** Reads the cards of the members not yet named; one that fails keeps the fallback. */
+/**
+ * Reads the cards of the members not yet named; one that fails keeps the
+ * fallback. Guarded by the load generation like every other read here, so a
+ * popup closed and reopened on another stack is not handed the old one's
+ * names after `load()` cleared them.
+ */
 async function nameMembers(next) {
+  const token = loadToken;
   if (next?.key && next.name) {
     memberNames.value = { ...memberNames.value, [next.key]: next.name };
   }
@@ -1160,7 +1166,7 @@ async function nameMembers(next) {
     }),
   );
   const found = named.filter(([, name]) => name);
-  if (found.length) {
+  if (token === loadToken && found.length) {
     memberNames.value = { ...memberNames.value, ...Object.fromEntries(found) };
   }
 }

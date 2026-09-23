@@ -300,6 +300,21 @@ describe("switching to another stack member", () => {
     ]);
   });
 
+  it("keeps the fallback for a member whose card cannot be read", async () => {
+    getWorkflowCard.mockImplementation(async (key) => {
+      if (key === OTHER) throw new Error("gone");
+      return { card: card({ member_keys: [OTHER] }) };
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const wrapper = await mountRun();
+    expect(wrapper.vm.workflowOptions).toEqual([
+      { value: KEY, label: "Cinematic portrait" },
+      { value: OTHER, label: "Stack member bbbbbbbb" },
+    ]);
+    expect(wrapper.vm.loadFailed).toBe("");
+    warn.mockRestore();
+  });
+
   it("says nothing when every edit survived", async () => {
     const wrapper = await mountRun();
     const cfg = wrapper.vm.scalarFields.find((f) => f.input_name === "cfg");
