@@ -21,10 +21,9 @@ Claude Design project, with the primitives at `components/core/Button.*` and
 
 ## Status
 
-**This file is ahead of the code.** The values below are the approved design;
-the shipped `AppButton` is still 27 / 23px at `--radius-md`. Nothing here has
-been implemented. Do not read a screenshot of the app as evidence against it,
-and do not implement any of it without checking this table first.
+**The approved rows are in the code, with the exceptions listed under "In the
+code" below.** That second table is the one to check before reading a
+screenshot as evidence for or against a row. The **Open** rows are not built.
 
 | Decision | Status |
 |---|---|
@@ -68,6 +67,29 @@ and do not implement any of it without checking this table first.
 | The z-index ladder stops at `--z-drawer` | **Approved** 2026-09-13 |
 | A raw value equal to a token is always a bug | **Approved** 2026-09-13 |
 | No sub-pixel type; a progress track takes `--radius-pill` | **Approved** 2026-09-13 |
+
+### In the code
+
+Checked against `develop` on 2026-09-23. A row not listed here is not built
+(the **Open** ones) or is covered by a line below.
+
+| Area | State | Evidence |
+|---|---|---|
+| Control heights 28 / 24px, bar 32px, `--radius-sm` | Done | `--control-h`, `--control-h-sm`, `--control-h-bar` in `design-tokens.css`; `AppButton` and `AppBarButton` read them |
+| `AppButton` replaces `v-btn`; `v-text-field` and `v-list` gone | Done | No `<v-btn>`, `<v-text-field>` or `<v-list>` left under `frontend/src` |
+| One field height, label inside the field retired, `--font-mono` fields | Done | `AppInput`: `--control-h`, no floating label, a `mono` prop |
+| Hues: `surface-*` foregrounds, amber acts / olive selects, `primary_green` retired, `--accent-on` white | Done | #1411; no `primary_green` site left; `on-accent` is `#ffffff` in both themes |
+| Focus ring token, ink hover wash | Done | `--focus-stroke` / `--focus-ring-inset`; `--hover-wash` in 105 places |
+| `Segmented` and `OptionRows` | Done | 11 and 6 users |
+| Menus on one 32px row | Done | `styles/context-menu.css` rows at `--control-h-bar` |
+| All 44 dialogs on `AppDialog`, four widths | Done | 44 `AppDialog` users, no bare `v-dialog`; `--dialog-w-sm` to `--dialog-w-xl` |
+| One `Tooltip` surface, `HelpTip` its preset, the `tooltip` prop | Done | `HelpTip.vue` renders `Tooltip`; `AppBarButton` takes `tooltip` |
+| No sub-pixel type | Done | No fractional `px` font size under `frontend/src` |
+| The z-index ladder stops at `--z-drawer` | **Partial** | 18 files still set a raw `z-index`; `styles/designDrift.test.js` lists the known ones above the ladder |
+| Native `title` only for clipped-text reveals; a raw value equal to a token; the 16px dialog gutter and `gap` spacing; the pill progress track | **Not audited** | Not checked site by site |
+| Outlined sites folding into the filled neutral (Open) | Not built | 4 `variant="outlined"` sites remain |
+| Selection-pill verbs 34 to 32px (Open) | Not built | Still 34px |
+| An `on-dark` context on both dialects (Open) | Not built | No such prop on either button |
 | Icons get no scale: a component owns its own icon slot | **Approved** 2026-09-13 |
 | A free-standing icon tracks its text; the default is 16px | **Approved** 2026-09-13 |
 | A menu row's two glyph slots are both `--gutter-glyph` | **Approved** 2026-09-13 |
