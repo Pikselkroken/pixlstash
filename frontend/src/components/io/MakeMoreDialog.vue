@@ -50,12 +50,13 @@
 
       <div class="mmd-controls">
         <div class="mmd-field">
-          <!-- "per recipe" and not "per picture", which is what the server
-               does: `count` runs of each card, whatever chose it. -->
-          <span class="mmd-l">Count per recipe</span>
+          <!-- Plain "Count": per recipe for a card that only starts from
+               its pictures' recipe, per PICTURE for one its pictures are fed
+               into (#1457). The button's total says which it came to. -->
+          <span class="mmd-l">Count</span>
           <AppInput
             v-model.number="count"
-            aria-label="Count per recipe"
+            aria-label="Count"
             type="number"
             min="1"
             :max="String(MAX_RUNS)"

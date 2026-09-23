@@ -5868,6 +5868,38 @@ def test_a_pin_whose_picture_has_gone_is_an_empty_slot_that_refuses(i2i):
     assert "fixed_input_deleted" not in _reasons(payload)
 
 
+def test_a_dead_pin_is_empty_even_when_the_graphs_own_file_is_live(i2i):
+    """The authored file being on ComfyUI must not stand in for a gone pin.
+
+    Otherwise the run quietly uses the file the graph was written with, and the
+    dead pin also keeps the selection from filling the other input, so neither
+    input reads what the owner chose (#1501 review).
+    """
+    i2i.graph = _i2i_graph(references=1)
+    reference = _label_of(i2i.graph, "6")
+    _set_inputs(
+        i2i.owner,
+        [
+            {
+                "slot_label": reference,
+                "input_name": "image",
+                "mode": "fixed",
+                "pixel_sha": _h("a picture that left"),
+            }
+        ],
+    )
+    subject = _add_picture(i2i.server, i2i.tmp_path, "subject-1.png")
+    r = i2i.owner.post(
+        f"{API}/workflows/run", json={"picture_ids": [subject], "target": RUN_CARD}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "refused", r.json()
+    gone = _inputs_of(r.json())[reference]
+    assert gone["fill"] is None and gone["picture_missing"] is True, gone
+    assert "picture_input_unfilled" in _reasons(r.json())
+    assert i2i.uploads == [] and i2i.submitted == []
+
+
 def test_a_duplicate_import_does_not_move_what_a_pin_resolves_to(i2i):
     """The OLDEST kept copy, so a pin feeds the same picture every run."""
     first = _add_picture(i2i.server, i2i.tmp_path, "a.png", _h("shared pixels"))

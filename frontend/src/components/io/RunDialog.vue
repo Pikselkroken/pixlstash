@@ -103,18 +103,26 @@
                 alt=""
               />
             </span>
+            <!-- `aria-disabled`, never `disabled`, on every control in these
+                 rows: a natively-disabled button drops out of the tab order
+                 while its own write is in flight, and a keyboard user's focus
+                 falls to the page. The handlers do the refusing. -->
             <button
               v-else
               type="button"
               class="rund-in-tile"
-              :class="{ 'rund-in-tile--empty': !input.picture_id }"
+              :class="{
+                'rund-in-tile--empty': !input.picture_id,
+                'rund-in-tile--off': !setupReady,
+              }"
+              :data-input="address(input)"
               :aria-label="
                 input.picture_id
                   ? `Change the picture for ${inputTitle(input)}`
                   : `Choose a picture for ${inputTitle(input)}`
               "
-              :disabled="submitting || inputsBusy"
-              @click="pickerFor = input"
+              :aria-disabled="setupReady ? undefined : 'true'"
+              @click="openPicker(input)"
             >
               <img
                 v-if="input.picture_id"
@@ -136,7 +144,7 @@
                 v-if="pictureIds.length && input.fill !== 'selection'"
                 size="sm"
                 class="rund-in-move"
-                :disabled="submitting || inputsBusy"
+                :aria-disabled="setupReady ? undefined : 'true'"
                 @click="useSelectionHere(input)"
               >
                 Use my selection here
@@ -144,17 +152,15 @@
             </span>
             <!-- Keep this picture: a pin is the card's own setup, so it holds
                  for every later run of this workflow in this library. -->
+            <!-- One fixed name; `aria-pressed` alone says whether it is on,
+                 so a reader never hears "Stop keeping... pressed". -->
             <AppBarButton
               v-if="input.picture_id && input.fill !== 'selection'"
               :icon="input.fill === 'fixed' ? 'pin' : 'pin-outline'"
               :active="input.fill === 'fixed'"
               :aria-pressed="input.fill === 'fixed' ? 'true' : 'false'"
-              :tooltip="
-                input.fill === 'fixed'
-                  ? `Stop keeping this picture for ${inputTitle(input)}`
-                  : `Keep this picture for ${inputTitle(input)} on every run`
-              "
-              :disabled="submitting || inputsBusy"
+              :aria-disabled="setupReady ? undefined : 'true'"
+              :tooltip="`Keep this picture for ${inputTitle(input)} on every run`"
               @click="togglePin(input)"
             />
             <span v-else class="rund-x-gap" />
@@ -162,7 +168,7 @@
               v-if="input.fill === 'request'"
               icon="close"
               :tooltip="`Clear the picture for ${inputTitle(input)}`"
-              :disabled="submitting || inputsBusy"
+              :aria-disabled="setupReady ? undefined : 'true'"
               @click="clearPick(input)"
             />
             <span v-else class="rund-x-gap" />
@@ -333,7 +339,12 @@
         <!-- Per run and never remembered (#1457, decision 4): the default
              follows whether a selected picture is actually fed into the graph,
              which is when the new picture is another take of that one. -->
-        <div v-if="pictureIds.length" class="rund-f rund-f--4 rund-check">
+        <!-- Shown only where its label is true: a picture fed into the graph
+             is each output's own source, and one picture is the source of
+             all of them. A selection nothing reads would stack every output
+             behind the FIRST picture, which is not "the ones they came
+             from". -->
+        <div v-if="stackOffered" class="rund-f rund-f--4 rund-check">
           <input
             :id="stackId"
             v-model="stack"
@@ -522,7 +533,7 @@
  * (#1480), as the lightbox's Recipe tab has since F6 - without it the second
  * identical row was one press away from here.
  */
-import { computed, reactive, ref, useId, watch } from "vue";
+import { computed, nextTick, reactive, ref, useId, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { getPictureRecipe } from "../../api/comfyui";
@@ -666,8 +677,20 @@ const pictureInputs = ref([]);
 const picks = reactive({});
 /** The input the picture picker is open for, or `null`. */
 const pickerFor = ref(null);
-/** A setup write in flight, so two quick pins cannot race each other. */
+/**
+ * A setup gesture in flight, INCLUDING the pre-flight after its write: the
+ * next whole-set PUT is built from `pictureInputs`, and until that pre-flight
+ * lands the list still says what the card was before the write. Released
+ * early, a second pin sent the first one back as a picker.
+ */
 const inputsBusy = ref(false);
+/**
+ * The card `pictureInputs` was read for. A write goes to `activeKey`, and a
+ * stack-member switch moves that at once while the new card's inputs are still
+ * being read - so a pin then would PUT one card's rows under another's key and
+ * replace its setup with rows that match nothing.
+ */
+const inputsKey = ref("");
 const inputsError = ref("");
 /**
  * The stack checkbox, `null` until the owner touches it.
@@ -747,8 +770,11 @@ const workflowKey = computed({
 
 async function switchCard(key, keepEdits) {
   // A pick is addressed by a slot of the card it was made on; another card's
-  // slots are other slots, so nothing carries over.
+  // slots are other slots, so nothing carries over - and neither do the rows,
+  // which are the set a pin would be written from.
   clearPicks();
+  pictureInputs.value = [];
+  inputsKey.value = "";
   // The same generation the load uses. A card read still in flight when the
   // popup is closed and reopened on another source would otherwise resolve
   // into the new dialog and replace its card, and the pre-flight behind it
@@ -1194,6 +1220,24 @@ const unfilledInputs = computed(() =>
 const feedsSelection = computed(() =>
   pictureInputs.value.some((input) => input.fill === "selection"),
 );
+/** Whether "stack with the ones they came from" would be true of this run. */
+const stackOffered = computed(
+  () =>
+    pictureIds.value.length === 1 ||
+    (pictureIds.value.length > 1 && feedsSelection.value),
+);
+/**
+ * Whether a setup gesture may start: nothing in flight, and the rows on screen
+ * read for the card a write would go to.
+ */
+const setupReady = computed(
+  () =>
+    !submitting.value &&
+    !inputsBusy.value &&
+    !preflighting.value &&
+    Boolean(activeKey.value) &&
+    inputsKey.value === activeKey.value,
+);
 const stack = computed({
   get: () => stackChoice.value ?? feedsSelection.value,
   set: (value) => {
@@ -1241,6 +1285,21 @@ function inputLine(input) {
   }
 }
 
+function openPicker(input) {
+  if (!setupReady.value) return;
+  pickerFor.value = input;
+}
+
+/**
+ * Put focus back on a row after a gesture that removed the control holding it
+ * (the clear, the move), so a keyboard user is not dropped to the page.
+ */
+async function focusRow(key) {
+  await nextTick();
+  const tile = document.querySelector(`[data-input="${key}"]`);
+  if (tile) tile.focus();
+}
+
 function clearPicks() {
   for (const key of Object.keys(picks)) delete picks[key];
 }
@@ -1255,12 +1314,25 @@ async function onPicked(picture) {
     input_name: input.input_name,
     picture_id: picture.id,
   };
-  await runPreflight();
+  await settle(runPreflight());
 }
 
 async function clearPick(input) {
-  delete picks[address(input)];
-  await runPreflight();
+  if (!setupReady.value) return;
+  const key = address(input);
+  delete picks[key];
+  await settle(runPreflight());
+  await focusRow(key);
+}
+
+/** Hold the setup controls until *step* - a write and its re-read - is done. */
+async function settle(step) {
+  inputsBusy.value = true;
+  try {
+    return await step;
+  } finally {
+    inputsBusy.value = false;
+  }
 }
 
 /**
@@ -1288,16 +1360,20 @@ function setupWith(input, change) {
 }
 
 async function writeSetup(entries) {
-  inputsBusy.value = true;
   inputsError.value = "";
+  // Asked again here and not only by the controls: this is the one place a
+  // whole-set write is sent, so it is the one place the guard cannot be
+  // skipped by a caller that forgot to check.
+  if (inputsKey.value !== activeKey.value) {
+    inputsError.value = "Still reading this workflow's pictures; try again.";
+    return false;
+  }
   try {
     await setWorkflowInputs(activeKey.value, entries);
     return true;
   } catch (err) {
     inputsError.value = errorMessage(err, "Could not keep that for this workflow.");
     return false;
-  } finally {
-    inputsBusy.value = false;
   }
 }
 
@@ -1309,27 +1385,32 @@ async function writeSetup(entries) {
  * never empties a slot the owner was about to run with.
  */
 async function togglePin(input) {
+  if (!setupReady.value) return;
   const key = address(input);
   const pinning = input.fill !== "fixed";
-  const ok = await writeSetup(
-    setupWith(
-      input,
-      pinning
-        ? { mode: "fixed", picture_id: input.picture_id, pixel_sha: null }
-        : { mode: "picker" },
-    ),
+  await settle(
+    (async () => {
+      const ok = await writeSetup(
+        setupWith(
+          input,
+          pinning
+            ? { mode: "fixed", picture_id: input.picture_id, pixel_sha: null }
+            : { mode: "picker" },
+        ),
+      );
+      if (!ok) return;
+      if (pinning) {
+        delete picks[key];
+      } else {
+        picks[key] = {
+          slot_label: input.slot_label,
+          input_name: input.input_name,
+          picture_id: input.picture_id,
+        };
+      }
+      await runPreflight();
+    })(),
   );
-  if (!ok) return;
-  if (pinning) {
-    delete picks[key];
-  } else {
-    picks[key] = {
-      slot_label: input.slot_label,
-      input_name: input.input_name,
-      picture_id: input.picture_id,
-    };
-  }
-  await runPreflight();
 }
 
 /**
@@ -1340,10 +1421,17 @@ async function togglePin(input) {
  * asking again on every run of such a card is the cost that would be paid.
  */
 async function useSelectionHere(input) {
-  const ok = await writeSetup(setupWith(input, { mode: "selection" }));
-  if (!ok) return;
-  delete picks[address(input)];
-  await runPreflight();
+  if (!setupReady.value) return;
+  const key = address(input);
+  await settle(
+    (async () => {
+      const ok = await writeSetup(setupWith(input, { mode: "selection" }));
+      if (!ok) return;
+      delete picks[key];
+      await runPreflight();
+    })(),
+  );
+  await focusRow(key);
 }
 /**
  * The button's number, from the server where it has answered.
@@ -1601,15 +1689,20 @@ async function runPreflight(token = loadToken) {
   }
   preflighting.value = true;
   preflightError.value = "";
+  const askedFor = activeKey.value;
   try {
     const answer = await preflightWorkflowRun(runBody());
-    if (!mine()) return;
+    // The popup has moved to another card since this was asked: its answer is
+    // about a card nobody is looking at, and its rows must not become the set
+    // a pin on the new card is written from.
+    if (!mine() || askedFor !== activeKey.value) return;
     reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
     bypassed.value = (answer?.groups || []).flatMap(bypassNotice);
     plannedRuns.value = Number(answer?.runs) || 0;
     // One group: this popup always runs one card (`target`, a key or a saved
     // recipe), so the first group's inputs are the card's.
     pictureInputs.value = answer?.groups?.[0]?.picture_inputs || [];
+    inputsKey.value = askedFor;
   } catch (err) {
     // The route answers 400/404/422 here exactly as it does on the run, "so
     // the two never disagree" - so a 4xx is this body being refused and is
@@ -1619,6 +1712,10 @@ async function runPreflight(token = loadToken) {
     if (!mine()) return;
     reasons.value = [];
     bypassed.value = [];
+    // What the card's inputs are is no longer known, so nothing may be
+    // written from the last answer: that is how a pin reverted the one before.
+    pictureInputs.value = [];
+    inputsKey.value = "";
     const status = err?.response?.status;
     if (status >= 400 && status < 500) {
       preflightError.value = errorMessage(err, "This run would be refused.");
@@ -1649,6 +1746,7 @@ async function load() {
   seedMode.value = "new";
   saveOpen.value = false;
   pictureInputs.value = [];
+  inputsKey.value = "";
   clearPicks();
   pickerFor.value = null;
   stackChoice.value = null;
@@ -1786,7 +1884,15 @@ async function submit() {
     const prompts = Array.isArray(answer?.prompts) ? answer.prompts : [];
     if (!prompts.length) {
       reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
-      submitError.value = "Nothing was queued; see the reason below.";
+      // The run's own answer, so a slot emptied since the pre-flight (a pin
+      // binned in another tab) shows as the empty slot it now is.
+      if (answer?.groups?.[0]?.picture_inputs) {
+        pictureInputs.value = answer.groups[0].picture_inputs;
+        inputsKey.value = activeKey.value;
+      }
+      submitError.value = shownRefusals.value.length
+        ? "Nothing was queued; see the reason below."
+        : "Nothing was queued: a picture above still needs choosing.";
       return;
     }
     if (picksDestination.value) rememberSet(destinationSetId.value);
@@ -1999,11 +2105,11 @@ button.rund-in-tile {
   cursor: pointer;
 }
 
-button.rund-in-tile:hover:not(:disabled) {
+button.rund-in-tile:hover:not(.rund-in-tile--off) {
   background: var(--hover-wash);
 }
 
-button.rund-in-tile:disabled {
+button.rund-in-tile.rund-in-tile--off {
   opacity: var(--opacity-disabled);
   cursor: default;
 }

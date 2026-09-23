@@ -2326,10 +2326,14 @@ def create_router(server) -> APIRouter:
                     # rather than filled somewhere else, which would be a run
                     # that never read the picture it was given.
                     how = None
-            elif all(
+            elif not (item.mode == "fixed" and item.pixel_sha) and all(
                 _graph_names_a_live_file(graph, node_id, item.input_name, missing)
                 for node_id in item.node_ids
             ):
+                # Never for a pin whose picture has gone: the owner chose a
+                # picture for this input, and quietly running the file the
+                # graph was authored with instead is a run that read neither.
+                # It is an empty slot, and says so (decision 7).
                 how = "graph"
             if how is None:
                 # `title` beside the address: a slot label is a topology hash,
