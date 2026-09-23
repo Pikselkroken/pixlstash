@@ -5343,7 +5343,9 @@ each phase change (a region that arrives already filled is skipped by several
 screen readers), the failure is a `role="alert"`, and Dismiss hands focus back
 to the toolbar's *Pull from ComfyUI* rather than dropping it to `<body>`. Both
 pull buttons use the shared `loading` prop, which refuses a second press.
-`useWorkflowPullStore` bumps a session epoch on reset and checks it after every
+On mount the screen calls `resume()`, which adopts a pull already running on the
+server (a reload, another tab) so the button reads *Pulling…*, and never a
+finished one. `useWorkflowPullStore` bumps a session epoch on reset and checks it after every
 await, so an answer to the owner's poll that lands after a switch to a share
 session is dropped instead of writing the owner's ComfyUI into it.
 

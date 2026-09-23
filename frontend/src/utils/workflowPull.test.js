@@ -81,7 +81,7 @@ describe("pullSummaryLines", () => {
     );
     const text = report.lines.map((l) => l.text).join(" ");
     expect(text).toContain(
-      "The new workflow counts as a one-off until it makes a picture",
+      "A pulled workflow with no pictures yet counts as a one-off",
     );
     expect(report.lines.find((l) => l.action).action).toBe("show-one-offs");
     expect(text).toContain("1 workflow you deleted here was left out");
@@ -125,5 +125,20 @@ describe("comfyuiHost", () => {
     expect(comfyuiHost(URL)).toBe("192.0.2.10:8188");
     expect(comfyuiHost(null)).toBe("this ComfyUI");
     expect(comfyuiHost("not a url")).toBe("not a url");
+  });
+});
+
+describe("a workflow edited in ComfyUI", () => {
+  it("is counted as changed and said to sit beside the earlier copy", () => {
+    const report = pullSummaryLines(
+      { listed: 3, pulled: 1, changed: 1, matched: 1, nodes_checked: true },
+      URL,
+    );
+    expect(report.headline).toBe(
+      "Found 3 workflows on 192.0.2.10:8188: 1 new, 1 changed, 1 already here.",
+    );
+    expect(report.lines.map((l) => l.text).join(" ")).toContain(
+      "1 workflow was edited in 192.0.2.10:8188 since the last pull. The new version is stored beside the earlier copy, which stays.",
+    );
   });
 });

@@ -97,7 +97,12 @@ export const useWorkflowPullStore = defineStore("workflowPull", () => {
       phase.value = "done";
       summary.value = state.summary ?? null;
       comfyuiUrl.value = state.comfyui_url ?? null;
-      await useWorkflowsStore().fetchCards();
+      try {
+        await useWorkflowsStore().fetchCards();
+      } catch (err) {
+        // The summary still stands; the grid shows its own read error.
+        console.warn("[workflows] could not re-read the grid after a pull", err);
+      }
       return;
     }
     if (state?.status === "failed" || state?.status === "cancelled") {
@@ -118,6 +123,31 @@ export const useWorkflowPullStore = defineStore("workflowPull", () => {
   function schedule() {
     stopPolling();
     timer = setTimeout(poll, PULL_POLL_MS);
+  }
+
+  /**
+   * Pick up a pull that is already running on the server - one started before
+   * a reload, or from another tab - so the button says "Pulling…" rather than
+   * offering to start what is already going. A finished pull is not adopted:
+   * its summary was somebody else's to read.
+   */
+  async function resume() {
+    if (phase.value !== "idle") return;
+    const mine = epoch;
+    let state;
+    try {
+      state = await getWorkflowPull();
+    } catch (err) {
+      console.warn("[workflows] could not ask whether a pull is running", err);
+      return;
+    }
+    if (mine !== epoch || phase.value !== "idle") return;
+    if (state?.status === "pending" || state?.status === "running") {
+      taskId = state.task_id ?? null;
+      misses = 0;
+      phase.value = "pulling";
+      schedule();
+    }
   }
 
   function dismiss() {
@@ -141,5 +171,5 @@ export const useWorkflowPullStore = defineStore("workflowPull", () => {
   onScopeDispose(onSessionReset(reset));
   onScopeDispose(stopPolling);
 
-  return { phase, summary, comfyuiUrl, error, start, dismiss, reset };
+  return { phase, summary, comfyuiUrl, error, start, resume, dismiss, reset };
 });

@@ -42,6 +42,7 @@ export function pullSummaryLines(summary, url, { hideOneOffs = true } = {}) {
   const host = comfyuiHost(url);
   const counted = [];
   if (s.pulled) counted.push(`${s.pulled} new`);
+  if (s.changed) counted.push(`${s.changed} changed`);
   if (s.matched) counted.push(`${s.matched} already here`);
   if (s.already_shipped)
     counted.push(`${s.already_shipped} shipped with PixlStash`);
@@ -104,16 +105,24 @@ export function pullSummaryLines(summary, url, { hideOneOffs = true } = {}) {
       });
     }
   }
-  if (s.pulled && hideOneOffs) {
-    // Where they went: a pulled workflow with no pictures is a one-off
-    // (`Card.hand_imported`), and the grid hides those while the filter is
-    // on. Without this the reader sees "21 new" over a grid that looks
-    // unchanged.
+  const written = (s.pulled || 0) + (s.changed || 0);
+  if (written && hideOneOffs) {
+    // Where they went: a pulled workflow with no pictures, rating or saved
+    // look is a one-off (`Card.hand_imported`), and the grid hides those while
+    // the filter is on. "Can", because a pulled file may land on a card that
+    // has pictures and is not a one-off at all.
     lines.push({
       kind: "info",
       icon: "eye-off-outline",
-      text: `${s.pulled === 1 ? "The new workflow counts" : "New workflows count"} as ${s.pulled === 1 ? "a one-off" : "one-offs"} until ${s.pulled === 1 ? "it makes" : "they make"} a picture, so the grid leaves ${s.pulled === 1 ? "it" : "them"} out.`,
+      text: "A pulled workflow with no pictures yet counts as a one-off, which the grid leaves out.",
       action: "show-one-offs",
+    });
+  }
+  if (s.changed) {
+    lines.push({
+      kind: "info",
+      icon: "file-replace-outline",
+      text: `${plural(s.changed, "workflow was", "workflows were")} edited in ${host} since the last pull. The new ${s.changed === 1 ? "version is" : "versions are"} stored beside the earlier ${s.changed === 1 ? "copy" : "copies"}, which ${s.changed === 1 ? "stays" : "stay"}.`,
     });
   }
   if (s.skipped_dismissed) {
@@ -123,7 +132,7 @@ export function pullSummaryLines(summary, url, { hideOneOffs = true } = {}) {
       text: `${plural(s.skipped_dismissed, "workflow", "workflows")} you deleted here ${s.skipped_dismissed === 1 ? "was" : "were"} left out.`,
     });
   }
-  if (s.pulled || s.skipped_dismissed) {
+  if (written || s.skipped_dismissed) {
     lines.push({
       kind: "info",
       icon: "information-outline",

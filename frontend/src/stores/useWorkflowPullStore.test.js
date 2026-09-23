@@ -167,3 +167,70 @@ describe("a session change mid-pull", () => {
     expect(pull.phase).toBe("idle");
   });
 });
+
+describe("the review's store findings", () => {
+  it("a poll that fails after a reset asks nothing more", async () => {
+    let fail;
+    getWorkflowPull.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (fail = reject)),
+    );
+    getWorkflowPull.mockResolvedValue({
+      status: "completed",
+      task_id: "t1",
+      comfyui_url: "http://owner-comfy:8188",
+      summary: { listed: 1 },
+    });
+    const pull = useWorkflowPullStore();
+    pull.start();
+    await settle();
+    pull.reset();
+    fail(new Error("offline"));
+    await settle();
+    await vi.advanceTimersByTimeAsync(PULL_POLL_MS * 3);
+    // Wrong if a second ask goes out: it would run under the new session and
+    // write the owner's ComfyUI into it.
+    expect(getWorkflowPull).toHaveBeenCalledTimes(1);
+    expect(pull.phase).toBe("idle");
+    expect(pull.comfyuiUrl).toBeNull();
+  });
+
+  it("a grid re-read that fails leaves the summary standing", async () => {
+    fetchCards.mockRejectedValue(new Error("500"));
+    getWorkflowPull.mockResolvedValue({
+      status: "completed",
+      task_id: "t1",
+      summary: { listed: 2 },
+    });
+    const pull = useWorkflowPullStore();
+    pull.start();
+    await settle();
+    expect(pull.phase).toBe("done");
+    expect(pull.summary).toEqual({ listed: 2 });
+  });
+
+  it("resumes a pull already running on the server, and adopts no finished one", async () => {
+    getWorkflowPull.mockResolvedValueOnce({ status: "running", task_id: "t9" });
+    const pull = useWorkflowPullStore();
+    await pull.resume();
+    expect(pull.phase).toBe("pulling");
+    getWorkflowPull.mockResolvedValue({
+      status: "completed",
+      task_id: "t9",
+      summary: { listed: 4 },
+    });
+    await vi.advanceTimersByTimeAsync(PULL_POLL_MS);
+    expect(pull.phase).toBe("done");
+
+    setActivePinia(createPinia());
+    getWorkflowPull.mockResolvedValue({
+      status: "completed",
+      task_id: "t9",
+      summary: { listed: 4 },
+    });
+    const fresh = useWorkflowPullStore();
+    await fresh.resume();
+    expect(fresh.phase).toBe("idle");
+    expect(fresh.summary).toBeNull();
+    expect(startWorkflowPull).not.toHaveBeenCalled();
+  });
+});

@@ -771,6 +771,9 @@ watch(
 
 onMounted(async () => {
   store.fetchCards();
+  // A pull started before a reload, or from another tab, is still running on
+  // the server: the button should say so rather than offer to start one.
+  if (comfyuiConfigured.value) pull.resume();
   try {
     const body = await listImportFolders();
     watchedFolder.value = (body?.folders ?? [])[0] ?? null;
