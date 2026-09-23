@@ -236,9 +236,9 @@
      --------------------------------------------------------------------------- */
   /* Badge - the count pill and the attention dot (sidebar task/upload badge,
      filter-count badge, folder counts). Count pills are pill-radius, `--text-2xs`
-     semibold, and MUST use a contrast-safe fill (`primary`/`on-primary`, 4.84:1);
-     the amber accent fails 4.5:1 behind small text, so accent is for the dot/glow
-     only. See visual-language.md §13. */
+     semibold, and use `primary`/`on-primary` (4.84:1). The dark theme's amber
+     fails 4.5:1 behind small text, and the split holds on meaning anyway: accent
+     is for the dot/glow only. See visual-language.md §13. */
   --badge-size: 16px;      /* min height / min-width of a count pill (on-grid; was an ad-hoc 15px) */
   --badge-size-dot: 8px;   /* the no-count activity dot (on-grid; was an ad-hoc 7px) */
 
