@@ -94,7 +94,6 @@ from pixlstash.services.comfyui_recipe_service import (
     apply_seeds,
     detect_lora_targets,
     detect_model_targets,
-    detect_seed_targets,
     insert_adapter,
     plan_lora_insertion,
 )
@@ -152,10 +151,7 @@ from pixlstash.services.workflow_library_service import (
     read_variant_picture_counts,
     stack_for_picture,
 )
-from pixlstash.utils.comfyui_utilities import (
-    collect_seed_inputs,
-    loaded_model_widgets,
-)
+from pixlstash.utils.comfyui_utilities import loaded_model_widgets
 from pixlstash.stacking import build_stack_filename_prefix
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
@@ -961,6 +957,12 @@ class RunGroup(BaseModel):
     # `PUT /workflows/{key}/inputs` safe to call after reading it: a client
     # never writes back a set it has not seen.
     picture_inputs: list[RunPictureInput] = Field(default_factory=list)
+    # A custom node this ComfyUI lacks, replaced by what PixlStash already does
+    # (#1463): today only a seed node, whose link becomes a literal the run's
+    # own seed pass then writes. Reported on the same terms as a bypass: the
+    # graph that runs is not the one the card names, and the owner is told so
+    # before the run rather than after.
+    replaced_nodes: list[dict] = Field(default_factory=list)
 
 
 class RunPreflight(BaseModel):
@@ -2779,9 +2781,10 @@ def create_router(server) -> APIRouter:
             # slot, and an unreachable ComfyUI cannot resolve a filename slot,
             # which `apply_adapter` would report as a missing node class.
             found: list[run_service.Reason] = []
-            # LoRA loaders taken out of this graph; put on the group only if it
-            # ends up being submitted. See the assignment below.
-            bypassed: list[dict] = []
+            # What the repair registry changed in this graph, by `RunGroup`
+            # field; put on the group only if it ends up being submitted. See
+            # the assignment below.
+            repaired: dict[str, list[dict]] = {}
             if body.loras and slots_in_graph:
                 # NOT gated on `object_info`: skipping the application when
                 # ComfyUI could not be asked is how a consented run silently
@@ -2848,20 +2851,6 @@ def create_router(server) -> APIRouter:
                         swap["class_type"],
                         swap["field"],
                     )
-                if not found:
-                    # After the swap, so a LoRA the shelf still holds under
-                    # another name is loaded rather than dropped, and before
-                    # `judge`, so the graph that is judged is the graph that
-                    # will be submitted and the loaders that are gone are not
-                    # reported as missing models. Skipped when `_apply_loras`
-                    # has already refused: that run is not happening.
-                    #
-                    # Held in a local and NOT put on the group here. What it
-                    # says is "the run goes ahead without this LoRA", which is
-                    # a lie on a group that is about to be refused for some
-                    # other reason - and `judge` has not run yet, so most of
-                    # the refusals are still unknown at this point.
-                    bypassed = run_service.bypass_missing_loras(graph, object_info)
 
             judged, preflight = run_service.judge(
                 graph,
@@ -2870,6 +2859,32 @@ def create_router(server) -> APIRouter:
                 wants_lora=bool(body.loras),
                 lora_slots=slots_in_graph,
             )
+            if object_info is not None and not found:
+                # Judge, repair what the registry knows how to, judge AGAIN
+                # (#1463): a repair can leave its refusal standing, and only
+                # the second verdict says whether this graph now runs. After
+                # the swap, so a LoRA the shelf still holds under another name
+                # is loaded rather than dropped; skipped when `_apply_loras`
+                # has already refused, because that run is not happening and a
+                # LoRA the request asked for is never the graph's to drop.
+                #
+                # Held in a local and NOT put on the group here. What it says
+                # is "the run goes ahead with this changed", which is a lie on
+                # a group about to be refused for some other reason.
+                repaired = run_service.repair(
+                    graph,
+                    object_info,
+                    judged,
+                    seed_overwritten=body.seed_mode != "keep",
+                )
+                if any(repaired.values()):
+                    judged, _preflight = run_service.judge(
+                        graph,
+                        object_info,
+                        object_info_error,
+                        wants_lora=bool(body.loras),
+                        lora_slots=slots_in_graph,
+                    )
             found += judged
             if object_info is None and not configured:
                 # The URL is the guessed default and nothing answered on it:
@@ -2910,7 +2925,8 @@ def create_router(server) -> APIRouter:
             group.runs = body.count * (len(picture_ids) if per_picture else 1)
             # Reported only now, when this group really is being submitted:
             # every refusal is in, and what the notice claims is true.
-            group.bypassed_loras = bypassed
+            for report, entries in repaired.items():
+                setattr(group, report, entries)
             planned.append(group)
             submittable.append((graph, group, feeds))
 
@@ -2945,7 +2961,8 @@ def create_router(server) -> APIRouter:
                 # Including the groups that WOULD have run: nothing is
                 # submitted now, so "the run goes ahead without this LoRA" is
                 # no longer true of any of them.
-                group.bypassed_loras = []
+                for entry in run_service.REPAIRS:
+                    setattr(group, entry.report, [])
             submittable = []
         total = sum(group.runs for group in planned)
         if total > MAX_RUNS_PER_REQUEST:
@@ -2979,7 +2996,11 @@ def create_router(server) -> APIRouter:
             "left are an uninspectable ComfyUI the body said allow_unchecked "
             "to. A LoRA this ComfyUI does not have is NOT among them: its "
             "loader is taken out of the graph and named in bypassed_loras, "
-            "which is a fact about the run rather than a reason against it. A "
+            "which is a fact about the run rather than a reason against it. "
+            "Likewise a custom seed node this ComfyUI lacks (rgthree's Seed and "
+            "its kin) is replaced by the run's own seed and named in "
+            "replaced_nodes, where every input it fed is one the seed pass "
+            "writes. A "
             "body that cannot be interpreted against the card answers "
             "400/404/422 here exactly as it does on the run, so the two never "
             "disagree."
@@ -3101,9 +3122,10 @@ def create_router(server) -> APIRouter:
         }
         for graph, group, feeds in plan.submittable:
             output_node_ids = _extract_output_node_ids(graph, {})
-            seed_targets = detect_seed_targets(
-                graph, object_info or {}
-            ) or collect_seed_inputs(graph)
+            # The same finder `replace_missing_seed_nodes` checked its literals
+            # against: a replaced seed node is only safe because this writes
+            # every input it inlined.
+            seed_targets = run_service.run_seed_targets(graph, object_info)
             # A selection feeding an input is the run's repeat axis: one pass
             # per picture, each its own source and, with `stack`, its own
             # stack. Otherwise one pass, and the group's first picture is the

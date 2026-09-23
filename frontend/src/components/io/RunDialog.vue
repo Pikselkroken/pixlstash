@@ -554,8 +554,8 @@ import { errorMessage } from "../../utils/apiError";
 import { wouldDuplicate } from "../../utils/recipeKey";
 import {
   PICTURE_INPUT_UNFILLED,
-  bypassNotice,
   reasonsBlock,
+  repairNotices,
 } from "../../utils/runReasons";
 import SaveRecipeDialog from "./SaveRecipeDialog.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -1697,7 +1697,7 @@ async function runPreflight(token = loadToken) {
     // a pin on the new card is written from.
     if (!mine() || askedFor !== activeKey.value) return;
     reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
-    bypassed.value = (answer?.groups || []).flatMap(bypassNotice);
+    bypassed.value = (answer?.groups || []).flatMap(repairNotices);
     plannedRuns.value = Number(answer?.runs) || 0;
     // One group: this popup always runs one card (`target`, a key or a saved
     // recipe), so the first group's inputs are the card's.

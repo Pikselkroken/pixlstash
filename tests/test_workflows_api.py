@@ -72,7 +72,14 @@ from pixlstash.services.workflow_hash import (
     structural_document,
 )
 from pixlstash.services import workflow_card_service
-from pixlstash.services.workflow_run_service import bypass_missing_loras
+from pixlstash.services.workflow_run_service import (
+    MISSING_MODELS,
+    MISSING_NODES,
+    Reason,
+    bypass_missing_loras,
+    repair,
+    replace_missing_seed_nodes,
+)
 from pixlstash.utils.known_base_models import fold
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
@@ -7147,6 +7154,198 @@ def test_a_loader_that_cannot_be_rewired_around_is_left_in_place():
     assert bypass_missing_loras(graph, info) == []
     assert "2" in graph
     assert graph["4"]["inputs"]["clip"] == ["2", 1]
+
+
+# --- a custom seed node this ComfyUI lacks (#1463, case B) -----------------
+
+
+def _with_seed_node(seed_value=4242, field="seed"):
+    """RUN_DOCUMENT with real names, its sampler's *field* fed by rgthree's Seed."""
+    graph = json.loads(json.dumps(RUN_DOCUMENT))
+    graph["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    graph["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    graph["3"]["inputs"].update({"steps": 20, "cfg": 7.0, "seed": 1})
+    graph["3"]["inputs"][field] = ["9", 0]
+    graph["4"]["inputs"]["filename_prefix"] = "PixlStash"
+    graph["9"] = {"class_type": "Seed (rgthree)", "inputs": {"seed": seed_value}}
+    return graph
+
+
+def _embed(monkeypatch, graph):
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (
+            json.loads(json.dumps(graph)),
+            [],
+        ),
+    )
+
+
+def test_a_missing_seed_node_is_replaced_and_the_run_still_happens(runnable):
+    """#1463 case B: rgthree's Seed is not here, and the run needs no pack.
+
+    The node only hands a number to the sampler's seed, which the run's own
+    seed pass writes. Said before the run, exactly as a bypassed LoRA is.
+    """
+    _embed(runnable.monkeypatch, _with_seed_node())
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    assert _reasons(payload) == set(), payload
+    group = payload["groups"][0]
+    assert group["runs"] == 1, payload
+    assert [(n["node_id"], n["class_type"]) for n in group["replaced_nodes"]] == [
+        ("9", "Seed (rgthree)")
+    ], payload
+    assert group["replaced_nodes"][0]["consumers"] == [
+        {"node_id": "3", "field": "seed"}
+    ]
+
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_key": RUN_CARD, "seed_mode": "fixed", "seed": 77},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["groups"][0]["replaced_nodes"], r.json()
+    graph = runnable.submitted[0]["graph"]
+    assert "9" not in graph, graph
+    # The overwrite that makes the replacement safe: the run's seed, not the
+    # literal it was inlined with.
+    assert graph["3"]["inputs"]["seed"] == 77, graph
+
+
+def test_keeping_the_seed_keeps_the_one_the_seed_node_handed_on(runnable):
+    """Under `keep` nothing overwrites the literal, so it must be the real seed.
+
+    A picture's embedded graph carries the value the node actually produced;
+    inlining anything else would re-run a different picture under "keep".
+    """
+    _embed(runnable.monkeypatch, _with_seed_node(seed_value=4242))
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={"workflow_key": RUN_CARD, "seed_mode": "keep"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    assert runnable.submitted[0]["graph"]["3"]["inputs"]["seed"] == 4242
+
+
+def test_a_seed_node_feeding_something_else_keeps_its_refusal(runnable):
+    """The allow-list is not the whole test: what it feeds must be a seed.
+
+    Wired into `steps`, which the seed pass never writes, an inlined literal
+    would silently be what the node computed - the "nearly right" replacement
+    that changes the picture - so the run is refused as before.
+    """
+    _embed(runnable.monkeypatch, _with_seed_node(field="steps"))
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    assert "missing_nodes" in _reasons(payload), payload
+    group = payload["groups"][0]
+    assert group["runs"] == 0, payload
+    assert group["replaced_nodes"] == [], payload
+
+
+def test_a_group_refused_for_another_reason_claims_no_replacement(runnable):
+    """Replaced and then refused is a run nobody made, so nothing is claimed."""
+    graph = _with_seed_node()
+    graph["4"]["class_type"] = "PreviewImage"
+    _embed(runnable.monkeypatch, graph)
+    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    assert "missing_nodes" in _reasons(payload), payload
+    assert all(
+        reason.get("nodes") == ["PreviewImage"]
+        for reason in payload["groups"][0]["reasons"]
+        if reason["code"] == "missing_nodes"
+    ), payload
+    assert payload["groups"][0]["replaced_nodes"] == [], payload
+
+
+# Asked of the function directly: an object_info that declares its seed the
+# way a real ComfyUI does, so `detect_seed_targets` is the finder in play.
+SEED_INFO = {
+    "KSampler": {
+        "input": {
+            "required": {
+                "seed": ["INT", {"default": 0, "control_after_generate": True}],
+                "steps": ["INT", {"default": 20}],
+            }
+        },
+        "output": ["LATENT"],
+    },
+    "PrimitiveInt": {
+        "input": {"required": {"value": ["INT", {}]}},
+        "output": ["INT"],
+    },
+}
+
+
+def _seed_graph(class_type="Seed (rgthree)", value=4242, field="seed"):
+    """A sampler whose *field* is fed by a seed node of *class_type*."""
+    sampler = {"seed": 1, "steps": 20}
+    sampler[field] = ["9", 0]
+    return {
+        "3": {"class_type": "KSampler", "inputs": sampler},
+        "9": {"class_type": class_type, "inputs": {"seed": value}},
+    }
+
+
+def test_a_seed_node_is_replaced_by_its_own_value():
+    graph = _seed_graph()
+    replaced = replace_missing_seed_nodes(graph, SEED_INFO, seed_overwritten=True)
+    assert [n["class_type"] for n in replaced] == ["Seed (rgthree)"]
+    assert "9" not in graph
+    assert graph["3"]["inputs"]["seed"] == 4242
+
+
+def test_a_seed_node_into_a_widget_the_seed_pass_skips_is_left_alone():
+    graph = _seed_graph(field="steps")
+    assert replace_missing_seed_nodes(graph, SEED_INFO, seed_overwritten=True) == []
+    assert graph["9"]["class_type"] == "Seed (rgthree)"
+    assert graph["3"]["inputs"]["steps"] == ["9", 0]
+
+
+def test_an_installed_seed_node_is_not_replaced():
+    info = dict(SEED_INFO, **{"Seed (rgthree)": {"input": {}, "output": ["INT"]}})
+    graph = _seed_graph()
+    assert replace_missing_seed_nodes(graph, info, seed_overwritten=True) == []
+    assert "9" in graph
+
+
+def test_a_node_outside_the_allow_list_is_never_replaced():
+    """Anything that samples, conditions or loads has no standard equivalent."""
+    graph = _seed_graph(class_type="Noise Injector (some pack)")
+    assert replace_missing_seed_nodes(graph, SEED_INFO, seed_overwritten=True) == []
+    assert "9" in graph
+
+
+def test_a_placeholder_seed_is_replaced_only_when_the_run_overwrites_it():
+    """rgthree's -1 means "random" and is no seed to keep."""
+    kept = _seed_graph(value=-1)
+    assert replace_missing_seed_nodes(kept, SEED_INFO, seed_overwritten=False) == []
+    assert "9" in kept
+
+    rolled = _seed_graph(value=-1)
+    assert replace_missing_seed_nodes(rolled, SEED_INFO, seed_overwritten=True)
+    assert rolled["3"]["inputs"]["seed"] == 0
+
+
+def test_a_seed_node_whose_own_seed_is_wired_is_left_alone():
+    graph = _seed_graph()
+    graph["9"]["inputs"]["seed"] = ["7", 0]
+    graph["7"] = {"class_type": "PrimitiveInt", "inputs": {"value": 5}}
+    assert replace_missing_seed_nodes(graph, SEED_INFO, seed_overwritten=True) == []
+    assert "9" in graph
+
+
+def test_the_registry_repairs_only_what_judge_reported():
+    """Keyed on reason code: a repair runs only against its own refusal."""
+    graph = _seed_graph()
+    assert repair(
+        graph, SEED_INFO, [Reason(MISSING_MODELS)], seed_overwritten=True
+    ) == {"bypassed_loras": [], "replaced_nodes": []}
+    assert "9" in graph
+
+    done = repair(graph, SEED_INFO, [Reason(MISSING_NODES)], seed_overwritten=True)
+    assert [n["node_id"] for n in done["replaced_nodes"]] == ["9"]
+    assert "9" not in graph
 
 
 def test_a_saved_recipes_own_loras_are_placed_in_the_graphs_slots(runnable):

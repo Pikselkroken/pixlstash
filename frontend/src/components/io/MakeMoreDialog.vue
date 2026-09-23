@@ -142,7 +142,7 @@ import {
   runWorkflowCard,
 } from "../../api/workflows";
 import { errorMessage } from "../../utils/apiError";
-import { BLOCKS_BATCH, bypassNotice } from "../../utils/runReasons";
+import { BLOCKS_BATCH, repairNotices } from "../../utils/runReasons";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
@@ -245,13 +245,13 @@ const anyRefusal = computed(() =>
  * Every refusal, named by the card it is about so a mixed batch reads - and
  * beside them what a card that IS going to run will do differently (#1463).
  *
- * `bypassNotice` is appended here and NOT to `group.reasons`: `runnable` counts
+ * `repairNotices` is appended here and NOT to `group.reasons`: `runnable` counts
  * groups with no reasons, so a notice put in that list would take a card the
  * server is willing to run out of the total.
  */
 const blockedReasons = computed(() =>
   groups.value.flatMap((group) =>
-    [...(group.reasons || []), ...bypassNotice(group)].map((reason) => ({
+    [...(group.reasons || []), ...repairNotices(group)].map((reason) => ({
       key: group.workflow_key || group.picture_ids.join(","),
       subject: nameOf(group),
       reason,

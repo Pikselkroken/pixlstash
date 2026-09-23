@@ -98,3 +98,33 @@ describe("a bypassed LoRA, which is not a refusal", () => {
     expect(mountNotice(reason).find(".rrn-acts").exists()).toBe(false);
   });
 });
+
+describe("a replaced seed node, which is not a refusal either", () => {
+  const reason = {
+    code: "nodes_replaced",
+    nodes: [
+      { node_id: "9", class_type: "Seed (rgthree)", replacement: "seed" },
+      { node_id: "12", class_type: "Seed (rgthree)", replacement: "seed" },
+    ],
+  };
+
+  it("says PixlStash seeds the run itself, and never that it cannot run", () => {
+    const wrapper = mountNotice(reason);
+    expect(wrapper.text()).toContain("sets the seed itself");
+    expect(wrapper.text()).toContain("The run goes ahead without it");
+    expect(wrapper.text()).not.toContain("can't run");
+  });
+
+  it("names the node's class once, with no model folder beside it", () => {
+    const wrapper = mountNotice(reason);
+    expect(wrapper.findAll(".rrn-files li")).toHaveLength(1);
+    expect(wrapper.text()).toContain("Seed (rgthree)");
+    expect(wrapper.text()).not.toContain("models/");
+  });
+
+  it("takes the notice modifier and offers nothing to press", () => {
+    const wrapper = mountNotice(reason);
+    expect(rail(wrapper)).toContain("rrn--notice");
+    expect(wrapper.find(".rrn-acts").exists()).toBe(false);
+  });
+});

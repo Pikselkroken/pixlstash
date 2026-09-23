@@ -40,6 +40,15 @@ export const LORAS_BYPASSED = "loras_bypassed";
  */
 export const PICTURE_INPUT_UNFILLED = "picture_input_unfilled";
 
+/**
+ * Not a refusal either: a custom node the server replaced (#1463).
+ *
+ * Today only a seed node (rgthree's `Seed (rgthree)` and its kin) this ComfyUI
+ * lacks: its link becomes a literal and the run's own seed pass writes it, so
+ * the run goes ahead without the pack. `RunGroup.replaced_nodes` carries it.
+ */
+export const NODES_REPLACED = "nodes_replaced";
+
 /** One value per `fix`, so a caller switches on a constant and not on prose. */
 export const FIX_SETTINGS = "settings";
 export const FIX_RETRY = "retry";
@@ -85,6 +94,19 @@ export function readReason(reason) {
       const count = files.length;
       return read(
         `${count === 1 ? "A LoRA this workflow uses is" : `${count} LoRAs this workflow uses are`} not on this ComfyUI, so ${count === 1 ? "its loader is" : "their loaders are"} skipped and the run goes ahead without ${count === 1 ? "it" : "them"}. The result will look different.`,
+        null,
+        files,
+        false,
+      );
+    }
+    case NODES_REPLACED: {
+      // Named by class, once each: two seed nodes of one pack are one fact.
+      const files = [...new Set(names(reason.nodes, "class_type"))].map(
+        (file) => ({ file }),
+      );
+      const count = files.length;
+      return read(
+        `This ComfyUI does not have ${count === 1 ? "the seed node" : "the seed nodes"} this workflow uses, so PixlStash sets the seed itself instead. The run goes ahead without ${count === 1 ? "it" : "them"}.`,
         null,
         files,
         false,
@@ -181,4 +203,30 @@ export function reasonsBlock(reasons, { allowUnchecked = false } = {}) {
 export function bypassNotice(group) {
   const models = (group?.bypassed_loras || []).filter(Boolean);
   return models.length ? [{ code: LORAS_BYPASSED, models }] : [];
+}
+
+/**
+ * The replaced nodes of one pre-flight group, in the reason shape.
+ *
+ * Kept out of `reasons` for the reason `bypassNotice` is.
+ *
+ * @param {{replaced_nodes?: Array<Object>}} group
+ * @returns {Array<Object>} zero or one entry, so a caller can spread it.
+ */
+export function replacedNotice(group) {
+  const nodes = (group?.replaced_nodes || []).filter(Boolean);
+  return nodes.length ? [{ code: NODES_REPLACED, nodes }] : [];
+}
+
+/**
+ * Every repair the server made to one group's graph, as notices (#1463).
+ *
+ * The server's repair registry is one mechanism with one report per repair;
+ * this is its one reading, so a popup spreads this and not each notice.
+ *
+ * @param {Object} group - one pre-flight group.
+ * @returns {Array<Object>}
+ */
+export function repairNotices(group) {
+  return [...bypassNotice(group), ...replacedNotice(group)];
 }

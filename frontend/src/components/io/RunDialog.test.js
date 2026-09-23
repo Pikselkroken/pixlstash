@@ -340,6 +340,32 @@ describe("a refusal the popup offers to fix", () => {
     ]);
   });
 
+  it("names a replaced seed node beside a bypassed LoRA, blocking neither (#1463)", async () => {
+    const replaced = { node_id: "9", class_type: "Seed (rgthree)", replacement: "seed" };
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 1,
+      groups: [
+        {
+          workflow_key: KEY,
+          reasons: [],
+          bypassed_loras: [{ file: "character.safetensors", folder: "loras" }],
+          replaced_nodes: [replaced],
+        },
+      ],
+    });
+
+    const wrapper = await mountRun();
+
+    expect(wrapper.vm.reasons).toEqual([]);
+    expect(wrapper.vm.canRun).toBe(true);
+    expect(wrapper.vm.runNotes.map((note) => note.code)).toEqual([
+      "loras_bypassed",
+      "nodes_replaced",
+    ]);
+    expect(wrapper.vm.runNotes[1].nodes).toEqual([replaced]);
+  });
+
   it("shows a pre-flight 4xx instead of waiting for the run to say it", async () => {
     // The route answers 400/404/422 on the dry run exactly as on the run, "so
     // the two never disagree". Swallowing it means the owner finds out by

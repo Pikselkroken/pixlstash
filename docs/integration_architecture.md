@@ -650,9 +650,10 @@ Seven rules the client must not re-derive:
    A code and never a sentence: one batch mixes sources, and a panel grouping
    "these four are missing the same model" cannot do it from prose.
    **Two group fields are facts rather than refusals** and must not be read as
-   reasons: `substitutions`, and `bypassed_loras: [{file, folder, node_id,
-   class_type, field}]`. Both say what this run will do differently from what
-   the graph says, on the pre-flight and on the run alike.
+   reasons: `substitutions`, `bypassed_loras: [{file, folder, node_id,
+   class_type, field}]` and `replaced_nodes: [{node_id, class_type,
+   replacement, consumers}]`. Each says what this run will do differently from
+   what the graph says, on the pre-flight and on the run alike.
 3. **A missing model blocks the whole batch**, mixed or not, and so does an
    unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
    submitted — including the groups whose own `reasons` are empty.
@@ -673,6 +674,13 @@ Seven rules the client must not re-derive:
    submitted**, and is cleared again when a missing model elsewhere zeroes the
    batch — it says "the run goes ahead without this LoRA", which must not
    appear beside a refusal.
+   **A missing seed node is repaired the same way** (#1463): a custom seed node
+   this ComfyUI lacks (rgthree's `Seed (rgthree)` and its kin) is dropped, its
+   links become literals the run's seed pass then writes, and it is named in
+   `replaced_nodes` rather than in `missing_nodes`. Only where every input it
+   fed is a seed the run writes; otherwise it stays a `missing_nodes` refusal.
+   `replaced_nodes` follows the same rule as `bypassed_loras`: set only on a
+   submitted group, cleared when the batch is zeroed.
    **A bypassed run lands on its own card**, as a substituted one does: taking
    a node out changes the topology, so the pictures it produces carry the
    submitted graph and are filed under a different `workflow_key` than the card
