@@ -126,7 +126,7 @@ describe("--opacity-text-secondary", () => {
 // sidebar, which is why light carries its own, deeper amber.
 describe("accent as an attention mark", () => {
   for (const [theme, block] of Object.entries(themes)) {
-    for (const bgName of ["sidebar", "toolbar", "background"]) {
+    for (const bgName of ["sidebar", "toolbar", "panel", "background"]) {
       it(`clears 3:1 on ${bgName} (${theme})`, () => {
         const ratio = contrast(
           themeColor(block, "accent"),
@@ -137,10 +137,26 @@ describe("accent as an attention mark", () => {
       });
     }
 
+    // Dark panels stay dark in the light theme and re-point the accent at
+    // `dark-surface-accent`; amber is text there too, so it holds the 4:1
+    // text floor, not only 3:1.
+    it(`dark-surface-accent clears 4:1 on dark-surface (${theme})`, () => {
+      const ratio = contrast(
+        themeColor(block, "dark-surface-accent"),
+        themeColor(block, "dark-surface"),
+        1,
+      );
+      expect(ratio).toBeGreaterThanOrEqual(4);
+    });
+
     it(`keeps sidebar-hover equal to accent (${theme})`, () => {
       expect(themeColor(block, "sidebar-hover")).toBe(
         themeColor(block, "accent"),
       );
     });
   }
+
+  it("leaves the dark theme's amber where it was", () => {
+    expect(themeColor(themes.dark, "accent")).toBe("#c47a1e");
+  });
 });

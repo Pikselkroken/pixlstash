@@ -85,6 +85,10 @@ const pixlStashLight = {
     "dark-surface-warning": "#e8912f",
     "dark-surface-success": "#5d9c6c",
     "dark-surface-info": "#6890cc",
+    // Amber on a deliberately-dark surface. Light's own accent is the deep
+    // #9e6727 (#1413), which measures only 3.20:1 on #242628; dark panels
+    // re-point `--v-theme-accent` at this (4.45:1). Identical in both themes.
+    "dark-surface-accent": "#c47a1e",
     // The fifth member of the family, same rationale: `primary` as a FOREGROUND
     // on a dark card. This is the dark theme's outgoing bright olive - a good
     // foreground on a dark card and a bad fill under a white label, so it moves
@@ -208,6 +212,10 @@ const pixlStashDark = {
     "dark-surface-warning": "#e8912f",
     "dark-surface-success": "#5d9c6c",
     "dark-surface-info": "#6890cc",
+    // Amber on a deliberately-dark surface. Light's own accent is the deep
+    // #9e6727 (#1413), which measures only 3.20:1 on #242628; dark panels
+    // re-point `--v-theme-accent` at this (4.45:1). Identical in both themes.
+    "dark-surface-accent": "#c47a1e",
     // Identical in both themes, like the four above. Keeps the retired bright
     // olive in service as a dark-card foreground (6.25:1 on #181b20).
     "dark-surface-primary": "#8EA604",

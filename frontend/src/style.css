@@ -36,8 +36,8 @@ body {
 }
 
 /* A filled control's hover: a 20% darken layered over its fill as a
-   background-image, so the label is untouched (white on amber goes 3.41 -> 5.03:1).
-   Theme-independent. */
+   background-image, so the label is untouched (white on amber goes 4.75 -> 6.74:1
+   in light, 3.41 -> 5.01:1 in dark). The layer itself is theme-independent. */
 :root {
   --hover-shade: linear-gradient(rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.2));
 }

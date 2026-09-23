@@ -434,11 +434,11 @@ an item or a value.
 What amber keeps: the key action fill and the attention dot. Nothing that marks a selection is amber, and
 neither does focus.
 
-**The amber does not move. Its label goes to pure white, and the 3.41:1 that
+**The amber does not move (in the dark theme; light superseded 2026-09-23, below). Its label goes to pure white, and the 3.41:1 that
 leaves is an accepted exception.** Settled after all five candidates were
 rendered at button size.
 
-`--accent` keeps `#c47a1e`. `--accent-on` becomes `#ffffff` rather than the
+`--accent` keeps `#c47a1e` (light superseded 2026-09-23, see below). `--accent-on` becomes `#ffffff` rather than the
 warm near-white, which is worth 0.37 for nothing and which the handoff's §9.1
 had already queued. 3.41:1 clears the 3:1 floor WCAG applies to a UI component
 and misses the 4.5:1 it applies to normal-size text. The shortfall is accepted

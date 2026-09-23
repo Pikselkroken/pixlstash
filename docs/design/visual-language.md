@@ -1,8 +1,9 @@
 # PixlStash Visual Language
 
 > **⚠️ Colors superseded (2026-07-24).** The color system moved to the unified
-> "Camp B" palette: ONE brand palette shared by both themes with warm-white
-> `#f7f1ea` labels — accent/amber **`#c47a1e`** (glow `#e08a2a`; light theme `#9e6727` since 2026-09-23, #1413), primary/olive
+> "Camp B" palette: one brand palette shared by both themes, except amber, with
+> warm-white `#f7f1ea` labels — accent/amber **`#c47a1e`** (glow `#e08a2a`; the
+> light theme's is `#9e6727` since 2026-09-23, #1413), primary/olive
 > `#567309`, secondary/raspberry `#bb3566`, tertiary/teal `#46707a`, quaternary/violet
 > `#7c55ae` (added 2026-09-13, with `info` moved to `#30558c`). The canonical
 > color sources are now **`frontend/DESIGN.md`** and the design-system
@@ -763,7 +764,7 @@ These get skipped and that is exactly why a UI looks cheap.
   and olive the selection: 1.57x on dark chrome, 1.56x on panel, 1.37x in light, 1.53x /
   1.35x layered over a selection. A filled control darkens instead: `--hover-shade`,
   a 20% black layer as `background-image`, which leaves the label untouched and lifts
-  white on amber from 3.41 to 5.03:1. A neutral fill takes `--hover-neutral`, which
+  white on amber from 4.75 to 6.74:1 in light and 3.41 to 5.01:1 in dark. A neutral fill takes `--hover-neutral`, which
   lightens in dark and darkens in light. Never `filter: brightness()`, which moves the
   label with the fill.
 - **Amber acts, olive selects.** Amber is the key action fill and the attention dot,
@@ -776,8 +777,8 @@ These get skipped and that is exactly why a UI looks cheap.
   button keep olive on their check, underline or glyph (`--selected-ink`, lifted in
   dark because the deep olive measures 2.72:1 on dark chrome) and set their words in
   ink. A solid `primary` fill keeps its `on-primary` label. There is no olive button:
-  `primary_green` is retired. `--accent-on` is pure white, 3.41:1, an accepted
-  exception for one short word on a 28px target (buttons.md).
+  `primary_green` is retired. `--accent-on` is pure white: 4.75:1 in light, and in
+  dark 3.41:1, an accepted exception for one short word on a 28px target (buttons.md).
   `--active-text` is a foreground on the *wash*, not on a solid fill, which is the
   "`on-<x>` on a tint" trap (§4); check it every time an `on-*` token appears next to
   an `rgba(...)` fill.
@@ -864,7 +865,7 @@ rules and tokens they collapse onto.
 - **Why the split — and note the reason changed.** It used to be forced by contrast:
   `primary` + white was 4.84:1 and the amber `accent` + white was 3.94:1, so a numeral
   could not sit on amber. Since the action-fill tier landed (§4) **both pass** —
-  `accent` + white is 4.75:1 light / 4.59:1 dark, `primary` + white 4.84 / 4.60 — and
+  `accent` + white is 4.75:1 light / 3.41:1 dark, `primary` + white 4.84 / 4.60 — and
   the arithmetic no longer decides it. **The split stays anyway, now on meaning:** a
   count is information and reads on the workhorse fill; the accent is the brand's
   attention colour and is spent on the dot and the glow, where there is nothing to read.
