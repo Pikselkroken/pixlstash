@@ -119,3 +119,28 @@ describe("--opacity-text-secondary", () => {
     expect(worst).toBeLessThan(4.5);
   });
 });
+
+// Amber is also a MARK: the attention dot and the pulsing busy icon sit on the
+// sidebar/toolbar, so it must clear the 3:1 non-text floor (WCAG 1.4.11) there
+// in both themes (#1413). The shared #c47a1e measured 2.93:1 on the light
+// sidebar, which is why light carries its own, deeper amber.
+describe("accent as an attention mark", () => {
+  for (const [theme, block] of Object.entries(themes)) {
+    for (const bgName of ["sidebar", "toolbar", "background"]) {
+      it(`clears 3:1 on ${bgName} (${theme})`, () => {
+        const ratio = contrast(
+          themeColor(block, "accent"),
+          themeColor(block, bgName),
+          1,
+        );
+        expect(ratio).toBeGreaterThanOrEqual(3);
+      });
+    }
+
+    it(`keeps sidebar-hover equal to accent (${theme})`, () => {
+      expect(themeColor(block, "sidebar-hover")).toBe(
+        themeColor(block, "accent"),
+      );
+    });
+  }
+});

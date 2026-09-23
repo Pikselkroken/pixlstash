@@ -2,7 +2,7 @@
 
 > **⚠️ Colors superseded (2026-07-24).** The color system moved to the unified
 > "Camp B" palette: ONE brand palette shared by both themes with warm-white
-> `#f7f1ea` labels — accent/amber **`#c47a1e`** (glow `#e08a2a`), primary/olive
+> `#f7f1ea` labels — accent/amber **`#c47a1e`** (glow `#e08a2a`; light theme `#9e6727` since 2026-09-23, #1413), primary/olive
 > `#567309`, secondary/raspberry `#bb3566`, tertiary/teal `#46707a`, quaternary/violet
 > `#7c55ae` (added 2026-09-13, with `info` moved to `#30558c`). The canonical
 > color sources are now **`frontend/DESIGN.md`** and the design-system
@@ -159,7 +159,7 @@ below.
   *brightest* surface and chrome (sidebar, toolbar, panels) recedes to a warm tinted
   grey; raised controls (cards, inputs) go pure white. In **dark**, chrome is a raised
   dark surface and elevation reads by *lightness*, not heavy shadow.
-- **One accent.** Amber: `#9e6727` (light) / `#b85c0c` (dark). It marks the primary
+- **One accent.** Amber: `#9e6727` (light) / `#c47a1e` (dark). It marks the primary
   action and key state. Spend it sparingly.
 
 ### Token map (what to reach for)
