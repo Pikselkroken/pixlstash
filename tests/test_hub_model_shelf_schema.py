@@ -29,6 +29,7 @@ from pixlstash.hub.schema import (
     CURRENT_SCHEMA_VERSION,
     _V2_MODEL,
     _V2_MODEL_FILE,
+    _backfill_base_model_canonical,
     apply_migrations,
     read_schema_version,
 )
@@ -619,6 +620,64 @@ class TestBlankRecipeAssetBackfill:
         assert (
             hub.execute("SELECT COUNT(*) FROM workflow_recipe_asset").fetchone()[0] == 1
         )
+
+
+class TestBaseModelCanonicalBackfill:
+    """Identifying the rows already on a shelf, from columns alone, once."""
+
+    @staticmethod
+    def _identified(conn):
+        return {
+            row[0]: (row[1], row[2])
+            for row in conn.execute(
+                "SELECT filename, base_model_canonical, base_model_source FROM model"
+            )
+        }
+
+    def test_the_columns_arrive_on_an_existing_hub(self, hub):
+        apply_migrations(hub)
+        assert {"base_model_canonical", "base_model_source"} <= column_names(
+            hub, "model"
+        )
+
+    def test_it_identifies_from_stored_strings_and_is_idempotent(self, hub):
+        apply_migrations(hub)
+        add_model(
+            hub, sha256="a", base_model="SDXL_Base_V1-0", filename="x.safetensors"
+        )
+        add_model(hub, sha256="b", filename="MyFlux2LoRA.safetensors")
+        add_model(hub, sha256="c", filename="hana_v3.safetensors")
+        add_model(
+            hub,
+            sha256="d",
+            filename="flux2.safetensors",
+            base_model_canonical=None,
+            base_model_source="user",
+        )
+        expected = {
+            "x.safetensors": ("SDXL 1.0", "declared"),
+            "MyFlux2LoRA.safetensors": ("FLUX.2", "filename_fuzzy"),
+            "hana_v3.safetensors": (None, None),
+            # A person's answer - here "none of these" - is not re-guessed.
+            "flux2.safetensors": (None, "user"),
+        }
+
+        assert _backfill_base_model_canonical(hub) == 2
+        assert self._identified(hub) == expected
+        assert _backfill_base_model_canonical(hub) == 0
+        assert self._identified(hub) == expected
+
+    def test_apply_migrations_runs_it_on_a_data_v2_hub(self, hub):
+        apply_migrations(hub)
+        add_model(hub, sha256="a", filename="ilxl_hana_v3.safetensors")
+        hub.execute("PRAGMA user_version = 2")
+        hub.commit()
+
+        apply_migrations(hub)
+
+        assert self._identified(hub) == {
+            "ilxl_hana_v3.safetensors": ("Illustrious XL", "filename")
+        }
 
 
 class TestComponentRoleBackfill:

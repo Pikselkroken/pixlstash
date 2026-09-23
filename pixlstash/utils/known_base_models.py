@@ -10,17 +10,17 @@ never constrains what can be stored. It does two jobs:
 * **seeds tab-completion** with models we already know about, so the field is
   useful on a fresh install with an empty library.
 
-**Nothing folds what is STORED.** Two callers read this module today and neither
-writes through it: ``GET /adapters`` and ``GET /checkpoints`` carry
-:func:`fold`'s answer beside the raw column as ``base_model_folded``, which is
-where the shelf's grouping and faceting get their buckets, and
-``GET /models/base-models`` serves :func:`completions` to the *Set base model*
-field. The stored column stays free text either way, the shelf's *Base model*
-sort is still ``m.base_model COLLATE NOCASE`` and its filter is still an exact
-match on the raw column. Folding those two needs either a SQLite function
-registered per hub connection or a canonical column the scanner maintains, and
-that is still open work. Do not read this docstring as a description of the
-whole shelf.
+**The shelf stores what this module identified, beside the raw column.**
+:func:`identify` matches a file's evidence - the base model its metadata
+declares, and its filename - against this table, and the scanner writes the
+answer to ``model.base_model_canonical`` with where it came from in
+``model.base_model_source``. The shelf's *Base model* sort and filter run on
+``COALESCE(base_model_canonical, base_model)``. ``base_model`` itself is never
+rewritten: it is the trainer's own string and the evidence a better matcher in
+a later release would want to re-read. ``GET /adapters`` and ``GET
+/checkpoints`` still carry :func:`fold`'s answer as ``base_model_folded`` for a
+row nothing has identified yet, and ``GET /models/base-models`` serves
+:func:`completions` to the *Set base model* field.
 
 An unrecognised string is not an error. It is stored verbatim, displayed
 verbatim, and - the moment it lands on a ``model`` row - becomes a completion
@@ -35,11 +35,21 @@ different strings: Civitai ``baseModel`` labels, kohya ``ss_base_model_version``
 values, HuggingFace repo ids and vendor codenames. Adding a spacing or case
 variant to an alias list means the normaliser was bypassed somewhere.
 
-**Only an exact normalised match folds automatically.** Containment and
-``difflib`` results are *offered* by :func:`suggest` and never applied, because
-``flux`` is a substring of ``flux2`` and silent containment would file every
-FLUX.2 adapter under FLUX.1. That split is the fold-and-ask guard; stdlib
-``difflib`` is enough and no fuzzy-matching dependency is added.
+**Evidence is ranked by quality, not by where it came from.** An exact
+normalised match from any source beats a fuzzy one from any source; within a
+tier the file's declared metadata beats its filename (:data:`SOURCE_RANK`). A
+person's value (``user``) outranks every scan, so nothing here clobbers it.
+
+**Containment for filenames, edit distance for declared values, never the
+reverse.** A filename is a soup of tokens (``ilxl_hana_v3_fp16-000012``) where
+only containment means anything; a declared value is one person's attempt at
+one name, where a typo is plausible. Containment is safe to apply only under
+two guards: the **longest alias wins**, because ``flux`` is a substring of
+``flux2`` and the shorter would file every FLUX.2 adapter under FLUX.1, and an
+alias shorter than :data:`_MIN_CONTAINED_ALIAS` never matches by containment
+at all, so ``mj`` and ``sd3`` do not fire off an incidental substring. A fuzzy
+answer is still an answer the shelf marks as guessed. Stdlib ``difflib`` is
+enough at this table's size; ``rapidfuzz`` would buy speed nobody waits on.
 
 **``family`` is architecture, the canonical name is compatibility.** A Pony V6
 adapter *loads* on SDXL and produces mush; Pony V7 moved to AuraFlow, so a V6
@@ -50,7 +60,16 @@ gets both cases wrong, which is why family is stored rather than derived.
 This is code and not a table, on the same ruling made for the built-in tagger
 models (``tagger_plugins/registry.py``): a declaration maintained beside the
 parser that consumes it, which a database copy could only fall out of sync with.
-Expect to append to it every few months.
+
+**Maintaining it.** The table grows with PixlStash releases, never from what
+sits on one machine's disk: review it before cutting a release
+(``docs/release-test-plan.md``) and add what has shipped since. A new entry
+carries a canonical label a person would recognise, its ``family`` (load
+compatibility, which is not derivable from the name - see Pony V6 vs V7 above),
+its ``modality``, and only aliases that differ in letters or digits. Every new
+entry or alias is user-visible, because files already on a shelf are identified
+by it on their next scan, so it gets a ``changelog.d/`` fragment. An alias two
+entries claim stops the server booting (:func:`_build_index`), by design.
 """
 
 from __future__ import annotations
@@ -74,6 +93,7 @@ KNOWN_BASE_MODELS: dict[str, dict] = {
             "stable diffusion 1.5",
             "runwayml/stable-diffusion-v1-5",
             "v1-5-pruned",
+            "stable-diffusion-v1",
         ],
     },
     "SD 2.1": {
@@ -84,6 +104,8 @@ KNOWN_BASE_MODELS: dict[str, dict] = {
             "sd v2-1",
             "stable diffusion 2.1",
             "stabilityai/stable-diffusion-2-1",
+            "stable-diffusion-v2-512",
+            "stable-diffusion-v2-768-v",
         ],
     },
     "SDXL 1.0": {
@@ -96,6 +118,7 @@ KNOWN_BASE_MODELS: dict[str, dict] = {
             "sd_xl",
             "stable diffusion xl",
             "stabilityai/stable-diffusion-xl-base-1.0",
+            "stable-diffusion-xl-v1-base",
         ],
     },
     "SD 3.5": {
@@ -395,11 +418,91 @@ def family_of(raw: Optional[str]) -> Optional[str]:
     return KNOWN_BASE_MODELS[label]["family"] if label else None
 
 
+# Where a stored canonical label came from, highest first. The scanner writes a
+# new answer only when its source outranks the stored one, within one scan and
+# across scans alike, so a rescan can upgrade a filename guess to a declared
+# match and nothing it finds can replace what a person typed.
+SOURCE_USER = "user"
+SOURCE_DECLARED = "declared"
+SOURCE_FILENAME = "filename"
+SOURCE_DECLARED_FUZZY = "declared_fuzzy"
+SOURCE_FILENAME_FUZZY = "filename_fuzzy"
+
+SOURCE_RANK = {
+    SOURCE_USER: 5,
+    SOURCE_DECLARED: 4,
+    SOURCE_FILENAME: 3,
+    SOURCE_DECLARED_FUZZY: 2,
+    SOURCE_FILENAME_FUZZY: 1,
+}
+
+# An alias shorter than this never matches by containment: `mj` and `sd3` are
+# incidental substrings of too many filenames to mean anything inside one.
+_MIN_CONTAINED_ALIAS = 4
+
+# How close a declared value has to be to an alias to be read as a typo of it.
+# Applied, not offered, so it is stricter than :func:`suggest`'s cutoff.
+_DECLARED_FUZZY_CUTOFF = 0.88
+_SUGGEST_CUTOFF = 0.8
+
+# A declared value can carry the file's own type after a slash
+# (`stable-diffusion-xl-v1-base/lora`); only the part before it names a model.
+_ARCHITECTURE_SUFFIX_RE = re.compile(
+    r"/(?:lora|lycoris|lokr|loha|dora|adapter|textual-inversion|ti|"
+    r"controlnet|control)\s*$",
+    re.IGNORECASE,
+)
+
+# What a filename is split on before its tokens are folded one by one.
+_FILENAME_SEPARATORS_RE = re.compile(r"[\s_.\-]+")
+
+# Alias keys, longest first, so containment tries `flux2` before anything it
+# contains. Built once: the table is fixed for the life of the process.
+_ALIASES_LONGEST_FIRST = sorted(_ALIAS_INDEX, key=len, reverse=True)
+
+
+def rank(source: Optional[str]) -> int:
+    """How much a stored source is worth; ``0`` for none or an unknown one."""
+    return SOURCE_RANK.get(source or "", 0)
+
+
+def _contained(key: str, min_alias: int) -> list[str]:
+    """Canonical labels whose alias occurs inside *key*, longest alias first."""
+    hits: list[str] = []
+    for alias in _ALIASES_LONGEST_FIRST:
+        if len(alias) < min_alias:
+            # Sorted longest first, so every alias after this one is shorter.
+            break
+        if alias in key:
+            canonical = _ALIAS_INDEX[alias]
+            if canonical not in hits:
+                hits.append(canonical)
+    return hits
+
+
+def _close(key: str, cutoff: float, limit: int) -> list[str]:
+    """Canonical labels an alias of which is within edit distance of *key*."""
+    hits: list[str] = []
+    for alias in difflib.get_close_matches(key, _ALIAS_INDEX, n=limit, cutoff=cutoff):
+        canonical = _ALIAS_INDEX[alias]
+        if canonical not in hits:
+            hits.append(canonical)
+    return hits
+
+
+def _stem(filename: str) -> str:
+    """A filename without its directory and extension."""
+    base = re.split(r"[\\/]", filename)[-1]
+    return base.rsplit(".", 1)[0] if "." in base else base
+
+
 def suggest(raw: Optional[str], limit: int = 5) -> list[str]:
-    """Canonical labels *raw* might mean. **Offer these; never apply them.**
+    """Canonical labels *raw* might mean, for a person to choose between.
 
     Containment first (``sdxl`` inside ``mymodel_sdxl_v3``), longest alias
-    winning so ``flux2`` beats ``flux``, then a ``difflib`` pass for typos.
+    winning so ``flux2`` beats ``flux``, then a ``difflib`` pass for typos. The
+    same two operators :func:`identify` applies, looser: any alias length and a
+    lower cutoff, because a person reads these before anything is kept.
     Returns ``[]`` when :func:`fold` already had an exact answer - there is
     nothing to ask about.
     """
@@ -408,22 +511,69 @@ def suggest(raw: Optional[str], limit: int = 5) -> list[str]:
     key = _norm(raw)
     if key in _ALIAS_INDEX:
         return []
-
-    hits: list[str] = []
-    # Longest alias first: 'flux2' must win over 'flux' for 'myflux2lora'.
-    for alias in sorted(_ALIAS_INDEX, key=len, reverse=True):
-        if alias and alias in key:
-            canonical = _ALIAS_INDEX[alias]
-            if canonical not in hits:
-                hits.append(canonical)
-        if len(hits) >= limit:
-            return hits
-
-    for alias in difflib.get_close_matches(key, _ALIAS_INDEX, n=limit, cutoff=0.8):
-        canonical = _ALIAS_INDEX[alias]
+    hits = _contained(key, 1)[:limit]
+    for canonical in _close(key, _SUGGEST_CUTOFF, limit):
         if canonical not in hits:
             hits.append(canonical)
     return hits[:limit]
+
+
+def identify(
+    declared: Iterable[Optional[str]], filenames: Iterable[Optional[str]]
+) -> tuple[Optional[str], Optional[str]]:
+    """The base model a file's evidence names, and which evidence named it.
+
+    *declared* is what the file's metadata says it was trained against
+    (``ss_base_model_version``, ``modelspec.architecture``), best first.
+    *filenames* is the file's own name and any filename its metadata records
+    (``ss_sd_model_name``). Tried in :data:`SOURCE_RANK` order, so an exact
+    match on a filename token beats a fuzzy match on a declared value:
+
+    1. a declared value folds exactly - ``declared``;
+    2. the whole stem, or one token of it, folds exactly - ``filename``;
+    3. a declared value is within edit distance of an alias -
+       ``declared_fuzzy``;
+    4. an alias of at least :data:`_MIN_CONTAINED_ALIAS` characters occurs in a
+       filename, longest alias first - ``filename_fuzzy``.
+
+    A ``closed`` base (Midjourney, Imagen) is never an answer: nothing is
+    trained against one locally, so a filename token ``mj`` is somebody's
+    abbreviation rather than a base model.
+
+    Returns:
+        ``(canonical label, source)``, or ``(None, None)`` when nothing
+        matched. No answer is written as nothing, so the next release's table
+        reaches the file by itself.
+    """
+    values = [_ARCHITECTURE_SUFFIX_RE.sub("", str(v)).strip() for v in declared if v]
+    values = [v for v in values if v]
+    stems = [_stem(str(f)) for f in filenames if f]
+    stems = [s for s in stems if s]
+
+    for value in values:
+        label = fold(value)
+        if _local(label):
+            return label, SOURCE_DECLARED
+    for stem in stems:
+        for candidate in (stem, *_FILENAME_SEPARATORS_RE.split(stem)):
+            label = fold(candidate)
+            if _local(label):
+                return label, SOURCE_FILENAME
+    for value in values:
+        key = _norm(value)
+        hits = [h for h in _close(key, _DECLARED_FUZZY_CUTOFF, 3) if _local(h)]
+        if key and hits:
+            return hits[0], SOURCE_DECLARED_FUZZY
+    for stem in stems:
+        hits = [h for h in _contained(_norm(stem), _MIN_CONTAINED_ALIAS) if _local(h)]
+        if hits:
+            return hits[0], SOURCE_FILENAME_FUZZY
+    return None, None
+
+
+def _local(label: Optional[str]) -> bool:
+    """Whether *label* is a base a local file can have been made against."""
+    return bool(label) and KNOWN_BASE_MODELS[label]["family"] != "closed"
 
 
 def completions(prefix: str = "", extra: Iterable[str] = ()) -> list[str]:

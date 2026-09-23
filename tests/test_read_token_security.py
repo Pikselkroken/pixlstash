@@ -1779,6 +1779,14 @@ class TestResourceScopedReadTokenIsolation:
         """GET /pictures/comfyui_models must only return model names drawn from
         pictures inside the token's grant; owner/unscoped sees the union."""
         self._seed_comfyui_vocab(env.server, env.pic_a, env.pic_b)
+        # A shelf row naming the in-scope model, so the scoped negative on
+        # `name` below is a refusal and not merely an empty shelf.
+        with env.server.hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, display_name, provenance) "
+                "SELECT 'checkpoint', 'model-a-only', 'Shelf Name A', 'external' "
+                "WHERE NOT EXISTS (SELECT 1 FROM model WHERE filename = 'model-a-only')"
+            )
 
         # Negative: Set-A token must not see Set-B-only models.
         r = TestClient(env.server.api).get(
@@ -1786,7 +1794,9 @@ class TestResourceScopedReadTokenIsolation:
             headers={"Authorization": f"Bearer {env.token_a}"},
         )
         assert r.status_code == 200, r.text
-        scoped = set(r.json())
+        scoped = {option["value"] for option in r.json()}
+        # The shelf's names are a fact about the library, never the grant's.
+        assert all(option["name"] is None for option in r.json()), r.json()
         assert "model-b-only" not in scoped, (
             f"Set-A token leaked out-of-scope model vocab: {scoped}"
         )
@@ -1797,10 +1807,12 @@ class TestResourceScopedReadTokenIsolation:
         # Positive: owner/unscoped sees the union (no over-block).
         r = env.owner_client.get(f"{API}/pictures/comfyui_models")
         assert r.status_code == 200, r.text
-        owner_models = set(r.json())
+        owner_models = {option["value"] for option in r.json()}
         assert {"model-a-only", "model-b-only"} <= owner_models, (
             f"Owner did not see full model vocab: {owner_models}"
         )
+        names = {option["value"]: option["name"] for option in r.json()}
+        assert names["model-a-only"] == "Shelf Name A", names
 
     def test_comfyui_loras_cannot_leak_out_of_scope_vocab(self, env):
         """GET /pictures/comfyui_loras must only return LoRA names drawn from
@@ -1813,7 +1825,9 @@ class TestResourceScopedReadTokenIsolation:
             headers={"Authorization": f"Bearer {env.token_a}"},
         )
         assert r.status_code == 200, r.text
-        scoped = set(r.json())
+        scoped = {option["value"] for option in r.json()}
+        # The shelf's names are a fact about the library, never the grant's.
+        assert all(option["name"] is None for option in r.json()), r.json()
         assert "lora-b-only" not in scoped, (
             f"Set-A token leaked out-of-scope LoRA vocab: {scoped}"
         )
@@ -1824,7 +1838,7 @@ class TestResourceScopedReadTokenIsolation:
         # Positive: owner/unscoped sees the union (no over-block).
         r = env.owner_client.get(f"{API}/pictures/comfyui_loras")
         assert r.status_code == 200, r.text
-        owner_loras = set(r.json())
+        owner_loras = {option["value"] for option in r.json()}
         assert {"lora-a-only", "lora-b-only"} <= owner_loras, (
             f"Owner did not see full LoRA vocab: {owner_loras}"
         )

@@ -1410,6 +1410,10 @@ class ComfyUIRecipeModelSlot(BaseModel):
     # owner alone.
     quant: Optional[str] = None
     model_id: Optional[int] = None
+    # The name the owner gave that shelf row, for the chip to show instead of
+    # the file's. A fact about the library, so it is set on the same owner-only
+    # path as `model_id` and is absent for a scoped token.
+    display_name: Optional[str] = None
     verified: bool = False
 
 

@@ -33,6 +33,8 @@ from pixlstash.scoring import (
 from pixlstash.utils.quality.smart_score_utils import SmartScoreUtils
 from pixlstash.utils.serialization_utils import safe_model_dict
 from pixlstash.services import plugin_service
+from pixlstash.services.model_shelf_service import recipe_asset_index
+from pixlstash.services.workflow_hash import normalized_filename
 from pixlstash.utils.service.picture_stats import (
     PictureStatsParams,
     get_cached_picture_stats,
@@ -107,6 +109,48 @@ class PictureStatsResponse(BaseModel):
     smart_score_distribution: Optional[list] = None
     resolution_distribution: Optional[list] = None
     score_agreement: Optional[dict] = None
+
+
+class ComfyUIModelOption(BaseModel):
+    """One checkpoint or LoRA a picture records, for the filter menu.
+
+    ``value`` is what the picture filter matches on, verbatim. ``name`` is the
+    name the owner gave the one shelf model a file of that name is, else
+    ``None``. A fact about the library rather than about any picture, so it is
+    only ever filled for an unscoped caller.
+    """
+
+    value: str
+    name: Optional[str] = None
+
+
+def _with_shelf_names(server, values: list[str], owner: bool) -> list[dict]:
+    """Pair each recorded model name with the shelf's name for it.
+
+    A name two shelf rows share resolves to neither, the same rule the recipe
+    panel's chips follow. The hub is a separate database from the vault, so
+    this is a lookup over the shelf's own index rather than a SQL join.
+    """
+    names: dict[str, str] = {}
+    hub = getattr(server, "hub", None)
+    if owner and hub is not None and values:
+        try:
+            by_name, _by_digest, _filenames, shelf_names = recipe_asset_index(hub)
+        except Exception:
+            logger.warning(
+                "Could not index the model shelf for the filter menu's model "
+                "names; the %d option(s) are listed by filename only.",
+                len(values),
+                exc_info=True,
+            )
+        else:
+            for value in values:
+                ids = by_name.get(normalized_filename(value), set())
+                if len(ids) == 1:
+                    name = shelf_names.get(next(iter(ids)))
+                    if name:
+                        names[value] = name
+    return [{"value": value, "name": names.get(value)} for value in values]
 
 
 class OpenLocationResponse(BaseModel):
@@ -225,7 +269,7 @@ def register_routes(router, server):
         "/pictures/comfyui_models",
         include_in_schema=False,
         summary="List distinct ComfyUI model names",
-        response_model=list[str],
+        response_model=list[ComfyUIModelOption],
     )
     def get_comfyui_models(request: Request):
         # Scope guard (BOLA): a READ-scoped share token may only see the model
@@ -254,13 +298,14 @@ def register_routes(router, server):
             rows = session.execute(stmt).all()
             return [r[0] for r in rows if r and r[0]]
 
-        return server.vault.db.run_immediate_read_task(fetch)
+        values = server.vault.db.run_immediate_read_task(fetch)
+        return _with_shelf_names(server, values, owner=allowed_ids is None)
 
     @router.get(
         "/pictures/comfyui_loras",
         include_in_schema=False,
         summary="List distinct ComfyUI LoRA names",
-        response_model=list[str],
+        response_model=list[ComfyUIModelOption],
     )
     def get_comfyui_loras(request: Request):
         # Scope guard (BOLA): a READ-scoped share token may only see the LoRA
@@ -289,7 +334,8 @@ def register_routes(router, server):
             rows = session.execute(stmt).all()
             return [r[0] for r in rows if r and r[0]]
 
-        return server.vault.db.run_immediate_read_task(fetch)
+        values = server.vault.db.run_immediate_read_task(fetch)
+        return _with_shelf_names(server, values, owner=allowed_ids is None)
 
     @router.get(
         "/pictures/likeness-groups",

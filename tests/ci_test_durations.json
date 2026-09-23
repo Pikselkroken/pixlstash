@@ -4,9 +4,10 @@
   "recorded_from": [
     "GitHub Actions CI run 34023161408 (develop @ 3ffa581b29d910a5175fc12f445e4ec388c3e5da), backend gate shards",
     "local run (2026-09-06): 3 newly-gated files (test_export_api.py, test_tag_prediction_backfill.py, test_tagger_plugin_registry.py), --force-cpu --fast-captions to match CI",
-    "local run (2026-09-19): the 2 files this branch newly gates (test_mps_device_check.py, test_mps_memory_and_providers.py), --force-cpu --fast-captions to match CI. All 80 are mocked unit tests that report 0.00s per phase - 2.1s for the pair, imports included - so they are recorded at zero rather than at the median the fallback would have charged them."
+    "local run (2026-09-19): the 2 files this branch newly gates (test_mps_device_check.py, test_mps_memory_and_providers.py), --force-cpu --fast-captions to match CI. All 80 are mocked unit tests that report 0.00s per phase - 2.1s for the pair, imports included - so they are recorded at zero rather than at the median the fallback would have charged them.",
+    "local run (2026-09-23): tests/test_known_base_model_identify.py, which this branch newly gates, --force-cpu --fast-captions to match CI. Pure-function tests reporting 0.00s per phase."
   ],
-  "test_count": 4154,
+  "test_count": 4167,
   "total_seconds": 8024.98,
   "durations": {
     "tests/multi_project_authz/test_generic_field_reader_allowlist.py::test_bbox_is_serialised_exactly_as_the_relationship_path_did": 19.33,
@@ -1703,6 +1704,19 @@
     "tests/test_keep_cover_only.py::test_the_selection_cap_bounds_the_request_not_the_deduplicated_set": 5.11,
     "tests/test_keep_cover_only.py::test_the_whole_call_is_one_operation_under_one_batch": 5.08,
     "tests/test_keep_cover_only.py::test_undo_announces_the_covers_stack_change_back": 5.01,
+    "tests/test_known_base_model_identify.py::test_a_fuzzy_declaration_beats_filename_containment": 0.0,
+    "tests/test_known_base_model_identify.py::test_a_person_outranks_every_scan": 0.0,
+    "tests/test_known_base_model_identify.py::test_a_recorded_training_checkpoint_is_filename_evidence": 0.0,
+    "tests/test_known_base_model_identify.py::test_an_exact_declaration_beats_an_exact_filename": 0.0,
+    "tests/test_known_base_model_identify.py::test_an_exact_filename_beats_a_fuzzy_declaration": 0.0,
+    "tests/test_known_base_model_identify.py::test_closed_models_are_never_an_answer": 0.0,
+    "tests/test_known_base_model_identify.py::test_containment_prefers_the_longest_alias": 0.0,
+    "tests/test_known_base_model_identify.py::test_declared_edit_distance_cutoff_has_a_case_each_side": 0.0,
+    "tests/test_known_base_model_identify.py::test_edit_distance_is_never_applied_to_a_filename": 0.0,
+    "tests/test_known_base_model_identify.py::test_mixed_case_evidence_folds": 0.0,
+    "tests/test_known_base_model_identify.py::test_modelspec_architecture_suffix_is_dropped": 0.0,
+    "tests/test_known_base_model_identify.py::test_nothing_matched_is_nothing": 0.0,
+    "tests/test_known_base_model_identify.py::test_short_aliases_never_match_inside_a_word": 0.0,
     "tests/test_known_base_models.py::test_closed_models_are_marked": 0.0,
     "tests/test_known_base_models.py::test_completions_merge_user_values_without_duplicating": 0.0,
     "tests/test_known_base_models.py::test_completions_seed_from_the_known_table": 0.0,

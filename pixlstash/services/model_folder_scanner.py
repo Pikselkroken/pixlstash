@@ -58,9 +58,11 @@ from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
     FILE_CHECKPOINT,
     FILE_UNKNOWN,
+    AdapterInfo,
     classify_model_file,
     describe_adapter,
 )
+from pixlstash.utils.known_base_models import SOURCE_RANK, identify, rank
 from pixlstash.utils.model_utils import quant_from_filename
 
 logger = get_logger(__name__)
@@ -193,6 +195,8 @@ class _FileRecord(NamedTuple):
     family: Optional[str] = None
     quant: Optional[str] = None
     weights_id: Optional[str] = None
+    base_model_canonical: Optional[str] = None
+    base_model_source: Optional[str] = None
 
 
 class _KnownFile(NamedTuple):
@@ -203,8 +207,11 @@ class _KnownFile(NamedTuple):
     parsed, so what the file is has to be read back rather than re-derived.
 
     ``has_header_facts`` is false for a row registered before ``family``,
-    ``quant`` and ``weights_id`` existed. Those need the header and never the
-    bytes, so the fast path re-reads the header for it and still skips the hash.
+    ``quant`` and ``weights_id`` existed, and for one whose base model nothing
+    has identified yet (``base_model_source`` NULL). Those need the header and
+    never the bytes, so the fast path re-reads the header for it and still
+    skips the hash. The second case is how a base model added to
+    ``known_base_models`` in a later release reaches a file scanned before it.
     """
 
     model_id: int
@@ -237,6 +244,22 @@ def _reads_a_header(path: str) -> bool:
     next time a format is added.
     """
     return path.lower().endswith(HEADER_SUFFIX)
+
+
+def _identify(
+    abs_path: str, info: Optional[AdapterInfo] = None
+) -> tuple[Optional[str], Optional[str]]:
+    """The base model this file's evidence names, and which evidence said so.
+
+    The header's declarations when there is a header, then the file's own name
+    and the checkpoint name kohya recorded training against.
+    """
+    if info is None:
+        return identify([], [os.path.basename(abs_path)])
+    return identify(
+        [info.base_model, info.architecture],
+        [os.path.basename(abs_path), info.trained_on],
+    )
 
 
 def _utcnow() -> str:
@@ -550,23 +573,29 @@ class ModelFolderScanner:
                 mtime_ns=mtime_ns,
                 model_id=previous.model_id,
             )
-            if previous.has_header_facts or not _reads_a_header(abs_path):
+            if previous.has_header_facts:
                 return record
+            if not _reads_a_header(abs_path):
+                # A `.gguf`: its `weights_id` is null by construction, so it is
+                # here on every sweep, and only its name can be asked. No read.
+                canonical, source = _identify(abs_path)
+                return record._replace(
+                    base_model_canonical=canonical, base_model_source=source
+                )
             # A header read, never a hash: this is how a shelf registered before
             # the header facts existed gets them without re-reading its bytes.
             # An unreadable header keeps the plain touch, and is retried next
             # scan, which costs one small read.
-            #
-            # A `.gguf` is excluded above rather than here: its `weights_id` is
-            # null by construction, so it would take this branch on every sweep
-            # for a header it will never have.
             info = describe_adapter(abs_path)
             if info is None:
                 return record
+            canonical, source = _identify(abs_path, info)
             return record._replace(
                 family=info.family,
                 quant=info.quant or quant_from_filename(abs_path),
                 weights_id=info.weights_id,
+                base_model_canonical=canonical,
+                base_model_source=source,
             )
 
         info = describe_adapter(abs_path) if _reads_a_header(abs_path) else None
@@ -610,6 +639,10 @@ class ModelFolderScanner:
             # way in would leave every row written before today unfolded.
             quant=info.quant or quant_from_filename(abs_path),
             weights_id=info.weights_id,
+        )
+        canonical, source = _identify(abs_path, info)
+        record = record._replace(
+            base_model_canonical=canonical, base_model_source=source
         )
 
         # Hash now, or leave it for MissingCheckpointHashFinder.
@@ -707,6 +740,10 @@ class ModelFolderScanner:
             filename=os.path.basename(abs_path),
             quant=quant_from_filename(abs_path),
         )
+        canonical, source = _identify(abs_path)
+        record = record._replace(
+            base_model_canonical=canonical, base_model_source=source
+        )
         if known_digest is not None:
             digest = known_digest
         elif file_kind == FILE_CHECKPOINT or size >= _DEFER_HASH_BYTES:
@@ -742,7 +779,8 @@ class ModelFolderScanner:
         """
         rows = self._hub.fetchall(
             "SELECT mf.relpath, mf.model_id, mf.file_mtime, m.file_kind, m.file_size, "
-            "m.weights_id IS NOT NULL AS has_header_facts "
+            "(m.weights_id IS NOT NULL AND m.base_model_source IS NOT NULL) "
+            "AS has_header_facts "
             "FROM model_file mf JOIN model m ON m.id = mf.model_id "
             "WHERE mf.model_folder_id = ? AND mf.state = ?",
             (folder_id, STATE_PRESENT),
@@ -777,7 +815,33 @@ class ModelFolderScanner:
                         "weights_id = COALESCE(weights_id, ?) WHERE id = ?",
                         (record.family, record.quant, record.weights_id, model_id),
                     )
+                self._write_identification(conn, model_id, record)
                 self._upsert_model_file(conn, folder_id, model_id, record, scanned_at)
+
+    @staticmethod
+    def _write_identification(
+        conn: sqlite3.Connection, model_id: int, record: _FileRecord
+    ) -> None:
+        """Store the identified base model, only over a source it outranks.
+
+        Deliberately **not** the ``COALESCE`` the curatable columns use: that
+        fills a blank and can never upgrade, and a rescan has to be able to
+        replace a filename guess with what the header declares. It must never
+        replace ``user``, which nothing here outranks. ``base_model`` itself is
+        still written with ``COALESCE`` by the upserts; this is only the pair
+        of identification columns. Nothing matched writes nothing, so the row
+        stays NULL and is looked at again next scan.
+        """
+        source = record.base_model_source
+        if source is None:
+            return
+        beaten = [s for s in SOURCE_RANK if rank(s) < rank(source)]
+        conn.execute(
+            "UPDATE model SET base_model_canonical = ?, base_model_source = ? "
+            "WHERE id = ? AND (base_model_source IS NULL OR base_model_source "
+            f"IN ({', '.join('?' * len(beaten)) or 'NULL'}))",
+            (record.base_model_canonical, source, model_id, *beaten),
+        )
 
     @staticmethod
     def _upsert_model(

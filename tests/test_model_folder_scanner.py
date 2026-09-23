@@ -33,6 +33,7 @@ from pixlstash.services.model_folder_scanner import (
     ModelFolderScanner,
     sha256_file,
 )
+from pixlstash.services.model_shelf_service import update_models
 
 SKIP_AS_ROOT = pytest.mark.skipif(
     hasattr(os, "getuid") and os.getuid() == 0,
@@ -1177,3 +1178,191 @@ class TestFilesWithNoReadableHeader:
 
         assert result.unreadable == 1
         assert models(hub) == {}
+
+
+class TestBaseModelIdentification:
+    """The identified base model: written with its source, upgraded only by a
+    stronger source, never over a person's, and nothing when nothing matched."""
+
+    @staticmethod
+    def _identified(hub):
+        return {
+            row["filename"]: (row["base_model_canonical"], row["base_model_source"])
+            for row in models(hub).values()
+        }
+
+    def test_a_scan_records_the_match_and_where_it_came_from(
+        self, hub, scanner, tmp_path
+    ):
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        write_adapter(folder / "MyFlux2LoRA.safetensors")
+        write_adapter(folder / "hana.safetensors", base_model="SDXL_Base_V1-0")
+        _write_safetensors(
+            folder / "Riko_v2.safetensors",
+            {"blocks.0.lora_A.weight": _tensor([8, 16])},
+            {"modelspec.architecture": "stable-diffusion-xl-v1-base/lora"},
+        )
+        folder_id = register_folder(hub, folder)
+
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        assert self._identified(hub) == {
+            "MyFlux2LoRA.safetensors": ("FLUX.2", "filename_fuzzy"),
+            "hana.safetensors": ("SDXL 1.0", "declared"),
+            "Riko_v2.safetensors": ("SDXL 1.0", "declared"),
+        }
+        # The trainer's own string is kept, never rewritten to the label.
+        (hana,) = [
+            r for r in models(hub).values() if r["filename"] == "hana.safetensors"
+        ]
+        assert hana["base_model"] == "SDXL_Base_V1-0"
+
+    def test_nothing_matched_writes_nothing_and_is_looked_at_again(
+        self, hub, scanner, tmp_path, monkeypatch
+    ):
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        write_adapter(folder / "hana_v3.safetensors")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        assert self._identified(hub) == {"hana_v3.safetensors": (None, None)}
+
+        reads = []
+        real = scanner_module.describe_adapter
+        monkeypatch.setattr(
+            scanner_module,
+            "describe_adapter",
+            lambda path: reads.append(path) or real(path),
+        )
+        scanner.scan_folder(folder_id, str(folder), "user")
+        # The unchanged file is not re-hashed, but its header is re-read, so a
+        # base model a later release learns reaches it with no bookkeeping.
+        assert len(reads) == 1, reads
+
+    def test_an_identified_row_is_not_re_read(
+        self, hub, scanner, tmp_path, monkeypatch
+    ):
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        write_adapter(folder / "hana.safetensors", base_model="sdxl")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        reads = []
+        monkeypatch.setattr(
+            scanner_module, "describe_adapter", lambda path: reads.append(path)
+        )
+        scanner.scan_folder(folder_id, str(folder), "user")
+        assert reads == []
+
+    def test_a_stronger_source_upgrades_and_a_person_is_never_overwritten(
+        self, hub, scanner, tmp_path
+    ):
+        # One file, three names. Each copy is the same content row, so each
+        # scan is a rescan of that row with different evidence.
+        first = tmp_path / "a"
+        second = tmp_path / "b"
+        third = tmp_path / "c"
+        for folder in (first, second, third):
+            folder.mkdir()
+        write_adapter(first / "mysanalora.safetensors")
+        (second / "flux2.safetensors").write_bytes(
+            (first / "mysanalora.safetensors").read_bytes()
+        )
+        (third / "Pony.safetensors").write_bytes(
+            (first / "mysanalora.safetensors").read_bytes()
+        )
+
+        scanner.scan_folder(register_folder(hub, first), str(first), "user")
+        (row,) = models(hub).values()
+        assert (row["base_model_canonical"], row["base_model_source"]) == (
+            "Sana",
+            "filename_fuzzy",
+        )
+
+        scanner.scan_folder(register_folder(hub, second), str(second), "user")
+        (row,) = models(hub).values()
+        assert (row["base_model_canonical"], row["base_model_source"]) == (
+            "FLUX.2",
+            "filename",
+        )
+
+        update_models(hub, [row["id"]], {"base_model": "Illustrious"})
+        scanner.scan_folder(register_folder(hub, third), str(third), "user")
+        (row,) = models(hub).values()
+        assert (row["base_model_canonical"], row["base_model_source"]) == (
+            "Illustrious XL",
+            "user",
+        )
+
+    def test_an_equal_source_does_not_replace_the_stored_answer(
+        self, hub, scanner, tmp_path
+    ):
+        first = tmp_path / "a"
+        second = tmp_path / "b"
+        for folder in (first, second):
+            folder.mkdir()
+        write_adapter(first / "flux2.safetensors")
+        (second / "pony.safetensors").write_bytes(
+            (first / "flux2.safetensors").read_bytes()
+        )
+        scanner.scan_folder(register_folder(hub, first), str(first), "user")
+        scanner.scan_folder(register_folder(hub, second), str(second), "user")
+        (row,) = models(hub).values()
+        assert row["base_model_canonical"] == "FLUX.2", dict(row)
+
+
+class TestCuratedBaseModel:
+    """A person's base model moves the canonical column in the same write."""
+
+    def test_setting_a_base_model_recomputes_the_canonical_label(
+        self, hub, scanner, tmp_path
+    ):
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        write_adapter(folder / "myflux2lora.safetensors")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        (row,) = models(hub).values()
+
+        update_models(hub, [row["id"]], {"base_model": "Stable Diffusion XL"})
+
+        (row,) = models(hub).values()
+        assert (
+            row["base_model"],
+            row["base_model_canonical"],
+            row["base_model_source"],
+        ) == ("Stable Diffusion XL", "SDXL 1.0", "user")
+
+    def test_clearing_a_guess_sticks_across_a_rescan(self, hub, scanner, tmp_path):
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        write_adapter(folder / "mysanalora.safetensors")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        (row,) = models(hub).values()
+
+        update_models(hub, [row["id"]], {"base_model": None})
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        (row,) = models(hub).values()
+        assert (row["base_model_canonical"], row["base_model_source"]) == (
+            None,
+            "user",
+        )
+
+    def test_editing_something_else_leaves_the_identification_alone(
+        self, hub, scanner, tmp_path
+    ):
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        write_adapter(folder / "myflux2lora.safetensors")
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        (row,) = models(hub).values()
+
+        update_models(hub, [row["id"]], {"display_name": "Hana"})
+
+        (row,) = models(hub).values()
+        assert row["base_model_source"] == "filename_fuzzy", dict(row)
