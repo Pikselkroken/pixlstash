@@ -137,14 +137,15 @@ describe("Segmented", () => {
 });
 
 describe("OptionRows", () => {
-  it("takes no fill: the selected row carries a trailing check and nothing else does", () => {
+  it("takes no fill: every row carries an aligned radio indicator", () => {
     const w = mount(OptionRows, {
       props: { options: OPTIONS, modelValue: "c" },
     });
     const rows = w.findAll('[role="radio"]');
-    expect(rows[2].find(".optrow__check").exists()).toBe(true);
-    expect(rows[0].find(".optrow__check").exists()).toBe(false);
-    expect(w.findAll(".optrow__check")).toHaveLength(1);
+    expect(w.findAll(".optrow__radio")).toHaveLength(3);
+    expect(
+      rows.map((row) => row.find(".optrow__radio").text().trim()),
+    ).toEqual(["mdi-radiobox-blank", "mdi-radiobox-blank", "mdi-radiobox-marked"]);
   });
 
   it("picks on a click, even of the current value, and never on an arrow", async () => {

@@ -53,7 +53,7 @@ screenshot as evidence for or against a row. The **Open** rows are not built.
 | `primary_green` retired; its 16 sites become `primary` | **Approved** 2026-09-12 |
 | Focus ring gets its own per-theme token | **Approved** 2026-09-12 |
 | Pick one: `Segmented` for 2 to 5, `OptionRows` for sort by | **Approved** 2026-09-12 |
-| Option rows take no fill: trailing check and an olive label | **Approved** 2026-09-12 |
+| Option rows take no fill: aligned radio indicator and an olive label | **Approved** 2026-09-23 |
 | Segmented track: trough, inset ring, concentric corners | **Approved** 2026-09-12 |
 | Popovers adopting the 28px control | **Open.** Recommended. |
 | Menus: one surface, one 32px row, one hover wash | **Approved** 2026-09-12 |
@@ -540,11 +540,13 @@ and not `--control-h`: 4 + 24 + 4 is 32, which keeps the track on
 
 #### The option row takes no fill
 
-Selected is a trailing check plus an olive label, nothing else. A filled row
-with an icon and a label, at the same height as a filled action button, is the
-same object at a different width, which is why the old one read as pressed.
-Nothing else in the app fills a row. **Rule: a fill means press me, so if it
-is not an action it does not get one.**
+Every row carries an aligned radio indicator; the selected one is marked,
+alongside an olive label. This identifies a mutually exclusive choice where it
+is read, rather than leaving a trailing check easy to mistake for the start of
+the next column. A filled row with an icon and a label, at the same height as a
+filled action button, is the same object at a different width, which is why the
+old one read as pressed. Nothing else in the app fills a row. **Rule: a fill
+means press me, so if it is not an action it does not get one.**
 
 The olive is `--selected-ink`, per theme: the deep olive measures 2.32:1 on a
 dark panel and the lifted one 2.36:1 on a light one. Weight carries a second
@@ -601,7 +603,7 @@ The other ten collapse to one surface and the twenty row families to one row.
 | Icon, gap | 16px at 0.75, `--space-3` | Unchanged from the commonest |
 | Hover | `--hover-wash` | Four washes (see below) |
 | Destructive row | `--surface-error` | `error`, which measures 2.20:1 as text on a hovered row |
-| Current value | `--selected-ink` + trailing check | Six different active treatments |
+| Current value | `--selected-ink` + marked radio | Six different active treatments |
 | On a dark ground | the `dark-surface` family | A bespoke 10px menu in the lightbox |
 
 The design-system primitive draws the border as `--border`, because the
@@ -675,11 +677,11 @@ status words on a hovered row (4.09 to 4.45:1) need no change.
 **Approved 2026-09-13: olive marks, words stay text.** On a plain row, olive
 words fall to 2.95 to 3.95:1 when hovered, under even the 4:1 floor. A current
 value in a menu or option list, a selected tab and an active bar button keep the
-olive on their mark (trailing check, underline, icon) and set their words in
+olive on their mark (radio, underline, icon) and set their words in
 `--text`. Every active bar button in the app today is icon-only (filters,
 search, stats toggle, the shelf's show filter), so the toolbar does not change.
-The one mark under 3:1 is the option-row check on a hovered dark panel, at
-2.95:1, accepted as the check plus the medium weight still read as selected. The status-word figures under the `surface-*` family, earlier in
+The one mark under 3:1 is the option-row radio on a hovered dark panel, at
+2.95:1, accepted as the radio plus the medium weight still read as selected. The status-word figures under the `surface-*` family, earlier in
 this file, were taken with the 0.14 amber wash.
 
 #### The `on-<x>`-on-a-tint trap, fourth occurrence

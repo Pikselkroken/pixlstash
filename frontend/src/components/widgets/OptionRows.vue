@@ -19,14 +19,16 @@
       :data-testid="o.testid"
       @click="select(o)"
     >
+      <v-icon size="16" class="optrow__radio">
+        {{
+          o.id === modelValue ? "mdi-radiobox-marked" : "mdi-radiobox-blank"
+        }}
+      </v-icon>
       <v-icon v-if="o.icon" size="16" class="optrow__icon">{{
         iconName(o.icon)
       }}</v-icon>
       <span class="optrow__label">{{ o.label }}</span>
       <slot name="meta" :option="o" />
-      <v-icon v-if="o.id === modelValue" size="16" class="optrow__check"
-        >mdi-check</v-icon
-      >
     </button>
   </div>
 </template>
@@ -36,9 +38,10 @@
  * Pick one from a long or server-supplied list: sort by, and the filter menu's
  * pick-one lists. Two to five short options are Segmented.
  *
- * NO FILL. A fill means "press me", so the selected row carries a trailing
- * olive check and a medium-weight label in ink: olive marks, words stay
- * text. Hover is the ink wash, which follows the pointer, not the value.
+ * NO FILL. A fill means "press me", so every row carries an aligned radio
+ * indicator and the selected one is marked in olive. The medium-weight label
+ * remains a second cue: olive marks, words stay text. Hover is the ink wash,
+ * which follows the pointer, not the value.
  */
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
@@ -135,8 +138,13 @@ function onKeydown(event) {
   opacity: 1;
 }
 
+.optrow__radio {
+  flex-shrink: 0;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
 .optrow--on .optrow__icon,
-.optrow__check {
+.optrow--on .optrow__radio {
   color: var(--selected-ink);
 }
 
@@ -145,9 +153,5 @@ function onKeydown(event) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.optrow__check {
-  flex-shrink: 0;
 }
 </style>

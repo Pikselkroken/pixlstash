@@ -160,6 +160,11 @@
             :disabled="o.disabled"
             @click="setStar('minScoreFilter', o.id)"
           >
+            <v-icon size="16" class="fm-row-radio">{{
+              store.minScoreFilter === o.id
+                ? "mdi-radiobox-marked"
+                : "mdi-radiobox-blank"
+            }}</v-icon>
             <span class="fm-row-label">
               <template v-if="o.id == null">Any</template>
               <span v-else class="fm-stars" aria-hidden="true">
@@ -172,9 +177,6 @@
                 >
               </span>
             </span>
-            <v-icon size="16" class="fm-row-trail">{{
-              store.minScoreFilter === o.id ? "mdi-check" : ""
-            }}</v-icon>
           </button>
         </div>
         <div
@@ -201,6 +203,11 @@
             :disabled="o.disabled"
             @click="setStar('maxScoreFilter', o.id)"
           >
+            <v-icon size="16" class="fm-row-radio">{{
+              store.maxScoreFilter === o.id
+                ? "mdi-radiobox-marked"
+                : "mdi-radiobox-blank"
+            }}</v-icon>
             <span class="fm-row-label">
               <template v-if="o.id == null">Any</template>
               <span v-else class="fm-stars" aria-hidden="true">
@@ -213,9 +220,6 @@
                 >
               </span>
             </span>
-            <v-icon size="16" class="fm-row-trail">{{
-              store.maxScoreFilter === o.id ? "mdi-check" : ""
-            }}</v-icon>
           </button>
         </div>
         <div class="tbm-section">
