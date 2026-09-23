@@ -196,6 +196,32 @@ describe("a selection every picture of which can run", () => {
     expect(wrapper.emitted("run")[0][0].pictureIds).toEqual([1, 2, 3]);
   });
 
+  it("counts once per PICTURE for a card its pictures are fed into (#1457)", async () => {
+    // The server feeds each picture into a card with one open picture input
+    // and repeats the run per picture, and says so with `fill: "selection"`.
+    // Read as "per recipe" that card would promise 4 runs and start 8.
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 3,
+      groups: [
+        {
+          workflow_key: GOOD,
+          picture_ids: [1, 2],
+          runs: 2,
+          reasons: [],
+          picture_inputs: [{ slot_label: "s", input_name: "image", fill: "selection" }],
+        },
+        { workflow_key: BAD, picture_ids: [3], runs: 1, reasons: [] },
+      ],
+    });
+    const wrapper = await mountMakeMore();
+    wrapper.vm.count = 4;
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.totalRuns).toBe(12);
+    expect(makeButton(wrapper).text()).toBe("Make 12");
+    expect(wrapper.text()).toContain("Its own recipe, run on each of these pictures");
+  });
+
   it("refuses a request over the server's 200-run ceiling, saying the number", async () => {
     // `_plan` caps the TOTAL, not the count, and answers 400. Pressing Run to
     // find that out is the round trip this avoids.

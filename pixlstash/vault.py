@@ -1692,6 +1692,32 @@ class Vault:
                     total = 0
                     missing = 0
                     worker_active_override = False
+            elif worker_type == TaskType.COMFYUI_WORKFLOW_PULL:
+                # User-triggered (no finder), the MODEL_FOLDER_SCAN shape.
+                # Counted in ComfyUI's saved workflows, which live on the
+                # ComfyUI machine rather than in the library.
+                label = "comfyui_workflow_pull"
+                active_pull_tasks = (
+                    self._task_runner.get_active_tasks_of_type(
+                        TaskType.COMFYUI_WORKFLOW_PULL.value
+                    )
+                    if self._task_runner is not None
+                    else []
+                )
+                if active_pull_tasks:
+                    total = sum(
+                        int(getattr(t, "_total_count", 0)) for t in active_pull_tasks
+                    )
+                    processed = sum(
+                        int(getattr(t, "_processed_count", 0))
+                        for t in active_pull_tasks
+                    )
+                    missing = max(0, total - processed)
+                    worker_active_override = True
+                else:
+                    total = 0
+                    missing = 0
+                    worker_active_override = False
             elif worker_type == TaskType.COMFYUI_EXTRACTION:
                 missing = int(
                     self.db.run_immediate_read_task(

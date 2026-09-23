@@ -23,12 +23,14 @@ const listWorkflowCards = vi.fn();
 const preflightWorkflowRun = vi.fn();
 const runWorkflowCard = vi.fn();
 const getPictureRecipe = vi.fn();
+const setWorkflowInputs = vi.fn();
 
 vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   preflightWorkflowRun: (...args) => preflightWorkflowRun(...args),
   runWorkflowCard: (...args) => runWorkflowCard(...args),
+  setWorkflowInputs: (...args) => setWorkflowInputs(...args),
   workflowCoverUrl: (cover) => (cover?.url ? `/api/v1${cover.url}` : ""),
 }));
 vi.mock("../../api/comfyui", () => ({
@@ -112,6 +114,7 @@ const globalOpts = {
       },
       AppBarButton: true,
       RunReasonNotice: true,
+      PicturePicker: true,
       "v-icon": true,
     },
   },
@@ -143,6 +146,7 @@ beforeEach(() => {
       : { card: card() },
   );
   listWorkflowCards.mockResolvedValue({ cards: [] });
+  setWorkflowInputs.mockResolvedValue({ inputs: [] });
   listSavedRecipes.mockResolvedValue([]);
   preflightWorkflowRun.mockResolvedValue({ ok: true, runs: 1, groups: [] });
   runWorkflowCard.mockResolvedValue({
@@ -1076,3 +1080,311 @@ describe("Save as recipe, when the look is already kept", () => {
     expect(footer(wrapper, "Save as recipe")).toBeTruthy();
   });
 });
+
+// ── The pictures a workflow takes (#1457) ──────────────────────────────────
+//
+// The server decides how each picture input is filled and says so per input
+// (`fill`); the popup draws that and never re-derives it. What it owns: that a
+// pin whose picture has gone is an empty slot and not a refusal notice, that a
+// picked picture reaches the body, that the whole-set PUT is written from the
+// set the pre-flight read (a row left out is a row deleted), and that the stack
+// box defaults from whether a selected picture is actually fed in.
+describe("the pictures a workflow takes", () => {
+  const SUBJECT = "a".repeat(63) + "1";
+  const REFERENCE = "a".repeat(63) + "2";
+
+  function input(slot, overrides = {}) {
+    return {
+      slot_label: slot,
+      input_name: "image",
+      title: slot === SUBJECT ? "Subject" : "Reference",
+      mode: "picker",
+      pixel_sha: null,
+      picture_id: null,
+      picture_missing: false,
+      fill: null,
+      ...overrides,
+    };
+  }
+
+  function answer(inputs, reasons = []) {
+    return {
+      ok: !reasons.length,
+      runs: 3,
+      groups: [{ workflow_key: KEY, reasons, picture_inputs: inputs }],
+    };
+  }
+
+  const UNFILLED = {
+    code: "picture_input_unfilled",
+    inputs: [{ slot_label: REFERENCE, input_name: "image", title: "Reference" }],
+  };
+
+  it("draws the selection where the server fills it, and ticks the stack box", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      answer([
+        input(SUBJECT, { fill: "selection" }),
+        input(REFERENCE, { mode: "fixed", pixel_sha: "f".repeat(64), picture_id: 7, fill: "fixed" }),
+      ]),
+    );
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2, 3], workflowKey: KEY });
+
+    const rows = wrapper.findAll(".rund-in");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].text()).toContain("Your selection: 3 pictures, one run each");
+    expect(rows[1].text()).toContain("Kept for every run of this workflow");
+    expect(wrapper.find(".rund-box").element.checked).toBe(true);
+    expect(wrapper.vm.canRun).toBe(true);
+  });
+
+  it("leaves the stack box unticked when no selected picture is fed in", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer([input(SUBJECT, { fill: "graph" })]));
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [1] });
+    expect(wrapper.find(".rund-box").element.checked).toBe(false);
+    await wrapper.vm.submit();
+    expect(runWorkflowCard.mock.calls[0][0].stack).toBe(false);
+  });
+
+  it("sends the stack choice the owner made over the default", async () => {
+    preflightWorkflowRun.mockResolvedValue(answer([input(SUBJECT, { fill: "selection" })]));
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2], workflowKey: KEY });
+    await wrapper.find(".rund-box").setValue(false);
+    await wrapper.vm.submit();
+    expect(runWorkflowCard.mock.calls[0][0].stack).toBe(false);
+  });
+
+  it("shows a pin whose picture has gone as an empty slot, not a refusal", async () => {
+    // Decision 7: "no picture yet", in the words of the slot, with the fix in
+    // the row. A second copy under the form as a notice would read as an error.
+    preflightWorkflowRun.mockResolvedValue(
+      answer(
+        [
+          input(SUBJECT, { fill: "selection" }),
+          input(REFERENCE, { mode: "fixed", pixel_sha: "f".repeat(64), picture_missing: true }),
+        ],
+        [UNFILLED],
+      ),
+    );
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [1] });
+
+    const gone = wrapper.findAll(".rund-in")[1];
+    expect(gone.text()).toContain("The picture you kept here is gone. Choose another.");
+    expect(gone.find(".rund-in-tile--empty").exists()).toBe(true);
+    expect(wrapper.vm.runNotes).toEqual([]);
+    expect(wrapper.vm.canRun).toBe(false);
+    expect(wrapper.vm.runBlocker).toBe("Choose a picture for Reference first.");
+  });
+
+  it("sends only the picture picked for this run, and asks again", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      answer([input(SUBJECT, { fill: "selection" }), input(REFERENCE)], [UNFILLED]),
+    );
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [1] });
+    expect(preflightWorkflowRun.mock.calls[0][0].inputs).toEqual([]);
+
+    wrapper.vm.pickerFor = wrapper.vm.pictureInputs[1];
+    await wrapper.vm.onPicked({ id: 99 });
+    await flushPromises();
+
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(2);
+    expect(preflightWorkflowRun.mock.calls[1][0].inputs).toEqual([
+      { slot_label: REFERENCE, input_name: "image", picture_id: 99 },
+    ]);
+    expect(wrapper.vm.pickerFor).toBe(null);
+  });
+
+  it("pins by writing the whole set it read, every other row unchanged", async () => {
+    // The PUT replaces the card's whole set, so a row the popup left out would
+    // be a pin deleted. The other pin goes back by the content it was stored
+    // with; only the addressed row changes.
+    const otherPin = "e".repeat(64);
+    preflightWorkflowRun.mockResolvedValue(
+      answer([
+        input(SUBJECT, { fill: "request", picture_id: 99 }),
+        input(REFERENCE, { mode: "fixed", pixel_sha: otherPin, picture_id: 7, fill: "fixed" }),
+      ]),
+    );
+    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+
+    await wrapper.vm.togglePin(wrapper.vm.pictureInputs[0]);
+    await flushPromises();
+
+    expect(setWorkflowInputs).toHaveBeenCalledWith(KEY, [
+      { slot_label: SUBJECT, input_name: "image", mode: "fixed", pixel_sha: null, picture_id: 99 },
+      { slot_label: REFERENCE, input_name: "image", mode: "fixed", pixel_sha: otherPin },
+    ]);
+  });
+
+  it("keeps an unpinned picture for this run rather than emptying the slot", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      answer([input(REFERENCE, { mode: "fixed", pixel_sha: "e".repeat(64), picture_id: 7, fill: "fixed" })]),
+    );
+    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+
+    await wrapper.vm.togglePin(wrapper.vm.pictureInputs[0]);
+    await flushPromises();
+
+    expect(setWorkflowInputs.mock.calls[0][1][0].mode).toBe("picker");
+    expect(preflightWorkflowRun.mock.calls.at(-1)[0].inputs).toEqual([
+      { slot_label: REFERENCE, input_name: "image", picture_id: 7 },
+    ]);
+  });
+
+  it("moves the selection by making the old Selection a picker", async () => {
+    // A card has at most one Selection, so moving it is one write of the set
+    // with the old one demoted - never two Selections in one PUT.
+    preflightWorkflowRun.mockResolvedValue(
+      answer([input(SUBJECT, { mode: "selection", fill: "selection" }), input(REFERENCE, { fill: "graph" })]),
+    );
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2], workflowKey: KEY });
+
+    await wrapper.vm.useSelectionHere(wrapper.vm.pictureInputs[1]);
+    await flushPromises();
+
+    expect(setWorkflowInputs.mock.calls[0][1].map((row) => row.mode)).toEqual([
+      "picker",
+      "selection",
+    ]);
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("says so, and keeps the form, when the setup cannot be written", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      answer([input(SUBJECT, { fill: "request", picture_id: 99 })]),
+    );
+    setWorkflowInputs.mockRejectedValue({
+      response: { status: 400, data: { detail: "Picture 99 is not a kept picture of this library, so it cannot be pinned." } },
+    });
+    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+
+    await wrapper.vm.togglePin(wrapper.vm.pictureInputs[0]);
+    await flushPromises();
+
+    expect(wrapper.vm.inputsError).toContain("not a kept picture");
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("will not pin again until the last pin's re-read has landed (#1501 review)", async () => {
+    // Released early, the second PUT was built from rows that still said the
+    // first input was a picker, and silently unpinned it.
+    const rows = [
+      input(SUBJECT, { fill: "request", picture_id: 99 }),
+      input(REFERENCE, { fill: "request", picture_id: 98 }),
+    ];
+    preflightWorkflowRun.mockResolvedValue(answer(rows));
+    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+
+    let release;
+    preflightWorkflowRun.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve(answer(rows)))),
+    );
+    const first = wrapper.vm.togglePin(wrapper.vm.pictureInputs[0]);
+    await flushPromises();
+    await wrapper.vm.togglePin(wrapper.vm.pictureInputs[1]);
+    expect(setWorkflowInputs).toHaveBeenCalledTimes(1);
+
+    release();
+    await first;
+    await flushPromises();
+    await wrapper.vm.togglePin(wrapper.vm.pictureInputs[1]);
+    expect(setWorkflowInputs).toHaveBeenCalledTimes(2);
+  });
+
+  it("writes nothing under a stack member whose inputs it has not read yet", async () => {
+    // The key moves at once on a switch; the rows are the old card's until
+    // the new pre-flight lands. A PUT then replaced the new card's setup.
+    preflightWorkflowRun.mockResolvedValue(
+      answer([input(SUBJECT, { fill: "request", picture_id: 99 })]),
+    );
+    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const oldRow = wrapper.vm.pictureInputs[0];
+
+    preflightWorkflowRun.mockImplementation(() => new Promise(() => {}));
+    wrapper.vm.workflowKey = OTHER;
+    await flushPromises();
+    expect(wrapper.vm.pictureInputs).toEqual([]);
+
+    await wrapper.vm.togglePin(oldRow);
+    await wrapper.vm.writeSetup([]);
+    expect(setWorkflowInputs).not.toHaveBeenCalled();
+  });
+
+  it("forgets the rows when a pre-flight fails, so none is written from them", async () => {
+    preflightWorkflowRun.mockResolvedValueOnce(
+      answer([input(SUBJECT, { fill: "request", picture_id: 99 })]),
+    );
+    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const row = wrapper.vm.pictureInputs[0];
+
+    preflightWorkflowRun.mockRejectedValue({
+      response: { status: 404, data: { detail: "Picture 99 is not a kept picture." } },
+    });
+    await wrapper.vm.runPreflight();
+    expect(wrapper.vm.pictureInputs).toEqual([]);
+
+    await wrapper.vm.togglePin(row);
+    expect(setWorkflowInputs).not.toHaveBeenCalled();
+  });
+
+  it("does not offer to stack a selection nothing reads", async () => {
+    // Every output would join the FIRST picture's stack, which is not "the
+    // ones they came from".
+    preflightWorkflowRun.mockResolvedValue(answer([input(SUBJECT, { fill: "graph" })]));
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2], workflowKey: KEY });
+    expect(wrapper.find(".rund-box").exists()).toBe(false);
+  });
+
+  it("shows the slot a refused run found empty, and says to look there", async () => {
+    // Pre-flight said filled; by the run the pin's picture was binned.
+    preflightWorkflowRun.mockResolvedValue(
+      answer([input(REFERENCE, { mode: "fixed", pixel_sha: "e".repeat(64), picture_id: 7, fill: "fixed" })]),
+    );
+    runWorkflowCard.mockResolvedValue({
+      status: "refused",
+      prompts: [],
+      groups: [
+        {
+          workflow_key: KEY,
+          reasons: [UNFILLED],
+          picture_inputs: [
+            input(REFERENCE, { mode: "fixed", pixel_sha: "e".repeat(64), picture_missing: true }),
+          ],
+        },
+      ],
+    });
+    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    await wrapper.vm.submit();
+    await flushPromises();
+
+    expect(wrapper.vm.pictureInputs[0].picture_missing).toBe(true);
+    expect(wrapper.vm.submitError).toBe(
+      "Nothing was queued: a picture above still needs choosing.",
+    );
+  });
+
+  it("keeps the pin toggle's name fixed and its state in aria-pressed", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      answer([input(REFERENCE, { mode: "fixed", pixel_sha: "e".repeat(64), picture_id: 7, fill: "fixed" })]),
+    );
+    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const pin = wrapper.findComponent({ name: "AppBarButton" });
+    expect(pin.attributes("tooltip")).toBe("Keep this picture for Reference on every run");
+    expect(pin.attributes("aria-pressed")).toBe("true");
+    expect(pin.attributes("aria-disabled")).toBeUndefined();
+  });
+
+  it("numbers two inputs that carry the same title", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      answer([
+        input(SUBJECT, { title: "Load Image", fill: "selection" }),
+        input(REFERENCE, { title: "Load Image", fill: "graph" }),
+      ]),
+    );
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [1] });
+    expect(wrapper.vm.pictureInputs.map(wrapper.vm.inputTitle)).toEqual([
+      "Load Image 1",
+      "Load Image 2",
+    ]);
+  });
+});
+

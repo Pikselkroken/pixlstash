@@ -48,8 +48,8 @@ import os
 import re
 import threading
 from copy import deepcopy
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field as dataclass_field
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from pydantic import (
@@ -114,7 +114,9 @@ from pixlstash.services.comfyui_service import (
     _extract_output_node_ids,
     _process_comfyui_outputs,
     _submit_comfyui_prompt,
+    _upload_image_to_comfyui,
 )
+from pixlstash.services import workflow_bindings
 from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
     BASE_MODEL_KINDS,
@@ -150,12 +152,18 @@ from pixlstash.services.workflow_hash import (
     structural_document,
 )
 from pixlstash.services.workflow_identity import topology_node_labels
+from pixlstash.services.workflow_inputs import (
+    CardInput,
+    card_input_modes,
+    resolve_fills,
+)
 from pixlstash.services.workflow_io import api_graph, detect_workflow_io
 from pixlstash.services.workflow_library_service import (
     read_best_picture_ids,
     read_card_picture_ids,
     read_instance_hashes,
-    read_kept_pixel_shas,
+    read_kept_picture_files,
+    read_oldest_kept_by_pixel_sha,
     read_recipe_activity,
     read_variant_picture_counts,
     stack_for_picture,
@@ -164,6 +172,7 @@ from pixlstash.utils.comfyui_utilities import (
     collect_seed_inputs,
     loaded_model_widgets,
 )
+from pixlstash.stacking import build_stack_filename_prefix
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 
 logger = get_logger(__name__)
@@ -573,6 +582,9 @@ MAX_STACK_KEYS = 500
 # the shipped run route caps a selection, because it is the same gesture.
 MAX_RUN_PICTURES = MAX_RUNS_PER_REQUEST
 MAX_RUN_LORAS = 32
+# SQLite's INTEGER ceiling. An id past it is not a picture that is missing, it
+# is a request no row could answer, and the driver says so with a 500.
+MAX_PICTURE_ID = 2**63 - 1
 MAX_PROMPT_LENGTH = 20000
 
 # How deep the runnable-source resolver looks for a picture or an instance to
@@ -600,6 +612,12 @@ OVERRIDE_ADDRESS_SEPARATOR = "/"
 # grouping. Checked rather than trusted, so a malformed id is a 422 naming the
 # parameter instead of a write against a stack nothing will ever read.
 _STACK_ID_RE = re.compile(rf"^(?:{AUTO_STACK_PREFIX}[0-9a-f]{{64}}|[0-9a-f]{{32}})$")
+
+# The extension a picture keeps when it is uploaded into ComfyUI's input folder.
+# Anything else is dropped rather than carried into a name another program
+# resolves as a path.
+_UPLOAD_EXTENSION_RE = re.compile(r"^\.[a-z0-9]{1,8}$")
+_PIXEL_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class WorkflowCardEdit(BaseModel):
@@ -710,11 +728,16 @@ class CardPictureInput(ParameterAddress):
     """How one picture input of a card is filled.
 
     ``fixed`` names a picture by content (``pixel_sha``) rather than by id,
-    because SQLite reuses a vault id the moment the next import lands.
+    because SQLite reuses a vault id the moment the next import lands. A
+    client may pin by ``picture_id`` instead and the server stores that
+    picture's content (#1457): the grid projection a picker hands back carries
+    no ``pixel_sha``, and fetching one per pin is a round trip to learn a value
+    the client never needs to hold.
     """
 
     mode: Literal["selection", "picker", "fixed"]
     pixel_sha: str | None = Field(None, max_length=64)
+    picture_id: int | None = Field(None, ge=1, le=MAX_PICTURE_ID)
 
 
 class CardPictureInputs(BaseModel):
@@ -728,7 +751,9 @@ class CardPictureInputs(BaseModel):
         cls, value: list[CardPictureInput]
     ) -> list[CardPictureInput]:
         for entry in value:
-            if entry.mode == "fixed" and not entry.pixel_sha:
+            if entry.mode == "fixed" and not (
+                entry.pixel_sha or entry.picture_id is not None
+            ):
                 raise ValueError("A fixed input must name a picture.")
         _one_row_per_address(value)
         return value
@@ -805,6 +830,17 @@ class RunValue(ParameterAddress):
     value: bool | int | float | str
 
 
+class RunInput(ParameterAddress):
+    """One picture input this run fills, addressed the way a card addresses.
+
+    ``picture_id`` is the picture it gets on every submission of this run;
+    ``null`` says "my selection goes here", which is how a caller picks the
+    input a selection feeds when more than one is open.
+    """
+
+    picture_id: int | None = Field(None, ge=1, le=MAX_PICTURE_ID)
+
+
 class RunDestination(BaseModel):
     """Where a run with no source picture files its output."""
 
@@ -826,7 +862,9 @@ class RunRequest(BaseModel):
     change the identity of the very card being run.
     """
 
-    picture_ids: list[int] = Field(default_factory=list, max_length=MAX_RUN_PICTURES)
+    picture_ids: list[Annotated[int, Field(le=MAX_PICTURE_ID)]] = Field(
+        default_factory=list, max_length=MAX_RUN_PICTURES
+    )
     saved_recipe_id: int | None = None
     workflow_key: str | None = None
 
@@ -847,15 +885,28 @@ class RunRequest(BaseModel):
     seed_mode: Literal["new", "keep", "fixed"] = "new"
     seed: int | None = Field(None, ge=0, le=MAX_SEED_64)
     destination: RunDestination | None = None
-    # NO `inputs` field. A card's picture-input setup is READ here - a fixed
-    # input whose picture has gone is `fixed_input_deleted` - but nothing
-    # FILLS one yet, because filling it means uploading pictures into
-    # ComfyUI's input folder. `/comfyui/workflows/{name}/run` owned that path
-    # and #1410 retired it, so **nothing in the product fills a picture input
-    # by mode today**; #1457 tracks this route learning to, and
-    # `comfyui_service._upload_image_to_comfyui` is held unused for it. Taking
-    # the field and ignoring it would be worse than not offering it: a caller
-    # would send a picture and get a run that never read it.
+    # What fills each picture input of the card (#1457), first answer wins:
+    # an entry here, a `fixed` pin whose picture is still kept, a stored
+    # `selection` fed from `picture_ids`, and - once those have been applied
+    # to every input - the one input still open when exactly one is, which the
+    # selection fills with nothing here saying so. That last rule is why this
+    # field is optional: it is needed only where two or more inputs are open,
+    # and for a picture picked for one run. See `workflow_inputs.resolve_fills`.
+    inputs: list[RunInput] = Field(default_factory=list, max_length=MAX_INPUTS)
+
+    @field_validator("inputs")
+    @classmethod
+    def _one_fill_per_input(cls, value: list[RunInput]) -> list[RunInput]:
+        """One entry per address, and the selection sent to one input at most.
+
+        A selection is the run's repeat axis, so two inputs both taking it
+        would have to agree on which picture each submission reads - which is
+        two selections, and the request has one.
+        """
+        _one_row_per_address(value)
+        if sum(entry.picture_id is None for entry in value) > 1:
+            raise ValueError("At most one input can take the selection.")
+        return value
 
     # A new run is a new picture, NOT a variant of the one it was made from
     # (v1.12 B7). The shipped run routes stack by default and this one does
@@ -907,6 +958,28 @@ class RunRequest(BaseModel):
     client_id: str | None = Field(None, max_length=MAX_LABEL_LENGTH)
 
 
+class RunPictureInput(ParameterAddress):
+    """One picture input of the card a group runs, and what fills it.
+
+    ``fill`` is the server's answer and the client's to show, never to
+    re-derive: ``request`` (this body's entry), ``fixed`` (the card's pin),
+    ``selection`` (the group's pictures, one per submission), ``graph`` (open,
+    and the file the graph already names is on this ComfyUI) or ``null`` (open
+    and unfilled, which ``picture_input_unfilled`` names).
+
+    ``picture_id`` is the one picture a ``request`` or ``fixed`` fill feeds; a
+    pin whose content no kept picture holds any more has it ``null`` and
+    ``picture_missing`` true, which is an empty slot to choose again.
+    """
+
+    title: str
+    mode: Literal["selection", "picker", "fixed"]
+    pixel_sha: str | None = None
+    picture_id: int | None = None
+    picture_missing: bool = False
+    fill: Literal["request", "fixed", "selection", "graph"] | None = None
+
+
 class RunGroup(BaseModel):
     """One card a request resolved to, and whether it would run.
 
@@ -948,6 +1021,12 @@ class RunGroup(BaseModel):
     # that is refused, because it is a fact about the recipe and the graph and
     # holds whatever ComfyUI says: `[{filename, sha256, node_id, reason}]`.
     unplaced_loras: list[dict] = Field(default_factory=list)
+    # Every picture input of the card, enumerated from the graph this run
+    # resolved with the card's stored setup laid over it (#1457). It is the
+    # card's WHOLE set, which is what makes the whole-set
+    # `PUT /workflows/{key}/inputs` safe to call after reading it: a client
+    # never writes back a set it has not seen.
+    picture_inputs: list[RunPictureInput] = Field(default_factory=list)
 
 
 class RunPreflight(BaseModel):
@@ -1132,19 +1211,36 @@ class WorkflowDeleted(BaseModel):
 
 
 @dataclass
+class Feed:
+    """Where one filled picture input goes in a graph, and what feeds it.
+
+    ``picture_id`` ``None`` is the group's selection: one of its pictures per
+    submission, which is what makes the group repeat per picture.
+    """
+
+    targets: list[dict]
+    picture_id: int | None
+
+
+@dataclass
 class Plan:
     """One run request, resolved: what it would do and what it asked ComfyUI.
 
     Not a response model - it carries the graphs and the ``object_info`` map,
     which are megabytes and are nobody's business outside the two handlers.
+
+    ``files`` is every picture a submission uploads, ``{picture_id: (path,
+    upload name)}``, resolved here so a picture that cannot be handed over is
+    a refusal before the first byte leaves - never half way through a batch.
     """
 
     body: RunRequest
     groups: list[RunGroup]
-    submittable: list[tuple[dict, RunGroup]]
+    submittable: list[tuple[dict, RunGroup, list[Feed]]]
     comfyui_url: str
     object_info: dict | None
     object_info_error: str | None
+    files: dict[int, tuple[str, str]] = dataclass_field(default_factory=dict)
 
 
 def _stored_value(value: bool | int | float | str) -> str:
@@ -1991,10 +2087,15 @@ def create_router(server) -> APIRouter:
         description=(
             "How each picture input of this card is filled: from the "
             "selection, from a picker, or from one fixed picture. Kept per "
-            "library, because a picture is a picture in one library."
+            "library, because a picture is a picture in one library. A fixed "
+            "input names its picture by pixel_sha or by picture_id, and one "
+            "given by id is stored as that picture's content. Replaces the "
+            "card's whole set, so read it first: every run pre-flight returns "
+            "it as picture_inputs."
         ),
         response_model=CardPictureInputs,
         responses={
+            400: {"description": "A pinned picture_id is not a kept picture."},
             404: {"description": "This machine has no such card."},
             503: {"description": "No library is open, so there is nothing to set up."},
         },
@@ -2011,17 +2112,39 @@ def create_router(server) -> APIRouter:
                 status_code=503,
                 detail="No library is open, so a picture input cannot be set up.",
             )
+        # A pin by id is stored as that picture's CONTENT, so it survives the
+        # id being reused. Refused rather than stored empty when the picture is
+        # not a kept one: a pin that silently names nothing is a run that later
+        # asks for a picture the owner thinks they already chose.
+        by_id = [entry.picture_id for entry in payload.inputs if entry.picture_id]
+        kept = read_kept_picture_files(server.vault, by_id) if by_id else {}
+        entries = []
+        for entry in payload.inputs:
+            pixel_sha = entry.pixel_sha
+            if entry.mode == "fixed" and entry.picture_id is not None:
+                pixel_sha = (kept.get(entry.picture_id) or (None, None))[1]
+                if not pixel_sha:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Picture {entry.picture_id} is not a kept picture "
+                            "of this library, so it cannot be pinned."
+                        ),
+                    )
+            entries.append(
+                entry.model_copy(update={"pixel_sha": pixel_sha, "picture_id": None})
+            )
         replace_picture_inputs(
             hub,
             library_uuid,
             workflow_key,
             [
                 (entry.slot_label, entry.input_name, entry.mode, entry.pixel_sha)
-                for entry in payload.inputs
+                for entry in entries
             ],
         )
         _announce(request, [workflow_key], "changed")
-        return payload
+        return CardPictureInputs(inputs=entries)
 
     @router.post(
         "/workflows/{workflow_key}/unstack",
@@ -2312,38 +2435,243 @@ def create_router(server) -> APIRouter:
             answer[(str(slot.get("node_id")), str(slot.get("field")))] = found
         return answer
 
-    def _fixed_input_reasons(hub, workflow_key: str) -> list[run_service.Reason]:
-        """Every ``fixed`` picture input of this card whose picture has gone."""
+    def _card_inputs(
+        hub,
+        workflow_key: str,
+        graph: dict,
+        addressed: bool,
+        bindings: list | None = None,
+    ) -> list[CardInput]:
+        """This card's picture inputs in *graph*, with its stored setup over them.
+
+        A graph that will not reduce has nothing addressable in it. That is a
+        400 only when the request ADDRESSED an input (``_apply_addressed``'s
+        rule and wording); otherwise the card runs exactly as it did before
+        picture inputs were filled, rather than a runnable card starting to
+        refuse over a question nobody asked.
+        """
         library_uuid = _library_uuid()
-        if not library_uuid:
+        stored = picture_inputs(hub, library_uuid, workflow_key) if library_uuid else []
+        try:
+            inputs = card_input_modes(graph, stored)
+        except WorkflowGraphError as exc:
+            if addressed:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "This workflow will not reduce, so its picture inputs "
+                        f"cannot be addressed: {exc}"
+                    ),
+                ) from exc
+            logger.info(
+                "Card %s's graph will not reduce, so its picture inputs are "
+                "left as the graph has them: %s",
+                workflow_key,
+                exc,
+            )
             return []
-        fixed = [
-            row
-            for row in picture_inputs(hub, library_uuid, workflow_key)
-            if row["mode"] == "fixed" and row["pixel_sha"]
-        ]
-        if not fixed:
-            return []
-        alive = read_kept_pixel_shas(server.vault, [row["pixel_sha"] for row in fixed])
-        gone = [row for row in fixed if row["pixel_sha"] not in alive]
-        return (
+        if bindings is None:
+            return inputs
+        # A file the old import dialog stored says which inputs a run fills,
+        # and `[]` is one that took no picture at all: detection must not opt
+        # an input back in that the owner opted out of (`workflow_bindings`).
+        # An input left out here is not addressable and runs as authored.
+        bound = {
+            workflow_bindings.target_node(graph, binding.get("path"))
+            for binding in bindings
+            if isinstance(binding, dict)
+            and binding.get("role") == workflow_bindings.IMAGE
+        }
+        return [item for item in inputs if bound.intersection(item.node_ids)]
+
+    def _fill_inputs(
+        graph: dict,
+        card_inputs: list[CardInput],
+        requested: dict[tuple[str, str], int | None],
+        selection: list[int],
+        preflight: dict,
+    ) -> tuple[list[RunPictureInput], list[Feed], list[run_service.Reason]]:
+        """Answer every picture input, and refuse the ones nothing answers.
+
+        Run AFTER ``judge``, on the graph ``judge`` saw, because an open input
+        is only a refusal when the file the graph already names is not on this
+        ComfyUI - and that is the pre-flight's ``missing_input_images``, which
+        ``judge`` itself never reads. A loader naming a mask or a reference
+        the owner keeps in ComfyUI's input folder runs as it always did.
+
+        Returns:
+            ``(described, feeds, reasons)``: every input as the response shows
+            it, where each filled one goes, and ``picture_input_unfilled``
+            naming the open ones, if any.
+        """
+        pinned = read_oldest_kept_by_pixel_sha(
+            server.vault,
+            sorted(
+                {i.pixel_sha for i in card_inputs if i.mode == "fixed" and i.pixel_sha}
+            ),
+        )
+        fills = resolve_fills(card_inputs, requested, pinned, bool(selection))
+        missing = {
+            str(item.get("node_id"))
+            for item in preflight.get("missing_input_images") or []
+            if item
+        }
+        described: list[RunPictureInput] = []
+        feeds: list[Feed] = []
+        unfilled: list[dict] = []
+        for fill in fills:
+            item = fill.input
+            how = fill.how
+            if how is not None:
+                targets = [
+                    workflow_bindings.picture_target(graph, node_id, item.class_type)
+                    for node_id in item.node_ids
+                ]
+                if all(targets):
+                    feeds.append(Feed(targets, fill.picture_id))
+                else:
+                    # A loader PixlStash cannot hand an uploaded file to. Named
+                    # rather than filled somewhere else, which would be a run
+                    # that never read the picture it was given.
+                    how = None
+            elif not (item.mode == "fixed" and item.pixel_sha) and all(
+                _graph_names_a_live_file(graph, node_id, item.input_name, missing)
+                for node_id in item.node_ids
+            ):
+                # Never for a pin whose picture has gone: the owner chose a
+                # picture for this input, and quietly running the file the
+                # graph was authored with instead is a run that read neither.
+                # It is an empty slot, and says so (decision 7).
+                how = "graph"
+            if how is None:
+                # `title` beside the address: a slot label is a topology hash,
+                # and a refusal a person reads has to name the input they see.
+                unfilled.append(
+                    {
+                        "slot_label": item.slot_label,
+                        "input_name": item.input_name,
+                        "title": item.title,
+                    }
+                )
+            pin_gone = bool(
+                item.mode == "fixed" and item.pixel_sha and item.pixel_sha not in pinned
+            )
+            described.append(
+                RunPictureInput(
+                    slot_label=item.slot_label,
+                    input_name=item.input_name,
+                    title=item.title,
+                    mode=item.mode,
+                    pixel_sha=item.pixel_sha,
+                    picture_id=(
+                        fill.picture_id
+                        if fill.picture_id is not None
+                        else pinned.get(item.pixel_sha)
+                        if item.mode == "fixed"
+                        else None
+                    ),
+                    picture_missing=pin_gone,
+                    fill=how,
+                )
+            )
+        reasons = (
             [
                 run_service.Reason(
-                    run_service.FIXED_INPUT_DELETED,
-                    {
-                        "inputs": [
-                            {
-                                "slot_label": r["slot_label"],
-                                "input_name": r["input_name"],
-                            }
-                            for r in gone
-                        ]
-                    },
+                    run_service.PICTURE_INPUT_UNFILLED, {"inputs": unfilled}
                 )
             ]
-            if gone
+            if unfilled
             else []
         )
+        return described, feeds, reasons
+
+    def _graph_names_a_live_file(
+        graph: dict, node_id: str, input_name: str, missing: set[str]
+    ) -> bool:
+        """Whether an input nobody filled can run on what the graph says.
+
+        A link is computed at run time and not ours to judge. A literal is live
+        unless the pre-flight found it missing; an empty one is nothing at all.
+        """
+        inputs = (graph.get(node_id) or {}).get("inputs") or {}
+        value = inputs.get(input_name)
+        if isinstance(value, list):
+            return True
+        return isinstance(value, str) and bool(value) and node_id not in missing
+
+    def _upload_files(submittable) -> dict[int, tuple[str, str]]:
+        """``{picture_id: (path, upload name)}`` for every picture a run feeds.
+
+        Resolved in ``_plan`` and not at upload time, so a picture that has
+        been binned or has lost its file refuses the request before anything
+        is uploaded - the rule that keeps a bad request out of the owner's
+        ComfyUI input folder.
+
+        The name carries the id and the content, never the picture's own file
+        name: ComfyUI's upload overwrites by name, so two pictures both called
+        ``image.png`` in one batch would each load whichever landed last by
+        the time the queue reached them.
+        """
+        wanted = sorted(
+            {
+                picture_id
+                for _graph, group, feeds in submittable
+                for feed in feeds
+                for picture_id in (
+                    [feed.picture_id]
+                    if feed.picture_id is not None
+                    else group.picture_ids
+                )
+            }
+        )
+        if not wanted:
+            return {}
+        kept = read_kept_picture_files(server.vault, wanted)
+        library = re.sub(r"[^0-9a-zA-Z]", "", _library_uuid() or "")[:8] or "library"
+        files: dict[int, tuple[str, str]] = {}
+        for picture_id in wanted:
+            if picture_id not in kept:
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"Picture {picture_id} is not a kept picture of this "
+                        "library, so it cannot fill a picture input."
+                    ),
+                )
+            file_path, pixel_sha = kept[picture_id]
+            path = ImageUtils.resolve_picture_path(server.vault.image_root, file_path)
+            if not path or not os.path.isfile(path):
+                logger.warning(
+                    "Picture %s cannot fill a picture input: its file %r "
+                    "(resolved %r) is not on disk.",
+                    picture_id,
+                    file_path,
+                    path,
+                )
+                raise HTTPException(
+                    status_code=404,
+                    detail=(
+                        f"Picture {picture_id}'s file is not on disk, so it "
+                        "cannot fill a picture input."
+                    ),
+                )
+            extension = os.path.splitext(path)[1].lower()
+            if not _UPLOAD_EXTENSION_RE.match(extension):
+                extension = ""
+            # The content, so a name never outlives the bytes it named: a vault
+            # id is reused after a delete and one ComfyUI may serve two
+            # libraries. A picture the hashing task has not reached yet has no
+            # `pixel_sha`, and its file's size and mtime stand in for one.
+            if pixel_sha and _PIXEL_SHA_RE.match(pixel_sha):
+                content = pixel_sha
+            else:
+                stat = os.stat(path)
+                content = f"{stat.st_mtime_ns:x}-{stat.st_size:x}"
+            files[picture_id] = (
+                path,
+                f"pixlstash-{library}-{picture_id}-{content}{extension}",
+            )
+        return files
 
     def _require_one_source(body: RunRequest) -> None:
         """Exactly one of the three sources, checked before anything is read.
@@ -2562,6 +2890,17 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail="seed_mode 'fixed' needs a seed."
             )
+        if not body.picture_ids and any(e.picture_id is None for e in body.inputs):
+            # "My selection goes here", on a run with no selection: honouring
+            # it is impossible and ignoring it would run a graph that never
+            # read the pictures the caller thinks it sent.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "An input was sent the selection, and this run has no "
+                    "selection: name a picture_id for it."
+                ),
+            )
         groups = _groups_for(body, recipe_key)
         if body.target:
             # One target replaces every group's card, keeping the pictures that
@@ -2592,8 +2931,16 @@ def create_router(server) -> APIRouter:
             adapter_digest_index(hub) if recipe_loras and not body.loras else None
         )
 
+        requested = {
+            (entry.slot_label, entry.input_name): entry.picture_id
+            for entry in body.inputs
+        }
+        # Addresses some resolved card actually has; see the check after the loop.
+        addressed: set[tuple[str, str]] = set()
+        reached_inputs = False
+
         planned: list[RunGroup] = []
-        submittable: list[tuple[dict, RunGroup]] = []
+        submittable: list[tuple[dict, RunGroup, list[Feed]]] = []
         # Which requested skips some graph of this run holds, and whether any
         # graph was resolved to look in: a skip no graph has is refused below.
         skips_found: set[tuple[str, str]] = set()
@@ -2640,6 +2987,19 @@ def create_router(server) -> APIRouter:
             group.source_picture_id = source.picture_id
 
             graph = source.graph
+            # Enumerated from the graph as it was resolved, BEFORE anything
+            # below rewires it: a slot label is derived from the topology, and
+            # #1463's bypass takes a LoRA loader out and changes the topology.
+            # The labels a card's setup was written against are these. The two
+            # steps commute otherwise - a LoRA loader has no picture input, a
+            # picture loader is never a model or clip consumer, and a bypass
+            # keeps every other node's id - so the fill below still finds its
+            # nodes in the graph the bypass left.
+            card_inputs = _card_inputs(
+                hub, workflow_key, graph, bool(requested), source.bindings
+            )
+            reached_inputs = True
+            addressed.update(item.address for item in card_inputs)
             _apply_addressed(graph, body.values)
             _apply_prompts(graph, body.prompt, body.negative)
             # A saved recipe's LoRAs are matched against the graph as it stood
@@ -2774,7 +3134,7 @@ def create_router(server) -> APIRouter:
                     # the refusals are still unknown at this point.
                     bypassed += run_service.bypass_missing_loras(graph, object_info)
 
-            judged, _preflight = run_service.judge(
+            judged, preflight = run_service.judge(
                 graph,
                 object_info,
                 object_info_error,
@@ -2791,7 +3151,16 @@ def create_router(server) -> APIRouter:
                     else r
                     for r in found
                 ]
-            found += _fixed_input_reasons(hub, workflow_key)
+            # After `judge` and after the bypass, on the graph that will be
+            # submitted, and before anything is uploaded: every refusal is
+            # decided in this function, so a request that refuses leaves
+            # nothing in ComfyUI's input folder. It blocks this card and not
+            # the batch - "Make more like these" runs the rest.
+            described, feeds, unfilled = _fill_inputs(
+                graph, card_inputs, requested, picture_ids, preflight
+            )
+            group.picture_inputs = described
+            found += unfilled
             group.reasons = [r.as_dict() for r in found]
             if run_service.blocks_group(found, allow_unchecked=body.allow_unchecked):
                 planned.append(group)
@@ -2805,12 +3174,31 @@ def create_router(server) -> APIRouter:
                     workflow_key,
                     ", ".join(r.code for r in found),
                 )
-            group.runs = body.count
+            # A selection feeding an input repeats the run per picture, and
+            # `count` multiplies that: 40 pictures at count 5 is 200 runs, and
+            # the cap below has to see 200, not 5.
+            per_picture = any(feed.picture_id is None for feed in feeds)
+            group.runs = body.count * (len(picture_ids) if per_picture else 1)
             # Reported only now, when this group really is being submitted:
             # every refusal is in, and what the notice claims is true.
             group.bypassed_loras = bypassed
             planned.append(group)
-            submittable.append((graph, group))
+            submittable.append((graph, group, feeds))
+
+        unknown = sorted(set(requested) - addressed)
+        if unknown and reached_inputs:
+            # The rule `_apply_loras` states: a request that cannot be read
+            # against the card is a request error, not a reason. A picture sent
+            # to an input no card here has would otherwise be a run that never
+            # read it.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This workflow has no picture input "
+                    + ", ".join(f"{label}/{name}" for label, name in unknown)
+                    + "."
+                ),
+            )
 
         unknown_skips = [
             f"{item.field} on node {item.node_id}"
@@ -2859,6 +3247,7 @@ def create_router(server) -> APIRouter:
             comfyui_url=comfyui_url,
             object_info=object_info,
             object_info_error=object_info_error,
+            files=_upload_files(submittable),
         )
 
     @router.post(
@@ -2868,7 +3257,7 @@ def create_router(server) -> APIRouter:
             "The same body as POST /workflows/run, submitting nothing. Every "
             "card the request resolves to comes back with the reasons it would "
             "not run: comfyui_not_configured, comfyui_unreachable, ui_format, "
-            "missing_nodes, missing_models, a1111, fixed_input_deleted, "
+            "missing_nodes, missing_models, a1111, picture_input_unfilled, "
             "no_lora_loader, pixlstash_nodes, no_save_node, no_runnable_source, "
             "lora_not_skippable. "
             "A group runs when its reasons are empty - or when the only ones "
@@ -2910,8 +3299,14 @@ def create_router(server) -> APIRouter:
             "target the server groups them by each picture's recipe. count "
             "submits that many runs of each, seed_mode is new, keep or fixed, "
             "and prompt/negative/loras/values are overrides applied to the "
-            "graph at run time and never written back into it. New runs are "
-            "NOT stacked with their source unless stack: true. A missing model "
+            "graph at run time and never written back into it. inputs fills "
+            "the card's picture inputs; with exactly one left open by the "
+            "card's pins and stored setup, the selection fills it unasked and "
+            "the run repeats once per selected picture. Pictures are uploaded "
+            "into ComfyUI's input folder only after every refusal is decided. "
+            "New runs are NOT stacked with their source unless stack: true, "
+            "and a run over a selection stacks each output with the picture it "
+            "read. A missing model "
             "blocks the whole batch. See /workflows/run/preflight for the "
             "reason codes. allow_unchecked consents to running a graph the "
             "server could not inspect and must be the literal JSON true: any "
@@ -2985,53 +3380,114 @@ def create_router(server) -> APIRouter:
         ``prompts`` is the caller's list and is written to in place on purpose:
         a failure half way through has already put work into ComfyUI's queue,
         and the caller needs to know which.
+
+        **Uploads happen here and nowhere else**, after every refusal in
+        ``_plan`` is in, and all of them before the first submission: each
+        distinct picture once per request however many runs read it, so an
+        upload that fails has queued nothing.
         """
-        for graph, group in plan.submittable:
+        uploaded = {
+            picture_id: _upload_image_to_comfyui(comfyui_url, path, upload_name)
+            for picture_id, (path, upload_name) in plan.files.items()
+        }
+        for graph, group, feeds in plan.submittable:
             output_node_ids = _extract_output_node_ids(graph, {})
             seed_targets = detect_seed_targets(
                 graph, object_info or {}
             ) or collect_seed_inputs(graph)
-            # Hoisted out of the loop below: it is a WRITE task, idempotent,
-            # and `count` runs of one group all land in the one stack.
-            stack_id = (
-                stack_for_picture(server.vault, group.picture_ids[0])
-                if body.stack and group.picture_ids
-                else None
+            # A selection feeding an input is the run's repeat axis: one pass
+            # per picture, each its own source and, with `stack`, its own
+            # stack. Otherwise one pass, and the group's first picture is the
+            # source, as a run of a card has always stacked.
+            per_picture = any(feed.picture_id is None for feed in feeds)
+            passes = group.picture_ids if per_picture else group.picture_ids[:1]
+            for selected in passes or [None]:
+                # Hoisted out of the loop below: it is a WRITE task, idempotent,
+                # and `count` runs of one pass all land in the one stack.
+                source_id = selected if body.stack else None
+                stack_id = (
+                    stack_for_picture(server.vault, source_id)
+                    if source_id is not None
+                    else None
+                )
+                filled = deepcopy(graph)
+                if stack_id:
+                    _tag_for_stack(filled, stack_id, source_id)
+                for feed in feeds:
+                    picture_id = (
+                        feed.picture_id if feed.picture_id is not None else selected
+                    )
+                    for target in feed.targets:
+                        workflow_bindings.fill(
+                            filled,
+                            {workflow_bindings.IMAGE: [target]},
+                            {workflow_bindings.IMAGE: uploaded[picture_id]},
+                        )
+                for _ in range(body.count):
+                    instance = deepcopy(filled)
+                    if body.seed_mode == "fixed":
+                        apply_seeds(instance, seed_targets, body.seed)
+                    elif body.seed_mode == "new":
+                        apply_seeds(instance, seed_targets, None)
+                    submitted = _submit_comfyui_prompt(
+                        comfyui_url, instance, body.client_id
+                    )
+                    prompt_id = submitted.get("prompt_id") or submitted.get("id")
+                    if prompt_id:
+                        lease = request.state.library_lease
+                        threading.Thread(
+                            target=_process_comfyui_outputs,
+                            args=(
+                                server,
+                                comfyui_url,
+                                str(prompt_id),
+                                output_node_ids,
+                                stack_id,
+                                source_id,
+                            ),
+                            kwargs={
+                                "view_context": destination,
+                                "origin_generation": lease.generation,
+                                "origin_library_uuid": lease.library_uuid,
+                            },
+                            daemon=True,
+                        ).start()
+                    prompts.append(
+                        {"workflow_key": group.workflow_key, "prompt_id": prompt_id}
+                    )
+
+    def _tag_for_stack(graph: dict, stack_id: int, source_id: int) -> None:
+        """Tag the save node so its outputs join the source's stack however they
+        arrive.
+
+        ``_process_comfyui_outputs`` stacks what IT imports; a ComfyUI output
+        folder the owner also watches can import the file first, and then
+        only the tag in its name says where it belongs. The retired run route
+        did both for the same reason.
+
+        Each save node keeps its OWN prefix under the tag, so a graph saving
+        `out` and `preview` still saves two sets of files. A prefix that is
+        wired from another node is left alone: overwriting it drops the link.
+        """
+        tagged = False
+        for node in graph.values():
+            if not isinstance(node, dict) or node.get("class_type") != "SaveImage":
+                continue
+            inputs = node.setdefault("inputs", {})
+            own = inputs.get("filename_prefix")
+            if isinstance(own, list):
+                continue
+            inputs["filename_prefix"] = build_stack_filename_prefix(
+                str(own or ""), stack_id, source_id
             )
-            for _ in range(body.count):
-                instance = deepcopy(graph)
-                if body.seed_mode == "fixed":
-                    apply_seeds(instance, seed_targets, body.seed)
-                elif body.seed_mode == "new":
-                    apply_seeds(instance, seed_targets, None)
-                submitted = _submit_comfyui_prompt(
-                    comfyui_url, instance, body.client_id
-                )
-                prompt_id = submitted.get("prompt_id") or submitted.get("id")
-                if prompt_id:
-                    lease = request.state.library_lease
-                    threading.Thread(
-                        target=_process_comfyui_outputs,
-                        args=(
-                            server,
-                            comfyui_url,
-                            str(prompt_id),
-                            output_node_ids,
-                            stack_id,
-                            group.picture_ids[0]
-                            if body.stack and group.picture_ids
-                            else None,
-                        ),
-                        kwargs={
-                            "view_context": destination,
-                            "origin_generation": lease.generation,
-                            "origin_library_uuid": lease.library_uuid,
-                        },
-                        daemon=True,
-                    ).start()
-                prompts.append(
-                    {"workflow_key": group.workflow_key, "prompt_id": prompt_id}
-                )
+            tagged = True
+        if not tagged:
+            logger.warning(
+                "[workflows] No SaveImage node to tag for stack %s (source %s); "
+                "its outputs join the stack only if this run imports them.",
+                stack_id,
+                source_id,
+            )
 
     # ── The file gestures (v1.12 B8) ──────────────────────────────────────
     #

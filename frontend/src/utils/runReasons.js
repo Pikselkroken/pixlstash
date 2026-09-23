@@ -56,6 +56,15 @@ export const LORAS_SKIPPED = "loras_skipped";
  */
 export const LORAS_UNPLACED = "loras_unplaced";
 
+/**
+ * A picture input nothing answered (#1457; it replaced `fixed_input_deleted`).
+ *
+ * The Run popup draws it in its Pictures section, as an empty slot, and not as
+ * a refusal notice: decision 7 of the issue is that a pin whose picture has
+ * gone is "no picture yet", not an error.
+ */
+export const PICTURE_INPUT_UNFILLED = "picture_input_unfilled";
+
 /** One value per `fix`, so a caller switches on a constant and not on prose. */
 export const FIX_SETTINGS = "settings";
 export const FIX_RETRY = "retry";
@@ -192,13 +201,15 @@ export function readReason(reason) {
       return read(
         "The workflow file this card names is an editor export, which ComfyUI cannot be handed.",
       );
-    case "fixed_input_deleted": {
-      const slots = names(reason.inputs, "slot_label");
-      // No fix offered: replacing one input means PUTting the card's WHOLE
-      // input set, and nothing reads the set back, so a fix here would delete
-      // every row it could not see.
+    case PICTURE_INPUT_UNFILLED: {
+      // Named by `title`, never by `slot_label`: the label is a topology hash.
+      // The fix is choosing a picture, which the Run popup offers in its own
+      // Pictures section rather than as a button here - so this sentence is
+      // what a popup WITHOUT that section (Make more like these) says.
+      const titles = names(reason.inputs, "title");
+      const what = titles.length ? titles.join(", ") : "one of its picture inputs";
       return read(
-        `A picture this workflow always loads is gone (${slots.join(", ") || "one input"}). Set it again on the workflow's own tab.`,
+        `This workflow needs a picture chosen for ${what}. Run it on its own to choose one.`,
       );
     }
     case "no_runnable_source":

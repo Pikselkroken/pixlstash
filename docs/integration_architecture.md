@@ -580,7 +580,7 @@ raising a `workflows_changed` event (§8) on the way out:
 | `PUT /api/v1/workflows/{workflow_key}/slots` | Mark LoRA slots `structural` \| `recipe` | `{marks: {slot_label: mark}}` → `{key, moved: {old: [key, …]}}`. **Re-keys every card of the topology**: `key` is where the card the caller had went (the biggest successor of a split), and a key not in `moved` did not move. **A key in `moved` may list itself**, which is a card that both moved and did not: a variant whose stored document will not parse keeps the key it is on, so if a sibling moved, that card is still open at its own URL and still holds its name, its pins and its saved recipes. A client following the caller's card takes `key`; a client deciding a card is gone must check for its own key in the list rather than read every entry as a departure. A label the topology has no LoRA slot for is a 422 |
 | `PUT /api/v1/workflows/{workflow_key}/defaults` | The card's parameter overrides, whole | `{defaults: [{slot_label, input_name, value}]}` → the opened card, the values back as `provenance: "edited"`. Stored as text, so `30` comes back `"30"` and `true` as `"true"` |
 | `PUT /api/v1/workflows/{workflow_key}/pins` | The pinned parameters, whole | `{pins: [{slot_label, input_name}] \| null}` → the same. `[]` is everything unpinned, `null` forgets the choice |
-| `PUT /api/v1/workflows/{workflow_key}/inputs` | The picture-input setup, whole, **per library** | `{inputs: [{slot_label, input_name, mode, pixel_sha?}]}` → the same. `mode: "fixed"` must carry a `pixel_sha` (422 otherwise); 503 when no library is open |
+| `PUT /api/v1/workflows/{workflow_key}/inputs` | The picture-input setup, whole, **per library** | `{inputs: [{slot_label, input_name, mode, pixel_sha?, picture_id?}]}` → the same, each pin as the `pixel_sha` stored. `mode: "fixed"` must carry a `pixel_sha` or a `picture_id` (422 otherwise); a `picture_id` is stored as that picture's content, and one that is not a kept picture is a 400; 503 when no library is open. **It replaces the whole set, so a client writes back only a set it has read**: every run pre-flight returns it as `RunGroup.picture_inputs` (#1457) |
 | `POST /api/v1/workflows/{workflow_key}/unstack` | Take one card out of its stack | — → `{stack_id: null, keys}` |
 | `POST /api/v1/workflows/stacks` | Stack cards together | `{keys}` (≥2) → `{stack_id, keys}`. Each key **expands to the stack it is already in**, so stacking two stacks merges them, and `keys[0]` stays the cover |
 | `PUT /api/v1/workflows/stacks/{stack_id}/order` | Reorder, `keys[0]` the cover | `{keys}` (≥2) → `{stack_id, keys}`. Ordering an `auto:<core hash>` grouping is what materialises it |
@@ -604,17 +604,33 @@ strength_model?, strength_clip?}]` (**one slot is a node AND a field**, so a
 stacker's `lora_name_1` and `lora_name_2` are two slots), `values:
 [{slot_label, input_name, value}]` addressed the way a card's defaults are,
 `count`, `seed_mode: "new" | "keep" | "fixed"` with `seed`,
-`destination: {set_id?, project_id?, character_id?}`, `stack` and
-`allow_unchecked`.
+`destination: {set_id?, project_id?, character_id?}`, `inputs: [{slot_label,
+input_name, picture_id}]`, `stack` and `allow_unchecked`.
 
-**There is no `inputs` field.** A card's picture-input setup is *read* — a
-fixed input whose picture has gone is `fixed_input_deleted` — but nothing
-*fills* one yet, because filling it means uploading pictures into ComfyUI's
-input folder, which is the i2i path `POST /comfyui/workflows/{name}/run`
-already owns. It is left out rather than accepted and ignored, which would let
-a caller send a picture and get a run that never read it.
+**`inputs` fills the card's picture inputs (#1457), and is usually empty.**
+The server answers each input in order: the body's entry (`picture_id: null`
+means "the selection goes here"), a `fixed` pin whose picture is still kept, a
+stored `selection` fed from `picture_ids`, and then — over the whole card —
+**the one input still open when exactly one is, which the selection fills with
+nothing in the body saying so.** A two-input card with a pinned reference
+therefore runs on a selection with an empty `inputs`, and so does "Make more
+like these". The body needs an entry only for a picture picked for this run, or
+to say which input the selection feeds when two or more are open. An entry
+naming an input no resolved card has is a 400; one naming a picture that is not
+kept, or whose file is gone, is a 404. At most one entry may take the selection
+(422). Pictures are uploaded into ComfyUI's input folder **only after every
+refusal is decided**, once per distinct picture per request; the pre-flight
+uploads nothing.
 
-Six rules the client must not re-derive:
+Each `RunGroup` carries `picture_inputs: [{slot_label, input_name, title, mode,
+pixel_sha, picture_id, picture_missing, fill}]`: every picture input of the
+card, enumerated from the graph with the stored setup over it. `fill` is how
+this run answers it — `request`, `fixed`, `selection`, `graph` (open, and the
+file the graph already names is on this ComfyUI, so it runs as authored) or
+`null` (unfilled). `picture_missing` is a pin whose picture has gone: an empty
+slot to choose again, not a separate refusal.
+
+Seven rules the client must not re-derive:
 
 1. **With several pictures and no `target`, the server groups them by each
    picture's recipe.** A selection spanning three cards is three groups, each
@@ -623,9 +639,15 @@ Six rules the client must not re-derive:
 2. **`reasons` empty is the only thing that means "this would run".** Each
    entry is `{code, …payload}` from a closed set: `comfyui_not_configured`,
    `comfyui_unreachable`, `ui_format`, `missing_nodes: {nodes}`,
-   `missing_models: {models: [{file, folder}]}`, `a1111`, `fixed_input_deleted`,
+   `missing_models: {models: [{file, folder}]}`, `a1111`,
+   `picture_input_unfilled: {inputs: [{slot_label, input_name, title}]}`,
    `no_lora_loader`, `pixlstash_nodes`, `no_save_node`, `no_runnable_source`,
    `lora_not_skippable: {node_id, field, file, message}`.
+   `picture_input_unfilled` replaced `fixed_input_deleted` in #1457 with the
+   same payload shape plus each input's `title` (a slot label is a hash); a client that only knows the old code no longer
+   recognises the refusal and must fall back to its generic sentence. It names
+   the open inputs the graph cannot run on as they stand, and blocks its group,
+   not the batch.
    A code and never a sentence: one batch mixes sources, and a panel grouping
    "these four are missing the same model" cannot do it from prose.
    **Three group fields are facts rather than refusals** and must not be read
@@ -667,7 +689,9 @@ Six rules the client must not re-derive:
    says `stack: true`. This is where it differs from the retired
    `POST /comfyui/run_recipe` (#1410), which stacked by default: that replayed
    one picture's own graph, so the output genuinely was another take of it,
-   while this runs a card.
+   while this runs a card. With `stack: true` and a selection feeding an input,
+   **each selected picture is its own source**: its outputs join its own stack,
+   not the first picture's.
 5. **`allow_unchecked` is the consent rule and it does something.** Without it
    an uninspectable ComfyUI (`comfyui_unreachable` / `comfyui_not_configured`)
    blocks the batch and nothing is submitted. With it the runs go ahead **and
@@ -684,10 +708,15 @@ Six rules the client must not re-derive:
    cannot be interpreted against this card is a `400`/`404`/`422` **on both** —
    two sources named, an unknown `saved_recipe_id`, a malformed key,
    `seed_mode: "fixed"` with no `seed`, `seed_mode: "keep"` on a source that
-   keeps none, a LoRA addressed to a slot the graph has not, or `count ×
-   groups` over `MAX_RUNS_PER_REQUEST`. Everything else — including a LoRA that
+   keeps none, a LoRA addressed to a slot the graph has not, a picture input
+   the card has not, a picture that is not kept, or the total runs over
+   `MAX_RUNS_PER_REQUEST`. Everything else — including a LoRA that
    is on the shelf but not on this ComfyUI — is a reason code. A pre-flight
    that 400s where the run returns reasons would not be a dry run.
+
+7. **A selection feeding an input is the run's repeat axis.** Such a group runs
+   once per selected picture, times `count`, and `runs` (and the cap) count that
+   product: 40 pictures at `count` 5 is 200 runs.
 
 **Edited defaults are overrides applied at run time and never written back into
 a graph.** The stored document is content-addressed, so rewriting it would
@@ -974,6 +1003,13 @@ the two sides have agreed:
    B6's: saving a look is the plainest statement that somebody means to run a
    workflow again, so a card carrying one is never folded into the count.
 
+   **"Imported" means imported by hand** (#1440): a file a pull from ComfyUI
+   wrote (`workflow_pulled_file`) does not count, because a pull
+   brings a whole install's experiments in one gesture and exempting them all
+   would bury the grid. A file the owner dropped in, or one a pull only
+   matched, still takes its card out. The card's wire `imported` keeps meaning
+   "has a file"; the narrower test is server-side (`Card.hand_imported`).
+
 6. **A card can have no variant at all, and `variant_count: 0` is how a client
    knows (#1466).** ComfyUI saves in *editor* format unless somebody
    deliberately exports the API one, and an editor-format file names its widget
@@ -994,7 +1030,9 @@ the two sides have agreed:
    it is in the file, which is what the mark means.
 
    **An empty row is "not read", never "has none" — and that is per ROW.**
-   The recovery finds loaders by class, over `MODEL_FILENAME_FIELDS`, and no
+   The recovery finds loaders by class, over `MODEL_FILENAME_FIELDS` (through
+   `model_filename_fields`, which also reads a ComfyUI-MultiGPU wrapper as the
+   loader it wraps), and no
    list of classes is every loader there is: a graph can have its LoRAs
    recovered and its base model missed, so a non-empty `models` does not mean
    the card was read either. A client renders any empty row on a
@@ -1587,7 +1625,8 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
    "seed_inputs": [{"node_id":"3","class_type":"KSampler","field":"seed","value":1}],
    "preflight": {"ok": true, "checked": true, "missing_node_classes": [],
                  "missing_models": [], "missing_input_images": [],
-                 "has_save_image": true, "unchecked_fields": 0}}
+                 "has_save_image": true, "unchecked_fields": 0,
+                 "unchecked_models": 0}}
   ```
   `node_classes` (distinct `class_type`, sorted) and `source_is_imported` / `source_label` exist for the owner's **consent** decision, not for display polish — see the untrusted-graph note below. `node_classes` is read from the file, so unlike everything under `preflight` it is populated even when ComfyUI was unreachable.
   **Three distinct negative answers, and the SPA must not collapse them**, because they send the user to three different places:
@@ -1604,7 +1643,7 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
 
   On the `a1111` branch the values come from the infotext instead. a value that is wholly a number is reported as one (`steps`, `cfg_scale`), and anything else stays the text A1111 wrote (`size: "512x768"`, `sampler: "Euler a"`). `settings` then carries **A1111's own field names, as an open set** — `steps`, `sampler`, `cfg_scale`, `size` and whatever else that build wrote (`denoising_strength`, `clip_skip`, ADetailer and ControlNet fields) — so render it as a list of name/value pairs rather than reaching for named keys. **One key is PixlStash's own**: a ControlNet field names its model inside its own value, and that name is lifted out into `<field>_model` (`controlnet_0_model`, `…_model_2` for a second) so it can be forgotten like any other model (#1375), which also means the `controlnet_0` beside it no longer repeats the name. Both are still rendered as ordinary name/value pairs; the lifted name is not added to `models`, which stays the checkpoint. `lora_slots[].node_id` and `.class_type` are `null` there: the reduction's ids name no node in any graph, and there is no replay to send one back to.
 
-  `unchecked_fields > 0` means the check was partial (a field ComfyUI does not enumerate, or a `remote` combo it fills lazily) and must not read as a clean bill of health. It is **not** the same state as `checked:false` and must not be gated the same way.
+  `unchecked_fields > 0` means the check was partial (a field ComfyUI does not enumerate, or a `remote` combo it fills lazily) and must not read as a clean bill of health. It is **not** the same state as `checked:false` and must not be gated the same way. `unchecked_models` counts the other gap: a model-shaped value (a model file extension) on a loader PixlStash cannot read at all, so it was never compared; a "no missing models" answer is only as good as that count is small.
 
 - **Run** `POST /api/v1/workflows/run` (§11.1). The per-picture replay routes this step used to name — `POST /api/v1/comfyui/run_recipe` and `POST /api/v1/comfyui/run_i2i` — were retired in #1410; the consent and seed rules below are unchanged and are now that route's. It returns `{status, prompts:[{picture_id, prompt_id}]}`; the SPA passes `prompts` to `ComfyUiRunner` so its ComfyUI-WebSocket progress tracking picks the run up.
 

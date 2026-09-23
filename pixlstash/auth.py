@@ -257,6 +257,10 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # `test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt`
         # derives rather than writes down.
         "/api/v1/recipes/used",
+        # The last pull of ComfyUI's saved workflows (#1440): what the owner's
+        # ComfyUI lacks and which cards the pull filed on. The prefix below
+        # refuses it today; this is the untemplated half, for the rollback.
+        "/api/v1/comfyui/workflows/pull",
     }
 )
 
@@ -272,8 +276,9 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
 # templated owner-class GET that no prefix covers.
 READ_BLOCKED_GET_PREFIXES: tuple[str, ...] = (
     "/api/v1/adapters/",
-    # The workflow list itself (no trailing slash) stays ANY_TOKEN; the only
-    # GET under it reaches the owner's ComfyUI to plan a LoRA insertion.
+    # The workflow list itself (no trailing slash) stays ANY_TOKEN; the GETs
+    # under it reach the owner's ComfyUI to plan a LoRA insertion, or report
+    # the last pull of its saved workflows.
     "/api/v1/comfyui/workflows/",
     "/api/v1/dedup/",
     "/api/v1/model-folders/",

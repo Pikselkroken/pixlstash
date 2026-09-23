@@ -19,21 +19,8 @@
   are gone; the Run popup replaces both. The toolbar's Generate button stays
   where it was and opens the popup instead, so generating with nothing selected
   is still one click from the grid.
-- Five things the run panel could do that the Run popup cannot do yet. Nothing
-  about the workflows themselves has changed and their setup in Workflows is
-  untouched; what is missing is a way to start these particular runs.
-- Gone for now: running a workflow **on** your pictures, with them loaded into
-  it as inputs. *Use as input for…* has been renamed *Run another workflow…*,
-  because that is what it now does — it opens the Run popup on another
-  workflow, starting from the picture's recipe, and does not feed the picture
-  into the graph.
-- Gone for now: choosing a picture for a workflow's picture input at run time,
-  and workflows set up with a fixed input picture.
-- Gone for now: image-to-image and upscale runs over a selection, and the
-  caption those took.
-- Gone for now: "stack new pictures with the ones they came from" for ComfyUI
-  runs — new pictures arrive in the grid unstacked. The same setting for plugin
-  *Filters* runs is unaffected.
+- Gone for now: the per-picture caption an image-to-image run from the run
+  panel took.
 - The Run popup lists the LoRAs the workflow already loads, matched to your
   model shelf, so you can swap one or change its strength. A LoRA the shelf has
   never seen is still shown, named, and left exactly as the workflow has it.

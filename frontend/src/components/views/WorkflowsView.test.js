@@ -75,13 +75,21 @@ const listImportFolders = vi.fn();
 vi.mock("../../api/folders", () => ({
   listImportFolders: (...args) => listImportFolders(...args),
 }));
-vi.mock("../../api/comfyui", () => ({ importWorkflow: vi.fn() }));
+const startWorkflowPull = vi.fn();
+const getWorkflowPull = vi.fn();
+vi.mock("../../api/comfyui", () => ({
+  importWorkflow: vi.fn(),
+  startWorkflowPull: (...args) => startWorkflowPull(...args),
+  getWorkflowPull: (...args) => getWorkflowPull(...args),
+}));
 
 import WorkflowCard from "../widgets/WorkflowCard.vue";
 import WorkflowsView from "./WorkflowsView.vue";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
+import { useFilterStore } from "../../stores/useFilterStore";
+import { useWorkflowPullStore } from "../../stores/useWorkflowPullStore";
 
 const card = (key, extra = {}) => ({
   key,
@@ -2112,5 +2120,125 @@ describe("the card menu opens the picture you pointed at", () => {
       name: "all-pictures",
       query: { overlay: "11", from: "/workflows" },
     });
+  });
+});
+
+describe("pulling from ComfyUI (#1440)", () => {
+  const SUMMARY = {
+    listed: 82,
+    pulled: 21,
+    matched: 61,
+    nodes_checked: true,
+    missing_nodes: 39,
+    missing_node_classes: ["LoRACharacterPromptBuilder"],
+    missing_models: 12,
+    missing_model_files: ["flux-2-klein-9b-fp8.safetensors"],
+    models_unread: 5,
+  };
+
+  beforeEach(() => {
+    listWorkflowCards.mockResolvedValue({ cards: CARDS, one_offs: 0, hidden: 0 });
+    startWorkflowPull.mockResolvedValue({ status: "started", task_id: "t1" });
+  });
+
+  afterEach(() => {
+    useWorkflowPullStore().reset();
+    useFilterStore().comfyuiConfigured = false;
+  });
+
+  it("is offered only once ComfyUI is connected", async () => {
+    const wrapper = mountView();
+    await flush();
+    expect(wrapper.find('[data-testid="wfv-pull"]').exists()).toBe(false);
+
+    useFilterStore().comfyuiConfigured = true;
+    await flush();
+    expect(wrapper.find('[data-testid="wfv-pull"]').text()).toContain(
+      "Pull from ComfyUI",
+    );
+  });
+
+  it("offers the pull in the empty state instead of Connect ComfyUI", async () => {
+    listWorkflowCards.mockResolvedValue({ cards: [], one_offs: 0, hidden: 0 });
+    useFilterStore().comfyuiConfigured = true;
+    const wrapper = mountView();
+    await flush();
+    const actions = wrapper
+      .findAll(".wfv-empty__actions button")
+      .map((el) => el.text())
+      .join(" | ");
+    expect(actions).toContain("Pull from ComfyUI");
+    expect(actions).not.toContain("Connect ComfyUI");
+  });
+
+  it("reports what the pull found, per machine, and re-reads the grid", async () => {
+    getWorkflowPull.mockResolvedValue({
+      status: "completed",
+      task_id: "t1",
+      comfyui_url: "http://127.0.0.1:8188",
+      summary: SUMMARY,
+    });
+    useFilterStore().comfyuiConfigured = true;
+    const wrapper = mountView();
+    await flush();
+    const reads = listWorkflowCards.mock.calls.length;
+
+    await wrapper.find('[data-testid="wfv-pull"]').trigger("click");
+    await flush();
+    await flush();
+
+    expect(startWorkflowPull).toHaveBeenCalledTimes(1);
+    expect(listWorkflowCards.mock.calls.length).toBe(reads + 1);
+    const band = wrapper.find('[data-testid="wfpull"]');
+    expect(band.find(".wfpull-headline").text()).toBe(
+      "Found 82 workflows on 127.0.0.1:8188: 21 new, 61 already here.",
+    );
+    // Said once, by the live region that was already mounted.
+    expect(wrapper.find('p[role="status"].visually-hidden').exists()).toBe(true);
+    const kinds = band.findAll(".wfpull-line").map((li) => li.attributes("data-kind"));
+    // Wrong if "won't run" and "not checked" ever share a kind: they must not
+    // look alike (the issue's rule).
+    expect(kinds).toContain("error");
+    expect(kinds).toContain("warning");
+    expect(kinds).toContain("unchecked");
+    expect(band.text()).toContain("won't run on 127.0.0.1:8188");
+    expect(band.text()).not.toMatch(/broken/i);
+    expect(band.text()).toContain("LoRACharacterPromptBuilder");
+
+    // The one-offs this pull added are hidden by default; the band lets them in.
+    await band.find('[data-testid="wfpull-show-one-offs"]').trigger("click");
+    expect(useWorkflowsStore().filters.hideOneOffs).toBe(false);
+
+    await band.find('[aria-label="Dismiss the ComfyUI pull result"]').trigger("click");
+    await flush();
+    expect(wrapper.find('[data-testid="wfpull"]').exists()).toBe(false);
+    // Focus goes back to the control that started it, not to <body>.
+    expect(document.activeElement).toBe(
+      wrapper.find('[data-testid="wfv-pull"]').element,
+    );
+  });
+
+  it("says why a pull failed, in an alert", async () => {
+    getWorkflowPull.mockResolvedValue({
+      status: "failed",
+      task_id: "t1",
+      comfyui_url: "http://127.0.0.1:8188",
+      error: "ComfyUI runs with --multi-user",
+    });
+    useFilterStore().comfyuiConfigured = true;
+    const wrapper = mountView();
+    await flush();
+    await wrapper.find('[data-testid="wfv-pull"]').trigger("click");
+    await flush();
+    const alert = wrapper.find('[data-testid="wfpull"] [role="alert"]');
+    expect(alert.text()).toContain(
+      "Couldn't pull from 127.0.0.1:8188: ComfyUI runs with --multi-user",
+    );
+    // A way to try again without hunting for the toolbar.
+    const retry = wrapper
+      .findAll('[data-testid="wfpull"] button')
+      .find((b) => b.text() === "Try again");
+    await retry.trigger("click");
+    expect(startWorkflowPull).toHaveBeenCalledTimes(2);
   });
 });

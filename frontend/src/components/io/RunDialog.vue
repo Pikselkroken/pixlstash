@@ -71,6 +71,113 @@
           {{ fellBackLine }}
         </p>
 
+        <!-- ── Pictures in (#1457): one row per picture input of the card,
+             straight off the pre-flight, which also decides how each is
+             filled. The popup never re-derives that: `fill` is the server's
+             answer, so a card whose one open input the selection fills shows
+             the selection there without anybody having asked for it. -->
+        <div
+          v-if="pictureInputs.length"
+          class="rund-f rund-f--4 rund-pics"
+          role="group"
+          :aria-labelledby="picsLabelId"
+        >
+          <span :id="picsLabelId" class="rund-l">Pictures</span>
+          <div
+            v-for="input in pictureInputs"
+            :key="address(input)"
+            class="rund-in"
+          >
+            <!-- The selection is not a picker: it is the pictures the run
+                 repeats over, so it is shown as what it is, and changed by
+                 moving it rather than by choosing one picture. -->
+            <span
+              v-if="input.fill === 'selection'"
+              class="rund-in-tile rund-in-tile--sel"
+            >
+              <img
+                v-for="id in pictureIds.slice(0, 4)"
+                :key="id"
+                class="rund-in-cell"
+                :src="thumbUrl(id)"
+                alt=""
+              />
+            </span>
+            <!-- `aria-disabled`, never `disabled`, on every control in these
+                 rows: a natively-disabled button drops out of the tab order
+                 while its own write is in flight, and a keyboard user's focus
+                 falls to the page. The handlers do the refusing. -->
+            <button
+              v-else
+              type="button"
+              class="rund-in-tile"
+              :class="{
+                'rund-in-tile--empty': !input.picture_id,
+                'rund-in-tile--off': !setupReady,
+              }"
+              :data-input="address(input)"
+              :aria-label="
+                input.picture_id
+                  ? `Change the picture for ${inputTitle(input)}`
+                  : `Choose a picture for ${inputTitle(input)}`
+              "
+              :aria-disabled="setupReady ? undefined : 'true'"
+              @click="openPicker(input)"
+            >
+              <img
+                v-if="input.picture_id"
+                class="rund-in-img"
+                :src="thumbUrl(input.picture_id)"
+                alt=""
+              />
+              <v-icon v-else size="24">mdi-image-plus-outline</v-icon>
+            </button>
+            <span class="rund-in-text">
+              <span class="rund-in-title">{{ inputTitle(input) }}</span>
+              <span
+                class="rund-in-sub"
+                :class="{ 'rund-in-sub--bad': input.fill === null }"
+              >
+                {{ inputLine(input) }}
+              </span>
+              <AppButton
+                v-if="pictureIds.length && input.fill !== 'selection'"
+                size="sm"
+                class="rund-in-move"
+                :aria-disabled="setupReady ? undefined : 'true'"
+                @click="useSelectionHere(input)"
+              >
+                Use my selection here
+              </AppButton>
+            </span>
+            <!-- Keep this picture: a pin is the card's own setup, so it holds
+                 for every later run of this workflow in this library. -->
+            <!-- One fixed name; `aria-pressed` alone says whether it is on,
+                 so a reader never hears "Stop keeping... pressed". -->
+            <AppBarButton
+              v-if="input.picture_id && input.fill !== 'selection'"
+              :icon="input.fill === 'fixed' ? 'pin' : 'pin-outline'"
+              :active="input.fill === 'fixed'"
+              :aria-pressed="input.fill === 'fixed' ? 'true' : 'false'"
+              :aria-disabled="setupReady ? undefined : 'true'"
+              :tooltip="`Keep this picture for ${inputTitle(input)} on every run`"
+              @click="togglePin(input)"
+            />
+            <span v-else class="rund-x-gap" />
+            <AppBarButton
+              v-if="input.fill === 'request'"
+              icon="close"
+              :tooltip="`Clear the picture for ${inputTitle(input)}`"
+              :aria-disabled="setupReady ? undefined : 'true'"
+              @click="clearPick(input)"
+            />
+            <span v-else class="rund-x-gap" />
+          </div>
+          <p v-if="inputsError" class="rund-note rund-note--bad" role="alert">
+            {{ inputsError }}
+          </p>
+        </div>
+
         <div class="rund-f rund-f--4">
           <span class="rund-l">
             Prompt
@@ -276,6 +383,25 @@
           />
         </div>
 
+        <!-- Per run and never remembered (#1457, decision 4): the default
+             follows whether a selected picture is actually fed into the graph,
+             which is when the new picture is another take of that one. -->
+        <!-- Shown only where its label is true: a picture fed into the graph
+             is each output's own source, and one picture is the source of
+             all of them. A selection nothing reads would stack every output
+             behind the FIRST picture, which is not "the ones they came
+             from". -->
+        <div v-if="stackOffered" class="rund-f rund-f--4 rund-check">
+          <input
+            :id="stackId"
+            v-model="stack"
+            class="rund-box"
+            type="checkbox"
+            :disabled="submitting"
+          />
+          <label :for="stackId">Stack new pictures with the ones they came from</label>
+        </div>
+
         <div v-if="checkpointField" class="rund-f rund-f--4">
           <span class="rund-l">
             Checkpoint
@@ -344,7 +470,7 @@
         <div
           v-if="runNotes.length"
           class="rund-f rund-f--4 rund-reasons"
-          :role="reasons.length ? 'alert' : 'status'"
+          :role="shownRefusals.length ? 'alert' : 'status'"
         >
         <RunReasonNotice
           v-for="(reason, index) in runNotes"
@@ -425,6 +551,17 @@
     @handoff="emit('close')"
     @saved="onSaved"
   />
+
+  <!-- Mounted while a slot is being filled and not before: the picker reads
+       the library's facets when it opens, which a run that never touches a
+       picture should not pay for. -->
+  <PicturePicker
+    v-if="pickerFor !== null"
+    :open="pickerFor !== null"
+    :subtitle="pickerFor ? `for ${inputTitle(pickerFor)}` : ''"
+    @close="pickerFor = null"
+    @pick="onPicked"
+  />
 </template>
 
 <script setup>
@@ -451,12 +588,14 @@ import { VIcon } from "vuetify/components";
 
 import { getPictureRecipe } from "../../api/comfyui";
 import { listAdapters } from "../../api/modelShelf";
+import { pictureThumbnailUrl } from "../../api/pictures";
 import { listSavedRecipes } from "../../api/recipes";
 import {
   getWorkflowCard,
   listWorkflowCards,
   preflightWorkflowRun,
   runWorkflowCard,
+  setWorkflowInputs,
   workflowCoverUrl,
 } from "../../api/workflows";
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
@@ -465,6 +604,7 @@ import { errorMessage } from "../../utils/apiError";
 import { editLorasRoute, loraStem } from "../../utils/loraChain";
 import { wouldDuplicate } from "../../utils/recipeKey";
 import {
+  PICTURE_INPUT_UNFILLED,
   bypassNotice,
   LORAS_BYPASSED,
   reasonsBlock,
@@ -477,6 +617,7 @@ import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import AppTextarea from "../widgets/AppTextarea.vue";
+import PicturePicker from "../widgets/PicturePicker.vue";
 import RunReasonNotice from "./RunReasonNotice.vue";
 import RunResetChip from "./RunResetChip.vue";
 
@@ -523,6 +664,8 @@ const KEEP_SEED_ASIDE =
 const SEPARATOR = "/";
 
 const blockerId = useId();
+const picsLabelId = useId();
+const stackId = useId();
 /** Bumped per open, so a slower earlier read cannot write over a later one. */
 let loadToken = 0;
 const runDialog = useRunDialogStore();
@@ -575,6 +718,44 @@ const seed = ref("0");
 const loras = ref([]);
 const destinationSetId = ref("");
 
+// ── Picture inputs (#1457) ───────────────────────────────────────────────
+/**
+ * Every picture input of the card, as the last pre-flight answered it
+ * (`RunGroup.picture_inputs`): the WHOLE set, which is what makes the
+ * whole-set `PUT /workflows/{key}/inputs` safe to call from here. A pin or a
+ * moved selection is written through that route from this list and nothing
+ * else, so a row the popup has not read is never deleted.
+ */
+const pictureInputs = ref([]);
+/** `address -> {slot_label, input_name, picture_id}` picked for this run only. */
+const picks = reactive({});
+/** The input the picture picker is open for, or `null`. */
+const pickerFor = ref(null);
+/**
+ * A setup gesture in flight, INCLUDING the pre-flight after its write: the
+ * next whole-set PUT is built from `pictureInputs`, and until that pre-flight
+ * lands the list still says what the card was before the write. Released
+ * early, a second pin sent the first one back as a picker.
+ */
+const inputsBusy = ref(false);
+/**
+ * The card `pictureInputs` was read for. A write goes to `activeKey`, and a
+ * stack-member switch moves that at once while the new card's inputs are still
+ * being read - so a pin then would PUT one card's rows under another's key and
+ * replace its setup with rows that match nothing.
+ */
+const inputsKey = ref("");
+const inputsError = ref("");
+/**
+ * The stack checkbox, `null` until the owner touches it.
+ *
+ * Untouched it follows the server: ticked exactly when a selected picture is
+ * fed into an input (decision 4). Deliberately NOT `useGenStackPrefsStore`:
+ * its old `stackI2IOutputs` key is still on disks from before #1452, defaulted
+ * on, and would silently re-read a choice made about a different feature.
+ */
+const stackChoice = ref(null);
+
 /**
  * Whether the form holds work a stray click would destroy.
  *
@@ -624,6 +805,7 @@ const dirty = computed(
     prompt.value !== basePrompt.value ||
     negative.value !== baseNegative.value ||
     Object.keys(edits).length > 0 ||
+    Object.keys(picks).length > 0 ||
     loras.value.length !== initialLoraCount.value ||
     changedLoras.value.length > 0,
 );
@@ -655,6 +837,12 @@ const workflowKey = computed({
 });
 
 async function switchCard(key, keepEdits) {
+  // A pick is addressed by a slot of the card it was made on; another card's
+  // slots are other slots, so nothing carries over - and neither do the rows,
+  // which are the set a pin would be written from.
+  clearPicks();
+  pictureInputs.value = [];
+  inputsKey.value = "";
   // The same generation the load uses. A card read still in flight when the
   // popup is closed and reopened on another source would otherwise resolve
   // into the new dialog and replace its card, and the pre-flight behind it
@@ -1084,12 +1272,249 @@ const runBlocker = computed(() => {
   if (!Number.isInteger(count.value) || count.value < 1 || count.value > MAX_COUNT)
     return `Between 1 and ${MAX_COUNT} runs at a time.`;
   if (preflightError.value) return preflightError.value;
+  // Before the generic refusal: an empty slot is "no picture yet", said in
+  // the words of the slot, and its fix is right there in the Pictures rows.
+  if (unfilledInputs.value.length) {
+    const titles = unfilledInputs.value.map(inputTitle).join(", ");
+    return `Choose a picture for ${titles} first.`;
+  }
   if (reasonsBlock(reasons.value)) return "This run cannot start; see below.";
   return "";
 });
 const canRun = computed(() => !runBlocker.value && !submitting.value);
+/**
+ * The refusals drawn as notices. `picture_input_unfilled` is not one of them:
+ * the Pictures section draws that as an empty slot, and a second, louder copy
+ * of it under the form would make a pin whose picture has gone read as an
+ * error when it is only a choice not made yet (decision 7).
+ */
+const shownRefusals = computed(() =>
+  reasons.value.filter((reason) => reason?.code !== PICTURE_INPUT_UNFILLED),
+);
 /** One list on screen: the refusals first, then what the run will do anyway. */
-const runNotes = computed(() => [...reasons.value, ...bypassed.value]);
+const runNotes = computed(() => [...shownRefusals.value, ...bypassed.value]);
+
+/** The inputs nothing fills, which is what keeps the Run button back. */
+const unfilledInputs = computed(() =>
+  pictureInputs.value.filter((input) => input.fill === null),
+);
+/** Whether a selected picture is fed into the graph, per the server. */
+const feedsSelection = computed(() =>
+  pictureInputs.value.some((input) => input.fill === "selection"),
+);
+/** Whether "stack with the ones they came from" would be true of this run. */
+const stackOffered = computed(
+  () =>
+    pictureIds.value.length === 1 ||
+    (pictureIds.value.length > 1 && feedsSelection.value),
+);
+/**
+ * Whether a setup gesture may start: nothing in flight, and the rows on screen
+ * read for the card a write would go to.
+ */
+const setupReady = computed(
+  () =>
+    !submitting.value &&
+    !inputsBusy.value &&
+    !preflighting.value &&
+    Boolean(activeKey.value) &&
+    inputsKey.value === activeKey.value,
+);
+const stack = computed({
+  get: () => stackChoice.value ?? feedsSelection.value,
+  set: (value) => {
+    stackChoice.value = Boolean(value);
+  },
+});
+
+function thumbUrl(id) {
+  return pictureThumbnailUrl(id);
+}
+
+/**
+ * What a row is called. A loader with no title of its own is called by its
+ * class, and two of those side by side would read as one input twice, so a
+ * repeated name is numbered in the order the card lists them.
+ */
+function inputTitle(input) {
+  const title = input?.title || "Picture";
+  const same = pictureInputs.value.filter(
+    (row) => (row.title || "Picture") === title,
+  );
+  if (same.length < 2) return title;
+  const position = same.findIndex((row) => address(row) === address(input));
+  return `${title} ${position + 1}`;
+}
+
+/** The line under a row's title: how this run fills it, in words. */
+function inputLine(input) {
+  const many = pictureIds.value.length;
+  switch (input.fill) {
+    case "selection":
+      return many === 1
+        ? "The picture this run starts from"
+        : `Your selection: ${many} pictures, one run each`;
+    case "request":
+      return "Chosen for this run";
+    case "fixed":
+      return "Kept for every run of this workflow";
+    case "graph":
+      return "As the workflow has it";
+    default:
+      return input.picture_missing
+        ? "The picture you kept here is gone. Choose another."
+        : "No picture yet";
+  }
+}
+
+function openPicker(input) {
+  if (!setupReady.value) return;
+  pickerFor.value = input;
+}
+
+/**
+ * Put focus back on a row after a gesture that removed the control holding it
+ * (the clear, the move), so a keyboard user is not dropped to the page.
+ */
+async function focusRow(key) {
+  await nextTick();
+  const tile = document.querySelector(`[data-input="${key}"]`);
+  if (tile) tile.focus();
+}
+
+function clearPicks() {
+  for (const key of Object.keys(picks)) delete picks[key];
+}
+
+/** The picker answered: this picture fills that slot, for this run. */
+async function onPicked(picture) {
+  const input = pickerFor.value;
+  pickerFor.value = null;
+  if (!input || !picture?.id) return;
+  picks[address(input)] = {
+    slot_label: input.slot_label,
+    input_name: input.input_name,
+    picture_id: picture.id,
+  };
+  await settle(runPreflight());
+}
+
+async function clearPick(input) {
+  if (!setupReady.value) return;
+  const key = address(input);
+  delete picks[key];
+  await settle(runPreflight());
+  await focusRow(key);
+}
+
+/** Hold the setup controls until *step* - a write and its re-read - is done. */
+async function settle(step) {
+  inputsBusy.value = true;
+  try {
+    return await step;
+  } finally {
+    inputsBusy.value = false;
+  }
+}
+
+/**
+ * The card's whole setup as it stands, with one row changed.
+ *
+ * Every other row goes back exactly as it was read, pins by the content they
+ * were stored with, so a write about one slot can never unpin another. The
+ * one exception is a second Selection: a card has at most one, so moving it
+ * here makes the old one a picker.
+ */
+function setupWith(input, change) {
+  return pictureInputs.value.map((row) => {
+    const entry = {
+      slot_label: row.slot_label,
+      input_name: row.input_name,
+      mode: row.mode,
+      pixel_sha: row.pixel_sha || null,
+    };
+    if (address(row) === address(input)) return { ...entry, ...change };
+    if (change.mode === "selection" && row.mode === "selection") {
+      return { ...entry, mode: "picker" };
+    }
+    return entry;
+  });
+}
+
+async function writeSetup(entries) {
+  inputsError.value = "";
+  // Asked again here and not only by the controls: this is the one place a
+  // whole-set write is sent, so it is the one place the guard cannot be
+  // skipped by a caller that forgot to check.
+  if (inputsKey.value !== activeKey.value) {
+    inputsError.value = "Still reading this workflow's pictures; try again.";
+    return false;
+  }
+  try {
+    await setWorkflowInputs(activeKey.value, entries);
+    return true;
+  } catch (err) {
+    inputsError.value = errorMessage(err, "Could not keep that for this workflow.");
+    return false;
+  }
+}
+
+/**
+ * Pin or unpin the picture a row shows.
+ *
+ * Pinning writes it as the card's `fixed` input, by id - the server stores its
+ * content. Unpinning keeps the picture for THIS run, so taking the pin off
+ * never empties a slot the owner was about to run with.
+ */
+async function togglePin(input) {
+  if (!setupReady.value) return;
+  const key = address(input);
+  const pinning = input.fill !== "fixed";
+  await settle(
+    (async () => {
+      const ok = await writeSetup(
+        setupWith(
+          input,
+          pinning
+            ? { mode: "fixed", picture_id: input.picture_id, pixel_sha: null }
+            : { mode: "picker" },
+        ),
+      );
+      if (!ok) return;
+      if (pinning) {
+        delete picks[key];
+      } else {
+        picks[key] = {
+          slot_label: input.slot_label,
+          input_name: input.input_name,
+          picture_id: input.picture_id,
+        };
+      }
+      await runPreflight();
+    })(),
+  );
+}
+
+/**
+ * Send the selection to this input, and remember that on the card.
+ *
+ * Remembered rather than per run (the plan's call on its open question 12):
+ * it only arises on a card with two or more inputs and nothing pinned, and
+ * asking again on every run of such a card is the cost that would be paid.
+ */
+async function useSelectionHere(input) {
+  if (!setupReady.value) return;
+  const key = address(input);
+  await settle(
+    (async () => {
+      const ok = await writeSetup(setupWith(input, { mode: "selection" }));
+      if (!ok) return;
+      delete picks[key];
+      await runPreflight();
+    })(),
+  );
+  await focusRow(key);
+}
 /**
  * The button's number, from the server where it has answered.
  *
@@ -1136,6 +1561,11 @@ function runBody() {
     // touched.
     loras: changedLoras.value,
     values,
+    // Only the pictures picked for this run: a pin, the stored selection and
+    // the one open input a selection fills are all the server's to apply, so
+    // an empty list is the ordinary body.
+    inputs: Object.values(picks),
+    stack: stack.value,
     count: count.value,
     seed_mode: seedMode.value,
     // The digits as they were typed. A Number here would round a 64-bit
@@ -1446,15 +1876,23 @@ async function runPreflight(token = loadToken) {
   }
   preflighting.value = true;
   preflightError.value = "";
+  const askedFor = activeKey.value;
   try {
     const answer = await preflightWorkflowRun(runBody());
-    if (!mine()) return;
+    // The popup has moved to another card since this was asked: its answer is
+    // about a card nobody is looking at, and its rows must not become the set
+    // a pin on the new card is written from.
+    if (!mine() || askedFor !== activeKey.value) return;
     reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
     bypassed.value = (answer?.groups || []).flatMap((group) => [
       ...bypassNotice(group),
       ...unplacedNotice(group),
     ]);
     plannedRuns.value = Number(answer?.runs) || 0;
+    // One group: this popup always runs one card (`target`, a key or a saved
+    // recipe), so the first group's inputs are the card's.
+    pictureInputs.value = answer?.groups?.[0]?.picture_inputs || [];
+    inputsKey.value = askedFor;
   } catch (err) {
     // The route answers 400/404/422 here exactly as it does on the run, "so
     // the two never disagree" - so a 4xx is this body being refused and is
@@ -1464,6 +1902,10 @@ async function runPreflight(token = loadToken) {
     if (!mine()) return;
     reasons.value = [];
     bypassed.value = [];
+    // What the card's inputs are is no longer known, so nothing may be
+    // written from the last answer: that is how a pin reverted the one before.
+    pictureInputs.value = [];
+    inputsKey.value = "";
     const status = err?.response?.status;
     if (status >= 400 && status < 500) {
       preflightError.value = errorMessage(err, "This run would be refused.");
@@ -1493,6 +1935,12 @@ async function load() {
   count.value = 1;
   seedMode.value = "new";
   saveOpen.value = false;
+  pictureInputs.value = [];
+  inputsKey.value = "";
+  clearPicks();
+  pickerFor.value = null;
+  stackChoice.value = null;
+  inputsError.value = "";
   try {
     if (props.source?.pickWorkflow) {
       cards.value = (await listWorkflowCards()).cards;
@@ -1626,7 +2074,15 @@ async function submit() {
     const prompts = Array.isArray(answer?.prompts) ? answer.prompts : [];
     if (!prompts.length) {
       reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
-      submitError.value = "Nothing was queued; see the reason below.";
+      // The run's own answer, so a slot emptied since the pre-flight (a pin
+      // binned in another tab) shows as the empty slot it now is.
+      if (answer?.groups?.[0]?.picture_inputs) {
+        pictureInputs.value = answer.groups[0].picture_inputs;
+        inputsKey.value = activeKey.value;
+      }
+      submitError.value = shownRefusals.value.length
+        ? "Nothing was queued; see the reason below."
+        : "Nothing was queued: a picture above still needs choosing.";
       return;
     }
     if (picksDestination.value) rememberSet(destinationSetId.value);
@@ -1805,6 +2261,114 @@ watch(
 .rund-size {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--space-3);
+}
+
+/* ── Pictures in (#1457) ─────────────────────────────────────────────────
+   A row is the tile, the words, then the pin and the clear in the same
+   bar-button column the LoRA rows use, so the right edge lines up. The tile is
+   72px: the size a picture is still recognisable at in a four-column form, and
+   a component-local value for the same reason the 168px source column is. */
+.rund-pics {
+  gap: var(--space-3);
+}
+
+.rund-in {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) var(--control-h-bar) var(--control-h-bar);
+  gap: var(--space-4);
+  align-items: center;
+}
+
+.rund-in-tile {
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  border: 1px solid rgb(var(--v-theme-divider));
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+button.rund-in-tile {
+  cursor: pointer;
+}
+
+button.rund-in-tile:hover:not(.rund-in-tile--off) {
+  background: var(--hover-wash);
+}
+
+button.rund-in-tile.rund-in-tile--off {
+  opacity: var(--opacity-disabled);
+  cursor: default;
+}
+
+/* An empty slot is drawn as a place to put something, not as a broken image. */
+.rund-in-tile--empty {
+  border-style: dashed;
+}
+
+.rund-in-img,
+.rund-in-cell {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* The selection: up to four of its pictures, as a 2 x 2 contact sheet. */
+.rund-in-tile--sel {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-rows: 1fr;
+  gap: var(--space-1);
+}
+
+.rund-in-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.rund-in-title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.rund-in-sub {
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.rund-in-sub--bad {
+  color: rgb(var(--v-theme-surface-error));
+}
+
+.rund-in-move {
+  margin-top: var(--space-1);
+}
+
+.rund-check {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.rund-check label {
+  cursor: pointer;
+}
+
+.rund-box {
+  width: 16px;
+  height: 16px;
+  accent-color: rgb(var(--v-theme-primary));
+  cursor: pointer;
 }
 
 /* One live region around the refusals: see RunReasonNotice. */

@@ -24,6 +24,7 @@ from pixlstash.services.comfyui_recipe_service import (
     format_prompt_rejection,
     bypass_node,
     insert_adapter,
+    model_filename_fields,
     plan_lora_chain,
     plan_lora_insertion,
     preflight_prompt,
@@ -1791,3 +1792,101 @@ class TestModelSwap:
             == []
         )
         assert graph["4"]["inputs"]["ckpt_name"] == "kept/kept.safetensors"
+
+
+class TestWrappedLoaders:
+    """ComfyUI-MultiGPU wrappers and the GGUF CLIP loader are checked (#1440).
+
+    A hand-written slice of ``object_info`` in the shape a live install
+    advertises: each wrapper keeps the field names of the loader it wraps and
+    adds placement inputs of its own.
+    """
+
+    WRAPPED = {
+        "UNETLoaderDisTorch2MultiGPU": "UNETLoader",
+        "VAELoaderDisTorch2MultiGPU": "VAELoader",
+        "CLIPLoaderDisTorch2MultiGPU": "CLIPLoader",
+        "DualCLIPLoaderMultiGPU": "DualCLIPLoader",
+        "CheckpointLoaderSimpleMultiGPU": "CheckpointLoaderSimple",
+        "UnetLoaderGGUFDisTorchMultiGPU": "UnetLoaderGGUF",
+        "UnetLoaderGGUFDisTorch2MultiGPU": "UnetLoaderGGUF",
+        "LoraLoaderMultiGPU": "LoraLoader",
+    }
+
+    @pytest.mark.parametrize(("wrapper", "base"), sorted(WRAPPED.items()))
+    def test_a_wrapper_reads_the_fields_of_the_loader_it_wraps(self, wrapper, base):
+        assert model_filename_fields(wrapper) == MODEL_FILENAME_FIELDS[base]
+
+    @pytest.mark.parametrize(
+        "class_type",
+        ["WanVideoModelLoaderMultiGPU", "MultiGPU", "DisTorch2MultiGPU", "KSampler"],
+    )
+    def test_a_suffix_on_an_unknown_base_invents_no_field(self, class_type):
+        assert model_filename_fields(class_type) == ()
+
+    def test_a_wrapped_loader_naming_an_absent_file_is_missing(self):
+        info = {
+            "UNETLoaderDisTorch2MultiGPU": {
+                "input": {
+                    "required": {
+                        "unet_name": [["wan2.2_t2v_14B.safetensors"], {}],
+                        "device": [["cuda:0", "cpu"], {}],
+                    }
+                }
+            }
+        }
+        present = {
+            "1": {
+                "class_type": "UNETLoaderDisTorch2MultiGPU",
+                "inputs": {"unet_name": "wan2.2_t2v_14B.safetensors"},
+            }
+        }
+        absent = {
+            "1": {
+                "class_type": "UNETLoaderDisTorch2MultiGPU",
+                "inputs": {"unet_name": "gone.safetensors"},
+            }
+        }
+        assert preflight_prompt(present, info)["ok"] is True
+        result = preflight_prompt(absent, info)
+        assert result["ok"] is False
+        assert [m["value"] for m in result["missing_models"]] == ["gone.safetensors"]
+        assert result["unchecked_models"] == 0
+
+    def test_the_gguf_clip_loader_is_checked(self):
+        info = {
+            "CLIPLoaderGGUF": {"input": {"required": {"clip_name": [["t5.gguf"], {}]}}}
+        }
+        graph = {
+            "1": {"class_type": "CLIPLoaderGGUF", "inputs": {"clip_name": "umt5.gguf"}}
+        }
+        result = preflight_prompt(graph, info)
+        assert [m["value"] for m in result["missing_models"]] == ["umt5.gguf"]
+
+    def test_a_model_on_a_loader_nobody_reads_is_counted_unchecked(self):
+        info = {"WanVideoModelLoader": {"input": {"required": {}}}, **OBJECT_INFO}
+        graph = {
+            **GRAPH,
+            "7": {
+                "class_type": "WanVideoModelLoader",
+                "inputs": {"model": "wan.safetensors", "precision": "bf16"},
+            },
+        }
+        result = preflight_prompt(graph, info)
+        assert result["ok"] is True
+        assert result["missing_models"] == []
+        # Only the unread one: the checkpoint and the LoRA were checked.
+        assert result["unchecked_models"] == 1
+
+    def test_a_wrapper_advertises_what_its_comfyui_can_load(self):
+        info = {
+            "VAELoaderDisTorch2MultiGPU": {
+                "input": {
+                    "required": {"vae_name": [["wan/wan_2.1_vae.safetensors"], {}]}
+                }
+            }
+        }
+        assert advertised_model_names(info) >= {
+            "wan/wan_2.1_vae.safetensors",
+            "wan_2.1_vae.safetensors",
+        }
