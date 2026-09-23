@@ -545,6 +545,8 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_variant")
         conn.execute("DELETE FROM workflow_slot_mark")
         conn.execute("DELETE FROM workflow_file")
+        conn.execute("DELETE FROM workflow_origin")
+        conn.execute("DELETE FROM workflow_pulled_file")
         conn.execute("DELETE FROM workflow_recipe")
         conn.execute("DELETE FROM workflow_topology_core")
         conn.execute("DELETE FROM workflow_topology")
@@ -1029,6 +1031,57 @@ def _ghost_shas(server) -> set[str]:
         row["pixel_sha"]
         for row in server.hub.fetchall("SELECT pixel_sha FROM workflow_picture_ghost")
     }
+
+
+def test_the_comfyui_pull_routes_are_the_owners_alone(workflow_env, monkeypatch):
+    """#1440: both directions on the pull and its summary, measured at the gate.
+
+    The GET belts are emptied so a refusal is the gate's (the rollback case the
+    belt exists for is covered by it being in ``READ_BLOCKED_GET_PATHS``); the
+    POST is refused to a READ token before routing either way. The runner is
+    stubbed so the owner's pull is queued and never reaches a ComfyUI.
+    """
+    server = workflow_env.server
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+    queued = []
+    monkeypatch.setattr(
+        server.vault, "submit_task", lambda task: queued.append(task) or task.id
+    )
+    path = f"{API}/comfyui/workflows/pull"
+    assert_real_route(server.api, "GET", path)
+    assert_real_route(server.api, "POST", path)
+    tokens = {
+        "unscoped": _mint(workflow_env.owner, "pull unscoped"),
+        "scoped": _mint(
+            workflow_env.owner,
+            "pull scoped",
+            resource_type="character",
+            resource_id=workflow_env.character_id,
+        ),
+    }
+    previously_enforcing = server.authz._enforcing
+    server.authz._enforcing = True
+    try:
+        for label, token in tokens.items():
+            client = _bearer(server, token)
+            assert client.get(f"{API}/pictures").status_code == 200, label
+            r = client.get(path)
+            assert r.status_code == 403, f"{label} GET: {r.status_code} {r.text}"
+            assert "Owner-level" in r.text, f"{label} GET not refused by the gate"
+            r = client.post(path)
+            assert r.status_code == 403, f"{label} POST: {r.status_code} {r.text}"
+        assert queued == []
+
+        r = workflow_env.owner.get(path)
+        assert r.status_code == 200 and r.json()["status"] == "idle", r.text
+        r = workflow_env.owner.post(path)
+        assert r.status_code == 202 and r.json()["status"] == "started", r.text
+        assert len(queued) == 1
+        r = workflow_env.owner.get(path)
+        assert r.status_code == 200 and r.json()["status"] == "pending", r.text
+    finally:
+        server.authz._enforcing = previously_enforcing
 
 
 def test_the_ghost_routes_are_the_owners_alone(workflow_env, monkeypatch):
@@ -2751,6 +2804,38 @@ def test_a_one_off_is_counted_and_an_imported_file_takes_it_out_of_the_count(
         )
     payload = _cards(workflow_env.owner)
     assert payload["one_offs"] == 0
+    assert _by_key(payload)[BINNED_CARD]["imported"] is True
+
+
+@pytest.mark.parametrize(
+    ("pull_wrote_it", "one_offs"),
+    [(True, 1), (False, 0)],
+    ids=["written-by-a-pull", "matched-by-a-pull"],
+)
+def test_a_pulled_file_does_not_take_a_card_out_of_the_one_offs(
+    workflow_env, pull_wrote_it, one_offs
+):
+    """#1440: a file a pull WROTE is not the owner's statement; one it matched is.
+
+    The same file row as the test above. Written by a pull
+    (``workflow_pulled_file``), BINNED stays a one-off - eighty pulled
+    workflows must not all come out of the count. Matched by the pull, the
+    file was already the owner's, and it keeps the card in the grid.
+    """
+    with workflow_env.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_file "
+            "(workflow_name, topology_hash, structural_hash, workflow_key) "
+            "VALUES ('binned.json', ?, ?, ?)",
+            (BINNED_TOPOLOGY, BINNED_RECIPE, BINNED_CARD),
+        )
+        if pull_wrote_it:
+            conn.execute(
+                "INSERT INTO workflow_pulled_file (workflow_name) "
+                "VALUES ('binned.json')"
+            )
+    payload = _cards(workflow_env.owner, "?include_one_offs=true")
+    assert payload["one_offs"] == one_offs
     assert _by_key(payload)[BINNED_CARD]["imported"] is True
 
 

@@ -1469,6 +1469,14 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Import workflow; POST blocked for READ tokens; owner only",
     ),
+    ("POST", "/api/v1/comfyui/workflows/pull"): RoutePolicy(
+        _OWNER,
+        justification="Pull ComfyUI's saved workflows into the user folder; reaches the owner's configured ComfyUI and writes stored workflow files, like the import beside it; owner only",
+    ),
+    ("GET", "/api/v1/comfyui/workflows/pull"): RoutePolicy(
+        _OWNER,
+        justification="The last pull's summary: counts, card keys and the node classes the owner's ComfyUI lacks; describes the owner's ComfyUI and workflow library; owner only",
+    ),
     ("GET", "/api/v1/comfyui/pictures/{picture_id}/workflow"): RoutePolicy(
         _PIC, id_param="picture_id"
     ),

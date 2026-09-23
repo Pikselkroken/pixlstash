@@ -72,6 +72,23 @@
            has no drop handler, so `useWindowFileImport` no longer stands
            aside for it. -->
       <AppBarButton icon="plus" @click="fileInput?.click()">Add…</AppBarButton>
+      <!-- #1440: read every workflow ComfyUI has saved, over its own API.
+           Only offered once ComfyUI is connected - the empty state's
+           "Connect ComfyUI" is the way there - and it reads, never writes
+           back. What it found lands in the band below the toolbar. -->
+      <!-- `loading` rather than a hand-rolled busy state: it refuses the
+           second press, spins the glyph and gives focus back when done. -->
+      <AppBarButton
+        v-if="comfyuiConfigured"
+        ref="pullButton"
+        icon="tray-arrow-down"
+        :loading="pull.phase === 'pulling'"
+        data-testid="wfv-pull"
+        @click="pull.start()"
+        >{{
+          pull.phase === "pulling" ? "Pulling…" : "Pull from ComfyUI"
+        }}</AppBarButton
+      >
       <input
         ref="fileInput"
         class="wfv-file-input"
@@ -111,6 +128,8 @@
       :on-clear-all="store.clearFilters"
       class="wfv-strip"
     />
+
+    <WorkflowPullSummary @dismissed="pullButton?.focus()" />
 
     <p v-if="store.error" class="wfv-error" role="alert">{{ store.error }}</p>
 
@@ -191,6 +210,19 @@
             @click="openWatchedFolder"
           >
             Open watched folder
+          </AppButton>
+          <!-- The connected half of the pair below: somebody with ComfyUI
+               connected most likely has workflows saved there already. -->
+          <AppButton
+            v-if="comfyuiConfigured"
+            size="sm"
+            variant="secondary"
+            icon-left="tray-arrow-down"
+            :loading="pull.phase === 'pulling'"
+            data-testid="wfv-empty-pull"
+            @click="pull.start()"
+          >
+            {{ pull.phase === "pulling" ? "Pulling…" : "Pull from ComfyUI" }}
           </AppButton>
           <!-- Gone once connected: there is nothing to offer somebody who has
                already done it. -->
@@ -400,6 +432,7 @@ import { useConfirm } from "../../composables/useConfirm";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { useWorkflowPullStore } from "../../stores/useWorkflowPullStore";
 import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import {
   SORT_KEYS,
@@ -412,6 +445,7 @@ import FilterStrip from "../panels/FilterStrip.vue";
 import StackPanel from "../panels/StackPanel.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import WorkflowFilterMenu from "../panels/WorkflowFilterMenu.vue";
+import WorkflowPullSummary from "../panels/WorkflowPullSummary.vue";
 import WorkflowSelectionBar from "../panels/WorkflowSelectionBar.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -447,6 +481,7 @@ const filterStore = useFilterStore();
 const prefs = useWorkflowPrefsStore();
 const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
+const pull = useWorkflowPullStore();
 const router = useRouter();
 const route = useRoute();
 const { confirm } = useConfirm();
@@ -456,6 +491,7 @@ const gridEl = ref(null);
 // drawn — one stack is open at a time.
 const panelRef = ref(null);
 const fileInput = ref(null);
+const pullButton = ref(null);
 const selBarRef = ref(null);
 const scrollEl = ref(null);
 const sortMenuOpen = ref(false);
@@ -735,6 +771,9 @@ watch(
 
 onMounted(async () => {
   store.fetchCards();
+  // A pull started before a reload, or from another tab, is still running on
+  // the server: the button should say so rather than offer to start one.
+  if (comfyuiConfigured.value) pull.resume();
   try {
     const body = await listImportFolders();
     watchedFolder.value = (body?.folders ?? [])[0] ?? null;

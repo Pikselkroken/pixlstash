@@ -35,7 +35,7 @@ from typing import Any, Optional
 
 from pixlstash.services import workflow_bindings
 from pixlstash.services.comfyui_recipe_service import (
-    MODEL_FILENAME_FIELDS,
+    model_filename_fields,
     SEED_PASSTHROUGH_CLASSES,
     find_input_spec,
 )
@@ -309,7 +309,7 @@ def _typed(parameter: Parameter, spec: Any, is_seed: Optional[bool]) -> Paramete
     when it feeds a seed input. ``None`` leaves the decision to the spec.
     """
     name, value = parameter.name, parameter.value
-    is_model_field = name in MODEL_FILENAME_FIELDS.get(parameter.class_type, ()) or (
+    is_model_field = name in model_filename_fields(parameter.class_type) or (
         isinstance(value, str) and value.lower().endswith(MODEL_EXTENSIONS)
     )
     found = find_input_spec(spec, name) if spec else None

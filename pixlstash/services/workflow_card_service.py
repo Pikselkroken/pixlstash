@@ -255,11 +255,17 @@ class CardFigures:
 
     @property
     def one_off(self) -> bool:
-        """Too small, unrated, never imported and never saved from."""
+        """Too small, unrated, never imported by hand and never saved from.
+
+        A file pulled from ComfyUI does not count as imported here (#1440):
+        a pull brings a whole install's experiments in one gesture, and
+        exempting all of them would bury the grid. A file the owner dropped
+        in, or one a pull merely matched, still does.
+        """
         return (
             self.pictures < ONE_OFF_PICTURES
             and self.rated == 0
-            and not self.card.imported
+            and not self.card.hand_imported
             and not self.saved_recipes
         )
 

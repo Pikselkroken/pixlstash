@@ -36,6 +36,7 @@ class TaskType(str, Enum):
     SNAPSHOT_IDENTITY_SCRUB = "SnapshotIdentityScrubTask"
     CHECKPOINT_HASH = "CheckpointHashTask"
     MODEL_FOLDER_SCAN = "ModelFolderScanTask"
+    COMFYUI_WORKFLOW_PULL = "ComfyUIWorkflowPullTask"
     LAYOUT_MOVE = "LayoutMoveTask"
     GHOST_CASCADE = "GhostCascadeTask"
     WORKFLOW_CARD_BACKFILL = "WorkflowCardBackfillTask"

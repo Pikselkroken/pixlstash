@@ -58,6 +58,7 @@ import { useFolderMappingStore } from "./useFolderMappingStore";
 import { useModelMovesStore } from "./useModelMovesStore";
 import { useMovesStore } from "./useMovesStore";
 import { useWorkflowsStore } from "./useWorkflowsStore";
+import { useWorkflowPullStore } from "./useWorkflowPullStore";
 import { useRunDialogStore } from "./useRunDialogStore";
 
 /**
@@ -154,6 +155,20 @@ const STORES = [
       s.openStackKey === null &&
       s.selectedKeys.length === 0 &&
       Object.keys(s.members).length === 0,
+  },
+  {
+    // #1440: what a pull from the owner's ComfyUI found - its URL, the node
+    // classes and model files it lacks. Owner-only; a pull being watched is
+    // abandoned with the credential that started it.
+    name: "useWorkflowPullStore",
+    use: useWorkflowPullStore,
+    seed: (s) => {
+      s.phase = "done";
+      s.summary = { listed: 3, missing_node_classes: ["SomePackNode"] };
+      s.comfyuiUrl = "http://127.0.0.1:8188";
+    },
+    isEmpty: (s) =>
+      s.phase === "idle" && s.summary === null && s.comfyuiUrl === null,
   },
   {
     // An open Run popup names pictures and a card of the library the old
