@@ -4,6 +4,7 @@ import json
 import math
 import os
 import sqlite3
+import threading
 import time
 import uuid
 from urllib.parse import quote
@@ -21,7 +22,7 @@ from pixlstash.db_models import (
     Picture,
     User,
 )
-from pixlstash.hub import workflow_cards
+from pixlstash.hub import workflow_cards, workflow_origin
 from pixlstash.hub.workflows import (
     forget_input_modes,
     input_modes_by_workflow,
@@ -81,6 +82,8 @@ from pixlstash.services.workflow_hash import (
     ui_topology_hash,
 )
 from pixlstash.services.workflow_io import api_graph, detect_workflow_io
+from pixlstash.tasks.base_task import TaskStatus
+from pixlstash.tasks.comfyui_workflow_pull_task import ComfyUIWorkflowPullTask
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.path_utils import resolve_path_within
 from platformdirs import user_data_dir
@@ -260,6 +263,24 @@ def _store_workflow(
     }
 
 
+def store_pulled_workflow(hub, name: str, workflow: dict) -> dict:
+    """File one document pulled from ComfyUI the way an import files it (#1440).
+
+    :func:`_store_workflow` under the inbox lock with ``keep_both``, so a copy
+    of a stored workflow is matched rather than stored twice and a name taken by
+    a different workflow gets the ``(2)`` suffix rather than a refusal. Adds
+    ``builtin``: a match in the built-in folder is a workflow PixlStash ships,
+    which has no user file to delete, so the pull reports it apart.
+    """
+    with workflow_inbox.INBOX_LOCK:
+        result = _store_workflow(hub, name, workflow, keep_both=True)
+    result["builtin"] = bool(
+        result.get("matched")
+        and not os.path.isfile(os.path.join(workflow_user_dir(), result["name"]))
+    )
+    return result
+
+
 def store_workflow_copy(hub, name: str, workflow: dict) -> tuple[str, str | None]:
     """Write *workflow* into the user folder beside whatever is already there.
 
@@ -393,7 +414,7 @@ def trash_user_workflow(hub, workflow_name: str) -> str:
     if hub is not None:
         # The file is already gone, so its rows describe nothing; they would
         # only come back into force if a file of the same name is imported
-        # later. Each is forgotten on its own, so one failing keeps the other.
+        # later. Each is updated on its own, so one failing keeps the others.
         for what, forget in (
             ("picture-input modes", lambda: forget_input_modes(hub, stored_name)),
             (
@@ -404,12 +425,20 @@ def trash_user_workflow(hub, workflow_name: str) -> str:
                 "place on its workflow card",
                 lambda: workflow_cards.forget_file(hub, stored_name),
             ),
+            # The opposite of its neighbours: they forget a row, this one
+            # REMEMBERS, by marking every ComfyUI path the file was pulled
+            # from dismissed. "Their rows describe nothing" is false of it -
+            # it is what stops the next pull from bringing the file back.
+            (
+                "dismissal from later ComfyUI pulls",
+                lambda: workflow_origin.dismiss_file(hub, stored_name),
+            ),
         ):
             try:
                 forget()
             except Exception as exc:
                 logger.warning(
-                    "Deleted workflow %s but could not forget its %s: %s",
+                    "Deleted workflow %s but could not update its %s: %s",
                     normalized,
                     what,
                     exc,
@@ -1380,6 +1409,59 @@ class ComfyUIWorkflowImportResponse(BaseModel):
     topology_hash: Optional[str] = None
 
 
+class ComfyUIWorkflowPullStartResponse(BaseModel):
+    """A pull of ComfyUI's saved workflows, queued or already running."""
+
+    # "started" or "already_running".
+    status: str
+    task_id: Optional[str] = None
+
+
+class ComfyUIWorkflowPullSummary(BaseModel):
+    """What one finished pull found, computed with it and never stored."""
+
+    # How many workflows ComfyUI listed.
+    listed: int = 0
+    # Stored here for the first time.
+    pulled: int = 0
+    # Already stored here, matched by content.
+    matched: int = 0
+    # Identical to a workflow PixlStash ships.
+    already_shipped: int = 0
+    # Deleted here after an earlier pull, so not brought back.
+    skipped_dismissed: int = 0
+    # Could not be read from ComfyUI or stored here.
+    failed: int = 0
+    # Pulled before and no longer listed by ComfyUI. The local file stays.
+    gone: int = 0
+    # False when ComfyUI's node list could not be read, which makes every
+    # workflow unchecked rather than fine.
+    nodes_checked: bool = False
+    # Workflows naming a node class this ComfyUI does not have.
+    missing_nodes: int = 0
+    # Workflows whose node classes were not checked.
+    nodes_unchecked: int = 0
+    # The absent classes, by name. Which pack provides one is not known here.
+    missing_node_classes: list[str] = []
+    # The cards the pull filed a file on.
+    workflow_keys: list[str] = []
+
+
+class ComfyUIWorkflowPullStateResponse(BaseModel):
+    """The most recent pull since the server started.
+
+    ``status`` is ``idle`` when there has been none, else the task state:
+    ``pending``, ``running``, ``completed`` or ``failed``. ``summary`` is set
+    once it completed, ``error`` once it failed.
+    """
+
+    status: str
+    task_id: Optional[str] = None
+    comfyui_url: Optional[str] = None
+    error: Optional[str] = None
+    summary: Optional[ComfyUIWorkflowPullSummary] = None
+
+
 class ComfyUIRecipeModelSlot(BaseModel):
     """One model the graph loads, as the overlay's Recipe section shows it.
 
@@ -1589,6 +1671,16 @@ def _recipe_extras(server, request, pic_id: int, graph: Optional[dict]) -> dict:
         ),
         "topology_hash": topology,
     }
+
+
+# The most recent pull of ComfyUI's saved workflows, whatever state it ended in.
+# It is the "already running" gate - a double-click must not list and read the
+# whole folder twice - and where a finished pull's summary lives, because the
+# TaskRunner forgets a task the moment it completes. In memory on purpose, the
+# `routes/model_folders.py::_scans` shape: after a restart nothing is pulling.
+_last_pull: dict[str, ComfyUIWorkflowPullTask] = {}
+_last_pull_lock = threading.Lock()
+_PULL_IN_FLIGHT = (TaskStatus.PENDING, TaskStatus.RUNNING)
 
 
 def create_router(server) -> APIRouter:
@@ -1929,6 +2021,102 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=409, detail="Workflow already exists"
             ) from exc
+
+    @router.post(
+        "/comfyui/workflows/pull",
+        summary="Pull every workflow ComfyUI has saved",
+        description=(
+            "Lists the workflows the configured ComfyUI has saved, over its "
+            "userdata API, and stores each one the way an import does: a copy "
+            "of a workflow already stored is matched rather than stored twice, "
+            "so a pull is safe to repeat. A workflow deleted here after an "
+            "earlier pull is skipped rather than brought back. Nothing is "
+            "written to ComfyUI. Returns 202 with the id of the task now "
+            "queued; watch it in `GET /workers/progress` under "
+            "`workers.ComfyUIWorkflowPullTask` and read its summary from "
+            "`GET /comfyui/workflows/pull`."
+        ),
+        status_code=202,
+        response_model=ComfyUIWorkflowPullStartResponse,
+    )
+    def pull_comfyui_workflows(request: Request):
+        hub = getattr(server, "hub", None)
+        if hub is None:
+            raise HTTPException(
+                status_code=503,
+                detail="The workflow library is not open, so nothing can be pulled.",
+            )
+        comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
+        origin_client_id = getattr(request.state, "origin_client_id", None)
+
+        def announce(keys: list[str]) -> None:
+            announce_changed_workflows(
+                server, keys, "imported", origin_client_id=origin_client_id
+            )
+
+        with _last_pull_lock:
+            running = _last_pull.get("task")
+            if running is not None and running.status in _PULL_IN_FLIGHT:
+                return {"status": "already_running", "task_id": running.id}
+            task = ComfyUIWorkflowPullTask(
+                hub,
+                comfyui_url,
+                store=functools.partial(store_pulled_workflow, hub),
+                announce=announce,
+            )
+            # Claimed before submission, so the gate covers the queued window.
+            _last_pull["task"] = task
+        try:
+            task_id = server.vault.submit_task(task)
+        except RuntimeError as exc:
+            logger.error(
+                "Could not queue a pull of ComfyUI workflows from %s: %s",
+                comfyui_url,
+                exc,
+            )
+            task_id = None
+        if task_id is None:
+            with _last_pull_lock:
+                if _last_pull.get("task") is task:
+                    del _last_pull["task"]
+            raise HTTPException(
+                status_code=503,
+                detail="The task runner is not available, so the pull cannot be queued.",
+            )
+        logger.info(
+            "Pull of ComfyUI workflows from %s queued as task %s.", comfyui_url, task_id
+        )
+        return {"status": "started", "task_id": task_id}
+
+    @router.get(
+        "/comfyui/workflows/pull",
+        summary="The most recent pull of ComfyUI's saved workflows",
+        description=(
+            "`idle` when nothing has been pulled since the server started; "
+            "otherwise the pull's state, and once it completed, what it found: "
+            "how many workflows were new, already stored, shipped with "
+            "PixlStash, deleted here and skipped, or failed, and how many name "
+            "a node class the configured ComfyUI does not have. When ComfyUI's "
+            "node list could not be read, `nodes_checked` is false and every "
+            "workflow counts as unchecked, never as fine."
+        ),
+        response_model=ComfyUIWorkflowPullStateResponse,
+    )
+    def get_comfyui_workflow_pull():
+        with _last_pull_lock:
+            task = _last_pull.get("task")
+        if task is None:
+            return {"status": "idle"}
+        state = {
+            "status": task.status.value,
+            "task_id": task.id,
+            "comfyui_url": task.params.get("comfyui_url"),
+        }
+        if task.status == TaskStatus.COMPLETED and isinstance(task.result, dict):
+            state["summary"] = task.result
+        elif task.status == TaskStatus.FAILED:
+            state["error"] = str(task.error) if task.error else "The pull failed."
+        return state
 
     @router.get(
         "/comfyui/pictures/{picture_id}/workflow",
