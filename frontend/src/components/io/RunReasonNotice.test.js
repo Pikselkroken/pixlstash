@@ -142,3 +142,32 @@ describe("a recipe LoRA with no loader, which is not a refusal (#1478)", () => {
     expect(wrapper.emitted("edit-loras")?.[0]).toEqual(["k".repeat(64)]);
   });
 });
+
+describe("a LoRA the owner skipped, and one that cannot be skipped", () => {
+  it("reads a requested bypass back as the owner's skip, not as a missing file", () => {
+    const wrapper = mountNotice({
+      code: "loras_skipped",
+      models: [{ file: "mira_v2.safetensors", folder: "loras", requested: true }],
+    });
+    const said = wrapper.text().replace(/\s+/g, " ");
+    expect(said).toContain("Skipped for this run: mira_v2.safetensors.");
+    expect(said).not.toContain("not on this ComfyUI");
+    expect(said).not.toMatch(/remov|delet/i);
+    expect(said).not.toContain("can't run");
+    expect(rail(wrapper)).toContain("rrn--notice");
+  });
+
+  it("refuses a skip nothing can be rewired around, in the server's words", () => {
+    const wrapper = mountNotice({
+      code: "lora_not_skippable",
+      file: "loras/stacked-a.safetensors",
+      text: "It sits in a stacker whose other LoRAs are present.",
+    });
+    const said = wrapper.text().replace(/\s+/g, " ");
+    expect(said).toContain("Cinematic portrait can't run.");
+    expect(said).toContain(
+      "stacked-a.safetensors cannot be skipped for this run. It sits in a stacker whose other LoRAs are present.",
+    );
+    expect(rail(wrapper)).not.toContain("rrn--notice");
+  });
+});

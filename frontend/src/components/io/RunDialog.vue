@@ -1261,13 +1261,6 @@ function shelfDigestFor(filename) {
   return "";
 }
 
-/** The graph's LoRAs the shelf could not name, still in this run. */
-const unresolvedLoras = computed(() =>
-  loras.value
-    .filter((row) => !row.added && !row.skipped && !row.baseSha && row.graphValue)
-    .map((row) => row.graphValue),
-);
-
 /** A file as it is compared across the popup and the pre-flight. */
 function fileKey(value) {
   return String(value || "")

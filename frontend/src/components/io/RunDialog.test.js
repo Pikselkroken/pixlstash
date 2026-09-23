@@ -499,8 +499,9 @@ describe("the LoRAs a graph already loads", () => {
 
     expect(wrapper.vm.loras).toHaveLength(1);
     expect(wrapper.vm.loras[0].sha256).toBe("");
-    expect(wrapper.vm.unresolvedLoras).toEqual(["somebody-elses.safetensors"]);
-    expect(wrapper.text()).toContain("Not on your model shelf");
+    expect(wrapper.text()).toContain(
+      "Not on your model shelf: PixlStash cannot identify this file.",
+    );
     // And its own value is in the select, or the row reads as an empty slot
     // nobody filled when in fact the graph fills it.
     expect(wrapper.vm.optionsFor(wrapper.vm.loras[0])[0].label).toContain(
@@ -593,6 +594,136 @@ describe("the LoRAs a graph already loads", () => {
       sha256: "s".repeat(64),
       strength_model: 0.4,
     });
+  });
+});
+
+describe("skipping a graph LoRA for this run", () => {
+  // The owner must be able to run without a LoRA that does not exist here.
+  // The popup changes no workflow, so its word is Skip: the row stays, says
+  // it is skipped, and Use takes it back. What goes on the wire is
+  // `skip_loras`, and a skipped row is never ALSO an override in `loras`.
+  function filenameSlot(value, node = "7") {
+    return {
+      node_id: node,
+      class_type: "LoraLoader",
+      field: "lora_name",
+      value,
+      by: "filename",
+      strengths: { model: 0.85 },
+    };
+  }
+
+  async function mountTwo() {
+    getPictureRecipe.mockResolvedValue({
+      available: true,
+      workflow_key: KEY,
+      settings: {},
+      lora_slots: [
+        filenameSlot("mira_v2.safetensors"),
+        filenameSlot("somebody-elses.safetensors", "8"),
+      ],
+    });
+    return mountRun();
+  }
+
+  function buttonReading(wrapper, text, index = 0) {
+    return wrapper.findAll("button").filter((b) => b.text().trim() === text)[
+      index
+    ];
+  }
+
+  it("offers Skip on a graph row, never a trash or a delete", async () => {
+    const wrapper = await mountTwo();
+    const words = wrapper.findAll("button").map((b) => b.text().trim());
+    expect(words.filter((word) => word === "Skip")).toHaveLength(2);
+    expect(wrapper.text()).not.toMatch(/delete|remove/i);
+  });
+
+  it("sends a skipped row in skip_loras and not in loras", async () => {
+    const wrapper = await mountTwo();
+    // An override on the row first, so leaving `loras` alone would be caught.
+    wrapper.vm.loras[0].sha256 = "t".repeat(64);
+    await wrapper.vm.$nextTick();
+    const before = preflightWorkflowRun.mock.calls.length;
+
+    await buttonReading(wrapper, "Skip", 0).trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Skipped for this run");
+    // The removal set changed, so the pre-flight is asked again with it.
+    expect(preflightWorkflowRun.mock.calls.length).toBe(before + 1);
+    expect(preflightWorkflowRun.mock.calls.at(-1)[0].skip_loras).toEqual([
+      { node_id: "7", field: "lora_name" },
+    ]);
+
+    await wrapper.vm.submit();
+    await flushPromises();
+    const body = runWorkflowCard.mock.calls[0][0];
+    expect(body.skip_loras).toEqual([{ node_id: "7", field: "lora_name" }]);
+    expect(body.loras).toEqual([]);
+    // Nor is it part of the look a recipe saved from here would keep.
+    expect(
+      wrapper.vm.recipeLoras.map((lora) => lora.filename),
+    ).toEqual(["somebody-elses.safetensors"]);
+  });
+
+  it("takes a skip back with Use", async () => {
+    const wrapper = await mountTwo();
+    await buttonReading(wrapper, "Skip", 1).trigger("click");
+    await flushPromises();
+    await buttonReading(wrapper, "Use").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).not.toContain("Skipped for this run");
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0]).not.toHaveProperty("skip_loras");
+  });
+
+  it("says on the row when the run already leaves its loader out", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 1,
+      groups: [
+        {
+          workflow_key: KEY,
+          reasons: [],
+          bypassed_loras: [
+            { file: "Somebody-Elses.safetensors", folder: "loras", requested: false },
+          ],
+        },
+      ],
+    });
+    const wrapper = await mountTwo();
+    const flags = wrapper
+      .findAll("[data-testid='rund-lora-flag']")
+      .map((flag) => flag.text().replace(/mdi-\S+/, "").trim());
+    expect(flags).toEqual([
+      "Not on this ComfyUI. The run leaves this loader out.",
+    ]);
+  });
+
+  it("keeps the owner's skips apart from the missing files in the notices", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 1,
+      groups: [
+        {
+          workflow_key: KEY,
+          reasons: [],
+          bypassed_loras: [
+            { file: "gone.safetensors", folder: "loras", requested: false },
+            { file: "mira_v2.safetensors", folder: "loras", requested: true },
+          ],
+        },
+      ],
+    });
+    const wrapper = await mountTwo();
+    expect(wrapper.vm.runNotes.map((note) => note.code)).toEqual([
+      "loras_bypassed",
+      "loras_skipped",
+    ]);
+    expect(wrapper.vm.canRun).toBe(true);
   });
 });
 
