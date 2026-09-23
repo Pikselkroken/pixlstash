@@ -3421,7 +3421,10 @@ def create_router(server) -> APIRouter:
         response_model=LoraChainSaved,
         status_code=201,
         responses={
-            200: {"description": "A dry run: the changes, nothing written."},
+            200: {
+                "model": LoraChainSaved,
+                "description": "A dry run: the changes, nothing written.",
+            },
             404: {"description": "This machine has no such card."},
             409: {
                 "description": (
