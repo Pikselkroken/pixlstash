@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 
-from pixlstash.services.workflow_hash import UI_PASSTHROUGH_CLASSES
+from pixlstash.services.workflow_hash import UI_PASSTHROUGH_CLASSES, bypass_input_slot
 
 logger = logging.getLogger(__name__)
 
@@ -222,12 +222,16 @@ class _Converter:
             if name:
                 self.set_nodes.setdefault(name, []).append(node)
 
-    def _resolve(self, link_id, depth: int = 0) -> list | None:
+    def _resolve(self, link_id, depth: int = 0, want_type=None) -> list | None:
         """``[node_id, slot]`` for a wire, chasing reroutes and bypasses.
 
         A muted node breaks the wire, which is what muting means; ComfyUI then
         refuses the prompt for a missing required input, exactly as it does for
         the same graph submitted from the editor.
+
+        *want_type* is the type of the input the wire ends at, carried
+        unchanged through every hop: a bypassed node on the way splices the
+        input that type asks for.
         """
         if depth > _MAX_LINK_DEPTH:
             self.problems.append("a wire runs in a circle")
@@ -244,22 +248,26 @@ class _Converter:
         if mode == _MODE_MUTED:
             return None
         if node_class == _GET_NODE:
-            return self._chase_through_set_node(node, depth)
+            return self._chase_through_set_node(node, depth, want_type)
         if mode == _MODE_BYPASSED or node_class in UI_PASSTHROUGH_CLASSES:
-            return self._chase_through(node, origin_slot, depth)
+            return self._chase_through(node, origin_slot, depth, want_type)
         if node_class not in self.object_info:
             self.problems.append(f"this ComfyUI has no node class {node_class!r}")
             return None
         return [str(origin_id), origin_slot]
 
-    def _chase_through(self, node: dict, origin_slot, depth: int) -> list | None:
+    def _chase_through(
+        self, node: dict, origin_slot, depth: int, want_type=None
+    ) -> list | None:
         """Follow a bypassed or rerouted node to whatever feeds its output.
 
-        **The output's own type decides which input is passed through**, and a
-        node that does not declare the slot being asked for is refused rather
-        than guessed at. Taking "the first connected input of any type" when
-        the type is unknown is how a sampler's MODEL input ends up wired to a
-        CLIP producer with nothing reported.
+        **Which input is passed through is ComfyUI's own rule**,
+        :func:`~pixlstash.services.workflow_hash.bypass_input_slot`, shared
+        with the topology key so the graph this builds and the key it files
+        under cannot pick different wires. It weighs the output's type and the
+        type of the input the wire ends at, so a sampler's MODEL input is never
+        wired to a CLIP producer. A node that does not declare the slot being
+        asked for is still refused rather than guessed at.
         """
         outputs = node.get("outputs") or []
         entry = (
@@ -274,14 +282,21 @@ class _Converter:
                 "does not say what its output carries"
             )
             return None
-        for candidate in node.get("inputs") or []:
-            if not isinstance(candidate, dict) or candidate.get("link") is None:
-                continue
-            if wanted == "*" or candidate.get("type") in (wanted, "*"):
-                return self._resolve(candidate["link"], depth + 1)
-        return None
+        through = bypass_input_slot(
+            node, origin_slot, wanted if want_type is None else want_type
+        )
+        if through is None:
+            return None
+        candidate = (node.get("inputs") or [])[through]
+        if not isinstance(candidate, dict) or candidate.get("link") is None:
+            # ComfyUI picks the input first and then finds nothing behind it;
+            # it does not go looking for another wire, and neither does this.
+            return None
+        return self._resolve(candidate["link"], depth + 1, want_type)
 
-    def _chase_through_set_node(self, node: dict, depth: int) -> list | None:
+    def _chase_through_set_node(
+        self, node: dict, depth: int, want_type=None
+    ) -> list | None:
         """Follow a ``GetNode`` to whatever feeds the ``SetNode`` it names.
 
         A ``GetNode`` has no input of its own - it fetches a wire the editor
@@ -309,7 +324,7 @@ class _Converter:
                 "there is no one thing to fetch"
             )
             return None
-        return self._resolve(wired[0]["link"], depth + 1)
+        return self._resolve(wired[0]["link"], depth + 1, want_type)
 
     def _connected_inputs(self, node: dict) -> dict[str, object]:
         return {
@@ -330,6 +345,13 @@ class _Converter:
         """
         declared = _declared_inputs(self.object_info[node_class])
         connected = self._connected_inputs(node)
+        # The editor's own slot types, which is what ComfyUI hands a bypassed
+        # node upstream when it picks the wire to splice.
+        input_types = {
+            str(entry.get("name")): entry.get("type")
+            for entry in node.get("inputs") or []
+            if isinstance(entry, dict)
+        }
         widget_values = node.get("widgets_values")
         by_name = isinstance(widget_values, dict)
         positional = widget_values if isinstance(widget_values, list) else []
@@ -342,7 +364,9 @@ class _Converter:
             if is_widget:
                 widget_names.add(name)
             if name in connected:
-                resolved = self._resolve(connected[name])
+                resolved = self._resolve(
+                    connected[name], want_type=input_types.get(name)
+                )
                 if resolved is None and required:
                     # Muted, dangling, or a bypass that could not be chased.
                     # **Only a REQUIRED input is refused over this.** Muting a
