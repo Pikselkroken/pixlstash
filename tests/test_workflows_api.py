@@ -7834,6 +7834,67 @@ def test_inserting_a_loader_into_a_workflow_that_has_one_is_refused_with_the_rea
     assert "lora" in r.json()["detail"].lower()
 
 
+def _forget_run_checkpoint_name(server) -> None:
+    """RUN_CARD's checkpoint as a card whose name the hub no longer holds."""
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM workflow_recipe_asset "
+            "WHERE structural_hash = ? AND widget_name = 'ckpt_name'",
+            (RUN_RECIPE,),
+        )
+
+
+def test_an_unnamed_checkpoint_is_named_from_the_graph_a_run_would_submit(
+    loaderless,
+):
+    """The card forgot the name; the graph it runs from did not.
+
+    "Not recorded" told the owner nothing they could act on. The file the
+    graph loads is what they would go looking for, so the detail serves it -
+    folders and all, for the tooltip; the client shows the file name alone.
+    """
+    graph = json.loads(json.dumps(LOADERLESS_DOCUMENT))
+    graph["1"]["inputs"]["ckpt_name"] = "SDXL/juggernautXL_v9.safetensors"
+    # Not a base model: the row is the checkpoint's, not every file's.
+    graph["9"] = {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}}
+    loaderless.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (json.loads(json.dumps(graph)), []),
+    )
+    _forget_run_checkpoint_name(loaderless.server)
+    body = loaderless.owner.get(f"{API}/workflows/{RUN_CARD}").json()
+    base = [m for m in body["card"]["models"] if m["kind"] == "checkpoint"]
+    assert base and base[0]["name"] is None, body["card"]["models"]
+    assert body["graph_base_models"] == ["SDXL/juggernautXL_v9.safetensors"]
+
+
+def test_a_graph_that_loads_no_base_model_says_so_as_an_empty_list(loaderless):
+    """`[]` is an answer - read, and no base model - and `null` is none."""
+    graph = {
+        "1": {"class_type": "LoadImage", "inputs": {"image": "in.png"}},
+        "2": {
+            "class_type": "UpscaleModelLoader",
+            "inputs": {"model_name": "4x-ultrasharp.pth"},
+        },
+        "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+    }
+    loaderless.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (json.loads(json.dumps(graph)), []),
+    )
+    _forget_run_checkpoint_name(loaderless.server)
+    body = loaderless.owner.get(f"{API}/workflows/{RUN_CARD}").json()
+    assert body["graph_base_models"] == []
+
+
+def test_a_named_checkpoint_does_not_read_the_graph_again(runnable):
+    """The card already says it, so the detail pays for no source read."""
+    body = runnable.owner.get(f"{API}/workflows/{RUN_CARD}").json()
+    assert body["graph_base_models"] is None
+
+
 def test_inserting_a_loader_without_comfyui_is_a_503_not_a_guess(runnable, tmp_path):
     """An API link carries no type, so with no `object_info` a reader could be missed."""
     _isolate_workflow_folders(tmp_path, runnable.monkeypatch)

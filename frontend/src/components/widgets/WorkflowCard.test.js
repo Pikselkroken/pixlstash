@@ -808,6 +808,40 @@ describe("WorkflowCard", () => {
     expect(wrapper.attributes("aria-label")).toContain("base model not read");
   });
 
+  it("says a checkpoint it has no name for is missing, not absent", () => {
+    // The loader is in the graph; its name was never recorded or was
+    // forgotten with the shelf's copy. "No checkpoint" said the graph has
+    // none, where the Workflow tab says the same state is missing.
+    const wrapper = mountCard({
+      ...BARE,
+      models: [{ name: null, kind: "checkpoint" }],
+    });
+    expect(wrapper.findAll(".wf-card__row")[1].text()).toBe(
+      "Checkpoint missing",
+    );
+    expect(wrapper.attributes("aria-label")).toContain("checkpoint missing");
+  });
+
+  it("says Checkpoint missing beside a strip of other models, too", () => {
+    // The strip draws the LoRA, so the base-model half of row 3 is where the
+    // missing checkpoint is said - not "No checkpoint", which is for a graph
+    // with no base-model loader at all.
+    const wrapper = mountCard({
+      ...BARE,
+      models: [{ name: null, kind: "checkpoint" }],
+      loras: [{ name: "detail", kind: "lora", mark: "structural" }],
+    });
+    expect(wrapper.findAll(".wf-card__row")[2].text()).toContain(
+      "Checkpoint missing",
+    );
+  });
+
+  it("still says No checkpoint for a graph that loads none", () => {
+    const wrapper = mountCard({ ...BARE, models: [] });
+    expect(wrapper.findAll(".wf-card__row")[1].text()).toBe("No checkpoint");
+    expect(wrapper.attributes("aria-label")).not.toContain("missing");
+  });
+
   it("keeps No pictures yet on a pictureless card that has a recipe", () => {
     // A card whose pictures were all binned is a different state from one
     // nothing has ever run.

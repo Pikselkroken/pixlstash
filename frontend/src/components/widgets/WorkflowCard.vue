@@ -147,7 +147,11 @@
           </li>
         </ul>
         <span v-else class="wf-card__none" aria-hidden="true">{{
-          modelsUnread ? "Models not read" : "No checkpoint"
+          modelsUnread
+            ? "Models not read"
+            : checkpointIsMissing
+              ? "Checkpoint missing"
+              : "No checkpoint"
         }}</span>
       </div>
       <!-- Row 3: the one name worth printing, the base model's, and how many
@@ -164,7 +168,11 @@
             class="wf-card__none"
             aria-hidden="true"
             >{{
-              checkpointIsUnread ? "Base model not read" : "No checkpoint"
+              checkpointIsUnread
+                ? "Base model not read"
+                : checkpointIsMissing
+                  ? "Checkpoint missing"
+                  : "No checkpoint"
             }}</span
           >
           <span
@@ -228,6 +236,7 @@ import {
   coverCellStyle,
   factChips,
   isStack,
+  checkpointMissing,
   checkpointUnread,
   lorasUnread,
   modelDisplayName,
@@ -355,6 +364,7 @@ const hasPictures = computed(
 // Per ROW, not per card: the recovery can find a LoRA and miss the loader
 // beside it, and an empty row must not become a claim either way (#1466).
 const checkpointIsUnread = computed(() => checkpointUnread(props.card));
+const checkpointIsMissing = computed(() => checkpointMissing(props.card));
 const lorasAreUnread = computed(() => lorasUnread(props.card));
 const modelsUnread = computed(
   () => checkpointIsUnread.value && lorasAreUnread.value,

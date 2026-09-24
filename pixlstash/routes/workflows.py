@@ -145,7 +145,11 @@ from pixlstash.routes.comfyui import (
     trash_user_workflow,
 )
 from pixlstash.services.workflow_export import download_stem, scrub_for_export
-from pixlstash.services.workflow_identity import RECIPE, STRUCTURAL
+from pixlstash.services.workflow_identity import (
+    CHECKPOINT_WIDGETS,
+    RECIPE,
+    STRUCTURAL,
+)
 from pixlstash.services.workflow_hash import (
     MODEL_EXTENSIONS,
     WorkflowGraphError,
@@ -591,6 +595,18 @@ class WorkflowCardDetail(BaseModel):
             "pinned on, so the client's own default pins apply; `[]` is "
             "somebody who unpinned everything. Without this the pins were "
             "write-only and the Workflow tab could not draw the pin it sets."
+        ),
+    )
+    graph_base_models: list[str] | None = Field(
+        None,
+        description=(
+            "The base-model files the graph a run would submit names, as the "
+            "graph spells them (folders included), for a card whose own "
+            "`models` name no base model: its name was never recorded or was "
+            "forgotten, but the workflow file or a picture's embedded graph "
+            "still says which file it loads. `[]` is a graph that was read and "
+            "loads no base model (an upscaler); `null` is one that was not "
+            "read - the card names its base model, or has no graph to read."
         ),
     )
 
@@ -1820,6 +1836,9 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=404, detail="Unknown workflow card.")
         card = figure.card
         pins = key_pins(hub, workflow_key)
+        graph_models = (
+            None if _base_model_slot(figure.models) else _graph_base_models(card)
+        )
         return WorkflowCardDetail(
             card=_card(
                 figure, card_defaults(hub, server.vault, card), by_key(grid.figures)
@@ -1833,7 +1852,42 @@ def create_router(server) -> APIRouter:
                 ParameterAddress(slot_label=slot_label, input_name=input_name)
                 for slot_label, input_name in pins
             ],
+            graph_base_models=graph_models,
         )
+
+    def _graph_base_models(card) -> list[str] | None:
+        """The base-model files the card's runnable graph names, in order.
+
+        Read off the same source a run would submit (:func:`_source_graph_for`:
+        the workflow file, then the best picture's embedded graph, then a stored
+        instance), because that is the graph whose missing file matters. Only
+        asked when the card has no name for its base model, so the grid never
+        pays for it and an opened card pays once. A name the hub forgot reads
+        back as :data:`~run_service.FORGOTTEN_MODEL` and is left out: it names
+        nothing a person could look for. ``None`` when there is no graph to
+        read, which is not the same answer as a graph that loads none.
+        """
+        try:
+            source, _reason = _source_graph_for(card)
+        except (RecursionError, WorkflowGraphError, OSError, ValueError) as exc:
+            logger.warning(
+                "Card %s: could not read its runnable graph for the base model "
+                "it names; the Workflow tab shows none: %s",
+                card.workflow_key,
+                exc,
+            )
+            return None
+        if source is None:
+            return None
+        found = []
+        for widget, value in loaded_model_widgets(source.graph):
+            if (
+                widget in CHECKPOINT_WIDGETS
+                and value != run_service.FORGOTTEN_MODEL
+                and value not in found
+            ):
+                found.append(value)
+        return found
 
     @router.get(
         "/workflows/{workflow_key}/pictures",

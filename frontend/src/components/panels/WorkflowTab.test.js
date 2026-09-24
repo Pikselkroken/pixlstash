@@ -11,13 +11,14 @@
 //   which is `aria-disabled` plus the reason; a button that disappears
 //   teaches nobody why.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
 const getWorkflowCard = vi.fn();
 const listWorkflowCards = vi.fn();
 const patchWorkflowCard = vi.fn();
+const preflightWorkflowRun = vi.fn();
 const setWorkflowDefaults = vi.fn();
 const setWorkflowPins = vi.fn();
 const setWorkflowSlots = vi.fn();
@@ -28,6 +29,7 @@ vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   patchWorkflowCard: (...args) => patchWorkflowCard(...args),
+  preflightWorkflowRun: (...args) => preflightWorkflowRun(...args),
   setWorkflowDefaults: (...args) => setWorkflowDefaults(...args),
   setWorkflowPins: (...args) => setWorkflowPins(...args),
   setWorkflowSlots: (...args) => setWorkflowSlots(...args),
@@ -183,14 +185,28 @@ async function flush(wrapper) {
   await wrapper.vm.$nextTick();
 }
 
+// Unmounted after each test: a pre-flight still settling would otherwise
+// land in the next test's call count.
+const mounted = [];
+afterEach(() => {
+  while (mounted.length) mounted.pop().unmount();
+});
+
 /** Mount the rail with `keys` selected and `cards` in the grid. */
 async function mountWith(keys, cards = [card()]) {
   const store = useWorkflowsStore();
   store.cards = cards;
   store.selectedKeys = keys;
   const wrapper = mount(WorkflowTab, globalOpts);
+  mounted.push(wrapper);
   await flush(wrapper);
   return { wrapper, store };
+}
+
+/** Past the pre-flight's settle delay (250 ms), and its answer rendered. */
+async function settle(wrapper) {
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await flush(wrapper);
 }
 
 function textOf(wrapper) {
@@ -215,6 +231,7 @@ beforeEach(() => {
   stackWorkflows.mockReset().mockResolvedValue({ stack_id: "s", keys: [] });
   getLoraChain.mockReset().mockResolvedValue(loraChain());
   replace.mockReset();
+  preflightWorkflowRun.mockReset().mockResolvedValue({ groups: [] });
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -289,6 +306,254 @@ describe("the models the panel names", () => {
     // The ordinary case - the line must say the file, never go blank.
     const { wrapper } = await mountWith([KEY]);
     expect(textOf(wrapper)).toContain("realvisXL_v5.safetensors");
+  });
+});
+
+describe("a checkpoint that will not load", () => {
+  // Never recorded, forgotten with the shelf's copy, or recorded and simply
+  // not installed in ComfyUI. Whatever the case, the row says WHICH file: a
+  // warning that cannot say what is missing gives the reader nothing to do.
+  const unnamed = card({
+    models: [{ name: null, kind: "checkpoint", slot_label: "n1/ckpt_name" }],
+  });
+  const named = card({
+    models: [
+      { name: "realvisXL_v5", kind: "checkpoint", slot_label: "n1/ckpt_name" },
+    ],
+  });
+
+  function missingFile(file) {
+    return {
+      groups: [
+        {
+          reasons: [
+            {
+              code: "missing_models",
+              models: [{ file, folder: "checkpoints" }],
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  /** The row's file name and the tooltip carrying the whole value. */
+  function missingLine(wrapper) {
+    const line = wrapper.find('[data-testid="wftab-missing-file"]');
+    return {
+      text: line.text().replace(/\s+/g, " "),
+      tooltip: line.find("tooltip-stub").attributes("text"),
+    };
+  }
+
+  it("names the file ComfyUI does not have, without its folders", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(textOf(wrapper)).toContain("Checkpoint missing");
+    const line = missingLine(wrapper);
+    expect(line.text).toBe(
+      "realvisXL_v5.safetensors is not installed in ComfyUI.",
+    );
+    expect(line.tooltip).toBe("SDXL/realvisXL_v5.safetensors");
+  });
+
+  it("names an unnamed checkpoint from the graph a run would submit", async () => {
+    // The hub forgot the name; the pre-flight says "(forgotten model)", which
+    // names nothing. The graph still says which file it loads.
+    preflightWorkflowRun.mockResolvedValue(missingFile("(forgotten model)"));
+    getWorkflowCard.mockResolvedValue(
+      detail({
+        card: unnamed,
+        graph_base_models: ["Flux/klein-9b-fp8.safetensors"],
+      }),
+    );
+    const { wrapper } = await mountWith([KEY], [unnamed]);
+    await settle(wrapper);
+    const line = missingLine(wrapper);
+    expect(line.text).toBe(
+      "klein-9b-fp8.safetensors is not installed in ComfyUI.",
+    );
+    expect(line.tooltip).toBe("Flux/klein-9b-fp8.safetensors");
+    expect(textOf(wrapper)).not.toContain("Not recorded");
+  });
+
+  it("says so plainly when no file name was kept anywhere", async () => {
+    preflightWorkflowRun.mockResolvedValue(missingFile("(forgotten model)"));
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: unnamed, graph_base_models: [] }),
+    );
+    const { wrapper } = await mountWith([KEY], [unnamed]);
+    await settle(wrapper);
+    expect(textOf(wrapper)).toContain("Checkpoint missing");
+    expect(textOf(wrapper)).toContain("No file name was kept for it anywhere.");
+    expect(textOf(wrapper)).not.toContain("(forgotten model)");
+  });
+
+  it("does not call a checkpoint missing that ComfyUI has", async () => {
+    // Unnamed on the card, but the pre-flight found nothing missing: it is
+    // installed, and the row shows the file the graph loads.
+    preflightWorkflowRun.mockResolvedValue({ groups: [] });
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: unnamed, graph_base_models: ["SDXL/pony.safetensors"] }),
+    );
+    const { wrapper } = await mountWith([KEY], [unnamed]);
+    await settle(wrapper);
+    expect(textOf(wrapper)).not.toContain("Checkpoint missing");
+    expect(textOf(wrapper)).toContain("pony.safetensors");
+    expect(textOf(wrapper)).not.toContain("SDXL/");
+  });
+
+  it("warns from the card alone while ComfyUI cannot be asked", async () => {
+    preflightWorkflowRun.mockRejectedValue(new Error("ComfyUI is down"));
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: unnamed, graph_base_models: ["SDXL/pony.safetensors"] }),
+    );
+    const { wrapper } = await mountWith([KEY], [unnamed]);
+    await settle(wrapper);
+    expect(textOf(wrapper)).toContain("Checkpoint missing");
+    // Named, but not claimed uninstalled: nobody could ask.
+    expect(missingLine(wrapper).text).toBe("pony.safetensors");
+  });
+
+  it("draws no warning before the card's detail has arrived", async () => {
+    getWorkflowCard.mockReturnValue(new Promise(() => {}));
+    const { wrapper } = await mountWith([KEY], [unnamed]);
+    expect(wrapper.find(".wftab-missing").exists()).toBe(false);
+  });
+
+  it("says None in this workflow for a graph that loads no base model", async () => {
+    // An upscaler: "Not recorded" read as a gap in the records, when the
+    // graph was read and simply loads none.
+    const upscale = card({
+      models: [
+        {
+          name: "4x-ultrasharp",
+          kind: "upscale_model",
+          slot_label: "u/model_name",
+        },
+      ],
+    });
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: upscale, graph_base_models: [] }),
+    );
+    const { wrapper } = await mountWith([KEY], [upscale]);
+    await settle(wrapper);
+    expect(textOf(wrapper)).toContain("None in this workflow");
+    expect(textOf(wrapper)).not.toContain("Not recorded");
+    expect(textOf(wrapper)).not.toContain("Checkpoint missing");
+  });
+
+  it("does not blame the checkpoint for another missing model", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      groups: [
+        {
+          reasons: [
+            {
+              code: "missing_models",
+              models: [{ file: "other.vae.safetensors", folder: "vae" }],
+            },
+          ],
+        },
+      ],
+    });
+    getWorkflowCard.mockResolvedValue(detail());
+    const { wrapper } = await mountWith([KEY]);
+    await settle(wrapper);
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(textOf(wrapper)).toContain("realvisXL_v5.safetensors");
+    expect(textOf(wrapper)).not.toContain("Checkpoint missing");
+  });
+
+  it("asks ComfyUI once for a selection passed straight through", async () => {
+    // Each ask is a fresh object_info read, so arrowing across the grid
+    // must not ask once per card it crosses.
+    getWorkflowCard.mockImplementation(async (key) =>
+      detail({ card: { key } }),
+    );
+    const { wrapper, store } = await mountWith(
+      [KEY],
+      [card(), card({ key: OTHER, name: "Card B" })],
+    );
+    store.selectedKeys = [OTHER];
+    await settle(wrapper);
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(preflightWorkflowRun).toHaveBeenCalledWith({
+      workflow_key: OTHER,
+      values: [],
+    });
+  });
+
+  it("asks ComfyUI nothing once the rail has closed", async () => {
+    getWorkflowCard.mockResolvedValue(detail());
+    const { wrapper } = await mountWith([KEY]);
+    wrapper.unmount();
+    mounted.length = 0;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(preflightWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  it("does not put card A's pre-flight answer on card B", async () => {
+    let answerA;
+    preflightWorkflowRun.mockImplementation((body) =>
+      body.workflow_key === KEY
+        ? new Promise((resolve) => {
+            answerA = () =>
+              resolve({
+                groups: [
+                  {
+                    reasons: [
+                      {
+                        code: "missing_models",
+                        models: [
+                          { file: "a.safetensors", folder: "checkpoints" },
+                        ],
+                      },
+                    ],
+                  },
+                ],
+              });
+          })
+        : Promise.resolve({ groups: [] }),
+    );
+    getWorkflowCard.mockImplementation(async (key) =>
+      detail({ card: { key, name: key === KEY ? "Card A" : "Card B" } }),
+    );
+    const { wrapper, store } = await mountWith(
+      [KEY],
+      [card({ name: "Card A" }), card({ key: OTHER, name: "Card B" })],
+    );
+    await settle(wrapper);
+    store.selectedKeys = [OTHER];
+    await flush(wrapper);
+    // A answers while B's own ask is still settling: nothing else would
+    // cover the wrong answer up.
+    answerA();
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("Card B");
+    expect(textOf(wrapper)).not.toContain("Checkpoint missing");
+  });
+
+  it("names the checkpoint plainly when the pre-flight cannot be asked", async () => {
+    preflightWorkflowRun.mockRejectedValue(new Error("ComfyUI is down"));
+    getWorkflowCard.mockResolvedValue(detail());
+    const { wrapper } = await mountWith([KEY]);
+    await settle(wrapper);
+    expect(preflightWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(textOf(wrapper)).toContain("realvisXL_v5.safetensors");
+    expect(textOf(wrapper)).not.toContain("Checkpoint missing");
+  });
+  it("does not call a Flux graph's unet a missing checkpoint", async () => {
+    const flux = card({
+      models: [{ name: "flux1-dev", kind: "unet", slot_label: "n1/unet_name" }],
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: flux }));
+    const { wrapper } = await mountWith([KEY], [flux]);
+    expect(textOf(wrapper)).toContain("flux1-dev");
+    expect(textOf(wrapper)).not.toContain("Checkpoint missing");
   });
 });
 
@@ -759,6 +1024,34 @@ describe("a write that comes back after the selection moved", () => {
     expect(
       rowNamed(wrapper, "sampler_name").element.closest("details"),
     ).toBeNull();
+  });
+
+  it("drops a whole-set write queued behind another when the selection moves", async () => {
+    // The pins PUT is whole-set, built from `defaults` when it RUNS, which is
+    // after the notes save it waited behind. By then those are card B's, and
+    // sending them to A would replace A's own choice with B's.
+    getWorkflowCard.mockImplementation(async (key) =>
+      detail({ card: { key, defaults: key === KEY ? [CFG] : [WIDTH] } }),
+    );
+    let settle;
+    patchWorkflowCard.mockReturnValue(
+      new Promise((resolve) => {
+        settle = () => resolve(detail({ card: { defaults: [CFG] } }));
+      }),
+    );
+    const { wrapper, store } = await mountWith(
+      [KEY],
+      [card({ name: "Card A" }), card({ key: OTHER, name: "Card B" })],
+    );
+    await wrapper.find("textarea").setValue("a note");
+    await wrapper.find("textarea").trigger("blur");
+    await rowNamed(wrapper, "cfg").find("button").trigger("click");
+    store.selectedKeys = [OTHER];
+    await flush(wrapper);
+    settle();
+    await flush(wrapper);
+    expect(patchWorkflowCard).toHaveBeenCalledWith(KEY, { notes: "a note" });
+    expect(setWorkflowPins).not.toHaveBeenCalled();
   });
 
   it("runs one write at a time, so two cannot discard each other", async () => {
