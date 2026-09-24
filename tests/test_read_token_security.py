@@ -1775,18 +1775,51 @@ class TestResourceScopedReadTokenIsolation:
 
         server.vault.db.run_task(_set)
 
+    @staticmethod
+    def _seed_shelf_names(server):
+        """Shelf rows naming the in-scope model and LoRA.
+
+        So a negative on ``name`` is a refusal, not merely an empty shelf.
+        """
+        with server.hub.transaction() as conn:
+            for file_kind, filename, name in (
+                ("checkpoint", "model-a-only", "Shelf Name A"),
+                ("unknown", "lora-a-only", "Shelf LoRA A"),
+            ):
+                conn.execute(
+                    "INSERT INTO model (file_kind, filename, display_name, "
+                    "provenance) SELECT ?, ?, ?, 'external' "
+                    "WHERE NOT EXISTS (SELECT 1 FROM model WHERE filename = ?)",
+                    (file_kind, filename, name, filename),
+                )
+
+    def _assert_names_are_owner_only(self, env, path, value, name):
+        """The owner reads the shelf's name; no READ token does, scoped or not.
+
+        A READ token with no resource restriction sees every picture's
+        vocabulary, but is refused the shelf, so it must not read the shelf's
+        names through the filter list either.
+        """
+        r = env.owner_client.get(f"{API}{path}")
+        assert r.status_code == 200, r.text
+        names = {option["value"]: option["name"] for option in r.json()}
+        assert names[value] == name, names
+
+        whole_library = _mint_read_token(env.owner_client, "whole-library READ")
+        r = TestClient(env.server.api).get(
+            f"{API}{path}", headers={"Authorization": f"Bearer {whole_library}"}
+        )
+        assert r.status_code == 200, r.text
+        names = {option["value"]: option["name"] for option in r.json()}
+        # Positive control: the token does see the vocabulary itself.
+        assert value in names, names
+        assert all(n is None for n in names.values()), names
+
     def test_comfyui_models_cannot_leak_out_of_scope_vocab(self, env):
         """GET /pictures/comfyui_models must only return model names drawn from
         pictures inside the token's grant; owner/unscoped sees the union."""
         self._seed_comfyui_vocab(env.server, env.pic_a, env.pic_b)
-        # A shelf row naming the in-scope model, so the scoped negative on
-        # `name` below is a refusal and not merely an empty shelf.
-        with env.server.hub.transaction() as conn:
-            conn.execute(
-                "INSERT INTO model (file_kind, filename, display_name, provenance) "
-                "SELECT 'checkpoint', 'model-a-only', 'Shelf Name A', 'external' "
-                "WHERE NOT EXISTS (SELECT 1 FROM model WHERE filename = 'model-a-only')"
-            )
+        self._seed_shelf_names(env.server)
 
         # Negative: Set-A token must not see Set-B-only models.
         r = TestClient(env.server.api).get(
@@ -1811,13 +1844,15 @@ class TestResourceScopedReadTokenIsolation:
         assert {"model-a-only", "model-b-only"} <= owner_models, (
             f"Owner did not see full model vocab: {owner_models}"
         )
-        names = {option["value"]: option["name"] for option in r.json()}
-        assert names["model-a-only"] == "Shelf Name A", names
+        self._assert_names_are_owner_only(
+            env, "/pictures/comfyui_models", "model-a-only", "Shelf Name A"
+        )
 
     def test_comfyui_loras_cannot_leak_out_of_scope_vocab(self, env):
         """GET /pictures/comfyui_loras must only return LoRA names drawn from
         pictures inside the token's grant; owner/unscoped sees the union."""
         self._seed_comfyui_vocab(env.server, env.pic_a, env.pic_b)
+        self._seed_shelf_names(env.server)
 
         # Negative: Set-A token must not see Set-B-only LoRAs.
         r = TestClient(env.server.api).get(
@@ -1841,6 +1876,9 @@ class TestResourceScopedReadTokenIsolation:
         owner_loras = {option["value"] for option in r.json()}
         assert {"lora-a-only", "lora-b-only"} <= owner_loras, (
             f"Owner did not see full LoRA vocab: {owner_loras}"
+        )
+        self._assert_names_are_owner_only(
+            env, "/pictures/comfyui_loras", "lora-a-only", "Shelf LoRA A"
         )
 
     def test_list_all_tags_cannot_leak_out_of_scope_vocab(self, env):

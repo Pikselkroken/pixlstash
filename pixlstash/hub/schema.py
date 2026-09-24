@@ -34,7 +34,7 @@ from pixlstash.utils.adapter_header import (
     FILE_UNKNOWN,
     role_from_folder,
 )
-from pixlstash.utils.known_base_models import identify
+from pixlstash.utils.known_base_models import SOURCE_DECLARED, identify
 
 logger = get_logger(__name__)
 
@@ -1448,14 +1448,16 @@ def _drop_blank_recipe_assets(conn: sqlite3.Connection) -> int:
 
 
 def _backfill_base_model_canonical(conn: sqlite3.Connection) -> int:
-    """Identify the base model of every row already on the shelf.
+    """Identify the rows already on the shelf whose stored base model folds.
 
-    From the two strings that are already columns - ``base_model`` and
-    ``filename`` - so it reads no file and parses no header, and covers most of
-    a shelf the moment the hub opens. Evidence only the header carries
-    (``modelspec.architecture``, ``ss_sd_model_name``) reaches the rows this
-    leaves unmatched on their next scan, which re-reads the header of every row
-    whose source is still NULL.
+    From the stored ``base_model`` alone, and **only an exact fold of it**
+    (``declared``), so it reads no file and parses no header. Nothing weaker is
+    written here, because a stored answer stops the scanner re-reading the
+    header, and the header can carry better evidence than the columns do
+    (``modelspec.architecture``, ``ss_sd_model_name``): a filename or fuzzy
+    guess written now would never be checked against it. Every row this leaves
+    NULL is identified from all of its evidence on its next scan, which re-reads
+    the header - never the bytes - of each row whose source is still NULL.
 
     Only rows with no source are touched, so a hub that ran a scan first loses
     nothing to this. Runs exactly once per hub (see
@@ -1468,12 +1470,13 @@ def _backfill_base_model_canonical(conn: sqlite3.Connection) -> int:
         How many rows were identified.
     """
     rows = conn.execute(
-        "SELECT id, base_model, filename FROM model WHERE base_model_source IS NULL"
+        "SELECT id, base_model FROM model "
+        "WHERE base_model_source IS NULL AND base_model IS NOT NULL"
     ).fetchall()
     updates = []
-    for model_id, base_model, filename in rows:
-        canonical, source = identify([base_model], [filename])
-        if canonical is not None:
+    for model_id, base_model in rows:
+        canonical, source = identify([base_model], [])
+        if source == SOURCE_DECLARED:
             updates.append((canonical, source, model_id))
     conn.executemany(
         "UPDATE model SET base_model_canonical = ?, base_model_source = ? WHERE id = ?",

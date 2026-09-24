@@ -3076,9 +3076,10 @@ Quality before provenance: an exact filename beats a fuzzy declaration. A
 `closed` base is never an answer.
 
 - **Written only over a source it outranks.** `_write_identification` is one
-  guarded UPDATE, deliberately not the `COALESCE` the curatable columns use: a
-  rescan must be able to upgrade a filename guess, and must never replace
-  `user`. `base_model` itself is still the trainer's string, written with
+  guarded UPDATE, deliberately not the `COALESCE` the curatable columns use:
+  the same content reached again with better evidence (a copy under a more
+  telling name) must be able to upgrade a guess, and nothing may replace
+  `user`. An unchanged file that already has an answer is not re-read. `base_model` itself is still the trainer's string, written with
   `COALESCE` as before.
 - **A curated base model moves both columns in the same UPDATE**
   (`update_models`: canonical = `fold(value)`, source = `user`), including a
@@ -3088,9 +3089,13 @@ Quality before provenance: an exact filename beats a fuzzy declaration. A
   requires `base_model_source IS NOT NULL`, so the fast path re-reads the
   header of an unmatched row on every scan (never its bytes). That is how a
   table entry added in a later release reaches files scanned before it.
-- **Existing rows** are identified once, from the stored `base_model` and
-  `filename` alone, by the hub's data backfill v3
-  (`schema._backfill_base_model_canonical`). The columns themselves are amended
+- **Existing rows** whose stored `base_model` folds exactly are identified
+  once, as `declared`, by the hub's data backfill v3
+  (`schema._backfill_base_model_canonical`). Nothing weaker is written there:
+  a stored answer stops the header being re-read, so a filename guess made
+  from the columns would never be checked against the header's
+  `modelspec.architecture`. Every other row is identified from all its
+  evidence on its next scan. The columns themselves are amended
   into schema v2 like the header facts, not a v3, which an older build would
   refuse.
 - The shelf **sorts and filters** on `COALESCE(base_model_canonical,

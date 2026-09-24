@@ -33,6 +33,7 @@ from pixlstash.services.model_folder_scanner import (
     ModelFolderScanner,
     sha256_file,
 )
+from pixlstash.hub.schema import _backfill_base_model_canonical
 from pixlstash.services.model_shelf_service import update_models
 
 SKIP_AS_ROOT = pytest.mark.skipif(
@@ -1197,9 +1198,9 @@ class TestBaseModelIdentification:
         folder = tmp_path / "loras"
         folder.mkdir()
         write_adapter(folder / "MyFlux2LoRA.safetensors")
-        write_adapter(folder / "hana.safetensors", base_model="SDXL_Base_V1-0")
+        write_adapter(folder / "example.safetensors", base_model="SDXL_Base_V1-0")
         _write_safetensors(
-            folder / "Riko_v2.safetensors",
+            folder / "Style_v2.safetensors",
             {"blocks.0.lora_A.weight": _tensor([8, 16])},
             {"modelspec.architecture": "stable-diffusion-xl-v1-base/lora"},
         )
@@ -1209,24 +1210,24 @@ class TestBaseModelIdentification:
 
         assert self._identified(hub) == {
             "MyFlux2LoRA.safetensors": ("FLUX.2", "filename_fuzzy"),
-            "hana.safetensors": ("SDXL 1.0", "declared"),
-            "Riko_v2.safetensors": ("SDXL 1.0", "declared"),
+            "example.safetensors": ("SDXL 1.0", "declared"),
+            "Style_v2.safetensors": ("SDXL 1.0", "declared"),
         }
         # The trainer's own string is kept, never rewritten to the label.
-        (hana,) = [
-            r for r in models(hub).values() if r["filename"] == "hana.safetensors"
+        (example,) = [
+            r for r in models(hub).values() if r["filename"] == "example.safetensors"
         ]
-        assert hana["base_model"] == "SDXL_Base_V1-0"
+        assert example["base_model"] == "SDXL_Base_V1-0"
 
     def test_nothing_matched_writes_nothing_and_is_looked_at_again(
         self, hub, scanner, tmp_path, monkeypatch
     ):
         folder = tmp_path / "loras"
         folder.mkdir()
-        write_adapter(folder / "hana_v3.safetensors")
+        write_adapter(folder / "example_v3.safetensors")
         folder_id = register_folder(hub, folder)
         scanner.scan_folder(folder_id, str(folder), "user")
-        assert self._identified(hub) == {"hana_v3.safetensors": (None, None)}
+        assert self._identified(hub) == {"example_v3.safetensors": (None, None)}
 
         reads = []
         real = scanner_module.describe_adapter
@@ -1245,7 +1246,7 @@ class TestBaseModelIdentification:
     ):
         folder = tmp_path / "loras"
         folder.mkdir()
-        write_adapter(folder / "hana.safetensors", base_model="sdxl")
+        write_adapter(folder / "example.safetensors", base_model="sdxl")
         folder_id = register_folder(hub, folder)
         scanner.scan_folder(folder_id, str(folder), "user")
 
@@ -1345,11 +1346,49 @@ class TestCuratedBaseModel:
 
         update_models(hub, [row["id"]], {"base_model": None})
         scanner.scan_folder(folder_id, str(folder), "user")
+        # The same bytes under a name that states a base model exactly: this
+        # goes through the identification write, not the unchanged-file touch,
+        # so it is the write itself that has to leave the answer alone.
+        other = tmp_path / "other"
+        other.mkdir()
+        (other / "flux2.safetensors").write_bytes(
+            (folder / "mysanalora.safetensors").read_bytes()
+        )
+        scanner.scan_folder(register_folder(hub, other), str(other), "user")
 
         (row,) = models(hub).values()
         assert (row["base_model_canonical"], row["base_model_source"]) == (
             None,
             "user",
+        )
+
+    def test_a_row_the_backfill_leaves_is_identified_from_its_header(
+        self, hub, scanner, tmp_path
+    ):
+        # A row registered before identification existed. Its filename alone
+        # suggests Sana; its header declares SDXL. The backfill must leave it
+        # for the scan, which reads the header of the unchanged file once.
+        folder = tmp_path / "loras"
+        folder.mkdir()
+        _write_safetensors(
+            folder / "mysanalora.safetensors",
+            {"blocks.0.lora_A.weight": _tensor([8, 16])},
+            {"modelspec.architecture": "stable-diffusion-xl-v1-base/lora"},
+        )
+        folder_id = register_folder(hub, folder)
+        scanner.scan_folder(folder_id, str(folder), "user")
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET base_model_canonical = NULL, base_model_source = NULL"
+            )
+            _backfill_base_model_canonical(conn)
+
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        (row,) = models(hub).values()
+        assert (row["base_model_canonical"], row["base_model_source"]) == (
+            "SDXL 1.0",
+            "declared",
         )
 
     def test_editing_something_else_leaves_the_identification_alone(
@@ -1362,7 +1401,7 @@ class TestCuratedBaseModel:
         scanner.scan_folder(folder_id, str(folder), "user")
         (row,) = models(hub).values()
 
-        update_models(hub, [row["id"]], {"display_name": "Hana"})
+        update_models(hub, [row["id"]], {"display_name": "Example"})
 
         (row,) = models(hub).values()
         assert row["base_model_source"] == "filename_fuzzy", dict(row)

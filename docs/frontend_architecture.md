@@ -3196,9 +3196,11 @@ undo by accident:
   `aria-keyshortcuts`, because a double click is not a keyboard gesture and a
   pointer-only field is a field some readers do not have. Focus returns to the
   row when a KEY closed the field and stays put when a click did, or committing
-  by clicking elsewhere would drag the reader back. It is seeded from the stored
-  value, unlike the name field: nothing infers a base model, so what the row
-  shows is what the file said and a correction is one word rather than a retype.
+  by clicking elsewhere would drag the reader back. It is seeded from what the
+  cell shows (`baseModelCell`), unlike the name field: the file's own string,
+  or for a guessed row the guess, so a correction is one word rather than a
+  retype, leaving a guess untouched writes nothing, and emptying the field
+  stores "none of these", which sticks across rescans.
   The bulk verb keeps its dialog, which is a different gesture with the
   overwrite count in front of it.
 - **`unknown` is never rendered as a checkpoint.** `file_kind='unknown'` is a

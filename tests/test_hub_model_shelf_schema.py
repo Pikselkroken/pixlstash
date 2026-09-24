@@ -640,26 +640,35 @@ class TestBaseModelCanonicalBackfill:
             hub, "model"
         )
 
-    def test_it_identifies_from_stored_strings_and_is_idempotent(self, hub):
+    def test_it_writes_only_exact_declared_matches_and_is_idempotent(self, hub):
         apply_migrations(hub)
         add_model(
             hub, sha256="a", base_model="SDXL_Base_V1-0", filename="x.safetensors"
         )
-        add_model(hub, sha256="b", filename="MyFlux2LoRA.safetensors")
-        add_model(hub, sha256="c", filename="hana_v3.safetensors")
+        # kohya's own spelling for every SD 1.x LoRA: an exact alias, never a
+        # near-typo of an SD 2.x one.
+        add_model(hub, sha256="b", base_model="sd_v1", filename="y.safetensors")
+        # Guesses are left for the scan, which weighs the header's evidence
+        # too: a filename guess stored now would stop the header being read.
+        add_model(hub, sha256="c", filename="MyFlux2LoRA.safetensors")
+        add_model(hub, sha256="d", filename="ilxl_example_v3.safetensors")
+        add_model(hub, sha256="e", base_model="ilustrius", filename="z.safetensors")
         add_model(
             hub,
-            sha256="d",
-            filename="flux2.safetensors",
+            sha256="f",
+            base_model="flux2",
+            filename="w.safetensors",
             base_model_canonical=None,
             base_model_source="user",
         )
         expected = {
             "x.safetensors": ("SDXL 1.0", "declared"),
-            "MyFlux2LoRA.safetensors": ("FLUX.2", "filename_fuzzy"),
-            "hana_v3.safetensors": (None, None),
+            "y.safetensors": ("SD 1.5", "declared"),
+            "MyFlux2LoRA.safetensors": (None, None),
+            "ilxl_example_v3.safetensors": (None, None),
+            "z.safetensors": (None, None),
             # A person's answer - here "none of these" - is not re-guessed.
-            "flux2.safetensors": (None, "user"),
+            "w.safetensors": (None, "user"),
         }
 
         assert _backfill_base_model_canonical(hub) == 2
@@ -669,15 +678,13 @@ class TestBaseModelCanonicalBackfill:
 
     def test_apply_migrations_runs_it_on_a_data_v2_hub(self, hub):
         apply_migrations(hub)
-        add_model(hub, sha256="a", filename="ilxl_hana_v3.safetensors")
+        add_model(hub, sha256="a", base_model="SDXL", filename="x.safetensors")
         hub.execute("PRAGMA user_version = 2")
         hub.commit()
 
         apply_migrations(hub)
 
-        assert self._identified(hub) == {
-            "ilxl_hana_v3.safetensors": ("Illustrious XL", "filename")
-        }
+        assert self._identified(hub) == {"x.safetensors": ("SDXL 1.0", "declared")}
 
 
 class TestComponentRoleBackfill:

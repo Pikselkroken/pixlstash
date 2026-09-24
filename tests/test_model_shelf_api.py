@@ -4441,7 +4441,11 @@ def test_the_identified_base_model_is_served_filtered_and_sorted_on(shelf_env):
     row = next(r for r in rows if r["id"] == noname)
     assert (row["base_model"], row["base_model_canonical"]) == (None, "SDXL 1.0")
     assert row["base_model_source"] == "filename_fuzzy"
-    assert row["family"] == "sdxl"
+    # A guess never becomes the family the swap UI states as compatibility;
+    # a stated base model does.
+    assert row["family"] is None, row["family"]
+    alice_row = next(r for r in rows if r["id"] == alice)
+    assert alice_row["family"] == "sdxl"
     assert row["matched_name"] is None, "an adapter's name is never its base"
 
     r = shelf_env.owner.get(f"{API}/adapters", params={"base_model": "SDXL 1.0"})

@@ -825,9 +825,14 @@ class ModelFolderScanner:
         """Store the identified base model, only over a source it outranks.
 
         Deliberately **not** the ``COALESCE`` the curatable columns use: that
-        fills a blank and can never upgrade, and a rescan has to be able to
-        replace a filename guess with what the header declares. It must never
-        replace ``user``, which nothing here outranks. ``base_model`` itself is
+        fills a blank and can never upgrade. One content row can be reached
+        with better evidence than it was identified from - the same bytes
+        found again under a name that says more, or registered through another
+        folder - and that has to be able to replace a guess. An unchanged file
+        that already has an answer is not re-read at all (``has_header_facts``),
+        so its header's evidence is weighed once, when the row is first
+        identified. It must never replace ``user``, which nothing here
+        outranks. ``base_model`` itself is
         still written with ``COALESCE`` by the upserts; this is only the pair
         of identification columns. Nothing matched writes nothing, so the row
         stays NULL and is looked at again next scan.

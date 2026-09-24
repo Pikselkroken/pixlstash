@@ -264,12 +264,12 @@ def test_malformed_metadata_values_degrade_instead_of_raising(tmp_path):
 def test_modelspec_and_kohya_evidence_is_read(tmp_path):
     """The SAI ``modelspec.*`` block and kohya's training checkpoint name."""
     path = _write_safetensors(
-        tmp_path / "hana.safetensors",
+        tmp_path / "example.safetensors",
         ["x.lora_A.weight"],
         {
             "format": "pt",
             "modelspec.architecture": "Stable-Diffusion-XL-v1-Base/LoRA",
-            "modelspec.title": "Hana Style",
+            "modelspec.title": "Example Style",
             "ss_sd_model_name": "animagineXLV31_v31.safetensors",
         },
     )
@@ -277,7 +277,7 @@ def test_modelspec_and_kohya_evidence_is_read(tmp_path):
 
     assert info.architecture == "Stable-Diffusion-XL-v1-Base/LoRA"
     assert info.trained_on == "animagineXLV31_v31.safetensors"
-    assert info.display_name == "Hana Style"
+    assert info.display_name == "Example Style"
     # modelspec says what the file is trained against; it does not become the
     # trainer's own base-model string.
     assert info.base_model is None

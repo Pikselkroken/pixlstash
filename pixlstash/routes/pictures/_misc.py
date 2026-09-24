@@ -117,7 +117,9 @@ class ComfyUIModelOption(BaseModel):
     ``value`` is what the picture filter matches on, verbatim. ``name`` is the
     name the owner gave the one shelf model a file of that name is, else
     ``None``. A fact about the library rather than about any picture, so it is
-    only ever filled for an unscoped caller.
+    only ever filled for the unscoped owner: a READ token with no resource
+    restriction sees every picture's vocabulary, but is refused the shelf
+    itself, and must not read the shelf's names through here.
     """
 
     value: str
@@ -299,7 +301,9 @@ def register_routes(router, server):
             return [r[0] for r in rows if r and r[0]]
 
         values = server.vault.db.run_immediate_read_task(fetch)
-        return _with_shelf_names(server, values, owner=allowed_ids is None)
+        return _with_shelf_names(
+            server, values, owner=server.auth.is_unscoped_owner_request(request)
+        )
 
     @router.get(
         "/pictures/comfyui_loras",
@@ -335,7 +339,9 @@ def register_routes(router, server):
             return [r[0] for r in rows if r and r[0]]
 
         values = server.vault.db.run_immediate_read_task(fetch)
-        return _with_shelf_names(server, values, owner=allowed_ids is None)
+        return _with_shelf_names(
+            server, values, owner=server.auth.is_unscoped_owner_request(request)
+        )
 
     @router.get(
         "/pictures/likeness-groups",

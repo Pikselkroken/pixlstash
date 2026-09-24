@@ -41,7 +41,7 @@ tier the file's declared metadata beats its filename (:data:`SOURCE_RANK`). A
 person's value (``user``) outranks every scan, so nothing here clobbers it.
 
 **Containment for filenames, edit distance for declared values, never the
-reverse.** A filename is a soup of tokens (``ilxl_hana_v3_fp16-000012``) where
+reverse.** A filename is a soup of tokens (``ilxl_example_v3_fp16-000012``) where
 only containment means anything; a declared value is one person's attempt at
 one name, where a typo is plausible. Containment is safe to apply only under
 two guards: the **longest alias wins**, because ``flux`` is a substring of
@@ -94,6 +94,7 @@ KNOWN_BASE_MODELS: dict[str, dict] = {
             "runwayml/stable-diffusion-v1-5",
             "v1-5-pruned",
             "stable-diffusion-v1",
+            "sd_v1",
         ],
     },
     "SD 2.1": {
@@ -106,6 +107,7 @@ KNOWN_BASE_MODELS: dict[str, dict] = {
             "stabilityai/stable-diffusion-2-1",
             "stable-diffusion-v2-512",
             "stable-diffusion-v2-768-v",
+            "sd_v2",
         ],
     },
     "SDXL 1.0": {
@@ -480,14 +482,23 @@ def _contained(key: str, min_alias: int) -> list[str]:
     return hits
 
 
+def _scored(key: str, cutoff: float) -> list[tuple[float, str]]:
+    """``(similarity, canonical label)`` at or above *cutoff*, closest first.
+
+    One entry per label, at its closest alias. Ties keep table order, so the
+    caller can see a tie rather than have ``difflib`` break it silently.
+    """
+    best: dict[str, float] = {}
+    for alias, canonical in _ALIAS_INDEX.items():
+        ratio = difflib.SequenceMatcher(None, key, alias).ratio()
+        if ratio >= cutoff and ratio > best.get(canonical, 0.0):
+            best[canonical] = ratio
+    return sorted(((r, c) for c, r in best.items()), key=lambda hit: -hit[0])
+
+
 def _close(key: str, cutoff: float, limit: int) -> list[str]:
     """Canonical labels an alias of which is within edit distance of *key*."""
-    hits: list[str] = []
-    for alias in difflib.get_close_matches(key, _ALIAS_INDEX, n=limit, cutoff=cutoff):
-        canonical = _ALIAS_INDEX[alias]
-        if canonical not in hits:
-            hits.append(canonical)
-    return hits
+    return [canonical for _ratio, canonical in _scored(key, cutoff)[:limit]]
 
 
 def _stem(filename: str) -> str:
@@ -555,15 +566,21 @@ def identify(
         if _local(label):
             return label, SOURCE_DECLARED
     for stem in stems:
-        for candidate in (stem, *_FILENAME_SEPARATORS_RE.split(stem)):
-            label = fold(candidate)
-            if _local(label):
-                return label, SOURCE_FILENAME
+        if _local(fold(stem)):
+            return fold(stem), SOURCE_FILENAME
+        # The longest token that names a base model, not the first: in
+        # `sdxl_illustrious_char` the specific base is the one that says more.
+        tokens = [t for t in _FILENAME_SEPARATORS_RE.split(stem) if _local(fold(t))]
+        if tokens:
+            return fold(max(tokens, key=lambda t: len(_norm(t)))), SOURCE_FILENAME
     for value in values:
         key = _norm(value)
-        hits = [h for h in _close(key, _DECLARED_FUZZY_CUTOFF, 3) if _local(h)]
-        if key and hits:
-            return hits[0], SOURCE_DECLARED_FUZZY
+        hits = [h for h in _scored(key, _DECLARED_FUZZY_CUTOFF) if _local(h[1])]
+        # Two different bases equally close is not a typo of either: a
+        # declared `flux` is as near `flux1` as `flux2`, and picking one would
+        # be a coin toss the shelf then presents as an answer.
+        if key and hits and (len(hits) == 1 or hits[1][0] < hits[0][0]):
+            return hits[0][1], SOURCE_DECLARED_FUZZY
     for stem in stems:
         hits = [h for h in _contained(_norm(stem), _MIN_CONTAINED_ALIAS) if _local(h)]
         if hits:

@@ -43,6 +43,7 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_folder_scanner import sha256_file
 from pixlstash.services.stack_detector import repair_stacks
 from pixlstash.tasks.base_task import BaseTask, TaskPriority
+from pixlstash.utils.known_base_models import rank
 
 logger = get_logger(__name__)
 
@@ -148,7 +149,9 @@ class CheckpointHashTask(BaseTask):
         legitimately present at two paths ends as one row with two locations
         rather than one row and a forgotten path. The survivor fills any column
         it has no value for from the row being dropped, so a base model somebody
-        typed is not lost to the merge.
+        typed is not lost to the merge. The identified base model is not a
+        blank-filling column: the pair with the stronger source wins, so a
+        person's answer on the dropped row beats a guess on the survivor.
 
         There is deliberately no filesystem call here. "Which path exists" was
         the old way of choosing between two paths only one column could hold;
@@ -158,7 +161,7 @@ class CheckpointHashTask(BaseTask):
         columns = (
             "id, filename, display_name, base_model, trigger_words, "
             "training_step, param_count, file_size, stack_id, family, quant, "
-            "weights_id"
+            "weights_id, base_model_canonical, base_model_source"
         )
         holder = conn.execute(
             f"SELECT {columns} FROM model WHERE sha256 = ?", (digest,)
@@ -243,6 +246,16 @@ class CheckpointHashTask(BaseTask):
                 survivor["id"],
             ),
         )
+        if rank(doomed["base_model_source"]) > rank(survivor["base_model_source"]):
+            conn.execute(
+                "UPDATE model SET base_model_canonical = ?, base_model_source = ? "
+                "WHERE id = ?",
+                (
+                    doomed["base_model_canonical"],
+                    doomed["base_model_source"],
+                    survivor["id"],
+                ),
+            )
         logger.info(
             "Merged model %s into %s on sha256 %s; %d location(s) moved across.",
             doomed["id"],

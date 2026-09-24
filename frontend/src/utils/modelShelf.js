@@ -745,7 +745,7 @@ export function baseModelCell(row) {
         : "Guessed from the filename. Nothing in the file says this.";
     return {
       text: canonical,
-      guess: `${how} Double-click, or use Set base model, to correct it.`,
+      guess: `${how} Double-click or press Shift+F2 to correct it.`,
     };
   }
   return { text: row?.base_model || canonical, guess: null };
