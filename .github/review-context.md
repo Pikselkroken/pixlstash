@@ -29,7 +29,9 @@ fragment format.
 - **Siblings.** A fix to one endpoint or call site that leaves identical
   siblings unfixed is a finding; name them.
 - **Migrations.** Every `op.add_column` is guarded by an inspector check for
-  the existing column. A migration already on `main` is never edited. Data to
+  the existing column. The revision variables are exported with
+  `__all__ = ["revision", "down_revision", "branch_labels", "depends_on"]`.
+  A migration already on `main` is never edited. Data to
   regenerate is reset to `NULL` so the `Missing*Finder` tasks pick it up;
   migrations hold no application logic.
 - **Exceptions.** A caught exception is logged with context (paths, ids, the
