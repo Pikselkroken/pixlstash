@@ -2,6 +2,7 @@ import { computed, onScopeDispose, ref } from "vue";
 import { defineStore } from "pinia";
 
 import {
+  cloneWorkflowWithModels,
   deleteWorkflowFile,
   dissolveStack,
   duplicateWorkflow,
@@ -901,6 +902,30 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   }
 
   /**
+   * Write a copy of one card with model files replaced, as a card of its own.
+   *
+   * `duplicateCard` with a body: the grid is re-read rather than patched, and
+   * the answer is handed back for the notice. `null` on failure, with the
+   * reason in `error`.
+   */
+  async function cloneCardWithModels(key, body) {
+    if (verbBusy.value) return null;
+    verbBusy.value = "clone-with-models";
+    try {
+      const answer = await cloneWorkflowWithModels(key, body);
+      forgetMembers();
+      await fetchCards();
+      return answer;
+    } catch (err) {
+      console.warn(`[workflows] could not clone ${key} with new models`, err);
+      error.value = errorMessage(err, "Could not clone that workflow.");
+      return null;
+    } finally {
+      verbBusy.value = "";
+    }
+  }
+
+  /**
    * Send every selected card's workflow FILE to the system trash.
    *
    * The cards and their pictures stay: this deletes the file that runs them.
@@ -1235,6 +1260,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     unstackSelected,
     renameCard,
     duplicateCard,
+    cloneCardWithModels,
     deleteSelected,
     stackKeys,
     select,

@@ -269,6 +269,20 @@ def _combo_options(node_spec: Any, field: str) -> list[str] | None:
     return values or None
 
 
+def listed_options(
+    object_info: dict | None, class_type: str, field: str
+) -> list[str] | None:
+    """What ComfyUI lists for one loader field, or ``None`` when it cannot say.
+
+    ``None`` for no ``object_info``, a class it does not declare, or a field it
+    does not enumerate (see :func:`_combo_options`): each means "unchecked",
+    never "empty".
+    """
+    if object_info is None:
+        return None
+    return _combo_options(object_info.get(class_type), field)
+
+
 def _normalize_filename(value: str) -> str:
     """Return *value* with path separators unified.
 
@@ -625,6 +639,138 @@ def apply_model_swap(
             )
             break
     return substitutions
+
+
+def _swap_key(value: str, swaps: dict[str, str]) -> str | None:
+    """The key of *swaps* one loader value names, or ``None``.
+
+    The whole recorded name only, separators unified and case folded. There is
+    no basename tier: the clone dialog sends the graph's own values as keys, so
+    an exact match always exists, and a basename one would let a swap of
+    ``diffusion_pytorch_model.safetensors`` rewrite a ControlNet loader's
+    ``canny/diffusion_pytorch_model.safetensors`` too. Two keys folding onto
+    one value is no answer: which of them was meant is a guess.
+    """
+    wanted = _normalize_filename(value).lower()
+    hits = [was for was in swaps if _normalize_filename(was).lower() == wanted]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _option_by_basename(value: str, options: list[str]) -> str | None:
+    """The one option whose basename is *value*'s, in ComfyUI's spelling.
+
+    A shelf row knows its file by name, and ComfyUI lists it under whatever
+    subfolder of its model folder it sits in (``flux/krea2.safetensors``), so a
+    whole-name match alone would refuse nearly every real swap. Two options of
+    that basename is not an answer. Case is kept, as in :func:`_matching_option`.
+    """
+    hits = _options_by_basename(value, options)
+    return hits[0] if len(hits) == 1 else None
+
+
+def _options_by_basename(value: str, options: list[str]) -> list[str]:
+    """Every option whose basename is *value*'s, in ComfyUI's spelling."""
+    base = _normalize_filename(value).rsplit("/", 1)[-1]
+    return [
+        option
+        for option in options
+        if _normalize_filename(option).rsplit("/", 1)[-1] == base
+    ]
+
+
+def apply_filename_swap(
+    prompt_graph: dict,
+    swaps: dict[str, str],
+    object_info: dict | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Point every loader naming one file at another file instead.
+
+    The clone-with-new-models rewrite. Deliberately not :func:`apply_model_swap`:
+    that one substitutes **the same bytes** under another name, aimed at fields
+    ComfyUI cannot load; this one replaces a file that loads perfectly well with
+    a **different** file the owner chose. Same shape, opposite intent.
+
+    Swapped by filename, never by node address: every loader field naming a
+    *swaps* key is rewritten, wherever it is in the graph. The fields read come
+    from :func:`pixlstash.utils.comfyui_utilities.iter_model_fields_api`, the
+    walk the clone dialog's slot list reads too, so the two agree on which
+    widgets name a model.
+
+    With *object_info* the replacement is written in **the option's spelling**
+    (:func:`_matching_option`, then :func:`_option_by_basename`), because
+    ComfyUI compares exactly; a replacement
+    that loader does not advertise is left unwritten and reported. Without it
+    the replacement is written as given and marked ``verified: False``: the
+    clone must not need ComfyUI to be running.
+
+    Args:
+        prompt_graph: The API-format graph, mutated in place.
+        swaps: The graph's filename -> the filename to load instead.
+        object_info: The map from :func:`fetch_object_info`, or ``None``.
+
+    Returns:
+        ``(substitutions, unswapped)``. One ``{node_id, class_type, field, was,
+        now, verified}`` per field rewritten, and one ``{was, now, reason}`` per
+        swap that did not land: ``not_in_graph`` when no field names it,
+        ``not_on_comfyui`` when ComfyUI does not list the replacement, and
+        ``several_on_comfyui`` when it lists that name in more than one folder.
+    """
+    # Local for the cycle: `comfyui_utilities` imports `model_filename_fields`
+    # from this module.
+    from pixlstash.utils.comfyui_utilities import iter_model_fields_api
+
+    substitutions: list[dict] = []
+    unswapped: list[dict] = []
+    matched: set[str] = set()
+    # Listed first, then written: the walk reads the inputs it rewrites.
+    for node_id, class_type, field, value in list(iter_model_fields_api(prompt_graph)):
+        key = _swap_key(value, swaps)
+        if key is None:
+            continue
+        matched.add(key)
+        now = swaps[key]
+        verified = False
+        options = (
+            _combo_options(object_info.get(class_type), field)
+            if object_info is not None
+            else None
+        )
+        if options:
+            listed = _matching_option(now, options) or _option_by_basename(now, options)
+            if listed is None:
+                # Two files of that name in two folders may be two different
+                # models: writing either is a guess, so it is refused - but as
+                # what it is, not as a file ComfyUI does not have.
+                several = len(_options_by_basename(now, options)) > 1
+                unswapped.append(
+                    {
+                        "was": value,
+                        "now": now,
+                        "reason": "several_on_comfyui" if several else "not_on_comfyui",
+                    }
+                )
+                continue
+            now, verified = listed, True
+        if now == value:
+            # The owner kept this file: nothing to write or report.
+            continue
+        prompt_graph[node_id]["inputs"][field] = now
+        substitutions.append(
+            {
+                "node_id": str(node_id),
+                "class_type": class_type,
+                "field": field,
+                "was": value,
+                "now": now,
+                "verified": verified,
+            }
+        )
+    unswapped.extend(
+        {"was": was, "now": now, "reason": "not_in_graph"}
+        for was, now in swaps.items()
+        if was not in matched
+    )
+    return substitutions, unswapped
 
 
 def detect_seed_targets(prompt_graph: dict, object_info: dict) -> list[dict]:

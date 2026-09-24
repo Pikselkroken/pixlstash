@@ -95,8 +95,10 @@ from pixlstash.hub.workflows import (
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.a1111_recipe import reduce_a1111
 from pixlstash.services.comfyui_recipe_service import (
+    LORA_FILENAME_FIELD_RE,
     MAX_SEED_64,
     apply_adapter,
+    apply_filename_swap,
     apply_lora_chain,
     apply_model_swap,
     apply_seeds,
@@ -104,6 +106,7 @@ from pixlstash.services.comfyui_recipe_service import (
     detect_model_targets,
     detect_seed_targets,
     insert_adapter,
+    listed_options,
     lora_display_name,
     plan_lora_chain,
     plan_lora_insertion,
@@ -124,11 +127,15 @@ from pixlstash.services.workflow_card_service import (
     by_key,
     card_defaults,
     read_grid,
+    slot_kind,
 )
 from pixlstash.services import saved_recipe_service
 from pixlstash.services.model_shelf_service import (
     adapter_digest_index,
+    known_base_model,
     model_name_aliases,
+    propose_companions,
+    recipe_asset_index,
 )
 from pixlstash.services.workflow_events import announce_changed_workflows
 from pixlstash.routes.comfyui import (
@@ -174,12 +181,21 @@ from pixlstash.services.workflow_library_service import (
     read_variant_picture_counts,
     stack_for_picture,
 )
+from pixlstash.services.workflow_bindings import BINDINGS_KEY
 from pixlstash.utils.comfyui_utilities import (
     collect_seed_inputs,
+    iter_model_fields_api,
     loaded_model_widgets,
 )
 from pixlstash.stacking import build_stack_filename_prefix
+from pixlstash.utils.adapter_header import (
+    FILE_CHECKPOINT,
+    FILE_ENGINE,
+    FILE_TEXT_ENCODER,
+    FILE_VAE,
+)
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.known_base_models import family_of
 
 logger = get_logger(__name__)
 
@@ -1279,6 +1295,122 @@ class LoraChainSaved(BaseModel):
         None, description="The NEW card; null on a dry run."
     )
     changes: list[LoraChainChange] = Field(default_factory=list)
+
+
+class SwapModel(BaseModel):
+    """One shelf row the clone dialog can offer or has resolved a file to."""
+
+    id: int
+    filename: str
+    display_name: str | None = None
+    base_model: str | None = Field(
+        None,
+        description=(
+            "The known base model the clone reasons about: the shelf's identified "
+            "label unless it is a fuzzy guess, else the stored one."
+        ),
+    )
+    file_kind: str
+    family: str | None = Field(
+        None,
+        description="The file's own layout or architecture (clip_l, t5_xxl, flux1).",
+    )
+
+
+class SwapSlot(BaseModel):
+    """One model file the card's graph names, and the shelf row it is, if any."""
+
+    filename: str = Field(description="The name exactly as the graph holds it.")
+    kind: str = Field(
+        description="checkpoint, unet, vae, clip, lora, controlnet, or the widget."
+    )
+    model: SwapModel | None = Field(
+        None, description="The one shelf row of that name, or null."
+    )
+
+
+class SwapProposal(BaseModel):
+    """A support file recipes on this machine have run beside the new checkpoint."""
+
+    id: int
+    filename: str
+    display_name: str | None = None
+    family: str | None = None
+    via: str = Field(
+        description=(
+            "Which step answered: checkpoint (ran with this checkpoint), "
+            "base_model (with another of the same base model) or family "
+            "(with another of the same architecture)."
+        )
+    )
+    recipes: int = Field(description="How many recipes name the two together.")
+
+
+class SwapFlag(BaseModel):
+    """A LoRA or ControlNet trained on another family than the new checkpoint."""
+
+    filename: str
+    kind: str
+    base_model: str
+    family: str
+
+
+class ModelSwapOptions(BaseModel):
+    """``GET /workflows/{key}/model-swap``: what the clone dialog draws."""
+
+    slots: list[SwapSlot]
+    checkpoints: list[SwapModel]
+    vaes: list[SwapModel]
+    text_encoders: list[SwapModel]
+    checkpoint_family: str | None = None
+    proposals: dict[str, list[SwapProposal]] = Field(
+        default_factory=dict,
+        description="Per support kind (vae, text_encoder); empty without a checkpoint.",
+    )
+    flags: list[SwapFlag] = Field(default_factory=list)
+
+
+# Ceiling on one clone's swap map. A graph names a handful of model files; the
+# bound is here so a hand-made request cannot post an unbounded map.
+MAX_SWAPS = 64
+
+
+class CloneWithModels(BaseModel):
+    """``POST /workflows/{key}/clone-with-models``."""
+
+    name: str = Field(min_length=1, max_length=MAX_NAME_LENGTH)
+    swaps: dict[str, str] = Field(
+        description="The graph's filename -> the filename to load instead."
+    )
+
+    @field_validator("swaps")
+    @classmethod
+    def _model_files_only(cls, swaps: dict[str, str]) -> dict[str, str]:
+        # A replacement without a model extension would be nulled out of the
+        # structural hash, so the clone would fold onto the original's card.
+        if not swaps or len(swaps) > MAX_SWAPS:
+            raise ValueError(f"swaps must name 1 to {MAX_SWAPS} files")
+        for was, now in swaps.items():
+            if not was.strip() or not now.strip() or len(now) > 1024:
+                raise ValueError("swaps must map a filename to a filename")
+            if not now.lower().endswith(MODEL_EXTENSIONS):
+                raise ValueError(f"{now!r} is not a model file")
+        return swaps
+
+
+class ClonedWorkflow(WorkflowFile):
+    """The file ``POST /workflows/{key}/clone-with-models`` wrote."""
+
+    swapped: list[dict] = Field(description="One entry per loader field rewritten.")
+    unswapped: list[dict] = Field(
+        description="Swaps that did not land: not_in_graph or not_on_comfyui."
+    )
+    verified: bool = Field(
+        description=(
+            "Whether ComfyUI listed every name written; false means at least "
+            "one went in unchecked."
+        )
+    )
 
 
 class WorkflowDeleted(BaseModel):
@@ -3662,11 +3794,11 @@ def create_router(server) -> APIRouter:
 
     # ── The file gestures (v1.12 B8) ──────────────────────────────────────
     #
-    # Export, Duplicate, Insert loader and Delete: the four gestures that write
-    # or read a FILE, against a card that may never have had one. Each starts
-    # from `_source_graph_for`, so a card the library only knows from its
-    # pictures exports and duplicates like any other - that is most of what
-    # makes them worth having.
+    # Export, Duplicate, Clone with new models, Insert loader and Delete: the
+    # five gestures that write or read a FILE, against a card that may never
+    # have had one. Each starts from `_source_graph_for`, so a card the library
+    # only knows from its pictures exports and duplicates like any other - that
+    # is most of what makes them worth having.
     #
     # Edited defaults are NOT applied to any of these. A default is an override
     # the run path puts in at submit time (implementation plan rule 1), and
@@ -3897,7 +4029,9 @@ def create_router(server) -> APIRouter:
         source = _card_source(card)
         # Unscrubbed on purpose: this file stays on the owner's machine and is
         # meant to RUN, and a copy with its models blanked would not.
-        name, key = _store_copy(hub, f"{_file_stem(card)} (copy)", source.graph)
+        name, key = _store_copy(
+            hub, f"{_file_stem(card)} (copy)", source.graph, source.bindings
+        )
         _announce(request, sorted({workflow_key, key} - {None}), "imported")
         return WorkflowFile(name=name, workflow_key=key)
 
@@ -3943,7 +4077,9 @@ def create_router(server) -> APIRouter:
             loader = insert_adapter(graph, plan, None, object_info)
         except LookupError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        name, key = _store_copy(hub, f"{_file_stem(card)} (LoRA)", graph)
+        name, key = _store_copy(
+            hub, f"{_file_stem(card)} (LoRA)", graph, source.bindings
+        )
         _announce(request, sorted({workflow_key, key} - {None}), "imported")
         return InsertedLoader(
             name=name,
@@ -4199,14 +4335,275 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         asked = re.sub(r"\.json$", "", (payload.name or "").strip(), flags=re.I)
         stem = download_stem(asked) if asked else ""
-        name, key = _store_copy(hub, stem or f"{_file_stem(card)} (edited)", graph)
+        name, key = _store_copy(
+            hub, stem or f"{_file_stem(card)} (edited)", graph, source.bindings
+        )
         _announce(request, sorted({workflow_key, key} - {None}), "imported")
         return LoraChainSaved(
             dry_run=False, name=name, workflow_key=key, changes=plan["changes"]
         )
 
-    def _store_copy(hub, stem: str, graph: dict) -> tuple[str, str | None]:
-        """Write one graph into the user folder, or raise the 500 that says why."""
+    def _swap_models(hub) -> dict[int, SwapModel]:
+        """Every shelf row a clone could load, by id. Engines are PixlStash's own."""
+        return {
+            int(row["id"]): SwapModel(
+                id=row["id"],
+                filename=row["filename"],
+                display_name=row["display_name"],
+                base_model=known_base_model(row),
+                file_kind=row["file_kind"],
+                family=row["family"],
+            )
+            for row in hub.fetchall(
+                "SELECT id, filename, display_name, base_model, "
+                "base_model_canonical, base_model_source, file_kind, family "
+                "FROM model WHERE filename IS NOT NULL AND file_kind <> ?",
+                (FILE_ENGINE,),
+            )
+        }
+
+    def _swap_slots(
+        graph: dict, models: dict[int, SwapModel], index: tuple
+    ) -> list[tuple[str, str, SwapSlot]]:
+        """``(class_type, widget, slot)`` per model file *graph* names, once each.
+
+        Read through ``iter_model_fields_api``, the walk ``apply_filename_swap``
+        rewrites through, so a file the dialog offers is one the swap reaches.
+        Only values ending in a model extension: anything else (PixlStash's own
+        node naming a shelf row by id) is not a filename a clone can swap.
+        """
+        by_name, _by_digest, _filenames, _names = index
+        slots: dict[str, tuple[str, str, SwapSlot]] = {}
+        for _node_id, class_type, widget, value in iter_model_fields_api(graph):
+            if value in slots or not value.lower().endswith(MODEL_EXTENSIONS):
+                continue
+            if LORA_FILENAME_FIELD_RE.match(widget):
+                kind = "lora"
+            elif "CLIPVision" in class_type:
+                # `clip_name` on a vision loader is an image encoder, not a
+                # text encoder: a row offering text encoders would write T5
+                # into an IPAdapter's vision slot.
+                kind = "clip_vision"
+            else:
+                kind = slot_kind(widget)
+            ids = by_name.get(normalized_filename(value), set())
+            slots[value] = (
+                class_type,
+                widget,
+                SwapSlot(
+                    filename=value,
+                    kind=kind,
+                    model=models.get(next(iter(ids))) if len(ids) == 1 else None,
+                ),
+            )
+        return list(slots.values())
+
+    def _base_candidates(
+        request: Request, found: list[tuple[str, str, SwapSlot]], checkpoints: list
+    ) -> list[SwapModel]:
+        """The checkpoints the workflow's first base loader could load.
+
+        The shelf keeps a diffusion-only UNET and an all-in-one checkpoint under
+        one kind, so without this a UNETLoader graph is offered SDXL
+        checkpoints. Narrowed by the loader's own file type (a GGUF loader is
+        offered GGUF files) and, when ComfyUI answers, by what that loader
+        lists. ComfyUI down keeps every file of the right type: the clone's own
+        check refuses the rest.
+        """
+        base = next(
+            (entry for entry in found if entry[2].kind in BASE_MODEL_KINDS), None
+        )
+        if base is None:
+            return checkpoints
+        class_type, widget, slot = base
+        extension = os.path.splitext(slot.filename)[1].lower()
+        kept = [
+            m
+            for m in checkpoints
+            if os.path.splitext(m.filename)[1].lower() == extension
+        ]
+        object_info, error = _read_object_info(_comfyui_url(_user(request)))
+        options = listed_options(object_info, class_type, widget)
+        if not options:
+            logger.info(
+                "Offering every %s checkpoint for %s unchecked, ComfyUI could "
+                "not say what it lists: %s",
+                extension,
+                class_type,
+                error or "the field is not enumerated",
+            )
+            return kept
+        listed = {normalized_filename(option) for option in options}
+        return [m for m in kept if normalized_filename(m.filename) in listed]
+
+    @router.get(
+        "/workflows/{workflow_key}/model-swap",
+        summary="What a workflow could be cloned onto",
+        description=(
+            "The model files this workflow loads, the shelf's checkpoints, VAEs "
+            "and text encoders to choose from, and - once a checkpoint is "
+            "chosen - the VAEs and text encoders recipes on this machine have "
+            "run beside it, and the LoRAs and ControlNets trained on another "
+            "family. Proposals are evidence only: a checkpoint nothing has run "
+            "with proposes nothing."
+        ),
+        response_model=ModelSwapOptions,
+        responses={
+            404: {"description": "No such card, or no such checkpoint."},
+            409: {"description": "There is no graph to clone."},
+        },
+    )
+    def read_model_swap(
+        request: Request, workflow_key: str, checkpoint_id: int | None = None
+    ):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        # The graph is read on the proposal call too: the LoRA flags are about
+        # the files it names.
+        source = _card_source(card)
+        models = _swap_models(hub)
+        index = recipe_asset_index(hub)
+        found = _swap_slots(source.graph, models, index)
+
+        def of_kind(kind: str) -> list[SwapModel]:
+            return sorted(
+                (m for m in models.values() if m.file_kind == kind),
+                key=lambda m: (m.display_name or m.filename).lower(),
+            )
+
+        options = ModelSwapOptions(
+            slots=[slot for _cls, _widget, slot in found],
+            checkpoints=[],
+            vaes=of_kind(FILE_VAE),
+            text_encoders=of_kind(FILE_TEXT_ENCODER),
+        )
+        if checkpoint_id is None:
+            # Asked once, on open: the choice lists are what the dialog draws
+            # then, and it does not re-read them per checkpoint.
+            options.checkpoints = _base_candidates(
+                request, found, of_kind(FILE_CHECKPOINT)
+            )
+            return options
+        chosen = models.get(checkpoint_id)
+        if chosen is None or chosen.file_kind != FILE_CHECKPOINT:
+            raise HTTPException(status_code=404, detail="Unknown checkpoint.")
+        options.checkpoint_family = family_of(chosen.base_model)
+        options.proposals = {
+            kind: [SwapProposal(**entry) for entry in entries]
+            for kind, entries in propose_companions(hub, checkpoint_id, index).items()
+        }
+        # Only where both sides fold to a known family and differ: an unknown
+        # family is never a flag, and a VAE or text encoder carries no base
+        # model to compare (evidence answers for those, not a table).
+        for slot in options.slots:
+            if slot.kind not in ("lora", "controlnet") or slot.model is None:
+                continue
+            family = family_of(slot.model.base_model)
+            if (
+                family
+                and options.checkpoint_family
+                and family != options.checkpoint_family
+            ):
+                options.flags.append(
+                    SwapFlag(
+                        filename=slot.filename,
+                        kind=slot.kind,
+                        base_model=slot.model.base_model,
+                        family=family,
+                    )
+                )
+        return options
+
+    @router.post(
+        "/workflows/{workflow_key}/clone-with-models",
+        summary="Clone a workflow onto other models",
+        description=(
+            "Write a copy of this workflow with some of its model files "
+            "replaced, named as asked, beside the original. Every loader "
+            "naming a replaced file is rewritten. When ComfyUI answers, each "
+            "new name is written as ComfyUI lists it and a name it does not "
+            "list is left out; when it does not, the names are written "
+            "unchecked. The original file is not changed; the clone is a card "
+            "of its own."
+        ),
+        response_model=ClonedWorkflow,
+        status_code=201,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "No graph to clone, or a swap could not be made."},
+            500: {"description": "The copy could not be written."},
+        },
+    )
+    def clone_with_models(request: Request, workflow_key: str, body: CloneWithModels):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        source = _card_source(card)
+        graph = deepcopy(source.graph)
+        # Not `insert_lora_loader`'s 503: nothing here depends on ComfyUI's link
+        # types, so an unreachable ComfyUI means "write the names unchecked".
+        object_info, error = _read_object_info(_comfyui_url(_user(request)))
+        if object_info is None:
+            logger.info(
+                "Cloning card %s with its model names unchecked, ComfyUI did "
+                "not answer: %s",
+                workflow_key,
+                error,
+            )
+        swapped, unswapped = apply_filename_swap(graph, body.swaps, object_info)
+        if not swapped and not unswapped:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The clone was not written: every model asked for is the "
+                    "file this workflow already loads, so it would be a copy."
+                ),
+            )
+        if unswapped:
+            # All or nothing. A clone whose checkpoint swap failed while its
+            # VAE swap landed is the old model with the new model's VAE - a
+            # broken workflow saved as a success.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The clone was not written, because not every new model "
+                    "could go in: "
+                    + "; ".join(f"{u['now']} ({u['reason']})" for u in unswapped)
+                ),
+            )
+        name, key = _store_copy(
+            hub, download_stem(body.name) or "workflow", graph, source.bindings
+        )
+        landed = find_card(hub, key) if key else None
+        if landed is not None and key != workflow_key and landed.name is None:
+            # A new key is a blank card; without the typed name it would sit in
+            # the grid unnamed. Only a card nobody has named: the clone may
+            # land on a card that already exists (a second clone, or the same
+            # workflow built by hand), and its owner's name stands. Notes, pins
+            # and defaults stay the original's.
+            set_attributes(hub, key, name=body.name.strip())
+        _announce(request, sorted({workflow_key, key} - {None}), "imported")
+        return ClonedWorkflow(
+            name=name,
+            workflow_key=key,
+            swapped=swapped,
+            unswapped=unswapped,
+            verified=all(entry["verified"] for entry in swapped),
+        )
+
+    def _store_copy(
+        hub, stem: str, graph: dict, bindings: list | None = None
+    ) -> tuple[str, str | None]:
+        """Write one graph into the user folder, or raise the 500 that says why.
+
+        *bindings* are the source file's ``pixlstash_bindings``, which the
+        resolved graph has lost (``Source.bindings``). They go back in, or a
+        copy of a file that opted out of a picture input would opt back in on
+        its first run.
+        """
+        if bindings is not None:
+            graph = {**graph, BINDINGS_KEY: bindings}
         try:
             return store_workflow_copy(hub, f"{stem}.json", graph)
         except (OSError, ValueError) as exc:

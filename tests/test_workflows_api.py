@@ -83,6 +83,7 @@ from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
 from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD, _stack_members
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
+from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
     CardFigures,
     SlotModel,
@@ -146,6 +147,8 @@ _WORKFLOW_ROUTES = (
     # Open in ComfyUI: the same graph unscrubbed, so owner-only for the same
     # reason and with even more to lose.
     ("GET", "/api/v1/workflows/{workflow_key}/graph"),
+    # Clone with new models: the card's files, the whole shelf and the recipes.
+    ("GET", "/api/v1/workflows/{workflow_key}/model-swap"),
 )
 
 # The card and stack writes (v1.12 B4), pinned in their own tuple: the reads
@@ -172,6 +175,7 @@ _WORKFLOW_WRITE_ROUTES = (
     ("POST", "/api/v1/workflows/{workflow_key}/duplicate"),
     ("POST", "/api/v1/workflows/{workflow_key}/insert-lora-loader"),
     ("PUT", "/api/v1/workflows/{workflow_key}/lora-chain"),
+    ("POST", "/api/v1/workflows/{workflow_key}/clone-with-models"),
     ("DELETE", "/api/v1/workflows/{workflow_key}"),
 )
 
@@ -942,6 +946,10 @@ def test_no_scoped_token_can_read_the_workflow_library(workflow_env):
         (
             f"{API}/workflows/{BUSY_CARD}/graph",
             API + "/workflows/{workflow_key}/graph",
+        ),
+        (
+            f"{API}/workflows/{BUSY_CARD}/model-swap",
+            API + "/workflows/{workflow_key}/model-swap",
         ),
     )
     for path, template in paths:
@@ -3785,6 +3793,11 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
         ("POST", f"{API}/workflows/{BUSY_CARD}/duplicate", None),
         ("POST", f"{API}/workflows/{BUSY_CARD}/insert-lora-loader", None),
         ("PUT", f"{API}/workflows/{BUSY_CARD}/lora-chain", {"entries": []}),
+        (
+            "POST",
+            f"{API}/workflows/{BUSY_CARD}/clone-with-models",
+            {"name": "nope", "swaps": {"a.safetensors": "b.safetensors"}},
+        ),
         ("DELETE", f"{API}/workflows/{BUSY_CARD}", None),
     ):
         assert_real_route(workflow_env.server.api, method, path)
@@ -7752,6 +7765,274 @@ def test_duplicating_twice_puts_a_second_file_beside_the_first(exportable, tmp_p
     ]
     assert first != second, "the second duplicate overwrote the first"
     assert (tmp_path / first).is_file() and (tmp_path / second).is_file()
+
+
+# ---------------------------------------------------------------------------
+# Clone with new models
+# ---------------------------------------------------------------------------
+
+CLONE_CHECKPOINT = "krea2.safetensors"
+
+
+@pytest.fixture
+def cloneable(exportable, tmp_path):
+    """RUN_CARD's picture graph, a second checkpoint on the shelf, and a folder."""
+    _isolate_workflow_folders(tmp_path, exportable.monkeypatch)
+    hub = exportable.server.hub
+    with hub.transaction() as conn:
+        checkpoint_id = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance, base_model) "
+            "VALUES ('checkpoint', ?, 'scanned', 'FLUX.1 dev')",
+            (CLONE_CHECKPOINT,),
+        ).lastrowid
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].append(
+        f"flux/{CLONE_CHECKPOINT}"
+    )
+    exportable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    yield SimpleNamespace(
+        folder=tmp_path, checkpoint_id=checkpoint_id, **vars(exportable)
+    )
+    with hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE id = ?", (checkpoint_id,))
+
+
+def _clone(env, swaps, name="Portrait on Krea"):
+    return env.owner.post(
+        f"{API}/workflows/{RUN_CARD}/clone-with-models",
+        json={"name": name, "swaps": swaps},
+    )
+
+
+def test_cloning_writes_a_new_card_in_comfyuis_spelling_and_names_it(cloneable):
+    r = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["verified"] is True
+    written = json.loads((cloneable.folder / body["name"]).read_text())
+    # The option ComfyUI lists, never the shelf's bare name.
+    assert written["1"]["inputs"]["ckpt_name"] == f"flux/{CLONE_CHECKPOINT}"
+    # The rest of the run travels, as a Duplicate's does.
+    assert written["5"]["inputs"]["text"] == EXPORT_PROMPT
+    assert body["workflow_key"] and body["workflow_key"] != RUN_CARD
+    card = cloneable.owner.get(f"{API}/workflows/{body['workflow_key']}").json()
+    assert card["card"]["name"] == "Portrait on Krea"
+    # The original card is untouched.
+    assert cloneable.graph["1"]["inputs"]["ckpt_name"] == _SHELF_FILENAME
+
+
+def test_cloning_with_comfyui_down_writes_the_names_unchecked(cloneable):
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "unreachable")
+    )
+    r = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT})
+    assert r.status_code == 201, r.text
+    assert r.json()["verified"] is False
+    written = json.loads((cloneable.folder / r.json()["name"]).read_text())
+    assert written["1"]["inputs"]["ckpt_name"] == CLONE_CHECKPOINT
+
+
+def test_a_clone_where_nothing_could_be_swapped_is_refused(cloneable):
+    r = _clone(cloneable, {_SHELF_FILENAME: "not-on-comfyui.safetensors"})
+    assert r.status_code == 409, r.text
+    assert "not_on_comfyui" in r.json()["detail"]
+    assert list(cloneable.folder.glob("*.json")) == []
+
+
+def test_a_second_clone_onto_the_same_models_keeps_the_first_ones_name(cloneable):
+    """The same swap re-keys to the same card, whose owner's name stands."""
+    first = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT}, name="First")
+    second = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT}, name="Second")
+    assert first.status_code == second.status_code == 201
+    key = first.json()["workflow_key"]
+    assert second.json()["workflow_key"] == key
+    card = cloneable.owner.get(f"{API}/workflows/{key}").json()
+    assert card["card"]["name"] == "First"
+
+
+def test_a_clone_that_cannot_take_every_model_is_not_written(cloneable):
+    """The checkpoint would land and the LoRA would not: nothing is written."""
+    r = _clone(
+        cloneable,
+        {
+            _SHELF_FILENAME: CLONE_CHECKPOINT,
+            FORGOTTEN_LORA: "not-on-comfyui.safetensors",
+        },
+    )
+    assert r.status_code == 409, r.text
+    assert list(cloneable.folder.glob("*.json")) == []
+
+
+def test_a_clone_onto_the_files_it_already_loads_says_so(cloneable):
+    r = _clone(cloneable, {_SHELF_FILENAME: _SHELF_FILENAME})
+    assert r.status_code == 409, r.text
+    assert "already loads" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("verb", ["duplicate", "clone-with-models"])
+def test_a_copy_keeps_the_picture_inputs_its_file_opted_out_of(cloneable, verb):
+    """`Source.graph` is sanitised; the file's bindings have to be put back."""
+    source = run_service.Source(
+        graph=json.loads(json.dumps(cloneable.graph)),
+        origin=run_service.FROM_FILE,
+        bindings=[],
+    )
+    cloneable.monkeypatch.setattr(
+        run_service, "resolve_source", lambda *args, **kwargs: (source, None)
+    )
+    r = (
+        _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT})
+        if verb == "clone-with-models"
+        else cloneable.owner.post(f"{API}/workflows/{RUN_CARD}/duplicate")
+    )
+    assert r.status_code == 201, r.text
+    written = json.loads((cloneable.folder / r.json()["name"]).read_text())
+    assert written["pixlstash_bindings"] == []
+
+
+def test_the_base_slot_is_offered_only_what_its_loader_could_load(cloneable):
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        added = [
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, provenance) "
+                "VALUES ('checkpoint', ?, 'scanned')",
+                (filename,),
+            ).lastrowid
+            for filename in ("krea2-q8.gguf", "unlisted.safetensors")
+        ]
+    try:
+        body = cloneable.owner.get(f"{API}/workflows/{RUN_CARD}/model-swap").json()
+        offered = {m["filename"] for m in body["checkpoints"]}
+        # Listed by the CheckpointLoaderSimple ComfyUI answers for.
+        assert CLONE_CHECKPOINT in offered
+        # A GGUF file for a .safetensors loader, and a file ComfyUI does not list.
+        assert "krea2-q8.gguf" not in offered
+        assert "unlisted.safetensors" not in offered
+
+        cloneable.monkeypatch.setattr(
+            workflows_routes, "_read_object_info", lambda url: (None, "down")
+        )
+        down = cloneable.owner.get(f"{API}/workflows/{RUN_CARD}/model-swap").json()
+        offered = {m["filename"] for m in down["checkpoints"]}
+        # Unchecked, so every file of the loader's type; never the GGUF one.
+        assert "unlisted.safetensors" in offered
+        assert "krea2-q8.gguf" not in offered
+    finally:
+        with hub.transaction() as conn:
+            conn.executemany("DELETE FROM model WHERE id = ?", [(i,) for i in added])
+
+
+def test_cloning_a_card_with_no_graph_is_a_409(workflow_env):
+    r = workflow_env.owner.post(
+        f"{API}/workflows/{BINNED_CARD}/clone-with-models",
+        json={"name": "x", "swaps": {"a.safetensors": "b.safetensors"}},
+    )
+    assert r.status_code == 409, r.text
+
+
+def test_a_replacement_that_is_not_a_model_file_is_a_422(cloneable):
+    assert _clone(cloneable, {_SHELF_FILENAME: "krea2"}).status_code == 422
+
+
+def test_the_swap_options_name_the_graphs_files_and_the_shelf(cloneable):
+    r = cloneable.owner.get(f"{API}/workflows/{RUN_CARD}/model-swap")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    slots = {slot["filename"]: slot for slot in body["slots"]}
+    assert slots[_SHELF_FILENAME]["kind"] == "checkpoint"
+    assert slots[_SHELF_FILENAME]["model"]["filename"] == _SHELF_FILENAME
+    assert slots[FORGOTTEN_LORA] == {
+        "filename": FORGOTTEN_LORA,
+        "kind": "lora",
+        "model": None,
+    }
+    assert CLONE_CHECKPOINT in {m["filename"] for m in body["checkpoints"]}
+    assert body["proposals"] == {}
+
+    chosen = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"checkpoint_id": cloneable.checkpoint_id},
+    ).json()
+    assert chosen["checkpoint_family"] == "flux1"
+    assert set(chosen["proposals"]) == {"vae", "text_encoder"}
+
+
+def test_the_swap_options_carry_the_companion_proposals(cloneable):
+    asked = []
+
+    def proposals(hub, checkpoint_id, index=None):
+        asked.append(checkpoint_id)
+        return {
+            "vae": [
+                {
+                    "id": 7,
+                    "filename": "flux-vae.safetensors",
+                    "display_name": None,
+                    "via": "family",
+                    "recipes": 2,
+                }
+            ],
+            "text_encoder": [],
+        }
+
+    cloneable.monkeypatch.setattr(workflows_routes, "propose_companions", proposals)
+    body = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"checkpoint_id": cloneable.checkpoint_id},
+    ).json()
+    assert asked == [cloneable.checkpoint_id]
+    assert body["proposals"]["vae"][0]["filename"] == "flux-vae.safetensors"
+    assert body["proposals"]["vae"][0]["via"] == "family"
+
+
+def test_a_lora_trained_on_another_family_is_flagged_never_dropped(cloneable):
+    graph = _embedded_export_graph(lora=RUN_ADAPTER_FILENAME)
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'SDXL 1.0' WHERE sha256 = ?",
+            (RUN_ADAPTER_DIGEST,),
+        )
+    body = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"checkpoint_id": cloneable.checkpoint_id},
+    ).json()
+    assert body["flags"] == [
+        {
+            "filename": RUN_ADAPTER_FILENAME,
+            "kind": "lora",
+            "base_model": "SDXL 1.0",
+            "family": "sdxl",
+        }
+    ]
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'FLUX.1 schnell' WHERE sha256 = ?",
+            (RUN_ADAPTER_DIGEST,),
+        )
+    same_family = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"checkpoint_id": cloneable.checkpoint_id},
+    ).json()
+    assert same_family["flags"] == []
+
+
+def test_the_swap_options_refuse_a_checkpoint_id_that_is_not_one(cloneable):
+    lora_id = cloneable.server.hub.fetchall(
+        "SELECT id FROM model WHERE file_kind = 'adapter' LIMIT 1"
+    )[0]["id"]
+    r = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap", params={"checkpoint_id": lora_id}
+    )
+    assert r.status_code == 404, r.text
 
 
 def test_deleting_a_card_the_library_knows_from_its_pictures_is_refused(workflow_env):

@@ -301,6 +301,49 @@ export async function duplicateWorkflow(workflowKey) {
 }
 
 /**
+ * What the Clone with new models dialog draws for one card.
+ *
+ * Without `checkpointId`: the model files the card's graph names (each
+ * resolved to a shelf row where one fits) and the shelf's checkpoints, VAEs
+ * and text encoders. With it: also the VAEs and text encoders recipes have run
+ * beside that checkpoint, each saying which step of the widening answered
+ * (`via`), and the LoRAs and ControlNets trained on another family (`flags`).
+ * Call it on open and on each checkpoint choice, never per keystroke: the
+ * server reads the whole shelf and every recipe to answer.
+ *
+ * @param {string} workflowKey
+ * @param {{checkpointId?: number}} [options]
+ * @returns {Promise<Object>}
+ */
+export async function readModelSwap(workflowKey, { checkpointId } = {}) {
+  return unwrap(
+    apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}/model-swap`, {
+      params: checkpointId == null ? {} : { checkpoint_id: checkpointId },
+    }),
+  );
+}
+
+/**
+ * Write a copy of this workflow with model files replaced, as a new card.
+ *
+ * `swaps` maps the graph's filename to the one to load instead; every loader
+ * naming it is rewritten. `verified` in the answer is false when ComfyUI was
+ * not reachable and the names were written unchecked.
+ *
+ * @param {string} workflowKey
+ * @param {{name: string, swaps: Object<string, string>}} body
+ * @returns {Promise<{name: string, workflow_key: ?string, swapped: Array, unswapped: Array, verified: boolean}>}
+ */
+export async function cloneWorkflowWithModels(workflowKey, body) {
+  return unwrap(
+    apiClient.post(
+      `/workflows/${encodeURIComponent(workflowKey)}/clone-with-models`,
+      body,
+    ),
+  );
+}
+
+/**
  * Send this card's workflow file to the system trash.
  *
  * Only a card with a file has one: a workflow the library knows from its

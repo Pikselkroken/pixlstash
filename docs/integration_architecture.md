@@ -736,7 +736,7 @@ dissolves** (the row goes, and the card stands on its own), and a
 `{stack_id}` is either a minted 32-hex id or `auto:` followed by a 64-hex core
 hash — anything else is a 422.
 
-The four file gestures (v1.12 B8), all `OWNER_ONLY`. Each one resolves the
+The file gestures (v1.12 B8, plus Clone with new models), all `OWNER_ONLY`. Each one resolves the
 card's graph the same three tiers the run does, so a card the library only
 knows from its pictures exports and duplicates like any other:
 
@@ -748,6 +748,8 @@ knows from its pictures exports and duplicates like any other:
 | `POST /api/v1/workflows/{workflow_key}/insert-lora-loader` | A copy with a LoRA loader spliced in | `201 {name, workflow_key, node_id, class_type}` |
 | `GET /api/v1/workflows/{workflow_key}/lora-chain` | The LoRA chain in apply order, for the editor (#1478) | `{workflow_key, editable, refusal, source, clip_source, sink: {summary, consumers}, loaders: [{node_id, class_type, field, filename, name, strength, strength_clip, sha256, on_shelf}], added_loader_class}`; ComfyUI down is still a 200 with `editable: false` |
 | `PUT /api/v1/workflows/{workflow_key}/lora-chain` | A copy with the chain as the owner left it: `{entries: [{node_id?, sha256?, strength?}], name?, dry_run}` | `201 {dry_run, name, workflow_key, changes: [{kind, node_id, text}]}`; a dry run is `200` with `name` and `workflow_key` null |
+| `GET /api/v1/workflows/{workflow_key}/model-swap[?checkpoint_id=]` | What the Clone with new models dialog draws: the graph's model files (each resolved to one shelf row or `null`), the shelf's checkpoints, VAEs and text encoders; with `checkpoint_id`, the companions recipes have run beside it and the LoRAs/ControlNets trained on another family | `{slots: [{filename, kind, model}], checkpoints, vaes, text_encoders, checkpoint_family, proposals: {vae, text_encoder: [{id, filename, display_name, family, via, recipes}]}, flags: [{filename, kind, base_model, family}]}`. `checkpoints` is filled on the call without `checkpoint_id` only, narrowed to what the workflow's first base loader could load |
+| `POST /api/v1/workflows/{workflow_key}/clone-with-models` | A copy with model files replaced, a card of its own, named as asked when nobody has named that card. Body `{name, swaps: {graph filename: new filename}}`. All or nothing: 409, and no file, when any swap could not be written (`not_in_graph`, `not_on_comfyui`, `several_on_comfyui`) or when every swap names the file already loaded. `verified` is false when any name went in unchecked | `201 {name, workflow_key, swapped, unswapped: [{was, now, reason}], verified}` |
 | `DELETE /api/v1/workflows/{workflow_key}` | Send the imported file to the trash | `{deleted, workflow_key}` |
 | `GET /api/v1/recipes/{recipe_id}/export` | The saved recipe as a file | `{filename, recipe, shares: [string]}` |
 | `GET /api/v1/recipes/used?workflow_key=…` | Every look this workflow's own pictures were made with, a saved recipe's included and flagged `saved`. `workflow_key` repeats for a selection of several and the answer is the union. **The Recipes tab's list, filled without anybody pressing Save** | `[{prompt, loras: [{filename}], pictures, cover_picture_id, saved}]` |

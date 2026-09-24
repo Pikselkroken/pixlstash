@@ -14,6 +14,7 @@ from pixlstash.services.comfyui_recipe_service import (
     MODEL_FILENAME_FIELDS,
     advertised_model_names,
     apply_adapter,
+    apply_filename_swap,
     apply_lora_chain,
     apply_model_swap,
     apply_seeds,
@@ -1792,6 +1793,181 @@ class TestModelSwap:
             == []
         )
         assert graph["4"]["inputs"]["ckpt_name"] == "kept/kept.safetensors"
+
+
+class TestFilenameSwap:
+    """Clone with new models: replace a file that loads with a different one."""
+
+    def _graph(self):
+        return {
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "zimage/zimage-turbo.safetensors"},
+            },
+            "5": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
+            "6": {
+                "class_type": "DualCLIPLoader",
+                "inputs": {
+                    "clip_name1": "qwen_3_4b.safetensors",
+                    "clip_name2": "ae.safetensors",
+                },
+            },
+        }
+
+    def test_every_field_naming_the_file_is_rewritten(self):
+        graph = self._graph()
+        swapped, unswapped = apply_filename_swap(
+            graph, {"ae.safetensors": "flux2-vae.safetensors"}
+        )
+        assert graph["5"]["inputs"]["vae_name"] == "flux2-vae.safetensors"
+        assert graph["6"]["inputs"]["clip_name2"] == "flux2-vae.safetensors"
+        assert {(s["node_id"], s["field"]) for s in swapped} == {
+            ("5", "vae_name"),
+            ("6", "clip_name2"),
+        }
+        assert unswapped == []
+
+    def test_a_key_matches_the_whole_name_whatever_its_case_or_separators(self):
+        graph = self._graph()
+        swapped, _ = apply_filename_swap(
+            graph, {"ZIMAGE\\Zimage-Turbo.safetensors": "krea2.safetensors"}
+        )
+        assert graph["4"]["inputs"]["ckpt_name"] == "krea2.safetensors"
+        assert swapped[0]["was"] == "zimage/zimage-turbo.safetensors"
+
+    def test_a_bare_key_never_rewrites_a_file_of_that_name_in_a_folder(self):
+        graph = self._graph()
+        graph["7"] = {
+            "class_type": "ControlNetLoader",
+            "inputs": {"control_net_name": "canny/ae.safetensors"},
+        }
+        apply_filename_swap(graph, {"ae.safetensors": "flux2-vae.safetensors"})
+        assert graph["5"]["inputs"]["vae_name"] == "flux2-vae.safetensors"
+        assert graph["7"]["inputs"]["control_net_name"] == "canny/ae.safetensors"
+
+    def test_a_key_with_a_folder_never_matches_another_folders_file(self):
+        graph = self._graph()
+        graph["7"] = {
+            "class_type": "CLIPVisionLoader",
+            "inputs": {"clip_name": "clip_vision/qwen_3_4b.safetensors"},
+        }
+        graph["6"]["inputs"]["clip_name1"] = "text_encoders/qwen_3_4b.safetensors"
+        apply_filename_swap(
+            graph, {"text_encoders/qwen_3_4b.safetensors": "mistral.safetensors"}
+        )
+        assert graph["6"]["inputs"]["clip_name1"] == "mistral.safetensors"
+        assert graph["7"]["inputs"]["clip_name"] == "clip_vision/qwen_3_4b.safetensors"
+
+    def test_a_basename_two_keys_share_is_left_alone(self):
+        graph = self._graph()
+        swapped, unswapped = apply_filename_swap(
+            graph,
+            {
+                "a/zimage-turbo.safetensors": "one.safetensors",
+                "b/zimage-turbo.safetensors": "two.safetensors",
+            },
+        )
+        assert swapped == []
+        assert graph["4"]["inputs"]["ckpt_name"] == "zimage/zimage-turbo.safetensors"
+        assert {u["reason"] for u in unswapped} == {"not_in_graph"}
+
+    def test_without_object_info_the_name_is_written_unverified(self):
+        graph = self._graph()
+        swapped, _ = apply_filename_swap(
+            graph, {"zimage/zimage-turbo.safetensors": "krea2.safetensors"}
+        )
+        assert swapped == [
+            {
+                "node_id": "4",
+                "class_type": "CheckpointLoaderSimple",
+                "field": "ckpt_name",
+                "was": "zimage/zimage-turbo.safetensors",
+                "now": "krea2.safetensors",
+                "verified": False,
+            }
+        ]
+
+    def test_with_object_info_the_options_own_spelling_is_written(self):
+        info = {
+            "CheckpointLoaderSimple": {
+                "input": {"required": {"ckpt_name": [["krea/krea2.safetensors"], {}]}}
+            }
+        }
+        graph = self._graph()
+        swapped, _ = apply_filename_swap(
+            graph,
+            {"zimage/zimage-turbo.safetensors": "krea\\krea2.safetensors"},
+            info,
+        )
+        assert graph["4"]["inputs"]["ckpt_name"] == "krea/krea2.safetensors"
+        assert swapped[0]["verified"] is True
+
+    def test_a_shelf_basename_finds_the_subfolder_comfyui_lists_it_under(self):
+        info = {
+            "CheckpointLoaderSimple": {
+                "input": {
+                    "required": {
+                        "ckpt_name": [
+                            ["other.safetensors", "krea/krea2.safetensors"],
+                            {},
+                        ]
+                    }
+                }
+            }
+        }
+        graph = self._graph()
+        apply_filename_swap(
+            graph, {"zimage/zimage-turbo.safetensors": "krea2.safetensors"}, info
+        )
+        assert graph["4"]["inputs"]["ckpt_name"] == "krea/krea2.safetensors"
+
+    def test_a_replacement_comfyui_does_not_list_is_reported_not_written(self):
+        info = {
+            "CheckpointLoaderSimple": {
+                "input": {"required": {"ckpt_name": [["other.safetensors"], {}]}}
+            }
+        }
+        graph = self._graph()
+        swapped, unswapped = apply_filename_swap(
+            graph, {"zimage/zimage-turbo.safetensors": "krea2.safetensors"}, info
+        )
+        assert swapped == []
+        assert graph["4"]["inputs"]["ckpt_name"] == "zimage/zimage-turbo.safetensors"
+        assert unswapped == [
+            {
+                "was": "zimage/zimage-turbo.safetensors",
+                "now": "krea2.safetensors",
+                "reason": "not_on_comfyui",
+            }
+        ]
+
+    def test_a_name_comfyui_lists_in_two_folders_is_refused_as_ambiguous(self):
+        info = {
+            "VAELoader": {
+                "input": {
+                    "required": {
+                        "vae_name": [
+                            ["flux/new.safetensors", "sd3/new.safetensors"],
+                            {},
+                        ]
+                    }
+                }
+            }
+        }
+        graph = self._graph()
+        swapped, unswapped = apply_filename_swap(
+            graph, {"ae.safetensors": "new.safetensors"}, info
+        )
+        assert graph["5"]["inputs"]["vae_name"] == "ae.safetensors"
+        assert {u["reason"] for u in unswapped} == {"several_on_comfyui"}
+
+    def test_a_swap_onto_the_same_file_changes_nothing(self):
+        graph = self._graph()
+        swapped, unswapped = apply_filename_swap(
+            graph, {"ae.safetensors": "ae.safetensors"}
+        )
+        assert swapped == [] and unswapped == []
+        assert graph == self._graph()
 
 
 class TestWrappedLoaders:

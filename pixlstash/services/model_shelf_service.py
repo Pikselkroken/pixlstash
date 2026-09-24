@@ -67,7 +67,13 @@ from pixlstash.utils.adapter_header import (
     FILE_UNKNOWN,
     FILE_VAE,
 )
-from pixlstash.utils.known_base_models import SOURCE_USER, fold
+from pixlstash.utils.known_base_models import (
+    SOURCE_FILENAME,
+    SOURCE_USER,
+    family_of,
+    fold,
+    rank,
+)
 
 logger = get_logger(__name__)
 
@@ -662,7 +668,7 @@ _NOT_CONSUMERS = (*SUPPORT_FILE_KINDS, FILE_ADAPTER, FILE_ENGINE)
 
 
 def resolve_recipe_models(
-    hub,
+    hub, index: Optional[tuple] = None
 ) -> tuple[dict[str, set[int]], dict[str, set[int]], set[str]]:
     """Which shelf models each recipe on this hub is proven to have run with.
 
@@ -687,8 +693,11 @@ def resolve_recipe_models(
     both read co-occurrence off the same table and must agree about what a
     recipe names - a second copy of this resolution is how the delete warning
     and the grid would come to disagree about the same pair of files.
+
+    *index* is a :func:`recipe_asset_index` the caller already built in this
+    request, so a route that needs both does not scan the tables twice.
     """
-    by_name, by_digest, _filenames, _names = recipe_asset_index(hub)
+    by_name, by_digest, _filenames, _names = index or recipe_asset_index(hub)
     sorted_digests = sorted(by_digest)
     digests_are_complete = not hub.fetchall(
         "SELECT 1 FROM model WHERE sha256 IS NULL AND file_kind <> ? LIMIT 1",
@@ -859,6 +868,144 @@ def fetch_companions(hub, ids: list[int]) -> dict:
         else:
             result["orphaned"].append(entry(support_id))
     return result
+
+
+def known_base_model(row) -> Optional[str]:
+    """The base model a clone may reason about for one ``model`` row, or ``None``.
+
+    The identified known label (``base_model_canonical``) when it came from the
+    owner, the file's declared metadata or its filename, and otherwise the
+    stored ``base_model`` folded where it folds. A **fuzzy** match is left out:
+    the shelf tags those as guesses, and a guess would widen the companion
+    ladder or flag a LoRA on a claim nobody made.
+    """
+    canonical = row["base_model_canonical"]
+    if canonical and rank(row["base_model_source"]) >= rank(SOURCE_FILENAME):
+        return canonical
+    return fold(row["base_model"]) or row["base_model"]
+
+
+# The widening ladder `propose_companions` climbs, narrowest first. Each answer
+# carries the step that produced it, so a weaker inference reads as weaker.
+VIA_CHECKPOINT = "checkpoint"
+VIA_BASE_MODEL = "base_model"
+VIA_FAMILY = "family"
+
+
+def propose_companions(
+    hub, checkpoint_id: int, index: Optional[tuple] = None
+) -> dict[str, list[dict]]:
+    """The VAEs and text encoders recipes have run beside *checkpoint_id*.
+
+    :func:`fetch_companions` read forwards: the same co-occurrence evidence, asked
+    "what goes with this" rather than "what would deleting this orphan". **It is
+    evidence and nothing else**: there is no table joining a checkpoint's
+    architecture to a VAE's tensor layout, and a VAE carries no ``base_model``
+    to compare, so a support file is proposed only because a recipe on this hub
+    named it beside a checkpoint.
+
+    Per support kind, the first step of the ladder with any answer wins:
+
+    1. ``checkpoint`` - recipes that name this checkpoint;
+    2. ``base_model`` - recipes naming any base model with the same base model
+       label (:func:`known_base_model`: the identified label unless it is a
+       fuzzy guess), when this checkpoint has one;
+    3. ``family`` - recipes naming any base model of the same architecture
+       family (:func:`family_of`), when the label folds to one.
+
+    A checkpoint no recipe names and whose family nothing on the shelf has run
+    with proposes nothing, and the caller is expected to say so. A support file a
+    recipe reached only through an ambiguous name is not proposed from that
+    recipe: it may be another row's file. Nor is one with no filename, which a
+    clone has nothing to write for.
+
+    Args:
+        hub: The open hub database.
+        checkpoint_id: The ``model.id`` the clone will load instead.
+        index: A :func:`recipe_asset_index` already built in this request.
+
+    Returns:
+        ``{"vae": [...], "text_encoder": [...]}``, each entry ``{"id",
+        "filename", "display_name", "family", "via", "recipes"}``, most recipes
+        first. ``family`` is the file's own layout (``clip_l``, ``t5_xxl``), which
+        is how a caller tells two text encoders apart. Both lists empty for an
+        unknown id.
+    """
+    models = {
+        int(row["id"]): row
+        for row in hub.fetchall(
+            "SELECT id, file_kind, base_model, base_model_canonical, "
+            "base_model_source, filename, display_name, family FROM model"
+        )
+    }
+    proposals: dict[str, list[dict]] = {kind: [] for kind in SUPPORT_FILE_KINDS}
+    target = models.get(checkpoint_id)
+    if target is None:
+        return proposals
+    recipe_models, ambiguous, _unresolved = resolve_recipe_models(hub, index)
+
+    consumers = {
+        model_id: row
+        for model_id, row in models.items()
+        if row["file_kind"] not in _NOT_CONSUMERS
+    }
+    ladder: list[tuple[str, set[int]]] = [(VIA_CHECKPOINT, {checkpoint_id})]
+    label = known_base_model(target)
+    if label:
+        ladder.append(
+            (
+                VIA_BASE_MODEL,
+                {
+                    model_id
+                    for model_id, row in consumers.items()
+                    if known_base_model(row) == label
+                },
+            )
+        )
+    family = family_of(label)
+    if family:
+        ladder.append(
+            (
+                VIA_FAMILY,
+                {
+                    model_id
+                    for model_id, row in consumers.items()
+                    if family_of(known_base_model(row)) == family
+                },
+            )
+        )
+
+    for kind in SUPPORT_FILE_KINDS:
+        for via, anchors in ladder:
+            counts: dict[int, int] = {}
+            for recipe, members in recipe_models.items():
+                if not members & anchors:
+                    continue
+                for member in members - ambiguous.get(recipe, set()):
+                    row = models.get(member)
+                    if row is not None and row["file_kind"] == kind and row["filename"]:
+                        counts[member] = counts.get(member, 0) + 1
+            if not counts:
+                continue
+            proposals[kind] = [
+                {
+                    "id": model_id,
+                    "filename": models[model_id]["filename"],
+                    "display_name": models[model_id]["display_name"],
+                    "family": models[model_id]["family"],
+                    "via": via,
+                    "recipes": count,
+                }
+                for model_id, count in sorted(
+                    counts.items(),
+                    key=lambda item: (
+                        -item[1],
+                        (models[item[0]]["filename"] or "").lower(),
+                    ),
+                )
+            ]
+            break
+    return proposals
 
 
 # How many of a combination's pictures the grid puts on a card's cover.

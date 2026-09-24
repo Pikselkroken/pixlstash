@@ -166,6 +166,37 @@ def test_a_different_checkpoint_is_a_different_workflow_in_the_same_stack():
     assert differs_by(_doc(a), _doc(b)) == ["other checkpoint"]
 
 
+def _with_companions(vae: str, clip: str) -> dict:
+    """A graph whose VAE and text encoder load from their own loaders."""
+    return _graph(
+        extra={
+            "8": _node("VAELoader", vae_name=vae),
+            "9": _node("CLIPLoader", clip_name=clip, type="flux2"),
+            "2": _node("CLIPTextEncode", text="a cat", clip=["9", 0]),
+            "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        (
+            ("ae.safetensors", "t5.safetensors"),
+            ("other_vae.safetensors", "t5.safetensors"),
+        ),
+        (("ae.safetensors", "t5.safetensors"), ("ae.safetensors", "qwen.safetensors")),
+    ],
+    ids=["vae", "text_encoder"],
+)
+def test_a_different_companion_file_is_a_different_workflow_in_the_same_stack(a, b):
+    # Clone with new models re-keys on the VAE and text encoder too, not only
+    # the checkpoint: otherwise the clone would land on the original's card.
+    first, second = _with_companions(*a), _with_companions(*b)
+    assert _key(first) != _key(second)
+    assert core_hash(_doc(first)) == core_hash(_doc(second))
+
+
 def test_a_character_lora_is_part_of_the_recipe_not_the_workflow():
     a = _graph(loras=("alice_character.safetensors",))
     b = _graph(loras=("bob_character.safetensors",))

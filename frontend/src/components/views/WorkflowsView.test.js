@@ -52,6 +52,8 @@ const dissolveStack = vi.fn();
 const duplicateWorkflow = vi.fn();
 const deleteWorkflowFile = vi.fn();
 const exportWorkflow = vi.fn();
+const readModelSwap = vi.fn();
+const cloneWorkflowWithModels = vi.fn();
 vi.mock("../../api/workflows", () => ({
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   getWorkflowCard: (...args) => getWorkflowCard(...args),
@@ -70,6 +72,8 @@ vi.mock("../../api/workflows", () => ({
   duplicateWorkflow: (...args) => duplicateWorkflow(...args),
   deleteWorkflowFile: (...args) => deleteWorkflowFile(...args),
   exportWorkflow: (...args) => exportWorkflow(...args),
+  readModelSwap: (...args) => readModelSwap(...args),
+  cloneWorkflowWithModels: (...args) => cloneWorkflowWithModels(...args),
 }));
 const listImportFolders = vi.fn();
 vi.mock("../../api/folders", () => ({
@@ -1976,6 +1980,65 @@ describe("the verbs the bar fires", () => {
     expect(patchWorkflowCard).toHaveBeenLastCalledWith("a", {
       name: "Portrait pass",
     });
+  });
+});
+
+describe("Clone with new models", () => {
+  const bar = (wrapper) =>
+    wrapper.findComponent({ name: "WorkflowSelectionBar" });
+
+  it("opens on the selected card and selects the clone it made", async () => {
+    const checkpoint = (id, filename) => ({
+      id,
+      filename,
+      display_name: null,
+      base_model: null,
+      file_kind: "checkpoint",
+    });
+    readModelSwap.mockResolvedValue({
+      slots: [
+        {
+          filename: "old.safetensors",
+          kind: "checkpoint",
+          model: checkpoint(1, "old.safetensors"),
+        },
+      ],
+      checkpoints: [
+        checkpoint(1, "old.safetensors"),
+        checkpoint(2, "new.safetensors"),
+      ],
+      vaes: [],
+      text_encoders: [],
+      proposals: {},
+      flags: [],
+    });
+    cloneWorkflowWithModels.mockResolvedValue({
+      name: "a (new models).json",
+      workflow_key: "c",
+      swapped: [],
+      unswapped: [],
+      verified: false,
+    });
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.selectRange(["a"]);
+
+    await bar(wrapper).vm.$emit("clone-with-models");
+    await flush();
+    expect(readModelSwap).toHaveBeenCalledWith("a");
+    await wrapper.find(".app-dialog select").setValue("2");
+    await flush();
+    const clone = wrapper
+      .findAll(".app-dialog__footer button")
+      .find((b) => b.text().includes("Clone"));
+    await clone.trigger("click");
+    await flush();
+
+    expect(cloneWorkflowWithModels).toHaveBeenCalledWith("a", {
+      name: "a — new.safetensors",
+      swaps: { "old.safetensors": "new.safetensors" },
+    });
+    expect(store.selectedKeys).toEqual(["c"]);
   });
 });
 
