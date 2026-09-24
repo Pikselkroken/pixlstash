@@ -2101,12 +2101,23 @@ can no longer see.
   round 2 draws **Recipes | Workflow** and no Pictures tab. The rail was
   terminal between F3 and F7, which was a known cost of that order rather than
   an oversight.
-- **Run… with several selected stays on screen and refuses**: `aria-disabled`
-  plus `aria-describedby` pointing at "Run one workflow at a time". A control
-  that disappears teaches nobody why. The multi-selection also gets *Stack
-  together* and *Hide*. With one selected, Run… opens the Run popup on that
-  card (F5, #1407): no picture behind it, so it shows the card's cover, an
-  empty prompt box and a set picker for where the output is filed.
+- **Run… with several cards selected stays on screen and refuses**: `aria-disabled`
+  plus `aria-describedby` pointing at "Run one workflow, or one whole stack, at
+  a time". A control that disappears teaches nobody why. The several-selected
+  body offers no verbs of its own (#1455): they are the pill's. With one
+  selected, Run… opens the Run popup on that card (F5, #1407): no picture
+  behind it, so it shows the card's cover, an empty prompt box and a set picker
+  for where the output is filed.
+- **A stack selected whole counts as one card.** A click on a stack card
+  selects its cover and every member, and `useWorkflowsStore.runnableCard`
+  reads that exact set as the cover. Run… here, the pill's Run and both verb
+  menus run the cover, and the popup's workflow select offers the members.
+  The rail's body names the cover and says so in visible text, which is what
+  Run… is described by; the pill's count reads "A stack of N workflows
+  selected". *Open cover picture* takes the same card. Rename, Export and
+  Duplicate still refuse, with "A stack is several workflows. Open it and pick
+  one to …". A stack plus anything else, or only part of one, is several again.
+  Ctrl-picking every row of an open stack is that same set, so it counts too.
 
 #### `WorkflowRecipesTab.vue` (`panels/`) + `SaveRecipeDialog.vue` / `ExportRecipeDialog.vue` (`io/`), v1.12 F6
 

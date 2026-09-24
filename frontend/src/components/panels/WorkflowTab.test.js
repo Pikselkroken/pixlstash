@@ -532,7 +532,7 @@ describe("with several workflows selected", () => {
     expect(run.attributes("aria-disabled")).toBe("true");
     const described = run.attributes("aria-describedby");
     expect(wrapper.find(`#${described}`).text()).toBe(
-      "Run one workflow at a time",
+      "Run one workflow, or one whole stack, at a time",
     );
   });
 
@@ -579,6 +579,34 @@ describe("with several workflows selected", () => {
     await run.trigger("click");
     await flush(wrapper);
     expect(runDialog.source.pictureIds).toEqual([99]);
+  });
+
+  it("runs a stack selected whole on its cover", async () => {
+    // A click on a stack card selects the cover and its members: several keys,
+    // one card on screen, and the one Run… should take.
+    const { wrapper } = await mountWith(
+      [KEY, OTHER],
+      [card({ stack_size: 2, member_keys: [OTHER] })],
+    );
+    const run = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Run…"));
+    expect(run.attributes("aria-disabled")).toBeUndefined();
+    // Named in visible text, which is what Run… is described by; never the
+    // "N workflows selected" count of a genuinely several selection.
+    const text = textOf(wrapper);
+    expect(text).not.toContain("workflows selected");
+    expect(
+      wrapper.find(`#${run.attributes("aria-describedby")}`).text(),
+    ).toContain("Run… runs Cinematic portrait, the cover");
+    await run.trigger("click");
+    await flush(wrapper);
+    const { useRunDialogStore } =
+      await import("../../stores/useRunDialogStore");
+    expect(useRunDialogStore().source).toMatchObject({
+      kind: "card",
+      workflowKey: KEY,
+    });
   });
 
   it("says how many are selected and offers no verbs of its own", async () => {

@@ -40,6 +40,21 @@
          are gated on a selection, and it is docked over the grid this rail
          sits beside), so nothing became unreachable — and the reader is told
          where the verbs are rather than left to find them. -->
+    <!-- A stack selected whole is one card on screen and one run: named, and
+         the sentence saying what Run… runs is the one the button points at,
+         visible rather than a hover tooltip touch never shows. -->
+    <template v-else-if="multiple && runTarget">
+      <div class="inspector-section">
+        <span class="section-label">Selected</span>
+        <p class="wftab-title">{{ runTarget.name }}</p>
+        <p id="wftab-run-target" class="wftab-note wftab-quiet">
+          A stack of {{ store.selectedKeys.length }} workflows. Run… runs
+          {{ runTarget.name }}, the cover; you can switch to another member in
+          the Run popup.
+        </p>
+      </div>
+    </template>
+
     <template v-else-if="multiple">
       <div class="inspector-section">
         <span class="section-label">Selected</span>
@@ -222,8 +237,8 @@
         variant="primary"
         icon-left="play"
         block
-        :aria-disabled="multiple ? 'true' : undefined"
-        :aria-describedby="multiple ? 'wftab-run-reason' : undefined"
+        :aria-disabled="runTarget ? undefined : 'true'"
+        :aria-describedby="runDescribedBy"
         @click="run"
       >
         Run…
@@ -256,8 +271,8 @@
           </div>
         </div>
       </v-menu>
-      <p v-if="multiple" id="wftab-run-reason" class="wftab-note wftab-quiet">
-        Run one workflow at a time
+      <p v-if="!runTarget" id="wftab-run-reason" class="wftab-note wftab-quiet">
+        Run one workflow, or one whole stack, at a time
       </p>
     </div>
   </AppInspector>
@@ -439,6 +454,13 @@ const recipeKeys = computed(() =>
  * key out and would call a stack of six "five workflows".
  */
 const recipesStack = computed(() => {
+  // A stack selected whole heads its Recipes as the stack, not as a count.
+  if (multiple.value && runTarget.value) {
+    return {
+      name: runTarget.value.name || "",
+      size: Number(runTarget.value.stack_size) || 0,
+    };
+  }
   if (multiple.value) {
     const count = store.selectedKeys.length;
     return { name: `${count} workflows selected`, size: 0 };
@@ -779,27 +801,40 @@ function toggleHidden() {
 }
 
 /**
+ * What Run… runs: this card, or the cover of a stack selected whole
+ * (`store.runnableCard`), which is several keys but one card on screen.
+ */
+const runTarget = computed(() =>
+  multiple.value ? store.runnableCard : card.value,
+);
+
+/** The sentence Run… is described by: why it refuses, or which stack card. */
+const runDescribedBy = computed(() => {
+  if (!runTarget.value) return "wftab-run-reason";
+  return multiple.value ? "wftab-run-target" : undefined;
+});
+
+/**
  * Run… opens the Run popup on THIS card (v1.12 F5).
  *
  * No picture behind it, so the popup shows the card's cover, an empty prompt
  * and a set picker for where the output is filed - which is the one thing a
  * card-sourced run has to be told and a picture-sourced one already knows.
  *
- * Refused outright while several are selected: the button stays on screen and
- * `aria-disabled` says why, rather than disappearing and leaving nothing to
- * explain.
+ * Refused outright while several cards are selected: the button stays on
+ * screen and `aria-disabled` says why, rather than disappearing and leaving
+ * nothing to explain. A stack selected whole is one card (`runTarget`).
  */
 function run() {
-  if (multiple.value || !card.value) return;
+  const target = runTarget.value;
+  if (!target) return;
   runDialog.openRun({
     kind: "card",
-    workflowKey: card.value.key,
-    name: card.value.name,
+    workflowKey: target.key,
+    name: target.name,
     // Through the helper: a raw `covers` entry is API-relative and an
     // `<img src>` resolves it against the page origin instead.
-    coverUrl: card.value.covers?.[0]
-      ? workflowCoverUrl(card.value.covers[0])
-      : "",
+    coverUrl: target.covers?.[0] ? workflowCoverUrl(target.covers[0]) : "",
     emptyPrompt: true,
   });
 }
