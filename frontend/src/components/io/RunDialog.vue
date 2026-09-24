@@ -964,8 +964,18 @@ function resetSize() {
   sizeFields.value.forEach(resetValue);
 }
 
+/**
+ * The prompt the box opens with, and what its reset chip goes back to.
+ *
+ * A caller's own `source.prompt` wins: the Recipes tab passes the prompt its
+ * row shows, and the picture's re-read can come back without one.
+ */
 const basePrompt = computed(
-  () => recipe.value?.positive_prompt || savedRecipe.value?.prompt || "",
+  () =>
+    props.source?.prompt ||
+    recipe.value?.positive_prompt ||
+    savedRecipe.value?.prompt ||
+    "",
 );
 
 /**

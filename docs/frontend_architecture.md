@@ -2125,19 +2125,29 @@ The **saved recipe** — the user's Recipe, which is a prompt, its LoRAs with
 strengths and the parameters they changed. Not a `workflow_recipe` row, which
 new code calls a *variant*. Owner-only, like everything under `/workflows`.
 
-- **The tab has two halves, and the second is why it is not empty.** A saved
-  recipe is a look somebody pressed Save on; `GET /recipes/used` answers with
-  every look the stack's own pictures were *actually made with*, grouped from
-  the same picture rows credit is counted from. Without it the tab showed "no
-  recipes yet" on every workflow of a full library, because saved recipes are
-  a concept that ships empty. The server leaves out any look a saved recipe
-  already keeps, on the same `prompt_key`/`lora_key` pair, so the two halves
-  can never both claim one — which is why **Save… keys the new recipe off the
-  look and not off the cover picture's re-read**: the look was keyed on the
-  stored `comfyui_*` columns, the live extraction can differ from them, and a
-  recipe carrying the re-read's prompt would leave the look in the used half
-  AND be credited 0. Only the LoRA strengths and the seed come from the
-  picture, because the columns do not hold them. The server merges groups on
+- **The tab has two halves: Saved on top, From your pictures below.** A
+  saved recipe is a *clone* of a recipe the pictures carry, made with
+  Clone…, which the owner can then name, edit and reorder.
+  `GET /recipes/used` answers with every look the stack's own pictures were
+  *actually made with*, grouped from the same picture rows credit is counted
+  from. Without it the tab showed "no recipes yet" on every workflow of a
+  full library, because saved recipes are a concept that ships empty. A look
+  a saved recipe keeps **stays in the list**, flagged `saved` on the
+  same `prompt_key`/`lora_key` pair credit uses, and shows "Saved" where
+  its Clone… button was. **The server is the only source of that flag**:
+  deleting a saved recipe re-reads the looks rather than working the mark out
+  with the client's mirror of the key. Because the flag and the credit share
+  that key, **Clone… keys the new recipe off the look and not off the
+  cover picture's re-read**: the look was keyed on the stored `comfyui_*`
+  columns, the live extraction can differ from them, and a recipe carrying
+  the re-read's prompt would leave the look unmarked AND be credited 0. Only
+  the LoRA strengths and the seed come from the picture, because the columns
+  do not hold them. **Run…** on a used recipe passes the row's prompt as the
+  Run popup's `source.prompt`, the box's editable starting text, because the
+  re-read can come back without one. **The thumbnails open the picture**: the
+  tab is mounted by `App.vue`, outside `WorkflowsView`, so it asks through
+  `useWorkflowsStore().requestOpenPicture` and the view opens it with its
+  own `openPicture`, parking the reader's place as a cover click does. The server merges groups on
   that key too, because the SQL groups by the stored `comfyui_loras` *text*
   and one look written two ways (`ada.safetensors`,
   `characters/Ada.safetensors`) arrives as two rows. A group with neither a

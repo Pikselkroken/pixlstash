@@ -1169,9 +1169,25 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     recipesEpoch.value += 1;
   }
 
+  /**
+   * A picture the Recipes tab asked to open, or null.
+   *
+   * The tab is mounted by `App.vue` beside the grid, not inside
+   * `WorkflowsView`, and only the view knows where the reader is - so the tab
+   * asks here and the view opens it, parking its place as a cover click does.
+   */
+  const pictureToOpen = ref(null);
+
+  /** Ask the Workflows view to open one picture in the lightbox. */
+  function requestOpenPicture(pictureId) {
+    pictureToOpen.value = pictureId;
+  }
+
   return {
     recipesEpoch,
     notedRecipesChanged,
+    pictureToOpen,
+    requestOpenPicture,
     cards,
     oneOffs,
     hidden,

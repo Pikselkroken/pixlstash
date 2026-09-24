@@ -2011,6 +2011,18 @@ describe("the keyboard can reach everything the pointer can", () => {
     });
   });
 
+  it("opens a picture the Recipes tab asks for, and clears the ask", async () => {
+    await grid();
+    const store = useWorkflowsStore();
+    store.requestOpenPicture(55);
+    await flush();
+    expect(push).toHaveBeenCalledWith({
+      name: "all-pictures",
+      query: { overlay: "55", from: "/workflows" },
+    });
+    expect(store.pictureToOpen).toBe(null);
+  });
+
   it("hands focus back to the cursor row when the menu closes", async () => {
     const wrapper = await grid();
     await wrapper.find(".wfv-grid").trigger("keydown", { key: "ContextMenu" });

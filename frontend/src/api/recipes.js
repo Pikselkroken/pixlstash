@@ -9,6 +9,15 @@ import { apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
 
 /**
+ * `workflow_key=a&workflow_key=b`, which is what FastAPI's `list[...]` reads.
+ *
+ * Axios' default array form is `workflow_key[]=`, a key the server does not
+ * know: the list is dropped in silence, so `/recipes/used` answers `[]` for
+ * every card and `/recipes` answers every recipe in the library.
+ */
+const REPEATED_KEYS = { indexes: null };
+
+/**
  * Keep the look a Run popup is showing.
  *
  * `overrides` is addressed `"<slot_label>/<input_name>"`, which is the form
@@ -41,25 +50,26 @@ export async function listSavedRecipes(workflowKey) {
   const body = await unwrap(
     apiClient.get("/recipes", {
       params: keys.length ? { workflow_key: keys } : {},
+      paramsSerializer: REPEATED_KEYS,
     }),
   );
   return Array.isArray(body) ? body : [];
 }
 
 /**
- * The looks this workflow's own pictures were made with, that nobody saved.
+ * Every look this workflow's own pictures were made with, saved or not.
  *
  * **A saved recipe is a look somebody kept; this is every look they ran.** A
  * library that has never pressed Save still has hundreds, which is why the
  * Recipes tab lists these beside the saved ones instead of showing an empty
  * panel to somebody with a full library. A look a saved recipe already keeps
- * is left out by the server, so the two halves never both claim one.
+ * stays in, with `saved` set: a clone does not take the original off the list.
  *
  * `loras` are file names with no strength - a picture row stores none - and
  * `cover_picture_id` is where the Save dialog reads the strengths back from.
  *
  * @param {string|Array<string>} workflowKey - one card, or a selection.
- * @returns {Promise<Array<{prompt: string, loras: Array<Object>, pictures: number, cover_picture_id: ?number}>>}
+ * @returns {Promise<Array<{prompt: string, loras: Array<Object>, pictures: number, cover_picture_id: ?number, saved: boolean}>>}
  */
 export async function listUsedLooks(workflowKey) {
   const keys = (Array.isArray(workflowKey) ? workflowKey : [workflowKey]).filter(
@@ -67,7 +77,10 @@ export async function listUsedLooks(workflowKey) {
   );
   if (!keys.length) return [];
   const body = await unwrap(
-    apiClient.get("/recipes/used", { params: { workflow_key: keys } }),
+    apiClient.get("/recipes/used", {
+      params: { workflow_key: keys },
+      paramsSerializer: REPEATED_KEYS,
+    }),
   );
   return Array.isArray(body) ? body : [];
 }
