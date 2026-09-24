@@ -9,6 +9,7 @@ import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
 import SettingsSection from "./SettingsSection.vue";
 import { errorDetail } from "../../utils/apiError";
+import { useFilterStore } from "../../stores/useFilterStore";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -86,6 +87,7 @@ async function saveComfyuiUrl() {
       await patchUserConfig({ comfyui_url: null });
       comfyuiHost.value = "";
       comfyuiPort.value = "";
+      useFilterStore().comfyuiUrl = "";
       emit("update:comfyui-configured", false);
       comfyuiConfigDialogOpen.value = false;
     } catch (e) {
@@ -109,6 +111,7 @@ async function saveComfyuiUrl() {
     await patchUserConfig({ comfyui_url: nextUrl });
     comfyuiHost.value = host;
     comfyuiPort.value = String(portNumber);
+    useFilterStore().comfyuiUrl = nextUrl;
     emit("update:comfyui-configured", true);
     comfyuiUrlSuccess.value = "Saved.";
     setTimeout(() => {
@@ -137,6 +140,7 @@ async function clearComfyuiUrl() {
     comfyuiPort.value = "";
     comfyuiEditHost.value = "";
     comfyuiEditPort.value = "";
+    useFilterStore().comfyuiUrl = "";
     emit("update:comfyui-configured", false);
     comfyuiConfigDialogOpen.value = false;
   } catch (e) {

@@ -11,7 +11,7 @@
 //   which is `aria-disabled` plus the reason; a button that disappears
 //   teaches nobody why.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
@@ -50,6 +50,8 @@ vi.mock("vue-router", () => ({
 
 import WorkflowTab from "./WorkflowTab.vue";
 import { useFilterStore } from "../../stores/useFilterStore";
+import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useSearchStore } from "../../stores/useSearchStore";
 import { useSelectionStore } from "../../stores/useSelectionStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
@@ -565,8 +567,6 @@ describe("with several workflows selected", () => {
     // Generate button is gone, and it was unguarded: `function run() { return; }`
     // kept the whole suite green.
     const { wrapper } = await mountWith([KEY], [card()]);
-    const { useRunDialogStore } =
-      await import("../../stores/useRunDialogStore");
     const run = wrapper
       .findAll("button")
       .find((b) => b.text().includes("Run…"));
@@ -593,8 +593,6 @@ describe("with several workflows selected", () => {
       .find((b) => b.text().includes("Run…"));
     await run.trigger("click");
     await flush(wrapper);
-    const { useRunDialogStore } =
-      await import("../../stores/useRunDialogStore");
     // Seeded first: `source` is null on a fresh store, so asserting null
     // against an untouched default would pass with `run()` deleted entirely.
     const runDialog = useRunDialogStore();
@@ -625,8 +623,6 @@ describe("with several workflows selected", () => {
     ).toContain("Run… runs Cinematic portrait, the cover");
     await run.trigger("click");
     await flush(wrapper);
-    const { useRunDialogStore } =
-      await import("../../stores/useRunDialogStore");
     expect(useRunDialogStore().source).toMatchObject({
       kind: "card",
       workflowKey: KEY,
@@ -652,6 +648,116 @@ describe("with several workflows selected", () => {
     const labels = wrapper.findAll("button").map((b) => b.text());
     expect(labels).not.toContain("Stack together");
     expect(labels).not.toContain("Hide");
+  });
+});
+
+describe("Open in ComfyUI", () => {
+  const openButton = (wrapper) =>
+    wrapper.findAll("button").find((b) => b.text().includes("Open in ComfyUI"));
+
+  let open;
+  beforeEach(() => {
+    open = vi.spyOn(window, "open").mockImplementation(() => null);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete window.pixlstashDesktop;
+  });
+
+  function configure(url = "http://127.0.0.1:8188/") {
+    const filterStore = useFilterStore();
+    filterStore.comfyuiConfigured = true;
+    filterStore.comfyuiUrl = url;
+  }
+
+  it("opens the configured ComfyUI on THIS card, in a new tab", async () => {
+    configure();
+    const { wrapper } = await mountWith([KEY], [card()]);
+
+    await openButton(wrapper).trigger("click");
+
+    expect(open).toHaveBeenCalledWith(
+      `http://127.0.0.1:8188/?pixlstash_workflow=${KEY}`,
+      "_blank",
+      "noopener,noreferrer",
+    );
+  });
+
+  it("sends a listen-everywhere address to the machine the page came from", async () => {
+    configure("http://0.0.0.0:8188/");
+    const { wrapper } = await mountWith([KEY], [card()]);
+
+    await openButton(wrapper).trigger("click");
+
+    expect(open.mock.calls[0][0]).toBe(
+      `http://${window.location.hostname}:8188/?pixlstash_workflow=${KEY}`,
+    );
+  });
+
+  it("is not offered without a ComfyUI address", async () => {
+    const { wrapper } = await mountWith([KEY], [card()]);
+    expect(openButton(wrapper)).toBeUndefined();
+
+    // The flag alone is not enough: the button is gated on the address it
+    // opens, so a flag set without one never draws a button that does nothing.
+    useFilterStore().comfyuiConfigured = true;
+    await flush(wrapper);
+    expect(openButton(wrapper)).toBeUndefined();
+
+    useFilterStore().comfyuiUrl = "http://127.0.0.1:8188/";
+    await flush(wrapper);
+    expect(openButton(wrapper)).toBeTruthy();
+  });
+
+  it("is not offered in the desktop app, whose shell would drop the click", async () => {
+    configure();
+    window.pixlstashDesktop = {};
+    const { wrapper } = await mountWith([KEY], [card()]);
+    expect(openButton(wrapper)).toBeUndefined();
+  });
+
+  it("stays on screen and refuses, with the reason, when several are selected", async () => {
+    configure();
+    const { wrapper } = await mountWith(
+      [KEY, OTHER],
+      [card(), card({ key: OTHER })],
+    );
+    const button = openButton(wrapper);
+    expect(button.attributes("aria-disabled")).toBe("true");
+    const described = button.attributes("aria-describedby");
+    expect(wrapper.find(`#${described}`).text()).toBe(
+      "Open one workflow, or one whole stack, at a time",
+    );
+    await button.trigger("click");
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("opens a stack selected whole on its cover, as Run… runs it", async () => {
+    configure();
+    const { wrapper } = await mountWith(
+      [KEY, OTHER],
+      [card({ stack_size: 2, member_keys: [OTHER] })],
+    );
+    const button = openButton(wrapper);
+    expect(button.attributes("aria-disabled")).toBeUndefined();
+
+    await button.trigger("click");
+
+    expect(open.mock.calls[0][0]).toBe(
+      `http://127.0.0.1:8188/?pixlstash_workflow=${KEY}`,
+    );
+  });
+
+  it("refuses an address that is not a web address", async () => {
+    configure("javascript:alert(1)");
+    const { wrapper } = await mountWith([KEY], [card()]);
+
+    await openButton(wrapper).trigger("click");
+
+    expect(open).not.toHaveBeenCalled();
+    expect(JSON.stringify(useNoticeStore().$state)).toContain(
+      "not a web address",
+    );
   });
 });
 

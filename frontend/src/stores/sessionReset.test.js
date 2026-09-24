@@ -60,6 +60,7 @@ import { useMovesStore } from "./useMovesStore";
 import { useWorkflowsStore } from "./useWorkflowsStore";
 import { useWorkflowPullStore } from "./useWorkflowPullStore";
 import { useRunDialogStore } from "./useRunDialogStore";
+import { useFilterStore } from "./useFilterStore";
 
 /**
  * The matrix. One row per store that holds server-sourced data: how to fill it
@@ -169,6 +170,17 @@ const STORES = [
     },
     isEmpty: (s) =>
       s.phase === "idle" && s.summary === null && s.comfyuiUrl === null,
+  },
+  {
+    // Filter form state otherwise, but it also carries the owner's ComfyUI
+    // address, which a share token's session cannot re-read to overwrite.
+    name: "useFilterStore",
+    use: useFilterStore,
+    seed: (s) => {
+      s.comfyuiUrl = "http://127.0.0.1:8188/";
+      s.comfyuiConfigured = true;
+    },
+    isEmpty: (s) => s.comfyuiUrl === "" && s.comfyuiConfigured === false,
   },
   {
     // An open Run popup names pictures and a card of the library the old
@@ -459,7 +471,6 @@ describe("the store matrix is complete", () => {
   // and carry no authorization decision in their content.
   const NO_SERVER_DATA = {
     "useExportStore.js": "export dialog form state",
-    "useFilterStore.js": "filter form state; ids come from the route",
     "useGenStackPrefsStore.js": "localStorage view preference",
     "useGridStore.js": "grid layout and display toggles",
     "useNoticeStore.js": "transient toast queue",

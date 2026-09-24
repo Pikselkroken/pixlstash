@@ -340,6 +340,34 @@
           </div>
         </div>
       </v-menu>
+      <!-- A row of its own under Run…: the node side of ComfyUI-PixlStash
+           reads `?pixlstash_workflow=` and loads the graph, so without the
+           node ComfyUI opens on whatever it had last. It opens what Run…
+           runs (`runTarget`), and is refused rather than hidden otherwise,
+           for Run…'s reason.
+
+           Not in the desktop app: its shell opens only `https:` outside the
+           app, and ComfyUI is plain `http:`, so the click would do nothing. -->
+      <AppButton
+        v-if="filterStore.comfyuiUrl && !isDesktop"
+        class="wftab-open"
+        variant="secondary"
+        icon-left="open-in-new"
+        block
+        tooltip="Open this workflow in ComfyUI, in a new tab. Needs the ComfyUI-PixlStash node."
+        :aria-disabled="runTarget ? undefined : 'true'"
+        :aria-describedby="runTarget ? undefined : 'wftab-open-reason'"
+        @click="openInComfyui"
+      >
+        Open in ComfyUI
+      </AppButton>
+      <p
+        v-if="!runTarget && filterStore.comfyuiUrl && !isDesktop"
+        id="wftab-open-reason"
+        class="wftab-note wftab-quiet"
+      >
+        Open one workflow, or one whole stack, at a time
+      </p>
       <p v-if="!runTarget" id="wftab-run-reason" class="wftab-note wftab-quiet">
         Run one workflow, or one whole stack, at a time
       </p>
@@ -386,6 +414,7 @@ import {
   workflowCoverUrl,
 } from "../../api/workflows";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
+import { useFilterStore } from "../../stores/useFilterStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
@@ -423,6 +452,9 @@ const store = useWorkflowsStore();
 const { showPictures } = useWorkflowPictures();
 const sidebarStore = useSidebarStore();
 const notices = useNoticeStore();
+const filterStore = useFilterStore();
+// The desktop shell's bridge; see the button for why it matters here.
+const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
 const runDialog = useRunDialogStore();
 const tasksStore = useTasksStore();
 
@@ -1064,6 +1096,40 @@ function run() {
   });
 }
 
+/**
+ * Open ComfyUI on what Run… runs (`runTarget`), in a new tab.
+ *
+ * ComfyUI takes no workflow from a URL, so the key rides along as
+ * `?pixlstash_workflow=` and the ComfyUI-PixlStash node fetches the graph
+ * (`GET /workflows/{key}/graph`) and loads it. Synchronous on purpose: a
+ * `window.open` after an await is what popup blockers refuse.
+ */
+function openInComfyui() {
+  const target = runTarget.value;
+  if (!target || !filterStore.comfyuiUrl) return;
+  let url;
+  try {
+    url = new URL(filterStore.comfyuiUrl);
+  } catch (err) {
+    console.warn(`[workflows] bad ComfyUI address ${filterStore.comfyuiUrl}`, err);
+    url = null;
+  }
+  if (!url || !/^https?:$/.test(url.protocol)) {
+    notices.push({
+      level: "error",
+      text: "The ComfyUI address in Settings is not a web address.",
+    });
+    return;
+  }
+  // `0.0.0.0` is ComfyUI listening everywhere: fine for the server, and a
+  // browser cannot navigate to it. The machine this page came from is the one.
+  if (["0.0.0.0", "[::]"].includes(url.hostname)) {
+    url.hostname = window.location.hostname;
+  }
+  url.searchParams.set("pixlstash_workflow", target.key);
+  window.open(url.toString(), "_blank", "noopener,noreferrer");
+}
+
 watch(
   selectedKey,
   (key) => {
@@ -1309,7 +1375,8 @@ watch(
   flex: 1;
 }
 
-.wftab-foot > .wftab-note {
+.wftab-foot > .wftab-note,
+.wftab-foot > .wftab-open {
   flex-basis: 100%;
 }
 

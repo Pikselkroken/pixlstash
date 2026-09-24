@@ -1,5 +1,7 @@
-import { ref, computed } from "vue";
+import { ref, computed, onScopeDispose } from "vue";
 import { defineStore } from "pinia";
+
+import { onSessionReset } from "../utils/apiClient";
 
 export const useFilterStore = defineStore("filter", () => {
   const mediaTypeFilter = ref("all"); // 'all' | 'images' | 'videos'
@@ -39,6 +41,17 @@ export const useFilterStore = defineStore("filter", () => {
   const comfyuiModelFilter = ref([]);
   const comfyuiLoraFilter = ref([]);
   const comfyuiConfigured = ref(false);
+  // The address itself, for the one control that sends the browser there
+  // (the Workflow tab's Open in ComfyUI). Empty when none is configured.
+  const comfyuiUrl = ref("");
+  // The owner's ComfyUI is not the next session's: a share token cannot read
+  // the config that would overwrite it (useWorkflowPullStore does the same).
+  onScopeDispose(
+    onSessionReset(() => {
+      comfyuiUrl.value = "";
+      comfyuiConfigured.value = false;
+    }),
+  );
   // Impossible-tag grid filter: array of source keys ("no_face" / "no_humans"),
   // OR'd together. Empty array means the filter is off.
   const impossibleSources = ref([]);
@@ -91,6 +104,7 @@ export const useFilterStore = defineStore("filter", () => {
     comfyuiModelFilter,
     comfyuiLoraFilter,
     comfyuiConfigured,
+    comfyuiUrl,
     impossibleSources,
     stackStateFilter,
     workflowFilter,

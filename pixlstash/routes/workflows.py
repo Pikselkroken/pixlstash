@@ -148,6 +148,7 @@ from pixlstash.services.workflow_export import download_stem, scrub_for_export
 from pixlstash.services.workflow_identity import RECIPE, STRUCTURAL
 from pixlstash.services.workflow_hash import (
     MODEL_EXTENSIONS,
+    SECRET_FIELD_RE,
     WorkflowGraphError,
     normalized_filename,
     structural_document,
@@ -1096,6 +1097,33 @@ class WorkflowExport(BaseModel):
     )
     source: str = Field(
         description="Where the graph was resolved from: file, picture or instance."
+    )
+
+
+class WorkflowRunnableGraph(BaseModel):
+    """``GET /workflows/{key}/graph``: the graph as it runs, for this owner's ComfyUI.
+
+    The unscrubbed sibling of :class:`WorkflowExport`. Duplicate writes the
+    same graph into a file; this hands it to the ComfyUI-PixlStash node, which
+    opens it in the ComfyUI editor when the Workflow tab's *Open in ComfyUI*
+    sends ComfyUI there with ``?pixlstash_workflow=<key>``.
+    """
+
+    name: str = Field(description="What to call the workflow in ComfyUI.")
+    workflow: dict = Field(description="The ComfyUI API-format graph.")
+    source: str = Field(
+        description="Where the graph was resolved from: file, picture or instance."
+    )
+    seedless: bool = Field(
+        False,
+        description=(
+            "True when the graph came from a stored recipe, whose seeds are "
+            "null by design: set one before queueing it."
+        ),
+    )
+    forgotten: int = Field(
+        0,
+        description="How many model names the library could no longer name.",
     )
 
 
@@ -3591,7 +3619,7 @@ def create_router(server) -> APIRouter:
     # writing one into a graph would make the workflow and the override the
     # same thing.
 
-    def _card_source(card):
+    def _card_source(card, object_info: dict | None = None):
         """One card's runnable graph, or the 409 that says why there is none.
 
         ``RecursionError`` is caught here rather than at each gesture because
@@ -3603,7 +3631,7 @@ def create_router(server) -> APIRouter:
         class for the same reason.
         """
         try:
-            source, reason = _source_graph_for(card)
+            source, reason = _source_graph_for(card, object_info)
         except RecursionError as exc:
             logger.warning(
                 "Card %s has a source graph too deeply nested to read: %s",
@@ -3734,6 +3762,61 @@ def create_router(server) -> APIRouter:
             workflow=document,
             removed=removed,
             source=source.origin,
+        )
+
+    @router.get(
+        "/workflows/{workflow_key}/graph",
+        summary="A workflow's runnable graph",
+        description=(
+            "This workflow as Run would submit it, prompt and seed kept, for "
+            "opening in the owner's own ComfyUI: resolved against what that "
+            "ComfyUI lists, with model names swapped to the copy it loads. "
+            "Credential widgets are blanked. A graph from a stored recipe has "
+            "no seeds (`seedless`) and may name models the library forgot "
+            "(`forgotten`). The ComfyUI-PixlStash node reads it when ComfyUI "
+            "is opened with `?pixlstash_workflow=<key>`. Export instead to "
+            "give it away."
+        ),
+        response_model=WorkflowRunnableGraph,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "There is no graph for this card."},
+        },
+    )
+    def get_runnable_graph(request: Request, workflow_key: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        # Resolved the way Run… resolves it: with ComfyUI's own model list, so
+        # an editor-only picture graph is rebuilt and a renamed model loads
+        # (#1439). Without ComfyUI the file and picture tiers still answer.
+        object_info, _error = _read_object_info(_comfyui_url(_user(request)))
+        source = _card_source(card, object_info)
+        graph = source.graph
+        if object_info is not None:
+            apply_model_swap(
+                graph,
+                detect_model_targets(graph, object_info),
+                model_name_aliases(hub),
+                object_info,
+            )
+        # Otherwise unscrubbed, for Duplicate's reason: it stays with the owner
+        # and is meant to RUN. But it travels over the network into ComfyUI's
+        # page, whose own save and share would keep a key, so credentials go.
+        # ponytail: top-level widgets only; export's nested walk if one hides.
+        for node in graph.values():
+            inputs = node.get("inputs") if isinstance(node, dict) else None
+            if not isinstance(inputs, dict):
+                continue
+            for name, value in inputs.items():
+                if isinstance(value, str) and SECRET_FIELD_RE.search(name):
+                    inputs[name] = ""
+        return WorkflowRunnableGraph(
+            name=_file_stem(card),
+            workflow=graph,
+            source=source.origin,
+            seedless=source.seedless,
+            forgotten=source.forgotten,
         )
 
     @router.post(
