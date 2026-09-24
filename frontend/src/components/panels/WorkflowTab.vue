@@ -1603,7 +1603,8 @@ watch(
      hidden without a box showing. */
   margin-inline: calc(-1 * var(--space-3));
   padding: var(--space-3);
-  border-top: 1px solid rgb(var(--v-theme-divider));
+  /* `border`, not `divider`: divider all but vanishes on the sidebar tone. */
+  border-top: 1px solid rgb(var(--v-theme-border));
   background: rgb(var(--v-theme-sidebar));
 }
 
