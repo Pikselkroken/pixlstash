@@ -89,6 +89,10 @@ jobs:
           # Pinned here because env overrides win over any .pr_agent.toml, which
           # could otherwise point the key at another host.
           OPENROUTER.API_BASE: https://openrouter.ai/api/v1
+          # Without a cap a looping generation runs until the job timeout: OpenRouter
+          # keeps the connection alive, so ai_timeout never fires. Reviews use ~1k.
+          OPENROUTER.MAX_TOKENS: "16000"
+          OPENROUTER.REASONING_EFFORT: "low"
           CONFIG.MODEL: openrouter/${{ vars.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash' }}
           # The upstream default fallback is an OpenAI model we hold no key for.
           CONFIG.FALLBACK_MODELS: "[]"
