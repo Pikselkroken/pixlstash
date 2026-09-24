@@ -74,6 +74,7 @@ DURATIONS_PATH = TESTS_DIR / "ci_test_durations.json"
 PRIVILEGED_WORKFLOW_PATHS = tuple(
     REPO_ROOT / ".github" / "workflows" / name
     for name in (
+        "ai-review.yml",
         "certum-signer-image.yml",
         "docker-publish.yml",
         "electron.yml",
@@ -91,6 +92,7 @@ _ACTION_USE_RE = re.compile(
     r"^\s*(?:-\s*)?uses:\s*([^#\s]+)\s*(?:#\s*(.+?))?\s*$", re.MULTILINE
 )
 _FULL_COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _VERSION_COMMENT_RE = re.compile(r"^v[0-9]+(?:\.[0-9]+){1,3}(?:[-+._][0-9A-Za-z.-]+)?$")
 _RELEASE_SECRET_RE = re.compile(
     r"secrets\.(?:APPLE_|CERTUM_|DOCKERHUB_|RELEASE_BOT_TOKEN)"
@@ -340,9 +342,15 @@ def test_privileged_workflow_actions_are_immutable():
             assert separator and action_name, (
                 f"Malformed action reference in {path}: {action}"
             )
-            assert _FULL_COMMIT_SHA_RE.fullmatch(ref), (
-                f"Privileged workflow action must use an exact 40-character "
-                f"commit SHA, not a mutable tag: {path}: {action}"
+            # A docker:// step is pinned by its image digest, not a commit.
+            pin_re = (
+                _IMAGE_DIGEST_RE
+                if action_name.startswith("docker://")
+                else _FULL_COMMIT_SHA_RE
+            )
+            assert pin_re.fullmatch(ref), (
+                f"Privileged workflow action must use an exact commit SHA or "
+                f"image digest, not a mutable tag: {path}: {action}"
             )
             assert version_comment and _VERSION_COMMENT_RE.fullmatch(version_comment), (
                 f"Pinned action must retain a machine-readable version comment "
