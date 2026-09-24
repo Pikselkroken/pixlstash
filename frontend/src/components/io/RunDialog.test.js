@@ -271,48 +271,35 @@ describe("switching to another stack member", () => {
     expect(wrapper.vm.currentValue(after)).toBe(20);
   });
 
-  it("names every member in the picker, not only the cover", async () => {
-    // `GET /workflows` lists covers only, so a member's name is on its own
-    // card; a picker built from the list alone said "Stack member bbbbbbbb".
-    getWorkflowCard.mockImplementation(async (key) =>
-      key === OTHER
-        ? {
-            card: card({
-              key: OTHER,
-              name: "Cinematic portrait · detailer",
-              member_keys: [KEY],
-            }),
-          }
-        : { card: card({ member_keys: [OTHER] }) },
-    );
+  it("lists the whole stack, each member told apart from the others", async () => {
+    // `GET /workflows` generates members of one stack the same name, so the
+    // picker would offer two identical rows without what sets them apart.
+    const members = [
+      { key: KEY, name: "Krea 2: Text to Image", sets_apart: ["film-grain"], differs_by: [] },
+      {
+        key: OTHER,
+        name: "Krea 2: Text to Image",
+        sets_apart: [],
+        differs_by: ["+ upscale"],
+      },
+      { key: "c".repeat(64), name: "Detailer pass", sets_apart: [], differs_by: [] },
+    ];
+    getWorkflowCard.mockResolvedValue({ card: card({ members }) });
     const wrapper = await mountRun();
     expect(wrapper.vm.workflowOptions).toEqual([
-      { value: KEY, label: "Cinematic portrait" },
-      { value: OTHER, label: "Cinematic portrait · detailer" },
+      { value: KEY, label: "Krea 2: Text to Image — film-grain" },
+      { value: OTHER, label: "Krea 2: Text to Image — + upscale" },
+      { value: "c".repeat(64), label: "Detailer pass" },
     ]);
-
-    // From the member, the cover is the one in `member_keys`.
-    wrapper.vm.workflowKey = OTHER;
-    await flushPromises();
-    expect(wrapper.vm.workflowOptions).toEqual([
-      { value: OTHER, label: "Cinematic portrait · detailer" },
-      { value: KEY, label: "Cinematic portrait" },
-    ]);
+    // Read off the card itself: no member's card is fetched to name it.
+    expect(getWorkflowCard).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the fallback for a member whose card cannot be read", async () => {
-    getWorkflowCard.mockImplementation(async (key) => {
-      if (key === OTHER) throw new Error("gone");
-      return { card: card({ member_keys: [OTHER] }) };
-    });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("offers the card alone when it is in no stack", async () => {
     const wrapper = await mountRun();
     expect(wrapper.vm.workflowOptions).toEqual([
       { value: KEY, label: "Cinematic portrait" },
-      { value: OTHER, label: "Stack member bbbbbbbb" },
     ]);
-    expect(wrapper.vm.loadFailed).toBe("");
-    warn.mockRestore();
   });
 
   it("says nothing when every edit survived", async () => {

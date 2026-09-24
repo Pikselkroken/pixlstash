@@ -868,7 +868,7 @@ the two sides have agreed:
    `stack_size`, `saved_recipe_count`, `defaults` — and `mark` carries B1's own
    `structural` | `recipe` vocabulary rather than a translation of it, which is
    how the solid/dashed meaning would get inverted. The route adds
-   `topology_hash`, `variant_count`, `member_keys`, `stack_id`, `rank`,
+   `topology_hash`, `variant_count`, `member_keys`, `members`, `stack_id`, `rank`,
    `last_used` and `cover_ids` beside them; a caller that only knows the
    document ignores those and still needs no mapping.
 
@@ -951,6 +951,16 @@ the two sides have agreed:
    those chips as plain facts about a cover the payload would never name.
    Chips and size are therefore always consistent: a card outside a stack has
    `stack_size: 1` and no chips at all.
+
+   **`members` names the stack without a read per member.** Every stacked
+   card, on the grid and on the detail route, carries the whole stack in its
+   order, itself included, as `{key, name, sets_apart, differs_by}`. Members
+   of one stack usually get the same generated `name`, so `sets_apart` lists
+   the models and structural LoRAs a member loads that some other member does
+   not (shelf title, plus its quant) and `differs_by` is its own chips against
+   the cover. Recipe LoRAs are left out, since they vary inside one card. The
+   Run dialog's Workflow picker labels each row `name — sets_apart`, falling
+   back to `differs_by`.
 
    **`stack_id` (v1.12 F2) is what a client WRITES to the stack by.**
    `PUT /workflows/stacks/{stack_id}/order` and

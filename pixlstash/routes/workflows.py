@@ -387,6 +387,31 @@ class WorkflowCover(BaseModel):
     square_crop_side: int | None = None
 
 
+class WorkflowStackMember(BaseModel):
+    """One card of a stack, as a picker lists it without reading its card.
+
+    Members of one stack are usually generated the same ``name`` - they share a
+    base model and a type - so ``sets_apart`` says what this one loads that
+    not every member does, and ``differs_by`` is its chips against the cover
+    for the difference that is not a model (a step added, nodes rewired).
+    """
+
+    key: str
+    name: str
+    sets_apart: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The models and structural LoRAs this member loads that some "
+            "other member of the stack does not, as the shelf names them. "
+            "Recipe LoRAs are left out: they vary inside one card."
+        ),
+    )
+    differs_by: list[str] = Field(
+        default_factory=list,
+        description="This member's chips against the cover; empty on the cover.",
+    )
+
+
 class WorkflowCard(BaseModel):
     """One card of the Workflows grid (v1.12 B3).
 
@@ -465,6 +490,14 @@ class WorkflowCard(BaseModel):
     )
     variant_count: int = 0
     member_keys: list[str] = Field(default_factory=list)
+    members: list[WorkflowStackMember] = Field(
+        default_factory=list,
+        description=(
+            "The whole stack in its order, the cover first and this card "
+            "included, each with its name and what sets it apart. Empty "
+            "outside a stack."
+        ),
+    )
     stack_id: str | None = Field(
         None,
         description=(
@@ -1337,8 +1370,49 @@ def _slot_models(slots) -> list[WorkflowSlotModel]:
     ]
 
 
-def _card(figure, defaults=()) -> WorkflowCard:
-    """Render one card's figures in the shape ``workflowCard.js`` documents."""
+def _slot_names(figure) -> list[str]:
+    """What a card loads, as :func:`_stack_members` compares cards by."""
+    names = []
+    for slot in [*figure.models, *figure.loras]:
+        if not slot.name or (slot.kind == "lora" and slot.mark == RECIPE):
+            continue
+        named = (slot.title or "").strip() or slot.name
+        names.append(f"{named} {slot.quant}" if slot.quant else named)
+    return names
+
+
+def _stack_members(figure, grid) -> list[WorkflowStackMember]:
+    """The stack *figure* is in, each member named and told apart."""
+    if grid is None or figure.stack_size < 2:
+        return []
+    figures = [grid.figure(key) for key in figure.member_keys]
+    if any(member is None for member in figures):
+        logger.warning(
+            "Stack of card %s names a member the grid has no figures for; "
+            "its members are not listed: %s",
+            figure.card.workflow_key,
+            figure.member_keys,
+        )
+        return []
+    loads = [_slot_names(member) for member in figures]
+    shared = set.intersection(*(set(names) for names in loads))
+    return [
+        WorkflowStackMember(
+            key=member.card.workflow_key,
+            name=_display_name(member.card, member.models),
+            sets_apart=list(dict.fromkeys(n for n in names if n not in shared)),
+            differs_by=member.differs_by if position else [],
+        )
+        for position, (member, names) in enumerate(zip(figures, loads))
+    ]
+
+
+def _card(figure, defaults=(), grid=None) -> WorkflowCard:
+    """Render one card's figures in the shape ``workflowCard.js`` documents.
+
+    *grid* is what names the other members of its stack (``members``); left
+    out, the card lists none.
+    """
     return WorkflowCard(
         key=figure.card.workflow_key,
         name=_display_name(figure.card, figure.models),
@@ -1372,6 +1446,7 @@ def _card(figure, defaults=()) -> WorkflowCard:
         member_keys=[
             key for key in figure.member_keys if key != figure.card.workflow_key
         ],
+        members=_stack_members(figure, grid),
         stack_id=figure.stack_id,
         ghosts=figure.ghosts,
         model_ghosts=figure.model_ghosts,
@@ -1510,7 +1585,7 @@ def create_router(server) -> APIRouter:
             file_models=_file_models,
         )
         return WorkflowCards(
-            cards=[_card(figure) for figure in grid.cards],
+            cards=[_card(figure, grid=grid) for figure in grid.cards],
             one_offs=grid.one_offs,
             hidden=grid.hidden,
         )
@@ -1539,15 +1614,14 @@ def create_router(server) -> APIRouter:
         rather than an echo of its own request - and pays the grid read once,
         on a gesture a person made, rather than per card.
         """
-        figure = read_grid(hub, server.vault, file_models=_file_models).figure(
-            workflow_key
-        )
+        grid = read_grid(hub, server.vault, file_models=_file_models)
+        figure = grid.figure(workflow_key)
         if figure is None:
             raise HTTPException(status_code=404, detail="Unknown workflow card.")
         card = figure.card
         pins = key_pins(hub, workflow_key)
         return WorkflowCardDetail(
-            card=_card(figure, card_defaults(hub, server.vault, card)),
+            card=_card(figure, card_defaults(hub, server.vault, card), grid),
             notes=card.notes,
             hidden=card.hidden,
             variants=_card_variants(hub, server.vault, card),

@@ -102,6 +102,14 @@
 //                                       // card; `routes/workflows.py` is what
 //                                       // excludes self on the way out, and
 //                                       // fills it for a stack only.
+//     members: [{ key, name, sets_apart, differs_by }],
+//                                       // the WHOLE stack in its order, this
+//                                       // card included; [] outside one.
+//                                       // Members often share a generated
+//                                       // `name`, so `sets_apart` is what
+//                                       // each loads that not every member
+//                                       // does, and `differs_by` its chips
+//                                       // against the cover ([] on it)
 //     saved_recipe_count,
 //     defaults: [{ label, slot_label, input_name, value, provenance }],
 //                                       // `provenance` is best | all | edited

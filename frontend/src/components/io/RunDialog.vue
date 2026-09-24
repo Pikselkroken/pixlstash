@@ -629,11 +629,6 @@ const plannedRuns = ref(0);
 const card = ref(null);
 const recipe = ref(null);
 const cards = ref([]);
-/**
- * Workflow key → name, for the stack members in the picker. `GET /workflows`
- * lists covers only, so a member's name comes from reading its own card.
- */
-const memberNames = ref({});
 const adapters = ref([]);
 const reasons = ref([]);
 /**
@@ -1116,12 +1111,14 @@ const seedOptions = [
 ];
 
 const workflowOptions = computed(() => {
-  const rows = [];
-  if (card.value) {
+  // A stack comes whole, in its own order, from the card: members often share
+  // a generated name, so each says what sets it apart from the others.
+  const rows = (card.value?.members || []).map((member) => ({
+    value: member.key,
+    label: memberLabel(member),
+  }));
+  if (card.value && !rows.length) {
     rows.push({ value: card.value.key, label: card.value.name });
-    for (const key of card.value.member_keys || []) {
-      rows.push({ value: key, label: memberLabel(key) });
-    }
   }
   // "Run a workflow on these…" opens with the whole library in the picker;
   // otherwise only the stack's own members, which is the switch the design
@@ -1134,41 +1131,13 @@ const workflowOptions = computed(() => {
   return rows;
 });
 
-function memberLabel(key) {
-  const known = cards.value.find((row) => row.key === key);
-  return (
-    memberNames.value[key] || known?.name || `Stack member ${key.slice(0, 8)}`
-  );
-}
-
 /**
- * Reads the cards of the members not yet named; one that fails keeps the
- * fallback. Guarded by the load generation like every other read here, so a
- * popup closed and reopened on another stack is not handed the old one's
- * names after `load()` cleared them.
+ * "Name — what sets it apart": the models only it loads, else its chips
+ * against the cover, else the name alone.
  */
-async function nameMembers(next) {
-  const token = loadToken;
-  if (next?.key && next.name) {
-    memberNames.value = { ...memberNames.value, [next.key]: next.name };
-  }
-  const unnamed = (next?.member_keys || []).filter(
-    (key) => !memberNames.value[key],
-  );
-  const named = await Promise.all(
-    unnamed.map(async (key) => {
-      try {
-        return [key, (await getWorkflowCard(key))?.card?.name];
-      } catch (err) {
-        console.warn(`Could not read the name of stack member ${key}:`, err);
-        return [key, null];
-      }
-    }),
-  );
-  const found = named.filter(([, name]) => name);
-  if (token === loadToken && found.length) {
-    memberNames.value = { ...memberNames.value, ...Object.fromEntries(found) };
-  }
+function memberLabel(member) {
+  const apart = member.sets_apart?.length ? member.sets_apart : member.differs_by;
+  return apart?.length ? `${member.name} — ${apart.join(", ")}` : member.name;
 }
 
 const adapterOptions = computed(() =>
@@ -1702,7 +1671,6 @@ async function loadAdapters() {
 async function loadCard(key, { keepEdits = false } = {}) {
   const detail = await getWorkflowCard(key);
   const next = detail?.card || null;
-  void nameMembers(next);
   if (!keepEdits) {
     card.value = next;
     fellBack.value = [];
@@ -1779,7 +1747,6 @@ async function load() {
   recipe.value = null;
   card.value = null;
   cards.value = [];
-  memberNames.value = {};
   loras.value = [];
   count.value = 1;
   seedMode.value = "new";
