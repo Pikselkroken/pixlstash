@@ -6,7 +6,7 @@ name: AI Review
 # `z-ai/glm-5.3-flash`), defaulting to that when unset.
 #
 # Reviews automatically only when the review owner (REVIEW_OWNER_ID) is the one
-# acting: opening a PR, pushing to one (their own or a contributor's), or marking
+# acting: opening a PR, pushing to one (their own or a contributor's fork PR), or marking
 # it ready. A contributor's push triggers nothing, so the key is never spent on
 # input the owner has not seen; the owner re-runs it by commenting a PR-Agent
 # command (`/review`, `/improve`, `/ask ...`). Comment commands always run the
@@ -70,7 +70,13 @@ jobs:
             const pr = context.payload.pull_request;
             if (pr.draft) return decide(false, "PR is a draft.");
             // The sender is whoever pushed, opened or reopened, not the PR author.
-            if (is(context.payload.sender)) return decide(true, "Review owner triggered this event.");
+            // A same-repo head on someone else's PR (anyone can open develop ->
+            // main) makes the owner the sender of every push to that branch, so
+            // only a fork head, which the owner must push to deliberately, counts.
+            const forkHead = pr.head.repo?.id !== pr.base.repo.id;
+            if (is(context.payload.sender) && (is(pr.user) || forkHead)) {
+              return decide(true, "Review owner triggered this event.");
+            }
             decide(false, "Someone other than the review owner triggered this; comment a command to review it.");
 
       - name: PR-Agent
