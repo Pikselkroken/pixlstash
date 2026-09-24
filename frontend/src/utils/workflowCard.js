@@ -57,14 +57,14 @@
 //                                       // base-model spellings are what a
 //                                       // generated mark takes its colour
 //                                       // from, under the same names the
-//                                       // shelf serves them by. A card with
-//                                       // no pictures draws itself out of
-//                                       // these (#1466). Usually all null
+//                                       // shelf serves them by. Row 2's
+//                                       // marks are drawn out of these
+//                                       // (#1485). Usually all null
 //     loras:  [{ name, title, icon, base_model, base_model_folded, kind,
 //               quant, mark, slot_label }],
 //                                       // "structural" = in the workflow
-//                                       // (a filled chip), "recipe" = a slot
-//                                       // the recipe fills (dashed).
+//                                       // (a mark), "recipe" = a slot the
+//                                       // recipe fills (a dashed "+" box).
 //                                       // `slot_label` is the address
 //                                       // `PUT /workflows/{key}/slots` marks
 //     differs_by: [string],             // a stack: the union over its members
@@ -329,30 +329,19 @@ export function modelDisplayName(model) {
   return model?.title || model?.name || null;
 }
 
-/** The LoRA row: a filled chip per workflow LoRA, a dashed one per recipe slot. */
-export function loraChips(card) {
-  return (card.loras ?? []).flatMap((lora, i) => {
-    const recipe = lora.mark === RECIPE;
-    const quant = recipe ? null : quantBadge(lora.quant);
-    return [
-      {
-        key: `lora-${i}`,
-        label: recipe ? "recipe LoRA" : modelDisplayName(lora),
-        icon: recipe ? "plus" : "layers",
-        dashed: recipe,
-      },
-      ...(quant
-        ? [{ key: `lora-${i}-quant`, label: quant.label, fact: true }]
-        : []),
-    ];
-  });
-}
+/**
+ * The two types whose served label is long enough to cost the facts row a
+ * chip, said short (#1485). The other three are one word already. Only the
+ * visible chip: the accessible name keeps `type_label`.
+ */
+const SHORT_TYPE_LABELS = { txt2img: "T2I", img2img: "I2I" };
 
 /**
  * The special-facts row: what a stack differs by, otherwise the workflow's type
- * and whether it was imported.
+ * and whether it was imported. `short` spells the type the way the card's chip
+ * does (`T2I`).
  */
-export function factChips(card) {
+export function factChips(card, { short = false } = {}) {
   const labels = isStack(card)
     ? // **First, and on a stack too.** A hidden card is only ever drawn
       // because somebody ticked *Show hidden workflows* (F7), and the row
@@ -366,9 +355,10 @@ export function factChips(card) {
         ...(card.differs_by ?? []),
         // The SERVED label, so the chip and a generated name say the type in
         // one vocabulary rather than reading `Text to Image` on row 1 and
-        // `txt2img` on row 4. Falls back to the token for a payload that
-        // predates `type_label`.
-        card.type_label ?? card.type,
+        // `txt2img` on row 4 - or its abbreviation, which a generated name
+        // already spells out in full. Falls back to the token for a payload
+        // that predates `type_label`.
+        (short && SHORT_TYPE_LABELS[card.type]) || card.type_label || card.type,
         card.imported ? "imported" : null,
       ].filter(Boolean);
   return labels.map((label, i) => ({ key: `fact-${i}`, label, fact: true }));

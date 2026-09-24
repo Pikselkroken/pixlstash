@@ -303,6 +303,35 @@ describe("WorkflowCard height", () => {
     }
   });
 
+  it("fits the strip's worst case in the narrowest card row", () => {
+    // A one-column stack panel is the narrowest host: its 1px border and
+    // padding come off the 240px column floor, then the card's own 1px border
+    // and the meta padding. The worst case is STRIP_MARKS marks, the hairline
+    // and "+N" (~20px, "+12" at --text-2xs) - and `overflow: hidden` clips the
+    // LAST item, which is the "+N", so it has to fit outright.
+    const t = tokens();
+    const marks = Number(
+      read("./WorkflowCard.vue").match(/STRIP_MARKS = (\d+)/)[1],
+    );
+    const floor = Number(
+      read("../views/WorkflowsView.vue").match(/COLUMN_MIN = (\d+)/)[1],
+    );
+    const panel = read("../panels/StackPanel.vue")
+      .split(".stack-panel__grid {")[1]
+      .split("}")[0];
+    const panelPad = px(panel.match(/padding: ([^;]+);/)[1], t);
+    const card = floor - 2 * 1 - 2 * panelPad;
+    const row = card - 2 * 1 - 2 * px(rule(".wf-card__meta").padding, t);
+    const gap = px(rule(".wf-card__strip").gap, t);
+    const hairline = px(rule(".wf-card__rule").width, t);
+    const worst =
+      marks * t["--entity-thumb"] + hairline + 20 + (marks + 1) * gap;
+    expect(row).toBe(196);
+    expect(worst).toBeLessThanOrEqual(row);
+    // And one more mark would not have fitted, so the cap is not loose.
+    expect(worst + t["--entity-thumb"] + gap - 20).toBeGreaterThan(row);
+  });
+
   it("keeps row 4 clear of the ⓘ button", () => {
     // ⓘ is a --control-h-sm square inset --space-3 from the card's bottom-right.
     // Row 4 sits in the same band (meta padding = the inset, row height = the
@@ -358,28 +387,104 @@ describe("WorkflowCard", () => {
     expect(wrapper.findAll(".wf-card > .wf-card__cover")).toHaveLength(1);
   });
 
-  it("says what each row's chips are with the design's glyphs", () => {
-    // The rows carry no labels, so the glyph is the only thing separating a
-    // checkpoint from a LoRA from a slot the recipe fills.
-    const rows = mountCard(CROWDED).findAll(".wf-card__meta > .wf-card__row");
-    const glyphs = (row) =>
-      row
-        .findAll(".chip-row > .chip-row__chip .chip-row__icon")
-        .map((i) => i.text());
-    expect(glyphs(rows[1])).toEqual(["mdi-cube-outline"]);
-    expect(glyphs(rows[2])).toEqual([
-      ...Array(4).fill("mdi-layers"),
-      "mdi-plus",
+  it("draws the base model and every LoRA as marks, base first", () => {
+    // Row 2 is the strip (#1485): the base model's mark, the hairline, then
+    // one mark per LoRA, and a recipe slot as a dashed box rather than a mark.
+    const strip = mountCard(CROWDED).find(".wf-card__strip");
+    const items = strip.findAll("li");
+    expect(items.map((li) => li.classes()[0])).toEqual([
+      "wf-card__mark",
+      "wf-card__rule",
+      ...Array(5).fill("wf-card__mark"),
     ]);
+    expect(items.at(-1).classes()).toContain("wf-card__mark--slot");
+    expect(items.at(-1).find(".mmark").exists()).toBe(false);
     // A fact is not a model: no glyph, and no fill either.
-    expect(glyphs(rows[3])).toEqual([]);
-    for (const chip of rows[3].findAll(".chip-row > .chip-row__chip")) {
+    const facts = mountCard(CROWDED).find(".wf-card__row--facts");
+    for (const chip of facts.findAll(".chip-row > .chip-row__chip")) {
       expect(chip.classes()).toContain("chip-row__chip--fact");
     }
   });
 
+  it("puts each model's file string in its mark's tooltip", () => {
+    const tips = mountCard({
+      ...BARE,
+      loras: [
+        { name: "add detail xl", mark: "structural", quant: "bf16" },
+        { mark: "recipe" },
+      ],
+    })
+      .findAll(".wf-card__strip .wf-card__mark > tooltip-stub")
+      .map((tip) => tip.attributes("text"));
+    expect(tips).toEqual([
+      "flux1-fill-dev",
+      "add detail xl · BF16",
+      "recipe LoRA",
+    ]);
+  });
+
+  it("puts the hairline after the base model only when LoRAs follow it", () => {
+    expect(mountCard(BARE).find(".wf-card__rule").exists()).toBe(false);
+    const rule = mountCard({
+      ...BARE,
+      loras: [{ name: "detail", mark: "structural" }],
+    }).find(".wf-card__rule");
+    expect(rule.element.previousElementSibling.textContent).toBe(
+      generatedMark({ filename: "flux1-fill-dev" }).initials,
+    );
+  });
+
+  it.each([
+    [5, 6, 0],
+    [6, 6, 1],
+    [12, 6, 7],
+  ])(
+    "draws a card with %i LoRAs as %i marks and a +%i",
+    (count, marks, more) => {
+      const wrapper = mountCard({
+        ...BARE,
+        loras: Array.from({ length: count }, (_, i) => ({
+          name: `lora-${i}`,
+          mark: "structural",
+        })),
+      });
+      expect(wrapper.findAll(".wf-card__strip .wf-card__mark")).toHaveLength(
+        marks,
+      );
+      const plus = wrapper.find(".wf-card__mark-more");
+      expect(plus.exists() ? plus.text() : "+0").toBe(`+${more}`);
+      // The count beside the name is the whole list, not what fitted.
+      expect(wrapper.find(".wf-card__lora-count").text()).toBe(
+        `${count} LoRAs`,
+      );
+    },
+  );
+
+  it("prints the base model's name once, beside the LoRA count", () => {
+    const row = mountCard({
+      ...BARE,
+      models: [{ name: "juggernautXL v9", kind: "checkpoint", title: null }],
+      loras: [{ name: "detail", mark: "structural" }],
+    }).findAll(".wf-card__meta > .wf-card__row")[2];
+    expect(row.find(".wf-card__base").text()).toBe("juggernautXL v9");
+    expect(row.find(".wf-card__lora-count").text()).toBe("1 LoRA");
+  });
+
+  it("counts a recipe slot as a slot, not as a LoRA", () => {
+    const count = (loras) =>
+      mountCard({ ...BARE, loras })
+        .find(".wf-card__lora-count")
+        .text();
+    expect(count([{ mark: "recipe" }])).toBe("1 LoRA slot");
+    expect(
+      count([{ name: "detail", mark: "structural" }, { mark: "recipe" }]),
+    ).toBe("1 LoRA");
+  });
+
   it("says No LoRAs rather than leaving the row blank", () => {
-    expect(mountCard(BARE).findAll(".wf-card__row")[2].text()).toBe("No LoRAs");
+    expect(mountCard(BARE).find(".wf-card__lora-count").text()).toBe(
+      "No LoRAs",
+    );
   });
 
   it("carries the full chip list in its accessible name", () => {
@@ -549,12 +654,14 @@ describe("WorkflowCard", () => {
   });
 
   it("hides every visible row from assistive tech", () => {
-    // The card's own label already reads all four rows, including the chips
+    // The card's own label already reads all four rows, including the marks
     // "+N" clipped; leaving them exposed reads the card out twice.
     const wrapper = mountCard(CROWDED);
     const visible = [
       ...wrapper.findAll(".chip-row"),
       ...wrapper.findAll(".wf-card__name"),
+      ...wrapper.findAll(".wf-card__strip"),
+      ...wrapper.findAll(".wf-card__base"),
       ...wrapper.findAll(".wf-card__none"),
     ];
     expect(visible.length).toBeGreaterThan(4);
@@ -568,16 +675,16 @@ describe("WorkflowCard", () => {
   // `base_model` and `base_model_folded` travel the wire so a model takes the
   // SAME colour on a card as on the shelf. Both were unobserved by this suite
   // until #1483 - every fixture left them null and nothing asserted a mark's
-  // colour, so deleting either line from `coverMarks` kept it green. These
+  // colour, so deleting either line from `markRow` kept it green. These
   // assert identity between renders rather than a literal colour, because the
   // token is `hsl()` and jsdom reports it back as `rgb()`.
   const colourOf = (models) =>
     mountCard({ ...FILE_ONLY, key: `w-${Math.random()}`, models })
-      .find(".wf-card__mark .mmark-initials")
+      .find(".wf-card__strip .mmark-initials")
       .attributes("style");
   const CHECKPOINT = { kind: "checkpoint", title: "Borrowed Light" };
 
-  it("colours a cover mark by the base model, not by the file name", () => {
+  it("colours a mark by the base model, not by the file name", () => {
     const one = colourOf([
       { ...CHECKPOINT, name: "a.safetensors", base_model_folded: "flux.1-dev" },
     ]);
@@ -631,43 +738,39 @@ describe("WorkflowCard", () => {
       models: [
         { name: "quiet_river_v2.safetensors", kind: "checkpoint", title: null },
       ],
-    }).find(".wf-card__mark .mmark-initials");
+    }).find(".wf-card__strip .mmark-initials");
     expect(mark.text()).toBe(
       generatedMark({ filename: "quiet_river_v2.safetensors" }).initials,
     );
   });
 
-  it("covers a card with no recipe with the models its file names", () => {
+  it("draws a card with no recipe the way it draws every other card", () => {
+    // #1485 retired the cover marks #1466 put on this card: its models are on
+    // the strip, and its empty cover holds the type and Run it… and nothing
+    // else.
     const wrapper = mountCard(FILE_ONLY);
-    const marks = wrapper.findAll(".wf-card__mark");
+    const cover = wrapper.find(".wf-card__cover--empty");
+    expect(cover.find(".mmark").exists()).toBe(false);
+    expect(cover.find(".wf-card__empty-line").exists()).toBe(false);
+    expect(cover.text()).toContain("Run it");
+    const marks = wrapper.findAll(".wf-card__strip .wf-card__mark");
     expect(marks).toHaveLength(1);
-    // The shelf's own identity slot, on its initials because this model
-    // reached no shelf row with a picture on it.
     expect(marks[0].find(".mmark-initials").text()).toBe("BL");
-    expect(wrapper.find(".wf-card__empty-line").exists()).toBe(false);
-    // "Run it…" stays: the cover says what the workflow loads, not that it ran.
-    expect(wrapper.find(".wf-card__cover--empty").text()).toContain("Run it");
-    // And the row names the model rather than claiming there is none. The
-    // SHELF's name for it, as every other card's model row does (#1454).
-    expect(wrapper.findAll(".wf-card__row")[1].text()).toContain(
-      "Borrowed Light",
-    );
-    expect(wrapper.findAll(".wf-card__row")[1].text()).not.toContain(
-      "z_image_bf16",
-    );
+    // The SHELF's name for it, as every other card's model row does (#1454).
+    const base = wrapper.find(".wf-card__base");
+    expect(base.text()).toBe("Borrowed Light");
+    expect(base.text()).not.toContain("z_image_bf16");
   });
 
-  it("leads the cover with the base model, however the file listed them", () => {
-    // Five loaders and four marks: the one the card is ABOUT must not be the
-    // one the slice drops. A real Z-Image graph lists its VAE and its text
-    // encoder before its UNET.
+  it("leads the strip with the base model, however the file listed them", () => {
+    // A real Z-Image graph lists its VAE and its text encoder before its UNET.
+    // Accessory slots are named in ⓘ and nowhere on the card.
     const many = {
       ...FILE_ONLY,
       key: "w13",
       models: [
         { name: "ae.safetensors", kind: "vae" },
         { name: "qwen_3_4b.safetensors", kind: "clip" },
-        { name: "clip_l.safetensors", kind: "clip" },
         { name: "controlnet.safetensors", kind: "controlnet" },
         {
           name: "z_image_bf16.safetensors",
@@ -675,54 +778,63 @@ describe("WorkflowCard", () => {
           kind: "unet",
         },
       ],
+      loras: [{ name: "detail.safetensors", mark: "structural" }],
     };
-    const wrapper = mountCard(many);
-    const marks = wrapper.findAll(".wf-card__mark");
-    expect(marks).toHaveLength(4);
+    const marks = mountCard(many).findAll(".wf-card__strip .wf-card__mark");
+    expect(marks).toHaveLength(2);
     expect(marks[0].find(".mmark-initials").text()).toBe("BL");
-    expect(wrapper.find(".wf-card__mark-more").text()).toBe("+1");
   });
 
   it("draws the shelf's own picture for a model that has one", () => {
     // The whole point of carrying `icon` on the slot: without it every mark
     // on every card falls to initials and the field is decoration.
     const wrapper = mountCard(FILE_ONLY_WITH_ICON);
-    const img = wrapper.find(".wf-card__mark .mmark-img");
+    const img = wrapper.find(".wf-card__strip .mmark-img");
     expect(img.exists()).toBe(true);
     expect(img.attributes("src")).toContain("a".repeat(64));
-    expect(wrapper.find(".wf-card__mark .mmark-initials").exists()).toBe(false);
+    expect(wrapper.find(".wf-card__strip .mmark-initials").exists()).toBe(
+      false,
+    );
   });
 
   it("will not say No checkpoint about a loader it could not read", () => {
     // The recovery found the LoRA and missed the base model beside it, so
     // `models` is empty on a card that plainly loads one.
     const wrapper = mountCard(HALF_READ);
-    const rows = wrapper.findAll(".wf-card__row");
-    expect(rows[1].text()).toBe("Base model not read");
-    expect(rows[2].text()).toContain("add_detail");
+    const rows = wrapper.findAll(".wf-card__meta > .wf-card__row");
+    expect(rows[1].findAll(".wf-card__mark")).toHaveLength(1);
+    expect(rows[2].text()).toContain("Base model not read");
+    expect(rows[2].text()).toContain("1 LoRA");
     expect(wrapper.attributes("aria-label")).toContain("base model not read");
   });
 
-  it("leaves every other pictureless cover exactly as it was", () => {
+  it("keeps No pictures yet on a pictureless card that has a recipe", () => {
     // A card whose pictures were all binned is a different state from one
-    // nothing has ever run, and it keeps the shipped empty cover. Without the
-    // `variant_count` gate this card would draw marks too.
+    // nothing has ever run.
     const wrapper = mountCard({ ...BARE, covers: [], picture_count: 0 });
-    expect(wrapper.findAll(".wf-card__mark")).toHaveLength(0);
     expect(wrapper.find(".wf-card__empty-line").text()).toBe("No pictures yet");
   });
 
   it("says a card's models were not read rather than that it has none", () => {
     const wrapper = mountCard(UNREAD);
-    expect(wrapper.findAll(".wf-card__mark")).toHaveLength(0);
-    // The last resort: the shipped empty cover, unchanged.
-    expect(wrapper.find(".wf-card__empty-line").text()).toBe("No pictures yet");
-    const rows = wrapper.findAll(".wf-card__row");
-    expect(rows[1].text()).toBe("Base model not read");
-    expect(rows[2].text()).toBe("LoRAs not read");
+    const rows = wrapper.findAll(".wf-card__meta > .wf-card__row");
+    expect(rows[1].text()).toBe("Models not read");
+    // Row 2 said it for both, so row 3 does not say it again.
+    expect(rows[2].text()).toBe("");
     const label = wrapper.attributes("aria-label");
     expect(label).toContain("base model not read");
     expect(label).toContain("LoRAs not read");
+  });
+
+  it("says No checkpoint, not 'not read', on a recipe card with none", () => {
+    // Only accessory slots: a VAE is loaded, so "No models" would be false.
+    const rows = mountCard({
+      ...BARE,
+      models: [{ name: "ae", kind: "vae" }],
+      loras: [],
+    }).findAll(".wf-card__meta > .wf-card__row");
+    expect(rows[1].text()).toBe("No checkpoint");
+    expect(rows[2].text()).toBe("No LoRAs");
   });
 
   it("hides the pictureless cover's own words too", () => {
@@ -750,61 +862,46 @@ describe("WorkflowCard", () => {
     expect(text).not.toContain("realvisxl.safetensors");
   });
 
-  it("falls back to the filename for a model the shelf does not know", () => {
-    // The ordinary case: plenty of files carry no name of their own, and the
-    // chip must say the filename rather than go blank.
-    const text = mountCard({
-      ...BARE,
-      models: [
-        { name: "realvisxl.safetensors", title: null, kind: "checkpoint" },
-      ],
-    }).text();
-    expect(text).toContain("realvisxl.safetensors");
-  });
-
-  it("draws the precision beside the checkpoint, as its own chip", () => {
+  it("draws the precision beside the base model's name", () => {
     // The name has had the postfix taken off it server-side, so two quant
-    // builds of one model are two cards reading one name - this chip is the
-    // whole of what tells them apart. `fact`, because a precision is not a
-    // model, and a separate chip so it clips to "+1" instead of eating the
-    // name it qualifies.
+    // builds of one model are two cards reading one name - this is the whole
+    // of what tells them apart.
     const row = mountCard({
       ...BARE,
       models: [{ name: "t5xxl", kind: "checkpoint", quant: "fp8_e4m3" }],
-    }).findAll(".wf-card__row")[1];
-    const chips = row.findAll(".chip-row > .chip-row__chip");
-    expect(chips.map((chip) => chip.find(".chip-row__label").text())).toEqual([
-      "t5xxl",
-      "FP8",
-    ]);
-    expect(chips[1].classes()).toContain("chip-row__chip--fact");
+    }).findAll(".wf-card__meta > .wf-card__row")[2];
+    expect(row.find(".wf-card__base").text()).toBe("t5xxl");
+    expect(row.find(".wf-card__quant").text()).toBe("FP8");
   });
 
-  it("draws no precision chip at all when nothing recorded one", () => {
-    // Not an empty chip and not `UNKNOWN`: a badge that is always there stops
+  it("draws no precision at all when nothing recorded one", () => {
+    // Not an empty label and not `UNKNOWN`: a badge that is always there stops
     // meaning anything, and most models record no precision.
-    const row = mountCard({
+    const wrapper = mountCard({
       ...BARE,
       models: [{ name: "t5xxl", kind: "checkpoint", quant: null }],
-    }).findAll(".wf-card__row")[1];
-    expect(row.findAll(".chip-row > .chip-row__chip")).toHaveLength(1);
+    });
+    expect(wrapper.find(".wf-card__quant").exists()).toBe(false);
   });
 
-  it("draws and speaks structural LoRA precision", () => {
+  it("speaks structural LoRA precision", () => {
     const card = mountCard({
       ...BARE,
       loras: [{ name: "Foxglove", mark: "structural", quant: "fp8_e4m3" }],
     });
-    const chips = card
-      .findAll(".wf-card__row")[2]
-      .findAll(".chip-row > .chip-row__chip");
-    expect(chips.map((chip) => chip.find(".chip-row__label").text())).toEqual([
-      "Foxglove",
-      "FP8",
-    ]);
     expect(card.find("article").attributes("aria-label")).toContain(
       "LoRAs: Foxglove, FP8 E4M3, workflow LoRA",
     );
+  });
+
+  it("says the type short on the facts row", () => {
+    const facts = mountCard({
+      ...BARE,
+      type: "txt2img",
+      type_label: "Text to Image",
+    }).find(".wf-card__row--facts");
+    expect(facts.text()).toContain("T2I");
+    expect(facts.text()).not.toContain("Text to Image");
   });
 
   it("speaks the precision, since every chip on the card is aria-hidden", () => {
