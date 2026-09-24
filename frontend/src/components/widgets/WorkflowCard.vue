@@ -123,22 +123,74 @@
         <span class="wf-card__name" aria-hidden="true">{{ card.name }}</span>
       </div>
       <!-- Row 2, the strip: the base model's mark, a hairline, then one mark
-           per LoRA (#1485). Names are in each mark's tooltip, and the card's
-           accessible name reads them all. -->
+           per LoRA of the workflow's own (#1485), and one pile for its recipe
+           slots: every LoRA a recipe has put in them, most used first. Names
+           are in each mark's tooltip, and the card's accessible name reads
+           them all. -->
       <div class="wf-card__row">
         <ul v-if="stripMarks.length" class="wf-card__strip" aria-hidden="true">
           <template v-for="mark in stripMarks" :key="mark.key">
-            <li
-              class="wf-card__mark"
-              :class="{ 'wf-card__mark--slot': mark.slot }"
-            >
+            <li v-if="mark.pile" class="wf-card__mark wf-card__pile">
+              <Tooltip activator="parent" :describe="false">
+                <!-- One block: the tooltip lays its children out in a row. -->
+                <div v-if="recipeLoras.length">
+                  <div>
+                    <strong>Recipe LoRAs</strong>
+                    <span class="wf-card__tip-dim">
+                      · {{ recipesLabel(card.variant_count ?? 0) }}</span
+                    >
+                  </div>
+                  <div
+                    v-for="face in tipFaces"
+                    :key="face.key"
+                    class="wf-card__tip-row"
+                  >
+                    <span class="wf-card__pile-face">
+                      <img
+                        v-if="face.src"
+                        :src="face.src"
+                        alt=""
+                        @error="dropFace(face.src)"
+                      />
+                      <v-icon v-else size="14">mdi-layers-outline</v-icon>
+                    </span>
+                    {{ face.label }}
+                    <span class="wf-card__tip-dim"
+                      >·{{ face.character ? "" : " no character ·" }}
+                      {{ recipesLabel(face.recipes) }}</span
+                    >
+                  </div>
+                  <div v-if="tipMore" class="wf-card__tip-dim">
+                    and {{ tipMore }} more
+                  </div>
+                </div>
+                <template v-else>Recipe LoRA slot</template>
+              </Tooltip>
+              <span
+                v-for="face in pileFaces"
+                :key="face.key"
+                class="wf-card__pile-face"
+              >
+                <img
+                  v-if="face.src"
+                  :src="face.src"
+                  alt=""
+                  loading="lazy"
+                  @error="dropFace(face.src)"
+                />
+                <v-icon v-else size="14">mdi-layers-outline</v-icon>
+              </span>
+              <span v-if="pileMore" class="wf-card__pile-more"
+                >+{{ pileMore }}</span
+              >
+            </li>
+            <li v-else class="wf-card__mark">
               <Tooltip
                 :text="mark.label"
                 activator="parent"
                 :describe="false"
               />
-              <v-icon v-if="mark.slot" size="12">mdi-plus</v-icon>
-              <ModelMark v-else :row="mark.row" />
+              <ModelMark :row="mark.row" />
             </li>
             <li v-if="mark.ruled" class="wf-card__rule" />
           </template>
@@ -225,9 +277,10 @@
 //
 // ▸ and ⓘ are real buttons at tabindex -1: the grid's roving cursor owns Tab.
 
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import { VIcon } from "vuetify/components";
 
+import { characterThumbnailUrl } from "../../api/characters";
 import { workflowCoverUrl } from "../../api/workflows";
 import { quantBadge } from "../../utils/modelShelf";
 import {
@@ -240,6 +293,8 @@ import {
   checkpointUnread,
   lorasUnread,
   modelDisplayName,
+  recipeLoraCount,
+  recipeLoraLabel,
 } from "../../utils/workflowCard";
 import AppButton from "./AppButton.vue";
 import ChipRow from "./ChipRow.vue";
@@ -255,6 +310,9 @@ import Tooltip from "./Tooltip.vue";
 // `overflow: hidden` would then clip the "+N" rather than a mark.
 // `WorkflowCard.test.js` sums this against the tokens.
 const STRIP_MARKS = 6;
+// Faces the recipe pile draws before "+N", and rows its tooltip lists.
+const PILE_FACES = 3;
+const TIP_ROWS = 4;
 
 const props = defineProps({
   /** One workflow card (see utils/workflowCard.js for the shape). */
@@ -411,15 +469,24 @@ const base = computed(() => {
 });
 /**
  * Row 2's marks: the base model leads, whatever order the file listed its
- * loaders in, then every LoRA in document order. A recipe slot is a dashed
- * "+" box, as its chip was dashed. Clipped to STRIP_MARKS.
+ * loaders in, then every LoRA in document order. The recipe slots are ONE
+ * pile, where the first of them sits: which LoRA fills a slot is each
+ * recipe's answer, not the workflow's, so the pile shows all the answers
+ * rather than one mark per slot. Clipped to STRIP_MARKS by `markCost`.
  */
 const allMarks = computed(() => {
-  const loras = (props.card.loras ?? []).map((lora, i) =>
-    lora.mark === "recipe"
-      ? { key: `lora-${i}`, slot: true, label: "recipe LoRA" }
-      : { key: `lora-${i}`, label: markLabel(lora), row: markRow(lora) },
-  );
+  const loras = [];
+  (props.card.loras ?? []).forEach((lora, i) => {
+    if (lora.mark !== "recipe") {
+      loras.push({
+        key: `lora-${i}`,
+        label: markLabel(lora),
+        row: markRow(lora),
+      });
+    } else if (!loras.some((mark) => mark.pile)) {
+      loras.push({ key: "recipe-loras", pile: true });
+    }
+  });
   if (!base.value) return loras;
   const model = base.value.model;
   return [
@@ -434,21 +501,83 @@ const allMarks = computed(() => {
     ...loras,
   ];
 });
-const stripMarks = computed(() => allMarks.value.slice(0, STRIP_MARKS));
+/**
+ * How many of the STRIP_MARKS budget a mark takes. The pile overlaps its faces
+ * (24px, then 14px per face after the first) and may end in "+N": two faces
+ * or three fit in two marks' width (52px), three and a "+N" in three (80px).
+ */
+function markCost(mark) {
+  if (!mark.pile) return 1;
+  const count = recipeLoras.value.length;
+  if (count <= 1) return 1;
+  return count <= PILE_FACES ? 2 : 3;
+}
+const stripMarks = computed(() => {
+  const drawn = [];
+  let left = STRIP_MARKS;
+  for (const mark of allMarks.value) {
+    left -= markCost(mark);
+    if (left < 0) break;
+    drawn.push(mark);
+  }
+  return drawn;
+});
 const stripOverflow = computed(
   () => allMarks.value.length - stripMarks.value.length,
 );
-// Counts the workflow's own LoRAs. A recipe slot is not one (the accessible
-// name calls it a "recipe LoRA slot"), so it is only counted, as a slot, on a
-// card that has no LoRAs of its own.
+// Counts the workflow's own LoRAs, then what its recipe slots have held
+// ("1 LoRA · 3 characters"). A slot no recipe has named a LoRA for is only
+// counted, as a slot, on a card that has no LoRAs of its own.
 const loraCount = computed(() => {
   const loras = props.card.loras ?? [];
   const slots = loras.filter((lora) => lora.mark === "recipe").length;
   const count = loras.length - slots;
-  if (count) return count === 1 ? "1 LoRA" : `${count} LoRAs`;
+  const own = count ? (count === 1 ? "1 LoRA" : `${count} LoRAs`) : "";
+  const cast = slots ? recipeLoraCount(recipeLoras.value) : "";
+  if (own && cast) return `${own} · ${cast}`;
+  if (own || cast) return own || cast;
   if (slots) return slots === 1 ? "1 LoRA slot" : `${slots} LoRA slots`;
   return lorasAreUnread.value ? "LoRAs not read" : "No LoRAs";
 });
+/** What has filled the recipe slots, most used first (the service's order). */
+const recipeLoras = computed(() => props.card.recipe_loras ?? []);
+// Thumbnails that 404ed: a character with no reference face yet has none to
+// lend, and the pile then shows it as the LoRA glyph like any other LoRA.
+const failedFaces = ref([]);
+function dropFace(src) {
+  if (!failedFaces.value.includes(src)) {
+    failedFaces.value = [...failedFaces.value, src];
+  }
+}
+function faceOf(lora, i) {
+  const src =
+    lora.character_id == null ? "" : characterThumbnailUrl(lora.character_id);
+  return {
+    key: `${i}-${lora.name}`,
+    src: failedFaces.value.includes(src) ? "" : src,
+    label: recipeLoraLabel(lora),
+    character: lora.character_id != null,
+    recipes: lora.recipes,
+  };
+}
+// An empty list still draws one glyph: the slot is there, nothing names it.
+const pileFaces = computed(() =>
+  recipeLoras.value.length
+    ? recipeLoras.value.slice(0, PILE_FACES).map(faceOf)
+    : [{ key: "empty", src: "" }],
+);
+const pileMore = computed(() =>
+  Math.max(0, recipeLoras.value.length - PILE_FACES),
+);
+const tipFaces = computed(() =>
+  recipeLoras.value.slice(0, TIP_ROWS).map(faceOf),
+);
+const tipMore = computed(() =>
+  Math.max(0, recipeLoras.value.length - TIP_ROWS),
+);
+function recipesLabel(n) {
+  return n === 1 ? "1 recipe" : `${n} recipes`;
+}
 const facts = computed(() => factChips(props.card, { short: true }));
 const accessibleName = computed(() =>
   cardAccessibleName(props.card, { member: props.member }),
@@ -699,16 +828,54 @@ const accessibleName = computed(() =>
   flex: none;
 }
 
-/* A LoRA slot the recipe fills: not a model, so no mark, only the dashed box
-   its chip used to be. */
-.wf-card__mark--slot {
-  box-sizing: border-box;
+/* The recipe slots' pile: what has filled them, overlapped avatar-stack
+   style. A face where the LoRA's character has one, the LoRA glyph on a
+   panel square otherwise, each with a surface-coloured edge so the overlap
+   reads as separate marks. No dashed box: several marks already say "this
+   varies". */
+.wf-card__pile {
   align-items: center;
-  justify-content: center;
+}
+
+.wf-card__pile-face {
+  box-sizing: border-box;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
   width: var(--entity-thumb);
   height: var(--entity-thumb);
-  border: 1px dashed rgb(var(--v-theme-border));
+  overflow: hidden;
+  border: 2px solid rgb(var(--v-theme-surface));
   border-radius: var(--radius-sm);
+  background: rgb(var(--v-theme-panel));
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.wf-card__pile .wf-card__pile-face + .wf-card__pile-face {
+  margin-left: calc(-1 * (var(--space-3) + var(--space-1)));
+}
+
+.wf-card__pile-face img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.wf-card__pile-more {
+  margin-left: var(--space-1);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The pile's tooltip: one row per LoRA, its face beside its name. */
+.wf-card__tip-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.wf-card__tip-dim {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 

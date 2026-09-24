@@ -77,7 +77,7 @@ INPUT_IMAGE_FIELDS: dict[str, tuple[str, ...]] = {
 LORA_FILENAME_FIELD_RE = re.compile(r"^lora_name(_\d+)?$")
 LORA_DIGEST_FIELDS = ("adapter_sha256", "lora_sha256")
 # The same names as a PATTERN, for the different question "is this widget a
-# LoRA slot at all?" - which `workflow_identity._is_lora_widget` asks of a
+# LoRA slot at all?" - which `workflow_identity.is_lora_widget` asks of a
 # widget it already has, and which has to cover the numbered spelling because
 # `workflow_hash.SHA256_FIELD_RE` keys one as an asset. A digest slot missed
 # here lands in the card key with no mark check, so swapping a character LoRA

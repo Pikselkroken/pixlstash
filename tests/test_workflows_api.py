@@ -84,6 +84,7 @@ from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD, _stack_members
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
 from pixlstash.services import workflow_run_service as run_service
+from pixlstash.services.model_shelf_service import replace_attachments
 from pixlstash.services.workflow_card_service import (
     CardFigures,
     SlotModel,
@@ -2562,6 +2563,121 @@ def test_two_names_for_one_shelf_model_both_keep_its_picture(workflow_env):
     marks = workflow_card_service.model_marks(hub, [_SHELF_FILENAME, digest])
     assert set(marks) == {_SHELF_FILENAME, digest}
     assert [mark.icon for mark in marks.values()] == [_EDITOR_ICON, _EDITOR_ICON]
+
+
+def _recipe_loras(owner) -> list[dict]:
+    return _by_key(_cards(owner))[BUSY_CARD]["recipe_loras"]
+
+
+def test_a_card_lists_the_loras_its_recipe_slot_was_filled_with(workflow_env):
+    """BUSY's one recipe slot held `add_detail` in one of its two variants.
+
+    Counted per variant, so filing it into the second one as well makes it 2.
+    Not on the shelf, so it is named after its file and has no character.
+    """
+    owner, hub = workflow_env.owner, workflow_env.server.hub
+    assert _recipe_loras(owner) == [
+        {
+            "name": "add detail",
+            "recipes": 1,
+            "character_id": None,
+            "character_name": None,
+        }
+    ]
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_recipe_asset "
+            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
+            (BUSY_RECIPE_B, "lora_name", "add_detail.safetensors"),
+        )
+    assert [lora["recipes"] for lora in _recipe_loras(owner)] == [2]
+
+
+def test_a_recipe_lora_attached_to_a_character_carries_that_character(
+    workflow_env,
+):
+    """The shelf row the value names, then this library's attachment of it."""
+    server, owner = workflow_env.server, workflow_env.owner
+    digest = _h("add-detail-digest")
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, kind, filename, sha256, display_name, "
+            "provenance) VALUES ('adapter', 'lora', ?, ?, 'Detail', 'scanned')",
+            ("add_detail.safetensors", digest),
+        )
+    replace_attachments(
+        server.vault, digest, [("character", workflow_env.character_id)]
+    )
+    try:
+        assert _recipe_loras(owner) == [
+            {
+                "name": "Detail",
+                "recipes": 1,
+                "character_id": workflow_env.character_id,
+                "character_name": "Workflow Character",
+            }
+        ]
+    finally:
+        replace_attachments(server.vault, digest, [])
+
+
+def test_a_cards_own_lora_is_not_listed_as_a_recipe_lora(workflow_env):
+    """A structural LoRA beside the recipe slot is the workflow's, not a look.
+
+    BUSY's first variant gains a speed LoRA whose slot is marked structural;
+    only the recipe slot's `add_detail` may reach the list.
+    """
+    hub, owner = workflow_env.server.hub, workflow_env.owner
+    document = json.loads(json.dumps(_DOCUMENTS[BUSY_RECIPE_A]))
+    speed = "sdxl_lightning_4step.safetensors"
+    document["5"] = {
+        "class_type": "LoraLoader",
+        "inputs": {"lora_name": asset_reference(speed), "model": ["2", 0]},
+    }
+    names = {**_ASSET_NAMES, asset_reference(speed): speed}
+    found = slots(document)
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_recipe_graph SET document = ? WHERE structural_hash = ?",
+            (json.dumps(document), BUSY_RECIPE_A),
+        )
+        conn.execute(
+            "UPDATE workflow_topology_core SET slots = ? WHERE topology_hash = ?",
+            (
+                json.dumps(
+                    [
+                        {
+                            "label": slot.label,
+                            "class_type": slot.class_type,
+                            "widget": slot.widget,
+                            "is_lora": slot.is_lora,
+                        }
+                        for slot in found
+                    ]
+                ),
+                BUSY_TOPOLOGY,
+            ),
+        )
+        conn.execute(
+            "DELETE FROM workflow_slot_mark WHERE topology_hash = ?", (BUSY_TOPOLOGY,)
+        )
+        conn.executemany(
+            "INSERT INTO workflow_slot_mark (topology_hash, slot_label, mark) "
+            "VALUES (?, ?, ?)",
+            [
+                (BUSY_TOPOLOGY, slot.label, guess_mark(names[slot.asset]))
+                for slot in found
+                if slot.is_lora
+            ],
+        )
+        conn.execute(
+            "INSERT INTO workflow_recipe_asset "
+            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
+            (BUSY_RECIPE_A, "lora_name", speed),
+        )
+    card = _by_key(_cards(owner))[BUSY_CARD]
+    assert sorted(lora["mark"] for lora in card["loras"]) == [RECIPE, STRUCTURAL]
+    assert [lora["name"] for lora in card["recipe_loras"]] == ["add detail"]
 
 
 def test_a_card_adds_up_every_variants_kept_pictures_and_ratings(workflow_env):

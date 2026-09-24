@@ -627,7 +627,7 @@ def test_a_checkpoint_id_written_as_a_number_names_the_same_model():
 
 
 def test_a_numbered_digest_slot_is_a_lora_slot_and_takes_a_mark():
-    """`SHA256_FIELD_RE` keys it, so `_is_lora_widget` has to claim it.
+    """`SHA256_FIELD_RE` keys it, so `is_lora_widget` has to claim it.
 
     Missed, it is a non-LoRA slot and reaches the card key unconditionally, so
     swapping a character LoRA in a stacker's second slot forks the workflow

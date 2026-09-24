@@ -74,6 +74,7 @@ from pixlstash.utils.known_base_models import (
     fold,
     rank,
 )
+from pixlstash.utils.sql_chunking import chunked
 
 logger = get_logger(__name__)
 
@@ -482,6 +483,41 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
         }
         for model_id in verified.keys() | named.keys()
     }
+
+
+def attached_characters(vault, digests: list[str]) -> dict[str, list[tuple[int, str]]]:
+    """``{sha256: [(character id, name)]}`` for the adapters named, oldest first.
+
+    The workflow card's half of :func:`fetch_attachments`: only characters, and
+    with their names, for the card's recipe LoRAs (``workflow_card_service``).
+    """
+    if not digests:
+        return {}
+
+    def fetch(session: Session):
+        rows = []
+        for batch in chunked(digests):
+            rows.extend(
+                session.exec(
+                    select(
+                        AdapterAttachment.adapter_sha256, Character.id, Character.name
+                    )
+                    .join(Character, Character.id == AdapterAttachment.entity_id)
+                    .where(
+                        AdapterAttachment.entity_type == ENTITY_CHARACTER,
+                        AdapterAttachment.adapter_sha256.in_(batch),
+                    )
+                    .order_by(Character.id)
+                ).all()
+            )
+        return rows
+
+    attached: dict[str, list[tuple[int, str]]] = {}
+    for sha256, character_id, name in vault.db.run_task(
+        fetch, priority=DBPriority.IMMEDIATE
+    ):
+        attached.setdefault(sha256.lower(), []).append((character_id, name))
+    return attached
 
 
 def recipe_asset_index(

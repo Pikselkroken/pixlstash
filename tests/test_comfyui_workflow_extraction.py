@@ -14,7 +14,7 @@ import pytest
 
 from pixlstash.services.comfyui_recipe_service import MODEL_FILENAME_FIELDS
 from pixlstash.services.workflow_card_service import _SLOT_KINDS
-from pixlstash.services.workflow_identity import _is_lora_widget
+from pixlstash.services.workflow_identity import is_lora_widget
 from pixlstash.utils.comfyui_utilities import _NOT_A_MODEL_WIDGET
 from pixlstash.services.workflow_identity import CHECKPOINT_WIDGETS
 from pixlstash.utils.comfyui_utilities import (
@@ -129,7 +129,7 @@ def test_every_widget_recovery_can_emit_has_a_slot_kind() -> None:
     unmapped = sorted(
         widget
         for widget in emittable
-        if widget not in _SLOT_KINDS and not _is_lora_widget(widget)
+        if widget not in _SLOT_KINDS and not is_lora_widget(widget)
     )
     assert not unmapped, (
         f"{unmapped} can be recovered off a workflow file but has no "
