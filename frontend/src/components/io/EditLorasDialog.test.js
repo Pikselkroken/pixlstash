@@ -314,6 +314,25 @@ describe("reordering by keyboard", () => {
   });
 });
 
+describe("the chain as a graph", () => {
+  it("titles each loader node with its class and id, and a new one with the class a save adds", async () => {
+    const wrapper = await mountDialog();
+    const titles = () =>
+      wrapper.findAll(".eld-row .eld-node-title").map((title) => title.text());
+    expect(titles()).toEqual([
+      "LoraLoader #14",
+      "LoraLoader #22",
+      "LoraLoader #31",
+      "LoraLoader #33",
+    ]);
+    await button(wrapper, "Add a LoRA").trigger("click");
+    await flushPromises();
+    expect(titles().at(-1)).toBe("LoraLoader");
+    // One arrow into every loader, and one more into the reader.
+    expect(wrapper.findAll(".eld-wire:not(.eld-wire--plain)")).toHaveLength(6);
+  });
+});
+
 describe("Add a LoRA", () => {
   it("appends one picker row at the end, and sends only a picked LoRA", async () => {
     const wrapper = await mountDialog();
@@ -396,7 +415,6 @@ describe("Add a LoRA", () => {
     getLoraChain.mockResolvedValue(chain({ loaders: [], ...overrides }));
     const wrapper = await mountDialog();
     expect(button(wrapper, "Add a LoRA").exists()).toBe(true);
-    expect(wrapper.find(".eld-chain--empty").exists()).toBe(false);
   });
 
   it("says Nothing found reading the chain for a reader it could not name", async () => {
@@ -417,7 +435,6 @@ describe("Add a LoRA", () => {
     }
     expect(wrapper.findAll(".eld-row--deleted")).toHaveLength(4);
     expect(button(wrapper, "Add a LoRA").exists()).toBe(true);
-    expect(wrapper.find(".eld-chain--empty").exists()).toBe(false);
   });
 });
 

@@ -29,10 +29,11 @@
         deleted for it.
       </p>
 
-      <!-- The two ends are drawn as graph nodes with a wire between them, so
-           the list reads as what is spliced into that wire. They are not rows:
-           nothing drags onto or past them. -->
-      <div class="eld-chain" :class="{ 'eld-chain--empty': spliceIn }">
+      <!-- The chain drawn as a graph: the model source, each loader and what
+           reads the result, one node each, with an arrow from every node to
+           the next. The two ends are not rows: nothing drags onto or past
+           them. -->
+      <div class="eld-chain">
         <div class="eld-node" data-testid="eld-source">
           <template v-if="chain?.source">
             <span class="eld-node-title">{{ chain.source.class_type }}</span>
@@ -44,145 +45,152 @@
           <span v-else class="eld-node-body eld-quiet">No model source found</span>
         </div>
 
-        <!-- The wire runs the whole span from node to node, behind the rows,
-             and ends in the arrowhead on the node that reads the chain. -->
-        <div class="eld-span">
-          <ol ref="listEl" class="eld-list" aria-label="LoRAs, in the order the chain applies them">
-            <li
-              v-for="(row, index) in rows"
-              :key="row.id"
-              class="eld-row"
-              :class="{
-                'eld-row--deleted': row.deleted,
-                'eld-row--dragging': draggingId === row.id,
-                'eld-row--over': overId === row.id && draggingId !== row.id,
-              }"
-              :data-row="row.id"
-              @dragover.prevent="onDragOver(row)"
-              @dragleave="onDragLeave(row)"
-              @drop.prevent="onDrop(index)"
-            >
-              <div class="eld-line">
-                <!-- The handle is the drag source AND the keyboard path, and the
-                     keyboard path is in its name: a tooltip needs a hover a
-                     keyboard user does not have. The Recipes tab's idiom. -->
-                <button
-                  class="eld-handle"
-                  type="button"
-                  data-focus="handle"
-                  :draggable="canReorder(row) ? 'true' : 'false'"
-                  :disabled="!canReorder(row)"
-                  :aria-label="`Reorder ${row.name || 'this LoRA'}: hold Alt and press the up or down arrow, or drag`"
-                  @dragstart="onDragStart(row, $event)"
-                  @dragend="onDragEnd"
-                  @keydown.up.alt.prevent="move(index, -1)"
-                  @keydown.down.alt.prevent="move(index, 1)"
-                >
-                  <Tooltip
-                    text="Drag to reorder, or Alt with the arrow keys"
-                    activator="parent"
-                    :describe="false"
-                  />
-                  <v-icon size="16">mdi-drag-vertical</v-icon>
-                </button>
-
-                <span class="eld-pos" aria-hidden="true">{{
-                  row.deleted ? "—" : positions[row.id]
-                }}</span>
-
-                <span v-if="row.isNew && !row.sha256" class="eld-name">
-                  <AppSelect
-                    :model-value="row.sha256"
-                    :label="`LoRA to add, row ${positions[row.id]}`"
-                    hide-label
-                    compact
-                    :options="pickerOptions"
-                    :disabled="saving"
-                    @update:model-value="(value) => pick(row, value)"
-                  />
-                </span>
-                <span v-else class="eld-name">
-                  <v-icon
-                    v-if="!row.onShelf && !row.isNew"
-                    size="16"
-                    class="eld-flag-glyph"
-                    aria-hidden="true"
-                    >mdi-alert-outline</v-icon
+        <ol ref="listEl" class="eld-list" aria-label="LoRAs, in the order the chain applies them">
+          <li
+            v-for="(row, index) in rows"
+            :key="row.id"
+            class="eld-row"
+            :class="{
+              'eld-row--deleted': row.deleted,
+              'eld-row--dragging': draggingId === row.id,
+              'eld-row--over': overId === row.id && draggingId !== row.id,
+            }"
+            :data-row="row.id"
+            @dragover.prevent="onDragOver(row)"
+            @dragleave="onDragLeave(row)"
+            @drop.prevent="onDrop(index)"
+          >
+            <!-- Each loader is a node like the two ends, with the wire from
+                 the node before it ending in an arrow on its title. -->
+            <span class="eld-wire" aria-hidden="true"></span>
+            <div class="eld-node">
+              <span class="eld-node-title">{{ loaderTitle(row) }}</span>
+              <div class="eld-node-body">
+                <div class="eld-line">
+                  <!-- The handle is the drag source AND the keyboard path, and the
+                       keyboard path is in its name: a tooltip needs a hover a
+                       keyboard user does not have. The Recipes tab's idiom. -->
+                  <button
+                    class="eld-handle"
+                    type="button"
+                    data-focus="handle"
+                    :draggable="canReorder(row) ? 'true' : 'false'"
+                    :disabled="!canReorder(row)"
+                    :aria-label="`Reorder ${row.name || 'this LoRA'}: hold Alt and press the up or down arrow, or drag`"
+                    @dragstart="onDragStart(row, $event)"
+                    @dragend="onDragEnd"
+                    @keydown.up.alt.prevent="move(index, -1)"
+                    @keydown.down.alt.prevent="move(index, 1)"
                   >
-                  <span class="eld-name-text">{{
-                    row.onShelf || row.isNew ? row.name : row.fileBase
+                    <Tooltip
+                      text="Drag to reorder, or Alt with the arrow keys"
+                      activator="parent"
+                      :describe="false"
+                    />
+                    <v-icon size="16">mdi-drag-vertical</v-icon>
+                  </button>
+
+                  <span class="eld-pos" aria-hidden="true">{{
+                    row.deleted ? "—" : positions[row.id]
                   }}</span>
-                  <span v-if="row.isNew" class="eld-tag">new</span>
-                  <span v-if="row.deleted" class="visually-hidden"
-                    >, deleted</span
+
+                  <span v-if="row.isNew && !row.sha256" class="eld-name">
+                    <AppSelect
+                      :model-value="row.sha256"
+                      :label="`LoRA to add, row ${positions[row.id]}`"
+                      hide-label
+                      compact
+                      :options="pickerOptions"
+                      :disabled="saving"
+                      @update:model-value="(value) => pick(row, value)"
+                    />
+                  </span>
+                  <span v-else class="eld-name">
+                    <v-icon
+                      v-if="!row.onShelf && !row.isNew"
+                      size="16"
+                      class="eld-flag-glyph"
+                      aria-hidden="true"
+                      >mdi-alert-outline</v-icon
+                    >
+                    <span class="eld-name-text">{{
+                      row.onShelf || row.isNew ? row.name : row.fileBase
+                    }}</span>
+                    <span v-if="row.isNew" class="eld-tag">new</span>
+                    <span v-if="row.deleted" class="visually-hidden"
+                      >, deleted</span
+                    >
+                  </span>
+
+                  <span v-if="row.deleted || !row.hasStrength" class="eld-strength eld-quiet">
+                    {{ row.deleted ? "—" : "wired" }}
+                  </span>
+                  <AppInput
+                    v-else
+                    class="eld-strength"
+                    :model-value="row.strengthText"
+                    :aria-label="`Strength of ${row.name || 'this LoRA'}`"
+                    type="number"
+                    min="-10"
+                    max="10"
+                    :disabled="!editable || saving"
+                    :error="strengthInvalid(row)"
+                    @update:model-value="(value) => (row.strengthText = value)"
+                    @keydown.stop
+                  />
+
+                  <!-- Delete, not ×: the entry leaves the workflow, and an × in
+                       this app closes things. A deleted row stays on screen with
+                       Restore until the dialog is saved or cancelled. -->
+                  <AppButton
+                    v-if="row.deleted"
+                    size="sm"
+                    data-focus="restore"
+                    :aria-label="`Restore ${row.name || 'this LoRA'}`"
+                    :disabled="saving"
+                    @click="restore(row)"
                   >
-                </span>
-
-                <span v-if="row.deleted || !row.hasStrength" class="eld-strength eld-quiet">
-                  {{ row.deleted ? "—" : "wired" }}
-                </span>
-                <AppInput
-                  v-else
-                  class="eld-strength"
-                  :model-value="row.strengthText"
-                  :aria-label="`Strength of ${row.name || 'this LoRA'}`"
-                  type="number"
-                  min="-10"
-                  max="10"
-                  :disabled="!editable || saving"
-                  :error="strengthInvalid(row)"
-                  @update:model-value="(value) => (row.strengthText = value)"
-                  @keydown.stop
-                />
-
-                <!-- Delete, not ×: the entry leaves the workflow, and an × in
-                     this app closes things. A deleted row stays on screen with
-                     Restore until the dialog is saved or cancelled. -->
-                <AppButton
-                  v-if="row.deleted"
-                  size="sm"
-                  data-focus="restore"
-                  :aria-label="`Restore ${row.name || 'this LoRA'}`"
-                  :disabled="saving"
-                  @click="restore(row)"
+                    Restore
+                  </AppButton>
+                  <AppBarButton
+                    v-else
+                    icon="delete-outline"
+                    data-focus="delete"
+                    :tooltip="`Delete ${row.name || 'this LoRA'}`"
+                    :disabled="!editable || saving"
+                    @click="remove(row)"
+                  />
+                </div>
+                <p
+                  v-if="!row.onShelf && !row.isNew && !row.deleted"
+                  class="eld-note eld-flag"
                 >
-                  Restore
-                </AppButton>
-                <AppBarButton
-                  v-else
-                  icon="delete-outline"
-                  data-focus="delete"
-                  :tooltip="`Delete ${row.name || 'this LoRA'}`"
-                  :disabled="!editable || saving"
-                  @click="remove(row)"
-                />
+                  {{ row.fileBase }} is missing from your model shelf.
+                </p>
               </div>
-              <p
-                v-if="!row.onShelf && !row.isNew && !row.deleted"
-                class="eld-note eld-flag"
-              >
-                {{ row.fileBase }} is missing from your model shelf.
-              </p>
-            </li>
-          </ol>
+            </div>
+          </li>
+        </ol>
 
-          <div class="eld-add">
-            <AppButton
-              size="sm"
-              icon-left="plus"
-              :disabled="!canAdd"
-              :aria-label="spliceLabel"
-              @click="add"
-            >
-              {{ spliceIn ? "Insert LoRA between these nodes" : "Add a LoRA" }}
-            </AppButton>
-            <span v-if="editable && !shelf.length && shelfRead" class="eld-note eld-quiet">
-              Your model shelf has no LoRA to add.
-            </span>
-          </div>
-
-          <span class="eld-arrow" aria-hidden="true"></span>
+        <!-- Add appends the last loader, so it sits on the last wire, the
+             one into the node that reads the chain. -->
+        <span class="eld-wire eld-wire--plain" aria-hidden="true"></span>
+        <div class="eld-add">
+          <AppButton
+            size="sm"
+            icon-left="plus"
+            :disabled="!canAdd"
+            :aria-label="spliceLabel"
+            @click="add"
+          >
+            {{ spliceIn ? "Insert LoRA between these nodes" : "Add a LoRA" }}
+          </AppButton>
+          <span v-if="editable && !shelf.length && shelfRead" class="eld-note eld-quiet">
+            Your model shelf has no LoRA to add.
+          </span>
         </div>
+
+        <span class="eld-wire" aria-hidden="true"></span>
 
         <div class="eld-node" data-testid="eld-sink">
           <span v-if="chain?.sink?.summary" class="eld-node-title">{{
@@ -511,6 +519,15 @@ const firstLoaderNote = computed(() => {
   return parts.join(" ");
 });
 
+/**
+ * A loader node's title bar, spelled like the source's: its class and id. A
+ * new row has no node yet, so it names the class a save puts in.
+ */
+function loaderTitle(row) {
+  if (row.isNew) return chain.value?.added_loader_class || "LoRA loader";
+  return `${row.classType || "LoRA loader"} #${row.nodeId}`;
+}
+
 function strengthInvalid(row) {
   if (row.deleted || !row.hasStrength) return false;
   const text = String(row.strengthText ?? "").trim();
@@ -529,6 +546,7 @@ function rowOf(loader) {
   return {
     id: `n:${loader.node_id}`,
     nodeId: String(loader.node_id),
+    classType: loader.class_type || "",
     name: loader.name || loraStem(loader.filename),
     fileBase: String(loader.filename || "").split(/[\\/]/).pop() || loader.name,
     filename: loader.filename || "",
@@ -662,6 +680,7 @@ async function add() {
   const row = {
     id: `new:${newRows}`,
     nodeId: null,
+    classType: "",
     name: "",
     fileBase: "",
     filename: "",
@@ -876,17 +895,15 @@ defineExpose({ rows, step, changeCount });
 .eld-chain {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
 }
 
-/* The two ends, drawn as graph nodes: a title bar over a body, narrower than
-   the rows and centred on the wire, so they read as the fixed ends of the
-   chain rather than two more entries. */
+/* Every step of the chain is one of these: the model source, each loader and
+   what reads the result. A title bar over a body, the same width and look for
+   all three, so the list reads as a graph and not as a list between two
+   labels. */
 .eld-node {
-  align-self: center;
   display: flex;
   flex-direction: column;
-  width: 75%;
   overflow: hidden;
   border: 1px solid rgb(var(--v-theme-border));
   border-radius: var(--radius-md);
@@ -903,43 +920,51 @@ defineExpose({ rows, step, changeCount });
 }
 
 .eld-node-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
   overflow-wrap: anywhere;
 }
 
-/* Everything between the two nodes, with the wire drawn down its middle from
-   node to node: behind the rows, which cover it, and ending in the arrowhead
-   on the node that reads the chain, so the direction the model flows is on
-   screen. The chain's gap is taken off at both ends so the line touches both
-   nodes. */
-.eld-span {
+/* The wire from one node to the next: a line ending in an arrowhead on the
+   node below, drawn rather than an icon because a glyph's own shaft reads as
+   the line and leaves a head too small to see. The plain one is the stretch
+   above the Add button, which sits on the last wire. */
+.eld-wire {
+  align-self: center;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  margin: calc(var(--space-2) * -1) 0;
-  padding-top: var(--space-4);
-  background: linear-gradient(
-      rgba(var(--v-theme-on-surface), var(--opacity-text-secondary)),
-      rgba(var(--v-theme-on-surface), var(--opacity-text-secondary))
-    )
-    center top / var(--rail-w) calc(100% - var(--space-3)) no-repeat;
+  align-items: center;
+  height: var(--space-6);
+  --eld-wire-color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-/* The arrowhead, drawn rather than an icon: a glyph's own shaft sits on the
-   line and leaves a head too small to read. */
-.eld-arrow {
-  align-self: center;
-  margin-top: var(--space-3);
-  border-top: var(--space-3) solid
-    rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+.eld-wire::before {
+  content: "";
+  flex: 1;
+  width: var(--rail-w);
+  background: var(--eld-wire-color);
+}
+
+.eld-wire::after {
+  content: "";
+  border-top: var(--space-3) solid var(--eld-wire-color);
   border-right: var(--space-3) solid transparent;
   border-left: var(--space-3) solid transparent;
+}
+
+.eld-wire--plain {
+  height: var(--space-4);
+}
+
+.eld-wire--plain::after {
+  content: none;
 }
 
 .eld-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -948,11 +973,6 @@ defineExpose({ rows, step, changeCount });
 .eld-row {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
-  background: rgb(var(--v-theme-surface));
 }
 
 .eld-row--dragging {
@@ -961,7 +981,7 @@ defineExpose({ rows, step, changeCount });
 
 /* Where a drop would land: the selection's bar, because the target is the
    thing chosen, not an action. */
-.eld-row--over {
+.eld-row--over > .eld-node {
   box-shadow: inset 0 var(--rail-w) 0 var(--active-bar);
 }
 
@@ -1044,17 +1064,9 @@ defineExpose({ rows, step, changeCount });
 
 .eld-add {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-/* Nothing in the chain yet: the button sits on the wire itself, which is
-   where the loader is spliced in. */
-.eld-chain--empty .eld-add {
   flex-direction: column;
-  align-self: center;
-  background: rgb(var(--v-theme-surface));
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .eld-changes {
