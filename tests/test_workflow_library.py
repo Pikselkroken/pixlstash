@@ -21,6 +21,7 @@ import copy
 import hashlib
 import json
 import os
+import random
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -587,6 +588,107 @@ def test_a_reroute_is_stepped_through():
             link[3], link[4] = 92, 0
     workflow["links"].append([len(workflow["links"]) + 1, 92, 0, 6, 0, "LATENT"])
     assert ui_topology_hash(workflow) == topology_hash(api_graph(TXT2IMG))
+
+
+# ---------------------------------------------------------------------------
+# Portability on real pairs (#1440 plan §2.2)
+#
+# The same workflow saved by ComfyUI in both formats. A pulled workflow is
+# always the editor half and the pictures it made carry the API half, so the
+# topology is the only thing that can join them.
+# ---------------------------------------------------------------------------
+
+PAIRED = Path(__file__).parent / "comfyui_workflows" / "paired" / "multigpu"
+PAIRED_NAMES = sorted(path.stem for path in (PAIRED / "ui").glob("*.json"))
+
+# The editor half wires the caption through a bypassed ShowText node; the API
+# half, made by ComfyUI, splices it out. The UI reducer drops the edge instead.
+BYPASSED_SHOWTEXT = "ComfyUI-Florence2 detailed_caption to flux"
+PAIRED_CASES = [
+    pytest.param(
+        name,
+        marks=pytest.mark.xfail(
+            strict=True,
+            reason="the UI reducer drops the edge through a bypassed node",
+        ),
+    )
+    if name == BYPASSED_SHOWTEXT
+    else name
+    for name in PAIRED_NAMES
+]
+
+
+def _paired(name):
+    with open(PAIRED / "ui" / f"{name}.json", encoding="utf-8") as handle:
+        ui = json.load(handle)
+    with open(PAIRED / "api" / f"{name}.json", encoding="utf-8") as handle:
+        api = json.load(handle)
+    return ui, api
+
+
+def test_the_paired_corpus_is_all_there():
+    """An empty glob would parametrize nothing and pass."""
+    assert len(PAIRED_NAMES) == 15
+    assert sorted(path.stem for path in (PAIRED / "api").glob("*.json")) == (
+        PAIRED_NAMES
+    )
+
+
+@pytest.mark.parametrize("name", PAIRED_CASES)
+def test_both_formats_of_a_real_workflow_key_to_one_topology(name):
+    ui, api = _paired(name)
+    assert ui_topology_hash(ui) == topology_hash(api)
+
+
+def _shuffled(workflow, rng):
+    rng.shuffle(workflow["nodes"])
+    rng.shuffle(workflow["links"])
+
+
+def _moved(workflow, rng):
+    for node in workflow["nodes"]:
+        node["pos"] = [rng.randint(-5000, 5000), rng.randint(-5000, 5000)]
+        node["size"] = [rng.randint(50, 900), rng.randint(50, 900)]
+
+
+def _reordered(workflow, rng):
+    for node in workflow["nodes"]:
+        node["order"] = rng.randint(0, 10_000)
+
+
+def _renumbered(workflow, rng):
+    """New node ids AND new link ids, everywhere either is written."""
+    node_ids = [node["id"] for node in workflow["nodes"]]
+    new_node = dict(zip(node_ids, rng.sample(range(1000, 100_000), len(node_ids))))
+    link_ids = [link[0] for link in workflow["links"]]
+    new_link = dict(zip(link_ids, rng.sample(range(1000, 100_000), len(link_ids))))
+    for node in workflow["nodes"]:
+        node["id"] = new_node[node["id"]]
+        for entry in node.get("inputs") or ():
+            if entry.get("link") is not None:
+                entry["link"] = new_link[entry["link"]]
+        for entry in node.get("outputs") or ():
+            if entry.get("links"):
+                entry["links"] = [new_link[link] for link in entry["links"]]
+    workflow["links"] = [
+        [new_link[link[0]], new_node[link[1]], link[2], new_node[link[3]], *link[4:]]
+        for link in workflow["links"]
+    ]
+
+
+@pytest.mark.parametrize(
+    "disturb", [_shuffled, _moved, _reordered, _renumbered], ids=lambda f: f.__name__
+)
+def test_editor_bookkeeping_does_not_reach_the_topology(disturb):
+    """Layout, evaluation order, array order and ids are the editor's, not the graph's."""
+    rng = random.Random(1440)
+    for name in PAIRED_NAMES:
+        ui, _api = _paired(name)
+        before = ui_topology_hash(ui)
+        disturbed = copy.deepcopy(ui)
+        disturb(disturbed, rng)
+        assert disturbed != ui, name
+        assert ui_topology_hash(disturbed) == before, name
 
 
 # ---------------------------------------------------------------------------
