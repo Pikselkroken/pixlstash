@@ -81,8 +81,8 @@
       class="fm-sub-slot"
       :style="{ marginTop: `${subTop}px` }"
     >
-      <!-- Media, Faces, Stacks, Sharing: pick one. "Any" is left out on
-           purpose; removing the chip (or Clear) is how you get back to any. -->
+      <!-- Media, Faces, Stacks, Sharing: pick one, led by the row that turns
+           the filter off ("All" or "Any"), so no filter is a choice too. -->
       <div
         v-if="PICK_ONE[sub]"
         class="tbm fm-sub"
@@ -91,15 +91,6 @@
       >
         <div class="tbm-header">
           <span class="tbm-title">{{ PICK_ONE[sub].title }}</span>
-          <span class="tbm-spacer"></span>
-          <button
-            class="tbm-ghost"
-            type="button"
-            :disabled="pickValue(sub) == null"
-            @click="setPick(sub, null)"
-          >
-            Clear
-          </button>
         </div>
         <div class="tbm-section">
           <OptionRows
@@ -113,9 +104,6 @@
             </template>
           </OptionRows>
         </div>
-        <div class="tbm-footer">
-          On the strip as "{{ PICK_ONE[sub].kind }} {{ pickFooterChip(sub) }}".
-        </div>
       </div>
 
       <div
@@ -126,15 +114,6 @@
       >
         <div class="tbm-header">
           <span class="tbm-title">Score</span>
-          <span class="tbm-spacer"></span>
-          <button
-            class="tbm-ghost"
-            type="button"
-            :disabled="!scoreActive"
-            @click="clearScore"
-          >
-            Clear
-          </button>
         </div>
         <div
           class="tbm-section"
@@ -433,12 +412,12 @@ const CONTENT_KINDS = [
 const formatParams = (exts) =>
   filterParams(exts.map((e) => ["format", e.toUpperCase()]));
 
-// Each pick-one kind: its store field, its "off" value, and the one query
-// parameter a choice adds for its count.
+// Each pick-one kind: its store field, its "off" value and that row's label,
+// and the one query parameter a choice adds for its count.
 const PICK_ONE = {
   media: {
     title: "Media",
-    kind: "Media",
+    anyLabel: "All",
     field: "mediaTypeFilter",
     off: "all",
     options: MEDIA_OPTIONS,
@@ -447,7 +426,7 @@ const PICK_ONE = {
   },
   faces: {
     title: "Faces",
-    kind: "Faces",
+    anyLabel: "Any",
     field: "faceBboxFilter",
     off: null,
     options: FACE_OPTIONS,
@@ -455,7 +434,7 @@ const PICK_ONE = {
   },
   stacks: {
     title: "Stacks",
-    kind: "Stacks",
+    anyLabel: "All",
     field: "stackStateFilter",
     off: "all",
     options: STACK_OPTIONS,
@@ -465,7 +444,7 @@ const PICK_ONE = {
   // complement, so "Not shared" waits on that.
   sharing: {
     title: "Sharing",
-    kind: "Sharing",
+    anyLabel: "All",
     field: "sharedOnlyFilter",
     off: false,
     options: [
@@ -591,12 +570,14 @@ watch(
 );
 
 // ── Pick-one kinds ───────────────────────────────────────────────────────────
+// The off row leads with the kind's own glyph and the unfiltered count.
 function pickOptions(kind) {
   const def = PICK_ONE[kind];
-  return def.options.map((o) => ({
-    ...o,
-    count: count(def.params(o.id)),
-  }));
+  const icon = PICTURE_KINDS.find((k) => k.id === kind).icon;
+  return [
+    { id: null, label: def.anyLabel, icon, count: total.value },
+    ...def.options.map((o) => ({ ...o, count: count(def.params(o.id)) })),
+  ];
 }
 
 function pickValue(kind) {
@@ -610,21 +591,7 @@ function setPick(kind, id) {
   store[def.field] = id == null ? def.off : id;
 }
 
-// The chosen option's chip, or the first option's as an example.
-function pickFooterChip(kind) {
-  const def = PICK_ONE[kind];
-  const value = pickValue(kind);
-  return (def.options.find((o) => o.id === value) ?? def.options[0]).chip;
-}
-
 // ── Score ────────────────────────────────────────────────────────────────────
-const scoreActive = computed(
-  () =>
-    store.minScoreFilter != null ||
-    store.maxScoreFilter != null ||
-    store.unscoredOnlyFilter,
-);
-
 const scoreHint = computed(() => {
   const min = store.minScoreFilter;
   if (min === 2) return "1 is dimmed under At most: it is below the minimum.";
@@ -661,12 +628,6 @@ function setStar(field, n) {
 function onStarKeydown(event, field) {
   const id = arrowStep(event, starOptions(field), store[field]);
   if (id !== undefined) setStar(field, id);
-}
-
-function clearScore() {
-  store.minScoreFilter = null;
-  store.maxScoreFilter = null;
-  store.unscoredOnlyFilter = false;
 }
 
 // ── Problems ─────────────────────────────────────────────────────────────────

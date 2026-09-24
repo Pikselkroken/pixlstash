@@ -2,8 +2,8 @@
 // excluded but never both, raising the minimum score drags the maximum up, a
 // tag-confidence threshold is one chip per tag that another pick moves, every
 // pick-one list follows the radiogroup contract (arrows select, one tab stop),
-// Clear puts each kind back to its own "off" value, and every count is the view
-// plus exactly one filter.
+// its leading All/Any row puts each kind back to its own "off" value, and every
+// count is the view plus exactly one filter.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -146,7 +146,7 @@ describe("FilterMenu", () => {
     ["Stacks", "stackStateFilter", "Stacked", "stacked", "all"],
     ["Sharing", "sharedOnlyFilter", "Shared", true, false],
   ])(
-    "%s: arrow selects, Enter keeps it, Clear restores the off value",
+    "%s: arrow selects, Enter keeps it, the off row restores the off value",
     async (kind, field, label, on, off) => {
       const store = useFilterStore();
       const wrapper = await mountMenu();
@@ -159,29 +159,32 @@ describe("FilterMenu", () => {
 
       await group.trigger("keydown", { key: "ArrowDown" });
       expect(store[field]).toBe(on);
-      expect(wrapper.find(".tbm-footer").text()).toContain(
-        `On the strip as "${kind}`,
-      );
       // Enter on the chosen row is a click on it: it confirms, never undoes.
       await row().trigger("click");
       expect(store[field]).toBe(on);
 
-      const clear = wrapper
-        .findAll(".fm-sub .tbm-ghost")
-        .find((b) => b.text() === "Clear");
-      await clear.trigger("click");
+      const radios = group.findAll('[role="radio"]');
+      expect(radios[0].attributes("aria-checked")).toBe("false");
+      await radios[0].trigger("click");
       expect(store[field]).toBe(off);
+      expect(radios[0].attributes("aria-checked")).toBe("true");
     },
   );
 
-  it("names the chosen option in the footer, not the first", async () => {
-    const store = useFilterStore();
-    store.mediaTypeFilter = "videos";
+  it("leads each pick-one list with its off row, All or Any", async () => {
     const wrapper = await mountMenu();
-    await openKind(wrapper, "Media");
-    expect(wrapper.find(".fm-sub .tbm-footer").text()).toBe(
-      'On the strip as "Media video".',
-    );
+    for (const [kind, any] of [
+      ["Media", "All"],
+      ["Faces", "Any"],
+      ["Stacks", "All"],
+      ["Sharing", "All"],
+    ]) {
+      await openKind(wrapper, kind);
+      const first = wrapper.find('.fm-sub [role="radio"]');
+      expect(first.find(".optrow__label").text()).toBe(any);
+      expect(first.attributes("aria-checked")).toBe("true");
+      expect(wrapper.find(".fm-sub .tbm-footer").exists()).toBe(false);
+    }
   });
 
   it("marks each Score row's radio from its own group's value", async () => {

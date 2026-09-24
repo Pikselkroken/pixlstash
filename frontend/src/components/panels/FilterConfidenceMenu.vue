@@ -59,10 +59,7 @@
         </template>
       </OptionRows>
     </div>
-    <div class="tbm-footer">
-      <template v-if="tag">On the strip as "{{ chipPreview }}".</template>
-      <template v-else>Pick a tag, then a threshold.</template>
-    </div>
+    <div v-if="!tag" class="tbm-footer">Pick a tag, then a threshold.</div>
   </div>
 </template>
 
@@ -160,13 +157,6 @@ const thresholdOptions = computed(() =>
       : undefined,
   })),
 );
-
-const chipPreview = computed(() => {
-  const t = percent(currentThreshold.value ?? 0.8);
-  return kind.value === "missing"
-    ? `Missing tag ${tag.value} ${t}+`
-    : `Doubtful tag ${tag.value} under ${t}`;
-});
 
 function setThreshold(threshold) {
   if (!tag.value) return;
