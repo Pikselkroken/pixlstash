@@ -957,10 +957,9 @@ the two sides have agreed:
    order, itself included, as `{key, name, sets_apart, differs_by}`. Members
    of one stack usually get the same generated `name`, so `sets_apart` lists
    the models and structural LoRAs a member loads that some other member does
-   not (shelf title, plus its quant) and `differs_by` is its own chips against
-   the cover. Recipe LoRAs are left out, since they vary inside one card. The
-   Run dialog's Workflow picker labels each row `name — sets_apart`, falling
-   back to `differs_by`.
+   not (shelf title, plus its quant), minus any its own `name` already says,
+   and `differs_by` is its own chips against the cover. Recipe LoRAs are left
+   out, since they vary inside one card.
 
    **`stack_id` (v1.12 F2) is what a client WRITES to the stack by.**
    `PUT /workflows/stacks/{stack_id}/order` and

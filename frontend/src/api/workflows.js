@@ -72,8 +72,9 @@ export async function listWorkflowCards({
 }
 
 /**
- * One card opened — the only way to read a stack member, which the grid never
- * lists: it draws the cover alone and names the rest in `member_keys`.
+ * One card opened — the only way to read a stack member's whole card, which
+ * the grid never lists: it draws the cover alone, naming the rest in
+ * `member_keys` and `members` (each member's name and what sets it apart).
  *
  * @param {string} workflowKey
  * @returns {Promise<{card: Object, notes: ?string, hidden: boolean, variants: Array<Object>, pins: ?Array<Object>}>}

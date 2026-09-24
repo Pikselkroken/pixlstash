@@ -81,7 +81,6 @@ from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
 from pixlstash.services.workflow_card_service import (
     CardFigures,
-    Grid,
     SlotModel,
     model_marks,
 )
@@ -2036,9 +2035,10 @@ def test_a_stack_names_its_members_and_what_sets_each_apart(workflow_env):
     by_key = {m["key"]: m for m in cover["members"]}
     assert by_key[BUSY_CARD]["name"] == cover["name"]
     assert by_key[FORGOTTEN_CARD]["name"] == member["name"]
-    # BUSY's checkpoint by its shelf title; FORGOTTEN's models are unnamed,
-    # so there is nothing to say for it and it says nothing.
-    assert by_key[BUSY_CARD]["sets_apart"] == ["Krea 2"]
+    # BUSY's checkpoint is "Krea 2", which its generated name already opens
+    # with; FORGOTTEN's models are unnamed. Neither has anything to add.
+    assert by_key[BUSY_CARD]["name"].startswith("Krea 2")
+    assert by_key[BUSY_CARD]["sets_apart"] == []
     assert by_key[FORGOTTEN_CARD]["sets_apart"] == []
     # Chips are against the cover, so the cover has none of its own.
     assert by_key[BUSY_CARD]["differs_by"] == []
@@ -2074,8 +2074,7 @@ def test_stack_members_are_told_apart_by_what_not_every_member_loads():
             ),
         )
     ]
-    grid = Grid(cards=[], stacks=[], one_offs=0, hidden=0, figures=figures)
-    members = _stack_members(figures[1], grid)
+    members = _stack_members(figures[1], {f.card.workflow_key: f for f in figures})
     assert [(m.key, m.name, m.sets_apart, m.differs_by) for m in members] == [
         (BUSY_CARD, "Portrait", ["film-grain"], []),
         (
@@ -2084,6 +2083,34 @@ def test_stack_members_are_told_apart_by_what_not_every_member_loads():
             ["t5xxl fp8_e4m3", "detail-tweaker"],
             ["other models"],
         ),
+    ]
+
+
+def test_stack_members_do_not_repeat_what_their_name_says():
+    """Three members, two on one checkpoint: the checkpoint tells only the
+    third apart, and a generated name that already starts with it is not
+    followed by it again."""
+    third = "c" * 64
+
+    def figure(key, checkpoint, name=None):
+        return CardFigures(
+            card=Card(workflow_key=key, topology_hash=key, name=name),
+            models=[SlotModel(name=checkpoint, kind="checkpoint")],
+            stack_size=3,
+            member_keys=[BUSY_CARD, FORGOTTEN_CARD, third],
+        )
+
+    figures = [
+        figure(BUSY_CARD, "realvisxl", "Portrait"),
+        figure(FORGOTTEN_CARD, "realvisxl", "Portrait"),
+        figure(third, "juggernaut"),
+    ]
+    members = _stack_members(figures[0], {f.card.workflow_key: f for f in figures})
+    assert [(m.name, m.sets_apart) for m in members] == [
+        ("Portrait", ["realvisxl"]),
+        ("Portrait", ["realvisxl"]),
+        # Generated from its checkpoint, so the name already says it.
+        ("juggernaut", []),
     ]
 
 

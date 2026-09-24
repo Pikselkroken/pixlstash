@@ -295,6 +295,30 @@ describe("switching to another stack member", () => {
     expect(getWorkflowCard).toHaveBeenCalledTimes(1);
   });
 
+  it("says both kinds of difference, and numbers rows that still tie", async () => {
+    const name = "Krea 2: Text to Image";
+    const members = [
+      { key: KEY, name, sets_apart: ["realvisxl"], differs_by: [] },
+      {
+        key: OTHER,
+        name,
+        sets_apart: ["realvisxl"],
+        // "other checkpoint" is what `sets_apart` already names; the step is not.
+        differs_by: ["other checkpoint", "+ upscale"],
+      },
+      { key: "c".repeat(64), name, sets_apart: [], differs_by: ["1 node differs"] },
+      { key: "d".repeat(64), name, sets_apart: [], differs_by: ["1 node differs"] },
+    ];
+    getWorkflowCard.mockResolvedValue({ card: card({ members }) });
+    const wrapper = await mountRun();
+    expect(wrapper.vm.workflowOptions.map((row) => row.label)).toEqual([
+      `${name} — realvisxl`,
+      `${name} — realvisxl, + upscale`,
+      `${name} — 1 node differs (1)`,
+      `${name} — 1 node differs (2)`,
+    ]);
+  });
+
   it("offers the card alone when it is in no stack", async () => {
     const wrapper = await mountRun();
     expect(wrapper.vm.workflowOptions).toEqual([

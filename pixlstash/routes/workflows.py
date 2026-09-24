@@ -109,6 +109,7 @@ from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
     BASE_MODEL_KINDS,
     BEST_SCORE,
+    by_key,
     card_defaults,
     read_grid,
 )
@@ -1381,11 +1382,15 @@ def _slot_names(figure) -> list[str]:
     return names
 
 
-def _stack_members(figure, grid) -> list[WorkflowStackMember]:
-    """The stack *figure* is in, each member named and told apart."""
-    if grid is None or figure.stack_size < 2:
+def _stack_members(figure, figures_by_key) -> list[WorkflowStackMember]:
+    """The stack *figure* is in, each member named and told apart.
+
+    A model the member's own name already says (the checkpoint a generated
+    name starts with) is not said again.
+    """
+    if not figures_by_key or figure.stack_size < 2:
         return []
-    figures = [grid.figure(key) for key in figure.member_keys]
+    figures = [figures_by_key.get(key) for key in figure.member_keys]
     if any(member is None for member in figures):
         logger.warning(
             "Stack of card %s names a member the grid has no figures for; "
@@ -1396,22 +1401,27 @@ def _stack_members(figure, grid) -> list[WorkflowStackMember]:
         return []
     loads = [_slot_names(member) for member in figures]
     shared = set.intersection(*(set(names) for names in loads))
-    return [
-        WorkflowStackMember(
-            key=member.card.workflow_key,
-            name=_display_name(member.card, member.models),
-            sets_apart=list(dict.fromkeys(n for n in names if n not in shared)),
-            differs_by=member.differs_by if position else [],
+    members = []
+    for position, (member, names) in enumerate(zip(figures, loads)):
+        name = _display_name(member.card, member.models)
+        members.append(
+            WorkflowStackMember(
+                key=member.card.workflow_key,
+                name=name,
+                sets_apart=list(
+                    dict.fromkeys(n for n in names if n not in shared and n not in name)
+                ),
+                differs_by=member.differs_by if position else [],
+            )
         )
-        for position, (member, names) in enumerate(zip(figures, loads))
-    ]
+    return members
 
 
-def _card(figure, defaults=(), grid=None) -> WorkflowCard:
+def _card(figure, defaults=(), figures_by_key=None) -> WorkflowCard:
     """Render one card's figures in the shape ``workflowCard.js`` documents.
 
-    *grid* is what names the other members of its stack (``members``); left
-    out, the card lists none.
+    *figures_by_key* (every card of the grid, by key) is what names the other
+    members of its stack (``members``); left out, the card lists none.
     """
     return WorkflowCard(
         key=figure.card.workflow_key,
@@ -1446,7 +1456,7 @@ def _card(figure, defaults=(), grid=None) -> WorkflowCard:
         member_keys=[
             key for key in figure.member_keys if key != figure.card.workflow_key
         ],
-        members=_stack_members(figure, grid),
+        members=_stack_members(figure, figures_by_key),
         stack_id=figure.stack_id,
         ghosts=figure.ghosts,
         model_ghosts=figure.model_ghosts,
@@ -1584,8 +1594,11 @@ def create_router(server) -> APIRouter:
             include_one_offs=include_one_offs,
             file_models=_file_models,
         )
+        figures_by_key = by_key(grid.figures)
         return WorkflowCards(
-            cards=[_card(figure, grid=grid) for figure in grid.cards],
+            cards=[
+                _card(figure, figures_by_key=figures_by_key) for figure in grid.cards
+            ],
             one_offs=grid.one_offs,
             hidden=grid.hidden,
         )
@@ -1621,7 +1634,9 @@ def create_router(server) -> APIRouter:
         card = figure.card
         pins = key_pins(hub, workflow_key)
         return WorkflowCardDetail(
-            card=_card(figure, card_defaults(hub, server.vault, card), grid),
+            card=_card(
+                figure, card_defaults(hub, server.vault, card), by_key(grid.figures)
+            ),
             notes=card.notes,
             hidden=card.hidden,
             variants=_card_variants(hub, server.vault, card),
