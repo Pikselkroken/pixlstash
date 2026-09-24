@@ -1053,7 +1053,8 @@ def _describe_ghosts(
     **The names come from** ``names`` **- every variant - and not from**
     :attr:`CardFigures.models` **and** :attr:`~CardFigures.loras`. Those two
     lists are what the CARD is drawn as: they cover the card's first variant
-    alone, and a recipe LoRA is deliberately anonymous there, so a forgotten
+    alone, and a recipe LoRA is deliberately anonymous there (its summary,
+    ``recipe_loras``, drops names it cannot resolve), so a forgotten
     character LoRA - the commonest model ghost of all - would never be counted.
     """
     # `vault.library_uuid` is a real property returning `Optional[str]`, so a
@@ -1161,8 +1162,13 @@ def _describe_recipe_loras(
             continue
         # Keyed by the model where one resolved, so one LoRA named by its
         # filename in one variant and by its digest in another is one entry.
+        # Sorted so the value that names the entry does not follow set order
+        # between restarts, and a filename (it has an extension) before a
+        # digest, which reads as nothing when the shelf has no title for it.
         merged: dict[object, list] = {}
-        for value, recipes in used.items():
+        for value, recipes in sorted(
+            used.items(), key=lambda item: ("." not in item[0], item[0])
+        ):
             model_id = single.get(value)
             key = model_id if model_id is not None else value
             entry = merged.setdefault(key, [value, 0, model_id])

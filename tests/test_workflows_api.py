@@ -2617,6 +2617,16 @@ def test_a_recipe_lora_attached_to_a_character_carries_that_character(
                 "character_name": "Workflow Character",
             }
         ]
+        # Attached to two characters, it is nobody's face: that would be a guess.
+        r = owner.post(f"{API}/characters", json={"name": "Second Character"})
+        assert r.status_code in {200, 201}, r.text
+        second = r.json().get("id") or r.json()["character"]["id"]
+        replace_attachments(
+            server.vault,
+            digest,
+            [("character", workflow_env.character_id), ("character", second)],
+        )
+        assert [lora["character_id"] for lora in _recipe_loras(owner)] == [None]
     finally:
         replace_attachments(server.vault, digest, [])
 

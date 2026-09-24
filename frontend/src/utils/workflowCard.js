@@ -422,7 +422,7 @@ export function ratingLabel(rating) {
 /**
  * The card's accessible name. "+N" is not a control, so this is the only place
  * a screen reader hears the chips a narrow card clipped, and it says "workflow"
- * or "recipe" because the dashed border is not announced.
+ * or "recipe" because which kind a mark is shows only by where it sits.
  *
  * `member` is a row inside its own stack's panel. It carries the WHOLE stack's
  * `stack_size` — the service sets it on every member deliberately, so a member
