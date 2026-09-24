@@ -47,6 +47,12 @@
       >
         <v-icon size="12">mdi-star</v-icon>{{ card.rating.toFixed(1) }}
       </span>
+      <!-- The stack panel's cover member, named on its own picture. The cover
+           is what the others are compared against, so its special row is
+           empty; without the flag it reads as "this one differs by nothing".
+           Inside the cover box, bottom-left, because the host used to pin it to
+           the whole cell's corner, which is the meta rows' text. -->
+      <span v-if="coverFlag" class="stack-cover-flag">Cover</span>
     </div>
     <div
       v-else
@@ -86,6 +92,7 @@
         @click="emit('run')"
         >Run it…</AppButton
       >
+      <span v-if="coverFlag" class="stack-cover-flag">Cover</span>
     </div>
 
     <!-- The layered count opens the stack too (#1402): it is the mark that
@@ -234,6 +241,8 @@ const props = defineProps({
    * that is this.
    */
   selected: { type: Boolean, default: false },
+  /** Flag this member as its stack's cover, on its own cover picture. */
+  coverFlag: { type: Boolean, default: false },
 });
 
 const emit = defineEmits(["toggle", "run"]);
@@ -578,6 +587,19 @@ const accessibleName = computed(() =>
 .wf-card__badge--bottom {
   top: auto;
   bottom: var(--space-3);
+}
+
+/* The stack panel's cover flag is the grid's chip (App.css), set on this
+   card's badge geometry so it and the rating badge in the opposite corner sit
+   on one baseline in one shape. */
+.wf-card__cover .stack-cover-flag {
+  left: var(--space-3);
+  bottom: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--badge-size);
+  border-radius: var(--radius-pill);
+  line-height: var(--leading-snug);
 }
 
 .wf-card__cover--empty {
