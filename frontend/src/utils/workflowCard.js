@@ -439,3 +439,41 @@ export function cardAccessibleName(card, { member = false } = {}) {
   ];
   return parts.filter(Boolean).join(", ");
 }
+
+// The chips that only say a model differs, which `sets_apart` already names.
+const MODEL_CHIPS = new Set(["other checkpoint", "other models"]);
+
+/** "Name — what sets it apart": the models only it loads, then its chips. */
+function memberLabel(member) {
+  const models = member.sets_apart || [];
+  const chips = (member.differs_by || []).filter(
+    (chip) => !models.length || !MODEL_CHIPS.has(chip),
+  );
+  const apart = [...models, ...chips];
+  return apart.length ? `${member.name} — ${apart.join(", ")}` : member.name;
+}
+
+/** Rows that still read alike are numbered, as the Pictures rows are. */
+function numberAlike(rows) {
+  const total = {};
+  for (const row of rows) total[row.label] = (total[row.label] || 0) + 1;
+  const seen = {};
+  return rows.map((row) => {
+    if (total[row.label] < 2) return row;
+    seen[row.label] = (seen[row.label] || 0) + 1;
+    return { ...row, label: `${row.label} (${seen[row.label]})` };
+  });
+}
+
+/**
+ * A stack's members as picker options, in the stack's order: members often
+ * share a generated name, so each says what sets it apart from the others.
+ */
+export function stackMemberOptions(members) {
+  return numberAlike(
+    (members || []).map((member) => ({
+      value: member.key,
+      label: memberLabel(member),
+    })),
+  );
+}

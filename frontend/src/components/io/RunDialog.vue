@@ -603,6 +603,7 @@ import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
 import { editLorasRoute, loraStem } from "../../utils/loraChain";
 import { wouldDuplicate } from "../../utils/recipeKey";
+import { stackMemberOptions } from "../../utils/workflowCard";
 import {
   PICTURE_INPUT_UNFILLED,
   bypassNotice,
@@ -1205,12 +1206,7 @@ const seedOptions = [
 const workflowOptions = computed(() => {
   // A stack comes whole, in its own order, from the card: members often share
   // a generated name, so each says what sets it apart from the others.
-  const rows = numberAlike(
-    (card.value?.members || []).map((member) => ({
-      value: member.key,
-      label: memberLabel(member),
-    })),
-  );
+  const rows = stackMemberOptions(card.value?.members);
   if (card.value && !rows.length) {
     rows.push({ value: card.value.key, label: card.value.name });
   }
@@ -1224,31 +1220,6 @@ const workflowOptions = computed(() => {
   }
   return rows;
 });
-
-// The chips that only say a model differs, which `sets_apart` already names.
-const MODEL_CHIPS = new Set(["other checkpoint", "other models"]);
-
-/** "Name — what sets it apart": the models only it loads, then its chips. */
-function memberLabel(member) {
-  const models = member.sets_apart || [];
-  const chips = (member.differs_by || []).filter(
-    (chip) => !models.length || !MODEL_CHIPS.has(chip),
-  );
-  const apart = [...models, ...chips];
-  return apart.length ? `${member.name} — ${apart.join(", ")}` : member.name;
-}
-
-/** Rows that still read alike are numbered, as the Pictures rows are. */
-function numberAlike(rows) {
-  const total = {};
-  for (const row of rows) total[row.label] = (total[row.label] || 0) + 1;
-  const seen = {};
-  return rows.map((row) => {
-    if (total[row.label] < 2) return row;
-    seen[row.label] = (seen[row.label] || 0) + 1;
-    return { ...row, label: `${row.label} (${seen[row.label]})` };
-  });
-}
 
 const adapterOptions = computed(() =>
   adapters.value

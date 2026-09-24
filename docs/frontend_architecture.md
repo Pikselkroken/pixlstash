@@ -2028,7 +2028,7 @@ can no longer see.
 - **Open in ComfyUI is an icon-only button beside Run…**, wearing the ComfyUI
   logomark (`widgets/ComfyuiIcon.vue`, `currentColor` on the AiToolkitIcon
   pattern), shown while `comfyuiUrl` is set. It opens what Run… runs
-  (`runTarget`: the card, or the cover of a stack selected whole) and is
+  (`runTarget`: the card, or the member picked for a stack selected whole) and is
   refused with a reason, not hidden, for any other selection of several, like
   Run…. ComfyUI takes no workflow from a URL, so it opens the configured
   address with `?pixlstash_workflow=<key>`, and the ComfyUI-PixlStash node reads
@@ -2168,11 +2168,14 @@ can no longer see.
   for where the output is filed.
 - **A stack selected whole counts as one card.** A click on a stack card
   selects its cover and every member, and `useWorkflowsStore.runnableCard`
-  reads that exact set as the cover. Run… here, the pill's Run and both verb
-  menus run the cover, and the popup's workflow select offers the members.
-  The rail's body names the cover and says so in visible text, which is what
-  Run… is described by; the pill's count reads "A stack of N workflows
-  selected". *Open cover picture* takes the same card. Rename, Export and
+  reads that exact set as the cover. The pill's Run and both verb menus run
+  the cover, and the popup's workflow select offers the members. **The rail
+  shows the stack as one workflow**: the full single-card body for the cover,
+  with the title replaced by a member select (`stackMemberOptions`, the popup's
+  own labels) that starts on the cover for every newly selected stack. Picking
+  a member re-points the whole body at it (`selectedKey`), so its defaults,
+  LoRAs, notes, Run… and Open in ComfyUI are that member's without expanding
+  the stack. The pill's count reads "A stack of N workflows selected". *Open cover picture* takes the same card. Rename, Export and
   Duplicate still refuse, with "A stack is several workflows. Open it and pick
   one to …". A stack plus anything else, or only part of one, is several again.
   Ctrl-picking every row of an open stack is that same set, so it counts too.

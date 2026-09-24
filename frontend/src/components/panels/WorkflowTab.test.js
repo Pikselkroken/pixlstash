@@ -868,30 +868,80 @@ describe("with several workflows selected", () => {
     expect(runDialog.source.pictureIds).toEqual([99]);
   });
 
-  it("runs a stack selected whole on its cover", async () => {
+  it("shows a stack selected whole as its cover, with a member picker", async () => {
     // A click on a stack card selects the cover and its members: several keys,
-    // one card on screen, and the one Run… should take.
-    const { wrapper } = await mountWith(
-      [KEY, OTHER],
-      [card({ stack_size: 2, member_keys: [OTHER] })],
+    // one card on screen. The rail reads it as one workflow, the cover first,
+    // and the picker at the top switches to another member without expanding
+    // the stack.
+    const cover = card({
+      stack_size: 2,
+      member_keys: [OTHER],
+      members: [
+        { key: KEY, name: "Cinematic portrait", sets_apart: [], differs_by: [] },
+        { key: OTHER, name: "Cinematic portrait", sets_apart: ["Flux"], differs_by: [] },
+      ],
+    });
+    getWorkflowCard.mockImplementation(async (key) =>
+      key === OTHER
+        ? detail({ card: { key: OTHER, name: "Flux portrait", stack_size: 2 } })
+        : detail({ card: { stack_size: 2 } }),
     );
-    const run = wrapper
-      .findAll("button")
-      .find((b) => b.text().includes("Run…"));
-    expect(run.attributes("aria-disabled")).toBeUndefined();
-    // Named in visible text, which is what Run… is described by; never the
-    // "N workflows selected" count of a genuinely several selection.
+    const { wrapper } = await mountWith([KEY, OTHER], [cover]);
+
     const text = textOf(wrapper);
     expect(text).not.toContain("workflows selected");
-    expect(
-      wrapper.find(`#${run.attributes("aria-describedby")}`).text(),
-    ).toContain("Run… runs Cinematic portrait, the cover");
-    await run.trigger("click");
+    expect(text).toContain("A stack of 2 workflows");
+    const pick = wrapper.find("[data-testid='wftab-stack-pick'] select");
+    expect(pick.element.value).toBe(KEY);
+    expect(pick.findAll("option").map((o) => o.text())).toEqual([
+      "Cinematic portrait",
+      "Cinematic portrait — Flux",
+    ]);
+    expect(getWorkflowCard).toHaveBeenLastCalledWith(KEY);
+
+    const run = () =>
+      wrapper.findAll("button").find((b) => b.text().includes("Run…"));
+    expect(run().attributes("aria-disabled")).toBeUndefined();
+    await run().trigger("click");
     await flush(wrapper);
     expect(useRunDialogStore().source).toMatchObject({
       kind: "card",
       workflowKey: KEY,
     });
+
+    // Picking the member reads it and makes it what Run… runs.
+    await pick.setValue(OTHER);
+    await flush(wrapper);
+    expect(getWorkflowCard).toHaveBeenLastCalledWith(OTHER);
+    expect(getLoraChain).toHaveBeenLastCalledWith(OTHER);
+    await run().trigger("click");
+    await flush(wrapper);
+    expect(useRunDialogStore().source).toMatchObject({ workflowKey: OTHER });
+  });
+
+  it("starts every newly selected stack on its cover", async () => {
+    const stack = (key, member) =>
+      card({
+        key,
+        stack_size: 2,
+        member_keys: [member],
+        members: [
+          { key, name: `Cover ${key[0]}` },
+          { key: member, name: `Member ${member[0]}` },
+        ],
+      });
+    const { wrapper, store } = await mountWith(
+      [KEY, OTHER],
+      [stack(KEY, OTHER), stack(MOVED, "e".repeat(64))],
+    );
+    await wrapper.find("[data-testid='wftab-stack-pick'] select").setValue(OTHER);
+    await flush(wrapper);
+    store.selectedKeys = [MOVED, "e".repeat(64)];
+    await flush(wrapper);
+    expect(
+      wrapper.find("[data-testid='wftab-stack-pick'] select").element.value,
+    ).toBe(MOVED);
+    expect(getWorkflowCard).toHaveBeenLastCalledWith(MOVED);
   });
 
   it("says how many are selected and offers no verbs of its own", async () => {
