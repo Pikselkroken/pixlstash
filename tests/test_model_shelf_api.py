@@ -4417,6 +4417,79 @@ def test_a_row_with_no_base_model_folds_to_null(shelf_env):
     assert row["base_model_folded"] is None
 
 
+def test_the_identified_base_model_is_served_filtered_and_sorted_on(shelf_env):
+    """``base_model_canonical`` answers for a row whose file said nothing: it
+    is served with its source, the filter finds the row under the label, the
+    not-set filter no longer does, and a caller holding the trainer's raw
+    spelling still gets its rows."""
+    noname = shelf_env.model_ids["sd_xl_noname.safetensors"]
+    alice = shelf_env.model_ids["alice.safetensors"]
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model_canonical = 'SDXL 1.0', "
+            "base_model_source = 'filename_fuzzy' WHERE id = ?",
+            (noname,),
+        )
+        conn.execute(
+            "UPDATE model SET base_model = 'sdxl_base_v1-0', "
+            "base_model_canonical = 'SDXL 1.0', base_model_source = 'declared' "
+            "WHERE id = ?",
+            (alice,),
+        )
+
+    rows = shelf_env.owner.get(f"{API}/adapters").json()["adapters"]
+    row = next(r for r in rows if r["id"] == noname)
+    assert (row["base_model"], row["base_model_canonical"]) == (None, "SDXL 1.0")
+    assert row["base_model_source"] == "filename_fuzzy"
+    # A guess never becomes the family the swap UI states as compatibility;
+    # a stated base model does.
+    assert row["family"] is None, row["family"]
+    alice_row = next(r for r in rows if r["id"] == alice)
+    assert alice_row["family"] == "sdxl"
+    assert row["matched_name"] is None, "an adapter's name is never its base"
+
+    r = shelf_env.owner.get(f"{API}/adapters", params={"base_model": "SDXL 1.0"})
+    assert _names(r.json()["adapters"]) == {
+        "sd_xl_noname.safetensors",
+        "alice.safetensors",
+    }
+    r = shelf_env.owner.get(f"{API}/adapters", params={"base_model": "UNASSIGNED"})
+    assert _names(r.json()["adapters"]) == {"dana.safetensors"}
+    r = shelf_env.owner.get(f"{API}/adapters", params={"base_model": "sdxl_base_v1-0"})
+    assert _names(r.json()["adapters"]) == {"alice.safetensors"}
+
+    r = shelf_env.owner.get(
+        f"{API}/adapters", params={"sort": "base_model", "direction": "asc"}
+    )
+    order = [row["filename"] for row in r.json()["adapters"]]
+    # Sorted under the label, so the unset row goes last, not the guessed one.
+    assert order[-1] == "dana.safetensors", order
+
+
+def test_a_checkpoint_named_after_its_base_model_is_matched_by_name(shelf_env):
+    """``flux1-dev.safetensors`` says FLUX.1 dev; a guess never names a row."""
+    huge = shelf_env.model_ids["huge_unhashed.safetensors"]
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET filename = 'Flux1-Dev-FP8.safetensors', "
+            "base_model_canonical = 'FLUX.1 dev', base_model_source = 'filename' "
+            "WHERE id = ?",
+            (huge,),
+        )
+
+    def matched():
+        rows = shelf_env.owner.get(f"{API}/checkpoints").json()["checkpoints"]
+        return next(r for r in rows if r["id"] == huge)["matched_name"]
+
+    assert matched() == "FLUX.1 dev"
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model_source = 'filename_fuzzy' WHERE id = ?",
+            (huge,),
+        )
+    assert matched() is None
+
+
 # ── Stack detection over HTTP (shelf plan F5) ───────────────────────────────
 
 
@@ -6527,7 +6600,7 @@ def test_merge_keeps_the_removed_copys_name_resolving_to_the_model(
         == 200
     )
 
-    by_name, _by_digest, _filenames = recipe_asset_index(shelf_env.server.hub)
+    by_name, _by_digest, _filenames, _names = recipe_asset_index(shelf_env.server.hub)
     assert by_name.get("alice-copy.safetensors") == {two_copies.model_id}, (
         "the removed copy's filename no longer names the model it was"
     )

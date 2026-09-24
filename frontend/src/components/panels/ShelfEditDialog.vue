@@ -221,6 +221,10 @@ const confirmLabel = computed(() =>
  * "12 selected" is something the reader can already see, and the number that
  * decides whether this was a mistake is how many recorded values are about to
  * be gone. There is no undo, so this sentence is the whole safety net.
+ *
+ * A row whose base model is only GUESSED (`base_model` null, a canonical label
+ * shown with a `guessed` tag) is not counted: replacing a guess loses nothing
+ * the file or a person stated.
  */
 const overwriteWarning = computed(() => {
   if (props.verb !== "base-model" || count.value < 2) return "";

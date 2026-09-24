@@ -203,6 +203,11 @@ def _resolve_against_shelf(hub, slots: list[dict]) -> list[dict]:
     resolved one is renamed to the shelf's filename. An unresolved one keeps the
     digest: that really is all this machine knows about the file.
 
+    ``display_name`` is the name the shelf row was given, or ``None``. Carried
+    beside ``name`` rather than written over it: ``name`` is the lookup key and
+    the string a reader pastes into a ComfyUI node, and the chip shows this one
+    when there is one.
+
     ``quant`` is upgraded here for the same reason it is renamed: the shelf's
     column is read from the safetensors header, so it knows what a file called
     ``nvfp4_awq`` is actually stored at where the name only guesses, and a
@@ -213,7 +218,7 @@ def _resolve_against_shelf(hub, slots: list[dict]) -> list[dict]:
     if hub is None:
         return slots
     try:
-        by_name, by_digest, filenames = recipe_asset_index(hub)
+        by_name, by_digest, filenames, names = recipe_asset_index(hub)
     except Exception:
         logger.warning(
             "Could not index the shelf for picture recipe models; the slots are "
@@ -246,6 +251,7 @@ def _resolve_against_shelf(hub, slots: list[dict]) -> list[dict]:
                     or quant_from_filename(name)
                 ),
                 "model_id": model_id,
+                "display_name": names.get(model_id),
                 "verified": by_sha and model_id is not None,
             }
         )

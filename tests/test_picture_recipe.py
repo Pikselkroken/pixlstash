@@ -65,8 +65,9 @@ class FakeHub:
     service does not silently hand a test the wrong table.
     """
 
-    def __init__(self, models=(), files=(), quants=None):
+    def __init__(self, models=(), files=(), quants=None, names=None):
         self.models = models  # (id, filename, sha256)
+        self.names = names or {}  # {model id: display_name}
         self.files = files  # (model_id, relpath)
         # {model id: the header's own dtype spelling}, for the rows that have
         # one. The real read filters `quant IS NOT NULL`, so a row absent here
@@ -80,7 +81,11 @@ class FakeHub:
             return [{"id": i, "quant": q} for i, q in self.quants.items()]
         if "sha256 IS NOT NULL" in sql:
             return [{"id": i, "sha256": sha} for i, _name, sha in self.models if sha]
-        return [{"id": i, "filename": name} for i, name, _sha in self.models if name]
+        return [
+            {"id": i, "filename": name, "display_name": self.names.get(i)}
+            for i, name, _sha in self.models
+            if name
+        ]
 
 
 def _named(slots) -> dict:
@@ -219,6 +224,17 @@ def test_a_filename_match_is_a_shelf_row_but_never_verified():
     slots = _named(_resolve_against_shelf(hub, _model_slots(GRAPH, ([], []))))
     assert slots["style.safetensors"]["model_id"] == 7
     assert slots["style.safetensors"]["verified"] is False
+
+
+def test_a_resolved_slot_carries_the_shelf_rows_name():
+    """The chip shows the name the owner gave the row; ``name`` stays the key."""
+    hub = FakeHub(
+        models=[(7, "style.safetensors", None), (8, "realvis.safetensors", None)],
+        names={7: "Watercolour Style"},
+    )
+    slots = _named(_resolve_against_shelf(hub, _model_slots(GRAPH, ([], []))))
+    assert slots["style.safetensors"]["display_name"] == "Watercolour Style"
+    assert slots["realvis.safetensors"]["display_name"] is None
 
 
 def test_a_name_two_shelf_rows_share_resolves_to_neither():

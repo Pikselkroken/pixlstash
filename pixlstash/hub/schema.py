@@ -34,6 +34,7 @@ from pixlstash.utils.adapter_header import (
     FILE_UNKNOWN,
     role_from_folder,
 )
+from pixlstash.utils.known_base_models import SOURCE_DECLARED, identify
 
 logger = get_logger(__name__)
 
@@ -62,7 +63,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 2
+CURRENT_DATA_VERSION = 3
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -390,6 +391,17 @@ CREATE TABLE IF NOT EXISTS model (
     family                TEXT,
     quant                 TEXT,
     weights_id            TEXT,
+    -- The known base model (pixlstash.utils.known_base_models) this row was
+    -- identified as, and which evidence said so: 'user' | 'declared' |
+    -- 'filename' | 'declared_fuzzy' | 'filename_fuzzy'. Unlike `family` this
+    -- IS stored, because the shelf sorts and filters on it in SQL, so the
+    -- staleness is closed at the write sites instead: a curated base_model
+    -- recomputes both columns in the same UPDATE (source 'user'), and the
+    -- scanner only replaces a source it outranks. `base_model` stays the
+    -- trainer's own string. NULL on both means nothing matched yet, which the
+    -- scanner takes as a reason to look again.
+    base_model_canonical  TEXT,
+    base_model_source     TEXT,
     CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL),
     -- Same shape one column over: every producer already supplies an algorithm
     -- for an adapter ('unknown' is a first-class value, never NULL), so an
@@ -1343,6 +1355,12 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     for column in ("family", "quant", "weights_id"):
         if column not in model_columns:
             conn.execute(f"ALTER TABLE model ADD COLUMN {column} TEXT")
+    # The identified base model, the same way and for the same reason. The
+    # rows already on the shelf are filled by the one-shot data backfill
+    # (`_backfill_base_model_canonical`), not here: this runs on every open.
+    for column in ("base_model_canonical", "base_model_source"):
+        if column not in model_columns:
+            conn.execute(f"ALTER TABLE model ADD COLUMN {column} TEXT")
 
     # Rows from the earliest feature-lane v1 may predate the column entirely.
     # Backfill in Python so every library gets a distinct cryptographic value;
@@ -1490,6 +1508,50 @@ def _drop_blank_recipe_assets(conn: sqlite3.Connection) -> int:
     return deleted
 
 
+def _backfill_base_model_canonical(conn: sqlite3.Connection) -> int:
+    """Identify the rows already on the shelf whose stored base model folds.
+
+    From the stored ``base_model`` alone, and **only an exact fold of it**
+    (``declared``), so it reads no file and parses no header. Nothing weaker is
+    written here, because a stored answer stops the scanner re-reading the
+    header, and the header can carry better evidence than the columns do
+    (``modelspec.architecture``, ``ss_sd_model_name``): a filename or fuzzy
+    guess written now would never be checked against it. Every row this leaves
+    NULL is identified from all of its evidence on its next scan, which re-reads
+    the header - never the bytes - of each row whose source is still NULL.
+
+    Only rows with no source are touched, so a hub that ran a scan first loses
+    nothing to this. Runs exactly once per hub (see
+    :data:`CURRENT_DATA_VERSION`).
+
+    Args:
+        conn: An open hub connection, inside the caller's transaction.
+
+    Returns:
+        How many rows were identified.
+    """
+    rows = conn.execute(
+        "SELECT id, base_model FROM model "
+        "WHERE base_model_source IS NULL AND base_model IS NOT NULL"
+    ).fetchall()
+    updates = []
+    for model_id, base_model in rows:
+        canonical, source = identify([base_model], [])
+        if source == SOURCE_DECLARED:
+            updates.append((canonical, source, model_id))
+    conn.executemany(
+        "UPDATE model SET base_model_canonical = ?, base_model_source = ? WHERE id = ?",
+        updates,
+    )
+    if updates:
+        logger.info(
+            "Hub data v3: identified the base model of %d of %d shelf row(s).",
+            len(updates),
+            len(rows),
+        )
+    return len(updates)
+
+
 def apply_migrations(conn: sqlite3.Connection) -> int:
     """Bring *conn* up to :data:`CURRENT_SCHEMA_VERSION` and return that version.
 
@@ -1575,6 +1637,8 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     _backfill_component_roles(conn)
                 if data_version < 2:
                     _drop_blank_recipe_assets(conn)
+                if data_version < 3:
+                    _backfill_base_model_canonical(conn)
                 # No placeholder: PRAGMA takes no parameters, and the value is
                 # this module's own constant rather than anything from outside.
                 conn.execute(f"PRAGMA user_version = {CURRENT_DATA_VERSION:d}")

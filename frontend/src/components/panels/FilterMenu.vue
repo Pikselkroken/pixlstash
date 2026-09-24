@@ -707,10 +707,16 @@ const tagItems = computed(() =>
   tagRows.value.map((t) => ({ value: t.tag, label: t.tag, count: t.count })),
 );
 const modelItems = computed(() =>
-  modelNames.value.map((m) => ({ value: m, label: modelLabel(m) })),
+  modelNames.value.map((m) => ({
+    value: m.value,
+    label: m.name || modelLabel(m.value),
+  })),
 );
 const loraItems = computed(() =>
-  loraNames.value.map((m) => ({ value: m, label: modelLabel(m) })),
+  loraNames.value.map((m) => ({
+    value: m.value,
+    label: m.name || modelLabel(m.value),
+  })),
 );
 
 async function loadLists() {

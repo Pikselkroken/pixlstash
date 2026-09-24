@@ -1248,15 +1248,28 @@
                     />
                     <template v-else>
                       <span
-                        v-if="row.base_model"
+                        v-if="baseModelCell(row).text"
+                        class="shelf-base-text"
                         @dblclick.stop="startBaseModelEdit(row)"
-                        >{{ row.base_model }}</span
+                        >{{ baseModelCell(row).text }}</span
                       >
                       <span
                         v-else
                         class="shelf-chip shelf-chip--none"
                         @dblclick.stop="startBaseModelEdit(row)"
                         >not set</span
+                      >
+                      <!-- A value we inferred rather than one the file or a
+                           person stated. The same tag the name column uses for
+                           the file's own string, with its own word: "from
+                           filename" there already means "verbatim". -->
+                      <span
+                        v-if="baseModelCell(row).guess"
+                        class="shelf-name-tag"
+                        ><Tooltip
+                          :text="baseModelCell(row).guess"
+                          activator="parent"
+                        />guessed</span
                       >
                     </template>
                   </span>
@@ -1596,6 +1609,7 @@ import {
   deletableModels,
   fileKindLabel,
   undeletableNotice,
+  baseModelCell,
   trashName,
   withEmptyFolders,
   withFolderSignals,
@@ -3572,17 +3586,18 @@ const editingBase = ref("");
 let editingBaseRow = null;
 
 /**
- * Put the base-model field on a row, seeded with what is recorded.
+ * Put the base-model field on a row, seeded with what the cell shows.
  *
- * Seeded from the stored value and not from a guess - unlike the name field,
- * which opens empty on a derived row because the string it shows was inferred.
- * Nothing infers a base model: what the row shows is what the file said, so
- * editing it starts from that and a correction is one word, not a retype.
+ * That is the file's own string, or for a GUESSED row the label it was read
+ * as (`baseModelCell`), so a correction is one word rather than a retype and
+ * the commit below compares against the same value: leaving a guess as it is
+ * writes nothing, and emptying the field says "none of these", which then
+ * sticks across rescans.
  */
 function startBaseModelEdit(row) {
   editingBaseRow = row;
   editingBaseKey.value = row.rowKey;
-  editingBase.value = row.base_model || "";
+  editingBase.value = baseModelCell(row).text;
   nextTick(() => {
     const el = rootEl.value?.querySelector(".shelf-row-base-edit");
     el?.focus();
@@ -3623,7 +3638,7 @@ async function commitBaseModel(restoreFocus = false) {
   // somewhere the reader chose, and dragging it back to the row would undo
   // their click.
   if (restoreFocus) nextTick(() => focusDrawnRow(key));
-  if (next === String(row.base_model || "").trim()) return;
+  if (next === String(baseModelCell(row).text).trim()) return;
   // A cover stands for every file of the run, and one run was trained against
   // one base model.
   await store.editModelIds(row.memberIds ?? [row.id], {
@@ -5603,6 +5618,20 @@ button.shelf-head-cell:hover {
 
 .shelf-col--base {
   width: var(--shelf-col-base);
+}
+
+/* A guessed value carries a tag, and the tag is the part that must survive a
+   narrow column: the label ellipsises, the tag keeps its width. */
+.shelf-col--base:has(.shelf-name-tag) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.shelf-base-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* The field fills the cell it replaces rather than widening the row: every

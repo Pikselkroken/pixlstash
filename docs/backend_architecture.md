@@ -3176,6 +3176,52 @@ on the next scan: the unchanged-file fast path re-reads the header, never the
 bytes, for a row whose `weights_id` is NULL. `CheckpointHashTask._merge`
 carries them to the surviving row like the other scan-derived columns.
 
+`model.base_model_canonical` and `model.base_model_source` are the base model
+the row was **identified** as, against the shipped table in
+`pixlstash/utils/known_base_models.py`, and which evidence said so.
+`known_base_models.identify(declared, filenames)` takes the header's
+declarations (`ss_base_model_version`, and the SAI `modelspec.architecture`
+with its `/lora`-style suffix dropped) and the filenames (the file's own, and
+kohya's `ss_sd_model_name`, the checkpoint it was trained against). Sources,
+strongest first: `user` (set only by `update_models`), `declared` and
+`filename` (an exact fold of a declared value, or of the filename stem or one of
+its tokens), `declared_fuzzy` (`difflib`, cutoff 0.88) and `filename_fuzzy`
+(containment, longest alias first, never an alias under four characters
+nor one that is an ordinary word, `pony`, `sana`, `lumina`, `krea`, `chroma`,
+which count only as a whole filename token).
+Quality before provenance: an exact filename beats a fuzzy declaration. A
+`closed` base is never an answer.
+
+- **Written only over a source it outranks.** `_write_identification` is one
+  guarded UPDATE, deliberately not the `COALESCE` the curatable columns use:
+  the same content reached again with better evidence (a copy under a more
+  telling name) must be able to upgrade a guess, and nothing may replace
+  `user`. An unchanged file that already has an answer is not re-read. `base_model` itself is still the trainer's string, written with
+  `COALESCE` as before.
+- **A curated base model moves both columns in the same UPDATE**
+  (`update_models`: canonical = `fold(value)`, source = `user`), including a
+  cleared one, so "none of these" sticks and the shelf never groups a corrected
+  row under the old guess.
+- **No match writes nothing.** Both columns stay NULL, and `has_header_facts`
+  requires `base_model_source IS NOT NULL`, so the fast path re-reads the
+  header of an unmatched row on every scan (never its bytes). That is how a
+  table entry added in a later release reaches files scanned before it.
+- **Existing rows** whose stored `base_model` folds exactly are identified
+  once, as `declared`, by the hub's data backfill v3
+  (`schema._backfill_base_model_canonical`). Nothing weaker is written there:
+  a stored answer stops the header being re-read, so a filename guess made
+  from the columns would never be checked against the header's
+  `modelspec.architecture`. Every other row is identified from all its
+  evidence on its next scan. The columns themselves are amended
+  into schema v2 like the header facts, not a v3, which an older build would
+  refuse.
+- The shelf **sorts and filters** on `COALESCE(base_model_canonical,
+  base_model)`; the filter also matches the raw column, so a caller holding the
+  trainer's spelling still gets its rows. `ModelResponse` serves both columns,
+  `family` from the canonical label when there is one, and `matched_name`: the
+  label for a checkpoint whose derived filename folds exactly to its own
+  non-guessed canonical label (`flux1-dev.safetensors`), never for an adapter.
+
 `quant` is **two sources folded into one vocabulary**, and the fold happens on
 the way out rather than on the way in. The column holds whichever source wrote
 it: the safetensors header's own dtype spelling (`f16`, `f8_e4m3`, `i32`, or
@@ -3238,9 +3284,10 @@ Two consequences worth stating:
   `MissingCheckpointHashFinder`. Turning the suffix on adds no reading the
   scan was not already deferring.
 - **The unchanged-file fast path skips the header re-read for it.**
-  `has_header_facts` is `weights_id IS NOT NULL`, which is false by
+  `has_header_facts` needs `weights_id IS NOT NULL`, which is false by
   construction here, so without the `_reads_a_header` check a GGUF would be
-  re-opened on every sweep for a header it will never have.
+  re-opened on every sweep for a header it will never have. It is identified
+  from its filename alone on that path instead, which reads nothing.
 
 #### The unlink is authorised by exactly one committed row (#1017)
 

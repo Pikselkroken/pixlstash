@@ -133,8 +133,15 @@ from pixlstash.utils.adapter_header import (
 )
 from pixlstash.utils.host_open import open_in_file_manager
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils.known_base_models import completions, family_of, fold
-from pixlstash.utils.model_utils import canonical_quant
+from pixlstash.utils.known_base_models import (
+    SOURCE_DECLARED,
+    SOURCE_FILENAME,
+    SOURCE_USER,
+    completions,
+    family_of,
+    fold,
+)
+from pixlstash.utils.model_utils import canonical_quant, derive_model_name
 from pixlstash.utils.path_utils import path_is_within
 
 logger = get_logger(__name__)
@@ -302,6 +309,34 @@ class ModelResponse(BaseModel):
             "and `stable diffusion xl` land in one bucket rather than four; "
             "**show `base_model`**, because the raw spelling is what the file "
             "actually says."
+        ),
+    )
+    base_model_canonical: Optional[str] = Field(
+        default=None,
+        description=(
+            "The known base model this row was identified as, from what the "
+            "file declares or from its filename, or the fold of what a person "
+            "typed. Stored, and what the shelf sorts and filters on. Null when "
+            "nothing matched, or when a person cleared the base model."
+        ),
+    )
+    base_model_source: Optional[str] = Field(
+        default=None,
+        description=(
+            "Where `base_model_canonical` came from, strongest first: `user`, "
+            "`declared` (the file's metadata names it exactly), `filename` (a "
+            "filename token names it exactly), `declared_fuzzy` (a near-typo "
+            "in the metadata), `filename_fuzzy` (an alias inside the "
+            "filename). The last three are guesses and the shelf says so."
+        ),
+    )
+    matched_name: Optional[str] = Field(
+        default=None,
+        description=(
+            "For a checkpoint whose filename is simply the name of a known "
+            "base model (`flux1-dev.safetensors`), that model's label, to show "
+            "where the row has no name of its own. Never set for an adapter, "
+            "whose base model is not its name, nor from a guessed base model."
         ),
     )
     family: Optional[str] = Field(
@@ -852,6 +887,41 @@ def _cover_strip(covers) -> list[WorkflowSetCover]:
     ]
 
 
+def _family(row: dict) -> Optional[str]:
+    """The architecture family to serve for *row*.
+
+    From the identified base model only when it was stated (by the file or a
+    person), never from a guess: the family is what the LoRA swap labels
+    compatibility with, and a guessed family there would be stated as fact.
+    """
+    stated = row["base_model_source"] in (SOURCE_USER, SOURCE_DECLARED)
+    return (
+        family_of(row["base_model"])
+        or (family_of(row["base_model_canonical"]) if stated else None)
+        or row["family"]
+    )
+
+
+def _matched_name(row: dict) -> Optional[str]:
+    """The known base model a checkpoint's filename simply IS, or ``None``.
+
+    Only when the name the shelf would derive from the filename folds exactly
+    to the row's own identified base model, and that identification is not a
+    guess: a fine-tune called ``juggernaut_sdxl`` is not SDXL 1.0 by name, and a
+    wrong fuzzy match must not show up in the name column as well.
+    """
+    canonical = row["base_model_canonical"]
+    if (
+        row["file_kind"] != FILE_CHECKPOINT
+        or not canonical
+        or row["base_model_source"]
+        not in (SOURCE_USER, SOURCE_DECLARED, SOURCE_FILENAME)
+        or not row["filename"]
+    ):
+        return None
+    return canonical if fold(derive_model_name(row["filename"])) == canonical else None
+
+
 def _to_response(
     row: dict,
     locations: dict[int, list[dict]],
@@ -869,7 +939,10 @@ def _to_response(
         filename=row["filename"],
         base_model=row["base_model"],
         base_model_folded=fold(row["base_model"]),
-        family=family_of(row["base_model"]) or row["family"],
+        base_model_canonical=row["base_model_canonical"],
+        base_model_source=row["base_model_source"],
+        matched_name=_matched_name(row),
+        family=_family(row),
         quant=canonical_quant(row["quant"]),
         weights_id=row["weights_id"],
         trigger_words=row["trigger_words"],

@@ -546,9 +546,8 @@ describe("editing a base model in place", () => {
     await wrapper.find(".shelf-col--base span").trigger("dblclick");
     const field = wrapper.find(".shelf-row-base-edit");
     expect(field.exists()).toBe(true);
-    // Seeded from the stored value, unlike the name field: nothing infers a
-    // base model, so what the row shows is what the file said and a correction
-    // is one word rather than a retype.
+    // Seeded from what the cell shows, unlike the name field: here that is
+    // what the file said, so a correction is one word rather than a retype.
     expect(field.element.value).toBe("flux.1-dev");
 
     await field.setValue("FLUX.2");
@@ -572,6 +571,33 @@ describe("editing a base model in place", () => {
     await field.setValue("SDXL 1.0");
     await field.trigger("keydown", { key: "Enter" });
     expect(edit).toHaveBeenCalledWith([7], { base_model: "SDXL 1.0" });
+  });
+
+  it("starts a guess from the guess, and clearing it says 'none of these'", async () => {
+    // A guessed row stores no base model of its own, so comparing against the
+    // stored value made an emptied field look unchanged and wrote nothing.
+    const wrapper = await mountShelf([
+      adapter({
+        id: 7,
+        base_model: null,
+        base_model_canonical: "Sana",
+        base_model_source: "filename_fuzzy",
+      }),
+    ]);
+    const store = useModelShelfStore();
+    const edit = vi.spyOn(store, "editModelIds").mockResolvedValue(true);
+
+    await wrapper.find(".shelf-base-text").trigger("dblclick");
+    let field = wrapper.find(".shelf-row-base-edit");
+    expect(field.element.value).toBe("Sana");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(edit).not.toHaveBeenCalled();
+
+    await wrapper.find(".shelf-base-text").trigger("dblclick");
+    field = wrapper.find(".shelf-row-base-edit");
+    await field.setValue("");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(edit).toHaveBeenCalledWith([7], { base_model: null });
   });
 
   it("clears the column with an explicit null rather than an empty string", async () => {

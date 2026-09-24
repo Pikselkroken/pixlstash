@@ -17,6 +17,7 @@ import {
   bandGroups,
   bandProjection,
   bandUsage,
+  baseModelCell,
   baseModelKey,
   capabilityLabel,
   collapseStacks,
@@ -234,6 +235,22 @@ describe("modelName", () => {
         filename: "Foxglove_Char_000000250.safetensors",
       }),
     ).toEqual({ text: "Foxglove Char", state: "derived" });
+  });
+
+  it("shows a checkpoint's matched base-model label, still as ours", () => {
+    // Drawn as `derived`: the label is our reading of the filename, not a
+    // name anybody chose, so the "needs a name" queue is untouched.
+    expect(
+      modelName({
+        display_name: null,
+        filename: "flux1-dev-fp8.safetensors",
+        matched_name: "FLUX.1 dev",
+      }),
+    ).toEqual({ text: "FLUX.1 dev", state: "derived" });
+    // A name somebody gave still wins over it.
+    expect(
+      modelName({ display_name: "My Flux", matched_name: "FLUX.1 dev" }).text,
+    ).toBe("My Flux");
   });
 
   it("separates the file's own string from one we made", () => {
@@ -1117,6 +1134,80 @@ describe("baseModelKey", () => {
       "",
     );
     expect(baseModelKey(undefined)).toBe("");
+  });
+
+  it("prefers the identified label, which is what the server filters on", () => {
+    expect(
+      baseModelKey({
+        base_model: null,
+        base_model_folded: null,
+        base_model_canonical: "Illustrious XL",
+      }),
+    ).toBe("Illustrious XL");
+    // A typo the server read as Illustrious groups under Illustrious, not
+    // under its own misspelling.
+    expect(
+      baseModelKey({
+        base_model: "Ilustrius",
+        base_model_folded: null,
+        base_model_canonical: "Illustrious XL",
+      }),
+    ).toBe("Illustrious XL");
+  });
+});
+
+describe("baseModelCell", () => {
+  it("shows what the file or a person said, untagged", () => {
+    for (const source of ["declared", "user"]) {
+      expect(
+        baseModelCell({
+          base_model: "sdxl_base_v1-0",
+          base_model_canonical: "SDXL 1.0",
+          base_model_source: source,
+        }),
+      ).toEqual({ text: "sdxl_base_v1-0", guess: null });
+    }
+    // modelspec declared it, and there is no raw string to show.
+    expect(
+      baseModelCell({
+        base_model: null,
+        base_model_canonical: "SDXL 1.0",
+        base_model_source: "declared",
+      }),
+    ).toEqual({ text: "SDXL 1.0", guess: null });
+  });
+
+  it("tags every guess and shows the label, not the raw string", () => {
+    for (const source of ["filename", "filename_fuzzy"]) {
+      const cell = baseModelCell({
+        base_model: null,
+        base_model_canonical: "Sana",
+        base_model_source: source,
+      });
+      expect(cell.text).toBe("Sana");
+      expect(cell.guess).toMatch(/filename/);
+    }
+    const typo = baseModelCell({
+      base_model: "Ilustrius",
+      base_model_canonical: "Illustrious XL",
+      base_model_source: "declared_fuzzy",
+    });
+    expect(typo.text).toBe("Illustrious XL");
+    expect(typo.guess).toContain("Ilustrius");
+  });
+
+  it("is empty when nothing is recorded, including a cleared guess", () => {
+    expect(baseModelCell({ base_model: null })).toEqual({
+      text: "",
+      guess: null,
+    });
+    expect(
+      baseModelCell({
+        base_model: null,
+        base_model_canonical: null,
+        base_model_source: "user",
+      }),
+    ).toEqual({ text: "", guess: null });
   });
 });
 
