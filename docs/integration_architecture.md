@@ -641,7 +641,8 @@ Seven rules the client must not re-derive:
    `comfyui_unreachable`, `ui_format`, `missing_nodes: {nodes}`,
    `missing_models: {models: [{file, folder}]}`, `a1111`,
    `picture_input_unfilled: {inputs: [{slot_label, input_name, title}]}`,
-   `no_lora_loader`, `pixlstash_nodes`, `no_save_node`, `no_runnable_source`.
+   `no_lora_loader`, `pixlstash_nodes`, `no_save_node`, `no_runnable_source`,
+   `lora_not_skippable: {node_id, field, file, message}`.
    `picture_input_unfilled` replaced `fixed_input_deleted` in #1457 with the
    same payload shape plus each input's `title` (a slot label is a hash); a client that only knows the old code no longer
    recognises the refusal and must fall back to its generic sentence. It names
@@ -649,10 +650,17 @@ Seven rules the client must not re-derive:
    not the batch.
    A code and never a sentence: one batch mixes sources, and a panel grouping
    "these four are missing the same model" cannot do it from prose.
-   **Two group fields are facts rather than refusals** and must not be read as
-   reasons: `substitutions`, and `bypassed_loras: [{file, folder, node_id,
-   class_type, field}]`. Both say what this run will do differently from what
-   the graph says, on the pre-flight and on the run alike.
+   **Three group fields are facts rather than refusals** and must not be read
+   as reasons: `substitutions`, `bypassed_loras: [{file, folder, node_id,
+   class_type, field, requested}]`, and `unplaced_loras: [{filename, sha256,
+   node_id, reason}]`. All three say what this run will do differently from
+   what the graph or the saved recipe says, on the pre-flight and on the run
+   alike. `requested: true` marks a loader the owner skipped with `skip_loras`
+   (#1478); `false` is one the server bypassed because this ComfyUI lacks its
+   file. `unplaced_loras` names a saved recipe's LoRA that is not applied: the
+   workflow has no loader left for it, or the shelf cannot identify it.
+   `skip_loras` is refused (400) on a run spanning several cards: a node id
+   names one loader on one graph.
 3. **A missing model blocks the whole batch**, mixed or not, and so does an
    unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
    submitted — including the groups whose own `reasons` are empty.
@@ -693,7 +701,9 @@ Seven rules the client must not re-derive:
    entry either: a filename slot is resolved against what that ComfyUI lists,
    so with nothing to resolve against the run is a 400 rather than one that
    quietly keeps whatever LoRA the stored graph named. A digest slot needs no
-   list and goes through.
+   list and goes through. `skip_loras` is not consented past either: with
+   ComfyUI unreachable, a skip is `lora_not_skippable`, because nothing says
+   what to wire in the loader's place.
 6. **The two routes answer identically, including their errors.** A body that
    cannot be interpreted against this card is a `400`/`404`/`422` **on both** —
    two sources named, an unknown `saved_recipe_id`, a malformed key,
@@ -735,9 +745,11 @@ knows from its pictures exports and duplicates like any other:
 | `GET /api/v1/workflows/{workflow_key}/export` | The workflow as a file to give away | `{filename, workflow, removed: [string], source: "file" \| "picture" \| "instance"}` |
 | `POST /api/v1/workflows/{workflow_key}/duplicate` | A second copy in the user's workflow folder | `201 {name, workflow_key}` |
 | `POST /api/v1/workflows/{workflow_key}/insert-lora-loader` | A copy with a LoRA loader spliced in | `201 {name, workflow_key, node_id, class_type}` |
+| `GET /api/v1/workflows/{workflow_key}/lora-chain` | The LoRA chain in apply order, for the editor (#1478) | `{workflow_key, editable, refusal, source, clip_source, sink: {summary, consumers}, loaders: [{node_id, class_type, field, filename, name, strength, strength_clip, sha256, on_shelf}], added_loader_class}`; ComfyUI down is still a 200 with `editable: false` |
+| `PUT /api/v1/workflows/{workflow_key}/lora-chain` | A copy with the chain as the owner left it: `{entries: [{node_id?, sha256?, strength?}], name?, dry_run}` | `201 {dry_run, name, workflow_key, changes: [{kind, node_id, text}]}`; a dry run is `200` with `name` and `workflow_key` null |
 | `DELETE /api/v1/workflows/{workflow_key}` | Send the imported file to the trash | `{deleted, workflow_key}` |
 | `GET /api/v1/recipes/{recipe_id}/export` | The saved recipe as a file | `{filename, recipe, shares: [string]}` |
-| `GET /api/v1/recipes/used?workflow_key=…` | The looks this workflow's own pictures were made with, minus any a saved recipe already keeps. `workflow_key` repeats for a selection of several and the answer is the union. **The half of the Recipes tab a library has without ever pressing Save** | `[{prompt, loras: [{filename}], pictures, cover_picture_id}]` |
+| `GET /api/v1/recipes/used?workflow_key=…` | Every look this workflow's own pictures were made with, a saved recipe's included and flagged `saved`. `workflow_key` repeats for a selection of several and the answer is the union. **The Recipes tab's list, filled without anybody pressing Save** | `[{prompt, loras: [{filename}], pictures, cover_picture_id, saved}]` |
 
 Five rules the client must not re-derive:
 
@@ -868,7 +880,7 @@ the two sides have agreed:
    `stack_size`, `saved_recipe_count`, `defaults` — and `mark` carries B1's own
    `structural` | `recipe` vocabulary rather than a translation of it, which is
    how the solid/dashed meaning would get inverted. The route adds
-   `topology_hash`, `variant_count`, `member_keys`, `stack_id`, `rank`,
+   `topology_hash`, `variant_count`, `member_keys`, `members`, `stack_id`, `rank`,
    `last_used` and `cover_ids` beside them; a caller that only knows the
    document ignores those and still needs no mapping.
 
@@ -951,6 +963,15 @@ the two sides have agreed:
    those chips as plain facts about a cover the payload would never name.
    Chips and size are therefore always consistent: a card outside a stack has
    `stack_size: 1` and no chips at all.
+
+   **`members` names the stack without a read per member.** Every stacked
+   card, on the grid and on the detail route, carries the whole stack in its
+   order, itself included, as `{key, name, sets_apart, differs_by}`. Members
+   of one stack usually get the same generated `name`, so `sets_apart` lists
+   the models and structural LoRAs a member loads that some other member does
+   not (shelf title, plus its quant), minus any its own `name` already says,
+   and `differs_by` is its own chips against the cover. Recipe LoRAs are left
+   out, since they vary inside one card.
 
    **`stack_id` (v1.12 F2) is what a client WRITES to the stack by.**
    `PUT /workflows/stacks/{stack_id}/order` and

@@ -1345,7 +1345,7 @@ function runCard(card) {
 }
 
 function runSelected() {
-  runCard(onlyCard.value);
+  runCard(store.runnableCard);
 }
 
 async function stackSelected() {
@@ -1471,6 +1471,16 @@ function focusCursorRow() {
  * the card's cover — so this takes the answer rather than recomputing it,
  * which is what keeps the row's label and what it opens the same thing.
  */
+// The Recipes tab's thumbnails, which live outside this view (see the store).
+watch(
+  () => store.pictureToOpen,
+  (id) => {
+    if (id == null) return;
+    store.pictureToOpen = null;
+    openPicture(id);
+  },
+);
+
 function openCoverPicture() {
   const id = selBarRef.value?.openTarget?.id;
   if (id != null) openPicture(id);

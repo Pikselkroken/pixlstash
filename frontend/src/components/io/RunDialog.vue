@@ -209,7 +209,30 @@
                 : "Open one of this workflow's pictures to change its LoRAs."
             }}
           </p>
-          <div v-for="(row, index) in loras" :key="row.key" class="rund-lora">
+          <template v-for="(row, index) in loras" :key="row.key">
+          <!-- A graph LoRA skipped for this run. The popup never changes the
+               workflow, so its word is Skip, never delete: the row stays,
+               says so, and Use takes it back. -->
+          <div
+            v-if="row.skipped"
+            class="rund-lora rund-lora--skipped"
+            :data-lora="row.key"
+          >
+            <span class="rund-lora-skip-line">
+              <span class="rund-lora-name">{{ rowName(row) }}</span>
+              <span class="rund-lora-skipped">Skipped for this run</span>
+            </span>
+            <AppButton
+              size="sm"
+              data-focus="use"
+              :aria-label="`Use ${rowName(row)} in this run`"
+              :disabled="submitting"
+              @click="useGraphLora(row)"
+            >
+              Use
+            </AppButton>
+          </div>
+          <div v-else class="rund-lora" :data-lora="row.key">
             <AppSelect
               v-model="row.sha256"
               :label="`LoRA ${index + 1}`"
@@ -227,23 +250,47 @@
               :disabled="submitting"
               @keydown.stop
             />
-            <!-- Only a row the owner ADDED can be taken away again. A slot the
-                 graph carries is in the graph: `POST /workflows/run` overrides
-                 a slot, it cannot delete one, so an × here would promise a
-                 removal the run does not perform. -->
+            <!-- Two different gestures, so two controls. A row the owner ADDED
+                 was never in the graph, and its × takes that override away. A
+                 slot the GRAPH carries gets Skip: this run is sent with that
+                 loader bypassed (`skip_loras`; the server rewires around it),
+                 so the owner can run without a LoRA that does not exist here.
+                 Skip, not a trash: this popup changes no workflow, and a
+                 delete glyph would promise that it does. Editing the chain for
+                 good is Edit LoRAs…, on the Workflows screen. -->
             <AppBarButton
               v-if="row.added"
+              class="rund-lora-act"
               icon="close"
               :tooltip="`Remove LoRA ${index + 1}`"
               :disabled="submitting"
               @click="removeLora(index)"
             />
-            <span v-else class="rund-x-gap" />
+            <AppButton
+              v-else
+              class="rund-lora-act"
+              size="sm"
+              data-focus="skip"
+              :aria-label="`Skip ${rowName(row)} for this run`"
+              :disabled="submitting"
+              @click="skipGraphLora(row)"
+            >
+              Skip
+            </AppButton>
           </div>
-          <p v-if="unresolvedLoras.length" class="rund-note">
-            Not on your model shelf, so {{ unresolvedLoras.length === 1 ? "it stays" : "they stay" }}
-            as the workflow has {{ unresolvedLoras.length === 1 ? "it" : "them" }}:
-            {{ unresolvedLoras.join(", ") }}.
+          <p
+            v-if="!row.skipped && loraFlag(row)"
+            class="rund-note rund-lora-flag"
+            data-testid="rund-lora-flag"
+          >
+            <v-icon size="14" class="rund-lora-flag-glyph" aria-hidden="true"
+              >mdi-alert-outline</v-icon
+            >
+            {{ loraFlag(row) }}
+          </p>
+          </template>
+          <p class="visually-hidden" role="status" aria-live="polite">
+            {{ loraLive }}
           </p>
           <AppButton
             v-if="loraSlots.length"
@@ -433,6 +480,7 @@
           @settings="emit('open-settings', 'compute')"
           @retry="runPreflight()"
           @drop-lora="dropLoras"
+          @edit-loras="editLoras"
         />
         </div>
         <p v-if="submitError" class="rund-f rund-f--4 rund-note rund-note--bad" role="alert">
@@ -500,6 +548,7 @@
     :settings-aside="seedMode === 'keep' ? KEEP_SEED_ASIDE : ''"
     :source-picture-id="pictureIds[0] ?? null"
     @close="saveOpen = false"
+    @handoff="emit('close')"
     @saved="onSaved"
   />
 
@@ -534,6 +583,7 @@
  * identical row was one press away from here.
  */
 import { computed, nextTick, reactive, ref, useId, watch } from "vue";
+import { useRouter } from "vue-router";
 import { VIcon } from "vuetify/components";
 
 import { getPictureRecipe } from "../../api/comfyui";
@@ -551,11 +601,14 @@ import {
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
+import { editLorasRoute, loraStem } from "../../utils/loraChain";
 import { wouldDuplicate } from "../../utils/recipeKey";
 import {
   PICTURE_INPUT_UNFILLED,
   bypassNotice,
+  LORAS_BYPASSED,
   reasonsBlock,
+  unplacedNotice,
 } from "../../utils/runReasons";
 import SaveRecipeDialog from "./SaveRecipeDialog.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -581,6 +634,7 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["close", "run", "open-settings"]);
+const router = useRouter();
 
 /**
  * `MAX_RUNS_PER_REQUEST` (`pixlstash/routes/comfyui.py`), which `_plan`
@@ -721,6 +775,7 @@ const changedLoras = computed(() =>
   loras.value
     .filter(
       (row) =>
+        !row.skipped &&
         row.sha256 &&
         (row.sha256 !== row.baseSha || row.strength !== row.baseStrength),
     )
@@ -732,8 +787,21 @@ const changedLoras = computed(() =>
     })),
 );
 
+/**
+ * The graph loaders skipped for this run, as `skip_loras` takes them.
+ *
+ * Never also in `loras`: `changedLoras` passes over a skipped row, so a loader
+ * is either overridden or skipped, and the route is never asked for both.
+ */
+const skippedLoras = computed(() =>
+  loras.value
+    .filter((row) => row.skipped)
+    .map((row) => ({ node_id: row.node_id, field: row.field || "lora_name" })),
+);
+
 const dirty = computed(
   () =>
+    skippedLoras.value.length > 0 ||
     prompt.value !== basePrompt.value ||
     negative.value !== baseNegative.value ||
     Object.keys(edits).length > 0 ||
@@ -964,8 +1032,18 @@ function resetSize() {
   sizeFields.value.forEach(resetValue);
 }
 
+/**
+ * The prompt the box opens with, and what its reset chip goes back to.
+ *
+ * A caller's own `source.prompt` wins: the Recipes tab passes the prompt its
+ * row shows, and the picture's re-read can come back without one.
+ */
 const basePrompt = computed(
-  () => recipe.value?.positive_prompt || savedRecipe.value?.prompt || "",
+  () =>
+    props.source?.prompt ||
+    recipe.value?.positive_prompt ||
+    savedRecipe.value?.prompt ||
+    "",
 );
 
 /**
@@ -987,20 +1065,34 @@ const baseNegative = computed(
 /**
  * The LoRAs as a recipe keeps them: by name and strength, not by slot.
  *
- * Only the rows the shelf could name. A saved LoRA is found again by its
- * digest after a rename, and a slot with no digest has nothing to save that
- * would still mean anything on another machine.
+ * A row the shelf could name goes by its digest, which finds it again after a
+ * rename. A graph row it could not name goes by its file with an empty digest:
+ * Save as recipe flags that row and lets the owner take it off (#1478), which
+ * it can only do for a row it is shown.
  */
 const recipeLoras = computed(() =>
   loras.value
-    .filter((row) => row.sha256)
+    // A graph LoRA the shelf cannot name is KEPT, as its file with no digest:
+    // Save as recipe lists and flags it (#1478), and dropping it here was the
+    // silent half of that - the dialog never saw it to say so.
+    // A row skipped for THIS run is still kept: a saved recipe cannot hold a
+    // skip, so every run of it loads that loader from the graph, and a list
+    // leaving it out would say less than those runs do.
+    .filter((row) => row.sha256 || (!row.added && row.graphValue))
     .map((row) => {
+      if (!row.sha256) {
+        return {
+          filename: row.graphValue,
+          sha256: "",
+          strength: strengthOr1(row.strength),
+        };
+      }
       const shelf = adapters.value.find((item) => item.sha256 === row.sha256);
       return {
         filename:
           shelf?.filename || shelf?.display_name || row.graphValue || row.sha256,
         sha256: row.sha256,
-        strength: Number(row.strength) || 1,
+        strength: strengthOr1(row.strength),
       };
     }),
 );
@@ -1111,12 +1203,16 @@ const seedOptions = [
 ];
 
 const workflowOptions = computed(() => {
-  const rows = [];
-  if (card.value) {
+  // A stack comes whole, in its own order, from the card: members often share
+  // a generated name, so each says what sets it apart from the others.
+  const rows = numberAlike(
+    (card.value?.members || []).map((member) => ({
+      value: member.key,
+      label: memberLabel(member),
+    })),
+  );
+  if (card.value && !rows.length) {
     rows.push({ value: card.value.key, label: card.value.name });
-    for (const key of card.value.member_keys || []) {
-      rows.push({ value: key, label: memberLabel(key) });
-    }
   }
   // "Run a workflow on these…" opens with the whole library in the picker;
   // otherwise only the stack's own members, which is the switch the design
@@ -1129,9 +1225,29 @@ const workflowOptions = computed(() => {
   return rows;
 });
 
-function memberLabel(key) {
-  const known = cards.value.find((row) => row.key === key);
-  return known?.name || `Stack member ${key.slice(0, 8)}`;
+// The chips that only say a model differs, which `sets_apart` already names.
+const MODEL_CHIPS = new Set(["other checkpoint", "other models"]);
+
+/** "Name — what sets it apart": the models only it loads, then its chips. */
+function memberLabel(member) {
+  const models = member.sets_apart || [];
+  const chips = (member.differs_by || []).filter(
+    (chip) => !models.length || !MODEL_CHIPS.has(chip),
+  );
+  const apart = [...models, ...chips];
+  return apart.length ? `${member.name} — ${apart.join(", ")}` : member.name;
+}
+
+/** Rows that still read alike are numbered, as the Pictures rows are. */
+function numberAlike(rows) {
+  const total = {};
+  for (const row of rows) total[row.label] = (total[row.label] || 0) + 1;
+  const seen = {};
+  return rows.map((row) => {
+    if (total[row.label] < 2) return row;
+    seen[row.label] = (seen[row.label] || 0) + 1;
+    return { ...row, label: `${row.label} (${seen[row.label]})` };
+  });
 }
 
 const adapterOptions = computed(() =>
@@ -1498,6 +1614,10 @@ function runBody() {
   // Exactly one source, which the route checks before it reads anything: a
   // saved recipe names its own card, with pictures the card is `target`, and
   // without either it IS the source.
+  // The graph's own loaders the owner skipped for this run. Only when there
+  // are any: the route rewires around each, and a key it is not sent cannot
+  // refuse a run over a feature nobody used.
+  if (skippedLoras.value.length) body.skip_loras = skippedLoras.value;
   if (savedRecipe.value) {
     body.saved_recipe_id = savedRecipe.value.id;
     // The picker still chooses which member of the stack runs: a recipe runs
@@ -1575,6 +1695,7 @@ function loraRow(slot, { added = false } = {}) {
     by: String(slot.by || "filename"),
     graphValue,
     added,
+    skipped: false,
     baseSha: sha256,
     baseStrength: strength,
     sha256,
@@ -1605,12 +1726,98 @@ function shelfDigestFor(filename) {
   return "";
 }
 
-/** The graph's LoRAs the shelf could not name, for the line under the rows. */
-const unresolvedLoras = computed(() =>
-  loras.value
-    .filter((row) => !row.added && !row.baseSha && row.graphValue)
-    .map((row) => row.graphValue),
+/** A row's strength, or 1 when it has none: a 0 is a strength, not a gap. */
+function strengthOr1(value) {
+  if (value === null || value === undefined || value === "") return 1;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : 1;
+}
+
+/** A file as it is compared across the popup and the pre-flight. */
+function fileKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .split(/[\\/]/)
+    .pop();
+}
+
+/**
+ * The files the last pre-flight says the run leaves out on its own, because
+ * this ComfyUI does not have them (`bypassed_loras`, `requested: false`).
+ */
+const bypassedFiles = computed(
+  () =>
+    new Set(
+      bypassed.value
+        .filter((note) => note.code === LORAS_BYPASSED)
+        .flatMap((note) => note.models || [])
+        .map((model) => fileKey(model?.file)),
+    ),
 );
+
+/** What a row is called: the shelf's name, or the graph's file. */
+function rowName(row) {
+  if (row.sha256) {
+    const shelf = adapters.value.find((item) => item.sha256 === row.sha256);
+    const named = shelf?.display_name || shelf?.filename;
+    if (named) return loraStem(named) || named;
+  }
+  return String(row.graphValue || "").split(/[\\/]/).pop() || "LoRA";
+}
+
+/**
+ * The sentence under a graph row that will not load as written, or "".
+ *
+ * The pre-flight's word first — the run already leaves that loader out — and
+ * then the shelf's, which cannot identify the file. The row's Skip is the fix
+ * either way: the owner can run without it on purpose.
+ */
+function loraFlag(row) {
+  if (row.added || row.skipped) return "";
+  const file = fileKey(row.graphValue);
+  if (file && bypassedFiles.value.has(file)) {
+    return "Not on this ComfyUI. The run leaves this loader out.";
+  }
+  if (!row.baseSha && row.graphValue && row.sha256 === row.baseSha) {
+    return "Not on your model shelf: PixlStash cannot identify this file.";
+  }
+  return "";
+}
+
+/** What the LoRA rows' live region is saying, or "". */
+const loraLive = ref("");
+
+async function focusLoraRow(key, which) {
+  await nextTick();
+  const el = document.querySelector(
+    `[data-lora="${key}"] [data-focus="${which}"]`,
+  );
+  el?.focus?.();
+}
+
+/**
+ * Skip one of the GRAPH's loaders for this run (`skip_loras`).
+ *
+ * Nothing about the workflow changes: the row stays, says it is skipped, and
+ * Use takes it back. The pre-flight is asked again, because the answer
+ * changes: a loader nothing can be rewired around comes back as
+ * `lora_not_skippable`, and a bypassed one is reported as skipped instead.
+ */
+async function skipGraphLora(row) {
+  if (row.added || submitting.value) return;
+  row.skipped = true;
+  loraLive.value = `${rowName(row)} is skipped for this run. Use is on the same row.`;
+  await focusLoraRow(row.key, "use");
+  await runPreflight();
+}
+
+async function useGraphLora(row) {
+  row.skipped = false;
+  loraLive.value = `${rowName(row)} is used in this run again.`;
+  await focusLoraRow(row.key, "skip");
+  await runPreflight();
+}
 
 /**
  * A row's options, with the graph's own unresolvable file among them.
@@ -1644,6 +1851,20 @@ async function dropLoras() {
   await runPreflight();
 }
 
+/**
+ * The `loras_unplaced` fix: Edit LoRAs… on the card that has no loader left.
+ *
+ * Adding a loader is a workflow edit, saved as a new workflow, so this popup
+ * closes and the Workflows screen opens on that card with the dialog up.
+ * Nothing is run.
+ */
+function editLoras(workflowKey) {
+  const key = workflowKey || activeKey.value;
+  if (!key) return;
+  emit("close");
+  void router?.push?.(editLorasRoute(key));
+}
+
 async function loadAdapters() {
   if (adapters.value.length) return;
   try {
@@ -1663,7 +1884,11 @@ async function loadAdapters() {
  * that quietly went back to 8 is the thing the design asks to be told about.
  */
 async function loadCard(key, { keepEdits = false } = {}) {
+  // A popup reopened on another source while this read was out has its own
+  // card; this one's answer must not replace it.
+  const token = loadToken;
   const detail = await getWorkflowCard(key);
+  if (token !== loadToken) return;
   const next = detail?.card || null;
   if (!keepEdits) {
     card.value = next;
@@ -1697,7 +1922,10 @@ async function runPreflight(token = loadToken) {
     // a pin on the new card is written from.
     if (!mine() || askedFor !== activeKey.value) return;
     reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
-    bypassed.value = (answer?.groups || []).flatMap(bypassNotice);
+    bypassed.value = (answer?.groups || []).flatMap((group) => [
+      ...bypassNotice(group),
+      ...unplacedNotice(group),
+    ]);
     plannedRuns.value = Number(answer?.runs) || 0;
     // One group: this popup always runs one card (`target`, a key or a saved
     // recipe), so the first group's inputs are the card's.
@@ -2044,6 +2272,8 @@ watch(
    value: changed apart, the label stops lining up with the column it names. */
 .rund-form {
   --rund-strength-w: 72px;
+  /* Wide enough for "Skip" and "Use" at the compact button size. */
+  --rund-act-w: 56px;
 }
 
 .rund-l2 {
@@ -2052,13 +2282,13 @@ watch(
 }
 
 .rund-x-gap {
-  width: var(--control-h-bar);
+  width: var(--rund-act-w);
 }
 
 .rund-lora,
 .rund-size {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--rund-strength-w) var(--control-h-bar);
+  grid-template-columns: minmax(0, 1fr) var(--rund-strength-w) var(--rund-act-w);
   gap: var(--space-3);
   align-items: center;
 }
@@ -2216,6 +2446,53 @@ button.rund-in-tile.rund-in-tile--off {
 .rund-note {
   margin: 0;
   line-height: var(--leading-body);
+}
+
+/* A graph row skipped for this run: its name, struck, the words saying so
+   across the select and strength columns, and Use where Skip was. */
+.rund-lora--skipped {
+  min-height: var(--control-h);
+}
+
+.rund-lora-skip-line {
+  grid-column: 1 / 3;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  min-width: 0;
+  font-size: var(--text-sm);
+}
+
+.rund-lora-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  text-decoration: line-through;
+}
+
+.rund-lora-skipped {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The last column holds × on an added row and Skip / Use on a graph row, so
+   it is sized for the word and the glyph sits at its end. */
+.rund-lora-act {
+  justify-self: end;
+}
+
+.rund-lora-flag {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.rund-lora-flag-glyph {
+  flex-shrink: 0;
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .rund-note--bad {

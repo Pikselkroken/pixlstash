@@ -822,6 +822,31 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   ]);
 
   /**
+   * The card Run acts on, or null: the one selected card, or a stack's cover
+   * when the selection is exactly that stack.
+   *
+   * A click on a stack card selects the stack WHOLE (`stackKeys`), so the
+   * selection holds several keys while the reader sees one card — and a gate
+   * counting keys refused to run it. Running the cover is what the Run popup
+   * already offers a stack: it lists the members to switch to.
+   */
+  const runnableCard = computed(() => {
+    const keys = selectedKeys.value;
+    if (keys.length === 1) return selectedCards.value[0] ?? null;
+    const held = new Set(keys);
+    // `stackKeys` rather than `isStack`, as `syncPanelToSelection` does: the
+    // set compared against is `member_keys`, so that is what says "a stack".
+    const cover = cards.value.find(
+      (card) => held.has(card.key) && stackKeys(card.key).length > 1,
+    );
+    if (!cover) return null;
+    const whole = stackKeys(cover.key);
+    return whole.length === held.size && whole.every((key) => held.has(key))
+      ? cover
+      : null;
+  });
+
+  /**
    * Dissolve every stack the selection touches.
    *
    * Addressed by STACK and not by card: selecting one member of a run and
@@ -1144,9 +1169,25 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     recipesEpoch.value += 1;
   }
 
+  /**
+   * A picture the Recipes tab asked to open, or null.
+   *
+   * The tab is mounted by `App.vue` beside the grid, not inside
+   * `WorkflowsView`, and only the view knows where the reader is - so the tab
+   * asks here and the view opens it, parking its place as a cover click does.
+   */
+  const pictureToOpen = ref(null);
+
+  /** Ask the Workflows view to open one picture in the lightbox. */
+  function requestOpenPicture(pictureId) {
+    pictureToOpen.value = pictureId;
+  }
+
   return {
     recipesEpoch,
     notedRecipesChanged,
+    pictureToOpen,
+    requestOpenPicture,
     cards,
     oneOffs,
     hidden,
@@ -1171,6 +1212,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     openStackSize,
     selectedCards,
     selectedStackIds,
+    runnableCard,
     parkedPlace,
     park,
     unpark,

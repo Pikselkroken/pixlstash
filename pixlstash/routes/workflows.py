@@ -51,8 +51,15 @@ from copy import deepcopy
 from dataclasses import dataclass, field as dataclass_field
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request
-from pydantic import BaseModel, Field, StrictBool, ValidationError, field_validator
+from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
+from pydantic import (
+    BaseModel,
+    Field,
+    StrictBool,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from pixlstash.hub.workflow_card_reads import (
     asset_names,
@@ -90,13 +97,18 @@ from pixlstash.services.a1111_recipe import reduce_a1111
 from pixlstash.services.comfyui_recipe_service import (
     MAX_SEED_64,
     apply_adapter,
+    apply_lora_chain,
     apply_model_swap,
     apply_seeds,
     detect_lora_targets,
     detect_model_targets,
     detect_seed_targets,
     insert_adapter,
+    lora_display_name,
+    plan_lora_chain,
     plan_lora_insertion,
+    read_lora_chain,
+    read_lora_chain_untyped,
 )
 from pixlstash.services.comfyui_service import (
     _extract_output_node_ids,
@@ -109,11 +121,15 @@ from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
     BASE_MODEL_KINDS,
     BEST_SCORE,
+    by_key,
     card_defaults,
     read_grid,
 )
 from pixlstash.services import saved_recipe_service
-from pixlstash.services.model_shelf_service import model_name_aliases
+from pixlstash.services.model_shelf_service import (
+    adapter_digest_index,
+    model_name_aliases,
+)
 from pixlstash.services.workflow_events import announce_changed_workflows
 from pixlstash.routes.comfyui import (
     MAX_RUNS_PER_REQUEST,
@@ -133,6 +149,7 @@ from pixlstash.services.workflow_identity import RECIPE, STRUCTURAL
 from pixlstash.services.workflow_hash import (
     MODEL_EXTENSIONS,
     WorkflowGraphError,
+    normalized_filename,
     structural_document,
 )
 from pixlstash.services.workflow_identity import topology_node_labels
@@ -387,6 +404,31 @@ class WorkflowCover(BaseModel):
     square_crop_side: int | None = None
 
 
+class WorkflowStackMember(BaseModel):
+    """One card of a stack, as a picker lists it without reading its card.
+
+    Members of one stack are usually generated the same ``name`` - they share a
+    base model and a type - so ``sets_apart`` says what this one loads that
+    not every member does, and ``differs_by`` is its chips against the cover
+    for the difference that is not a model (a step added, nodes rewired).
+    """
+
+    key: str
+    name: str
+    sets_apart: list[str] = Field(
+        default_factory=list,
+        description=(
+            "The models and structural LoRAs this member loads that some "
+            "other member of the stack does not, as the shelf names them. "
+            "Recipe LoRAs are left out: they vary inside one card."
+        ),
+    )
+    differs_by: list[str] = Field(
+        default_factory=list,
+        description="This member's chips against the cover; empty on the cover.",
+    )
+
+
 class WorkflowCard(BaseModel):
     """One card of the Workflows grid (v1.12 B3).
 
@@ -465,6 +507,14 @@ class WorkflowCard(BaseModel):
     )
     variant_count: int = 0
     member_keys: list[str] = Field(default_factory=list)
+    members: list[WorkflowStackMember] = Field(
+        default_factory=list,
+        description=(
+            "The whole stack in its order, the cover first and this card "
+            "included, each with its name and what sets it apart. Empty "
+            "outside a stack."
+        ),
+    )
     stack_id: str | None = Field(
         None,
         description=(
@@ -796,6 +846,18 @@ class RunLora(BaseModel):
     strength_clip: float | None = Field(None, ge=-10.0, le=10.0)
 
 
+class RunLoraSlot(BaseModel):
+    """One LoRA slot a run skips (#1478), addressed as :class:`RunLora` addresses it.
+
+    A skip is for THIS run: the loader is bypassed on the run's own copy of the
+    graph and the stored workflow keeps it. Editing the workflow for good is
+    ``PUT /workflows/{key}/lora-chain``.
+    """
+
+    node_id: str = Field(min_length=1, max_length=MAX_LABEL_LENGTH)
+    field: str = Field("lora_name", min_length=1, max_length=MAX_LABEL_LENGTH)
+
+
 class RunValue(ParameterAddress):
     """One parameter this run sets, over the card's defaults."""
 
@@ -845,6 +907,12 @@ class RunRequest(BaseModel):
     prompt: str | None = Field(None, max_length=MAX_PROMPT_LENGTH)
     negative: str | None = Field(None, max_length=MAX_PROMPT_LENGTH)
     loras: list[RunLora] = Field(default_factory=list, max_length=MAX_RUN_LORAS)
+    # LoRA slots this run goes without (#1478): each loader is bypassed on the
+    # run's copy, its consumers reading its inputs. Applied to every group of
+    # the run whose graph has that slot; a slot no graph has is a 400.
+    skip_loras: list[RunLoraSlot] = Field(
+        default_factory=list, max_length=MAX_RUN_LORAS
+    )
     values: list[RunValue] = Field(default_factory=list, max_length=MAX_DEFAULTS)
 
     count: int = Field(1, ge=1, le=MAX_RUNS_PER_REQUEST)
@@ -893,6 +961,26 @@ class RunRequest(BaseModel):
         """
         return list(dict.fromkeys(value))
 
+    @model_validator(mode="after")
+    def _a_slot_is_filled_or_skipped(self) -> "RunRequest":
+        """A slot named both in ``loras`` and in ``skip_loras`` is refused (422).
+
+        Filling a slot and skipping it are opposite answers to one question,
+        and picking either would be answering a request nobody made.
+        """
+        filled = {(item.node_id, item.field) for item in self.loras}
+        both = [
+            f"{item.field} on node {item.node_id}"
+            for item in self.skip_loras
+            if (item.node_id, item.field) in filled
+        ]
+        if both:
+            raise ValueError(
+                f"LoRA slot {', '.join(both)} is both set and skipped; name it in "
+                "loras or in skip_loras, not both."
+            )
+        return self
+
     stack: bool = False
     # `StrictBool`, not `bool`: consent to running a graph nobody could inspect
     # is the CWE-829 control (review finding R3b), and a lax cast reads `"yes"`,
@@ -931,9 +1019,10 @@ class RunGroup(BaseModel):
 
     ``reasons`` empty is the only thing that means "this would run". Each
     reason is a code and its payload, so a panel can act on it rather than
-    print it. ``substitutions`` and ``bypassed_loras`` are not reasons: they
-    say what this run will do differently from what the graph says, which is a
-    fact to report rather than a refusal to act on.
+    print it. ``substitutions``, ``bypassed_loras`` and ``unplaced_loras`` are
+    not reasons: they say what this run will do differently from what the graph
+    or the recipe says, which is a fact to report rather than a refusal to act
+    on.
     """
 
     workflow_key: str
@@ -954,7 +1043,18 @@ class RunGroup(BaseModel):
     # for the same reason a substitution is: a picture made without the
     # character LoRA the owner expected, with nothing said, is worse than a
     # refusal, and the pre-flight is where they are told BEFORE the run.
+    # A slot the owner asked this run to skip (`skip_loras`, #1478) is reported
+    # here too, marked `"requested": true`; the automatic ones are `false`.
     bypassed_loras: list[dict] = Field(default_factory=list)
+    # A saved recipe's LoRA this run does not apply (#1478): the workflow has no
+    # slot left for it, or the shelf cannot identify its file. Matched to slots
+    # by digest, then basename, then any free slot, and only a LoRA with nowhere
+    # to go lands here - reported rather than dropped, because the credit
+    # matcher that said "matches your saved recipe" counted it. Not a reason:
+    # the run goes ahead. Unlike `bypassed_loras` it is NOT cleared on a group
+    # that is refused, because it is a fact about the recipe and the graph and
+    # holds whatever ComfyUI says: `[{filename, sha256, node_id, reason}]`.
+    unplaced_loras: list[dict] = Field(default_factory=list)
     # Every picture input of the card, enumerated from the graph this run
     # resolved with the card's stored setup laid over it (#1457). It is the
     # card's WHOLE set, which is what makes the whole-set
@@ -1014,6 +1114,127 @@ class InsertedLoader(WorkflowFile):
 
     node_id: str = Field(description="The id the new loader has in the graph.")
     class_type: str = Field(description="Which loader node was added.")
+
+
+class LoraChainSource(BaseModel):
+    """The top rail: the output the first LoRA loader reads."""
+
+    node_id: str
+    class_type: str | None = None
+    outputs: list[str] = Field(
+        default_factory=list,
+        description="What this node hands the chain: MODEL, and CLIP when it is "
+        "the CLIP source too.",
+    )
+
+
+class LoraChainClipSource(BaseModel):
+    """Where the chain's CLIP comes from, when that is not the model source."""
+
+    node_id: str
+    class_type: str | None = None
+
+
+class LoraChainConsumer(BaseModel):
+    """One input reading the end of the chain."""
+
+    node_id: str
+    class_type: str | None = None
+    field: str
+    type: str
+
+
+class LoraChainSink(BaseModel):
+    """The bottom rail: what reads the chain's result."""
+
+    summary: str | None = Field(
+        None, description="`KSampler #7 reads model · 2 text encoders read clip`."
+    )
+    consumers: list[LoraChainConsumer] = Field(default_factory=list)
+
+
+class LoraChainLoader(BaseModel):
+    """One LoRA slot of the chain, in the order a run applies it."""
+
+    node_id: str
+    class_type: str | None = None
+    field: str = Field(
+        description="The slot's widget; a stacker read untyped lists one row per "
+        "slot on the same node."
+    )
+    filename: str = Field(description="The raw widget value, or a digest.")
+    name: str = Field(description="The basename without its extension.")
+    strength: float | None = None
+    strength_clip: float | None = None
+    sha256: str | None = Field(
+        None, description="The shelf LoRA this slot loads, when exactly one matches."
+    )
+    on_shelf: bool = False
+
+
+class LoraChain(BaseModel):
+    """``GET /workflows/{key}/lora-chain``: the LoRA chain as the editor shows it."""
+
+    workflow_key: str
+    editable: bool = False
+    refusal: str | None = Field(
+        None, description="Why the chain can only be looked at, when it can."
+    )
+    source: LoraChainSource | None = None
+    clip_source: LoraChainClipSource | None = None
+    sink: LoraChainSink = Field(default_factory=LoraChainSink)
+    loaders: list[LoraChainLoader] = Field(default_factory=list)
+    added_loader_class: str | None = Field(
+        None, description="The loader class Add a LoRA would insert."
+    )
+
+
+class LoraChainEntry(BaseModel):
+    """One loader of the chain as the owner left it.
+
+    An existing loader by ``node_id``, or a new one by the shelf ``sha256`` of
+    the LoRA it loads. An existing loader cannot be re-pointed at another LoRA:
+    a ``sha256`` beside a ``node_id`` must be the one it already loads.
+    """
+
+    node_id: str | None = Field(None, min_length=1, max_length=MAX_LABEL_LENGTH)
+    sha256: str | None = Field(None, min_length=1, max_length=64)
+    strength: float | None = Field(None, ge=-10.0, le=10.0)
+
+    @model_validator(mode="after")
+    def _names_a_loader(self) -> "LoraChainEntry":
+        if self.node_id is None and self.sha256 is None:
+            raise ValueError("an entry names an existing node_id or a shelf sha256")
+        return self
+
+
+class LoraChainEdit(BaseModel):
+    """``PUT /workflows/{key}/lora-chain``: the whole chain, in apply order."""
+
+    entries: list[LoraChainEntry] = Field(
+        default_factory=list, max_length=MAX_RUN_LORAS
+    )
+    name: str | None = Field(None, max_length=MAX_NAME_LENGTH)
+    dry_run: StrictBool = False
+
+
+class LoraChainChange(BaseModel):
+    """One line of what a chain edit changes, in the owner's words."""
+
+    kind: Literal["deleted", "added", "moved", "strength", "rewired"]
+    node_id: str
+    text: str
+
+
+class LoraChainSaved(BaseModel):
+    """What a chain edit changed, and the new card a write filed it on."""
+
+    dry_run: bool = False
+    name: str | None = Field(None, description="The file written; null on a dry run.")
+    workflow_key: str | None = Field(
+        None, description="The NEW card; null on a dry run."
+    )
+    changes: list[LoraChainChange] = Field(default_factory=list)
 
 
 class WorkflowDeleted(BaseModel):
@@ -1337,8 +1558,58 @@ def _slot_models(slots) -> list[WorkflowSlotModel]:
     ]
 
 
-def _card(figure, defaults=()) -> WorkflowCard:
-    """Render one card's figures in the shape ``workflowCard.js`` documents."""
+def _slot_names(figure) -> list[str]:
+    """What a card loads, as :func:`_stack_members` compares cards by."""
+    names = []
+    for slot in [*figure.models, *figure.loras]:
+        if not slot.name or (slot.kind == "lora" and slot.mark == RECIPE):
+            continue
+        named = (slot.title or "").strip() or slot.name
+        names.append(f"{named} {slot.quant}" if slot.quant else named)
+    return names
+
+
+def _stack_members(figure, figures_by_key) -> list[WorkflowStackMember]:
+    """The stack *figure* is in, each member named and told apart.
+
+    A model the member's own name already says (the checkpoint a generated
+    name starts with) is not said again.
+    """
+    if not figures_by_key or figure.stack_size < 2:
+        return []
+    figures = [figures_by_key.get(key) for key in figure.member_keys]
+    if any(member is None for member in figures):
+        logger.warning(
+            "Stack of card %s names a member the grid has no figures for; "
+            "its members are not listed: %s",
+            figure.card.workflow_key,
+            figure.member_keys,
+        )
+        return []
+    loads = [_slot_names(member) for member in figures]
+    shared = set.intersection(*(set(names) for names in loads))
+    members = []
+    for position, (member, names) in enumerate(zip(figures, loads)):
+        name = _display_name(member.card, member.models)
+        members.append(
+            WorkflowStackMember(
+                key=member.card.workflow_key,
+                name=name,
+                sets_apart=list(
+                    dict.fromkeys(n for n in names if n not in shared and n not in name)
+                ),
+                differs_by=member.differs_by if position else [],
+            )
+        )
+    return members
+
+
+def _card(figure, defaults=(), figures_by_key=None) -> WorkflowCard:
+    """Render one card's figures in the shape ``workflowCard.js`` documents.
+
+    *figures_by_key* (every card of the grid, by key) is what names the other
+    members of its stack (``members``); left out, the card lists none.
+    """
     return WorkflowCard(
         key=figure.card.workflow_key,
         name=_display_name(figure.card, figure.models),
@@ -1372,6 +1643,7 @@ def _card(figure, defaults=()) -> WorkflowCard:
         member_keys=[
             key for key in figure.member_keys if key != figure.card.workflow_key
         ],
+        members=_stack_members(figure, figures_by_key),
         stack_id=figure.stack_id,
         ghosts=figure.ghosts,
         model_ghosts=figure.model_ghosts,
@@ -1509,8 +1781,11 @@ def create_router(server) -> APIRouter:
             include_one_offs=include_one_offs,
             file_models=_file_models,
         )
+        figures_by_key = by_key(grid.figures)
         return WorkflowCards(
-            cards=[_card(figure) for figure in grid.cards],
+            cards=[
+                _card(figure, figures_by_key=figures_by_key) for figure in grid.cards
+            ],
             one_offs=grid.one_offs,
             hidden=grid.hidden,
         )
@@ -1539,15 +1814,16 @@ def create_router(server) -> APIRouter:
         rather than an echo of its own request - and pays the grid read once,
         on a gesture a person made, rather than per card.
         """
-        figure = read_grid(hub, server.vault, file_models=_file_models).figure(
-            workflow_key
-        )
+        grid = read_grid(hub, server.vault, file_models=_file_models)
+        figure = grid.figure(workflow_key)
         if figure is None:
             raise HTTPException(status_code=404, detail="Unknown workflow card.")
         card = figure.card
         pins = key_pins(hub, workflow_key)
         return WorkflowCardDetail(
-            card=_card(figure, card_defaults(hub, server.vault, card)),
+            card=_card(
+                figure, card_defaults(hub, server.vault, card), by_key(grid.figures)
+            ),
             notes=card.notes,
             hidden=card.hidden,
             variants=_card_variants(hub, server.vault, card),
@@ -2227,6 +2503,27 @@ def create_router(server) -> APIRouter:
                     inputs["strength_clip"] = item.strength_clip
         return []
 
+    def _slot_digests(slots: list[dict], shelf_index) -> dict:
+        """``{(node_id, field): sha256 or None}``: which shelf LoRA each slot loads.
+
+        A digest slot names its LoRA exactly, and counts when the shelf holds
+        that digest. A filename slot is matched on its case-folded basename,
+        and a name two shelf LoRAs share names neither - the rule
+        ``resolveRecipeLoras`` and ``_resolve_against_shelf`` already apply.
+        """
+        by_name, digests = shelf_index or ({}, set())
+        answer: dict[tuple[str, str], str | None] = {}
+        for slot in slots:
+            value = str(slot.get("value") or "")
+            if slot.get("by") == "digest":
+                digest = value.strip().lower()
+                found = digest if digest in digests else None
+            else:
+                matched = by_name.get(normalized_filename(value.strip()), set())
+                found = next(iter(matched)) if len(matched) == 1 else None
+            answer[(str(slot.get("node_id")), str(slot.get("field")))] = found
+        return answer
+
     def _card_inputs(
         hub,
         workflow_key: str,
@@ -2700,11 +2997,29 @@ def create_router(server) -> APIRouter:
             target = _require_hash(body.target, "target")
             pictures = [pid for _, ids, _ in groups for pid in ids]
             groups = [(target, pictures, [])]
+        if body.skip_loras and len({key for key, _, _ in groups if key}) > 1:
+            # A skip names a loader by its node id, which only means one thing
+            # in one graph: across cards it could skip an unrelated LoRA and
+            # report it as the owner's choice.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "skip_loras names loaders by node id, which only identifies "
+                    "a loader on one workflow; this run spans several. Run one "
+                    "workflow at a time, or name it as target."
+                ),
+            )
 
         # Read once for the whole request, and only when there is a ComfyUI to
         # verify a swap against: two shelf scans per group would be two scans of
         # `model` and `model_file` for an answer that cannot change mid-request.
         aliases = model_name_aliases(hub) if object_info is not None else {}
+        # Which shelf LoRA each graph slot already loads, read once and only when
+        # a saved recipe's LoRAs have to be matched to slots.
+        shelf_index = (
+            adapter_digest_index(hub) if recipe_loras and not body.loras else None
+        )
+
         requested = {
             (entry.slot_label, entry.input_name): entry.picture_id
             for entry in body.inputs
@@ -2715,6 +3030,10 @@ def create_router(server) -> APIRouter:
 
         planned: list[RunGroup] = []
         submittable: list[tuple[dict, RunGroup, list[Feed]]] = []
+        # Which requested skips some graph of this run holds, and whether any
+        # graph was resolved to look in: a skip no graph has is refused below.
+        skips_found: set[tuple[str, str]] = set()
+        skips_checked = False
         for workflow_key, picture_ids, reasons in groups:
             group = RunGroup(
                 workflow_key=workflow_key or "",
@@ -2772,42 +3091,83 @@ def create_router(server) -> APIRouter:
             addressed.update(item.address for item in card_inputs)
             _apply_addressed(graph, body.values)
             _apply_prompts(graph, body.prompt, body.negative)
+            # A saved recipe's LoRAs are matched against the graph as it stood
+            # BEFORE the skip: matched after it, the LoRA a skipped loader held
+            # moved on to the next free slot and replaced a LoRA the owner had
+            # not named, while the notice still said it was skipped.
+            slots_before_skip = detect_lora_targets(graph)
+            # The slots the owner asked this run to go without, next: before
+            # the saved recipe's LoRAs are applied, before the missing-LoRA
+            # bypass and before `judge`, so the graph judged is the graph
+            # submitted.
+            skipped, skip_reasons, skip_seen = run_service.skip_requested_loras(
+                graph,
+                [(item.node_id, item.field) for item in body.skip_loras],
+                object_info,
+            )
+            skips_found |= skip_seen
+            skips_checked = True
             slots_in_graph = detect_lora_targets(graph)
             # Applied only when it CAN be, and after the two questions that
             # would otherwise be answered as the wrong failure: a graph with no
             # LoRA slot at all is `no_lora_loader` rather than a 400 about one
             # slot, and an unreachable ComfyUI cannot resolve a filename slot,
             # which `apply_adapter` would report as a missing node class.
-            found: list[run_service.Reason] = []
+            found: list[run_service.Reason] = list(skip_reasons)
             # LoRA loaders taken out of this graph; put on the group only if it
             # ends up being submitted. See the assignment below.
-            bypassed: list[dict] = []
+            bypassed: list[dict] = list(skipped)
             if body.loras and slots_in_graph:
                 # NOT gated on `object_info`: skipping the application when
                 # ComfyUI could not be asked is how a consented run silently
                 # kept the stored graph's LoRA instead of the one that was
                 # asked for. `_apply_loras` answers for that state itself.
                 found += _apply_loras(graph, body.loras, object_info)
-            elif not body.loras and recipe_loras and slots_in_graph:
+            elif not body.loras and recipe_loras:
                 # "Run this saved look" has to place the look's own LoRAs. A
-                # saved one names a file and a strength but no slot, so they
-                # fill the graph's slots in order - which is exact for the one
-                # slot a card usually has, and is why the request's own
-                # addressed form exists for the rest.
-                found += _apply_loras(
-                    graph,
-                    [
-                        RunLora(
-                            node_id=str(target["node_id"]),
-                            field=str(target["field"]),
-                            sha256=str(saved.get("sha256") or ""),
-                            strength_model=_float_or_none(saved.get("strength")),
-                        )
-                        for target, saved in zip(slots_in_graph, recipe_loras)
-                        if saved.get("sha256")
-                    ],
-                    object_info,
+                # saved one names a file and a digest but no slot, so each is
+                # MATCHED to one - digest, then basename, then a free slot in
+                # order (#1478) - and one with nowhere to go is reported in
+                # `unplaced_loras` rather than dropped. A positional zip put a
+                # recipe stored in the other order onto the wrong loaders.
+                placements, group.unplaced_loras = run_service.place_recipe_loras(
+                    slots_before_skip,
+                    recipe_loras,
+                    _slot_digests(slots_before_skip, shelf_index)
+                    if slots_before_skip
+                    else {},
                 )
+                # A recipe LoRA matched to a skipped slot is not applied: the
+                # owner skipped that loader for this run, and the skip is
+                # already reported in `bypassed_loras`.
+                skipped_slots = {(item["node_id"], item["field"]) for item in skipped}
+                placements = [
+                    (target, saved)
+                    for target, saved in placements
+                    if (str(target["node_id"]), str(target["field"]))
+                    not in skipped_slots
+                ]
+                for unplaced in group.unplaced_loras:
+                    logger.info(
+                        "[workflows] Card %s runs without saved LoRA %s: %s",
+                        workflow_key,
+                        unplaced["filename"] or unplaced["sha256"],
+                        unplaced["reason"],
+                    )
+                if placements:
+                    found += _apply_loras(
+                        graph,
+                        [
+                            RunLora(
+                                node_id=str(target["node_id"]),
+                                field=str(target["field"]),
+                                sha256=str(saved["sha256"]).strip().lower(),
+                                strength_model=_float_or_none(saved.get("strength")),
+                            )
+                            for target, saved in placements
+                        ],
+                        object_info,
+                    )
             if body.seed_mode == "keep" and source.seedless:
                 # There is nothing to keep: a stored instance document nulls its
                 # seeds by design, so every one of `count` runs would submit
@@ -2861,7 +3221,7 @@ def create_router(server) -> APIRouter:
                     # a lie on a group that is about to be refused for some
                     # other reason - and `judge` has not run yet, so most of
                     # the refusals are still unknown at this point.
-                    bypassed = run_service.bypass_missing_loras(graph, object_info)
+                    bypassed += run_service.bypass_missing_loras(graph, object_info)
 
             judged, preflight = run_service.judge(
                 graph,
@@ -2929,6 +3289,19 @@ def create_router(server) -> APIRouter:
                 ),
             )
 
+        unknown_skips = [
+            f"{item.field} on node {item.node_id}"
+            for item in body.skip_loras
+            if (item.node_id, item.field) not in skips_found
+        ]
+        if skips_checked and unknown_skips:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This workflow has no LoRA slot "
+                    f"{', '.join(unknown_skips)} to skip."
+                ),
+            )
         blocking = any(
             run_service.blocks_batch(
                 [run_service.Reason(r["code"]) for r in group.reasons],
@@ -2974,12 +3347,19 @@ def create_router(server) -> APIRouter:
             "card the request resolves to comes back with the reasons it would "
             "not run: comfyui_not_configured, comfyui_unreachable, ui_format, "
             "missing_nodes, missing_models, a1111, picture_input_unfilled, "
-            "no_lora_loader, pixlstash_nodes, no_save_node, no_runnable_source. "
+            "no_lora_loader, pixlstash_nodes, no_save_node, no_runnable_source, "
+            "lora_not_skippable. "
             "A group runs when its reasons are empty - or when the only ones "
             "left are an uninspectable ComfyUI the body said allow_unchecked "
             "to. A LoRA this ComfyUI does not have is NOT among them: its "
             "loader is taken out of the graph and named in bypassed_loras, "
-            "which is a fact about the run rather than a reason against it. A "
+            "which is a fact about the run rather than a reason against it; "
+            "so is unplaced_loras, a saved recipe's LoRA the workflow has no "
+            "slot for or the shelf cannot identify. skip_loras names slots "
+            "this run goes without: each loader is bypassed on the run's copy "
+            "and reported in bypassed_loras with requested true, and one that "
+            "cannot be skipped without dropping another LoRA is "
+            "lora_not_skippable. A "
             "body that cannot be interpreted against the card answers "
             "400/404/422 here exactly as it does on the run, so the two never "
             "disagree."
@@ -3433,6 +3813,259 @@ def create_router(server) -> APIRouter:
             workflow_key=key,
             node_id=loader["node_id"],
             class_type=loader["class_type"],
+        )
+
+    # ── The LoRA chain (#1478) ──────────────────────────────────────────────
+    # Read and written whole: the editor lists the loaders in the order a run
+    # applies them, and one save is one new card however many gestures made
+    # it. `insert-lora-loader` above is the empty-list case of the write.
+
+    def _shelf_chain(hub, chain: dict) -> None:
+        """Mark each loader of *chain* with the shelf LoRA it loads, in place.
+
+        ``sha256`` is set when exactly one shelf LoRA matches - by digest for a
+        digest slot, by case-folded basename otherwise - and a digest slot's
+        ``name`` becomes the shelf's filename, since a hash names nothing to a
+        reader.
+        """
+        by_name, digests = adapter_digest_index(hub)
+        found = _slot_digests(chain["loaders"], (by_name, digests))
+        for loader in chain["loaders"]:
+            digest = found.get((str(loader["node_id"]), str(loader["field"])))
+            loader["sha256"] = digest
+            if loader.get("by") != "digest":
+                continue
+            if digest is None:
+                loader["name"] = str(loader["value"])[:12]
+                continue
+            try:
+                filenames = _shelf_adapter(hub, digest)["filenames"]
+            except HTTPException as exc:
+                logger.info(
+                    "Digest loader #%s names shelf LoRA %s, whose name cannot be "
+                    "read, so it is shown by its digest: %s",
+                    loader["node_id"],
+                    digest,
+                    exc.detail,
+                )
+                loader["name"] = digest[:12]
+                continue
+            loader["name"] = lora_display_name(filenames[-1]) if filenames else digest
+
+    def _chain_payload(
+        workflow_key: str, chain: dict, refusal: str | None, object_info
+    ) -> LoraChain:
+        model = chain.get("model_source")
+        clip = chain.get("clip_source")
+        same_node = bool(model and clip and clip["node_id"] == model["node_id"])
+        added = None
+        if refusal is None:
+            added = "LoraLoader" if clip is not None else "LoraLoaderModelOnly"
+            if added not in (object_info or {}):
+                added = None
+        return LoraChain(
+            workflow_key=workflow_key,
+            editable=refusal is None,
+            refusal=refusal,
+            source=None
+            if model is None
+            else LoraChainSource(
+                node_id=str(model["node_id"]),
+                class_type=model.get("class_type"),
+                outputs=["MODEL", "CLIP"] if same_node else ["MODEL"],
+            ),
+            clip_source=None
+            if clip is None or same_node
+            else LoraChainClipSource(
+                node_id=str(clip["node_id"]), class_type=clip.get("class_type")
+            ),
+            sink=LoraChainSink(
+                summary=chain.get("sink_summary"),
+                consumers=[LoraChainConsumer(**sink) for sink in chain["sinks"]],
+            ),
+            loaders=[
+                LoraChainLoader(
+                    node_id=str(loader["node_id"]),
+                    class_type=loader.get("class_type"),
+                    field=str(loader["field"]),
+                    filename=str(loader["value"]),
+                    name=loader["name"],
+                    strength=loader["strengths"].get("model"),
+                    # A model-only loader has no CLIP strength to show, and a
+                    # loader read untyped says nothing about its wiring either.
+                    strength_clip=loader["strengths"].get("clip"),
+                    sha256=loader.get("sha256"),
+                    on_shelf=loader.get("sha256") is not None,
+                )
+                for loader in chain["loaders"]
+            ],
+            added_loader_class=added,
+        )
+
+    @router.get(
+        "/workflows/{workflow_key}/lora-chain",
+        summary="A workflow's LoRA chain",
+        description=(
+            "The LoRA loaders between this workflow's model source and what "
+            "reads the model, in the order a run applies them, each with its "
+            "strength and the shelf LoRA it loads. Typed from ComfyUI's "
+            "object_info: when ComfyUI cannot be reached, or the chain is one "
+            "PixlStash cannot edit honestly (two model sources, a stacker, a "
+            "branching chain), editable is false, refusal says why, and the "
+            "loaders are still listed as read from the graph."
+        ),
+        response_model=LoraChain,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "There is no graph for this card."},
+        },
+    )
+    def get_lora_chain(request: Request, workflow_key: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        graph = _card_source(card).graph
+        # Cached: the inspector asks on every card it selects, the map is
+        # megabytes, and an unreachable ComfyUI would otherwise cost a full
+        # timeout per click. This read only DRAWS the chain; the PUT that
+        # rewires it reads a fresh map.
+        object_info, error = _read_object_info(
+            _comfyui_url(_user(request)), cached=True
+        )
+        chain = None
+        if object_info is None:
+            refusal = (
+                "PixlStash could not reach ComfyUI, so it cannot tell how this "
+                f"workflow's LoRAs are wired; they can only be looked at: {error}"
+            )
+        else:
+            try:
+                chain = read_lora_chain(graph, object_info)
+                refusal = None
+            except LookupError as exc:
+                logger.info(
+                    "Card %s's LoRA chain is shown read-only: %s", workflow_key, exc
+                )
+                refusal = str(exc)
+        if chain is None:
+            chain = read_lora_chain_untyped(graph)
+        _shelf_chain(hub, chain)
+        return _chain_payload(workflow_key, chain, refusal, object_info)
+
+    @router.put(
+        "/workflows/{workflow_key}/lora-chain",
+        summary="Edit a workflow's LoRA chain",
+        description=(
+            "Write a copy of this workflow with its LoRA chain as the owner "
+            "left it: entries in apply order, an existing loader by node_id "
+            "(moved and re-weighted, its id kept), a new one by the shelf "
+            "sha256 of its LoRA, and every loader left out deleted. One call "
+            "is one new card; the original file is never changed. dry_run "
+            "answers the list of changes and writes nothing."
+        ),
+        response_model=LoraChainSaved,
+        status_code=201,
+        responses={
+            200: {
+                "model": LoraChainSaved,
+                "description": "A dry run: the changes, nothing written.",
+            },
+            404: {"description": "This machine has no such card."},
+            409: {
+                "description": (
+                    "No graph, nothing changed, an unknown or repeated loader, a "
+                    "LoRA not on the shelf or not on this ComfyUI, or a chain "
+                    "PixlStash cannot edit honestly."
+                )
+            },
+            503: {"description": "ComfyUI could not be reached."},
+        },
+    )
+    def edit_lora_chain(
+        request: Request,
+        response: Response,
+        workflow_key: str,
+        payload: LoraChainEdit = Body(...),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        source = _card_source(card)
+        object_info, error = _read_object_info(_comfyui_url(_user(request)))
+        if object_info is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "PixlStash could not ask ComfyUI what its nodes hand on, so "
+                    f"it cannot rewire this workflow's LoRAs: {error}"
+                ),
+            )
+        graph = deepcopy(source.graph)
+        try:
+            chain = read_lora_chain(graph, object_info)
+        except LookupError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        _shelf_chain(hub, chain)
+        loaded = {
+            loader["node_id"]: loader.get("sha256") for loader in chain["loaders"]
+        }
+        entries: list[dict] = []
+        for entry in payload.entries:
+            if entry.node_id is not None:
+                wanted = entry.sha256.strip().lower() if entry.sha256 else None
+                if (
+                    wanted
+                    and entry.node_id in loaded
+                    and loaded[entry.node_id] != wanted
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            f"Loader #{entry.node_id} loads another LoRA, and a "
+                            "loader cannot be pointed at a different one here. "
+                            "Delete it and add the new one."
+                        ),
+                    )
+                entries.append({"node_id": entry.node_id, "strength": entry.strength})
+                continue
+            try:
+                adapter = _shelf_adapter(hub, entry.sha256)
+            except HTTPException as exc:
+                if exc.status_code == 503:
+                    raise
+                # Not on the shelf, or not a LoRA: the chain the owner asked for
+                # cannot be built, which is this route's conflict and not a
+                # malformed request.
+                raise HTTPException(status_code=409, detail=exc.detail) from exc
+            entries.append(
+                {
+                    "node_id": None,
+                    "adapter": adapter,
+                    "strength": entry.strength,
+                    "name": lora_display_name(
+                        (adapter["filenames"] or [adapter["sha256"]])[-1]
+                    ),
+                }
+            )
+        try:
+            plan = plan_lora_chain(graph, chain, entries, object_info)
+            if not plan["changes"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Nothing changed: this is the chain the workflow has.",
+                )
+            if payload.dry_run:
+                response.status_code = 200
+                return LoraChainSaved(dry_run=True, changes=plan["changes"])
+            apply_lora_chain(graph, plan, object_info)
+        except LookupError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        asked = re.sub(r"\.json$", "", (payload.name or "").strip(), flags=re.I)
+        stem = download_stem(asked) if asked else ""
+        name, key = _store_copy(hub, stem or f"{_file_stem(card)} (edited)", graph)
+        _announce(request, sorted({workflow_key, key} - {None}), "imported")
+        return LoraChainSaved(
+            dry_run=False, name=name, workflow_key=key, changes=plan["changes"]
         )
 
     def _store_copy(hub, stem: str, graph: dict) -> tuple[str, str | None]:

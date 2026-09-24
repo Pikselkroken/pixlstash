@@ -40,6 +40,21 @@
          are gated on a selection, and it is docked over the grid this rail
          sits beside), so nothing became unreachable — and the reader is told
          where the verbs are rather than left to find them. -->
+    <!-- A stack selected whole is one card on screen and one run: named, and
+         the sentence saying what Run… runs is the one the button points at,
+         visible rather than a hover tooltip touch never shows. -->
+    <template v-else-if="multiple && runTarget">
+      <div class="inspector-section">
+        <span class="section-label">Selected</span>
+        <p class="wftab-title">{{ runTarget.name }}</p>
+        <p id="wftab-run-target" class="wftab-note wftab-quiet">
+          A stack of {{ store.selectedKeys.length }} workflows. Run… runs
+          {{ runTarget.name }}, the cover; you can switch to another member in
+          the Run popup.
+        </p>
+      </div>
+    </template>
+
     <template v-else-if="multiple">
       <div class="inspector-section">
         <span class="section-label">Selected</span>
@@ -81,6 +96,73 @@
           <span class="wftab-label">VAE</span>
           <span class="wftab-value">{{ vaeLabel }}</span>
         </div>
+
+        <!-- The chain, in the order it applies (#1478). "Edit LoRAs…" is
+             here even with no loader at all: an entry point that only exists
+             for workflows that already have LoRAs is how adding the first one
+             stays unreachable. -->
+        <div class="wftab-loras-head">
+          <span class="wftab-label">LoRAs</span>
+          <AppButton
+            size="sm"
+            data-testid="wftab-edit-loras"
+            :disabled="chainNoGraph"
+            :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
+            @click="openEditLoras(selectedKey)"
+          >
+            Edit LoRAs…
+          </AppButton>
+        </div>
+        <p v-if="chainPending" class="wftab-note wftab-quiet">
+          Reading its LoRAs…
+        </p>
+        <p
+          v-else-if="chainNoGraph"
+          id="wftab-chain-reason"
+          class="wftab-note wftab-quiet"
+        >
+          PixlStash has no graph for this workflow, so its LoRAs cannot be read
+          or edited.
+        </p>
+        <p v-else-if="chainFailed" class="wftab-note wftab-quiet">
+          Could not read its LoRAs just now.
+        </p>
+        <template v-else-if="chain">
+          <ol
+            v-if="chainLoaders.length"
+            class="wftab-chain"
+            aria-label="LoRAs, in the order the chain applies them"
+          >
+            <li
+              v-for="loader in chainLoaders"
+              :key="loader.node_id"
+              class="wftab-chain-row"
+            >
+              <v-icon
+                v-if="!loader.on_shelf"
+                size="16"
+                class="wftab-chain-flag"
+                aria-hidden="true"
+                >mdi-alert-outline</v-icon
+              >
+              <span class="wftab-chain-name">{{ loader.label }}</span>
+              <span v-if="!loader.on_shelf" class="visually-hidden"
+                >, not on your model shelf</span
+              >
+              <span class="wftab-chain-strength">{{ loader.strengthText }}</span>
+            </li>
+          </ol>
+          <p
+            v-if="chainLoaders.length"
+            class="wftab-note wftab-quiet"
+            data-testid="wftab-shelf-line"
+          >
+            In the order the chain applies them. {{ shelfLine }}
+          </p>
+          <p v-else class="wftab-note wftab-quiet">
+            No LoRA loader. Editing adds the first one.
+          </p>
+        </template>
 
         <!-- Two lines per slot, as drawn: what is in it and how strong, then
              the switch that decides whether the slot is part of the workflow
@@ -125,7 +207,9 @@
             </p>
           </div>
         </template>
-        <p v-else class="wftab-note wftab-quiet">
+        <!-- Only while the chain has nothing to say: once it is read, "No LoRA
+             loader" above is the same fact in the words that lead to Edit. -->
+        <p v-else-if="!chain" class="wftab-note wftab-quiet">
           This workflow has no LoRA slot.
         </p>
       </div>
@@ -222,8 +306,8 @@
         variant="primary"
         icon-left="play"
         block
-        :aria-disabled="multiple ? 'true' : undefined"
-        :aria-describedby="multiple ? 'wftab-run-reason' : undefined"
+        :aria-disabled="runTarget ? undefined : 'true'"
+        :aria-describedby="runDescribedBy"
         @click="run"
       >
         Run…
@@ -256,10 +340,23 @@
           </div>
         </div>
       </v-menu>
-      <p v-if="multiple" id="wftab-run-reason" class="wftab-note wftab-quiet">
-        Run one workflow at a time
+      <p v-if="!runTarget" id="wftab-run-reason" class="wftab-note wftab-quiet">
+        Run one workflow, or one whole stack, at a time
       </p>
     </div>
+
+    <!-- Keyed to the card it was OPENED on, not to the selection: a save
+         selects the new card, and the dialog must not re-read the chain of
+         the card it just wrote under the owner's feet. -->
+    <EditLorasDialog
+      v-if="editKey"
+      :open="Boolean(editKey)"
+      :workflow-key="editKey"
+      :card-name="editName"
+      :picture-count="editPictures"
+      :drop-lora="editDrop"
+      @close="closeEditLoras"
+    />
   </AppInspector>
 </template>
 
@@ -276,10 +373,11 @@
 // way to read a member's own defaults.
 
 import { computed, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
 import {
+  getLoraChain,
   getWorkflowCard,
   patchWorkflowCard,
   setWorkflowDefaults,
@@ -294,10 +392,12 @@ import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
+import { EDIT_LORAS, loraStem } from "../../utils/loraChain";
 import { quantBadge } from "../../utils/modelShelf";
 import { modelDisplayName } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
+import EditLorasDialog from "../io/EditLorasDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -327,6 +427,7 @@ const runDialog = useRunDialogStore();
 const tasksStore = useTasksStore();
 
 const route = useRoute();
+const router = useRouter();
 
 const tab = ref("workflow");
 // A deep link to the Tasks tab, from a notice or a banner (`showTasksTab`).
@@ -439,6 +540,13 @@ const recipeKeys = computed(() =>
  * key out and would call a stack of six "five workflows".
  */
 const recipesStack = computed(() => {
+  // A stack selected whole heads its Recipes as the stack, not as a count.
+  if (multiple.value && runTarget.value) {
+    return {
+      name: runTarget.value.name || "",
+      size: Number(runTarget.value.stack_size) || 0,
+    };
+  }
   if (multiple.value) {
     const count = store.selectedKeys.length;
     return { name: `${count} workflows selected`, size: 0 };
@@ -519,6 +627,145 @@ const loraSlots = computed(() =>
     chipText: lora.name ? withQuant(lora.name, lora) : null,
     mark: lora.mark,
   })),
+);
+
+// ── The LoRA chain (#1478) ─────────────────────────────────────────────────
+
+/** `GET …/lora-chain` for the selected card, and the state of that read. */
+const chain = ref(null);
+const chainPending = ref(false);
+const chainFailed = ref(false);
+/** 409: the card has no graph, so there is no chain to read or edit. */
+const chainNoGraph = ref(false);
+
+/** The card Edit LoRAs… is open on, or "" when it is shut. */
+const editKey = ref("");
+const editName = ref("");
+const editPictures = ref(0);
+/** A LoRA to open with its loader already deleted (Save-as-recipe's hand-over). */
+const editDrop = ref("");
+
+/** The loaders as the inspector lists them: the shelf's name, and a strength. */
+const chainLoaders = computed(() =>
+  (chain.value?.loaders ?? []).map((loader) => {
+    const strength = Number(loader.strength);
+    return {
+      node_id: String(loader.node_id),
+      label: loader.on_shelf
+        ? loader.name || loraStem(loader.filename)
+        : String(loader.filename || loader.name || "").split(/[\\/]/).pop(),
+      on_shelf: Boolean(loader.on_shelf),
+      strengthText:
+        loader.strength === null || loader.strength === undefined
+          ? "—"
+          : Number.isFinite(strength)
+            ? strength.toFixed(2)
+            : "—",
+    };
+  }),
+);
+
+/** "3 of 4 are on your model shelf." */
+const shelfLine = computed(() => {
+  const total = chainLoaders.value.length;
+  const known = chainLoaders.value.filter((loader) => loader.on_shelf).length;
+  return `${known} of ${total} ${total === 1 ? "is" : "are"} on your model shelf.`;
+});
+
+/**
+ * Read the selected card's chain.
+ *
+ * Its own read rather than a field on the card: the chain is typed from the
+ * owner's ComfyUI (`object_info`), which the grid must not wait on. A 409 is a
+ * card with no graph, said as such; anything else is "could not read it just
+ * now", and Edit LoRAs… stays offered because the dialog reads again.
+ */
+async function loadChain(key) {
+  chain.value = null;
+  chainFailed.value = false;
+  chainNoGraph.value = false;
+  if (!key) {
+    chainPending.value = false;
+    return;
+  }
+  chainPending.value = true;
+  try {
+    const body = await getLoraChain(key);
+    if (selectedKey.value !== key) return;
+    chain.value = body;
+  } catch (err) {
+    if (selectedKey.value !== key) return;
+    if (err?.response?.status === 409) {
+      chainNoGraph.value = true;
+    } else {
+      console.warn(`[workflows] could not read the LoRA chain of ${key}`, err);
+      chainFailed.value = true;
+    }
+  } finally {
+    if (selectedKey.value === key) chainPending.value = false;
+  }
+}
+
+/** Open Edit LoRAs… on `key`, with `drop` already struck through if given. */
+function openEditLoras(key, drop = "") {
+  if (!key) return;
+  const shown = card.value?.key === key ? card.value : null;
+  editName.value = shown?.name || "";
+  editPictures.value = Number(shown?.picture_count) || 0;
+  editDrop.value = drop;
+  editKey.value = key;
+}
+
+function closeEditLoras() {
+  editKey.value = "";
+  editDrop.value = "";
+}
+
+// The name and count arrive with the card when the dialog was opened from a
+// link before the grid or the detail read had landed.
+watch(card, (next) => {
+  if (!editKey.value || next?.key !== editKey.value) return;
+  if (!editName.value) editName.value = next.name || "";
+  if (!editPictures.value) editPictures.value = Number(next.picture_count) || 0;
+});
+
+// `?card=<key>&edit=loras&drop_lora=<file>`, from Save-as-recipe's "The
+// workflow" (#1478): select that card, open the rail on its Workflow tab, and
+// open Edit LoRAs… with that entry already deleted.
+//
+// By KEY rather than `?topology=`, because a topology can hold several cards
+// and the hand-over names exactly one. `edit` and `drop_lora` are one-shot:
+// they are taken back off the URL once honoured, so a reload or a Back does
+// not reopen a dialog the owner has since cancelled. `card` stays, as
+// `topology` does, and is honoured once per value.
+let honouredCard = null;
+
+watch(
+  () => [route.query?.card, route.query?.edit, route.query?.drop_lora],
+  ([wanted, edit, drop]) => {
+    if (typeof wanted !== "string" || !wanted) {
+      honouredCard = null;
+      return;
+    }
+    if (honouredCard !== wanted || edit) {
+      honouredCard = wanted;
+      store.select(wanted);
+      tab.value = "workflow";
+      sidebarStore.statsOpen = true;
+    }
+    if (edit === EDIT_LORAS) {
+      openEditLoras(wanted, typeof drop === "string" ? drop : "");
+    }
+    if (edit !== undefined || drop !== undefined) {
+      const rest = Object.fromEntries(
+        Object.entries(route.query || {}).filter(
+          ([name]) => name !== "edit" && name !== "drop_lora",
+        ),
+      );
+      void router?.replace?.({ query: rest });
+    }
+  },
+  { immediate: true },
 );
 
 /** Every slot the card names, for the ComfyUI-users disclosure. */
@@ -779,32 +1026,52 @@ function toggleHidden() {
 }
 
 /**
+ * What Run… runs: this card, or the cover of a stack selected whole
+ * (`store.runnableCard`), which is several keys but one card on screen.
+ */
+const runTarget = computed(() =>
+  multiple.value ? store.runnableCard : card.value,
+);
+
+/** The sentence Run… is described by: why it refuses, or which stack card. */
+const runDescribedBy = computed(() => {
+  if (!runTarget.value) return "wftab-run-reason";
+  return multiple.value ? "wftab-run-target" : undefined;
+});
+
+/**
  * Run… opens the Run popup on THIS card (v1.12 F5).
  *
  * No picture behind it, so the popup shows the card's cover, an empty prompt
  * and a set picker for where the output is filed - which is the one thing a
  * card-sourced run has to be told and a picture-sourced one already knows.
  *
- * Refused outright while several are selected: the button stays on screen and
- * `aria-disabled` says why, rather than disappearing and leaving nothing to
- * explain.
+ * Refused outright while several cards are selected: the button stays on
+ * screen and `aria-disabled` says why, rather than disappearing and leaving
+ * nothing to explain. A stack selected whole is one card (`runTarget`).
  */
 function run() {
-  if (multiple.value || !card.value) return;
+  const target = runTarget.value;
+  if (!target) return;
   runDialog.openRun({
     kind: "card",
-    workflowKey: card.value.key,
-    name: card.value.name,
+    workflowKey: target.key,
+    name: target.name,
     // Through the helper: a raw `covers` entry is API-relative and an
     // `<img src>` resolves it against the page origin instead.
-    coverUrl: card.value.covers?.[0]
-      ? workflowCoverUrl(card.value.covers[0])
-      : "",
+    coverUrl: target.covers?.[0] ? workflowCoverUrl(target.covers[0]) : "",
     emptyPrompt: true,
   });
 }
 
-watch(selectedKey, (key) => loadDetail(key), { immediate: true });
+watch(
+  selectedKey,
+  (key) => {
+    void loadDetail(key);
+    void loadChain(key);
+  },
+  { immediate: true },
+);
 </script>
 
 <style scoped>
@@ -899,6 +1166,55 @@ watch(selectedKey, (key) => loadDetail(key), { immediate: true });
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.wftab-loras-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+/* The chain as read: one line per loader, name then strength, in the order
+   it applies. Plain rows, not chips: the chips below are the slot marks, and
+   a second set of chips would read as a second set of controls. */
+.wftab-chain {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wftab-chain-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h-sm);
+  font-size: var(--text-sm);
+}
+
+.wftab-chain-row + .wftab-chain-row {
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+.wftab-chain-flag {
+  flex-shrink: 0;
+  color: rgb(var(--v-theme-surface-warning));
+}
+
+.wftab-chain-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wftab-chain-strength {
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .wftab-slot {

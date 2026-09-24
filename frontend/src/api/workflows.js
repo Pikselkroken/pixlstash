@@ -7,7 +7,8 @@
 // topology routes themselves and moved the cards onto `/workflows`, so the
 // grid and the detail are what this module fronts, with `exportWorkflow`,
 // `duplicateWorkflow`, `deleteWorkflowFile` and `dissolveStack` at the foot of
-// the file for the grid's own verb menu (#1455). `GET /workflows/{key}/
+// the file for the grid's own verb menu (#1455), and the LoRA chain editor's
+// `getLoraChain` / `saveLoraChain` after them (#1478). `GET /workflows/{key}/
 // pictures` is served and has no caller in the app - the picture grid reaches
 // a card's pictures through `GET /pictures?workflow_key=`, which filters like
 // every other facet - so there is deliberately no function for it here.
@@ -72,8 +73,9 @@ export async function listWorkflowCards({
 }
 
 /**
- * One card opened — the only way to read a stack member, which the grid never
- * lists: it draws the cover alone and names the rest in `member_keys`.
+ * One card opened — the only way to read a stack member's whole card, which
+ * the grid never lists: it draws the cover alone, naming the rest in
+ * `member_keys` and `members` (each member's name and what sets it apart).
  *
  * @param {string} workflowKey
  * @returns {Promise<{card: Object, notes: ?string, hidden: boolean, variants: Array<Object>, pins: ?Array<Object>}>}
@@ -311,5 +313,51 @@ export async function duplicateWorkflow(workflowKey) {
 export async function deleteWorkflowFile(workflowKey) {
   return unwrap(
     apiClient.delete(`/workflows/${encodeURIComponent(workflowKey)}`),
+  );
+}
+
+/**
+ * A workflow's LoRA chain, in the order the chain applies it (#1478).
+ *
+ * Source rail on top, the loaders from source to sink, the sink rail under
+ * them, plus what "Add a LoRA" would insert. **Always a 200 when the card has
+ * a graph**, ComfyUI or not: with ComfyUI unreachable the chain is read from
+ * the graph's own links and comes back `editable: false` with the reason in
+ * `refusal`, so the dialog opens read-only rather than failing. 404 is no such
+ * card and 409 a card with no graph.
+ *
+ * @param {string} workflowKey
+ * @returns {Promise<{workflow_key: string, editable: boolean, refusal: ?string,
+ *   source: ?Object, sink: ?Object, loaders: Array<Object>,
+ *   added_loader_class: ?string}>}
+ */
+export async function getLoraChain(workflowKey) {
+  return unwrap(
+    apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}/lora-chain`),
+  );
+}
+
+/**
+ * Save a LoRA chain as the owner left it, as a NEW workflow (#1478).
+ *
+ * `entries` is the whole chain in apply order: an existing loader by
+ * `node_id` (kept, maybe moved or re-weighted), a new one by the shelf
+ * `sha256` with `node_id: null`. An existing loader left out is deleted. The
+ * original file is never modified: a write answers 201 with the new card's
+ * `workflow_key`, and `dry_run: true` answers 200 with only the `changes` the
+ * confirm step lists.
+ *
+ * @param {string} workflowKey
+ * @param {{entries: Array<{node_id: ?string, sha256?: string, strength?: number}>,
+ *   name: ?string, dry_run: boolean}} body
+ * @returns {Promise<{dry_run: boolean, name: ?string, workflow_key: ?string,
+ *   changes: Array<{kind: string, node_id: ?string, text: string}>}>}
+ */
+export async function saveLoraChain(workflowKey, body) {
+  return unwrap(
+    apiClient.put(
+      `/workflows/${encodeURIComponent(workflowKey)}/lora-chain`,
+      body,
+    ),
   );
 }

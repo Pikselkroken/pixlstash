@@ -78,7 +78,7 @@
       shape="round"
       icon="play"
       data-verb="run"
-      aria-label="Run this workflow"
+      :aria-label="stackWhole ? runTitle : 'Run this workflow'"
       :disabled="!runnable || busy"
       :loading="running('run')"
       :tooltip="runTitle"
@@ -335,6 +335,9 @@ const running = (verb) => store.verbBusy === verb;
 
 const countTitle = computed(() => {
   const n = store.selectedKeys.length;
+  if (stackWhole.value) {
+    return `A stack of ${n.toLocaleString()} workflows selected`;
+  }
   return `${n.toLocaleString()} ${n === 1 ? "workflow" : "workflows"} selected`;
 });
 
@@ -345,13 +348,35 @@ const countTitle = computed(() => {
 // Stack tooltip named the wrong rule for half of its refusals and sent the
 // reader to fix something that was not the problem.
 
-/** `POST /workflows/run` takes one card, and the Run popup shows one run. */
-const runTitle = computed(() =>
-  single.value
-    ? "Run this workflow"
-    : "Select one workflow to run it — a run is one card",
-);
-const runnable = computed(() => single.value);
+/**
+ * `POST /workflows/run` takes one card, and the Run popup shows one run. A
+ * stack selected whole runs its cover (`store.runnableCard`).
+ */
+const runnable = computed(() => Boolean(store.runnableCard));
+const runTitle = computed(() => {
+  if (!runnable.value) {
+    return "Select one workflow, or one whole stack, to run it";
+  }
+  if (single.value) return "Run this workflow";
+  return (
+    `Run ${store.runnableCard.name}, this stack's cover. ` +
+    "Pick another member in the Run popup"
+  );
+});
+
+/**
+ * A stack selected whole: several keys, one card on screen. Run and Open
+ * cover picture take its cover; the verbs that would have to pick one of its
+ * workflows refuse with that rule rather than "Select one workflow".
+ */
+const stackWhole = computed(() => !single.value && runnable.value);
+
+/** The refusal of a verb that acts on exactly one workflow. */
+function oneOnly(verb) {
+  return stackWhole.value
+    ? `A stack is several workflows. Open it and pick one to ${verb}`
+    : `Select one workflow to ${verb} it`;
+}
 
 /**
  * The picture the selected card's cover draws, or null.
@@ -361,10 +386,9 @@ const runnable = computed(() => single.value);
  * nothing to open — and this menu is the only surface where that refusal can
  * be read, so it says which of the two it is.
  */
-const coverPictureId = computed(() => {
-  if (!single.value) return null;
-  return cards.value[0]?.covers?.[0]?.picture_id ?? null;
-});
+const coverPictureId = computed(
+  () => store.runnableCard?.covers?.[0]?.picture_id ?? null,
+);
 
 /**
  * The picture this menu's open row would open, and how to name it.
@@ -391,7 +415,7 @@ const openTarget = computed(() => {
   return {
     id: coverPictureId.value,
     label: "Open cover picture",
-    title: single.value
+    title: runnable.value
       ? coverPictureId.value != null
         ? "Open the first of this workflow's pictures"
         : "This workflow has no picture to open"
@@ -402,9 +426,7 @@ const openTarget = computed(() => {
 const coverOpenable = computed(() => openTarget.value.id != null);
 
 const renameTitle = computed(() =>
-  single.value
-    ? "Give this workflow a name"
-    : "Select one workflow to rename it",
+  single.value ? "Give this workflow a name" : oneOnly("rename"),
 );
 
 const stackRefusal = computed(() =>
@@ -533,13 +555,13 @@ const deleteTitle = computed(() => {
 const exportTitle = computed(() =>
   single.value
     ? "Save a shareable copy: prompts, seeds and recipe LoRAs taken out"
-    : "Select one workflow to export it",
+    : oneOnly("export"),
 );
 
 const duplicateTitle = computed(() =>
   single.value
     ? "Write a copy into your workflow folder, to change in ComfyUI"
-    : "Select one workflow to copy it",
+    : oneOnly("copy"),
 );
 
 /**

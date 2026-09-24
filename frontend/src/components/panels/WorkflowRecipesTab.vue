@@ -10,18 +10,20 @@
       v-else-if="!loadError && !recipes.length && !looks.length"
       class="wfrt-note wfrt-quiet"
     >
-      No looks here yet. A picture shows up once PixlStash has read how it was
+      No recipes here yet. A picture shows up once PixlStash has read how it was
       made, so a fresh import takes a moment to arrive.
     </p>
     <p v-else-if="loadError" class="wfrt-note wfrt-bad" role="alert">
       {{ loadError }}
     </p>
 
+    <!-- Saved first: they are few, in the owner's order, and the reason to
+         come back to this tab. The list below them can run to hundreds. -->
     <div
-      v-if="!loading && !loadError && recipes.length && looks.length"
+      v-if="!loading && !loadError && recipes.length"
       class="section-label wfrt-section"
     >
-      Kept
+      Saved
     </div>
 
     <!-- One list, one tab stop. The handle is the control: it is what a
@@ -30,7 +32,7 @@
 
          `v-if`, not the band's `v-else`: chaining the two made the band and
          the list alternatives, so the moment there was a used half to label,
-         the kept half it labelled disappeared. -->
+         the saved list it labelled disappeared. -->
     <ul
       v-if="!loading && !loadError && recipes.length"
       class="wfrt-list"
@@ -73,14 +75,22 @@
                invention. A square at the head of the row rather than a band
                across the card, because 1/1 is a ratio this app already has
                and a one-picture band needed a new one. -->
-          <img
+          <button
             v-if="recipe.source_picture_id"
-            class="wfrt-thumb"
-            :src="thumbnail(recipe.source_picture_id)"
-            alt=""
-            loading="lazy"
-            decoding="async"
-          />
+            class="wfrt-thumb-btn"
+            type="button"
+            :aria-label="`Open the picture ${recipe.name || 'this recipe'} was saved from`"
+            @click="openPicture(recipe.source_picture_id)"
+          >
+            <Tooltip text="Open the picture" activator="parent" :describe="false" />
+            <img
+              class="wfrt-thumb"
+              :src="thumbnail(recipe.source_picture_id)"
+              alt=""
+              loading="lazy"
+              decoding="async"
+            />
+          </button>
 
           <!-- Escape backs out, as it does in every dialog here; Enter and
                blur both commit, which is what an inline field in a list has
@@ -180,25 +190,35 @@
       </li>
     </ul>
 
-    <!-- The looks the pictures themselves carry. A saved recipe is one
-         somebody chose to keep; these are the ones they actually ran, and a
-         library that has never pressed Save still has hundreds. The server
-         leaves out any look a saved recipe already keeps, so the two halves
-         never both claim one. -->
+    <!-- The looks the pictures themselves carry: every one they were made
+         with, filled in without anybody pressing anything. One cloned into
+         Saved stays here too, marked, because a clone is a copy and does not
+         take the original out of the list it was found in. -->
     <template v-if="!loading && !loadError && looks.length">
-      <div class="section-label wfrt-section">Used in your pictures</div>
+      <div class="section-label wfrt-section">From your pictures</div>
       <ul class="wfrt-list">
         <li v-for="look in looks" :key="look.key" class="wfrt-card">
           <div class="wfrt-top">
-            <img
+            <button
               v-if="look.cover_picture_id"
-              class="wfrt-thumb"
-              :src="thumbnail(look.cover_picture_id)"
-              alt=""
-              loading="lazy"
-              decoding="async"
-            />
-            <span class="wfrt-name wfrt-quiet">Not kept yet</span>
+              class="wfrt-thumb-btn"
+              type="button"
+              aria-label="Open the newest picture made with this recipe"
+              @click="openPicture(look.cover_picture_id)"
+            >
+              <Tooltip text="Open the picture" activator="parent" :describe="false" />
+              <img
+                class="wfrt-thumb"
+                :src="thumbnail(look.cover_picture_id)"
+                alt=""
+                loading="lazy"
+                decoding="async"
+              />
+            </button>
+            <span v-if="look.saved" class="wfrt-marked">
+              <v-icon size="16">mdi-check</v-icon>
+              Saved
+            </span>
           </div>
 
           <p v-if="look.prompt" class="wfrt-prompt">{{ look.prompt }}</p>
@@ -217,20 +237,21 @@
           <div class="wfrt-bot">
             <span class="wfrt-facts">{{ picturesLabel(look.pictures) }}</span>
             <AppButton
+              v-if="!look.saved"
               size="sm"
-              icon-left="bookmark-plus-outline"
+              icon-left="content-copy"
               :loading="savingLook === look.key"
               :disabled="!look.cover_picture_id"
-              tooltip="Keep this look as a recipe you can name and reorder"
+              tooltip="Clone this recipe into Saved, to name it and keep it at the top"
               @click="keepLook(look)"
             >
-              Save…
+              Clone…
             </AppButton>
             <AppButton
               v-if="look.cover_picture_id"
               size="sm"
               icon-left="play"
-              tooltip="Run this look again, from the picture that made it"
+              tooltip="Run this recipe again, from the picture that made it"
               @click="runLook(look)"
             >
               Run…
@@ -240,13 +261,6 @@
       </ul>
     </template>
 
-    <div v-if="!loading && !loadError" class="wfrt-hint">
-      <v-icon size="16">mdi-bookmark-plus-outline</v-icon>
-      <span>
-        Keep a look from any picture with <b class="wfrt-strong">Save as
-        recipe</b> on its Recipe tab.
-      </span>
-    </div>
 
     <!-- One polite region for the whole list: a reorder made with the
          keyboard, and a refused write that slides the row back, are both
@@ -345,9 +359,9 @@ const menuId = ref(null);
 const renamingId = ref(null);
 const renameDraft = ref("");
 const exportId = ref(null);
-/** The looks the stack's own pictures carry, that nobody has saved. */
+/** Every recipe the stack's own pictures carry; `saved` is the server's. */
 const looks = ref([]);
-/** The look whose cover picture is being read, so its Save… can show it. */
+/** The recipe whose cover picture is being read, so its Clone… can show it. */
 const savingLook = ref("");
 /** What the Save dialog is filled from, or null. */
 const savingSource = ref(null);
@@ -372,11 +386,19 @@ let loadToken = 0;
 const MAX_UNION_KEYS = 100;
 
 const subtitle = computed(() => {
+  const found = looks.value.length;
   const kept = recipes.value.length;
-  const parts = [`${kept} saved recipe${kept === 1 ? "" : "s"}`];
-  // The used half is most of what a tab shows before anybody saves anything,
-  // so a header counting only the kept ones reads as "0" over a full list.
-  if (looks.value.length) parts.push(`${looks.value.length} more used`);
+  // One count per section, in the sections' order, so each reads as the size
+  // of the list under its own label: a saved recipe need not have one below it
+  // (saved from the Run popup, never run), and two may mark one. Nothing
+  // is counted before a read has answered, because 0 would be a claim.
+  const parts = [];
+  if (!loading.value && !loadError.value) {
+    if (kept) parts.push(`${kept} saved`);
+    if (found || !kept) {
+      parts.push(`${found} recipe${found === 1 ? "" : "s"} from your pictures`);
+    }
+  }
   if (props.stackSize > 1) {
     parts.push(`runs on any of its ${props.stackSize} workflows`);
   }
@@ -415,6 +437,37 @@ function factsOf(recipe) {
   return parts.join(" · ");
 }
 
+/**
+ * The looks as the list keys them.
+ *
+ * A look has no id, and its prompt and LoRAs are what make it one, so the key
+ * both halves match on is also what keys the list.
+ */
+function keyedLooks(used) {
+  return used.map((look) => ({
+    ...look,
+    key: `${promptKey(look.prompt)}\u0000${loraKey(look.loras)}`,
+  }));
+}
+
+/**
+ * Read the looks again, for their marks, without blanking the tab.
+ *
+ * **The server is the only source of `saved`.** Its key and the client's
+ * mirror differ at the edges (whitespace a LoRA name was written with), so a
+ * mark worked out here could disagree with the one the next load shows.
+ */
+async function refreshLooks(token) {
+  try {
+    const used = await listUsedLooks(props.workflowKeys.filter(Boolean));
+    if (token === loadToken) looks.value = keyedLooks(used);
+  } catch (err) {
+    // The recipe is gone either way; only a mark below may be stale until
+    // the tab is next read.
+    console.warn("Could not re-read the used recipes after a delete:", err);
+  }
+}
+
 async function load() {
   const token = (loadToken += 1);
   const mine = () => token === loadToken;
@@ -437,21 +490,16 @@ async function load() {
   }
   loading.value = true;
   try {
-    // Both halves together: the server leaves a look out of the second when a
-    // recipe in the first keeps it, so reading them apart could show one look
-    // twice for as long as the slower read was out.
+    // Both halves together: a look's `saved` flag is about the recipes
+    // in the first, so reading them apart could mark a look against a list
+    // of saved recipes that is not the one on screen.
     const [saved, used] = await Promise.all([
       listSavedRecipes(keys),
       listUsedLooks(keys),
     ]);
     if (!mine()) return;
     recipes.value = saved;
-    looks.value = used.map((look) => ({
-      ...look,
-      // A look has no id, and its prompt and LoRAs are what make it one, so
-      // the key both halves match on is also what keys the list.
-      key: `${promptKey(look.prompt)}\u0000${loraKey(look.loras)}`,
-    }));
+    looks.value = keyedLooks(used);
   } catch (err) {
     if (mine()) {
       recipes.value = [];
@@ -586,7 +634,7 @@ async function removeRecipe(recipe) {
   menuId.value = null;
   const ok = await confirm({
     title: "Delete this recipe?",
-    message: `“${recipe.name || "Untitled"}” goes for good. The pictures it made are untouched.`,
+    message: `“${recipe.name || "Untitled"}” goes for good. The pictures it made are untouched, and the recipe they carry stays in the list below.`,
     confirmLabel: "Delete",
     danger: true,
   });
@@ -594,13 +642,19 @@ async function removeRecipe(recipe) {
     focusMenuButton(recipe.id);
     return;
   }
+  const token = loadToken;
   try {
     await deleteSavedRecipe(recipe.id);
-    // The row goes locally and the epoch is NOT bumped: this tab is the writer
-    // here, so announcing it would only make the tab re-read what it just did.
-    // The epoch is for a save made on a surface this one cannot see.
+    // Only if this is still the same card's list, as in `place()`: another
+    // selection made mid-write has its own saved and used recipes.
+    if (token !== loadToken) return;
+    // The epoch is NOT bumped: this tab is the writer, so announcing it would
+    // only make the whole tab re-read what it just did. The looks are re-read
+    // on their own, because whether the look keeps its mark (another saved recipe
+    // differing only in a strength) is the server's answer.
     recipes.value = recipes.value.filter((row) => row.id !== recipe.id);
-    say(`${recipe.name || "Recipe"} deleted.`);
+    say(`“${recipe.name || "Untitled"}” deleted.`);
+    void refreshLooks(token);
   } catch (err) {
     focusMenuButton(recipe.id);
     notices.push({
@@ -642,7 +696,7 @@ async function keepLook(look) {
     // keyed on the stored `comfyui_*` columns; the live extraction can differ
     // from them (a prompt the column never got, a LoRA spelled another way).
     // Saving the re-read's version would make a recipe whose key is not this
-    // look's, so the look would stay in the used half AND the new recipe
+    // look's, so the look would stay unmarked below AND the new recipe
     // would be credited 0 - the one thing both halves promise cannot happen.
     // The picture is read for the two things the columns do not hold: the
     // LoRA strengths, and the seed.
@@ -687,7 +741,19 @@ async function keepLook(look) {
  */
 function runLook(look) {
   if (!look.cover_picture_id) return;
-  runDialog.openRun({ kind: "picture", pictureIds: [look.cover_picture_id] });
+  // The prompt the row shows, as the popup's starting text: the picture's own
+  // re-read can come back without one, and the box would open empty under a
+  // row that plainly has a prompt. It stays an editable prefill.
+  runDialog.openRun({
+    kind: "picture",
+    pictureIds: [look.cover_picture_id],
+    prompt: look.prompt,
+  });
+}
+
+/** Open a recipe's picture in the lightbox, by way of the Workflows view. */
+function openPicture(pictureId) {
+  workflows.requestOpenPicture(pictureId);
 }
 
 function run(recipe) {
@@ -860,26 +926,27 @@ function run(recipe) {
   white-space: nowrap;
 }
 
-/* The hint points at the gesture that fills this tab, and stays on screen
-   whether or not the tab is empty: the second recipe is saved the same way
-   the first one was. */
-.wfrt-hint {
-  display: flex;
+/* A bare button around the thumbnail: the picture IS the control. */
+.wfrt-thumb-btn {
+  display: block;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+}
+
+.wfrt-marked {
+  flex: 1;
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3);
-  border: 1px dashed rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
+  gap: var(--space-2);
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.wfrt-strong {
-  color: rgb(var(--v-theme-on-surface));
-}
-
-/* The band between the two halves. The first only wears one once there is a
-   second: a tab showing kept recipes alone needs no word for "the rest". */
+/* The band over each half: Saved, then From your pictures. */
 .wfrt-section {
   margin-top: var(--space-2);
 }

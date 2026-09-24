@@ -283,8 +283,8 @@ def credit_groups_in_session(
     holds ``"[]"`` and is counted.
 
     The fourth column is the **newest** picture of the group, which is what a
-    look with no saved recipe behind it shows as its cover (:func:`used_looks`)
-    and what the Save dialog reads the LoRA strengths back from. Credit ignores
+    look shows as its cover (:func:`used_looks`) and what the Save dialog
+    reads the LoRA strengths back from when it is cloned. Credit ignores
     it. ``MAX(id)`` rather than a rating: a group is one look, so any of its
     pictures represents it, and the newest is the one the owner just made.
     """
@@ -508,10 +508,11 @@ def used_looks(
     of these, which is why the Recipes tab lists them beside the saved ones
     instead of showing an empty panel to somebody with a full library.
 
-    A group whose prompt and LoRA names match a saved recipe is left out: it is
-    already on the tab, above, with its name and its credit. Matching is
-    :func:`prompt_key` / :func:`lora_key`, the same pair credit uses, so the two
-    halves of the tab can never both claim one group.
+    A group whose prompt and LoRA names match a saved recipe **stays in**, with
+    ``saved`` set: a saved recipe is a clone of the look, and a clone does not
+    take the original out of the list. Matching is :func:`prompt_key` /
+    :func:`lora_key`, the same pair credit uses, so the flag and the credit on
+    the saved recipe agree about which pictures are the look's.
 
     ``loras`` here are **file names only**. The picture column stores no
     strength, so a look carries the names it loaded and nothing about how
@@ -538,8 +539,6 @@ def used_looks(
             where=f"the picture group with prompt {prompt_key(prompt)[:60]!r}",
         )
         key = (prompt_key(prompt), lora_key(names))
-        if key in taken:
-            continue
         # **A look that is neither a prompt nor a LoRA is not a look.** This
         # module reasons carefully about the `comfyui_loras` NULL sentinel and
         # nothing about `comfyui_positive_prompt`, which is NULL whenever the
@@ -559,6 +558,7 @@ def used_looks(
                 ],
                 "pictures": int(count),
                 "cover_picture_id": newest,
+                "saved": key in taken,
             }
             continue
         look["pictures"] += int(count)

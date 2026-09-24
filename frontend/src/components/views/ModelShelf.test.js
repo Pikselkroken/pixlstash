@@ -5027,14 +5027,19 @@ describe("acting inside a run", () => {
 
   it("says which file the run is being drawn from, once it is open", async () => {
     const wrapper = await openRun();
-    const chips = wrapper
-      .findAll(".shelf-row:not(.shelf-row--member) .shelf-chip")
-      .map((c) => c.text());
-    expect(chips).toContain("Cover");
-    // Not on the member rows: exactly one file covers a run.
+    // On the cover's thumbnail, not among the name's chips (where it pushed
+    // the line into the text around it).
+    const flags = wrapper.findAll(
+      ".shelf-row:not(.shelf-row--member) .shelf-row-ident .stack-cover-flag",
+    );
+    expect(flags.map((f) => f.text())).toEqual(["Cover"]);
     expect(
-      wrapper.findAll(".shelf-row--member .shelf-chip").map((c) => c.text()),
+      wrapper.findAll(".shelf-row-label .shelf-chip").map((c) => c.text()),
     ).not.toContain("Cover");
+    // Not on the member rows: exactly one file covers a run.
+    expect(wrapper.findAll(".shelf-row--member .stack-cover-flag")).toHaveLength(
+      0,
+    );
     wrapper.unmount();
   });
 
@@ -5109,9 +5114,7 @@ describe("acting inside a run", () => {
     useModelShelfStore().setFilters({ baseModels: ["flux.1-dev"] });
     await wrapper.vm.$nextTick();
 
-    expect(wrapper.findAll(".shelf-chip").map((c) => c.text())).not.toContain(
-      "Cover",
-    );
+    expect(wrapper.find(".stack-cover-flag").exists()).toBe(false);
     wrapper.unmount();
   });
 
