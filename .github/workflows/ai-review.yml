@@ -1,0 +1,122 @@
+name: AI Review
+
+# PR-Agent (https://github.com/The-PR-Agent/pr-agent) reviewing through
+# OpenRouter. Needs the OPENROUTER_API_KEY secret; the model is the
+# OPENROUTER_MODEL repository variable (an OpenRouter slug such as
+# `z-ai/glm-5.3-flash`), defaulting to that when unset.
+#
+# Reviews automatically only when the review owner (REVIEW_OWNER_ID) is the one
+# acting: opening a PR, pushing to one (their own or a contributor's fork PR), or marking
+# it ready. A contributor's push triggers nothing, so the key is never spent on
+# input the owner has not seen; the owner re-runs it by commenting a PR-Agent
+# command (`/review`, `/improve`, `/ask ...`). Comment commands always run the
+# default branch's copy of this file.
+#
+# pull_request_target, NOT pull_request: under `pull_request` a fork PR gets no
+# secrets, so contributor PRs could never be reviewed, and the workflow judging
+# the PR would be the PR's own copy of this file. `pull_request_target` also runs
+# the default branch's copy (main), whatever the PR targets, so nothing here is
+# live until it reaches main. That is only safe because nothing here checks
+# out or executes PR code -- PR-Agent reads the diff through the API. Do not add
+# a checkout step here.
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  # Pushes to one PR supersede each other; each comment gets its own group, so
+  # nobody else's comment can cancel the owner's queued command.
+  group: ai-review-${{ github.event_name }}-${{ github.event.comment.id || github.event.pull_request.number }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
+env:
+  # The account id, not the login: a renamed login can be registered by anyone.
+  REVIEW_OWNER_ID: "1160606"
+
+jobs:
+  review:
+    if: github.event.sender.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Decide whether this PR is reviewed
+        id: gate
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        with:
+          script: |
+            const ownerId = Number(process.env.REVIEW_OWNER_ID);
+            const is = (user) => user?.id === ownerId;
+            const decide = (run, why) => {
+              core.info(why);
+              core.setOutput("run", String(run));
+            };
+
+            if (context.eventName === "issue_comment") {
+              const { issue, comment } = context.payload;
+              if (!issue.pull_request) return decide(false, "Comment is not on a PR.");
+              if (!is(comment.user)) return decide(false, "Commenter is not the review owner.");
+              if (!comment.body.trimStart().startsWith("/")) return decide(false, "Comment is not a command.");
+              return decide(true, "Review owner issued a command.");
+            }
+
+            const pr = context.payload.pull_request;
+            if (pr.draft) return decide(false, "PR is a draft.");
+            // The sender is whoever pushed, opened or reopened, not the PR author.
+            // A same-repo head on someone else's PR (anyone can open develop ->
+            // main) makes the owner the sender of every push to that branch, so
+            // only a fork head, which the owner must push to deliberately, counts.
+            const forkHead = pr.head.repo?.id !== pr.base.repo.id;
+            if (is(context.payload.sender) && (is(pr.user) || forkHead)) {
+              return decide(true, "Review owner triggered this event.");
+            }
+            decide(false, "Someone other than the review owner triggered this; comment a command to review it.");
+
+      - name: PR-Agent
+        if: steps.gate.outputs.run == 'true'
+        # Digest of the pragent/pr-agent:0.46.0-github_action image.
+        uses: docker://pragent/pr-agent@sha256:65e5b196e38cecd7df8a71fe29942052e081a0c6645132c2ac874df60b1760c7 # v0.46.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENROUTER.KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Pinned here because env overrides win over any .pr_agent.toml, which
+          # could otherwise point the key at another host.
+          OPENROUTER.API_BASE: https://openrouter.ai/api/v1
+          CONFIG.MODEL: openrouter/${{ vars.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash' }}
+          # The upstream default fallback is an OpenAI model we hold no key for.
+          CONFIG.FALLBACK_MODELS: "[]"
+          # Required for models missing from PR-Agent's token table; the
+          # second line is what we actually send.
+          CONFIG.CUSTOM_MODEL_MAX_TOKENS: "1000000"
+          CONFIG.MAX_MODEL_TOKENS: "128000"
+          GITHUB_ACTION_CONFIG.AUTO_DESCRIBE: "false"
+          GITHUB_ACTION_CONFIG.AUTO_REVIEW: "true"
+          GITHUB_ACTION_CONFIG.AUTO_IMPROVE: "true"
+          GITHUB_ACTION_CONFIG.PR_ACTIONS: '["opened", "reopened", "ready_for_review"]'
+          GITHUB_ACTION_CONFIG.HANDLE_PUSH_TRIGGER: "true"
+          GITHUB_ACTION_CONFIG.PUSH_COMMANDS: '["/review", "/improve"]'
+          PR_REVIEWER.EXTRA_INSTRUCTIONS: |
+            This is PixlStash: a FastAPI + SQLModel backend (pixlstash/) and a Vue 3 frontend (frontend/).
+            Skip formatting and lint findings; ruff and CI cover them. Check these repository rules:
+            - Every new or changed FastAPI data route needs a (method, path) -> RoutePolicy entry in
+              ROUTE_POLICIES (pixlstash/authz/registry.py). Inline scope checks in handlers
+              (enforce_picture_scope, require_unscoped_owner, token_scope ladders) are a finding.
+            - Alembic: every op.add_column must be guarded by an inspector check for the existing
+              column; revision variables are exported via __all__; a migration already on main is
+              never edited.
+            - CHANGELOG.md is never edited on a branch; user-visible changes add a changelog.d/ fragment.
+            - A caught exception is logged with context; `except ...: pass` is a finding.
+            - Imports sit at the top of the file; no function-local imports of torch, numpy, PIL or cv2.
+            - A new file under tests/ must be listed in the backend job in .github/workflows/ci.yml or in
+              DEFERRED_FROM_GATE in tests/test_ci_shards.py.
+            - Frontend UI uses the tokens in docs/design/design-tokens.css: no hardcoded hex colours,
+              raw rgba() shadows, off-grid spacing or ad-hoc font sizes.
+            - No RFC 1918 address literals outside tests/network_vectors.py, and no real home paths.
+            - A failed metric calculation stores -1.0 rather than leaving the value unset.
