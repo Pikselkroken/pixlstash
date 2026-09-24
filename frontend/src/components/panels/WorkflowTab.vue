@@ -1591,14 +1591,17 @@ watch(
 .wftab-foot {
   position: sticky;
   bottom: 0;
+  z-index: var(--z-sticky);
   margin-top: auto;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-3) 0;
-  border-top: 1px solid rgb(var(--v-theme-divider));
-  background: rgb(var(--v-theme-surface));
+  /* No frame: the body's inline padding made a bordered band narrower than
+     the rail. Opaque in the rail's own colour, so what scrolls under the
+     sticky footer stays hidden without a box showing. */
+  background: rgb(var(--v-theme-sidebar));
 }
 
 .wftab-foot > :first-child {
