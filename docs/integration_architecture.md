@@ -804,7 +804,8 @@ Five rules the client must not re-derive:
    `reason: "imported"`. Insert loader reaches the owner's ComfyUI for
    `object_info` (503 when it cannot) and answers 409, with the sentence, where
    the splice cannot be made honestly: no model source, several models or text
-   encoders, a graph that already loads a LoRA PixlStash cannot swap. **It
+   encoders. A node that already loads a LoRA its own way does not stop it: the
+   loader goes in the MODEL path alongside it. **It
    chooses no LoRA**: the loader lands at ComfyUI's own widget defaults, the
    way dropping the node in ComfyUI would leave it, so the client tells the
    owner to pick one rather than presenting the copy as ready to run.

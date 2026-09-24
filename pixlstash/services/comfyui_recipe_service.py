@@ -1070,27 +1070,20 @@ def plan_lora_insertion(prompt_graph: dict, object_info: dict) -> dict:
         resolves by digest could be the one inserted, which is what makes a
         picture from that run unreplayable by "Generate variants".
 
+    **A node that loads a LoRA some way of its own does not stop it.** A
+    stacker, a prompt-tag encoder or a character prompt builder is an ordinary
+    node here: a loader spliced into the MODEL path patches the model whatever
+    that node does, and it applies alongside, never instead.
+
     Raises:
         LookupError: When the graph cannot be spliced honestly - no model
             source, more than one (a refiner, a merge: which one the LoRA is
             for is the owner's call), a second model chain of a type this
-            loader cannot patch (``WANVIDEOMODEL`` and the like), a node
-            already loading a LoRA some way of its own, a CLIP source that
-            reads the model (splicing would make a cycle), or a node this
+            loader cannot patch (``WANVIDEOMODEL`` and the like), a CLIP source
+            that reads the model (splicing would make a cycle), or a node this
             ComfyUI does not have, so what it hands on is unknown.
     """
     graph = prompt_graph or {}
-    for node_id, node in graph.items():
-        if not isinstance(node, dict) or not isinstance(node.get("inputs"), dict):
-            continue
-        if _already_loads_a_lora(node, object_info):
-            # A loader detect_lora_targets cannot swap is still a loader: adding
-            # another ahead of it would stack two adapters without saying so.
-            raise LookupError(
-                f"Node {node_id} ({node.get('class_type')}) already loads a LoRA "
-                "in a way PixlStash cannot swap, so it will not add a second one. "
-                "Change it in ComfyUI."
-            )
     links = _model_links(graph, object_info)
 
     def source_of(kind: str) -> dict | None:
@@ -1148,40 +1141,6 @@ def plan_lora_insertion(prompt_graph: dict, object_info: dict) -> dict:
         # owner is owed the worse case before they choose.
         "pixlstash_loader": PIXLSTASH_ADAPTER_LOADER in object_info,
     }
-
-
-def _already_loads_a_lora(node: dict, object_info: dict) -> bool:
-    """True when this node loads a LoRA in a way :func:`detect_lora_targets` misses.
-
-    **Decided at the class level, not on widget spellings.** By the time
-    insertion is being planned, a swappable slot has been ruled out, so any
-    remaining node that has anything to do with LoRAs is one PixlStash cannot
-    swap - and splicing a loader in front of it would leave two adapters live
-    with nothing said. Widget spellings only covered the two shapes anyone
-    happened to name: a wired ``lora_name``, rgthree's ``lora_1`` dicts, and
-    then not ``lora_1_name`` (easy-loraStack), a prompt tag
-    (``<lora:style:0.8>``), or a ``lora_name`` holding ``None``.
-
-    The three rules: the class name mentions a LoRA, ComfyUI declares a
-    LoRA-ish type on one of its inputs or outputs, or one of its values carries
-    a ``<lora:…>`` prompt tag.
-    """
-    class_type = str(node.get("class_type") or "")
-    if "lora" in class_type.lower():
-        return True
-    spec = object_info.get(class_type)
-    if isinstance(spec, dict):
-        declared = [str(out) for out in spec.get("output") or []]
-        for group in ("required", "optional"):
-            for entry in ((spec.get("input") or {}).get(group) or {}).values():
-                if isinstance(entry, (list, tuple)) and entry:
-                    declared.append(str(entry[0]))
-        if any("LORA" in name.upper() for name in declared):
-            return True
-    return any(
-        isinstance(value, str) and "<lora:" in value.lower()
-        for value in (node.get("inputs") or {}).values()
-    )
 
 
 def _widget_defaults(node_spec: dict) -> dict:
@@ -1473,10 +1432,13 @@ def _chain_loader(node_id: str, node: dict, object_info: dict) -> dict | None:
     :func:`detect_lora_targets` can read, and ComfyUI says it takes a MODEL in
     and hands one on - which is what makes it a link rather than a leaf.
 
+    Anything else that loads a LoRA - a stacker with several slots, a node
+    that takes no model in (a character prompt builder), one with nothing
+    wired into its model - is ``None`` too: an ordinary node of the graph,
+    which loaders can go in front of or after, but not one this chain edits.
+
     Raises:
-        LookupError: A stacker (several slots on one node), a class this
-            ComfyUI lacks, or a node that loads a LoRA but is not wired as a
-            loader is - none of which PixlStash can put in order honestly.
+        LookupError: A class this ComfyUI lacks, whose wiring cannot be read.
     """
     inputs = node["inputs"]
     class_type = node.get("class_type")
@@ -1485,10 +1447,13 @@ def _chain_loader(node_id: str, node: dict, object_info: dict) -> dict | None:
     if not slots and not numbered:
         return None
     if numbered or len(slots) != 1:
-        raise LookupError(
-            f"Node {node_id} ({class_type}) holds several LoRAs in one node, "
-            "which PixlStash cannot put in order. Change it in ComfyUI."
+        logger.info(
+            "Node %s (%s) holds several LoRAs, so it is left in the graph as it "
+            "is rather than edited as a link of the chain.",
+            node_id,
+            class_type,
         )
+        return None
     spec = object_info.get(class_type)
     if not isinstance(spec, dict):
         raise LookupError(
@@ -1502,18 +1467,18 @@ def _chain_loader(node_id: str, node: dict, object_info: dict) -> dict | None:
         model_field is None
         or "MODEL" not in outputs
         or (clip_field is not None and "CLIP" not in outputs)
-    ):
-        raise LookupError(
-            f"Node {node_id} ({class_type}) loads a LoRA but does not take and "
-            "hand on a model the way a LoRA loader does, so PixlStash cannot "
-            "put it in a chain. Change it in ComfyUI."
+        or any(
+            field is not None and not is_link(inputs.get(field))
+            for field in (model_field, clip_field)
         )
-    for field in (model_field, clip_field):
-        if field is not None and not is_link(inputs.get(field)):
-            raise LookupError(
-                f"Node {node_id} ({class_type}) has nothing wired into its "
-                f"{field}, so it is not part of a chain PixlStash can read."
-            )
+    ):
+        logger.info(
+            "Node %s (%s) loads a LoRA but is not wired as a LoRA loader is, so "
+            "it is left in the graph as it is rather than edited as a link.",
+            node_id,
+            class_type,
+        )
+        return None
     slot = slots[0]
     return {
         **slot,
@@ -1631,10 +1596,12 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
     Raises:
         LookupError: With the owner-facing sentence, when the chain cannot be
             edited honestly: the insertion planner's refusals (no model source,
-            several, a foreign model type, a class this ComfyUI lacks), a node
-            loading a LoRA in a way PixlStash cannot edit (a stacker, rgthree's
-            dicts, a prompt tag, a wired ``lora_name``), loaders that do not
-            form one straight chain, or a loader output something else reads.
+            several, a foreign model type, a class this ComfyUI lacks), loaders
+            that do not form one straight chain, or a loader output something
+            else reads. A node loading a LoRA some other way (a stacker,
+            rgthree's dicts, a prompt tag, a character prompt builder) is not
+            one: it stays in the graph as an ordinary node, so a chain can
+            always be built in the MODEL path around it.
     """
     graph = prompt_graph or {}
     loaders: dict[str, dict] = {}
@@ -1645,12 +1612,6 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
         loader = _chain_loader(node_id, node, object_info)
         if loader is not None:
             loaders[node_id] = loader
-        elif _already_loads_a_lora(node, object_info):
-            raise LookupError(
-                f"Node {node_id} ({node.get('class_type')}) loads a LoRA in a way "
-                "PixlStash cannot edit, so the chain can only be changed in "
-                "ComfyUI."
-            )
     links = _model_links(graph, object_info)
     foreign = _source_of(graph, links, "OTHER_MODEL")
     if foreign is not None:

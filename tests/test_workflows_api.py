@@ -8139,27 +8139,103 @@ def test_the_chain_is_still_shown_when_comfyui_is_down(chained):
     assert chain["sink"]["summary"] is None
 
 
-def test_a_chain_refused_for_its_shape_still_names_both_ends(chained):
-    """ComfyUI answered, so the read-only view says what the chain runs between.
-
-    Wrong if the sink summary is None: that is the dialog's empty bottom node.
-    """
+def _chain_document_with(**nodes):
     document = json.loads(json.dumps(CHAIN_DOCUMENT))
-    document["6"]["inputs"]["text"] = "a cat <lora:style:0.8>"
+    document.update(nodes)
+    return document
+
+
+def _serve_chain(chained, document, info=None):
     chained.monkeypatch.setattr(
         workflows_routes,
         "_load_embedded_api_prompt",
         lambda server, pid, object_info=None: (json.loads(json.dumps(document)), []),
     )
+    if info is not None:
+        chained.monkeypatch.setattr(
+            workflows_routes,
+            "_read_object_info",
+            lambda url, **_: (json.loads(json.dumps(info)), None),
+        )
+
+
+def test_a_chain_refused_for_its_shape_still_names_both_ends(chained):
+    """ComfyUI answered, so the read-only view says what the chain runs between.
+
+    Refused because loader #2's model is also read by a second sampler, so
+    there is no single order. Wrong if the sink summary is None: that is the
+    dialog's empty bottom node.
+    """
+    _serve_chain(
+        chained,
+        _chain_document_with(
+            **{
+                "7": {
+                    "class_type": "KSampler",
+                    "inputs": {"seed": 1, "model": ["2", 0], "positive": ["6", 0]},
+                }
+            }
+        ),
+    )
     r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
     assert r.status_code == 200, r.text
     chain = r.json()
     assert chain["editable"] is False
-    assert "cannot edit" in chain["refusal"]
+    assert "besides" in chain["refusal"]
     assert chain["source"]["node_id"] == "1"
     assert chain["sink"]["summary"] == (
         "KSampler #3 reads model · CLIPTextEncode #6 reads clip"
     )
+
+
+def test_a_character_prompt_builder_does_not_stop_a_lora_being_added(chained):
+    """A node loading a LoRA its own way is an ordinary node, not a refusal.
+
+    The MODEL path from the checkpoint to the sampler always takes another
+    loader. Wrong if `editable` is false, or the new loader is not between
+    the last loader and the sampler.
+    """
+    info = json.loads(json.dumps(CHAIN_OBJECT_INFO))
+    info["LoRACharacterPromptBuilder"] = {
+        "input": {"required": {"clip": ["CLIP", {}]}},
+        "output": ["STRING"],
+    }
+    _serve_chain(
+        chained,
+        _chain_document_with(
+            **{
+                "68": {
+                    "class_type": "LoRACharacterPromptBuilder",
+                    "inputs": {"lora_name": "hero.safetensors", "clip": ["5", 1]},
+                }
+            }
+        ),
+        info,
+    )
+    r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
+    assert r.status_code == 200, r.text
+    chain = r.json()
+    assert chain["editable"] is True, chain["refusal"]
+    assert [loader["node_id"] for loader in chain["loaders"]] == ["2", "5"]
+
+    r = _chain_edit(
+        chained.owner,
+        {"node_id": "2", "strength": 0.8},
+        {"node_id": "5", "strength": 0.5},
+        {"sha256": RUN_ADAPTER_DIGEST, "strength": 1.0},
+    )
+    assert r.status_code == 201, r.text
+    written = json.loads((chained.tmp_path / r.json()["name"]).read_text())
+    added = [
+        node_id
+        for node_id, node in written.items()
+        if node_id not in CHAIN_DOCUMENT and node_id != "68"
+    ]
+    assert len(added) == 1, written
+    assert written[added[0]]["inputs"]["model"] == ["5", 0]
+    assert written["3"]["inputs"]["model"] == [added[0], 0]
+    # The builder is left as it was, reading the chain's CLIP end.
+    assert written["68"]["inputs"]["lora_name"] == "hero.safetensors"
 
 
 def test_a_dry_run_lists_the_changes_and_writes_nothing(chained):

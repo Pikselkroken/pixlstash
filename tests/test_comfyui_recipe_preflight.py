@@ -1092,27 +1092,41 @@ class TestLoraInsertion:
             {"class_type": "LoraLoaderModelOnly", "inputs": {"lora_name": None}},
         ],
     )
-    def test_a_lora_loaded_where_no_slot_is_seen_is_not_stacked_on(self, loader):
-        graph = self._checkpoint_graph()
-        # The control: the same graph without it takes a loader.
-        assert plan_lora_insertion(graph, self.INFO)["model"]["node_id"] == "4"
-        graph["5"] = loader
-        with pytest.raises(LookupError, match="already loads a LoRA"):
-            plan_lora_insertion(graph, self.INFO)
+    def test_a_lora_loaded_where_no_slot_is_seen_does_not_stop_an_insert(self, loader):
+        """A loader always goes in the MODEL path, whatever else loads a LoRA.
 
-    def test_a_node_comfyui_declares_a_lora_type_on_is_one_too(self):
-        """Nothing in its name or its values says LoRA; its spec does."""
+        It applies alongside that node, never instead of it, so there is no
+        reason to refuse; #1376 used to, and nearly nothing could take one.
+        """
         graph = self._checkpoint_graph()
-        graph["5"] = {"class_type": "Efficient Loader", "inputs": {"stack": ["9", 0]}}
-        info = {
-            **self.INFO,
-            "Efficient Loader": {
-                "input": {"required": {"stack": ["LORA_STACK", {}]}},
-                "output": ["CONDITIONING"],
+        graph["5"] = loader
+        # VAEDecode: the wired `lora_name` reads node 8, so its output is typed.
+        info = {**self.INFO, "VAEDecode": {"output": ["IMAGE"]}}
+        plan = plan_lora_insertion(graph, info)
+        assert plan["model"]["node_id"] == "4"
+        assert ("3", "model") in {(r["node_id"], r["field"]) for r in plan["rewires"]}
+
+    def test_a_stacker_in_the_model_path_reads_the_inserted_loader(self):
+        """It sits after the model source, so it is one of the readers rewired."""
+        graph = self._checkpoint_graph()
+        graph["5"] = {
+            "class_type": "Power Lora Loader (rgthree)",
+            "inputs": {
+                "model": ["4", 0],
+                "clip": ["4", 1],
+                "lora_1": {"on": True, "lora": "a.st", "strength": 1},
             },
         }
-        with pytest.raises(LookupError, match="already loads a LoRA"):
-            plan_lora_insertion(graph, info)
+        graph["3"]["inputs"]["model"] = ["5", 0]
+        info = {
+            **self.INFO,
+            "Power Lora Loader (rgthree)": {"output": ["MODEL", "CLIP"]},
+        }
+        plan = plan_lora_insertion(graph, info)
+        assert plan["model"]["node_id"] == "4"
+        rewired = {(r["node_id"], r["field"]) for r in plan["rewires"]}
+        assert {("5", "model"), ("5", "clip")} <= rewired
+        assert ("3", "model") not in rewired
 
     def test_a_second_model_chain_of_another_kind_refuses_the_whole_graph(self):
         """A model no LoRA loader can patch, beside one it can, is not half-done."""
@@ -1483,17 +1497,39 @@ class TestLoraChain:
             apply_lora_chain(graph, plan, info)
         assert graph == before
 
-    def test_a_stacker_is_refused(self):
+    def test_a_stacker_is_an_ordinary_node_the_chain_goes_in_front_of(self):
+        """Not edited, not refused: the chain runs from the source to it."""
         graph = self._graph(loaders=("a",))
         graph["10"]["inputs"]["lora_name_2"] = "b.safetensors"
-        with pytest.raises(LookupError, match="several LoRAs in one node"):
-            read_lora_chain(graph, self.INFO)
+        chain = read_lora_chain(graph, self.INFO)
+        assert chain["loaders"] == []
+        assert chain["model_source"]["node_id"] == "4"
+        assert {s["node_id"] for s in chain["sinks"]} == {"10"}
 
-    def test_a_prompt_tag_loader_is_refused(self):
+    def test_a_prompt_tag_node_does_not_stop_the_chain_being_edited(self):
         graph = self._graph(loaders=("a",))
         graph["6"]["inputs"]["text"] = "a cat <lora:style:0.8>"
-        with pytest.raises(LookupError, match="cannot edit"):
-            read_lora_chain(graph, self.INFO)
+        chain = read_lora_chain(graph, self.INFO)
+        assert [loader["node_id"] for loader in chain["loaders"]] == ["10"]
+
+    def test_a_lora_node_that_takes_no_model_is_left_out_of_the_chain(self):
+        """A character prompt builder: a LoRA slot, a CLIP in, no model."""
+        graph = self._graph(loaders=("a",))
+        graph["68"] = {
+            "class_type": "LoRACharacterPromptBuilder",
+            "inputs": {"lora_name": "hero.safetensors", "clip": ["10", 1]},
+        }
+        info = {
+            **self.INFO,
+            "LoRACharacterPromptBuilder": {
+                "input": {"required": {"clip": ["CLIP", {}]}},
+                "output": ["STRING"],
+            },
+        }
+        chain = read_lora_chain(graph, info)
+        assert [loader["node_id"] for loader in chain["loaders"]] == ["10"]
+        # A CLIP reader of the chain's end like any other.
+        assert "68" in {s["node_id"] for s in chain["sinks"]}
 
     def test_a_branching_chain_is_refused(self):
         graph = self._graph()
@@ -1526,16 +1562,17 @@ class TestLoraChain:
         assert chain["model_source"]["node_id"] == "4"
 
     def test_a_refused_chain_still_names_its_two_ends_when_comfyui_answered(self):
-        # Refused for its shape, with no loader to follow: the read-only view
-        # still says what the chain runs between, and nothing untyped does.
-        graph = self._graph(loaders=())
-        graph["6"]["inputs"]["text"] = "a cat <lora:style:0.8>"
-        with pytest.raises(LookupError, match="cannot edit"):
+        # Refused for its shape: the read-only view still says what the chain
+        # runs between, and nothing untyped does.
+        graph = self._graph()
+        # #11's model is read by the next loader AND by the sampler.
+        graph["7"]["inputs"]["model2"] = ["11", 0]
+        with pytest.raises(LookupError, match="to the next loader and to #7"):
             read_lora_chain(graph, self.INFO)
         chain = read_lora_chain_untyped(graph, self.INFO)
         assert chain["model_source"]["node_id"] == "4"
+        # #7 reads the chain's end on model1 only; model2 is the branch off #11.
         assert [(s["node_id"], s["type"]) for s in chain["sinks"]] == [
-            ("7", "MODEL"),
             ("7", "MODEL"),
             ("6", "CLIP"),
             ("8", "CLIP"),
@@ -1543,8 +1580,10 @@ class TestLoraChain:
         assert chain["sink_summary"] == (
             "TwinSampler #7 reads model · 2 text encoders read clip"
         )
+        # Without ComfyUI the source is still followed by name; the readers
+        # need the types, so none are named.
         untyped = read_lora_chain_untyped(graph)
-        assert untyped["model_source"] is None
+        assert untyped["model_source"]["node_id"] == "4"
         assert untyped["sinks"] == [] and untyped["sink_summary"] is None
 
 
