@@ -1676,20 +1676,23 @@ watcher the model shelf uses. See §9.1b for the destination itself.
   toolbar, so without the tail nothing on this screen opens Settings or the
   right rail, and the rail is where `WorkflowTab` is drawn (#1415).
 - **Filters** (F7) is `WorkflowFilterMenu.vue`, the picture grid's cascade
-  (#1387's `FilterMenu`) with one exception. A *Show* section keeps the three
-  switches on the root, where one click flips them: *Hide one-offs* and
+  (#1387's `FilterMenu`) with one exception. An unlabelled first section keeps
+  the three switches on the root, where one click flips them (a "Show" label
+  over *Hide one-offs* read as its own opposite): *Hide one-offs* and
   *Hidden workflows* with the payload's counts, and *Keeps something deleted*
   (ghosts). A *Workflow* section holds Type, Checkpoint, Source and Rating as
   chevron rows, each showing the value its chip shows and opening a flyout
-  beside the root with the grid's placement clamp. Every flyout is a pick-one
-  list led by its off row (`All` for Type, `Any` for the rest, counting every
-  card) and has no Clear of its own, as the grid's are. Checkpoint is the
-  grid's searchable `FilterChecklistMenu` in its `pick-one` mode, because the
-  store models one checkpoint; Rating copies the grid's Score flyout, "at
-  least" only. The one-off rule is the root's one-line footer. The rows, the
-  counts, the `.tbm-*` / `.fm-*` classes and the chip strip are #1387's. Which
-  side applies which filter is in the `useWorkflowsStore` row of §3. The
-  funnel's badge and the strip both count
+  beside the root with the grid's placement clamp. → opens a flyout and ←
+  comes back to its row; ← is caught in the capture phase, because the
+  flyouts' radio groups (`arrowStep`) otherwise take it as "previous option".
+  Every flyout is a pick-one list led by its off row (`All` for Type, `Any`
+  for the rest, counting every card) and has no Clear of its own, as the
+  grid's are. Checkpoint is the grid's searchable `FilterChecklistMenu` in its
+  `pick-one` mode, because the store models one checkpoint; Rating copies the
+  grid's Score flyout, "at least" only. The one-off rule is the root's
+  one-line footer. The rows, the counts, the `.tbm-*` / `.fm-*` classes and
+  the chip strip are #1387's. Which side applies which filter is in the
+  `useWorkflowsStore` row of §3. The funnel's badge and the strip both count
   `filterChips`, so neither can describe a filter the other has dropped, and
   the subtitle counts only what is STILL withheld — a grid showing its hidden
   cards must not also caption itself "4 hidden". Filters that leave no card

@@ -126,7 +126,8 @@
 //                                       // nothing else on the card derives
 //                                       // it (F2, #1405).
 //     ghosts, model_ghosts,             // what the card keeps of something
-//                                       // deleted, for F7's Ghosts row.
+//                                       // deleted, for F7's Keeps something
+//                                       // deleted row.
 //                                       // `ghosts` are this library's picture
 //                                       // ghosts; `model_ghosts` counts
 //                                       // VALUES the shelf does not hold (a

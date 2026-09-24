@@ -1,5 +1,5 @@
 <template>
-  <div class="fm-cascade" @keydown.left="onLeft">
+  <div class="fm-cascade">
     <div
       ref="rootRef"
       class="tbm fm-root"
@@ -24,9 +24,10 @@
 
       <!-- Switches, not lists, so they stay on the root where one click flips
            them. The first two are the server's flags, so ticking one re-reads
-           the grid; the third only ever removes a card and is applied here. -->
+           the grid; the third only ever removes a card and is applied here.
+           No section label, as the grid's Problems section has none: "Show"
+           over "Hide one-offs" read as its own opposite. -->
       <div class="tbm-section">
-        <span class="tbm-label">Show</span>
         <label v-for="row in CHECKS" :key="row.key" class="tbm-check fm-check">
           <input
             type="checkbox"
@@ -50,6 +51,7 @@
           :data-testid="`wff-row-${k.key}`"
           :aria-expanded="sub === k.key ? 'true' : 'false'"
           :aria-controls="sub === k.key ? submenuId : undefined"
+          :title="rowValue(k.key) || undefined"
           @click="toggle(k.key)"
           @keydown.right.prevent="openKind(k.key)"
         >
@@ -72,6 +74,7 @@
       ref="subRef"
       class="fm-sub-slot"
       :style="{ marginTop: `${subTop}px` }"
+      @keydown.left.capture="onLeft"
     >
       <!-- Pick one, and the only open-ended list searchable, as the grid's
            Checkpoint is. The store models one checkpoint, so its rows carry a
@@ -320,11 +323,15 @@ function toggle(kind) {
   else openKind(kind);
 }
 
-// Left arrow inside a flyout returns to its row, unless it is moving a caret.
+// Left arrow inside a flyout returns to its row, unless it is moving a caret
+// that has somewhere left to go. Caught on the way DOWN, because the flyouts'
+// radio groups (`arrowStep`) take ← as "previous option" and stop it, so a
+// reader pressing it to go back would change the filter instead.
 function onLeft(event) {
-  if (!sub.value || event.target?.tagName === "INPUT") return;
-  if (!subRef.value?.contains(event.target)) return;
+  const t = event.target;
+  if (t?.tagName === "INPUT" && (t.selectionStart || t.selectionEnd)) return;
   event.preventDefault();
+  event.stopPropagation();
   rowRefs[sub.value]?.focus();
   sub.value = null;
 }

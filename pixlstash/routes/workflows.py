@@ -579,7 +579,7 @@ class WorkflowCard(BaseModel):
             "what the shelf judges. A card naming one missing model by both "
             "counts 2, so this is not a count of models: read it as "
             "'something here is gone'. With `ghosts`, what the Filters "
-            "panel's Ghosts row asks about."
+            "menu's 'Keeps something deleted' row asks about."
         ),
     )
 

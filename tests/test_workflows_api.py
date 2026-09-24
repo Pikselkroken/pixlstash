@@ -3044,7 +3044,7 @@ def test_a_hidden_card_let_back_in_rejoins_its_stack(workflow_env):
 
 
 def test_a_card_counts_the_ghosts_its_own_variants_keep(workflow_env):
-    """The Filters panel's Ghosts row: "keeps something deleted", per CARD.
+    """The Filters menu's *Keeps something deleted* row, per CARD.
 
     A SECOND CARD IS PUT ON BUSY'S TOPOLOGY for this, because that is the only
     shape that can tell the two readings apart: counting per topology - what

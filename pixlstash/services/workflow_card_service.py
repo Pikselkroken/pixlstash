@@ -547,7 +547,7 @@ def read_grid(
     is called once per such card and for no other, so a grid with none pays
     nothing at all.
 
-    The two flags are the Filters panel's *Show hidden workflows* and the
+    The two flags are the Filters menu's *Hidden workflows* and the
     unticked *Hide one-offs* (F7). They widen what is DRAWN; ``hidden`` and
     ``one_offs`` are counted either way, so the panel can label its own
     checkboxes with the number it is letting in. Widening here rather than in
@@ -986,7 +986,7 @@ def _describe_ghosts(
     figures: list[CardFigures],
     names: dict[str, list[tuple]],
 ) -> None:
-    """Fill in what each card keeps of something deleted (F7's Ghosts filter).
+    """Fill in what each card keeps of something deleted (F7's *Keeps something deleted*).
 
     Two kinds, counted apart because forgetting them is two different purges in
     Settings › Privacy: a **picture ghost** is the thumbnail and prompt of a
@@ -1049,8 +1049,8 @@ def _describe_ghosts(
         logger.warning(
             "This vault has no library uuid, so a picture ghost cannot be "
             "matched to the library that holds it: all %d workflow cards will "
-            "report ghosts: 0 and the Workflows Ghosts filter will read as "
-            "'nothing deleted' rather than 'not known'.",
+            "report ghosts: 0 and the Workflows 'Keeps something deleted' "
+            "filter will read as 'nothing deleted' rather than 'not known'.",
             len(figures),
         )
     ghost_names = model_ghost_names(hub)

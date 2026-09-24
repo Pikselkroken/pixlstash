@@ -10,7 +10,7 @@
 // The counts are the second: they label the checkboxes, and a count computed
 // over the already-filtered cards goes to zero on the row you are reading.
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
 import { setActivePinia, createPinia } from "pinia";
 
@@ -21,6 +21,7 @@ vi.mock("../../api/workflows", () => ({
   workflowCoverUrl: (cover) => cover?.url ?? "",
 }));
 
+import FilterChecklistMenu from "./FilterChecklistMenu.vue";
 import WorkflowFilterMenu from "./WorkflowFilterMenu.vue";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 
@@ -74,7 +75,12 @@ const CARDS = [
 ];
 
 /** The panel over a grid that already holds `cards` and the two counts. */
-async function mountMenu({ cards = CARDS, oneOffs = 7, hidden = 4 } = {}) {
+async function mountMenu({
+  cards = CARDS,
+  oneOffs = 7,
+  hidden = 4,
+  attachTo,
+} = {}) {
   setActivePinia(createPinia());
   const store = useWorkflowsStore();
   store.cards = cards;
@@ -86,6 +92,7 @@ async function mountMenu({ cards = CARDS, oneOffs = 7, hidden = 4 } = {}) {
     hidden,
   });
   const wrapper = mount(WorkflowFilterMenu, {
+    attachTo,
     global: { stubs: { "v-icon": true } },
   });
   await flushPromises();
@@ -421,6 +428,108 @@ describe("the Workflows filter panel", () => {
 // A filter that removes the open stack's cover. The panel is drawn inside the
 // cover's row, so it leaves the screen either way — what must not survive is
 // the store going on saying a stack is open, with members nothing filtered.
+// The cascade's keyboard contract, the grid's: → opens a row's flyout and
+// puts focus in its body, ← comes back to the row. Attached to the document,
+// because focus is what is being asserted.
+describe("the filter cascade from the keyboard", () => {
+  let mounted;
+  afterEach(() => mounted?.unmount());
+
+  async function keyboardMenu(options) {
+    const { wrapper, store } = await mountMenu({
+      ...options,
+      attachTo: document.body,
+    });
+    mounted = wrapper;
+    return { wrapper, store };
+  }
+
+  const active = () => document.activeElement;
+
+  it("opens a row's flyout on → and focuses its chosen option", async () => {
+    const { wrapper, store } = await keyboardMenu();
+    store.setFilters({ minRating: 3 });
+    await flushPromises();
+    await kindRow(wrapper, "minRating").trigger("keydown", {
+      key: "ArrowRight",
+    });
+    await flushPromises();
+    expect(kindRow(wrapper, "minRating").attributes("aria-expanded")).toBe(
+      "true",
+    );
+    expect(active().getAttribute("aria-label")).toBe("At least 3 stars");
+  });
+
+  it("comes back to the row on ←, without changing the pick", async () => {
+    const { wrapper, store } = await keyboardMenu();
+    store.setFilters({ minRating: 3, type: "upscale" });
+    await flushPromises();
+    for (const key of ["minRating", "type"]) {
+      await kindRow(wrapper, key).trigger("keydown", { key: "ArrowRight" });
+      await flushPromises();
+      expect(wrapper.find(".fm-sub-slot").element.contains(active())).toBe(
+        true,
+      );
+      active().dispatchEvent(
+        new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
+      );
+      await flushPromises();
+      expect(active()).toBe(kindRow(wrapper, key).element);
+      expect(wrapper.find(".fm-sub-slot").exists()).toBe(false);
+    }
+    expect(store.filters.minRating).toBe(3);
+    expect(store.filters.type).toBe("upscale");
+  });
+
+  it("leaves ← to the Checkpoint search while its caret can still move", async () => {
+    const { wrapper } = await keyboardMenu();
+    await kindRow(wrapper, "checkpoint").trigger("keydown", {
+      key: "ArrowRight",
+    });
+    await flushPromises();
+    const field = wrapper.find(".fm-sub-slot input");
+    expect(active()).toBe(field.element);
+
+    await field.setValue("real");
+    field.element.setSelectionRange(4, 4);
+    await field.trigger("keydown", { key: "ArrowLeft" });
+    expect(wrapper.find(".fm-sub-slot").exists()).toBe(true);
+
+    field.element.setSelectionRange(0, 0);
+    await field.trigger("keydown", { key: "ArrowLeft" });
+    await flushPromises();
+    expect(wrapper.find(".fm-sub-slot").exists()).toBe(false);
+    expect(active()).toBe(kindRow(wrapper, "checkpoint").element);
+  });
+
+  // The field is the pick-one list's one tab stop: a click on a row must not
+  // take focus from it, or ↑/↓/Enter stop working until it is clicked again.
+  it("keeps focus in the Checkpoint search when a row is clicked", async () => {
+    const { wrapper } = await keyboardMenu();
+    const flyout = await section(wrapper, "checkpoint");
+    expect(flyout.find('[role="radiogroup"]').exists()).toBe(true);
+    const row = flyout.find('[role="radio"]').element;
+    const down = new MouseEvent("mousedown", {
+      bubbles: true,
+      cancelable: true,
+    });
+    row.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+  });
+
+  // A radio is only ever asked ON: Enter on the chosen row must not emit a
+  // request to untick it, whatever the parent then does with it.
+  it("asks for the highlighted checkpoint on, even when it is chosen", async () => {
+    const { wrapper, store } = await keyboardMenu();
+    store.setFilters({ checkpoint: "realvisXL_v5.safetensors" });
+    const flyout = await section(wrapper, "checkpoint");
+    await flyout.find("input").trigger("keydown", { key: "Enter" });
+    expect(
+      wrapper.findComponent(FilterChecklistMenu).emitted("toggle"),
+    ).toEqual([["realvisXL_v5.safetensors", true]]);
+  });
+});
+
 describe("the open stack and the filters", () => {
   const STACKED = [
     { ...CARDS[0], stack_size: 2, member_keys: ["b".repeat(64)] },
