@@ -132,6 +132,8 @@ const emit = defineEmits(["update:modelValue"]);
 /* The lightbox is dark in both themes, so its pane is a translucent
    dark-surface over the picture rather than the theme's chrome. */
 .inspector--lightbox {
+  /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
+  --v-theme-accent: var(--v-theme-dark-surface-accent);
   background: rgba(var(--v-theme-dark-surface), 0.6);
   border-left-color: rgba(var(--v-theme-on-dark-surface), 0.12);
   color: rgb(var(--v-theme-on-dark-surface));
@@ -214,8 +216,8 @@ const emit = defineEmits(["update:modelValue"]);
 }
 
 .inspector-tab-pulse {
-  width: 6px;
-  height: 6px;
+  width: var(--badge-size-dot);
+  height: var(--badge-size-dot);
   border-radius: var(--radius-pill);
   background: rgb(var(--v-theme-accent));
   box-shadow: 0 0 5px rgba(var(--v-theme-accent), 0.6);

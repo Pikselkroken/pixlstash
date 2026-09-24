@@ -154,6 +154,29 @@ export async function setWorkflowPins(workflowKey, pins) {
 }
 
 /**
+ * Replace a card's whole picture-input setup, in the open library (#1457).
+ *
+ * **Whole, so write back only a set that was read**: a row left out is a row
+ * deleted. The read is the run pre-flight's `RunGroup.picture_inputs`, which is
+ * every input of the card with its stored mode laid over it. A `fixed` input
+ * may name its picture by `picture_id`; the server stores that picture's
+ * content, so the client never has to hold a `pixel_sha` it did not read.
+ *
+ * @param {string} workflowKey
+ * @param {Array<{slot_label: string, input_name: string,
+ *   mode: "selection"|"picker"|"fixed", pixel_sha?: ?string,
+ *   picture_id?: ?number}>} inputs
+ * @returns {Promise<{inputs: Array<Object>}>}
+ */
+export async function setWorkflowInputs(workflowKey, inputs) {
+  return unwrap(
+    apiClient.put(`/workflows/${encodeURIComponent(workflowKey)}/inputs`, {
+      inputs,
+    }),
+  );
+}
+
+/**
  * Put several cards in one stack. `keys[0]` becomes the cover.
  *
  * @param {Array<string>} keys
@@ -216,7 +239,10 @@ export async function preflightWorkflowRun(body) {
  * ("run this look") or `workflow_key` ("run this card"). `target` overrides
  * which card actually runs, which is how a stack's other member is chosen.
  * `prompt` / `negative` / `loras` / `values` are overrides applied to the graph
- * at run time and are never written back into it.
+ * at run time and are never written back into it. `inputs` fills the card's
+ * picture inputs and is usually empty: the server fills the one input a
+ * selection can only mean on its own (#1457). `stack` files each new picture
+ * behind the one it was made from.
  *
  * @param {Object} body
  * @returns {Promise<{status: string, runs: number, groups: Array<Object>, prompts: Array<Object>}>}

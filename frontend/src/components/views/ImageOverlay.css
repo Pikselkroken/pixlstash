@@ -11,6 +11,8 @@
    rating menu's rows take the on-dark ring from `.ctx-menu--on-dark`). */
 .image-overlay,
 .overlay-comfy-panel {
+  /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
+  --v-theme-accent: var(--v-theme-dark-surface-accent);
   --focus-stroke: rgb(var(--v-theme-on-dark-surface));
   --focus-ring-inset: inset 0 0 0 var(--focus-width) var(--focus-stroke);
 }

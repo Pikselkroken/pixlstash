@@ -167,15 +167,15 @@
             <v-icon class="ctx-icon">mdi-image-search-outline</v-icon>
             Reverse image search
           </button>
-          <!-- 4. Run another workflow from this picture (#1406, reworded in
-               #1407). Acts on the overlay picture and closes the lightbox,
-               which the popup would otherwise open behind.
+          <!-- 4. Use this picture as the input of another workflow (#1406).
+               Acts on the overlay picture and closes the lightbox, which the
+               popup would otherwise open behind.
 
-               It used to say "Use as input for…", and it must not: the Run
-               popup sends `POST /workflows/run`, which has no `inputs` field
-               and uploads nothing into ComfyUI's input folder. The picture
-               chooses the recipe to start from; it is not fed into the
-               graph. -->
+               The name is true again since #1457: `POST /workflows/run` fills
+               a card's picture inputs, and one picture behaves like a
+               selection of one, so a workflow with one open picture input is
+               run ON this picture. A workflow that takes no picture still
+               opens, starting from this picture's recipe. -->
           <button
             v-if="comfyuiConfigured && contextImage?.id"
             class="ctx-item"
@@ -184,11 +184,11 @@
             @click="delegateWith('use-as-input', contextImage?.id)"
           >
             <Tooltip
-              text="Run another workflow, starting from this picture's recipe"
+              text="Run another workflow on this picture"
               activator="parent"
             />
             <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
-            Run another workflow…
+            Use as input for…
           </button>
           <!-- 5. Segment -->
           <button

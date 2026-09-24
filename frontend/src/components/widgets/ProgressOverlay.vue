@@ -150,6 +150,8 @@ const announcement = computed(() => {
 
 <style scoped>
 .progress-overlay {
+  /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
+  --v-theme-accent: var(--v-theme-dark-surface-accent);
   position: absolute;
   right: 12px;
   z-index: 120;

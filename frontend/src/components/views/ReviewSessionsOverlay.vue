@@ -553,6 +553,8 @@ onUnmounted(() => {
 }
 
 .rs-shell {
+  /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
+  --v-theme-accent: var(--v-theme-dark-surface-accent);
   display: flex;
   width: 100%;
   background: rgb(var(--v-theme-dark-surface));
@@ -595,6 +597,8 @@ onUnmounted(() => {
   background: rgba(0, 0, 0, 0.45);
 }
 .rs-keys {
+  /* Amber on a dark panel keeps the bright amber in both themes (#1413). */
+  --v-theme-accent: var(--v-theme-dark-surface-accent);
   width: 380px;
   max-width: calc(100vw - 32px);
   padding: 20px;

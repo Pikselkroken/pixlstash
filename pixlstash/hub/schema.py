@@ -988,6 +988,44 @@ CREATE TABLE IF NOT EXISTS workflow_unstacked (
 )
 """
 
+# Where a stored workflow FILE came from when it was pulled from a ComfyUI's
+# saved workflows (#1440), one row per path over there. Its own table rather
+# than columns on ``workflow_file``, because ``workflow_cards.forget_file``
+# deletes that row when the file is deleted, and ``dismissed`` exists precisely
+# to outlive that delete: a workflow the owner deleted here is not pulled back.
+# ``workflow_name`` is many-to-one - a pull matches by content, so two paths
+# holding one document both name the file it was stored as. ``remote_modified``
+# is the remote machine's clock in milliseconds, a hint and never an identity.
+# ``content_hash`` is ``workflow_inbox.content_hash`` of the document last read
+# from that path. It is what a dismissal really keys on: the same workflow
+# renamed in ComfyUI, reached through another spelling of its URL, or listed
+# again after an empty listing is still the workflow the owner deleted.
+_V2_WORKFLOW_ORIGIN = """
+CREATE TABLE IF NOT EXISTS workflow_origin (
+    origin           TEXT NOT NULL,
+    remote_path      TEXT NOT NULL,
+    workflow_name    TEXT,
+    remote_modified  INTEGER,
+    first_pulled_at  TEXT NOT NULL,
+    last_seen_at     TEXT NOT NULL,
+    dismissed        INTEGER NOT NULL DEFAULT 0,
+    content_hash     TEXT,
+    PRIMARY KEY (origin, remote_path)
+)
+"""
+
+# The stored workflow files a pull WROTE (#1440), as opposed to ones the owner
+# put there. Per FILE and not per path, so what a pull wrote stays pull-written
+# when ComfyUI renames, edits or stops listing the path it came from - the
+# one-off test reads it (``Card.hand_imported``). The owner handing a file over
+# (the import route, the watched inbox) takes it off; deleting the file does
+# too, since there is nothing left to describe.
+_V2_WORKFLOW_PULLED_FILE = """
+CREATE TABLE IF NOT EXISTS workflow_pulled_file (
+    workflow_name  TEXT PRIMARY KEY
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1009,6 +1047,10 @@ _V2_WORKFLOW_INDEXES = (
     # with the code that runs them.
     "CREATE INDEX IF NOT EXISTS ix_workflow_variant_key "
     "ON workflow_variant(workflow_key)",
+    # "Which pulled paths name this file" - a delete's dismissal. The primary
+    # key is by path, so without this it is a scan.
+    "CREATE INDEX IF NOT EXISTS ix_workflow_origin_name "
+    "ON workflow_origin(workflow_name)",
 )
 
 _V2_WORKFLOW_TABLES = (
@@ -1036,6 +1078,8 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_STACK,
     _V2_WORKFLOW_STACK_MEMBER,
     _V2_WORKFLOW_UNSTACKED,
+    _V2_WORKFLOW_ORIGIN,
+    _V2_WORKFLOW_PULLED_FILE,
     *_V2_WORKFLOW_INDEXES,
 )
 
@@ -1279,6 +1323,23 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
     }
     if "specials" not in core_columns:
         conn.execute("ALTER TABLE workflow_topology_core ADD COLUMN specials TEXT")
+
+    # The dismissal's content key (#1440), guarded the same way. No released
+    # hub has this table; a development hub that ran an earlier commit of the
+    # pull does, and would otherwise fail every pull on the missing column. A
+    # NULL there means "not read since", which the next pull fills in.
+    origin_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(workflow_origin)").fetchall()
+    }
+    if "content_hash" not in origin_columns:
+        conn.execute("ALTER TABLE workflow_origin ADD COLUMN content_hash TEXT")
+    # "Was this content dismissed, at any path or origin" - once per pulled
+    # document. Here and not in `_V2_WORKFLOW_INDEXES`: those run before this
+    # ALTER, and on a hub that needed it the column would not exist yet.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_workflow_origin_content "
+        "ON workflow_origin(content_hash)"
+    )
 
     # The icon column (shelf plan, the sixth verb) lands the same way the rest
     # of v2 does: amended in place rather than as a v3, because a build shipped

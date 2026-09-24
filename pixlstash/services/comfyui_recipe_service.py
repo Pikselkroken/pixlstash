@@ -29,7 +29,7 @@ from typing import Any, Optional
 import requests
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.workflow_hash import is_link
+from pixlstash.services.workflow_hash import MODEL_EXTENSIONS, is_link
 
 logger = get_logger(__name__)
 
@@ -127,7 +127,35 @@ MODEL_FILENAME_FIELDS: dict[str, tuple[str, ...]] = {
     "UpscaleModelLoader": ("model_name",),
     "HypernetworkLoader": ("hypernetwork_name",),
     "PhotoMakerLoader": ("photomaker_model_name",),
+    # The GGUF pack's CLIP loader, sibling of `UnetLoaderGGUF` above.
+    "CLIPLoaderGGUF": ("clip_name",),
 }
+
+# ComfyUI-MultiGPU wraps a loader to add device placement and names the wrapper
+# after it: `UNETLoaderDisTorch2MultiGPU` is `UNETLoader` plus placement inputs.
+# Every suffixed class whose base is in the map above keeps the base's field
+# names (23 of 23 on a live install, #1440), so the base's fields are used. A
+# suffix on a base the map does not know resolves to nothing: the rule extends
+# the map and can never invent a field. Longest suffix first, so the earliest
+# match strips the whole of it.
+_MULTIGPU_SUFFIX_RE = re.compile(r"(?:DisTorch2MultiGPU|DisTorchMultiGPU|MultiGPU)$")
+
+
+def model_filename_fields(class_type: str) -> tuple[str, ...]:
+    """The fields of *class_type* that hold a model file name, or ``()``.
+
+    :data:`MODEL_FILENAME_FIELDS`, plus a ComfyUI-MultiGPU wrapper resolved to
+    the loader it wraps. Every reader of the map goes through this, so the
+    pre-flight, the parameters and a card's model chips agree on which loaders
+    they can read.
+    """
+    fields = MODEL_FILENAME_FIELDS.get(class_type)
+    if fields is not None:
+        return fields
+    base = _MULTIGPU_SUFFIX_RE.sub("", class_type)
+    if base and base != class_type:
+        return MODEL_FILENAME_FIELDS.get(base, ())
+    return ()
 
 
 def fetch_object_info(base_url: str) -> dict:
@@ -332,7 +360,9 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
        ComfyUI's advertised combo list. Node references (``[node_id, slot]``)
        are skipped: computed at run time, not filenames. Non-enumerable fields
        are skipped and counted in ``unchecked_fields``, so a mostly-skipped
-       check cannot masquerade as a clean bill of health.
+       check cannot masquerade as a clean bill of health. A model-shaped
+       value (a model file extension) on a loader the map does not cover is
+       counted in ``unchecked_models`` for the same reason.
     3. **Input images** (``missing_input_images``) - a recipe's ``LoadImage``
        names whatever sat in *that* ComfyUI's ``input/`` directory when the
        image was generated, which is usually gone. This is a separate bucket
@@ -349,12 +379,14 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
 
     Returns:
         A dict with the four buckets above plus ``ok`` (True only when all
-        three missing-lists are empty), ``checked``, and ``unchecked_fields``.
+        three missing-lists are empty), ``checked``, ``unchecked_fields`` and
+        ``unchecked_models``.
     """
     missing_classes: list[str] = []
     missing_models: list[dict] = []
     missing_input_images: list[dict] = []
     unchecked_fields = 0
+    unchecked_models = 0
     seen_classes: set[str] = set()
     has_save_image = False
 
@@ -400,7 +432,7 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
                     )
             continue
 
-        fields = list(MODEL_FILENAME_FIELDS.get(class_type, ()))
+        fields = list(model_filename_fields(class_type))
         # Stackers spell their extra slots `lora_name_2`, `lora_name_3`, …;
         # unlike the core loader, their class gives no fixed field list. Read
         # the actual graph inputs so the pre-flight and the later bypass see
@@ -430,6 +462,16 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
                         "note": note,
                     }
                 )
+        # A model-shaped value on a loader the map does not cover was never
+        # looked at. Counted, so "no missing models" is read against how many
+        # models went unchecked rather than as a clean bill of health.
+        unchecked_models += sum(
+            1
+            for field, value in inputs.items()
+            if field not in fields
+            and isinstance(value, str)
+            and value.lower().endswith(MODEL_EXTENSIONS)
+        )
 
     return {
         "ok": not missing_classes and not missing_models and not missing_input_images,
@@ -439,6 +481,7 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
         "missing_input_images": missing_input_images,
         "has_save_image": has_save_image,
         "unchecked_fields": unchecked_fields,
+        "unchecked_models": unchecked_models,
     }
 
 
@@ -464,11 +507,8 @@ def advertised_model_names(object_info: dict) -> set[str]:
         The normalized names, empty for a map that advertises no loader.
     """
     names: set[str] = set()
-    for class_type, fields in MODEL_FILENAME_FIELDS.items():
-        spec = (object_info or {}).get(class_type)
-        if spec is None:
-            continue
-        for field in fields:
+    for class_type, spec in (object_info or {}).items():
+        for field in model_filename_fields(class_type):
             for option in _combo_options(spec, field) or ():
                 normalized = _normalize_filename(option)
                 names.add(normalized)
@@ -1417,6 +1457,7 @@ def unchecked_preflight(error: str) -> dict:
         "missing_node_classes": [],
         "missing_models": [],
         "unchecked_fields": 0,
+        "unchecked_models": 0,
     }
 
 
