@@ -148,6 +148,17 @@ describe("OptionRows", () => {
     ).toEqual(["mdi-radiobox-blank", "mdi-radiobox-blank", "mdi-radiobox-marked"]);
   });
 
+  it("draws the radio as each row's only glyph, even for an option with an icon", () => {
+    const w = mount(OptionRows, {
+      props: { options: OPTIONS, modelValue: "c" },
+    });
+    for (const row of w.findAll('[role="radio"]')) {
+      expect(row.findAll("i").map((i) => i.text().trim())).toEqual([
+        expect.stringMatching(/^mdi-radiobox-/),
+      ]);
+    }
+  });
+
   it("picks on a click, even of the current value, and never on an arrow", async () => {
     const w = mount(OptionRows, {
       props: { options: OPTIONS, modelValue: "a" },

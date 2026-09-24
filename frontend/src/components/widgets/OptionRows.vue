@@ -24,9 +24,6 @@
           o.id === modelValue ? "mdi-radiobox-marked" : "mdi-radiobox-blank"
         }}
       </v-icon>
-      <v-icon v-if="o.icon" size="16" class="optrow__icon">{{
-        iconName(o.icon)
-      }}</v-icon>
       <span class="optrow__label">{{ o.label }}</span>
       <slot name="meta" :option="o" />
     </button>
@@ -48,7 +45,8 @@ import { VIcon } from "vuetify/components";
 import { arrowStep, tabStopId } from "../../utils/radioGroup.js";
 
 const props = defineProps({
-  // [{ id, label, icon?, disabled?, testid? }]
+  // [{ id, label, disabled?, testid? }]. No option icon: the radio is the
+  // row's one glyph (docs/design/buttons.md, "The option row takes no fill").
   options: { type: Array, required: true },
   modelValue: { type: [String, Number, Boolean, null], default: null },
   columns: { type: Number, default: 1 },
@@ -61,10 +59,6 @@ const props = defineProps({
 const emit = defineEmits(["update:modelValue", "pick"]);
 
 const tabStop = computed(() => tabStopId(props.options, props.modelValue));
-
-function iconName(icon) {
-  return icon.startsWith("mdi-") ? icon : `mdi-${icon}`;
-}
 
 function select(option) {
   if (props.disabled || option.disabled) return;
@@ -128,22 +122,12 @@ function onKeydown(event) {
   font-weight: var(--weight-medium);
 }
 
-.optrow__icon {
-  flex-shrink: 0;
-  opacity: 0.55;
-}
-
-.optrow--on .optrow__icon,
-.optrow:not(:disabled):hover .optrow__icon {
-  opacity: 1;
-}
-
 .optrow__radio {
   flex-shrink: 0;
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-/* One olive mark per row: the radio. The option's own icon stays ink. */
+/* One olive mark per row: the radio. */
 .optrow--on .optrow__radio {
   color: var(--selected-ink);
 }

@@ -55,6 +55,7 @@ screenshot as evidence for or against a row. The **Open** rows are not built.
 | Pick one: `Segmented` for 2 to 5, `OptionRows` for sort by | **Approved** 2026-09-12 |
 | Option rows take no fill: trailing check and an olive label | **Approved** 2026-09-12; superseded 2026-09-23 |
 | Option rows take no fill: a leading radio on every row, olive when selected, words in `--text` | **Approved** 2026-09-23 |
+| Option rows draw no option icon: the radio is the row's one glyph | **Approved** 2026-09-24 |
 | Segmented track: trough, inset ring, concentric corners | **Approved** 2026-09-12 |
 | Popovers adopting the 28px control | **Open.** Recommended. |
 | Menus: one surface, one 32px row, one hover wash | **Approved** 2026-09-12 |
@@ -544,7 +545,10 @@ and not `--control-h`: 4 + 24 + 4 is 32, which keeps the track on
 Every row leads with a radio; the selected one is marked in olive and its
 label takes medium weight in `--text`. A trailing check sat where the next
 column starts in a two-column list, so it read as belonging to the wrong
-option; a leading radio is read with its own label. A filled row with an icon and a label, at the same height as a
+option; a leading radio is read with its own label. The radio is the row's
+only glyph: an option icon after it made two small shapes of different weight
+before every label, and pushed to the far end it sat against the next
+column's radio exactly as the check had. A filled row with an icon and a label, at the same height as a
 filled action button, is the same object at a different width, which is why the
 old one read as pressed. Nothing else in the app fills a row. **Rule: a fill
 means press me, so if it is not an action it does not get one.**

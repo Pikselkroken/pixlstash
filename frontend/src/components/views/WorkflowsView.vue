@@ -516,7 +516,6 @@ const panelId = "wfv-stack-panel";
 const sortOptions = SORT_KEYS.map((key) => ({
   id: key,
   label: SORT_LABELS[key].label,
-  icon: SORT_LABELS[key].icon,
 }));
 
 const comfyuiConfigured = computed(() => filterStore.comfyuiConfigured);

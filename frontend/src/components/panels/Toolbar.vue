@@ -874,7 +874,6 @@ const sortRowOptions = computed(() =>
   filteredSortOptions.value.map((opt) => ({
     id: opt.value,
     label: opt.label,
-    icon: gbGetSortIcon(opt.value),
   })),
 );
 
@@ -1224,9 +1223,8 @@ const gbCollapseAllStacksDisabled = computed(
 /* ── Sort panel ───────────────────────────────────────────────────────────── */
 .gb-sort-panel {
   /* Two tracks need enough room for the stack-only label plus its availability
-     glyph without ellipsis, after each row's leading radio (16px + gap). The
-     viewport cap preserves the narrow layout. */
-  width: 508px;
+     glyph without ellipsis. The viewport cap preserves the narrow layout. */
+  width: 460px;
   max-width: 92vw;
 }
 

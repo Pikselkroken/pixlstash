@@ -563,12 +563,11 @@ watch(
 );
 
 // ── Pick-one kinds ───────────────────────────────────────────────────────────
-// The off row leads with the kind's own glyph and the unfiltered count.
+// The off row carries the unfiltered count.
 function pickOptions(kind) {
   const def = PICK_ONE[kind];
-  const icon = PICTURE_KINDS.find((k) => k.id === kind).icon;
   return [
-    { id: null, label: def.anyLabel, icon, count: total.value },
+    { id: null, label: def.anyLabel, count: total.value },
     ...def.options.map((o) => ({ ...o, count: count(def.params(o.id)) })),
   ];
 }
