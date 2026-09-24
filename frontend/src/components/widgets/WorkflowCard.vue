@@ -125,7 +125,11 @@
               class="wf-card__mark"
               :class="{ 'wf-card__mark--slot': mark.slot }"
             >
-              <Tooltip :text="mark.label" activator="parent" :describe="false" />
+              <Tooltip
+                :text="mark.label"
+                activator="parent"
+                :describe="false"
+              />
               <v-icon v-if="mark.slot" size="12">mdi-plus</v-icon>
               <ModelMark v-else :row="mark.row" />
             </li>
@@ -227,11 +231,14 @@ import InfoPopover from "./InfoPopover.vue";
 import ModelMark from "./ModelMark.vue";
 import Tooltip from "./Tooltip.vue";
 
-// How many marks row 2 draws before it counts the rest (#1485). At the 240px
-// column floor the row is 228px: eight 24px marks, the hairline after the base
-// and their 4px gaps are 225px. A ninth becomes "+N", which takes the eighth
-// mark's place (seven marks, the hairline and "+N" are ~217px).
-const STRIP_MARKS = 8;
+// How many marks row 2 draws before it counts the rest (#1485). Sized for the
+// NARROWEST host, a one-column stack panel: its 1px border and --space-4
+// padding take the 240px column floor to a 214px card, whose row is 196px
+// after the card's border and --space-3 padding. Six 24px marks, the hairline,
+// "+N" and their 4px gaps are ~191px there; a seventh mark would not fit, and
+// `overflow: hidden` would then clip the "+N" rather than a mark.
+// `WorkflowCard.test.js` sums this against the tokens.
+const STRIP_MARKS = 6;
 
 const props = defineProps({
   /** One workflow card (see utils/workflowCard.js for the shape). */
@@ -408,17 +415,19 @@ const allMarks = computed(() => {
     ...loras,
   ];
 });
-const stripMarks = computed(() =>
-  allMarks.value.length > STRIP_MARKS
-    ? allMarks.value.slice(0, STRIP_MARKS - 1)
-    : allMarks.value,
-);
+const stripMarks = computed(() => allMarks.value.slice(0, STRIP_MARKS));
 const stripOverflow = computed(
   () => allMarks.value.length - stripMarks.value.length,
 );
+// Counts the workflow's own LoRAs. A recipe slot is not one (the accessible
+// name calls it a "recipe LoRA slot"), so it is only counted, as a slot, on a
+// card that has no LoRAs of its own.
 const loraCount = computed(() => {
-  const count = (props.card.loras ?? []).length;
+  const loras = props.card.loras ?? [];
+  const slots = loras.filter((lora) => lora.mark === "recipe").length;
+  const count = loras.length - slots;
   if (count) return count === 1 ? "1 LoRA" : `${count} LoRAs`;
+  if (slots) return slots === 1 ? "1 LoRA slot" : `${slots} LoRA slots`;
   return lorasAreUnread.value ? "LoRAs not read" : "No LoRAs";
 });
 const facts = computed(() => factChips(props.card, { short: true }));

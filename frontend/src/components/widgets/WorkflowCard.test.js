@@ -303,6 +303,35 @@ describe("WorkflowCard height", () => {
     }
   });
 
+  it("fits the strip's worst case in the narrowest card row", () => {
+    // A one-column stack panel is the narrowest host: its 1px border and
+    // padding come off the 240px column floor, then the card's own 1px border
+    // and the meta padding. The worst case is STRIP_MARKS marks, the hairline
+    // and "+N" (~20px, "+12" at --text-2xs) - and `overflow: hidden` clips the
+    // LAST item, which is the "+N", so it has to fit outright.
+    const t = tokens();
+    const marks = Number(
+      read("./WorkflowCard.vue").match(/STRIP_MARKS = (\d+)/)[1],
+    );
+    const floor = Number(
+      read("../views/WorkflowsView.vue").match(/COLUMN_MIN = (\d+)/)[1],
+    );
+    const panel = read("../panels/StackPanel.vue")
+      .split(".stack-panel__grid {")[1]
+      .split("}")[0];
+    const panelPad = px(panel.match(/padding: ([^;]+);/)[1], t);
+    const card = floor - 2 * 1 - 2 * panelPad;
+    const row = card - 2 * 1 - 2 * px(rule(".wf-card__meta").padding, t);
+    const gap = px(rule(".wf-card__strip").gap, t);
+    const hairline = px(rule(".wf-card__rule").width, t);
+    const worst =
+      marks * t["--entity-thumb"] + hairline + 20 + (marks + 1) * gap;
+    expect(row).toBe(196);
+    expect(worst).toBeLessThanOrEqual(row);
+    // And one more mark would not have fitted, so the cap is not loose.
+    expect(worst + t["--entity-thumb"] + gap - 20).toBeGreaterThan(row);
+  });
+
   it("keeps row 4 clear of the ⓘ button", () => {
     // ⓘ is a --control-h-sm square inset --space-3 from the card's bottom-right.
     // Row 4 sits in the same band (meta padding = the inset, row height = the
@@ -406,9 +435,9 @@ describe("WorkflowCard", () => {
   });
 
   it.each([
-    [7, 8, 0],
-    [8, 7, 2],
-    [12, 7, 6],
+    [5, 6, 0],
+    [6, 6, 1],
+    [12, 6, 7],
   ])(
     "draws a card with %i LoRAs as %i marks and a +%i",
     (count, marks, more) => {
@@ -439,6 +468,17 @@ describe("WorkflowCard", () => {
     }).findAll(".wf-card__meta > .wf-card__row")[2];
     expect(row.find(".wf-card__base").text()).toBe("juggernautXL v9");
     expect(row.find(".wf-card__lora-count").text()).toBe("1 LoRA");
+  });
+
+  it("counts a recipe slot as a slot, not as a LoRA", () => {
+    const count = (loras) =>
+      mountCard({ ...BARE, loras })
+        .find(".wf-card__lora-count")
+        .text();
+    expect(count([{ mark: "recipe" }])).toBe("1 LoRA slot");
+    expect(
+      count([{ name: "detail", mark: "structural" }, { mark: "recipe" }]),
+    ).toBe("1 LoRA");
   });
 
   it("says No LoRAs rather than leaving the row blank", () => {
