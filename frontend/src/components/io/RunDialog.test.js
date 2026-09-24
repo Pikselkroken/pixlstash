@@ -319,6 +319,19 @@ describe("switching to another stack member", () => {
     ]);
   });
 
+  it("keeps the card of a popup reopened while the old card read was out", async () => {
+    let release;
+    getWorkflowCard.mockImplementationOnce(
+      () => new Promise((resolve) => (release = () => resolve({ card: card() }))),
+    );
+    const wrapper = await mountRun({ kind: "workflow", workflowKey: KEY });
+    await wrapper.setProps({ source: { kind: "workflow", workflowKey: OTHER } });
+    await flushPromises();
+    release();
+    await flushPromises();
+    expect(wrapper.vm.card.key).toBe(OTHER);
+  });
+
   it("offers the card alone when it is in no stack", async () => {
     const wrapper = await mountRun();
     expect(wrapper.vm.workflowOptions).toEqual([

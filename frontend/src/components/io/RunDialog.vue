@@ -1687,7 +1687,11 @@ async function loadAdapters() {
  * that quietly went back to 8 is the thing the design asks to be told about.
  */
 async function loadCard(key, { keepEdits = false } = {}) {
+  // A popup reopened on another source while this read was out has its own
+  // card; this one's answer must not replace it.
+  const token = loadToken;
   const detail = await getWorkflowCard(key);
+  if (token !== loadToken) return;
   const next = detail?.card || null;
   if (!keepEdits) {
     card.value = next;
