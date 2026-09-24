@@ -589,6 +589,19 @@ const accessibleName = computed(() =>
   bottom: var(--space-3);
 }
 
+/* The stack panel's cover flag is the grid's chip (App.css), set on this
+   card's badge geometry so it and the rating badge in the opposite corner sit
+   on one baseline in one shape. */
+.wf-card__cover .stack-cover-flag {
+  left: var(--space-3);
+  bottom: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--badge-size);
+  border-radius: var(--radius-pill);
+  line-height: var(--leading-snug);
+}
+
 .wf-card__cover--empty {
   display: flex;
   flex-direction: column;

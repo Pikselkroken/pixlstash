@@ -140,6 +140,20 @@ describe("StackPanel", () => {
     expect(wrapper.findAll(".stack-cover-flag")).toHaveLength(1);
   });
 
+  it("flags a cover that has no pictures on its empty cover box", () => {
+    const wrapper = makePanel({
+      members: [
+        member("cover", { covers: [], picture_count: 0 }),
+        ...MEMBERS.slice(1),
+      ],
+    });
+    const cards = wrapper.findAll('[data-testid="workflow-card"]');
+    expect(
+      cards[0].find(".wf-card__cover--empty .stack-cover-flag").text(),
+    ).toBe("Cover");
+    expect(wrapper.findAll(".stack-cover-flag")).toHaveLength(1);
+  });
+
   it("draws List as treegrid rows with column gridcells and no table", async () => {
     useWorkflowPrefsStore().setStackView("list");
     const wrapper = makePanel();

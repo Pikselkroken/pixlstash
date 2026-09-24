@@ -5361,14 +5361,13 @@ button.shelf-head-cell:hover {
    the hairline padding and starts in the row's own left padding: about 42px
    at its widest, ending short of the name. The row's bottom padding (8px) is
    what keeps the 4px overhang out of `content-visibility`'s paint clip.
-   Hoverable, unlike the grid's, so its tooltip still says what "Cover" means;
-   a click on it still reaches the row. */
+   Not hoverable, like the grid's: it overlaps the mark, whose own tooltip names
+   the assignments, and the chip's tip still describes it to assistive tech. */
 .shelf-row-ident .stack-cover-flag {
   left: calc(var(--space-2) * -1);
   bottom: calc(var(--space-2) * -1);
   padding: 0 var(--space-1);
   letter-spacing: normal;
-  pointer-events: auto;
 }
 
 .shelf-row-label {
