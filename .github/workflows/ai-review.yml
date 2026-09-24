@@ -102,21 +102,5 @@ jobs:
           GITHUB_ACTION_CONFIG.PR_ACTIONS: '["opened", "reopened", "ready_for_review"]'
           GITHUB_ACTION_CONFIG.HANDLE_PUSH_TRIGGER: "true"
           GITHUB_ACTION_CONFIG.PUSH_COMMANDS: '["/review", "/improve"]'
-          PR_REVIEWER.EXTRA_INSTRUCTIONS: |
-            This is PixlStash: a FastAPI + SQLModel backend (pixlstash/) and a Vue 3 frontend (frontend/).
-            Skip formatting and lint findings; ruff and CI cover them. Check these repository rules:
-            - Every new or changed FastAPI data route needs a (method, path) -> RoutePolicy entry in
-              ROUTE_POLICIES (pixlstash/authz/registry.py). Inline scope checks in handlers
-              (enforce_picture_scope, require_unscoped_owner, token_scope ladders) are a finding.
-            - Alembic: every op.add_column must be guarded by an inspector check for the existing
-              column; revision variables are exported via __all__; a migration already on main is
-              never edited.
-            - CHANGELOG.md is never edited on a branch; user-visible changes add a changelog.d/ fragment.
-            - A caught exception is logged with context; `except ...: pass` is a finding.
-            - Imports sit at the top of the file; no function-local imports of torch, numpy, PIL or cv2.
-            - A new file under tests/ must be listed in the backend job in .github/workflows/ci.yml or in
-              DEFERRED_FROM_GATE in tests/test_ci_shards.py.
-            - Frontend UI uses the tokens in docs/design/design-tokens.css: no hardcoded hex colours,
-              raw rgba() shadows, off-grid spacing or ad-hoc font sizes.
-            - No RFC 1918 address literals outside tests/network_vectors.py, and no real home paths.
-            - A failed metric calculation stores -1.0 rather than leaving the value unset.
+          # The review rules, read from main for review and improve alike.
+          CONFIG.REPO_CONTEXT_FILES: '[".github/review-context.md"]'
