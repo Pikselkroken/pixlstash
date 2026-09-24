@@ -5,17 +5,18 @@ name: AI Review
 # OPENROUTER_MODEL repository variable (an OpenRouter slug such as
 # `z-ai/glm-5.3-flash`), defaulting to that when unset.
 #
-# Runs only on PRs opened by REVIEW_OWNER, or on PRs REVIEW_OWNER has approved,
-# and re-reviews on every push to them. REVIEW_OWNER can also comment a
-# PR-Agent command (`/review`, `/improve`, `/ask ...`) on any PR; that is how
-# to get a review straight after approving someone else's PR, since the
-# approval itself triggers nothing. Comment commands always run the default
-# branch's copy of this file, so they work only once it is on main.
+# Reviews automatically only when the review owner (REVIEW_OWNER_ID) is the one
+# acting: opening a PR, pushing to one (their own or a contributor's), or marking
+# it ready. A contributor's push triggers nothing, so the key is never spent on
+# input the owner has not seen; the owner re-runs it by commenting a PR-Agent
+# command (`/review`, `/improve`, `/ask ...`). Comment commands always run the
+# default branch's copy of this file.
 #
 # pull_request_target, NOT pull_request: under `pull_request` a fork PR gets no
 # secrets, so contributor PRs could never be reviewed, and the workflow judging
-# the PR would be the PR's own copy of this file. `pull_request_target` runs the
-# base branch's copy with secrets. That is only safe because nothing here checks
+# the PR would be the PR's own copy of this file. `pull_request_target` also runs
+# the default branch's copy (main), whatever the PR targets, so nothing here is
+# live until it reaches main. That is only safe because nothing here checks
 # out or executes PR code -- PR-Agent reads the diff through the API. Do not add
 # a checkout step here.
 
@@ -37,7 +38,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 env:
-  REVIEW_OWNER: lindkvis
+  # The account id, not the login: a renamed login can be registered by anyone.
+  REVIEW_OWNER_ID: "1160606"
 
 jobs:
   review:
@@ -47,11 +49,11 @@ jobs:
     steps:
       - name: Decide whether this PR is reviewed
         id: gate
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
         with:
           script: |
-            const owner = process.env.REVIEW_OWNER.toLowerCase();
-            const is = (user) => String(user?.login || "").toLowerCase() === owner;
+            const ownerId = Number(process.env.REVIEW_OWNER_ID);
+            const is = (user) => user?.id === ownerId;
             const decide = (run, why) => {
               core.info(why);
               core.setOutput("run", String(run));
@@ -67,26 +69,20 @@ jobs:
 
             const pr = context.payload.pull_request;
             if (pr.draft) return decide(false, "PR is a draft.");
-            if (is(pr.user)) return decide(true, "PR was opened by the review owner.");
-
-            const reviews = await github.paginate(github.rest.pulls.listReviews, {
-              ...context.repo,
-              pull_number: pr.number,
-            });
-            // The owner's latest decisive review, so a later "request changes"
-            // withdraws the approval instead of an old approval counting forever.
-            const last = reviews
-              .filter((r) => is(r.user) && ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state))
-              .at(-1);
-            if (last?.state === "APPROVED") return decide(true, "Review owner has approved this PR.");
-            decide(false, "PR is neither the review owner's nor approved by them.");
+            // The sender is whoever pushed, opened or reopened, not the PR author.
+            if (is(context.payload.sender)) return decide(true, "Review owner triggered this event.");
+            decide(false, "Someone other than the review owner triggered this; comment a command to review it.");
 
       - name: PR-Agent
         if: steps.gate.outputs.run == 'true'
-        uses: docker://pragent/pr-agent@sha256:65e5b196e38cecd7df8a71fe29942052e081a0c6645132c2ac874df60b1760c7 # 0.46.0-github_action
+        # Digest of the pragent/pr-agent:0.46.0-github_action image.
+        uses: docker://pragent/pr-agent@sha256:65e5b196e38cecd7df8a71fe29942052e081a0c6645132c2ac874df60b1760c7 # v0.46.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENROUTER.KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Pinned here because env overrides win over any .pr_agent.toml, which
+          # could otherwise point the key at another host.
+          OPENROUTER.API_BASE: https://openrouter.ai/api/v1
           CONFIG.MODEL: openrouter/${{ vars.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash' }}
           # The upstream default fallback is an OpenAI model we hold no key for.
           CONFIG.FALLBACK_MODELS: "[]"
