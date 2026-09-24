@@ -209,6 +209,51 @@ describe("FilterMenu", () => {
     expect(marked(atMost)).toEqual(["At most 4 stars"]);
   });
 
+  // 0 stars is unrated: a range from 0 takes the unrated with it, At most 0 is
+  // them alone, and 0 to 5 is no filter at all.
+  it("reads 0 stars as unrated, with no separate unscored switch", async () => {
+    const store = useFilterStore();
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Score");
+    const checked = () =>
+      wrapper
+        .findAll('.fm-sub [role="radio"][aria-checked="true"]')
+        .map((b) => b.attributes("aria-label"));
+    const click = (label) =>
+      wrapper.find(`[aria-label="${label}"]`).trigger("click");
+    const state = () => [
+      store.minScoreFilter,
+      store.maxScoreFilter,
+      store.unscoredOnlyFilter,
+    ];
+
+    expect(checked()).toEqual(["At least 0 stars", "At most 5 stars"]);
+    expect(wrapper.text()).not.toContain("Include unscored");
+
+    await click("At most 0 stars");
+    expect(state()).toEqual([null, 0, true]);
+    await click("At most 3 stars");
+    expect(state()).toEqual([null, 3, true]);
+    await click("At least 2 stars");
+    expect(state()).toEqual([2, 3, false]);
+    await click("At least 0 stars");
+    await click("At most 5 stars");
+    expect(state()).toEqual([null, null, false]);
+    expect(checked()).toEqual(["At least 0 stars", "At most 5 stars"]);
+  });
+
+  it("shows the stats sidebar's unrated-only filter as At most 0", async () => {
+    const store = useFilterStore();
+    store.unscoredOnlyFilter = true;
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Score");
+    expect(
+      wrapper
+        .find('[aria-label="At most 0 stars"]')
+        .attributes("aria-checked"),
+    ).toBe("true");
+  });
+
   it("gives each Score radiogroup one tab stop, moved and selected by arrows", async () => {
     const store = useFilterStore();
     const wrapper = await mountMenu();

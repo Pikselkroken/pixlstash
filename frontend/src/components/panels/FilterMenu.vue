@@ -128,11 +128,14 @@
             class="fm-row"
             type="button"
             role="radio"
-            :aria-checked="store.minScoreFilter === o.id ? 'true' : 'false'"
-            :aria-label="o.id == null ? 'Any' : `At least ${o.id} stars`"
+            :aria-checked="starValue('minScoreFilter') === o.id ? 'true' : 'false'"
+            :aria-label="`At least ${o.id} stars`"
             :tabindex="
               o.id ===
-              tabStopId(starOptions('minScoreFilter'), store.minScoreFilter)
+              tabStopId(
+                starOptions('minScoreFilter'),
+                starValue('minScoreFilter'),
+              )
                 ? 0
                 : -1
             "
@@ -140,13 +143,12 @@
             @click="setStar('minScoreFilter', o.id)"
           >
             <v-icon size="16" class="fm-row-lead">{{
-              store.minScoreFilter === o.id
+              starValue("minScoreFilter") === o.id
                 ? "mdi-radiobox-marked"
                 : "mdi-radiobox-blank"
             }}</v-icon>
             <span class="fm-row-label">
-              <template v-if="o.id == null">Any</template>
-              <span v-else class="fm-stars" aria-hidden="true">
+              <span class="fm-stars" aria-hidden="true">
                 <v-icon
                   v-for="i in 5"
                   :key="i"
@@ -171,11 +173,14 @@
             class="fm-row"
             type="button"
             role="radio"
-            :aria-checked="store.maxScoreFilter === o.id ? 'true' : 'false'"
-            :aria-label="o.id == null ? 'Any' : `At most ${o.id} stars`"
+            :aria-checked="starValue('maxScoreFilter') === o.id ? 'true' : 'false'"
+            :aria-label="`At most ${o.id} stars`"
             :tabindex="
               o.id ===
-              tabStopId(starOptions('maxScoreFilter'), store.maxScoreFilter)
+              tabStopId(
+                starOptions('maxScoreFilter'),
+                starValue('maxScoreFilter'),
+              )
                 ? 0
                 : -1
             "
@@ -183,13 +188,12 @@
             @click="setStar('maxScoreFilter', o.id)"
           >
             <v-icon size="16" class="fm-row-lead">{{
-              store.maxScoreFilter === o.id
+              starValue("maxScoreFilter") === o.id
                 ? "mdi-radiobox-marked"
                 : "mdi-radiobox-blank"
             }}</v-icon>
             <span class="fm-row-label">
-              <template v-if="o.id == null">Any</template>
-              <span v-else class="fm-stars" aria-hidden="true">
+              <span class="fm-stars" aria-hidden="true">
                 <v-icon
                   v-for="i in 5"
                   :key="i"
@@ -200,17 +204,6 @@
               </span>
             </span>
           </button>
-        </div>
-        <div class="tbm-section">
-          <label class="tbm-check fm-check">
-            <input
-              type="checkbox"
-              :checked="store.unscoredOnlyFilter"
-              @change="store.unscoredOnlyFilter = $event.target.checked"
-            />
-            <span class="fm-check-label">Include unscored</span>
-            <span class="fm-n">{{ formatCount(count("unscored=1")) }}</span>
-          </label>
         </div>
         <div class="tbm-footer">{{ scoreHint }}</div>
       </div>
@@ -459,7 +452,7 @@ const PICK_ONE = {
   },
 };
 
-const STAR_ROWS = [null, 1, 2, 3, 4, 5];
+const STAR_ROWS = [0, 1, 2, 3, 4, 5];
 const TAG_MODE_OPTIONS = [
   { id: "has", label: "Has tag" },
   { id: "lacks", label: "Lacks tag" },
@@ -592,41 +585,52 @@ function setPick(kind, id) {
 }
 
 // ── Score ────────────────────────────────────────────────────────────────────
+// 0 stars is unrated (score empty or 0), so At least 0 and At most 5 are the
+// whole library and there is no separate "Any" or "Include unscored": a range
+// from 0 takes the unrated with it, and At most 0 is the unrated alone. The
+// store keeps its three fields; `unscoredOnlyFilter` is derived from the two.
 const scoreHint = computed(() => {
   const min = store.minScoreFilter;
-  if (min === 2) return "1 is dimmed under At most: it is below the minimum.";
-  if (min > 2) {
-    return `1–${min - 1} are dimmed under At most: they are below the minimum.`;
+  if (min === 1) return "0 is dimmed under At most: it is below the minimum.";
+  if (min > 1) {
+    return `0–${min - 1} are dimmed under At most: they are below the minimum.`;
   }
-  return "At least and At most make one Score chip.";
+  return "0 stars is unrated.";
 });
+
+function starValue(field) {
+  if (field === "minScoreFilter") return store.minScoreFilter ?? 0;
+  if (store.maxScoreFilter != null) return store.maxScoreFilter;
+  // Unrated alone, as the stats sidebar sets it, reads as At most 0.
+  return store.unscoredOnlyFilter && store.minScoreFilter == null ? 0 : 5;
+}
 
 // At most rows below the minimum are disabled, which arrowStep and tabStopId
 // both skip.
 function starOptions(field) {
-  const min = store.minScoreFilter;
+  const min = store.minScoreFilter ?? 0;
   return STAR_ROWS.map((id) => ({
     id,
-    disabled:
-      field === "maxScoreFilter" && id != null && min != null && id < min,
+    disabled: field === "maxScoreFilter" && id < min,
   }));
 }
 
 function setStar(field, n) {
-  store[field] = n;
-  if (
-    field === "minScoreFilter" &&
-    n != null &&
-    store.maxScoreFilter != null &&
-    store.maxScoreFilter < n
-  ) {
-    store.maxScoreFilter = n;
+  if (field === "minScoreFilter") {
+    store.minScoreFilter = n || null;
+    if (n && store.maxScoreFilter != null && store.maxScoreFilter < n) {
+      store.maxScoreFilter = n;
+    }
+  } else {
+    store.maxScoreFilter = n === 5 ? null : n;
   }
+  store.unscoredOnlyFilter =
+    store.minScoreFilter == null && store.maxScoreFilter != null;
 }
 
 // The radiogroup contract (utils/radioGroup.js): one tab stop, arrows select.
 function onStarKeydown(event, field) {
-  const id = arrowStep(event, starOptions(field), store[field]);
+  const id = arrowStep(event, starOptions(field), starValue(field));
   if (id !== undefined) setStar(field, id);
 }
 
