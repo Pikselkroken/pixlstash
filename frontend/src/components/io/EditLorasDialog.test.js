@@ -333,6 +333,21 @@ describe("the chain as a graph", () => {
   });
 });
 
+describe("a chain that stops at a branch", () => {
+  it("says why the list is shorter than the workflow", async () => {
+    const note =
+      "The chain stops at #22 LoraLoader, because its model goes 2 ways from there.";
+    getLoraChain.mockResolvedValue(chain({ branch_note: note }));
+    const wrapper = await mountDialog();
+    expect(wrapper.find("[data-testid='eld-branch']").text()).toBe(note);
+  });
+
+  it("says nothing when the chain runs straight", async () => {
+    const wrapper = await mountDialog();
+    expect(wrapper.find("[data-testid='eld-branch']").exists()).toBe(false);
+  });
+});
+
 describe("Add a LoRA", () => {
   it("appends one picker row at the end, and sends only a picked LoRA", async () => {
     const wrapper = await mountDialog();

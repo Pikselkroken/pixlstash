@@ -1175,22 +1175,56 @@ class TestLoraInsertion:
         assert {("5", "model"), ("5", "clip")} <= rewired
         assert ("3", "model") not in rewired
 
-    def test_a_second_model_chain_of_another_kind_refuses_the_whole_graph(self):
-        """A model no LoRA loader can patch, beside one it can, is not half-done."""
+    @pytest.mark.parametrize(
+        "loader_class, kind, reader_class, field",
+        [
+            # The upscale pass after decoding: a model, and nothing to do with
+            # the MODEL path a LoRA goes on.
+            (
+                "UpscaleModelLoader",
+                "UPSCALE_MODEL",
+                "ImageUpscaleWithModel",
+                "upscale_model",
+            ),
+            ("WanVideoModelLoader", "WANVIDEOMODEL", "WanVideoSampler", "model"),
+        ],
+    )
+    def test_another_kind_of_model_does_not_stop_an_insert(
+        self, loader_class, kind, reader_class, field
+    ):
+        """Only MODEL is patched, so only the MODEL path matters."""
         graph = self._checkpoint_graph()
-        graph["20"] = {"class_type": "WanVideoModelLoader", "inputs": {}}
-        graph["21"] = {"class_type": "WanVideoSampler", "inputs": {"model": ["20", 0]}}
+        graph["20"] = {"class_type": loader_class, "inputs": {}}
+        graph["21"] = {"class_type": reader_class, "inputs": {field: ["20", 0]}}
         info = {
             **self.INFO,
-            "WanVideoModelLoader": {"output": ["WANVIDEOMODEL"]},
-            "WanVideoSampler": {"output": ["LATENT"]},
+            loader_class: {"output": [kind]},
+            reader_class: {"output": ["IMAGE"]},
             "VAEDecode": {"output": ["IMAGE"]},
         }
-        with pytest.raises(LookupError, match="own kind, which a LoRA loader cannot"):
-            plan_lora_insertion(graph, info)
-        # The control: the same graph without that chain still splices.
-        del graph["21"], graph["20"]
+        plan = plan_lora_insertion(graph, info)
+        assert plan["model"]["node_id"] == "4"
+        assert "21" not in {r["node_id"] for r in plan["rewires"]}
+
+    def test_a_branch_no_output_reads_is_not_a_second_model(self):
+        """A leftover UNET loader wired into nothing never runs in ComfyUI."""
+        graph = self._checkpoint_graph()
+        graph["9"] = {"class_type": "SaveImage", "inputs": {"images": ["8", 0]}}
+        graph["20"] = {"class_type": "UnetLoaderGGUF", "inputs": {}}
+        graph["21"] = {
+            "class_type": "ModelSamplingFlux",
+            "inputs": {"model": ["20", 0]},
+        }
+        info = {
+            **self.INFO,
+            "VAEDecode": {"output": ["IMAGE"]},
+            "SaveImage": {"output": [], "output_node": True},
+        }
         assert plan_lora_insertion(graph, info)["model"]["node_id"] == "4"
+        # The control: without `output_node` nothing says #20 is dead.
+        info["SaveImage"] = {"output": []}
+        with pytest.raises(LookupError, match="loads 2 models"):
+            plan_lora_insertion(graph, info)
 
     def test_a_spec_that_does_not_say_what_a_node_hands_on_is_refused(self):
         """An output list too short hides exactly the chain the refusals look for."""
@@ -1588,12 +1622,43 @@ class TestLoraChain:
         # A CLIP reader of the chain's end like any other.
         assert "68" in {s["node_id"] for s in chain["sinks"]}
 
-    def test_a_branching_chain_is_refused(self):
+    def test_a_branch_ends_the_chain_and_says_why(self):
+        """A two-pass sampler: #11's model is read by the next loader AND #7.
+
+        The chain stops at #11, so a LoRA added at its end reaches both; #12
+        is past the branch, left as it is, and the owner is told why the list
+        is shorter than the workflow.
+        """
         graph = self._graph()
-        # #11's model is read by the next loader AND by the sampler.
         graph["7"]["inputs"]["model2"] = ["11", 0]
-        with pytest.raises(LookupError, match="to the next loader and to #7"):
-            read_lora_chain(graph, self.INFO)
+        chain = read_lora_chain(graph, self.INFO)
+        assert [loader["node_id"] for loader in chain["loaders"]] == ["10", "11"]
+        model_readers = {s["node_id"] for s in chain["sinks"] if s["type"] == "MODEL"}
+        assert model_readers == {"7", "12"}
+        note = chain["branch_note"]
+        assert note.startswith("The chain stops at #11 LoraLoader, because its model")
+        assert "goes 2 ways" in note and "#12 LoraLoader is past the branch" in note
+
+    def test_a_straight_chain_has_no_branch_note(self):
+        assert read_lora_chain(self._graph(), self.INFO)["branch_note"] is None
+
+    def test_a_dead_branch_is_neither_a_second_model_nor_a_loader(self):
+        """A second UNET and a LoRA wired into nothing: ComfyUI never runs them."""
+        graph = self._graph(loaders=("a",))
+        graph["9"] = {"class_type": "SaveImage", "inputs": {"images": ["7", 0]}}
+        graph["20"] = {"class_type": "UnetLoaderGGUF", "inputs": {}}
+        graph["21"] = {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "lora_name": "a.safetensors",
+                "strength_model": 1.0,
+                "model": ["20", 0],
+            },
+        }
+        info = {**self.INFO, "SaveImage": {"output": [], "output_node": True}}
+        chain = read_lora_chain(graph, info)
+        assert chain["model_source"]["node_id"] == "4"
+        assert [loader["node_id"] for loader in chain["loaders"]] == ["10"]
 
     def test_two_model_sources_are_refused(self):
         graph = self._graph(loaders=("a",))
@@ -1622,13 +1687,14 @@ class TestLoraChain:
         # Refused for its shape: the read-only view still says what the chain
         # runs between, and nothing untyped does.
         graph = self._graph()
-        # #11's model is read by the next loader AND by the sampler.
-        graph["7"]["inputs"]["model2"] = ["11", 0]
-        with pytest.raises(LookupError, match="to the next loader and to #7"):
+        # A second model source for the sampler's other input.
+        graph["5"] = {"class_type": "UnetLoaderGGUF", "inputs": {}}
+        graph["7"]["inputs"]["model2"] = ["5", 0]
+        with pytest.raises(LookupError, match="loads 2 models"):
             read_lora_chain(graph, self.INFO)
         chain = read_lora_chain_untyped(graph, self.INFO)
         assert chain["model_source"]["node_id"] == "4"
-        # #7 reads the chain's end on model1 only; model2 is the branch off #11.
+        # #7 reads the chain's end on model1; model2 is the other model.
         assert [(s["node_id"], s["type"]) for s in chain["sinks"]] == [
             ("7", "MODEL"),
             ("6", "CLIP"),

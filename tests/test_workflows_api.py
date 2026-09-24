@@ -8104,9 +8104,42 @@ def _serve_chain(chained, document, info=None):
 def test_a_chain_refused_for_its_shape_still_names_both_ends(chained):
     """ComfyUI answered, so the read-only view says what the chain runs between.
 
-    Refused because loader #2's model is also read by a second sampler, so
-    there is no single order. Wrong if the sink summary is None: that is the
-    dialog's empty bottom node.
+    Refused because a second checkpoint feeds another sampler, so which model
+    the LoRAs are for is the owner's call. Wrong if the sink summary is None:
+    that is the dialog's empty bottom node.
+    """
+    _serve_chain(
+        chained,
+        _chain_document_with(
+            **{
+                "8": {
+                    "class_type": "CheckpointLoaderSimple",
+                    "inputs": {"ckpt_name": "realvisxl.safetensors"},
+                },
+                "7": {
+                    "class_type": "KSampler",
+                    "inputs": {"seed": 1, "model": ["8", 0], "positive": ["6", 0]},
+                },
+            }
+        ),
+    )
+    r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
+    assert r.status_code == 200, r.text
+    chain = r.json()
+    assert chain["editable"] is False
+    assert "loads 2 models" in chain["refusal"]
+    assert chain["source"]["node_id"] == "1"
+    assert chain["sink"]["summary"] == (
+        "KSampler #3 reads model · CLIPTextEncode #6 reads clip"
+    )
+
+
+def test_a_branch_ends_the_chain_and_the_editor_is_told_why(chained):
+    """A second sampler pass reads loader #2 before #5: the chain stops at #2.
+
+    Wrong if `editable` is false (a branch used to refuse the whole chain),
+    or `branch_note` is missing: the list is shorter than the workflow, and
+    the owner is owed the reason.
     """
     _serve_chain(
         chained,
@@ -8122,12 +8155,9 @@ def test_a_chain_refused_for_its_shape_still_names_both_ends(chained):
     r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
     assert r.status_code == 200, r.text
     chain = r.json()
-    assert chain["editable"] is False
-    assert "besides" in chain["refusal"]
-    assert chain["source"]["node_id"] == "1"
-    assert chain["sink"]["summary"] == (
-        "KSampler #3 reads model · CLIPTextEncode #6 reads clip"
-    )
+    assert chain["editable"] is True, chain["refusal"]
+    assert [loader["node_id"] for loader in chain["loaders"]] == ["2"]
+    assert chain["branch_note"].startswith("The chain stops at #2 LoraLoader")
 
 
 def test_a_character_prompt_builder_does_not_stop_a_lora_being_added(chained):

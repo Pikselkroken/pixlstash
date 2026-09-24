@@ -202,6 +202,12 @@
         </div>
       </div>
 
+      <!-- Why the list is shorter than the workflow: the model branches at
+           the chain's end, and the loaders past it are left as they are. -->
+      <p v-if="chain?.branch_note" class="eld-note eld-quiet" data-testid="eld-branch">
+        {{ chain.branch_note }}
+      </p>
+
       <!-- The empty chain says which loader class goes in, rather than
            surprising the owner with a node they did not choose. -->
       <p v-if="firstLoaderNote" class="eld-note eld-quiet">

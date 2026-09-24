@@ -329,7 +329,9 @@ export async function deleteWorkflowFile(workflowKey) {
  * @param {string} workflowKey
  * @returns {Promise<{workflow_key: string, editable: boolean, refusal: ?string,
  *   source: ?Object, sink: ?Object, loaders: Array<Object>,
- *   added_loader_class: ?string}>}
+ *   added_loader_class: ?string, branch_note: ?string}>} `branch_note` says
+ *   why the list stops before some of the workflow's loaders (the model
+ *   branches at the chain's end); null for a straight chain.
  */
 export async function getLoraChain(workflowKey) {
   return unwrap(
