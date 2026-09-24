@@ -343,76 +343,78 @@
       </div>
     </template>
 
-    <!-- The footer is the last thing in the body and sticks to its bottom, so
-         Run… is where the design puts it without a second scroll container. -->
+    <!-- The inspector's footer slot sits below the scrolling body, so Run…
+         stays where the design puts it and never scrolls. -->
     <!-- The Workflow tab's, and only its: Recipes runs a recipe from its own
          row and Tasks is the app's business, so neither wants this footer. -->
-    <div v-if="tab === 'workflow' && (card || multiple)" class="wftab-foot">
-      <AppButton
-        variant="primary"
-        icon-left="play"
-        block
-        :aria-disabled="runTarget ? undefined : 'true'"
-        :aria-describedby="runDescribedBy"
-        @click="run"
-      >
-        Run…
-      </AppButton>
-      <!-- Beside Run…, as the ComfyUI mark: the ComfyUI-PixlStash node reads
-           `?pixlstash_workflow=` and loads the graph, so without the node
-           ComfyUI opens on whatever it had last. It opens what Run… runs
-           (`runTarget`), and is refused rather than hidden otherwise, for
-           Run…'s reason. The tooltip is its accessible name. -->
-      <AppButton
-        v-if="canOpenComfyui"
-        icon-only
-        tooltip="Open in ComfyUI"
-        data-testid="wftab-open-comfyui"
-        :aria-disabled="runTarget ? undefined : 'true'"
-        :aria-describedby="runTarget ? undefined : 'wftab-open-reason'"
-        @click="openInComfyui"
-      >
-        <template #icon="{ size }"><ComfyuiIcon :size="size" /></template>
-      </AppButton>
-      <v-menu
-        v-if="card"
-        v-model="menuOpen"
-        location="top end"
-        origin="bottom end"
-        :offset="8"
-      >
-        <template #activator="{ props: menuProps }">
-          <AppButton
-            v-bind="menuProps"
-            icon-left="dots-horizontal"
-            icon-only
-            tooltip="More"
-            aria-haspopup="menu"
-            :aria-expanded="menuOpen"
-          />
-        </template>
-        <div class="tbm">
-          <div class="tbm-section">
-            <button class="wftab-item" type="button" @click="toggleHidden">
-              <v-icon size="16">{{
-                detail?.hidden ? "mdi-eye-outline" : "mdi-eye-off-outline"
-              }}</v-icon>
-              {{ detail?.hidden ? "Unhide" : "Hide" }}
-            </button>
+    <template #footer>
+      <div v-if="tab === 'workflow' && (card || multiple)" class="wftab-foot">
+        <AppButton
+          variant="primary"
+          icon-left="play"
+          block
+          :aria-disabled="runTarget ? undefined : 'true'"
+          :aria-describedby="runDescribedBy"
+          @click="run"
+        >
+          Run…
+        </AppButton>
+        <!-- Beside Run…, as the ComfyUI mark: the ComfyUI-PixlStash node reads
+             `?pixlstash_workflow=` and loads the graph, so without the node
+             ComfyUI opens on whatever it had last. It opens what Run… runs
+             (`runTarget`), and is refused rather than hidden otherwise, for
+             Run…'s reason. The tooltip is its accessible name. -->
+        <AppButton
+          v-if="canOpenComfyui"
+          icon-only
+          tooltip="Open in ComfyUI"
+          data-testid="wftab-open-comfyui"
+          :aria-disabled="runTarget ? undefined : 'true'"
+          :aria-describedby="runTarget ? undefined : 'wftab-open-reason'"
+          @click="openInComfyui"
+        >
+          <template #icon="{ size }"><ComfyuiIcon :size="size" /></template>
+        </AppButton>
+        <v-menu
+          v-if="card"
+          v-model="menuOpen"
+          location="top end"
+          origin="bottom end"
+          :offset="8"
+        >
+          <template #activator="{ props: menuProps }">
+            <AppButton
+              v-bind="menuProps"
+              icon-left="dots-horizontal"
+              icon-only
+              tooltip="More"
+              aria-haspopup="menu"
+              :aria-expanded="menuOpen"
+            />
+          </template>
+          <div class="tbm">
+            <div class="tbm-section">
+              <button class="wftab-item" type="button" @click="toggleHidden">
+                <v-icon size="16">{{
+                  detail?.hidden ? "mdi-eye-outline" : "mdi-eye-off-outline"
+                }}</v-icon>
+                {{ detail?.hidden ? "Unhide" : "Hide" }}
+              </button>
+            </div>
           </div>
-        </div>
-      </v-menu>
-      <p
-        v-if="!runTarget && canOpenComfyui"
-        id="wftab-open-reason"
-        class="wftab-note wftab-quiet"
-      >
-        Open one workflow, or one whole stack, at a time
-      </p>
-      <p v-if="!runTarget" id="wftab-run-reason" class="wftab-note wftab-quiet">
-        Run one workflow, or one whole stack, at a time
-      </p>
-    </div>
+        </v-menu>
+        <p
+          v-if="!runTarget && canOpenComfyui"
+          id="wftab-open-reason"
+          class="wftab-note wftab-quiet"
+        >
+          Open one workflow, or one whole stack, at a time
+        </p>
+        <p v-if="!runTarget" id="wftab-run-reason" class="wftab-note wftab-quiet">
+          Run one workflow, or one whole stack, at a time
+        </p>
+      </div>
+    </template>
 
     <!-- Keyed to the card it was OPENED on, not to the selection: a save
          selects the new card, and the dialog must not re-read the chain of
@@ -1353,12 +1355,6 @@ watch(
 </script>
 
 <style scoped>
-/* The body fills the rail so the footer's `margin-top: auto` reaches the
-   bottom of a short panel, and `sticky` keeps it there on a long one. */
-.wftab :deep(.inspector-body) {
-  flex: 1;
-}
-
 .wftab-empty,
 .wftab-note {
   margin: 0;
@@ -1589,23 +1585,16 @@ watch(
 }
 
 .wftab-foot {
-  position: sticky;
-  bottom: 0;
-  z-index: var(--z-sticky);
-  margin-top: auto;
+  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  /* Out over `.inspector-body`'s inline padding (--space-3) so the hairline
-     spans the whole rail instead of stopping short of its edges. Opaque in
-     the rail's own colour, so what scrolls under the sticky footer stays
-     hidden without a box showing. */
-  margin-inline: calc(-1 * var(--space-3));
+  /* The body's inline padding, so the buttons line up with the content while
+     the hairline spans the whole rail. */
   padding: var(--space-3);
   /* `border`, not `divider`: divider all but vanishes on the sidebar tone. */
   border-top: 1px solid rgb(var(--v-theme-border));
-  background: rgb(var(--v-theme-sidebar));
 }
 
 .wftab-foot > :first-child {
