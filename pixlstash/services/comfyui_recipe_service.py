@@ -962,10 +962,16 @@ def _model_links(graph: dict, object_info: dict) -> list[dict]:
         ``type`` being ``MODEL``, ``CLIP`` or ``OTHER_MODEL`` (a model of a
         kind a LoRA loader cannot patch), ``source`` ``(node_id, index)``.
 
+    **A source ComfyUI cannot type is typed by its reader instead.** A seed
+    node from a pack this ComfyUI lacks hands the sampler an INT, and the
+    sampler's own spec says ``seed`` is an INT: that link is no model, and the
+    single MODEL path from checkpoint to sampler is still there to follow. Only
+    when neither end says what the link carries is it refused.
+
     Raises:
-        LookupError: A link whose source class this ComfyUI lacks, or whose
-            output list does not reach the link's index - what it hands on is
-            unknown, and it may be the model.
+        LookupError: A link neither end can type - a source class this ComfyUI
+            lacks (or whose output list does not reach the link's index) read
+            by an input whose type is unknown too - since it may be the model.
     """
     links: list[dict] = []
     for node_id, node in graph.items():
@@ -976,22 +982,38 @@ def _model_links(graph: dict, object_info: dict) -> list[dict]:
                 continue
             source_class = graph[value[0]].get("class_type")
             spec = object_info.get(source_class)
-            if not isinstance(spec, dict):
-                raise LookupError(
-                    f"This ComfyUI has no {source_class} node, so PixlStash cannot "
-                    f"tell what node {value[0]} hands on, or where a LoRA would go."
+            outputs = spec.get("output") if isinstance(spec, dict) else None
+            if isinstance(outputs, list) and 0 <= value[1] <= len(outputs) - 1:
+                kind = outputs[value[1]]
+            else:
+                # Not a type PixlStash can read off the source: no such class,
+                # no output list, or one shorter than the graph's own link. The
+                # reader's declared input type answers instead; with neither,
+                # the link may hide exactly the second model chain the
+                # refusals below exist for.
+                kind = _declared_input_type(
+                    object_info.get(node.get("class_type")), field
                 )
-            outputs = spec.get("output")
-            if not isinstance(outputs, list) or not 0 <= value[1] <= len(outputs) - 1:
-                # Not a type PixlStash can read as "not a model": a spec with no
-                # output list, or one shorter than the graph's own link, hides
-                # exactly the second model chain the refusals below exist for.
-                raise LookupError(
-                    f"This ComfyUI does not say what {source_class} (node "
-                    f"{value[0]}) hands on, so PixlStash cannot tell whether a "
-                    "LoRA belongs there."
+                if kind is None:
+                    what = (
+                        f"This ComfyUI has no {source_class} node"
+                        if not isinstance(spec, dict)
+                        else f"This ComfyUI does not say what {source_class} hands on"
+                    )
+                    raise LookupError(
+                        f"{what}, and #{node_id} {node.get('class_type')} does not "
+                        f"say what its {field} takes, so PixlStash cannot tell "
+                        f"whether node {value[0]} hands on the model."
+                    )
+                logger.info(
+                    "Node %s (%s) cannot be typed by this ComfyUI; its link into "
+                    "#%s %s is read as %s, the type that input declares.",
+                    value[0],
+                    source_class,
+                    node_id,
+                    field,
+                    kind,
                 )
-            kind = outputs[value[1]]
             # A MODEL-ish type that is not MODEL (WANVIDEOMODEL, and the packs
             # that mint their own) is kept, because the > 1 refusal has to see
             # it: a LoRA loader cannot patch it, and a graph carrying one beside
@@ -1008,6 +1030,27 @@ def _model_links(graph: dict, object_info: dict) -> list[dict]:
                     }
                 )
     return links
+
+
+def _declared_input_type(node_spec: dict | None, field: str) -> str | None:
+    """The type *node_spec* declares for its input *field*, or ``None``.
+
+    A combo (a list of options) is a value, not a link type, and reads as
+    ``"COMBO"``. ``None`` for an unknown class, an undeclared field, or the
+    wildcard ``*``, none of which says what the link carries.
+    """
+    inputs = node_spec.get("input") if isinstance(node_spec, dict) else None
+    for group in ("required", "optional"):
+        entry = ((inputs or {}).get(group) or {}).get(field)
+        if not isinstance(entry, (list, tuple)) or not entry:
+            continue
+        declared = entry[0]
+        if isinstance(declared, list):
+            return "COMBO"
+        if isinstance(declared, str) and declared and declared != "*":
+            return declared
+        return None
+    return None
 
 
 def _source_of(graph: dict, links: list[dict], kind: str) -> dict | None:
@@ -1437,8 +1480,8 @@ def _chain_loader(node_id: str, node: dict, object_info: dict) -> dict | None:
     wired into its model - is ``None`` too: an ordinary node of the graph,
     which loaders can go in front of or after, but not one this chain edits.
 
-    Raises:
-        LookupError: A class this ComfyUI lacks, whose wiring cannot be read.
+    A class this ComfyUI lacks is ``None`` as well: its wiring cannot be read,
+    so it cannot be moved, but loaders can still go around it.
     """
     inputs = node["inputs"]
     class_type = node.get("class_type")
@@ -1456,10 +1499,13 @@ def _chain_loader(node_id: str, node: dict, object_info: dict) -> dict | None:
         return None
     spec = object_info.get(class_type)
     if not isinstance(spec, dict):
-        raise LookupError(
-            f"This ComfyUI has no {class_type} node, so PixlStash cannot tell "
-            f"how node {node_id} is wired into the LoRA chain."
+        logger.info(
+            "Node %s (%s) loads a LoRA and this ComfyUI does not have its class, "
+            "so it is left in the graph as it is rather than edited as a link.",
+            node_id,
+            class_type,
         )
+        return None
     outputs = spec.get("output") if isinstance(spec.get("output"), list) else []
     model_field = _input_of_type(spec, "MODEL")
     clip_field = _input_of_type(spec, "CLIP")

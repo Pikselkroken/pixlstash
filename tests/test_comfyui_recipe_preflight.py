@@ -1106,6 +1106,53 @@ class TestLoraInsertion:
         assert plan["model"]["node_id"] == "4"
         assert ("3", "model") in {(r["node_id"], r["field"]) for r in plan["rewires"]}
 
+    def _sampler_spec(self):
+        return {
+            "input": {
+                "required": {
+                    "model": ["MODEL", {}],
+                    "seed": ["INT", {"default": 0}],
+                    "positive": ["CONDITIONING", {}],
+                    "negative": ["CONDITIONING", {}],
+                }
+            },
+            "output": ["LATENT"],
+        }
+
+    def test_a_seed_node_this_comfyui_lacks_does_not_stop_an_insert(self):
+        """The sampler says its seed is an INT, so that link is no model.
+
+        The single MODEL path from the checkpoint to the sampler is still there
+        to follow; refusing here was "cannot tell where a LoRA would go" over a
+        number.
+        """
+        graph = self._checkpoint_graph()
+        graph["20"] = {"class_type": "Seed (rgthree)", "inputs": {"seed": 42}}
+        graph["3"]["inputs"]["seed"] = ["20", 0]
+        info = {**self.INFO, "KSampler": self._sampler_spec()}
+        plan = plan_lora_insertion(graph, info)
+        assert plan["model"]["node_id"] == "4"
+        assert ("3", "model") in {(r["node_id"], r["field"]) for r in plan["rewires"]}
+
+    def test_a_model_loader_this_comfyui_lacks_is_typed_by_its_reader(self):
+        """The sampler's `model` input says MODEL, so the unknown node is the source."""
+        graph = self._checkpoint_graph()
+        graph["20"] = {"class_type": "SomePackUnetLoader", "inputs": {"name": "x"}}
+        graph["3"]["inputs"]["model"] = ["20", 0]
+        info = {**self.INFO, "KSampler": self._sampler_spec()}
+        plan = plan_lora_insertion(graph, info)
+        assert plan["model"]["node_id"] == "20"
+
+    def test_a_link_neither_end_can_type_is_still_refused(self):
+        """An unknown node read by an input nobody declares may be the model."""
+        graph = self._checkpoint_graph()
+        graph["20"] = {"class_type": "MysteryNode", "inputs": {}}
+        graph["21"] = {"class_type": "OtherMystery", "inputs": {"thing": ["20", 0]}}
+        with pytest.raises(
+            LookupError, match="no MysteryNode node.*hands on the model"
+        ):
+            plan_lora_insertion(graph, self.INFO)
+
     def test_a_stacker_in_the_model_path_reads_the_inserted_loader(self):
         """It sits after the model source, so it is one of the readers rewired."""
         graph = self._checkpoint_graph()
@@ -1509,6 +1556,16 @@ class TestLoraChain:
     def test_a_prompt_tag_node_does_not_stop_the_chain_being_edited(self):
         graph = self._graph(loaders=("a",))
         graph["6"]["inputs"]["text"] = "a cat <lora:style:0.8>"
+        chain = read_lora_chain(graph, self.INFO)
+        assert [loader["node_id"] for loader in chain["loaders"]] == ["10"]
+
+    def test_a_lora_node_this_comfyui_lacks_is_left_out_of_the_chain(self):
+        """Its wiring cannot be read, so it is not moved; the chain still reads."""
+        graph = self._graph(loaders=("a",))
+        graph["68"] = {
+            "class_type": "UninstalledLoraThing",
+            "inputs": {"lora_name": "hero.safetensors", "clip": ["10", 1]},
+        }
         chain = read_lora_chain(graph, self.INFO)
         assert [loader["node_id"] for loader in chain["loaders"]] == ["10"]
 

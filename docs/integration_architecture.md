@@ -1073,9 +1073,11 @@ it asks the owner's ComfyUI) answers `{workflow, has_lora_loader, plan,
 reason}`, `plan` being `{model: {node_id, class_type, output}, clip: … | null,
 rewires: [{node_id, class_type, field, type}], pixlstash_loader}` and `null`
 with a `reason` when no loader can go in (several models or text encoders, a
-second model chain of another kind, a node already loading a LoRA some way of
-its own, a CLIP source that reads the model, no model, a node this ComfyUI
-lacks or that does not say what it hands on, ComfyUI unreachable).
+second model chain of another kind, a CLIP source that reads the model, no
+model, a link neither end can type - a node this ComfyUI lacks read by an input
+whose type is unknown too - ComfyUI unreachable). A node loading a LoRA its own
+way, or a missing node whose reader declares a non-model type (a seed from an
+uninstalled pack), does not stop it.
 `has_lora_loader` is `null` for a UI-format file, which may carry a loader
 nobody can read. `pixlstash_loader` says the digest loader could be the one
 inserted, which leaves the outputs unreplayable by a later replay of the same

@@ -7893,80 +7893,22 @@ def test_inserting_a_loader_leaves_the_original_workflow_alone(loaderless):
     assert len(written) == len(LOADERLESS_DOCUMENT) + 1
 
 
-def test_inserting_a_loader_into_a_workflow_that_has_one_is_refused_with_the_reason(
-    runnable, tmp_path
+def test_inserting_a_loader_into_a_workflow_that_has_one_adds_it_after_the_source(
+    chained,
 ):
-    """Stacking a second adapter silently is the failure #1376 refuses."""
-    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
-    runnable.monkeypatch.setattr(
-        workflows_routes,
-        "_load_embedded_api_prompt",
-        lambda server, pid, object_info=None: (_embedded_export_graph(), []),
-    )
-    r = runnable.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
-    assert r.status_code == 409, r.text
-    assert "lora" in r.json()["detail"].lower()
+    """A loader always goes in the MODEL path, whatever loaders are there already.
 
-
-def _forget_run_checkpoint_name(server) -> None:
-    """RUN_CARD's checkpoint as a card whose name the hub no longer holds."""
-    with server.hub.transaction() as conn:
-        conn.execute(
-            "DELETE FROM workflow_recipe_asset "
-            "WHERE structural_hash = ? AND widget_name = 'ckpt_name'",
-            (RUN_RECIPE,),
-        )
-
-
-def test_an_unnamed_checkpoint_is_named_from_the_graph_a_run_would_submit(
-    loaderless,
-):
-    """The card forgot the name; the graph it runs from did not.
-
-    "Not recorded" told the owner nothing they could act on. The file the
-    graph loads is what they would go looking for, so the detail serves it -
-    folders and all, for the tooltip; the client shows the file name alone.
+    Spliced right after the checkpoint, so the existing chain reads it. #1376
+    refused this; the owner's rule since is that the MODEL path from the
+    model source to the sampler always takes another LoRA.
     """
-    graph = json.loads(json.dumps(LOADERLESS_DOCUMENT))
-    graph["1"]["inputs"]["ckpt_name"] = "SDXL/juggernautXL_v9.safetensors"
-    # Not a base model: the row is the checkpoint's, not every file's.
-    graph["9"] = {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}}
-    loaderless.monkeypatch.setattr(
-        workflows_routes,
-        "_load_embedded_api_prompt",
-        lambda server, pid, object_info=None: (json.loads(json.dumps(graph)), []),
-    )
-    _forget_run_checkpoint_name(loaderless.server)
-    body = loaderless.owner.get(f"{API}/workflows/{RUN_CARD}").json()
-    base = [m for m in body["card"]["models"] if m["kind"] == "checkpoint"]
-    assert base and base[0]["name"] is None, body["card"]["models"]
-    assert body["graph_base_models"] == ["SDXL/juggernautXL_v9.safetensors"]
-
-
-def test_a_graph_that_loads_no_base_model_says_so_as_an_empty_list(loaderless):
-    """`[]` is an answer - read, and no base model - and `null` is none."""
-    graph = {
-        "1": {"class_type": "LoadImage", "inputs": {"image": "in.png"}},
-        "2": {
-            "class_type": "UpscaleModelLoader",
-            "inputs": {"model_name": "4x-ultrasharp.pth"},
-        },
-        "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
-    }
-    loaderless.monkeypatch.setattr(
-        workflows_routes,
-        "_load_embedded_api_prompt",
-        lambda server, pid, object_info=None: (json.loads(json.dumps(graph)), []),
-    )
-    _forget_run_checkpoint_name(loaderless.server)
-    body = loaderless.owner.get(f"{API}/workflows/{RUN_CARD}").json()
-    assert body["graph_base_models"] == []
-
-
-def test_a_named_checkpoint_does_not_read_the_graph_again(runnable):
-    """The card already says it, so the detail pays for no source read."""
-    body = runnable.owner.get(f"{API}/workflows/{RUN_CARD}").json()
-    assert body["graph_base_models"] is None
+    r = chained.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
+    assert r.status_code == 201, r.text
+    body = r.json()
+    written = json.loads((chained.tmp_path / body["name"]).read_text())
+    new = body["node_id"]
+    assert written[new]["inputs"]["model"] == ["1", 0]
+    assert written["2"]["inputs"]["model"] == [new, 0]
 
 
 def test_inserting_a_loader_without_comfyui_is_a_503_not_a_guess(runnable, tmp_path):
