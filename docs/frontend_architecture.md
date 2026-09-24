@@ -218,7 +218,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 |-------|------|-----------|
 | `useViewStore` | `useViewStore.js` | The route's parsed reflection: `view` (the resolved view descriptor) and `activeFolderKey`. Owns the app's **single route watcher** and is the only writer of route-derived selection/project state. Never pushes a route. See §4.5. |
 | `useSelectionStore` | `useSelectionStore.js` | `selectedCharacter`, `selectedCharacterIds`, `selectedSet`, `selectedSetIds`, `selectedFolderFilter` |
-| `useFilterStore` | `useFilterStore.js` | `mediaTypeFilter`, `minScoreFilter`, `maxScoreFilter`, `unscoredOnlyFilter`, `tagFilter`, `tagRejectedFilter`, `faceBboxFilter`, `sharedOnlyFilter`, `unassignedOnlyFilter`, etc. `minScoreFilter`/`maxScoreFilter`/`unscoredOnlyFilter` are writable computeds, not bare refs: "unscored" (`unscored=1`, i.e. `score IS NULL OR score = 0`) combines with a score range as "range OR unrated" (the filter menu's "Include unscored"), so the setters no longer clear each other; a surface that means one or the other, like the stats sidebar's score bars, clears the other kind itself. |
+| `useFilterStore` | `useFilterStore.js` | `mediaTypeFilter`, `minScoreFilter`, `maxScoreFilter`, `unscoredOnlyFilter`, `tagFilter`, `tagRejectedFilter`, `faceBboxFilter`, `sharedOnlyFilter`, `unassignedOnlyFilter`, `comfyuiConfigured` and `comfyuiUrl` (the configured ComfyUI address, set by `useAppConfig` and the ComfyUI settings section; both cleared on session change, since a share token cannot re-read the owner's config to overwrite them, `sessionReset.test.js`), etc. `minScoreFilter`/`maxScoreFilter`/`unscoredOnlyFilter` are writable computeds, not bare refs: "unscored" (`unscored=1`, i.e. `score IS NULL OR score = 0`) combines with a score range as "range OR unrated" (the filter menu's "Include unscored"), so the setters no longer clear each other; a surface that means one or the other, like the stats sidebar's score bars, clears the other kind itself. |
 | `useSortStore` | `useSortStore.js` | `selectedSort`, `selectedDescending`, `sortOptions`, `similarityCharacterOptions`, `selectedSimilarityCharacter` |
 | `useGridStore` | `useGridStore.js` | `columns`, `thumbnailSize`, `sidebarThumbnailSize`, `gridVersion`, `wsUpdateKey`, `showStars`, `showFaceBboxes`, `showProblemIcon`, `showStacks`, `stackThreshold`, `expandedStackCount`, `totalStackCount`, `compactMode`, `visibleRangeLabel` |
 | `useExportStore` | `useExportStore.js` | `exportType`, `exportCaptionMode`, `exportResolution`, `exportTagFormat`, `exportIncludeCharacterName`, `exportUseOriginalFileNames`, etc. |
@@ -2024,6 +2024,24 @@ the card is, and a card with no saved recipe yet would otherwise open on an
 empty list. The footer is the Workflow tab's alone: Recipes runs a recipe from
 its own row, and Tasks replaces the body, so Run… would act on a card the reader
 can no longer see.
+
+- **Open in ComfyUI is an icon-only button beside Run…**, wearing the ComfyUI
+  logomark (`widgets/ComfyuiIcon.vue`, `currentColor` on the AiToolkitIcon
+  pattern), shown while `comfyuiUrl` is set. It opens what Run… runs
+  (`runTarget`: the card, or the cover of a stack selected whole) and is
+  refused with a reason, not hidden, for any other selection of several, like
+  Run…. ComfyUI takes no workflow from a URL, so it opens the configured
+  address with `?pixlstash_workflow=<key>`, and the ComfyUI-PixlStash node reads
+  the key and fetches `GET /workflows/{key}/graph`. Without that node ComfyUI
+  opens on whatever it had last. In a browser it is a synchronous `window.open`
+  (one after an await is a blocked popup). **On the desktop it goes through
+  `pixlstashDesktop.openComfyui`** (`desktop:openComfyui`), because the shell's
+  `openExternalSafely` refuses `http:` and ComfyUI is plain `http:`: the channel
+  is app-window-only and opens nothing but an `http(s)` URL whose sole query
+  parameter is a card key (`electron/src/urlPolicy.ts::comfyuiOpenTarget`). An
+  older shell without the bridge gets no button. An address of `0.0.0.0` is
+  sent to the page's own host. The address is the one the *server* reaches
+  ComfyUI on, so a browser on another machine resolves it against itself.
 
 - **Tasks is the shared `TasksPanel`, and always last.** This view replaces
   the grid, and its rail replaces the grid's, so without the tab a run started

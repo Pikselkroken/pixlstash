@@ -1779,6 +1779,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Export a card's graph, resolved from the whole library; owner only",
     ),
+    ("GET", "/api/v1/workflows/{workflow_key}/graph"): RoutePolicy(
+        _OWNER,
+        justification="A card's graph unscrubbed, for the owner's own ComfyUI; owner only",
+    ),
     ("POST", "/api/v1/workflows/{workflow_key}/duplicate"): RoutePolicy(
         _OWNER,
         justification="Write a copy of a card's workflow to disk; POST blocked for READ tokens; owner only",

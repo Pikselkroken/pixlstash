@@ -39,6 +39,9 @@ contextBridge.exposeInMainWorld('pixlstashDesktop', {
   askStartupQuestion: (step: string) => ipcRenderer.invoke('startup:askQuestion', step),
   openLibraryFolder: () => ipcRenderer.invoke('desktop:openLibraryFolder'),
   showLogs: () => ipcRenderer.invoke('desktop:showLogs'),
+  // Open in ComfyUI: main opens it in the OS browser, and only a ComfyUI
+  // workflow link (`comfyuiOpenTarget`).
+  openComfyui: (url: string) => ipcRenderer.invoke('desktop:openComfyui', url),
   // Narrow media operations for the web-app lightbox. The renderer supplies
   // authenticated bytes; only main chooses a destination or touches clipboard.
   beginMediaSaveAs: (suggestedName: string) =>

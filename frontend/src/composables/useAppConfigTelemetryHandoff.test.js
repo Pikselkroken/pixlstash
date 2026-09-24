@@ -20,6 +20,8 @@ vi.mock("../api/config", () => ({
 
 vi.mock("../utils/apiClient", () => ({
   isReadOnly: { value: false },
+  // The filter store registers for session resets; nothing resets here.
+  onSessionReset: () => () => {},
 }));
 
 import { getUserConfig } from "../api/config";

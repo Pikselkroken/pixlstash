@@ -143,6 +143,9 @@ _WORKFLOW_ROUTES = (
     # The LoRA chain editor's read (#1478): the whole-library graph, the shelf
     # LoRA each loader loads, and the owner's ComfyUI behind it.
     ("GET", "/api/v1/workflows/{workflow_key}/lora-chain"),
+    # Open in ComfyUI: the same graph unscrubbed, so owner-only for the same
+    # reason and with even more to lose.
+    ("GET", "/api/v1/workflows/{workflow_key}/graph"),
 )
 
 # The card and stack writes (v1.12 B4), pinned in their own tuple: the reads
@@ -936,6 +939,10 @@ def test_no_scoped_token_can_read_the_workflow_library(workflow_env):
             f"{API}/workflows/{BUSY_CARD}/lora-chain",
             API + "/workflows/{workflow_key}/lora-chain",
         ),
+        (
+            f"{API}/workflows/{BUSY_CARD}/graph",
+            API + "/workflows/{workflow_key}/graph",
+        ),
     )
     for path, template in paths:
         assert_real_route(workflow_env.server.api, "GET", path, template)
@@ -985,6 +992,7 @@ _TEMPLATED_PATHS = (
     # The export (v1.12 B8) hands back a whole graph, so it is the one here
     # with most to lose from the rollback.
     (f"{API}/workflows/{BUSY_CARD}/export", API + "/workflows/{workflow_key}/export"),
+    (f"{API}/workflows/{BUSY_CARD}/graph", API + "/workflows/{workflow_key}/graph"),
 )
 
 
@@ -7647,6 +7655,72 @@ def test_exporting_an_unknown_card_is_a_404(workflow_env):
         workflow_env.owner.get(f"{API}/workflows/{_h('nope')}/export").status_code
         == 404
     )
+
+
+def test_the_runnable_graph_is_the_run_unscrubbed(exportable):
+    """Open in ComfyUI hands the owner's own ComfyUI what ran, not the export."""
+    r = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/graph")
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["source"] == "picture"
+    assert payload["name"]
+    assert payload["workflow"]["5"]["inputs"]["text"] == EXPORT_PROMPT
+    assert payload["workflow"]["2"]["inputs"]["lora_name"] == FORGOTTEN_LORA
+    assert payload["workflow"]["3"]["inputs"]["seed"] == 4242
+
+
+def test_the_runnable_graph_of_a_card_without_one_is_a_409_and_unknown_a_404(
+    workflow_env, monkeypatch
+):
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+    )
+    assert (
+        workflow_env.owner.get(f"{API}/workflows/{BINNED_CARD}/graph").status_code
+        == 409
+    )
+    assert (
+        workflow_env.owner.get(f"{API}/workflows/{_h('nope')}/graph").status_code == 404
+    )
+
+
+def test_the_runnable_graph_blanks_a_credential_widget(exportable):
+    """It crosses the network into ComfyUI's page, so a key does not."""
+    exportable.graph["8"] = {
+        "class_type": "SomeApiNode",
+        "inputs": {"api_key": "example-key", "model": "keep-me"},
+    }
+    graph = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/graph").json()["workflow"]
+    assert graph["8"]["inputs"] == {"api_key": "", "model": "keep-me"}
+
+
+def test_the_runnable_graph_loads_the_copy_run_would(runnable, merged_checkpoint):
+    """Resolved against this ComfyUI like Run… is, so a merged copy loads (#1439)."""
+    merged_checkpoint(keeper="kept.safetensors")
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [
+        ["kept.safetensors"],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    graph = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/graph").json()["workflow"]
+    assert graph["1"]["inputs"]["ckpt_name"] == "kept.safetensors"
+
+
+def test_a_runnable_graph_from_a_stored_recipe_says_it_has_no_seed(
+    runnable, monkeypatch
+):
+    """The instance tier nulls seeds by design; the node has to be told."""
+
+    def gone(server, picture_id, object_info=None):
+        raise HTTPException(status_code=404, detail="Picture file missing")
+
+    monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", gone)
+    payload = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/graph").json()
+    assert payload["source"] == "instance", payload
+    assert payload["seedless"] is True
 
 
 def test_duplicating_writes_a_runnable_file_the_original_does_not_lose(

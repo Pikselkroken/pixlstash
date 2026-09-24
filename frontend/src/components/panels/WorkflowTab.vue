@@ -358,6 +358,22 @@
       >
         Run…
       </AppButton>
+      <!-- Beside Run…, as the ComfyUI mark: the ComfyUI-PixlStash node reads
+           `?pixlstash_workflow=` and loads the graph, so without the node
+           ComfyUI opens on whatever it had last. It opens what Run… runs
+           (`runTarget`), and is refused rather than hidden otherwise, for
+           Run…'s reason. The tooltip is its accessible name. -->
+      <AppButton
+        v-if="canOpenComfyui"
+        icon-only
+        tooltip="Open in ComfyUI"
+        data-testid="wftab-open-comfyui"
+        :aria-disabled="runTarget ? undefined : 'true'"
+        :aria-describedby="runTarget ? undefined : 'wftab-open-reason'"
+        @click="openInComfyui"
+      >
+        <template #icon="{ size }"><ComfyuiIcon :size="size" /></template>
+      </AppButton>
       <v-menu
         v-if="card"
         v-model="menuOpen"
@@ -386,6 +402,13 @@
           </div>
         </div>
       </v-menu>
+      <p
+        v-if="!runTarget && canOpenComfyui"
+        id="wftab-open-reason"
+        class="wftab-note wftab-quiet"
+      >
+        Open one workflow, or one whole stack, at a time
+      </p>
       <p v-if="!runTarget" id="wftab-run-reason" class="wftab-note wftab-quiet">
         Run one workflow, or one whole stack, at a time
       </p>
@@ -433,6 +456,7 @@ import {
   workflowCoverUrl,
 } from "../../api/workflows";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
+import { useFilterStore } from "../../stores/useFilterStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
@@ -449,6 +473,7 @@ import {
 } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
+import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import EditLorasDialog from "../io/EditLorasDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
@@ -475,6 +500,18 @@ const store = useWorkflowsStore();
 const { showPictures } = useWorkflowPictures();
 const sidebarStore = useSidebarStore();
 const notices = useNoticeStore();
+const filterStore = useFilterStore();
+/**
+ * The desktop shell's bridge, when there is one. Its window opens only `https:`
+ * outside the app and ComfyUI is plain `http:`, so on the desktop the link goes
+ * through `desktop:openComfyui` instead of `window.open`.
+ */
+const desktop = typeof window !== "undefined" ? window.pixlstashDesktop : null;
+
+/** Whether there is a ComfyUI to open, and a way to open it from here. */
+const canOpenComfyui = computed(
+  () => Boolean(filterStore.comfyuiUrl) && (!desktop || !!desktop.openComfyui),
+);
 const runDialog = useRunDialogStore();
 const tasksStore = useTasksStore();
 
@@ -1218,6 +1255,52 @@ function run() {
     coverUrl: target.covers?.[0] ? workflowCoverUrl(target.covers[0]) : "",
     emptyPrompt: true,
   });
+}
+
+/**
+ * Open ComfyUI on what Run… runs (`runTarget`), in a new tab.
+ *
+ * ComfyUI takes no workflow from a URL, so the key rides along as
+ * `?pixlstash_workflow=` and the ComfyUI-PixlStash node fetches the graph
+ * (`GET /workflows/{key}/graph`) and loads it. Synchronous on purpose: a
+ * `window.open` after an await is what popup blockers refuse.
+ */
+function openInComfyui() {
+  const target = runTarget.value;
+  if (!target || !filterStore.comfyuiUrl) return;
+  let url;
+  try {
+    url = new URL(filterStore.comfyuiUrl);
+  } catch (err) {
+    console.warn(`[workflows] bad ComfyUI address ${filterStore.comfyuiUrl}`, err);
+    url = null;
+  }
+  if (!url || !/^https?:$/.test(url.protocol)) {
+    notices.push({
+      level: "error",
+      text: "The ComfyUI address in Settings is not a web address.",
+    });
+    return;
+  }
+  // `0.0.0.0` is ComfyUI listening everywhere: fine for the server, and a
+  // browser cannot navigate to it. The machine this page came from is the one.
+  if (["0.0.0.0", "[::]"].includes(url.hostname)) {
+    url.hostname = window.location.hostname;
+  }
+  url.searchParams.set("pixlstash_workflow", target.key);
+  if (desktop?.openComfyui) {
+    desktop
+      .openComfyui(url.toString())
+      .then((opened) => {
+        if (!opened) throw new Error("the shell refused the link");
+      })
+      .catch((err) => {
+        console.warn("[workflows] the desktop shell would not open ComfyUI", err);
+        notices.push({ level: "error", text: "Could not open ComfyUI." });
+      });
+    return;
+  }
+  window.open(url.toString(), "_blank", "noopener,noreferrer");
 }
 
 watch(

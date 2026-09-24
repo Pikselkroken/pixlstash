@@ -753,6 +753,7 @@ Public guest scoring and shared-link endpoints.
 | PUT    | /api/v1/workflows/{workflow_key}/defaults                                     | workflows       | Set a card's parameter defaults                             |
 | POST   | /api/v1/workflows/{workflow_key}/duplicate                                    | workflows       | Duplicate a workflow                                        |
 | GET    | /api/v1/workflows/{workflow_key}/export                                       | workflows       | Export a workflow                                           |
+| GET    | /api/v1/workflows/{workflow_key}/graph                                        | workflows       | A workflow's runnable graph                                 |
 | PUT    | /api/v1/workflows/{workflow_key}/inputs                                       | workflows       | Set a card's picture inputs                                 |
 | POST   | /api/v1/workflows/{workflow_key}/insert-lora-loader                           | workflows       | Add a LoRA loader to a workflow                             |
 | GET    | /api/v1/workflows/{workflow_key}/lora-chain                                   | workflows       | A workflow's LoRA chain                                     |
