@@ -160,7 +160,7 @@
             :disabled="o.disabled"
             @click="setStar('minScoreFilter', o.id)"
           >
-            <v-icon size="16" class="fm-row-radio">{{
+            <v-icon size="16" class="fm-row-lead">{{
               store.minScoreFilter === o.id
                 ? "mdi-radiobox-marked"
                 : "mdi-radiobox-blank"
@@ -203,7 +203,7 @@
             :disabled="o.disabled"
             @click="setStar('maxScoreFilter', o.id)"
           >
-            <v-icon size="16" class="fm-row-radio">{{
+            <v-icon size="16" class="fm-row-lead">{{
               store.maxScoreFilter === o.id
                 ? "mdi-radiobox-marked"
                 : "mdi-radiobox-blank"

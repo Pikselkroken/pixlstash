@@ -1001,9 +1001,9 @@ kbd {
 
 /* ── Filter menus: a root menu of kinds and one submenu beside it ───────────
    Shared by FilterMenu, FilterChecklistMenu and FilterConfidenceMenu, which is
-   why they are global. Rows follow OptionRows: 28px, radius-sm, hover wash, no
-   fill; a leading radio marks a pick-one row, a trailing chevron opens a
-   submenu, a trailing number is a count. */
+   why they are global. Rows follow OptionRows at the menu row's 32px:
+   radius-sm, hover wash, no fill; a leading radio marks a pick-one row, a
+   trailing chevron opens a submenu, a trailing number is a count. */
 .fm-sub {
   width: var(--filter-submenu-w);
   max-width: 94vw;
@@ -1056,11 +1056,7 @@ kbd {
   flex-shrink: 0;
   opacity: var(--opacity-text-secondary);
 }
-.fm-row-radio {
-  flex-shrink: 0;
-  opacity: var(--opacity-text-secondary);
-}
-.fm-row[aria-checked="true"] .fm-row-radio {
+.fm-row[aria-checked="true"] .fm-row-lead {
   color: var(--selected-ink);
   opacity: 1;
 }

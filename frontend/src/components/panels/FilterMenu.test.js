@@ -184,6 +184,28 @@ describe("FilterMenu", () => {
     );
   });
 
+  it("marks each Score row's radio from its own group's value", async () => {
+    const store = useFilterStore();
+    store.minScoreFilter = 3;
+    store.maxScoreFilter = 4;
+    const wrapper = mount(FilterMenu, {
+      props: { countBaseQuery: "set_id=4", open: true },
+      // Renders the icon name, which the `true` stub drops.
+      global: { stubs: { "v-icon": { template: "<i><slot /></i>" } } },
+    });
+    await flushPromises();
+    await openKind(wrapper, "Score");
+    const marked = (group) =>
+      group
+        .findAll('[role="radio"]')
+        .filter((b) => b.text().includes("mdi-radiobox-marked"))
+        .map((b) => b.attributes("aria-label"));
+
+    const [atLeast, atMost] = wrapper.findAll('.fm-sub [role="radiogroup"]');
+    expect(marked(atLeast)).toEqual(["At least 3 stars"]);
+    expect(marked(atMost)).toEqual(["At most 4 stars"]);
+  });
+
   it("gives each Score radiogroup one tab stop, moved and selected by arrows", async () => {
     const store = useFilterStore();
     const wrapper = await mountMenu();

@@ -143,7 +143,7 @@ function onKeydown(event) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.optrow--on .optrow__icon,
+/* One olive mark per row: the radio. The option's own icon stays ink. */
 .optrow--on .optrow__radio {
   color: var(--selected-ink);
 }
