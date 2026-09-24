@@ -155,7 +155,7 @@ describe("CloneWithModelsDialog", () => {
     expect(text).toContain("Used with this checkpoint");
     expect(text).toContain("Used with other FLUX.2 checkpoints");
     // The one proposal went to the first row: that is not "nothing ran".
-    expect(text).toContain("The suggestions went to the rows above");
+    expect(text).toContain("The suggestion went to another row");
     expect(text).not.toContain("Nothing on your shelf");
     // Flagged, never dropped.
     expect(text).toContain("“style.safetensors” was trained on Z-Image Turbo");
@@ -277,6 +277,156 @@ describe("CloneWithModelsDialog", () => {
     await flushPromises();
     expect(wrapper.text()).not.toContain("Reading this workflow's models");
     expect(selects(wrapper)[0].element.value).toBe("1");
+  });
+
+  it("says a row kept its file for the reason it did, whichever row took the proposal", async () => {
+    const t5 = {
+      id: 9,
+      filename: "t5xxl.safetensors",
+      display_name: null,
+      file_kind: "text_encoder",
+      family: "t5_xxl",
+    };
+    const clipL = {
+      id: 8,
+      filename: "clip_l_old.safetensors",
+      display_name: null,
+      file_kind: "text_encoder",
+      family: "clip_l",
+    };
+    const newClipL = {
+      id: 4,
+      filename: "clip_l.safetensors",
+      display_name: null,
+      file_kind: "text_encoder",
+      family: "clip_l",
+    };
+    readModelSwap.mockImplementation(async (key, { checkpointId } = {}) =>
+      checkpointId == null
+        ? {
+            ...OPTIONS,
+            // The T5 row is ABOVE the CLIP-L row that takes the only proposal.
+            slots: [
+              OPTIONS.slots[0],
+              { filename: "t5xxl.safetensors", kind: "clip", model: t5 },
+              {
+                filename: "clip_l_old.safetensors",
+                kind: "clip",
+                model: clipL,
+              },
+            ],
+            text_encoders: [t5, clipL, newClipL],
+          }
+        : {
+            ...CHOSEN,
+            proposals: {
+              vae: [],
+              text_encoder: [{ ...newClipL, via: "checkpoint", recipes: 2 }],
+            },
+          },
+    );
+    const wrapper = open();
+    await flushPromises();
+    await selects(wrapper)[0].setValue("2");
+    await flushPromises();
+    expect(selects(wrapper)[1].element.value).toBe("t5xxl.safetensors");
+    expect(selects(wrapper)[2].element.value).toBe("clip_l.safetensors");
+    const text = wrapper.text();
+    expect(text).toContain("Nothing of this encoder type has run");
+    expect(text).not.toContain("went to another row");
+  });
+
+  it("counts another shelf file of the same basename as a swap", async () => {
+    readModelSwap.mockImplementation(async (key, { checkpointId } = {}) =>
+      checkpointId == null
+        ? {
+            ...OPTIONS,
+            vaes: [
+              {
+                id: 3,
+                filename: "ae.safetensors",
+                display_name: null,
+                file_kind: "vae",
+              },
+              {
+                id: 6,
+                filename: "sd3/ae.safetensors",
+                display_name: null,
+                file_kind: "vae",
+              },
+            ],
+            slots: [
+              OPTIONS.slots[0],
+              {
+                filename: "ae.safetensors",
+                kind: "vae",
+                model: { id: 3, filename: "ae.safetensors", file_kind: "vae" },
+              },
+            ],
+          }
+        : CHOSEN,
+    );
+    const wrapper = open();
+    await flushPromises();
+    expect(selects(wrapper)[1].element.value).toBe("ae.safetensors");
+    await selects(wrapper)[1].setValue("sd3/ae.safetensors");
+    await flushPromises();
+    await cloneButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(cloneWorkflowWithModels.mock.calls[0][1].swaps).toEqual({
+      "ae.safetensors": "sd3/ae.safetensors",
+    });
+  });
+
+  it("never takes another shelf row's proposal as evidence for this row's own file", async () => {
+    const own = {
+      id: 3,
+      filename: "ae.safetensors",
+      display_name: null,
+      file_kind: "vae",
+    };
+    const other = {
+      id: 6,
+      filename: "sd3/ae.safetensors",
+      display_name: null,
+      file_kind: "vae",
+    };
+    readModelSwap.mockImplementation(async (key, { checkpointId } = {}) =>
+      checkpointId == null
+        ? {
+            ...OPTIONS,
+            vaes: [own, other],
+            slots: [
+              OPTIONS.slots[0],
+              { filename: "ae.safetensors", kind: "vae", model: own },
+            ],
+          }
+        : {
+            ...CHOSEN,
+            proposals: {
+              vae: [{ ...other, via: "checkpoint", recipes: 1 }],
+              text_encoder: [],
+            },
+          },
+    );
+    const wrapper = open();
+    await flushPromises();
+    await selects(wrapper)[0].setValue("2");
+    await flushPromises();
+    // The proposal is the OTHER file: it is offered as a swap, not claimed
+    // for the file the row already holds.
+    expect(selects(wrapper)[1].element.value).toBe("sd3/ae.safetensors");
+  });
+
+  it("keeps the workflow's own checkpoint in the select when the server left it out", async () => {
+    readModelSwap.mockImplementation(async (key, { checkpointId } = {}) =>
+      checkpointId == null ? { ...OPTIONS, checkpoints: [KREA] } : CHOSEN,
+    );
+    const wrapper = open();
+    await flushPromises();
+    const select = selects(wrapper)[0];
+    expect(select.element.value).toBe("1");
+    expect(select.text()).toContain("Z-Image Turbo (the workflow's)");
   });
 
   it("clones nothing into a checkpoint whose proposal read failed", async () => {

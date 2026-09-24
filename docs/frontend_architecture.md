@@ -1452,14 +1452,20 @@ choice, never per keystroke (the server reads the whole shelf and every recipe).
   choice**: a row filled for the previous checkpoint is not evidence about this
   one. A row whose own file is proposed keeps it; the others take the next
   proposal nobody has taken **of the same encoder layout** (`family`, so a
-  CLIP-L never lands in a T5 slot). A row left over because a sibling took the
-  only proposal says so, rather than that nothing ran. The row selects are
+  CLIP-L never lands in a T5 slot). A row that kept its file says why, decided
+  after every row is filled: another row took the proposal that fitted it, or
+  nothing of its encoder type was proposed, or nothing ran at all. A proposal
+  counts as a row's own file only by exact filename, never by basename. The row selects are
   disabled while the read is in flight, and a failed read resets the rows and
   keeps Clone off until another choice.
 - **The base swap is by shelf row, not by name**: an unchanged checkpoint the
   graph loads under another copy's filename is never a swap. A row shows the
-  shelf's spelling of the graph's own file where there is one, so the native
-  select never renders blank.
+  shelf's spelling of the graph's own file where there is one (the row the
+  server resolved, else the one shelf file of that basename), and a row's
+  swap is judged against that spelling exactly, so another shelf file of the
+  same basename is a real swap. The checkpoint select keeps the workflow's own
+  checkpoint even when the server's ComfyUI narrowing left it out, so neither
+  select ever renders blank.
 - **The graph's own file is always among a select's options** (RunDialog's
   `optionsFor` rule), so an unmatched slot never renders empty.
 - **Clone stays off until something would change.** `swaps` compares basenames

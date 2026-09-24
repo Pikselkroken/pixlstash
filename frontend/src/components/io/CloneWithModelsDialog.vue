@@ -203,12 +203,23 @@ const checkpointOptions = computed(() => {
     value: model.id,
     label: modelLabel(model),
   }));
-  // No option for the graph's own file (not on the shelf, or on it as
-  // something other than a checkpoint) would render the select empty.
-  if (baseSlot.value && baseSlot.value.model?.file_kind !== "checkpoint") {
+  // No option for the graph's own file would render the select empty: not
+  // on the shelf, or on it as something other than a checkpoint.
+  const own = baseSlot.value?.model;
+  if (baseSlot.value && own?.file_kind !== "checkpoint") {
     list.unshift({
       value: "",
       label: `${baseSlot.value.filename} (not on your shelf)`,
+    });
+  } else if (
+    own &&
+    !list.some((option) => String(option.value) === String(own.id))
+  ) {
+    // The server's ComfyUI narrowing can leave the workflow's own checkpoint
+    // out of the list; the select starts on it and must not render blank.
+    list.unshift({
+      value: own.id,
+      label: `${modelLabel(own)} (the workflow's)`,
     });
   }
   return list;
@@ -243,8 +254,11 @@ function provenance(row) {
     return `Used with other ${chosenCheckpoint.value.base_model} checkpoints`;
   }
   if (row.via === "family") return "Used with other checkpoints of its family";
-  if (row.exhausted) {
-    return "The suggestions went to the rows above: keeps the workflow's file";
+  if (row.leftover === "taken") {
+    return "The suggestion went to another row: keeps the workflow's file";
+  }
+  if (row.leftover === "other_kind") {
+    return "Nothing of this encoder type has run with this checkpoint or its family: keeps the workflow's file";
   }
   return "Nothing on your shelf has run with this checkpoint or its family: keeps the workflow's file";
 }
@@ -273,8 +287,9 @@ const swaps = computed(() => {
     out[base.filename] = chosen.filename;
   }
   for (const row of rows.value) {
-    if (row.value && !same(row.value, row.original))
-      out[row.original] = row.value;
+    // Against the row's own spelling, not a basename fold: another shelf
+    // file of the same basename is a real swap.
+    if (row.value && row.value !== row.own) out[row.original] = row.value;
   }
   return out;
 });
@@ -324,9 +339,15 @@ watch(
           // The select shows the shelf's spelling of the graph's own file when
           // it has one: a native select matches values exactly, and the graph
           // may name it under a folder the shelf row does not carry.
+          const resolved = shelf.find((model) => model.id === slot.model?.id);
+          const named = shelf.filter((model) =>
+            same(model.filename, slot.filename),
+          );
+          // The row the server resolved the file to, else the one shelf file
+          // of that basename; two of them is not an answer.
           const own =
-            shelf.find((model) => same(model.filename, slot.filename))
-              ?.filename ?? slot.filename;
+            resolved?.filename ??
+            (named.length === 1 ? named[0].filename : slot.filename);
           return {
             kind: slot.kind,
             label: ROW_KINDS[slot.kind],
@@ -336,7 +357,7 @@ watch(
             value: own,
             via: null,
             touched: false,
-            exhausted: false,
+            leftover: null,
           };
         });
     } catch (err) {
@@ -405,7 +426,9 @@ watch(checkpointId, async () => {
   for (const row of rows.value) {
     const proposals = body.proposals?.[PROPOSAL_KIND[row.kind]] || [];
     byKind[row.kind] = proposals;
-    const own = proposals.find((p) => same(p.filename, row.original));
+    // Exact, not a basename fold: the evidence names one shelf row, and two
+    // rows can share a basename.
+    const own = proposals.find((p) => p.filename === row.own);
     if (own) {
       taken.add(own.id);
       row.via = own.via;
@@ -424,9 +447,17 @@ watch(checkpointId, async () => {
     if (next) {
       taken.add(next.id);
       Object.assign(row, { value: next.filename, via: next.via });
-    } else {
-      row.exhausted = byKind[row.kind].length > 0;
     }
+  }
+  // Why a row kept its file, said only once every row has been filled: a
+  // proposal can go to a row below this one as easily as above it.
+  for (const row of rows.value) {
+    if (row.via) continue;
+    const fits = byKind[row.kind].filter(
+      (p) => !row.family || !p.family || p.family === row.family,
+    );
+    if (fits.length) row.leftover = "taken";
+    else if (byKind[row.kind].length) row.leftover = "other_kind";
   }
 });
 
@@ -436,7 +467,7 @@ function resetRows() {
       value: row.own,
       via: null,
       touched: false,
-      exhausted: false,
+      leftover: null,
     });
   }
 }
