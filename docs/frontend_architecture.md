@@ -2042,6 +2042,42 @@ can no longer see.
   an open stack panel emptied the rail. The header then reads "In the X
   stack · N pictures" for a member and "Showing the cover · N pictures" for a
   stack's cover.
+- **A base model that will not load reads "Checkpoint missing"**, with a
+  warning glyph, **and always the file it is missing**: its name without
+  folders, the whole recorded value in the tooltip. The card cannot tell
+  whether a file is installed - it names what the recipe recorded - so the tab
+  asks `POST /workflows/run/preflight` for the selected card and warns on a
+  `missing_models` entry in the `checkpoints` or `diffusion_models` folder.
+  - **Asked once per card**, keyed on the card alone: other writes answer
+    with a new `detail` too, and none of them is a reason to ask again.
+  - **Each ask is a fresh `object_info` read**, so it waits 250 ms for the
+    selection to settle; a superseded answer is dropped, and an unmounted rail
+    asks nothing.
+  - **Once ComfyUI has answered, its answer decides.** A checkpoint the card
+    cannot name but ComfyUI has is not missing. Until then, and when it cannot
+    be asked, the card decides: `checkpointMissing` (`utils/workflowCard.js`,
+    over `BASE_MODEL_KINDS`) is a base-model slot with no name. The grid card
+    reads the same helper and says "Checkpoint missing" rather than "No
+    checkpoint"; it cannot see a NAMED file ComfyUI lacks, which would cost one
+    pre-flight per card on the grid.
+  - **Where the name comes from, in order:** the pre-flight's missing file
+    (never its `(forgotten model)` token, which names nothing), then the
+    detail's `graph_base_models` - the base-model files the graph a run would
+    submit names, served only for a card with no name of its own - then the
+    card's own label. With none of them, "No file name was kept for it
+    anywhere."
+  - **The quiet states say what is known.** A card with no base-model name
+    whose graph names one shows that file; a graph read and loading none
+    (`graph_base_models: []`, an upscaler) reads "None in this workflow"; a
+    recipe-less card whose file gave up no loader reads "Not read from its
+    file" (`checkpointUnread`); "Not recorded" is left for nothing anywhere
+    naming a base model.
+- **Whole-set writes are built when they run, and only on their own card.**
+  `resetDefault` and `togglePin` each PUT the complete set, read from
+  `defaults` after any earlier write they queued behind. If the selection
+  moved in between (the owner's click, or a LoRA flip re-keying the
+  card), `defaultsFor` refuses the write with a notice rather than sending one
+  card's set to another.
 - **The LoRA slot's `Segmented` re-keys the card.** `PUT /workflows/{key}/slots`
   answers with the key the card moved to, and the rail follows it: staying on
   the key it sent leaves the panel reading a card the hub no longer has. The

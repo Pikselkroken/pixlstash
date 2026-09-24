@@ -90,7 +90,53 @@
         <span class="section-label">Models</span>
         <div class="wftab-field">
           <span class="wftab-label">Checkpoint</span>
-          <span class="wftab-value">{{ checkpointLabel }}</span>
+          <!-- Missing: ComfyUI does not have the file (the run pre-flight's
+               answer), or - when ComfyUI cannot be asked - the card has no
+               name for it. Always with the FILE it is missing, as its name
+               without folders; the whole recorded value is the tooltip. -->
+          <div v-if="detail && checkpointIsMissing" class="wftab-missing">
+            <p class="wftab-warn">
+              <v-icon size="16">mdi-alert-outline</v-icon>
+              Checkpoint missing
+            </p>
+            <p
+              v-if="missingCheckpointFile"
+              class="wftab-note wftab-quiet"
+              data-testid="wftab-missing-file"
+            >
+              <span class="wftab-file"
+                ><Tooltip :text="missingCheckpointFile" activator="parent" />{{
+                  fileName(missingCheckpointFile)
+                }}</span
+              >{{ preflightAnswered ? " is not installed in ComfyUI." : "" }}
+            </p>
+            <p v-else class="wftab-note wftab-quiet">
+              No file name was kept for it anywhere.
+            </p>
+          </div>
+          <span v-else-if="checkpointLabel" class="wftab-value">{{
+            checkpointLabel
+          }}</span>
+          <!-- The card has no name for it, but the graph a run submits does:
+               that is the file, installed as far as anybody knows. -->
+          <span v-else-if="graphBaseModel" class="wftab-value"
+            ><Tooltip :text="graphBaseModel" activator="parent" />{{
+              fileName(graphBaseModel)
+            }}</span
+          >
+          <!-- The graph a run would submit was read and loads no base model:
+               an upscaler, say. A fact, so it is said as one. -->
+          <span v-else-if="graphLoadsNone" class="wftab-value wftab-quiet">
+            None in this workflow
+          </span>
+          <!-- A recipe-less card's rows are what its file gave up, so an
+               empty one is "not read", never a claim that it has none. -->
+          <span v-else-if="checkpointIsUnread" class="wftab-value wftab-quiet">
+            Not read from its file
+          </span>
+          <!-- Only when nothing anywhere names a base model: not the card, not
+               the graph a run would submit, not the pre-flight. -->
+          <span v-else class="wftab-value wftab-quiet">Not recorded</span>
         </div>
         <div class="wftab-field">
           <span class="wftab-label">VAE</span>
@@ -372,7 +418,7 @@
 // member selected inside its panel shows that member here, which is the only
 // way to read a member's own defaults.
 
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
@@ -380,6 +426,7 @@ import {
   getLoraChain,
   getWorkflowCard,
   patchWorkflowCard,
+  preflightWorkflowRun,
   setWorkflowDefaults,
   setWorkflowPins,
   setWorkflowSlots,
@@ -394,7 +441,12 @@ import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { EDIT_LORAS, loraStem } from "../../utils/loraChain";
 import { quantBadge } from "../../utils/modelShelf";
-import { modelDisplayName } from "../../utils/workflowCard";
+import {
+  checkpointMissing,
+  checkpointModel,
+  checkpointUnread,
+  modelDisplayName,
+} from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
 import EditLorasDialog from "../io/EditLorasDialog.vue";
@@ -602,12 +654,85 @@ function withQuant(text, model) {
   return detail ? `${text} · ${detail}` : text;
 }
 
+// The base model, as the card's own row picks it: a Flux or SD3 graph has a
+// `unet` and no `checkpoint`, and reading "checkpoint" alone called that
+// missing.
 const checkpointLabel = computed(() => {
-  const models = card.value?.models ?? [];
-  const found = models.find((model) => model.kind === "checkpoint");
+  const found = card.value ? checkpointModel(card.value) : null;
   const name = modelDisplayName(found);
-  return name ? withQuant(name, found) : "Not recorded";
+  return name ? withQuant(name, found) : "";
 });
+
+const checkpointIsUnread = computed(() =>
+  card.value ? checkpointUnread(card.value) : false,
+);
+
+/** ComfyUI's folders for a base model, as `missing_models` names them. */
+const BASE_MODEL_FOLDERS = new Set(["checkpoints", "diffusion_models"]);
+
+/** What the pre-flight reports for a name the hub forgot: names no file. */
+const FORGOTTEN_MODEL = "(forgotten model)";
+
+/** How long a selection has to settle before ComfyUI is asked about it. */
+const PREFLIGHT_SETTLE_MS = 250;
+
+/**
+ * The base-model files the run pre-flight says ComfyUI does not have.
+ *
+ * The card cannot answer this: it names what the recipe recorded, and only
+ * ComfyUI's own model list says whether that file is installed. So the tab
+ * asks the same question Run… asks, once per card. `preflightAnswered` says
+ * whether it has: an unreachable ComfyUI leaves the card's own answer.
+ */
+const missingBaseFiles = ref([]);
+const preflightAnswered = ref(false);
+let installedCheck = 0;
+// A rail that has closed asks nothing: an ask still settling is superseded.
+onBeforeUnmount(() => {
+  installedCheck += 1;
+});
+
+/**
+ * The base-model file the graph a run would submit names, for a card that
+ * has no name of its own for it (`graph_base_models` on the detail).
+ */
+const graphBaseModel = computed(
+  () => detail.value?.graph_base_models?.[0] || "",
+);
+
+/** The graph was read and names no base model (`[]`, not `null`). */
+const graphLoadsNone = computed(
+  () =>
+    Array.isArray(detail.value?.graph_base_models) &&
+    detail.value.graph_base_models.length === 0,
+);
+
+/**
+ * Whether the base model will not load.
+ *
+ * Once ComfyUI has answered, its answer: a checkpoint the card cannot name
+ * but ComfyUI has is not missing. Until then, and when it cannot be asked, the
+ * card's own: a base-model slot with no name. A graph with no such slot (an
+ * upscaler) is never missing one.
+ */
+const checkpointIsMissing = computed(() =>
+  preflightAnswered.value
+    ? missingBaseFiles.value.length > 0
+    : Boolean(card.value && checkpointMissing(card.value)),
+);
+
+/** The file that is missing, as recorded (folders included), or "". */
+const missingCheckpointFile = computed(
+  () =>
+    missingBaseFiles.value.find((file) => file !== FORGOTTEN_MODEL) ||
+    graphBaseModel.value ||
+    checkpointLabel.value,
+);
+
+/** A recorded model value as a person looks for it: the file, no folders. */
+function fileName(value) {
+  return String(value).split(/[\\/]/).pop();
+}
 
 const vaeLabel = computed(() => {
   const found = (card.value?.models ?? []).find(
@@ -908,6 +1033,46 @@ function flipMark(slot, mark) {
 }
 
 /**
+ * The defaults a whole-set write for `key` may be built from, or null.
+ *
+ * Read when the queued write RUNS, not when it was queued, so an earlier write
+ * it waited behind is in them. By then the rail may have moved on: `defaults`
+ * is then another card's (or nothing, mid-read), and a whole-set PUT built
+ * from them would replace `key`'s own overrides. Refused and said instead.
+ */
+function defaultsFor(key) {
+  if (stillOn(key) && detail.value) return defaults.value;
+  console.warn(`[workflows] a write to ${key} dropped: the selection moved`);
+  // Not "you selected another": a LoRA flip re-keys the card and moves the
+  // selection itself.
+  notices.push({
+    level: "error",
+    text: "That change was not saved: the workflow changed before it could be.",
+  });
+  return null;
+}
+
+/**
+ * The edited defaults except one address, as a whole-set write sends them.
+ *
+ * Every whole-set writer starts here: the route replaces the set, so what is
+ * not sent is cleared.
+ */
+function editedExcept(rows, slotLabel, inputName) {
+  return rows
+    .filter(
+      (entry) =>
+        entry.provenance === "edited" &&
+        !(entry.slot_label === slotLabel && entry.input_name === inputName),
+    )
+    .map((entry) => ({
+      slot_label: entry.slot_label,
+      input_name: entry.input_name,
+      value: entry.value,
+    }));
+}
+
+/**
  * Put a value back to what the pictures say.
  *
  * The route replaces the whole override set, so this sends every other edited
@@ -918,21 +1083,10 @@ function resetDefault(row) {
   const key = selectedKey.value;
   if (!key) return;
   return queueWrite(`default:${row.label}`, async () => {
+    const rows = defaultsFor(key);
+    if (!rows) return;
     try {
-      const kept = defaults.value
-        .filter(
-          (entry) =>
-            entry.provenance === "edited" &&
-            !(
-              entry.slot_label === row.slot_label &&
-              entry.input_name === row.input_name
-            ),
-        )
-        .map((entry) => ({
-          slot_label: entry.slot_label,
-          input_name: entry.input_name,
-          value: entry.value,
-        }));
+      const kept = editedExcept(rows, row.slot_label, row.input_name);
       const body = await setWorkflowDefaults(key, kept);
       if (stillOn(key)) detail.value = body;
     } catch (err) {
@@ -946,8 +1100,10 @@ function togglePin(row) {
   const key = selectedKey.value;
   if (!key) return;
   return queueWrite(`default:${row.label}`, async () => {
+    const rows = defaultsFor(key);
+    if (!rows) return;
     try {
-      const pins = defaults.value
+      const pins = rows
         .filter((entry) =>
           entry.slot_label === row.slot_label &&
           entry.input_name === row.input_name
@@ -1069,6 +1225,45 @@ watch(
   (key) => {
     void loadDetail(key);
     void loadChain(key);
+  },
+  { immediate: true },
+);
+
+/**
+ * Ask the run pre-flight whether the base model loads, once per card./**
+ * Ask the run pre-flight whether the base model loads, once per card.
+ *
+ * Keyed on the card alone: every write answers with a new `detail` too, and a
+ * pin toggle is no reason to ask ComfyUI again. Each ask is a fresh
+ * `object_info` read, so it waits for the selection to settle - arrowing across
+ * the grid asks once, not per card - and a superseded answer is dropped. A
+ * failed or unanswerable check leaves the card's own answer standing.
+ */
+watch(
+  () => (detail.value ? selectedKey.value : null),
+  async (key) => {
+    const check = ++installedCheck;
+    missingBaseFiles.value = [];
+    preflightAnswered.value = false;
+    if (!key) return;
+    await new Promise((resolve) => setTimeout(resolve, PREFLIGHT_SETTLE_MS));
+    if (check !== installedCheck) return;
+    try {
+      const answer = await preflightWorkflowRun({
+        workflow_key: key,
+        values: [],
+      });
+      if (check !== installedCheck || !stillOn(key)) return;
+      preflightAnswered.value = true;
+      missingBaseFiles.value = (answer?.groups ?? [])
+        .flatMap((group) => group.reasons ?? [])
+        .filter((reason) => reason.code === "missing_models")
+        .flatMap((reason) => reason.models ?? [])
+        .filter((model) => BASE_MODEL_FOLDERS.has(model.folder))
+        .map((model) => String(model.file));
+    } catch (err) {
+      console.warn(`[workflows] could not pre-flight ${key}`, err);
+    }
   },
   { immediate: true },
 );
@@ -1215,6 +1410,24 @@ watch(
 .wftab-chain-strength {
   font-variant-numeric: tabular-nums;
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.wftab-missing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* The hue drawn as text, so the surface variant: the fill is 2.1:1 on the
+   light canvas. */
+.wftab-warn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .wftab-slot {

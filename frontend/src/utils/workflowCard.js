@@ -268,6 +268,21 @@ export function checkpointUnread(card) {
   return noRecipe(card) && !checkpointModel(card);
 }
 
+/**
+ * Whether the graph loads a base model the card has no name for.
+ *
+ * A `checkpoint` or `unet` slot whose name was never recorded, or was
+ * forgotten because the shelf no longer holds the file: either way nothing can
+ * load it. Read off `BASE_MODEL_KINDS` so the list the guardrail checks is the
+ * one this asks. The card alone cannot see a NAMED file ComfyUI lacks; only the
+ * run pre-flight can, which is the Workflow tab's business, not the grid's.
+ */
+export function checkpointMissing(card) {
+  return (card.models ?? []).some(
+    (model) => BASE_MODEL_KINDS.includes(model.kind) && !model.name,
+  );
+}
+
 /** The same for the LoRA row, and for the same reason. */
 export function lorasUnread(card) {
   return noRecipe(card) && !(card.loras ?? []).length;
@@ -410,6 +425,7 @@ export function cardAccessibleName(card, { member = false } = {}) {
     // What the visible rows say, in the same words: a card with no recipe is
     // silent about what its file did not name, never certain it has none.
     checkpointUnread(card) ? "base model not read" : null,
+    !checkpoint && checkpointMissing(card) ? "checkpoint missing" : null,
     loras.length
       ? `LoRAs: ${loras.join("; ")}`
       : lorasUnread(card)
