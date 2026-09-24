@@ -1267,18 +1267,18 @@ class TestBaseModelIdentification:
         third = tmp_path / "c"
         for folder in (first, second, third):
             folder.mkdir()
-        write_adapter(first / "mysanalora.safetensors")
+        write_adapter(first / "myqwenlora.safetensors")
         (second / "flux2.safetensors").write_bytes(
-            (first / "mysanalora.safetensors").read_bytes()
+            (first / "myqwenlora.safetensors").read_bytes()
         )
         (third / "Pony.safetensors").write_bytes(
-            (first / "mysanalora.safetensors").read_bytes()
+            (first / "myqwenlora.safetensors").read_bytes()
         )
 
         scanner.scan_folder(register_folder(hub, first), str(first), "user")
         (row,) = models(hub).values()
         assert (row["base_model_canonical"], row["base_model_source"]) == (
-            "Sana",
+            "Qwen-Image",
             "filename_fuzzy",
         )
 
@@ -1339,7 +1339,7 @@ class TestCuratedBaseModel:
     def test_clearing_a_guess_sticks_across_a_rescan(self, hub, scanner, tmp_path):
         folder = tmp_path / "loras"
         folder.mkdir()
-        write_adapter(folder / "mysanalora.safetensors")
+        write_adapter(folder / "myqwenlora.safetensors")
         folder_id = register_folder(hub, folder)
         scanner.scan_folder(folder_id, str(folder), "user")
         (row,) = models(hub).values()
@@ -1352,7 +1352,7 @@ class TestCuratedBaseModel:
         other = tmp_path / "other"
         other.mkdir()
         (other / "flux2.safetensors").write_bytes(
-            (folder / "mysanalora.safetensors").read_bytes()
+            (folder / "myqwenlora.safetensors").read_bytes()
         )
         scanner.scan_folder(register_folder(hub, other), str(other), "user")
 
@@ -1366,12 +1366,12 @@ class TestCuratedBaseModel:
         self, hub, scanner, tmp_path
     ):
         # A row registered before identification existed. Its filename alone
-        # suggests Sana; its header declares SDXL. The backfill must leave it
+        # suggests Qwen-Image; its header declares SDXL. The backfill must leave it
         # for the scan, which reads the header of the unchanged file once.
         folder = tmp_path / "loras"
         folder.mkdir()
         _write_safetensors(
-            folder / "mysanalora.safetensors",
+            folder / "myqwenlora.safetensors",
             {"blocks.0.lora_A.weight": _tensor([8, 16])},
             {"modelspec.architecture": "stable-diffusion-xl-v1-base/lora"},
         )

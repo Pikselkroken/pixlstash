@@ -3071,7 +3071,9 @@ kohya's `ss_sd_model_name`, the checkpoint it was trained against). Sources,
 strongest first: `user` (set only by `update_models`), `declared` and
 `filename` (an exact fold of a declared value, or of the filename stem or one of
 its tokens), `declared_fuzzy` (`difflib`, cutoff 0.88) and `filename_fuzzy`
-(containment, longest alias first, never an alias under four characters).
+(containment, longest alias first, never an alias under four characters
+nor one that is an ordinary word, `pony`, `sana`, `lumina`, `krea`, `chroma`,
+which count only as a whole filename token).
 Quality before provenance: an exact filename beats a fuzzy declaration. A
 `closed` base is never an answer.
 

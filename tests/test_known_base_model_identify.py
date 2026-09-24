@@ -40,6 +40,28 @@ def test_short_aliases_never_match_inside_a_word():
     assert identify([], ["xsdxly.safetensors"]) == ("SDXL 1.0", SOURCE_FILENAME_FUZZY)
 
 
+def test_ordinary_word_aliases_never_match_inside_a_word():
+    for name in (
+        "ponytail_girl.safetensors",
+        "kurosawa_sanae.safetensors",
+        "illumination_style.safetensors",
+        "kreative_style.safetensors",
+        "monochromatic.safetensors",
+    ):
+        assert identify([], [name]) == (None, None), name
+    # As a whole filename token, or declared, they still count.
+    assert identify([], ["pony_style.safetensors"]) == (
+        "Pony Diffusion V6 XL",
+        SOURCE_FILENAME,
+    )
+    assert identify(["sana"], []) == ("Sana", SOURCE_DECLARED)
+    # Distinctive names are not ordinary words and still match inside one.
+    assert identify([], ["myqwenstyle.safetensors"]) == (
+        "Qwen-Image",
+        SOURCE_FILENAME_FUZZY,
+    )
+
+
 def test_closed_models_are_never_an_answer():
     # `mj` as a whole token folds exactly, but nothing local trains on it.
     assert identify([], ["portrait_mj_style.safetensors"]) == (None, None)

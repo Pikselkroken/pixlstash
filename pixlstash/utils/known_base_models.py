@@ -47,7 +47,9 @@ one name, where a typo is plausible. Containment is safe to apply only under
 two guards: the **longest alias wins**, because ``flux`` is a substring of
 ``flux2`` and the shorter would file every FLUX.2 adapter under FLUX.1, and an
 alias shorter than :data:`_MIN_CONTAINED_ALIAS` never matches by containment
-at all, so ``mj`` and ``sd3`` do not fire off an incidental substring. A fuzzy
+at all, so ``mj`` and ``sd3`` do not fire off an incidental substring, and nor
+does an alias that is an ordinary word (:data:`_NOT_CONTAINED`: ``pony`` in
+``ponytail``), which only counts as a whole filename token. A fuzzy
 answer is still an answer the shelf marks as guessed. Stdlib ``difflib`` is
 enough at this table's size; ``rapidfuzz`` would buy speed nobody waits on.
 
@@ -442,6 +444,13 @@ SOURCE_RANK = {
 # incidental substrings of too many filenames to mean anything inside one.
 _MIN_CONTAINED_ALIAS = 4
 
+# Aliases long enough for that floor that are still ordinary words or word
+# pieces (`ponytail`, `sanae`, `illumination`), so they never match INSIDE a
+# filename word. They still match as a whole filename token, and as declared
+# metadata. Normalised keys. Distinctive names such as `qwen` and `hunyuan`
+# are deliberately not here.
+_NOT_CONTAINED = frozenset({"pony", "sana", "lumina", "krea", "chroma"})
+
 # How close a declared value has to be to an alias to be read as a typo of it.
 # Applied, not offered, so it is stricter than :func:`suggest`'s cutoff.
 _DECLARED_FUZZY_CUTOFF = 0.88
@@ -468,14 +477,19 @@ def rank(source: Optional[str]) -> int:
     return SOURCE_RANK.get(source or "", 0)
 
 
-def _contained(key: str, min_alias: int) -> list[str]:
-    """Canonical labels whose alias occurs inside *key*, longest alias first."""
+def _contained(
+    key: str, min_alias: int, skip: frozenset[str] = frozenset()
+) -> list[str]:
+    """Canonical labels whose alias occurs inside *key*, longest alias first.
+
+    Aliases in *skip* are not tried.
+    """
     hits: list[str] = []
     for alias in _ALIASES_LONGEST_FIRST:
         if len(alias) < min_alias:
             # Sorted longest first, so every alias after this one is shorter.
             break
-        if alias in key:
+        if alias in key and alias not in skip:
             canonical = _ALIAS_INDEX[alias]
             if canonical not in hits:
                 hits.append(canonical)
@@ -582,7 +596,11 @@ def identify(
         if key and hits and (len(hits) == 1 or hits[1][0] < hits[0][0]):
             return hits[0][1], SOURCE_DECLARED_FUZZY
     for stem in stems:
-        hits = [h for h in _contained(_norm(stem), _MIN_CONTAINED_ALIAS) if _local(h)]
+        hits = [
+            h
+            for h in _contained(_norm(stem), _MIN_CONTAINED_ALIAS, _NOT_CONTAINED)
+            if _local(h)
+        ]
         if hits:
             return hits[0], SOURCE_FILENAME_FUZZY
     return None, None
