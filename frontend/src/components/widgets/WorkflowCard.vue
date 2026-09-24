@@ -555,7 +555,7 @@ function faceOf(lora, i) {
   return {
     key: `${i}-${lora.name}`,
     src: failedFaces.value.includes(src) ? "" : src,
-    label: recipeLoraLabel(lora),
+    label: recipeLoraLabel(lora, recipeLoras.value),
     character: lora.character_id != null,
     recipes: lora.recipes,
   };

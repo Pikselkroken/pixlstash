@@ -388,10 +388,18 @@ export function factChips(card, { short = false } = {}) {
 
 /**
  * One recipe LoRA as the card names it: its character's, where it has one,
- * because that is who the pile shows.
+ * because that is who the pile shows. A character with several LoRAs in
+ * `all` (two versions, say) draws the same face for each, so there the
+ * LoRA's own name - which is where a version lives - follows the character's.
  */
-export function recipeLoraLabel(lora) {
-  return lora.character_name ? `${lora.character_name}'s LoRA` : lora.name;
+export function recipeLoraLabel(lora, all = []) {
+  if (!lora.character_name) return lora.name;
+  const shared = all.filter(
+    (other) => other.character_id === lora.character_id,
+  ).length;
+  return shared > 1
+    ? `${lora.character_name} · ${lora.name}`
+    : `${lora.character_name}'s LoRA`;
 }
 
 /**
@@ -433,7 +441,9 @@ export function ratingLabel(rating) {
 export function cardAccessibleName(card, { member = false } = {}) {
   const count = card.picture_count ?? 0;
   const checkpoint = checkpointModel(card);
-  const cast = (card.recipe_loras ?? []).map(recipeLoraLabel);
+  const cast = (card.recipe_loras ?? []).map((lora, _, all) =>
+    recipeLoraLabel(lora, all),
+  );
   const loras = (card.loras ?? []).map((lora) => {
     if (lora.mark === RECIPE) return "recipe LoRA slot";
     const quant = quantBadge(lora.quant);

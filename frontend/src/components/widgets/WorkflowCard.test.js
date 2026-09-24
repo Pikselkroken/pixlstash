@@ -535,6 +535,19 @@ describe("WorkflowCard", () => {
       expect(text).toContain("and 1 more");
     });
 
+    it("tells two LoRAs of one character apart by their own names", () => {
+      const label = piled({
+        recipe_loras: [
+          lora("ada v1", 3, 7),
+          lora("ada v2", 2, 7),
+          lora("bea", 1, 8),
+        ],
+      }).attributes("aria-label");
+      expect(label).toContain(
+        "recipe LoRAs used: Person 7 · ada v1; Person 7 · ada v2; Person 8's LoRA",
+      );
+    });
+
     it("names every recipe LoRA in the accessible name", () => {
       expect(piled().attributes("aria-label")).toContain(
         "recipe LoRAs used: Person 7's LoRA; retro outfit; Person 8's LoRA; " +
