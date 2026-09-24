@@ -1597,10 +1597,13 @@ watch(
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-3) 0;
-  /* No frame: the body's inline padding made a bordered band narrower than
-     the rail. Opaque in the rail's own colour, so what scrolls under the
-     sticky footer stays hidden without a box showing. */
+  /* Out over `.inspector-body`'s inline padding (--space-3) so the hairline
+     spans the whole rail instead of stopping short of its edges. Opaque in
+     the rail's own colour, so what scrolls under the sticky footer stays
+     hidden without a box showing. */
+  margin-inline: calc(-1 * var(--space-3));
+  padding: var(--space-3);
+  border-top: 1px solid rgb(var(--v-theme-divider));
   background: rgb(var(--v-theme-sidebar));
 }
 
