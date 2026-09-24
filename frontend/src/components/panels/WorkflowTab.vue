@@ -10,6 +10,25 @@
          is not part of a workflow, so it replaces the body rather than sitting
          under it. Here so that a run started from this screen can be watched
          from this screen. -->
+    <!-- A stack selected whole reads as one workflow, its cover, with the
+         other members a pick away: expanding the stack just to read one of
+         them was the only way before. Outside the body below so a member's
+         read, or its failure, never takes the picker (or its focus) away. -->
+    <div
+      v-if="tab === 'workflow' && stackCover"
+      class="inspector-section wftab-head"
+    >
+      <AppSelect
+        :model-value="selectedKey"
+        class="wftab-pick"
+        label="Workflow in this stack"
+        hide-label
+        :options="stackOptions"
+        data-testid="wftab-stack-pick"
+        @update:model-value="stackPick = $event"
+      />
+    </div>
+
     <TasksPanel v-if="tab === 'tasks'" />
 
     <p v-else-if="!card && !multiple && !stackCover" class="wftab-empty">
@@ -54,23 +73,17 @@
     </template>
 
     <!-- A stack member the grid does not list, while its read is out. -->
-    <p v-else-if="!card" class="wftab-empty">Reading this workflow…</p>
+    <p v-else-if="!card" class="wftab-empty">
+      {{
+        detailFailed
+          ? "Could not read this workflow just now."
+          : "Reading this workflow…"
+      }}
+    </p>
 
     <template v-else>
       <div class="inspector-section wftab-head">
-        <!-- A stack selected whole reads as one workflow, its cover, with the
-             other members a pick away: expanding the stack just to read one
-             of them was the only way before. -->
-        <AppSelect
-          v-if="stackCover"
-          v-model="stackPick"
-          class="wftab-pick"
-          label="Workflow in this stack"
-          hide-label
-          :options="stackOptions"
-          data-testid="wftab-stack-pick"
-        />
-        <p v-else class="wftab-title">{{ card.name }}</p>
+        <p v-if="!stackCover" class="wftab-title">{{ card.name }}</p>
         <p class="wftab-sub">
           {{ subtitlePrefix
           }}<button
@@ -348,7 +361,10 @@
     <!-- The Workflow tab's, and only its: Recipes runs a recipe from its own
          row and Tasks is the app's business, so neither wants this footer. -->
     <template #footer>
-      <div v-if="tab === 'workflow' && (card || multiple)" class="wftab-foot">
+      <div
+        v-if="tab === 'workflow' && (card || multiple || stackCover)"
+        class="wftab-foot"
+      >
         <AppButton
           variant="primary"
           icon-left="play"
@@ -370,7 +386,7 @@
           tooltip="Open in ComfyUI"
           data-testid="wftab-open-comfyui"
           :aria-disabled="runTarget ? undefined : 'true'"
-          :aria-describedby="runTarget ? undefined : 'wftab-open-reason'"
+          :aria-describedby="multiple ? 'wftab-open-reason' : undefined"
           @click="openInComfyui"
         >
           <template #icon="{ size }"><ComfyuiIcon :size="size" /></template>
@@ -404,13 +420,13 @@
           </div>
         </v-menu>
         <p
-          v-if="!runTarget && canOpenComfyui"
+          v-if="multiple && canOpenComfyui"
           id="wftab-open-reason"
           class="wftab-note wftab-quiet"
         >
           Open one workflow, or one whole stack, at a time
         </p>
-        <p v-if="!runTarget" id="wftab-run-reason" class="wftab-note wftab-quiet">
+        <p v-if="multiple" id="wftab-run-reason" class="wftab-note wftab-quiet">
           Run one workflow, or one whole stack, at a time
         </p>
       </div>
@@ -1090,6 +1106,19 @@ function stillOn(key) {
 }
 
 /**
+ * A mark over the selection itself, for the writes that re-read the grid.
+ *
+ * `stillOn` is not enough there: a stack member's `selectedKey` is derived
+ * from the grid, so a flip or a Hide that takes the member out of its stack
+ * empties it even though the reader never moved. Compared by contents, so a
+ * reader who clicked elsewhere meanwhile is still told apart.
+ */
+function selectionMark() {
+  const mark = store.selectedKeys.join("\u0000");
+  return () => store.selectedKeys.join("\u0000") === mark;
+}
+
+/**
  * Flip a LoRA slot between the workflow and the look.
  *
  * **This re-keys the card**, and can split it into several or merge it into
@@ -1100,6 +1129,7 @@ function stillOn(key) {
 function flipMark(slot, mark) {
   const key = selectedKey.value;
   if (!key || !slot.label || slot.mark === mark) return;
+  const unmoved = selectionMark();
   return queueWrite(`slot:${slot.label}`, async () => {
     try {
       const moved = await setWorkflowSlots(key, { [slot.label]: mark });
@@ -1107,12 +1137,13 @@ function flipMark(slot, mark) {
       // stack members are about workflows the hub no longer has.
       store.forgetMembers();
       await store.fetchCards();
-      if (!stillOn(key)) return;
+      if (!unmoved()) return;
       // `select` moves `selectedKey`, which the watcher below turns into the
       // detail read. Calling `loadDetail` here as well fetched the same card
       // twice; when the flip did not move it the watcher does not fire, so
-      // that case reads explicitly.
-      if (moved.key === key) await loadDetail(key);
+      // that case reads explicitly. A stack member the flip took out of its
+      // stack is selected on its own, the card the reader was looking at.
+      if (selectedKey.value === moved.key) await loadDetail(moved.key);
       else store.select(moved.key);
     } catch (err) {
       fail(err, "Could not change that LoRA slot.");
@@ -1251,6 +1282,7 @@ function toggleHidden() {
   if (!key || !detail.value) return;
   menuOpen.value = false;
   const hiding = !detail.value.hidden;
+  const unmoved = selectionMark();
   return queueWrite("hidden", async () => {
     try {
       const body = await patchWorkflowCard(key, { hidden: hiding });
@@ -1260,6 +1292,9 @@ function toggleHidden() {
       // what keeps Unhide reachable from here.
       store.forgetMembers();
       await store.fetchCards();
+      // A stack member hidden from the rail leaves its stack, and the stack
+      // stops being selected whole: stay on the card that was hidden.
+      if (unmoved() && selectedKey.value !== key) store.select(key);
     } catch (err) {
       fail(
         err,
@@ -1275,9 +1310,12 @@ function toggleHidden() {
  */
 const runTarget = computed(() => (multiple.value ? null : card.value));
 
-/** Why Run… refuses, when it does. */
+/**
+ * Why Run… refuses, when it is a reason worth a sentence: a stack member
+ * whose read is still out refuses too, but only for as long as the read.
+ */
 const runDescribedBy = computed(() =>
-  runTarget.value ? undefined : "wftab-run-reason",
+  multiple.value ? "wftab-run-reason" : undefined,
 );
 
 /**

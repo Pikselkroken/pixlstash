@@ -2171,11 +2171,16 @@ can no longer see.
   reads that exact set as the cover. The pill's Run and both verb menus run
   the cover, and the popup's workflow select offers the members. **The rail
   shows the stack as one workflow**: the full single-card body for the cover,
-  with the title replaced by a member select (`stackMemberOptions`, the popup's
-  own labels) that starts on the cover for every newly selected stack. Picking
-  a member re-points the whole body at it (`selectedKey`), so its defaults,
-  LoRAs, notes, Run… and Open in ComfyUI are that member's without expanding
-  the stack. The pill's count reads "A stack of N workflows selected". *Open cover picture* takes the same card. Rename, Export and
+  with the title replaced by a member select (`stackMemberOptions`, the
+  popup's own labels) that starts on the cover for every newly selected stack.
+  Picking a member re-points the whole body at it (`selectedKey`), so its
+  defaults, LoRAs, notes, Hide, Run… and Open in ComfyUI are that member's
+  without expanding the stack; the pill still acts on the whole selection,
+  running the cover. The select sits outside the body so a member's read, or
+  its failure, never unmounts it. A flip or Hide that takes the picked member
+  out of its stack selects that card alone rather than dropping the rail to
+  "N workflows selected". The pill's count reads "A stack of N workflows
+  selected". *Open cover picture* takes the same card. Rename, Export and
   Duplicate still refuse, with "A stack is several workflows. Open it and pick
   one to …". A stack plus anything else, or only part of one, is several again.
   Ctrl-picking every row of an open stack is that same set, so it counts too.
