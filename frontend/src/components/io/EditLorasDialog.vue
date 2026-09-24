@@ -171,6 +171,7 @@
               size="sm"
               icon-left="plus"
               :disabled="!canAdd"
+              :aria-label="spliceLabel"
               @click="add"
             >
               {{ spliceIn ? "Insert LoRA between these nodes" : "Add a LoRA" }}
@@ -419,15 +420,36 @@ const pickerOptions = computed(() => [
 ]);
 
 /**
- * No row at all, and both ends read: the button sits on the wire between the
- * two nodes and says so. A deleted row still stands on screen with Restore,
- * so it keeps the list between the nodes and the button an Add.
+ * No row at all, both ends read, and the chain editable: the button sits on
+ * the wire between the two nodes and says so. A deleted row still stands on
+ * screen with Restore, so it keeps the list between the nodes and the button
+ * an Add; a read-only chain offers no insert to name.
  */
 const spliceIn = computed(
   () =>
+    editable.value &&
     !rows.value.length &&
     Boolean(chain.value?.source && chain.value?.sink?.summary),
 );
+
+/**
+ * The splice button's name, with the two nodes in it.
+ *
+ * The sink comes after the button in reading order, so "these nodes" alone
+ * points a screen reader at something it has not reached. The visible words
+ * lead, so a speech-input user can say what they see (WCAG 2.5.3).
+ */
+const spliceLabel = computed(() => {
+  if (!spliceIn.value) return undefined;
+  const { source, sink } = chain.value;
+  const reader = (sink.consumers || []).find(
+    (consumer) => String(consumer.type || "").toUpperCase() === "MODEL",
+  );
+  const readerName = reader
+    ? `${reader.class_type} #${reader.node_id}`
+    : sink.summary;
+  return `Insert LoRA between these nodes: ${source.class_type} #${source.node_id} and ${readerName}`;
+});
 
 /** A new row with nothing picked yet: Add waits for it, and so does Save. */
 const unpicked = computed(() =>

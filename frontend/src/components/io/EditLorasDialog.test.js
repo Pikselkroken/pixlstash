@@ -365,6 +365,12 @@ describe("Add a LoRA", () => {
     // loader is spliced into it; once a row stands it is an Add again.
     const labels = () => wrapper.findAll("button").map(labelOf);
     expect(labels()).not.toContain("Add a LoRA");
+    // The sink comes after the button, so its name says which two nodes.
+    expect(
+      button(wrapper, "Insert LoRA between these nodes").attributes("aria-label"),
+    ).toBe(
+      "Insert LoRA between these nodes: UNETLoader #4 and KSampler #9",
+    );
     await button(wrapper, "Insert LoRA between these nodes").trigger("click");
     await flushPromises();
     expect(labels()).toContain("Add a LoRA");
@@ -374,17 +380,44 @@ describe("Add a LoRA", () => {
     );
   });
 
-  it("keeps Add a LoRA on an empty chain with an end it could not read", async () => {
-    // What the route sends when nothing reading the chain could be named: a
-    // sink with no summary, not a missing sink.
+  // Each of these keeps the button an Add, off the wire: the splice wording
+  // claims two nodes it can insert between, and here one is missing or the
+  // insert is not on offer.
+  it.each([
+    [
+      // What the route sends when nothing reading the chain could be named:
+      // a sink with no summary, not a missing sink.
+      "no reader",
+      { sink: { summary: null, consumers: [] } },
+    ],
+    ["no model source", { source: null }],
+    ["a read-only chain", { editable: false, refusal: "Node 68 cannot be edited." }],
+  ])("keeps Add a LoRA on an empty chain with %s", async (_case, overrides) => {
+    getLoraChain.mockResolvedValue(chain({ loaders: [], ...overrides }));
+    const wrapper = await mountDialog();
+    expect(button(wrapper, "Add a LoRA").exists()).toBe(true);
+    expect(wrapper.find(".eld-chain--empty").exists()).toBe(false);
+  });
+
+  it("says Nothing found reading the chain for a reader it could not name", async () => {
     getLoraChain.mockResolvedValue(
       chain({ loaders: [], sink: { summary: null, consumers: [] } }),
     );
     const wrapper = await mountDialog();
-    expect(button(wrapper, "Add a LoRA").exists()).toBe(true);
     expect(wrapper.find("[data-testid='eld-sink']").text()).toBe(
       "Nothing found reading the chain",
     );
+  });
+
+  it("keeps Add a LoRA when every loader is deleted, since the rows stay on screen", async () => {
+    const wrapper = await mountDialog();
+    for (let index = 0; index < 4; index += 1) {
+      await deleteButton(wrapper, index).trigger("click");
+      await flushPromises();
+    }
+    expect(wrapper.findAll(".eld-row--deleted")).toHaveLength(4);
+    expect(button(wrapper, "Add a LoRA").exists()).toBe(true);
+    expect(wrapper.find(".eld-chain--empty").exists()).toBe(false);
   });
 });
 

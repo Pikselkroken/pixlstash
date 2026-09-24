@@ -4085,7 +4085,7 @@ def create_router(server) -> APIRouter:
                 )
                 refusal = str(exc)
         if chain is None:
-            chain = read_lora_chain_untyped(graph)
+            chain = read_lora_chain_untyped(graph, object_info)
         _shelf_chain(hub, chain)
         return _chain_payload(workflow_key, chain, refusal, object_info)
 

@@ -8135,6 +8135,31 @@ def test_the_chain_is_still_shown_when_comfyui_is_down(chained):
     assert chain["editable"] is False
     assert "ComfyUI" in chain["refusal"]
     assert [loader["node_id"] for loader in chain["loaders"]] == ["2", "5"]
+    # Nothing typed the links, so nothing is named as reading the chain.
+    assert chain["sink"]["summary"] is None
+
+
+def test_a_chain_refused_for_its_shape_still_names_both_ends(chained):
+    """ComfyUI answered, so the read-only view says what the chain runs between.
+
+    Wrong if the sink summary is None: that is the dialog's empty bottom node.
+    """
+    document = json.loads(json.dumps(CHAIN_DOCUMENT))
+    document["6"]["inputs"]["text"] = "a cat <lora:style:0.8>"
+    chained.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (json.loads(json.dumps(document)), []),
+    )
+    r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
+    assert r.status_code == 200, r.text
+    chain = r.json()
+    assert chain["editable"] is False
+    assert "cannot edit" in chain["refusal"]
+    assert chain["source"]["node_id"] == "1"
+    assert chain["sink"]["summary"] == (
+        "KSampler #3 reads model · CLIPTextEncode #6 reads clip"
+    )
 
 
 def test_a_dry_run_lists_the_changes_and_writes_nothing(chained):
