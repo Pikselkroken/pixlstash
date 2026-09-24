@@ -312,6 +312,22 @@
       >
         Run…
       </AppButton>
+      <!-- Beside Run…, as the ComfyUI mark: the ComfyUI-PixlStash node reads
+           `?pixlstash_workflow=` and loads the graph, so without the node
+           ComfyUI opens on whatever it had last. It opens what Run… runs
+           (`runTarget`), and is refused rather than hidden otherwise, for
+           Run…'s reason. The tooltip is its accessible name. -->
+      <AppButton
+        v-if="canOpenComfyui"
+        icon-only
+        tooltip="Open in ComfyUI"
+        data-testid="wftab-open-comfyui"
+        :aria-disabled="runTarget ? undefined : 'true'"
+        :aria-describedby="runTarget ? undefined : 'wftab-open-reason'"
+        @click="openInComfyui"
+      >
+        <template #icon="{ size }"><ComfyuiIcon :size="size" /></template>
+      </AppButton>
       <v-menu
         v-if="card"
         v-model="menuOpen"
@@ -340,29 +356,8 @@
           </div>
         </div>
       </v-menu>
-      <!-- A row of its own under Run…: the node side of ComfyUI-PixlStash
-           reads `?pixlstash_workflow=` and loads the graph, so without the
-           node ComfyUI opens on whatever it had last. It opens what Run…
-           runs (`runTarget`), and is refused rather than hidden otherwise,
-           for Run…'s reason.
-
-           Not in the desktop app: its shell opens only `https:` outside the
-           app, and ComfyUI is plain `http:`, so the click would do nothing. -->
-      <AppButton
-        v-if="filterStore.comfyuiUrl && !isDesktop"
-        class="wftab-open"
-        variant="secondary"
-        icon-left="open-in-new"
-        block
-        tooltip="Open this workflow in ComfyUI, in a new tab. Needs the ComfyUI-PixlStash node."
-        :aria-disabled="runTarget ? undefined : 'true'"
-        :aria-describedby="runTarget ? undefined : 'wftab-open-reason'"
-        @click="openInComfyui"
-      >
-        Open in ComfyUI
-      </AppButton>
       <p
-        v-if="!runTarget && filterStore.comfyuiUrl && !isDesktop"
+        v-if="!runTarget && canOpenComfyui"
         id="wftab-open-reason"
         class="wftab-note wftab-quiet"
       >
@@ -426,6 +421,7 @@ import { quantBadge } from "../../utils/modelShelf";
 import { modelDisplayName } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
+import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import EditLorasDialog from "../io/EditLorasDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
@@ -453,8 +449,17 @@ const { showPictures } = useWorkflowPictures();
 const sidebarStore = useSidebarStore();
 const notices = useNoticeStore();
 const filterStore = useFilterStore();
-// The desktop shell's bridge; see the button for why it matters here.
-const isDesktop = typeof window !== "undefined" && !!window.pixlstashDesktop;
+/**
+ * The desktop shell's bridge, when there is one. Its window opens only `https:`
+ * outside the app and ComfyUI is plain `http:`, so on the desktop the link goes
+ * through `desktop:openComfyui` instead of `window.open`.
+ */
+const desktop = typeof window !== "undefined" ? window.pixlstashDesktop : null;
+
+/** Whether there is a ComfyUI to open, and a way to open it from here. */
+const canOpenComfyui = computed(
+  () => Boolean(filterStore.comfyuiUrl) && (!desktop || !!desktop.openComfyui),
+);
 const runDialog = useRunDialogStore();
 const tasksStore = useTasksStore();
 
@@ -1127,6 +1132,18 @@ function openInComfyui() {
     url.hostname = window.location.hostname;
   }
   url.searchParams.set("pixlstash_workflow", target.key);
+  if (desktop?.openComfyui) {
+    desktop
+      .openComfyui(url.toString())
+      .then((opened) => {
+        if (!opened) throw new Error("the shell refused the link");
+      })
+      .catch((err) => {
+        console.warn("[workflows] the desktop shell would not open ComfyUI", err);
+        notices.push({ level: "error", text: "Could not open ComfyUI." });
+      });
+    return;
+  }
   window.open(url.toString(), "_blank", "noopener,noreferrer");
 }
 
@@ -1375,8 +1392,7 @@ watch(
   flex: 1;
 }
 
-.wftab-foot > .wftab-note,
-.wftab-foot > .wftab-open {
+.wftab-foot > .wftab-note {
   flex-basis: 100%;
 }
 

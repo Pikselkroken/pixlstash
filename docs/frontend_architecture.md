@@ -2025,18 +2025,23 @@ empty list. The footer is the Workflow tab's alone: Recipes runs a recipe from
 its own row, and Tasks replaces the body, so Run… would act on a card the reader
 can no longer see.
 
-- **Open in ComfyUI sits on its own row under Run…**, shown while
-  `comfyuiUrl` is set. It opens what Run… runs (`runTarget`: the card, or the
-  cover of a stack selected whole) and is refused with a reason, not hidden,
-  for any other selection of several, like Run…. **Not in the desktop app**: the shell opens only
-  `https:` outside the app and ComfyUI is plain `http:`, so the click would be
-  dropped. An address of `0.0.0.0` is sent to the page's own host. ComfyUI takes no workflow from a
-  URL, so it opens the configured address with `?pixlstash_workflow=<key>` in a
-  new tab (synchronously: a `window.open` after an await is a blocked popup),
-  and the ComfyUI-PixlStash node reads the key and fetches
-  `GET /workflows/{key}/graph`. Without that node ComfyUI opens on whatever it
-  had last. The address is the one the *server* reaches ComfyUI on, so a
-  browser on another machine resolves it against itself.
+- **Open in ComfyUI is an icon-only button beside Run…**, wearing the ComfyUI
+  logomark (`widgets/ComfyuiIcon.vue`, `currentColor` on the AiToolkitIcon
+  pattern), shown while `comfyuiUrl` is set. It opens what Run… runs
+  (`runTarget`: the card, or the cover of a stack selected whole) and is
+  refused with a reason, not hidden, for any other selection of several, like
+  Run…. ComfyUI takes no workflow from a URL, so it opens the configured
+  address with `?pixlstash_workflow=<key>`, and the ComfyUI-PixlStash node reads
+  the key and fetches `GET /workflows/{key}/graph`. Without that node ComfyUI
+  opens on whatever it had last. In a browser it is a synchronous `window.open`
+  (one after an await is a blocked popup). **On the desktop it goes through
+  `pixlstashDesktop.openComfyui`** (`desktop:openComfyui`), because the shell's
+  `openExternalSafely` refuses `http:` and ComfyUI is plain `http:`: the channel
+  is app-window-only and opens nothing but an `http(s)` URL whose sole query
+  parameter is a card key (`electron/src/urlPolicy.ts::comfyuiOpenTarget`). An
+  older shell without the bridge gets no button. An address of `0.0.0.0` is
+  sent to the page's own host. The address is the one the *server* reaches
+  ComfyUI on, so a browser on another machine resolves it against itself.
 
 - **Tasks is the shared `TasksPanel`, and always last.** This view replaces
   the grid, and its rail replaces the grid's, so without the tab a run started

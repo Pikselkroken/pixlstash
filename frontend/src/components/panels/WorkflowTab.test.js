@@ -652,8 +652,10 @@ describe("with several workflows selected", () => {
 });
 
 describe("Open in ComfyUI", () => {
-  const openButton = (wrapper) =>
-    wrapper.findAll("button").find((b) => b.text().includes("Open in ComfyUI"));
+  const openButton = (wrapper) => {
+    const found = wrapper.find('[data-testid="wftab-open-comfyui"]');
+    return found.exists() ? found : undefined;
+  };
 
   let open;
   beforeEach(() => {
@@ -709,7 +711,40 @@ describe("Open in ComfyUI", () => {
     expect(openButton(wrapper)).toBeTruthy();
   });
 
-  it("is not offered in the desktop app, whose shell would drop the click", async () => {
+  it("is named for a screen reader, since it is only the ComfyUI mark", async () => {
+    configure();
+    const { wrapper } = await mountWith([KEY], [card()]);
+    expect(openButton(wrapper).attributes("aria-label")).toBe("Open in ComfyUI");
+  });
+
+  it("goes through the desktop shell's bridge, which window.open cannot", async () => {
+    configure();
+    const openComfyui = vi.fn().mockResolvedValue(true);
+    window.pixlstashDesktop = { openComfyui };
+    const { wrapper } = await mountWith([KEY], [card()]);
+
+    await openButton(wrapper).trigger("click");
+
+    expect(openComfyui).toHaveBeenCalledWith(
+      `http://127.0.0.1:8188/?pixlstash_workflow=${KEY}`,
+    );
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("says so when the desktop shell refuses the link", async () => {
+    configure();
+    window.pixlstashDesktop = { openComfyui: vi.fn().mockResolvedValue(false) };
+    const { wrapper } = await mountWith([KEY], [card()]);
+
+    await openButton(wrapper).trigger("click");
+    await flush(wrapper);
+
+    expect(JSON.stringify(useNoticeStore().$state)).toContain(
+      "Could not open ComfyUI",
+    );
+  });
+
+  it("is not offered on an older desktop shell with no bridge", async () => {
     configure();
     window.pixlstashDesktop = {};
     const { wrapper } = await mountWith([KEY], [card()]);

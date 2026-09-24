@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { join, resolve, sep } from 'node:path';
 import {
+  comfyuiOpenTarget,
   isAllowedNavigation,
   isBackendOrigin,
   isBundledRendererPage,
@@ -624,5 +625,42 @@ describe('main.ts window-open wiring', () => {
   it('never classifies a target by the loopback string prefix (#1020)', () => {
     const loopbackPrefix = /startsWith\(\s*['"`]https?:\/\/(127\.0\.0\.1|localhost|\[::1\])/;
     assert.equal(loopbackPrefix.test(source), false);
+  });
+});
+
+describe('comfyuiOpenTarget — the Open in ComfyUI channel opens only a workflow link', () => {
+  const KEY = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+
+  it('accepts plain http and https ComfyUI addresses carrying a card key', () => {
+    for (const good of [
+      `http://127.0.0.1:8188/?pixlstash_workflow=${KEY}`,
+      `https://comfy.example.com/?pixlstash_workflow=${KEY}`,
+      `http://192.0.2.10:8188/comfy/?pixlstash_workflow=${KEY}`,
+    ]) {
+      assert.equal(comfyuiOpenTarget(good), good, good);
+    }
+  });
+
+  it('refuses anything that would make it a general open-any-link door', () => {
+    for (const bad of [
+      undefined,
+      42,
+      '',
+      'not a url',
+      `file:///etc/passwd?pixlstash_workflow=${KEY}`,
+      `javascript:alert(1)//?pixlstash_workflow=${KEY}`,
+      `smb://host/share?pixlstash_workflow=${KEY}`,
+      'http://127.0.0.1:8188/',
+      `http://127.0.0.1:8188/?pixlstash_workflow=${KEY}&next=http://example.com`,
+      `http://127.0.0.1:8188/?other=${KEY}`,
+      'http://127.0.0.1:8188/?pixlstash_workflow=abc',
+      `http://127.0.0.1:8188/?pixlstash_workflow=${KEY.toUpperCase()}`,
+      `http://user:pw@127.0.0.1:8188/?pixlstash_workflow=${KEY}`,
+      `http://127.0.0.1:8188/?pixlstash_workflow=${KEY}#frag`,
+      `http://127.0.0.1:8188/?pixlstash_workflow=${KEY}&pixlstash_workflow=${KEY}`,
+      `http://127.0.0.1:8188/${'a'.repeat(2100)}?pixlstash_workflow=${KEY}`,
+    ]) {
+      assert.equal(comfyuiOpenTarget(bad), null, String(bad));
+    }
   });
 });

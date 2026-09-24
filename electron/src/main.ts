@@ -24,6 +24,7 @@ import { BackendManager, OVERLAY_ACCELS, launchWithOverlayFallback } from './bac
 import { uniqueDownloadPath } from './downloads';
 import { ipcBytes, pngClipboardPayload, safeMediaFilename } from './mediaIpc';
 import {
+  comfyuiOpenTarget,
   isAllowedNavigation,
   isBackendOrigin,
   isBundledRendererPage,
@@ -1588,6 +1589,25 @@ function registerIpc(): void {
 
   ipcMain.handle('desktop:openLibraryFolder', () => openLibraryFolder());
   ipcMain.handle('desktop:showLogs', () => showServerLogs());
+  // The Workflow tab's Open in ComfyUI. Its own channel because ComfyUI is
+  // plain http:, which openExternalSafely refuses for every other link; the
+  // app window only, and only a URL comfyuiOpenTarget accepts.
+  // One a second: a person clicks once, and a loop from a hostile page should
+  // not be able to fill the OS browser with tabs.
+  let lastComfyuiOpen = 0;
+  ipcMain.handle('desktop:openComfyui', async (event, target: unknown) => {
+    requireAppRenderer(event, 'desktop:openComfyui');
+    const now = Date.now();
+    if (now - lastComfyuiOpen < 1000) return false;
+    lastComfyuiOpen = now;
+    const url = comfyuiOpenTarget(target);
+    if (!url) {
+      console.warn('[external] refusing desktop:openComfyui for a URL that is not a ComfyUI workflow link');
+      return false;
+    }
+    await shell.openExternal(url);
+    return true;
+  });
 
   // The renderer fetches through its authenticated Axios/session path (also
   // preserving read-only share tokens), then hands opaque bytes to these two
