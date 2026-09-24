@@ -1121,12 +1121,16 @@ const seedOptions = [
 ];
 
 const workflowOptions = computed(() => {
-  const rows = [];
-  if (card.value) {
+  // A stack comes whole, in its own order, from the card: members often share
+  // a generated name, so each says what sets it apart from the others.
+  const rows = numberAlike(
+    (card.value?.members || []).map((member) => ({
+      value: member.key,
+      label: memberLabel(member),
+    })),
+  );
+  if (card.value && !rows.length) {
     rows.push({ value: card.value.key, label: card.value.name });
-    for (const key of card.value.member_keys || []) {
-      rows.push({ value: key, label: memberLabel(key) });
-    }
   }
   // "Run a workflow on these…" opens with the whole library in the picker;
   // otherwise only the stack's own members, which is the switch the design
@@ -1139,9 +1143,29 @@ const workflowOptions = computed(() => {
   return rows;
 });
 
-function memberLabel(key) {
-  const known = cards.value.find((row) => row.key === key);
-  return known?.name || `Stack member ${key.slice(0, 8)}`;
+// The chips that only say a model differs, which `sets_apart` already names.
+const MODEL_CHIPS = new Set(["other checkpoint", "other models"]);
+
+/** "Name — what sets it apart": the models only it loads, then its chips. */
+function memberLabel(member) {
+  const models = member.sets_apart || [];
+  const chips = (member.differs_by || []).filter(
+    (chip) => !models.length || !MODEL_CHIPS.has(chip),
+  );
+  const apart = [...models, ...chips];
+  return apart.length ? `${member.name} — ${apart.join(", ")}` : member.name;
+}
+
+/** Rows that still read alike are numbered, as the Pictures rows are. */
+function numberAlike(rows) {
+  const total = {};
+  for (const row of rows) total[row.label] = (total[row.label] || 0) + 1;
+  const seen = {};
+  return rows.map((row) => {
+    if (total[row.label] < 2) return row;
+    seen[row.label] = (seen[row.label] || 0) + 1;
+    return { ...row, label: `${row.label} (${seen[row.label]})` };
+  });
 }
 
 const adapterOptions = computed(() =>
@@ -1673,7 +1697,11 @@ async function loadAdapters() {
  * that quietly went back to 8 is the thing the design asks to be told about.
  */
 async function loadCard(key, { keepEdits = false } = {}) {
+  // A popup reopened on another source while this read was out has its own
+  // card; this one's answer must not replace it.
+  const token = loadToken;
   const detail = await getWorkflowCard(key);
+  if (token !== loadToken) return;
   const next = detail?.card || null;
   if (!keepEdits) {
     card.value = next;

@@ -76,12 +76,18 @@ from pixlstash.services.workflow_run_service import bypass_missing_loras
 from pixlstash.utils.known_base_models import fold
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
-from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
+from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD, _stack_members
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
-from pixlstash.services.workflow_card_service import SlotModel, model_marks
+from pixlstash.services.workflow_card_service import (
+    CardFigures,
+    SlotModel,
+    model_marks,
+)
 from pixlstash.services.workflow_identity import (
     FACE_DETAILER,
+    RECIPE,
+    STRUCTURAL,
     UPSCALE,
     WORKFLOW_KEY_VERSION,
     guess_mark,
@@ -2013,6 +2019,105 @@ def test_a_stack_member_opened_alone_still_says_it_is_in_a_stack(workflow_env):
     cover = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
     assert cover["stack_size"] == 2
     assert cover["member_keys"] == [FORGOTTEN_CARD]
+
+
+def test_a_stack_names_its_members_and_what_sets_each_apart(workflow_env):
+    """`members` is the whole stack in order, so a picker needs no card reads.
+
+    Members of one stack often share a generated name, so each carries what it
+    loads that the others do not; what every member loads is left out.
+    """
+    cover = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    member = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]
+    assert [m["key"] for m in cover["members"]] == [BUSY_CARD, FORGOTTEN_CARD]
+    # The detail route of a member lists the same stack, in the same order.
+    assert member["members"] == cover["members"]
+    by_key = {m["key"]: m for m in cover["members"]}
+    assert by_key[BUSY_CARD]["name"] == cover["name"]
+    assert by_key[FORGOTTEN_CARD]["name"] == member["name"]
+    # BUSY's checkpoint is "Krea 2", which its generated name already opens
+    # with; FORGOTTEN's models are unnamed. Neither has anything to add.
+    assert by_key[BUSY_CARD]["name"].startswith("Krea 2")
+    assert by_key[BUSY_CARD]["sets_apart"] == []
+    assert by_key[FORGOTTEN_CARD]["sets_apart"] == []
+    # Chips are against the cover, so the cover has none of its own.
+    assert by_key[BUSY_CARD]["differs_by"] == []
+    assert by_key[FORGOTTEN_CARD]["differs_by"] == member["differs_by"]
+
+
+def test_stack_members_are_told_apart_by_what_not_every_member_loads():
+    """What all members load says nothing; a recipe LoRA varies inside a card.
+
+    Two quant builds of one model share a slot name, so the quant is what
+    tells them apart.
+    """
+    base = SlotModel(name="realvisxl", kind="checkpoint", title="Krea 2")
+    figures = [
+        CardFigures(
+            card=Card(workflow_key=key, topology_hash=key, name="Portrait"),
+            models=[base, *extra],
+            loras=[
+                SlotModel(name=f"mira_{key[:4]}", kind="lora", mark=RECIPE),
+                SlotModel(name=lora, kind="lora", mark=STRUCTURAL),
+            ],
+            stack_size=2,
+            member_keys=[BUSY_CARD, FORGOTTEN_CARD],
+            differs_by=chips,
+        )
+        for key, extra, lora, chips in (
+            (BUSY_CARD, [], "film-grain", ["other models"]),
+            (
+                FORGOTTEN_CARD,
+                [SlotModel(name="t5xxl", kind="clip", quant="fp8_e4m3")],
+                "detail-tweaker",
+                ["other models"],
+            ),
+        )
+    ]
+    members = _stack_members(figures[1], {f.card.workflow_key: f for f in figures})
+    assert [(m.key, m.name, m.sets_apart, m.differs_by) for m in members] == [
+        (BUSY_CARD, "Portrait", ["film-grain"], []),
+        (
+            FORGOTTEN_CARD,
+            "Portrait",
+            ["t5xxl fp8_e4m3", "detail-tweaker"],
+            ["other models"],
+        ),
+    ]
+
+
+def test_stack_members_do_not_repeat_what_their_name_says():
+    """Three members, two on one checkpoint: the checkpoint tells only the
+    third apart, and a generated name that already starts with it is not
+    followed by it again."""
+    third = "c" * 64
+
+    def figure(key, checkpoint, name=None):
+        return CardFigures(
+            card=Card(workflow_key=key, topology_hash=key, name=name),
+            models=[SlotModel(name=checkpoint, kind="checkpoint")],
+            stack_size=3,
+            member_keys=[BUSY_CARD, FORGOTTEN_CARD, third],
+        )
+
+    figures = [
+        figure(BUSY_CARD, "realvisxl", "Portrait"),
+        figure(FORGOTTEN_CARD, "realvisxl", "Portrait"),
+        figure(third, "juggernaut"),
+    ]
+    members = _stack_members(figures[0], {f.card.workflow_key: f for f in figures})
+    assert [(m.name, m.sets_apart) for m in members] == [
+        ("Portrait", ["realvisxl"]),
+        ("Portrait", ["realvisxl"]),
+        # Generated from its checkpoint, so the name already says it.
+        ("juggernaut", []),
+    ]
+
+
+def test_a_card_outside_a_stack_lists_no_members(workflow_env):
+    cards = _by_key(_cards(workflow_env.owner, "?include_hidden=true"))
+    assert cards[HIDDEN_CARD]["stack_size"] == 1
+    assert cards[HIDDEN_CARD]["members"] == []
 
 
 def test_a_card_outside_a_stack_carries_no_difference_chips(workflow_env):
