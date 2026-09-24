@@ -1787,6 +1787,18 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Write a copy of a card's workflow with a LoRA loader added; POST blocked for READ tokens; owner only",
     ),
+    # The LoRA chain editor (#1478). The read resolves the card's graph out of
+    # the whole library like its siblings, names the shelf LoRA each loader
+    # loads, and reaches the owner's ComfyUI for object_info; the write is the
+    # insertion above generalised to the whole chain, and files a new card.
+    ("GET", "/api/v1/workflows/{workflow_key}/lora-chain"): RoutePolicy(
+        _OWNER,
+        justification="A card's LoRA loaders and the shelf LoRAs they load, resolved from the whole library; owner only",
+    ),
+    ("PUT", "/api/v1/workflows/{workflow_key}/lora-chain"): RoutePolicy(
+        _OWNER,
+        justification="Write a copy of a card's workflow with its LoRA chain edited; PUT blocked for READ tokens; owner only",
+    ),
     ("DELETE", "/api/v1/workflows/{workflow_key}"): RoutePolicy(
         _OWNER,
         justification="Send a card's imported workflow file to the trash; DELETE blocked for READ tokens; owner only",

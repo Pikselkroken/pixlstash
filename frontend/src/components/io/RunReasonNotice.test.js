@@ -98,3 +98,95 @@ describe("a bypassed LoRA, which is not a refusal", () => {
     expect(mountNotice(reason).find(".rrn-acts").exists()).toBe(false);
   });
 });
+
+describe("a recipe LoRA with no loader, which is not a refusal (#1478)", () => {
+  const reason = {
+    code: "loras_unplaced",
+    workflowKey: "k".repeat(64),
+    loras: [
+      {
+        filename: "loras/skin-detail-xl.safetensors",
+        sha256: "c".repeat(64),
+        reason: "this workflow has no third loader",
+      },
+    ],
+  };
+
+  function mountWithButtons(entry) {
+    return mount(RunReasonNotice, {
+      props: { reason: entry, subject: "SDXL fast" },
+      global: {
+        stubs: {
+          AppButton: { template: "<button @click=\"$emit('click')\"><slot /></button>" },
+        },
+      },
+    });
+  }
+
+  it("says it is not applied, names it, and does not say the run cannot", () => {
+    const wrapper = mountWithButtons(reason);
+    const said = wrapper.text().replace(/\s+/g, " ");
+    expect(said).not.toContain("can't run");
+    expect(said).toContain(
+      "A LoRA this recipe names has no loader to go in on this workflow, so it is not applied.",
+    );
+    expect(said).toContain("skin-detail-xl.safetensors — this workflow has no third loader");
+    expect(rail(wrapper)).toContain("rrn--notice");
+  });
+
+
+  it("says a LoRA the shelf cannot identify is missing, not loaderless", () => {
+    const wrapper = mountWithButtons({
+      ...reason,
+      loras: [
+        {
+          filename: "loras/Mystery.safetensors",
+          sha256: null,
+          reason: "Your model shelf cannot identify Mystery.safetensors",
+        },
+      ],
+    });
+    const said = wrapper.text().replace(/\s+/g, " ");
+    expect(said).toContain(
+      "A LoRA this recipe names is missing from your model shelf, so it is not applied.",
+    );
+    expect(said).not.toContain("no loader");
+  });
+
+  it("offers Edit LoRAs… for the card it is about", async () => {
+    const wrapper = mountWithButtons(reason);
+    const edit = wrapper.findAll("button").find((b) => b.text() === "Edit LoRAs…");
+    expect(edit).toBeTruthy();
+    await edit.trigger("click");
+    expect(wrapper.emitted("edit-loras")?.[0]).toEqual(["k".repeat(64)]);
+  });
+});
+
+describe("a LoRA the owner skipped, and one that cannot be skipped", () => {
+  it("reads a requested bypass back as the owner's skip, not as a missing file", () => {
+    const wrapper = mountNotice({
+      code: "loras_skipped",
+      models: [{ file: "mira_v2.safetensors", folder: "loras", requested: true }],
+    });
+    const said = wrapper.text().replace(/\s+/g, " ");
+    expect(said).toContain("Skipped for this run: mira_v2.safetensors.");
+    expect(said).not.toContain("not on this ComfyUI");
+    expect(said).not.toMatch(/remov|delet/i);
+    expect(said).not.toContain("can't run");
+    expect(rail(wrapper)).toContain("rrn--notice");
+  });
+
+  it("refuses a skip nothing can be rewired around, in the server's words", () => {
+    const wrapper = mountNotice({
+      code: "lora_not_skippable",
+      file: "loras/stacked-a.safetensors",
+      text: "It sits in a stacker whose other LoRAs are present.",
+    });
+    const said = wrapper.text().replace(/\s+/g, " ");
+    expect(said).toContain("Cinematic portrait can't run.");
+    expect(said).toContain(
+      "stacked-a.safetensors cannot be skipped for this run. It sits in a stacker whose other LoRAs are present.",
+    );
+    expect(rail(wrapper)).not.toContain("rrn--notice");
+  });
+});
