@@ -115,95 +115,47 @@
         <div class="tbm-header">
           <span class="tbm-title">Score</span>
         </div>
-        <div
-          class="tbm-section"
-          role="radiogroup"
-          aria-label="At least"
-          @keydown="(e) => onStarKeydown(e, 'minScoreFilter')"
-        >
+        <div class="tbm-section">
           <span class="tbm-label">At least</span>
-          <button
-            v-for="o in starOptions('minScoreFilter')"
-            :key="`minScoreFilter-${o.id}`"
-            class="fm-row"
-            type="button"
-            role="radio"
-            :aria-checked="starValue('minScoreFilter') === o.id ? 'true' : 'false'"
-            :aria-label="`At least ${o.id} stars`"
-            :tabindex="
-              o.id ===
-              tabStopId(
-                starOptions('minScoreFilter'),
-                starValue('minScoreFilter'),
-              )
-                ? 0
-                : -1
-            "
-            :disabled="o.disabled"
-            @click="setStar('minScoreFilter', o.id)"
+          <OptionRows
+            :options="starOptions('minScoreFilter')"
+            :model-value="starValue('minScoreFilter')"
+            aria-label="At least"
+            @update:model-value="(n) => setStar('minScoreFilter', n)"
           >
-            <v-icon size="16" class="fm-row-lead">{{
-              starValue("minScoreFilter") === o.id
-                ? "mdi-radiobox-marked"
-                : "mdi-radiobox-blank"
-            }}</v-icon>
-            <span class="fm-row-label">
+            <template #label="{ option }">
               <span class="fm-stars" aria-hidden="true">
                 <v-icon
                   v-for="i in 5"
                   :key="i"
                   size="14"
-                  :class="{ 'fm-star--off': i > o.id }"
+                  :class="{ 'fm-star--off': i > option.id }"
                   >mdi-star</v-icon
                 >
               </span>
-            </span>
-          </button>
+            </template>
+          </OptionRows>
         </div>
-        <div
-          class="tbm-section"
-          role="radiogroup"
-          aria-label="At most"
-          @keydown="(e) => onStarKeydown(e, 'maxScoreFilter')"
-        >
+        <div class="tbm-section">
           <span class="tbm-label">At most</span>
-          <button
-            v-for="o in starOptions('maxScoreFilter')"
-            :key="`maxScoreFilter-${o.id}`"
-            class="fm-row"
-            type="button"
-            role="radio"
-            :aria-checked="starValue('maxScoreFilter') === o.id ? 'true' : 'false'"
-            :aria-label="`At most ${o.id} stars`"
-            :tabindex="
-              o.id ===
-              tabStopId(
-                starOptions('maxScoreFilter'),
-                starValue('maxScoreFilter'),
-              )
-                ? 0
-                : -1
-            "
-            :disabled="o.disabled"
-            @click="setStar('maxScoreFilter', o.id)"
+          <OptionRows
+            :options="starOptions('maxScoreFilter')"
+            :model-value="starValue('maxScoreFilter')"
+            aria-label="At most"
+            @update:model-value="(n) => setStar('maxScoreFilter', n)"
           >
-            <v-icon size="16" class="fm-row-lead">{{
-              starValue("maxScoreFilter") === o.id
-                ? "mdi-radiobox-marked"
-                : "mdi-radiobox-blank"
-            }}</v-icon>
-            <span class="fm-row-label">
+            <template #label="{ option }">
               <span class="fm-stars" aria-hidden="true">
                 <v-icon
                   v-for="i in 5"
                   :key="i"
                   size="14"
-                  :class="{ 'fm-star--off': i > o.id }"
+                  :class="{ 'fm-star--off': i > option.id }"
                   >mdi-star</v-icon
                 >
               </span>
-            </span>
-          </button>
+            </template>
+          </OptionRows>
         </div>
         <div class="tbm-footer">{{ scoreHint }}</div>
       </div>
@@ -354,7 +306,6 @@
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import Segmented from "../widgets/Segmented.vue";
-import { arrowStep, tabStopId } from "../../utils/radioGroup.js";
 import FilterChecklistMenu from "./FilterChecklistMenu.vue";
 import FilterConfidenceMenu from "./FilterConfidenceMenu.vue";
 import { isReadOnly } from "../../utils/apiClient";
@@ -604,33 +555,34 @@ function starValue(field) {
   return store.unscoredOnlyFilter && store.minScoreFilter == null ? 0 : 5;
 }
 
-// At most rows below the minimum are disabled, which arrowStep and tabStopId
-// both skip.
+// At most rows below the minimum are disabled, which the radiogroup's arrows
+// skip. The rows draw stars, so each names itself for a screen reader.
 function starOptions(field) {
   const min = store.minScoreFilter ?? 0;
+  const word = field === "minScoreFilter" ? "At least" : "At most";
   return STAR_ROWS.map((id) => ({
     id,
+    ariaLabel: `${word} ${id} stars`,
     disabled: field === "maxScoreFilter" && id < min,
   }));
 }
 
+// Starts from the range the menu SHOWS, not the raw fields: the stats sidebar's
+// unrated-only filter leaves both fields null and reads as At most 0, so
+// deriving from the raw fields would drop it on a click that changes nothing.
 function setStar(field, n) {
+  let min = starValue("minScoreFilter");
+  let max = starValue("maxScoreFilter");
   if (field === "minScoreFilter") {
-    store.minScoreFilter = n || null;
-    if (n && store.maxScoreFilter != null && store.maxScoreFilter < n) {
-      store.maxScoreFilter = n;
-    }
+    min = n;
+    max = Math.max(max, n);
   } else {
-    store.maxScoreFilter = n === 5 ? null : n;
+    max = n;
   }
+  store.minScoreFilter = min || null;
+  store.maxScoreFilter = max === 5 ? null : max;
   store.unscoredOnlyFilter =
     store.minScoreFilter == null && store.maxScoreFilter != null;
-}
-
-// The radiogroup contract (utils/radioGroup.js): one tab stop, arrows select.
-function onStarKeydown(event, field) {
-  const id = arrowStep(event, starOptions(field), starValue(field));
-  if (id !== undefined) setStar(field, id);
 }
 
 // ── Problems ─────────────────────────────────────────────────────────────────

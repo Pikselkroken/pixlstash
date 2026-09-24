@@ -252,6 +252,24 @@ describe("FilterMenu", () => {
         .find('[aria-label="At most 0 stars"]')
         .attributes("aria-checked"),
     ).toBe("true");
+
+    // Clicking the marked At least 0 confirms it, never drops the filter.
+    await wrapper.find('[aria-label="At least 0 stars"]').trigger("click");
+    expect(store.unscoredOnlyFilter).toBe(true);
+    expect(store.minScoreFilter).toBeNull();
+    expect(
+      wrapper
+        .find('[aria-label="At most 0 stars"]')
+        .attributes("aria-checked"),
+    ).toBe("true");
+
+    // A minimum above the shown At most 0 drags it up, as it would anywhere.
+    await wrapper.find('[aria-label="At least 2 stars"]').trigger("click");
+    expect([
+      store.minScoreFilter,
+      store.maxScoreFilter,
+      store.unscoredOnlyFilter,
+    ]).toEqual([2, 2, false]);
   });
 
   it("gives each Score radiogroup one tab stop, moved and selected by arrows", async () => {

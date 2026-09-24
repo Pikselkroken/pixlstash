@@ -17,14 +17,17 @@
       :tabindex="o.id === tabStop ? 0 : -1"
       :disabled="disabled || o.disabled"
       :data-testid="o.testid"
+      :aria-label="o.ariaLabel"
       @click="select(o)"
     >
-      <v-icon size="16" class="optrow__radio">
+      <v-icon class="optrow__radio">
         {{
           o.id === modelValue ? "mdi-radiobox-marked" : "mdi-radiobox-blank"
         }}
       </v-icon>
-      <span class="optrow__label">{{ o.label }}</span>
+      <span class="optrow__label">
+        <slot name="label" :option="o">{{ o.label }}</slot>
+      </span>
       <slot name="meta" :option="o" />
     </button>
   </div>
@@ -45,8 +48,10 @@ import { VIcon } from "vuetify/components";
 import { arrowStep, tabStopId } from "../../utils/radioGroup.js";
 
 const props = defineProps({
-  // [{ id, label, disabled?, testid? }]. No option icon: the radio is the
-  // row's one glyph (docs/design/buttons.md, "The option row takes no fill").
+  // [{ id, label, ariaLabel?, disabled?, testid? }]. No option icon: the radio
+  // is the row's one glyph (docs/design/buttons.md, "The option row takes no
+  // fill"). A `#label` slot draws something other than words (the Score
+  // filter's stars), and `ariaLabel` then names the row.
   options: { type: Array, required: true },
   modelValue: { type: [String, Number, Boolean, null], default: null },
   columns: { type: Number, default: 1 },
@@ -122,8 +127,14 @@ function onKeydown(event) {
   font-weight: var(--weight-medium);
 }
 
-.optrow__radio {
+/* The row owns its glyph size, as a menu row does: no `size` on the v-icon,
+   which would write an inline style. `.optrow` in front outranks Vuetify's
+   `.v-icon--size-default`. */
+.optrow .optrow__radio {
   flex-shrink: 0;
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+  font-size: var(--gutter-glyph);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
