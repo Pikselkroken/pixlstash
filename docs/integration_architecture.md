@@ -746,7 +746,7 @@ knows from its pictures exports and duplicates like any other:
 | `GET /api/v1/workflows/{workflow_key}/graph` | The workflow as Run… would submit it (resolved against ComfyUI's own model list, #1439 swaps applied, credential widgets blanked), for *Open in ComfyUI*: the Workflow tab opens the configured ComfyUI at `?pixlstash_workflow=<key>`; the ComfyUI-PixlStash node (`web/js/open_workflow.js`) strips the param so a reload does not refetch, fetches this through `/pixlstash/workflow_graph` with its configured API token, which must be an owner token (a scoped or READ token gets 403), loads it with `app.loadApiJson`, and warns on `seedless`/`forgotten` | `{name, workflow, source, seedless, forgotten}` |
 | `POST /api/v1/workflows/{workflow_key}/duplicate` | A second copy in the user's workflow folder | `201 {name, workflow_key}` |
 | `POST /api/v1/workflows/{workflow_key}/insert-lora-loader` | A copy with a LoRA loader spliced in | `201 {name, workflow_key, node_id, class_type}` |
-| `GET /api/v1/workflows/{workflow_key}/lora-chain` | The LoRA chain in apply order, for the editor (#1478) | `{workflow_key, editable, refusal, source, clip_source, sink: {summary, consumers}, loaders: [{node_id, class_type, field, filename, name, strength, strength_clip, sha256, on_shelf}], added_loader_class}`; ComfyUI down is still a 200 with `editable: false` |
+| `GET /api/v1/workflows/{workflow_key}/lora-chain` | The LoRA chain in apply order, for the editor (#1478) | `{workflow_key, editable, refusal, source, clip_source, sink: {summary, consumers}, loaders: [{node_id, class_type, field, filename, name, strength, strength_clip, sha256, on_shelf}], added_loader_class, branch_note}`; ComfyUI down is still a 200 with `editable: false`; `branch_note` is the sentence saying why the chain stops at a branch, null for a straight chain |
 | `PUT /api/v1/workflows/{workflow_key}/lora-chain` | A copy with the chain as the owner left it: `{entries: [{node_id?, sha256?, strength?}], name?, dry_run}` | `201 {dry_run, name, workflow_key, changes: [{kind, node_id, text}]}`; a dry run is `200` with `name` and `workflow_key` null |
 | `DELETE /api/v1/workflows/{workflow_key}` | Send the imported file to the trash | `{deleted, workflow_key}` |
 | `GET /api/v1/recipes/{recipe_id}/export` | The saved recipe as a file | `{filename, recipe, shares: [string]}` |
@@ -804,7 +804,8 @@ Five rules the client must not re-derive:
    `reason: "imported"`. Insert loader reaches the owner's ComfyUI for
    `object_info` (503 when it cannot) and answers 409, with the sentence, where
    the splice cannot be made honestly: no model source, several models or text
-   encoders, a graph that already loads a LoRA PixlStash cannot swap. **It
+   encoders. A node that already loads a LoRA its own way does not stop it: the
+   loader goes in the MODEL path alongside it. **It
    chooses no LoRA**: the loader lands at ComfyUI's own widget defaults, the
    way dropping the node in ComfyUI would leave it, so the client tells the
    owner to pick one rather than presenting the copy as ready to run.
@@ -1072,9 +1073,11 @@ it asks the owner's ComfyUI) answers `{workflow, has_lora_loader, plan,
 reason}`, `plan` being `{model: {node_id, class_type, output}, clip: … | null,
 rewires: [{node_id, class_type, field, type}], pixlstash_loader}` and `null`
 with a `reason` when no loader can go in (several models or text encoders, a
-second model chain of another kind, a node already loading a LoRA some way of
-its own, a CLIP source that reads the model, no model, a node this ComfyUI
-lacks or that does not say what it hands on, ComfyUI unreachable).
+second model chain of another kind, a CLIP source that reads the model, no
+model, a link neither end can type - a node this ComfyUI lacks read by an input
+whose type is unknown too - ComfyUI unreachable). A node loading a LoRA its own
+way, or a missing node whose reader declares a non-model type (a seed from an
+uninstalled pack), does not stop it.
 `has_lora_loader` is `null` for a UI-format file, which may carry a loader
 nobody can read. `pixlstash_loader` says the digest loader could be the one
 inserted, which leaves the outputs unreplayable by a later replay of the same

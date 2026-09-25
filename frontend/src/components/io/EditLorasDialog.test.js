@@ -314,6 +314,40 @@ describe("reordering by keyboard", () => {
   });
 });
 
+describe("the chain as a graph", () => {
+  it("titles each loader node with its class and id, and a new one with the class a save adds", async () => {
+    const wrapper = await mountDialog();
+    const titles = () =>
+      wrapper.findAll(".eld-row .eld-node-title").map((title) => title.text());
+    expect(titles()).toEqual([
+      "LoraLoader #14",
+      "LoraLoader #22",
+      "LoraLoader #31",
+      "LoraLoader #33",
+    ]);
+    await button(wrapper, "Add a LoRA").trigger("click");
+    await flushPromises();
+    expect(titles().at(-1)).toBe("LoraLoader");
+    // One arrow into every loader, and one more into the reader.
+    expect(wrapper.findAll(".eld-wire:not(.eld-wire--plain)")).toHaveLength(6);
+  });
+});
+
+describe("a chain that stops at a branch", () => {
+  it("says why the list is shorter than the workflow", async () => {
+    const note =
+      "The chain stops at #22 LoraLoader, because its model goes 2 ways from there.";
+    getLoraChain.mockResolvedValue(chain({ branch_note: note }));
+    const wrapper = await mountDialog();
+    expect(wrapper.find("[data-testid='eld-branch']").text()).toBe(note);
+  });
+
+  it("says nothing when the chain runs straight", async () => {
+    const wrapper = await mountDialog();
+    expect(wrapper.find("[data-testid='eld-branch']").exists()).toBe(false);
+  });
+});
+
 describe("Add a LoRA", () => {
   it("appends one picker row at the end, and sends only a picked LoRA", async () => {
     const wrapper = await mountDialog();
@@ -361,11 +395,61 @@ describe("Add a LoRA", () => {
       }),
     );
     const wrapper = await mountDialog({ cardName: "Character sheet" });
-    await button(wrapper, "Add a LoRA").trigger("click");
+    // An empty chain is a wire between two nodes, and the button says the
+    // loader is spliced into it; once a row stands it is an Add again.
+    const labels = () => wrapper.findAll("button").map(labelOf);
+    expect(labels()).not.toContain("Add a LoRA");
+    // The sink comes after the button, so its name says which two nodes.
+    expect(
+      button(wrapper, "Insert LoRA between these nodes").attributes("aria-label"),
+    ).toBe(
+      "Insert LoRA between these nodes: UNETLoader #4 and KSampler #9",
+    );
+    await button(wrapper, "Insert LoRA between these nodes").trigger("click");
     await flushPromises();
+    expect(labels()).toContain("Add a LoRA");
+    expect(labels()).not.toContain("Insert LoRA between these nodes");
     expect(textOf(wrapper)).toContain(
       "The loader goes in after #4 UNETLoader, and the 1 input reading its MODEL is rewired to it. This graph has no CLIP source, so LoraLoaderModelOnly is used.",
     );
+  });
+
+  // Each of these keeps the button an Add, off the wire: the splice wording
+  // claims two nodes it can insert between, and here one is missing or the
+  // insert is not on offer.
+  it.each([
+    [
+      // What the route sends when nothing reading the chain could be named:
+      // a sink with no summary, not a missing sink.
+      "no reader",
+      { sink: { summary: null, consumers: [] } },
+    ],
+    ["no model source", { source: null }],
+    ["a read-only chain", { editable: false, refusal: "Node 68 cannot be edited." }],
+  ])("keeps Add a LoRA on an empty chain with %s", async (_case, overrides) => {
+    getLoraChain.mockResolvedValue(chain({ loaders: [], ...overrides }));
+    const wrapper = await mountDialog();
+    expect(button(wrapper, "Add a LoRA").exists()).toBe(true);
+  });
+
+  it("says Nothing found reading the chain for a reader it could not name", async () => {
+    getLoraChain.mockResolvedValue(
+      chain({ loaders: [], sink: { summary: null, consumers: [] } }),
+    );
+    const wrapper = await mountDialog();
+    expect(wrapper.find("[data-testid='eld-sink']").text()).toBe(
+      "Nothing found reading the chain",
+    );
+  });
+
+  it("keeps Add a LoRA when every loader is deleted, since the rows stay on screen", async () => {
+    const wrapper = await mountDialog();
+    for (let index = 0; index < 4; index += 1) {
+      await deleteButton(wrapper, index).trigger("click");
+      await flushPromises();
+    }
+    expect(wrapper.findAll(".eld-row--deleted")).toHaveLength(4);
+    expect(button(wrapper, "Add a LoRA").exists()).toBe(true);
   });
 });
 

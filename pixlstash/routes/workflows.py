@@ -1231,6 +1231,13 @@ class LoraChain(BaseModel):
     added_loader_class: str | None = Field(
         None, description="The loader class Add a LoRA would insert."
     )
+    branch_note: str | None = Field(
+        None,
+        description=(
+            "Why the chain stops before some of the workflow's loaders: the "
+            "model branches at its end, so those loaders are left as they are."
+        ),
+    )
 
 
 class LoraChainEntry(BaseModel):
@@ -4037,6 +4044,7 @@ def create_router(server) -> APIRouter:
                 for loader in chain["loaders"]
             ],
             added_loader_class=added,
+            branch_note=chain.get("branch_note"),
         )
 
     @router.get(
@@ -4085,7 +4093,7 @@ def create_router(server) -> APIRouter:
                 )
                 refusal = str(exc)
         if chain is None:
-            chain = read_lora_chain_untyped(graph)
+            chain = read_lora_chain_untyped(graph, object_info)
         _shelf_chain(hub, chain)
         return _chain_payload(workflow_key, chain, refusal, object_info)
 
