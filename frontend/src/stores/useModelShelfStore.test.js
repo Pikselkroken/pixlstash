@@ -1404,6 +1404,41 @@ describe("Assign", () => {
     expect(setAdapterAttachments.mock.calls[0][0]).toBe("a".repeat(64));
   });
 
+  it("assigns every model in a ticked stack, not just its cover", async () => {
+    // A fully-selected stack is ONE selected row carrying the cover's id and
+    // hash; the picker is handed member ids and each member keeps its own
+    // attachments in the union.
+    const store = useModelShelfStore();
+    store.rows = [
+      adapter({ id: 1, stack_id: 9, stack_position: 0 }),
+      adapter({
+        id: 2,
+        sha256: "b".repeat(64),
+        stack_id: 9,
+        stack_position: 1,
+        attachments: [{ entity_type: "set", entity_id: 3 }],
+      }),
+    ];
+    store.selectVisible();
+    expect(store.selectedRows).toHaveLength(1);
+
+    await store.setAttachment({
+      entityType: "character",
+      entityId: 4,
+      entityName: "Alice",
+      subjectIds: ["1", "2"],
+    });
+
+    expect(setAdapterAttachments).toHaveBeenCalledTimes(2);
+    expect(setAdapterAttachments).toHaveBeenCalledWith("a".repeat(64), [
+      { entity_type: "character", entity_id: 4 },
+    ]);
+    expect(setAdapterAttachments).toHaveBeenCalledWith("b".repeat(64), [
+      { entity_type: "set", entity_id: 3 },
+      { entity_type: "character", entity_id: 4 },
+    ]);
+  });
+
   it("reports the ones that landed when some of the N calls fail", async () => {
     // N calls means a partial failure is an outcome, not an error: reporting
     // only the failure would send the reader back to re-run the verb on rows

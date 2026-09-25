@@ -4563,9 +4563,13 @@ adapters:
   **replaces** one adapter's whole set, so Assign is N calls with the union
   computed in `setAttachment`. Writing just the new entity would silently detach
   every other character already using the model, with no undo behind it and no
-  error to notice. The rows are re-read from `selectedRows` rather than trusted
+  error to notice. The rows are re-read from `selectedModels` (the selection
+  with each ticked stack expanded into its member rows) rather than trusted
   from the payload, because the picker emits the ids it was handed when the menu
-  opened and the selection may have moved since.
+  opened and the selection may have moved since. Per member and not per row: a
+  stack row carries only the cover's id, hash and attachments, so assigning off
+  `selectedRows` reached the cover and left the rest of the stack out. The bar
+  builds `subjectIds` and the membership map off `selectedModels` too.
 
 Partial resolves **up**, the picker's existing rule: a half-attached row adds
 the rest and never detaches, so the only way to detach is to click a row that is
