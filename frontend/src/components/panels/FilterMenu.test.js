@@ -100,6 +100,18 @@ describe("FilterMenu", () => {
     expect(store.tagFilter).toEqual(["hat"]);
     expect(store.tagRejectedFilter).toEqual(["outdoors"]);
 
+    // Tab completes like Enter, Shift+Tab like Shift+Enter.
+    await field.setValue("ha");
+    await field.trigger("keydown", { key: "Tab", shiftKey: true });
+    expect(store.tagRejectedFilter).toEqual(["outdoors", "hat"]);
+    await field.setValue("ha");
+    await field.trigger("keydown", { key: "Tab" });
+    expect(store.tagFilter).toEqual(["hat"]);
+    // With nothing to complete, Tab is left to move focus.
+    const tab = new KeyboardEvent("keydown", { key: "Tab", cancelable: true });
+    field.element.dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(false);
+
     // Backspace in the empty field takes the last chip, never while typing.
     await field.setValue("x");
     await field.trigger("keydown", { key: "Backspace" });

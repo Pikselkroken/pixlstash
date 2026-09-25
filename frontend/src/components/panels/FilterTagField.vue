@@ -33,6 +33,7 @@
           @keydown.down.prevent="move(1)"
           @keydown.up.prevent="move(-1)"
           @keydown.enter.prevent="onEnter"
+          @keydown.tab="onTab"
           @keydown.backspace="removeLast"
           @keydown.esc="onEsc"
         />
@@ -130,8 +131,8 @@
 <script setup>
 /**
  * A typeahead over the tag vocabulary above two rows of chips: the Tags and
- * Tag confidence menus. Enter adds the highlighted tag to the first row,
- * Shift+Enter to the second; Backspace in an empty field removes the last chip
+ * Tag confidence menus. Enter or Tab adds the highlighted tag to the first row,
+ * Shift+Enter or Shift+Tab to the second; Backspace in an empty field removes the last chip
  * of the lower row. Clicking a chip moves it to the other row, the mouse path
  * to the second row. The parent owns what adding, flipping and removing mean.
  */
@@ -200,6 +201,15 @@ function onEnter(event) {
   if (item) add(item.tag, event.shiftKey);
 }
 
+// Tab completes like Enter while there is a suggestion to take; with none it
+// moves focus as usual, so the field is never a keyboard trap.
+function onTab(event) {
+  const item = suggestions.value[highlight.value];
+  if (!item || event.isComposing) return;
+  event.preventDefault();
+  add(item.tag, event.shiftKey);
+}
+
 // A first Esc empties the field; only an empty field lets the menu close.
 function onEsc(event) {
   if (!query.value) return;
@@ -242,15 +252,25 @@ onMounted(() => nextTick(() => fieldRef.value?.focus()));
   width: var(--filter-menu-w);
 }
 .ftf-input {
-  padding-right: 7.5rem;
+  padding-right: 9rem;
 }
 .ftf-hint {
   position: absolute;
-  right: var(--space-3);
-  font-size: var(--text-2xs);
+  right: var(--space-2);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
   white-space: nowrap;
   pointer-events: none;
+}
+/* The arrows are glyphs, not words: at the mono 2xs of .fm-kbd they shrink to
+   specks, so the hint's keycaps take the UI face a step up. */
+.ftf-hint .fm-kbd {
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  padding: 0 var(--space-2);
 }
 .ftf-list {
   margin-top: var(--space-2);
