@@ -2929,7 +2929,8 @@ and `bypass_node`
 ([`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py))
 are the substitution above's neighbour and its last resort: where no copy of the
 file can be found at all, a **LoRA** is simply left out and the run happens
-anyway. Wired into `_plan` at one site, between the swap and `judge`.
+anyway. It is one entry of the **repair registry** described in the next
+section, not a site of its own in `_plan`.
 
 - **Because a LoRA is optional and nothing else in the graph is.** Installing a
   checkpoint is a trip away from the keyboard and the graph cannot run without
@@ -2959,12 +2960,12 @@ anyway. Wired into `_plan` at one site, between the swap and `judge`.
   quietly made without an adapter the owner has — and send them to install a
   file called `(forgotten model)`. All three are logged with the value that
   could not be found.
-- **Before `judge`, so the graph judged is the graph submitted.** The bypassed
-  loader is gone by the time the pre-flight runs again, so it is not reported as
-  a missing model the owner would go looking for; what is left in
+- **Judged again after, so the graph judged is the graph submitted.** The
+  bypassed loader is gone by the time the second `judge` runs, so it is not
+  reported as a missing model the owner would go looking for; what is left in
   `missing_models` is what genuinely blocks.
 - **Reported only on a group that is actually submitted.** The bypass happens
-  before `judge` because the graph needs it, but the *report* is written when
+  before the final verdict because the graph needs it, but the *report* is written when
   `group.runs` is set, and cleared again when a missing model elsewhere zeroes
   the whole batch. What it says is "the run goes ahead without this LoRA", which
   is a lie on a card that is about to be refused for a missing checkpoint — and
@@ -3048,6 +3049,61 @@ graph, and the result is written as a **new** file through `_store_copy`, so one
 save is one new card and the original file never changes. `dry_run` answers the
 change list (`deleted`, `added`, `moved`, `strength`, `rewired`) and writes
 nothing. `insert-lora-loader` is the empty-chain case and still stands on its own.
+
+#### The repair registry: judge, repair, judge again (#1463)
+
+Some refusals PixlStash can answer by changing the graph before it submits.
+`REPAIRS` in
+[`services/workflow_run_service.py`](../pixlstash/services/workflow_run_service.py)
+is the one place that decides which: each `Repair` names the reason code it
+answers, the `RunGroup` field that reports it, and the function that mutates the
+graph. `_plan` runs one loop over it, after the model swap:
+
+1. `judge` the graph.
+2. `repair(graph, object_info, reasons)` applies every entry
+   whose code is among the reasons, and returns `{report_field: entries}`.
+3. If anything changed, `judge` **again**. Only the second verdict says whether
+   the graph runs: a repair can leave its refusal standing. Re-judging is pure
+   over the graph and the `object_info` `_plan` already fetched, so it costs no
+   ComfyUI round-trip.
+
+Skipped when ComfyUI could not be inspected (nothing is known to repair) and
+when `_apply_loras` has already refused (that run is not happening). The
+reports go on the group only when it is actually submitted, and every
+registered field is cleared when the batch rule zeroes the request. A new
+repair is a registry entry plus its `RunGroup` field. Two ship:
+
+- **`missing_models` → `bypassed_loras`**: the LoRA bypass above.
+- **`missing_nodes` → `replaced_nodes`**: `replace_missing_seed_nodes`. A custom
+  seed node this ComfyUI lacks (`SEED_NODE_CLASSES`: rgthree's `Seed (rgthree)`,
+  WAS's `Seed`, `SeedGenerator`, `Seed Generator`, Comfyroll's `CR Seed`) only
+  hands a number to a sampler's seed widget, which the run writes itself. So
+  each link from it becomes a literal and the node leaves the graph.
+  **The seed pass overwriting that literal is what makes it safe, so it is
+  checked and not assumed**, against `run_seed_targets`, which is the same
+  finder `_submit_every` writes seeds through (one function, so the check and
+  the write cannot drift). It is checked on the **final** graph: a later
+  replacement can switch that finder from its fallback to `detect_seed_targets`
+  and strand an earlier literal, so if any inlined input is not a target once
+  all are replaced, the graph is put back whole and every node keeps its
+  refusal. A seed node wired into `steps`, or into a pack's own `SEED` dict,
+  keeps it that way. The literal is the node's own `seed` value, which is what
+  `seed_mode: "keep"` then keeps: a picture's embedded graph carries the value
+  the node really handed on. Also refused, each logged: a **placeholder** seed
+  (rgthree's `-1`, "random"), whatever the seed mode, so the pre-flight's answer
+  never depends on a control the popups do not re-ask on; a node feeding **more
+  than one** input, because the seed pass rolls each target separately and a
+  hires-fix or refiner pair built to share one seed would get two; and a node
+  whose own seed is wired from elsewhere. Each entry is `{node_id, class_type,
+  replacement: "seed", consumers: [{node_id, field}]}`.
+- **An allow-list, not a general rewriter.** A replacement that is *nearly*
+  right silently changes what the picture looks like, which is worse than the
+  refusal. The candidates the issue names for later (custom primitive nodes,
+  reroutes, notes) are each judged on their own when one is added. Anything that
+  samples, conditions or loads is not a candidate: there is no standard
+  equivalent that makes the same picture.
+- **A repaired run lands on its own card**, for the reason a bypassed one does:
+  deleting a node changes the topology.
 
 #### What a delete leaves behind: companions (#1314)
 

@@ -99,6 +99,36 @@ describe("a bypassed LoRA, which is not a refusal", () => {
   });
 });
 
+describe("a replaced seed node, which is not a refusal either", () => {
+  const reason = {
+    code: "nodes_replaced",
+    nodes: [
+      { node_id: "9", class_type: "Seed (rgthree)", replacement: "seed" },
+      { node_id: "12", class_type: "Seed (rgthree)", replacement: "seed" },
+    ],
+  };
+
+  it("says PixlStash seeds the run itself, and never that it cannot run", () => {
+    const wrapper = mountNotice(reason);
+    expect(wrapper.text()).toContain("writes the seed straight into the sampler");
+    expect(wrapper.text()).toContain("The run goes ahead without it");
+    expect(wrapper.text()).not.toContain("can't run");
+  });
+
+  it("names the node's class once, in the sentence rather than as a file", () => {
+    const wrapper = mountNotice(reason);
+    expect(wrapper.find(".rrn-files").exists()).toBe(false);
+    expect(wrapper.text().split("Seed (rgthree)")).toHaveLength(2);
+    expect(wrapper.text()).not.toContain("models/");
+  });
+
+  it("takes the notice modifier and offers nothing to press", () => {
+    const wrapper = mountNotice(reason);
+    expect(rail(wrapper)).toContain("rrn--notice");
+    expect(wrapper.find(".rrn-acts").exists()).toBe(false);
+  });
+});
+
 describe("a recipe LoRA with no loader, which is not a refusal (#1478)", () => {
   const reason = {
     code: "loras_unplaced",

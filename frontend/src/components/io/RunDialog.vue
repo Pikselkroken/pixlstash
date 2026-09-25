@@ -606,9 +606,9 @@ import { wouldDuplicate } from "../../utils/recipeKey";
 import { stackMemberOptions } from "../../utils/workflowCard";
 import {
   PICTURE_INPUT_UNFILLED,
-  bypassNotice,
   LORAS_BYPASSED,
   reasonsBlock,
+  repairNotices,
   unplacedNotice,
 } from "../../utils/runReasons";
 import SaveRecipeDialog from "./SaveRecipeDialog.vue";
@@ -1894,7 +1894,7 @@ async function runPreflight(token = loadToken) {
     if (!mine() || askedFor !== activeKey.value) return;
     reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
     bypassed.value = (answer?.groups || []).flatMap((group) => [
-      ...bypassNotice(group),
+      ...repairNotices(group),
       ...unplacedNotice(group),
     ]);
     plannedRuns.value = Number(answer?.runs) || 0;

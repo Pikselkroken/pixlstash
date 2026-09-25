@@ -333,6 +333,33 @@ describe("a selection every picture of which can run", () => {
     expect(wrapper.vm.blockedReasons[0].subject).toBe("Z-Image turbo");
   });
 
+  it("still makes every run when a seed node is only replaced (#1463)", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 2,
+      groups: [
+        { workflow_key: GOOD, picture_ids: [1, 2], runs: 1, reasons: [] },
+        {
+          workflow_key: BAD,
+          picture_ids: [3],
+          runs: 1,
+          reasons: [],
+          replaced_nodes: [
+            { node_id: "9", class_type: "Seed (rgthree)", replacement: "seed" },
+          ],
+        },
+      ],
+    });
+
+    const wrapper = await mountMakeMore();
+
+    expect(wrapper.vm.blocker).toBe("");
+    expect(makeButton(wrapper).text()).toBe("Make 2");
+    expect(wrapper.vm.blockedReasons.map((entry) => entry.reason.code)).toEqual([
+      "nodes_replaced",
+    ]);
+  });
+
   it("starts each open at a count of 1, never the last selection's", async () => {
     const wrapper = await mountMakeMore();
     wrapper.vm.count = 20;

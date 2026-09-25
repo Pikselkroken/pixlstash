@@ -22,13 +22,15 @@ rather than in a caller.
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from pixlstash.services.comfyui_recipe_service import (
     LORA_DIGEST_FIELD_RE,
     LORA_FILENAME_FIELD_RE,
     bypass_node,
+    detect_seed_targets,
     preflight_prompt,
     sanitize_prompt_graph,
     unchecked_preflight,
@@ -41,6 +43,7 @@ from pixlstash.services.workflow_hash import (
     normalized_filename,
 )
 from pixlstash.services.workflow_io import api_graph
+from pixlstash.utils.comfyui_utilities import collect_seed_inputs
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
@@ -84,6 +87,17 @@ _FOLDER_BY_FIELD = {
     "hypernetwork_name": "hypernetworks",
     "photomaker_model_name": "photomaker",
 }
+
+# Custom seed nodes a graph may name without this ComfyUI having their pack
+# (#1463). Each exists only to hand a number to a sampler's seed widget, which
+# PixlStash writes itself on every run, so the node can be dropped and its link
+# replaced with a literal. **An allow-list, not a rule**: a replacement that is
+# nearly right changes what the picture looks like, which is worse than the
+# refusal, and anything that samples, conditions or loads has no equivalent.
+# rgthree's, WAS's, Comfyroll's and image-saver's, by their class_type.
+SEED_NODE_CLASSES = frozenset(
+    {"Seed (rgthree)", "Seed", "SeedGenerator", "Seed Generator", "CR Seed"}
+)
 
 # Where the source of a runnable graph came from, in the order tried.
 FROM_FILE = "file"
@@ -461,6 +475,200 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
             for item in missing
         )
     return bypassed
+
+
+def run_seed_targets(graph: dict, object_info: Optional[dict]) -> list[dict]:
+    """The seed inputs a run writes into, as the run itself finds them.
+
+    One function for the run and for :func:`replace_missing_seed_nodes`, because
+    the replacement is only safe where this pass overwrites what it inlined: two
+    copies of the rule could agree today and drift tomorrow, and the drift would
+    be a run that quietly kept a placeholder seed.
+    """
+    return detect_seed_targets(graph, object_info or {}) or collect_seed_inputs(graph)
+
+
+def replace_missing_seed_nodes(graph: dict, object_info: dict) -> list[dict]:
+    """Drop every custom seed node this ComfyUI lacks, inlining its value.
+
+    A graph naming rgthree's ``Seed (rgthree)`` on an install without rgthree is
+    ``missing_nodes``, and the owner's only route was installing the pack. The
+    node does something PixlStash already does (#1463): it hands a number to a
+    sampler's ``seed`` / ``noise_seed``, and the run's seed pass writes that
+    widget itself. So the link from the node becomes a literal and the node
+    leaves the graph.
+
+    **The seed pass overwriting the literal is what makes this safe**, so it is
+    checked rather than assumed, and checked on the FINAL graph: a later
+    replacement can change which finder :func:`run_seed_targets` answers with
+    (``detect_seed_targets`` finding a new target stops the fallback), so an
+    input that passed alone could stop being written. If any inlined input is
+    not a target once every node is replaced, the graph is put back whole and
+    every node keeps its refusal. A consumer that is not a seed widget - an
+    ``INT`` driving width, a pack's own ``SEED`` dict - is refused the same way.
+
+    The literal is the node's own ``seed`` value, which is what
+    ``seed_mode: "keep"`` then keeps: a picture's embedded graph carries the
+    value the node actually handed on.
+
+    Keeps its refusal, logged: a class that IS installed (nothing to repair), a
+    class outside :data:`SEED_NODE_CLASSES`, a node whose own seed is wired
+    from elsewhere (the literal would cut that link), a **placeholder** seed
+    such as rgthree's ``-1`` (there is no seed to keep, and accepting it only
+    for some seed modes would make the pre-flight's answer depend on a control
+    the popups do not re-ask on), and a node feeding **more than one** input:
+    the seed pass rolls each target separately, so a hires-fix or refiner pair
+    built to share one seed would get two.
+
+    Args:
+        graph: The API-format graph, mutated in place.
+        object_info: The map this ComfyUI published.
+
+    Returns:
+        ``[{node_id, class_type, replacement, consumers}, …]``, one per node
+        replaced; empty when nothing could be replaced honestly.
+    """
+    original = deepcopy(graph)
+    replaced: list[dict] = []
+    for node_id in [str(key) for key in graph]:
+        node = graph.get(node_id)
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        if class_type not in SEED_NODE_CLASSES or class_type in object_info:
+            continue
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        if any(is_link(value) for value in inputs.values()):
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI but its own seed is wired "
+                "from another node, so it keeps its refusal: a literal would "
+                "cut that link.",
+                node_id,
+                class_type,
+            )
+            continue
+        value = inputs.get("seed")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI and carries no real seed "
+                "(%r), so it keeps its refusal.",
+                node_id,
+                class_type,
+                value,
+            )
+            continue
+        consumers = [
+            (str(other_id), str(name))
+            for other_id, other in graph.items()
+            if isinstance(other, dict) and isinstance(other.get("inputs"), dict)
+            for name, link in other["inputs"].items()
+            if is_link(link) and str(link[0]) == node_id
+        ]
+        if len(consumers) > 1:
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI and feeds %s, which share "
+                "one seed by design; the run would roll each separately, so it "
+                "keeps its refusal.",
+                node_id,
+                class_type,
+                ", ".join(f"{other}.{name}" for other, name in consumers),
+            )
+            continue
+        for other_id, name in consumers:
+            graph[other_id]["inputs"][name] = value
+        del graph[node_id]
+        replaced.append(
+            {
+                "node_id": node_id,
+                "class_type": class_type,
+                "replacement": "seed",
+                "consumers": [
+                    {"node_id": other, "field": name} for other, name in consumers
+                ],
+            }
+        )
+    targets = {
+        (str(target.get("node_id")), str(target.get("field")))
+        for target in run_seed_targets(graph, object_info)
+    }
+    unsafe = [
+        f"{consumer['node_id']}.{consumer['field']}"
+        for entry in replaced
+        for consumer in entry["consumers"]
+        if (consumer["node_id"], consumer["field"]) not in targets
+    ]
+    if unsafe:
+        logger.info(
+            "Seed nodes %s are not on this ComfyUI, but replacing them would "
+            "leave %s holding a value the run's seed pass does not write, so "
+            "the graph is left as it was and they keep their refusal.",
+            ", ".join(f"{e['node_id']} ({e['class_type']})" for e in replaced),
+            ", ".join(unsafe),
+        )
+        graph.clear()
+        graph.update(original)
+        return []
+    for entry in replaced:
+        logger.info(
+            "Node %s (%s) is not on this ComfyUI, so it is replaced: %s now "
+            "takes the run's own seed.",
+            entry["node_id"],
+            entry["class_type"],
+            ", ".join(f"{c['node_id']}.{c['field']}" for c in entry["consumers"])
+            or "nothing",
+        )
+    return replaced
+
+
+@dataclass(frozen=True)
+class Repair:
+    """One refusal PixlStash can answer by changing the graph (#1463).
+
+    ``code`` is the reason it answers, ``report`` the ``RunGroup`` field that
+    names what it changed, and ``apply`` the change itself: it mutates the graph
+    and returns one entry per thing it did, empty when it did nothing.
+    """
+
+    code: str
+    report: str
+    apply: Callable[[dict, dict], list[dict]]
+
+
+# The repair registry: the one place that decides what "repairable" means. Keyed
+# on reason code so a repair runs only when `judge` reported what it answers,
+# and so a new one is an entry here rather than another patch to the run route.
+REPAIRS: tuple[Repair, ...] = (
+    Repair(
+        MISSING_MODELS,
+        "bypassed_loras",
+        bypass_missing_loras,
+    ),
+    Repair(MISSING_NODES, "replaced_nodes", replace_missing_seed_nodes),
+)
+
+
+def repair(
+    graph: dict, object_info: dict, reasons: list[Reason]
+) -> dict[str, list[dict]]:
+    """Apply every registered repair whose refusal *reasons* contains.
+
+    The caller judges, repairs, then judges **again**: a repair can leave its
+    refusal standing (a stacker still holding an adapter that is here, a seed
+    node feeding something that is not a seed), and only the second verdict
+    says whether the graph now runs. Re-judging is pure over the graph and the
+    ``object_info`` already fetched, so it costs no ComfyUI round-trip.
+
+    Returns:
+        ``{report_field: [entries…]}`` for every registered repair, empty lists
+        included, so the caller can assign each field without knowing the set.
+    """
+    codes = {reason.code for reason in reasons}
+    done: dict[str, list[dict]] = {}
+    for entry in REPAIRS:
+        done[entry.report] = (
+            entry.apply(graph, object_info) if entry.code in codes else []
+        )
+    return done
 
 
 def lora_slot_fields(inputs: dict) -> list[str]:
