@@ -105,6 +105,8 @@ export function scoreChipValue(min, max, unscored) {
   else if (min != null) range = `${min}+`;
   else if (max != null) range = `up to ${max}`;
   if (!unscored) return range;
+  // From the filter menu a range from 0 carries the unrated: 0 stars is them.
+  if (min == null && max != null) return max === 0 ? "unscored" : range;
   return range ? `${range} or unscored` : "unscored";
 }
 

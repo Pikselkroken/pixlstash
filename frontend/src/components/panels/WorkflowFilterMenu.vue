@@ -44,23 +44,13 @@
     </div>
 
     <div v-for="pick in PICKS" :key="pick.key" class="tbm-section">
-      <div class="wff-label-row">
-        <span class="tbm-label">{{ pick.label }}</span>
-        <button
-          class="tbm-ghost"
-          type="button"
-          :disabled="store.filters[pick.key] == null"
-          @click="store.setFilters({ [pick.key]: null })"
-        >
-          Clear
-        </button>
-      </div>
+      <span class="tbm-label">{{ pick.label }}</span>
       <p v-if="!options(pick.key).length" class="fm-help">
         Nothing in this grid says.
       </p>
       <div v-else class="wff-scroll">
         <OptionRows
-          :options="options(pick.key)"
+          :options="rows(pick)"
           :model-value="store.filters[pick.key]"
           :aria-label="pick.label"
           @update:model-value="(id) => store.setFilters({ [pick.key]: id })"
@@ -104,11 +94,12 @@ const CHECKS = [
   { key: "ghosts", label: "Ghosts", note: "Keeps something deleted" },
 ];
 
+// `anyLabel` names the row that turns the filter off.
 const PICKS = [
-  { key: "type", label: "Type" },
-  { key: "checkpoint", label: "Checkpoint" },
-  { key: "source", label: "Source" },
-  { key: "minRating", label: "Min rating" },
+  { key: "type", label: "Type", anyLabel: "All" },
+  { key: "checkpoint", label: "Checkpoint", anyLabel: "Any" },
+  { key: "source", label: "Source", anyLabel: "Any" },
+  { key: "minRating", label: "Min rating", anyLabel: "Any" },
 ];
 
 const OPTION_LISTS = {
@@ -120,6 +111,13 @@ const OPTION_LISTS = {
 
 function options(key) {
   return store.filterOptions[OPTION_LISTS[key]] ?? [];
+}
+
+function rows(pick) {
+  return [
+    { id: null, label: pick.anyLabel, count: store.cards.length },
+    ...options(pick.key),
+  ];
 }
 
 // The number beside each checkbox is what it is holding back, or letting in:
@@ -148,12 +146,6 @@ const counts = computed(() => ({
   display: block;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
-}
-.wff-label-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
 }
 /* A library can hold more checkpoints than a panel can be tall. Six rows of
    the shared menu-row height, so the cap is a number of rows rather than a

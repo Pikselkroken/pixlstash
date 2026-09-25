@@ -435,7 +435,7 @@ List and import workflow files; read the workflow a picture carries. Running one
 
 **A LoRA from the shelf, put into a run (#1310).** A run puts one shelf adapter into **one** LoRA slot of the graph. The file-keyed resolver `_resolve_lora_swap` went with the run routes it served (#1410); `POST /workflows/run` addresses LoRAs per slot through its own `loras`, and what follows is the slot vocabulary both generations share. Slots are found by `detect_lora_targets` (`services/comfyui_recipe_service.py`) **by field name, not by class**: a `lora_name` input (and a stacker's numbered `lora_name_2`) is a filename slot whatever loader carries it (`LoraLoaderModelOnly`, `LoraLoaderGGUF`, the `LoRALoader` spelling, the third-party ones that copy the widget), and `adapter_sha256` / `lora_sha256` are the digest slots of the ComfyUI-PixlStash loaders, one per node however the pack spells it. A class allowlist would have to grow for each pack and would quietly refuse the rest; a wired slot (`[node_id, slot]`) is skipped, since overwriting it would drop the link. The known reach is a stacker holding its slots as dicts under its own key (rgthree's Power Lora Loader), which reads as no slot at all; #1376 refuses to insert a loader into such a graph rather than stack a second adapter on it. `apply_adapter` then writes the slot the way its own loader reads it - **the decision on #1310: patch what the graph already has, substitute nothing and add nothing**, so this works on any ComfyUI and needs the node pack only where the graph already uses it. A digest slot takes the shelf's `sha256` and that node resolves or fetches the file itself. A filename slot takes a name *this* ComfyUI lists: the shelf's names for the model (each copy's `relpath`, then its `filename`) are matched against the loader's own combo options from `object_info`, exactly first and then on the basename, because ComfyUI counts from its `loras` folder and the shelf from the folder it scanned. **That last match is by name, not by content, and cannot be anything else** - `object_info` lists no digests - so a different file of the same name on that machine is what gets loaded; the digest slot is the exact one. **One slot, not all of them, and a slot is a node and a field**: a graph chaining a style LoRA and a character LoRA would otherwise come back loading the chosen file twice with the other gone, and a stacker carries several LoRAs on one node, so `lora_node_id` alone would still swap every one of them. A slot is narrowed by node and field and whatever is left must be exactly one slot; a 400 lists the slots otherwise, or names the node or field that matched nothing. The swap runs *after* `apply_values`, so the LoRA chosen for the run wins over a `lora_name` set in the parameter form. A UI-format file is refused as that, before the shelf is even asked - "no LoRA loader" would be false about a file that may have one - and a loader class this ComfyUI lacks is named as the missing node rather than as a file list it does not enumerate. The write goes through `api_graph`, since the import dialog stores `{"prompt": graph}` and detection reads inside it; a slot the submitted instance turns out not to have is a **500**, never a run that quietly keeps the graph's own LoRA. Refusals, all before the first upload (the swap is applied once to a copy of the graph, as the bindings are filled once): **a graph with no LoRA loader at all without `insert_lora_loader: true`** (400; see the insertion below), a basename naming several of ComfyUI's files, a loader that does not enumerate them, and a model on the shelf but not on that ComfyUI (400 each); a ComfyUI that cannot be asked at all is a **502** on every route, a replay included, never a guess. `file_kind` is an **allow-list**: `adapter` and the unclassified `unknown`, which on this shelf is usually an adapter the header reader could not place; a checkpoint, VAE, text encoder or engine is a 400 naming the kind, a hash the shelf does not have a 404, and no hub a 503. **One run route takes the swap now.** `POST /comfyui/workflows/{name}/run`, `run_i2i` and `run_recipe` all did, through one resolver so they refused the same things in the same words; the dialogs that drove them were deleted in v1.12 F5 (#1407) and the routes themselves in B9 (#1410), leaving `POST /workflows/run`. Slots are still reported where a caller already reads: `lora_slots` on each row of `GET /comfyui/workflows` (cached with the rest of the file's description, so a menu needs no request per workflow), on `GET /comfyui/pictures/{id}/recipe`, and on a card's detail read. **The list's rows carry no `value`**: that route is `ANY_TOKEN` and open to share-link tokens, a slot's value is a LoRA filename or digest, and `/models/` and `/adapters/` keep exactly that inventory from those tokens. The owner-only card detail read and the picture-scoped recipe read (whose `/workflow` sibling already returns the whole graph to the same scope) carry the values. **In a replay the swap is applied before the pre-flight judges the graph**, which is the whole point of it there (the replay is `POST /workflows/run` since #1410): a picture made with a LoRA that has since left this ComfyUI is exactly the one worth re-running with another, and pre-flighting the file it no longer uses would refuse it. `_read_object_info` / `_inspect_graph` exist for that ordering, so one `/object_info` read still serves the swap, the pre-flight and seed detection.
 
-**A LoRA loader added to a graph that has none (#1376).** `plan_lora_insertion` (`services/comfyui_recipe_service.py`) finds where it goes and `insert_adapter` carries it out, reached from the run route when a graph has no slot to swap. **The loader is spliced right after the model source**: the node handing out MODEL that takes no MODEL itself (a checkpoint, UNET or GGUF loader), and likewise for CLIP, which may be another node or none. Every input reading that exact output is rewired to the loader, so several readers of one MODEL and a model patch downstream (`ModelSamplingFlux`) all see the LoRA, and the VAE stays where it was. **Links are typed from `object_info`'s `output` lists, never from input names** (`ModelMergeSimple` reads `model1`): a missed reader would run that branch without the LoRA and say nothing, so a linked node this ComfyUI lacks refuses the plan rather than reading as untyped. Refused as a `LookupError` (400 on a run, `reason` on the reads): **a node that already loads a LoRA some way of its own**, decided at the class level rather than on widget spellings - its `class_type` mentions a LoRA, ComfyUI declares a LoRA-ish type on one of its inputs or outputs, or one of its values carries a `<lora:…>` prompt tag - since by then a swappable slot has been ruled out, so any such node is one that cannot be swapped and splicing in front of it would leave two adapters live (the spelling rule covered a wired `lora_name` and rgthree's `lora_N` dicts and missed `lora_1_name`, a prompt-tag loader and `lora_name: null`); a **second model chain of another kind** (`WANVIDEOMODEL` and the packs that mint their own), which a LoRA loader cannot patch and which the >1 refusal would not otherwise see, so a mixed graph is refused whole rather than run half-LoRA'd; a link whose source class **does not say what it hands on** (no `output` list, or one shorter than the link), for the same reason; a CLIP source that itself reads the model, where splicing in front of both would make a cycle; no model source, more than one model or text-encoder source (a refiner, a merge - which one the LoRA is for is the owner's call), and a UI-format file. **The loader** is `LoraLoader`, or `LoraLoaderModelOnly` when nothing reads a CLIP, when this ComfyUI lists the file by the same name match as a swap: it needs no node pack, and a picture made with it stays replayable, because a replay refuses any graph carrying a `PixlStash*` node. Otherwise `PixlStashAdapterLoader` by digest when that pack is installed - **except on a replay** (`digest_loader=False`), whose variant would otherwise be one it refuses to replay - (it fetches the file itself), otherwise a 400 saying why the core loader could not. It gets the next free numeric node id, its widgets' own `object_info` defaults (strength 1.0; a combo's first option), and `_meta.title` "LoRA (added by PixlStash)". Its `model` / `clip` **inputs** are checked against `object_info` as well as its outputs, so a fork spelling them differently is refused here rather than by `POST /prompt` after the run is queued. **Only on `insert_lora_loader: true`**: adding a node is a bigger change than filling a slot, so a bare `adapter_sha256` stays the 400 it was, and naming a slot with it is a 400. The plan is made once on a copy before the first upload, like a swap, and `insert_adapter` checks every planned input still reads the planned source before it touches anything, so a diverged instance is a 500 and never a half-rewired run. The owner sees the splice first: `GET /comfyui/workflows/{workflow_name}/lora-insertion` (`OWNER_ONLY`, since it asks the owner's ComfyUI) answers `{workflow, has_lora_loader, plan, reason}`, and `GET /comfyui/pictures/{id}/recipe` carries `lora_insertion: {plan, reason}` when its `lora_slots` is empty, from the one `object_info` read its pre-flight already makes. `insert_lora_loader` without an `adapter_sha256` is a 400, not a LoRA-less 200. The plan carries `pixlstash_loader`, whether the digest loader *could* be the one inserted, since which it takes depends on an adapter not chosen yet and the owner is owed the worse case; the recipe read reports it `false`, because that route never inserts it. `has_lora_loader` is `null` for a UI-format file, which may have a loader nobody can read. The run recomputes the plan rather than accepting one from the client, so it is not proof the owner saw that exact splice (a file re-imported under the same name between preview and run gets the new one). Known reach: the splice is by type, so a model loader whose MODEL core `LoraLoader` cannot patch (Nunchaku, TensorRT) gets a loader that loads nothing; and insertion is refused by any missing node pack anywhere in the graph, however unrelated to the model. Nothing is written back to the stored file, and stacking a second adapter is not offered.
+**A LoRA loader added to a graph that has none (#1376).** `plan_lora_insertion` (`services/comfyui_recipe_service.py`) finds where it goes and `insert_adapter` carries it out, reached from the run route when a graph has no slot to swap. **The loader is spliced right after the model source**: the node handing out MODEL that takes no MODEL itself (a checkpoint, UNET or GGUF loader), and likewise for CLIP, which may be another node or none. Every input reading that exact output is rewired to the loader, so several readers of one MODEL and a model patch downstream (`ModelSamplingFlux`) all see the LoRA, and the VAE stays where it was. **Links are typed from `object_info`'s `output` lists, never from input names** (`ModelMergeSimple` reads `model1`): a missed reader would run that branch without the LoRA and say nothing. A linked node this ComfyUI lacks is typed by its **reader's** declared input instead (a seed node from an uninstalled pack feeds the sampler's `seed`, an INT, so it is no model and the MODEL path is still there to follow); only a link neither end can type refuses the plan. **A node that already loads a LoRA some way of its own** (a stacker, rgthree's `lora_N` dicts, a prompt-tag encoder, a character prompt builder) **does not stop the splice**: it is an ordinary node, a loader in the MODEL path applies alongside it, and refusing it (as #1376 first did) left almost no real workflow able to take a loader. **Only the MODEL path counts**: another kind of model (an upscaler's `UPSCALE_MODEL`, `WANVIDEOMODEL`) is on a path of its own and is ignored, and the graph is first cut to the nodes an output node reads, so a leftover loader wired into nothing is not a second model. Refused as a `LookupError` (400 on a run, `reason` on the reads): a link **neither end can type** (the source's class missing or silent about its outputs, and the reader's input undeclared or `*`), for the same reason; a CLIP source that itself reads the model, where splicing in front of both would make a cycle; no model source, more than one model or text-encoder source (a refiner, a merge - which one the LoRA is for is the owner's call), and a UI-format file. **The loader** is `LoraLoader`, or `LoraLoaderModelOnly` when nothing reads a CLIP, when this ComfyUI lists the file by the same name match as a swap: it needs no node pack, and a picture made with it stays replayable, because a replay refuses any graph carrying a `PixlStash*` node. Otherwise `PixlStashAdapterLoader` by digest when that pack is installed - **except on a replay** (`digest_loader=False`), whose variant would otherwise be one it refuses to replay - (it fetches the file itself), otherwise a 400 saying why the core loader could not. It gets the next free numeric node id, its widgets' own `object_info` defaults (strength 1.0; a combo's first option), and `_meta.title` "LoRA (added by PixlStash)". Its `model` / `clip` **inputs** are checked against `object_info` as well as its outputs, so a fork spelling them differently is refused here rather than by `POST /prompt` after the run is queued. **Only on `insert_lora_loader: true`**: adding a node is a bigger change than filling a slot, so a bare `adapter_sha256` stays the 400 it was, and naming a slot with it is a 400. The plan is made once on a copy before the first upload, like a swap, and `insert_adapter` checks every planned input still reads the planned source before it touches anything, so a diverged instance is a 500 and never a half-rewired run. The owner sees the splice first: `GET /comfyui/workflows/{workflow_name}/lora-insertion` (`OWNER_ONLY`, since it asks the owner's ComfyUI) answers `{workflow, has_lora_loader, plan, reason}`, and `GET /comfyui/pictures/{id}/recipe` carries `lora_insertion: {plan, reason}` when its `lora_slots` is empty, from the one `object_info` read its pre-flight already makes. `insert_lora_loader` without an `adapter_sha256` is a 400, not a LoRA-less 200. The plan carries `pixlstash_loader`, whether the digest loader *could* be the one inserted, since which it takes depends on an adapter not chosen yet and the owner is owed the worse case; the recipe read reports it `false`, because that route never inserts it. `has_lora_loader` is `null` for a UI-format file, which may have a loader nobody can read. The run recomputes the plan rather than accepting one from the client, so it is not proof the owner saw that exact splice (a file re-imported under the same name between preview and run gets the new one). Known reach: the splice is by type, so a model loader whose MODEL core `LoraLoader` cannot patch (Nunchaku, TensorRT) gets a loader that loads nothing; and a missing node pack stops insertion only where nothing in the graph says what the missing node hands on. Nothing is written back to the stored file, and stacking a second adapter is not offered.
 
 **Two chunks, one of them executable.** A ComfyUI-generated PNG embeds *both* a `workflow` chunk (the UI node graph, for reopening in the editor) and a `prompt` chunk (the resolved API-format graph the server actually executed). Only the `prompt` chunk is submittable to `POST /prompt`.
 
@@ -750,11 +750,16 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/workflows/{workflow_key}                                              | workflows       | One workflow card                                           |
 | PATCH  | /api/v1/workflows/{workflow_key}                                              | workflows       | Edit a workflow card                                        |
 | DELETE | /api/v1/workflows/{workflow_key}                                              | workflows       | Delete an imported workflow                                 |
+| POST   | /api/v1/workflows/{workflow_key}/clone-with-models                            | workflows       | Clone a workflow onto other models                          |
 | PUT    | /api/v1/workflows/{workflow_key}/defaults                                     | workflows       | Set a card's parameter defaults                             |
 | POST   | /api/v1/workflows/{workflow_key}/duplicate                                    | workflows       | Duplicate a workflow                                        |
 | GET    | /api/v1/workflows/{workflow_key}/export                                       | workflows       | Export a workflow                                           |
+| GET    | /api/v1/workflows/{workflow_key}/graph                                        | workflows       | A workflow's runnable graph                                 |
 | PUT    | /api/v1/workflows/{workflow_key}/inputs                                       | workflows       | Set a card's picture inputs                                 |
 | POST   | /api/v1/workflows/{workflow_key}/insert-lora-loader                           | workflows       | Add a LoRA loader to a workflow                             |
+| GET    | /api/v1/workflows/{workflow_key}/lora-chain                                   | workflows       | A workflow's LoRA chain                                     |
+| PUT    | /api/v1/workflows/{workflow_key}/lora-chain                                   | workflows       | Edit a workflow's LoRA chain                                |
+| GET    | /api/v1/workflows/{workflow_key}/model-swap                                   | workflows       | What a workflow could be cloned onto                        |
 | GET    | /api/v1/workflows/{workflow_key}/pictures                                     | workflows       | Pictures made with a card                                   |
 | PUT    | /api/v1/workflows/{workflow_key}/pins                                         | workflows       | Set a card's pinned parameters                              |
 | PUT    | /api/v1/workflows/{workflow_key}/slots                                        | workflows       | Mark a card's LoRA slots                                    |
@@ -2985,6 +2990,65 @@ section, not a site of its own in `_plan`.
   reason. The Run popup draws it *before* the run: a picture generated without
   the character LoRA the owner expected, with nothing said, is worse than a
   refusal.
+- **The owner can skip a LoRA for one run** (#1478): `skip_loras: [{node_id,
+  field}]` on the run body. `workflow_run_service.skip_requested_loras` takes
+  each loader out through the same `bypass_node`, on the run's copy only, before
+  a saved recipe's LoRAs are placed and before `judge`. The request is the
+  consent the automatic bypass lacks, so a `(forgotten model)` loader is skipped
+  when asked. What it cannot consent to is dropping a LoRA it did not name: a
+  stacker holding another filled slot, a loader nothing can be rewired around,
+  and any skip while ComfyUI cannot be asked become the blocking reason
+  `lora_not_skippable`. A skip is reported in `bypassed_loras` with
+  `requested: true`; the automatic ones carry `requested: false`. A slot no
+  graph of the run has is a 400; one named in both `loras` and `skip_loras` is
+  a 422; and a skip on a run spanning several cards is a 400, because a node id
+  names one loader on one graph. A saved recipe's LoRAs are matched against the
+  graph as it stood before the skip, so the LoRA a skipped loader held is not
+  applied and does not move on to another loader.
+- **A saved recipe's LoRAs are placed by what they are, not by position**
+  (`place_recipe_loras`): digest first, then case-folded basename, then any
+  free slot in graph order, so a recipe that ran before still runs the same.
+  The positional `zip` it replaced put a recipe stored in the other order onto
+  the wrong loaders and dropped a third LoRA on a two-loader graph without a
+  word. A LoRA with nowhere to go, or one the shelf cannot identify, is reported
+  on `RunGroup.unplaced_loras` (`{filename, sha256, node_id, reason}`), a fact
+  like `bypassed_loras` and never a reason.
+
+#### Editing a workflow's LoRA chain (#1478)
+
+`GET /workflows/{key}/lora-chain` reads the card's graph as a chain: the model
+source, the LoRA loaders in the order a run applies them, and what reads the
+result. `read_lora_chain` types every link from `object_info`, as
+`plan_lora_insertion` does, and refuses (the route answers `editable: false` with
+the sentence) a graph it cannot edit honestly: several model sources, or a CLIP
+chain in a different order from the MODEL one. Only the MODEL path counts: the
+graph is first cut to the nodes an output node (`output_node` in `object_info`)
+reads, as ComfyUI runs it, so a leftover UNET loader wired into nothing is not a
+second model; another kind of model (an upscaler's, `WANVIDEOMODEL`) is on a
+path of its own and ignored. Only a plain one-slot loader wired into the MODEL
+path is an editable link; any other node that loads a LoRA (a stacker, a prompt
+tag, a character prompt builder) stays as an ordinary node the chain runs
+around, so a loader can always be added between the model source and what reads
+the model. **A branch ends the chain**: when a loader's model is read by the
+next loader and by something else (a second sampler pass with an extra LoRA),
+the chain stops there, a LoRA added at its end reaches every reader, the
+loaders past the branch are left as they are, and `branch_note` tells the owner
+why the list is shorter than the workflow. A refused chain,
+or one read with ComfyUI unreachable, goes through `read_lora_chain_untyped`,
+which follows the `model` links so the chain can still be looked at; when
+ComfyUI did answer it also types the two ends best effort (the model source and
+what reads the chain's end), so the read-only view names what the chain runs
+between. Each loader carries the shelf digest it loads, when exactly one shelf
+LoRA matches.
+
+`PUT` takes the whole chain as the owner left it. An existing loader is kept by
+`node_id` (moved and re-weighted, its id kept), a new one is added by shelf
+`sha256`, and every loader left out is deleted through `bypass_node`.
+`plan_lora_chain` validates the whole edit before `apply_lora_chain` touches the
+graph, and the result is written as a **new** file through `_store_copy`, so one
+save is one new card and the original file never changes. `dry_run` answers the
+change list (`deleted`, `added`, `moved`, `strength`, `rewired`) and writes
+nothing. `insert-lora-loader` is the empty-chain case and still stands on its own.
 
 #### The repair registry: judge, repair, judge again (#1463)
 
@@ -3185,6 +3249,52 @@ on the next scan: the unchanged-file fast path re-reads the header, never the
 bytes, for a row whose `weights_id` is NULL. `CheckpointHashTask._merge`
 carries them to the surviving row like the other scan-derived columns.
 
+`model.base_model_canonical` and `model.base_model_source` are the base model
+the row was **identified** as, against the shipped table in
+`pixlstash/utils/known_base_models.py`, and which evidence said so.
+`known_base_models.identify(declared, filenames)` takes the header's
+declarations (`ss_base_model_version`, and the SAI `modelspec.architecture`
+with its `/lora`-style suffix dropped) and the filenames (the file's own, and
+kohya's `ss_sd_model_name`, the checkpoint it was trained against). Sources,
+strongest first: `user` (set only by `update_models`), `declared` and
+`filename` (an exact fold of a declared value, or of the filename stem or one of
+its tokens), `declared_fuzzy` (`difflib`, cutoff 0.88) and `filename_fuzzy`
+(containment, longest alias first, never an alias under four characters
+nor one that is an ordinary word, `pony`, `sana`, `lumina`, `krea`, `chroma`,
+which count only as a whole filename token).
+Quality before provenance: an exact filename beats a fuzzy declaration. A
+`closed` base is never an answer.
+
+- **Written only over a source it outranks.** `_write_identification` is one
+  guarded UPDATE, deliberately not the `COALESCE` the curatable columns use:
+  the same content reached again with better evidence (a copy under a more
+  telling name) must be able to upgrade a guess, and nothing may replace
+  `user`. An unchanged file that already has an answer is not re-read. `base_model` itself is still the trainer's string, written with
+  `COALESCE` as before.
+- **A curated base model moves both columns in the same UPDATE**
+  (`update_models`: canonical = `fold(value)`, source = `user`), including a
+  cleared one, so "none of these" sticks and the shelf never groups a corrected
+  row under the old guess.
+- **No match writes nothing.** Both columns stay NULL, and `has_header_facts`
+  requires `base_model_source IS NOT NULL`, so the fast path re-reads the
+  header of an unmatched row on every scan (never its bytes). That is how a
+  table entry added in a later release reaches files scanned before it.
+- **Existing rows** whose stored `base_model` folds exactly are identified
+  once, as `declared`, by the hub's data backfill v3
+  (`schema._backfill_base_model_canonical`). Nothing weaker is written there:
+  a stored answer stops the header being re-read, so a filename guess made
+  from the columns would never be checked against the header's
+  `modelspec.architecture`. Every other row is identified from all its
+  evidence on its next scan. The columns themselves are amended
+  into schema v2 like the header facts, not a v3, which an older build would
+  refuse.
+- The shelf **sorts and filters** on `COALESCE(base_model_canonical,
+  base_model)`; the filter also matches the raw column, so a caller holding the
+  trainer's spelling still gets its rows. `ModelResponse` serves both columns,
+  `family` from the canonical label when there is one, and `matched_name`: the
+  label for a checkpoint whose derived filename folds exactly to its own
+  non-guessed canonical label (`flux1-dev.safetensors`), never for an adapter.
+
 `quant` is **two sources folded into one vocabulary**, and the fold happens on
 the way out rather than on the way in. The column holds whichever source wrote
 it: the safetensors header's own dtype spelling (`f16`, `f8_e4m3`, `i32`, or
@@ -3207,6 +3317,42 @@ suffix* below for the file kinds that have no header at all.
 Nothing reads them to decide a delete yet: `family` speaks two vocabularies (base-model
 families and tensor layouts), and joining a checkpoint's `flux1` to a
 `vae_16ch` needs a compatibility table this change does not invent.
+
+**Clone with new models proposes companions from evidence, not from a table.**
+`model_shelf_service.propose_companions` is `fetch_companions` read forwards:
+the VAEs and text encoders that share a `workflow_recipe_asset` recipe with the
+chosen checkpoint, and when there are none, with any base model of the same
+`base_model` label, then of the same `family_of` family. Each proposal carries
+the step that produced it (`via`), and a support file a recipe reached only
+through an ambiguous name is not proposed. "Same base model" and "same family"
+read `known_base_model`: the shelf's identified label (`base_model_canonical`)
+unless its source is a fuzzy guess, else the stored `base_model` folded; the
+LoRA flag reads the same. A checkpoint nothing has run with,
+from a family nothing has run with, proposes nothing: no bridge between the two
+vocabularies above is invented. LoRAs and ControlNets are the one legitimate
+family comparison (`family_of` on both sides of one vocabulary), and a mismatch
+is flagged by `GET /workflows/{key}/model-swap`, never dropped. The rewrite is
+`comfyui_recipe_service.apply_filename_swap`, deliberately not
+`apply_model_swap`: that one substitutes the same bytes under another name, this
+one replaces a file that loads with a different file. It matches the graph on
+the whole recorded name only (separators unified, case folded): the dialog
+sends the graph's own values, and a basename match would let a swap of
+`diffusion_pytorch_model.safetensors` rewrite a ControlNet loader's file of the
+same name. It writes the name in ComfyUI's own spelling when `object_info`
+answers (whole option, then the one option with that basename; a name listed
+in two folders is refused as `several_on_comfyui`, since either could be the
+wrong model) and unchecked when it does not. Both it and the dialog's slot list
+walk the graph through `comfyui_utilities.iter_model_fields_api`. The route is
+all or nothing: any swap that did not land refuses the clone (409) rather than
+saving the old model beside the new one's VAE. It names the new card only when
+it is a card nobody has named, because a repeat clone re-keys onto the card the
+first one made. A `CLIPVisionLoader`'s `clip_name` is reported as
+`clip_vision`, never offered text encoders. The base slot is offered only
+checkpoints of its loader's file type and, when ComfyUI answers, only ones that
+loader lists, because the shelf files a diffusion-only UNET and an all-in-one
+checkpoint under one kind. Duplicate, Insert loader, the LoRA chain edit and
+Clone all write the source file's `pixlstash_bindings` back into the copy
+(`_store_copy`), which the resolved graph has lost.
 
 #### The shelf catalogues more than one suffix
 
@@ -3247,9 +3393,10 @@ Two consequences worth stating:
   `MissingCheckpointHashFinder`. Turning the suffix on adds no reading the
   scan was not already deferring.
 - **The unchanged-file fast path skips the header re-read for it.**
-  `has_header_facts` is `weights_id IS NOT NULL`, which is false by
+  `has_header_facts` needs `weights_id IS NOT NULL`, which is false by
   construction here, so without the `_reads_a_header` check a GGUF would be
-  re-opened on every sweep for a header it will never have.
+  re-opened on every sweep for a header it will never have. It is identified
+  from its filename alone on that path instead, which reads nothing.
 
 #### The unlink is authorised by exactly one committed row (#1017)
 

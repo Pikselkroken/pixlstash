@@ -40,6 +40,21 @@
          are gated on a selection, and it is docked over the grid this rail
          sits beside), so nothing became unreachable — and the reader is told
          where the verbs are rather than left to find them. -->
+    <!-- A stack selected whole is one card on screen and one run: named, and
+         the sentence saying what Run… runs is the one the button points at,
+         visible rather than a hover tooltip touch never shows. -->
+    <template v-else-if="multiple && runTarget">
+      <div class="inspector-section">
+        <span class="section-label">Selected</span>
+        <p class="wftab-title">{{ runTarget.name }}</p>
+        <p id="wftab-run-target" class="wftab-note wftab-quiet">
+          A stack of {{ store.selectedKeys.length }} workflows. Run… runs
+          {{ runTarget.name }}, the cover; you can switch to another member in
+          the Run popup.
+        </p>
+      </div>
+    </template>
+
     <template v-else-if="multiple">
       <div class="inspector-section">
         <span class="section-label">Selected</span>
@@ -75,12 +90,125 @@
         <span class="section-label">Models</span>
         <div class="wftab-field">
           <span class="wftab-label">Checkpoint</span>
-          <span class="wftab-value">{{ checkpointLabel }}</span>
+          <!-- Missing: ComfyUI does not have the file (the run pre-flight's
+               answer), or - when ComfyUI cannot be asked - the card has no
+               name for it. Always with the FILE it is missing, as its name
+               without folders; the whole recorded value is the tooltip. -->
+          <div v-if="detail && checkpointIsMissing" class="wftab-missing">
+            <p class="wftab-warn">
+              <v-icon size="16">mdi-alert-outline</v-icon>
+              Checkpoint missing
+            </p>
+            <p
+              v-if="missingCheckpointFile"
+              class="wftab-note wftab-quiet"
+              data-testid="wftab-missing-file"
+            >
+              <span class="wftab-file"
+                ><Tooltip :text="missingCheckpointFile" activator="parent" />{{
+                  fileName(missingCheckpointFile)
+                }}</span
+              >{{ preflightAnswered ? " is not installed in ComfyUI." : "" }}
+            </p>
+            <p v-else class="wftab-note wftab-quiet">
+              No file name was kept for it anywhere.
+            </p>
+          </div>
+          <span v-else-if="checkpointLabel" class="wftab-value">{{
+            checkpointLabel
+          }}</span>
+          <!-- The card has no name for it, but the graph a run submits does:
+               that is the file, installed as far as anybody knows. -->
+          <span v-else-if="graphBaseModel" class="wftab-value"
+            ><Tooltip :text="graphBaseModel" activator="parent" />{{
+              fileName(graphBaseModel)
+            }}</span
+          >
+          <!-- The graph a run would submit was read and loads no base model:
+               an upscaler, say. A fact, so it is said as one. -->
+          <span v-else-if="graphLoadsNone" class="wftab-value wftab-quiet">
+            None in this workflow
+          </span>
+          <!-- A recipe-less card's rows are what its file gave up, so an
+               empty one is "not read", never a claim that it has none. -->
+          <span v-else-if="checkpointIsUnread" class="wftab-value wftab-quiet">
+            Not read from its file
+          </span>
+          <!-- Only when nothing anywhere names a base model: not the card, not
+               the graph a run would submit, not the pre-flight. -->
+          <span v-else class="wftab-value wftab-quiet">Not recorded</span>
         </div>
         <div class="wftab-field">
           <span class="wftab-label">VAE</span>
           <span class="wftab-value">{{ vaeLabel }}</span>
         </div>
+
+        <!-- The chain, in the order it applies (#1478). "Edit LoRAs…" is
+             here even with no loader at all: an entry point that only exists
+             for workflows that already have LoRAs is how adding the first one
+             stays unreachable. -->
+        <div class="wftab-loras-head">
+          <span class="wftab-label">LoRAs</span>
+          <AppButton
+            size="sm"
+            data-testid="wftab-edit-loras"
+            :disabled="chainNoGraph"
+            :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
+            @click="openEditLoras(selectedKey)"
+          >
+            Edit LoRAs…
+          </AppButton>
+        </div>
+        <p v-if="chainPending" class="wftab-note wftab-quiet">
+          Reading its LoRAs…
+        </p>
+        <p
+          v-else-if="chainNoGraph"
+          id="wftab-chain-reason"
+          class="wftab-note wftab-quiet"
+        >
+          PixlStash has no graph for this workflow, so its LoRAs cannot be read
+          or edited.
+        </p>
+        <p v-else-if="chainFailed" class="wftab-note wftab-quiet">
+          Could not read its LoRAs just now.
+        </p>
+        <template v-else-if="chain">
+          <ol
+            v-if="chainLoaders.length"
+            class="wftab-chain"
+            aria-label="LoRAs, in the order the chain applies them"
+          >
+            <li
+              v-for="loader in chainLoaders"
+              :key="loader.node_id"
+              class="wftab-chain-row"
+            >
+              <v-icon
+                v-if="!loader.on_shelf"
+                size="16"
+                class="wftab-chain-flag"
+                aria-hidden="true"
+                >mdi-alert-outline</v-icon
+              >
+              <span class="wftab-chain-name">{{ loader.label }}</span>
+              <span v-if="!loader.on_shelf" class="visually-hidden"
+                >, not on your model shelf</span
+              >
+              <span class="wftab-chain-strength">{{ loader.strengthText }}</span>
+            </li>
+          </ol>
+          <p
+            v-if="chainLoaders.length"
+            class="wftab-note wftab-quiet"
+            data-testid="wftab-shelf-line"
+          >
+            In the order the chain applies them. {{ shelfLine }}
+          </p>
+          <p v-else class="wftab-note wftab-quiet">
+            No LoRA loader. Editing adds the first one.
+          </p>
+        </template>
 
         <!-- Two lines per slot, as drawn: what is in it and how strong, then
              the switch that decides whether the slot is part of the workflow
@@ -125,7 +253,9 @@
             </p>
           </div>
         </template>
-        <p v-else class="wftab-note wftab-quiet">
+        <!-- Only while the chain has nothing to say: once it is read, "No LoRA
+             loader" above is the same fact in the words that lead to Edit. -->
+        <p v-else-if="!chain" class="wftab-note wftab-quiet">
           This workflow has no LoRA slot.
         </p>
       </div>
@@ -213,53 +343,91 @@
       </div>
     </template>
 
-    <!-- The footer is the last thing in the body and sticks to its bottom, so
-         Run… is where the design puts it without a second scroll container. -->
+    <!-- The inspector's footer slot sits below the scrolling body, so Run…
+         stays where the design puts it and never scrolls. -->
     <!-- The Workflow tab's, and only its: Recipes runs a recipe from its own
          row and Tasks is the app's business, so neither wants this footer. -->
-    <div v-if="tab === 'workflow' && (card || multiple)" class="wftab-foot">
-      <AppButton
-        variant="primary"
-        icon-left="play"
-        block
-        :aria-disabled="multiple ? 'true' : undefined"
-        :aria-describedby="multiple ? 'wftab-run-reason' : undefined"
-        @click="run"
-      >
-        Run…
-      </AppButton>
-      <v-menu
-        v-if="card"
-        v-model="menuOpen"
-        location="top end"
-        origin="bottom end"
-        :offset="8"
-      >
-        <template #activator="{ props: menuProps }">
-          <AppButton
-            v-bind="menuProps"
-            icon-left="dots-horizontal"
-            icon-only
-            tooltip="More"
-            aria-haspopup="menu"
-            :aria-expanded="menuOpen"
-          />
-        </template>
-        <div class="tbm">
-          <div class="tbm-section">
-            <button class="wftab-item" type="button" @click="toggleHidden">
-              <v-icon size="16">{{
-                detail?.hidden ? "mdi-eye-outline" : "mdi-eye-off-outline"
-              }}</v-icon>
-              {{ detail?.hidden ? "Unhide" : "Hide" }}
-            </button>
+    <template #footer>
+      <div v-if="tab === 'workflow' && (card || multiple)" class="wftab-foot">
+        <AppButton
+          variant="primary"
+          icon-left="play"
+          block
+          :aria-disabled="runTarget ? undefined : 'true'"
+          :aria-describedby="runDescribedBy"
+          @click="run"
+        >
+          Run…
+        </AppButton>
+        <!-- Beside Run…, as the ComfyUI mark: the ComfyUI-PixlStash node reads
+             `?pixlstash_workflow=` and loads the graph, so without the node
+             ComfyUI opens on whatever it had last. It opens what Run… runs
+             (`runTarget`), and is refused rather than hidden otherwise, for
+             Run…'s reason. The tooltip is its accessible name. -->
+        <AppButton
+          v-if="canOpenComfyui"
+          icon-only
+          tooltip="Open in ComfyUI"
+          data-testid="wftab-open-comfyui"
+          :aria-disabled="runTarget ? undefined : 'true'"
+          :aria-describedby="runTarget ? undefined : 'wftab-open-reason'"
+          @click="openInComfyui"
+        >
+          <template #icon="{ size }"><ComfyuiIcon :size="size" /></template>
+        </AppButton>
+        <v-menu
+          v-if="card"
+          v-model="menuOpen"
+          location="top end"
+          origin="bottom end"
+          :offset="8"
+        >
+          <template #activator="{ props: menuProps }">
+            <AppButton
+              v-bind="menuProps"
+              icon-left="dots-horizontal"
+              icon-only
+              tooltip="More"
+              aria-haspopup="menu"
+              :aria-expanded="menuOpen"
+            />
+          </template>
+          <div class="tbm">
+            <div class="tbm-section">
+              <button class="wftab-item" type="button" @click="toggleHidden">
+                <v-icon size="16">{{
+                  detail?.hidden ? "mdi-eye-outline" : "mdi-eye-off-outline"
+                }}</v-icon>
+                {{ detail?.hidden ? "Unhide" : "Hide" }}
+              </button>
+            </div>
           </div>
-        </div>
-      </v-menu>
-      <p v-if="multiple" id="wftab-run-reason" class="wftab-note wftab-quiet">
-        Run one workflow at a time
-      </p>
-    </div>
+        </v-menu>
+        <p
+          v-if="!runTarget && canOpenComfyui"
+          id="wftab-open-reason"
+          class="wftab-note wftab-quiet"
+        >
+          Open one workflow, or one whole stack, at a time
+        </p>
+        <p v-if="!runTarget" id="wftab-run-reason" class="wftab-note wftab-quiet">
+          Run one workflow, or one whole stack, at a time
+        </p>
+      </div>
+    </template>
+
+    <!-- Keyed to the card it was OPENED on, not to the selection: a save
+         selects the new card, and the dialog must not re-read the chain of
+         the card it just wrote under the owner's feet. -->
+    <EditLorasDialog
+      v-if="editKey"
+      :open="Boolean(editKey)"
+      :workflow-key="editKey"
+      :card-name="editName"
+      :picture-count="editPictures"
+      :drop-lora="editDrop"
+      @close="closeEditLoras"
+    />
   </AppInspector>
 </template>
 
@@ -275,29 +443,40 @@
 // member selected inside its panel shows that member here, which is the only
 // way to read a member's own defaults.
 
-import { computed, ref, watch } from "vue";
-import { useRoute } from "vue-router";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
 import {
+  getLoraChain,
   getWorkflowCard,
   patchWorkflowCard,
+  preflightWorkflowRun,
   setWorkflowDefaults,
   setWorkflowPins,
   setWorkflowSlots,
   workflowCoverUrl,
 } from "../../api/workflows";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
+import { useFilterStore } from "../../stores/useFilterStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
+import { EDIT_LORAS, loraStem } from "../../utils/loraChain";
 import { quantBadge } from "../../utils/modelShelf";
-import { modelDisplayName } from "../../utils/workflowCard";
+import {
+  checkpointMissing,
+  checkpointModel,
+  checkpointUnread,
+  modelDisplayName,
+} from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
+import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
+import EditLorasDialog from "../io/EditLorasDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import Tooltip from "../widgets/Tooltip.vue";
@@ -323,10 +502,23 @@ const store = useWorkflowsStore();
 const { showPictures } = useWorkflowPictures();
 const sidebarStore = useSidebarStore();
 const notices = useNoticeStore();
+const filterStore = useFilterStore();
+/**
+ * The desktop shell's bridge, when there is one. Its window opens only `https:`
+ * outside the app and ComfyUI is plain `http:`, so on the desktop the link goes
+ * through `desktop:openComfyui` instead of `window.open`.
+ */
+const desktop = typeof window !== "undefined" ? window.pixlstashDesktop : null;
+
+/** Whether there is a ComfyUI to open, and a way to open it from here. */
+const canOpenComfyui = computed(
+  () => Boolean(filterStore.comfyuiUrl) && (!desktop || !!desktop.openComfyui),
+);
 const runDialog = useRunDialogStore();
 const tasksStore = useTasksStore();
 
 const route = useRoute();
+const router = useRouter();
 
 const tab = ref("workflow");
 // A deep link to the Tasks tab, from a notice or a banner (`showTasksTab`).
@@ -439,6 +631,13 @@ const recipeKeys = computed(() =>
  * key out and would call a stack of six "five workflows".
  */
 const recipesStack = computed(() => {
+  // A stack selected whole heads its Recipes as the stack, not as a count.
+  if (multiple.value && runTarget.value) {
+    return {
+      name: runTarget.value.name || "",
+      size: Number(runTarget.value.stack_size) || 0,
+    };
+  }
   if (multiple.value) {
     const count = store.selectedKeys.length;
     return { name: `${count} workflows selected`, size: 0 };
@@ -494,12 +693,85 @@ function withQuant(text, model) {
   return detail ? `${text} · ${detail}` : text;
 }
 
+// The base model, as the card's own row picks it: a Flux or SD3 graph has a
+// `unet` and no `checkpoint`, and reading "checkpoint" alone called that
+// missing.
 const checkpointLabel = computed(() => {
-  const models = card.value?.models ?? [];
-  const found = models.find((model) => model.kind === "checkpoint");
+  const found = card.value ? checkpointModel(card.value) : null;
   const name = modelDisplayName(found);
-  return name ? withQuant(name, found) : "Not recorded";
+  return name ? withQuant(name, found) : "";
 });
+
+const checkpointIsUnread = computed(() =>
+  card.value ? checkpointUnread(card.value) : false,
+);
+
+/** ComfyUI's folders for a base model, as `missing_models` names them. */
+const BASE_MODEL_FOLDERS = new Set(["checkpoints", "diffusion_models"]);
+
+/** What the pre-flight reports for a name the hub forgot: names no file. */
+const FORGOTTEN_MODEL = "(forgotten model)";
+
+/** How long a selection has to settle before ComfyUI is asked about it. */
+const PREFLIGHT_SETTLE_MS = 250;
+
+/**
+ * The base-model files the run pre-flight says ComfyUI does not have.
+ *
+ * The card cannot answer this: it names what the recipe recorded, and only
+ * ComfyUI's own model list says whether that file is installed. So the tab
+ * asks the same question Run… asks, once per card. `preflightAnswered` says
+ * whether it has: an unreachable ComfyUI leaves the card's own answer.
+ */
+const missingBaseFiles = ref([]);
+const preflightAnswered = ref(false);
+let installedCheck = 0;
+// A rail that has closed asks nothing: an ask still settling is superseded.
+onBeforeUnmount(() => {
+  installedCheck += 1;
+});
+
+/**
+ * The base-model file the graph a run would submit names, for a card that
+ * has no name of its own for it (`graph_base_models` on the detail).
+ */
+const graphBaseModel = computed(
+  () => detail.value?.graph_base_models?.[0] || "",
+);
+
+/** The graph was read and names no base model (`[]`, not `null`). */
+const graphLoadsNone = computed(
+  () =>
+    Array.isArray(detail.value?.graph_base_models) &&
+    detail.value.graph_base_models.length === 0,
+);
+
+/**
+ * Whether the base model will not load.
+ *
+ * Once ComfyUI has answered, its answer: a checkpoint the card cannot name
+ * but ComfyUI has is not missing. Until then, and when it cannot be asked, the
+ * card's own: a base-model slot with no name. A graph with no such slot (an
+ * upscaler) is never missing one.
+ */
+const checkpointIsMissing = computed(() =>
+  preflightAnswered.value
+    ? missingBaseFiles.value.length > 0
+    : Boolean(card.value && checkpointMissing(card.value)),
+);
+
+/** The file that is missing, as recorded (folders included), or "". */
+const missingCheckpointFile = computed(
+  () =>
+    missingBaseFiles.value.find((file) => file !== FORGOTTEN_MODEL) ||
+    graphBaseModel.value ||
+    checkpointLabel.value,
+);
+
+/** A recorded model value as a person looks for it: the file, no folders. */
+function fileName(value) {
+  return String(value).split(/[\\/]/).pop();
+}
 
 const vaeLabel = computed(() => {
   const found = (card.value?.models ?? []).find(
@@ -519,6 +791,145 @@ const loraSlots = computed(() =>
     chipText: lora.name ? withQuant(lora.name, lora) : null,
     mark: lora.mark,
   })),
+);
+
+// ── The LoRA chain (#1478) ─────────────────────────────────────────────────
+
+/** `GET …/lora-chain` for the selected card, and the state of that read. */
+const chain = ref(null);
+const chainPending = ref(false);
+const chainFailed = ref(false);
+/** 409: the card has no graph, so there is no chain to read or edit. */
+const chainNoGraph = ref(false);
+
+/** The card Edit LoRAs… is open on, or "" when it is shut. */
+const editKey = ref("");
+const editName = ref("");
+const editPictures = ref(0);
+/** A LoRA to open with its loader already deleted (Save-as-recipe's hand-over). */
+const editDrop = ref("");
+
+/** The loaders as the inspector lists them: the shelf's name, and a strength. */
+const chainLoaders = computed(() =>
+  (chain.value?.loaders ?? []).map((loader) => {
+    const strength = Number(loader.strength);
+    return {
+      node_id: String(loader.node_id),
+      label: loader.on_shelf
+        ? loader.name || loraStem(loader.filename)
+        : String(loader.filename || loader.name || "").split(/[\\/]/).pop(),
+      on_shelf: Boolean(loader.on_shelf),
+      strengthText:
+        loader.strength === null || loader.strength === undefined
+          ? "—"
+          : Number.isFinite(strength)
+            ? strength.toFixed(2)
+            : "—",
+    };
+  }),
+);
+
+/** "3 of 4 are on your model shelf." */
+const shelfLine = computed(() => {
+  const total = chainLoaders.value.length;
+  const known = chainLoaders.value.filter((loader) => loader.on_shelf).length;
+  return `${known} of ${total} ${total === 1 ? "is" : "are"} on your model shelf.`;
+});
+
+/**
+ * Read the selected card's chain.
+ *
+ * Its own read rather than a field on the card: the chain is typed from the
+ * owner's ComfyUI (`object_info`), which the grid must not wait on. A 409 is a
+ * card with no graph, said as such; anything else is "could not read it just
+ * now", and Edit LoRAs… stays offered because the dialog reads again.
+ */
+async function loadChain(key) {
+  chain.value = null;
+  chainFailed.value = false;
+  chainNoGraph.value = false;
+  if (!key) {
+    chainPending.value = false;
+    return;
+  }
+  chainPending.value = true;
+  try {
+    const body = await getLoraChain(key);
+    if (selectedKey.value !== key) return;
+    chain.value = body;
+  } catch (err) {
+    if (selectedKey.value !== key) return;
+    if (err?.response?.status === 409) {
+      chainNoGraph.value = true;
+    } else {
+      console.warn(`[workflows] could not read the LoRA chain of ${key}`, err);
+      chainFailed.value = true;
+    }
+  } finally {
+    if (selectedKey.value === key) chainPending.value = false;
+  }
+}
+
+/** Open Edit LoRAs… on `key`, with `drop` already struck through if given. */
+function openEditLoras(key, drop = "") {
+  if (!key) return;
+  const shown = card.value?.key === key ? card.value : null;
+  editName.value = shown?.name || "";
+  editPictures.value = Number(shown?.picture_count) || 0;
+  editDrop.value = drop;
+  editKey.value = key;
+}
+
+function closeEditLoras() {
+  editKey.value = "";
+  editDrop.value = "";
+}
+
+// The name and count arrive with the card when the dialog was opened from a
+// link before the grid or the detail read had landed.
+watch(card, (next) => {
+  if (!editKey.value || next?.key !== editKey.value) return;
+  if (!editName.value) editName.value = next.name || "";
+  if (!editPictures.value) editPictures.value = Number(next.picture_count) || 0;
+});
+
+// `?card=<key>&edit=loras&drop_lora=<file>`, from Save-as-recipe's "The
+// workflow" (#1478): select that card, open the rail on its Workflow tab, and
+// open Edit LoRAs… with that entry already deleted.
+//
+// By KEY rather than `?topology=`, because a topology can hold several cards
+// and the hand-over names exactly one. `edit` and `drop_lora` are one-shot:
+// they are taken back off the URL once honoured, so a reload or a Back does
+// not reopen a dialog the owner has since cancelled. `card` stays, as
+// `topology` does, and is honoured once per value.
+let honouredCard = null;
+
+watch(
+  () => [route.query?.card, route.query?.edit, route.query?.drop_lora],
+  ([wanted, edit, drop]) => {
+    if (typeof wanted !== "string" || !wanted) {
+      honouredCard = null;
+      return;
+    }
+    if (honouredCard !== wanted || edit) {
+      honouredCard = wanted;
+      store.select(wanted);
+      tab.value = "workflow";
+      sidebarStore.statsOpen = true;
+    }
+    if (edit === EDIT_LORAS) {
+      openEditLoras(wanted, typeof drop === "string" ? drop : "");
+    }
+    if (edit !== undefined || drop !== undefined) {
+      const rest = Object.fromEntries(
+        Object.entries(route.query || {}).filter(
+          ([name]) => name !== "edit" && name !== "drop_lora",
+        ),
+      );
+      void router?.replace?.({ query: rest });
+    }
+  },
+  { immediate: true },
 );
 
 /** Every slot the card names, for the ComfyUI-users disclosure. */
@@ -661,6 +1072,46 @@ function flipMark(slot, mark) {
 }
 
 /**
+ * The defaults a whole-set write for `key` may be built from, or null.
+ *
+ * Read when the queued write RUNS, not when it was queued, so an earlier write
+ * it waited behind is in them. By then the rail may have moved on: `defaults`
+ * is then another card's (or nothing, mid-read), and a whole-set PUT built
+ * from them would replace `key`'s own overrides. Refused and said instead.
+ */
+function defaultsFor(key) {
+  if (stillOn(key) && detail.value) return defaults.value;
+  console.warn(`[workflows] a write to ${key} dropped: the selection moved`);
+  // Not "you selected another": a LoRA flip re-keys the card and moves the
+  // selection itself.
+  notices.push({
+    level: "error",
+    text: "That change was not saved: the workflow changed before it could be.",
+  });
+  return null;
+}
+
+/**
+ * The edited defaults except one address, as a whole-set write sends them.
+ *
+ * Every whole-set writer starts here: the route replaces the set, so what is
+ * not sent is cleared.
+ */
+function editedExcept(rows, slotLabel, inputName) {
+  return rows
+    .filter(
+      (entry) =>
+        entry.provenance === "edited" &&
+        !(entry.slot_label === slotLabel && entry.input_name === inputName),
+    )
+    .map((entry) => ({
+      slot_label: entry.slot_label,
+      input_name: entry.input_name,
+      value: entry.value,
+    }));
+}
+
+/**
  * Put a value back to what the pictures say.
  *
  * The route replaces the whole override set, so this sends every other edited
@@ -671,21 +1122,10 @@ function resetDefault(row) {
   const key = selectedKey.value;
   if (!key) return;
   return queueWrite(`default:${row.label}`, async () => {
+    const rows = defaultsFor(key);
+    if (!rows) return;
     try {
-      const kept = defaults.value
-        .filter(
-          (entry) =>
-            entry.provenance === "edited" &&
-            !(
-              entry.slot_label === row.slot_label &&
-              entry.input_name === row.input_name
-            ),
-        )
-        .map((entry) => ({
-          slot_label: entry.slot_label,
-          input_name: entry.input_name,
-          value: entry.value,
-        }));
+      const kept = editedExcept(rows, row.slot_label, row.input_name);
       const body = await setWorkflowDefaults(key, kept);
       if (stillOn(key)) detail.value = body;
     } catch (err) {
@@ -699,8 +1139,10 @@ function togglePin(row) {
   const key = selectedKey.value;
   if (!key) return;
   return queueWrite(`default:${row.label}`, async () => {
+    const rows = defaultsFor(key);
+    if (!rows) return;
     try {
-      const pins = defaults.value
+      const pins = rows
         .filter((entry) =>
           entry.slot_label === row.slot_label &&
           entry.input_name === row.input_name
@@ -779,41 +1221,140 @@ function toggleHidden() {
 }
 
 /**
+ * What Run… runs: this card, or the cover of a stack selected whole
+ * (`store.runnableCard`), which is several keys but one card on screen.
+ */
+const runTarget = computed(() =>
+  multiple.value ? store.runnableCard : card.value,
+);
+
+/** The sentence Run… is described by: why it refuses, or which stack card. */
+const runDescribedBy = computed(() => {
+  if (!runTarget.value) return "wftab-run-reason";
+  return multiple.value ? "wftab-run-target" : undefined;
+});
+
+/**
  * Run… opens the Run popup on THIS card (v1.12 F5).
  *
  * No picture behind it, so the popup shows the card's cover, an empty prompt
  * and a set picker for where the output is filed - which is the one thing a
  * card-sourced run has to be told and a picture-sourced one already knows.
  *
- * Refused outright while several are selected: the button stays on screen and
- * `aria-disabled` says why, rather than disappearing and leaving nothing to
- * explain.
+ * Refused outright while several cards are selected: the button stays on
+ * screen and `aria-disabled` says why, rather than disappearing and leaving
+ * nothing to explain. A stack selected whole is one card (`runTarget`).
  */
 function run() {
-  if (multiple.value || !card.value) return;
+  const target = runTarget.value;
+  if (!target) return;
   runDialog.openRun({
     kind: "card",
-    workflowKey: card.value.key,
-    name: card.value.name,
+    workflowKey: target.key,
+    name: target.name,
     // Through the helper: a raw `covers` entry is API-relative and an
     // `<img src>` resolves it against the page origin instead.
-    coverUrl: card.value.covers?.[0]
-      ? workflowCoverUrl(card.value.covers[0])
-      : "",
+    coverUrl: target.covers?.[0] ? workflowCoverUrl(target.covers[0]) : "",
     emptyPrompt: true,
   });
 }
 
-watch(selectedKey, (key) => loadDetail(key), { immediate: true });
+/**
+ * Open ComfyUI on what Run… runs (`runTarget`), in a new tab.
+ *
+ * ComfyUI takes no workflow from a URL, so the key rides along as
+ * `?pixlstash_workflow=` and the ComfyUI-PixlStash node fetches the graph
+ * (`GET /workflows/{key}/graph`) and loads it. Synchronous on purpose: a
+ * `window.open` after an await is what popup blockers refuse.
+ */
+function openInComfyui() {
+  const target = runTarget.value;
+  if (!target || !filterStore.comfyuiUrl) return;
+  let url;
+  try {
+    url = new URL(filterStore.comfyuiUrl);
+  } catch (err) {
+    console.warn(`[workflows] bad ComfyUI address ${filterStore.comfyuiUrl}`, err);
+    url = null;
+  }
+  if (!url || !/^https?:$/.test(url.protocol)) {
+    notices.push({
+      level: "error",
+      text: "The ComfyUI address in Settings is not a web address.",
+    });
+    return;
+  }
+  // `0.0.0.0` is ComfyUI listening everywhere: fine for the server, and a
+  // browser cannot navigate to it. The machine this page came from is the one.
+  if (["0.0.0.0", "[::]"].includes(url.hostname)) {
+    url.hostname = window.location.hostname;
+  }
+  url.searchParams.set("pixlstash_workflow", target.key);
+  if (desktop?.openComfyui) {
+    desktop
+      .openComfyui(url.toString())
+      .then((opened) => {
+        if (!opened) throw new Error("the shell refused the link");
+      })
+      .catch((err) => {
+        console.warn("[workflows] the desktop shell would not open ComfyUI", err);
+        notices.push({ level: "error", text: "Could not open ComfyUI." });
+      });
+    return;
+  }
+  window.open(url.toString(), "_blank", "noopener,noreferrer");
+}
+
+watch(
+  selectedKey,
+  (key) => {
+    void loadDetail(key);
+    void loadChain(key);
+  },
+  { immediate: true },
+);
+
+/**
+ * Ask the run pre-flight whether the base model loads, once per card./**
+ * Ask the run pre-flight whether the base model loads, once per card.
+ *
+ * Keyed on the card alone: every write answers with a new `detail` too, and a
+ * pin toggle is no reason to ask ComfyUI again. Each ask is a fresh
+ * `object_info` read, so it waits for the selection to settle - arrowing across
+ * the grid asks once, not per card - and a superseded answer is dropped. A
+ * failed or unanswerable check leaves the card's own answer standing.
+ */
+watch(
+  () => (detail.value ? selectedKey.value : null),
+  async (key) => {
+    const check = ++installedCheck;
+    missingBaseFiles.value = [];
+    preflightAnswered.value = false;
+    if (!key) return;
+    await new Promise((resolve) => setTimeout(resolve, PREFLIGHT_SETTLE_MS));
+    if (check !== installedCheck) return;
+    try {
+      const answer = await preflightWorkflowRun({
+        workflow_key: key,
+        values: [],
+      });
+      if (check !== installedCheck || !stillOn(key)) return;
+      preflightAnswered.value = true;
+      missingBaseFiles.value = (answer?.groups ?? [])
+        .flatMap((group) => group.reasons ?? [])
+        .filter((reason) => reason.code === "missing_models")
+        .flatMap((reason) => reason.models ?? [])
+        .filter((model) => BASE_MODEL_FOLDERS.has(model.folder))
+        .map((model) => String(model.file));
+    } catch (err) {
+      console.warn(`[workflows] could not pre-flight ${key}`, err);
+    }
+  },
+  { immediate: true },
+);
 </script>
 
 <style scoped>
-/* The body fills the rail so the footer's `margin-top: auto` reaches the
-   bottom of a short panel, and `sticky` keeps it there on a long one. */
-.wftab :deep(.inspector-body) {
-  flex: 1;
-}
-
 .wftab-empty,
 .wftab-note {
   margin: 0;
@@ -901,6 +1442,73 @@ watch(selectedKey, (key) => loadDetail(key), { immediate: true });
   white-space: nowrap;
 }
 
+.wftab-loras-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+/* The chain as read: one line per loader, name then strength, in the order
+   it applies. Plain rows, not chips: the chips below are the slot marks, and
+   a second set of chips would read as a second set of controls. */
+.wftab-chain {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wftab-chain-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h-sm);
+  font-size: var(--text-sm);
+}
+
+.wftab-chain-row + .wftab-chain-row {
+  border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+.wftab-chain-flag {
+  flex-shrink: 0;
+  color: rgb(var(--v-theme-surface-warning));
+}
+
+.wftab-chain-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wftab-chain-strength {
+  font-variant-numeric: tabular-nums;
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.wftab-missing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* The hue drawn as text, so the surface variant: the fill is 2.1:1 on the
+   light canvas. */
+.wftab-warn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-sm);
+  color: rgb(var(--v-theme-surface-warning));
+}
+
 .wftab-slot {
   display: flex;
   flex-direction: column;
@@ -977,16 +1585,16 @@ watch(selectedKey, (key) => loadDetail(key), { immediate: true });
 }
 
 .wftab-foot {
-  position: sticky;
-  bottom: 0;
-  margin-top: auto;
+  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-3) 0;
-  border-top: 1px solid rgb(var(--v-theme-divider));
-  background: rgb(var(--v-theme-surface));
+  /* The body's inline padding, so the buttons line up with the content while
+     the hairline spans the whole rail. */
+  padding: var(--space-3);
+  /* `border`, not `divider`: divider all but vanishes on the sidebar tone. */
+  border-top: 1px solid rgb(var(--v-theme-border));
 }
 
 .wftab-foot > :first-child {

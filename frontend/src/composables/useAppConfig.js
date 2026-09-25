@@ -269,6 +269,7 @@ export function useAppConfig({
         apply_tag_filter: userPrefsStore.applyTagFilter,
       };
       filterStore.comfyuiConfigured = Boolean(cfg?.comfyui_url);
+      filterStore.comfyuiUrl = cfg?.comfyui_url || "";
       if (typeof cfg?.public_url === "string" && cfg.public_url) {
         userPrefsStore.publicUrl = cfg.public_url;
       }

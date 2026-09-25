@@ -108,6 +108,8 @@ describe("scoreChipValue", () => {
     [3, 3, false, "3"],
     [3, null, false, "3+"],
     [null, 4, false, "up to 4"],
+    [null, 4, true, "up to 4"],
+    [null, 0, true, "unscored"],
     [3, 4, true, "3–4 or unscored"],
     [null, null, true, "unscored"],
     [null, null, false, ""],

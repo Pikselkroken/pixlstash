@@ -1767,7 +1767,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Take one card out of its stack; POST blocked for READ tokens; owner only",
     ),
-    # The four file gestures (v1.12 B8). Every one of them resolves the card's
+    # The file gestures (v1.12 B8). Every one of them resolves the card's
     # graph the way the run route does - from the linked file, from the whole
     # library's best picture, or from a stored instance document - so each one
     # discloses a workflow assembled out of the library rather than out of any
@@ -1779,6 +1779,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Export a card's graph, resolved from the whole library; owner only",
     ),
+    ("GET", "/api/v1/workflows/{workflow_key}/graph"): RoutePolicy(
+        _OWNER,
+        justification="A card's graph unscrubbed, for the owner's own ComfyUI; owner only",
+    ),
     ("POST", "/api/v1/workflows/{workflow_key}/duplicate"): RoutePolicy(
         _OWNER,
         justification="Write a copy of a card's workflow to disk; POST blocked for READ tokens; owner only",
@@ -1786,6 +1790,29 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/workflows/{workflow_key}/insert-lora-loader"): RoutePolicy(
         _OWNER,
         justification="Write a copy of a card's workflow with a LoRA loader added; POST blocked for READ tokens; owner only",
+    ),
+    # The LoRA chain editor (#1478). The read resolves the card's graph out of
+    # the whole library like its siblings, names the shelf LoRA each loader
+    # loads, and reaches the owner's ComfyUI for object_info; the write is the
+    # insertion above generalised to the whole chain, and files a new card.
+    ("GET", "/api/v1/workflows/{workflow_key}/lora-chain"): RoutePolicy(
+        _OWNER,
+        justification="A card's LoRA loaders and the shelf LoRAs they load, resolved from the whole library; owner only",
+    ),
+    ("PUT", "/api/v1/workflows/{workflow_key}/lora-chain"): RoutePolicy(
+        _OWNER,
+        justification="Write a copy of a card's workflow with its LoRA chain edited; PUT blocked for READ tokens; owner only",
+    ),
+    # Clone with new models: the read names the shelf's checkpoints, VAEs and
+    # text encoders and what recipes have run together, which is the whole
+    # shelf and the whole hub; the write is a Duplicate with filenames replaced.
+    ("GET", "/api/v1/workflows/{workflow_key}/model-swap"): RoutePolicy(
+        _OWNER,
+        justification="A card's model files, the shelf's models and the recipes' co-occurrence, all whole-library; owner only",
+    ),
+    ("POST", "/api/v1/workflows/{workflow_key}/clone-with-models"): RoutePolicy(
+        _OWNER,
+        justification="Write a copy of a card's workflow with model files replaced; POST blocked for READ tokens; owner only",
     ),
     ("DELETE", "/api/v1/workflows/{workflow_key}"): RoutePolicy(
         _OWNER,
@@ -1847,7 +1874,8 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
             "The looks the stack's own pictures carry, prompts in full. A "
             "SUPERSET of the credit figure on GET /recipes, which counts these "
             "same rows: that route says how many pictures a saved recipe "
-            "accounts for, this one says what the unsaved ones were made with. "
+            "accounts for, this one says what every one was made with, and "
+            "whether a saved recipe keeps it. "
             "Owner only for the reason the listing is, and more so"
         ),
     ),

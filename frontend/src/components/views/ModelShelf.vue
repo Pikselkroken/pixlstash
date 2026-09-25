@@ -1041,6 +1041,33 @@
                       :ring="ringFor(row)"
                       :style="ringStyle(row)"
                     />
+                    <!-- Which file the run is being drawn from, said in words
+                         rather than by position: once the strip is open the
+                         reader is looking at six rows and choosing between
+                         them, and "the top one" is not an answer a screen
+                         reader can hear. On the thumbnail's bottom-left corner,
+                         the grid's own cover chip in the grid's own place,
+                         rather than among the name's chips, where it pushed the
+                         line into the text around it. Only while the stack is
+                         OPEN - on a collapsed run the cover is the only row
+                         there is, so the chip would be noise on every stacked
+                         row of the shelf. And only on the REAL cover: a filter
+                         can hide position 0, and `collapseStacks` then draws
+                         the lowest surviving member at the top - which is the
+                         run's stand-in for the moment, not the file the owner
+                         chose. -->
+                    <span
+                      v-if="
+                        row.memberCount > 1 &&
+                        isStackOpen(row.stack_id) &&
+                        row.stack_position === 0
+                      "
+                      class="stack-cover-flag"
+                      ><Tooltip
+                        text="This file is what the shelf draws for the whole run."
+                        activator="parent"
+                      />Cover</span
+                    >
                   </span>
                   <span role="gridcell" class="shelf-row-label">
                     <!-- The absence glyph leads the line, because it changes what
@@ -1122,30 +1149,6 @@
                         >mdi-chevron-right</v-icon
                       >
                     </button>
-                    <!-- Which file the run is being drawn from, said in words
-                         rather than by position: once the strip is open the
-                         reader is looking at six rows and choosing between
-                         them, and "the top one" is not an answer a screen
-                         reader can hear. Only while the stack is OPEN - on a
-                         collapsed run the cover is the only row there is, so
-                         the chip would be noise on every stacked row of the
-                         shelf. And only on the REAL cover: a filter can hide
-                         position 0, and `collapseStacks` then draws the lowest
-                         surviving member at the top - which is the run's
-                         stand-in for the moment, not the file the owner
-                         chose. -->
-                    <span
-                      v-if="
-                        row.memberCount > 1 &&
-                        isStackOpen(row.stack_id) &&
-                        row.stack_position === 0
-                      "
-                      class="shelf-chip"
-                      ><Tooltip
-                        text="This file is what the shelf draws for the whole run."
-                        activator="parent"
-                      />Cover</span
-                    >
                     <!-- The precision the file was stored at, which
                          `deriveModelName` has just taken out of the name to
                          its left. Two quant variants of one model are two rows
@@ -1245,15 +1248,28 @@
                     />
                     <template v-else>
                       <span
-                        v-if="row.base_model"
+                        v-if="baseModelCell(row).text"
+                        class="shelf-base-text"
                         @dblclick.stop="startBaseModelEdit(row)"
-                        >{{ row.base_model }}</span
+                        >{{ baseModelCell(row).text }}</span
                       >
                       <span
                         v-else
                         class="shelf-chip shelf-chip--none"
                         @dblclick.stop="startBaseModelEdit(row)"
                         >not set</span
+                      >
+                      <!-- A value we inferred rather than one the file or a
+                           person stated. The same tag the name column uses for
+                           the file's own string, with its own word: "from
+                           filename" there already means "verbatim". -->
+                      <span
+                        v-if="baseModelCell(row).guess"
+                        class="shelf-name-tag"
+                        ><Tooltip
+                          :text="baseModelCell(row).guess"
+                          activator="parent"
+                        />guessed</span
                       >
                     </template>
                   </span>
@@ -1593,6 +1609,7 @@ import {
   deletableModels,
   fileKindLabel,
   undeletableNotice,
+  baseModelCell,
   trashName,
   withEmptyFolders,
   withFolderSignals,
@@ -3569,17 +3586,18 @@ const editingBase = ref("");
 let editingBaseRow = null;
 
 /**
- * Put the base-model field on a row, seeded with what is recorded.
+ * Put the base-model field on a row, seeded with what the cell shows.
  *
- * Seeded from the stored value and not from a guess - unlike the name field,
- * which opens empty on a derived row because the string it shows was inferred.
- * Nothing infers a base model: what the row shows is what the file said, so
- * editing it starts from that and a correction is one word, not a retype.
+ * That is the file's own string, or for a GUESSED row the label it was read
+ * as (`baseModelCell`), so a correction is one word rather than a retype and
+ * the commit below compares against the same value: leaving a guess as it is
+ * writes nothing, and emptying the field says "none of these", which then
+ * sticks across rescans.
  */
 function startBaseModelEdit(row) {
   editingBaseRow = row;
   editingBaseKey.value = row.rowKey;
-  editingBase.value = row.base_model || "";
+  editingBase.value = baseModelCell(row).text;
   nextTick(() => {
     const el = rootEl.value?.querySelector(".shelf-row-base-edit");
     el?.focus();
@@ -3620,7 +3638,7 @@ async function commitBaseModel(restoreFocus = false) {
   // somewhere the reader chose, and dragging it back to the row would undo
   // their click.
   if (restoreFocus) nextTick(() => focusDrawnRow(key));
-  if (next === String(row.base_model || "").trim()) return;
+  if (next === String(baseModelCell(row).text).trim()) return;
   // A cover stands for every file of the run, and one run was trained against
   // one base model.
   await store.editModelIds(row.memberIds ?? [row.id], {
@@ -5350,6 +5368,23 @@ button.shelf-head-cell:hover {
   flex: none;
 }
 
+/* The cover chip is the grid's (App.css), but a 24px mark is not a tile: it
+   sits on the slot's own corner rather than inset from it, and straddles the
+   mark's bottom edge so the top of the face still shows. The slot plus the row
+   gap leave 48px before the name, and "COVER" at the grid's tracking and
+   padding measures up to 53px on DejaVu, so here it drops the tracking, takes
+   the hairline padding and starts in the row's own left padding: about 42px
+   at its widest, ending short of the name. The row's bottom padding (8px) is
+   what keeps the 4px overhang out of `content-visibility`'s paint clip.
+   Not hoverable, like the grid's: it overlaps the mark, whose own tooltip names
+   the assignments, and the chip's tip still describes it to assistive tech. */
+.shelf-row-ident .stack-cover-flag {
+  left: calc(var(--space-2) * -1);
+  bottom: calc(var(--space-2) * -1);
+  padding: 0 var(--space-1);
+  letter-spacing: normal;
+}
+
 .shelf-row-label {
   display: flex;
   align-items: center;
@@ -5583,6 +5618,20 @@ button.shelf-head-cell:hover {
 
 .shelf-col--base {
   width: var(--shelf-col-base);
+}
+
+/* A guessed value carries a tag, and the tag is the part that must survive a
+   narrow column: the label ellipsises, the tag keeps its width. */
+.shelf-col--base:has(.shelf-name-tag) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.shelf-base-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* The field fills the cell it replaces rather than widening the row: every

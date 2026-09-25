@@ -175,6 +175,11 @@ BASE_MODEL_KINDS = ("checkpoint", "unet") + tuple(
 )
 
 
+def slot_kind(widget: str) -> str:
+    """What a model slot's widget makes it, or the widget's own name."""
+    return _SLOT_KINDS.get(widget, widget)
+
+
 @dataclass(frozen=True)
 class SlotModel:
     """One model a card names: its file, and which slot it sits in.
@@ -667,7 +672,7 @@ def _shelf_candidates(
     wanted = {name.lower() for name in names if name}
     if not wanted:
         return {}, {}
-    by_name, by_digest, _filenames = recipe_asset_index(hub)
+    by_name, by_digest, _filenames, _names = recipe_asset_index(hub)
     sorted_digests = sorted(by_digest)
     # Every model, named or not: the unnamed ones are what make a shared name
     # ambiguous, so filtering them out in SQL would hand back a confident
@@ -762,7 +767,7 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
     for batch in chunked(sorted(single)):
         placeholders = ",".join("?" * len(batch))
         for row in hub.fetchall(
-            "SELECT id, icon_sha256, base_model, quant "
+            "SELECT id, icon_sha256, base_model, base_model_canonical, quant "
             f"FROM model WHERE id IN ({placeholders})",
             tuple(batch),
         ):
@@ -770,7 +775,7 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
                 pictures[value] = (
                     row["icon_sha256"],
                     row["base_model"],
-                    fold(row["base_model"]),
+                    row["base_model_canonical"] or fold(row["base_model"]),
                     canonical_quant(row["quant"]),
                 )
     marks = {}

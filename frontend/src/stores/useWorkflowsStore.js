@@ -2,6 +2,7 @@ import { computed, onScopeDispose, ref } from "vue";
 import { defineStore } from "pinia";
 
 import {
+  cloneWorkflowWithModels,
   deleteWorkflowFile,
   dissolveStack,
   duplicateWorkflow,
@@ -59,9 +60,9 @@ export const PANEL_COLLAPSE_MS = 600;
 export const SORT_KEYS = ["rating", "used", "pictures"];
 
 export const SORT_LABELS = {
-  rating: { label: "Your ratings", icon: "mdi-star" },
-  used: { label: "Recently used", icon: "mdi-history" },
-  pictures: { label: "Picture count", icon: "mdi-image-multiple" },
+  rating: { label: "Your ratings" },
+  used: { label: "Recently used" },
+  pictures: { label: "Picture count" },
 };
 
 /** The sort keys, each as `(card) => number`, descending. */
@@ -822,6 +823,31 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   ]);
 
   /**
+   * The card Run acts on, or null: the one selected card, or a stack's cover
+   * when the selection is exactly that stack.
+   *
+   * A click on a stack card selects the stack WHOLE (`stackKeys`), so the
+   * selection holds several keys while the reader sees one card — and a gate
+   * counting keys refused to run it. Running the cover is what the Run popup
+   * already offers a stack: it lists the members to switch to.
+   */
+  const runnableCard = computed(() => {
+    const keys = selectedKeys.value;
+    if (keys.length === 1) return selectedCards.value[0] ?? null;
+    const held = new Set(keys);
+    // `stackKeys` rather than `isStack`, as `syncPanelToSelection` does: the
+    // set compared against is `member_keys`, so that is what says "a stack".
+    const cover = cards.value.find(
+      (card) => held.has(card.key) && stackKeys(card.key).length > 1,
+    );
+    if (!cover) return null;
+    const whole = stackKeys(cover.key);
+    return whole.length === held.size && whole.every((key) => held.has(key))
+      ? cover
+      : null;
+  });
+
+  /**
    * Dissolve every stack the selection touches.
    *
    * Addressed by STACK and not by card: selecting one member of a run and
@@ -869,6 +895,30 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     } catch (err) {
       console.warn(`[workflows] could not duplicate ${key}`, err);
       error.value = errorMessage(err, "Could not duplicate that workflow.");
+      return null;
+    } finally {
+      verbBusy.value = "";
+    }
+  }
+
+  /**
+   * Write a copy of one card with model files replaced, as a card of its own.
+   *
+   * `duplicateCard` with a body: the grid is re-read rather than patched, and
+   * the answer is handed back for the notice. `null` on failure, with the
+   * reason in `error`.
+   */
+  async function cloneCardWithModels(key, body) {
+    if (verbBusy.value) return null;
+    verbBusy.value = "clone-with-models";
+    try {
+      const answer = await cloneWorkflowWithModels(key, body);
+      forgetMembers();
+      await fetchCards();
+      return answer;
+    } catch (err) {
+      console.warn(`[workflows] could not clone ${key} with new models`, err);
+      error.value = errorMessage(err, "Could not clone that workflow.");
       return null;
     } finally {
       verbBusy.value = "";
@@ -1144,9 +1194,25 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     recipesEpoch.value += 1;
   }
 
+  /**
+   * A picture the Recipes tab asked to open, or null.
+   *
+   * The tab is mounted by `App.vue` beside the grid, not inside
+   * `WorkflowsView`, and only the view knows where the reader is - so the tab
+   * asks here and the view opens it, parking its place as a cover click does.
+   */
+  const pictureToOpen = ref(null);
+
+  /** Ask the Workflows view to open one picture in the lightbox. */
+  function requestOpenPicture(pictureId) {
+    pictureToOpen.value = pictureId;
+  }
+
   return {
     recipesEpoch,
     notedRecipesChanged,
+    pictureToOpen,
+    requestOpenPicture,
     cards,
     oneOffs,
     hidden,
@@ -1171,6 +1237,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     openStackSize,
     selectedCards,
     selectedStackIds,
+    runnableCard,
     parkedPlace,
     park,
     unpark,
@@ -1193,6 +1260,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     unstackSelected,
     renameCard,
     duplicateCard,
+    cloneCardWithModels,
     deleteSelected,
     stackKeys,
     select,

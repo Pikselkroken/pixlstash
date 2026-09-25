@@ -32,6 +32,31 @@ export const BLOCKS_BATCH = "missing_models";
 export const LORAS_BYPASSED = "loras_bypassed";
 
 /**
+ * Not a refusal: a LoRA loader the OWNER skipped for this run.
+ *
+ * The same `bypassed_loras` list carries these, with `requested: true`, beside
+ * the ones the server bypassed on its own (`requested: false`, a file this
+ * ComfyUI does not have). They are said differently because they ARE
+ * different: one is a fact to be warned about, the other is the owner's own
+ * choice read back, in the popup's word for it — skipped, never removed,
+ * because a run changes no workflow.
+ */
+export const LORAS_SKIPPED = "loras_skipped";
+
+/**
+ * Not a refusal either: a recipe LoRA that found no loader to go in (#1478).
+ *
+ * A saved recipe's LoRAs are matched onto the graph's loaders by digest, then
+ * by basename, then onto the free loaders left in order; one with nowhere left
+ * to go — a three-LoRA recipe on a two-loader member of its stack, or a LoRA
+ * the shelf cannot identify at all — is reported on `RunGroup.unplaced_loras`
+ * rather than dropped in silence. The run still goes ahead, so it is drawn in
+ * the warning hue with Edit LoRAs… as its fix: adding a loader is a workflow
+ * edit, and that dialog is where it is made.
+ */
+export const LORAS_UNPLACED = "loras_unplaced";
+
+/**
  * A picture input nothing answered (#1457; it replaced `fixed_input_deleted`).
  *
  * The Run popup draws it in its Pictures section, as an empty slot, and not as
@@ -53,6 +78,7 @@ export const NODES_REPLACED = "nodes_replaced";
 export const FIX_SETTINGS = "settings";
 export const FIX_RETRY = "retry";
 export const FIX_DROP_LORA = "drop-lora";
+export const FIX_EDIT_LORAS = "edit-loras";
 
 /**
  * Codes whose fix happens somewhere ELSE, so the popup has to be able to
@@ -108,6 +134,50 @@ export function readReason(reason) {
         `This ComfyUI does not have ${one ? "the seed node" : "the seed nodes"} ${nodes.join(", ")}, so PixlStash writes the seed straight into the sampler instead. The run goes ahead without ${one ? "it" : "them"}.`,
         null,
         [],
+        false,
+      );
+    }
+    case LORAS_SKIPPED: {
+      const files = (reason.models || []).filter(Boolean);
+      return read(
+        `Skipped for this run: ${files.map((model) => model.file).filter(Boolean).join(", ")}.`,
+        null,
+        [],
+        false,
+      );
+    }
+    case "lora_not_skippable": {
+      // Blocking: a stacker whose other LoRAs are present, or a loader nothing
+      // can be rewired around. The server's own sentence says which.
+      const file = String(reason.file || "").split(/[\\/]/).pop();
+      const said = String(reason.text || reason.detail || reason.message || "").trim();
+      return read(
+        `${file || "This LoRA"} cannot be skipped for this run. ${said || "Its loader cannot be taken out of this graph."} Use it, or edit the workflow's LoRAs.`,
+      );
+    }
+    case LORAS_UNPLACED: {
+      // Shaped like the bypass's `models` so the notice's file list draws
+      // them: the file, then the server's own reason for it.
+      const loras = (reason.loras || []).filter(Boolean);
+      const files = loras.map((lora) => ({
+        file: String(lora.filename || "").split(/[\\/]/).pop() || "a LoRA",
+        reason: lora.reason || "",
+      }));
+      const count = files.length;
+      // Two causes and two fixes: a LoRA with no loader left wants one added;
+      // one the shelf cannot identify has a loader and wants the file on the
+      // shelf. Each LoRA's own line says which it is.
+      const unnamed = loras.filter((lora) => !lora.sha256).length;
+      const lead =
+        unnamed === count
+          ? `${count === 1 ? "A LoRA this recipe names is" : `${count} LoRAs this recipe names are`} missing from your model shelf, so ${count === 1 ? "it is" : "they are"} not applied. Put the ${count === 1 ? "file" : "files"} on the shelf, or take ${count === 1 ? "it" : "them"} off the recipe.`
+          : unnamed === 0
+            ? `${count === 1 ? "A LoRA this recipe names has" : `${count} LoRAs this recipe names have`} no loader to go in on this workflow, so ${count === 1 ? "it is" : "they are"} not applied. Add a loader to the workflow, or take ${count === 1 ? "it" : "them"} off the recipe.`
+            : `${count} LoRAs this recipe names are not applied. Each one below says why.`;
+      return read(
+        lead,
+        FIX_EDIT_LORAS,
+        files,
         false,
       );
     }
@@ -197,11 +267,37 @@ export function reasonsBlock(reasons, { allowUnchecked = false } = {}) {
  * list a popup draws.
  *
  * @param {{bypassed_loras?: Array<Object>}} group
- * @returns {Array<Object>} zero or one entry, so a caller can spread it.
+ * @returns {Array<Object>} zero, one or two entries — the missing files and
+ *   the owner's skips are two notices — so a caller can spread it.
  */
 export function bypassNotice(group) {
-  const models = (group?.bypassed_loras || []).filter(Boolean);
-  return models.length ? [{ code: LORAS_BYPASSED, models }] : [];
+  const all = (group?.bypassed_loras || []).filter(Boolean);
+  // `requested` absent is the server's own bypass: that is what the list
+  // meant before the owner could skip anything, and it must keep its warning.
+  const missing = all.filter((model) => !model.requested);
+  const skipped = all.filter((model) => model.requested);
+  return [
+    ...(missing.length ? [{ code: LORAS_BYPASSED, models: missing }] : []),
+    ...(skipped.length ? [{ code: LORAS_SKIPPED, models: skipped }] : []),
+  ];
+}
+
+/**
+ * The recipe LoRAs of one pre-flight group that found no loader, in the
+ * reason shape.
+ *
+ * Kept out of `reasons` for the reason `bypassNotice` is: the run goes ahead.
+ * `workflowKey` rides along because the fix is "Edit LoRAs…" on THAT card,
+ * and in a batch every group is a different one.
+ *
+ * @param {{workflow_key?: string, unplaced_loras?: Array<Object>}} group
+ * @returns {Array<Object>} zero or one entry, so a caller can spread it.
+ */
+export function unplacedNotice(group) {
+  const loras = (group?.unplaced_loras || []).filter(Boolean);
+  return loras.length
+    ? [{ code: LORAS_UNPLACED, loras, workflowKey: group?.workflow_key || "" }]
+    : [];
 }
 
 /**

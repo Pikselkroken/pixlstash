@@ -46,6 +46,10 @@ logger = get_logger(__name__)
 # from the file, so an 8-byte field can otherwise ask us to allocate 16 EiB.
 _MAX_HEADER_BYTES = 16 * 1024 * 1024
 
+# Longest metadata string kept. Names and base-model declarations are tens of
+# characters; this only stops a hostile header filling a column.
+_MAX_METADATA_TEXT = 256
+
 # A file shorter than this cannot contain a length prefix and a header.
 _MIN_FILE_BYTES = 8
 
@@ -187,7 +191,14 @@ class AdapterInfo:
         base_model: Trainer-reported base model. **Free text** (``zimage``,
             ``krea2``, ``minimax_h3`` seen in the wild), not a closed set.
         trigger_words: Tags recovered from ``ss_tag_frequency``.
-        display_name: Trainer-reported name, if any.
+        display_name: Trainer-reported name, if any: ``ss_output_name``,
+            ``name``, then the SAI ``modelspec.title``.
+        architecture: The SAI ``modelspec.architecture`` declaration
+            (``stable-diffusion-xl-v1-base/lora``), verbatim. Evidence for
+            :func:`~pixlstash.utils.known_base_models.identify`, never shown.
+        trained_on: kohya's ``ss_sd_model_name``, the checkpoint the file was
+            trained against. A **filename** (``animagineXLV31_v31.safetensors``),
+            so it is matched as one.
         training_step: Step the checkpoint was saved at.
         training_epoch: Epoch the checkpoint was saved at.
         trained_by: Producing software, e.g. ``"ai-toolkit 0.9.11"``.
@@ -209,6 +220,8 @@ class AdapterInfo:
     base_model: Optional[str] = None
     trigger_words: list[str] = field(default_factory=list)
     display_name: Optional[str] = None
+    architecture: Optional[str] = None
+    trained_on: Optional[str] = None
     training_step: Optional[int] = None
     training_epoch: Optional[int] = None
     trained_by: Optional[str] = None
@@ -633,6 +646,22 @@ def _decode_json_object(raw, label: str) -> dict:
     return {}
 
 
+def _metadata_text(metadata: dict, *keys: str) -> Optional[str]:
+    """The first of *keys* holding a non-blank value, as bounded text.
+
+    The value comes from an untrusted header, so it is coerced to ``str`` and
+    cut at :data:`_MAX_METADATA_TEXT` rather than trusted to be a short string.
+    """
+    for key in keys:
+        value = metadata.get(key)
+        if value is None or isinstance(value, (dict, list)):
+            continue
+        text = str(value).strip()
+        if text:
+            return text[:_MAX_METADATA_TEXT]
+    return None
+
+
 def _coerce_int(value) -> Optional[int]:
     """Return *value* as an int, or ``None`` if it is not one."""
     try:
@@ -674,8 +703,8 @@ def describe_adapter(path: str) -> Optional[AdapterInfo]:
 
     training = _decode_json_object(metadata.get("training_info"), "training_info")
 
-    base_model = metadata.get("ss_base_model_version") or None
-    display_name = metadata.get("ss_output_name") or metadata.get("name") or None
+    base_model = _metadata_text(metadata, "ss_base_model_version")
+    display_name = _metadata_text(metadata, "ss_output_name", "name", "modelspec.title")
 
     # `format` is mandatory and says nothing about the model, so a header
     # carrying only that is "no metadata" as far as the shelf is concerned.
@@ -689,11 +718,13 @@ def describe_adapter(path: str) -> Optional[AdapterInfo]:
         is_adapter=has_adapter_markers(tensor_names),
         file_kind=classify_model_file(tensor_names, param_count, path),
         param_count=param_count,
-        base_model=str(base_model) if base_model else None,
+        base_model=base_model,
         trigger_words=_trigger_words_from_tag_frequency(
             metadata.get("ss_tag_frequency")
         ),
-        display_name=str(display_name) if display_name else None,
+        display_name=display_name,
+        architecture=_metadata_text(metadata, "modelspec.architecture"),
+        trained_on=_metadata_text(metadata, "ss_sd_model_name"),
         training_step=_coerce_int(training.get("step")),
         training_epoch=_coerce_int(training.get("epoch")),
         trained_by=trained_by,

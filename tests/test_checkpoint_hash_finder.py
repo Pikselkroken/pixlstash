@@ -272,6 +272,67 @@ class TestCollisionIsAMerge:
         assert surviving["base_model"] == "typed by hand"
         assert surviving["filename"] == "a.safetensors"
 
+    def test_the_merge_keeps_the_stronger_base_model_identification(
+        self, hub, tmp_path
+    ):
+        # Not blank-filling: the survivor's guess must lose to a person's
+        # answer on the dropped row, including an answer of "none of these".
+        first = write_model(tmp_path / "one" / "a.safetensors")
+        second = write_model(tmp_path / "two" / "b.safetensors")
+        first_id = register(hub, first)
+        second_id = register(hub, second)
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET base_model_canonical = 'Sana', "
+                "base_model_source = 'filename_fuzzy' WHERE id = ?",
+                (first_id,),
+            )
+            conn.execute(
+                "UPDATE model SET base_model_canonical = NULL, "
+                "base_model_source = 'user' WHERE id = ?",
+                (second_id,),
+            )
+
+        CheckpointHashTask(
+            hub, [(first_id, str(first)), (second_id, str(second))]
+        ).run()
+
+        (surviving,) = rows(hub)
+        assert surviving["id"] == first_id
+        assert (
+            surviving["base_model_canonical"],
+            surviving["base_model_source"],
+        ) == (None, "user")
+
+    def test_the_merge_keeps_the_survivors_identification_when_it_is_stronger(
+        self, hub, tmp_path
+    ):
+        first = write_model(tmp_path / "one" / "a.safetensors")
+        second = write_model(tmp_path / "two" / "b.safetensors")
+        first_id = register(hub, first)
+        second_id = register(hub, second)
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET base_model_canonical = 'FLUX.2', "
+                "base_model_source = 'declared' WHERE id = ?",
+                (first_id,),
+            )
+            conn.execute(
+                "UPDATE model SET base_model_canonical = 'Sana', "
+                "base_model_source = 'filename_fuzzy' WHERE id = ?",
+                (second_id,),
+            )
+
+        CheckpointHashTask(
+            hub, [(first_id, str(first)), (second_id, str(second))]
+        ).run()
+
+        (surviving,) = rows(hub)
+        assert (
+            surviving["base_model_canonical"],
+            surviving["base_model_source"],
+        ) == ("FLUX.2", "declared")
+
     def test_a_merge_where_the_survivors_file_is_gone_still_keeps_both_rows(
         self, hub, tmp_path
     ):

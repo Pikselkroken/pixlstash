@@ -480,8 +480,9 @@ kbd {
    same corner and the same backing the grid's other permanent chips use, so it
    reads as one family. Global rather than scoped to `ImageGrid.css`, where it
    began: the Workflows stack panel (v1.12 F1a) flags its cover member with the
-   same chip, and the two must not drift. `ImageGrid.css` still owns where it
-   sits in a picture tile's stacking order. */
+   same chip, and the two must not drift; so does the model shelf's open run,
+   on its leading thumbnail. `ImageGrid.css` still owns where it sits in a
+   picture tile's stacking order. */
 .stack-cover-flag {
   position: absolute;
   bottom: var(--space-2);
@@ -1000,8 +1001,9 @@ kbd {
 
 /* ── Filter menus: a root menu of kinds and one submenu beside it ───────────
    Shared by FilterMenu, FilterChecklistMenu and FilterConfidenceMenu, which is
-   why they are global. Rows follow OptionRows: 28px, radius-sm, hover wash, no
-   fill; a trailing chevron opens a submenu, a trailing number is a count. */
+   why they are global. Rows follow OptionRows at the menu row's 32px:
+   radius-sm, hover wash, no fill; a trailing chevron opens a submenu, a
+   trailing number is a count. Pick-one lists are OptionRows itself. */
 .fm-sub {
   width: var(--filter-submenu-w);
   max-width: 94vw;
@@ -1027,7 +1029,6 @@ kbd {
 .fm-row[aria-expanded="true"] {
   background: var(--hover-wash);
 }
-.fm-row[aria-checked="true"],
 .fm-row[aria-expanded="true"] {
   font-weight: var(--weight-medium);
 }
@@ -1053,10 +1054,6 @@ kbd {
 .fm-row-trail {
   flex-shrink: 0;
   opacity: var(--opacity-text-secondary);
-}
-.fm-row[aria-checked="true"] .fm-row-trail {
-  color: var(--selected-ink);
-  opacity: 1;
 }
 .fm-n {
   font-size: var(--text-xs);

@@ -77,18 +77,27 @@ from pixlstash.services.workflow_run_service import (
     MISSING_NODES,
     Reason,
     bypass_missing_loras,
+    place_recipe_loras,
     repair,
     replace_missing_seed_nodes,
+    skip_requested_loras,
 )
 from pixlstash.utils.known_base_models import fold
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
-from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
+from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD, _stack_members
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
-from pixlstash.services.workflow_card_service import SlotModel, model_marks
+from pixlstash.services import workflow_run_service as run_service
+from pixlstash.services.workflow_card_service import (
+    CardFigures,
+    SlotModel,
+    model_marks,
+)
 from pixlstash.services.workflow_identity import (
     FACE_DETAILER,
+    RECIPE,
+    STRUCTURAL,
     UPSCALE,
     WORKFLOW_KEY_VERSION,
     guess_mark,
@@ -137,6 +146,14 @@ _WORKFLOW_ROUTES = (
     # Export (v1.12 B8): the sharpest read here, because it hands back a whole
     # graph rather than a count of one.
     ("GET", "/api/v1/workflows/{workflow_key}/export"),
+    # The LoRA chain editor's read (#1478): the whole-library graph, the shelf
+    # LoRA each loader loads, and the owner's ComfyUI behind it.
+    ("GET", "/api/v1/workflows/{workflow_key}/lora-chain"),
+    # Open in ComfyUI: the same graph unscrubbed, so owner-only for the same
+    # reason and with even more to lose.
+    ("GET", "/api/v1/workflows/{workflow_key}/graph"),
+    # Clone with new models: the card's files, the whole shelf and the recipes.
+    ("GET", "/api/v1/workflows/{workflow_key}/model-swap"),
 )
 
 # The card and stack writes (v1.12 B4), pinned in their own tuple: the reads
@@ -162,6 +179,8 @@ _WORKFLOW_WRITE_ROUTES = (
     # whole library the way the run route does, and two of them write a file.
     ("POST", "/api/v1/workflows/{workflow_key}/duplicate"),
     ("POST", "/api/v1/workflows/{workflow_key}/insert-lora-loader"),
+    ("PUT", "/api/v1/workflows/{workflow_key}/lora-chain"),
+    ("POST", "/api/v1/workflows/{workflow_key}/clone-with-models"),
     ("DELETE", "/api/v1/workflows/{workflow_key}"),
 )
 
@@ -925,6 +944,18 @@ def test_no_scoped_token_can_read_the_workflow_library(workflow_env):
             f"{API}/workflows/{BUSY_CARD}/export",
             API + "/workflows/{workflow_key}/export",
         ),
+        (
+            f"{API}/workflows/{BUSY_CARD}/lora-chain",
+            API + "/workflows/{workflow_key}/lora-chain",
+        ),
+        (
+            f"{API}/workflows/{BUSY_CARD}/graph",
+            API + "/workflows/{workflow_key}/graph",
+        ),
+        (
+            f"{API}/workflows/{BUSY_CARD}/model-swap",
+            API + "/workflows/{workflow_key}/model-swap",
+        ),
     )
     for path, template in paths:
         assert_real_route(workflow_env.server.api, "GET", path, template)
@@ -974,6 +1005,7 @@ _TEMPLATED_PATHS = (
     # The export (v1.12 B8) hands back a whole graph, so it is the one here
     # with most to lose from the rollback.
     (f"{API}/workflows/{BUSY_CARD}/export", API + "/workflows/{workflow_key}/export"),
+    (f"{API}/workflows/{BUSY_CARD}/graph", API + "/workflows/{workflow_key}/graph"),
 )
 
 
@@ -2020,6 +2052,105 @@ def test_a_stack_member_opened_alone_still_says_it_is_in_a_stack(workflow_env):
     cover = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
     assert cover["stack_size"] == 2
     assert cover["member_keys"] == [FORGOTTEN_CARD]
+
+
+def test_a_stack_names_its_members_and_what_sets_each_apart(workflow_env):
+    """`members` is the whole stack in order, so a picker needs no card reads.
+
+    Members of one stack often share a generated name, so each carries what it
+    loads that the others do not; what every member loads is left out.
+    """
+    cover = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    member = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]
+    assert [m["key"] for m in cover["members"]] == [BUSY_CARD, FORGOTTEN_CARD]
+    # The detail route of a member lists the same stack, in the same order.
+    assert member["members"] == cover["members"]
+    by_key = {m["key"]: m for m in cover["members"]}
+    assert by_key[BUSY_CARD]["name"] == cover["name"]
+    assert by_key[FORGOTTEN_CARD]["name"] == member["name"]
+    # BUSY's checkpoint is "Krea 2", which its generated name already opens
+    # with; FORGOTTEN's models are unnamed. Neither has anything to add.
+    assert by_key[BUSY_CARD]["name"].startswith("Krea 2")
+    assert by_key[BUSY_CARD]["sets_apart"] == []
+    assert by_key[FORGOTTEN_CARD]["sets_apart"] == []
+    # Chips are against the cover, so the cover has none of its own.
+    assert by_key[BUSY_CARD]["differs_by"] == []
+    assert by_key[FORGOTTEN_CARD]["differs_by"] == member["differs_by"]
+
+
+def test_stack_members_are_told_apart_by_what_not_every_member_loads():
+    """What all members load says nothing; a recipe LoRA varies inside a card.
+
+    Two quant builds of one model share a slot name, so the quant is what
+    tells them apart.
+    """
+    base = SlotModel(name="realvisxl", kind="checkpoint", title="Krea 2")
+    figures = [
+        CardFigures(
+            card=Card(workflow_key=key, topology_hash=key, name="Portrait"),
+            models=[base, *extra],
+            loras=[
+                SlotModel(name=f"mira_{key[:4]}", kind="lora", mark=RECIPE),
+                SlotModel(name=lora, kind="lora", mark=STRUCTURAL),
+            ],
+            stack_size=2,
+            member_keys=[BUSY_CARD, FORGOTTEN_CARD],
+            differs_by=chips,
+        )
+        for key, extra, lora, chips in (
+            (BUSY_CARD, [], "film-grain", ["other models"]),
+            (
+                FORGOTTEN_CARD,
+                [SlotModel(name="t5xxl", kind="clip", quant="fp8_e4m3")],
+                "detail-tweaker",
+                ["other models"],
+            ),
+        )
+    ]
+    members = _stack_members(figures[1], {f.card.workflow_key: f for f in figures})
+    assert [(m.key, m.name, m.sets_apart, m.differs_by) for m in members] == [
+        (BUSY_CARD, "Portrait", ["film-grain"], []),
+        (
+            FORGOTTEN_CARD,
+            "Portrait",
+            ["t5xxl fp8_e4m3", "detail-tweaker"],
+            ["other models"],
+        ),
+    ]
+
+
+def test_stack_members_do_not_repeat_what_their_name_says():
+    """Three members, two on one checkpoint: the checkpoint tells only the
+    third apart, and a generated name that already starts with it is not
+    followed by it again."""
+    third = "c" * 64
+
+    def figure(key, checkpoint, name=None):
+        return CardFigures(
+            card=Card(workflow_key=key, topology_hash=key, name=name),
+            models=[SlotModel(name=checkpoint, kind="checkpoint")],
+            stack_size=3,
+            member_keys=[BUSY_CARD, FORGOTTEN_CARD, third],
+        )
+
+    figures = [
+        figure(BUSY_CARD, "realvisxl", "Portrait"),
+        figure(FORGOTTEN_CARD, "realvisxl", "Portrait"),
+        figure(third, "juggernaut"),
+    ]
+    members = _stack_members(figures[0], {f.card.workflow_key: f for f in figures})
+    assert [(m.name, m.sets_apart) for m in members] == [
+        ("Portrait", ["realvisxl"]),
+        ("Portrait", ["realvisxl"]),
+        # Generated from its checkpoint, so the name already says it.
+        ("juggernaut", []),
+    ]
+
+
+def test_a_card_outside_a_stack_lists_no_members(workflow_env):
+    cards = _by_key(_cards(workflow_env.owner, "?include_hidden=true"))
+    assert cards[HIDDEN_CARD]["stack_size"] == 1
+    assert cards[HIDDEN_CARD]["members"] == []
 
 
 def test_a_card_outside_a_stack_carries_no_difference_chips(workflow_env):
@@ -3666,6 +3797,12 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
         ("POST", f"{API}/workflows/run/preflight", {"workflow_key": BUSY_CARD}),
         ("POST", f"{API}/workflows/{BUSY_CARD}/duplicate", None),
         ("POST", f"{API}/workflows/{BUSY_CARD}/insert-lora-loader", None),
+        ("PUT", f"{API}/workflows/{BUSY_CARD}/lora-chain", {"entries": []}),
+        (
+            "POST",
+            f"{API}/workflows/{BUSY_CARD}/clone-with-models",
+            {"name": "nope", "swaps": {"a.safetensors": "b.safetensors"}},
+        ),
         ("DELETE", f"{API}/workflows/{BUSY_CARD}", None),
     ):
         assert_real_route(workflow_env.server.api, method, path)
@@ -7769,6 +7906,72 @@ def test_exporting_an_unknown_card_is_a_404(workflow_env):
     )
 
 
+def test_the_runnable_graph_is_the_run_unscrubbed(exportable):
+    """Open in ComfyUI hands the owner's own ComfyUI what ran, not the export."""
+    r = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/graph")
+    assert r.status_code == 200, r.text
+    payload = r.json()
+    assert payload["source"] == "picture"
+    assert payload["name"]
+    assert payload["workflow"]["5"]["inputs"]["text"] == EXPORT_PROMPT
+    assert payload["workflow"]["2"]["inputs"]["lora_name"] == FORGOTTEN_LORA
+    assert payload["workflow"]["3"]["inputs"]["seed"] == 4242
+
+
+def test_the_runnable_graph_of_a_card_without_one_is_a_409_and_unknown_a_404(
+    workflow_env, monkeypatch
+):
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+    )
+    assert (
+        workflow_env.owner.get(f"{API}/workflows/{BINNED_CARD}/graph").status_code
+        == 409
+    )
+    assert (
+        workflow_env.owner.get(f"{API}/workflows/{_h('nope')}/graph").status_code == 404
+    )
+
+
+def test_the_runnable_graph_blanks_a_credential_widget(exportable):
+    """It crosses the network into ComfyUI's page, so a key does not."""
+    exportable.graph["8"] = {
+        "class_type": "SomeApiNode",
+        "inputs": {"api_key": "example-key", "model": "keep-me"},
+    }
+    graph = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/graph").json()["workflow"]
+    assert graph["8"]["inputs"] == {"api_key": "", "model": "keep-me"}
+
+
+def test_the_runnable_graph_loads_the_copy_run_would(runnable, merged_checkpoint):
+    """Resolved against this ComfyUI like Run… is, so a merged copy loads (#1439)."""
+    merged_checkpoint(keeper="kept.safetensors")
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [
+        ["kept.safetensors"],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    graph = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/graph").json()["workflow"]
+    assert graph["1"]["inputs"]["ckpt_name"] == "kept.safetensors"
+
+
+def test_a_runnable_graph_from_a_stored_recipe_says_it_has_no_seed(
+    runnable, monkeypatch
+):
+    """The instance tier nulls seeds by design; the node has to be told."""
+
+    def gone(server, picture_id, object_info=None):
+        raise HTTPException(status_code=404, detail="Picture file missing")
+
+    monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", gone)
+    payload = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/graph").json()
+    assert payload["source"] == "instance", payload
+    assert payload["seedless"] is True
+
+
 def test_duplicating_writes_a_runnable_file_the_original_does_not_lose(
     exportable, tmp_path
 ):
@@ -7798,6 +8001,274 @@ def test_duplicating_twice_puts_a_second_file_beside_the_first(exportable, tmp_p
     ]
     assert first != second, "the second duplicate overwrote the first"
     assert (tmp_path / first).is_file() and (tmp_path / second).is_file()
+
+
+# ---------------------------------------------------------------------------
+# Clone with new models
+# ---------------------------------------------------------------------------
+
+CLONE_CHECKPOINT = "krea2.safetensors"
+
+
+@pytest.fixture
+def cloneable(exportable, tmp_path):
+    """RUN_CARD's picture graph, a second checkpoint on the shelf, and a folder."""
+    _isolate_workflow_folders(tmp_path, exportable.monkeypatch)
+    hub = exportable.server.hub
+    with hub.transaction() as conn:
+        checkpoint_id = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance, base_model) "
+            "VALUES ('checkpoint', ?, 'scanned', 'FLUX.1 dev')",
+            (CLONE_CHECKPOINT,),
+        ).lastrowid
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].append(
+        f"flux/{CLONE_CHECKPOINT}"
+    )
+    exportable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    yield SimpleNamespace(
+        folder=tmp_path, checkpoint_id=checkpoint_id, **vars(exportable)
+    )
+    with hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE id = ?", (checkpoint_id,))
+
+
+def _clone(env, swaps, name="Portrait on Krea"):
+    return env.owner.post(
+        f"{API}/workflows/{RUN_CARD}/clone-with-models",
+        json={"name": name, "swaps": swaps},
+    )
+
+
+def test_cloning_writes_a_new_card_in_comfyuis_spelling_and_names_it(cloneable):
+    r = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["verified"] is True
+    written = json.loads((cloneable.folder / body["name"]).read_text())
+    # The option ComfyUI lists, never the shelf's bare name.
+    assert written["1"]["inputs"]["ckpt_name"] == f"flux/{CLONE_CHECKPOINT}"
+    # The rest of the run travels, as a Duplicate's does.
+    assert written["5"]["inputs"]["text"] == EXPORT_PROMPT
+    assert body["workflow_key"] and body["workflow_key"] != RUN_CARD
+    card = cloneable.owner.get(f"{API}/workflows/{body['workflow_key']}").json()
+    assert card["card"]["name"] == "Portrait on Krea"
+    # The original card is untouched.
+    assert cloneable.graph["1"]["inputs"]["ckpt_name"] == _SHELF_FILENAME
+
+
+def test_cloning_with_comfyui_down_writes_the_names_unchecked(cloneable):
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "unreachable")
+    )
+    r = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT})
+    assert r.status_code == 201, r.text
+    assert r.json()["verified"] is False
+    written = json.loads((cloneable.folder / r.json()["name"]).read_text())
+    assert written["1"]["inputs"]["ckpt_name"] == CLONE_CHECKPOINT
+
+
+def test_a_clone_where_nothing_could_be_swapped_is_refused(cloneable):
+    r = _clone(cloneable, {_SHELF_FILENAME: "not-on-comfyui.safetensors"})
+    assert r.status_code == 409, r.text
+    assert "not_on_comfyui" in r.json()["detail"]
+    assert list(cloneable.folder.glob("*.json")) == []
+
+
+def test_a_second_clone_onto_the_same_models_keeps_the_first_ones_name(cloneable):
+    """The same swap re-keys to the same card, whose owner's name stands."""
+    first = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT}, name="First")
+    second = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT}, name="Second")
+    assert first.status_code == second.status_code == 201
+    key = first.json()["workflow_key"]
+    assert second.json()["workflow_key"] == key
+    card = cloneable.owner.get(f"{API}/workflows/{key}").json()
+    assert card["card"]["name"] == "First"
+
+
+def test_a_clone_that_cannot_take_every_model_is_not_written(cloneable):
+    """The checkpoint would land and the LoRA would not: nothing is written."""
+    r = _clone(
+        cloneable,
+        {
+            _SHELF_FILENAME: CLONE_CHECKPOINT,
+            FORGOTTEN_LORA: "not-on-comfyui.safetensors",
+        },
+    )
+    assert r.status_code == 409, r.text
+    assert list(cloneable.folder.glob("*.json")) == []
+
+
+def test_a_clone_onto_the_files_it_already_loads_says_so(cloneable):
+    r = _clone(cloneable, {_SHELF_FILENAME: _SHELF_FILENAME})
+    assert r.status_code == 409, r.text
+    assert "already loads" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("verb", ["duplicate", "clone-with-models"])
+def test_a_copy_keeps_the_picture_inputs_its_file_opted_out_of(cloneable, verb):
+    """`Source.graph` is sanitised; the file's bindings have to be put back."""
+    source = run_service.Source(
+        graph=json.loads(json.dumps(cloneable.graph)),
+        origin=run_service.FROM_FILE,
+        bindings=[],
+    )
+    cloneable.monkeypatch.setattr(
+        run_service, "resolve_source", lambda *args, **kwargs: (source, None)
+    )
+    r = (
+        _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT})
+        if verb == "clone-with-models"
+        else cloneable.owner.post(f"{API}/workflows/{RUN_CARD}/duplicate")
+    )
+    assert r.status_code == 201, r.text
+    written = json.loads((cloneable.folder / r.json()["name"]).read_text())
+    assert written["pixlstash_bindings"] == []
+
+
+def test_the_base_slot_is_offered_only_what_its_loader_could_load(cloneable):
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        added = [
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, provenance) "
+                "VALUES ('checkpoint', ?, 'scanned')",
+                (filename,),
+            ).lastrowid
+            for filename in ("krea2-q8.gguf", "unlisted.safetensors")
+        ]
+    try:
+        body = cloneable.owner.get(f"{API}/workflows/{RUN_CARD}/model-swap").json()
+        offered = {m["filename"] for m in body["checkpoints"]}
+        # Listed by the CheckpointLoaderSimple ComfyUI answers for.
+        assert CLONE_CHECKPOINT in offered
+        # A GGUF file for a .safetensors loader, and a file ComfyUI does not list.
+        assert "krea2-q8.gguf" not in offered
+        assert "unlisted.safetensors" not in offered
+
+        cloneable.monkeypatch.setattr(
+            workflows_routes, "_read_object_info", lambda url: (None, "down")
+        )
+        down = cloneable.owner.get(f"{API}/workflows/{RUN_CARD}/model-swap").json()
+        offered = {m["filename"] for m in down["checkpoints"]}
+        # Unchecked, so every file of the loader's type; never the GGUF one.
+        assert "unlisted.safetensors" in offered
+        assert "krea2-q8.gguf" not in offered
+    finally:
+        with hub.transaction() as conn:
+            conn.executemany("DELETE FROM model WHERE id = ?", [(i,) for i in added])
+
+
+def test_cloning_a_card_with_no_graph_is_a_409(workflow_env):
+    r = workflow_env.owner.post(
+        f"{API}/workflows/{BINNED_CARD}/clone-with-models",
+        json={"name": "x", "swaps": {"a.safetensors": "b.safetensors"}},
+    )
+    assert r.status_code == 409, r.text
+
+
+def test_a_replacement_that_is_not_a_model_file_is_a_422(cloneable):
+    assert _clone(cloneable, {_SHELF_FILENAME: "krea2"}).status_code == 422
+
+
+def test_the_swap_options_name_the_graphs_files_and_the_shelf(cloneable):
+    r = cloneable.owner.get(f"{API}/workflows/{RUN_CARD}/model-swap")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    slots = {slot["filename"]: slot for slot in body["slots"]}
+    assert slots[_SHELF_FILENAME]["kind"] == "checkpoint"
+    assert slots[_SHELF_FILENAME]["model"]["filename"] == _SHELF_FILENAME
+    assert slots[FORGOTTEN_LORA] == {
+        "filename": FORGOTTEN_LORA,
+        "kind": "lora",
+        "model": None,
+    }
+    assert CLONE_CHECKPOINT in {m["filename"] for m in body["checkpoints"]}
+    assert body["proposals"] == {}
+
+    chosen = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"checkpoint_id": cloneable.checkpoint_id},
+    ).json()
+    assert chosen["checkpoint_family"] == "flux1"
+    assert set(chosen["proposals"]) == {"vae", "text_encoder"}
+
+
+def test_the_swap_options_carry_the_companion_proposals(cloneable):
+    asked = []
+
+    def proposals(hub, checkpoint_id, index=None):
+        asked.append(checkpoint_id)
+        return {
+            "vae": [
+                {
+                    "id": 7,
+                    "filename": "flux-vae.safetensors",
+                    "display_name": None,
+                    "via": "family",
+                    "recipes": 2,
+                }
+            ],
+            "text_encoder": [],
+        }
+
+    cloneable.monkeypatch.setattr(workflows_routes, "propose_companions", proposals)
+    body = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"checkpoint_id": cloneable.checkpoint_id},
+    ).json()
+    assert asked == [cloneable.checkpoint_id]
+    assert body["proposals"]["vae"][0]["filename"] == "flux-vae.safetensors"
+    assert body["proposals"]["vae"][0]["via"] == "family"
+
+
+def test_a_lora_trained_on_another_family_is_flagged_never_dropped(cloneable):
+    graph = _embedded_export_graph(lora=RUN_ADAPTER_FILENAME)
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'SDXL 1.0' WHERE sha256 = ?",
+            (RUN_ADAPTER_DIGEST,),
+        )
+    body = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"checkpoint_id": cloneable.checkpoint_id},
+    ).json()
+    assert body["flags"] == [
+        {
+            "filename": RUN_ADAPTER_FILENAME,
+            "kind": "lora",
+            "base_model": "SDXL 1.0",
+            "family": "sdxl",
+        }
+    ]
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'FLUX.1 schnell' WHERE sha256 = ?",
+            (RUN_ADAPTER_DIGEST,),
+        )
+    same_family = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"checkpoint_id": cloneable.checkpoint_id},
+    ).json()
+    assert same_family["flags"] == []
+
+
+def test_the_swap_options_refuse_a_checkpoint_id_that_is_not_one(cloneable):
+    lora_id = cloneable.server.hub.fetchall(
+        "SELECT id FROM model WHERE file_kind = 'adapter' LIMIT 1"
+    )[0]["id"]
+    r = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap", params={"checkpoint_id": lora_id}
+    )
+    assert r.status_code == 404, r.text
 
 
 def test_deleting_a_card_the_library_knows_from_its_pictures_is_refused(workflow_env):
@@ -7939,19 +8410,22 @@ def test_inserting_a_loader_leaves_the_original_workflow_alone(loaderless):
     assert len(written) == len(LOADERLESS_DOCUMENT) + 1
 
 
-def test_inserting_a_loader_into_a_workflow_that_has_one_is_refused_with_the_reason(
-    runnable, tmp_path
+def test_inserting_a_loader_into_a_workflow_that_has_one_adds_it_after_the_source(
+    chained,
 ):
-    """Stacking a second adapter silently is the failure #1376 refuses."""
-    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
-    runnable.monkeypatch.setattr(
-        workflows_routes,
-        "_load_embedded_api_prompt",
-        lambda server, pid, object_info=None: (_embedded_export_graph(), []),
-    )
-    r = runnable.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
-    assert r.status_code == 409, r.text
-    assert "lora" in r.json()["detail"].lower()
+    """A loader always goes in the MODEL path, whatever loaders are there already.
+
+    Spliced right after the checkpoint, so the existing chain reads it. #1376
+    refused this; the owner's rule since is that the MODEL path from the
+    model source to the sampler always takes another LoRA.
+    """
+    r = chained.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
+    assert r.status_code == 201, r.text
+    body = r.json()
+    written = json.loads((chained.tmp_path / body["name"]).read_text())
+    new = body["node_id"]
+    assert written[new]["inputs"]["model"] == ["1", 0]
+    assert written["2"]["inputs"]["model"] == [new, 0]
 
 
 def test_inserting_a_loader_without_comfyui_is_a_503_not_a_guess(runnable, tmp_path):
@@ -7971,6 +8445,590 @@ def test_inserting_a_loader_without_comfyui_is_a_503_not_a_guess(runnable, tmp_p
     r = runnable.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
     assert r.status_code == 503, r.text
     assert list(tmp_path.glob("*.json")) == [], "a file was written anyway"
+
+
+# --- the LoRA chain editor's routes (#1478) ---------------------------------
+#
+# Two loaders in a row between the checkpoint and both of its readers, typed
+# the way a real ComfyUI types them. Node 2 loads the shelf LoRA the run tests
+# already seed (`RUN_ADAPTER_FILENAME`); node 5 loads a file the shelf does not
+# know, which is the row the editor has to flag rather than hide.
+CHAIN_DOCUMENT = {
+    "1": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": "realvisxl.safetensors"},
+    },
+    "2": {
+        "class_type": "LoraLoader",
+        "inputs": {
+            "lora_name": RUN_ADAPTER_FILENAME,
+            "strength_model": 0.8,
+            "strength_clip": 0.8,
+            "model": ["1", 0],
+            "clip": ["1", 1],
+        },
+    },
+    "5": {
+        "class_type": "LoraLoader",
+        "inputs": {
+            "lora_name": "Mystery_Style.safetensors",
+            "strength_model": 0.5,
+            "strength_clip": 0.5,
+            "model": ["2", 0],
+            "clip": ["2", 1],
+        },
+    },
+    "6": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "a cat", "clip": ["5", 1]},
+    },
+    "3": {
+        "class_type": "KSampler",
+        "inputs": {"seed": 1, "model": ["5", 0], "positive": ["6", 0]},
+    },
+    "4": {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "P", "images": ["3", 0]},
+    },
+}
+
+CHAIN_OBJECT_INFO = {
+    "CheckpointLoaderSimple": {
+        "input": {"required": {"ckpt_name": [["realvisxl.safetensors"], {}]}},
+        "output": ["MODEL", "CLIP", "VAE"],
+    },
+    "LoraLoader": {
+        "input": {
+            "required": {
+                "model": ["MODEL", {}],
+                "clip": ["CLIP", {}],
+                "lora_name": [
+                    [RUN_ADAPTER_FILENAME, "Mystery_Style.safetensors"],
+                    {},
+                ],
+                "strength_model": ["FLOAT", {"default": 1.0}],
+                "strength_clip": ["FLOAT", {"default": 1.0}],
+            }
+        },
+        "output": ["MODEL", "CLIP"],
+    },
+    "CLIPTextEncode": {
+        "input": {"required": {"text": ["STRING", {}], "clip": ["CLIP", {}]}},
+        "output": ["CONDITIONING"],
+    },
+    "KSampler": {
+        "input": {
+            "required": {
+                "seed": ["INT", {"default": 0}],
+                "model": ["MODEL", {}],
+                "positive": ["CONDITIONING", {}],
+            }
+        },
+        "output": ["LATENT"],
+    },
+    "SaveImage": {
+        "input": {"required": {"filename_prefix": ["STRING", {}]}},
+        "output": [],
+    },
+}
+
+
+@pytest.fixture
+def chained(runnable, tmp_path):
+    """RUN_CARD sourced from CHAIN_DOCUMENT, on a ComfyUI that types every link."""
+    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (
+            json.loads(json.dumps(CHAIN_DOCUMENT)),
+            [],
+        ),
+    )
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (json.loads(json.dumps(CHAIN_OBJECT_INFO)), None),
+    )
+    return SimpleNamespace(tmp_path=tmp_path, **vars(runnable))
+
+
+def _chain_edit(client, *entries, **extra):
+    return client.put(
+        f"{API}/workflows/{RUN_CARD}/lora-chain",
+        json={"entries": list(entries), **extra},
+    )
+
+
+def test_the_chain_is_read_in_apply_order_with_the_unknown_loader_flagged(chained):
+    """The inspector's list: source to sink, and the one the shelf cannot name kept.
+
+    Wrong if node 5 is missing (hidden) or listed before node 2 (the order a
+    run applies them is the order the editor edits).
+    """
+    r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
+    assert r.status_code == 200, r.text
+    chain = r.json()
+    assert chain["editable"] is True, chain
+    assert chain["refusal"] is None
+    assert chain["source"]["node_id"] == "1"
+    assert [loader["node_id"] for loader in chain["loaders"]] == ["2", "5"]
+    known, unknown = chain["loaders"]
+    assert (known["sha256"], known["on_shelf"]) == (RUN_ADAPTER_DIGEST, True)
+    assert (unknown["sha256"], unknown["on_shelf"]) == (None, False)
+    assert unknown["strength"] == 0.5
+    # A CLIP source is there, so an Add would put in the loader that patches it.
+    assert chain["added_loader_class"] == "LoraLoader"
+
+
+def test_the_chain_is_still_shown_when_comfyui_is_down(chained):
+    """Read-only, with the reason, rather than a 503 the inspector cannot draw."""
+    chained.monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url, **_: (None, "connection refused"),
+    )
+    r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
+    assert r.status_code == 200, r.text
+    chain = r.json()
+    assert chain["editable"] is False
+    assert "ComfyUI" in chain["refusal"]
+    assert [loader["node_id"] for loader in chain["loaders"]] == ["2", "5"]
+    # Nothing typed the links, so nothing is named as reading the chain.
+    assert chain["sink"]["summary"] is None
+
+
+def _chain_document_with(**nodes):
+    document = json.loads(json.dumps(CHAIN_DOCUMENT))
+    document.update(nodes)
+    return document
+
+
+def _serve_chain(chained, document, info=None):
+    chained.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (json.loads(json.dumps(document)), []),
+    )
+    if info is not None:
+        chained.monkeypatch.setattr(
+            workflows_routes,
+            "_read_object_info",
+            lambda url, **_: (json.loads(json.dumps(info)), None),
+        )
+
+
+def test_a_chain_refused_for_its_shape_still_names_both_ends(chained):
+    """ComfyUI answered, so the read-only view says what the chain runs between.
+
+    Refused because a second checkpoint feeds another sampler, so which model
+    the LoRAs are for is the owner's call. Wrong if the sink summary is None:
+    that is the dialog's empty bottom node.
+    """
+    _serve_chain(
+        chained,
+        _chain_document_with(
+            **{
+                "8": {
+                    "class_type": "CheckpointLoaderSimple",
+                    "inputs": {"ckpt_name": "realvisxl.safetensors"},
+                },
+                "7": {
+                    "class_type": "KSampler",
+                    "inputs": {"seed": 1, "model": ["8", 0], "positive": ["6", 0]},
+                },
+            }
+        ),
+    )
+    r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
+    assert r.status_code == 200, r.text
+    chain = r.json()
+    assert chain["editable"] is False
+    assert "loads 2 models" in chain["refusal"]
+    assert chain["source"]["node_id"] == "1"
+    assert chain["sink"]["summary"] == (
+        "KSampler #3 reads model · CLIPTextEncode #6 reads clip"
+    )
+
+
+def test_a_branch_ends_the_chain_and_the_editor_is_told_why(chained):
+    """A second sampler pass reads loader #2 before #5: the chain stops at #2.
+
+    Wrong if `editable` is false (a branch used to refuse the whole chain),
+    or `branch_note` is missing: the list is shorter than the workflow, and
+    the owner is owed the reason.
+    """
+    _serve_chain(
+        chained,
+        _chain_document_with(
+            **{
+                "7": {
+                    "class_type": "KSampler",
+                    "inputs": {"seed": 1, "model": ["2", 0], "positive": ["6", 0]},
+                }
+            }
+        ),
+    )
+    r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
+    assert r.status_code == 200, r.text
+    chain = r.json()
+    assert chain["editable"] is True, chain["refusal"]
+    assert [loader["node_id"] for loader in chain["loaders"]] == ["2"]
+    assert chain["branch_note"].startswith("The chain stops at #2 LoraLoader")
+
+
+def test_a_character_prompt_builder_does_not_stop_a_lora_being_added(chained):
+    """A node loading a LoRA its own way is an ordinary node, not a refusal.
+
+    The MODEL path from the checkpoint to the sampler always takes another
+    loader. Wrong if `editable` is false, or the new loader is not between
+    the last loader and the sampler.
+    """
+    info = json.loads(json.dumps(CHAIN_OBJECT_INFO))
+    info["LoRACharacterPromptBuilder"] = {
+        "input": {"required": {"clip": ["CLIP", {}]}},
+        "output": ["STRING"],
+    }
+    _serve_chain(
+        chained,
+        _chain_document_with(
+            **{
+                "68": {
+                    "class_type": "LoRACharacterPromptBuilder",
+                    "inputs": {"lora_name": "hero.safetensors", "clip": ["5", 1]},
+                }
+            }
+        ),
+        info,
+    )
+    r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
+    assert r.status_code == 200, r.text
+    chain = r.json()
+    assert chain["editable"] is True, chain["refusal"]
+    assert [loader["node_id"] for loader in chain["loaders"]] == ["2", "5"]
+
+    r = _chain_edit(
+        chained.owner,
+        {"node_id": "2", "strength": 0.8},
+        {"node_id": "5", "strength": 0.5},
+        {"sha256": RUN_ADAPTER_DIGEST, "strength": 1.0},
+    )
+    assert r.status_code == 201, r.text
+    written = json.loads((chained.tmp_path / r.json()["name"]).read_text())
+    added = [
+        node_id
+        for node_id, node in written.items()
+        if node_id not in CHAIN_DOCUMENT and node_id != "68"
+    ]
+    assert len(added) == 1, written
+    assert written[added[0]]["inputs"]["model"] == ["5", 0]
+    assert written["3"]["inputs"]["model"] == [added[0], 0]
+    # The builder is left as it was, reading the chain's CLIP end.
+    assert written["68"]["inputs"]["lora_name"] == "hero.safetensors"
+
+
+def test_a_dry_run_lists_the_changes_and_writes_nothing(chained):
+    r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8}, dry_run=True)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["dry_run"] is True
+    assert body["workflow_key"] is None
+    assert ("deleted", "5") in {(c["kind"], c["node_id"]) for c in body["changes"]}
+    assert list(chained.tmp_path.glob("*.json")) == [], "a dry run wrote a file"
+
+
+def test_deleting_a_loader_writes_a_new_card_whose_readers_skip_it(chained):
+    """The whole point of the write: every MODEL and CLIP reader closes over the gap.
+
+    The original is written to disk first so its bytes can be compared after.
+    """
+    original = chained.tmp_path / "original.json"
+    original.write_text(json.dumps(CHAIN_DOCUMENT))
+    r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["workflow_key"] and body["workflow_key"] != RUN_CARD
+    written = json.loads((chained.tmp_path / body["name"]).read_text())
+    assert "5" not in written, written
+    assert written["3"]["inputs"]["model"] == ["2", 0]
+    assert written["6"]["inputs"]["clip"] == ["2", 1]
+    assert json.loads(original.read_text()) == CHAIN_DOCUMENT
+
+
+def test_reordering_two_loaders_rewires_every_link_and_keeps_their_ids(chained):
+    r = _chain_edit(
+        chained.owner,
+        {"node_id": "5", "strength": 0.5},
+        {"node_id": "2", "strength": 0.8},
+    )
+    assert r.status_code == 201, r.text
+    written = json.loads((chained.tmp_path / r.json()["name"]).read_text())
+    assert written["5"]["inputs"]["model"] == ["1", 0]
+    assert written["5"]["inputs"]["clip"] == ["1", 1]
+    assert written["2"]["inputs"]["model"] == ["5", 0]
+    assert written["2"]["inputs"]["clip"] == ["5", 1]
+    assert written["3"]["inputs"]["model"] == ["2", 0]
+    assert written["6"]["inputs"]["clip"] == ["2", 1]
+
+
+@pytest.mark.parametrize(
+    "entries",
+    [
+        # Nothing changed.
+        [{"node_id": "2", "strength": 0.8}, {"node_id": "5", "strength": 0.5}],
+        # A loader this graph does not have.
+        [{"node_id": "99", "strength": 1.0}],
+        # A LoRA the shelf does not hold.
+        [{"sha256": _h("not-on-the-shelf"), "strength": 1.0}],
+    ],
+    ids=["unchanged", "unknown-node", "not-on-shelf"],
+)
+def test_an_edit_that_cannot_be_made_is_a_409_and_writes_nothing(chained, entries):
+    r = _chain_edit(chained.owner, *entries)
+    assert r.status_code == 409, r.text
+    assert list(chained.tmp_path.glob("*.json")) == [], "a refused edit wrote a file"
+
+
+def test_an_edit_without_comfyui_is_a_503_not_a_guess(chained):
+    chained.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
+    )
+    r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
+    assert r.status_code == 503, r.text
+    assert list(chained.tmp_path.glob("*.json")) == []
+
+
+def test_an_edit_never_changes_the_linked_workflow_file(chained):
+    """A card with a FILE behind it: the edit writes beside it, never into it.
+
+    The file differs from the picture's graph (seed 42), so the written copy
+    proves which one the edit started from, and the original's bytes are
+    compared after.
+    """
+    original = chained.tmp_path / "original.json"
+    authored = json.loads(json.dumps(CHAIN_DOCUMENT))
+    authored["3"]["inputs"]["seed"] = 42
+    original.write_text(json.dumps(authored))
+    before = original.read_bytes()
+    chained.monkeypatch.setattr(
+        workflows_routes,
+        "_resolve_workflow_path",
+        lambda name: (str(original), "user"),
+    )
+    with chained.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_file "
+            "(workflow_name, workflow_key, topology_hash, structural_hash) "
+            "VALUES (?, ?, ?, ?)",
+            ("original.json", RUN_CARD, RUN_TOPOLOGY, RUN_RECIPE),
+        )
+    try:
+        r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
+        assert r.status_code == 201, r.text
+        written = json.loads((chained.tmp_path / r.json()["name"]).read_text())
+        assert written["3"]["inputs"]["seed"] == 42, "not edited from the file"
+        assert "5" not in written
+        assert original.read_bytes() == before
+    finally:
+        with chained.server.hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM workflow_file WHERE workflow_name = 'original.json'"
+            )
+
+
+# --- skipping a LoRA for one run (#1478) ------------------------------------
+
+
+def test_a_skipped_lora_leaves_this_runs_graph_and_nothing_else(runnable):
+    """The Run popup's Skip: the loader is bypassed on the submitted copy only.
+
+    The LoRA IS on this ComfyUI, so nothing but the request takes it out.
+    """
+    body = {
+        "workflow_key": RUN_CARD,
+        "skip_loras": [{"node_id": "2", "field": "lora_name"}],
+    }
+    payload = _preflight(runnable.owner, **body)
+    assert _reasons(payload) == set(), payload
+    skipped = payload["groups"][0]["bypassed_loras"]
+    assert [(s["node_id"], s["requested"]) for s in skipped] == [("2", True)]
+
+    r = runnable.owner.post(f"{API}/workflows/run", json=body)
+    assert r.status_code == 200, r.text
+    graph = runnable.submitted[0]["graph"]
+    assert "2" not in graph, graph
+    assert graph["3"]["inputs"]["model"] == ["1", 0], graph
+
+
+def test_the_same_run_without_a_skip_keeps_the_loader(runnable):
+    """The positive control for the skip above: the loader is there by default."""
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.status_code == 200, r.text
+    assert "2" in runnable.submitted[0]["graph"]
+    assert r.json()["groups"][0]["bypassed_loras"] == []
+
+
+def test_skipping_a_slot_no_graph_has_is_a_400(runnable):
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"workflow_key": RUN_CARD, "skip_loras": [{"node_id": "99"}]},
+    )
+    assert r.status_code == 400, r.text
+    assert "99" in r.json()["detail"]
+
+
+def test_a_slot_both_filled_and_skipped_is_refused(runnable):
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={
+            "workflow_key": RUN_CARD,
+            "loras": [{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
+            "skip_loras": [{"node_id": "2"}],
+        },
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_a_forgotten_loras_loader_is_skipped_when_asked():
+    """The owner's request is the consent the automatic bypass does without."""
+    graph = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
+        "2": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": FORGOTTEN_MODEL, "model": ["1", 0]},
+        },
+        "3": {"class_type": "KSampler", "inputs": {"model": ["2", 0]}},
+    }
+    skipped, reasons, found = skip_requested_loras(
+        graph, [("2", "lora_name")], json.loads(json.dumps(RUN_OBJECT_INFO))
+    )
+    assert reasons == []
+    assert found == {("2", "lora_name")}
+    assert [s["requested"] for s in skipped] == [True]
+    assert "2" not in graph
+    assert graph["3"]["inputs"]["model"] == ["1", 0]
+
+
+def test_a_stacker_slot_whose_neighbour_is_live_is_not_skipped():
+    """Skipping the node would skip the LoRA the owner did not name."""
+    graph = {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
+        "2": {
+            "class_type": "LoraStack",
+            "inputs": {
+                "lora_name_1": "a.safetensors",
+                "lora_name_2": "b.safetensors",
+                "model": ["1", 0],
+            },
+        },
+    }
+    skipped, reasons, _ = skip_requested_loras(
+        graph, [("2", "lora_name_1")], json.loads(json.dumps(RUN_OBJECT_INFO))
+    )
+    assert skipped == []
+    assert [r.code for r in reasons] == ["lora_not_skippable"]
+    assert "b.safetensors" in reasons[0].as_dict()["message"]
+    assert "2" in graph, "the stacker was taken out anyway"
+
+
+def test_a_skip_is_not_undone_by_the_saved_recipes_loras(chained):
+    """The recipe LoRA a skipped loader held does not move on to the next one.
+
+    Placed after the skip, `other` (on the shelf, and in skipped node 2) fell
+    through to the positional fill and replaced node 5's LoRA, which the owner
+    had not named, while the notice still said node 2 was skipped.
+    """
+    r = chained.owner.post(
+        f"{API}/recipes",
+        json={
+            "name": "skip keeps its word",
+            "workflow_key": RUN_CARD,
+            "prompt": "a cat",
+            "loras": [
+                {
+                    "filename": RUN_ADAPTER_FILENAME,
+                    "sha256": RUN_ADAPTER_DIGEST,
+                    "strength": 0.7,
+                }
+            ],
+        },
+    )
+    assert r.status_code in {200, 201}, r.text
+    run = chained.owner.post(
+        f"{API}/workflows/run",
+        json={"saved_recipe_id": r.json()["id"], "skip_loras": [{"node_id": "2"}]},
+    )
+    assert run.status_code == 200, run.text
+    graph = chained.submitted[0]["graph"]
+    assert "2" not in graph, graph
+    assert graph["5"]["inputs"]["lora_name"] == "Mystery_Style.safetensors", graph
+
+
+def test_a_skip_on_a_run_of_several_workflows_is_refused(runnable):
+    """A node id means one loader on one graph; across cards it could be any."""
+    second = _seed_second_runnable_card(runnable.server)
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={
+            "picture_ids": [runnable.picture_id, second],
+            "skip_loras": [{"node_id": "2"}],
+        },
+    )
+    assert r.status_code == 400, r.text
+    assert "several" in r.json()["detail"]
+    assert runnable.submitted == []
+
+
+# --- a saved recipe's LoRAs, placed by what they are (#1478) ----------------
+
+
+def _slot(node_id, value):
+    return {"node_id": node_id, "field": "lora_name", "value": value, "by": "filename"}
+
+
+def test_a_recipe_stored_in_the_other_order_still_reaches_its_own_loaders():
+    """The positional zip put these on each other's loaders.
+
+    The graph and the recipe spell the files differently, so only the digest
+    can tell which loader is which: a basename match or the positional fill
+    would pass here by luck if the names agreed.
+    """
+    slots = [_slot("2", "sub/A-v2.safetensors"), _slot("5", "sub/B-v2.safetensors")]
+    recipe = [
+        {"filename": "b_renamed.safetensors", "sha256": _h("b"), "strength": 0.4},
+        {"filename": "a_renamed.safetensors", "sha256": _h("a"), "strength": 0.9},
+    ]
+    digests = {("2", "lora_name"): _h("a"), ("5", "lora_name"): _h("b")}
+    placements, unplaced = place_recipe_loras(slots, recipe, digests)
+    assert unplaced == []
+    assert {slot["node_id"]: saved["sha256"] for slot, saved in placements} == {
+        "2": _h("a"),
+        "5": _h("b"),
+    }
+
+
+def test_a_recipe_with_more_loras_than_loaders_reports_the_one_left_over():
+    slots = [_slot("2", "a.safetensors"), _slot("5", "b.safetensors")]
+    recipe = [
+        {"filename": "a.safetensors", "sha256": _h("a"), "strength": 1.0},
+        {"filename": "b.safetensors", "sha256": _h("b"), "strength": 1.0},
+        {"filename": "c.safetensors", "sha256": _h("c"), "strength": 1.0},
+    ]
+    placements, unplaced = place_recipe_loras(slots, recipe, {})
+    assert len(placements) == 2
+    assert [u["filename"] for u in unplaced] == ["c.safetensors"]
+    assert "2 LoRA loaders" in unplaced[0]["reason"]
+
+
+def test_a_recipe_lora_the_shelf_cannot_name_is_reported_not_filtered():
+    slots = [_slot("2", "Mystery_Style.safetensors")]
+    recipe = [{"filename": "Mystery_Style.safetensors", "sha256": "", "strength": 1.0}]
+    placements, unplaced = place_recipe_loras(slots, recipe, {})
+    assert placements == []
+    assert [(u["filename"], u["sha256"]) for u in unplaced] == [
+        ("Mystery_Style.safetensors", None)
+    ]
+    assert "cannot identify" in unplaced[0]["reason"]
 
 
 # --- the shapes one hand-written graph never asks about ---------------------

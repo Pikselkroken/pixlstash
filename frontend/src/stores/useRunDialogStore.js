@@ -29,6 +29,8 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    *                   not a prefill: the run body carries `saved_recipe_id`
    *                   and the route fills the row's own prompt, LoRAs,
    *                   overrides and seed in underneath the form.
+   *   prompt        - the prompt box's starting text, when the caller already
+   *                   shows one; still an editable prefill, not a lock.
    */
   const source = ref(null);
   /**

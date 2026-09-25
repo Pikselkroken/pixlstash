@@ -1284,22 +1284,25 @@ def test_one_look_spelled_two_ways_is_one_row(recipe_env):
     assert matching[0]["pictures"] == 2
 
 
-def test_a_saved_recipe_takes_its_look_off_the_used_half(recipe_env):
-    """The two halves of the tab can never both claim one look."""
+def test_a_saved_recipe_marks_its_look_and_leaves_it_listed(recipe_env):
+    """Saving a look marks it; it never takes the look out of the list."""
     before = _used(recipe_env.owner, CARD_A)
-    assert any(look["prompt"] == PROMPT and look["pictures"] == 2 for look in before)
+    assert not any(look["saved"] for look in before), before
 
     _save(recipe_env.owner, CARD_A, prompt=PROMPT, loras=_ada())
 
     after = _used(recipe_env.owner, CARD_A)
-    assert not any(
-        look["prompt"] == PROMPT
-        and len(look["loras"]) == 1
-        and look["loras"][0]["filename"].lower().endswith(ADA)
+    assert [look["pictures"] for look in after] == [
+        look["pictures"] for look in before
+    ], "saving moved or dropped a look"
+    saved = [
+        (look["prompt"], len(look["loras"]), look["pictures"])
         for look in after
-    ), after
-    # And the others are untouched: saving one look does not hide the rest.
-    assert {look["prompt"] for look in after} == {PROMPT, OTHER_PROMPT}
+        if look["saved"]
+    ]
+    # Only the saved look: the same prompt with another LoRA is another look.
+    assert saved == [(PROMPT, 1, 2)], after
+    assert after[0]["loras"][0]["filename"].lower().endswith(ADA)
 
 
 def test_a_selection_of_several_workflows_is_the_union_counted_once(recipe_env):

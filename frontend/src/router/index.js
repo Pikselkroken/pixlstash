@@ -29,6 +29,17 @@ import App from "../App.vue";
 //   /workflows?topology=<hash>&tab=recipes  → …with the rail open on its Recipes tab
 //                                            (the Recipe tab's "Matches your saved recipe X"
 //                                            banner, #1480; honoured by WorkflowTab)
+//   /workflows?card=<key>                   → …selected by card KEY, rail open on its
+//                                            Workflow tab (a topology can hold several
+//                                            cards; this names exactly one)
+//   /workflows?card=<key>&edit=loras        → …with Edit LoRAs… open on it (#1478)
+//   /workflows?card=<key>&edit=loras&drop_lora=<filename>
+//                                          → …and that LoRA's loader already deleted
+//                                            (Save as recipe's "The workflow" answer).
+//                                            `edit` and `drop_lora` are one-shot: the
+//                                            rail takes them off the URL once honoured.
+//                                            Built by `utils/loraChain.editLorasRoute`,
+//                                            honoured by WorkflowTab.
 //   /ref-folder/:id                         → Reference folder view (id = numeric)
 //   /import-folder/:id                      → Import folder view (id = numeric)
 //

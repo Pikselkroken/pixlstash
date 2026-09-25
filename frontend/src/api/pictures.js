@@ -344,7 +344,8 @@ export async function patchPicture(id, body) {
 
 /**
  * List the ComfyUI models referenced by pictures in the library.
- * @returns {Promise<Array<Object>>} the response body.
+ * @returns {Promise<Array<{value: string, name: string|null}>>} `value` is
+ *   the filter key; `name` is the shelf's name for that model, when it has one.
  */
 export async function listComfyuiModels() {
   return unwrap(apiClient.get(`/pictures/comfyui_models`));
@@ -352,7 +353,8 @@ export async function listComfyuiModels() {
 
 /**
  * List the ComfyUI LoRAs referenced by pictures in the library.
- * @returns {Promise<Array<Object>>} the response body.
+ * @returns {Promise<Array<{value: string, name: string|null}>>} as
+ *   {@link listComfyuiModels}.
  */
 export async function listComfyuiLoras() {
   return unwrap(apiClient.get(`/pictures/comfyui_loras`));

@@ -2,8 +2,8 @@
 // excluded but never both, raising the minimum score drags the maximum up, a
 // tag-confidence threshold is one chip per tag that another pick moves, every
 // pick-one list follows the radiogroup contract (arrows select, one tab stop),
-// Clear puts each kind back to its own "off" value, and every count is the view
-// plus exactly one filter.
+// its leading All/Any row puts each kind back to its own "off" value, and every
+// count is the view plus exactly one filter.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -21,7 +21,9 @@ vi.mock("../../api/tags", () => ({
   ]),
 }));
 vi.mock("../../api/pictures", () => ({
-  listComfyuiModels: vi.fn().mockResolvedValue(["flux1-dev.safetensors"]),
+  listComfyuiModels: vi
+    .fn()
+    .mockResolvedValue([{ value: "flux1-dev.safetensors", name: null }]),
   listComfyuiLoras: vi.fn().mockResolvedValue([]),
   getPictureCount: vi.fn().mockResolvedValue({ count: 3 }),
 }));
@@ -144,7 +146,7 @@ describe("FilterMenu", () => {
     ["Stacks", "stackStateFilter", "Stacked", "stacked", "all"],
     ["Sharing", "sharedOnlyFilter", "Shared", true, false],
   ])(
-    "%s: arrow selects, Enter keeps it, Clear restores the off value",
+    "%s: arrow selects, Enter keeps it, the off row restores the off value",
     async (kind, field, label, on, off) => {
       const store = useFilterStore();
       const wrapper = await mountMenu();
@@ -157,29 +159,117 @@ describe("FilterMenu", () => {
 
       await group.trigger("keydown", { key: "ArrowDown" });
       expect(store[field]).toBe(on);
-      expect(wrapper.find(".tbm-footer").text()).toContain(
-        `On the strip as "${kind}`,
-      );
       // Enter on the chosen row is a click on it: it confirms, never undoes.
       await row().trigger("click");
       expect(store[field]).toBe(on);
 
-      const clear = wrapper
-        .findAll(".fm-sub .tbm-ghost")
-        .find((b) => b.text() === "Clear");
-      await clear.trigger("click");
+      const radios = group.findAll('[role="radio"]');
+      expect(radios[0].attributes("aria-checked")).toBe("false");
+      await radios[0].trigger("click");
       expect(store[field]).toBe(off);
+      expect(radios[0].attributes("aria-checked")).toBe("true");
     },
   );
 
-  it("names the chosen option in the footer, not the first", async () => {
-    const store = useFilterStore();
-    store.mediaTypeFilter = "videos";
+  it("leads each pick-one list with its off row, All or Any", async () => {
     const wrapper = await mountMenu();
-    await openKind(wrapper, "Media");
-    expect(wrapper.find(".fm-sub .tbm-footer").text()).toBe(
-      'On the strip as "Media video".',
-    );
+    for (const [kind, any] of [
+      ["Media", "All"],
+      ["Faces", "Any"],
+      ["Stacks", "All"],
+      ["Sharing", "All"],
+    ]) {
+      await openKind(wrapper, kind);
+      const first = wrapper.find('.fm-sub [role="radio"]');
+      expect(first.find(".optrow__label").text()).toBe(any);
+      expect(first.attributes("aria-checked")).toBe("true");
+      expect(wrapper.find(".fm-sub .tbm-footer").exists()).toBe(false);
+    }
+  });
+
+  it("marks each Score row's radio from its own group's value", async () => {
+    const store = useFilterStore();
+    store.minScoreFilter = 3;
+    store.maxScoreFilter = 4;
+    const wrapper = mount(FilterMenu, {
+      props: { countBaseQuery: "set_id=4", open: true },
+      // Renders the icon name, which the `true` stub drops.
+      global: { stubs: { "v-icon": { template: "<i><slot /></i>" } } },
+    });
+    await flushPromises();
+    await openKind(wrapper, "Score");
+    const marked = (group) =>
+      group
+        .findAll('[role="radio"]')
+        .filter((b) => b.text().includes("mdi-radiobox-marked"))
+        .map((b) => b.attributes("aria-label"));
+
+    const [atLeast, atMost] = wrapper.findAll('.fm-sub [role="radiogroup"]');
+    expect(marked(atLeast)).toEqual(["At least 3 stars"]);
+    expect(marked(atMost)).toEqual(["At most 4 stars"]);
+  });
+
+  // 0 stars is unrated: a range from 0 takes the unrated with it, At most 0 is
+  // them alone, and 0 to 5 is no filter at all.
+  it("reads 0 stars as unrated, with no separate unscored switch", async () => {
+    const store = useFilterStore();
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Score");
+    const checked = () =>
+      wrapper
+        .findAll('.fm-sub [role="radio"][aria-checked="true"]')
+        .map((b) => b.attributes("aria-label"));
+    const click = (label) =>
+      wrapper.find(`[aria-label="${label}"]`).trigger("click");
+    const state = () => [
+      store.minScoreFilter,
+      store.maxScoreFilter,
+      store.unscoredOnlyFilter,
+    ];
+
+    expect(checked()).toEqual(["At least 0 stars", "At most 5 stars"]);
+    expect(wrapper.text()).not.toContain("Include unscored");
+
+    await click("At most 0 stars");
+    expect(state()).toEqual([null, 0, true]);
+    await click("At most 3 stars");
+    expect(state()).toEqual([null, 3, true]);
+    await click("At least 2 stars");
+    expect(state()).toEqual([2, 3, false]);
+    await click("At least 0 stars");
+    await click("At most 5 stars");
+    expect(state()).toEqual([null, null, false]);
+    expect(checked()).toEqual(["At least 0 stars", "At most 5 stars"]);
+  });
+
+  it("shows the stats sidebar's unrated-only filter as At most 0", async () => {
+    const store = useFilterStore();
+    store.unscoredOnlyFilter = true;
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Score");
+    expect(
+      wrapper
+        .find('[aria-label="At most 0 stars"]')
+        .attributes("aria-checked"),
+    ).toBe("true");
+
+    // Clicking the marked At least 0 confirms it, never drops the filter.
+    await wrapper.find('[aria-label="At least 0 stars"]').trigger("click");
+    expect(store.unscoredOnlyFilter).toBe(true);
+    expect(store.minScoreFilter).toBeNull();
+    expect(
+      wrapper
+        .find('[aria-label="At most 0 stars"]')
+        .attributes("aria-checked"),
+    ).toBe("true");
+
+    // A minimum above the shown At most 0 drags it up, as it would anywhere.
+    await wrapper.find('[aria-label="At least 2 stars"]').trigger("click");
+    expect([
+      store.minScoreFilter,
+      store.maxScoreFilter,
+      store.unscoredOnlyFilter,
+    ]).toEqual([2, 2, false]);
   });
 
   it("gives each Score radiogroup one tab stop, moved and selected by arrows", async () => {

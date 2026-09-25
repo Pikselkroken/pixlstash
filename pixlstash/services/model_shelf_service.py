@@ -67,6 +67,13 @@ from pixlstash.utils.adapter_header import (
     FILE_UNKNOWN,
     FILE_VAE,
 )
+from pixlstash.utils.known_base_models import (
+    SOURCE_FILENAME,
+    SOURCE_USER,
+    family_of,
+    fold,
+    rank,
+)
 
 logger = get_logger(__name__)
 
@@ -134,6 +141,8 @@ MODEL_COLUMNS = (
     "family",
     "quant",
     "weights_id",
+    "base_model_canonical",
+    "base_model_source",
 )
 
 # Computed per row by the two aggregate joins below, never by a second query.
@@ -178,6 +187,11 @@ _SELECT_LIST = ", ".join(
 
 _FROM = f"FROM model m{_STACK_JOIN}{_LOCATION_JOIN}"
 
+# What a row is grouped, sorted and filtered under: the identified base model,
+# else the raw string for one nothing has identified (or a person typed
+# something the table does not know).
+_BASE_MODEL_KEY = "COALESCE(m.base_model_canonical, m.base_model)"
+
 # The five sort keys ruled 2026-08-08. ``COALESCE`` on the stack aggregate is the
 # "a row never sorts by a number it does not display" rule in SQL: a stacked row
 # displays the stack's total, a standalone row displays its own.
@@ -189,7 +203,7 @@ SORT_KEYS = {
     "file_mtime": "loc.newest_file_mtime",
     "name": "m.display_name COLLATE NOCASE",
     "size": "COALESCE(st.total_size, m.file_size)",
-    "base_model": "m.base_model COLLATE NOCASE",
+    "base_model": f"{_BASE_MODEL_KEY} COLLATE NOCASE",
 }
 
 DEFAULT_SORT = "added_at"
@@ -245,8 +259,9 @@ def fetch_models(
         hub: The open :class:`~pixlstash.hub.db.HubDatabase`.
         file_kinds: Which ``model.file_kind`` values to serve. One query, not one
             per kind: there is one content table.
-        base_model: Exact match, or :data:`UNSET` to select the rows that record
-            none. ``None`` means no filter - a null base model is a bulk state
+        base_model: Exact match on the identified base model or on the raw
+            string (a caller holding the trainer's own spelling still gets its
+            rows), or :data:`UNSET` to select the rows that record none. ``None`` means no filter - a null base model is a bulk state
             (37 % of a measured 91-file folder), so it is never dropped by
             default.
         kind: Adapter algorithm (``lora``, ``lokr``, …).
@@ -270,10 +285,10 @@ def fetch_models(
 
     if base_model is not None:
         if base_model == UNSET:
-            where.append("m.base_model IS NULL")
+            where.append(f"{_BASE_MODEL_KEY} IS NULL")
         else:
-            where.append("m.base_model = ?")
-            params.append(base_model)
+            where.append(f"({_BASE_MODEL_KEY} = ? OR m.base_model = ?)")
+            params.extend([base_model, base_model])
     if kind:
         where.append("m.kind = ?")
         params.append(kind)
@@ -433,7 +448,7 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
     pictures = vault.db.run_task(recipe_picture_counts, priority=DBPriority.IMMEDIATE)
     if not pictures:
         return {}
-    by_name, by_digest, _filenames = recipe_asset_index(hub)
+    by_name, by_digest, _filenames, _names = recipe_asset_index(hub)
     sorted_digests = sorted(by_digest)
 
     verified: dict[int, set[str]] = {}
@@ -471,25 +486,30 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
 
 def recipe_asset_index(
     hub,
-) -> tuple[dict[str, set[int]], dict[str, int], dict[int, str]]:
+) -> tuple[dict[str, set[int]], dict[str, int], dict[int, str], dict[int, str]]:
     """How a recipe's asset names reach shelf models.
 
-    Returns ``(by_name, by_digest, filenames)``. ``by_name`` maps a normalized
+    Returns ``(by_name, by_digest, filenames, names)``. ``by_name`` maps a normalized
     basename to every model a file of that name could be - the row's
     ``filename`` and each copy's basename - so a name two rows share maps to
     both. ``by_digest`` maps a lowercase sha256 to its one model. ``filenames``
     is the same ``model`` read the first map is built from, kept by id rather
     than thrown away: a caller that has resolved a digest needs the name to
     show for it, and re-issuing the identical SELECT to get it is a second scan
-    of this table for nothing.
+    of this table for nothing. ``names`` is the name a person gave each model
+    that has one, off the same read, so a caller can show the shelf's name for
+    a model rather than the file's.
     """
     by_name: dict[str, set[int]] = {}
     filenames: dict[int, str] = {}
+    names: dict[int, str] = {}
     for row in hub.fetchall(
-        "SELECT id, filename FROM model WHERE filename IS NOT NULL"
+        "SELECT id, filename, display_name FROM model WHERE filename IS NOT NULL"
     ):
         by_name.setdefault(normalized_filename(row["filename"]), set()).add(row["id"])
         filenames[row["id"]] = row["filename"]
+        if row["display_name"] and row["display_name"].strip():
+            names[row["id"]] = row["display_name"].strip()
     for row in hub.fetchall("SELECT model_id, relpath FROM model_file"):
         by_name.setdefault(normalized_filename(row["relpath"]), set()).add(
             row["model_id"]
@@ -498,7 +518,44 @@ def recipe_asset_index(
         row["sha256"].lower(): row["id"]
         for row in hub.fetchall("SELECT id, sha256 FROM model WHERE sha256 IS NOT NULL")
     }
-    return by_name, by_digest, filenames
+    return by_name, by_digest, filenames, names
+
+
+def adapter_digest_index(hub) -> tuple[dict[str, set[str]], set[str]]:
+    """Which shelf LoRA a graph's ``lora_name`` names, by case-folded basename.
+
+    Returns ``(by_name, digests)``: ``by_name`` maps a
+    :func:`normalized_filename` (lowercase basename) to the SHA-256 of every
+    shelf model a file of that name could be - the row's ``filename`` and each
+    copy's ``relpath`` - and ``digests`` is every such model's SHA-256. Only
+    the kinds a LoRA loader can load count (an adapter, or a file the shelf has
+    not classified), because a checkpoint sharing a LoRA's name is not the
+    LoRA, and a digest nothing can load is no answer to "which LoRA is this".
+
+    A name two models share maps to both, and the caller treats that as no
+    match: it is the frontend's ``resolveRecipeLoras`` rule and
+    ``_resolve_against_shelf``'s, so the LoRA editor, the save dialog and the
+    run all agree on what the shelf can name (#1478).
+    """
+    kinds = (FILE_ADAPTER, FILE_UNKNOWN)
+    by_name: dict[str, set[str]] = {}
+    digests: set[str] = set()
+    sha_by_id: dict[int, str] = {}
+    for row in hub.fetchall(
+        "SELECT id, filename, sha256 FROM model "
+        "WHERE sha256 IS NOT NULL AND file_kind IN (?, ?)",
+        kinds,
+    ):
+        digest = str(row["sha256"]).lower()
+        sha_by_id[int(row["id"])] = digest
+        digests.add(digest)
+        if row["filename"]:
+            by_name.setdefault(normalized_filename(row["filename"]), set()).add(digest)
+    for row in hub.fetchall("SELECT model_id, relpath FROM model_file"):
+        digest = sha_by_id.get(int(row["model_id"]))
+        if digest is not None and row["relpath"]:
+            by_name.setdefault(normalized_filename(row["relpath"]), set()).add(digest)
+    return by_name, digests
 
 
 def model_name_aliases(hub) -> dict[str, list[str]]:
@@ -611,7 +668,7 @@ _NOT_CONSUMERS = (*SUPPORT_FILE_KINDS, FILE_ADAPTER, FILE_ENGINE)
 
 
 def resolve_recipe_models(
-    hub,
+    hub, index: Optional[tuple] = None
 ) -> tuple[dict[str, set[int]], dict[str, set[int]], set[str]]:
     """Which shelf models each recipe on this hub is proven to have run with.
 
@@ -636,8 +693,11 @@ def resolve_recipe_models(
     both read co-occurrence off the same table and must agree about what a
     recipe names - a second copy of this resolution is how the delete warning
     and the grid would come to disagree about the same pair of files.
+
+    *index* is a :func:`recipe_asset_index` the caller already built in this
+    request, so a route that needs both does not scan the tables twice.
     """
-    by_name, by_digest, _filenames = recipe_asset_index(hub)
+    by_name, by_digest, _filenames, _names = index or recipe_asset_index(hub)
     sorted_digests = sorted(by_digest)
     digests_are_complete = not hub.fetchall(
         "SELECT 1 FROM model WHERE sha256 IS NULL AND file_kind <> ? LIMIT 1",
@@ -808,6 +868,144 @@ def fetch_companions(hub, ids: list[int]) -> dict:
         else:
             result["orphaned"].append(entry(support_id))
     return result
+
+
+def known_base_model(row) -> Optional[str]:
+    """The base model a clone may reason about for one ``model`` row, or ``None``.
+
+    The identified known label (``base_model_canonical``) when it came from the
+    owner, the file's declared metadata or its filename, and otherwise the
+    stored ``base_model`` folded where it folds. A **fuzzy** match is left out:
+    the shelf tags those as guesses, and a guess would widen the companion
+    ladder or flag a LoRA on a claim nobody made.
+    """
+    canonical = row["base_model_canonical"]
+    if canonical and rank(row["base_model_source"]) >= rank(SOURCE_FILENAME):
+        return canonical
+    return fold(row["base_model"]) or row["base_model"]
+
+
+# The widening ladder `propose_companions` climbs, narrowest first. Each answer
+# carries the step that produced it, so a weaker inference reads as weaker.
+VIA_CHECKPOINT = "checkpoint"
+VIA_BASE_MODEL = "base_model"
+VIA_FAMILY = "family"
+
+
+def propose_companions(
+    hub, checkpoint_id: int, index: Optional[tuple] = None
+) -> dict[str, list[dict]]:
+    """The VAEs and text encoders recipes have run beside *checkpoint_id*.
+
+    :func:`fetch_companions` read forwards: the same co-occurrence evidence, asked
+    "what goes with this" rather than "what would deleting this orphan". **It is
+    evidence and nothing else**: there is no table joining a checkpoint's
+    architecture to a VAE's tensor layout, and a VAE carries no ``base_model``
+    to compare, so a support file is proposed only because a recipe on this hub
+    named it beside a checkpoint.
+
+    Per support kind, the first step of the ladder with any answer wins:
+
+    1. ``checkpoint`` - recipes that name this checkpoint;
+    2. ``base_model`` - recipes naming any base model with the same base model
+       label (:func:`known_base_model`: the identified label unless it is a
+       fuzzy guess), when this checkpoint has one;
+    3. ``family`` - recipes naming any base model of the same architecture
+       family (:func:`family_of`), when the label folds to one.
+
+    A checkpoint no recipe names and whose family nothing on the shelf has run
+    with proposes nothing, and the caller is expected to say so. A support file a
+    recipe reached only through an ambiguous name is not proposed from that
+    recipe: it may be another row's file. Nor is one with no filename, which a
+    clone has nothing to write for.
+
+    Args:
+        hub: The open hub database.
+        checkpoint_id: The ``model.id`` the clone will load instead.
+        index: A :func:`recipe_asset_index` already built in this request.
+
+    Returns:
+        ``{"vae": [...], "text_encoder": [...]}``, each entry ``{"id",
+        "filename", "display_name", "family", "via", "recipes"}``, most recipes
+        first. ``family`` is the file's own layout (``clip_l``, ``t5_xxl``), which
+        is how a caller tells two text encoders apart. Both lists empty for an
+        unknown id.
+    """
+    models = {
+        int(row["id"]): row
+        for row in hub.fetchall(
+            "SELECT id, file_kind, base_model, base_model_canonical, "
+            "base_model_source, filename, display_name, family FROM model"
+        )
+    }
+    proposals: dict[str, list[dict]] = {kind: [] for kind in SUPPORT_FILE_KINDS}
+    target = models.get(checkpoint_id)
+    if target is None:
+        return proposals
+    recipe_models, ambiguous, _unresolved = resolve_recipe_models(hub, index)
+
+    consumers = {
+        model_id: row
+        for model_id, row in models.items()
+        if row["file_kind"] not in _NOT_CONSUMERS
+    }
+    ladder: list[tuple[str, set[int]]] = [(VIA_CHECKPOINT, {checkpoint_id})]
+    label = known_base_model(target)
+    if label:
+        ladder.append(
+            (
+                VIA_BASE_MODEL,
+                {
+                    model_id
+                    for model_id, row in consumers.items()
+                    if known_base_model(row) == label
+                },
+            )
+        )
+    family = family_of(label)
+    if family:
+        ladder.append(
+            (
+                VIA_FAMILY,
+                {
+                    model_id
+                    for model_id, row in consumers.items()
+                    if family_of(known_base_model(row)) == family
+                },
+            )
+        )
+
+    for kind in SUPPORT_FILE_KINDS:
+        for via, anchors in ladder:
+            counts: dict[int, int] = {}
+            for recipe, members in recipe_models.items():
+                if not members & anchors:
+                    continue
+                for member in members - ambiguous.get(recipe, set()):
+                    row = models.get(member)
+                    if row is not None and row["file_kind"] == kind and row["filename"]:
+                        counts[member] = counts.get(member, 0) + 1
+            if not counts:
+                continue
+            proposals[kind] = [
+                {
+                    "id": model_id,
+                    "filename": models[model_id]["filename"],
+                    "display_name": models[model_id]["display_name"],
+                    "family": models[model_id]["family"],
+                    "via": via,
+                    "recipes": count,
+                }
+                for model_id, count in sorted(
+                    counts.items(),
+                    key=lambda item: (
+                        -item[1],
+                        (models[item[0]]["filename"] or "").lower(),
+                    ),
+                )
+            ]
+            break
+    return proposals
 
 
 # How many of a combination's pictures the grid puts on a card's cover.
@@ -1145,10 +1343,21 @@ def update_models(hub, ids: list[int], changes: dict) -> list[int]:
         ]
         if existing:
             if columns_only:
-                columns = ", ".join(f"{field} = ?" for field in columns_only)
+                assignments = dict(columns_only)
+                if "base_model" in assignments:
+                    # In the same UPDATE, or the shelf keeps grouping a corrected
+                    # row under the scanner's old guess. `user` outranks every
+                    # scan, so the answer sticks - including a cleared one,
+                    # which is the owner saying "none of these", not a blank
+                    # for the next scan to guess into.
+                    assignments["base_model_canonical"] = fold(
+                        assignments["base_model"]
+                    )
+                    assignments["base_model_source"] = SOURCE_USER
+                columns = ", ".join(f"{field} = ?" for field in assignments)
                 conn.execute(
                     f"UPDATE model SET {columns} WHERE id IN ({placeholders})",
-                    tuple(columns_only.values()) + tuple(ids),
+                    tuple(assignments.values()) + tuple(ids),
                 )
             # Correcting what a file IS drops the capabilities we guessed it
             # served - unless the same call states them, which is the owner

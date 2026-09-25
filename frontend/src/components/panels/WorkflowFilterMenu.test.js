@@ -213,11 +213,13 @@ describe("the Workflows filter panel", () => {
   it("counts each pick-one option over the whole grid, not the filtered one", async () => {
     const { wrapper, store } = await mountMenu();
     expect(optionLabels(wrapper, "Type")).toEqual([
+      ["All", "3"],
       ["Text to Image", "1"],
       ["Upscale", "1"],
       ["Image to Image", "1"],
     ]);
     expect(optionLabels(wrapper, "Source")).toEqual([
+      ["Any", "3"],
       ["Imported file", "1"],
       ["Found in your pictures", "2"],
     ]);
@@ -225,8 +227,9 @@ describe("the Workflows filter panel", () => {
     store.setFilters({ source: "imported" });
     await flushPromises();
     // Still every type, still counted over all three cards.
-    expect(optionLabels(wrapper, "Type")).toHaveLength(3);
+    expect(optionLabels(wrapper, "Type")).toHaveLength(4);
     expect(optionLabels(wrapper, "Source")).toEqual([
+      ["Any", "3"],
       ["Imported file", "1"],
       ["Found in your pictures", "2"],
     ]);
@@ -281,11 +284,12 @@ describe("the Workflows filter panel", () => {
   it("offers the base models as checkpoints, and narrows to the one picked", async () => {
     const { wrapper, store } = await mountMenu();
     expect(optionLabels(wrapper, "Checkpoint")).toEqual([
+      ["Any", "3"],
       ["realvisXL_v5.safetensors", "2"],
     ]);
 
     await section(wrapper, "Checkpoint")
-      .findAll(".optrow")[0]
+      .findAll(".optrow")[1]
       .trigger("click");
     expect(store.filteredCards.map((entry) => entry.name)).toEqual([
       "Cinematic portrait",

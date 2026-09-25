@@ -52,6 +52,8 @@ const dissolveStack = vi.fn();
 const duplicateWorkflow = vi.fn();
 const deleteWorkflowFile = vi.fn();
 const exportWorkflow = vi.fn();
+const readModelSwap = vi.fn();
+const cloneWorkflowWithModels = vi.fn();
 vi.mock("../../api/workflows", () => ({
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   getWorkflowCard: (...args) => getWorkflowCard(...args),
@@ -70,6 +72,8 @@ vi.mock("../../api/workflows", () => ({
   duplicateWorkflow: (...args) => duplicateWorkflow(...args),
   deleteWorkflowFile: (...args) => deleteWorkflowFile(...args),
   exportWorkflow: (...args) => exportWorkflow(...args),
+  readModelSwap: (...args) => readModelSwap(...args),
+  cloneWorkflowWithModels: (...args) => cloneWorkflowWithModels(...args),
 }));
 const listImportFolders = vi.fn();
 vi.mock("../../api/folders", () => ({
@@ -86,6 +90,7 @@ vi.mock("../../api/comfyui", () => ({
 import WorkflowCard from "../widgets/WorkflowCard.vue";
 import WorkflowsView from "./WorkflowsView.vue";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import { useFilterStore } from "../../stores/useFilterStore";
@@ -1906,6 +1911,26 @@ describe("the verbs the bar fires", () => {
   const bar = (wrapper) =>
     wrapper.findComponent({ name: "WorkflowSelectionBar" });
 
+  it("Run on a stack selected whole opens the popup on its cover", async () => {
+    // `select` with `whole` is what a click on a stack card does: the cover
+    // and both members, three keys for the one card on screen.
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.select("b", { whole: true });
+    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
+    // With the members fetched (the panel has been open), every key resolves
+    // to a card, so a gate counting cards sees three and runs nothing.
+    store.members = { b: [card("b"), card("b1"), card("b2")] };
+    expect(store.selectedCards).toHaveLength(3);
+
+    await bar(wrapper).vm.$emit("run");
+    await flush();
+    expect(useRunDialogStore().source).toMatchObject({
+      kind: "card",
+      workflowKey: "b",
+    });
+  });
+
   it("Delete asks first, and deletes nothing when the answer is no", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
@@ -1958,6 +1983,65 @@ describe("the verbs the bar fires", () => {
   });
 });
 
+describe("Clone with new models", () => {
+  const bar = (wrapper) =>
+    wrapper.findComponent({ name: "WorkflowSelectionBar" });
+
+  it("opens on the selected card and selects the clone it made", async () => {
+    const checkpoint = (id, filename) => ({
+      id,
+      filename,
+      display_name: null,
+      base_model: null,
+      file_kind: "checkpoint",
+    });
+    readModelSwap.mockResolvedValue({
+      slots: [
+        {
+          filename: "old.safetensors",
+          kind: "checkpoint",
+          model: checkpoint(1, "old.safetensors"),
+        },
+      ],
+      checkpoints: [
+        checkpoint(1, "old.safetensors"),
+        checkpoint(2, "new.safetensors"),
+      ],
+      vaes: [],
+      text_encoders: [],
+      proposals: {},
+      flags: [],
+    });
+    cloneWorkflowWithModels.mockResolvedValue({
+      name: "a (new models).json",
+      workflow_key: "c",
+      swapped: [],
+      unswapped: [],
+      verified: false,
+    });
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.selectRange(["a"]);
+
+    await bar(wrapper).vm.$emit("clone-with-models");
+    await flush();
+    expect(readModelSwap).toHaveBeenCalledWith("a");
+    await wrapper.find(".app-dialog select").setValue("2");
+    await flush();
+    const clone = wrapper
+      .findAll(".app-dialog__footer button")
+      .find((b) => b.text().includes("Clone"));
+    await clone.trigger("click");
+    await flush();
+
+    expect(cloneWorkflowWithModels).toHaveBeenCalledWith("a", {
+      name: "a — new.safetensors",
+      swaps: { "old.safetensors": "new.safetensors" },
+    });
+    expect(store.selectedKeys).toEqual(["c"]);
+  });
+});
+
 // ── What the UX review asked for (#1455) ──────────────────────────────────
 describe("the keyboard can reach everything the pointer can", () => {
   const bar = (wrapper) =>
@@ -1988,6 +2072,18 @@ describe("the keyboard can reach everything the pointer can", () => {
       name: "all-pictures",
       query: { overlay: "7", from: "/workflows" },
     });
+  });
+
+  it("opens a picture the Recipes tab asks for, and clears the ask", async () => {
+    await grid();
+    const store = useWorkflowsStore();
+    store.requestOpenPicture(55);
+    await flush();
+    expect(push).toHaveBeenCalledWith({
+      name: "all-pictures",
+      query: { overlay: "55", from: "/workflows" },
+    });
+    expect(store.pictureToOpen).toBe(null);
   });
 
   it("hands focus back to the cursor row when the menu closes", async () => {

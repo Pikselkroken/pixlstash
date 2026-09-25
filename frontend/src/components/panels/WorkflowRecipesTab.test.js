@@ -125,7 +125,7 @@ describe("WorkflowRecipesTab", () => {
       "Harbour fog",
     ]);
     expect(wrapper.find(".wfrt-sub").text()).toBe(
-      "3 saved recipes · runs on any of its 6 workflows",
+      "3 saved · runs on any of its 6 workflows",
     );
     // What the card credits and what it changed, on one line.
     expect(wrapper.findAll(".wfrt-facts")[0].text()).toBe("31 pictures · steps 12");
@@ -137,7 +137,9 @@ describe("WorkflowRecipesTab", () => {
   it("leaves the stack clause out when the card is not a stack", async () => {
     const wrapper = render({ stackSize: 1 });
     await flushPromises();
-    expect(wrapper.find(".wfrt-sub").text()).toBe("3 saved recipes");
+    expect(wrapper.find(".wfrt-sub").text()).toBe(
+      "3 saved",
+    );
   });
 
   it("writes the whole new order when a recipe is moved by keyboard", async () => {
@@ -222,14 +224,6 @@ describe("WorkflowRecipesTab", () => {
     expect(namesOf(wrapper)[0]).toBe("Tram, rewritten");
   });
 
-  it("points at the gesture that fills it", async () => {
-    listSavedRecipes.mockResolvedValue([]);
-    const wrapper = render();
-    await flushPromises();
-    expect(wrapper.find(".wfrt-hint").text()).toContain("Save as recipe");
-    expect(wrapper.find(".wfrt-sub").text()).toContain("0 saved recipes");
-  });
-
   // ── The looks the pictures already carry ────────────────────────────────
   //
   // The tab shipped listing only what somebody had pressed Save on, so it was
@@ -243,6 +237,17 @@ describe("WorkflowRecipesTab", () => {
     cover_picture_id: 88,
   };
 
+  it("offers no help text, saved recipes or not", async () => {
+    listSavedRecipes.mockResolvedValue([]);
+    listUsedLooks.mockResolvedValue([LOOK]);
+    const wrapper = render();
+    await flushPromises();
+    expect(wrapper.find(".wfrt-hint").exists()).toBe(false);
+    expect(wrapper.find(".wfrt-sub").text()).toBe(
+      "1 recipe from your pictures · runs on any of its 6 workflows",
+    );
+  });
+
   it("lists the looks the pictures carry when nothing is saved", async () => {
     listSavedRecipes.mockResolvedValue([]);
     listUsedLooks.mockResolvedValue([LOOK]);
@@ -251,10 +256,10 @@ describe("WorkflowRecipesTab", () => {
 
     expect(listUsedLooks).toHaveBeenCalledWith([KEY]);
     // Not the empty sentence: a library with pictures has looks to show.
-    expect(wrapper.text()).not.toContain("No looks here yet");
+    expect(wrapper.text()).not.toContain("No recipes here yet");
     expect(wrapper.text()).toContain("a look nobody kept");
     expect(wrapper.text()).toContain("12 pictures");
-    expect(wrapper.text()).toContain("Used in your pictures");
+    expect(wrapper.text()).toContain("From your pictures");
   });
 
   it("says so only when there is neither a recipe nor a look", async () => {
@@ -262,11 +267,34 @@ describe("WorkflowRecipesTab", () => {
     listUsedLooks.mockResolvedValue([]);
     const wrapper = render();
     await flushPromises();
-    expect(wrapper.text()).toContain("No looks here yet");
+    expect(wrapper.text()).toContain("No recipes here yet");
     // Never "nothing has been made with this workflow": a picture only shows
     // up once its ComfyUI metadata has been read, so an unread stack is not
     // an empty one.
     expect(wrapper.text()).not.toContain("Nothing has been made");
+    // An answered read of nothing is a count, and says 0.
+    expect(wrapper.find(".wfrt-sub").text()).toBe(
+      "0 recipes from your pictures · runs on any of its 6 workflows",
+    );
+  });
+
+  it("counts nothing before a read has answered, or when it failed", async () => {
+    let answer;
+    listSavedRecipes.mockImplementation(
+      () => new Promise((resolve) => (answer = resolve)),
+    );
+    const wrapper = render({ stackSize: 1 });
+    await flushPromises();
+    expect(wrapper.text()).toContain("Reading your recipes");
+    expect(wrapper.find(".wfrt-sub").text()).toBe("");
+    answer([]);
+    await flushPromises();
+    expect(wrapper.find(".wfrt-sub").text()).toBe("0 recipes from your pictures");
+
+    listSavedRecipes.mockRejectedValue(new Error("boom"));
+    useWorkflowsStore().notedRecipesChanged();
+    await flushPromises();
+    expect(wrapper.find(".wfrt-sub").text()).toBe("");
   });
 
   it("keeps an unsaved look from its cover picture's own recipe", async () => {
@@ -276,7 +304,7 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     await wrapper
       .findAll("button")
-      .find((b) => b.text().includes("Save…"))
+      .find((b) => b.text().includes("Clone…"))
       .trigger("click");
     await flushPromises();
 
@@ -304,10 +332,27 @@ describe("WorkflowRecipesTab", () => {
 
     // No `saved_recipe_id` exists for a look, so the run's source is the
     // picture: "run what made this" is exactly what the look is.
+    // And the row's prompt as the box's editable starting text: the picture's
+    // re-read can come back without one.
     expect(openRun).toHaveBeenCalledWith({
       kind: "picture",
       pictureIds: [88],
+      prompt: "a look nobody kept",
     });
+  });
+
+  it("opens a recipe's picture from its thumbnail, in both lists", async () => {
+    listUsedLooks.mockResolvedValue([LOOK]);
+    const wrapper = render();
+    await flushPromises();
+    const store = useWorkflowsStore();
+    const thumbs = wrapper.findAll(".wfrt-thumb-btn");
+    // Three saved (source picture 7) and one used (cover 88).
+    expect(thumbs).toHaveLength(4);
+    await thumbs[0].trigger("click");
+    expect(store.pictureToOpen).toBe(7);
+    await thumbs[3].trigger("click");
+    expect(store.pictureToOpen).toBe(88);
   });
 
   it("asks about every selected workflow at once", async () => {
@@ -449,7 +494,7 @@ describe("WorkflowRecipesTab", () => {
   it("saves an unsaved look under the look's own key, not the re-read's", async () => {
     // The look was keyed on the stored columns; the live extraction can
     // differ. Saving the re-read's version makes a recipe whose key is not
-    // this look's, so the look stays in the used half and the new recipe is
+    // this look's, so the look stays unmarked and the new recipe is
     // credited 0 — the one thing both halves promise cannot happen.
     listSavedRecipes.mockResolvedValue([]);
     listUsedLooks.mockResolvedValue([LOOK]);
@@ -467,7 +512,7 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     await wrapper
       .findAll("button")
-      .find((b) => b.text().includes("Save…"))
+      .find((b) => b.text().includes("Clone…"))
       .trigger("click");
     await flushPromises();
 
@@ -489,7 +534,7 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     await wrapper
       .findAll("button")
-      .find((b) => b.text().includes("Save…"))
+      .find((b) => b.text().includes("Clone…"))
       .trigger("click");
     await flushPromises();
 
@@ -501,20 +546,82 @@ describe("WorkflowRecipesTab", () => {
     expect(useNoticeStore().notices.map((n) => n.level)).toContain("error");
   });
 
-  it("renders a used look in the used list, not among the kept", async () => {
-    listSavedRecipes.mockResolvedValue([recipe(1, "Rainy tram platform")]);
-    listUsedLooks.mockResolvedValue([LOOK]);
+  it("lists saved recipes above the used ones, and marks a cloned one in place", async () => {
+    const kept = recipe(1, "Rainy tram platform", {
+      prompt: "a kept look",
+      loras: [{ filename: "mira_v2.safetensors", strength: 0.85 }],
+    });
+    listSavedRecipes.mockResolvedValue([kept]);
+    listUsedLooks.mockResolvedValue([
+      { ...LOOK, prompt: "a kept look", saved: true },
+      LOOK,
+    ]);
     const wrapper = render();
     await flushPromises();
 
+    const labels = wrapper.findAll(".section-label").map((l) => l.text());
+    expect(labels).toEqual(["Saved", "From your pictures"]);
     const lists = wrapper.findAll(".wfrt-list");
     expect(lists).toHaveLength(2);
     expect(lists[0].text()).toContain("Rainy tram platform");
     expect(lists[0].text()).not.toContain("a look nobody kept");
-    expect(lists[1].text()).toContain("a look nobody kept");
-    expect(lists[1].text()).toContain("Not kept yet");
-    // And the header counts both halves, not just the kept one.
-    expect(wrapper.find(".wfrt-sub").text()).toContain("1 saved recipe");
-    expect(wrapper.find(".wfrt-sub").text()).toContain("1 more used");
+
+    // The cloned one is still in the list, marked Saved, with no Clone…;
+    // the other one offers it.
+    const [markedRow, plainRow] = lists[1].findAll(".wfrt-card");
+    expect(markedRow.text()).toContain("a kept look");
+    expect(markedRow.find(".wfrt-marked").exists()).toBe(true);
+    expect(markedRow.text()).not.toContain("Clone…");
+    expect(plainRow.find(".wfrt-marked").exists()).toBe(false);
+    expect(plainRow.text()).toContain("Clone…");
+    expect(wrapper.find(".wfrt-sub").text()).toContain(
+      "1 saved · 2 recipes from your pictures",
+    );
+  });
+
+  it("re-reads the looks after a removal and shows the server's mark", async () => {
+    deleteSavedRecipe.mockResolvedValue({ deleted: 1 });
+    const kept = recipe(1, "Rainy tram platform", { prompt: "a kept look" });
+    listSavedRecipes.mockResolvedValue([kept]);
+    listUsedLooks
+      .mockResolvedValueOnce([{ ...LOOK, prompt: "a kept look", saved: true }])
+      .mockResolvedValueOnce([{ ...LOOK, prompt: "a kept look", saved: false }]);
+    const wrapper = render();
+    await flushPromises();
+    expect(wrapper.find(".wfrt-marked").exists()).toBe(true);
+
+    // Rename, Export…, Delete.
+    await wrapper.findAll(".ctx-item")[2].trigger("click");
+    await flushPromises();
+
+    expect(deleteSavedRecipe).toHaveBeenCalledWith(1);
+    expect(listUsedLooks).toHaveBeenCalledTimes(2);
+    // Only the looks were read again, not the whole tab.
+    expect(listSavedRecipes).toHaveBeenCalledTimes(1);
+    expect(wrapper.text()).toContain("a kept look");
+    expect(wrapper.find(".wfrt-marked").exists()).toBe(false);
+    expect(wrapper.text()).toContain("Clone…");
+  });
+
+  it("keeps a removal that lands late off another card's list", async () => {
+    let finish;
+    deleteSavedRecipe.mockImplementation(
+      () => new Promise((resolve) => (finish = resolve)),
+    );
+    const wrapper = render();
+    await flushPromises();
+    await wrapper.findAll(".ctx-item")[2].trigger("click"); // first card's Remove
+    await flushPromises();
+
+    const other = [recipe(1, "Another card's recipe")];
+    listSavedRecipes.mockResolvedValue(other);
+    await wrapper.setProps({ workflowKeys: ["b".repeat(64)] });
+    await flushPromises();
+    const reads = listUsedLooks.mock.calls.length;
+
+    finish({ deleted: 1 });
+    await flushPromises();
+    expect(namesOf(wrapper)).toEqual(["Another card's recipe"]);
+    expect(listUsedLooks).toHaveBeenCalledTimes(reads);
   });
 });

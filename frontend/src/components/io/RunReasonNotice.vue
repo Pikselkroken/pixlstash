@@ -17,6 +17,7 @@
       <ul v-if="read.files.length" class="rrn-files">
         <li v-for="file in read.files" :key="file.file">
           <span class="rrn-mono">{{ file.file }}</span>
+          <template v-if="file.reason"> — {{ file.reason }}</template>
           <template v-if="file.folder">
             , expected in <span class="rrn-mono">models/{{ file.folder }}</span>
           </template>
@@ -55,6 +56,16 @@
         >
           Run without the LoRA
         </AppButton>
+        <!-- A recipe LoRA with no loader to go in (#1478): adding one is a
+             workflow edit, so the fix is the dialog that makes it, on the
+             card this notice is about. -->
+        <AppButton
+          v-else-if="read.fix === FIX_EDIT_LORAS"
+          size="sm"
+          @click="emit('edit-loras', reason.workflowKey || '')"
+        >
+          Edit LoRAs…
+        </AppButton>
       </div>
     </div>
   </div>
@@ -78,6 +89,7 @@ import { VIcon } from "vuetify/components";
 
 import {
   FIX_DROP_LORA,
+  FIX_EDIT_LORAS,
   FIX_SETTINGS,
   readReason,
 } from "../../utils/runReasons";
@@ -95,13 +107,15 @@ const props = defineProps({
   busy: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["settings", "retry", "drop-lora"]);
+const emit = defineEmits(["settings", "retry", "drop-lora", "edit-loras"]);
 
 const read = computed(() => readReason(props.reason));
 
 /** Whether anything here can actually be pressed; see the template. */
 const hasAction = computed(
-  () => read.value.retry || read.value.fix === FIX_SETTINGS || read.value.fix === FIX_DROP_LORA,
+  () =>
+    read.value.retry ||
+    [FIX_SETTINGS, FIX_DROP_LORA, FIX_EDIT_LORAS].includes(read.value.fix),
 );
 </script>
 
