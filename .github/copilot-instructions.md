@@ -91,15 +91,28 @@ proves something, say so in a line and spend the human's attention elsewhere.
 
 Use the architecture documents according to the scope of the task.
 
-**Read them by section, never end to end.** They are reference manuals:
-`backend_architecture.md` is ~82k tokens, `frontend_architecture.md` ~53k,
-`integration_architecture.md` ~24k. Reading all three costs ~160k tokens before
-you have looked at a line of code, almost all of it about subsystems you are not
-touching. Read the Table of Contents at the top, then only the sections covering
-the code you are about to change plus any section they point you to, and widen
-only when that turns out to be insufficient. `grep -n '^## ' docs/backend_architecture.md` gives the section map; `sed -n 'START,ENDp'`
-reads one section. A whole-file read is a mistake unless you are auditing the
-document itself.
+**Read them by section, never end to end.** They are reference manuals, each
+far larger than any one task needs; reading all three before a line of code
+spends a large share of the context window on subsystems you are not touching.
+No size is written here because a written figure goes stale: measure it with
+`wc -c docs/*_architecture.md` (roughly 3.5 characters per token). Read the
+Table of Contents at the top, then only the sections covering the code you are
+about to change plus any section they point you to, and widen only when that
+turns out to be insufficient. `grep -n '^## ' docs/backend_architecture.md`
+gives the section map (`'^### '` for subsections); `sed -n 'START,ENDp'` reads
+one section. A whole-file read is a mistake unless you are auditing the document
+itself.
+
+**File new material under its topic, never under its release.** A feature edits
+the section that covers its subsystem, adding a numbered subsection there when
+it needs one. Do not add a `## N. <feature> (vX.Y Phase Z)` heading: a reader
+arrives with a topic, finds it in the Table of Contents, reads that section and
+believes they are done, so a chronological section is the half they never read.
+A subsystem with no section yet gets one named for the subsystem, and the
+Table of Contents lists its subsections.
+`tests/test_architecture_guardrails.py::test_architecture_docs_are_filed_by_topic`
+fails the build on a release-named `##` section and on a Table of Contents that
+has drifted from the headings.
 
 1. Frontend tasks: the relevant sections of `/docs/frontend_architecture.md`.
 2. Backend tasks: the relevant sections of `/docs/backend_architecture.md`.

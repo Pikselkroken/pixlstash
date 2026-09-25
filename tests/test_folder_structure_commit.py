@@ -203,7 +203,7 @@ def test_the_accepted_mapping_actually_attaches_the_pictures(owner_env):
 
 
 def test_recommitting_a_completed_read_is_refused_and_creates_nothing_twice(owner_env):
-    """The one-shot invariant integration_architecture.md §22 documents.
+    """The one-shot invariant integration_architecture.md §20.2 documents.
 
     Not vacuous: without the `committed` guard this would create a second
     "2026" Project and a second "kai" Character, so the count assertions
@@ -263,7 +263,7 @@ def test_a_malformed_commit_does_not_burn_the_read_s_one_commit(owner_env):
 
 
 def test_committing_a_path_already_registered_and_scanned_is_refused(owner_env):
-    """§25's reuse-vs-refuse rule: a folder that already completed a scan
+    """Backend §24.2's reuse-vs-refuse rule: a folder that already completed a scan
     (an unrelated reference folder, or an earlier commit of the same path
     from a since-cancelled read run again) must not be silently reused -
     that would apply the new mapping to whatever is indexed already, not to

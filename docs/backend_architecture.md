@@ -23,7 +23,7 @@
 10. [Services Layer](#10-services-layer)
 11. [Utility Modules](#11-utility-modules)
 12. [Alembic Migrations](#12-alembic-migrations)
-13. [Storage Architecture](#13-storage-architecture)
+13. [Storage Architecture](#13-storage-architecture) — incl. [Image vault](#image-vault), [Database](#database), [Stored path containment (#776)](#stored-path-containment-776), [The shelf's five verbs (shelf plan F3)](#the-shelfs-five-verbs-shelf-plan-f3), [The built-in model folder: declared, never scanned](#the-built-in-model-folder-declared-never-scanned), [The other two roots: InsightFace packs and the HuggingFace cache](#the-other-two-roots-insightface-packs-and-the-huggingface-cache), [What a cached model is FOR: the feature classifier and model_capability](#what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [The managed model store (shelf plan B7)](#the-managed-model-store-shelf-plan-b7), [Add file: one loose model onto the shelf (shelf plan F6)](#add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [A trained model's previews: <stem>_samples/](#a-trained-models-previews-stem_samples), [Delete: models off the shelf and off the disk (#933)](#delete-models-off-the-shelf-and-off-the-disk-933), [Keep one copy: merging duplicate models (#1439)](#keep-one-copy-merging-duplicate-models-1439), [Hub and library identity](#hub-and-library-identity), [Vector storage](#vector-storage), [Caches](#caches), [The library layout](#the-library-layout)
 14. [Server Lifecycle](#14-server-lifecycle)
 15. [Frontend Integration](#15-frontend-integration)
 16. [Authentication & Authorization](#16-authentication--authorization)
@@ -31,13 +31,10 @@
 18. [Snapshots & Restore](#18-snapshots--restore)
 19. [Mermaid Diagrams](#19-mermaid-diagrams)
 20. [Architectural Patterns](#20-architectural-patterns)
-21. [Operation Log](#21-operation-log--undoredo-and-the-audit-trail-dam-12)
-22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection-v19-dedup--stacks)
-23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags-v19-lane-f)
-24. [The folder-structure read](#24-the-folder-structure-read-v111-phase-2)
-25. [The folder-structure commit](#25-the-folder-structure-commit-v111-phase-3)
-26. [The layout and the move engine](#26-the-layout-and-the-move-engine-v111-phase-4b)
-27. [Reconciling moves made outside PixlStash](#27-reconciling-moves-made-outside-pixlstash-v111-phase-5)
+21. [Operation Log](#21-operation-log--undoredo-and-the-audit-trail)
+22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
+23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
+24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
 
 ---
 
@@ -487,7 +484,7 @@ background job behind it — "Look again" is this same GET. `owner_only` for the
 narrowed answer would either leak that out-of-scope pictures exist or state a
 wrong total. Findings and the reasoning behind each check live in
 [services/library_insights_service.py](../pixlstash/services/library_insights_service.py);
-the contract is in `docs/integration_architecture.md` §20.
+the contract is in `docs/integration_architecture.md` §21.
 
 ### `guest_scores.py`, `share.py`
 Public guest scoring and shared-link endpoints.
@@ -1642,7 +1639,7 @@ This rule is enforced by **`tests/test_architecture_guardrails.py::test_services
 | [utils/watermark.py](../pixlstash/utils/watermark.py) | Seeded watermark rendering + cache |
 | [utils/caption_file_utils.py](../pixlstash/utils/caption_file_utils.py) | Sidecar `.txt` caption I/O |
 | [utils/face_tags.py](../pixlstash/utils/face_tags.py) | Face-derived tag helpers |
-| [utils/library_layout.py](../pixlstash/utils/library_layout.py) | The library layout model — `render` / `is_true` (§13) |
+| [utils/library_layout.py](../pixlstash/utils/library_layout.py) | The library layout model — `render` / `is_true` (§24.3) |
 | [utils/library_roots.py](../pixlstash/utils/library_roots.py) | The directories this installation reads or writes as library content, and the two rules that read them: the folder export may write inside none of them (#1206 item 1); a watch or reference folder may not overlap a library's folder **or another watch or reference folder** — `refuse_overlapping_folder`, two-way, `exclude=` for the caller's own row — and `LibraryRegistry.create`/`attach`/`relocate` (so `POST /libraries` and the CLI alike) refuse a library overlapping a watch or reference folder of any registered library, under `FOLDER_OVERLAP_LOCK`, which the watch and reference folder writes also hold from check to commit (#1223) |
 | [utils/path_mapper.py](../pixlstash/utils/path_mapper.py) | Host↔container path translation |
 | [utils/host_path_utils.py](../pixlstash/utils/host_path_utils.py) | Host-aware path resolution |
@@ -4540,71 +4537,10 @@ this record and needs its own independent adversarial sign-off.
 | Anomaly regions | In-memory bounded LRU | Cleared on library switch |
 | Models | `~/.cache/huggingface/` + VRAM | Lazy load, idle unload |
 
-### The library layout (v1.11 Phase 4a)
+### The library layout
 
-`utils/library_layout.py` is the model of **where a picture belongs and whether
-it still belongs there**. Model only: no move engine, no file writes, no UI —
-see Phase 4b for those. The rule it implements, and its case table, are in
-`design/1.11-existing-library/DECISIONS.md`; the module docstring carries the
-detail, so this section is the map rather than a second copy of it.
-
-A `Layout` is an ordered list of segments, one folder level each. A segment
-holds one or more `Facet`s (`PROJECT`, `PERSON`, `SET`, `TAG`) and the first the
-picture has a value for wins. A segment nothing fills becomes `GLOBAL_FOLDER`
-(`Global`) **when a later segment is filled**, and is dropped when none is: under
-`Project` then `Person or Set` a picture with only a person is `Global/Mira` and
-one with only a project is `Nordvik`, never `Nordvik/Global`. That keeps the
-tree two deep instead of five while putting every person folder at one depth,
-and — the reason `Global` is in the layout's *language* rather than being
-decoration — it gives an unprojected picture a folder to move **out of** when a
-project arrives (#1161). A new library starts on `DEFAULT_LAYOUT`, `Project`
-then `Person or Set`.
-
-`_walk` therefore reads `Global` at every segment whatever the picture is, and
-treats it as the picture's own only where nothing fills that segment. Reading it
-only where the picture has nothing would make it unparseable in exactly the case
-that has to move. The cost, stated once: a folder of the owner's own literally
-named `Global` at a layout level is adopted by the layout instead of being the
-permanent override an unreadable name would be. A picture that fills no segment
-at all still answers `layout.unfiled`, not `Global`, which is what keeps the
-migration's unfiled sweep an opt-in rather than something `Global` does anyway.
-
-| Function | Answers |
-|---|---|
-| `render(facets, layout)` | The folder the picture should be in, relative to the library root. An unfilled segment with a filled one after it becomes `Global`; trailing ones are dropped. A picture nothing files goes to `layout.unfiled`, defaulting to `Unassigned` — never the library root, which is where an unmigrated flat library lives. |
-| `is_true(folder, facets, layout, known_names)` | Whether the folder it is *actually* in still describes it. Takes the **folder**, not the file path: guessing which trailing component was a file name would silently flip the answer for a path written with a trailing separator. A path carrying `.` or `..` is refused whole rather than normalised — tidying one would fabricate a level the path does not have. |
-
-The release rests on `is_true`, and on one property of it: **a path that does
-not parse against the layout can never be false.** A file at the library root
-matches no segment, so an existing flat library needs no migration; a file the
-owner dragged into a folder of their own contradicts nothing, so it stays there
-permanently and the override needs no setting.
-
-The three properties a reader is most likely to get wrong:
-
-- **Truth is membership, not equality with `render`.** The folder `Mira/` says
-  "this is a Mira picture" and stays true while Mira is one of the picture's
-  people, whoever `render` would pick today. That is what makes adding a second
-  project or person move nothing.
-- **`known_names` is not optional.** Only the library's whole vocabulary
-  separates *this folder names a project the picture is no longer in* (false, it
-  moves) from *this folder names nothing PixlStash knows* (unparseable, it never
-  moves). Deleting an entity takes its name out of the language and freezes the
-  folders named after it.
-- **Reading stops at the first component the vocabulary cannot read**, and it is
-  not positional. Everything from that component down is the owner's own, so
-  `2024 Shoots/Mira/2026-08` is judged on its first two components while
-  `Holiday/2024 Shoots` is judged on none of them.
-
-Every name reaching a path goes through `folder_name()` — including
-`Layout.unfiled`, which is validated against it on construction because it is
-the one field a settings screen will let a user type and it reaches `render`'s
-output verbatim. It is a many-to-one map (`A/B`, `A:B` and `A_B` all become
-`A_B`), which is the collision the filesystem would force anyway; comparison is
-additionally case-folded and NFC-normalised for Windows and macOS. Every
-ambiguity here resolves towards *not* moving a file.
-
-`tests/test_library_layout.py` covers it, unparseable-path cases first.
+Where a picture belongs on disk, and the engine that moves files to match, is
+§24.3 and §24.4.
 
 ---
 
@@ -5007,7 +4943,7 @@ The one accepted cost is rot in the other direction: if a listed route's module 
 - [`reference_folders.py`](../pixlstash/routes/reference_folders.py) — create / update / delete reference folders (`folder`, `host_path`), `GET /reference-folders/detect-sidecars` (walks a client-supplied path), sidecar write-back, `restart_server`, `open_reference_folder`.
 - [`import_folders.py`](../pixlstash/routes/import_folders.py) — create / update / delete import folders.
 - [`filesystem.py`](../pixlstash/routes/filesystem.py) — `GET /filesystem/browse` (enumerates a client-supplied host path).
-- [`folder_structure.py`](../pixlstash/routes/folder_structure.py) — the v1.11 folder-structure read and commit: `POST /folder-structure/read` walks a client-supplied host path and decodes pictures out of it, `GET /folder-structure/read/status` carries the resulting folder map, `DELETE /folder-structure/read` stops it, and writes nothing (§24); `POST /folder-structure/commit` registers the same root as a reference folder and creates the accepted projects/people/sets/tags, `GET /folder-structure/commit/status` carries its progress — the one place any of it is written, and still zero files moved (§25).
+- [`folder_structure.py`](../pixlstash/routes/folder_structure.py) — the v1.11 folder-structure read and commit: `POST /folder-structure/read` walks a client-supplied host path and decodes pictures out of it, `GET /folder-structure/read/status` carries the resulting folder map, `DELETE /folder-structure/read` stops it, and writes nothing (§24.1); `POST /folder-structure/commit` registers the same root as a reference folder and creates the accepted projects/people/sets/tags, `GET /folder-structure/commit/status` carries its progress — the one place any of it is written, and still zero files moved (§24.2).
 
 **Current gate.** Every one of these is gated with `require_user_id` (authentication only); none uses `require_unscoped_owner`, so they do not themselves verify that the caller is *unscoped*. A plain `ALL` token leaves `token_scope = None` (the middleware builds a `TokenScope` only for non-`ALL` tokens — the `if matched_token.scope != "ALL"` branch in [`auth.py`](../pixlstash/auth.py)) and is treated as owner-equivalent here, which is correct: `ALL == owner` (below). The danger *used* to be that an `ALL`+`resource_type` token **masqueraded** as that plain-owner shape — it also left `token_scope = None` — letting a nominally "restricted" token drive filesystem authority. That vector (the §16.2 item 4 footgun, applied to owner-only operations rather than picture-scoped reads) is now **closed**: `create_token` refuses to mint it and the middleware fail-closed-rejects any already-existing row before these handlers run. The correct *explicit* gate for this class is still `require_unscoped_owner` (it consults `request.state.matched_token.resource_type`), already used by [`snapshots.py`](../pixlstash/routes/snapshots.py) and [`config.py`](../pixlstash/routes/config.py); moving to it (below) is still wanted as defense in depth, but it is no longer closing an open hole.
 
@@ -5849,7 +5785,7 @@ sequenceDiagram
 
 ---
 
-## 21. Operation Log — undo/redo and the audit trail (DAM 1.2)
+## 21. Operation Log — undo/redo and the audit trail
 
 The `operation` table ([db_models/operation.py](../pixlstash/db_models/operation.py)) is the **append-only** record of every user-visible change. It is the undo/redo stack today and the audit log / Studio activity feed later — one mechanism, three features (DAM roadmap §1.2 / §4.3), which is why it is built once and additively.
 
@@ -6143,7 +6079,7 @@ one, so backfilling the mirror does not invalidate every thumbnail at once.
 
 **The event names the field: `fields: ["pixels"]`.** The forward rotate and the
 undo/redo restore both stamp it (`_crud.rotate_pictures` and
-`operation_log_service._emit`), for the reason §23's move does: the thumbnail URL
+`operation_log_service._emit`), for the reason a move does (integration §20.3): the thumbnail URL
 and its cache token come from the batch-thumbnail endpoint, never from
 `GET /pictures/{id}/metadata`, so a client told only `updated` re-reads metadata
 it already has and goes on painting the pre-rotate bitmap. The client that
@@ -6183,7 +6119,7 @@ mirror precisely so the next rotate converges instead of compounding that.
 
 ---
 
-## 22. Tiered Duplicate Detection (v1.9 Dedup → Stacks)
+## 22. Tiered Duplicate Detection
 
 The Duplicates queue is filled by three tiers of increasing cost and decreasing
 certainty. Detection lives in `pixlstash/services/dedup_tier_service.py`; what
@@ -7276,7 +7212,7 @@ Both routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline scope check
 
 ---
 
-## 23. Opt-in telemetry: the install ID and the consent flags (v1.9 Lane F)
+## 23. Opt-in telemetry: the install ID and the consent flags
 
 Nothing in this section transmits anything. It is the local half of the
 telemetry mechanism: storage, consent state, and the surface the UI reads.
@@ -7369,11 +7305,20 @@ Both are covered in both directions by
 
 ---
 
-## 24. The folder-structure read (v1.11 Phase 2)
+## 24. Folder structure: read, commit, layout and moves
+
+Everything that maps a folder tree onto the library and keeps the two in step:
+reading an existing tree (§24.1), writing the accepted mapping (§24.2), the
+layout that says where a picture belongs (§24.3), the engine that moves files
+to match it (§24.4), and reconciling moves the owner made outside PixlStash
+(§24.5). The vault and path rules these build on are §13. The wire contract
+for all of it is `docs/integration_architecture.md` §20.
+
+### 24.1 The folder-structure read
 
 `pixlstash/services/folder_structure_service.py`, exposed by
 `pixlstash/routes/folder_structure.py`. The wire contract is
-`docs/integration_architecture.md` §20; the release plan is
+`docs/integration_architecture.md` §20.1; the release plan is
 `docs/plans/v1.11.0-existing-library.md` §4 Phase 2. This section is the part
 that is not on the wire: why the signals are shaped the way they are, and what
 they cost.
@@ -7384,7 +7329,7 @@ renamed. That is not an implementation detail to preserve by care — it is the
 release's headline (*"import moves zero files"*), and Phase 3 is the only thing
 that commits anything.
 
-### The eight signals
+#### The eight signals
 
 | Signal | Scope | Cost | Proposes |
 |---|---|---|---|
@@ -7434,7 +7379,7 @@ hands the workers back on its own, and a read that finishes calls
 the planner and must not wait out the minute. The deadline still matters, since
 an URGENT task that cannot finish starves the queue it jumped.
 
-### The shape signals: what a photo library looks like
+#### The shape signals: what a photo library looks like
 
 The first four signals leave a photo library — no captions, no existing
 entities — reading as Person-or-nothing. The other four read the *shape* of the
@@ -7528,10 +7473,10 @@ unambiguous name decides, a bare `.txt` is decided by content). The majority
 kind is reported, a tie going to description, with an excerpt of a file of
 that kind. Only the first `MAX_CAPTION_PATTERNS` suffixes by file count are
 opened, so a tree of one-off notes costs a bounded number of reads. The result
-carries them as `captions` (§20 of the integration doc); the sidecar signal's
+carries them as `captions` (§20.1 of the integration doc); the sidecar signal's
 `with_sidecar` comes from the same pairing, so the two cannot disagree.
 
-### Why cardinality is level-scoped and nothing else is
+#### Why cardinality is level-scoped and nothing else is
 
 Cardinality is a property of a *level* — "four names under 118 parents" cannot
 be said about one folder — so it speaks in a level's
@@ -7555,7 +7500,7 @@ unreachable: two kinds would need 120% of the level. The exact comparison is
 therefore not pedantry, it is the whole of why there is no tie-break to get
 wrong, and it is asserted in the code.
 
-### Evidence, and the refusal to guess
+#### Evidence, and the refusal to guess
 
 Every proposal carries the evidence that produced it, and **a signal that cannot
 state its reason proposes nothing**. Two consequences fall out rather than being
@@ -7580,7 +7525,7 @@ the layout cannot leave this read proposing a word the layout no longer places.
 fails the build on the drift, which is the only way anyone would notice: the
 symptom otherwise is a picture that quietly fails to move, one release later.
 
-### Folding a name
+#### Folding a name
 
 **There are two name folds in v1.11 and they disagree on purpose.**
 `library_layout._match_key` (Phase 4a) is NFC + casefold: accents and separators
@@ -7602,7 +7547,7 @@ library is confidently proposed as a single Tag level with the evidence
 so `José` and `Jose` are the same name; without that, the accented spelling
 matches nothing and the *unaccented* one matches a person who does not exist.
 
-### The bounds
+#### The bounds
 
 Three bounds, and each one has a way of saying it was hit.
 
@@ -7649,7 +7594,7 @@ A corrupt or unreadable picture decodes to `None` and is sampled as
 *no face*, logged at warning with its basename. A whole folder's detection batch
 failing is logged and costs that folder its face evidence — never the read.
 
-### Authorization
+#### Authorization
 
 All three routes are `LOCAL_OWNER_ONLY` (§16.3), and the `GET` is on that tier
 for the reason `GET /model-moves` is: what it carries **is** the answer — a map
@@ -7677,7 +7622,7 @@ rollback the `POST` and `DELETE` are covered by the gate alone. The gate is the
 live enforcement and ships enforcing; the belt is the extra layer, and it can
 only ever be an extra layer for the reads.
 
-### One read at a time
+#### One read at a time
 
 `Server.folder_structure_read` is a single slot, not a dict. The mapping screen
 only ever shows one read, and a second concurrent one would fight the first for
@@ -7692,14 +7637,14 @@ library would otherwise pin all 28,000 filenames for the process lifetime.
 
 The lock covers the 409 check-and-set and nothing else. The worker writes
 `result` before it writes `status`, and the status handler reads `status` first
-and serves `result` only once the read has settled, which is what keeps §20's
+and serves `result` only once the read has settled, which is what keeps integration §20.1's
 *"`result` is null until the read has settled"* true without taking a lock on
 every poll.
 
-### Ambiguity in `name_match`
+#### Ambiguity in `name_match`
 
 `PictureSet.name` carries no unique constraint and a real vault has duplicates
-immediately. §20 promises that `match.id` is *that row's real primary key*, so
+immediately. Integration §20.1 promises that `match.id` is *that row's real primary key*, so
 when two entities of the same kind share a name the read returns the **kind**
 (which is genuinely known) with `match: null` and evidence saying
 `"matches 2 existing sets"`. Handing back whichever row the query ordered first
@@ -7707,17 +7652,17 @@ would aim Phase 3's attach at an arbitrary set, confidently, with evidence. Two
 different *kinds* sharing a name is the other case and is already a narrowing:
 `candidates`, no `kind`.
 
-## 25. The folder-structure commit (v1.11 Phase 3)
+### 24.2 The folder-structure commit
 
 `pixlstash/services/folder_structure_commit_service.py`, exposed by the
 `/folder-structure/commit` routes added to `pixlstash/routes/folder_structure.py`.
-Wire contract `docs/integration_architecture.md` §22; release plan
-`docs/plans/v1.11.0-existing-library.md` §4 Phase 3. §24's read only ever
+Wire contract `docs/integration_architecture.md` §20.2; release plan
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 3. §24.1's read only ever
 proposes; this is the one module anything from the mapping screen writes.
 
-### Reuse, not a second walker
+#### Reuse, not a second walker
 
-The commit does not walk the filesystem a second time. §24 already measured
+The commit does not walk the filesystem a second time. §24.1 already measured
 that cost and the release plan's whole argument for the two-minute read is that
 it is paid *once*. Instead the accepted root is registered as an ordinary
 `ReferenceFolder`, and the existing, already-shipped `ReferenceFolderScanTask`
@@ -7770,7 +7715,7 @@ organise later" during `Main` or `MapTree` leaves nothing committed and nothing
 registered at all, so there is no row at that point for a resumed commit to
 collide with.
 
-### The newest accepted mapping is the only resumable one
+#### The newest accepted mapping is the only resumable one
 
 `FolderMappingCommit` promises "at most one row is `pending`", and the endpoint's
 in-memory single-slot rule is not enough to keep it: a commit that *fails*
@@ -7782,9 +7727,9 @@ first. `record_pending_commit` therefore marks every older pending row
 the next start-up resumes the newest, and the start-up *after that* resumes the
 older one and re-applies a mapping the owner has already replaced.
 
-### One pruning rule for every walk of a tree
+#### One pruning rule for every walk of a tree
 
-§24's read prunes dot-folders (a vault's own `.pixlstash-thumbnails/`, the older
+§24.1's read prunes dot-folders (a vault's own `.pixlstash-thumbnails/`, the older
 `.ref_thumbs/`, `.pixlstash` sidecar stores, anything the owner hid) and so does
 `local_import_pictures`; `ReferenceFolderScanTask` did not. Since a
 reference-mode commit is precisely the read and that scan looking at one root,
@@ -7801,7 +7746,7 @@ is still there.
 the field the model's own docstring names as "unix timestamp of the last
 **completed** scan pass" — not a picture count, because a count can plateau
 mid-batch for reasons that have nothing to do with completion. It has a
-30-minute bound (`INDEX_TIMEOUT_S`) for the same reason §24's read has a
+30-minute bound (`INDEX_TIMEOUT_S`) for the same reason §24.1's read has a
 deadline: a stuck scan must fail the commit rather than hang the screen
 forever.
 
@@ -7835,7 +7780,7 @@ per chunk (`_BUILD_CHUNK_SIZE` = 128 pictures) has faces, quality and the rest
 running on the first chunk while the walk continues; it is a scheduler poke,
 not an event, so the SPA is still told about the import once, at the end.
 
-### The assigning step costs a bounded number of statements
+#### The assigning step costs a bounded number of statements
 
 `_link_pictures` resolves every folder first and only then links, because with
 the answers in hand the human-label ledger can be written in **one batched
@@ -7850,7 +7795,7 @@ whole import and cross SQLite's bound-parameter cap.
 pins it by counting statements at two import sizes: twenty times the pictures
 must not cost more statements.
 
-### A read commits once, enforced
+#### A read commits once, enforced
 
 `apply_mapping` is not idempotent, and cannot cheaply be made so: it walks
 every picture currently under the reference folder and unconditionally
@@ -7873,7 +7818,7 @@ what the client is told. Checked and set separately from — and nested inside
 that loses to an *unrelated* read's in-flight commit is refused before it
 spends the read's one commit on a 409 it never got to act on.
 
-### Person is `pending_character_id`, not a fabricated Face
+#### Person is `pending_character_id`, not a fabricated Face
 
 A folder accepted as Person has no detected face to attach to — the read's own
 `faces` signal is sampled at 20 pictures and never claims to have looked at the
@@ -7889,7 +7834,7 @@ the immediate one — the existing background pipeline reconciles the assignment
 against a real detected face once extraction runs, on its own schedule, with no
 new code here to do it.
 
-### Nearest-ancestor-wins, tags are not exclusive
+#### Nearest-ancestor-wins, tags are not exclusive
 
 A picture is filed under the **closest** accepted Project, Person or Set above
 it — first-match-wins walking from the picture's folder up to the root,
@@ -7901,10 +7846,10 @@ a shoot folder is two tags, not the nearer one winning). `_resolve_folder`
 computes this once per distinct folder, not once per picture, since the
 `ReferenceFolderScanTask`-created rows already state which folder each is in
 via their own `file_path` — no second read of `FolderStructureRead`'s
-internal `_folders` list, which §24 already documents as dropped once the
+internal `_folders` list, which §24.1 already documents as dropped once the
 proposal document is built.
 
-### Entity identity is (kind, name), not (kind, relative_path)
+#### Entity identity is (kind, name), not (kind, relative_path)
 
 Two folders accepted as the same kind with the same name — `Mira` appearing
 under two different parents, or a folder whose owner picked the same
@@ -7920,7 +7865,7 @@ name that happens to collide with something created by an *earlier* commit is
 not merged, only within-batch repeats are.
 
 `Project.name` carries a real unique constraint; `Character.name` and
-`PictureSet.name` do not (§24's own note on `name_match`'s ambiguity is why —
+`PictureSet.name` do not (§24.1's own note on `name_match`'s ambiguity is why —
 a real vault has duplicate set names on day one). A newly-created Project whose
 name collides with an existing one the owner did not explicitly `match_id`
 would raise on `session.flush()`, surfacing as a failed commit rather than a
@@ -7928,7 +7873,7 @@ silent skip — that is deliberate: **it reads as the owner asking to reuse a
 project name without saying so**, and a `match_id` is exactly how the mapping
 screen already lets them say so on purpose.
 
-### What this does not do
+#### What this does not do
 
 - **No layout write.** The accepted mapping places the pictures this commit
   indexes; it does not set the library's `Layout` for what comes in *next* —
@@ -7939,12 +7884,78 @@ screen already lets them say so on purpose.
   `set_picture_set_projects` are called once, at creation, never for an
   existing entity's membership change.
 
-## 26. The layout and the move engine (v1.11 Phase 4b)
+### 24.3 The library layout
+
+`utils/library_layout.py` is the model of **where a picture belongs and whether
+it still belongs there**. Model only: no move engine, no file writes, no UI —
+see §24.4 for those. The rule it implements, and its case table, are in
+`design/1.11-existing-library/DECISIONS.md`; the module docstring carries the
+detail, so this section is the map rather than a second copy of it.
+
+A `Layout` is an ordered list of segments, one folder level each. A segment
+holds one or more `Facet`s (`PROJECT`, `PERSON`, `SET`, `TAG`) and the first the
+picture has a value for wins. A segment nothing fills becomes `GLOBAL_FOLDER`
+(`Global`) **when a later segment is filled**, and is dropped when none is: under
+`Project` then `Person or Set` a picture with only a person is `Global/Mira` and
+one with only a project is `Nordvik`, never `Nordvik/Global`. That keeps the
+tree two deep instead of five while putting every person folder at one depth,
+and — the reason `Global` is in the layout's *language* rather than being
+decoration — it gives an unprojected picture a folder to move **out of** when a
+project arrives (#1161). A new library starts on `DEFAULT_LAYOUT`, `Project`
+then `Person or Set`.
+
+`_walk` therefore reads `Global` at every segment whatever the picture is, and
+treats it as the picture's own only where nothing fills that segment. Reading it
+only where the picture has nothing would make it unparseable in exactly the case
+that has to move. The cost, stated once: a folder of the owner's own literally
+named `Global` at a layout level is adopted by the layout instead of being the
+permanent override an unreadable name would be. A picture that fills no segment
+at all still answers `layout.unfiled`, not `Global`, which is what keeps the
+migration's unfiled sweep an opt-in rather than something `Global` does anyway.
+
+| Function | Answers |
+|---|---|
+| `render(facets, layout)` | The folder the picture should be in, relative to the library root. An unfilled segment with a filled one after it becomes `Global`; trailing ones are dropped. A picture nothing files goes to `layout.unfiled`, defaulting to `Unassigned` — never the library root, which is where an unmigrated flat library lives. |
+| `is_true(folder, facets, layout, known_names)` | Whether the folder it is *actually* in still describes it. Takes the **folder**, not the file path: guessing which trailing component was a file name would silently flip the answer for a path written with a trailing separator. A path carrying `.` or `..` is refused whole rather than normalised — tidying one would fabricate a level the path does not have. |
+
+The release rests on `is_true`, and on one property of it: **a path that does
+not parse against the layout can never be false.** A file at the library root
+matches no segment, so an existing flat library needs no migration; a file the
+owner dragged into a folder of their own contradicts nothing, so it stays there
+permanently and the override needs no setting.
+
+The three properties a reader is most likely to get wrong:
+
+- **Truth is membership, not equality with `render`.** The folder `Mira/` says
+  "this is a Mira picture" and stays true while Mira is one of the picture's
+  people, whoever `render` would pick today. That is what makes adding a second
+  project or person move nothing.
+- **`known_names` is not optional.** Only the library's whole vocabulary
+  separates *this folder names a project the picture is no longer in* (false, it
+  moves) from *this folder names nothing PixlStash knows* (unparseable, it never
+  moves). Deleting an entity takes its name out of the language and freezes the
+  folders named after it.
+- **Reading stops at the first component the vocabulary cannot read**, and it is
+  not positional. Everything from that component down is the owner's own, so
+  `2024 Shoots/Mira/2026-08` is judged on its first two components while
+  `Holiday/2024 Shoots` is judged on none of them.
+
+Every name reaching a path goes through `folder_name()` — including
+`Layout.unfiled`, which is validated against it on construction because it is
+the one field a settings screen will let a user type and it reaches `render`'s
+output verbatim. It is a many-to-one map (`A/B`, `A:B` and `A_B` all become
+`A_B`), which is the collision the filesystem would force anyway; comparison is
+additionally case-folded and NFC-normalised for Windows and macOS. Every
+ambiguity here resolves towards *not* moving a file.
+
+`tests/test_library_layout.py` covers it, unparseable-path cases first.
+
+### 24.4 The layout and the move engine
 
 `pixlstash/utils/library_layout.py` decides *where* a picture belongs and
 whether it still does; `pixlstash/services/layout_move_service.py` decides
 *whether to act* and then acts. The wire contract is
-`docs/integration_architecture.md` §23; the release plan is
+`docs/integration_architecture.md` §20.3; the release plan is
 `docs/plans/v1.11.0-existing-library.md` §4 Phase 4.
 
 Everything here is downstream of one sentence:
@@ -7962,7 +7973,7 @@ rather than being designed in, and they are what the section is for:
    existing flat library needs no migration and a hand-placed file is a
    permanent override that needs no setting.
 
-### Where a layout lives, and why in two places
+#### Where a layout lives, and why in two places
 
 | Root | Column | Governs |
 |---|---|---|
@@ -7981,7 +7992,7 @@ only thing it has to reconcile is the stored-path convention: absolute for a
 reference picture, relative for a library one, which is the same branch
 `ImageUtils.get_thumbnail_path` already makes.
 
-### The two jobs
+#### The two jobs
 
 **Placement on write.** `resolve_placement` is the one call every creation site
 makes, and it answers `None` — write where you always did — for a root with no
@@ -8014,7 +8025,7 @@ collapse a date tree into one folder and make two files of the same name
 collide — a curated library's structure destroyed by a rule that promised to
 preserve it.
 
-### The trigger, and why it is a flush hook
+#### The trigger, and why it is a flush hook
 
 `database._before_flush_layout_tracker` / `_after_flush_layout_marker` stamp
 `Picture.layout_check_due_at` when a picture's project, set or person membership
@@ -8038,7 +8049,7 @@ is what makes a remove-then-add **one** move: swapping a picture's project is
 two requests a fraction of a second apart, and acting on the first would take
 the file through the unfiled folder on its way to the right one.
 
-### Doing it: order, refusals, and what is never done
+#### Doing it: order, refusals, and what is never done
 
 `LayoutMoveFinder` → `LayoutMoveTask` plans the whole batch, **logs the count
 before executing it**, moves, and records one `pictures.layout.move` operation
@@ -8100,7 +8111,7 @@ stamp when it moved, and nothing re-stamps a picture whose memberships did not
 change. A picture the owner has undone therefore stays where they put it back,
 which is the same override an off-layout folder gets.
 
-### Renaming an entity renames its folder
+#### Renaming an entity renames its folder
 
 `rename_entity_folders` renames the directories named after a project, set or
 person and repoints the rows under them. It moves no files, and that is not a
@@ -8149,7 +8160,7 @@ that commit fails. A half-applied rename would leave every picture under the
 folder naming a path that does not exist, which is the purge sweep's input. That
 is why every caller renames **before** its own `session.commit()`, not after.
 
-### What Phase 6 sees once a layout is on
+#### What Phase 6 sees once a layout is on
 
 `library_insights_service` gates its folder-shaped findings on a picture's path
 having a directory component, on the stated premise that a vault-managed picture
@@ -8165,7 +8176,7 @@ and neither could have tested the combination: a folder-shaped finding in a
 laid-out library may restate a membership the owner can already see, and the
 wording is worth a look on a real library once both are in.
 
-### The move journal, and why it is Phase 4b's job
+#### The move journal, and why it is Phase 4b's job
 
 Every move the engine makes writes a `picture_move` row **before** anything
 walks the tree again, and `ReferenceFolderScanTask` claims the pairs that are
@@ -8185,7 +8196,7 @@ same two folders next month be dismissed as ours.
 `ReferenceFolderScanTask`'s result carries `external_moved_picture_ids` — the
 moves it attributes to the owner — which is exactly Phase 5's input.
 
-### Moving an existing library onto its layout (v1.11 Phase 4c)
+#### Moving an existing library onto its layout (v1.11 Phase 4c)
 
 `pixlstash/services/layout_migration_service.py`, two routes on
 `/server-config/layout/migration`. Offered whenever a layout is set or changed
@@ -8223,7 +8234,7 @@ undo. `2024/2024-08-15/IMG_0001.jpg` therefore lands at `<rendered>/IMG_0001.jpg
 `Unassigned/2026-08` at `<rendered>`, and two files of one name arriving at one
 folder are told apart by the suffix rule below rather than refused.
 
-Everything that touches a file is §26's: the same `_prepare_move` refusals, the
+Everything that touches a file is §24.4's: the same `_prepare_move` refusals, the
 same `apply_moves`, the same `picture_move` journal, the same `FACET_LOCATION`
 undo. What a whole-library move needs and a one-picture move does not is four
 things.
@@ -8330,7 +8341,7 @@ is the check that matters; here the caller names none and the scope is the whole
 library, so there is nothing for the gate to bound and the tier carries it. The
 GET is on `READ_BLOCKED_GET_PATHS` beside `GET /server-config/layout`.
 
-## 27. Reconciling moves made outside PixlStash (v1.11 Phase 5)
+### 24.5 Reconciling moves made outside PixlStash
 
 `pixlstash/utils/library_layout.py::reconcile_move` decides what an owner-made
 move implies; `pixlstash/services/move_reconciliation_service.py` queues the
@@ -8339,11 +8350,11 @@ routes in `pixlstash/routes/moves.py`; the release plan is
 `docs/plans/v1.11.0-existing-library.md` §4 Phase 5; the design reference is
 the Moves artboard in `design/1.11-existing-library/`.
 
-> **The mirror of §26's rule.** PixlStash moves a file when an assignment
+> **The mirror of §24.4's rule.** PixlStash moves a file when an assignment
 > change makes its folder stop being true; when the *owner* moves a file,
 > PixlStash reconsiders an assignment when the move makes it stop being true.
 
-### The queue is a fact, not a verdict
+#### The queue is a fact, not a verdict
 
 `ExternalMoveReview` (migration `0109`) holds exactly `(picture_id, old_path,
 new_path, detected_at)` — the raw fact a move happened, nothing derived.
@@ -8363,7 +8374,7 @@ with no layout.
 
 **The scan is not the only thing that discovers an owner move.**
 `MissingFilePurgeTask` reads the same journal to tell a deletion from a move it
-must not purge (§26), and it reads it in both directions — so a file found back
+must not purge (§24.4), and it reads it in both directions — so a file found back
 at a row's `old_path` is repaired there too. That direction has two causes the
 journal cannot tell apart: an undo whose rename landed and whose transaction did
 not, and the owner dragging the file out of the folder PixlStash filed it in.
@@ -8387,9 +8398,9 @@ the owner and never an applied change.
 cached verdict to invalidate, so a picture whose memberships changed between
 the move and the review is judged on what is true now. `reconcile_move` reuses
 `layout_move_service.layout_roots` / `library_vocabulary` / `picture_facets`,
-the same reads §26's engine uses, rather than a second query surface.
+the same reads §24.4's engine uses, rather than a second query surface.
 
-### `reconcile_move`: the three outcomes, and a fourth
+#### `reconcile_move`: the three outcomes, and a fourth
 
 `reconcile_move(old_folder, new_folder, facets, layout, known_names)` is pure
 — no database, no filesystem, argument shape borrowed from `relocate` — and
@@ -8409,7 +8420,7 @@ returns a `ReconciledMove(outcome, removals, additions)`:
      layout's vocabulary knows (including landing at the root). Touches
      nothing at all, not even a removal on the old side: the path was already
      followed by the scan, and an unreadable destination is a permanent
-     override under §26's rule too.
+     override under §24.4's rule too.
    - **`AMBIGUOUS`** — at least one candidate removal is for a facet the
      picture currently has **more than one** value of. A folder holds a
      picture once; a project (or set, or person) can share it, so leaving one
@@ -8443,7 +8454,7 @@ Measured on the owner's four real libraries (~59,000 pictures, DECISIONS.md):
 is the minority outcome by construction, not by a threshold this module
 chose.
 
-### Applying: three memberships, deliberately not four
+#### Applying: three memberships, deliberately not four
 
 `move_reconciliation_service` turns `removals`/`additions` into writes for
 `Facet.PROJECT`, `Facet.SET` and `Facet.PERSON` only:
@@ -8487,7 +8498,7 @@ chose.
 
 **Both a project and a set/person name are resolved by unique-name lookup, and
 a collision is refused rather than guessed — twice over.** `Project.name` is
-DB-unique; `PictureSet.name` and `Character.name` are not (§26, "Renaming an
+DB-unique; `PictureSet.name` and `Character.name` are not (§24.4, "Renaming an
 entity renames its folder" already declines the equivalent ambiguity for a
 rename). `_resolve_entity_id` refuses a name matching more than one row. That
 alone is not sufficient: two *distinct* names can render to the same folder
@@ -8532,7 +8543,7 @@ same window the move journal keeps a claimed row for) and pruned past it,
 whether or not anyone opened the screen. The frontend's own reachability rule
 follows from this — see `docs/frontend_architecture.md` §9.4.
 
-### The route surface
+#### The route surface
 
 Three `OWNER_ONLY` routes (`pixlstash/routes/moves.py`), vault-wide like
 `operations.py` — none of this is boundable to a single resource-scoped grant:
@@ -8553,6 +8564,4 @@ the queue itself keeps no cached verdict.
 
 ---
 
-*Last updated: 2026-08-24. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
-
-### Known drift / cleanup notes
+*When a change needs documenting, edit the section that covers its subsystem, adding a numbered subsection there, and to the Table of Contents, if it needs one. Never add a new `##` section named for a feature, a release or a phase.*

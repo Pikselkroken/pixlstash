@@ -26,13 +26,10 @@
 16. [Versioning](#16-versioning)
 17. [Integration Pitfalls](#17-integration-pitfalls)
 18. [Integration Diagrams](#18-integration-diagrams)
-19. [Duplicates Queue API (v1.9)](#19-duplicates-queue-api-v19)
-20. [Folder-Structure Read API (v1.11, Phase 2)](#20-folder-structure-read-api-v111-phase-2)
-21. [About your library (v1.11)](#21-about-your-library-v111)
-22. [Folder-Structure Commit API (v1.11, Phase 3)](#22-folder-structure-commit-api-v111-phase-3)
-23. [Layout & Move API (v1.11, Phase 4b)](#23-layout--move-api-v111-phase-4b)
-24. [Move Reconciliation API (v1.11, Phase 5)](#24-move-reconciliation-api-v111-phase-5)
-25. [Text in Pictures (#1197)](#25-text-in-pictures-1197)
+19. [Duplicates Queue API](#19-duplicates-queue-api)
+20. [Folder-Structure API: read, commit, layout and moves](#20-folder-structure-api-read-commit-layout-and-moves) — incl. [20.1 Read](#201-read), [20.2 Commit](#202-commit), [20.3 Layout & Move](#203-layout--move), [20.4 Move Reconciliation](#204-move-reconciliation)
+21. [About your library](#21-about-your-library)
+22. [Text in Pictures](#22-text-in-pictures)
 
 ---
 
@@ -1885,7 +1882,7 @@ flowchart TB
 
 ---
 
-## 19. Duplicates Queue API (v1.9)
+## 19. Duplicates Queue API
 
 The contract behind the sidebar **Duplicates** destination. Every route is
 `owner_only`; a share token gets 403 on all of them. Backend design is
@@ -2275,11 +2272,21 @@ There is **no deletion route** anywhere in v1.9. A stack is a grouping row plus 
 cover pointer; dropping it restores the flat grid exactly. Any UI copy implying
 files are removed would be wrong.
 
-## 20. Folder-Structure Read API (v1.11, Phase 2)
+---
+
+## 20. Folder-Structure API: read, commit, layout and moves
+
+The contract for mapping a folder tree onto the library and keeping the two
+in step: reading a tree (§20.1), committing the accepted mapping (§20.2), the
+layout and the moves that follow it (§20.3), and reconciling moves made
+outside PixlStash (§20.4). Backend design for all of it is
+`docs/backend_architecture.md` §24.
+
+### 20.1 Read
 
 The two-minute pass behind the mapping screen (`MapTree`). It reads a folder tree
 on disk and proposes **what each level is** — Project, Set, Person, Tag, or just a
-folder. Backend design is `docs/backend_architecture.md` §24; the release plan is
+folder. Backend design is `docs/backend_architecture.md` §24.1; the release plan is
 `docs/plans/v1.11.0-existing-library.md` §4 Phase 2.
 
 **Three rules the client must hold to.**
@@ -2299,7 +2306,7 @@ folder. Backend design is `docs/backend_architecture.md` §24; the release plan 
    to `candidates[0]` would invent a decision the backend deliberately refused to
    make.
 
-### The eight signals
+#### The eight signals
 
 All deterministic, all local, **no LLM** — a folder name is a string and `Mira`
 could be a person, a project or a client.
@@ -2334,7 +2341,7 @@ One more `signal` value, `level_vote`, can appear on a **level** proposal: it
 means the level took its rows' answer as its own, and its `text` says the count
 (`"31 of 149 folders read as Set"`).
 
-### `POST /api/v1/folder-structure/read`
+#### `POST /api/v1/folder-structure/read`
 
 Body `{"path": "/absolute/path/to/library"}`. Returns `{"task_id": "…"}` and
 starts the read in the background. An optional `"match_existing": false`
@@ -2369,7 +2376,7 @@ folder comes back as a Person. The result says which happened
 depending on whether models had loaded, and neither the client nor the owner
 could tell that from a library with nobody in it.
 
-### `GET /api/v1/folder-structure/read/status?task_id=…`
+#### `GET /api/v1/folder-structure/read/status?task_id=…`
 
 Polled per §11's task-id branch. `result` is `null` until the read has **settled**
 (`completed`, `cancelled` or `failed`); a `failed` read carries `error` and a
@@ -2395,7 +2402,7 @@ mean folders during `faces`; during `walking` `total` is `0` and `processed`
 counts folders found so far, which is why the client must render `walking` as an
 indeterminate bar rather than 0%.
 
-### The result
+#### The result
 
 ```jsonc
 {
@@ -2429,7 +2436,7 @@ files first. `kind` is the read's guess from a few sampled files (comma lists
 read as `tags`, prose as `description`); `sample` is an excerpt so the owner
 can check it without opening a file. Binary files, JSON and markup are never
 offered, and only text extensions (`.txt`, `.caption`) are considered. The
-owner confirms or corrects each row on the commit (§22, `captions`). Empty
+owner confirms or corrects each row on the commit (§20.2, `captions`). Empty
 when there are none.
 
 Two fields the screen must not ignore, because both mean *this map is not the
@@ -2535,7 +2542,7 @@ Two ways `name_match` declines to hand back a `match`, and both are deliberate:
   `Mira`). That is a narrowing, not a match: `kind: null`, `match: null`,
   `candidates: ["project", "person"]`, with the evidence saying so.
 
-### Evidence
+#### Evidence
 
 `evidence` is an ordered list, strongest signal first, and every entry carries a
 `signal` (the table above) and a display-ready `text`. Entries may carry extra
@@ -2565,7 +2572,7 @@ them again, so the two cannot drift. `folder` is the one addition and is
 deliberately not a facet: it is the *absence* of one. A client can treat a
 `kind` other than `folder` as a facet name the layout will accept.
 
-### `DELETE /api/v1/folder-structure/read?task_id=…`
+#### `DELETE /api/v1/folder-structure/read?task_id=…`
 
 Asks a running read to stop. Returns `{"status": "cancelled"}`, or **404** if the
 task-id is unknown (including an id evicted by a later read). A read that has
@@ -2578,16 +2585,481 @@ was found. It takes effect **at the next folder boundary**, so a cancel issued
 while a folder's face batch is in flight lands when that batch returns rather
 than instantly.
 
-### Not in this API
+#### Not in this API
 
-- **No commit.** Nothing here writes. The accept path is §22, Phase 3.
+- **No commit.** Nothing here writes. The accept path is §20.2.
 - **No per-row re-read.** A single read answers the whole tree; there is no
   "re-run faces on this one folder" route.
 - **No language reading of folder names.** Explicitly out (release plan §5): no
   LLM ships with PixlStash, and `name_match` is a string comparison against rows
   the vault already has, not a semantic one.
 
-## 21. About your library (v1.11)
+### 20.2 Commit
+
+The accept path behind the `Preview` screen: takes the mapping the owner
+confirmed over a §20.1 read and writes it. Backend design is
+`docs/backend_architecture.md` §24.2; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 3.
+
+**One rule the client must hold to, same as §20.1's first: it moves, renames and
+copies zero files, in either commit mode.** `mode: "reference"` (the default)
+registers the scanned root as an ordinary reference folder — the same
+mechanism `POST /reference-folders` already ships, indexed in place. `mode:
+"local_import"` (v1.11.x, the "Add a library" fix) instead imports the pictures
+as ordinary MANAGED ones — no reference folder at all. Either way every
+picture found is linked to the accepted projects, people, sets and tags by
+writing database rows. Nothing on disk changes except the new thumbnail each
+newly-indexed picture gets, exactly as any other import produces.
+
+#### `POST /api/v1/folder-structure/commit`
+
+```jsonc
+{
+  // Exactly ONE of these two identifies the read being committed.
+  "task_id": "…",              // the settled read's task_id (§20.1)
+  "read_result": { /* … */ },  // or the read's own result, from §20.1's status
+  "label": "Generations",       // optional; defaults to the folder's own name
+  "mode": "reference",          // "reference" (default) | "local_import"
+  "captions": [                 // local_import only: one row per §20.1 caption pattern
+    {"suffix": ".txt", "kind": "tags"},
+    {"suffix": "_caption.txt", "kind": "description"},
+    {"suffix": "_notes.txt", "kind": "ignore"}
+  ],
+  "assignments": [
+    // One entry per folder the owner accepted as something. A folder left
+    // "just a folder" or undecided is simply absent — there is nothing here
+    // for it to do, and every picture under it is still indexed and
+    // searchable (§20.1's "arrives ungrouped" case).
+    {"relative_path": "2024 Shoots", "kind": "project"},
+    {"relative_path": "2024 Shoots/mira", "kind": "person", "match_id": 41},
+    {"relative_path": "Datasets/mira-lora-v3", "kind": "set"},
+    {"relative_path": "final", "kind": "tag"}
+  ]
+}
+```
+
+**`read_result` exists because a read lives in one server process's memory and
+processes end.** The desktop's first run reads the library folder while the GPU
+runtime downloads and then restarts the backend onto that runtime, so by the
+time the owner answers the mapping questions the task that produced the answer
+is gone and `task_id` can only be `404 Task not found` — with the answer sitting
+in the dialog. Sending the result back is the same information by another route.
+Two consequences worth knowing: a supplied result reserves nothing, so it
+carries none of the one-commit protection a task-identified read gets (the
+caller holding the result owns that), and a body that names both or neither is a
+`400`.
+
+`relative_path` is the same handle §20.1's folder rows carry — POSIX-separated,
+relative to the read's root, `""` for the root itself. `kind` is one of
+`project`, `person`, `set`, `tag` (never `folder`: a row with nothing to do is
+omitted, not sent as `folder`). `match_id` names an existing entity to attach
+to, exactly as `name_match`'s `match.id` proposed or as the owner picked from
+`candidates`; omitted, a new one is created named after the folder.
+
+**A folder's nearest accepted ancestor of each exclusive kind wins** — a
+picture is filed under the *closest* Project, Person or Set above it, not
+every one along the path, mirroring `library_layout`'s first-match-wins
+segments. Tags are the exception: every accepted Tag ancestor applies, because
+a picture can carry more than one label.
+
+Returns `{"task_id": "…"}` and starts the commit in the background.
+
+`local_owner_only` (§16.3): the read already validated the host path once, and
+this route is the write that follows from it.
+
+| Status | When |
+|---|---|
+| **400** | an `assignments` row is malformed or names an unknown `kind` |
+| **404** | `task_id` does not name a read this session holds |
+| **409** | the named read has not settled yet, a commit is already running (against any read), the named read has **already been committed**, or the read's root path is already a reference folder that has completed a scan (backend §24.2 — the reuse-vs-refuse rule) |
+
+#### `mode: "local_import"`
+
+For the read's root when it IS the active library's own `image_root`, or a
+folder inside it — the "Add a library" flow's "pictures" verdict, where the
+folder a fresh vault was just created in already held loose files before the
+owner ever pointed PixlStash at it. `label` is ignored in this mode: there is
+no reference folder to name.
+
+**Every picture the walk finds becomes an ordinary MANAGED picture** (relative
+`file_path`, exactly as anything else imported into this library), not a
+reference-folder one. Routing this case through `mode: "reference"` instead
+would collide with the rule `POST /reference-folders` already enforces the
+other direction — a reference folder may never equal or contain `image_root`
+(`409 "Path conflicts with the PixlStash data folder."`) — so the two stay two
+modes, never one. Import is **idempotent by `file_path`**: a file already
+indexed under this path (an overlapping earlier `local_import`, or an ordinary
+import that reached it independently) is reused by id, never re-imported as a
+second row — same spirit as `mode: "reference"`'s own "don't redo what already
+happened" rule for a resumed commit (backend §24.2).
+
+**`captions` says what each caption file beside the pictures is.** A picture
+built by the import reads the files at the confirmed suffixes: a `tags` file
+becomes its tags (and it is not queued for the tagger), a `description` file
+its description, and an `ignore` pattern is never opened however tag-like its
+content. **Absent and empty are different answers.** A request with no
+`captions` key is a client that never asked (an older one), and the import
+probes the known conventions as it always did (`_tags.txt`, `.caption`, a
+content-sniffed `.txt`). `[]` is the owner having been asked with nothing to
+confirm, and reads no caption file at all. The answer is recorded on the
+durable commit record, so a commit resumed after a crash honours it. A row's
+`suffix` must be a bare filename fragment and `kind` one of `tags`,
+`description`, `ignore`, else `400`. `mode: "reference"` refuses the field
+outright (`400`), `null` and `[]` included: a reference folder's sidecar
+suffixes are its own `PATCH /reference-folders/{folder_id}` fields.
+
+**The root must be inside `image_root` or the commit fails.** There is no
+separate error status for this — the check runs inside the background commit,
+same as every other commit-time refusal, and surfaces as `status: "failed"`
+with `error` set once the client polls `GET .../commit/status` (see below),
+not as a synchronous 4xx on the `POST`. A client offering `local_import` in its
+UI should therefore only ever construct the request against the active
+library's own folder — this is a server-side backstop, not something the
+mapping screen is expected to let the owner trigger by hand against an
+arbitrary path.
+
+#### `GET /api/v1/folder-structure/commit/status?task_id=…`
+
+Polled per §11's task-id branch, same shape as §20.1's read status:
+
+```jsonc
+{
+  "task_id": "…",
+  "status": "running",        // queued | running | completed | failed
+  "stage": "indexing",        // registering | indexing | assigning | done
+  "processed": 149,
+  "total": 352,
+  "progress": 42.3,
+  "error": null,
+  "result": null
+}
+```
+
+**A commit is never `cancelled`.** In `mode: "reference"`, once the reference
+folder is registered its scan runs to completion regardless of what the screen
+does next — the in-place indexing this route starts is not something a
+"Cancel and organise later" on a *later* screen can safely stop mid-write, and
+it is also the whole reason the mapping screen stays reachable from the
+sidebar afterwards: the scan and the mapping are two different steps, and
+abandoning the second does not undo the first. `mode: "local_import"` has no
+separate scan to keep running, but the same rule applies for the same
+underlying reason: there is no cancel route on this API in either mode, so a
+commit once started always runs to `completed` or `failed`.
+
+`stage` progresses `registering` (creating the reference folder row) →
+`indexing` → `assigning` (creating the accepted entities and linking pictures
+— no filesystem work happens here at all) → `done`. In `mode: "reference"`,
+`indexing` means waiting for the reference folder's first scan pass;
+`processed`/`total` are pictures indexed so far, out of the read's own
+`picture_count`. In `mode: "local_import"` there is no reference folder to
+register, so `stage` goes straight from `registering` (the commit's initial
+state, before its background thread has reported anything) to `indexing`,
+where `processed`/`total` instead count files as `local_import_pictures`
+resolves them — both the ones already indexed (an idempotent hit, counted
+immediately) and the newly-imported ones (counted as each batch commits).
+
+The result, once `status` is `completed`:
+
+```jsonc
+{
+  "reference_folder_id": 7,     // null for mode: "local_import" — no ref folder
+  "pictures_indexed": 28412,
+  "projects_created": 12, "projects_matched": 1,
+  "people_created": 114, "people_matched": 4,
+  "sets_created": 31, "sets_matched": 0,
+  "tags_created": 4
+}
+```
+
+#### Not in this API
+
+- **No re-mapping an already-committed folder.** Accepting a mapping is
+  one-shot and **enforced**, not merely a convention the client is trusted to
+  follow: the read is marked committed the instant a commit for it starts
+  (backend §24.2), and a second `POST` against the same `task_id` — whether the first
+  commit is still running or long since `completed` — is refused with a
+  **409**, never re-run. Changing what a folder means afterwards is ordinary
+  entity editing (rename a project, move a picture between sets), not a
+  second commit.
+- **No placement of *future* pictures.** This writes the accepted mapping onto
+  the pictures the read found; where a new picture goes on import is the
+  layout, v1.11 Phase 4.
+
+### 20.3 Layout & Move
+
+How a library's folders are laid out, the one action the client offers over it,
+and the one gesture that moves everything. Backend design is
+`docs/backend_architecture.md` §24.4; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 4.
+
+**Three rules the client must hold to.**
+
+1. **A picture moves only when its folder stops being true.** Not whenever
+   something about it changes. Adding a second project or a second person moves
+   nothing, and the UI must not suggest otherwise — the copy that sits next to
+   the layout builder is a table of what does and does not move, not a warning.
+2. **Choosing a layout reorganises nothing.** Every path already in the library
+   is what its assignments were read from, so every path is already true. A
+   confirmation dialog saying "this will move your files" would be false, and
+   `PATCH /server-config/layout` will not have moved one when it returns.
+   *Offering* the Phase 4c migration afterwards is the correct shape, and it is
+   a separate, previewed, explicitly-consented action — never a side effect of
+   the PATCH.
+3. **Drift is offered, never taken.** A picture whose folder is still true but is
+   not what the layout would pick today is *not wrong*. `suggested_folder` is an
+   offer the owner accepts; nothing in the product acts on it by itself. The
+   Phase 4c migration is the one thing that does sweep a folder of the owner's
+   own into the layout, and only because it is the owner acting, on the whole
+   library at once, after a preview and with one undo: **the rule and the drift
+   offer treat a folder of the owner's own as a permanent override; "Move them
+   now" flattens it.**
+
+#### The layout string
+
+One field, `layout`, in the form `project/person,set`:
+
+- `/` separates **segments** — one folder level each, in order.
+- `,` separates a segment's **alternatives**; the first the picture has a value
+  for wins.
+- A segment nothing fills is **skipped**, not left as an empty folder, which is
+  what keeps the tree two deep instead of five.
+- Facets: `project`, `person`, `set`, `tag`. `person` is the user-facing word;
+  `character` is the database's.
+
+`null` or `""` means **no layout**, which is the default and the only state in
+which nothing is ever placed or moved. `layout_unfiled` is the folder a picture
+with nothing to file it by goes to — one safe path component, `Unassigned`
+when null. It is deliberately not the library root: the root is where an unmigrated
+flat library lives and those files must never move.
+
+**Both PATCHes are patches, not puts.** A field you do not send keeps its stored
+value, so sending `layout_unfiled` alone renames the unfiled folder and does not
+turn the layout off. Send `layout: null` explicitly to turn it off. An unfiled
+name that is not a single safe path component is `400`, and so is an
+unparseable layout — checked independently, so a bad unfiled name is refused
+even when there is no layout to parse beside it.
+
+#### Routes
+
+| Method | Path | Tier | Returns |
+|---|---|---|---|
+| `GET` | `/api/v1/server-config/layout` | `local_owner_only` | `{layout, layout_unfiled, default_layout}` for the library's own picture root |
+| `PATCH` | `/api/v1/server-config/layout` | `local_owner_only` | the same, after recording. `400` with the reason if the layout cannot be read |
+| `GET` | `/api/v1/server-config/captions` | `local_owner_only` | `{sync_tags, sync_descriptions, tags_suffix, description_suffix, default_tags_suffix, default_description_suffix}`: caption-file sync for the library's own picture root, the same four fields a reference folder carries |
+| `PATCH` | `/api/v1/server-config/captions` | `local_owner_only` | the same, after recording. A toggle sent as `null` is no change; an empty suffix clears it. `400` for a suffix that is not a bare filename fragment, or one suffix for both kinds. Turning a kind on asks for a root rescan, which reads existing caption files in and writes one beside every picture that has content but no file |
+| `PATCH` | `/api/v1/reference-folders/{folder_id}` | `local_owner_only` | the folder, now carrying `layout` / `layout_unfiled`. The same two fields on the folder the owner indexed in place, and they are read back by `GET /reference-folders` too |
+| `GET` | `/api/v1/pictures/{id}/layout` | `picture_scoped` | `{layout, current_folder, suggested_folder}` |
+| `POST` | `/api/v1/pictures/layout/move-to-match` | `picture_scoped` | `{moved_count, moved_picture_ids, skipped, operation_id}` |
+| `GET` | `/api/v1/server-config/layout/migration` | `local_owner_only` | what moving the whole library onto its layout would do. Moves nothing |
+| `POST` | `/api/v1/server-config/layout/migration` | `local_owner_only` | one pass of that move: `{batch_id, moved_count, moved_picture_ids, examined, next_after_id, done, skipped, operation_id}` |
+
+`GET /pictures/{id}/layout` answers `{"layout": null, "current_folder": null,
+"suggested_folder": null}` — **not** a 404 — for a picture in a root with no
+layout. A 404 there means the picture does not exist.
+
+`suggested_folder` is `null` whenever there is nothing to offer, and the client
+must treat all four cases the same way (no button): the root has no layout, the
+picture is not in a laid-out root, its folder is one of the owner's own, or it
+is already where the layout would put it.
+
+#### `move-to-match`
+
+Body `{"picture_ids": [int, ...]}`, at most 200 — the same cap as `POST /pictures/rotate`, because every id is a file operation on the owner's disk and the whole request is one transaction and one undo. A larger selection is `422`; send it in batches. Every picture that is already
+where the layout would put it, or is in a folder of the owner's own, comes back
+in `skipped` as `{"picture_id": int, "reason": str}` and is **left exactly where
+it is**. Reasons the client may see: `already_matches`, `no_layout`,
+`destination_taken`, `source_file_missing`, `source_is_symlink`,
+`path_outside_root`, `destination_outside_root`.
+
+The whole request is recorded as **one** `pictures.layout.move` operation, so
+one Ctrl+Z puts every file back — `operation_id` names it. A folder the move
+leaves empty is kept, never deleted.
+
+#### The migration (Phase 4c)
+
+The one operation in this release that deliberately moves everything, offered
+whenever a layout is **set or changed** and never automatic, never on import.
+
+> **It is not rule 1 and the UI must not describe it as one.** Under that rule a
+> flat path parses against nothing, can never be false, and never moves — which
+> is why an existing library needs no migration and why rule 2 is true. This is
+> the owner asking for something else: *make it all match, now.*
+
+`GET .../migration` **moves nothing** and is the consent screen:
+
+```
+{ "layout": "project/person,set",
+  "picture_count": 4109, "folder_count": 312,
+  "samples": [ {"picture_id": 12, "from": "0412.png", "to": "2024 Shoots/Mira/0412.png"} ],
+  "collision_count": 3, "collisions": [ ... ],
+  "cross_volume_count": 0,
+  "skipped_counts": {"source_is_symlink": 1} }
+```
+
+**`skipped_counts` is a different shape from the `POST`'s `skipped`, on
+purpose**, and the name says so: the preview answers `{reason: count}` because a
+per-picture list over a whole library would be a listing of it, and the `POST`
+answers `[{picture_id, reason}]` because a pass is 200 pictures and the client
+may want to name them.
+
+Every path is **relative to the library root**, never absolute. Three numbers
+carry the whole consent and the client must show all three:
+
+- `picture_count` / `folder_count` — *"4,109 pictures will move into 312
+  folders"*, with `samples` under it. A picture the layout cannot place is in
+  none of these and does not move: sweeping it into the unfiled folder would be
+  movement for no gain, since it already contradicts nothing.
+- `collision_count` — pictures rendering onto a path something already occupies.
+  They are suffixed `-2`, `-3`… **The file already sitting there is never
+  renamed and never overwritten**; what is suffixed is the file being moved,
+  and its sidecars with it (a sidecar pairs with its picture by stem).
+  Show the count and the `collisions` samples rather than hiding it, and never
+  present it as a failure.
+- `cross_volume_count` — pictures sitting across a mount point from where the
+  layout would put them. **Those cannot be moved at all**: the destination is
+  claimed with `os.link` and then `os.replace`, and both refuse to cross a
+  device, so they are refused in the plan rather than attempted. They are also
+  in `skipped_counts` as `destination_other_volume`, they are not in
+  `picture_count`, and they stay exactly where they are. Non-zero is worth
+  saying out loud before the run — it is the one case where "make it all match"
+  cannot, and the owner may want to move the mount rather than the pictures.
+
+`POST .../migration` runs **one pass**. Body `{"after_id": 0, "batch_id": null}`;
+call it again with the `next_after_id` and the `batch_id` it returned until
+`done` is `true`. That loop is the progress bar.
+
+- **Omit `batch_id` on the first pass and echo it on every one after.** Every
+  pass records its own `pictures.layout.move` operation, all under that one id,
+  and a batch is a single undo unit — so **one undo puts every file back at the
+  path it had**. A `batch_id` outside the `srv-layout-migration-` namespace is
+  `400`; the check is on the value's shape, so what it guarantees is that a
+  migration's passes cannot be grouped into some other gesture's undo unit, not
+  that the id came from this server.
+- **A pass that fails is finishable, not restartable.** The tree is left
+  half-moved and wholly consistent; call again with the same cursor and id. A
+  picture already where the layout wants it plans no move, so re-running is
+  safe and re-moves nothing.
+- **Every picture a pass planned is accounted for**, in `moved_picture_ids` or
+  in `skipped`. A file that could not be moved after all — a name that appeared
+  at the destination since the plan, a file locked on Windows — comes back as
+  `move_failed` rather than vanishing from both lists while the pass reports a
+  clean finish. Re-run to retry it.
+- `skipped` uses §20.3's own vocabulary plus `destination_other_volume` and
+  `move_failed`, both above.
+- Only the library's **own** picture root is migrated. A reference folder's
+  layout has no migration route; it would need its own consent naming that
+  folder.
+
+#### Events
+
+A move — whether the owner asked for it, the rule decided it, or the migration
+made it — broadcasts
+`CHANGED_PICTURES` with `change_kind: "updated"` and
+`fields: ["file_path", "pixels"]`. **`pixels` is not decoration.** The thumbnail
+URL is derived from the file path and does not come back from
+`GET /pictures/{id}/metadata`, so a client that re-reads metadata alone goes on
+painting a thumbnail that is no longer at that address — the same marker an
+in-place rotate raises, for the same reason.
+
+There is no event for "a picture became due a layout check", and there should
+not be: the check is debounced by design, almost always decides nothing, and a
+client that drew a spinner for it would be drawing one for every membership edit
+in the product.
+
+### 20.4 Move Reconciliation
+
+The mirror of §20.3: that surface moves a file when an assignment change makes
+its folder untrue; this one reads a file the owner already moved outside
+PixlStash and says whether an assignment should change to match. Backend
+design is `docs/backend_architecture.md` §24.5; the release plan is
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 5.
+
+#### Routes
+
+All three `owner_only`, vault-wide like `/operations` — none of it is
+boundable to a single resource-scoped grant.
+
+| Method | Path | Body | Returns |
+|---|---|---|---|
+| `GET` | `/api/v1/moves/pending` | — | `{unambiguous, ambiguous, off_layout}` |
+| `POST` | `/api/v1/moves/apply` | `{"review_ids": [int, ...]}` | `{applied_picture_ids, skipped_review_ids}` |
+| `POST` | `/api/v1/moves/dismiss` | `{"review_ids": [int, ...]}` | `{dismissed_review_ids}` |
+
+Each item in a bucket:
+
+```jsonc
+{
+  "review_id": 42,
+  "picture_id": 1001,
+  "old_path": "/library/refs/2024 Shoots/mira.png",
+  "new_path": "/library/refs/Client · Nordvik/mira.png",
+  "removals": [{"facet": "project", "name": "2024 Shoots"}],
+  "additions": [{"facet": "project", "name": "Client · Nordvik"}],
+  // ambiguous bucket only — the picture's own current names for each facet a
+  // removal is ambiguous about, i.e. why leaving one folder does not say
+  // which the owner meant:
+  "current": {"project": ["2024 Shoots", "Client · Nordvik"]}
+}
+```
+
+`facet` is one of `"project"` \| `"set"` \| `"person"` — the same three
+`Facet` values §20.3's layout builder uses, minus `"tag"` (deliberately
+unreconciled; `docs/backend_architecture.md` §24.5).
+
+**Four contract points the client must hold to.**
+
+1. **There is no cache to invalidate, on either side.** Every `GET` is
+   reclassified live against current assignments and the current layout —
+   the same "Look again" shape as `GET /insights` (§21). A row that no longer
+   implies anything is quietly dropped rather than returned; the client
+   should not expect a `review_id` it saw once to still be there.
+2. **`apply` recomputes fresh too, never trusting an earlier `GET`.** Passing
+   every currently-unambiguous `review_id` is how the client requests "apply
+   the whole bucket" — it is not submitting a decision the server already
+   made, it is asking the server to decide again, right now, and act. A
+   picture whose memberships changed in the gap is applied against what is
+   true at that moment, which may differ from what the `GET` said.
+3. **A single `review_id` sent to `apply` is how an ambiguous row is
+   resolved** — the ambiguity gate only blocks the *bulk* "apply every
+   unambiguous row" action, never a caller naming one row explicitly.
+   `dismiss` on the same id ("Keep both") changes nothing and only clears the
+   queue. The resolve button's own label is derived client-side from `current`
+   and `removals`, not sent by the server — see
+   `docs/frontend_architecture.md` §9.4 for why it must name the destination
+   rather than a generic verb.
+4. **`applied_picture_ids` and `skipped_review_ids` are disjoint, and neither
+   implies the row is still in the queue.** Every `review_id` the caller sent
+   is cleared once acted on, whether or not anything changed. A `review_id`
+   lands in `skipped_review_ids` when it had a genuine removal or addition to
+   make but the entity name it needed could not be resolved uniquely (backend §24.5) —
+   the client must not read an empty `applied_picture_ids` as "nothing was
+   asked for" without also checking whether anything was skipped.
+
+**`off_layout` carries no decision.** Every item in it already has its path
+followed (the scan already updated `Picture.file_path`); the bucket exists so
+the client can say so, not so the client can act on it. Both endpoints accept
+any `review_id` and clear the row either way, so applying or dismissing an
+`off_layout` one is never an error — but it is not guaranteed to be a pure
+no-op, because `apply` reclassifies fresh (contract point 2, above): if a
+matching entity was created in the gap between the `GET` and the click, the
+row may no longer be `off_layout` by the time `apply` acts on it, and it is
+applied against what is true then. The client's own `off_layout` bucket
+carries no button for this reason — the row is not offered as something to
+apply, only as something to dismiss along with the rest of the queue, and it
+never persists past `RETENTION_S` regardless (backend §24.5).
+
+#### Events
+
+`external_moves_pending` (§8) is the only event on this surface, and it
+carries no picture ids or counts — see the table entry above. There is no
+"reconciled" event: applying and dismissing are both client-initiated `POST`s
+the caller already has the result of, and `CHANGED_PICTURES` (with
+`change_kind: "updated"`) is emitted separately for the pictures an `apply`
+actually changed, the same envelope every other membership write uses.
+
+---
+
+## 21. About your library
 
 ### `GET /insights`
 
@@ -2727,476 +3199,7 @@ touched. Any UI copy implying otherwise would be wrong.
 
 ---
 
-## 22. Folder-Structure Commit API (v1.11, Phase 3)
-
-The accept path behind the `Preview` screen: takes the mapping the owner
-confirmed over a §20 read and writes it. Backend design is
-`docs/backend_architecture.md` §25; the release plan is
-`docs/plans/v1.11.0-existing-library.md` §4 Phase 3.
-
-**One rule the client must hold to, same as §20's first: it moves, renames and
-copies zero files, in either commit mode.** `mode: "reference"` (the default)
-registers the scanned root as an ordinary reference folder — the same
-mechanism `POST /reference-folders` already ships, indexed in place. `mode:
-"local_import"` (v1.11.x, the "Add a library" fix) instead imports the pictures
-as ordinary MANAGED ones — no reference folder at all. Either way every
-picture found is linked to the accepted projects, people, sets and tags by
-writing database rows. Nothing on disk changes except the new thumbnail each
-newly-indexed picture gets, exactly as any other import produces.
-
-### `POST /api/v1/folder-structure/commit`
-
-```jsonc
-{
-  // Exactly ONE of these two identifies the read being committed.
-  "task_id": "…",              // the settled read's task_id (§20)
-  "read_result": { /* … */ },  // or the read's own result, from §20's status
-  "label": "Generations",       // optional; defaults to the folder's own name
-  "mode": "reference",          // "reference" (default) | "local_import"
-  "captions": [                 // local_import only: one row per §20 caption pattern
-    {"suffix": ".txt", "kind": "tags"},
-    {"suffix": "_caption.txt", "kind": "description"},
-    {"suffix": "_notes.txt", "kind": "ignore"}
-  ],
-  "assignments": [
-    // One entry per folder the owner accepted as something. A folder left
-    // "just a folder" or undecided is simply absent — there is nothing here
-    // for it to do, and every picture under it is still indexed and
-    // searchable (§20's "arrives ungrouped" case).
-    {"relative_path": "2024 Shoots", "kind": "project"},
-    {"relative_path": "2024 Shoots/mira", "kind": "person", "match_id": 41},
-    {"relative_path": "Datasets/mira-lora-v3", "kind": "set"},
-    {"relative_path": "final", "kind": "tag"}
-  ]
-}
-```
-
-**`read_result` exists because a read lives in one server process's memory and
-processes end.** The desktop's first run reads the library folder while the GPU
-runtime downloads and then restarts the backend onto that runtime, so by the
-time the owner answers the mapping questions the task that produced the answer
-is gone and `task_id` can only be `404 Task not found` — with the answer sitting
-in the dialog. Sending the result back is the same information by another route.
-Two consequences worth knowing: a supplied result reserves nothing, so it
-carries none of the one-commit protection a task-identified read gets (the
-caller holding the result owns that), and a body that names both or neither is a
-`400`.
-
-`relative_path` is the same handle §20's folder rows carry — POSIX-separated,
-relative to the read's root, `""` for the root itself. `kind` is one of
-`project`, `person`, `set`, `tag` (never `folder`: a row with nothing to do is
-omitted, not sent as `folder`). `match_id` names an existing entity to attach
-to, exactly as `name_match`'s `match.id` proposed or as the owner picked from
-`candidates`; omitted, a new one is created named after the folder.
-
-**A folder's nearest accepted ancestor of each exclusive kind wins** — a
-picture is filed under the *closest* Project, Person or Set above it, not
-every one along the path, mirroring `library_layout`'s first-match-wins
-segments. Tags are the exception: every accepted Tag ancestor applies, because
-a picture can carry more than one label.
-
-Returns `{"task_id": "…"}` and starts the commit in the background.
-
-`local_owner_only` (§16.3): the read already validated the host path once, and
-this route is the write that follows from it.
-
-| Status | When |
-|---|---|
-| **400** | an `assignments` row is malformed or names an unknown `kind` |
-| **404** | `task_id` does not name a read this session holds |
-| **409** | the named read has not settled yet, a commit is already running (against any read), the named read has **already been committed**, or the read's root path is already a reference folder that has completed a scan (§25 — the reuse-vs-refuse rule) |
-
-### `mode: "local_import"`
-
-For the read's root when it IS the active library's own `image_root`, or a
-folder inside it — the "Add a library" flow's "pictures" verdict, where the
-folder a fresh vault was just created in already held loose files before the
-owner ever pointed PixlStash at it. `label` is ignored in this mode: there is
-no reference folder to name.
-
-**Every picture the walk finds becomes an ordinary MANAGED picture** (relative
-`file_path`, exactly as anything else imported into this library), not a
-reference-folder one. Routing this case through `mode: "reference"` instead
-would collide with the rule `POST /reference-folders` already enforces the
-other direction — a reference folder may never equal or contain `image_root`
-(`409 "Path conflicts with the PixlStash data folder."`) — so the two stay two
-modes, never one. Import is **idempotent by `file_path`**: a file already
-indexed under this path (an overlapping earlier `local_import`, or an ordinary
-import that reached it independently) is reused by id, never re-imported as a
-second row — same spirit as `mode: "reference"`'s own "don't redo what already
-happened" rule for a resumed commit (§25).
-
-**`captions` says what each caption file beside the pictures is.** A picture
-built by the import reads the files at the confirmed suffixes: a `tags` file
-becomes its tags (and it is not queued for the tagger), a `description` file
-its description, and an `ignore` pattern is never opened however tag-like its
-content. **Absent and empty are different answers.** A request with no
-`captions` key is a client that never asked (an older one), and the import
-probes the known conventions as it always did (`_tags.txt`, `.caption`, a
-content-sniffed `.txt`). `[]` is the owner having been asked with nothing to
-confirm, and reads no caption file at all. The answer is recorded on the
-durable commit record, so a commit resumed after a crash honours it. A row's
-`suffix` must be a bare filename fragment and `kind` one of `tags`,
-`description`, `ignore`, else `400`. `mode: "reference"` refuses the field
-outright (`400`), `null` and `[]` included: a reference folder's sidecar
-suffixes are its own `PATCH /reference-folders/{folder_id}` fields.
-
-**The root must be inside `image_root` or the commit fails.** There is no
-separate error status for this — the check runs inside the background commit,
-same as every other commit-time refusal, and surfaces as `status: "failed"`
-with `error` set once the client polls `GET .../commit/status` (see below),
-not as a synchronous 4xx on the `POST`. A client offering `local_import` in its
-UI should therefore only ever construct the request against the active
-library's own folder — this is a server-side backstop, not something the
-mapping screen is expected to let the owner trigger by hand against an
-arbitrary path.
-
-### `GET /api/v1/folder-structure/commit/status?task_id=…`
-
-Polled per §11's task-id branch, same shape as §20's read status:
-
-```jsonc
-{
-  "task_id": "…",
-  "status": "running",        // queued | running | completed | failed
-  "stage": "indexing",        // registering | indexing | assigning | done
-  "processed": 149,
-  "total": 352,
-  "progress": 42.3,
-  "error": null,
-  "result": null
-}
-```
-
-**A commit is never `cancelled`.** In `mode: "reference"`, once the reference
-folder is registered its scan runs to completion regardless of what the screen
-does next — the in-place indexing this route starts is not something a
-"Cancel and organise later" on a *later* screen can safely stop mid-write, and
-it is also the whole reason the mapping screen stays reachable from the
-sidebar afterwards: the scan and the mapping are two different steps, and
-abandoning the second does not undo the first. `mode: "local_import"` has no
-separate scan to keep running, but the same rule applies for the same
-underlying reason: there is no cancel route on this API in either mode, so a
-commit once started always runs to `completed` or `failed`.
-
-`stage` progresses `registering` (creating the reference folder row) →
-`indexing` → `assigning` (creating the accepted entities and linking pictures
-— no filesystem work happens here at all) → `done`. In `mode: "reference"`,
-`indexing` means waiting for the reference folder's first scan pass;
-`processed`/`total` are pictures indexed so far, out of the read's own
-`picture_count`. In `mode: "local_import"` there is no reference folder to
-register, so `stage` goes straight from `registering` (the commit's initial
-state, before its background thread has reported anything) to `indexing`,
-where `processed`/`total` instead count files as `local_import_pictures`
-resolves them — both the ones already indexed (an idempotent hit, counted
-immediately) and the newly-imported ones (counted as each batch commits).
-
-The result, once `status` is `completed`:
-
-```jsonc
-{
-  "reference_folder_id": 7,     // null for mode: "local_import" — no ref folder
-  "pictures_indexed": 28412,
-  "projects_created": 12, "projects_matched": 1,
-  "people_created": 114, "people_matched": 4,
-  "sets_created": 31, "sets_matched": 0,
-  "tags_created": 4
-}
-```
-
-### Not in this API
-
-- **No re-mapping an already-committed folder.** Accepting a mapping is
-  one-shot and **enforced**, not merely a convention the client is trusted to
-  follow: the read is marked committed the instant a commit for it starts
-  (§25), and a second `POST` against the same `task_id` — whether the first
-  commit is still running or long since `completed` — is refused with a
-  **409**, never re-run. Changing what a folder means afterwards is ordinary
-  entity editing (rename a project, move a picture between sets), not a
-  second commit.
-- **No placement of *future* pictures.** This writes the accepted mapping onto
-  the pictures the read found; where a new picture goes on import is the
-  layout, v1.11 Phase 4.
-
----
-
----
-
-## 23. Layout & Move API (v1.11, Phases 4b and 4c)
-
-How a library's folders are laid out, the one action the client offers over it,
-and the one gesture that moves everything. Backend design is
-`docs/backend_architecture.md` §26; the release plan is
-`docs/plans/v1.11.0-existing-library.md` §4 Phase 4.
-
-**Three rules the client must hold to.**
-
-1. **A picture moves only when its folder stops being true.** Not whenever
-   something about it changes. Adding a second project or a second person moves
-   nothing, and the UI must not suggest otherwise — the copy that sits next to
-   the layout builder is a table of what does and does not move, not a warning.
-2. **Choosing a layout reorganises nothing.** Every path already in the library
-   is what its assignments were read from, so every path is already true. A
-   confirmation dialog saying "this will move your files" would be false, and
-   `PATCH /server-config/layout` will not have moved one when it returns.
-   *Offering* the Phase 4c migration afterwards is the correct shape, and it is
-   a separate, previewed, explicitly-consented action — never a side effect of
-   the PATCH.
-3. **Drift is offered, never taken.** A picture whose folder is still true but is
-   not what the layout would pick today is *not wrong*. `suggested_folder` is an
-   offer the owner accepts; nothing in the product acts on it by itself. The
-   Phase 4c migration is the one thing that does sweep a folder of the owner's
-   own into the layout, and only because it is the owner acting, on the whole
-   library at once, after a preview and with one undo: **the rule and the drift
-   offer treat a folder of the owner's own as a permanent override; "Move them
-   now" flattens it.**
-
-### The layout string
-
-One field, `layout`, in the form `project/person,set`:
-
-- `/` separates **segments** — one folder level each, in order.
-- `,` separates a segment's **alternatives**; the first the picture has a value
-  for wins.
-- A segment nothing fills is **skipped**, not left as an empty folder, which is
-  what keeps the tree two deep instead of five.
-- Facets: `project`, `person`, `set`, `tag`. `person` is the user-facing word;
-  `character` is the database's.
-
-`null` or `""` means **no layout**, which is the default and the only state in
-which nothing is ever placed or moved. `layout_unfiled` is the folder a picture
-with nothing to file it by goes to — one safe path component, `Unassigned`
-when null. It is deliberately not the library root: the root is where an unmigrated
-flat library lives and those files must never move.
-
-**Both PATCHes are patches, not puts.** A field you do not send keeps its stored
-value, so sending `layout_unfiled` alone renames the unfiled folder and does not
-turn the layout off. Send `layout: null` explicitly to turn it off. An unfiled
-name that is not a single safe path component is `400`, and so is an
-unparseable layout — checked independently, so a bad unfiled name is refused
-even when there is no layout to parse beside it.
-
-### Routes
-
-| Method | Path | Tier | Returns |
-|---|---|---|---|
-| `GET` | `/api/v1/server-config/layout` | `local_owner_only` | `{layout, layout_unfiled, default_layout}` for the library's own picture root |
-| `PATCH` | `/api/v1/server-config/layout` | `local_owner_only` | the same, after recording. `400` with the reason if the layout cannot be read |
-| `GET` | `/api/v1/server-config/captions` | `local_owner_only` | `{sync_tags, sync_descriptions, tags_suffix, description_suffix, default_tags_suffix, default_description_suffix}`: caption-file sync for the library's own picture root, the same four fields a reference folder carries |
-| `PATCH` | `/api/v1/server-config/captions` | `local_owner_only` | the same, after recording. A toggle sent as `null` is no change; an empty suffix clears it. `400` for a suffix that is not a bare filename fragment, or one suffix for both kinds. Turning a kind on asks for a root rescan, which reads existing caption files in and writes one beside every picture that has content but no file |
-| `PATCH` | `/api/v1/reference-folders/{folder_id}` | `local_owner_only` | the folder, now carrying `layout` / `layout_unfiled`. The same two fields on the folder the owner indexed in place, and they are read back by `GET /reference-folders` too |
-| `GET` | `/api/v1/pictures/{id}/layout` | `picture_scoped` | `{layout, current_folder, suggested_folder}` |
-| `POST` | `/api/v1/pictures/layout/move-to-match` | `picture_scoped` | `{moved_count, moved_picture_ids, skipped, operation_id}` |
-| `GET` | `/api/v1/server-config/layout/migration` | `local_owner_only` | what moving the whole library onto its layout would do. Moves nothing |
-| `POST` | `/api/v1/server-config/layout/migration` | `local_owner_only` | one pass of that move: `{batch_id, moved_count, moved_picture_ids, examined, next_after_id, done, skipped, operation_id}` |
-
-`GET /pictures/{id}/layout` answers `{"layout": null, "current_folder": null,
-"suggested_folder": null}` — **not** a 404 — for a picture in a root with no
-layout. A 404 there means the picture does not exist.
-
-`suggested_folder` is `null` whenever there is nothing to offer, and the client
-must treat all four cases the same way (no button): the root has no layout, the
-picture is not in a laid-out root, its folder is one of the owner's own, or it
-is already where the layout would put it.
-
-### `move-to-match`
-
-Body `{"picture_ids": [int, ...]}`, at most 200 — the same cap as `POST /pictures/rotate`, because every id is a file operation on the owner's disk and the whole request is one transaction and one undo. A larger selection is `422`; send it in batches. Every picture that is already
-where the layout would put it, or is in a folder of the owner's own, comes back
-in `skipped` as `{"picture_id": int, "reason": str}` and is **left exactly where
-it is**. Reasons the client may see: `already_matches`, `no_layout`,
-`destination_taken`, `source_file_missing`, `source_is_symlink`,
-`path_outside_root`, `destination_outside_root`.
-
-The whole request is recorded as **one** `pictures.layout.move` operation, so
-one Ctrl+Z puts every file back — `operation_id` names it. A folder the move
-leaves empty is kept, never deleted.
-
-### The migration (Phase 4c)
-
-The one operation in this release that deliberately moves everything, offered
-whenever a layout is **set or changed** and never automatic, never on import.
-
-> **It is not rule 1 and the UI must not describe it as one.** Under that rule a
-> flat path parses against nothing, can never be false, and never moves — which
-> is why an existing library needs no migration and why rule 2 is true. This is
-> the owner asking for something else: *make it all match, now.*
-
-`GET .../migration` **moves nothing** and is the consent screen:
-
-```
-{ "layout": "project/person,set",
-  "picture_count": 4109, "folder_count": 312,
-  "samples": [ {"picture_id": 12, "from": "0412.png", "to": "2024 Shoots/Mira/0412.png"} ],
-  "collision_count": 3, "collisions": [ ... ],
-  "cross_volume_count": 0,
-  "skipped_counts": {"source_is_symlink": 1} }
-```
-
-**`skipped_counts` is a different shape from the `POST`'s `skipped`, on
-purpose**, and the name says so: the preview answers `{reason: count}` because a
-per-picture list over a whole library would be a listing of it, and the `POST`
-answers `[{picture_id, reason}]` because a pass is 200 pictures and the client
-may want to name them.
-
-Every path is **relative to the library root**, never absolute. Three numbers
-carry the whole consent and the client must show all three:
-
-- `picture_count` / `folder_count` — *"4,109 pictures will move into 312
-  folders"*, with `samples` under it. A picture the layout cannot place is in
-  none of these and does not move: sweeping it into the unfiled folder would be
-  movement for no gain, since it already contradicts nothing.
-- `collision_count` — pictures rendering onto a path something already occupies.
-  They are suffixed `-2`, `-3`… **The file already sitting there is never
-  renamed and never overwritten**; what is suffixed is the file being moved,
-  and its sidecars with it (a sidecar pairs with its picture by stem).
-  Show the count and the `collisions` samples rather than hiding it, and never
-  present it as a failure.
-- `cross_volume_count` — pictures sitting across a mount point from where the
-  layout would put them. **Those cannot be moved at all**: the destination is
-  claimed with `os.link` and then `os.replace`, and both refuse to cross a
-  device, so they are refused in the plan rather than attempted. They are also
-  in `skipped_counts` as `destination_other_volume`, they are not in
-  `picture_count`, and they stay exactly where they are. Non-zero is worth
-  saying out loud before the run — it is the one case where "make it all match"
-  cannot, and the owner may want to move the mount rather than the pictures.
-
-`POST .../migration` runs **one pass**. Body `{"after_id": 0, "batch_id": null}`;
-call it again with the `next_after_id` and the `batch_id` it returned until
-`done` is `true`. That loop is the progress bar.
-
-- **Omit `batch_id` on the first pass and echo it on every one after.** Every
-  pass records its own `pictures.layout.move` operation, all under that one id,
-  and a batch is a single undo unit — so **one undo puts every file back at the
-  path it had**. A `batch_id` outside the `srv-layout-migration-` namespace is
-  `400`; the check is on the value's shape, so what it guarantees is that a
-  migration's passes cannot be grouped into some other gesture's undo unit, not
-  that the id came from this server.
-- **A pass that fails is finishable, not restartable.** The tree is left
-  half-moved and wholly consistent; call again with the same cursor and id. A
-  picture already where the layout wants it plans no move, so re-running is
-  safe and re-moves nothing.
-- **Every picture a pass planned is accounted for**, in `moved_picture_ids` or
-  in `skipped`. A file that could not be moved after all — a name that appeared
-  at the destination since the plan, a file locked on Windows — comes back as
-  `move_failed` rather than vanishing from both lists while the pass reports a
-  clean finish. Re-run to retry it.
-- `skipped` uses §23's own vocabulary plus `destination_other_volume` and
-  `move_failed`, both above.
-- Only the library's **own** picture root is migrated. A reference folder's
-  layout has no migration route; it would need its own consent naming that
-  folder.
-
-### Events
-
-A move — whether the owner asked for it, the rule decided it, or the migration
-made it — broadcasts
-`CHANGED_PICTURES` with `change_kind: "updated"` and
-`fields: ["file_path", "pixels"]`. **`pixels` is not decoration.** The thumbnail
-URL is derived from the file path and does not come back from
-`GET /pictures/{id}/metadata`, so a client that re-reads metadata alone goes on
-painting a thumbnail that is no longer at that address — the same marker an
-in-place rotate raises, for the same reason.
-
-There is no event for "a picture became due a layout check", and there should
-not be: the check is debounced by design, almost always decides nothing, and a
-client that drew a spinner for it would be drawing one for every membership edit
-in the product.
-
-## 24. Move Reconciliation API (v1.11, Phase 5)
-
-The mirror of §23: that surface moves a file when an assignment change makes
-its folder untrue; this one reads a file the owner already moved outside
-PixlStash and says whether an assignment should change to match. Backend
-design is `docs/backend_architecture.md` §27; the release plan is
-`docs/plans/v1.11.0-existing-library.md` §4 Phase 5.
-
-### Routes
-
-All three `owner_only`, vault-wide like `/operations` — none of it is
-boundable to a single resource-scoped grant.
-
-| Method | Path | Body | Returns |
-|---|---|---|---|
-| `GET` | `/api/v1/moves/pending` | — | `{unambiguous, ambiguous, off_layout}` |
-| `POST` | `/api/v1/moves/apply` | `{"review_ids": [int, ...]}` | `{applied_picture_ids, skipped_review_ids}` |
-| `POST` | `/api/v1/moves/dismiss` | `{"review_ids": [int, ...]}` | `{dismissed_review_ids}` |
-
-Each item in a bucket:
-
-```jsonc
-{
-  "review_id": 42,
-  "picture_id": 1001,
-  "old_path": "/library/refs/2024 Shoots/mira.png",
-  "new_path": "/library/refs/Client · Nordvik/mira.png",
-  "removals": [{"facet": "project", "name": "2024 Shoots"}],
-  "additions": [{"facet": "project", "name": "Client · Nordvik"}],
-  // ambiguous bucket only — the picture's own current names for each facet a
-  // removal is ambiguous about, i.e. why leaving one folder does not say
-  // which the owner meant:
-  "current": {"project": ["2024 Shoots", "Client · Nordvik"]}
-}
-```
-
-`facet` is one of `"project"` \| `"set"` \| `"person"` — the same three
-`Facet` values §23's layout builder uses, minus `"tag"` (deliberately
-unreconciled; `docs/backend_architecture.md` §27).
-
-**Four contract points the client must hold to.**
-
-1. **There is no cache to invalidate, on either side.** Every `GET` is
-   reclassified live against current assignments and the current layout —
-   the same "Look again" shape as `GET /insights` (§21). A row that no longer
-   implies anything is quietly dropped rather than returned; the client
-   should not expect a `review_id` it saw once to still be there.
-2. **`apply` recomputes fresh too, never trusting an earlier `GET`.** Passing
-   every currently-unambiguous `review_id` is how the client requests "apply
-   the whole bucket" — it is not submitting a decision the server already
-   made, it is asking the server to decide again, right now, and act. A
-   picture whose memberships changed in the gap is applied against what is
-   true at that moment, which may differ from what the `GET` said.
-3. **A single `review_id` sent to `apply` is how an ambiguous row is
-   resolved** — the ambiguity gate only blocks the *bulk* "apply every
-   unambiguous row" action, never a caller naming one row explicitly.
-   `dismiss` on the same id ("Keep both") changes nothing and only clears the
-   queue. The resolve button's own label is derived client-side from `current`
-   and `removals`, not sent by the server — see
-   `docs/frontend_architecture.md` §9.4 for why it must name the destination
-   rather than a generic verb.
-4. **`applied_picture_ids` and `skipped_review_ids` are disjoint, and neither
-   implies the row is still in the queue.** Every `review_id` the caller sent
-   is cleared once acted on, whether or not anything changed. A `review_id`
-   lands in `skipped_review_ids` when it had a genuine removal or addition to
-   make but the entity name it needed could not be resolved uniquely (§27) —
-   the client must not read an empty `applied_picture_ids` as "nothing was
-   asked for" without also checking whether anything was skipped.
-
-**`off_layout` carries no decision.** Every item in it already has its path
-followed (the scan already updated `Picture.file_path`); the bucket exists so
-the client can say so, not so the client can act on it. Both endpoints accept
-any `review_id` and clear the row either way, so applying or dismissing an
-`off_layout` one is never an error — but it is not guaranteed to be a pure
-no-op, because `apply` reclassifies fresh (contract point 2, above): if a
-matching entity was created in the gap between the `GET` and the click, the
-row may no longer be `off_layout` by the time `apply` acts on it, and it is
-applied against what is true then. The client's own `off_layout` bucket
-carries no button for this reason — the row is not offered as something to
-apply, only as something to dismiss along with the rest of the queue, and it
-never persists past `RETENTION_S` regardless (§27).
-
-### Events
-
-`external_moves_pending` (§8) is the only event on this surface, and it
-carries no picture ids or counts — see the table entry above. There is no
-"reconciled" event: applying and dismissing are both client-initiated `POST`s
-the caller already has the result of, and `CHANGED_PICTURES` (with
-`change_kind: "updated"`) is emitted separately for the pictures an `apply`
-actually changed, the same envelope every other membership write uses.
-
----
-
-## 25. Text in Pictures (#1197)
+## 22. Text in Pictures
 
 Text read out of a picture is its own data: never `description`, never tags.
 
@@ -3215,4 +3218,4 @@ Text read out of a picture is its own data: never `description`, never tags.
 
 ---
 
-*Last updated: 2026-08-24. Update this document whenever any integration contract (URL prefix, event names, auth mode, build output path, CORS policy, share-token mechanism, settings field names) changes.*
+*When a change needs documenting, edit the section that covers its subsystem, adding a numbered subsection there, and to the Table of Contents, if it needs one. Never add a new `##` section named for a feature, a release or a phase.*
