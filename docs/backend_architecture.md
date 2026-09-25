@@ -3160,18 +3160,8 @@ models, and nothing on disk says which.
 - **Not yet read here:** ComfyUI's own history and saved workflows. Models used
   only in graphs that never produced a picture PixlStash filed are invisible to
   the delete warning, which the `no_evidence` answer says out loud rather than
-  hiding. The clone's *proposals* do read ComfyUI's history (below).
-- **Proposals also read ComfyUI's run history (#1518).** The workflow pull
-  (`ComfyUIWorkflowPullTask`) reads `GET /history?max_items=500` after the saved
-  workflows, and `record_comfyui_history` files each *finished* run as
-  `comfyui_history_model(prompt_id, model_id)`. Names resolve to shelf rows the
-  way a recipe's do, but only an unambiguous match is stored, and as an id: the
-  table adds no place a model filename lives, so forgetting a name has nothing
-  new to reach. `propose_companions` reads it beside the recipes and counts the
-  two apart (`recipes`, `history_runs`; recipes rank first), so the evidence
-  stays distinguishable. ComfyUI forgets its history on restart; the rows do
-  not, and nothing on the read path asks ComfyUI. A failed history read never
-  fails the pull (`history_runs: null` in its summary).
+  hiding. The clone's *proposals* do read ComfyUI's history (see "Clone with
+  new models proposes companions from evidence").
 
 #### Workflow sets: which models have actually run together (#1438)
 
@@ -3347,7 +3337,23 @@ chosen checkpoint, and when there are none, with any base model of the same
 `base_model` label, then of the same `family_of` family and `modality_of`
 modality (image or video, never across). Each proposal carries
 the step that produced it (`via`), and a support file a recipe reached only
-through an ambiguous name is not proposed. "Same base model" and "same family"
+through an ambiguous name is not proposed. **ComfyUI's own runs are evidence
+too (#1518).** The workflow pull (`ComfyUIWorkflowPullTask`) reads
+`GET /history?max_items=500` after the saved workflows, and
+`record_comfyui_history` files each *finished* run as
+`comfyui_history_model(prompt_id, model_id)`. Names resolve to shelf rows the
+way a recipe's do, but only an unambiguous match is stored, and as an id: the
+table adds no place a model filename lives, so forgetting a name has nothing new
+to reach. The ambiguity is judged at pull time, so a same-named row added later
+does not reopen it; the next pull re-reads what ComfyUI still holds. A duplicate
+merge in `checkpoint_hash_task` carries the rows to the survivor. The two kinds
+are counted apart (`recipes`, `history_runs`; recipes rank first within a
+step), and the dialog says "in ComfyUI" when a run is the only evidence. A run
+at the `checkpoint` step answers before recipes at `base_model`, for the same
+reason the ladder exists: direct evidence beats an inference. ComfyUI forgets
+its history on restart; the rows do not, and nothing on the read path asks
+ComfyUI. A failed history read never fails the pull (`history_runs: null` in
+its summary). "Same base model" and "same family"
 read `known_base_model`: the shelf's identified label (`base_model_canonical`)
 unless its source is a fuzzy guess, else the stored `base_model` folded; the
 LoRA flag reads the same. A checkpoint from a family nothing has run with
@@ -3357,7 +3363,7 @@ architecture family, the tensor layouts (`vae_16ch`, `clip_l`, `t5_xxl`...) its
 VAE and text encoders take, and the shelf's support files of those layouts are
 proposed with `recipes` 0, by filename. It is a declaration, not evidence (SD
 1.5's and SDXL's VAEs share a layout, as do FLUX's and SD 3.5's), so it runs
-only for a kind no recipe answered, the dialog labels it untested, and a family
+only for a kind no recipe or ComfyUI run answered, the dialog labels it untested, and a family
 declares only the kinds the layout vocabulary can name with certainty; anything
 else still proposes nothing. LoRAs and ControlNets are the one legitimate
 family comparison (`family_of` on both sides of one vocabulary), and a mismatch

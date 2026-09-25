@@ -211,6 +211,16 @@ class CheckpointHashTask(BaseTask):
             (survivor["id"], doomed["id"]),
         )
         conn.execute("DELETE FROM model_capability WHERE model_id = ?", (doomed["id"],))
+        # ComfyUI runs recorded against the doomed row (#1518) are runs of the
+        # same bytes; carried the same way, or the evidence is lost silently.
+        conn.execute(
+            "INSERT OR IGNORE INTO comfyui_history_model (prompt_id, model_id) "
+            "SELECT prompt_id, ? FROM comfyui_history_model WHERE model_id = ?",
+            (survivor["id"], doomed["id"]),
+        )
+        conn.execute(
+            "DELETE FROM comfyui_history_model WHERE model_id = ?", (doomed["id"],)
+        )
         conn.execute("DELETE FROM model WHERE id = ?", (doomed["id"],))
         # A duplicate can be one file of a run, and the row that loses the merge
         # leaves it without asking the stack module - the same hole Forget and

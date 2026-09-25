@@ -395,11 +395,14 @@ class ComfyUIWorkflowPullTask(BaseTask):
         try:
             history = comfyui_userdata.read_history(self._comfyui_url)
             return record_comfyui_history(self._hub, history)
-        except (RuntimeError, sqlite3.Error) as exc:
+        except Exception as exc:
+            # Broad on purpose: the workflows are already filed, and a history
+            # this cannot read must not turn that into a failed pull.
             logger.warning(
                 "Pulled ComfyUI workflows from %s but could not file its run "
-                "history as companion evidence: %s",
+                "history as companion evidence: %s: %s",
                 self._comfyui_url,
+                type(exc).__name__,
                 exc,
             )
             return None

@@ -482,6 +482,29 @@ describe("CloneWithModelsDialog", () => {
     expect(selects(wrapper)[1].element.value).toBe("sd3/ae.safetensors");
   });
 
+  it("says so when ComfyUI's run history is the only evidence", async () => {
+    readModelSwap.mockImplementation(async (key, { checkpointId } = {}) =>
+      checkpointId == null
+        ? OPTIONS
+        : {
+            ...CHOSEN,
+            proposals: {
+              vae: [{ ...CHOSEN.proposals.vae[0], recipes: 0, history_runs: 2 }],
+              text_encoder: CHOSEN.proposals.text_encoder,
+            },
+          },
+    );
+    const wrapper = open();
+    await flushPromises();
+    await selects(wrapper)[0].setValue("2");
+    await flushPromises();
+    const text = wrapper.text();
+    expect(text).toContain("Used with this checkpoint in ComfyUI");
+    // A recipe-backed proposal keeps its plain wording.
+    expect(text).toContain("Used with other FLUX.2 checkpoints");
+    expect(text).not.toContain("FLUX.2 checkpoints in ComfyUI");
+  });
+
   it("keeps the workflow's own checkpoint in the select when the server left it out", async () => {
     readModelSwap.mockImplementation(async (key, { checkpointId } = {}) =>
       checkpointId == null ? { ...OPTIONS, checkpoints: [KREA] } : CHOSEN,
