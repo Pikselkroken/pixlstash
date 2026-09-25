@@ -90,16 +90,17 @@ jobs:
           # could otherwise point the key at another host.
           OPENROUTER.API_BASE: https://openrouter.ai/api/v1
           # Without a cap a looping generation runs until the job timeout: OpenRouter
-          # keeps the connection alive, so ai_timeout never fires. Reviews use ~1k.
-          OPENROUTER.MAX_TOKENS: "16000"
-          OPENROUTER.REASONING_EFFORT: "low"
+          # keeps the connection alive, so ai_timeout never fires. Reasoning tokens count
+          # against it, and PR-Agent subtracts it from MAX_MODEL_TOKENS for the diff.
+          OPENROUTER.MAX_TOKENS: "20000"
+          OPENROUTER.REASONING_EFFORT: "medium"
           CONFIG.MODEL: openrouter/${{ vars.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash' }}
           # The upstream default fallback is an OpenAI model we hold no key for.
           CONFIG.FALLBACK_MODELS: "[]"
           # Required for models missing from PR-Agent's token table; the
           # second line is what we actually send.
           CONFIG.CUSTOM_MODEL_MAX_TOKENS: "1000000"
-          CONFIG.MAX_MODEL_TOKENS: "128000"
+          CONFIG.MAX_MODEL_TOKENS: "160000"
           GITHUB_ACTION_CONFIG.AUTO_DESCRIBE: "false"
           GITHUB_ACTION_CONFIG.AUTO_REVIEW: "true"
           GITHUB_ACTION_CONFIG.AUTO_IMPROVE: "true"
