@@ -529,6 +529,11 @@ def swap_pixlstash_savers(workflow: dict) -> list[str]:
             # not have: left as it is, and refused as `imports_itself`.
             continue
         inputs = node.get("inputs") or {}
+        if inputs.get("images") is None:
+            # Nothing to hand to SaveImage: left as it is, and refused as
+            # `imports_itself` rather than queued as a SaveImage ComfyUI
+            # then rejects.
+            continue
         node["class_type"] = "SaveImage"
         node["inputs"] = {
             "images": inputs.get("images"),

@@ -162,6 +162,11 @@ class TestNodePolicy:
         assert comfyui_service.swap_pixlstash_savers(graph) == []
         assert _why(graph, **OPEN) == {"9": "imports_itself"}
 
+    def test_a_saver_with_no_images_is_not_swapped(self):
+        graph = {"9": _node("PixlStashPictureSaver", filename_prefix="v")}
+        assert comfyui_service.swap_pixlstash_savers(graph) == []
+        assert _why(graph, **OPEN) == {"9": "imports_itself"}
+
     def test_a_pack_node_without_an_entry_stays_refused(self):
         graph = {"9": _node("PixlStashSomethingNew")}
         assert _why(graph, **OPEN) == {"9": "no_policy"}
