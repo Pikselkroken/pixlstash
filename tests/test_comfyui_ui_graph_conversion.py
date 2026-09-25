@@ -288,6 +288,57 @@ class TestItConvertsExactly:
             "the sampler must be wired to the MODEL producer, not the CLIP one"
         )
 
+    def test_a_bypass_splices_the_input_on_the_slot_being_read(self):
+        """ComfyUI's rule, so the rebuild and the topology key pick one wire.
+
+        Two MODEL inputs and the sampler reads the SECOND output: ComfyUI
+        passes the second input through. "The first connected input of the
+        right type" wires the other model and reports an exact rebuild (#1440).
+        """
+        graph = _graph(
+            [
+                _node(
+                    4,
+                    "CheckpointLoaderSimple",
+                    outputs=[{"name": "MODEL", "type": "MODEL", "links": [1]}],
+                    widgets=["sd_xl_base_1.0.safetensors"],
+                ),
+                _node(
+                    42,
+                    "CheckpointLoaderSimple",
+                    outputs=[{"name": "MODEL", "type": "MODEL", "links": [5]}],
+                    widgets=["sd_xl_base_1.0.safetensors"],
+                ),
+                _node(
+                    7,
+                    "LoraStub",
+                    mode=4,
+                    inputs=[
+                        {"name": "model_a", "type": "MODEL", "link": 1},
+                        {"name": "model_b", "type": "MODEL", "link": 5},
+                    ],
+                    outputs=[
+                        {"name": "MODEL_A", "type": "MODEL", "links": []},
+                        {"name": "MODEL_B", "type": "MODEL", "links": [2]},
+                    ],
+                ),
+                _node(
+                    3,
+                    "KSampler",
+                    inputs=[{"name": "model", "type": "MODEL", "link": 2}],
+                    widgets=[1, "fixed", 20, 7.0],
+                ),
+            ],
+            [
+                [1, 4, 0, 7, 0, "MODEL"],
+                [5, 42, 0, 7, 1, "MODEL"],
+                [2, 7, 1, 3, 0, "MODEL"],
+            ],
+        )
+        prompt, problems = convert_ui_graph_to_api(graph, OBJECT_INFO)
+        assert problems == []
+        assert prompt["3"]["inputs"]["model"] == ["42", 0]
+
     def test_a_wired_widget_input_still_holds_its_slot_in_the_array(self):
         """The rule most likely to shift a whole node's values.
 

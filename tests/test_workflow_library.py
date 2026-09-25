@@ -21,6 +21,7 @@ import copy
 import hashlib
 import json
 import os
+import random
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -578,6 +579,127 @@ def test_ui_only_and_bypassed_nodes_do_not_reach_the_key():
     assert ui_topology_hash(workflow) == topology_hash(api_graph(TXT2IMG))
 
 
+def _typed_io(node, inputs, outputs):
+    node["inputs"] = [{"name": name, "type": kind} for name, kind in inputs]
+    node["outputs"] = [{"name": name, "type": kind} for name, kind in outputs]
+    return node
+
+
+def _latent_through(inputs, outputs, *, read_slot=0, feed_slot=None, mode=4):
+    """TXT2IMG with a node spliced into ``EmptyLatentImage -> KSampler.latent_image``.
+
+    The spliced node (93) gets *inputs* and *outputs* as ``(name, type)``;
+    EmptyLatentImage feeds its input *feed_slot* (the last one by default), a
+    LoadImage (94) feeds every other input, and the sampler reads output
+    *read_slot*.
+    """
+    workflow = ui_workflow(TXT2IMG)
+    sampler = next(node for node in workflow["nodes"] if node["id"] == 5)
+    for entry in sampler["inputs"]:
+        entry["type"] = "LATENT" if entry["name"] == "latent_image" else "*"
+    workflow["nodes"].append(
+        _typed_io(ui_node(93, "Spliced", [], mode=mode), inputs, outputs)
+    )
+    feed_slot = len(inputs) - 1 if feed_slot is None else feed_slot
+    if any(slot != feed_slot for slot in range(len(inputs))):
+        workflow["nodes"].append(
+            _typed_io(ui_node(94, "LoadImage", []), [], [("IMAGE", "IMAGE")])
+        )
+    links = workflow["links"]
+    latent = next(link for link in links if link[3] == 5 and link[4] == 3)
+    latent[1], latent[2] = 93, read_slot
+    for slot in range(len(inputs)):
+        source = (4, 0) if slot == feed_slot else (94, 0)
+        links.append([len(links) + 1, *source, 93, slot, "*"])
+    return workflow
+
+
+def _latent_source(workflow):
+    sampler = reduce_ui_graph(workflow)["5"]
+    return next(
+        ((key, slot) for name, key, slot in sampler.inputs if name == "latent_image"),
+        None,
+    )
+
+
+def test_a_bypassed_node_is_spliced_out_as_comfyui_does():
+    """ComfyUI hands the consumer what fed the bypassed node, so the key must too.
+
+    #1440: a bypassed ShowText between a captioner and a text encoder dropped
+    the edge on the editor side only, and one workflow keyed two ways.
+    """
+    workflow = _latent_through([("samples", "LATENT")], [("LATENT", "LATENT")])
+    assert _latent_source(workflow) == ("4", 0)
+    assert ui_topology_hash(workflow) == topology_hash(api_graph(TXT2IMG))
+
+
+def test_a_muted_node_still_cuts_the_edge():
+    """Muting is not bypassing: ComfyUI gives the consumer nothing."""
+    workflow = _latent_through([("samples", "LATENT")], [("LATENT", "LATENT")], mode=2)
+    assert _latent_source(workflow) is None
+    assert ui_topology_hash(workflow) != topology_hash(api_graph(TXT2IMG))
+
+
+def test_a_bypass_prefers_the_input_on_the_same_slot():
+    workflow = _latent_through(
+        [("a", "LATENT"), ("b", "LATENT")],
+        [("x", "LATENT"), ("y", "LATENT")],
+        read_slot=1,
+        feed_slot=1,
+    )
+    assert _latent_source(workflow) == ("4", 0)
+
+
+def test_a_bypass_passes_over_a_same_slot_input_of_the_wrong_type():
+    """Slot 0 is an IMAGE and the sampler wants a LATENT: the LATENT input wins."""
+    workflow = _latent_through(
+        [("image", "IMAGE"), ("samples", "LATENT")], [("LATENT", "LATENT")]
+    )
+    assert _latent_source(workflow) == ("4", 0)
+
+
+def test_a_bypass_matches_types_as_litegraph_does():
+    """Case-insensitive, and a comma list matches on any member."""
+    workflow = _latent_through(
+        [("image", "IMAGE"), ("samples", "image,latent")], [("LATENT", "LATENT")]
+    )
+    assert _latent_source(workflow) == ("4", 0)
+
+
+def test_a_bypass_with_no_input_of_the_type_drops_the_edge():
+    workflow = _latent_through(
+        [("image", "IMAGE")], [("LATENT", "LATENT")], feed_slot=1
+    )
+    assert _latent_source(workflow) is None
+
+
+def test_a_bypassed_subgraph_instance_is_spliced_not_entered():
+    """ComfyUI checks bypass before it looks inside a subgraph instance.
+
+    VAEDecode's ``samples`` is typed ``*`` here, and an any-type consumer takes
+    the input on the same slot number: the instance's ``model``.
+    """
+    workflow = subgraph_ui_workflow()
+    instance = next(node for node in workflow["nodes"] if node["id"] == 10)
+    instance["mode"] = 4
+    _typed_io(
+        instance,
+        [
+            ("model", "MODEL"),
+            ("positive", "CONDITIONING"),
+            ("negative", "CONDITIONING"),
+        ],
+        [("LATENT", "LATENT")],
+    )
+    decode = next(node for node in workflow["nodes"] if node["id"] == 6)
+    decode["inputs"][0]["type"] = "*"
+    nodes = reduce_ui_graph(workflow)
+    assert ("samples", "1", 0) in nodes["6"].inputs
+    assert not {"EmptyLatentImage", "KSampler"} & {
+        node.class_type for node in nodes.values()
+    }
+
+
 def test_a_reroute_is_stepped_through():
     """A Reroute exists only in the UI graph, so it must not key as a node."""
     workflow = ui_workflow(TXT2IMG)
@@ -588,6 +710,91 @@ def test_a_reroute_is_stepped_through():
             link[3], link[4] = 92, 0
     workflow["links"].append([len(workflow["links"]) + 1, 92, 0, 6, 0, "LATENT"])
     assert ui_topology_hash(workflow) == topology_hash(api_graph(TXT2IMG))
+
+
+# ---------------------------------------------------------------------------
+# Portability on real pairs (#1440 plan §2.2)
+#
+# The same workflow saved by ComfyUI in both formats. A pulled workflow is
+# always the editor half and the pictures it made carry the API half, so the
+# topology is the only thing that can join them.
+# ---------------------------------------------------------------------------
+
+PAIRED = Path(__file__).parent / "comfyui_workflows" / "paired" / "multigpu"
+PAIRED_NAMES = sorted(path.stem for path in (PAIRED / "ui").glob("*.json"))
+
+
+def _paired(name):
+    with open(PAIRED / "ui" / f"{name}.json", encoding="utf-8") as handle:
+        ui = json.load(handle)
+    with open(PAIRED / "api" / f"{name}.json", encoding="utf-8") as handle:
+        api = json.load(handle)
+    return ui, api
+
+
+def test_the_paired_corpus_is_all_there():
+    """An empty glob would parametrize nothing and pass."""
+    assert len(PAIRED_NAMES) == 15
+    assert sorted(path.stem for path in (PAIRED / "api").glob("*.json")) == (
+        PAIRED_NAMES
+    )
+
+
+@pytest.mark.parametrize("name", PAIRED_NAMES)
+def test_both_formats_of_a_real_workflow_key_to_one_topology(name):
+    ui, api = _paired(name)
+    assert ui_topology_hash(ui) == topology_hash(api)
+
+
+def _shuffled(workflow, rng):
+    rng.shuffle(workflow["nodes"])
+    rng.shuffle(workflow["links"])
+
+
+def _moved(workflow, rng):
+    for node in workflow["nodes"]:
+        node["pos"] = [rng.randint(-5000, 5000), rng.randint(-5000, 5000)]
+        node["size"] = [rng.randint(50, 900), rng.randint(50, 900)]
+
+
+def _reordered(workflow, rng):
+    for node in workflow["nodes"]:
+        node["order"] = rng.randint(0, 10_000)
+
+
+def _renumbered(workflow, rng):
+    """New node ids AND new link ids, everywhere either is written."""
+    node_ids = [node["id"] for node in workflow["nodes"]]
+    new_node = dict(zip(node_ids, rng.sample(range(1000, 100_000), len(node_ids))))
+    link_ids = [link[0] for link in workflow["links"]]
+    new_link = dict(zip(link_ids, rng.sample(range(1000, 100_000), len(link_ids))))
+    for node in workflow["nodes"]:
+        node["id"] = new_node[node["id"]]
+        for entry in node.get("inputs") or ():
+            if entry.get("link") is not None:
+                entry["link"] = new_link[entry["link"]]
+        for entry in node.get("outputs") or ():
+            if entry.get("links"):
+                entry["links"] = [new_link[link] for link in entry["links"]]
+    workflow["links"] = [
+        [new_link[link[0]], new_node[link[1]], link[2], new_node[link[3]], *link[4:]]
+        for link in workflow["links"]
+    ]
+
+
+@pytest.mark.parametrize(
+    "disturb", [_shuffled, _moved, _reordered, _renumbered], ids=lambda f: f.__name__
+)
+def test_editor_bookkeeping_does_not_reach_the_topology(disturb):
+    """Layout, evaluation order, array order and ids are the editor's, not the graph's."""
+    rng = random.Random(1440)
+    for name in PAIRED_NAMES:
+        ui, _api = _paired(name)
+        before = ui_topology_hash(ui)
+        disturbed = copy.deepcopy(ui)
+        disturb(disturbed, rng)
+        assert disturbed != ui, name
+        assert ui_topology_hash(disturbed) == before, name
 
 
 # ---------------------------------------------------------------------------
