@@ -46,6 +46,11 @@ vi.mock("../../api/recipes", () => ({
   editSavedRecipe: vi.fn(),
   listSavedRecipes: (...args) => listSavedRecipes(...args),
 }));
+// Opening the dialog refreshes the set names. Unmocked, that is a real request
+// still in flight when the environment tears down.
+vi.mock("../../api/pictureSets", () => ({
+  listPictureSets: vi.fn().mockResolvedValue([]),
+}));
 const push = vi.fn();
 vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
 vi.mock("vuetify/components", async () => {
