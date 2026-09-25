@@ -1639,7 +1639,7 @@ This rule is enforced by **`tests/test_architecture_guardrails.py::test_services
 | [utils/watermark.py](../pixlstash/utils/watermark.py) | Seeded watermark rendering + cache |
 | [utils/caption_file_utils.py](../pixlstash/utils/caption_file_utils.py) | Sidecar `.txt` caption I/O |
 | [utils/face_tags.py](../pixlstash/utils/face_tags.py) | Face-derived tag helpers |
-| [utils/library_layout.py](../pixlstash/utils/library_layout.py) | The library layout model — `render` / `is_true` (§13) |
+| [utils/library_layout.py](../pixlstash/utils/library_layout.py) | The library layout model — `render` / `is_true` (§24.3) |
 | [utils/library_roots.py](../pixlstash/utils/library_roots.py) | The directories this installation reads or writes as library content, and the two rules that read them: the folder export may write inside none of them (#1206 item 1); a watch or reference folder may not overlap a library's folder **or another watch or reference folder** — `refuse_overlapping_folder`, two-way, `exclude=` for the caller's own row — and `LibraryRegistry.create`/`attach`/`relocate` (so `POST /libraries` and the CLI alike) refuse a library overlapping a watch or reference folder of any registered library, under `FOLDER_OVERLAP_LOCK`, which the watch and reference folder writes also hold from check to commit (#1223) |
 | [utils/path_mapper.py](../pixlstash/utils/path_mapper.py) | Host↔container path translation |
 | [utils/host_path_utils.py](../pixlstash/utils/host_path_utils.py) | Host-aware path resolution |

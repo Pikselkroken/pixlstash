@@ -67,8 +67,8 @@ const emit = defineEmits([
 const committing = ref(false);
 // The wizard makes its dialog undismissable while this is true: a commit,
 // once started, runs to completion server-side regardless of what this
-// screen does next (integration §20.2), so Escape or a backdrop click must not be able to
-// quietly abandon the UI while it keeps running - that is what let the same
+// screen does next (integration §20.2), so Escape or a backdrop click must
+// not be able to quietly abandon the UI while it keeps running - that is what let the same
 // read's task id come back through the sidebar's resume flow and get
 // committed a second time.
 watch(committing, (value) => emit("update:committing", value));
