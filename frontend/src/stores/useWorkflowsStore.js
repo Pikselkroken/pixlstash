@@ -1,4 +1,4 @@
-import { computed, onScopeDispose, ref } from "vue";
+import { computed, onScopeDispose, ref, shallowRef, toRaw } from "vue";
 import { defineStore } from "pinia";
 
 import {
@@ -823,17 +823,15 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   ]);
 
   /**
-   * The card Run acts on, or null: the one selected card, or a stack's cover
-   * when the selection is exactly that stack.
+   * The cover of a stack selected WHOLE, or null.
    *
    * A click on a stack card selects the stack WHOLE (`stackKeys`), so the
    * selection holds several keys while the reader sees one card — and a gate
-   * counting keys refused to run it. Running the cover is what the Run popup
-   * already offers a stack: it lists the members to switch to.
+   * counting keys refused to run it.
    */
-  const runnableCard = computed(() => {
+  const stackCover = computed(() => {
     const keys = selectedKeys.value;
-    if (keys.length === 1) return selectedCards.value[0] ?? null;
+    if (keys.length < 2) return null;
     const held = new Set(keys);
     // `stackKeys` rather than `isStack`, as `syncPanelToSelection` does: the
     // set compared against is `member_keys`, so that is what says "a stack".
@@ -845,6 +843,53 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     return whole.length === held.size && whole.every((key) => held.has(key))
       ? cover
       : null;
+  });
+
+  /**
+   * The member of a whole-stack selection the inspector's picker is on.
+   *
+   * Tied to the selection ARRAY it was picked on, not its contents: every
+   * gesture that selects writes a new array, so each newly selected stack —
+   * the same one clicked again included — starts on its cover, and a grid
+   * re-read that leaves the selection alone keeps the pick.
+   */
+  const stackPick = shallowRef({ keys: null, key: "" });
+
+  /** Pick `key` out of the stack selected whole. */
+  function pickStackMember(key) {
+    stackPick.value = { keys: toRaw(selectedKeys.value), key };
+  }
+
+  /** The key the stack selected whole stands for: the pick, else the cover. */
+  const stackPickKey = computed(() => {
+    const cover = stackCover.value;
+    if (!cover) return null;
+    const { keys, key } = stackPick.value;
+    return keys === toRaw(selectedKeys.value) &&
+      stackKeys(cover.key).includes(key)
+      ? key
+      : cover.key;
+  });
+
+  /**
+   * The card Run acts on, or null: the one selected card, or — when the
+   * selection is exactly one stack — the member picked in the inspector,
+   * which is the cover until somebody picks another.
+   *
+   * A member the grid has not fetched is named from the cover's `members`
+   * list; the Run popup reads its cover picture itself.
+   */
+  const runnableCard = computed(() => {
+    if (selectedKeys.value.length === 1) return selectedCards.value[0] ?? null;
+    const cover = stackCover.value;
+    const key = stackPickKey.value;
+    if (!cover || key === cover.key) return cover;
+    for (const list of Object.values(members.value)) {
+      const found = list.find((entry) => entry.key === key);
+      if (found) return found;
+    }
+    const named = (cover.members ?? []).find((entry) => entry.key === key);
+    return { key, name: named?.name || cover.name, covers: [] };
   });
 
   /**
@@ -1238,6 +1283,10 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     selectedCards,
     selectedStackIds,
     runnableCard,
+    stackCover,
+    stackPick,
+    stackPickKey,
+    pickStackMember,
     parkedPlace,
     park,
     unpark,

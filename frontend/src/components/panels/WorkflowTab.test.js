@@ -868,30 +868,193 @@ describe("with several workflows selected", () => {
     expect(runDialog.source.pictureIds).toEqual([99]);
   });
 
-  it("runs a stack selected whole on its cover", async () => {
+  it("shows a stack selected whole as its cover, with a member picker", async () => {
     // A click on a stack card selects the cover and its members: several keys,
-    // one card on screen, and the one Run… should take.
-    const { wrapper } = await mountWith(
-      [KEY, OTHER],
-      [card({ stack_size: 2, member_keys: [OTHER] })],
+    // one card on screen. The rail reads it as one workflow, the cover first,
+    // and the picker at the top switches to another member without expanding
+    // the stack.
+    const cover = card({
+      stack_size: 2,
+      member_keys: [OTHER],
+      members: [
+        { key: KEY, name: "Cinematic portrait", sets_apart: [], differs_by: [] },
+        { key: OTHER, name: "Cinematic portrait", sets_apart: ["Flux"], differs_by: [] },
+      ],
+    });
+    getWorkflowCard.mockImplementation(async (key) =>
+      key === OTHER
+        ? detail({ card: { key: OTHER, name: "Flux portrait", stack_size: 2 } })
+        : detail({ card: { stack_size: 2 } }),
     );
-    const run = wrapper
-      .findAll("button")
-      .find((b) => b.text().includes("Run…"));
-    expect(run.attributes("aria-disabled")).toBeUndefined();
-    // Named in visible text, which is what Run… is described by; never the
-    // "N workflows selected" count of a genuinely several selection.
+    const { wrapper } = await mountWith([KEY, OTHER], [cover]);
+
     const text = textOf(wrapper);
     expect(text).not.toContain("workflows selected");
-    expect(
-      wrapper.find(`#${run.attributes("aria-describedby")}`).text(),
-    ).toContain("Run… runs Cinematic portrait, the cover");
-    await run.trigger("click");
+    expect(text).toContain("A stack of 2 workflows");
+    const pick = wrapper.find("[data-testid='wftab-stack-pick'] select");
+    expect(pick.element.value).toBe(KEY);
+    expect(pick.findAll("option").map((o) => o.text())).toEqual([
+      "Cinematic portrait",
+      "Cinematic portrait — Flux",
+    ]);
+    expect(getWorkflowCard).toHaveBeenLastCalledWith(KEY);
+
+    const run = () =>
+      wrapper.findAll("button").find((b) => b.text().includes("Run…"));
+    expect(run().attributes("aria-disabled")).toBeUndefined();
+    await run().trigger("click");
     await flush(wrapper);
     expect(useRunDialogStore().source).toMatchObject({
       kind: "card",
       workflowKey: KEY,
     });
+
+    // Picking the member reads it and makes it what Run… runs.
+    await pick.setValue(OTHER);
+    await flush(wrapper);
+    expect(getWorkflowCard).toHaveBeenLastCalledWith(OTHER);
+    expect(getLoraChain).toHaveBeenLastCalledWith(OTHER);
+    await run().trigger("click");
+    await flush(wrapper);
+    expect(useRunDialogStore().source).toMatchObject({ workflowKey: OTHER });
+  });
+
+  /** A two-card stack whose cover is KEY and member OTHER. */
+  function twoStack() {
+    return card({
+      stack_size: 2,
+      member_keys: [OTHER],
+      members: [
+        { key: KEY, name: "Cinematic portrait" },
+        { key: OTHER, name: "Flux portrait" },
+      ],
+    });
+  }
+
+  it("keeps the picker on screen while a member reads, and says a failed read", async () => {
+    let fail;
+    getWorkflowCard.mockImplementation((key) =>
+      key === OTHER
+        ? new Promise((_, reject) => {
+            fail = reject;
+          })
+        : Promise.resolve(detail({ card: { stack_size: 2 } })),
+    );
+    const { wrapper } = await mountWith([KEY, OTHER], [twoStack()]);
+    const pick = () => wrapper.find("[data-testid='wftab-stack-pick'] select");
+    await pick().setValue(OTHER);
+    await flush(wrapper);
+    expect(pick().exists()).toBe(true);
+    expect(pick().element.value).toBe(OTHER);
+    expect(textOf(wrapper)).toContain("Reading this workflow…");
+    // Run… stays on screen, refusing only for as long as the read.
+    const run = wrapper.findAll("button").find((b) => b.text().includes("Run…"));
+    expect(run.attributes("aria-disabled")).toBe("true");
+
+    fail(new Error("offline"));
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("Could not read this workflow just now.");
+    await pick().setValue(KEY);
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("Cinematic portrait");
+    expect(textOf(wrapper)).not.toContain("Could not read");
+  });
+
+  it("follows a picked member that a LoRA flip takes out of its stack", async () => {
+    getWorkflowCard.mockImplementation(async (key) =>
+      detail({
+        card: card({ key, name: key === OTHER ? "Flux portrait" : "Cover" }),
+      }),
+    );
+    const { wrapper, store } = await mountWith([KEY, OTHER], [twoStack()]);
+    await wrapper.find("[data-testid='wftab-stack-pick'] select").setValue(OTHER);
+    await flush(wrapper);
+    // The flip re-keys the member and splits the stack: the grid comes back
+    // without the old stack, so the rail can no longer derive the pick.
+    listWorkflowCards.mockResolvedValue({
+      cards: [card({ key: KEY }), card({ key: MOVED })],
+      one_offs: 0,
+      hidden: 0,
+    });
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Recipe")
+      .trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowSlots).toHaveBeenCalledWith(OTHER, { l1: "recipe" });
+    expect(store.selectedKeys).toEqual([MOVED]);
+  });
+
+  it("leaves a reader who picked another member during a flip where they are", async () => {
+    const stack = card({
+      stack_size: 3,
+      member_keys: [OTHER, MOVED],
+      members: [
+        { key: KEY, name: "Cover" },
+        { key: OTHER, name: "Flux portrait" },
+        { key: MOVED, name: "Third" },
+      ],
+    });
+    getWorkflowCard.mockImplementation(async (key) =>
+      detail({ card: card({ key, name: key }) }),
+    );
+    let answer;
+    setWorkflowSlots.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    // The re-read after the flip hands the grid the same stack back, minus
+    // the flipped member, which the answer re-keyed.
+    listWorkflowCards.mockResolvedValue({
+      cards: [{ ...stack, member_keys: [MOVED], stack_size: 2 }],
+      one_offs: 0,
+      hidden: 0,
+    });
+    const { wrapper, store } = await mountWith([KEY, OTHER, MOVED], [stack]);
+    const pick = () => wrapper.find("[data-testid='wftab-stack-pick'] select");
+    await pick().setValue(OTHER);
+    await flush(wrapper);
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Recipe")
+      .trigger("click");
+    await flush(wrapper);
+    // Mid-write, the reader moves on to another member of the same stack.
+    await pick().setValue(MOVED);
+    await flush(wrapper);
+    answer({ key: "f".repeat(64), moved: {} });
+    await flush(wrapper);
+    await flush(wrapper);
+    // Not yanked onto the flipped card: the selection and the pick stand.
+    expect(store.selectedKeys).toEqual([KEY, OTHER, MOVED]);
+    expect(store.stackPick.key).toBe(MOVED);
+  });
+
+  it("starts every newly selected stack on its cover", async () => {
+    const stack = (key, member) =>
+      card({
+        key,
+        stack_size: 2,
+        member_keys: [member],
+        members: [
+          { key, name: `Cover ${key[0]}` },
+          { key: member, name: `Member ${member[0]}` },
+        ],
+      });
+    const { wrapper, store } = await mountWith(
+      [KEY, OTHER],
+      [stack(KEY, OTHER), stack(MOVED, "e".repeat(64))],
+    );
+    await wrapper.find("[data-testid='wftab-stack-pick'] select").setValue(OTHER);
+    await flush(wrapper);
+    store.selectedKeys = [MOVED, "e".repeat(64)];
+    await flush(wrapper);
+    expect(
+      wrapper.find("[data-testid='wftab-stack-pick'] select").element.value,
+    ).toBe(MOVED);
+    expect(getWorkflowCard).toHaveBeenLastCalledWith(MOVED);
   });
 
   it("says how many are selected and offers no verbs of its own", async () => {

@@ -2082,7 +2082,7 @@ can no longer see.
 - **Open in ComfyUI is an icon-only button beside Run…**, wearing the ComfyUI
   logomark (`widgets/ComfyuiIcon.vue`, `currentColor` on the AiToolkitIcon
   pattern), shown while `comfyuiUrl` is set. It opens what Run… runs
-  (`runTarget`: the card, or the cover of a stack selected whole) and is
+  (`runTarget`: the card, or the member picked for a stack selected whole) and is
   refused with a reason, not hidden, for any other selection of several, like
   Run…. ComfyUI takes no workflow from a URL, so it opens the configured
   address with `?pixlstash_workflow=<key>`, and the ComfyUI-PixlStash node reads
@@ -2221,15 +2221,29 @@ can no longer see.
   behind it, so it shows the card's cover, an empty prompt box and a set picker
   for where the output is filed.
 - **A stack selected whole counts as one card.** A click on a stack card
-  selects its cover and every member, and `useWorkflowsStore.runnableCard`
-  reads that exact set as the cover. Run… here, the pill's Run and both verb
-  menus run the cover, and the popup's workflow select offers the members.
-  The rail's body names the cover and says so in visible text, which is what
-  Run… is described by; the pill's count reads "A stack of N workflows
-  selected". *Open cover picture* takes the same card. Rename, Export and
-  Duplicate still refuse, with "A stack is several workflows. Open it and pick
-  one to …". A stack plus anything else, or only part of one, is several again.
-  Ctrl-picking every row of an open stack is that same set, so it counts too.
+  selects its cover and every member; `useWorkflowsStore.stackCover` reads
+  that exact set as the stack. **Which member it stands for is one value in
+  the store**, `stackPickKey`: the member picked in the rail's select
+  (`pickStackMember`), else the cover. The pick is tied to the selection
+  array it was made on, so every new selection, the same stack clicked again
+  included, starts on the cover. `runnableCard` resolves that key to a card
+  (from the fetched members, else named from the cover's `members`), and the
+  rail's Run…, the pill's Run and both verb menus all run it; the pill's
+  tooltip says whether it is the cover or the picked member. **The rail shows
+  the stack as one workflow**: the full single-card body, with the title
+  replaced by a member select (`stackMemberOptions`, the popup's own labels).
+  Picking a member re-points the whole body at it (`selectedKey`), so its
+  defaults, LoRAs, notes, Hide, Run… and Open in ComfyUI are that member's
+  without expanding the stack. The select sits outside the body so a member's
+  read, or its failure, never unmounts it. A flip or Hide that takes the
+  picked member out of its stack selects that card alone rather than dropping
+  the rail to "N workflows selected", unless the reader moved on (another
+  selection, or another pick) while the write was out. The pill's count reads
+  "A stack of N workflows selected". *Open cover picture* takes the stack's
+  cover. Rename, Export and Duplicate still refuse, with "A stack is several
+  workflows. Open it and pick one to …". A stack plus anything else, or only
+  part of one, is several again. Ctrl-picking every row of an open stack is
+  that same set, so it counts too.
 
 #### `WorkflowRecipesTab.vue` (`panels/`) + `SaveRecipeDialog.vue` / `ExportRecipeDialog.vue` (`io/`), v1.12 F6
 

@@ -10,9 +10,28 @@
          is not part of a workflow, so it replaces the body rather than sitting
          under it. Here so that a run started from this screen can be watched
          from this screen. -->
+    <!-- A stack selected whole reads as one workflow, its cover, with the
+         other members a pick away: expanding the stack just to read one of
+         them was the only way before. Outside the body below so a member's
+         read, or its failure, never takes the picker (or its focus) away. -->
+    <div
+      v-if="tab === 'workflow' && stackCover"
+      class="inspector-section wftab-head"
+    >
+      <AppSelect
+        :model-value="selectedKey"
+        class="wftab-pick"
+        label="Workflow in this stack"
+        hide-label
+        :options="stackOptions"
+        data-testid="wftab-stack-pick"
+        @update:model-value="store.pickStackMember"
+      />
+    </div>
+
     <TasksPanel v-if="tab === 'tasks'" />
 
-    <p v-else-if="!card && !multiple" class="wftab-empty">
+    <p v-else-if="!card && !multiple && !stackCover" class="wftab-empty">
       Pick a workflow to see what it is made of.
     </p>
 
@@ -40,21 +59,6 @@
          are gated on a selection, and it is docked over the grid this rail
          sits beside), so nothing became unreachable — and the reader is told
          where the verbs are rather than left to find them. -->
-    <!-- A stack selected whole is one card on screen and one run: named, and
-         the sentence saying what Run… runs is the one the button points at,
-         visible rather than a hover tooltip touch never shows. -->
-    <template v-else-if="multiple && runTarget">
-      <div class="inspector-section">
-        <span class="section-label">Selected</span>
-        <p class="wftab-title">{{ runTarget.name }}</p>
-        <p id="wftab-run-target" class="wftab-note wftab-quiet">
-          A stack of {{ store.selectedKeys.length }} workflows. Run… runs
-          {{ runTarget.name }}, the cover; you can switch to another member in
-          the Run popup.
-        </p>
-      </div>
-    </template>
-
     <template v-else-if="multiple">
       <div class="inspector-section">
         <span class="section-label">Selected</span>
@@ -68,9 +72,18 @@
       </div>
     </template>
 
+    <!-- A stack member the grid does not list, while its read is out. -->
+    <p v-else-if="!card" class="wftab-empty">
+      {{
+        detailFailed
+          ? "Could not read this workflow just now."
+          : "Reading this workflow…"
+      }}
+    </p>
+
     <template v-else>
       <div class="inspector-section wftab-head">
-        <p class="wftab-title">{{ card.name }}</p>
+        <p v-if="!stackCover" class="wftab-title">{{ card.name }}</p>
         <p class="wftab-sub">
           {{ subtitlePrefix
           }}<button
@@ -348,7 +361,10 @@
     <!-- The Workflow tab's, and only its: Recipes runs a recipe from its own
          row and Tasks is the app's business, so neither wants this footer. -->
     <template #footer>
-      <div v-if="tab === 'workflow' && (card || multiple)" class="wftab-foot">
+      <div
+        v-if="tab === 'workflow' && (card || multiple || stackCover)"
+        class="wftab-foot"
+      >
         <AppButton
           variant="primary"
           icon-left="play"
@@ -370,7 +386,7 @@
           tooltip="Open in ComfyUI"
           data-testid="wftab-open-comfyui"
           :aria-disabled="runTarget ? undefined : 'true'"
-          :aria-describedby="runTarget ? undefined : 'wftab-open-reason'"
+          :aria-describedby="multiple ? 'wftab-open-reason' : undefined"
           @click="openInComfyui"
         >
           <template #icon="{ size }"><ComfyuiIcon :size="size" /></template>
@@ -404,13 +420,13 @@
           </div>
         </v-menu>
         <p
-          v-if="!runTarget && canOpenComfyui"
+          v-if="multiple && canOpenComfyui"
           id="wftab-open-reason"
           class="wftab-note wftab-quiet"
         >
           Open one workflow, or one whole stack, at a time
         </p>
-        <p v-if="!runTarget" id="wftab-run-reason" class="wftab-note wftab-quiet">
+        <p v-if="multiple" id="wftab-run-reason" class="wftab-note wftab-quiet">
           Run one workflow, or one whole stack, at a time
         </p>
       </div>
@@ -440,10 +456,10 @@
 // that inspector together, and this is the rail on `/workflows`.
 //
 // What the rail shows follows the SELECTION, not the open stack: a stack
-// member selected inside its panel shows that member here, which is the only
-// way to read a member's own defaults.
+// member selected inside its panel shows that member here, and a stack
+// selected whole shows its cover with a picker for the other members.
 
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, toRaw, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
@@ -472,9 +488,11 @@ import {
   checkpointModel,
   checkpointUnread,
   modelDisplayName,
+  stackMemberOptions,
 } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
+import AppSelect from "../widgets/AppSelect.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import EditLorasDialog from "../io/EditLorasDialog.vue";
 import Segmented from "../widgets/Segmented.vue";
@@ -576,10 +594,36 @@ const busy = ref("");
 const menuOpen = ref(false);
 const notesDraft = ref("");
 
-const multiple = computed(() => store.selectedKeys.length > 1);
+/**
+ * The cover of a stack selected WHOLE, or null.
+ *
+ * Several keys, but one card on screen: the rail shows it as one workflow,
+ * the cover by default, with a picker for the other members. The pick is the
+ * store's (`stackPickKey`), because the grid's Run follows it too.
+ */
+const stackCover = computed(() => store.stackCover);
 
+/** Several cards selected that are not one whole stack. */
+const multiple = computed(
+  () => store.selectedKeys.length > 1 && !stackCover.value,
+);
+
+/** The stack's members, from the cover's own card, which lists them in order. */
+const stackOptions = computed(() => {
+  const cover = stackCover.value;
+  if (!cover) return [];
+  const rows = stackMemberOptions(cover.members);
+  return rows.length ? rows : [{ value: cover.key, label: cover.name }];
+});
+
+/**
+ * The one card the body reads: the single selection, or the stack member
+ * picked. Every read and write below goes through this.
+ */
 const selectedKey = computed(() =>
-  store.selectedKeys.length === 1 ? store.selectedKeys[0] : null,
+  store.selectedKeys.length === 1
+    ? store.selectedKeys[0]
+    : store.stackPickKey,
 );
 
 /**
@@ -621,7 +665,11 @@ const showingRecipes = computed(
 
 /** Every selected card, because a selection's recipes are their union. */
 const recipeKeys = computed(() =>
-  multiple.value ? [...store.selectedKeys] : card.value ? [card.value.key] : [],
+  store.selectedKeys.length > 1
+    ? [...store.selectedKeys]
+    : card.value
+      ? [card.value.key]
+      : [],
 );
 
 /**
@@ -632,10 +680,10 @@ const recipeKeys = computed(() =>
  */
 const recipesStack = computed(() => {
   // A stack selected whole heads its Recipes as the stack, not as a count.
-  if (multiple.value && runTarget.value) {
+  if (stackCover.value) {
     return {
-      name: runTarget.value.name || "",
-      size: Number(runTarget.value.stack_size) || 0,
+      name: stackCover.value.name || "",
+      size: Number(stackCover.value.stack_size) || 0,
     };
   }
   if (multiple.value) {
@@ -670,6 +718,9 @@ const picturesLabel = computed(() => {
 });
 
 const subtitlePrefix = computed(() => {
+  if (stackCover.value) {
+    return `A stack of ${stackCover.value.stack_size} workflows · `;
+  }
   if (parentStack.value) return `In the ${parentStack.value.name} stack · `;
   if ((card.value?.stack_size ?? 1) > 1) return "Showing the cover · ";
   return "";
@@ -1041,6 +1092,22 @@ function stillOn(key) {
 }
 
 /**
+ * A mark over the selection itself, for the writes that re-read the grid.
+ *
+ * `stillOn` is not enough there: a stack member's `selectedKey` is derived
+ * from the grid, so a flip or a Hide that takes the member out of its stack
+ * empties it even though the reader never moved. By identity, of the
+ * selection and of the stack pick: every gesture that selects, or picks
+ * another member, writes a new one, so a reader who moved on meanwhile —
+ * even only to another member of the same stack — is told apart.
+ */
+function selectionMark() {
+  const keys = toRaw(store.selectedKeys);
+  const pick = store.stackPick;
+  return () => toRaw(store.selectedKeys) === keys && store.stackPick === pick;
+}
+
+/**
  * Flip a LoRA slot between the workflow and the look.
  *
  * **This re-keys the card**, and can split it into several or merge it into
@@ -1051,6 +1118,7 @@ function stillOn(key) {
 function flipMark(slot, mark) {
   const key = selectedKey.value;
   if (!key || !slot.label || slot.mark === mark) return;
+  const unmoved = selectionMark();
   return queueWrite(`slot:${slot.label}`, async () => {
     try {
       const moved = await setWorkflowSlots(key, { [slot.label]: mark });
@@ -1058,12 +1126,13 @@ function flipMark(slot, mark) {
       // stack members are about workflows the hub no longer has.
       store.forgetMembers();
       await store.fetchCards();
-      if (!stillOn(key)) return;
+      if (!unmoved()) return;
       // `select` moves `selectedKey`, which the watcher below turns into the
       // detail read. Calling `loadDetail` here as well fetched the same card
       // twice; when the flip did not move it the watcher does not fire, so
-      // that case reads explicitly.
-      if (moved.key === key) await loadDetail(key);
+      // that case reads explicitly. A stack member the flip took out of its
+      // stack is selected on its own, the card the reader was looking at.
+      if (selectedKey.value === moved.key) await loadDetail(moved.key);
       else store.select(moved.key);
     } catch (err) {
       fail(err, "Could not change that LoRA slot.");
@@ -1202,6 +1271,7 @@ function toggleHidden() {
   if (!key || !detail.value) return;
   menuOpen.value = false;
   const hiding = !detail.value.hidden;
+  const unmoved = selectionMark();
   return queueWrite("hidden", async () => {
     try {
       const body = await patchWorkflowCard(key, { hidden: hiding });
@@ -1211,6 +1281,9 @@ function toggleHidden() {
       // what keeps Unhide reachable from here.
       store.forgetMembers();
       await store.fetchCards();
+      // A stack member hidden from the rail leaves its stack, and the stack
+      // stops being selected whole: stay on the card that was hidden.
+      if (unmoved() && selectedKey.value !== key) store.select(key);
     } catch (err) {
       fail(
         err,
@@ -1221,18 +1294,18 @@ function toggleHidden() {
 }
 
 /**
- * What Run… runs: this card, or the cover of a stack selected whole
- * (`store.runnableCard`), which is several keys but one card on screen.
+ * What Run… runs: the card on screen, which for a stack selected whole is the
+ * member picked at the top. Nothing while several cards are selected.
  */
-const runTarget = computed(() =>
-  multiple.value ? store.runnableCard : card.value,
-);
+const runTarget = computed(() => (multiple.value ? null : card.value));
 
-/** The sentence Run… is described by: why it refuses, or which stack card. */
-const runDescribedBy = computed(() => {
-  if (!runTarget.value) return "wftab-run-reason";
-  return multiple.value ? "wftab-run-target" : undefined;
-});
+/**
+ * Why Run… refuses, when it is a reason worth a sentence: a stack member
+ * whose read is still out refuses too, but only for as long as the read.
+ */
+const runDescribedBy = computed(() =>
+  multiple.value ? "wftab-run-reason" : undefined,
+);
 
 /**
  * Run… opens the Run popup on THIS card (v1.12 F5).
@@ -1402,6 +1475,11 @@ watch(
 
 .wftab-head {
   gap: var(--space-2);
+}
+
+.wftab-pick :deep(.app-select__field) {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
 }
 
 .wftab-actions {
