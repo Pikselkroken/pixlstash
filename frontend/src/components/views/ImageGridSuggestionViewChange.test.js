@@ -281,6 +281,101 @@ describe("completing the person suggestion search", () => {
   });
 });
 
+// The set twin, "Suggest more pictures for <set>" (#1489).
+describe("the set suggestion search", () => {
+  function mockSetSearch(responses) {
+    let setSearchCount = 0;
+    apiPost.mockImplementation((url) => {
+      const requestUrl = String(url ?? "");
+      if (requestUrl.includes("/pictures/likeness-search")) {
+        const data = responses[Math.min(setSearchCount, responses.length - 1)];
+        setSearchCount += 1;
+        return Promise.resolve({ data });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    apiGet.mockImplementation((url) => {
+      if (String(url ?? "").includes("/pictures?id=")) {
+        return Promise.resolve({
+          data: [
+            { id: 101, format: "JPG", width: 100, height: 100 },
+            { id: 102, format: "JPG", width: 100, height: 100 },
+          ],
+        });
+      }
+      return Promise.resolve({ data: { pictures: [], count: 0, total: 0 } });
+    });
+    return () => setSearchCount;
+  }
+
+  const suggestions = [
+    { picture_id: 101, likeness: 0.9, cohesion: 0.8, tags_matched: 2, tags_total: 2 },
+    { picture_id: 102, likeness: 0.7, cohesion: 0.8, tags_matched: 0, tags_total: 2 },
+  ];
+
+  async function armSetSuggestion(wrapper) {
+    wrapper.vm.suggestPicturesForSet({ id: 5, name: "Beach" });
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+  }
+
+  it("seats the strength cut at the set's cohesion", async () => {
+    mockSetSearch([suggestions]);
+    const wrapper = mountGrid();
+    await wrapper.vm.$nextTick();
+    await armSetSuggestion(wrapper);
+
+    const search = apiPost.mock.calls.find(([url]) =>
+      String(url ?? "").includes("source_set_id=5"),
+    );
+    expect(search?.[0]).toContain("exclude_set_id=5");
+    expect(wrapper.vm.setSuggestThreshold).toBe(0.8);
+    // 0.7 is under the seated cut, so only 101 is offered.
+    expect(wrapper.vm.setSuggestAddIds).toEqual([101]);
+    wrapper.unmount();
+  });
+
+  it("adds the survivors in ONE bulk call, then returns to the view", async () => {
+    const setSearchCount = mockSetSearch([suggestions, []]);
+    const wrapper = mountGrid();
+    await wrapper.vm.$nextTick();
+    await armSetSuggestion(wrapper);
+
+    await wrapper.vm.handleAddSetSuggestions();
+
+    const adds = apiPost.mock.calls.filter(([url]) =>
+      String(url ?? "").includes("/picture_sets/5/members"),
+    );
+    expect(adds).toHaveLength(1);
+    expect(adds[0][0]).toBe("/picture_sets/5/members");
+    expect(adds[0][1]).toEqual({ picture_ids: [101] });
+    expect(setSearchCount()).toBe(2);
+    expect(wrapper.vm.searchResultsActive).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("is dropped by a view change", async () => {
+    mockSetSearch([suggestions]);
+    const wrapper = mountGrid();
+    await wrapper.vm.$nextTick();
+    await armSetSuggestion(wrapper);
+    apiPost.mockClear();
+
+    useSelectionStore().selectedCharacter = 42;
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      apiPost.mock.calls.filter(([url]) =>
+        String(url ?? "").includes("/pictures/likeness-search"),
+      ),
+    ).toHaveLength(0);
+    expect(wrapper.vm.searchResultsActive).toBe(false);
+    wrapper.unmount();
+  });
+});
+
 describe("character navigation while duplicate scanning continues", () => {
   it("issues the singleton character grid request without waiting for the scan", async () => {
     const wrapper = mountGrid();

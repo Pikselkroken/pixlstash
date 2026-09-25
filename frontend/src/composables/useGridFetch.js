@@ -6,6 +6,7 @@ import {
   getLikenessGroups,
   faceSearch,
   characterFaceSearch,
+  setLikenessSearch,
   likenessSearch,
   searchPictures,
   listPicturesByIds,
@@ -15,6 +16,7 @@ import { getProjectSummary } from "../api/projects";
 import { useEntityListsStore } from "../stores/useEntityListsStore";
 import { getStackColor, getStackThreshold } from "../utils/utils.js";
 import { cutFaceSuggestions } from "../utils/faceSuggestionCut.js";
+import { cutSetSuggestions, setCohesion } from "../utils/setSuggestionCut.js";
 import {
   getPictureId,
   PIL_IMAGE_EXTENSIONS,
@@ -84,6 +86,10 @@ export function useGridFetch(
     faceSearchThreshold,
     faceSearchMinRefs,
     faceSearchRanked,
+    setSuggestSet,
+    setSuggestThreshold,
+    setSuggestMinTags,
+    setSuggestRanked,
     textSearchResults,
   },
   props,
@@ -223,6 +229,14 @@ export function useGridFetch(
         : null,
       faceSearchMinRefs: faceSearchCharacter?.value
         ? (faceSearchMinRefs?.value ?? null)
+        : null,
+      // Same reasoning for the set suggestion's two knobs.
+      setSuggestSetId: setSuggestSet?.value?.id ?? null,
+      setSuggestThreshold: setSuggestSet?.value
+        ? (setSuggestThreshold?.value ?? null)
+        : null,
+      setSuggestMinTags: setSuggestSet?.value
+        ? (setSuggestMinTags?.value ?? null)
         : null,
       // Narrowing to text matches changes which pictures the grid shows.
       textMatchesOnly: searchStore.textMatchesOnly === true,
@@ -660,10 +674,16 @@ export function useGridFetch(
         !_hasSearch &&
         !_hasReverseImageSearch &&
         !!faceSearchCharacter?.value?.id;
+      const _hasSetSuggestSearch =
+        !_hasSearch &&
+        !_hasReverseImageSearch &&
+        !_hasCharacterFaceSearch &&
+        !!setSuggestSet?.value?.id;
       const _hasFaceLikenessSearch =
         !_hasSearch &&
         !_hasReverseImageSearch &&
         !_hasCharacterFaceSearch &&
+        !_hasSetSuggestSearch &&
         !!faceLikenessSearchFaceId?.value;
 
       if (_isLikenessSort) {
@@ -751,6 +771,69 @@ export function useGridFetch(
           ranked,
           faceSearchThreshold?.value ?? 0,
           faceSearchMinRefs?.value ?? 1,
+        )
+          .map((r) => rowsById[r.picture_id])
+          .filter(Boolean);
+      } else if (_hasSetSuggestSearch) {
+        fetchMode = "set-suggest-search";
+        // "Suggest more pictures for <set>" (#1489): the same cached-ranked-list
+        // shape as the person search above, so neither slider costs a round
+        // trip. Only a change of set (or an explicit force) refetches.
+        const pictureSet = setSuggestSet.value;
+        const cached = setSuggestRanked?.value;
+        let ranked =
+          !force && cached?.setId === pictureSet.id ? cached.matches : null;
+        if (!ranked) {
+          let raw;
+          try {
+            raw = await setLikenessSearch(pictureSet.id);
+          } catch (error) {
+            error.gridFetchPhase = "set-suggest-search-request";
+            throw error;
+          }
+          if (fetchAllGridImages.lastRequestId !== requestId) {
+            if (isSortedFetch && options?.showProgress === true)
+              completeSmartScoreProgress(loadId, 0, false);
+            return;
+          }
+          ranked = Array.isArray(raw) ? raw : [];
+          const rowsById = {};
+          if (ranked.length) {
+            const rows = await listPicturesByIds(
+              ranked.map((r) => r.picture_id),
+              { fields: "grid" },
+            );
+            if (fetchAllGridImages.lastRequestId !== requestId) {
+              if (isSortedFetch && options?.showProgress === true)
+                completeSmartScoreProgress(loadId, 0, false);
+              return;
+            }
+            for (const pic of Array.isArray(rows) ? rows : []) {
+              rowsById[pic.id] = pic;
+            }
+          }
+          if (setSuggestRanked) {
+            setSuggestRanked.value = {
+              setId: pictureSet.id,
+              matches: ranked,
+              rowsById,
+            };
+          }
+          // Seat the strength slider at the set's own cohesion the first time
+          // the list arrives: no fixed default suits both a tight photoshoot
+          // and a loose theme. A refetch keeps whatever the user dragged to.
+          if (setSuggestThreshold && setSuggestThreshold.value == null) {
+            const cohesion = setCohesion(ranked);
+            if (cohesion != null) {
+              setSuggestThreshold.value = Math.round(cohesion * 100) / 100;
+            }
+          }
+        }
+        const rowsById = setSuggestRanked?.value?.rowsById ?? {};
+        images = cutSetSuggestions(
+          ranked,
+          setSuggestThreshold?.value ?? 0,
+          setSuggestMinTags?.value ?? 0,
         )
           .map((r) => rowsById[r.picture_id])
           .filter(Boolean);

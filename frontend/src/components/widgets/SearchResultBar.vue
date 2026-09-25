@@ -135,18 +135,16 @@
                   <v-icon size="24">mdi-plus</v-icon>
                 </button>
               </div>
-              <p class="threshold-group-hint">
-                How closely a face has to resemble a reference.
-              </p>
+              <p class="threshold-group-hint">{{ copy.strengthHint }}</p>
             </div>
 
-            <!-- Dropped entirely below two references: a slider whose only legal
-                 position is its minimum is chrome, not a control. -->
+            <!-- Dropped when the slider would have one legal position: that is
+                 chrome, not a control. -->
             <div v-if="showRefs" class="threshold-group">
               <div class="threshold-group-head">
-                <label class="section-label" :for="refsId"
-                  >Reference faces</label
-                >
+                <label class="section-label" :for="refsId">{{
+                  copy.agreementLabel
+                }}</label>
                 <output class="threshold-readout" :for="refsId" aria-live="off"
                   >{{ minRefs }} of {{ referenceCount }}</output
                 >
@@ -155,8 +153,8 @@
                 <button
                   class="threshold-step"
                   type="button"
-                  :disabled="minRefs <= 1"
-                  aria-label="Require one fewer reference face"
+                  :disabled="minRefs <= agreementMin"
+                  :aria-label="`Require one fewer ${copy.agreementUnit}`"
                   @click="stepMinRefs(-1)"
                 >
                   <v-icon size="24">mdi-minus</v-icon>
@@ -165,7 +163,7 @@
                   :id="refsId"
                   class="search-result-threshold-input"
                   type="range"
-                  min="1"
+                  :min="agreementMin"
                   :max="referenceCount"
                   step="1"
                   :value="minRefs"
@@ -176,15 +174,13 @@
                   class="threshold-step"
                   type="button"
                   :disabled="minRefs >= referenceCount"
-                  aria-label="Require one more reference face"
+                  :aria-label="`Require one more ${copy.agreementUnit}`"
                   @click="stepMinRefs(1)"
                 >
                   <v-icon size="24">mdi-plus</v-icon>
                 </button>
               </div>
-              <p class="threshold-group-hint">
-                How many of them have to agree at that strength.
-              </p>
+              <p class="threshold-group-hint">{{ copy.agreementHint }}</p>
             </div>
 
             <!-- The count repeated inside, so tuning does not require looking
@@ -252,7 +248,7 @@
       <AppButton
         v-if="assignTarget"
         variant="primary"
-        icon-left="account-check-outline"
+        :icon-left="copy.assignIcon"
         :disabled="assignCount === 0"
         :loading="assignBusy"
         :aria-label="assignAccessibleName"
@@ -260,7 +256,7 @@
         @click="$emit('assign')"
       >
         <span class="assign-label"
-          >Assign {{ assignCount
+          >{{ copy.assignVerb }} {{ assignCount
           }}<span v-if="assignFromSelection"> selected</span
           ><span class="assign-target">to {{ assignTarget }}</span></span
         >
@@ -290,6 +286,27 @@ import AppBarButton from "./AppBarButton.vue";
 import AppButton from "./AppButton.vue";
 import Tooltip from "./Tooltip.vue";
 
+const SUGGEST_COPY = {
+  person: {
+    strengthHint: "How closely a face has to resemble a reference.",
+    agreementLabel: "Reference faces",
+    agreementHint: "How many of them have to agree at that strength.",
+    agreementUnit: "reference face",
+    agreementNoun: "reference faces",
+    assignVerb: "Assign",
+    assignIcon: "account-check-outline",
+  },
+  set: {
+    strengthHint: "How closely a picture has to resemble the set as a whole.",
+    agreementLabel: "Tags in common",
+    agreementHint: "How many of the set's defining tags a picture has to carry.",
+    agreementUnit: "tag",
+    agreementNoun: "set tags",
+    assignVerb: "Add",
+    assignIcon: "playlist-plus",
+  },
+};
+
 const props = defineProps({
   imagesLoading: { type: Boolean, default: false },
   /** The numeral in the status sentence. Null renders the sentence alone. */
@@ -314,6 +331,16 @@ const props = defineProps({
   assignFromSelection: { type: Boolean, default: false },
   assignBusy: { type: Boolean, default: false },
   /**
+   * What the suggestion search is for: `person` ("Suggest more pictures of",
+   * #636) or `set` (#1489). Picks the copy, and the agreement knob's floor -
+   * reference faces start at one, set tags at zero (off).
+   */
+  suggestKind: {
+    type: String,
+    default: "person",
+    validator: (value) => ["person", "set"].includes(value),
+  },
+  /**
    * Esc reaches THIS half (nothing is selected). Only the control Esc will
    * actually hit wears the keycap: an aria-keyshortcuts on a button that will
    * not get the key is a 4.1.2 lie.
@@ -333,6 +360,9 @@ const emit = defineEmits([
   "assign",
   "update:text-matches-only",
 ]);
+
+const copy = computed(() => SUGGEST_COPY[props.suggestKind]);
+const agreementMin = computed(() => (props.suggestKind === "set" ? 0 : 1));
 
 const strengthId = useId();
 const refsId = useId();
@@ -360,10 +390,12 @@ function setTextMatchesOnly(value) {
   emit("update:text-matches-only", value);
 }
 
-const showRefs = computed(() => props.referenceCount > 1);
+const showRefs = computed(() => props.referenceCount > agreementMin.value);
 
 // The agreement knob is "on" only above its floor. See the trigger markup.
-const refsEngaged = computed(() => showRefs.value && props.minRefs > 1);
+const refsEngaged = computed(
+  () => showRefs.value && props.minRefs > agreementMin.value,
+);
 
 // The trigger's accessible name spells both knobs out. Its visible label is two
 // numbers and a separator, which is legible next to the count it shapes but is
@@ -372,9 +404,13 @@ const refsEngaged = computed(() => showRefs.value && props.minRefs > 1);
 const tuneAccessibleName = computed(() => {
   const base = `Tune suggestions. Match strength ${thresholdPercent.value}%`;
   if (!showRefs.value) return `${base}.`;
-  return props.minRefs > 1
-    ? `${base}, on at least ${props.minRefs} of ${props.referenceCount} reference faces.`
-    : `${base}, on any of ${props.referenceCount} reference faces.`;
+  const noun = copy.value.agreementNoun;
+  if (refsEngaged.value) {
+    return `${base}, on at least ${props.minRefs} of ${props.referenceCount} ${noun}.`;
+  }
+  return props.suggestKind === "set"
+    ? `${base}, whatever the ${noun}.`
+    : `${base}, on any of ${props.referenceCount} ${noun}.`;
 });
 
 const statusSentence = computed(() => {
@@ -388,9 +424,10 @@ const statusSentence = computed(() => {
 // count is in both, and never "all": the blast radius of a bulk write has to be
 // visible before the click.
 const assignAccessibleName = computed(() => {
+  const verb = copy.value.assignVerb;
   const base = props.assignFromSelection
-    ? `Assign ${props.assignCount} selected to ${props.assignTarget}`
-    : `Assign ${props.assignCount} to ${props.assignTarget}`;
+    ? `${verb} ${props.assignCount} selected to ${props.assignTarget}`
+    : `${verb} ${props.assignCount} to ${props.assignTarget}`;
   if (!props.assignFromSelection || props.assignCount === props.statusCount) {
     return base;
   }
@@ -424,7 +461,7 @@ function onMinRefsInput(event) {
 function stepMinRefs(delta) {
   const next = Math.min(
     props.referenceCount,
-    Math.max(1, props.minRefs + delta),
+    Math.max(agreementMin.value, props.minRefs + delta),
   );
   emit("update:min-refs", next);
 }
@@ -445,7 +482,7 @@ const announcementSource = computed(() => {
   // Both knobs in the one sentence, for the same reason the percentage is: two
   // regions racing over one drag is the defect §6.4 was written about.
   return refsEngaged.value
-    ? `${cut}, on at least ${props.minRefs} of ${props.referenceCount} reference faces`
+    ? `${cut}, on at least ${props.minRefs} of ${props.referenceCount} ${copy.value.agreementNoun}`
     : cut;
 });
 

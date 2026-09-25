@@ -238,6 +238,7 @@ const emit = defineEmits([
   "images-moved",
   "empty-scrapheap",
   "suggest-pictures-for-character",
+  "suggest-pictures-for-set",
   "view-project",
   "update:check-for-updates",
   "select-folder",
@@ -2939,6 +2940,18 @@ function suggestPicturesForCharacterFromCtx(character) {
   emit("suggest-pictures-for-character", {
     id: character.id,
     name: character.name,
+  });
+}
+
+// "Suggest more pictures" for a set (#1489): ranks the library against the
+// set's members so the pictures that belong in it can be added in one action.
+// Like the person twin above, it does not select the set first.
+function suggestPicturesForSetFromCtx(pictureSet) {
+  if (!pictureSet?.id) return;
+  closeSidebarCtxMenu();
+  emit("suggest-pictures-for-set", {
+    id: pictureSet.id,
+    name: pictureSet.name,
   });
 }
 
@@ -7921,6 +7934,20 @@ defineExpose({
         </button>
       </template>
       <template v-if="sidebarCtxSet">
+        <!-- Hidden on a locked set: adding to it is refused, and an action
+             that cannot complete is worse than one that is not offered. -->
+        <button
+          v-if="!isReadOnly && !sidebarCtxSet.locked"
+          class="ctx-item"
+          @click="suggestPicturesForSetFromCtx(sidebarCtxSet)"
+        >
+          <Tooltip
+            :text="`Rank the library against ${sidebarCtxSet.name} to find pictures that belong in it`"
+            activator="parent"
+          />
+          <v-icon class="ctx-icon">mdi-image-search</v-icon>
+          <span class="ctx-label-text">Suggest more pictures</span>
+        </button>
         <button
           class="ctx-item"
           :disabled="

@@ -1,8 +1,9 @@
 // Picture sets resource - /picture_sets.
 //
-// Membership is per-picture: a set is joined or left one picture at a time
-// (`/picture_sets/{id}/members/{pictureId}`), so bulk actions are the caller's
-// loop over these calls, not a bulk endpoint.
+// Membership is joined or left one picture at a time
+// (`/picture_sets/{id}/members/{pictureId}`), or joined in bulk
+// (`/picture_sets/{id}/members`), which records ONE undoable operation where a
+// loop over the per-picture call records one per picture.
 
 import { API_BASE_URL, apiClient, appendShareToken } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
@@ -119,6 +120,22 @@ export async function getPictureSetMembership(
  */
 export async function addPictureToSet(setId, pictureId) {
   return unwrap(apiClient.post(setsUrl(`/${setId}/members/${pictureId}`)));
+}
+
+/**
+ * Add several pictures to a set as one recorded, undoable operation.
+ *
+ * Pictures already in the set are skipped, and stacks are expanded server-side,
+ * so the set can gain more pictures than were named.
+ *
+ * @param {number|string} setId
+ * @param {Array<number|string>} pictureIds
+ * @returns {Promise<Object>} the response body.
+ */
+export async function bulkAddPicturesToSet(setId, pictureIds) {
+  return unwrap(
+    apiClient.post(setsUrl(`/${setId}/members`), { picture_ids: pictureIds }),
+  );
 }
 
 /**

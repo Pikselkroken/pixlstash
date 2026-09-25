@@ -477,3 +477,61 @@ describe("SearchResultBar - All / In text switch (#1197)", () => {
     );
   });
 });
+
+// The set twin (#1489): the same bar, other copy, and an agreement knob that
+// starts at zero (tags off) rather than one reference face.
+describe("SearchResultBar - set suggestion search", () => {
+  function setSearchProps(overrides = {}) {
+    return characterSearchProps({
+      suggestKind: "set",
+      threshold: 0.82,
+      thresholdMin: 0,
+      thresholdMax: 1,
+      minRefs: 0,
+      referenceCount: 3,
+      assignTarget: "Beach",
+      assignCount: 14,
+      ...overrides,
+    });
+  }
+
+  it("says Add, not Assign, on the bulk action", () => {
+    const wrapper = mountBar(setSearchProps());
+    const button = wrapper.find('button[aria-label^="Add "]');
+    expect(button.attributes("aria-label")).toBe("Add 14 to Beach");
+    expect(wrapper.find(".assign-label").text()).toContain("Add 14");
+    expect(assignButton(wrapper).exists()).toBe(false);
+  });
+
+  it("labels the second knob as tags and lets it go down to zero", () => {
+    const wrapper = mountBar(setSearchProps());
+    const tags = group(wrapper, 1);
+    expect(tags.find(".section-label").text()).toBe("Tags in common");
+    expect(tags.find(".threshold-readout").text()).toBe("0 of 3");
+    expect(tags.find(".search-result-threshold-input").attributes("min")).toBe(
+      "0",
+    );
+  });
+
+  it("keeps the tag knob off the trigger at zero, and shows it above", () => {
+    expect(
+      mountBar(setSearchProps()).find(".search-result-threshold-refs").exists(),
+    ).toBe(false);
+    expect(
+      mountBar(setSearchProps({ minRefs: 2 }))
+        .find(".search-result-threshold-refs")
+        .text(),
+    ).toContain("2/3");
+  });
+
+  it("offers a single signature tag as an on/off knob", () => {
+    // Zero to one is a real choice, unlike one-of-one reference faces.
+    const wrapper = mountBar(setSearchProps({ referenceCount: 1 }));
+    expect(wrapper.findAll(".threshold-group")).toHaveLength(2);
+  });
+
+  it("drops the tag knob when the set has no signature tags", () => {
+    const wrapper = mountBar(setSearchProps({ referenceCount: 0 }));
+    expect(wrapper.findAll(".threshold-group")).toHaveLength(1);
+  });
+});
