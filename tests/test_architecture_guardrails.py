@@ -3155,3 +3155,63 @@ def test_the_keyed_table_guardrail_has_teeth(tmp_path):
         "workflow_variant",
         "workflow_file",
     }
+
+
+# ---------------------------------------------------------------------------
+# Architecture docs are filed by topic, never by release (#1468)
+# ---------------------------------------------------------------------------
+
+ARCHITECTURE_DOCS = sorted((REPO_ROOT / "docs").glob("*_architecture.md"))
+_RELEASE_TAG = re.compile(r"\(v\d+\.\d+|\bPhase \d|\bLane [A-Z]\b|\(DAM \d")
+
+
+def _github_slug(heading: str) -> str:
+    """The anchor GitHub gives a Markdown heading, before de-duplication."""
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", heading)  # a link keeps its text
+    return re.sub(r"[^\w\- ]", "", text.strip().lower()).replace(" ", "-")
+
+
+def _architecture_doc_problems(text: str) -> list[str]:
+    """Release-named ``##`` sections, and Table of Contents drift both ways."""
+    headings = re.findall(r"^#{1,6} (.+)$", text, re.M)
+    anchors: set[str] = set()
+    for heading in headings:
+        slug = _github_slug(heading)
+        n = 0
+        while (slug if n == 0 else f"{slug}-{n}") in anchors:
+            n += 1
+        anchors.add(slug if n == 0 else f"{slug}-{n}")
+    toc = text.split("## Table of Contents", 1)[1].split("\n---", 1)[0]
+    linked = set(re.findall(r"\]\(#([^)]+)\)", toc))
+    problems = []
+    for section in re.findall(r"^## (\d+\..+)$", text, re.M):
+        if _RELEASE_TAG.search(section):
+            problems.append(f"release-named section: ## {section}")
+        if _github_slug(section) not in linked:
+            problems.append(f"not in the Table of Contents: ## {section}")
+    problems += [f"TOC link to no heading: #{a}" for a in sorted(linked - anchors)]
+    return problems
+
+
+@pytest.mark.parametrize("doc", ARCHITECTURE_DOCS, ids=lambda p: p.name)
+def test_architecture_docs_are_filed_by_topic(doc):
+    """A section named for a release is the half a topic-first reader never
+    reads. New material goes in its subsystem's section; see the
+    "Project Architecture" rule in .github/copilot-instructions.md."""
+    assert ARCHITECTURE_DOCS, "no docs/*_architecture.md found"
+    problems = _architecture_doc_problems(doc.read_text(encoding="utf-8"))
+    assert not problems, f"{doc.name}:\n" + "\n".join(problems)
+
+
+def test_the_architecture_doc_guardrail_has_teeth():
+    """Put a release tag back on a real section and both halves must fire."""
+    doc = REPO_ROOT / "docs" / "backend_architecture.md"
+    text = doc.read_text(encoding="utf-8")
+    heading = "## 24. Folder structure: read, commit, layout and moves"
+    assert heading in text
+    problems = _architecture_doc_problems(
+        text.replace(heading, heading + " (v1.11 Phase 2)")
+    )
+    assert any(p.startswith("release-named section") for p in problems), problems
+    assert any(p.startswith("not in the Table of Contents") for p in problems), problems
+    assert any(p.startswith("TOC link to no heading") for p in problems), problems

@@ -110,6 +110,9 @@ arrives with a topic, finds it in the Table of Contents, reads that section and
 believes they are done, so a chronological section is the half they never read.
 A subsystem with no section yet gets one named for the subsystem, and the
 Table of Contents lists its subsections.
+`tests/test_architecture_guardrails.py::test_architecture_docs_are_filed_by_topic`
+fails the build on a release-named `##` section and on a Table of Contents that
+has drifted from the headings.
 
 1. Frontend tasks: the relevant sections of `/docs/frontend_architecture.md`.
 2. Backend tasks: the relevant sections of `/docs/backend_architecture.md`.

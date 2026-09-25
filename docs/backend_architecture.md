@@ -23,7 +23,7 @@
 10. [Services Layer](#10-services-layer)
 11. [Utility Modules](#11-utility-modules)
 12. [Alembic Migrations](#12-alembic-migrations)
-13. [Storage Architecture](#13-storage-architecture)
+13. [Storage Architecture](#13-storage-architecture) — incl. [Image vault](#image-vault), [Database](#database), [Stored path containment (#776)](#stored-path-containment-776), [The shelf's five verbs (shelf plan F3)](#the-shelfs-five-verbs-shelf-plan-f3), [The built-in model folder: declared, never scanned](#the-built-in-model-folder-declared-never-scanned), [The other two roots: InsightFace packs and the HuggingFace cache](#the-other-two-roots-insightface-packs-and-the-huggingface-cache), [What a cached model is FOR: the feature classifier and model_capability](#what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [The managed model store (shelf plan B7)](#the-managed-model-store-shelf-plan-b7), [Add file: one loose model onto the shelf (shelf plan F6)](#add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [A trained model's previews: <stem>_samples/](#a-trained-models-previews-stem_samples), [Delete: models off the shelf and off the disk (#933)](#delete-models-off-the-shelf-and-off-the-disk-933), [Keep one copy: merging duplicate models (#1439)](#keep-one-copy-merging-duplicate-models-1439), [Hub and library identity](#hub-and-library-identity), [Vector storage](#vector-storage), [Caches](#caches), [The library layout](#the-library-layout)
 14. [Server Lifecycle](#14-server-lifecycle)
 15. [Frontend Integration](#15-frontend-integration)
 16. [Authentication & Authorization](#16-authentication--authorization)
@@ -31,7 +31,7 @@
 18. [Snapshots & Restore](#18-snapshots--restore)
 19. [Mermaid Diagrams](#19-mermaid-diagrams)
 20. [Architectural Patterns](#20-architectural-patterns)
-21. [Operation Log](#21-operation-log--undoredo-and-the-audit-trail-dam-12)
+21. [Operation Log](#21-operation-log--undoredo-and-the-audit-trail)
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
@@ -5785,7 +5785,7 @@ sequenceDiagram
 
 ---
 
-## 21. Operation Log — undo/redo and the audit trail (DAM 1.2)
+## 21. Operation Log — undo/redo and the audit trail
 
 The `operation` table ([db_models/operation.py](../pixlstash/db_models/operation.py)) is the **append-only** record of every user-visible change. It is the undo/redo stack today and the audit log / Studio activity feed later — one mechanism, three features (DAM roadmap §1.2 / §4.3), which is why it is built once and additively.
 
@@ -8564,6 +8564,4 @@ the queue itself keeps no cached verdict.
 
 ---
 
-*Last updated: 2026-08-24. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
-
-### Known drift / cleanup notes
+*When a change needs documenting, edit the section that covers its subsystem, adding a numbered subsection there, and to the Table of Contents, if it needs one. Never add a new `##` section named for a feature, a release or a phase.*

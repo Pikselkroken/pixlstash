@@ -14,7 +14,7 @@
 6. [Utility Modules](#6-utility-modules)
 7. [Theming and Styling](#7-theming-and-styling)
 8. [API Client and Authentication](#8-api-client-and-authentication)
-9. [Real-time Updates (WebSocket)](#9-real-time-updates-websocket)
+9. [Real-time Updates (WebSocket)](#9-real-time-updates-websocket) — incl. [9.1 Overlay-open deferral contract](#91-overlay-open-deferral-contract), [9.1a The model shelf destination](#91a-the-model-shelf-destination), [9.1b The workflow library destination](#91b-the-workflow-library-destination), [9.2 The Duplicates destination](#92-the-duplicates-destination), [9.3 The "About your library" destination](#93-the-about-your-library-destination), [9.4 The "Moves" destination](#94-the-moves-destination)
 10. [Naming and Coding Conventions](#10-naming-and-coding-conventions)
 11. [Build Configuration](#11-build-configuration)
 12. [Mermaid Diagrams](#12-mermaid-diagrams)
@@ -6188,7 +6188,7 @@ whose entire body is headed sections needs an outline to move through. The
 contract is in `docs/integration_architecture.md` §21, including why the
 counts are in grid ROWS rather than pictures.
 
-### 9.4 The "Moves" destination (v1.11 Phase 5)
+### 9.4 The "Moves" destination
 
 `/moves` mounts `MovesReview.vue` in place of `ImageGrid`, the same
 replaces-the-grid shape as Insights/Duplicates/the shelf (`App.vue`,
