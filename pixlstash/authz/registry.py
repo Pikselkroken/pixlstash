@@ -1469,6 +1469,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Import workflow; POST blocked for READ tokens; owner only",
     ),
+    ("POST", "/api/v1/comfyui/workflows/convert"): RoutePolicy(
+        _OWNER,
+        justification="Store ComfyUI's API conversion of an editor workflow beside its stored file, storing the file first as an import would; writes stored workflow files like the import beside it; owner only",
+    ),
     ("POST", "/api/v1/comfyui/workflows/pull"): RoutePolicy(
         _OWNER,
         justification="Pull ComfyUI's saved workflows into the user folder; reaches the owner's configured ComfyUI and writes stored workflow files, like the import beside it; owner only",

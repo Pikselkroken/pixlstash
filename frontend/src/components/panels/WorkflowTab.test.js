@@ -657,6 +657,31 @@ describe("a default's provenance and reset", () => {
   });
 });
 
+describe("an editor file ComfyUI has not converted (#1530)", () => {
+  const editorFile = { imported: true, variant_count: 0 };
+
+  it("says its parameters are not available yet, and how to convert it", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: editorFile }));
+    const { wrapper } = await mountWith([KEY], [card(editorFile)]);
+    expect(wrapper.find('[data-testid="wftab-editor-only"]').exists()).toBe(true);
+    expect(textOf(wrapper)).toContain("Convert for PixlStash");
+  });
+
+  it("says nothing of converting a card its pictures made", async () => {
+    const pictureOnly = { imported: false, variant_count: 0 };
+    getWorkflowCard.mockResolvedValue(detail({ card: pictureOnly }));
+    const { wrapper } = await mountWith([KEY], [card(pictureOnly)]);
+    expect(wrapper.find('[data-testid="wftab-editor-only"]').exists()).toBe(false);
+  });
+
+  it("says nothing of converting once it has a recipe", async () => {
+    const converted = { imported: true, variant_count: 1 };
+    getWorkflowCard.mockResolvedValue(detail({ card: converted }));
+    const { wrapper } = await mountWith([KEY], [card(converted)]);
+    expect(wrapper.find('[data-testid="wftab-editor-only"]').exists()).toBe(false);
+  });
+});
+
 describe("marking a LoRA slot", () => {
   it("calls the slots route with the slot's own label", async () => {
     const { wrapper } = await mountWith([KEY]);

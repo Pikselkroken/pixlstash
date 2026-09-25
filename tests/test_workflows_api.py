@@ -183,6 +183,8 @@ _WORKFLOW_WRITE_ROUTES = (
     ("PUT", "/api/v1/workflows/{workflow_key}/lora-chain"),
     ("POST", "/api/v1/workflows/{workflow_key}/clone-with-models"),
     ("DELETE", "/api/v1/workflows/{workflow_key}"),
+    # ComfyUI's conversion of an editor file (#1530): writes stored files.
+    ("POST", "/api/v1/comfyui/workflows/convert"),
 )
 
 
@@ -2417,6 +2419,143 @@ def test_an_editor_format_card_answers_the_same_on_its_own_route(
     assert r.json()["card"]["models"] == on_the_grid["models"]
 
 
+# What ComfyUI's own graphToPrompt makes of _EDITOR_WORKFLOW (#1530).
+_EDITOR_CONVERTED = {
+    "1": {
+        "class_type": "UNETLoader",
+        "inputs": {"unet_name": _SHELF_FILENAME, "weight_dtype": "default"},
+    },
+    "2": {
+        "class_type": "LoraLoader",
+        "inputs": {
+            "model": ["1", 0],
+            "lora_name": _EDITOR_UNRESOLVED,
+            "strength_model": 1.0,
+            "strength_clip": 1.0,
+        },
+    },
+    "3": {
+        "class_type": "SaveImage",
+        "inputs": {"images": ["2", 0], "filename_prefix": "out"},
+    },
+}
+
+
+def _convert(owner, workflow=_EDITOR_WORKFLOW, output=_EDITOR_CONVERTED):
+    return owner.post(
+        f"{API}/comfyui/workflows/convert",
+        json={"name": "editor.json", "workflow": workflow, "output": output},
+    )
+
+
+def _listed(owner) -> dict:
+    r = owner.get(f"{API}/comfyui/workflows")
+    assert r.status_code == 200, r.text
+    return {item["name"]: item for item in r.json()["workflows"]}
+
+
+@pytest.fixture
+def converting(workflow_env, tmp_path, monkeypatch):
+    """An editor-format file stored in an isolated user folder, no ComfyUI."""
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+    )
+    topology_only = _file_a_workflow(
+        workflow_env.server, tmp_path, monkeypatch, "editor.json", _EDITOR_WORKFLOW
+    )
+    return SimpleNamespace(folder=tmp_path, topology_only=topology_only)
+
+
+def test_a_converted_editor_file_runs_from_the_graph_stored_beside_it(
+    workflow_env, converting
+):
+    """#1530: ComfyUI's conversion makes a pulled editor file runnable."""
+    owner = workflow_env.owner
+    before = (converting.folder / "editor.json").read_bytes()
+    assert _listed(owner)["editor.json"]["runnable"] is False
+
+    r = _convert(owner)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["name"], body["matched"]) == ("editor.json", True)
+    # Filed as its API graph: a recipe's card, no longer a topology's.
+    assert body["workflow_key"] != converting.topology_only
+
+    # Beside the file, never over it, and never listed as a workflow of its own.
+    assert (converting.folder / "editor.json").read_bytes() == before
+    assert [p.name for p in converting.folder.glob("*.json")] == ["editor.json"]
+    assert _listed(owner)["editor.json"]["runnable"] is True
+    # The card is the recipe's now, and runs the converted graph from the file.
+    r = owner.get(f"{API}/workflows/{body['workflow_key']}/graph")
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "file"
+    assert r.json()["workflow"]["2"]["inputs"]["lora_name"] == _EDITOR_UNRESOLVED
+
+
+def test_a_conversion_of_another_version_of_the_file_is_not_run(
+    workflow_env, converting
+):
+    """A file overwritten since it was converted is a different workflow."""
+    owner = workflow_env.owner
+    assert _convert(owner).status_code == 200
+    changed = json.loads(json.dumps(_EDITOR_WORKFLOW))
+    changed["nodes"][2]["widgets_values"] = ["elsewhere"]
+    r = owner.post(
+        f"{API}/comfyui/workflows/import",
+        json={"name": "editor.json", "workflow": changed, "overwrite": True},
+    )
+    assert r.status_code == 200, r.text
+
+    assert _listed(owner)["editor.json"]["runnable"] is False
+    key = workflow_cards.record_file(
+        workflow_env.server.hub,
+        "editor.json",
+        record_ui_graph(workflow_env.server.hub, changed),
+    )
+    assert owner.get(f"{API}/workflows/{key}/graph").status_code == 409
+
+
+def test_deleting_a_converted_file_takes_its_conversion_with_it(
+    workflow_env, converting
+):
+    owner = workflow_env.owner
+    key = _convert(owner).json()["workflow_key"]
+    assert (converting.folder / "editor.json.api").is_file()
+    r = owner.delete(f"{API}/workflows/{key}")
+    assert r.status_code == 200, r.text
+    assert list(converting.folder.glob("editor.json*")) == []
+
+
+def test_a_workflow_not_stored_yet_is_stored_by_its_conversion(
+    workflow_env, converting
+):
+    other = json.loads(json.dumps(_EDITOR_WORKFLOW))
+    other["nodes"][2]["widgets_values"] = ["another"]
+    r = _convert(workflow_env.owner, workflow=other)
+    assert r.status_code == 200, r.text
+    assert (r.json()["name"], r.json()["matched"]) == ("editor (2).json", False)
+    assert json.loads((converting.folder / "editor (2).json").read_text()) == other
+    assert _listed(workflow_env.owner)["editor (2).json"]["runnable"] is True
+
+
+@pytest.mark.parametrize(
+    "workflow, output",
+    [
+        (_EDITOR_CONVERTED, _EDITOR_CONVERTED),
+        (_EDITOR_WORKFLOW, _EDITOR_WORKFLOW),
+        (_EDITOR_WORKFLOW, {}),
+    ],
+    ids=["api-as-editor", "editor-as-api", "empty-output"],
+)
+def test_a_conversion_is_an_editor_workflow_and_its_api_graph(
+    workflow_env, converting, workflow, output
+):
+    r = _convert(workflow_env.owner, workflow=workflow, output=output)
+    assert r.status_code == 400, r.text
+    assert not (converting.folder / "editor.json.api").exists()
+
+
 def test_two_files_of_one_topology_make_one_card(workflow_env, tmp_path, monkeypatch):
     """A card key is a content address, so two copies of one graph share it.
 
@@ -3930,6 +4069,11 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
             {"name": "nope", "swaps": {"a.safetensors": "b.safetensors"}},
         ),
         ("DELETE", f"{API}/workflows/{BUSY_CARD}", None),
+        (
+            "POST",
+            f"{API}/comfyui/workflows/convert",
+            {"workflow": _EDITOR_WORKFLOW, "output": _EDITOR_CONVERTED},
+        ),
     ):
         assert_real_route(workflow_env.server.api, method, path)
         r = client.request(method, path, json=body)

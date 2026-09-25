@@ -220,7 +220,7 @@ export function readReason(reason) {
       return read("This picture was made in A1111 or Forge, so there is no ComfyUI graph to run.");
     case "ui_format":
       return read(
-        "The workflow file this card names is an editor export, which ComfyUI cannot be handed.",
+        "The workflow file this card names is an editor export, which ComfyUI cannot be handed. Open it in ComfyUI and use Convert for PixlStash.",
       );
     case PICTURE_INPUT_UNFILLED: {
       // Named by `title`, never by `slot_label`: the label is a topology hash.

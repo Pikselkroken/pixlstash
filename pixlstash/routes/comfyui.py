@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import hashlib
 import json
 import math
 import os
@@ -197,6 +198,89 @@ def _load_workflow_json(path: str) -> dict:
 def _save_workflow_json(path: str, payload: dict) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=True)
+
+
+# The API graph ComfyUI converted an editor-format file into (#1530), kept
+# BESIDE the file rather than over it: the file stays byte-identical to what
+# ComfyUI holds, so it still re-opens there and still deduplicates against a
+# re-pull. Not ``.json``, so the folder listing never reads it as a workflow.
+CONVERTED_SUFFIX = ".api"
+
+
+def _editor_digest(workflow: dict) -> str:
+    """Which version of an editor file a converted graph was made from."""
+    return hashlib.sha256(
+        workflow_bindings.canonical(workflow).encode("utf-8")
+    ).hexdigest()
+
+
+def converted_graph(path: str, workflow: dict) -> dict | None:
+    """The API graph stored beside the editor file at *path*, or ``None``.
+
+    ``None`` too when it will not read, or when it was converted from another
+    version of the file: a file overwritten since is a different workflow, and
+    running the old conversion would run the wrong graph.
+    """
+    sidecar = f"{path}{CONVERTED_SUFFIX}"
+    if not os.path.isfile(sidecar):
+        return None
+    try:
+        stored = _load_workflow_json(sidecar)
+    except (OSError, ValueError, RecursionError) as exc:
+        logger.warning(
+            "Converted graph %s will not load, so %s runs as an editor file: %s",
+            sidecar,
+            path,
+            exc,
+        )
+        return None
+    if not isinstance(stored, dict):
+        logger.warning("Converted graph %s is not a JSON object; ignored.", sidecar)
+        return None
+    if stored.get("converted_from") != _editor_digest(workflow):
+        logger.info(
+            "Converted graph %s was made from another version of %s; ignored "
+            "until the file is converted again.",
+            sidecar,
+            path,
+        )
+        return None
+    return api_graph(stored)
+
+
+def runnable_document(path: str, workflow: dict) -> dict:
+    """*workflow*, or the graph it was converted into if it is an editor file.
+
+    What every reader that runs or parameterises a stored file goes through,
+    so a converted editor file reads as the API graph it now has. PixlStash's
+    own keys (bindings, output choice) are the file's and carry over.
+    """
+    if api_graph(workflow) is not None:
+        return workflow
+    graph = converted_graph(path, workflow)
+    if graph is None:
+        return workflow
+    own = {k: v for k, v in workflow.items() if str(k).startswith("pixlstash_")}
+    return {**own, **graph}
+
+
+def _converted_mtime_ns(path: str) -> int:
+    """The converted graph's mtime beside *path*, 0 when there is none."""
+    try:
+        return os.stat(f"{path}{CONVERTED_SUFFIX}").st_mtime_ns
+    except FileNotFoundError:
+        return 0
+    except OSError as exc:
+        logger.warning("Could not stat the converted graph of %s: %s", path, exc)
+        return 0
+
+
+def store_converted_graph(path: str, workflow: dict, graph: dict) -> None:
+    """Write *graph* beside the editor file at *path*, which holds *workflow*."""
+    _save_workflow_json(
+        f"{path}{CONVERTED_SUFFIX}",
+        {"converted_from": _editor_digest(workflow), "prompt": graph},
+    )
 
 
 def _store_workflow(
@@ -429,16 +513,22 @@ def trash_user_workflow(hub, workflow_name: str) -> str:
     except (TrashPermissionError, OSError, RecursionError, ValueError) as exc:
         logger.warning("Failed to delete workflow %s: %s", normalized, exc)
         raise HTTPException(status_code=500, detail="Failed to delete workflow")
-    # The placeholder migration's backup goes with the workflow it copied.
-    backup = f"{path}{workflow_bindings.BACKUP_SUFFIX}"
-    if os.path.exists(backup):
+    # The placeholder migration's backup and the converted graph go with the
+    # workflow they were made from.
+    for what, extra in (
+        ("migration backup", f"{path}{workflow_bindings.BACKUP_SUFFIX}"),
+        ("converted graph", f"{path}{CONVERTED_SUFFIX}"),
+    ):
+        if not os.path.exists(extra):
+            continue
         try:
-            os.remove(backup)
+            os.remove(extra)
         except OSError as exc:
             logger.warning(
-                "Deleted workflow %s but not its migration backup %s: %s",
+                "Deleted workflow %s but not its %s %s: %s",
                 normalized,
-                backup,
+                what,
+                extra,
                 exc,
             )
     if hub is not None:
@@ -533,6 +623,15 @@ def _file_in_hub(hub, name: str, workflow: dict) -> tuple[str | None, str | None
         return None, None
     try:
         graph = api_graph(workflow)
+        if graph is None:
+            # A converted editor file files its API graph (#1530): the card
+            # gets model slots and a structural hash instead of a topology.
+            try:
+                path = resolve_path_within(workflow_user_dir(), name)
+            except ValueError:
+                path = None
+            if path is not None:
+                graph = converted_graph(path, workflow)
         if graph is None:
             topology_hash = record_ui_graph(hub, workflow)
             structural_hash = None
@@ -732,14 +831,18 @@ def _missing_placeholders(payload: dict, detected=None) -> list[str]:
 
 # ponytail: one entry per file version; stale versions age out of the LRU.
 @functools.lru_cache(maxsize=512)
-def _describe_workflow(path: str, source: str, mtime_ns: int, size: int) -> dict:
+def _describe_workflow(
+    path: str, source: str, mtime_ns: int, size: int, converted_mtime_ns: int = 0
+) -> dict:
     """List metadata for one workflow file, recomputed only when the file changes.
 
     Keyed on mtime and size so detection runs once per file version, and a file
-    that stays broken is logged once rather than on every menu open.
+    that stays broken is logged once rather than on every menu open. The
+    converted graph's mtime is in the key too, so converting a file (#1530)
+    makes it runnable on the next list rather than on its next edit.
     """
     try:
-        payload = _load_workflow_json(path)
+        payload = runnable_document(path, _load_workflow_json(path))
     except Exception as exc:
         logger.warning("Failed to read %s workflow %s: %s", source, path, exc)
         return {
@@ -1455,6 +1558,17 @@ class ComfyUIWorkflowImportResponse(BaseModel):
     topology_hash: Optional[str] = None
 
 
+class ComfyUIWorkflowConvertResponse(BaseModel):
+    """An editor file with the API graph ComfyUI converted it into (#1530)."""
+
+    # The stored editor file the graph now sits beside.
+    name: str
+    # True when that file was already stored; False when this stored it.
+    matched: bool
+    # The card the file is on now; None when it could not be filed.
+    workflow_key: Optional[str] = None
+
+
 class ComfyUIWorkflowPullStartResponse(BaseModel):
     """A pull of ComfyUI's saved workflows, queued or already running."""
 
@@ -1927,7 +2041,13 @@ def create_router(server) -> APIRouter:
                     continue
                 # Copied, because the description is the cache's own dict.
                 described = dict(
-                    _describe_workflow(path, source, stat.st_mtime_ns, stat.st_size)
+                    _describe_workflow(
+                        path,
+                        source,
+                        stat.st_mtime_ns,
+                        stat.st_size,
+                        _converted_mtime_ns(path),
+                    )
                 )
                 picture_inputs = described.pop("picture_inputs", {})
                 workflows.append(
@@ -1974,7 +2094,7 @@ def create_router(server) -> APIRouter:
         if not path:
             raise HTTPException(status_code=404, detail="Workflow not found")
         try:
-            document = _load_workflow_json(path)
+            document = runnable_document(path, _load_workflow_json(path))
         except Exception as exc:
             logger.warning("Failed to read workflow %s: %s", path, exc)
             raise HTTPException(
@@ -2096,6 +2216,88 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=409, detail="Workflow already exists"
             ) from exc
+
+    @router.post(
+        "/comfyui/workflows/convert",
+        summary="Store ComfyUI's API conversion of an editor-format workflow",
+        description=(
+            "Takes what ComfyUI's own `graphToPrompt` returns for the workflow "
+            "open on its canvas - `workflow` (editor format) and `output` (API "
+            "format) - and stores the API graph beside the matching stored "
+            "editor file, never over it. A workflow not stored yet is stored "
+            "first, as an import would. The file's card then runs and takes "
+            "parameters from the API graph. Sent by the ComfyUI-PixlStash "
+            "node's *Convert for PixlStash* command, one workflow at a time."
+        ),
+        response_model=ComfyUIWorkflowConvertResponse,
+        responses={
+            400: {"description": "Not an editor workflow and its API graph."},
+            409: {"description": "A workflow PixlStash ships; nothing to convert."},
+        },
+    )
+    def convert_comfyui_workflow(request: Request, payload: dict = Body(...)):
+        workflow = payload.get("workflow")
+        output = payload.get("output")
+        if not isinstance(workflow, dict) or api_graph(workflow) is not None:
+            raise HTTPException(
+                status_code=400, detail="workflow must be an editor-format workflow"
+            )
+        if not isinstance(output, dict) or not output or api_graph(output) is None:
+            raise HTTPException(
+                status_code=400, detail="output must be an API-format graph"
+            )
+        name = _normalize_workflow_name(payload.get("name")) or "workflow.json"
+        try:
+            resolve_path_within(workflow_user_dir(), name)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid workflow name")
+        hub = getattr(server, "hub", None)
+        try:
+            with workflow_inbox.INBOX_LOCK:
+                result = _store_workflow(hub, name, workflow, keep_both=True)
+                if result.get("source") == "built-in":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="PixlStash ships this workflow; it has nothing to convert.",
+                    )
+                stored_name = result["name"]
+                path = resolve_path_within(workflow_user_dir(), stored_name)
+                # Digested from the file as stored, which is the placeholder-
+                # migrated document, so the check on read compares like with
+                # like.
+                store_converted_graph(path, _load_workflow_json(path), output)
+                # Filed again now the graph is there: the store above filed
+                # the editor file as a topology only.
+                _topology_hash, card_key = _file_in_hub(
+                    hub, stored_name, _load_workflow_json(path)
+                )
+        except NotAWorkflowError as exc:
+            logger.warning("Refused converting %s: %s", name, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RecursionError as exc:
+            logger.warning("Refused a conversion that nests too deeply: %s", exc)
+            raise HTTPException(
+                status_code=400, detail="Workflow JSON nests too deeply"
+            ) from exc
+        except OSError as exc:
+            logger.error("Could not store the converted graph of %s: %s", name, exc)
+            raise HTTPException(
+                status_code=500, detail="Could not store the converted graph"
+            ) from exc
+        if not result.get("matched"):
+            claim_stored_workflow(hub, stored_name)
+        logger.info("Stored ComfyUI's conversion of %s.", stored_name)
+        announce_changed_workflows(
+            server,
+            sorted({key for key in (result.get("workflow_key"), card_key) if key}),
+            "imported",
+            origin_client_id=getattr(request.state, "origin_client_id", None),
+        )
+        return {
+            "name": stored_name,
+            "matched": bool(result.get("matched")),
+            "workflow_key": card_key,
+        }
 
     @router.post(
         "/comfyui/workflows/pull",

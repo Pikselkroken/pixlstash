@@ -313,6 +313,15 @@
             />
           </details>
         </template>
+        <p
+          v-else-if="editorOnly"
+          class="wftab-note wftab-quiet"
+          data-testid="wftab-editor-only"
+        >
+          Parameters are not available yet. This is a ComfyUI editor file:
+          open it in ComfyUI and use <strong>Convert for PixlStash</strong> to
+          hand PixlStash the graph it runs.
+        </p>
         <p v-else class="wftab-note wftab-quiet">
           Nothing this workflow made records a setting yet, so it has no
           defaults to start from.
@@ -1014,6 +1023,16 @@ const defaults = computed(() => {
       : DEFAULT_PINS.includes(row.input_name),
   }));
 });
+
+/**
+ * A workflow file with no recipe: an editor-format file ComfyUI has not
+ * converted yet (#1530). An API file always files a recipe, and a converted
+ * editor file files its converted graph, so `variant_count: 0` on an imported
+ * card is exactly the editor file PixlStash cannot run or parameterise.
+ */
+const editorOnly = computed(
+  () => Boolean(card.value?.imported) && card.value?.variant_count === 0,
+);
 
 const pinnedDefaults = computed(() =>
   defaults.value.filter((row) => row.pinned),
