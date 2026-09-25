@@ -19,6 +19,7 @@ from fastapi import File, HTTPException, Query, Request, UploadFile
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
 
+from pixlstash.authz.membership import enforce_set_scope
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.likeness.likeness_utils import LikenessUtils
 from pixlstash.services import search_query_service
@@ -42,6 +43,9 @@ class ImageLikenessMatchResponse(BaseModel):
 
     picture_id: int
     likeness: float
+    cohesion: float | None = None
+    tags_matched: int | None = None
+    tags_total: int | None = None
 
 
 def _encode_query_image(server, pil_image: Image.Image) -> np.ndarray:
@@ -101,10 +105,20 @@ def register_routes(router, server):
             "- `random=false` (default): returns the top `top_n` most similar pictures.\n"
             "- `random=true`: selects `top_n` pictures at random from the `pool_m` "
             "most similar candidates.\n\n"
+            "**Suggesting pictures for a set**\n"
+            "- `source_set_id` queries with the set's centroid: the normalised mean "
+            "of its members' embeddings. Every match carries `cohesion`, the median "
+            "similarity of the set's own members to that centroid, so a caller can "
+            'seat its cut at "as alike as a typical member".\n'
+            "- `exclude_set_id` drops pictures already in that set.\n"
+            "- `include_tag_counts` (with `source_set_id`) adds `tags_matched` and "
+            "`tags_total`: how many of the set's signature tags (those on at least "
+            "half its members) the match carries.\n\n"
             "Results are ordered by descending similarity score. "
             "Only pictures with a pre-computed image embedding are considered."
         ),
         response_model=list[ImageLikenessMatchResponse],
+        response_model_exclude_none=True,
     )
     async def search_by_image_likeness(
         request: Request,
@@ -171,9 +185,37 @@ def register_routes(router, server):
             None,
             description="Filter to pictures containing a specific character (numeric ID).",
         ),
+        source_set_id: int | None = Query(
+            None,
+            description=(
+                "Use this set's centroid (the mean of its members' embeddings) as "
+                "the query, so the search finds more pictures that belong in it."
+            ),
+        ),
+        exclude_set_id: int | None = Query(
+            None,
+            description=(
+                "Drop pictures already in this set. Pair it with `source_set_id` "
+                "to search for only the pictures not yet added."
+            ),
+        ),
+        include_tag_counts: bool = Query(
+            False,
+            description=(
+                "With `source_set_id`, add `tags_matched` and `tags_total` to every "
+                "match: how many of the set's signature tags it carries."
+            ),
+        ),
     ):
         # ── Authentication ────────────────────────────────────────────────
         server.auth.require_user_id(request)
+
+        # A scoped token must not learn anything about a set outside its scope,
+        # not even whether it exists or has members: check before any
+        # membership query so the 422 below cannot become an existence oracle.
+        for scoped_set_id in (source_set_id, exclude_set_id):
+            if scoped_set_id is not None:
+                enforce_set_scope(server, request, scoped_set_id)
 
         if combine not in VALID_COMBINE_MODES:
             raise HTTPException(
@@ -234,6 +276,16 @@ def register_routes(router, server):
             merged = filter_candidate_ids  # None means unrestricted
         candidate_ids = list(merged) if merged is not None else None
 
+        # ── Already-in-set exclusion ──────────────────────────────────────
+        # Subtracted from the fetched candidates rather than intersected into
+        # `filter_candidate_ids`, because `None` there means "unrestricted" and
+        # has no set to subtract from.
+        excluded_picture_ids: set[int] = set()
+        if exclude_set_id is not None:
+            excluded_picture_ids = search_query_service.fetch_set_member_ids(
+                server.vault.db, exclude_set_id
+            )
+
         # ── Load and validate query embeddings ──────────────────────────
         # Merge source_picture_ids and the legacy single source_picture_id.
         effective_source_ids: list[int] = list(source_picture_ids)
@@ -243,7 +295,43 @@ def register_routes(router, server):
         ):
             effective_source_ids.insert(0, source_picture_id)
 
-        if effective_source_ids:
+        if source_set_id is not None and (effective_source_ids or files):
+            raise HTTPException(
+                status_code=400,
+                detail="Provide either 'source_set_id', source picture IDs or uploaded files, not more than one.",
+            )
+
+        cohesion: float | None = None
+        set_member_ids: set[int] = set()
+        if source_set_id is not None:
+            set_member_ids = search_query_service.fetch_set_member_ids(
+                server.vault.db, source_set_id
+            )
+            member_embeddings = [
+                emb
+                for _pic_id, emb in search_query_service.fetch_candidate_clip_embeddings(
+                    server.vault.db, list(set_member_ids)
+                )
+            ]
+            if not member_embeddings:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Set {source_set_id} has no picture with a stored "
+                        "embedding to search with."
+                    ),
+                )
+            # One query vector: for unit vectors the mean of the cosines to every
+            # member equals the cosine to their mean, so the centroid is exact
+            # `combine="mean"` at a fraction of the cost.
+            member_matrix = np.stack(member_embeddings).astype(np.float32)
+            centroid = member_matrix.mean(axis=0)
+            norm = float(np.linalg.norm(centroid))
+            if norm > 0:
+                centroid = centroid / norm
+            cohesion = round(float(np.median(member_matrix @ centroid)), 6)
+            query_embeddings = [centroid]
+        elif effective_source_ids:
             # Fast path: fetch stored CLIP embeddings for all source pictures.
             source_rows = search_query_service.fetch_source_clip_embeddings(
                 server.vault.db, effective_source_ids
@@ -313,13 +401,15 @@ def register_routes(router, server):
         else:
             raise HTTPException(
                 status_code=400,
-                detail="Provide either 'source_picture_id', 'source_picture_ids', or upload at least one image file.",
+                detail="Provide either 'source_picture_id', 'source_picture_ids', 'source_set_id', or upload at least one image file.",
             )
 
         # ── Fetch candidate embeddings from DB ───────────────────────────
         candidates = search_query_service.fetch_candidate_clip_embeddings(
             server.vault.db, candidate_ids
         )
+        if excluded_picture_ids:
+            candidates = [c for c in candidates if c[0] not in excluded_picture_ids]
         if not candidates:
             return []
 
@@ -362,7 +452,24 @@ def register_routes(router, server):
             ids_pool = ids_pool[:top_n]
             sim_pool = sim_pool[:top_n]
 
-        return [
+        matches = [
             {"picture_id": int(pic_id), "likeness": round(float(sim), 6)}
             for pic_id, sim in zip(ids_pool, sim_pool)
         ]
+        if source_set_id is not None:
+            for match in matches:
+                match["cohesion"] = cohesion
+            if include_tag_counts:
+                # Counted on the returned matches only, never the whole library.
+                signature_tags = search_query_service.fetch_signature_tags(
+                    server.vault.db, set_member_ids
+                )
+                tag_counts = search_query_service.fetch_tag_counts_for_pictures(
+                    server.vault.db,
+                    [m["picture_id"] for m in matches],
+                    signature_tags,
+                )
+                for match in matches:
+                    match["tags_matched"] = tag_counts.get(match["picture_id"], 0)
+                    match["tags_total"] = len(signature_tags)
+        return matches

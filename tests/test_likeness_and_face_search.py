@@ -9,7 +9,10 @@ from sqlmodel import select, func
 from pixlstash.server import Server
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture
+from pixlstash.db_models.tag import Tag
 from pixlstash.scoring.character_likeness import count_pictures_by_character_likeness
+from pixlstash.services import search_query_service
+from pixlstash.tasks import TaskType
 from tests.utils import (
     upload_pictures_and_wait,
     wait_for_faces,
@@ -810,3 +813,289 @@ def test_face_search_character_without_reference_faces_is_422():
             )
             assert resp.status_code == 422, resp.text
             assert "reference face" in resp.json()["detail"]
+
+
+# ── Set-scoped likeness search ("Suggest more pictures for a set", #1489) ──
+#
+# One server for every set test (CLAUDE.md: reuse the environment). The
+# embedding and tagging sweeps are detached for the module's lifetime, because
+# the embeddings and tags below are hand-written and either sweep would
+# overwrite them; the planner itself keeps running so the import still works.
+
+_SET_KEYS = ["m1", "m2", "m3", "near", "far", "bare"]
+
+
+def _unit(vec) -> bytes:
+    arr = np.asarray(vec, dtype=np.float32)
+    return (arr / np.linalg.norm(arr)).tobytes()
+
+
+def _set_embedding(server, pic_id, blob):
+    def _write(session):
+        picture = session.get(Picture, pic_id)
+        picture.image_embedding = blob
+        session.add(picture)
+        session.commit()
+
+    server.vault.db.run_task(_write)
+
+
+def _add_tags(server, pic_id, tags):
+    def _write(session):
+        existing = set(
+            session.exec(select(Tag.tag).where(Tag.picture_id == pic_id)).all()
+        )
+        for tag in tags:
+            if tag not in existing:
+                session.add(Tag(picture_id=pic_id, tag=tag))
+        session.commit()
+
+    server.vault.db.run_task(_write)
+
+
+def _create_set(client, name, picture_ids):
+    resp = client.post(f"{API_PREFIX}/picture_sets", json={"name": name})
+    assert resp.status_code == 200, resp.text
+    set_id = resp.json().get("id") or resp.json().get("picture_set", {}).get("id")
+    assert set_id, resp.text
+    if picture_ids:
+        resp = client.post(
+            f"{API_PREFIX}/picture_sets/{set_id}/members",
+            json={"picture_ids": list(picture_ids)},
+        )
+        assert resp.status_code in (200, 201), resp.text
+    return set_id
+
+
+def _set_share_token(client, set_id):
+    resp = client.post(
+        f"{API_PREFIX}/users/me/token",
+        json={
+            "description": "set share",
+            "scope": "READ",
+            "resource_type": "picture_set",
+            "resource_id": set_id,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["token"]
+
+
+@pytest.fixture(scope="module")
+def set_env():
+    """Seed three set members around +x, two candidates and one unembedded
+    picture, then the sets the tests query.
+
+    - ``m1`` = +x, ``m2``/``m3`` = 0.9 towards +x either side, so the centroid
+      is exactly +x and the members' own similarities are 1.0, 0.9, 0.9.
+    - ``near`` is 0.98 towards +x; ``far`` is orthogonal to it.
+    - ``bare`` has no embedding at all.
+    - Tags: ``beach`` on every member, ``sunset`` on two of three (both
+      signature tags), ``dog`` on one (not). Every member also carries both
+      tagging sentinels, which must never count as signature tags.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        server_config_path = os.path.join(temp_dir, "server_config.json")
+        with Server(server_config_path=server_config_path) as server:
+            for task_type in (TaskType.IMAGE_EMBEDDING, TaskType.TAGGER):
+                server.vault._planner_work_finders.pop(task_type, None)
+            server.vault._work_planner.detach_finders(
+                (TaskType.IMAGE_EMBEDDING, TaskType.TAGGER)
+            )
+            client = TestClient(server.api)
+            resp = client.post(
+                "/login", json={"username": "testuser", "password": "testpassword"}
+            )
+            assert resp.status_code == 200
+
+            images = [
+                ("file", (f"{key}.png", random_images[i], "image/png"))
+                for i, key in enumerate(_SET_KEYS)
+            ]
+            import_status = upload_pictures_and_wait(client, images)
+            assert import_status["status"] == "completed"
+            ids = dict(
+                zip(_SET_KEYS, [r["picture_id"] for r in import_status["results"]])
+            )
+
+            _set_embedding(server, ids["m1"], _unit([1, 0, 0, 0, 0, 0, 0, 0]))
+            _set_embedding(server, ids["m2"], _unit([0.9, 0.436, 0, 0, 0, 0, 0, 0]))
+            _set_embedding(server, ids["m3"], _unit([0.9, -0.436, 0, 0, 0, 0, 0, 0]))
+            _set_embedding(server, ids["near"], _unit([0.98, 0, 0.199, 0, 0, 0, 0, 0]))
+            _set_embedding(server, ids["far"], _unit([0, 0, 0, 1, 0, 0, 0, 0]))
+
+            sentinels = ["__tag", "__tag:wd14"]
+            _add_tags(server, ids["m1"], ["beach", "sunset", "dog", *sentinels])
+            _add_tags(server, ids["m2"], ["beach", "sunset", *sentinels])
+            _add_tags(server, ids["m3"], ["beach", *sentinels])
+            _add_tags(server, ids["near"], ["beach", "sunset"])
+            _add_tags(server, ids["far"], ["beach", "dog"])
+
+            sets = {
+                "main": _create_set(
+                    client, "Beach", [ids[k] for k in ("m1", "m2", "m3")]
+                ),
+                "other": _create_set(client, "Other", [ids["far"]]),
+                "shared": _create_set(client, "Shared", [ids["m1"], ids["near"]]),
+                "unembedded": _create_set(client, "Unembedded", [ids["bare"]]),
+                "empty": _create_set(client, "Empty", []),
+            }
+            yield client, server, ids, sets
+
+
+def _likeness_search(client, headers=None, **params):
+    return client.post(
+        f"{API_PREFIX}/pictures/likeness-search", params=params, headers=headers
+    )
+
+
+def test_likeness_search_by_set_ranks_and_excludes_members(set_env):
+    client, _server, ids, sets = set_env
+
+    # Without the exclusion the members come back: they match their centroid.
+    resp = _likeness_search(client, source_set_id=sets["main"], top_n=500)
+    assert resp.status_code == 200, resp.text
+    returned = [row["picture_id"] for row in resp.json()]
+    assert ids["m1"] in returned
+
+    resp = _likeness_search(
+        client, source_set_id=sets["main"], exclude_set_id=sets["main"], top_n=500
+    )
+    assert resp.status_code == 200, resp.text
+    returned = [row["picture_id"] for row in resp.json()]
+    for key in ("m1", "m2", "m3"):
+        assert ids[key] not in returned, f"set member {key} was not excluded"
+    assert ids["near"] in returned and ids["far"] in returned
+    assert returned.index(ids["near"]) < returned.index(ids["far"])
+    # The centroid is +x, so `near` scores its own x component, not a min
+    # across members (which the multi-picture source path would have forced).
+    near = next(r for r in resp.json() if r["picture_id"] == ids["near"])
+    assert near["likeness"] == pytest.approx(0.98, abs=1e-3)
+
+
+def test_likeness_search_by_set_returns_the_set_cohesion(set_env):
+    client, _server, ids, sets = set_env
+
+    resp = _likeness_search(
+        client, source_set_id=sets["main"], exclude_set_id=sets["main"], top_n=500
+    )
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()
+    assert rows
+    # Members sit at 1.0, 0.9, 0.9 to their centroid: the median is 0.9.
+    for row in rows:
+        assert row["cohesion"] == pytest.approx(0.9, abs=1e-3), row
+
+    # A plain picture-sourced search carries no set fields at all.
+    resp = _likeness_search(client, source_picture_ids=ids["m1"], top_n=500)
+    assert resp.status_code == 200, resp.text
+    assert all("cohesion" not in row for row in resp.json())
+
+
+def test_likeness_search_by_set_counts_signature_tags(set_env):
+    client, _server, ids, sets = set_env
+
+    resp = _likeness_search(
+        client,
+        source_set_id=sets["main"],
+        exclude_set_id=sets["main"],
+        include_tag_counts=True,
+        top_n=500,
+    )
+    assert resp.status_code == 200, resp.text
+    by_id = {row["picture_id"]: row for row in resp.json()}
+    # beach + sunset; `dog` is on one member of three, sentinels never count.
+    assert by_id[ids["near"]]["tags_total"] == 2
+    assert by_id[ids["near"]]["tags_matched"] == 2
+    assert by_id[ids["far"]]["tags_matched"] == 1
+
+    # Off by default.
+    resp = _likeness_search(
+        client, source_set_id=sets["main"], exclude_set_id=sets["main"], top_n=500
+    )
+    assert all("tags_matched" not in row for row in resp.json())
+
+
+def test_likeness_search_by_set_ignores_tag_sentinels(set_env):
+    _client, server, ids, _sets = set_env
+    member_ids = {ids["m1"], ids["m2"], ids["m3"]}
+
+    signature = search_query_service.fetch_signature_tags(server.vault.db, member_ids)
+    assert signature == ["beach", "sunset"]
+    # The sentinels really are on every member, so leaving the filter out
+    # would have made both of them signature tags.
+    tags_per_member = [
+        set(
+            server.vault.db.run_task(
+                lambda s, pid=pid: s.exec(
+                    select(Tag.tag).where(Tag.picture_id == pid)
+                ).all()
+            )
+        )
+        for pid in member_ids
+    ]
+    assert all({"__tag", "__tag:wd14"} <= tags for tags in tags_per_member)
+
+
+def test_likeness_search_by_set_with_no_embedded_members_is_422(set_env):
+    client, _server, _ids, sets = set_env
+
+    for key in ("unembedded", "empty"):
+        resp = _likeness_search(client, source_set_id=sets[key])
+        assert resp.status_code == 422, resp.text
+        assert "embedding" in resp.json()["detail"]
+
+
+def test_likeness_search_rejects_more_than_one_source(set_env):
+    client, _server, ids, sets = set_env
+
+    resp = _likeness_search(
+        client, source_set_id=sets["main"], source_picture_ids=ids["m1"]
+    )
+    assert resp.status_code == 400, resp.text
+    assert "source_set_id" in resp.json()["detail"]
+
+
+def test_likeness_search_by_set_refuses_an_out_of_scope_set_for_a_share_token(
+    set_env,
+):
+    """A picture_set token may name only its own set as source or exclusion.
+
+    The positive control sits beside each negative: the same token, same
+    request, its own set, gets 200 - so the 403 is the set-scope check and not
+    the READ-token belt refusing the route.
+    """
+    client, server, _ids, sets = set_env
+    token = _set_share_token(client, sets["shared"])
+    headers = {"Authorization": f"Bearer {token}"}
+    anon = TestClient(server.api)
+
+    for param in ("source_set_id", "exclude_set_id"):
+        base = {} if param == "source_set_id" else {"source_set_id": sets["shared"]}
+        resp = _likeness_search(anon, headers, **base, **{param: sets["shared"]})
+        assert resp.status_code == 200, (param, resp.text)
+        resp = _likeness_search(anon, headers, **base, **{param: sets["other"]})
+        assert resp.status_code == 403, (param, resp.text)
+        # No existence oracle: an unknown set is refused the same way.
+        resp = _likeness_search(anon, headers, **base, **{param: 999_999})
+        assert resp.status_code == 403, (param, resp.text)
+
+
+def test_likeness_search_by_set_still_scope_filters_results_for_a_share_token(
+    set_env,
+):
+    client, server, ids, sets = set_env
+    token = _set_share_token(client, sets["shared"])
+    anon = TestClient(server.api)
+
+    resp = _likeness_search(
+        anon,
+        {"Authorization": f"Bearer {token}"},
+        source_set_id=sets["shared"],
+        top_n=500,
+    )
+    assert resp.status_code == 200, resp.text
+    returned = {row["picture_id"] for row in resp.json()}
+    assert ids["near"] in returned, "in-scope match was over-blocked"
+    assert ids["m2"] not in returned, "out-of-scope picture leaked"
+    assert ids["far"] not in returned, "out-of-scope picture leaked"
