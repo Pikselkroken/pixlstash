@@ -104,14 +104,16 @@
       <!-- The app-wide tail, minus undo: this view replaces the grid and its
            toolbar, so without it neither Settings nor the right rail has a
            control on the screen — and the rail is where `WorkflowTab` is
-           shown (`AppInspector` gates it on `sidebarStore.statsOpen`), so the
-           rail would be unreachable (#1415). Its own `--space-3` cluster
-           because this bar spaces its controls wider, and `rail-name` because
-           the toggle's tooltip is also its accessible name and this rail is
-           not the stats sidebar. -->
+           shown (`AppInspector` gates it on
+           `sidebarStore.workflowInspectorOpen`), so the rail would be
+           unreachable (#1415). Its own `--space-3` cluster because this bar
+           spaces its controls wider, `rail-name` because the toggle's tooltip
+           is also its accessible name and this rail is not the stats sidebar,
+           and `rail` because the inspector has its own open flag. -->
       <span class="wfv-bar-tail">
         <TbGlobalActions
           separator
+          rail="workflows"
           rail-name="inspector"
           @open-settings="emit('open-settings')"
         />
@@ -244,7 +246,12 @@
          track: `measure()` reads the grid's `clientWidth`, which INCLUDES its
          own padding, and a padded grid would be measured 32px wider than the
          space the columns actually have. -->
-    <div v-else ref="scrollEl" class="wfv-scroll">
+    <div
+      v-else
+      ref="scrollEl"
+      class="wfv-scroll"
+      :class="{ 'wfv-scroll--edge-tab': !sidebarStore.workflowInspectorOpen }"
+    >
       <!-- One `treegrid` and one tab stop: the cursor roves with the arrow
            keys and the focused row is the only one at `tabindex="0"`. -->
       <div
@@ -337,6 +344,16 @@
          grid down every time a card was clicked. `.selbar-float` turns
          `pointer-events` off on the strip and back on for the pill, so the
          cards underneath it stay clickable. -->
+    <!-- The closed inspector's handle: names the selection, and bounces on a
+         new one (`inspectorNudge`). Never opens the inspector by itself -
+         that would take a column away under the pointer. -->
+    <InspectorEdgeTab
+      v-if="!sidebarStore.workflowInspectorOpen"
+      :label="edgeTabLabel"
+      :nudge="sidebarStore.inspectorNudge"
+      @open="openInspectorFromTab"
+    />
+
     <div class="selbar-float">
       <WorkflowSelectionBar
         ref="selBarRef"
@@ -441,6 +458,7 @@ import { useConfirm } from "../../composables/useConfirm";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWorkflowPullStore } from "../../stores/useWorkflowPullStore";
 import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import {
@@ -461,6 +479,7 @@ import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
+import InspectorEdgeTab from "../widgets/InspectorEdgeTab.vue";
 import OptionRows from "../widgets/OptionRows.vue";
 import WorkflowCard from "../widgets/WorkflowCard.vue";
 
@@ -492,6 +511,7 @@ const prefs = useWorkflowPrefsStore();
 const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
 const pull = useWorkflowPullStore();
+const sidebarStore = useSidebarStore();
 const router = useRouter();
 const route = useRoute();
 const { confirm } = useConfirm();
@@ -887,6 +907,9 @@ watch(
     linkMissed.value = false;
     linkFiltered.value = false;
     store.select(card.key);
+    // The one deep link that lands on a selection: it opens the inspector,
+    // without persisting it, as `?card=` and `?tab=recipes` do.
+    sidebarStore.openWorkflowInspector();
     // Not while the reader is inside a popover or the file dialog: the cards
     // arrive asynchronously, so this can fire a second after the screen went
     // interactive, and yanking focus out from under a gesture in progress is
@@ -909,6 +932,38 @@ watch(
   },
   { immediate: true },
 );
+
+// ── The closed inspector (visual-language "Closed inspector") ─────────────
+//
+// A NEW selection nudges the inspector: the edge tab bounces and the rail
+// toggle's glyph flashes, both only while the inspector is closed. Keyed on
+// the selection's identity, so re-clicking the selected card (a fresh array
+// holding the same key) is not news, and clearing the selection is not either.
+watch(
+  () => [...store.selectedKeys].sort().join("\n"),
+  (identity) => {
+    if (identity) sidebarStore.inspectorNudge += 1;
+  },
+);
+
+/** What the closed inspector would describe: a name, `N workflows`, or "". */
+const edgeTabLabel = computed(() => {
+  // `runnableCard` is the one card the inspector describes: the selected
+  // card, or for a stack selected whole the member picked in the inspector.
+  if (store.runnableCard) return store.runnableCard.name ?? "";
+  const count = store.selectedKeys.length;
+  return count > 1 ? `${count} workflows` : "";
+});
+
+// The same act as the toolbar toggle, so it persists. The tab unmounts as the
+// inspector opens, so focus is handed to the inspector's active tab rather
+// than dropping to `body`.
+function openInspectorFromTab() {
+  sidebarStore.toggleWorkflowInspector();
+  nextTick(() =>
+    document.querySelector(".wftab .inspector-tab--active")?.focus(),
+  );
+}
 
 function openWatchedFolder() {
   const id = watchedFolder.value?.id;
@@ -1929,6 +1984,14 @@ async function filesChosen(event) {
      vertical one the reader asked for. */
   scrollbar-gutter: stable;
   padding: var(--space-3);
+}
+
+/* The closed inspector's edge tab (34px) floats over this edge: the cards
+   stop short of it, so a click on a card's edge never lands on the tab and
+   opens the inspector under the pointer. The scrollbar still runs under the
+   tab's band, which is why it opens on click only. */
+.wfv-scroll--edge-tab {
+  padding-right: calc(34px + var(--space-3));
 }
 
 /* `--wf-columns` is set from the measured width, so the painted grid and the

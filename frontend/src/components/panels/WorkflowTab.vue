@@ -3,7 +3,7 @@
     v-model="tab"
     class="wftab"
     label="Inspector"
-    :open="sidebarStore.statsOpen"
+    :open="sidebarStore.workflowInspectorOpen"
     :tabs="tabs"
   >
     <!-- The task manager, last tab and on its own: what the app is working on
@@ -562,7 +562,7 @@ watch(
   (wanted) => {
     if (wanted !== "recipes") return;
     tab.value = "recipes";
-    sidebarStore.statsOpen = true;
+    sidebarStore.openWorkflowInspector();
   },
   { immediate: true },
 );
@@ -966,7 +966,7 @@ watch(
       honouredCard = wanted;
       store.select(wanted);
       tab.value = "workflow";
-      sidebarStore.statsOpen = true;
+      sidebarStore.openWorkflowInspector();
     }
     if (edit === EDIT_LORAS) {
       openEditLoras(wanted, typeof drop === "string" ? drop : "");

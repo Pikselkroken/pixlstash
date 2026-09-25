@@ -24,6 +24,30 @@ function saveStatsOpen(val) {
   }
 }
 
+// The Workflows inspector's own open flag. It describes the selection, so it
+// defaults OPEN: the grid is laid out around it from the first paint and a
+// click on a card never reflows the columns under the pointer. The stats
+// sidebar describes the library and keeps its own, closed-by-default flag.
+const WORKFLOW_INSPECTOR_KEY = "pixlstash:workflowInspectorOpen";
+
+function loadWorkflowInspectorOpen() {
+  try {
+    const stored = window.localStorage?.getItem(WORKFLOW_INSPECTOR_KEY);
+    if (stored !== null && stored !== undefined) return stored !== "false";
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+function saveWorkflowInspectorOpen(val) {
+  try {
+    window.localStorage?.setItem(WORKFLOW_INSPECTOR_KEY, val ? "true" : "false");
+  } catch {
+    // ignore
+  }
+}
+
 // Width: full sidebar vs. narrow icon dock. Set in Settings → Appearance.
 function loadSidebarDocked() {
   try {
@@ -74,6 +98,12 @@ export const useSidebarStore = defineStore("sidebar", () => {
   // Transient reveal state for auto-hide: true while the sidebar is peeked open.
   const autoRevealed = ref(false);
   const statsOpen = ref(loadStatsOpen());
+  const workflowInspectorOpen = ref(loadWorkflowInspectorOpen());
+  // Bumped by whichever screen owns a selection-describing inspector when its
+  // selection changes to something NEW. The closed-inspector edge tab and the
+  // rail toggle's glyph both play their one-shot nudge on it. A counter, like
+  // `tasksTabRequest`, so two new selections in a row are two nudges.
+  const inspectorNudge = ref(0);
   // Responsive override: a narrow/mobile window is always auto-hide + full width.
   const sidebarForcedHidden = ref(false);
   const statsForcedHidden = ref(false);
@@ -125,6 +155,17 @@ export const useSidebarStore = defineStore("sidebar", () => {
     saveStatsOpen(statsOpen.value);
   }
 
+  // The reader's own choice, from the toolbar toggle or the edge tab: kept.
+  function toggleWorkflowInspector() {
+    workflowInspectorOpen.value = !workflowInspectorOpen.value;
+    saveWorkflowInspectorOpen(workflowInspectorOpen.value);
+  }
+
+  // A deep link's "show me": opened, not persisted (see `showTasksTab`).
+  function openWorkflowInspector() {
+    workflowInspectorOpen.value = true;
+  }
+
   // "Take me to the task manager", from a notice or a banner. A counter rather
   // than a flag, so asking twice in a row is two requests and nothing has to
   // remember to clear it. Whichever inspector is on screen watches it and
@@ -135,10 +176,12 @@ export const useSidebarStore = defineStore("sidebar", () => {
   // Deliberately NOT `saveStatsOpen`, unlike `toggleStats` above: opening the
   // rail to answer one "show me" is not the reader choosing to keep it open,
   // and persisting it would leave every later session with a rail they never
-  // asked for.
+  // asked for. Both rails' flags, because the caller (a notice) does not know
+  // which screen is showing, and only the one on screen is drawn.
   const tasksTabRequest = ref(0);
   function showTasksTab() {
     statsOpen.value = true;
+    workflowInspectorOpen.value = true;
     tasksTabRequest.value += 1;
   }
 
@@ -156,6 +199,8 @@ export const useSidebarStore = defineStore("sidebar", () => {
     sidebarVisible,
     sidebarOverlay,
     statsOpen,
+    workflowInspectorOpen,
+    inspectorNudge,
     tasksTabRequest,
     sidebarForcedHidden,
     statsForcedHidden,
@@ -164,6 +209,8 @@ export const useSidebarStore = defineStore("sidebar", () => {
     revealSidebar,
     hideAutoSidebar,
     toggleStats,
+    toggleWorkflowInspector,
+    openWorkflowInspector,
     showTasksTab,
     persistSidebarDocked,
   };
