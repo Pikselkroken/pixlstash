@@ -307,7 +307,7 @@ export async function duplicateWorkflow(workflowKey) {
  * resolved to a shelf row where one fits) and the shelf's checkpoints, VAEs
  * and text encoders. With it: also the VAEs and text encoders recipes have run
  * beside that checkpoint, each saying which step of the widening answered
- * (`via`), and the LoRAs and ControlNets trained on another family (`flags`).
+ * (`via`; `declared` when nothing has and only the file layout fits), and the LoRAs and ControlNets trained on another family (`flags`).
  * Call it on open and on each checkpoint choice, never per keystroke: the
  * server reads the whole shelf and every recipe to answer.
  *

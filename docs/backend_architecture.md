@@ -3313,9 +3313,10 @@ wherever there is one: it is the only thing that knows what a file called
 `nvfp4_awq` is actually stored at. See §*The shelf catalogues more than one
 suffix* below for the file kinds that have no header at all.
 
-Nothing reads them to decide a delete yet: `family` speaks two vocabularies (base-model
-families and tensor layouts), and joining a checkpoint's `flux1` to a
-`vae_16ch` needs a compatibility table this change does not invent.
+Nothing reads them to decide a delete: `family` speaks two vocabularies (base-model
+families and tensor layouts), and the one table joining a checkpoint's `flux1`
+to a `vae_16ch` (`COMPANION_LAYOUTS`, below) is a declaration, which a delete
+warning must not act on.
 
 **Clone with new models proposes companions from evidence, not from a table.**
 `model_shelf_service.propose_companions` is `fetch_companions` read forwards:
@@ -3327,9 +3328,15 @@ the step that produced it (`via`), and a support file a recipe reached only
 through an ambiguous name is not proposed. "Same base model" and "same family"
 read `known_base_model`: the shelf's identified label (`base_model_canonical`)
 unless its source is a fuzzy guess, else the stored `base_model` folded; the
-LoRA flag reads the same. A checkpoint nothing has run with,
-from a family nothing has run with, proposes nothing: no bridge between the two
-vocabularies above is invented. LoRAs and ControlNets are the one legitimate
+LoRA flag reads the same. A checkpoint from a family nothing has run with
+falls to a fourth step, `declared`, the one bridge between the two
+vocabularies above: `known_base_models.COMPANION_LAYOUTS` names, per
+architecture family, the tensor layouts (`vae_16ch`, `clip_l`, `t5_xxl`...) its
+VAE and text encoders take, and the shelf's support files of those layouts are
+proposed with `recipes` 0. It is a declaration, not evidence (SD 1.5's and
+SDXL's VAEs share a layout), so it runs only for a kind no recipe answered, the
+dialog labels it untested, and a family declares only the kinds the layout
+vocabulary can name with certainty; anything else still proposes nothing. LoRAs and ControlNets are the one legitimate
 family comparison (`family_of` on both sides of one vocabulary), and a mismatch
 is flagged by `GET /workflows/{key}/model-swap`, never dropped. The rewrite is
 `comfyui_recipe_service.apply_filename_swap`, deliberately not

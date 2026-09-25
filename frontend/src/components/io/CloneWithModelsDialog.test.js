@@ -193,6 +193,38 @@ describe("CloneWithModelsDialog", () => {
     );
   });
 
+  it("says a declared proposal is untested, in the warning tone", async () => {
+    readModelSwap.mockImplementation(async (key, { checkpointId } = {}) =>
+      checkpointId == null
+        ? OPTIONS
+        : {
+            ...OPTIONS,
+            proposals: {
+              vae: [
+                {
+                  id: 3,
+                  filename: "flux2-vae.safetensors",
+                  family: "vae_16ch",
+                  via: "declared",
+                  recipes: 0,
+                },
+              ],
+            },
+          },
+    );
+    const wrapper = open();
+    await flushPromises();
+    await selects(wrapper)[0].setValue("2");
+    await flushPromises();
+    expect(selects(wrapper)[1].element.value).toBe("flux2-vae.safetensors");
+    const note = wrapper
+      .findAll(".cwm-note")
+      .find((n) => n.text().startsWith("Untested"));
+    expect(note).toBeDefined();
+    expect(note.classes()).toContain("cwm-warn");
+    expect(wrapper.text()).not.toContain("Used with");
+  });
+
   it("clones by filename, only what changed, under the typed name", async () => {
     const wrapper = open();
     await flushPromises();

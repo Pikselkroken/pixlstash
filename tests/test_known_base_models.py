@@ -6,7 +6,10 @@ containment trap folding FLUX.2 into FLUX.1, and a user's own value being either
 lost or duplicated in tab-completion.
 """
 
+import re
+
 from pixlstash.utils.known_base_models import (
+    COMPANION_LAYOUTS,
     KNOWN_BASE_MODELS,
     _norm,
     completions,
@@ -107,3 +110,15 @@ def test_closed_models_are_marked():
     assert {"Wan 2.2", "LTXV 13B", "HunyuanVideo 1.5"} <= {
         name for name, i in KNOWN_BASE_MODELS.items() if i["modality"] == "video"
     }
+
+
+def test_companion_layouts_join_the_two_family_vocabularies():
+    """Keyed by a base-model family, valued in `family_from_header`'s layouts:
+    a key the table above never produces, or a layout the scanner never stores,
+    is a declaration that can never fire."""
+    families = {info["family"] for info in KNOWN_BASE_MODELS.values()}
+    for family, kinds in COMPANION_LAYOUTS.items():
+        assert family in families, family
+        assert kinds and set(kinds) <= {"vae", "text_encoder"}, family
+        for layout in set().union(*kinds.values()):
+            assert re.fullmatch(r"vae_\d+ch|clip_[lhg]|(um)?t5_xxl", layout), layout
