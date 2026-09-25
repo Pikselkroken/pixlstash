@@ -239,11 +239,13 @@ describe("WorkflowCard height", () => {
     expect(cover.flex).toBe("none");
     expect(meta.flex).toBe("none");
 
-    const rows = meta["grid-template-rows"].match(/^repeat\((\d+), (.+)\)$/);
-    expect(Number(rows[1])).toBe(4);
+    const rows = meta["grid-template-rows"].trim().split(/\s+/);
+    expect(rows).toHaveLength(4);
     const total =
-      2 * px(meta.padding) + 4 * px(rows[2]) + 3 * px(meta["row-gap"]);
-    expect(t["--wf-meta-h"]).toBe(118);
+      2 * px(meta.padding) +
+      rows.reduce((sum, track) => sum + px(track, t), 0) +
+      3 * px(meta["row-gap"]);
+    expect(t["--wf-meta-h"]).toBe(122);
     expect(total).toBe(t["--wf-meta-h"]);
   });
 
@@ -324,12 +326,11 @@ describe("WorkflowCard height", () => {
     const row = card - 2 * 1 - 2 * px(rule(".wf-card__meta").padding, t);
     const gap = px(rule(".wf-card__strip").gap, t);
     const hairline = px(rule(".wf-card__rule").width, t);
-    const worst =
-      marks * t["--entity-thumb"] + hairline + 20 + (marks + 1) * gap;
+    const worst = marks * t["--wf-mark"] + hairline + 20 + (marks + 1) * gap;
     expect(row).toBe(196);
     expect(worst).toBeLessThanOrEqual(row);
     // And one more mark would not have fitted, so the cap is not loose.
-    expect(worst + t["--entity-thumb"] + gap - 20).toBeGreaterThan(row);
+    expect(worst + t["--wf-mark"] + gap - 20).toBeGreaterThan(row);
   });
 
   it("keeps row 4 clear of the ⓘ button", () => {
@@ -389,16 +390,22 @@ describe("WorkflowCard", () => {
 
   it("draws the base model and every LoRA as marks, base first", () => {
     // Row 2 is the strip (#1485): the base model's mark, the hairline, then
-    // one mark per LoRA, and a recipe slot as a dashed box rather than a mark.
-    const strip = mountCard(CROWDED).find(".wf-card__strip");
+    // one mark per LoRA, and the recipe slot as a pile rather than a mark -
+    // here an empty one, a single LoRA glyph, since no recipe named a LoRA.
+    const strip = mountCard({
+      ...CROWDED,
+      loras: CROWDED.loras.slice(1),
+    }).find(".wf-card__strip");
     const items = strip.findAll("li");
     expect(items.map((li) => li.classes()[0])).toEqual([
       "wf-card__mark",
       "wf-card__rule",
-      ...Array(5).fill("wf-card__mark"),
+      ...Array(4).fill("wf-card__mark"),
     ]);
-    expect(items.at(-1).classes()).toContain("wf-card__mark--slot");
+    expect(items.at(-1).classes()).toContain("wf-card__pile");
     expect(items.at(-1).find(".mmark").exists()).toBe(false);
+    expect(items.at(-1).text()).toBe("mdi-layers-outline");
+    expect(items.at(-1).text()).not.toContain("mdi-plus");
     // A fact is not a model: no glyph, and no fill either.
     const facts = mountCard(CROWDED).find(".wf-card__row--facts");
     for (const chip of facts.findAll(".chip-row > .chip-row__chip")) {
@@ -414,13 +421,157 @@ describe("WorkflowCard", () => {
         { mark: "recipe" },
       ],
     })
-      .findAll(".wf-card__strip .wf-card__mark > tooltip-stub")
+      .findAll(
+        ".wf-card__strip .wf-card__mark:not(.wf-card__pile) > tooltip-stub",
+      )
       .map((tip) => tip.attributes("text"));
-    expect(tips).toEqual([
-      "flux1-fill-dev",
-      "add detail xl · BF16",
-      "recipe LoRA",
-    ]);
+    expect(tips).toEqual(["flux1-fill-dev", "add detail xl · BF16"]);
+  });
+
+  describe("the recipe pile", () => {
+    const lora = (name, recipes, character_id = null) => ({
+      name,
+      recipes,
+      character_id,
+      character_name: character_id == null ? null : `Person ${character_id}`,
+    });
+    const CAST = [
+      lora("ada", 5, 7),
+      lora("retro outfit", 3),
+      lora("bea", 2, 8),
+      lora("film grain", 1),
+      lora("noir", 1),
+    ];
+    const piled = (extra = {}) =>
+      mountCard({
+        ...BARE,
+        variant_count: 12,
+        loras: [{ name: "detail", mark: "structural" }, { mark: "recipe" }],
+        recipe_loras: CAST,
+        ...extra,
+      });
+
+    it("draws three faces, most used first, then +N", () => {
+      const pile = piled().find(".wf-card__pile");
+      const faces = pile.findAll(".wf-card__pile-face");
+      expect(faces).toHaveLength(3);
+      expect(faces[0].find("img").attributes("src")).toContain(
+        "/characters/7/thumbnail",
+      );
+      // No character: the LoRA glyph, never a guessed face.
+      expect(faces[1].find("img").exists()).toBe(false);
+      expect(faces[1].text()).toBe("mdi-layers-outline");
+      expect(faces[2].find("img").attributes("src")).toContain(
+        "/characters/8/thumbnail",
+      );
+      expect(pile.find(".wf-card__pile-more").text()).toBe("+2");
+    });
+
+    it("draws each one as a full mark, side by side, while they fit", () => {
+      // Base + one LoRA of its own leaves three marks for three recipe LoRAs.
+      const pile = piled({ recipe_loras: CAST.slice(0, 3) }).find(
+        ".wf-card__pile",
+      );
+      expect(pile.classes()).not.toContain("wf-card__pile--stacked");
+      expect(pile.findAll(".wf-card__pile-face")).toHaveLength(3);
+      expect(pile.find(".wf-card__pile-more").exists()).toBe(false);
+      // Five do not fit in three, so they stack.
+      expect(piled().find(".wf-card__pile").classes()).toContain(
+        "wf-card__pile--stacked",
+      );
+    });
+
+    it("draws a character with no thumbnail as the LoRA glyph", async () => {
+      const wrapper = piled();
+      await wrapper.find(".wf-card__pile-face img").trigger("error");
+      const first = wrapper.find(".wf-card__pile-face");
+      expect(first.find("img").exists()).toBe(false);
+      expect(first.text()).toBe("mdi-layers-outline");
+    });
+
+    it("draws one pile however many recipe slots the card has", () => {
+      const wrapper = piled({
+        loras: [{ mark: "recipe" }, { mark: "recipe" }],
+      });
+      expect(wrapper.findAll(".wf-card__pile")).toHaveLength(1);
+    });
+
+    it("counts characters apart from the other recipe LoRAs", () => {
+      expect(piled().find(".wf-card__lora-count").text()).toBe(
+        "1 LoRA · 2 characters + 3 recipe LoRAs",
+      );
+      expect(
+        piled({ loras: [{ mark: "recipe" }], recipe_loras: [lora("x", 1)] })
+          .find(".wf-card__lora-count")
+          .text(),
+      ).toBe("1 recipe LoRA");
+    });
+
+    it.each([
+      // [structural LoRAs, recipe LoRAs, whether the pile fits]
+      [1, 5, true], // base + 1 + a pile with +N (3) = 5
+      [2, 5, false], // 6
+      [2, 3, true], // three stacked faces cost two marks: 5
+      [3, 3, false], // 6
+      [3, 1, true], // one face is one mark: 5
+    ])(
+      "budgets %i marks beside a pile of %i as fitting: %s",
+      (own, cast, fits) => {
+        const wrapper = piled({
+          loras: [
+            ...Array.from({ length: own }, (_, i) => ({
+              name: `lora-${i}`,
+              mark: "structural",
+            })),
+            { mark: "recipe" },
+          ],
+          recipe_loras: CAST.slice(0, cast),
+        });
+        expect(wrapper.find(".wf-card__pile").exists()).toBe(fits);
+        expect(wrapper.find(".wf-card__mark-more").exists()).toBe(!fits);
+      },
+    );
+
+    it("lists each LoRA in its tooltip with how many recipes used it", () => {
+      const text = mount(WorkflowCard, {
+        props: {
+          card: {
+            ...BARE,
+            variant_count: 12,
+            loras: [{ mark: "recipe" }],
+            recipe_loras: CAST,
+          },
+        },
+        global: { stubs: { Tooltip: { template: "<div><slot /></div>" } } },
+      })
+        .find(".wf-card__pile")
+        .text()
+        .replace(/\s+/g, " ");
+      expect(text).toContain("Recipe LoRAs · 12 recipes");
+      expect(text).toContain("Person 7's LoRA · 5 recipes");
+      expect(text).toContain("retro outfit · no character · 3 recipes");
+      expect(text).toContain("and 1 more");
+    });
+
+    it("tells two LoRAs of one character apart by their own names", () => {
+      const label = piled({
+        recipe_loras: [
+          lora("ada v1", 3, 7),
+          lora("ada v2", 2, 7),
+          lora("bea", 1, 8),
+        ],
+      }).attributes("aria-label");
+      expect(label).toContain(
+        "recipe LoRAs used: Person 7 · ada v1; Person 7 · ada v2; Person 8's LoRA",
+      );
+    });
+
+    it("names every recipe LoRA in the accessible name", () => {
+      expect(piled().attributes("aria-label")).toContain(
+        "recipe LoRAs used: Person 7's LoRA; retro outfit; Person 8's LoRA; " +
+          "film grain; noir",
+      );
+    });
   });
 
   it("puts the hairline after the base model only when LoRAs follow it", () => {
@@ -435,9 +586,9 @@ describe("WorkflowCard", () => {
   });
 
   it.each([
-    [5, 6, 0],
-    [6, 6, 1],
-    [12, 6, 7],
+    [4, 5, 0],
+    [5, 5, 1],
+    [12, 5, 8],
   ])(
     "draws a card with %i LoRAs as %i marks and a +%i",
     (count, marks, more) => {

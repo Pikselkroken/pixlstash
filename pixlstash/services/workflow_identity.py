@@ -157,7 +157,7 @@ class Slot:
     is_lora: bool
 
 
-def _is_lora_widget(widget: str) -> bool:
+def is_lora_widget(widget: str) -> bool:
     """Whether this widget names a LoRA, so its slot takes a mark.
 
     Both spellings carry the numbered form a stacker gives its second and third
@@ -206,7 +206,7 @@ def _slots(nodes: dict[str, ReducedNode]) -> list[Slot]:
                     class_type=node.class_type,
                     widget=widget,
                     asset=value,
-                    is_lora=_is_lora_widget(widget),
+                    is_lora=is_lora_widget(widget),
                 )
             )
     return sorted(found, key=lambda s: (s.label, s.asset))
@@ -354,7 +354,7 @@ def node_groups(nodes: dict[str, ReducedNode]) -> dict[str, Optional[str]]:
             groups[node_id] = UPSCALE
         elif _FACE_DETAILER_CLASS_RE.match(cls):
             groups[node_id] = FACE_DETAILER
-        elif any(_is_lora_widget(name) for name, _ in node.widgets) or (
+        elif any(is_lora_widget(name) for name, _ in node.widgets) or (
             "lora" in cls.lower() and "loader" in cls.lower()
         ):
             groups[node_id] = LORA

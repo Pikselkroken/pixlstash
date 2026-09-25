@@ -313,8 +313,9 @@ def asset_names(
 
     Resolving that properly means reducing the stored document per card, which
     is a Weisfeiler-Leman refinement apiece and would roughly double the grid's
-    cost. It is worth doing when something depends on it: a *recipe* LoRA is
-    drawn as an anonymous slot rather than by name, so today nothing does.
+    cost. Nothing pairs a *recipe* LoRA to its slot: the card summarises every
+    variant's recipe LoRAs as one list, and reduces one document only for a
+    card that also has structural LoRA slots to subtract.
     """
     names: dict[str, list[tuple[str, str]]] = {}
     for batch in chunked(sorted(set(structural_hashes))):

@@ -64,9 +64,16 @@
 //               quant, mark, slot_label }],
 //                                       // "structural" = in the workflow
 //                                       // (a mark), "recipe" = a slot the
-//                                       // recipe fills (a dashed "+" box).
+//                                       // recipe fills (drawn as the pile
+//                                       // of `recipe_loras`).
 //                                       // `slot_label` is the address
 //                                       // `PUT /workflows/{key}/slots` marks
+//     recipe_loras: [{ name, recipes, character_id, character_name }],
+//                                       // every LoRA the card's recipes put
+//                                       // in its recipe slots, most used
+//                                       // first; `recipes` is how many.
+//                                       // `character_id` is null for a LoRA
+//                                       // attached to no one character
 //     differs_by: [string],             // a stack: the union over its members
 //     picture_count, rating,            // rating 1-5; 0 or null is unrated
 //     covers: [{ url, picture_id, thumbnail_width, thumbnail_height,
@@ -379,6 +386,42 @@ export function factChips(card, { short = false } = {}) {
   return labels.map((label, i) => ({ key: `fact-${i}`, label, fact: true }));
 }
 
+/**
+ * One recipe LoRA as the card names it: its character's, where it has one,
+ * because that is who the pile shows. A character with several LoRAs in
+ * `all` (two versions, say) draws the same face for each, so there the
+ * LoRA's own name - which is where a version lives - follows the character's.
+ */
+export function recipeLoraLabel(lora, all = []) {
+  if (!lora.character_name) return lora.name;
+  const shared = all.filter(
+    (other) => other.character_id === lora.character_id,
+  ).length;
+  return shared > 1
+    ? `${lora.character_name} · ${lora.name}`
+    : `${lora.character_name}'s LoRA`;
+}
+
+/**
+ * Row 3's count of what the recipe slots have held, people apart from the
+ * rest: "3 characters", "1 character + 1 recipe LoRA", "1 recipe LoRA". ""
+ * for none, so the caller can fall back to counting the slot itself.
+ */
+export function recipeLoraCount(recipeLoras) {
+  const people = new Set(
+    recipeLoras
+      .filter((lora) => lora.character_id != null)
+      .map((lora) => lora.character_id),
+  ).size;
+  const rest = recipeLoras.filter((lora) => lora.character_id == null).length;
+  return [
+    people ? (people === 1 ? "1 character" : `${people} characters`) : "",
+    rest ? (rest === 1 ? "1 recipe LoRA" : `${rest} recipe LoRAs`) : "",
+  ]
+    .filter(Boolean)
+    .join(" + ");
+}
+
 /** "4.9 of 5", or null when nothing is rated (0 or missing). */
 export function ratingLabel(rating) {
   return rating > 0 ? `${rating.toFixed(1)} of 5` : null;
@@ -387,7 +430,7 @@ export function ratingLabel(rating) {
 /**
  * The card's accessible name. "+N" is not a control, so this is the only place
  * a screen reader hears the chips a narrow card clipped, and it says "workflow"
- * or "recipe" because the dashed border is not announced.
+ * or "recipe" because which kind a mark is shows only by where it sits.
  *
  * `member` is a row inside its own stack's panel. It carries the WHOLE stack's
  * `stack_size` — the service sets it on every member deliberately, so a member
@@ -398,6 +441,9 @@ export function ratingLabel(rating) {
 export function cardAccessibleName(card, { member = false } = {}) {
   const count = card.picture_count ?? 0;
   const checkpoint = checkpointModel(card);
+  const cast = (card.recipe_loras ?? []).map((lora, _, all) =>
+    recipeLoraLabel(lora, all),
+  );
   const loras = (card.loras ?? []).map((lora) => {
     if (lora.mark === RECIPE) return "recipe LoRA slot";
     const quant = quantBadge(lora.quant);
@@ -431,6 +477,7 @@ export function cardAccessibleName(card, { member = false } = {}) {
       : lorasUnread(card)
         ? "LoRAs not read"
         : "no LoRAs",
+    cast.length ? `recipe LoRAs used: ${cast.join("; ")}` : null,
     facts.length
       ? `${isStack(card) ? "differs by" : "facts"}: ${facts.join(", ")}`
       : null,

@@ -379,6 +379,19 @@ class WorkflowDefault(BaseModel):
     provenance: str
 
 
+class WorkflowRecipeLora(BaseModel):
+    """One LoRA that has filled the card's recipe slots in some variant.
+
+    ``character_id`` is null for a LoRA attached to no character in this
+    library (or to several), and the card then draws a LoRA glyph for it.
+    """
+
+    name: str
+    recipes: int
+    character_id: int | None = None
+    character_name: str | None = None
+
+
 class WorkflowCover(BaseModel):
     """One picture of a card's cover strip: where to load it, and how to crop it.
 
@@ -498,6 +511,13 @@ class WorkflowCard(BaseModel):
     )
     models: list[WorkflowSlotModel] = Field(default_factory=list)
     loras: list[WorkflowSlotModel] = Field(default_factory=list)
+    recipe_loras: list[WorkflowRecipeLora] = Field(
+        default_factory=list,
+        description=(
+            "Every LoRA the card's variants loaded into its recipe slots, "
+            "most-used first. Empty on a card with no recipe slot."
+        ),
+    )
     differs_by: list[str] = Field(default_factory=list)
     picture_count: int = 0
     rating: float | None = Field(
@@ -1806,6 +1826,15 @@ def _card(figure, defaults=(), figures_by_key=None) -> WorkflowCard:
         hidden=figure.card.hidden,
         models=_slot_models(figure.models),
         loras=_slot_models(figure.loras),
+        recipe_loras=[
+            WorkflowRecipeLora(
+                name=lora.name,
+                recipes=lora.recipes,
+                character_id=lora.character_id,
+                character_name=lora.character_name,
+            )
+            for lora in figure.recipe_loras
+        ],
         specials=None if figure.card.specials is None else list(figure.card.specials),
         differs_by=figure.differs_by,
         picture_count=figure.pictures,

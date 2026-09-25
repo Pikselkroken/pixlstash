@@ -10,7 +10,11 @@ the cards that have no variant at all, #1466) and one more is only issued
 where a slot name actually reaches the shelf; everything else here is
 arithmetic over their results, plus F7's ghost pass - one grouped count, and
 the five reads ``model_ghost_names`` makes, two of them whole-table scans,
-measured together at 1.3 ms (:func:`_describe_ghosts`).
+measured together at 1.3 ms (:func:`_describe_ghosts`). The recipe-LoRA
+pass (:func:`_describe_recipe_loras`) adds the shelf index once more, one
+vault read of the character attachments, and one reduced document per card
+that has both a structural and a recipe LoRA slot - none at all on a grid
+with no recipe slot.
 An aggregate table would have to be invalidated by every rating,
 every import, every soft delete and every re-run of the card backfill, and
 would be a second source of truth for numbers the vault can already produce
@@ -60,16 +64,19 @@ from pixlstash.hub.workflow_card_reads import (
 from pixlstash.hub.workflows import model_ghost_names, picture_ghosts_by_variant
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.model_shelf_service import (
+    attached_characters,
     models_for_digest,
     recipe_asset_index,
 )
-from pixlstash.services.workflow_hash import WorkflowGraphError
+from pixlstash.services.workflow_hash import WorkflowGraphError, asset_reference
 from pixlstash.services.workflow_identity import (
     CHECKPOINT_WIDGETS,
     RECIPE,
     STRUCTURAL,
     differs_by_reduced,
+    is_lora_widget,
     reduce_stored_document,
+    slots,
     topology_node_labels,
 )
 from pixlstash.services.workflow_library_service import (
@@ -226,6 +233,23 @@ class SlotModel:
     base_model_folded: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class RecipeLora:
+    """One LoRA that has filled a card's recipe slots, and who it is of.
+
+    ``name`` is the shelf's title where the shelf holds exactly one model by
+    that value, the derived filename otherwise. ``recipes`` is how many of the
+    card's variants loaded it. ``character_id`` is set only where that one
+    model is attached to exactly one character in this library: two would be
+    a guess about which face to draw, and no face is better than the wrong one.
+    """
+
+    name: str
+    recipes: int
+    character_id: Optional[int] = None
+    character_name: Optional[str] = None
+
+
 @dataclass
 class CardFigures:
     """One card's counts, its rank and the pictures that would cover it."""
@@ -244,6 +268,7 @@ class CardFigures:
     differs_by: list[str] = field(default_factory=list)
     models: list[SlotModel] = field(default_factory=list)
     loras: list[SlotModel] = field(default_factory=list)
+    recipe_loras: list[RecipeLora] = field(default_factory=list)
     ghosts: int = 0
     model_ghosts: int = 0
 
@@ -650,6 +675,7 @@ def read_grid(
     )
     _describe_slots(hub, figures, names, _recovered_slots(figures, file_models))
     _describe_ghosts(hub, vault, figures, names)
+    _describe_recipe_loras(hub, vault, figures, names)
     return Grid(
         cards=drawn,
         stacks=stacks,
@@ -828,11 +854,11 @@ def _describe_slots(
     :func:`~pixlstash.hub.workflow_card_reads.asset_names` read, the table that
     holds the readable filenames, shared with :func:`_describe_ghosts`.
 
-    **A recipe LoRA is a slot, not a file.** It is drawn as an anonymous dashed
-    chip (`utils/workflowCard.js`), because which character LoRA happened to be
-    in it is the recipe's business and not the workflow's - so its name is left
-    off here rather than paired to a slot the hub cannot address (see
-    :func:`~pixlstash.hub.workflow_card_reads.asset_names`).
+    **A recipe LoRA is a slot, not a file.** Which character LoRA happened to
+    be in it is the recipe's business and not the workflow's - so its name is
+    left off here rather than paired to a slot the hub cannot address (see
+    :func:`~pixlstash.hub.workflow_card_reads.asset_names`). What the recipes
+    put in it is summarised per card instead, by :func:`_describe_recipe_loras`.
 
     A second hub read puts the shelf's own name - and its picture, for a card
     that has to draw itself out of its models (#1466) - beside each filename,
@@ -1027,7 +1053,8 @@ def _describe_ghosts(
     **The names come from** ``names`` **- every variant - and not from**
     :attr:`CardFigures.models` **and** :attr:`~CardFigures.loras`. Those two
     lists are what the CARD is drawn as: they cover the card's first variant
-    alone, and a recipe LoRA is deliberately anonymous there, so a forgotten
+    alone, and a recipe LoRA is deliberately anonymous there (its summary,
+    ``recipe_loras``, drops names it cannot resolve), so a forgotten
     character LoRA - the commonest model ghost of all - would never be counted.
     """
     # `vault.library_uuid` is a real property returning `Optional[str]`, so a
@@ -1066,6 +1093,158 @@ def _describe_ghosts(
             }
             & ghost_names
         )
+
+
+def _describe_recipe_loras(
+    hub: HubDatabase,
+    vault,
+    figures: list[CardFigures],
+    names: dict[str, list[tuple]],
+) -> None:
+    """Fill in which LoRAs have filled each card's recipe slots, most used first.
+
+    The card key ignores them on purpose, so this is a summary of how the
+    workflow has been RUN rather than of what it loads: every variant's LoRA
+    values, less the card's structural ones, counted once per variant. One
+    list per card, not one per slot - ``names`` is keyed by widget and cannot
+    say which loader a value sat on (:func:`~pixlstash.hub.workflow_card_reads.
+    asset_names`), and the card draws one pile anyway.
+
+    **The structural values are read off ONE reduced document per card**, and
+    only for a card that has both kinds of LoRA slot: the card key includes
+    every structural (label, asset) pair, so they are the same in every
+    variant, and a card whose LoRA slots are all recipe slots needs no
+    reduction at all. A card whose document will not reduce is left with no
+    list and says so in the log; its client draws the plain LoRA glyph.
+
+    A stacked card counts its own variants, not its stack's, like every other
+    figure on it.
+    """
+    wanted = [
+        figure
+        for figure in figures
+        if figure.card.variants and any(lora.mark == RECIPE for lora in figure.loras)
+    ]
+    if not wanted:
+        return
+    structural = _structural_lora_assets(hub, wanted)
+    counts: dict[str, Counter] = {}
+    for figure in wanted:
+        fixed = structural.get(figure.card.workflow_key)
+        if fixed is None:
+            continue
+        used: Counter = Counter()
+        for variant in figure.card.variants:
+            used.update(
+                {
+                    filename
+                    for widget, filename in names.get(variant, ())
+                    if is_lora_widget(widget) and asset_reference(filename) not in fixed
+                }
+            )
+        counts[figure.card.workflow_key] = used
+
+    values = sorted({value for used in counts.values() for value in used})
+    candidates, titles = _shelf_candidates(hub, values)
+    # Only a value that names exactly one shelf model gets a title or a face,
+    # by the same rule `model_marks` draws a picture by.
+    single = {
+        value: next(iter(models))
+        for value, models in candidates.items()
+        if len(models) == 1
+    }
+    digests = _model_digests(hub, sorted(set(single.values())))
+    characters = attached_characters(vault, sorted(set(digests.values())))
+
+    for figure in wanted:
+        used = counts.get(figure.card.workflow_key)
+        if not used:
+            continue
+        # Keyed by the model where one resolved, so one LoRA named by its
+        # filename in one variant and by its digest in another is one entry.
+        # Sorted so the value that names the entry does not follow set order
+        # between restarts, and a filename (it has an extension) before a
+        # digest, which reads as nothing when the shelf has no title for it.
+        merged: dict[object, list] = {}
+        for value, recipes in sorted(
+            used.items(), key=lambda item: ("." not in item[0], item[0])
+        ):
+            model_id = single.get(value)
+            key = model_id if model_id is not None else value
+            entry = merged.setdefault(key, [value, 0, model_id])
+            entry[1] += recipes
+        loras = []
+        for value, recipes, model_id in merged.values():
+            attached = characters.get(digests.get(model_id), ())
+            character = attached[0] if len(attached) == 1 else (None, None)
+            loras.append(
+                RecipeLora(
+                    name=titles.get(model_id) or _derived(value) or value,
+                    recipes=recipes,
+                    character_id=character[0],
+                    character_name=character[1],
+                )
+            )
+        loras.sort(key=lambda lora: (-lora.recipes, lora.name.lower()))
+        figure.recipe_loras = loras
+
+
+def _structural_lora_assets(
+    hub: HubDatabase, figures: list[CardFigures]
+) -> dict[str, set[str]]:
+    """``{workflow_key: asset references of its structural LoRA slots}``.
+
+    Empty for a card with no structural LoRA slot, without reading anything.
+    A card whose first variant's document is missing or will not reduce is
+    absent, which :func:`_describe_recipe_loras` reads as "do not guess".
+    """
+    found: dict[str, set[str]] = {}
+    need: dict[str, CardFigures] = {}
+    for figure in figures:
+        if any(lora.mark == STRUCTURAL for lora in figure.loras):
+            need[figure.card.variants[0]] = figure
+        else:
+            found[figure.card.workflow_key] = set()
+    documents = variant_documents(hub, list(need))
+    for variant, figure in need.items():
+        key = figure.card.workflow_key
+        document = documents.get(variant)
+        if document is None:
+            logger.info(
+                "Card %s has no stored document for variant %s, so its recipe "
+                "LoRAs cannot be told from its own and are not listed.",
+                key,
+                variant,
+            )
+            continue
+        labels = {lora.label for lora in figure.loras if lora.mark == STRUCTURAL}
+        try:
+            found[key] = {
+                slot.asset
+                for slot in slots(document)
+                if slot.is_lora and slot.label in labels
+            }
+        except WorkflowGraphError as exc:
+            logger.info(
+                "Card %s will not reduce, so its recipe LoRAs are not listed: %s",
+                key,
+                exc,
+            )
+    return found
+
+
+def _model_digests(hub: HubDatabase, ids: list[int]) -> dict[int, str]:
+    """``{model id: lowercase sha256}`` for the shelf models that have one."""
+    digests = {}
+    for batch in chunked(ids):
+        placeholders = ",".join("?" * len(batch))
+        for row in hub.fetchall(
+            f"SELECT id, sha256 FROM model WHERE id IN ({placeholders}) "
+            "AND sha256 IS NOT NULL",
+            tuple(batch),
+        ):
+            digests[row["id"]] = row["sha256"].lower()
+    return digests
 
 
 def by_key(figures: list[CardFigures]) -> dict[str, CardFigures]:
