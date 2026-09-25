@@ -1675,18 +1675,25 @@ watcher the model shelf uses. See §9.1b for the destination itself.
   cluster, `rail-name="inspector"`. Replacing the grid replaces the grid's
   toolbar, so without the tail nothing on this screen opens Settings or the
   right rail, and the rail is where `WorkflowTab` is drawn (#1415).
-- **Filters** (F7) is a `.tbm` panel on the toolbar's funnel,
-  `WorkflowFilterMenu.vue`, carrying the design's rows: *Hide one-offs* with
-  its count and the rule it states, *Show hidden workflows* with its count, a
-  Ghosts row ("Keeps something deleted"), then Type, Checkpoint, Source and
-  Min rating as pick-one lists with counts, each led by its off row (`All`
-  for Type, `Any` for the rest, counting every card) and with no Clear of
-  its own. **One panel, not #1387's cascade**:
-  that menu fans out because the picture grid has eleven filter kinds and
-  several are searchable lists of hundreds of tags, while these four lists are
-  the library's own workflow types, its checkpoints and five stars. The rows,
-  the counts, the `.tbm-*` / `.fm-*` classes and the chip strip are #1387's;
-  the second level is not. Which side applies which filter is in the
+- **Filters** (F7) is the picture grid's cascade on the toolbar's funnel,
+  `WorkflowFilterMenu.vue`: the same `.tbm` root of `.fm-row` kinds under
+  section labels, each opening a pick-one submenu beside it, so a reader who
+  has learnt one screen's Filters button knows the other. *Workflow* holds
+  Type, Checkpoint and Source; *Quality* holds Rating (the Score submenu's
+  "At least" half, since the store has only `minRating`); *Show* holds the
+  three flags, last where the grid puts Problems. **Every filter is a radio
+  list, the flags included**: the grid's menu has no checkboxes, so
+  One-offs and Hidden are Hide / Show and Ghosts is Any / Keeps something
+  deleted, each row carrying the count it holds back, with the one-off rule
+  in the submenu's footer. A root row says only whether its filter is on
+  (`1`, or the rating as `4★+`); the value is on the chip. Checkpoint, the
+  one list that grows with the library, has a find field over its radios
+  and scrolls after six rows. Each pick-one list leads with its off row
+  (`All` for Type, `Any` for the rest, counting every card) and has no Clear
+  of its own. Keys follow the grid's: ↑/↓ move through the root rows, → or
+  Enter opens a submenu on its chosen radio (or the Checkpoint field), ←
+  returns to the row, caught in the capture phase because the radiogroup
+  would otherwise take it as "previous". Which side applies which filter is in the
   `useWorkflowsStore` row of §3. The funnel's badge and the strip both count
   `filterChips`, so neither can describe a filter the other has dropped, and
   the subtitle counts only what is STILL withheld — a grid showing its hidden
@@ -1742,7 +1749,7 @@ watcher the model shelf uses. See §9.1b for the destination itself.
   false while the answer is on the wire, and it does not move the cursor while
   the Sort popover is open, because the cards land asynchronously and can
   arrive mid-gesture. F7's Filters panel does not close the gap but makes it
-  actionable: unticking *Hide one-offs*, or ticking *Show hidden workflows*,
+  actionable: showing the one-offs, or the hidden workflows,
   re-reads the grid with the withheld cards in it, and the note already says
   which of the two is holding them.
 - **`--wf-columns` is computed, not `auto-fill`.** A `ResizeObserver` reads the
