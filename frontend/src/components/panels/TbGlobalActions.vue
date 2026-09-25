@@ -11,13 +11,19 @@
        whenever the task manager has any active work, so background tasks are
        visible without opening the stats sidebar. A corner dot was too subtle
        to notice (#1343). -->
+  <!-- `--nudge-a`/`--nudge-b`: the closed-inspector flash (visual-language
+       "Closed inspector"). Two classes with identical keyframes, alternated,
+       so a second nudge restarts the animation instead of being ignored. -->
   <AppBarButton
     class="tb-stats-btn"
-    :class="{ 'tb-stats-btn--busy': tasksStore.hasActiveTasks }"
+    :class="{
+      'tb-stats-btn--busy': tasksStore.hasActiveTasks,
+      [`tb-stats-btn--nudge-${nudgeParity}`]: nudgeParity,
+    }"
     icon="chart-bar"
-    :active="sidebarStore.statsOpen"
+    :active="railOpen"
     :tooltip="statsTitle"
-    @click="sidebarStore.toggleStats()"
+    @click="toggleRail"
   />
 </template>
 
@@ -32,7 +38,7 @@
 // two it does take are about the HOST: an optional separator for a bar that
 // does not already draw one, and what the rail is called on that screen.
 
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import AppBarButton from "../widgets/AppBarButton.vue";
@@ -47,6 +53,14 @@ const props = defineProps({
   // grid it carries the workflow inspector, so a reader there was offered
   // "Show stats sidebar" for a control that opens the inspector (#1415).
   railName: { type: String, default: "stats sidebar" },
+  // WHICH rail the toggle drives. The Workflows inspector has its own open
+  // flag (it defaults open; the stats sidebar defaults closed), so the host
+  // says which one is on its screen.
+  rail: {
+    type: String,
+    default: "stats",
+    validator: (value) => ["stats", "workflows"].includes(value),
+  },
 });
 
 const emit = defineEmits(["open-settings"]);
@@ -54,10 +68,35 @@ const emit = defineEmits(["open-settings"]);
 const sidebarStore = useSidebarStore();
 const tasksStore = useTasksStore();
 
+const railOpen = computed(() =>
+  props.rail === "workflows"
+    ? sidebarStore.workflowInspectorOpen
+    : sidebarStore.statsOpen,
+);
+
+function toggleRail() {
+  if (props.rail === "workflows") sidebarStore.toggleWorkflowInspector();
+  else sidebarStore.toggleStats();
+}
+
+// A new selection while the rail is closed: the glyph turns olive for
+// `--dur-attention` and fades back. Skipped while tasks run, because the amber
+// busy pulse owns the glyph then. Nothing is cleared on a timer: the class
+// stays until the next nudge swaps it for its twin, and a one-shot animation
+// that has finished paints nothing.
+const nudgeParity = ref("");
+watch(
+  () => sidebarStore.inspectorNudge,
+  () => {
+    if (railOpen.value || tasksStore.hasActiveTasks) return;
+    nudgeParity.value = nudgeParity.value === "a" ? "b" : "a";
+  },
+);
+
 const statsTitle = computed(() =>
   tasksStore.hasActiveTasks
     ? `${tasksStore.activeCount} active task${tasksStore.activeCount === 1 ? "" : "s"} running`
-    : sidebarStore.statsOpen
+    : railOpen.value
       ? `Hide ${props.railName}`
       : `Show ${props.railName}`,
 );
@@ -88,8 +127,34 @@ const statsTitle = computed(() =>
   }
 }
 
+/* Glyph colour only: no background, ring or border, so it cannot be read as
+   the button's pressed state. */
+.tb-stats-btn--nudge-a:not(.tb-stats-btn--busy) :deep(.v-icon) {
+  animation: tb-stats-nudge-a var(--dur-attention) var(--ease-standard);
+}
+
+.tb-stats-btn--nudge-b:not(.tb-stats-btn--busy) :deep(.v-icon) {
+  animation: tb-stats-nudge-b var(--dur-attention) var(--ease-standard);
+}
+
+@keyframes tb-stats-nudge-a {
+  0%,
+  40% {
+    color: var(--selected-ink);
+  }
+}
+
+@keyframes tb-stats-nudge-b {
+  0%,
+  40% {
+    color: var(--selected-ink);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .tb-stats-btn--busy :deep(.v-icon) {
+  .tb-stats-btn--busy :deep(.v-icon),
+  .tb-stats-btn--nudge-a :deep(.v-icon),
+  .tb-stats-btn--nudge-b :deep(.v-icon) {
     animation: none;
   }
 }

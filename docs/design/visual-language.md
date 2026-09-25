@@ -710,6 +710,9 @@ Motion is feedback. Durations and easings live in `design-tokens.css`:
 - `--dur-4` (420ms): the one exception — an expressive **one-shot** for a delight
   moment (a chip flying into the sidebar, a badge landing, a sticker drop). Never
   for a routine interaction; a bulk action that animates this slow feels sluggish.
+- `--dur-attention` (500ms): the closed-inspector nudge only (§12, "Closed
+  inspector") — a one-shot that has to be *noticed* at the edge of the screen,
+  which is why it is longer than the routine ceiling.
 - `--ease-standard` for most; `--ease-decelerate` for elements entering the screen;
   `--ease-accelerate` for elements leaving it; `--ease-spring` for a physical
   **landing with a slight overshoot** — the punctuation at the end of a flight, not
@@ -963,6 +966,38 @@ vanish — they **fold** into the ⋯ overflow (`TbOverflowMenu`, a
   the primary-token pressed colour. The stats toggle never folds, so its
   pulsing amber icon (`prefers-reduced-motion` honoured) keeps background work
   visible at every width.
+
+### Closed inspector
+
+The app-wide standard for a right-edge inspector that **describes a
+selection** and has been closed by the reader (`InspectorEdgeTab`; first
+adopted by Workflows). The inspector is open by default so the grid is laid
+out around it from the first paint. Closed, it is **never re-opened by itself**
+— opening the docked rail takes a column away under the pointer — so the
+closed state has to say what it is hiding:
+
+| Part | Value |
+|---|---|
+| Width · max height | 34px · 260px, label ellipsised; a 20×52 chevron handle when nothing is selected |
+| Label | `writing-mode: vertical-rl`, `--text-sm`, `--weight-medium`, chevron-left above it. One item: its name. Several: `N workflows` |
+| Surface | `--panel`, `--border` on all but the right edge, `--elevation-2` |
+| Corners | `--radius-md`, left corners only |
+| Selection stripe | 3px `--active-bar` on the left edge |
+| Placement | the content's right edge, vertically centred, `--z-floating` |
+
+- **Click only**, never hover: the content's scrollbar is on that edge. It is a
+  `<button>` in the Tab order, named `Show inspector: <name>`, and opening from
+  it persists (it is the same act as the toolbar toggle) and puts focus on the
+  inspector's first tab.
+- **Nudge on a new selection, never on the same one again.** Over
+  `--dur-attention` the tab bounces left (0 → −16 → 0 → −7 → 0 → −2 → 0px) and
+  the rail toggle's glyph turns `--selected-ink` and fades back — **glyph colour
+  only**, no background, ring or border, so it cannot read as the pressed state.
+  While tasks run the amber busy pulse owns that glyph and the flash is skipped;
+  the tab still bounces.
+- **Reduced motion:** neither plays. The label changing is the cue.
+- A deep link that lands on a selection (a picture's Recipe → *Open*) opens the
+  inspector for that visit without persisting it.
 
 ---
 

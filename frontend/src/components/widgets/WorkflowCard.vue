@@ -207,7 +207,7 @@
           icon-left="information-outline"
           icon-only
           tabindex="-1"
-          tooltip="Everything about this workflow"
+          tooltip="What this workflow is made of"
         />
       </template>
     </InfoPopover>

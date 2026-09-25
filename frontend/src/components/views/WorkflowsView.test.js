@@ -95,6 +95,7 @@ import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useWorkflowPullStore } from "../../stores/useWorkflowPullStore";
+import { useTasksStore } from "../../stores/useTasksStore";
 
 const card = (key, extra = {}) => ({
   key,
@@ -207,6 +208,9 @@ const cursorKey = (wrapper) =>
 
 beforeEach(() => {
   setActivePinia(createPinia());
+  // Both rails' open flags are persisted; a test that closes the inspector
+  // must not hand the next one a closed inspector.
+  window.localStorage.clear();
   observers = [];
   push.mockClear();
   route.query = {};
@@ -1206,12 +1210,189 @@ describe("arriving on ?topology=", () => {
   });
 });
 
+// ── The closed inspector ──────────────────────────────────────────────────
+//
+// The Workflows inspector has its own open flag and defaults OPEN, so a click
+// never reflows the grid. Closed, a vertical edge tab names the selection and
+// bounces on a new one, and the rail toggle's glyph flashes. Nothing but the
+// reader (or a deep link) opens it.
+describe("the closed inspector", () => {
+  const edgeTab = (wrapper) =>
+    wrapper.find('[data-testid="inspector-edge-tab"]');
+  const tabLabel = (wrapper) => {
+    const label = edgeTab(wrapper).find(".inspector-edge-tab__label");
+    return label.exists() ? label.text() : "";
+  };
+  const railButton = (wrapper) => wrapper.find(".wfv-toolbar .tb-stats-btn");
+  const nudgeClass = (el) =>
+    el.classes().find((name) => /--nudge-[ab]$/.test(name)) ?? "";
+
+  async function closedGrid() {
+    const wrapper = await grid();
+    useSidebarStore().workflowInspectorOpen = false;
+    await flush();
+    return wrapper;
+  }
+
+  it("is open on a fresh install, and the Library's stats stay shut", () => {
+    const sidebar = useSidebarStore();
+    expect(sidebar.workflowInspectorOpen).toBe(true);
+    expect(sidebar.statsOpen).toBe(false);
+  });
+
+  it("keeps a closed inspector closed on the next visit", () => {
+    window.localStorage.setItem("pixlstash:workflowInspectorOpen", "false");
+    setActivePinia(createPinia());
+    expect(useSidebarStore().workflowInspectorOpen).toBe(false);
+  });
+
+  it("does not open or close on a plain card click", async () => {
+    const wrapper = await closedGrid();
+    const sidebar = useSidebarStore();
+    await wrapper.findAll(".wfv-row")[0].trigger("click");
+    await flush();
+    expect(sidebar.workflowInspectorOpen).toBe(false);
+    expect(sidebar.statsOpen).toBe(false);
+
+    sidebar.workflowInspectorOpen = true;
+    await wrapper.findAll(".wfv-row")[2].trigger("click");
+    await flush();
+    expect(sidebar.workflowInspectorOpen).toBe(true);
+    expect(sidebar.statsOpen).toBe(false);
+  });
+
+  it("opens, without persisting, on a ?topology= hit", async () => {
+    route.query = { topology: "topology-d" };
+    window.localStorage.setItem("pixlstash:workflowInspectorOpen", "false");
+    setActivePinia(createPinia());
+    await grid();
+    const sidebar = useSidebarStore();
+    expect(useWorkflowsStore().selectedKeys).toEqual(["d"]);
+    expect(sidebar.workflowInspectorOpen).toBe(true);
+    expect(window.localStorage.getItem("pixlstash:workflowInspectorOpen")).toBe(
+      "false",
+    );
+  });
+
+  it("stays closed when ?topology= names a card the grid does not list", async () => {
+    route.query = { topology: "topology-nothing" };
+    window.localStorage.setItem("pixlstash:workflowInspectorOpen", "false");
+    setActivePinia(createPinia());
+    await grid();
+    expect(useSidebarStore().workflowInspectorOpen).toBe(false);
+  });
+
+  it("stays closed when ?topology= names a card a filter hides", async () => {
+    const wrapper = await closedGrid();
+    useWorkflowsStore().setFilters({ minRating: 5 });
+    await flush();
+    route.query = { topology: "topology-d" };
+    await flush();
+    expect(wrapper.find('[data-testid="wfv-link-filtered"]').exists()).toBe(
+      true,
+    );
+    expect(useSidebarStore().workflowInspectorOpen).toBe(false);
+  });
+
+  it("draws the edge tab only while the inspector is closed", async () => {
+    const wrapper = await grid();
+    expect(edgeTab(wrapper).exists()).toBe(false);
+    useSidebarStore().workflowInspectorOpen = false;
+    await flush();
+    expect(edgeTab(wrapper).exists()).toBe(true);
+  });
+
+  it("names one workflow, counts several, and is a bare handle for none", async () => {
+    const wrapper = await closedGrid();
+    expect(tabLabel(wrapper)).toBe("");
+    expect(edgeTab(wrapper).attributes("aria-label")).toBe("Show inspector");
+
+    await wrapper.findAll(".wfv-row")[0].trigger("click");
+    await flush();
+    expect(tabLabel(wrapper)).toBe("a");
+    expect(edgeTab(wrapper).attributes("aria-label")).toBe(
+      "Show inspector: a",
+    );
+
+    await wrapper.findAll(".wfv-row")[2].trigger("click", { ctrlKey: true });
+    await flush();
+    expect(tabLabel(wrapper)).toBe("2 workflows");
+  });
+
+  // A stack card clicked is the whole stack selected: several keys, one card.
+  it("names a stack selected whole by its cover", async () => {
+    const wrapper = await closedGrid();
+    await wrapper.findAll(".wfv-row")[1].trigger("click");
+    await flush();
+    expect(useWorkflowsStore().selectedKeys.length).toBeGreaterThan(1);
+    expect(tabLabel(wrapper)).toBe("b");
+  });
+
+  it("opens the inspector on a click, and keeps it open", async () => {
+    const wrapper = await closedGrid();
+    await edgeTab(wrapper).trigger("click");
+    await flush();
+    expect(useSidebarStore().workflowInspectorOpen).toBe(true);
+    expect(window.localStorage.getItem("pixlstash:workflowInspectorOpen")).toBe(
+      "true",
+    );
+    expect(edgeTab(wrapper).exists()).toBe(false);
+  });
+
+  it("nudges once per NEW selection, never for the same one again", async () => {
+    const wrapper = await closedGrid();
+    const sidebar = useSidebarStore();
+    const start = sidebar.inspectorNudge;
+
+    await wrapper.findAll(".wfv-row")[0].trigger("click");
+    await flush();
+    expect(sidebar.inspectorNudge).toBe(start + 1);
+    const first = nudgeClass(edgeTab(wrapper));
+    expect(first).not.toBe("");
+    expect(nudgeClass(railButton(wrapper))).not.toBe("");
+
+    // The same card again: a fresh array, the same selection.
+    await wrapper.findAll(".wfv-row")[0].trigger("click");
+    await flush();
+    expect(sidebar.inspectorNudge).toBe(start + 1);
+    expect(nudgeClass(edgeTab(wrapper))).toBe(first);
+
+    // Another card: news, and both animations restart on the twin class.
+    const rail = nudgeClass(railButton(wrapper));
+    await wrapper.findAll(".wfv-row")[2].trigger("click");
+    await flush();
+    expect(sidebar.inspectorNudge).toBe(start + 2);
+    expect(nudgeClass(edgeTab(wrapper))).not.toBe(first);
+    expect(nudgeClass(railButton(wrapper))).not.toBe(rail);
+  });
+
+  it("does not flash the rail glyph while the inspector is open", async () => {
+    const wrapper = await grid();
+    await wrapper.findAll(".wfv-row")[0].trigger("click");
+    await flush();
+    expect(useSidebarStore().inspectorNudge).toBe(1);
+    expect(nudgeClass(railButton(wrapper))).toBe("");
+  });
+
+  // The amber busy pulse owns the glyph while anything runs.
+  it("leaves the glyph to the busy pulse while tasks run, and still bounces the tab", async () => {
+    const wrapper = await closedGrid();
+    useTasksStore().setImportRun("run-1", { status: "running" });
+    await flush();
+    await wrapper.findAll(".wfv-row")[0].trigger("click");
+    await flush();
+    expect(nudgeClass(railButton(wrapper))).toBe("");
+    expect(nudgeClass(edgeTab(wrapper))).not.toBe("");
+  });
+});
+
 // ── The app-wide toolbar tail ─────────────────────────────────────────────
 //
 // #1415: this view replaces the grid and its toolbar, so without the tail
 // nothing on this screen opens Settings or the right rail - and `WorkflowTab`
 // only renders while that rail is open (`AppInspector` gates it on
-// `sidebarStore.statsOpen`), so F3's whole deliverable is unreachable.
+// `sidebarStore.workflowInspectorOpen`), so F3's whole deliverable is
+// unreachable.
 //
 // Six assertions ported from the retired shelf's suite, which pinned exactly
 // this and went with the shelf. `Toolbar.test.js` does NOT stand in for them:
@@ -1227,13 +1408,25 @@ describe("the app-wide toolbar tail", () => {
       .trigger("click");
     expect(wrapper.emitted("open-settings")).toHaveLength(1);
 
-    // From the shut state a fresh session starts in: the first press opens the
-    // rail, the second closes it.
-    sidebar.statsOpen = false;
+    // From the open state a fresh session starts in: the first press closes
+    // the inspector, the second opens it again. Only the Workflows flag moves,
+    // and the reader's choice is kept; the Library's stats sidebar is not
+    // touched.
+    expect(sidebar.workflowInspectorOpen).toBe(true);
     await wrapper.find(".wfv-toolbar .tb-stats-btn").trigger("click");
-    expect(sidebar.statsOpen).toBe(true);
+    expect(sidebar.workflowInspectorOpen).toBe(false);
+    expect(
+      window.localStorage.getItem("pixlstash:workflowInspectorOpen"),
+    ).toBe("false");
     await wrapper.find(".wfv-toolbar .tb-stats-btn").trigger("click");
+    expect(sidebar.workflowInspectorOpen).toBe(true);
+    expect(
+      window.localStorage.getItem("pixlstash:workflowInspectorOpen"),
+    ).toBe("true");
     expect(sidebar.statsOpen).toBe(false);
+    expect(window.localStorage.getItem("pixlstash:statsSidebarOpen")).toBe(
+      null,
+    );
   });
 
   it("orders the tail separator → TbGlobalActions, last in the bar", async () => {
@@ -1277,10 +1470,10 @@ describe("the app-wide toolbar tail", () => {
   it("names the rail it actually opens here", async () => {
     const wrapper = await grid();
     const stats = wrapper.find(".wfv-toolbar .tb-stats-btn");
-    expect(stats.attributes("aria-label")).toBe("Show inspector");
-    useSidebarStore().statsOpen = true;
-    await wrapper.vm.$nextTick();
     expect(stats.attributes("aria-label")).toBe("Hide inspector");
+    useSidebarStore().workflowInspectorOpen = false;
+    await wrapper.vm.$nextTick();
+    expect(stats.attributes("aria-label")).toBe("Show inspector");
   });
 
   // The emit above is only half of it: App.vue has to listen, and nothing else

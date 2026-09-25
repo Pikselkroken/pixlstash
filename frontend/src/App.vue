@@ -909,7 +909,9 @@ defineExpose({
       class="shortcuts-fab"
       :class="{
         'shortcuts-fab--above-bar': multiSelectBarShown,
-        'shortcuts-fab--stats-open': sidebarStore.statsOpen,
+        'shortcuts-fab--stats-open': isWorkflowsView
+          ? sidebarStore.workflowInspectorOpen
+          : sidebarStore.statsOpen,
       }"
       type="button"
       :disabled="librarySwitchOverlayOpen"

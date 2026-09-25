@@ -219,7 +219,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   window.localStorage.clear();
   route.query = {};
-  useSidebarStore().statsOpen = true;
+  useSidebarStore().workflowInspectorOpen = true;
   getWorkflowCard.mockReset().mockResolvedValue(detail());
   listWorkflowCards.mockReset().mockResolvedValue({
     cards: [card()],
@@ -722,10 +722,10 @@ describe("the Recipes tab (v1.12 F6)", () => {
     const sidebar = useSidebarStore();
     // Shut, which is the state that made the link a dead end of its own: the
     // card would be selected behind a rail nobody opened.
-    sidebar.statsOpen = false;
+    sidebar.workflowInspectorOpen = false;
     const { wrapper } = await mountWith([KEY]);
 
-    expect(sidebar.statsOpen).toBe(true);
+    expect(sidebar.workflowInspectorOpen).toBe(true);
     expect(wrapper.findComponent({ name: "WorkflowRecipesTab" }).exists()).toBe(
       true,
     );
@@ -736,9 +736,9 @@ describe("the Recipes tab (v1.12 F6)", () => {
     // watcher that fired unconditionally would only show up in the RAIL being
     // forced open on a screen the reader had shut it on.
     const sidebar = useSidebarStore();
-    sidebar.statsOpen = false;
+    sidebar.workflowInspectorOpen = false;
     const { wrapper } = await mountWith([KEY]);
-    expect(sidebar.statsOpen).toBe(false);
+    expect(sidebar.workflowInspectorOpen).toBe(false);
     expect(wrapper.findComponent({ name: "WorkflowRecipesTab" }).exists()).toBe(
       false,
     );
@@ -1642,11 +1642,11 @@ describe("the LoRA chain (#1478)", () => {
   it("opens Edit LoRAs… from Save-as-recipe's link, with the entry deleted", async () => {
     route.query = { card: OTHER, edit: "loras", drop_lora: "hairstyle-v3.safetensors" };
     const sidebar = useSidebarStore();
-    sidebar.statsOpen = false;
+    sidebar.workflowInspectorOpen = false;
     const { wrapper, store } = await mountChain([]);
 
     expect(store.selectedKeys).toEqual([OTHER]);
-    expect(sidebar.statsOpen).toBe(true);
+    expect(sidebar.workflowInspectorOpen).toBe(true);
     const dialog = wrapper.findComponent({ name: "EditLorasDialog" });
     expect(dialog.exists()).toBe(true);
     expect(dialog.props("workflowKey")).toBe(OTHER);
