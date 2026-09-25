@@ -76,23 +76,20 @@
       :style="{ marginTop: `${subTop}px` }"
       @keydown.left.capture="onLeft"
     >
-      <!-- Pick one, and the only open-ended list searchable, as the grid's
-           Checkpoint is. The store models one checkpoint, so its rows carry a
-           check rather than checkboxes. -->
+      <!-- Every flyout is a pick-one list led by its off row ("All" or
+           "Any"), with no Clear of its own, as the grid's are. Checkpoint, the
+           only open-ended list, is searchable as the grid's is; the store
+           models one checkpoint, so its rows are radios, not checkboxes. -->
       <FilterChecklistMenu
         v-if="sub === 'checkpoint'"
         pick-one
         title="Checkpoint"
         placeholder="Filter checkpoints…"
         :items="checkpointItems"
-        :checked="
-          store.filters.checkpoint == null ? [] : [store.filters.checkpoint]
-        "
-        :clearable="store.filters.checkpoint != null"
+        :checked="[store.filters.checkpoint]"
         hint="picks the highlighted one."
         empty-text="No workflow here names a checkpoint."
         @toggle="(v) => store.setFilters({ checkpoint: v })"
-        @clear="store.setFilters({ checkpoint: null })"
       />
 
       <!-- Rating copies the grid's Score flyout: star rows, "at least" only. -->
@@ -104,53 +101,31 @@
       >
         <div class="tbm-header">
           <span class="tbm-title">Rating</span>
-          <span class="tbm-spacer"></span>
-          <button
-            class="tbm-ghost"
-            type="button"
-            :disabled="store.filters.minRating == null"
-            @click="store.setFilters({ minRating: null })"
-          >
-            Clear
-          </button>
         </div>
-        <div
-          class="tbm-section"
-          role="radiogroup"
-          aria-label="At least"
-          @keydown="onStarKeydown"
-        >
+        <div class="tbm-section">
           <span class="tbm-label">At least</span>
-          <button
-            v-for="o in starOptions"
-            :key="String(o.id)"
-            class="fm-row"
-            type="button"
-            role="radio"
-            :aria-checked="store.filters.minRating === o.id ? 'true' : 'false'"
-            :aria-label="o.id == null ? 'Any' : `At least ${o.id} stars`"
-            :tabindex="
-              o.id === tabStopId(starOptions, store.filters.minRating) ? 0 : -1
-            "
-            @click="store.setFilters({ minRating: o.id })"
+          <OptionRows
+            :options="starOptions"
+            :model-value="store.filters.minRating"
+            aria-label="At least"
+            @update:model-value="(n) => store.setFilters({ minRating: n })"
           >
-            <span class="fm-row-label">
-              <template v-if="o.id == null">Any</template>
+            <template #label="{ option }">
+              <template v-if="option.id == null">{{ option.label }}</template>
               <span v-else class="wff-stars" aria-hidden="true">
                 <v-icon
                   v-for="i in 5"
                   :key="i"
                   size="14"
-                  :class="{ 'wff-star--off': i > o.id }"
+                  :class="{ 'wff-star--off': i > option.id }"
                   >mdi-star</v-icon
                 >
               </span>
-            </span>
-            <span class="fm-n">{{ o.count }}</span>
-            <v-icon size="16" class="fm-row-trail">{{
-              store.filters.minRating === o.id ? "mdi-check" : ""
-            }}</v-icon>
-          </button>
+            </template>
+            <template #meta="{ option }">
+              <span class="fm-n">{{ option.count }}</span>
+            </template>
+          </OptionRows>
         </div>
       </div>
 
@@ -163,15 +138,6 @@
       >
         <div class="tbm-header">
           <span class="tbm-title">{{ kindOf(sub).label }}</span>
-          <span class="tbm-spacer"></span>
-          <button
-            class="tbm-ghost"
-            type="button"
-            :disabled="store.filters[sub] == null"
-            @click="store.setFilters({ [sub]: null })"
-          >
-            Clear
-          </button>
         </div>
         <div class="tbm-section">
           <p v-if="!options(sub).length" class="fm-help">
@@ -179,7 +145,7 @@
           </p>
           <OptionRows
             v-else
-            :options="options(sub)"
+            :options="rows(sub)"
             :model-value="store.filters[sub]"
             :aria-label="kindOf(sub).label"
             @update:model-value="(id) => store.setFilters({ [sub]: id })"
@@ -210,7 +176,6 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
-import { arrowStep, tabStopId } from "../../utils/radioGroup.js";
 import OptionRows from "../widgets/OptionRows.vue";
 import FilterChecklistMenu from "./FilterChecklistMenu.vue";
 
@@ -227,22 +192,36 @@ const CHECKS = [
 ];
 
 // `chip` is the key of this kind's chip in `workflowFilterChips`, whose value
-// is what the row says is picked.
+// is what the row says is picked; `anyLabel` names the flyout's off row.
 const KINDS = [
-  { key: "type", label: "Type", icon: "mdi-shape-outline", chip: "type" },
+  {
+    key: "type",
+    label: "Type",
+    icon: "mdi-shape-outline",
+    chip: "type",
+    anyLabel: "All",
+  },
   // The checkpoint glyph is the model shelf's, as on the grid's menu.
   {
     key: "checkpoint",
     label: "Checkpoint",
     icon: "mdi-package-variant-closed",
     chip: "checkpoint",
+    anyLabel: "Any",
   },
-  { key: "source", label: "Source", icon: "mdi-file-outline", chip: "source" },
+  {
+    key: "source",
+    label: "Source",
+    icon: "mdi-file-outline",
+    chip: "source",
+    anyLabel: "Any",
+  },
   {
     key: "minRating",
     label: "Rating",
     icon: "mdi-star-outline",
     chip: "min-rating",
+    anyLabel: "Any",
   },
 ];
 
@@ -263,6 +242,15 @@ function options(key) {
   return store.filterOptions[OPTION_LISTS[key]] ?? [];
 }
 
+// The off row first, counting every card, as the grid's lists do.
+function offRow(key) {
+  return { id: null, label: kindOf(key).anyLabel, count: store.cards.length };
+}
+
+function rows(key) {
+  return [offRow(key), ...options(key)];
+}
+
 // An empty value means "any".
 function rowValue(key) {
   const chip = kindOf(key).chip;
@@ -278,23 +266,22 @@ const counts = computed(() => ({
 }));
 
 const checkpointItems = computed(() =>
-  store.filterOptions.checkpoints.map((c) => ({
+  [offRow("checkpoint"), ...store.filterOptions.checkpoints].map((c) => ({
     value: c.id,
     label: c.label,
     count: c.count,
   })),
 );
 
+// The rows draw stars, so each names itself for a screen reader.
 const starOptions = computed(() => [
-  { id: null, count: "" },
-  ...store.filterOptions.ratings.map((r) => ({ id: r.id, count: r.count })),
+  { ...offRow("minRating"), ariaLabel: "Any" },
+  ...store.filterOptions.ratings.map((r) => ({
+    id: r.id,
+    ariaLabel: `At least ${r.id} stars`,
+    count: r.count,
+  })),
 ]);
-
-// The radiogroup contract (utils/radioGroup.js): one tab stop, arrows select.
-function onStarKeydown(event) {
-  const id = arrowStep(event, starOptions.value, store.filters.minRating);
-  if (id !== undefined) store.setFilters({ minRating: id });
-}
 
 // The grid cascade's placement (`FilterMenu.vue`'s `openKind`): line the
 // flyout up with its row, but never so low that its bottom sits below the
@@ -308,8 +295,8 @@ function openKind(kind) {
     const rootHeight = rootRef.value?.offsetHeight ?? 0;
     const subHeight = subRef.value?.offsetHeight ?? 0;
     subTop.value = Math.max(0, Math.min(rowTop, rootHeight - subHeight));
-    // Into the body, never the header's Clear. The checklist focuses its own
-    // search field once it mounts.
+    // Into the body, onto the chosen row. The checklist focuses its own search
+    // field once it mounts.
     const body = subRef.value?.querySelector(".tbm-section");
     const target =
       body?.querySelector('[role="radio"][tabindex="0"]') ??

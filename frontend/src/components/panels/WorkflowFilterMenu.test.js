@@ -231,11 +231,13 @@ describe("the Workflows filter panel", () => {
   it("counts each pick-one option over the whole grid, not the filtered one", async () => {
     const { wrapper, store } = await mountMenu();
     expect(await optionLabels(wrapper, "type")).toEqual([
+      ["All", "3"],
       ["Text to Image", "1"],
       ["Upscale", "1"],
       ["Image to Image", "1"],
     ]);
     expect(await optionLabels(wrapper, "source")).toEqual([
+      ["Any", "3"],
       ["Imported file", "1"],
       ["Found in your pictures", "2"],
     ]);
@@ -243,8 +245,9 @@ describe("the Workflows filter panel", () => {
     store.setFilters({ source: "imported" });
     await flushPromises();
     // Still every type, still counted over all three cards.
-    expect(await optionLabels(wrapper, "type")).toHaveLength(3);
+    expect(await optionLabels(wrapper, "type")).toHaveLength(4);
     expect(await optionLabels(wrapper, "source")).toEqual([
+      ["Any", "3"],
       ["Imported file", "1"],
       ["Found in your pictures", "2"],
     ]);
@@ -299,13 +302,14 @@ describe("the Workflows filter panel", () => {
   it("offers the base models as checkpoints, and narrows to the one picked", async () => {
     const { wrapper, store } = await mountMenu();
     expect(await checkpointRows(wrapper)).toEqual([
+      ["Any", "3"],
       ["realvisXL_v5.safetensors", "2"],
     ]);
 
     await (
       await section(wrapper, "checkpoint")
     )
-      .find('[role="radio"]')
+      .findAll('[role="radio"]')[1]
       .trigger("click");
     expect(store.filteredCards.map((entry) => entry.name)).toEqual([
       "Cinematic portrait",
@@ -379,6 +383,7 @@ describe("the Workflows filter panel", () => {
     expect(flyout.findAll('input[type="checkbox"]')).toHaveLength(0);
 
     const field = flyout.find("input");
+    await field.trigger("keydown", { key: "ArrowDown" });
     await field.trigger("keydown", { key: "Enter" });
     expect(store.filters.checkpoint).toBe("realvisXL_v5.safetensors");
 
@@ -397,11 +402,41 @@ describe("the Workflows filter panel", () => {
     await field.trigger("keydown", { key: "Enter" });
     expect(store.filters.checkpoint).toBe("flux1-dev.safetensors");
 
-    await flyout
-      .findAll("button")
-      .find((button) => button.text() === "Clear")
-      .trigger("click");
+    // The off row, not a Clear, is the way back to any checkpoint.
+    await flyout.find('[role="radio"]').trigger("click");
     expect(store.filters.checkpoint).toBeNull();
+    expect(store.filterChips).toHaveLength(0);
+  });
+
+  // As the grid's lists: led by the row that turns the filter off, selected
+  // while nothing is picked, and no Clear in any flyout's header.
+  it("leads every flyout with its off row, and has no Clear", async () => {
+    const { wrapper, store } = await mountMenu();
+    store.setFilters({ type: "upscale", source: "found", minRating: 4 });
+    await flushPromises();
+    for (const [key, off] of [
+      ["type", "All"],
+      ["source", "Any"],
+      ["minRating", "Any"],
+      ["checkpoint", "Any"],
+    ]) {
+      const flyout = await section(wrapper, key);
+      const first = flyout.find('[role="radio"]');
+      expect(first.text()).toContain(off);
+      expect(
+        flyout.findAll("button").filter((b) => b.text() === "Clear"),
+      ).toHaveLength(0);
+      if (key !== "checkpoint") {
+        await first.trigger("click");
+        expect(store.filters[key]).toBeNull();
+      }
+    }
+    expect(
+      (await section(wrapper, "checkpoint"))
+        .find('[role="radio"]')
+        .attributes("aria-checked"),
+    ).toBe("true");
+    expect(store.filterChips).toHaveLength(0);
   });
 
   it("clears every filter at once, including the server's two", async () => {
@@ -523,6 +558,7 @@ describe("the filter cascade from the keyboard", () => {
     const { wrapper, store } = await keyboardMenu();
     store.setFilters({ checkpoint: "realvisXL_v5.safetensors" });
     const flyout = await section(wrapper, "checkpoint");
+    await flyout.find("input").trigger("keydown", { key: "ArrowDown" });
     await flyout.find("input").trigger("keydown", { key: "Enter" });
     expect(
       wrapper.findComponent(FilterChecklistMenu).emitted("toggle"),

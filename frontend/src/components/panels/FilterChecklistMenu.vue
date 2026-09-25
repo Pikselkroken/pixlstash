@@ -3,7 +3,9 @@
     <div class="tbm-header">
       <span class="tbm-title">{{ title }}</span>
       <span class="tbm-spacer"></span>
+      <!-- A pick-one list has no Clear: its off row is how you get back. -->
       <button
+        v-if="!pickOne"
         class="tbm-ghost"
         type="button"
         :disabled="!clearable"
@@ -39,15 +41,15 @@
         :role="pickOne ? 'radiogroup' : 'group'"
         :aria-label="title"
       >
-        <!-- Pick one: a check on the chosen row, not a checkbox. Focus stays in
+        <!-- Pick one: OptionRows' leading radio, not a checkbox. Focus stays in
              the field, which is the list's one tab stop, so a click must not
-             take it; and a radio is never unticked, the header's Clear is. -->
+             take it; and a radio is never unticked, the off row is picked. -->
         <template v-if="pickOne">
           <button
             v-for="(item, idx) in shown"
             :id="`${listId}-${idx}`"
-            :key="item.value"
-            class="fm-row"
+            :key="String(item.value)"
+            class="fm-row fm-pick"
             :class="{ 'fm-check--kbd': idx === highlight }"
             type="button"
             role="radio"
@@ -57,11 +59,13 @@
             @mousedown.prevent
             @click="emit('toggle', item.value, true)"
           >
+            <v-icon class="fm-pick-radio">{{
+              isChecked(item.value)
+                ? "mdi-radiobox-marked"
+                : "mdi-radiobox-blank"
+            }}</v-icon>
             <span class="fm-row-label">{{ item.label }}</span>
             <span class="fm-n">{{ formatCount(countOf(item)) }}</span>
-            <v-icon size="16" class="fm-row-trail">{{
-              isChecked(item.value) ? "mdi-check" : ""
-            }}</v-icon>
           </button>
         </template>
         <label
@@ -177,6 +181,21 @@ onMounted(() => nextTick(() => fieldRef.value?.focus()));
   max-height: 320px;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+/* OptionRows' radio and selected weight (`.optrow__radio`), on a row that
+   keeps its focus in the field rather than roving. */
+.fm-pick .fm-pick-radio {
+  flex-shrink: 0;
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+  font-size: var(--gutter-glyph);
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
+}
+.fm-pick[aria-checked="true"] {
+  font-weight: var(--weight-medium);
+}
+.fm-pick[aria-checked="true"] .fm-pick-radio {
+  color: var(--selected-ink);
 }
 .fm-empty {
   margin: var(--space-2) 0;
