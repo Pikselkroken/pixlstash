@@ -484,13 +484,16 @@
       <!-- The set grid, ahead of every row-list state: its groups OVERLAP, so
            it is a different screen rather than a banded version of this one. It
            still reads `visibleRows`, so Show and the filters keep applying. -->
+      <!-- `firstRead`, not `loading`: a refetch after an edit (assign, stack,
+           rename) must leave the list mounted. Swapping it for the state line
+           destroys the scrollport and drops the reader back at the top. -->
       <ModelSetGrid
-        v-if="isSetGrid && !store.loading && !store.error"
+        v-if="isSetGrid && !firstRead && !store.error"
         @works-with="showWorksWith"
         @menu="openGridMenu"
         @rename="startRenameSelected"
       />
-      <p v-else-if="store.loading" class="shelf-state">Reading the shelf…</p>
+      <p v-else-if="firstRead" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
         {{ store.error }}
       </p>
@@ -3979,6 +3982,16 @@ const grouped = computed(() => store.view.groupBy !== "none");
  */
 const isSetGrid = computed(
   () => isShelfTab.value && store.view.groupBy === GRID_GROUP_BY,
+);
+
+/**
+ * True while a read is in flight with nothing to show yet. A refetch over rows
+ * already on screen keeps them until the new ones land, so the list keeps its
+ * scroll position; one over an empty view (Reset from a narrowed, empty Show)
+ * still says it is reading rather than flashing an empty state.
+ */
+const firstRead = computed(
+  () => store.loading && (!store.loaded || !store.visibleRows.length),
 );
 
 /**
