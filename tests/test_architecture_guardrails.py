@@ -3181,7 +3181,10 @@ def _architecture_doc_problems(text: str) -> list[str]:
         while (slug if n == 0 else f"{slug}-{n}") in anchors:
             n += 1
         anchors.add(slug if n == 0 else f"{slug}-{n}")
-    toc = text.split("## Table of Contents", 1)[1].split("\n---", 1)[0]
+    parts = text.split("## Table of Contents", 1)
+    if len(parts) < 2:
+        return ["no '## Table of Contents' section"]
+    toc = parts[1].split("\n---", 1)[0]
     linked = set(re.findall(r"\]\(#([^)]+)\)", toc))
     problems = []
     for section in re.findall(r"^## (\d+\..+)$", text, re.M):
@@ -3193,12 +3196,16 @@ def _architecture_doc_problems(text: str) -> list[str]:
     return problems
 
 
+def test_the_architecture_docs_exist():
+    """An empty glob parametrizes to zero tests, which would drop the guardrail."""
+    assert ARCHITECTURE_DOCS, "no docs/*_architecture.md found"
+
+
 @pytest.mark.parametrize("doc", ARCHITECTURE_DOCS, ids=lambda p: p.name)
 def test_architecture_docs_are_filed_by_topic(doc):
     """A section named for a release is the half a topic-first reader never
     reads. New material goes in its subsystem's section; see the
     "Project Architecture" rule in .github/copilot-instructions.md."""
-    assert ARCHITECTURE_DOCS, "no docs/*_architecture.md found"
     problems = _architecture_doc_problems(doc.read_text(encoding="utf-8"))
     assert not problems, f"{doc.name}:\n" + "\n".join(problems)
 
@@ -3215,3 +3222,6 @@ def test_the_architecture_doc_guardrail_has_teeth():
     assert any(p.startswith("release-named section") for p in problems), problems
     assert any(p.startswith("not in the Table of Contents") for p in problems), problems
     assert any(p.startswith("TOC link to no heading") for p in problems), problems
+    assert _architecture_doc_problems(text.replace("## Table of Contents", "")) == [
+        "no '## Table of Contents' section"
+    ]
