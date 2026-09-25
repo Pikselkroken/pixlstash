@@ -63,7 +63,7 @@
             >Filters</AppBarButton
           >
         </template>
-        <WorkflowFilterMenu />
+        <WorkflowFilterMenu :open="filterMenuOpen" />
       </v-menu>
 
       <!-- "Add" is today's workflow import, unchanged: the file lands through

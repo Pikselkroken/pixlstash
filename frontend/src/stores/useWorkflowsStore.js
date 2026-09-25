@@ -1145,7 +1145,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   /**
    * Change some of the filters, re-reading the grid when the server's two move.
    *
-   * A partial patch, like `setView` on the retired shelf: a checkbox row knows
+   * A partial patch, like `setView` on the retired shelf: a filter row knows
    * its own key and nothing about its neighbours' current values.
    */
   function setFilters(changes) {

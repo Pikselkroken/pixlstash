@@ -285,7 +285,7 @@
  * two cannot drift.
  *
  * *Unstack all* and the hidden-member count are still not here. The read side
- * no longer blocks them outright: F7's *Show hidden workflows* asks
+ * no longer blocks them outright: F7's *Hidden: Show* asks
  * `GET /workflows` for `include_hidden`, the grouping then runs over the
  * widened set, and a hidden member arrives in `member_keys` and draws here.
  * It is marked by the `hidden` fact chip `utils/workflowCard.js` puts first in

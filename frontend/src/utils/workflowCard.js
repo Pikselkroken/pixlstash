@@ -10,7 +10,7 @@
 //     key, name, type, type_label, imported, hidden,
 //                                       // `hidden` is only ever true when the
 //                                       // grid asked for the hidden cards
-//                                       // (F7's *Show hidden workflows*), and
+//                                       // (F7's *Hidden: Show*), and
 //                                       // `factChips` leads the row with it:
 //                                       // unmarked, such a card reads as an
 //                                       // ordinary one.
@@ -366,7 +366,7 @@ const SHORT_TYPE_LABELS = { txt2img: "T2I", img2img: "I2I" };
 export function factChips(card, { short = false } = {}) {
   const labels = isStack(card)
     ? // **First, and on a stack too.** A hidden card is only ever drawn
-      // because somebody ticked *Show hidden workflows* (F7), and the row
+      // because somebody chose *Hidden: Show* (F7), and the row
       // clips to "+N" — a mark that can be clipped away is a card that reads
       // as an ordinary one in the grid it was deliberately kept out of.
       [card.hidden ? "hidden" : null, ...(card.differs_by ?? [])].filter(
