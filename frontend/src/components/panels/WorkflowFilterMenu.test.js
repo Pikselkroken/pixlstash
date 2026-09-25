@@ -385,6 +385,48 @@ describe("the Workflows filter menu", () => {
     expect(sub.text()).toContain("No checkpoint matches.");
   });
 
+  // A radiogroup whose value is not among its rows puts its tab stop on Any,
+  // and the next arrow would clear a filter the reader never touched.
+  it("keeps the chosen checkpoint in the list whatever is typed", async () => {
+    const { wrapper, store } = await mountMenu();
+    store.setFilters({ checkpoint: "realvisXL_v5.safetensors" });
+    const sub = await openSub(wrapper, "checkpoint");
+    await sub.find("input").setValue("nothing-like-it");
+    expect(await optionLabels(wrapper, "checkpoint")).toEqual([
+      ["Any", "3"],
+      ["realvisXL_v5.safetensors", "2"],
+    ]);
+    await sub.find("input").trigger("keydown", { key: "ArrowDown" });
+    const radio = sub.find('[aria-checked="true"]');
+    expect(document.activeElement).toBe(radio.element);
+    // Focus lands on the chosen row, not on Any, and nothing has changed.
+    expect(radio.find(".optrow__label").text()).toBe(
+      "realvisXL_v5.safetensors",
+    );
+    expect(store.filters.checkpoint).toBe("realvisXL_v5.safetensors");
+  });
+
+  it("says checkpoint, not checkpoints, when the grid holds one", async () => {
+    const { wrapper } = await mountMenu({ cards: CARDS.slice(0, 1) });
+    const sub = await openSub(wrapper, "checkpoint");
+    expect(sub.find(".tbm-footer").text()).toBe("1 checkpoint in this grid.");
+  });
+
+  it("goes back from the Checkpoint field on ← only from the start of the text", async () => {
+    const { wrapper } = await mountMenu();
+    const sub = await openSub(wrapper, "checkpoint");
+    const field = sub.find("input");
+    await field.setValue("real");
+    field.element.setSelectionRange(4, 4);
+    await field.trigger("keydown", { key: "ArrowLeft" });
+    expect(wrapper.find(".fm-sub").exists()).toBe(true);
+
+    field.element.setSelectionRange(0, 0);
+    await field.trigger("keydown", { key: "ArrowLeft" });
+    expect(wrapper.find(".fm-sub").exists()).toBe(false);
+    expect(document.activeElement).toBe(rootRow(wrapper, "checkpoint").element);
+  });
+
   it("keeps a card at or above the minimum rating, unrated ones included out", async () => {
     const { wrapper, store } = await mountMenu();
     await pick(wrapper, "minRating", "At least 4 stars");
@@ -395,7 +437,7 @@ describe("the Workflows filter menu", () => {
   });
 
   it("moves through the root rows with the arrows and in and out with → and ←", async () => {
-    const { wrapper } = await mountMenu();
+    const { wrapper, store } = await mountMenu();
     rootRow(wrapper, "source").element.focus();
     await rootRow(wrapper, "source").trigger("keydown", { key: "ArrowDown" });
     expect(document.activeElement).toBe(rootRow(wrapper, "minRating").element);
@@ -413,6 +455,8 @@ describe("the Workflows filter menu", () => {
 
     await radio.trigger("keydown", { key: "ArrowLeft" });
     expect(wrapper.find(".fm-sub").exists()).toBe(false);
+    // ← leaves the submenu; it does not also step the radio back.
+    expect(store.filters.showHidden).toBe(false);
     expect(document.activeElement).toBe(rootRow(wrapper, "showHidden").element);
   });
 

@@ -35,6 +35,7 @@
           :aria-controls="sub === kind ? submenuId : undefined"
           @click="toggle(kind)"
           @keydown.right.prevent="openKind(kind)"
+          @keydown.enter.prevent="openKind(kind)"
           @keydown.down.prevent="stepRow(kind, 1)"
           @keydown.up.prevent="stepRow(kind, -1)"
         >
@@ -193,7 +194,13 @@ const checkpointQuery = ref("");
 const checkpointHits = computed(() => {
   const q = checkpointQuery.value.trim().toLowerCase();
   const all = store.filterOptions.checkpoints;
-  return q ? all.filter((c) => c.id.toLowerCase().includes(q)) : all;
+  // The chosen checkpoint stays in the list whatever is typed: a radiogroup
+  // whose value is not among its rows puts its tab stop on Any, and the next
+  // arrow would then clear the filter the reader never touched.
+  const chosen = store.filters.checkpoint;
+  return q
+    ? all.filter((c) => c.id === chosen || c.id.toLowerCase().includes(q))
+    : all;
 });
 
 function rowValue(kind) {
@@ -252,7 +259,8 @@ function rows(kind) {
 
 function footer(kind) {
   if (kind === "checkpoint") {
-    return `${store.filterOptions.checkpoints.length} checkpoints in this grid.`;
+    const n = store.filterOptions.checkpoints.length;
+    return `${n} ${n === 1 ? "checkpoint" : "checkpoints"} in this grid.`;
   }
   return FOOTERS[kind] ?? "";
 }
@@ -262,8 +270,8 @@ function focusChosen() {
 }
 
 function openKind(kind) {
+  if (sub.value !== kind) checkpointQuery.value = "";
   sub.value = kind;
-  checkpointQuery.value = "";
   const row = rowRefs[kind];
   const rowTop = row ? Math.max(0, row.offsetTop - 8) : 0;
   subTop.value = rowTop;
@@ -292,8 +300,12 @@ function stepRow(kind, step) {
 
 // Left arrow inside a submenu returns to its row, unless it is moving a caret.
 // Caught on the way down: a radiogroup would otherwise take it as "previous".
+// In the Checkpoint field it goes back only from the start of the text.
 function onLeft(event) {
-  if (!sub.value || event.target?.tagName === "INPUT") return;
+  const field = event.target?.tagName === "INPUT" ? event.target : null;
+  if (!sub.value || (field && (field.selectionStart || field.selectionEnd))) {
+    return;
+  }
   if (!subRef.value?.contains(event.target)) return;
   event.preventDefault();
   event.stopPropagation();
