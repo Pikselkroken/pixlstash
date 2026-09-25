@@ -929,6 +929,70 @@ describe("empty states", () => {
   });
 });
 
+describe("refetching after an edit", () => {
+  it("keeps the list, and so its scroll position, while the new rows load", async () => {
+    // Assigning a stack to a character refetches the shelf. Swapping the list
+    // for "Reading the shelf…" meanwhile rebuilt the scrollport at the top.
+    const wrapper = await mountShelf([adapter()]);
+    const scrollport = wrapper.find(".shelf-scroll").element;
+
+    let land;
+    listAdapters.mockReturnValue(new Promise((resolve) => (land = resolve)));
+    const pending = useModelShelfStore().fetchRows();
+    await wrapper.vm.$nextTick();
+
+    expect(useModelShelfStore().loading).toBe(true);
+    // The same element, not a rebuilt one: a rebuilt scrollport starts at 0.
+    expect(wrapper.find(".shelf-scroll").element).toBe(scrollport);
+    expect(textOf(wrapper.find(".shelf-body"))).not.toContain(
+      "Reading the shelf",
+    );
+
+    land([adapter()]);
+    await pending;
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".shelf-scroll").element).toBe(scrollport);
+  });
+
+  it("keeps the set grid mounted through a refetch too", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    useModelShelfStore().setView({ groupBy: "workflow_set" });
+    await wrapper.vm.$nextTick();
+    const grid = wrapper.find(".set-grid-stub").element;
+    expect(grid).toBeTruthy();
+
+    listAdapters.mockReturnValue(new Promise(() => {}));
+    useModelShelfStore().fetchRows();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".set-grid-stub").element).toBe(grid);
+  });
+
+  it("says it is reading, not 'no models', while Reset refetches an empty view", async () => {
+    const wrapper = await mountShelf([]);
+    await useModelShelfStore().setFilters(
+      { adapters: false, checkpoints: false, unclassified: false },
+      { refetch: true },
+    );
+    listAdapters.mockReturnValue(new Promise(() => {}));
+    useModelShelfStore().resetFilters();
+    await wrapper.vm.$nextTick();
+    expect(textOf(wrapper.find(".shelf-state"))).toContain(
+      "Reading the shelf",
+    );
+  });
+
+  it("still says it is reading before the first rows arrive", async () => {
+    listAdapters.mockReturnValue(new Promise(() => {}));
+    listCheckpoints.mockResolvedValue([]);
+    useModelShelfStore().setView({ groupBy: "none" });
+    const wrapper = mount(ModelShelf, globalOpts);
+    await wrapper.vm.$nextTick();
+    expect(textOf(wrapper.find(".shelf-state"))).toContain(
+      "Reading the shelf",
+    );
+  });
+});
+
 describe("after a session reset", () => {
   it("refetches rather than claiming the machine has no models", async () => {
     // Logout, login, a share token or a restore empties the store. Nothing
