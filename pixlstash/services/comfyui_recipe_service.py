@@ -1383,13 +1383,12 @@ def _inserted_loader(
     """``(class, field, value)`` of the loader to insert for *adapter*.
 
     ComfyUI's own loader first, when this ComfyUI lists the file: it needs no
-    node pack, and a picture made with it stays replayable by "Generate
-    variants", which refuses any graph carrying a PixlStash node. The
-    ComfyUI-PixlStash loader when the file is not there by name, since it
-    resolves the file by its digest and fetches it when it has to.
+    node pack. The ComfyUI-PixlStash loader when the file is not there by
+    name, since it resolves the file by its digest and fetches it when it has
+    to.
 
-    ``digest_loader=False`` leaves the second out, for a replay: its output
-    would carry a PixlStash node, which "Generate variants" then refuses.
+    ``digest_loader=False`` leaves the second out, for a replay. That rule
+    predates #1521, which lets "Generate variants" run the digest loader.
 
     Raises:
         LookupError: When neither can load it, saying why the first could not.

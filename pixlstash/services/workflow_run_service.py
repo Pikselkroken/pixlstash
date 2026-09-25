@@ -35,7 +35,7 @@ from pixlstash.services.comfyui_recipe_service import (
     sanitize_prompt_graph,
     unchecked_preflight,
 )
-from pixlstash.services.comfyui_service import graph_has_pixlstash_nodes
+from pixlstash.services.comfyui_service import pixlstash_node_refusals
 from pixlstash.services.workflow_bindings import BINDINGS_KEY
 from pixlstash.services.workflow_hash import (
     asset_reference,
@@ -299,6 +299,9 @@ def judge(
     *,
     wants_lora: bool = False,
     lora_slots: Optional[list[dict]] = None,
+    library_ids: Optional[dict[str, set[int]]] = None,
+    picture_loader: bool = False,
+    from_file: bool = False,
 ) -> tuple[list[Reason], dict]:
     """Every reason this graph would not run, and the pre-flight behind them.
 
@@ -312,6 +315,11 @@ def judge(
     reporting ``no_lora_loader`` for one would make every plain card look
     broken.
 
+    ``library_ids``, ``picture_loader`` and ``from_file`` are what the
+    ComfyUI-PixlStash node policy needs to know about this run (#1521, see
+    :func:`~pixlstash.services.comfyui_service.pixlstash_node_refusals`); the
+    defaults refuse.
+
     Returns:
         ``(reasons, preflight)``. ``reasons`` empty means it would run.
     """
@@ -322,8 +330,14 @@ def judge(
     else:
         preflight = preflight_prompt(graph, object_info)
 
-    if graph_has_pixlstash_nodes(graph):
-        reasons.append(Reason(PIXLSTASH_NODES))
+    refused = pixlstash_node_refusals(
+        graph,
+        library_ids=library_ids,
+        picture_loader=picture_loader,
+        from_file=from_file,
+    )
+    if refused:
+        reasons.append(Reason(PIXLSTASH_NODES, {"nodes": refused}))
     if wants_lora and not (lora_slots or []):
         reasons.append(Reason(NO_LORA_LOADER))
 
@@ -346,6 +360,18 @@ def judge(
     if preflight.get("checked") and not preflight.get("has_save_image"):
         reasons.append(Reason(NO_SAVE_NODE))
     return reasons, preflight
+
+
+def with_pixlstash_refusals(reasons: list[Reason], nodes: list[dict]) -> list[Reason]:
+    """*reasons* with *nodes* added to its one ``pixlstash_nodes`` reason.
+
+    One reason per code, so a panel naming the refused nodes names them all.
+    """
+    for reason in reasons:
+        if reason.code == PIXLSTASH_NODES:
+            reason.detail["nodes"] = [*reason.detail.get("nodes", []), *nodes]
+            return reasons
+    return [*reasons, Reason(PIXLSTASH_NODES, {"nodes": nodes})]
 
 
 def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:

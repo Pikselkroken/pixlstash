@@ -21,7 +21,7 @@ from typing import Optional
 from sqlalchemy import and_, case, func, nullslast, or_
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Character, Picture, PictureSet, Project
 from pixlstash.services.saved_recipe_service import counts_by_workflow_key
 from pixlstash.stacking import get_or_create_stack_for_picture
 
@@ -603,6 +603,31 @@ def read_kept_picture_files(
 ) -> dict[int, tuple[str, Optional[str]]]:
     """Each kept picture's file and content, in its own read task."""
     return vault.db.run_immediate_read_task(kept_picture_files, picture_ids)
+
+
+_LIBRARY_TABLES = {"project": Project, "set": PictureSet, "character": Character}
+
+
+def library_ids_present(
+    session: Session, named: dict[str, set[int]]
+) -> dict[str, set[int]]:
+    """The ids in *named* this library has, by kind (``project``, ``set``,
+    ``character``): what a ComfyUI-PixlStash loader's frozen id is checked
+    against before a run (#1521)."""
+    present: dict[str, set[int]] = {}
+    for kind, ids in named.items():
+        table = _LIBRARY_TABLES[kind]
+        present[kind] = set(
+            session.exec(select(table.id).where(table.id.in_(sorted(ids)))).all()
+        )
+    return present
+
+
+def read_library_ids(vault, named: dict[str, set[int]]) -> dict[str, set[int]]:
+    """:func:`library_ids_present` in its own read task; no read when empty."""
+    if not named:
+        return {}
+    return vault.db.run_immediate_read_task(library_ids_present, named)
 
 
 def stack_for_picture(vault, picture_id: int) -> Optional[int]:

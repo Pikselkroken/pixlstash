@@ -638,7 +638,9 @@ Seven rules the client must not re-derive:
    `comfyui_unreachable`, `ui_format`, `missing_nodes: {nodes}`,
    `missing_models: {models: [{file, folder}]}`, `a1111`,
    `picture_input_unfilled: {inputs: [{slot_label, input_name, title}]}`,
-   `no_lora_loader`, `pixlstash_nodes`, `no_save_node`, `no_runnable_source`,
+   `no_lora_loader`,
+   `pixlstash_nodes: {nodes: [{node_id, class_type, title, why, kind?, id?}]}`,
+   `no_save_node`, `no_runnable_source`,
    `lora_not_skippable: {node_id, field, file, message}`.
    `picture_input_unfilled` replaced `fixed_input_deleted` in #1457 with the
    same payload shape plus each input's `title` (a slot label is a hash); a client that only knows the old code no longer

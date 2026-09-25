@@ -39,30 +39,123 @@ class TestGraphInspection:
         )
 
 
-class TestReplayRefusal:
-    """A graph that calls back into PixlStash cannot be replayed as a variant."""
+def _node(class_type: str, **inputs) -> dict:
+    return {"class_type": class_type, "inputs": inputs}
 
-    def test_any_node_from_the_pack_counts(self):
-        # Prefix rule, so a node added to the pack later is covered for free.
+
+def _why(graph: dict, **run) -> dict:
+    """``{node_id: why}`` for every node the policy refuses."""
+    return {
+        entry["node_id"]: entry["why"]
+        for entry in comfyui_service.pixlstash_node_refusals(graph, **run)
+    }
+
+
+# The strictest run and the most permissive one. A node allowed under STRICT is
+# allowed everywhere; one refused under OPEN is refused everywhere.
+STRICT: dict = {}
+OPEN = {
+    "library_ids": {"project": {3}, "set": {4}, "character": {5}},
+    "picture_loader": True,
+    "from_file": True,
+}
+
+
+class TestNodePolicy:
+    """Each ComfyUI-PixlStash class has its own answer (#1521), both ways."""
+
+    def test_digest_loaders_searches_and_gates_run_everywhere(self):
         for cls in (
-            "PixlStashPictureSaver",
-            "PixlStashProjectLoader",
-            "PixlStashPictureLoader",
+            "PixlStashAdapterLoader",
+            "PixlStashVAELoader",
+            "PixlStashCLIPLoader",
+            "PixlStashLikenessSearch",
             "PixlStashSemanticSearch",
+            "PixlStashFaceLikenessGate",
+            "PixlStashPictureLikenessGate",
         ):
-            graph = {"9": {"class_type": cls, "inputs": {}}}
-            assert comfyui_service.graph_has_pixlstash_nodes(graph) is True, cls
+            assert _why({"9": _node(cls)}, **STRICT) == {}, cls
 
-    def test_an_ordinary_graph_does_not(self):
-        graph = {
-            "3": {"class_type": "KSampler", "inputs": {}},
-            "9": {"class_type": "SaveImage", "inputs": {}},
+    def test_a_library_loader_runs_when_its_id_is_in_this_library(self):
+        for cls, field, kind, library_id in (
+            ("PixlStashProjectLoader", "pixlstash_project", "project", 3),
+            ("PixlStashSetLoader", "pixlstash_set", "set", 4),
+            ("PixlStashCharacterLoader", "pixlstash_character", "character", 5),
+        ):
+            graph = {"9": _node(cls, **{field: f"Holiday #{library_id}"})}
+            assert comfyui_service.library_ids_named(graph) == {kind: {library_id}}
+            assert _why(graph, library_ids={kind: {library_id}}) == {}, cls
+            # The same id under another kind is no answer.
+            other = "set" if kind != "set" else "project"
+            refused = comfyui_service.pixlstash_node_refusals(
+                graph, library_ids={other: {library_id}}
+            )
+            assert [(e["why"], e["kind"], e["id"]) for e in refused] == [
+                ("not_in_library", kind, library_id)
+            ], cls
+
+    def test_a_library_loader_with_no_choice_names_nothing_to_check(self):
+        graph = {"9": _node("PixlStashSetLoader", pixlstash_set="(loading…)")}
+        assert comfyui_service.library_ids_named(graph) == {}
+        assert _why(graph, **STRICT) == {}
+
+    def test_a_wired_library_choice_cannot_be_checked_so_is_refused(self):
+        graph = {"9": _node("PixlStashProjectLoader", pixlstash_project=["1", 0])}
+        assert _why(graph, **OPEN) == {"9": "unreadable_id"}
+
+    def test_the_picture_loader_runs_only_where_the_run_feeds_it(self):
+        graph = {"9": _node("PixlStashPictureLoader", picture_ids="1,2")}
+        assert _why(graph, picture_loader=True) == {}
+        assert _why(graph, **{**OPEN, "picture_loader": False}) == {
+            "9": "picks_its_own_picture"
         }
-        assert comfyui_service.graph_has_pixlstash_nodes(graph) is False
+        # The run's half: a loader it did not write ids into is refused.
+        assert [
+            e["why"] for e in comfyui_service.unfed_picture_loaders(graph, set())
+        ] == ["picks_its_own_picture"]
+        assert comfyui_service.unfed_picture_loaders(graph, {"9"}) == []
 
-    def test_a_lookalike_class_name_does_not_match_by_accident(self):
-        graph = {"9": {"class_type": "NotPixlStashSaver", "inputs": {}}}
-        assert comfyui_service.graph_has_pixlstash_nodes(graph) is False
+    def test_the_checkpoint_loader_runs_only_from_a_stored_file(self):
+        graph = {"9": _node("PixlStashCheckpointLoader", checkpoint_id="12")}
+        assert _why(graph, from_file=True) == {}
+        assert _why(graph, **{**OPEN, "from_file": False}) == {
+            "9": "per_hub_checkpoint"
+        }
+
+    def test_the_saver_is_refused_until_swapped_and_runs_as_save_image(self):
+        graph = {
+            "9": {
+                **_node(
+                    "PixlStashPictureSaver",
+                    images=["3", 0],
+                    filename_prefix="v",
+                    save_workflow=True,
+                    pixlstash_set=["8", 1],
+                ),
+                "_meta": {"title": "Keep"},
+            }
+        }
+        assert _why(graph, **OPEN) == {"9": "imports_itself"}
+        assert comfyui_service.swap_pixlstash_savers(graph) == ["9"]
+        assert graph["9"] == {
+            "class_type": "SaveImage",
+            "inputs": {"images": ["3", 0], "filename_prefix": "v"},
+            "_meta": {"title": "Keep"},
+        }
+        assert _why(graph, **STRICT) == {}
+
+    def test_a_pack_node_without_an_entry_stays_refused(self):
+        graph = {"9": _node("PixlStashSomethingNew")}
+        assert _why(graph, **OPEN) == {"9": "no_policy"}
+
+    def test_an_ordinary_graph_and_a_lookalike_are_not_pack_nodes(self):
+        graph = {
+            "3": _node("KSampler"),
+            "8": _node("NotPixlStashSaver"),
+            "9": _node("SaveImage"),
+        }
+        assert _why(graph, **STRICT) == {}
+        assert comfyui_service.swap_pixlstash_savers(graph) == []
 
 
 class TestHistoryExtraction:

@@ -113,10 +113,14 @@ from pixlstash.services.comfyui_recipe_service import (
     read_lora_chain_untyped,
 )
 from pixlstash.services.comfyui_service import (
+    PIXLSTASH_PICTURE_LOADER,
     _extract_output_node_ids,
     _process_comfyui_outputs,
     _submit_comfyui_prompt,
     _upload_image_to_comfyui,
+    library_ids_named,
+    swap_pixlstash_savers,
+    unfed_picture_loaders,
 )
 from pixlstash.services import workflow_bindings
 from pixlstash.services import workflow_run_service as run_service
@@ -175,6 +179,7 @@ from pixlstash.services.workflow_library_service import (
     read_card_picture_ids,
     read_instance_hashes,
     read_kept_picture_files,
+    read_library_ids,
     read_oldest_kept_by_pixel_sha,
     read_recipe_activity,
     read_variant_picture_counts,
@@ -1457,10 +1462,14 @@ class Feed:
 
     ``picture_id`` ``None`` is the group's selection: one of its pictures per
     submission, which is what makes the group repeat per picture.
+
+    ``by_id`` is a ComfyUI-PixlStash picture loader, which is handed the
+    picture's id rather than an uploaded file: it fetches the picture itself.
     """
 
     targets: list[dict]
     picture_id: int | None
+    by_id: bool = False
 
 
 @dataclass
@@ -2871,13 +2880,24 @@ def create_router(server) -> APIRouter:
                     for node_id in item.node_ids
                 ]
                 if all(targets):
-                    feeds.append(Feed(targets, fill.picture_id))
+                    feeds.append(
+                        Feed(
+                            targets,
+                            fill.picture_id,
+                            by_id=item.class_type == PIXLSTASH_PICTURE_LOADER,
+                        )
+                    )
                 else:
                     # A loader PixlStash cannot hand an uploaded file to. Named
                     # rather than filled somewhere else, which would be a run
                     # that never read the picture it was given.
                     how = None
-            elif not (item.mode == "fixed" and item.pixel_sha) and all(
+            elif (
+                not (item.mode == "fixed" and item.pixel_sha)
+                # A PixlStash picture loader's own ids are frozen, and empty
+                # it picks pictures by its own sort (#1521): never run as is.
+                and item.class_type != PIXLSTASH_PICTURE_LOADER
+            ) and all(
                 _graph_names_a_live_file(graph, node_id, item.input_name, missing)
                 for node_id in item.node_ids
             ):
@@ -2954,19 +2974,20 @@ def create_router(server) -> APIRouter:
         name: ComfyUI's upload overwrites by name, so two pictures both called
         ``image.png`` in one batch would each load whichever landed last by
         the time the queue reached them.
+
+        A picture only a PixlStash picture loader reads (``Feed.by_id``) is
+        checked the same way and not uploaded: that loader fetches it itself.
         """
-        wanted = sorted(
-            {
-                picture_id
-                for _graph, group, feeds in submittable
-                for feed in feeds
-                for picture_id in (
-                    [feed.picture_id]
-                    if feed.picture_id is not None
-                    else group.picture_ids
-                )
-            }
-        )
+        fed = [
+            (picture_id, feed.by_id)
+            for _graph, group, feeds in submittable
+            for feed in feeds
+            for picture_id in (
+                [feed.picture_id] if feed.picture_id is not None else group.picture_ids
+            )
+        ]
+        wanted = sorted({picture_id for picture_id, _by_id in fed})
+        uploads = {picture_id for picture_id, by_id in fed if not by_id}
         if not wanted:
             return {}
         kept = read_kept_picture_files(server.vault, wanted)
@@ -3010,10 +3031,11 @@ def create_router(server) -> APIRouter:
             else:
                 stat = os.stat(path)
                 content = f"{stat.st_mtime_ns:x}-{stat.st_size:x}"
-            files[picture_id] = (
-                path,
-                f"pixlstash-{library}-{picture_id}-{content}{extension}",
-            )
+            if picture_id in uploads:
+                files[picture_id] = (
+                    path,
+                    f"pixlstash-{library}-{picture_id}-{content}{extension}",
+                )
         return files
 
     def _require_one_source(body: RunRequest) -> None:
@@ -3464,12 +3486,22 @@ def create_router(server) -> APIRouter:
                         swap["field"],
                     )
 
+            # The ComfyUI-PixlStash policy (#1521): a saver runs as SaveImage,
+            # so the import below is the only one, and a loader's frozen
+            # project, set or character id is looked up in this library.
+            swap_pixlstash_savers(graph)
+            node_policy = {
+                "library_ids": read_library_ids(server.vault, library_ids_named(graph)),
+                "picture_loader": True,
+                "from_file": source.origin == run_service.FROM_FILE,
+            }
             judged, preflight = run_service.judge(
                 graph,
                 object_info,
                 object_info_error,
                 wants_lora=bool(body.loras),
                 lora_slots=slots_in_graph,
+                **node_policy,
             )
             if object_info is not None and not found:
                 # Judge, repair what the registry knows how to, judge AGAIN
@@ -3493,6 +3525,7 @@ def create_router(server) -> APIRouter:
                         object_info_error,
                         wants_lora=bool(body.loras),
                         lora_slots=slots_in_graph,
+                        **node_policy,
                     )
             found += judged
             if object_info is None and not configured:
@@ -3514,6 +3547,20 @@ def create_router(server) -> APIRouter:
             )
             group.picture_inputs = described
             found += unfilled
+            # `judge` allowed the PixlStash picture loader because a run feeds
+            # it; one that is not fed and is not an input the owner can fill
+            # (that one is `picture_input_unfilled` already) is refused here.
+            unfed = unfed_picture_loaders(
+                graph,
+                {
+                    workflow_bindings.target_node(graph, target.get("path"))
+                    for feed in feeds
+                    for target in feed.targets
+                }
+                | {node_id for item in card_inputs for node_id in item.node_ids},
+            )
+            if unfed:
+                found = run_service.with_pixlstash_refusals(found, unfed)
             group.reasons = [r.as_dict() for r in found]
             if run_service.blocks_group(found, allow_unchecked=body.allow_unchecked):
                 planned.append(group)
@@ -3778,11 +3825,12 @@ def create_router(server) -> APIRouter:
                     picture_id = (
                         feed.picture_id if feed.picture_id is not None else selected
                     )
+                    value = str(picture_id) if feed.by_id else uploaded[picture_id]
                     for target in feed.targets:
                         workflow_bindings.fill(
                             filled,
                             {workflow_bindings.IMAGE: [target]},
-                            {workflow_bindings.IMAGE: uploaded[picture_id]},
+                            {workflow_bindings.IMAGE: value},
                         )
                 for _ in range(body.count):
                     instance = deepcopy(filled)

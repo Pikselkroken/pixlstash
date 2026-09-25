@@ -97,6 +97,23 @@ function names(list, key) {
     .filter(Boolean);
 }
 
+/** Why one ComfyUI-PixlStash node may not run, as the pre-flight said. */
+function pixlstashNodeSentence(node) {
+  const title = node.title || node.class_type || "A PixlStash node";
+  switch (node.why) {
+    case "not_in_library":
+      return `${title} names a ${node.kind} this library does not have. Choose one in ComfyUI.`;
+    case "unreadable_id":
+      return `${title} takes its ${node.kind} from another node, so PixlStash cannot check it is in this library.`;
+    case "picks_its_own_picture":
+      return `${title} would pick its own pictures, because this run gives it none.`;
+    case "per_hub_checkpoint":
+      return `${title} names a checkpoint on another machine's shelf. It runs only from the stored workflow file.`;
+    default:
+      return `${title} is a PixlStash node this version does not know how to run.`;
+  }
+}
+
 /**
  * One refusal, read - or one notice, when `blocking` comes back false.
  *
@@ -212,8 +229,15 @@ export function readReason(reason) {
         "This workflow has no LoRA loader, so the LoRA has nowhere to go.",
         FIX_DROP_LORA,
       );
-    case "pixlstash_nodes":
-      return read("This graph calls back into PixlStash, so PixlStash will not run it.");
+    case "pixlstash_nodes": {
+      // One sentence per refused ComfyUI-PixlStash node (#1521), named by its
+      // title; an older server sends no `nodes` and gets the old sentence.
+      const nodes = (reason.nodes || []).filter(Boolean);
+      if (!nodes.length) {
+        return read("This graph calls back into PixlStash, so PixlStash will not run it.");
+      }
+      return read(nodes.map(pixlstashNodeSentence).join(" "));
+    }
     case "no_save_node":
       return read("This graph saves no image, so a run would produce nothing to keep.");
     case "a1111":

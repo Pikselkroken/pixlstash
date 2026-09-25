@@ -261,6 +261,39 @@ class TestRecipeReportsSourceOrigin:
         assert "/home/someone" not in json.dumps(body)
 
 
+def test_generate_variants_judges_each_pixlstash_node_on_its_own(env, monkeypatch):
+    """A saver and the digest loaders do not stop a variant; the picture
+    loader does (#1521), because it would not read this picture."""
+    server, client, _pic_id = env
+    _comfyui_reachable(monkeypatch)
+    graph = json.loads(json.dumps(RECIPE_GRAPH))
+    graph["9"] = {
+        "class_type": "PixlStashPictureSaver",
+        "inputs": {"filename_prefix": "v", "images": ["3", 0]},
+    }
+    graph["10"] = {"class_type": "PixlStashVAELoader", "inputs": {"vae_sha256": "a"}}
+    graph["11"] = {
+        "class_type": "PixlStashAdapterLoader",
+        "inputs": {"adapter_sha256": "b", "model": ["4", 0]},
+    }
+    runs = _upload_one(client, "pack-ok.png", _recipe_png_bytes(graph, (1, 2, 3)))
+    body = client.get(f"{API}/comfyui/pictures/{runs}/recipe").json()
+    assert body["available"] is True, body
+    assert body["pixlstash_nodes"] == [], body
+
+    graph["12"] = {
+        "class_type": "PixlStashPictureLoader",
+        "inputs": {"picture_ids": ""},
+    }
+    refused = _upload_one(client, "pack-no.png", _recipe_png_bytes(graph, (4, 5, 6)))
+    body = client.get(f"{API}/comfyui/pictures/{refused}/recipe").json()
+    assert body["available"] is False, body
+    assert body["reason"] == "pixlstash_nodes"
+    assert [(n["node_id"], n["why"]) for n in body["pixlstash_nodes"]] == [
+        ("12", "picks_its_own_picture")
+    ], body
+
+
 # ── The extended read (B5): the rest of the recipe, and the workflow filters ──
 
 # A graph that actually carries what the extended read reports: both prompts

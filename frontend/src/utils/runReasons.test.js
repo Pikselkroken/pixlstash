@@ -46,3 +46,24 @@ describe("picture_input_unfilled (#1457)", () => {
     );
   });
 });
+
+describe("pixlstash_nodes (#1521)", () => {
+  it("names each refused node and why", () => {
+    const read = readReason({
+      code: "pixlstash_nodes",
+      nodes: [
+        { node_id: "10", title: "Holiday", why: "not_in_library", kind: "project", id: 9 },
+        { node_id: "12", title: "Subject", why: "picks_its_own_picture" },
+      ],
+    });
+    expect(read.text).toContain("Holiday names a project this library does not have");
+    expect(read.text).toContain("Subject would pick its own pictures");
+    expect(read.blocking).toBe(true);
+  });
+
+  it("keeps the old sentence for a server that names no nodes", () => {
+    expect(readReason({ code: "pixlstash_nodes" }).text).toBe(
+      "This graph calls back into PixlStash, so PixlStash will not run it.",
+    );
+  });
+});
