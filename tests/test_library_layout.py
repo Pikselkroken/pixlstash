@@ -1916,7 +1916,7 @@ def test_an_off_layout_row_is_pruned_past_its_retention_window(library):
     Unlike unambiguous/ambiguous, nothing here waits on the owner - the
     row exists so the screen can say "already followed, nothing to decide"
     at least once, not so it can sit forever as unreachable, unclearable
-    state (see docs/backend_architecture.md §27).
+    state (see docs/backend_architecture.md §24.5).
     """
     from datetime import datetime, timedelta
 

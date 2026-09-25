@@ -4,7 +4,7 @@ The mirror of ``layout_move_service``: that engine moves a file when an
 assignment change makes its folder stop being true; this reads a file the
 owner already moved in their file manager and decides whether an assignment
 should change to match. See ``docs/plans/v1.11.0-existing-library.md`` §4
-Phase 5 and ``docs/backend_architecture.md`` §26 "The move journal".
+Phase 5 and ``docs/backend_architecture.md`` §24.4 "The move journal".
 
 ``ReferenceFolderScanTask`` writes an :class:`ExternalMoveReview` row for
 every move it attributes to the owner (``record_pending_reviews``). Nothing
@@ -290,7 +290,7 @@ def _resolve_entity_id(session: Session, facet: Facet, name: str) -> Optional[in
     """Return the one entity *name* names for *facet*, or ``None``.
 
     Project names are unique; set and character names are not
-    (``docs/backend_architecture.md`` §26, "Renaming an entity renames its
+    (``docs/backend_architecture.md`` §24.4, "Renaming an entity renames its
     folder"). A name matching more than one row is exactly the ambiguity that
     section declines to resolve for a rename, and the same refusal is correct
     here: guessing which one the folder meant risks reassigning the wrong

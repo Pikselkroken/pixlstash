@@ -98,7 +98,7 @@ class FolderStructureReadCancelResponse(BaseModel):
 
 
 class FolderStructureAssignmentPayload(BaseModel):
-    """One accepted folder from the mapping screen. See §22 for the shape."""
+    """One accepted folder from the mapping screen. Shape: integration §20.2."""
 
     relative_path: str
     kind: str
@@ -158,7 +158,7 @@ class FolderStructureCommitRequest(BaseModel):
     already held loose files. Those pictures become ordinary MANAGED pictures
     (relative `file_path`) instead of reference-folder ones. The commit fails
     (`status: "failed"`, polled via `GET .../commit/status`) if the root is
-    not actually inside `image_root`. See integration_architecture.md §22.
+    not actually inside `image_root`. See integration_architecture.md §20.2.
     """
 
 
@@ -278,7 +278,7 @@ def create_router(server) -> APIRouter:
         models. So each batch also renews the planner hold (``_WORKER_HOLD_S``)
         and nothing new is queued behind it while the read is alive. The
         deadline still matters: an URGENT task that cannot finish starves the
-        queue it jumped. See ``backend_architecture.md`` §24.
+        queue it jumped. See ``backend_architecture.md`` §24.1.
         """
         from pixlstash.tasks.face_detection_task import FaceDetectionTask
 
@@ -901,7 +901,7 @@ def create_router(server) -> APIRouter:
             "or inside it. Either way no file is moved, renamed or copied; "
             "then the accepted projects, people, sets and tags are created "
             "and every picture found is linked to them. Returns a task id to "
-            "poll; see integration_architecture.md §22."
+            "poll; see integration_architecture.md §20.2."
         ),
         response_model=FolderStructureCommitStartResponse,
         tags=["folders"],
@@ -993,7 +993,7 @@ def create_router(server) -> APIRouter:
         except commit_service.CommitError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if "captions" in payload.model_fields_set and payload.mode == "reference":
-            # The field being present at all is what §22 refuses, `null`
+            # The field being present at all is what integration §20.2 refuses, `null`
             # included, so this asks the request rather than the parsed
             # answer. A reference folder's suffixes are its own contract.
             raise HTTPException(
@@ -1013,7 +1013,7 @@ def create_router(server) -> APIRouter:
         # done must refuse a second one against the same read, or
         # `apply_mapping` runs twice over the same pictures and creates
         # duplicate projects, people, sets, tags and memberships. See
-        # backend_architecture.md §25 and integration_architecture.md §22
+        # backend_architecture.md §24.2 and integration_architecture.md §20.2
         # ("one-shot"). Reserving the (unrelated, single, global) commit slot
         # BEFORE marking this read committed: if a different read's commit is
         # already running there, this request must not spend this read's one

@@ -293,7 +293,7 @@ async function startEmptyLibraryHere() {
 }
 
 function close() {
-  // A commit that has started cannot be cancelled (§22) and keeps running
+  // A commit that has started cannot be cancelled (integration_architecture.md §20.2) and keeps running
   // server-side either way, so this must be a no-op while `committing` is
   // true. The dialog is `:persistent` for its whole life: Escape belongs to
   // the mapping step (it clears the selection) and a backdrop click must
