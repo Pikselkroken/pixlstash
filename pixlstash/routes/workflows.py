@@ -64,6 +64,7 @@ from pydantic import (
 from pixlstash.hub.workflow_card_reads import (
     asset_names,
     card_index,
+    default_overrides,
     find_card,
     instance_documents,
     key_pins,
@@ -4644,13 +4645,8 @@ def create_router(server) -> APIRouter:
             hub, download_stem(body.name) or "workflow", graph, source.bindings
         )
         landed = find_card(hub, key) if key else None
-        if landed is not None and key != workflow_key and landed.name is None:
-            # A new key is a blank card; without the typed name it would sit in
-            # the grid unnamed. Only a card nobody has named: the clone may
-            # land on a card that already exists (a second clone, or the same
-            # workflow built by hand), and its owner's name stands. Notes, pins
-            # and defaults stay the original's.
-            set_attributes(hub, key, name=body.name.strip())
+        if landed is not None and key != workflow_key:
+            _carry_to_clone(hub, workflow_key, landed, body.name, graph, swapped)
         _announce(request, sorted({workflow_key, key} - {None}), "imported")
         return ClonedWorkflow(
             name=name,
@@ -4659,6 +4655,54 @@ def create_router(server) -> APIRouter:
             unswapped=unswapped,
             verified=all(entry["verified"] for entry in swapped),
         )
+
+    def _carry_to_clone(
+        hub, source_key: str, landed, name: str, graph: dict, swapped: list
+    ):
+        """Give a clone the name typed for it and the original's pins and defaults.
+
+        A new key is a blank card, and pins and defaults are addressed by
+        ``(slot label, input name)``, which a filename swap does not move, so
+        the owner's choices on the original fit the clone as they stand. Each is
+        carried only where the card has none of its own: the clone may land on
+        a card that already exists (a second clone, or the same workflow built
+        by hand), and its owner's choices stand. Notes are not carried: they
+        describe the original's history, which the clone does not share.
+
+        A default on a loader field the swap rewrote is dropped, whatever its
+        value, or it would put some other model back on the clone's first run.
+        """
+        if landed.name is None:
+            set_attributes(hub, landed.workflow_key, name=name.strip())
+        if key_pins(hub, landed.workflow_key) is None:
+            pins = key_pins(hub, source_key)
+            if pins is not None:
+                replace_pins(hub, landed.workflow_key, pins)
+        overrides = default_overrides(hub, source_key)
+        if not overrides or default_overrides(hub, landed.workflow_key):
+            return
+        try:
+            labels = topology_node_labels(structural_document(graph))
+        except WorkflowGraphError as exc:
+            logger.warning(
+                "Clone %s of card %s will not reduce, so its swapped loader "
+                "fields cannot be told apart and the original's defaults are "
+                "not carried: %s",
+                landed.workflow_key,
+                source_key,
+                exc,
+            )
+            return
+        rewritten = {
+            (labels.get(entry["node_id"]), entry["field"]) for entry in swapped
+        }
+        defaults = [
+            (slot_label, input_name, value)
+            for (slot_label, input_name), value in overrides.items()
+            if (slot_label, input_name) not in rewritten
+        ]
+        if defaults:
+            replace_defaults(hub, landed.workflow_key, defaults)
 
     def _store_copy(
         hub, stem: str, graph: dict, bindings: list | None = None
