@@ -258,7 +258,7 @@ class PictureListFilters:
             description=(
                 "With character_id=UNASSIGNED, narrow 'unassigned' to one half: "
                 "'character' (no named face, sets ignored) or 'set' (in no "
-                "set, faces ignored). Omitted means neither."
+                "set, faces ignored). Omitted keeps both."
             ),
         ),
         character_ids: list[str] = Query(
