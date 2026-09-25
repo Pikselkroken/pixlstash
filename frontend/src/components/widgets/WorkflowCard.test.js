@@ -463,6 +463,20 @@ describe("WorkflowCard", () => {
       expect(pile.find(".wf-card__pile-more").text()).toBe("+2");
     });
 
+    it("draws each one as a full mark, side by side, while they fit", () => {
+      // Base + one LoRA of its own leaves four marks for three recipe LoRAs.
+      const pile = piled({ recipe_loras: CAST.slice(0, 3) }).find(
+        ".wf-card__pile",
+      );
+      expect(pile.classes()).not.toContain("wf-card__pile--stacked");
+      expect(pile.findAll(".wf-card__pile-face")).toHaveLength(3);
+      expect(pile.find(".wf-card__pile-more").exists()).toBe(false);
+      // Five do not fit in four, so they stack.
+      expect(piled().find(".wf-card__pile").classes()).toContain(
+        "wf-card__pile--stacked",
+      );
+    });
+
     it("draws a character with no thumbnail as the LoRA glyph", async () => {
       const wrapper = piled();
       await wrapper.find(".wf-card__pile-face img").trigger("error");

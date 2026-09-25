@@ -130,7 +130,11 @@
       <div class="wf-card__row">
         <ul v-if="stripMarks.length" class="wf-card__strip" aria-hidden="true">
           <template v-for="mark in stripMarks" :key="mark.key">
-            <li v-if="mark.pile" class="wf-card__mark wf-card__pile">
+            <li
+              v-if="mark.pile"
+              class="wf-card__mark wf-card__pile"
+              :class="{ 'wf-card__pile--stacked': pileStacked }"
+            >
               <Tooltip activator="parent" :describe="false">
                 <!-- One block: the tooltip lays its children out in a row. -->
                 <div v-if="recipeLoras.length">
@@ -152,7 +156,7 @@
                         alt=""
                         @error="dropFace(face.src)"
                       />
-                      <v-icon v-else size="14">mdi-layers-outline</v-icon>
+                      <v-icon v-else>mdi-layers-outline</v-icon>
                     </span>
                     {{ face.label }}
                     <span class="wf-card__tip-dim"
@@ -178,7 +182,7 @@
                   loading="lazy"
                   @error="dropFace(face.src)"
                 />
-                <v-icon v-else size="14">mdi-layers-outline</v-icon>
+                <v-icon v-else>mdi-layers-outline</v-icon>
               </span>
               <span v-if="pileMore" class="wf-card__pile-more"
                 >+{{ pileMore }}</span
@@ -502,14 +506,24 @@ const allMarks = computed(() => {
   ];
 });
 /**
- * How many of the STRIP_MARKS budget a mark takes. The pile overlaps its faces
- * (24px, then 14px per face after the first) and may end in "+N": two faces
- * or three fit in two marks' width (52px), three and a "+N" in three (80px).
+ * Whether the recipe LoRAs have to overlap. While every one of them fits in
+ * what the strip has left after the card's other marks, each is a full mark
+ * of its own, as large as the checkpoint's; only past that do they stack.
+ */
+const pileStacked = computed(() => {
+  const others = allMarks.value.filter((mark) => !mark.pile).length;
+  return recipeLoras.value.length > Math.max(1, STRIP_MARKS - others);
+});
+/**
+ * How many of the STRIP_MARKS budget a mark takes. Side by side, the recipe
+ * LoRAs take one each. Stacked, the pile overlaps its faces (24px, then 14px
+ * per face after the first) and ends in "+N" past three: two faces or three
+ * fit in two marks' width (52px), three and a "+N" in three (80px).
  */
 function markCost(mark) {
   if (!mark.pile) return 1;
   const count = recipeLoras.value.length;
-  if (count <= 1) return 1;
+  if (!pileStacked.value) return Math.max(1, count);
   return count <= PILE_FACES ? 2 : 3;
 }
 const stripMarks = computed(() => {
@@ -561,13 +575,14 @@ function faceOf(lora, i) {
   };
 }
 // An empty list still draws one glyph: the slot is there, nothing names it.
-const pileFaces = computed(() =>
-  recipeLoras.value.length
+const pileFaces = computed(() => {
+  if (!recipeLoras.value.length) return [{ key: "empty", src: "" }];
+  return pileStacked.value
     ? recipeLoras.value.slice(0, PILE_FACES).map(faceOf)
-    : [{ key: "empty", src: "" }],
-);
+    : recipeLoras.value.map(faceOf);
+});
 const pileMore = computed(() =>
-  Math.max(0, recipeLoras.value.length - PILE_FACES),
+  pileStacked.value ? Math.max(0, recipeLoras.value.length - PILE_FACES) : 0,
 );
 const tipFaces = computed(() =>
   recipeLoras.value.slice(0, TIP_ROWS).map(faceOf),
@@ -828,30 +843,42 @@ const accessibleName = computed(() =>
   flex: none;
 }
 
-/* The recipe slots' pile: what has filled them, overlapped avatar-stack
-   style. A face where the LoRA's character has one, the LoRA glyph on a
-   panel square otherwise, each with a surface-coloured edge so the overlap
-   reads as separate marks. No dashed box: several marks already say "this
-   varies". */
+/* The recipe slots' LoRAs: what has filled them, each a full --entity-thumb
+   mark like the checkpoint's. A face where the LoRA's character has one, the
+   LoRA glyph on a panel square otherwise. Side by side at the strip's own gap
+   while they fit; past that they overlap avatar-stack style, each with a
+   surface-coloured ring so the overlap reads as separate marks. The ring is
+   a shadow, not a border, so it never shrinks the face. */
 .wf-card__pile {
   align-items: center;
+  gap: var(--space-2);
 }
 
 .wf-card__pile-face {
-  box-sizing: border-box;
   display: inline-grid;
   place-items: center;
   flex: none;
   width: var(--entity-thumb);
   height: var(--entity-thumb);
   overflow: hidden;
-  border: 2px solid rgb(var(--v-theme-surface));
   border-radius: var(--radius-sm);
   background: rgb(var(--v-theme-panel));
   color: rgb(var(--v-theme-on-surface));
 }
 
-.wf-card__pile .wf-card__pile-face + .wf-card__pile-face {
+.wf-card__pile-face .v-icon {
+  font-size: var(--gutter-glyph);
+}
+
+.wf-card__pile--stacked {
+  gap: 0;
+}
+
+.wf-card__pile--stacked .wf-card__pile-face {
+  box-shadow: 0 0 0 2px rgb(var(--v-theme-surface));
+}
+
+.wf-card__pile--stacked .wf-card__pile-face + .wf-card__pile-face {
   margin-left: calc(-1 * (var(--space-3) + var(--space-1)));
 }
 
