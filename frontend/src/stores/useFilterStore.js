@@ -9,7 +9,8 @@ export const useFilterStore = defineStore("filter", () => {
   const _maxScore = ref(null);
   // Pictures nobody has rated (`unscored=1`, i.e. score IS NULL OR 0). Alone it
   // is the unrated only; beside a score range it adds the unrated to that range
-  // (the filter menu's "Include unscored"), which the backend ORs.
+  // (the filter menu's Score sets it for a range from 0 stars), which the
+  // backend ORs.
   const _unscoredOnly = ref(false);
   const minScoreFilter = computed({
     get: () => _minScore.value,

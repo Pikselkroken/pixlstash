@@ -106,15 +106,11 @@ const props = defineProps({
 const store = useModelShelfStore();
 const view = store.view;
 
-// `icon` renders in the OptionRows lists; the one remaining Segmented axis (the
-// folder layout) takes the default label variant, where a glyph costs the room a
-// label like "Drive, then folder" needs. One mapper either way.
+// Labels only: OptionRows draws no option icon, and the one remaining Segmented
+// axis (the folder layout) takes the label variant, where a glyph costs the
+// room a label like "Drive, then folder" needs. One mapper either way.
 const asOptions = (keys, labels) =>
-  keys.map((key) => ({
-    id: key,
-    label: labels[key].label,
-    icon: labels[key].icon,
-  }));
+  keys.map((key) => ({ id: key, label: labels[key].label }));
 const sortOptions = asOptions(SORT_KEYS, SORT_LABELS);
 const groupOptions = asOptions(GROUP_BY_KEYS, GROUP_BY_LABELS);
 const layoutOptions = asOptions(FOLDER_LAYOUTS, FOLDER_LAYOUT_LABELS);

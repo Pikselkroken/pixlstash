@@ -59,9 +59,9 @@ export const PANEL_COLLAPSE_MS = 600;
 export const SORT_KEYS = ["rating", "used", "pictures"];
 
 export const SORT_LABELS = {
-  rating: { label: "Your ratings", icon: "mdi-star" },
-  used: { label: "Recently used", icon: "mdi-history" },
-  pictures: { label: "Picture count", icon: "mdi-image-multiple" },
+  rating: { label: "Your ratings" },
+  used: { label: "Recently used" },
+  pictures: { label: "Picture count" },
 };
 
 /** The sort keys, each as `(card) => number`, descending. */
