@@ -2392,11 +2392,20 @@ def create_router(server) -> APIRouter:
         # swaps a saver for SaveImage, so it is judged as swapped. Reported
         # here so the dialog can say so before the user commits to a run, and
         # offer the workflow to paste into ComfyUI instead.
+        #
+        # Only the unscoped owner has the ids looked up: this route serves
+        # share links, and an answer that depends on whether project N exists
+        # would tell one about projects outside its scope (#708's class). A
+        # scoped reader is told every id is unchecked, and cannot run it anyway.
         as_run = json.loads(json.dumps(graph))
         swap_pixlstash_savers(as_run)
         refused_nodes = pixlstash_node_refusals(
             as_run,
-            library_ids=read_library_ids(server.vault, library_ids_named(as_run)),
+            library_ids=(
+                read_library_ids(server.vault, library_ids_named(as_run))
+                if server.auth.is_unscoped_owner_request(request)
+                else {}
+            ),
         )
         has_pixlstash_nodes = bool(refused_nodes)
         return {

@@ -108,7 +108,7 @@ function pixlstashNodeSentence(node) {
     case "picks_its_own_picture":
       return `${title} would pick its own pictures, because this run gives it none.`;
     case "per_hub_checkpoint":
-      return `${title} names a checkpoint on another machine's shelf. It runs only from the stored workflow file.`;
+      return `${title} names a checkpoint by its shelf number, so it runs only from an imported workflow file.`;
     default:
       return `${title} is a PixlStash node this version does not know how to run.`;
   }

@@ -384,15 +384,18 @@ def _pixlstash_nodes(workflow: dict) -> list[tuple[str, dict]]:
     ]
 
 
-def _library_choice(node: dict) -> tuple[str, int | None | bool]:
-    """``(kind, id)`` a library loader names: ``None`` for no id, ``False`` for
-    a value that cannot be read (a link, where the choice is made elsewhere)."""
+def _library_choice(node: dict) -> tuple[str, int | None | bool, str]:
+    """``(kind, id, name)`` a library loader names: id ``None`` for no id,
+    ``False`` for a value that cannot be read (a link, where the choice is made
+    elsewhere)."""
     field, kind = PIXLSTASH_LIBRARY_LOADERS[node["class_type"]]
     value = (node.get("inputs") or {}).get(field, "")
     if not isinstance(value, str):
-        return kind, False
+        return kind, False, ""
     match = _LIBRARY_ID_RE.search(value)
-    return kind, int(match.group(1)) if match else None
+    if not match:
+        return kind, None, ""
+    return kind, int(match.group(1)), value[: match.start()].strip()
 
 
 def library_ids_named(workflow: dict) -> dict[str, set[int]]:
@@ -405,7 +408,7 @@ def library_ids_named(workflow: dict) -> dict[str, set[int]]:
     for _node_id, node in _pixlstash_nodes(workflow):
         if node["class_type"] not in PIXLSTASH_LIBRARY_LOADERS:
             continue
-        kind, library_id = _library_choice(node)
+        kind, library_id, _name = _library_choice(node)
         if library_id is not None and library_id is not False:
             named.setdefault(kind, set()).add(library_id)
     return named
@@ -414,7 +417,7 @@ def library_ids_named(workflow: dict) -> dict[str, set[int]]:
 def pixlstash_node_refusals(
     workflow: dict,
     *,
-    library_ids: dict[str, set[int]] | None = None,
+    library_ids: dict[str, dict[int, str]] | None = None,
     picture_loader: bool = False,
     from_file: bool = False,
 ) -> list[dict]:
@@ -431,7 +434,9 @@ def pixlstash_node_refusals(
     Args:
         workflow: The API-format graph, as it will be submitted.
         library_ids: The ids :func:`library_ids_named` found that this library
-            has, by kind.
+            has, by kind, each with its name. A loader runs only when both
+            match: ids start at 1 in every library, so an id alone would run
+            another library's "Portraits #3" against this one's project 3.
         picture_loader: Whether the run writes the picture loader's ids itself
             (a card run's picture inputs). The caller then owns refusing a
             loader it did not feed.
@@ -445,10 +450,13 @@ def pixlstash_node_refusals(
         if class_type in PIXLSTASH_ALLOWED_NODES:
             continue
         if class_type in PIXLSTASH_LIBRARY_LOADERS:
-            kind, library_id = _library_choice(node)
+            kind, library_id, name = _library_choice(node)
             if library_id is False:
                 why = {"why": "unreadable_id", "kind": kind}
-            elif library_id is not None and library_id not in present.get(kind, ()):
+            elif library_id is not None and (
+                library_id not in present.get(kind, {})
+                or (name and present[kind][library_id] != name)
+            ):
                 why = {"why": "not_in_library", "kind": kind, "id": library_id}
         elif class_type == PIXLSTASH_PICTURE_LOADER:
             if not picture_loader:
@@ -499,14 +507,26 @@ def swap_pixlstash_savers(workflow: dict) -> list[str]:
     run is already doing and applies the project, set and character ids baked
     into the file. ``SaveImage`` on the same images and prefix leaves the run's
     own import as the only one. The node keeps its id and title, so an explicit
-    ``pixlstash_output_nodes`` still names it.
+    ``pixlstash_output_nodes`` still names it. A saver whose output another
+    node reads is left alone, since ``SaveImage`` has none to hand on.
 
     Returns:
         The ids of the nodes swapped.
     """
+    read = {
+        str(value[0])
+        for node in workflow.values()
+        if isinstance(node, dict)
+        for value in (node.get("inputs") or {}).values()
+        if isinstance(value, list) and len(value) == 2
+    }
     swapped = []
     for node_id, node in _pixlstash_nodes(workflow):
         if node["class_type"] not in PIXLSTASH_SAVER_CLASSES:
+            continue
+        if node_id in read:
+            # Something reads its `picture_ids` output, which SaveImage does
+            # not have: left as it is, and refused as `imports_itself`.
             continue
         inputs = node.get("inputs") or {}
         node["class_type"] = "SaveImage"
@@ -515,11 +535,6 @@ def swap_pixlstash_savers(workflow: dict) -> list[str]:
             "filename_prefix": inputs.get("filename_prefix") or "PixlStash",
         }
         swapped.append(node_id)
-        logger.info(
-            "Node %s (PixlStashPictureSaver) runs as SaveImage, so the run's "
-            "own import is the only one.",
-            node_id,
-        )
     return swapped
 
 

@@ -42,7 +42,7 @@ from pixlstash.services.workflow_hash import (
     topology_hash as api_topology_hash,
     ui_topology_hash,
 )
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Picture, Project
 from pixlstash.hub import workflow_cards
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.db_models.generation import Generation, GenerationInput
@@ -1359,3 +1359,49 @@ class TestTheOpenLinkNamesTheWorkflowOnScreen:
         # is about a substitution that happens and not about two nulls.
         assert stored is not None
         assert body["topology_hash"] != stored
+
+
+def test_a_scoped_token_cannot_ask_which_projects_exist(env, monkeypatch):
+    """The recipe read checks a pack loader's project only for the owner.
+
+    A share link reads this route, and an answer that turned on whether
+    project N exists would tell it about projects outside its scope.
+    """
+    server, client, _pic_id = env
+    _comfyui_reachable(monkeypatch)
+
+    def write(session):
+        project = Project(name="Recipe probe 1521")
+        session.add(project)
+        session.commit()
+        return project.id
+
+    project_id = server.vault.db.run_task(write)
+    graph = json.loads(json.dumps(RECIPE_GRAPH))
+    graph["10"] = {
+        "class_type": "PixlStashProjectLoader",
+        "inputs": {"pixlstash_project": f"Recipe probe 1521 #{project_id}"},
+    }
+    pic = _upload_one(client, "probe.png", _recipe_png_bytes(graph, (7, 8, 9)))
+
+    # The owner: the project exists, so the variant is offered.
+    body = client.get(f"{API}/comfyui/pictures/{pic}/recipe").json()
+    assert body["available"] is True, body
+
+    r = client.post(
+        f"{API}/users/me/token",
+        json={
+            "description": "project probe",
+            "scope": "READ",
+            "resource_type": "picture",
+            "resource_id": pic,
+        },
+    )
+    assert r.status_code == 200, r.text
+    scoped = TestClient(server.api)
+    scoped.headers.update({"Authorization": f"Bearer {r.json()['token']}"})
+    r = scoped.get(f"{API}/comfyui/pictures/{pic}/recipe")
+    assert r.status_code == 200, r.text
+    # The same answer an absent project would get: nothing to tell them apart.
+    assert r.json()["available"] is False
+    assert [n["why"] for n in r.json()["pixlstash_nodes"]] == ["not_in_library"]

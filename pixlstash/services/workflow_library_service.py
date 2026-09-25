@@ -610,20 +610,22 @@ _LIBRARY_TABLES = {"project": Project, "set": PictureSet, "character": Character
 
 def library_ids_present(
     session: Session, named: dict[str, set[int]]
-) -> dict[str, set[int]]:
-    """The ids in *named* this library has, by kind (``project``, ``set``,
-    ``character``): what a ComfyUI-PixlStash loader's frozen id is checked
-    against before a run (#1521)."""
-    present: dict[str, set[int]] = {}
+) -> dict[str, dict[int, str]]:
+    """``{kind: {id: name}}`` for the ids in *named* this library has (kinds
+    ``project``, ``set``, ``character``): what a ComfyUI-PixlStash loader's
+    frozen ``"<name> #<id>"`` is checked against before a run (#1521)."""
+    present: dict[str, dict[int, str]] = {}
     for kind, ids in named.items():
         table = _LIBRARY_TABLES[kind]
-        present[kind] = set(
-            session.exec(select(table.id).where(table.id.in_(sorted(ids)))).all()
+        present[kind] = dict(
+            session.exec(
+                select(table.id, table.name).where(table.id.in_(sorted(ids)))
+            ).all()
         )
     return present
 
 
-def read_library_ids(vault, named: dict[str, set[int]]) -> dict[str, set[int]]:
+def read_library_ids(vault, named: dict[str, set[int]]) -> dict[str, dict[int, str]]:
     """:func:`library_ids_present` in its own read task; no read when empty."""
     if not named:
         return {}

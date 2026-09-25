@@ -55,7 +55,11 @@ def _why(graph: dict, **run) -> dict:
 # allowed everywhere; one refused under OPEN is refused everywhere.
 STRICT: dict = {}
 OPEN = {
-    "library_ids": {"project": {3}, "set": {4}, "character": {5}},
+    "library_ids": {
+        "project": {3: "Holiday"},
+        "set": {4: "Holiday"},
+        "character": {5: "Holiday"},
+    },
     "picture_loader": True,
     "from_file": True,
 }
@@ -84,15 +88,20 @@ class TestNodePolicy:
         ):
             graph = {"9": _node(cls, **{field: f"Holiday #{library_id}"})}
             assert comfyui_service.library_ids_named(graph) == {kind: {library_id}}
-            assert _why(graph, library_ids={kind: {library_id}}) == {}, cls
-            # The same id under another kind is no answer.
+            assert _why(graph, library_ids={kind: {library_id: "Holiday"}}) == {}
+            # The same id under another kind is no answer, and nor is the same
+            # id under another name: ids start at 1 in every library.
             other = "set" if kind != "set" else "project"
-            refused = comfyui_service.pixlstash_node_refusals(
-                graph, library_ids={other: {library_id}}
-            )
-            assert [(e["why"], e["kind"], e["id"]) for e in refused] == [
-                ("not_in_library", kind, library_id)
-            ], cls
+            for present in (
+                {other: {library_id: "Holiday"}},
+                {kind: {library_id: "Portraits"}},
+            ):
+                refused = comfyui_service.pixlstash_node_refusals(
+                    graph, library_ids=present
+                )
+                assert [(e["why"], e["kind"], e["id"]) for e in refused] == [
+                    ("not_in_library", kind, library_id)
+                ], (cls, present)
 
     def test_a_library_loader_with_no_choice_names_nothing_to_check(self):
         graph = {"9": _node("PixlStashSetLoader", pixlstash_set="(loading…)")}
@@ -143,6 +152,15 @@ class TestNodePolicy:
             "_meta": {"title": "Keep"},
         }
         assert _why(graph, **STRICT) == {}
+
+    def test_a_saver_whose_output_is_read_is_not_swapped(self):
+        # SaveImage has no output to hand on, so the swap would break the link.
+        graph = {
+            "9": _node("PixlStashPictureSaver", images=["3", 0]),
+            "10": _node("ShowText", text=["9", 0]),
+        }
+        assert comfyui_service.swap_pixlstash_savers(graph) == []
+        assert _why(graph, **OPEN) == {"9": "imports_itself"}
 
     def test_a_pack_node_without_an_entry_stays_refused(self):
         graph = {"9": _node("PixlStashSomethingNew")}

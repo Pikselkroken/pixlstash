@@ -299,7 +299,7 @@ def judge(
     *,
     wants_lora: bool = False,
     lora_slots: Optional[list[dict]] = None,
-    library_ids: Optional[dict[str, set[int]]] = None,
+    library_ids: Optional[dict[str, dict[int, str]]] = None,
     picture_loader: bool = False,
     from_file: bool = False,
 ) -> tuple[list[Reason], dict]:
