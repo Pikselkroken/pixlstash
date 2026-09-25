@@ -750,6 +750,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/workflows/{workflow_key}                                              | workflows       | One workflow card                                           |
 | PATCH  | /api/v1/workflows/{workflow_key}                                              | workflows       | Edit a workflow card                                        |
 | DELETE | /api/v1/workflows/{workflow_key}                                              | workflows       | Delete an imported workflow                                 |
+| POST   | /api/v1/workflows/{workflow_key}/clone-with-models                            | workflows       | Clone a workflow onto other models                          |
 | PUT    | /api/v1/workflows/{workflow_key}/defaults                                     | workflows       | Set a card's parameter defaults                             |
 | POST   | /api/v1/workflows/{workflow_key}/duplicate                                    | workflows       | Duplicate a workflow                                        |
 | GET    | /api/v1/workflows/{workflow_key}/export                                       | workflows       | Export a workflow                                           |
@@ -758,6 +759,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/workflows/{workflow_key}/insert-lora-loader                           | workflows       | Add a LoRA loader to a workflow                             |
 | GET    | /api/v1/workflows/{workflow_key}/lora-chain                                   | workflows       | A workflow's LoRA chain                                     |
 | PUT    | /api/v1/workflows/{workflow_key}/lora-chain                                   | workflows       | Edit a workflow's LoRA chain                                |
+| GET    | /api/v1/workflows/{workflow_key}/model-swap                                   | workflows       | What a workflow could be cloned onto                        |
 | GET    | /api/v1/workflows/{workflow_key}/pictures                                     | workflows       | Pictures made with a card                                   |
 | PUT    | /api/v1/workflows/{workflow_key}/pins                                         | workflows       | Set a card's pinned parameters                              |
 | PUT    | /api/v1/workflows/{workflow_key}/slots                                        | workflows       | Mark a card's LoRA slots                                    |
@@ -3259,6 +3261,42 @@ suffix* below for the file kinds that have no header at all.
 Nothing reads them to decide a delete yet: `family` speaks two vocabularies (base-model
 families and tensor layouts), and joining a checkpoint's `flux1` to a
 `vae_16ch` needs a compatibility table this change does not invent.
+
+**Clone with new models proposes companions from evidence, not from a table.**
+`model_shelf_service.propose_companions` is `fetch_companions` read forwards:
+the VAEs and text encoders that share a `workflow_recipe_asset` recipe with the
+chosen checkpoint, and when there are none, with any base model of the same
+`base_model` label, then of the same `family_of` family. Each proposal carries
+the step that produced it (`via`), and a support file a recipe reached only
+through an ambiguous name is not proposed. "Same base model" and "same family"
+read `known_base_model`: the shelf's identified label (`base_model_canonical`)
+unless its source is a fuzzy guess, else the stored `base_model` folded; the
+LoRA flag reads the same. A checkpoint nothing has run with,
+from a family nothing has run with, proposes nothing: no bridge between the two
+vocabularies above is invented. LoRAs and ControlNets are the one legitimate
+family comparison (`family_of` on both sides of one vocabulary), and a mismatch
+is flagged by `GET /workflows/{key}/model-swap`, never dropped. The rewrite is
+`comfyui_recipe_service.apply_filename_swap`, deliberately not
+`apply_model_swap`: that one substitutes the same bytes under another name, this
+one replaces a file that loads with a different file. It matches the graph on
+the whole recorded name only (separators unified, case folded): the dialog
+sends the graph's own values, and a basename match would let a swap of
+`diffusion_pytorch_model.safetensors` rewrite a ControlNet loader's file of the
+same name. It writes the name in ComfyUI's own spelling when `object_info`
+answers (whole option, then the one option with that basename; a name listed
+in two folders is refused as `several_on_comfyui`, since either could be the
+wrong model) and unchecked when it does not. Both it and the dialog's slot list
+walk the graph through `comfyui_utilities.iter_model_fields_api`. The route is
+all or nothing: any swap that did not land refuses the clone (409) rather than
+saving the old model beside the new one's VAE. It names the new card only when
+it is a card nobody has named, because a repeat clone re-keys onto the card the
+first one made. A `CLIPVisionLoader`'s `clip_name` is reported as
+`clip_vision`, never offered text encoders. The base slot is offered only
+checkpoints of its loader's file type and, when ComfyUI answers, only ones that
+loader lists, because the shelf files a diffusion-only UNET and an all-in-one
+checkpoint under one kind. Duplicate, Insert loader, the LoRA chain edit and
+Clone all write the source file's `pixlstash_bindings` back into the copy
+(`_store_copy`), which the resolved graph has lost.
 
 #### The shelf catalogues more than one suffix
 

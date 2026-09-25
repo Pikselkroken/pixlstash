@@ -351,6 +351,7 @@
         @hide="hideSelected"
         @export="exportSelected"
         @duplicate="duplicateSelected"
+        @clone-with-models="startCloneWithModels"
         @delete="confirmDelete"
       />
     </div>
@@ -388,6 +389,14 @@
         >
       </template>
     </AppDialog>
+
+    <CloneWithModelsDialog
+      :open="cloneOpen"
+      :workflow-key="cloneKey"
+      :card-name="cloneName"
+      @close="closeClone"
+      @cloned="clonedWithModels"
+    />
   </div>
 </template>
 
@@ -447,6 +456,7 @@ import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import WorkflowFilterMenu from "../panels/WorkflowFilterMenu.vue";
 import WorkflowPullSummary from "../panels/WorkflowPullSummary.vue";
 import WorkflowSelectionBar from "../panels/WorkflowSelectionBar.vue";
+import CloneWithModelsDialog from "../io/CloneWithModelsDialog.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -1571,6 +1581,38 @@ async function duplicateSelected() {
   const body = await store.duplicateCard(card.key);
   if (!body) return;
   notices.push({ level: "success", text: `Copied to ${body.name}.` });
+}
+
+// Clone with new models: one dialog, one new card. Held by key rather than by
+// the selection, so the dialog keeps its card if the selection moves under it.
+const cloneOpen = ref(false);
+const cloneKey = ref("");
+const cloneName = ref("");
+
+function startCloneWithModels() {
+  const card = onlyCard.value;
+  if (!card) return;
+  cloneKey.value = card.key;
+  cloneName.value = card.name || "";
+  cloneOpen.value = true;
+}
+
+function closeClone() {
+  cloneOpen.value = false;
+  focusCursorRow();
+}
+
+/** Name the file written, say when ComfyUI could not check it, select the card. */
+function clonedWithModels(body) {
+  notices.push(
+    body.verified
+      ? { level: "success", text: `Cloned to ${body.name}.` }
+      : {
+          level: "warning",
+          text: `Cloned to ${body.name}. ComfyUI did not confirm every new model name, so run it once to check.`,
+        },
+  );
+  if (body.workflow_key) store.select(body.workflow_key);
 }
 
 /**

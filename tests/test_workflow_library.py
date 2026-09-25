@@ -75,6 +75,7 @@ from pixlstash.services.workflow_hash import (
 from pixlstash.services import model_shelf_service
 from pixlstash.services.model_shelf_service import (
     fetch_companions,
+    propose_companions,
     fetch_picture_counts,
     fetch_workflow_sets,
 )
@@ -2135,6 +2136,127 @@ def test_a_digest_the_shelf_cannot_match_yet_makes_its_companions_unknown(hub):
             "UPDATE model SET sha256 = printf('%064d', id) WHERE sha256 IS NULL"
         )
     assert companion_ids(fetch_companions(hub, [doomed]), "orphaned") == [vae]
+
+
+def set_base_model(hub, model_id, base_model):
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = ? WHERE id = ?", (base_model, model_id)
+        )
+
+
+def proposed(result, kind):
+    return [(item["id"], item["via"]) for item in result[kind]]
+
+
+def test_a_checkpoint_proposes_what_its_own_recipes_ran_with(companions_shelf):
+    ids = companions_shelf.ids
+
+    result = propose_companions(companions_shelf.hub, ids["ckpt_a"])
+
+    assert proposed(result, "vae") == [(ids["vae_a"], "checkpoint")]
+    assert proposed(result, "text_encoder") == [(ids["clip_shared"], "checkpoint")]
+    assert result["vae"][0]["recipes"] == 1
+
+
+def test_a_support_file_only_an_ambiguous_name_reaches_is_not_proposed(
+    companions_shelf,
+):
+    """B's VAE is `twin.safetensors`, which two shelf rows are called."""
+    ids = companions_shelf.ids
+
+    result = propose_companions(companions_shelf.hub, ids["ckpt_b"])
+
+    assert result["vae"] == []
+    assert proposed(result, "text_encoder") == [(ids["clip_shared"], "checkpoint")]
+
+
+def test_a_checkpoint_no_recipe_names_widens_to_its_base_model(companions_shelf):
+    ids = companions_shelf.ids
+    set_base_model(companions_shelf.hub, ids["ckpt_a"], "FLUX.1 dev")
+    set_base_model(companions_shelf.hub, ids["lonely"], "flux1-dev")
+
+    result = propose_companions(companions_shelf.hub, ids["lonely"])
+
+    assert proposed(result, "vae") == [(ids["vae_a"], "base_model")]
+    assert proposed(result, "text_encoder") == [(ids["clip_shared"], "base_model")]
+
+
+def test_a_base_model_nothing_ran_with_widens_to_its_family(companions_shelf):
+    ids = companions_shelf.ids
+    set_base_model(companions_shelf.hub, ids["ckpt_a"], "FLUX.1 dev")
+    set_base_model(companions_shelf.hub, ids["lonely"], "FLUX.1 schnell")
+
+    result = propose_companions(companions_shelf.hub, ids["lonely"])
+
+    assert proposed(result, "vae") == [(ids["vae_a"], "family")]
+
+
+def test_a_checkpoint_nothing_in_its_family_ran_with_proposes_nothing(
+    companions_shelf,
+):
+    ids = companions_shelf.ids
+    set_base_model(companions_shelf.hub, ids["ckpt_a"], "FLUX.1 dev")
+    set_base_model(companions_shelf.hub, ids["lonely"], "SDXL 1.0")
+
+    result = propose_companions(companions_shelf.hub, ids["lonely"])
+
+    assert result == {"vae": [], "text_encoder": []}
+    assert propose_companions(companions_shelf.hub, 999_999) == result
+
+
+def identify_base_model(hub, model_id, canonical, source):
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model_canonical = ?, base_model_source = ? "
+            "WHERE id = ?",
+            (canonical, source, model_id),
+        )
+
+
+def test_an_identified_base_model_widens_like_a_recorded_one(companions_shelf):
+    """No `base_model` typed on either row: the shelf named both by filename."""
+    ids = companions_shelf.ids
+    identify_base_model(companions_shelf.hub, ids["ckpt_a"], "FLUX.1 dev", "filename")
+    identify_base_model(companions_shelf.hub, ids["lonely"], "FLUX.1 dev", "filename")
+
+    result = propose_companions(companions_shelf.hub, ids["lonely"])
+
+    assert proposed(result, "vae") == [(ids["vae_a"], "base_model")]
+
+
+def test_a_fuzzy_guess_at_a_base_model_never_widens(companions_shelf):
+    ids = companions_shelf.ids
+    identify_base_model(companions_shelf.hub, ids["ckpt_a"], "FLUX.1 dev", "filename")
+    identify_base_model(
+        companions_shelf.hub, ids["lonely"], "FLUX.1 dev", "filename_fuzzy"
+    )
+
+    result = propose_companions(companions_shelf.hub, ids["lonely"])
+
+    assert result == {"vae": [], "text_encoder": []}
+
+
+def test_a_support_file_with_no_filename_is_never_proposed(companions_shelf):
+    """A clone would have nothing to write for it."""
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    with hub.transaction() as conn:
+        folder = conn.execute(
+            "INSERT INTO model_folder (path, kind, movable) "
+            "VALUES ('/models/vae', 'user', 'per_item')"
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+            "VALUES (?, ?, 'vae_a.safetensors', 'present')",
+            (ids["vae_a"], folder),
+        )
+        conn.execute("UPDATE model SET filename = NULL WHERE id = ?", (ids["vae_a"],))
+
+    result = propose_companions(hub, ids["ckpt_a"])
+
+    assert result["vae"] == []
+    assert proposed(result, "text_encoder") == [(ids["clip_shared"], "checkpoint")]
 
 
 # ---------------------------------------------------------------------------

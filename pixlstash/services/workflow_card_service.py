@@ -175,6 +175,11 @@ BASE_MODEL_KINDS = ("checkpoint", "unet") + tuple(
 )
 
 
+def slot_kind(widget: str) -> str:
+    """What a model slot's widget makes it, or the widget's own name."""
+    return _SLOT_KINDS.get(widget, widget)
+
+
 @dataclass(frozen=True)
 class SlotModel:
     """One model a card names: its file, and which slot it sits in.

@@ -662,21 +662,35 @@ def _loaded_model_widgets_ui(workflow: dict) -> list[tuple[str, str]]:
     return found
 
 
-def _loaded_model_widgets_api(workflow: dict) -> list[tuple[str, str]]:
-    found = []
-    for node in workflow.values():
+def iter_model_fields_api(workflow: dict):
+    """Yield ``(node_id, class_type, widget, filename)`` for an API graph.
+
+    The one walk over "which widget of which loader names a model file" in an
+    API-format graph: :func:`loaded_model_widgets` reads through it, and so do
+    the clone dialog's slot list and ``apply_filename_swap``'s rewrite, which
+    must agree with it about which fields a swap reaches.
+    """
+    for node_id, node in (workflow or {}).items():
         if not isinstance(node, dict):
             continue
-        inputs = node.get("inputs") or {}
-        widgets = _model_widgets_of(node.get("class_type", ""))
+        inputs = node.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        class_type = node.get("class_type", "")
+        widgets = _model_widgets_of(class_type)
         for widget in (
             *widgets,
             *(w for w in _base_model_widgets() if w not in widgets),
         ):
             value = inputs.get(widget)
             if isinstance(value, str) and value:
-                found.append((widget, value))
-    return found
+                yield node_id, class_type, widget, value
+
+
+def _loaded_model_widgets_api(workflow: dict) -> list[tuple[str, str]]:
+    return [
+        (widget, value) for _id, _cls, widget, value in iter_model_fields_api(workflow)
+    ]
 
 
 def extract_recipe_extras(workflow: dict) -> dict:
