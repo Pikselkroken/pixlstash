@@ -134,7 +134,7 @@ describe("FilterMenu", () => {
 
     await wrapper.setProps({ allPicturesView: false });
     expect(wrapper.find(".fm-sub .tbm-footer").text()).toBe(
-      "No character works in All Pictures.",
+      "No character and In no set work in All Pictures.",
     );
   });
 

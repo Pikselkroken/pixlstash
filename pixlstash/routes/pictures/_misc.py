@@ -16,7 +16,7 @@ from sqlalchemy import (
 )
 from pydantic import BaseModel, ConfigDict
 from sqlmodel import Session, select
-from typing import Optional
+from typing import Literal, Optional
 
 from pixlstash.db_models import (
     Face,
@@ -358,6 +358,7 @@ def register_routes(router, server):
         set_ids: list[int] = Query(None),
         set_mode: str = Query("union"),
         character_id: str = Query(None),
+        unassigned_by: Literal["character", "set"] | None = Query(None),
         project_id: str = Query(None),
         format: list[str] = Query(None),
         tag: list[str] = Query(None),
@@ -406,6 +407,7 @@ def register_routes(router, server):
                         enforce_stack_assignment=True,
                         assignment_project_id=assignment_project_id,
                         assignment_unassigned_project=assignment_unassigned_project,
+                        unassigned_by=unassigned_by,
                     )
                     query = query.where(
                         *unassigned_conditions,

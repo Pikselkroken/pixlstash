@@ -186,12 +186,29 @@
             <input
               type="checkbox"
               :disabled="!allPicturesView"
-              :checked="allPicturesView && store.unassignedOnlyFilter"
-              @change="store.unassignedOnlyFilter = $event.target.checked"
+              :checked="allPicturesView && store.noCharacterFilter"
+              @change="store.noCharacterFilter = $event.target.checked"
             />
             <span class="fm-check-label">No character</span>
             <span v-if="allPicturesView" class="fm-n">{{
-              formatCount(count("character_id=UNASSIGNED"))
+              formatCount(
+                count("character_id=UNASSIGNED&unassigned_by=character"),
+              )
+            }}</span>
+          </label>
+          <label
+            class="tbm-check fm-check"
+            :class="{ 'fm-check--off': !allPicturesView }"
+          >
+            <input
+              type="checkbox"
+              :disabled="!allPicturesView"
+              :checked="allPicturesView && store.noSetFilter"
+              @change="store.noSetFilter = $event.target.checked"
+            />
+            <span class="fm-check-label">In no set</span>
+            <span v-if="allPicturesView" class="fm-n">{{
+              formatCount(count("character_id=UNASSIGNED&unassigned_by=set"))
             }}</span>
           </label>
           <label class="tbm-check fm-check">
@@ -225,7 +242,7 @@
           </div>
         </div>
         <div v-if="!allPicturesView" class="tbm-footer">
-          No character works in All Pictures.
+          No character and In no set work in All Pictures.
         </div>
       </div>
 
@@ -597,7 +614,7 @@ const impossibleAllParams = filterParams(
 const problemsActive = computed(
   () =>
     impossibleCount.value > 0 ||
-    (props.allPicturesView && store.unassignedOnlyFilter),
+    (props.allPicturesView && (store.noCharacterFilter || store.noSetFilter)),
 );
 
 function setAllImpossible(on) {
@@ -610,7 +627,8 @@ function toggleImpossible(id, on) {
 
 function clearProblems() {
   store.impossibleSources = [];
-  store.unassignedOnlyFilter = false;
+  store.noCharacterFilter = false;
+  store.noSetFilter = false;
 }
 
 // ── Lists: tags, models, LoRAs ───────────────────────────────────────────────

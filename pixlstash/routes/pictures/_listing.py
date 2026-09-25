@@ -1,6 +1,7 @@
 import re
 import sys
 from datetime import datetime
+from typing import Literal
 
 from fastapi import (
     Depends,
@@ -251,6 +252,14 @@ class PictureListFilters:
             None,
             description="Character filter: a character id, or 'UNASSIGNED'.",
             examples=["42"],
+        ),
+        unassigned_by: Literal["character", "set"] | None = Query(
+            None,
+            description=(
+                "With character_id=UNASSIGNED, narrow 'unassigned' to one half: "
+                "'character' (no named face, sets ignored) or 'set' (in no "
+                "set, faces ignored). Omitted means neither."
+            ),
         ),
         character_ids: list[str] = Query(
             default=[], description="Multi-character filter (repeatable)."
@@ -576,6 +585,7 @@ def select_pictures_for_listing(
     offset = int(query_params.pop("offset", offset))
     limit = int(query_params.pop("limit", limit))
     character_id = _character_id(query_params.pop("character_id", None))
+    unassigned_by = query_params.pop("unassigned_by", None)
     _character_ids_raw = query_params.pop("character_ids", None)
     character_id_list: list[int] = []
     if _character_ids_raw:
@@ -811,6 +821,7 @@ def select_pictures_for_listing(
                 enforce_stack_assignment=True,
                 assignment_project_id=assignment_project_id,
                 assignment_unassigned_project=assignment_unassigned_project,
+                unassigned_by=unassigned_by,
             )
             query = select(Picture.id).where(
                 *unassigned_conditions,
@@ -1029,6 +1040,7 @@ def select_pictures_for_listing(
                 count_only=True,
                 project_id=unassigned_project_id,
                 only_unassigned_project=unassigned_project_only,
+                unassigned_by=unassigned_by,
                 format=format,
                 min_score=min_score,
                 max_score=max_score,
@@ -1074,6 +1086,7 @@ def select_pictures_for_listing(
             resolution_bucket=resolution_bucket,
             project_id=unassigned_project_id,
             only_unassigned_project=unassigned_project_only,
+            unassigned_by=unassigned_by,
             tags_filter=query_params.get("tags_filter") or None,
             tags_rejected_filter=query_params.get("tags_rejected_filter") or None,
             tags_confidence_above_filter=query_params.get(
