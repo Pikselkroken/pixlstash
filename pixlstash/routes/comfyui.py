@@ -86,6 +86,7 @@ from pixlstash.services.workflow_io import api_graph, detect_workflow_io
 from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks.comfyui_workflow_pull_task import ComfyUIWorkflowPullTask
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.path_utils import resolve_path_within
 from platformdirs import user_data_dir
 
@@ -260,7 +261,14 @@ def runnable_document(path: str, workflow: dict) -> dict:
     graph = converted_graph(path, workflow)
     if graph is None:
         return workflow
-    own = {k: v for k, v in workflow.items() if str(k).startswith("pixlstash_")}
+    # Not the bindings: theirs are paths into the editor structure (or the
+    # start-up migration's empty list), and either would suppress detection
+    # on the API graph and fill nothing.
+    own = {
+        k: v
+        for k, v in workflow.items()
+        if str(k).startswith("pixlstash_") and k != workflow_bindings.BINDINGS_KEY
+    }
     return {**own, **graph}
 
 
@@ -276,8 +284,11 @@ def _converted_mtime_ns(path: str) -> int:
 
 
 def store_converted_graph(path: str, workflow: dict, graph: dict) -> None:
-    """Write *graph* beside the editor file at *path*, which holds *workflow*."""
-    _save_workflow_json(
+    """Write *graph* beside the editor file at *path*, which holds *workflow*.
+
+    Atomic, so a listing racing the write never reads (and caches) half of it.
+    """
+    write_json_atomic(
         f"{path}{CONVERTED_SUFFIX}",
         {"converted_from": _editor_digest(workflow), "prompt": graph},
     )
@@ -2242,7 +2253,15 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail="workflow must be an editor-format workflow"
             )
-        if not isinstance(output, dict) or not output or api_graph(output) is None:
+        # The envelope an embedded prompt chunk comes in is unwrapped, so the
+        # sidecar's own ``prompt`` never wraps a second one.
+        if isinstance(output, dict) and isinstance(output.get("prompt"), dict):
+            output = output["prompt"]
+        try:
+            check_comfy_workflow(output)
+        except NotAWorkflowError as exc:
+            raise HTTPException(status_code=400, detail=f"output: {exc}") from exc
+        if api_graph(output) is None:
             raise HTTPException(
                 status_code=400, detail="output must be an API-format graph"
             )
@@ -2284,8 +2303,9 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=500, detail="Could not store the converted graph"
             ) from exc
-        if not result.get("matched"):
-            claim_stored_workflow(hub, stored_name)
+        # Handed over by the owner whether stored or matched, as an import is:
+        # a pulled file converted here is no longer a hidden one-off.
+        claim_stored_workflow(hub, stored_name)
         logger.info("Stored ComfyUI's conversion of %s.", stored_name)
         announce_changed_workflows(
             server,

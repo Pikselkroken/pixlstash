@@ -2484,7 +2484,10 @@ def test_a_converted_editor_file_runs_from_the_graph_stored_beside_it(
 
     # Beside the file, never over it, and never listed as a workflow of its own.
     assert (converting.folder / "editor.json").read_bytes() == before
-    assert [p.name for p in converting.folder.glob("*.json")] == ["editor.json"]
+    assert sorted(p.name for p in converting.folder.iterdir() if p.is_file()) == [
+        "editor.json",
+        "editor.json.api",
+    ]
     assert _listed(owner)["editor.json"]["runnable"] is True
     # The card is the recipe's now, and runs the converted graph from the file.
     r = owner.get(f"{API}/workflows/{body['workflow_key']}/graph")
@@ -2516,6 +2519,43 @@ def test_a_conversion_of_another_version_of_the_file_is_not_run(
     assert owner.get(f"{API}/workflows/{key}/graph").status_code == 409
 
 
+def test_converting_a_pulled_file_hands_it_to_the_owner(workflow_env, converting):
+    """A matched file is claimed as the import claims it, so no longer a one-off."""
+    hub = workflow_env.server.hub
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_pulled_file (workflow_name) VALUES (?)",
+            ("editor.json",),
+        )
+    assert _convert(workflow_env.owner).json()["matched"] is True
+    assert (
+        hub.fetchone(
+            "SELECT 1 FROM workflow_pulled_file WHERE workflow_name = ?",
+            ("editor.json",),
+        )
+        is None
+    )
+
+
+def test_a_converted_file_runs_without_its_editor_bindings(workflow_env, converting):
+    """Bindings address the editor structure; the API graph is detected afresh."""
+    bound = {**_EDITOR_WORKFLOW, "pixlstash_bindings": []}
+    (converting.folder / "editor.json").write_text(json.dumps(bound))
+    assert _convert(workflow_env.owner, workflow=bound).status_code == 200
+    document = comfyui_module.runnable_document(
+        str(converting.folder / "editor.json"), bound
+    )
+    assert "pixlstash_bindings" not in document
+    assert document["3"]["class_type"] == "SaveImage"
+
+
+def test_an_enveloped_conversion_is_stored_unwrapped(workflow_env, converting):
+    r = _convert(workflow_env.owner, output={"prompt": _EDITOR_CONVERTED})
+    assert r.status_code == 200, r.text
+    stored = json.loads((converting.folder / "editor.json.api").read_text())
+    assert stored["prompt"] == _EDITOR_CONVERTED
+
+
 def test_deleting_a_converted_file_takes_its_conversion_with_it(
     workflow_env, converting
 ):
@@ -2545,8 +2585,10 @@ def test_a_workflow_not_stored_yet_is_stored_by_its_conversion(
         (_EDITOR_CONVERTED, _EDITOR_CONVERTED),
         (_EDITOR_WORKFLOW, _EDITOR_WORKFLOW),
         (_EDITOR_WORKFLOW, {}),
+        (_EDITOR_WORKFLOW, {"1": "x"}),
+        (_EDITOR_WORKFLOW, {"a": 1}),
     ],
-    ids=["api-as-editor", "editor-as-api", "empty-output"],
+    ids=["api-as-editor", "editor-as-api", "empty-output", "not-nodes", "scalar"],
 )
 def test_a_conversion_is_an_editor_workflow_and_its_api_graph(
     workflow_env, converting, workflow, output
