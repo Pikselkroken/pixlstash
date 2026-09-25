@@ -107,5 +107,8 @@ jobs:
           GITHUB_ACTION_CONFIG.PR_ACTIONS: '["opened", "reopened", "ready_for_review"]'
           GITHUB_ACTION_CONFIG.HANDLE_PUSH_TRIGGER: "true"
           GITHUB_ACTION_CONFIG.PUSH_COMMANDS: '["/review", "/improve"]'
+          # /improve posts each suggestion as an inline, committable review comment
+          # instead of one summary table.
+          PR_CODE_SUGGESTIONS.COMMITABLE_CODE_SUGGESTIONS: "true"
           # The review rules, read from main for review and improve alike.
           CONFIG.REPO_CONTEXT_FILES: '[".github/review-context.md"]'
