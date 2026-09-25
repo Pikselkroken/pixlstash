@@ -1450,7 +1450,8 @@ choice, never per keystroke (the server reads the whole shelf and every recipe).
   family, or `declared`: nothing has run with it and its file layout is one
   the family declares, which the line calls untested and draws in the warning
   tone). A row nothing answered keeps the workflow's own file and says so;
-  it is never filled with a guess. A row the owner changes loses its line,
+  the only row filled without evidence is a `declared` one, and its line says
+  so. A row the owner changes loses its line,
   and with the workflow's own checkpoint chosen no row carries one.
 - **Rows are rebuilt from the workflow's own files on every checkpoint
   choice**: a row filled for the previous checkpoint is not evidence about this

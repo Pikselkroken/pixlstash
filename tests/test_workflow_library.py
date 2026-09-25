@@ -2414,9 +2414,10 @@ def test_the_family_step_never_crosses_from_image_to_video(
     assert result == {"vae": [], "text_encoder": []}
 
 
-def test_a_checkpoint_nothing_in_its_family_ran_with_proposes_nothing(
+def test_a_cold_checkpoint_with_no_file_of_a_declared_layout_proposes_nothing(
     companions_shelf,
 ):
+    """SDXL declares layouts, but no support file here has one recorded."""
     ids = companions_shelf.ids
     set_base_model(companions_shelf.hub, ids["ckpt_a"], "FLUX.1 dev")
     set_base_model(companions_shelf.hub, ids["lonely"], "SDXL 1.0")

@@ -382,14 +382,15 @@ KNOWN_BASE_MODELS: dict[str, dict] = {
 # stores on a VAE or text encoder (``vae_4ch``, ``vae_16ch``, ``clip_l``,
 # ``clip_h``, ``clip_g``, ``t5_xxl``, ``umt5_xxl``). It is a **declaration, not
 # evidence**: a layout that fits says the file will load, not that it was made
-# for this family (SD 1.5's and SDXL's VAEs share a layout and are not
-# interchangeable), so `propose_companions` reaches for it only when no recipe
+# for this family (SD 1.5's and SDXL's VAEs share ``vae_4ch``, FLUX's and SD
+# 3.5's share ``vae_16ch``, and neither pair is interchangeable), so `propose_companions` reaches for it only when no recipe
 # answers and labels what it proposes as coming from here.
 #
 # Only what that vocabulary can say, and only what is certain. A family whose
 # companion has no recognised layout (FLUX.2, Qwen-Image, Krea 2, the Qwen and
 # Gemma encoders, the 3D video VAEs) declares that kind not at all rather than
-# something close, and Chroma declares no VAE because Radiance needs none.
+# something close, Chroma declares no VAE because Radiance needs none, and Wan
+# is left out until every release in its family is known to load UMT5-XXL.
 COMPANION_LAYOUTS: dict[str, dict[str, frozenset[str]]] = {
     "sd15": {"vae": frozenset({"vae_4ch"}), "text_encoder": frozenset({"clip_l"})},
     "sd21": {"vae": frozenset({"vae_4ch"}), "text_encoder": frozenset({"clip_h"})},
@@ -407,7 +408,6 @@ COMPANION_LAYOUTS: dict[str, dict[str, frozenset[str]]] = {
     },
     "chroma": {"text_encoder": frozenset({"t5_xxl"})},
     "zimage": {"vae": frozenset({"vae_16ch"})},
-    "wan": {"text_encoder": frozenset({"umt5_xxl"})},
     "hidream": {
         "vae": frozenset({"vae_16ch"}),
         "text_encoder": frozenset({"clip_l", "clip_g", "t5_xxl"}),

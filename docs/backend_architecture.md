@@ -3318,7 +3318,8 @@ families and tensor layouts), and the one table joining a checkpoint's `flux1`
 to a `vae_16ch` (`COMPANION_LAYOUTS`, below) is a declaration, which a delete
 warning must not act on.
 
-**Clone with new models proposes companions from evidence, not from a table.**
+**Clone with new models proposes companions from evidence first, and from a
+declared table only when there is none.**
 `model_shelf_service.propose_companions` is `fetch_companions` read forwards:
 the VAEs and text encoders that share a `workflow_recipe_asset` recipe with the
 chosen checkpoint, and when there are none, with any base model of the same
@@ -3333,10 +3334,11 @@ falls to a fourth step, `declared`, the one bridge between the two
 vocabularies above: `known_base_models.COMPANION_LAYOUTS` names, per
 architecture family, the tensor layouts (`vae_16ch`, `clip_l`, `t5_xxl`...) its
 VAE and text encoders take, and the shelf's support files of those layouts are
-proposed with `recipes` 0. It is a declaration, not evidence (SD 1.5's and
-SDXL's VAEs share a layout), so it runs only for a kind no recipe answered, the
-dialog labels it untested, and a family declares only the kinds the layout
-vocabulary can name with certainty; anything else still proposes nothing. LoRAs and ControlNets are the one legitimate
+proposed with `recipes` 0, by filename. It is a declaration, not evidence (SD
+1.5's and SDXL's VAEs share a layout, as do FLUX's and SD 3.5's), so it runs
+only for a kind no recipe answered, the dialog labels it untested, and a family
+declares only the kinds the layout vocabulary can name with certainty; anything
+else still proposes nothing. LoRAs and ControlNets are the one legitimate
 family comparison (`family_of` on both sides of one vocabulary), and a mismatch
 is flagged by `GET /workflows/{key}/model-swap`, never dropped. The rewrite is
 `comfyui_recipe_service.apply_filename_swap`, deliberately not
