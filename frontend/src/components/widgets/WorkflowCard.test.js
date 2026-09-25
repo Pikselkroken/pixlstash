@@ -239,11 +239,13 @@ describe("WorkflowCard height", () => {
     expect(cover.flex).toBe("none");
     expect(meta.flex).toBe("none");
 
-    const rows = meta["grid-template-rows"].match(/^repeat\((\d+), (.+)\)$/);
-    expect(Number(rows[1])).toBe(4);
+    const rows = meta["grid-template-rows"].trim().split(/\s+/);
+    expect(rows).toHaveLength(4);
     const total =
-      2 * px(meta.padding) + 4 * px(rows[2]) + 3 * px(meta["row-gap"]);
-    expect(t["--wf-meta-h"]).toBe(118);
+      2 * px(meta.padding) +
+      rows.reduce((sum, track) => sum + px(track, t), 0) +
+      3 * px(meta["row-gap"]);
+    expect(t["--wf-meta-h"]).toBe(122);
     expect(total).toBe(t["--wf-meta-h"]);
   });
 
@@ -324,12 +326,11 @@ describe("WorkflowCard height", () => {
     const row = card - 2 * 1 - 2 * px(rule(".wf-card__meta").padding, t);
     const gap = px(rule(".wf-card__strip").gap, t);
     const hairline = px(rule(".wf-card__rule").width, t);
-    const worst =
-      marks * t["--entity-thumb"] + hairline + 20 + (marks + 1) * gap;
+    const worst = marks * t["--wf-mark"] + hairline + 20 + (marks + 1) * gap;
     expect(row).toBe(196);
     expect(worst).toBeLessThanOrEqual(row);
     // And one more mark would not have fitted, so the cap is not loose.
-    expect(worst + t["--entity-thumb"] + gap - 20).toBeGreaterThan(row);
+    expect(worst + t["--wf-mark"] + gap - 20).toBeGreaterThan(row);
   });
 
   it("keeps row 4 clear of the ⓘ button", () => {
@@ -391,12 +392,15 @@ describe("WorkflowCard", () => {
     // Row 2 is the strip (#1485): the base model's mark, the hairline, then
     // one mark per LoRA, and the recipe slot as a pile rather than a mark -
     // here an empty one, a single LoRA glyph, since no recipe named a LoRA.
-    const strip = mountCard(CROWDED).find(".wf-card__strip");
+    const strip = mountCard({
+      ...CROWDED,
+      loras: CROWDED.loras.slice(1),
+    }).find(".wf-card__strip");
     const items = strip.findAll("li");
     expect(items.map((li) => li.classes()[0])).toEqual([
       "wf-card__mark",
       "wf-card__rule",
-      ...Array(5).fill("wf-card__mark"),
+      ...Array(4).fill("wf-card__mark"),
     ]);
     expect(items.at(-1).classes()).toContain("wf-card__pile");
     expect(items.at(-1).find(".mmark").exists()).toBe(false);
@@ -464,14 +468,14 @@ describe("WorkflowCard", () => {
     });
 
     it("draws each one as a full mark, side by side, while they fit", () => {
-      // Base + one LoRA of its own leaves four marks for three recipe LoRAs.
+      // Base + one LoRA of its own leaves three marks for three recipe LoRAs.
       const pile = piled({ recipe_loras: CAST.slice(0, 3) }).find(
         ".wf-card__pile",
       );
       expect(pile.classes()).not.toContain("wf-card__pile--stacked");
       expect(pile.findAll(".wf-card__pile-face")).toHaveLength(3);
       expect(pile.find(".wf-card__pile-more").exists()).toBe(false);
-      // Five do not fit in four, so they stack.
+      // Five do not fit in three, so they stack.
       expect(piled().find(".wf-card__pile").classes()).toContain(
         "wf-card__pile--stacked",
       );
@@ -505,11 +509,11 @@ describe("WorkflowCard", () => {
 
     it.each([
       // [structural LoRAs, recipe LoRAs, whether the pile fits]
-      [2, 5, true], // base + 2 + a pile with +N (3) = 6
-      [3, 5, false], // 7
-      [3, 3, true], // three faces cost two marks: 6
-      [4, 3, false], // 7
-      [4, 1, true], // one face is one mark: 6
+      [1, 5, true], // base + 1 + a pile with +N (3) = 5
+      [2, 5, false], // 6
+      [2, 3, true], // three stacked faces cost two marks: 5
+      [3, 3, false], // 6
+      [3, 1, true], // one face is one mark: 5
     ])(
       "budgets %i marks beside a pile of %i as fitting: %s",
       (own, cast, fits) => {
@@ -582,9 +586,9 @@ describe("WorkflowCard", () => {
   });
 
   it.each([
-    [5, 6, 0],
-    [6, 6, 1],
-    [12, 6, 7],
+    [4, 5, 0],
+    [5, 5, 1],
+    [12, 5, 8],
   ])(
     "draws a card with %i LoRAs as %i marks and a +%i",
     (count, marks, more) => {

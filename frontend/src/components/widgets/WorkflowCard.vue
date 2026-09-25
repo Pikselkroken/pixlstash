@@ -309,11 +309,11 @@ import Tooltip from "./Tooltip.vue";
 // How many marks row 2 draws before it counts the rest (#1485). Sized for the
 // NARROWEST host, a one-column stack panel: its 1px border and --space-4
 // padding take the 240px column floor to a 214px card, whose row is 196px
-// after the card's border and --space-3 padding. Six 24px marks, the hairline,
-// "+N" and their 4px gaps are ~191px there; a seventh mark would not fit, and
-// `overflow: hidden` would then clip the "+N" rather than a mark.
+// after the card's border and --space-3 padding. Five --wf-mark (28px) marks,
+// the hairline, "+N" and their 4px gaps are ~185px there; a sixth mark would
+// not fit, and `overflow: hidden` would then clip the "+N" rather than a mark.
 // `WorkflowCard.test.js` sums this against the tokens.
-const STRIP_MARKS = 6;
+const STRIP_MARKS = 5;
 // Faces the recipe pile draws before "+N", and rows its tooltip lists.
 const PILE_FACES = 3;
 const TIP_ROWS = 4;
@@ -516,9 +516,9 @@ const pileStacked = computed(() => {
 });
 /**
  * How many of the STRIP_MARKS budget a mark takes. Side by side, the recipe
- * LoRAs take one each. Stacked, the pile overlaps its faces (24px, then 14px
+ * LoRAs take one each. Stacked, the pile overlaps its faces (28px, then 16px
  * per face after the first) and ends in "+N" past three: two faces or three
- * fit in two marks' width (52px), three and a "+N" in three (80px).
+ * fit in two marks' width (60px), three and a "+N" in three (92px).
  */
 function markCost(mark) {
   if (!mark.pile) return 1;
@@ -600,7 +600,8 @@ const accessibleName = computed(() =>
 </script>
 
 <style scoped>
-/* 118 = 8 + 4 × 24 + 3 × 2 + 8: the meta block, which is fixed whatever the
+/* 122 = 8 + 24 + 28 + 2 × 24 + 3 × 2 + 8: the meta block - three
+   --control-h-sm rows and row 2 at --wf-mark, which is fixed whatever the
    card holds and is `flex: none` so a change to that sum shows as a wrong
    height rather than being absorbed. Local on purpose (approved as
    component-local, not global).
@@ -612,7 +613,10 @@ const accessibleName = computed(() =>
    Pictures here are mostly portrait or square (832×1216, 1024×1024), so that
    shape threw away most of every cover. */
 .wf-card {
-  --wf-meta-h: 118px;
+  --wf-meta-h: 122px;
+  /* Row 2's marks, a step up from the shared --entity-thumb (24px) so the
+     models a card is made of stand out on it. Local, like --wf-meta-h. */
+  --wf-mark: 28px;
 
   position: relative;
   display: flex;
@@ -824,9 +828,11 @@ const accessibleName = computed(() =>
   line-height: var(--leading-snug);
 }
 
-/* Row 2's strip of model marks (#1485): the shelf's own identity slot, at the
-   shared --entity-thumb rather than a local size. */
+/* Row 2's strip of model marks (#1485): the shelf's own identity slot,
+   re-sized to --wf-mark for everything inside the strip. */
 .wf-card__strip {
+  --entity-thumb: var(--wf-mark);
+
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -879,7 +885,7 @@ const accessibleName = computed(() =>
 }
 
 .wf-card__pile--stacked .wf-card__pile-face + .wf-card__pile-face {
-  margin-left: calc(-1 * (var(--space-3) + var(--space-1)));
+  margin-left: calc(-1 * var(--space-4));
 }
 
 .wf-card__pile-face img {
@@ -942,7 +948,9 @@ const accessibleName = computed(() =>
 .wf-card__meta {
   flex: none;
   display: grid;
-  grid-template-rows: repeat(4, var(--control-h-sm));
+  grid-template-rows:
+    var(--control-h-sm) var(--wf-mark) var(--control-h-sm)
+    var(--control-h-sm);
   row-gap: var(--space-1);
   padding: var(--space-3);
 }
