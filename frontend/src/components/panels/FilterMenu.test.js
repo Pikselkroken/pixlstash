@@ -1,6 +1,6 @@
 // The filter menu's own rules, which the strip then shows: a tag is required or
 // excluded but never both, raising the minimum score drags the maximum up, a
-// tag-confidence threshold is one chip per tag that another pick moves, every
+// tag-confidence rule is one chip per tag that another pick moves, every
 // pick-one list follows the radiogroup contract (arrows select, one tab stop),
 // its leading All/Any row puts each kind back to its own "off" value, and every
 // count is the view plus exactly one filter.
@@ -46,14 +46,6 @@ async function openKind(wrapper, label) {
   await flushPromises();
 }
 
-function checkbox(wrapper, label) {
-  const row = wrapper
-    .findAll("label.fm-check")
-    .find((l) => l.find(".fm-check-label").text() === label);
-  expect(row, `no checkbox "${label}"`).toBeTruthy();
-  return row.find("input");
-}
-
 beforeEach(() => {
   setActivePinia(createPinia());
   getPictureCount.mockClear();
@@ -72,21 +64,78 @@ describe("FilterMenu", () => {
     expect(wrapper.find(".fm-sub .fm-n").text()).toBe("");
   });
 
-  it("moves a tag between Has and Lacks instead of holding it in both", async () => {
+  it("adds a typed tag as has on Enter, lacks on Shift+Enter, and flips on click", async () => {
     const store = useFilterStore();
     const wrapper = await mountMenu();
     await openKind(wrapper, "Tags");
+    const field = wrapper.find(".fm-sub input");
 
-    await checkbox(wrapper, "hat").setValue(true);
+    // Nothing is listed until something is typed, and each empty row says so.
+    expect(wrapper.findAll('[role="option"]')).toHaveLength(0);
+    expect(wrapper.findAll(".ftf-none").map((n) => n.text())).toEqual([
+      "None",
+      "None",
+    ]);
+    await field.setValue("ha");
+    expect(wrapper.findAll('[role="option"]').map((o) => o.text())).toEqual([
+      "hat12Tab",
+    ]);
+    await field.trigger("keydown", { key: "Enter" });
     expect(store.tagFilter).toEqual(["hat"]);
+    expect(field.element.value).toBe("");
+    expect(wrapper.findAll(".ftf-none")).toHaveLength(1);
 
-    const lacks = wrapper
-      .findAll('[role="radio"]')
-      .find((b) => b.text() === "Lacks tag");
-    await lacks.trigger("click");
-    await checkbox(wrapper, "hat").setValue(true);
-    expect(store.tagRejectedFilter).toEqual(["hat"]);
+    await field.setValue("out");
+    await field.trigger("keydown", { key: "Enter", shiftKey: true });
+    expect(store.tagRejectedFilter).toEqual(["outdoors"]);
+
+    // A tag is required or excluded, never both: its chip moves.
+    const chip = (name) =>
+      wrapper
+        .findAll(".ftf-chip")
+        .find((c) => c.find(".ftf-chip-name").text() === name);
+    expect(chip("hat").classes()).toContain("ftf-chip--has");
+    await chip("hat").find(".ftf-chip-body").trigger("click");
     expect(store.tagFilter).toEqual([]);
+    expect(store.tagRejectedFilter).toEqual(["outdoors", "hat"]);
+    expect(chip("hat").classes()).toContain("ftf-chip--lacks");
+
+    await field.setValue("hat");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(store.tagFilter).toEqual(["hat"]);
+    expect(store.tagRejectedFilter).toEqual(["outdoors"]);
+
+    // Tab completes like Enter, Shift+Tab like Shift+Enter.
+    await field.setValue("ha");
+    await field.trigger("keydown", { key: "Tab", shiftKey: true });
+    expect(store.tagRejectedFilter).toEqual(["outdoors", "hat"]);
+    await field.setValue("ha");
+    await field.trigger("keydown", { key: "Tab" });
+    expect(store.tagFilter).toEqual(["hat"]);
+    // With nothing to complete, Tab is left to move focus.
+    const tab = new KeyboardEvent("keydown", { key: "Tab", cancelable: true });
+    field.element.dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(false);
+
+    // Backspace in the empty field takes the last chip, never while typing.
+    await field.setValue("x");
+    await field.trigger("keydown", { key: "Backspace" });
+    expect(store.tagRejectedFilter).toEqual(["outdoors"]);
+    await field.setValue("");
+    await field.trigger("keydown", { key: "Backspace" });
+    expect(store.tagRejectedFilter).toEqual([]);
+    expect(store.tagFilter).toEqual(["hat"]);
+  });
+
+  it("gives Problems no footer in All Pictures, and says why No character is off elsewhere", async () => {
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Problems");
+    expect(wrapper.find(".fm-sub .tbm-footer").exists()).toBe(false);
+
+    await wrapper.setProps({ allPicturesView: false });
+    expect(wrapper.find(".fm-sub .tbm-footer").text()).toBe(
+      "No character works in All Pictures.",
+    );
   });
 
   it("raises At most to a new At least above it", async () => {
@@ -103,25 +152,63 @@ describe("FilterMenu", () => {
     ).toBeDefined();
   });
 
-  it("keeps one confidence chip per tag: another threshold moves it", async () => {
+  it("keeps one confidence chip per tag: its % or the other kind moves it", async () => {
     const store = useFilterStore();
     const wrapper = await mountMenu();
     await openKind(wrapper, "Tag confidence");
+    const field = wrapper.find(".fm-sub input");
 
-    const pick = async (label) => {
-      const row = wrapper
-        .findAll('[role="radio"]')
-        .find((b) => b.text().startsWith(label));
-      await row.trigger("click");
-      await flushPromises();
-    };
-    await pick("hat");
-    await pick("80%");
+    await field.setValue("hat");
+    await field.trigger("keydown", { key: "Enter" });
     expect(store.tagConfidenceAboveFilter).toEqual(["hat:0.80"]);
-    await pick("90%");
+
+    await wrapper.find(".ftf-thr-select").setValue("0.9");
     expect(store.tagConfidenceAboveFilter).toEqual(["hat:0.90"]);
-    await pick("90%");
+
+    await field.setValue("hat");
+    await field.trigger("keydown", { key: "Enter", shiftKey: true });
+    expect(store.tagConfidenceAboveFilter).toEqual([]);
+    expect(store.tagConfidenceBelowFilter).toEqual(["hat:0.40"]);
+
+    // Clicking the chip is the mouse path between the two kinds.
+    await wrapper.find(".ftf-chip-body").trigger("click");
+    expect(store.tagConfidenceBelowFilter).toEqual([]);
+    expect(store.tagConfidenceAboveFilter).toEqual(["hat:0.80"]);
+
+    await wrapper.find(".ftf-chip-x").trigger("click");
+    expect(store.tagConfidenceAboveFilter).toEqual([]);
+  });
+
+  it("edits one of the stats sidebar's per-bucket entries without the others", async () => {
+    const store = useFilterStore();
+    store.tagConfidenceAboveFilter = ["hat:0.20", "hat:0.40"];
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Tag confidence");
+
+    const [first] = wrapper.findAll(".ftf-thr-select");
+    await first.setValue("0.9");
+    expect(store.tagConfidenceAboveFilter).toEqual(["hat:0.90", "hat:0.40"]);
+    await wrapper.findAll(".ftf-chip-x")[1].trigger("click");
     expect(store.tagConfidenceAboveFilter).toEqual(["hat:0.90"]);
+  });
+
+  it("moves the highlight with the arrows, and Enter adds the highlighted tag", async () => {
+    const store = useFilterStore();
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Tags");
+    const field = wrapper.find(".fm-sub input");
+
+    // "t" is in both; hat leads as the more used.
+    await field.setValue("t");
+    const tabRow = () =>
+      wrapper.find(".ftf-row-kbd").element.closest('[role="option"]');
+    expect(tabRow().textContent).toContain("hat");
+    await field.trigger("keydown", { key: "ArrowDown" });
+    // The Tab keycap follows the highlight to the row it will take.
+    expect(wrapper.findAll(".ftf-row-kbd")).toHaveLength(1);
+    expect(tabRow().textContent).toContain("outdoors");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(store.tagFilter).toEqual(["outdoors"]);
   });
 
   it("counts each choice as the view plus that one filter", async () => {
@@ -248,9 +335,7 @@ describe("FilterMenu", () => {
     const wrapper = await mountMenu();
     await openKind(wrapper, "Score");
     expect(
-      wrapper
-        .find('[aria-label="At most 0 stars"]')
-        .attributes("aria-checked"),
+      wrapper.find('[aria-label="At most 0 stars"]').attributes("aria-checked"),
     ).toBe("true");
 
     // Clicking the marked At least 0 confirms it, never drops the filter.
@@ -258,9 +343,7 @@ describe("FilterMenu", () => {
     expect(store.unscoredOnlyFilter).toBe(true);
     expect(store.minScoreFilter).toBeNull();
     expect(
-      wrapper
-        .find('[aria-label="At most 0 stars"]')
-        .attributes("aria-checked"),
+      wrapper.find('[aria-label="At most 0 stars"]').attributes("aria-checked"),
     ).toBe("true");
 
     // A minimum above the shown At most 0 drags it up, as it would anywhere.

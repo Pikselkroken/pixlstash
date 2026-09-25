@@ -224,43 +224,39 @@
             </label>
           </div>
         </div>
-        <div class="tbm-footer">
-          {{
-            allPicturesView
-              ? 'Chips read "Problem no character".'
-              : "No character works in All Pictures."
-          }}
+        <div v-if="!allPicturesView" class="tbm-footer">
+          No character works in All Pictures.
         </div>
       </div>
 
-      <FilterChecklistMenu
+      <FilterTagField
         v-else-if="sub === 'tags'"
         title="Tags"
-        placeholder="Filter tags…"
-        :items="tagItems"
-        :checked="tagMode === 'has' ? store.tagFilter : store.tagRejectedFilter"
-        :clearable="
-          Boolean(store.tagFilter.length || store.tagRejectedFilter.length)
-        "
-        empty-text="No tag matches."
-        @toggle="toggleTag"
-        @clear="clearTags"
-      >
-        <template #top>
-          <Segmented
-            v-model="tagMode"
-            :options="TAG_MODE_OPTIONS"
-            full
-            aria-label="Tag rule"
-            class="fm-seg"
-          />
-        </template>
-      </FilterChecklistMenu>
-
-      <FilterConfidenceMenu
-        v-else-if="sub === 'confidence'"
         :tags="tagRows"
-        :count="count"
+        :rows="tagFieldRows"
+        footer="Click a chip to flip it between has and lacks."
+        @add="setTag"
+        @flip="
+          (chip, from) => setTag(chip.tag, from === 'has' ? 'lacks' : 'has')
+        "
+        @remove="(chip, rule) => toggleIn(TAG_FIELDS[rule], chip.tag, false)"
+        @clear="clearTags"
+      />
+
+      <FilterTagField
+        v-else-if="sub === 'confidence'"
+        title="Tag confidence"
+        :tags="tagRows"
+        :rows="confidenceFieldRows"
+        footer="Click a chip to flip it between missing and doubtful; its % is its own menu."
+        @add="setConfidence"
+        @flip="
+          (chip, from) =>
+            setConfidence(chip.tag, from === 'missing' ? 'doubtful' : 'missing')
+        "
+        @threshold="setThreshold"
+        @remove="removeConfidence"
+        @clear="clearConfidence"
       />
 
       <FilterChecklistMenu
@@ -305,9 +301,8 @@
  */
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import OptionRows from "../widgets/OptionRows.vue";
-import Segmented from "../widgets/Segmented.vue";
 import FilterChecklistMenu from "./FilterChecklistMenu.vue";
-import FilterConfidenceMenu from "./FilterConfidenceMenu.vue";
+import FilterTagField from "./FilterTagField.vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { listTags } from "../../api/tags";
 import { listComfyuiLoras, listComfyuiModels } from "../../api/pictures";
@@ -319,12 +314,16 @@ import {
   useFilterCounts,
 } from "../../composables/useFilterCounts";
 import {
+  CONFIDENCE_THRESHOLDS,
+  DOUBTFUL_THRESHOLDS,
   FACE_OPTIONS,
   IMPOSSIBLE_OPTIONS,
   MEDIA_OPTIONS,
   STACK_OPTIONS,
+  confidenceEntry,
   filterChips,
   modelLabel,
+  parseConfidenceEntry,
   scoreChipValue,
 } from "../../utils/filterChips";
 
@@ -404,10 +403,6 @@ const PICK_ONE = {
 };
 
 const STAR_ROWS = [0, 1, 2, 3, 4, 5];
-const TAG_MODE_OPTIONS = [
-  { id: "has", label: "Has tag" },
-  { id: "lacks", label: "Lacks tag" },
-];
 
 const sub = ref(null);
 const subTop = ref(0);
@@ -487,9 +482,12 @@ function toggle(kind) {
   else openKind(kind);
 }
 
-// Left arrow inside a submenu returns to its row, unless it is moving a caret.
+// Left arrow inside a submenu returns to its row, unless it is moving a caret
+// or a chip's threshold.
 function onLeft(event) {
-  if (!sub.value || event.target?.tagName === "INPUT") return;
+  if (!sub.value || ["INPUT", "SELECT"].includes(event.target?.tagName)) {
+    return;
+  }
   if (!subRef.value?.contains(event.target)) return;
   event.preventDefault();
   rowRefs[sub.value]?.focus();
@@ -619,13 +617,9 @@ function clearProblems() {
 const tagRows = ref([]);
 const modelNames = ref([]);
 const loraNames = ref([]);
-const tagMode = ref("has");
 
 // /tags counts span the pictures this session may see, not the current view:
 // one request for the whole vocabulary rather than one per tag.
-const tagItems = computed(() =>
-  tagRows.value.map((t) => ({ value: t.tag, label: t.tag, count: t.count })),
-);
 const modelItems = computed(() =>
   modelNames.value.map((m) => ({
     value: m.value,
@@ -664,19 +658,109 @@ function toggleIn(field, value, on) {
     : current.filter((v) => v !== value);
 }
 
+// ── Tags and Tag confidence: a field that adds chips ─────────────────────────
+const TAG_FIELDS = { has: "tagFilter", lacks: "tagRejectedFilter" };
+
+const tagFieldRows = computed(() => [
+  {
+    id: "has",
+    label: "Has tag",
+    short: "has",
+    tone: "has",
+    icon: "mdi-check",
+    chips: store.tagFilter.map((tag) => ({ tag })),
+  },
+  {
+    id: "lacks",
+    label: "Lacks tag",
+    short: "lacks",
+    tone: "lacks",
+    icon: "mdi-cancel",
+    chips: store.tagRejectedFilter.map((tag) => ({ tag })),
+  },
+]);
+
 // A tag is either required or excluded, never both.
-function toggleTag(tag, on) {
-  const [into, other] =
-    tagMode.value === "has"
-      ? ["tagFilter", "tagRejectedFilter"]
-      : ["tagRejectedFilter", "tagFilter"];
-  toggleIn(into, tag, on);
-  if (on) toggleIn(other, tag, false);
+function setTag(tag, rule) {
+  toggleIn(TAG_FIELDS[rule], tag, true);
+  toggleIn(TAG_FIELDS[rule === "has" ? "lacks" : "has"], tag, false);
 }
 
 function clearTags() {
   store.tagFilter = [];
   store.tagRejectedFilter = [];
+}
+
+// Missing asks for a confident tagger, doubtful for an unsure one, so each
+// kind has its own thresholds and its own default.
+const CONFIDENCE_KINDS = {
+  missing: {
+    field: "tagConfidenceAboveFilter",
+    thresholds: CONFIDENCE_THRESHOLDS,
+    initial: 0.8,
+  },
+  doubtful: {
+    field: "tagConfidenceBelowFilter",
+    thresholds: DOUBTFUL_THRESHOLDS,
+    initial: 0.4,
+  },
+};
+
+const confidenceFieldRows = computed(() => [
+  {
+    id: "missing",
+    label: "Missing — tagger sees it, tag not applied",
+    short: "missing",
+    sign: "≥",
+    thresholds: CONFIDENCE_KINDS.missing.thresholds,
+    chips: (store.tagConfidenceAboveFilter || []).map(parseConfidenceEntry),
+  },
+  {
+    id: "doubtful",
+    label: "Doubtful — applied, tagger unsure",
+    short: "doubtful",
+    sign: "<",
+    thresholds: CONFIDENCE_KINDS.doubtful.thresholds,
+    chips: (store.tagConfidenceBelowFilter || []).map(parseConfidenceEntry),
+  },
+]);
+
+function withoutTag(entries, tag) {
+  return (entries || []).filter((e) => parseConfidenceEntry(e).tag !== tag);
+}
+
+// Adding a tag gives it one rule: it leaves the other kind, and a tag already
+// in this kind keeps its threshold. Missing and doubtful cannot both hold for
+// one picture, so the two together would only ever match nothing.
+function setConfidence(tag, kind) {
+  const def = CONFIDENCE_KINDS[kind];
+  const other = CONFIDENCE_KINDS[kind === "missing" ? "doubtful" : "missing"];
+  store[other.field] = withoutTag(store[other.field], tag);
+  const mine = store[def.field] || [];
+  if (mine.some((e) => parseConfidenceEntry(e).tag === tag)) return;
+  store[def.field] = [...mine, confidenceEntry(tag, def.initial)];
+}
+
+// The threshold menu and the × act on the one chip, never on every entry for
+// its tag: the stats sidebar can hold several (one per histogram bucket).
+function setThreshold(chip, kind, threshold) {
+  const field = CONFIDENCE_KINDS[kind].field;
+  const was = confidenceEntry(chip.tag, chip.threshold);
+  const now = confidenceEntry(chip.tag, threshold);
+  store[field] = (store[field] || [])
+    .filter((e) => e !== now)
+    .map((e) => (e === was ? now : e));
+}
+
+function removeConfidence(chip, kind) {
+  const field = CONFIDENCE_KINDS[kind].field;
+  const entry = confidenceEntry(chip.tag, chip.threshold);
+  store[field] = (store[field] || []).filter((e) => e !== entry);
+}
+
+function clearConfidence() {
+  store.tagConfidenceAboveFilter = [];
+  store.tagConfidenceBelowFilter = [];
 }
 </script>
 
@@ -710,9 +794,6 @@ function clearTags() {
 .fm-star--off {
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
   opacity: 0.6;
-}
-.fm-seg {
-  margin-bottom: var(--space-2);
 }
 .fm-check--off {
   opacity: var(--opacity-disabled);
