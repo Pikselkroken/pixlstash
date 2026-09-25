@@ -38,8 +38,8 @@
           @keydown.esc="onEsc"
         />
         <span :id="`${listId}-hint`" class="ftf-hint">
-          <kbd class="fm-kbd">↵</kbd> {{ rows[0].short }} ·
-          <kbd class="fm-kbd">⇧↵</kbd> {{ rows[1].short }}
+          <kbd class="fm-kbd ftf-kbd">↵</kbd> {{ rows[0].short }} ·
+          <kbd class="fm-kbd ftf-kbd">⇧↵</kbd> {{ rows[1].short }}
         </span>
       </div>
       <div
@@ -65,6 +65,13 @@
             >{{ item.after }}</span
           >
           <span class="fm-n">{{ formatCount(item.count) }}</span>
+          <!-- The row Tab (and Enter) will take, marked on the row itself. -->
+          <kbd
+            v-if="idx === highlight"
+            class="fm-kbd ftf-kbd ftf-row-kbd"
+            aria-hidden="true"
+            >Tab</kbd
+          >
         </div>
       </div>
       <p v-if="query.trim() && !suggestions.length" class="fm-help">
@@ -266,11 +273,15 @@ onMounted(() => nextTick(() => fieldRef.value?.focus()));
   pointer-events: none;
 }
 /* The arrows are glyphs, not words: at the mono 2xs of .fm-kbd they shrink to
-   specks, so the hint's keycaps take the UI face a step up. */
-.ftf-hint .fm-kbd {
+   specks, so the field's keycaps take the UI face a step up. */
+.ftf-kbd {
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   padding: 0 var(--space-2);
+}
+.ftf-row-kbd {
+  margin-left: var(--space-3);
+  font-size: var(--text-xs);
 }
 .ftf-list {
   margin-top: var(--space-2);

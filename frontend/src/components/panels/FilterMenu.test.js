@@ -74,7 +74,7 @@ describe("FilterMenu", () => {
     expect(wrapper.findAll('[role="option"]')).toHaveLength(0);
     await field.setValue("ha");
     expect(wrapper.findAll('[role="option"]').map((o) => o.text())).toEqual([
-      "hat12",
+      "hat12Tab",
     ]);
     await field.trigger("keydown", { key: "Enter" });
     expect(store.tagFilter).toEqual(["hat"]);
@@ -184,7 +184,13 @@ describe("FilterMenu", () => {
 
     // "t" is in both; hat leads as the more used.
     await field.setValue("t");
+    const tabRow = () =>
+      wrapper.find(".ftf-row-kbd").element.closest('[role="option"]');
+    expect(tabRow().textContent).toContain("hat");
     await field.trigger("keydown", { key: "ArrowDown" });
+    // The Tab keycap follows the highlight to the row it will take.
+    expect(wrapper.findAll(".ftf-row-kbd")).toHaveLength(1);
+    expect(tabRow().textContent).toContain("outdoors");
     await field.trigger("keydown", { key: "Enter" });
     expect(store.tagFilter).toEqual(["outdoors"]);
   });
