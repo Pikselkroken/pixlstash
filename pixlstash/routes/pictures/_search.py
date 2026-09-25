@@ -16,6 +16,10 @@ from pixlstash.db_models import (
     Picture,
     SortMechanism,
 )
+from pixlstash.inference.cpu_query_encoders import (
+    NO_GPU_WORKER_DETAIL,
+    CpuQueryEncodersNotReadyError,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.filter_helpers import (
     collect_set_filter_ids,
@@ -444,7 +448,19 @@ def register_routes(router, server):
             log_semantic_results(f"sorted_{sort_mech.key.name}", sorted_results)
             return sorted_results
 
-        results = server.vault.db.run_task(find_by_text, query, offset, limit)
+        try:
+            results = server.vault.db.run_task(find_by_text, query, offset, limit)
+        except CpuQueryEncodersNotReadyError as exc:
+            # Raised from inside the database task, where the query is encoded.
+            # 503 rather than a 500: nothing is wrong with the request, the
+            # encoders are still loading (or need a worker that is not running).
+            logger.warning(
+                "Text search cannot encode its query yet (query=%r): %s", query, exc
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=str(exc) if exc.worker_running else NO_GPU_WORKER_DETAIL,
+            ) from exc
         if results:
             hidden_ids = _fetch_hidden_picture_ids(
                 server,

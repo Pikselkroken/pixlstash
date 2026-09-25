@@ -70,6 +70,30 @@ class ClipEmbeddingWorkflow:
         """
         return self._engine.clip_service.encode_image_batch(images, tensors=tensors)
 
+    def encode_query_image(self, image) -> Optional[np.ndarray]:
+        """Encode one uploaded likeness-search image, off the inference device.
+
+        Separate from :meth:`encode_images` because the caller, not the
+        workflow, knows which side of the comparison an image is on. The GPU
+        worker writes the stored picture embeddings and must keep the
+        accelerator; the *query* arrives on a request thread while the worker
+        is running, and on Metal that second thread is what crashes the
+        process. Where the engine has no CPU copies this is
+        :meth:`encode_images` with a batch of one.
+
+        Args:
+            image: The uploaded ``PIL.Image`` to search with.
+
+        Returns:
+            Float32 numpy array of shape ``(1, D)`` or ``None`` on failure.
+        """
+        encoders = self._engine.query_encoders
+        if encoders is not None and encoders.ensure_serving():
+            return encoders.encode_query_image(image)
+        # No copies on this host, or no GPU worker running - see
+        # ``TextEmbeddingWorkflow.encode_query`` for why the latter is safe.
+        return self.encode_images([image])
+
     def suggested_batch_size(self) -> int:
         """Return the VRAM-budget-constrained batch size for a CLIP inference pass.
 

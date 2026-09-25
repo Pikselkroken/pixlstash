@@ -5,11 +5,18 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
+from pixlstash.inference.cpu_query_encoders import build_cpu_query_encoders
 from pixlstash.inference.vram_budget import VramBudget
 from pixlstash.inference.model_lifecycle import ModelLifecycleManager
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.builtin_models import builtin_model_dir
-from pixlstash.utils.accelerator import CUDA, MPS, normalise_device, resolve_device
+from pixlstash.utils.accelerator import (
+    CUDA,
+    MPS,
+    configure_metal_model_loading,
+    normalise_device,
+    resolve_device,
+)
 
 if TYPE_CHECKING:
     from pixlstash.tagger_plugins.clip_service import ClipService
@@ -106,6 +113,10 @@ class InferenceEngine:
         self.wd14_service = wd14_service
         self.pixlstash_tagger_service = pixlstash_tagger_service
         self.florence_service = florence_service
+        # CPU copies of the query encoders, so a search never encodes on the
+        # inference device while the GPU worker is using it, when using Metal.
+        # See inference/cpu_query_encoders.py.
+        self.query_encoders = None
         self.vram_budget = vram_budget
         self.lifecycle = lifecycle
         self.force_cpu = force_cpu
@@ -362,6 +373,11 @@ class InferenceEngine:
 
     def close(self) -> None:
         """Unload all models and release GPU/CPU memory."""
+        # Before the lifecycle call, which ends in trim_process_memory(): these
+        # have to be dropped by then or their ~630 MB is still held when the
+        # code that returns memory to the OS runs.
+        if self.query_encoders is not None:
+            self.query_encoders.unload()
         self.lifecycle.aggressive_unload(
             clip_service=self.clip_service,
             wd14_service=self.wd14_service,
@@ -376,6 +392,10 @@ class InferenceEngine:
 
     def safe_idle_unload(self) -> None:
         """Release non-captioning models during idle periods."""
+        # If the owner chose memory over speed, let's unload it.
+        # The next search will queue a reload and wait for it.
+        if self.query_encoders is not None:
+            self.query_encoders.unload()
         self.lifecycle.safe_idle_unload(
             clip_service=self.clip_service,
             wd14_service=self.wd14_service,
@@ -548,6 +568,8 @@ class InferenceEngine:
 
         model_dir = builtin_model_dir()
 
+        configure_metal_model_loading()
+
         # One resolution, accelerator-blind. ``force_cpu`` wins over everything
         # here as it does everywhere else, which is what keeps CI's --force-cpu
         # honest on a developer machine that has Metal.
@@ -651,5 +673,12 @@ class InferenceEngine:
 
         if wd14_threshold is not None:
             wd14_service.set_threshold(wd14_threshold)
+
+        # Metal only, and constructed unloaded: every service here is lazy, so
+        # reading two sets of weights at this point would be the only thing in
+        # create() that costs time - measured at 7.3 s against 0.003 s, because
+        # they would be the first models in the process and pay every import.
+        # Vault.start queues the load onto the GPU worker instead.
+        engine.query_encoders = build_cpu_query_encoders(device)
 
         return engine

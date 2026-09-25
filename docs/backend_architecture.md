@@ -1514,6 +1514,70 @@ the OOM classifier (`is_device_error`), the allocator cache flush
 (`empty_accelerator_cache`, reached through `vram_utils.empty_device_cache`)
 and the memory budget (`accelerator_total_memory_mb`) all answer per device.
 
+#### Metal takes one thread, and does not raise when it gets two
+
+Torch's Metal backend fills its kernel-name set without a lock, and every dtype
+cast routes through that lookup, so two threads casting at once corrupt it. The
+process then dies (`SIGSEGV`, `SIGBUS`, an `NSInvalidArgumentException` out of
+`matmul`) or hangs — **never a Python exception**, so no `try`, retry or CPU
+fallback can reach it. CUDA tolerates the same pattern, which is why none of
+this exists for it. Details are in `docs/apple-metal-thread-safety.md`.
+
+Two places in the product put a second thread on the accelerator, and each is
+closed at its source rather than synchronised:
+
+**Loading.** transformers copies and casts weights on a pool of
+`min(4, cpu_count)` threads, so *merely loading a model* trips it — measured at
+10 of 10 loads failing on torch 2.13.0 / transformers 5.16.1, and 0 of 10 with
+`HF_DEACTIVATE_ASYNC_LOAD=1`. `accelerator.configure_metal_model_loading()`
+sets it, and is called from `InferenceEngine.create` before any service is
+built and from `plugin_check` before a plugin's `init()`. It is set whenever
+Metal is **present**, not only when it is the inference device: accelerate's
+`device_map="auto"` places weights on Metal whenever the host offers it. A
+value already in the environment is the owner's and is kept, with a warning
+when transformers would read it as false.
+
+**Searching.** A query is encoded on the thread handling the request — the text
+path inside the database task, likeness search inline in its async handler —
+while the GPU worker runs the embedding and tagging batches. So on Metal, and
+only on Metal, `InferenceEngine.create` also builds
+`inference/cpu_query_encoders.CpuQueryEncoders`: the same classes, weights and
+preprocessing on the `cpu` device, about 0.65 GB and 1.8–2.8 s. They are loaded
+during `create`, while the process is still single-threaded — `Vault.start` has
+not run — because loading them later, on a request thread beside the worker's
+own loads, races transformers' and accelerate's *imports* instead.
+`TextEmbeddingWorkflow.encode_query`/`encode_clip_query` and
+`ClipEmbeddingWorkflow.encode_query_image` route to them; `engine.query_encoders
+is None` on every other host, which is what those three branch on. The worker's
+own `encode`/`encode_images` deliberately do **not** route — moving those to the
+CPU would take the whole library's indexing off the GPU.
+
+**`create` builds them; it does not load them.** Every engine service is lazy,
+so `create` reads no weights and returns in milliseconds — loading these two
+inline made it take 7.3 s, because they were then the first models in the
+process and paid the whole cold-import cost. Measured on a real library, boot
+went 1.95 s to 9.11 s. The weights load on a `CpuQueryEncoderLoadTask` instead:
+`URGENT`, on the **GPU** queue although it loads onto the CPU, because that
+queue is what serialises it against the worker's own model loads and so keeps it
+clear of the transformers/accelerate import race.
+
+`Vault` queues that task from **both** `ensure_ready` and `start`, because
+neither is reliably the later one: at boot `Server.__init__` calls `start()`
+before `app` builds the engine, and on a library switch `_bring_up` calls
+`ensure_ready()` before the new runner has started. Whichever runs second
+queues it; the call is idempotent. In `start` it is queued *before* the work
+planner, since `URGENT` heads the queue but cannot preempt a task already
+running — one planner-queued batch held the load for over 86 s.
+
+A search arriving while the load is still running waits on it
+(`CpuQueryEncoders.ensure_serving`, 60 s) and answers 503 rather than falling
+back to the Metal services, because with the worker running that fallback is
+the crash. With **no** GPU worker it does fall back, and that is correct: the
+crash needs two threads on Metal, and a runner that is not running has no
+worker doing Metal work. The pair serves
+only when **both** copies loaded: the services call `ensure_ready()` outside
+their own `try`, so a half-loaded pair would raise out of every search instead.
+
 #### "VRAM" on unified memory
 
 On Apple Silicon there is no card and no separate pool — the GPU reads the same
