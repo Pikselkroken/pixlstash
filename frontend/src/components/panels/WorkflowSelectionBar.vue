@@ -350,7 +350,8 @@ const countTitle = computed(() => {
 
 /**
  * `POST /workflows/run` takes one card, and the Run popup shows one run. A
- * stack selected whole runs its cover (`store.runnableCard`).
+ * stack selected whole runs the member picked in the inspector, its cover
+ * until another is picked (`store.runnableCard`).
  */
 const runnable = computed(() => Boolean(store.runnableCard));
 const runTitle = computed(() => {
@@ -358,15 +359,18 @@ const runTitle = computed(() => {
     return "Select one workflow, or one whole stack, to run it";
   }
   if (single.value) return "Run this workflow";
+  if (store.runnableCard.key !== store.stackCover?.key) {
+    return `Run ${store.runnableCard.name}, the member picked in the inspector`;
+  }
   return (
     `Run ${store.runnableCard.name}, this stack's cover. ` +
-    "Pick another member in the Run popup"
+    "Pick another member in the inspector or the Run popup"
   );
 });
 
 /**
- * A stack selected whole: several keys, one card on screen. Run and Open
- * cover picture take its cover; the verbs that would have to pick one of its
+ * A stack selected whole: several keys, one card on screen. Run takes the
+ * member picked in the inspector and Open cover picture the stack's cover; the verbs that would have to pick one of its
  * workflows refuse with that rule rather than "Select one workflow".
  */
 const stackWhole = computed(() => !single.value && runnable.value);
@@ -387,7 +391,8 @@ function oneOnly(verb) {
  * be read, so it says which of the two it is.
  */
 const coverPictureId = computed(
-  () => store.runnableCard?.covers?.[0]?.picture_id ?? null,
+  () =>
+    (store.stackCover ?? store.runnableCard)?.covers?.[0]?.picture_id ?? null,
 );
 
 /**

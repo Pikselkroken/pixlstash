@@ -25,7 +25,7 @@
         hide-label
         :options="stackOptions"
         data-testid="wftab-stack-pick"
-        @update:model-value="stackPick = $event"
+        @update:model-value="store.pickStackMember"
       />
     </div>
 
@@ -459,7 +459,7 @@
 // member selected inside its panel shows that member here, and a stack
 // selected whole shows its cover with a picker for the other members.
 
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, toRaw, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
@@ -598,25 +598,14 @@ const notesDraft = ref("");
  * The cover of a stack selected WHOLE, or null.
  *
  * Several keys, but one card on screen: the rail shows it as one workflow,
- * the cover by default, with a picker for the other members (`stackPick`).
+ * the cover by default, with a picker for the other members. The pick is the
+ * store's (`stackPickKey`), because the grid's Run follows it too.
  */
-const stackCover = computed(() =>
-  store.selectedKeys.length > 1 ? store.runnableCard : null,
-);
+const stackCover = computed(() => store.stackCover);
 
 /** Several cards selected that are not one whole stack. */
 const multiple = computed(
   () => store.selectedKeys.length > 1 && !stackCover.value,
-);
-
-/** The member the stack picker shows; back to the cover on every new stack. */
-const stackPick = ref("");
-watch(
-  () => stackCover.value?.key,
-  (key) => {
-    stackPick.value = key || "";
-  },
-  { immediate: true },
 );
 
 /** The stack's members, from the cover's own card, which lists them in order. */
@@ -631,14 +620,11 @@ const stackOptions = computed(() => {
  * The one card the body reads: the single selection, or the stack member
  * picked. Every read and write below goes through this.
  */
-const selectedKey = computed(() => {
-  if (store.selectedKeys.length === 1) return store.selectedKeys[0];
-  const cover = stackCover.value;
-  if (!cover) return null;
-  return stackOptions.value.some((row) => row.value === stackPick.value)
-    ? stackPick.value
-    : cover.key;
-});
+const selectedKey = computed(() =>
+  store.selectedKeys.length === 1
+    ? store.selectedKeys[0]
+    : store.stackPickKey,
+);
 
 /**
  * The selected card, wherever it sits.
@@ -1110,12 +1096,15 @@ function stillOn(key) {
  *
  * `stillOn` is not enough there: a stack member's `selectedKey` is derived
  * from the grid, so a flip or a Hide that takes the member out of its stack
- * empties it even though the reader never moved. Compared by contents, so a
- * reader who clicked elsewhere meanwhile is still told apart.
+ * empties it even though the reader never moved. By identity, of the
+ * selection and of the stack pick: every gesture that selects, or picks
+ * another member, writes a new one, so a reader who moved on meanwhile —
+ * even only to another member of the same stack — is told apart.
  */
 function selectionMark() {
-  const mark = store.selectedKeys.join("\u0000");
-  return () => store.selectedKeys.join("\u0000") === mark;
+  const keys = toRaw(store.selectedKeys);
+  const pick = store.stackPick;
+  return () => toRaw(store.selectedKeys) === keys && store.stackPick === pick;
 }
 
 /**

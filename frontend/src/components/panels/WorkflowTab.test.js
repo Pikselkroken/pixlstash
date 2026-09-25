@@ -985,6 +985,53 @@ describe("with several workflows selected", () => {
     expect(store.selectedKeys).toEqual([MOVED]);
   });
 
+  it("leaves a reader who picked another member during a flip where they are", async () => {
+    const stack = card({
+      stack_size: 3,
+      member_keys: [OTHER, MOVED],
+      members: [
+        { key: KEY, name: "Cover" },
+        { key: OTHER, name: "Flux portrait" },
+        { key: MOVED, name: "Third" },
+      ],
+    });
+    getWorkflowCard.mockImplementation(async (key) =>
+      detail({ card: card({ key, name: key }) }),
+    );
+    let answer;
+    setWorkflowSlots.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    // The re-read after the flip hands the grid the same stack back, minus
+    // the flipped member, which the answer re-keyed.
+    listWorkflowCards.mockResolvedValue({
+      cards: [{ ...stack, member_keys: [MOVED], stack_size: 2 }],
+      one_offs: 0,
+      hidden: 0,
+    });
+    const { wrapper, store } = await mountWith([KEY, OTHER, MOVED], [stack]);
+    const pick = () => wrapper.find("[data-testid='wftab-stack-pick'] select");
+    await pick().setValue(OTHER);
+    await flush(wrapper);
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text() === "Recipe")
+      .trigger("click");
+    await flush(wrapper);
+    // Mid-write, the reader moves on to another member of the same stack.
+    await pick().setValue(MOVED);
+    await flush(wrapper);
+    answer({ key: "f".repeat(64), moved: {} });
+    await flush(wrapper);
+    await flush(wrapper);
+    // Not yanked onto the flipped card: the selection and the pick stand.
+    expect(store.selectedKeys).toEqual([KEY, OTHER, MOVED]);
+    expect(store.stackPick.key).toBe(MOVED);
+  });
+
   it("starts every newly selected stack on its cover", async () => {
     const stack = (key, member) =>
       card({
