@@ -72,6 +72,7 @@ const OPTIONS = {
 const CHOSEN = {
   ...OPTIONS,
   checkpoint_family: "flux2",
+  checkpoint_modality: "image",
   proposals: {
     vae: [
       {
@@ -91,6 +92,7 @@ const CHOSEN = {
       kind: "lora",
       base_model: "Z-Image Turbo",
       family: "zimage",
+      modality: "image",
     },
   ],
 };
@@ -157,8 +159,38 @@ describe("CloneWithModelsDialog", () => {
     // The one proposal went to the first row: that is not "nothing ran".
     expect(text).toContain("The suggestion went to another row");
     expect(text).not.toContain("Nothing on your shelf");
-    // Flagged, never dropped.
-    expect(text).toContain("“style.safetensors” was trained on Z-Image Turbo");
+    // Flagged, never dropped; both image models, so no modality words.
+    expect(text).toContain(
+      "“style.safetensors” was trained on Z-Image Turbo; this checkpoint is FLUX.2.",
+    );
+  });
+
+  it("says when a flagged LoRA is for a video model and the checkpoint an image one", async () => {
+    readModelSwap.mockImplementation((key, { checkpointId } = {}) =>
+      Promise.resolve(
+        checkpointId == null
+          ? OPTIONS
+          : {
+              ...CHOSEN,
+              flags: [
+                {
+                  filename: "motion.safetensors",
+                  kind: "lora",
+                  base_model: "Wan 2.2",
+                  family: "wan",
+                  modality: "video",
+                },
+              ],
+            },
+      ),
+    );
+    const wrapper = open();
+    await flushPromises();
+    await selects(wrapper)[0].setValue("2");
+    await flushPromises();
+    expect(wrapper.text()).toContain(
+      "“motion.safetensors” was trained on Wan 2.2, a video model; this checkpoint is FLUX.2, an image model.",
+    );
   });
 
   it("clones by filename, only what changed, under the typed name", async () => {

@@ -3319,7 +3319,8 @@ families and tensor layouts), and joining a checkpoint's `flux1` to a
 `model_shelf_service.propose_companions` is `fetch_companions` read forwards:
 the VAEs and text encoders that share a `workflow_recipe_asset` recipe with the
 chosen checkpoint, and when there are none, with any base model of the same
-`base_model` label, then of the same `family_of` family. Each proposal carries
+`base_model` label, then of the same `family_of` family and `modality_of`
+modality (image or video, never across). Each proposal carries
 the step that produced it (`via`), and a support file a recipe reached only
 through an ambiguous name is not proposed. "Same base model" and "same family"
 read `known_base_model`: the shelf's identified label (`base_model_canonical`)

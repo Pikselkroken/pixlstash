@@ -57,7 +57,9 @@ enough at this table's size; ``rapidfuzz`` would buy speed nobody waits on.
 adapter *loads* on SDXL and produces mush; Pony V7 moved to AuraFlow, so a V6
 adapter will not load on V7 at all despite the shared name. Grouping by name
 gets both cases wrong, which is why family is stored rather than derived.
-``modality`` keeps video bases out of an image-adapter filter.
+``modality`` keeps a clone's companion proposals from crossing from image to
+video (or back), and lets the clone dialog say a LoRA was trained for the
+other kind of model.
 
 This is code and not a table, on the same ruling made for the built-in tagger
 models (``tagger_plugins/registry.py``): a declaration maintained beside the
@@ -420,6 +422,12 @@ def family_of(raw: Optional[str]) -> Optional[str]:
     """
     label = fold(raw)
     return KNOWN_BASE_MODELS[label]["family"] if label else None
+
+
+def modality_of(raw: Optional[str]) -> Optional[str]:
+    """Return ``"image"`` or ``"video"`` for what *raw* folds to, or ``None``."""
+    label = fold(raw)
+    return KNOWN_BASE_MODELS[label]["modality"] if label else None
 
 
 # Where a stored canonical label came from, highest first. The scanner writes a
