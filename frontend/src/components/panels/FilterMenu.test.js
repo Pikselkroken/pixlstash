@@ -70,8 +70,12 @@ describe("FilterMenu", () => {
     await openKind(wrapper, "Tags");
     const field = wrapper.find(".fm-sub input");
 
-    // Nothing is listed until something is typed.
+    // Nothing is listed until something is typed, and each empty row says so.
     expect(wrapper.findAll('[role="option"]')).toHaveLength(0);
+    expect(wrapper.findAll(".ftf-none").map((n) => n.text())).toEqual([
+      "None",
+      "None",
+    ]);
     await field.setValue("ha");
     expect(wrapper.findAll('[role="option"]').map((o) => o.text())).toEqual([
       "hat12Tab",
@@ -79,6 +83,7 @@ describe("FilterMenu", () => {
     await field.trigger("keydown", { key: "Enter" });
     expect(store.tagFilter).toEqual(["hat"]);
     expect(field.element.value).toBe("");
+    expect(wrapper.findAll(".ftf-none")).toHaveLength(1);
 
     await field.setValue("out");
     await field.trigger("keydown", { key: "Enter", shiftKey: true });
@@ -120,6 +125,17 @@ describe("FilterMenu", () => {
     await field.trigger("keydown", { key: "Backspace" });
     expect(store.tagRejectedFilter).toEqual([]);
     expect(store.tagFilter).toEqual(["hat"]);
+  });
+
+  it("gives Problems no footer in All Pictures, and says why No character is off elsewhere", async () => {
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Problems");
+    expect(wrapper.find(".fm-sub .tbm-footer").exists()).toBe(false);
+
+    await wrapper.setProps({ allPicturesView: false });
+    expect(wrapper.find(".fm-sub .tbm-footer").text()).toBe(
+      "No character works in All Pictures.",
+    );
   });
 
   it("raises At most to a new At least above it", async () => {

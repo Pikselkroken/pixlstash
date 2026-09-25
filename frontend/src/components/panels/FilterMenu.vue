@@ -224,12 +224,8 @@
             </label>
           </div>
         </div>
-        <div class="tbm-footer">
-          {{
-            allPicturesView
-              ? 'Chips read "Problem no character".'
-              : "No character works in All Pictures."
-          }}
+        <div v-if="!allPicturesView" class="tbm-footer">
+          No character works in All Pictures.
         </div>
       </div>
 

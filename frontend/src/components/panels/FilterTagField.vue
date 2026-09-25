@@ -128,6 +128,7 @@
               <v-icon size="14">mdi-close</v-icon>
             </button>
           </span>
+          <span v-if="!row.chips.length" class="ftf-none">None</span>
         </div>
       </template>
     </div>
@@ -278,6 +279,13 @@ onMounted(() => nextTick(() => fieldRef.value?.focus()));
   font-family: var(--font-ui);
   font-size: var(--text-sm);
   padding: 0 var(--space-2);
+}
+.ftf-none {
+  display: inline-flex;
+  align-items: center;
+  height: var(--control-h-sm);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
 .ftf-row-kbd {
   margin-left: var(--space-3);
