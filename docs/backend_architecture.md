@@ -3157,9 +3157,21 @@ models, and nothing on disk says which.
 - **It offers, it never deletes.** The shelf's confirmation lists the answer;
   an orphaned file stays on disk until the owner selects and deletes it. Every
   path still ends at a person choosing a file.
-- **Not yet read:** ComfyUI's own history and saved workflows. Models used only in graphs that never produced a picture
-  PixlStash filed are invisible here, which the `no_evidence` answer says out
-  loud rather than hiding.
+- **Not yet read here:** ComfyUI's own history and saved workflows. Models used
+  only in graphs that never produced a picture PixlStash filed are invisible to
+  the delete warning, which the `no_evidence` answer says out loud rather than
+  hiding. The clone's *proposals* do read ComfyUI's history (below).
+- **Proposals also read ComfyUI's run history (#1518).** The workflow pull
+  (`ComfyUIWorkflowPullTask`) reads `GET /history?max_items=500` after the saved
+  workflows, and `record_comfyui_history` files each *finished* run as
+  `comfyui_history_model(prompt_id, model_id)`. Names resolve to shelf rows the
+  way a recipe's do, but only an unambiguous match is stored, and as an id: the
+  table adds no place a model filename lives, so forgetting a name has nothing
+  new to reach. `propose_companions` reads it beside the recipes and counts the
+  two apart (`recipes`, `history_runs`; recipes rank first), so the evidence
+  stays distinguishable. ComfyUI forgets its history on restart; the rows do
+  not, and nothing on the read path asks ComfyUI. A failed history read never
+  fails the pull (`history_runs: null` in its summary).
 
 #### Workflow sets: which models have actually run together (#1438)
 

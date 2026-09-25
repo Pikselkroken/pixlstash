@@ -12,6 +12,11 @@ copy of a workflow already stored by content, so a pull is idempotent and safe
 to repeat. :mod:`pixlstash.hub.workflow_origin` remembers which path each came
 from, which is what keeps a workflow the owner deleted here from coming back.
 
+**So does ComfyUI's run history** (#1518): ``GET /history`` names which models
+ran together, including runs whose pictures never reached PixlStash, and
+:func:`~pixlstash.services.model_shelf_service.record_comfyui_history` files it
+for companion proposals to read while ComfyUI is off.
+
 **Triage rides along for free.** The sweep already holds every document, so one
 ``object_info`` fetch lets it count the workflows naming a node class this
 ComfyUI does not have, and those naming a model file it does not list, with
@@ -39,6 +44,7 @@ from pixlstash.services.comfyui_recipe_service import (
     fetch_object_info,
     preflight_prompt,
 )
+from pixlstash.services.model_shelf_service import record_comfyui_history
 from pixlstash.services.workflow_hash import (
     MODEL_EXTENSIONS,
     WorkflowGraphError,
@@ -347,6 +353,7 @@ class ComfyUIWorkflowPullTask(BaseTask):
                 origin,
                 exc,
             )
+        result["history_runs"] = self._read_history()
         result["missing_node_classes"] = sorted(missing_classes, key=str.lower)
         result["missing_model_files"] = sorted(missing_files, key=str.lower)
         result["workflow_keys"] = sorted(set(keys))
@@ -373,6 +380,29 @@ class ComfyUIWorkflowPullTask(BaseTask):
                     exc,
                 )
         return result
+
+    def _read_history(self) -> Optional[int]:
+        """File ComfyUI's recent runs as companion evidence (#1518).
+
+        Rides the pull because the pull is when ComfyUI is known to answer, and
+        the rows it leaves are what proposals read afterwards, ComfyUI running
+        or not. Never fails the pull: the saved workflows are already filed.
+
+        Returns:
+            How many finished runs named a shelf model, or ``None`` when the
+            history could not be read or filed.
+        """
+        try:
+            history = comfyui_userdata.read_history(self._comfyui_url)
+            return record_comfyui_history(self._hub, history)
+        except (RuntimeError, sqlite3.Error) as exc:
+            logger.warning(
+                "Pulled ComfyUI workflows from %s but could not file its run "
+                "history as companion evidence: %s",
+                self._comfyui_url,
+                exc,
+            )
+            return None
 
     def _topology_has_pictures(self, topology_hash: Optional[str]) -> bool:
         """Whether a picture in some library was made with this shape.

@@ -78,6 +78,7 @@ from pixlstash.services.model_shelf_service import (
     fetch_companions,
     propose_companions,
     fetch_picture_counts,
+    record_comfyui_history,
     fetch_workflow_sets,
 )
 from pixlstash.services.workflow_library_service import (
@@ -2541,6 +2542,86 @@ def test_a_support_file_with_no_filename_is_never_proposed(companions_shelf):
 
     assert result["vae"] == []
     assert proposed(result, "text_encoder") == [(ids["clip_shared"], "checkpoint")]
+
+
+def history_entry(graph, status="success"):
+    """One ``GET /history`` entry as ComfyUI answers it."""
+    return {
+        "prompt": [0, "unused", graph, {}, ["7"]],
+        "outputs": {},
+        "status": {"status_str": status, "completed": status == "success"},
+    }
+
+
+def test_a_comfyui_run_proposes_for_a_checkpoint_no_recipe_names(companions_shelf):
+    """`lonely` ran in ComfyUI only; the run is evidence, counted apart."""
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    history = {
+        "ran": history_entry(
+            generation_graph(
+                "lonely.safetensors", "vae_a.safetensors", "twin.safetensors"
+            )
+        ),
+        "failed": history_entry(
+            generation_graph(
+                "lonely.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+            ),
+            status="error",
+        ),
+        "not a run": {"prompt": "junk"},
+    }
+
+    assert record_comfyui_history(hub, history) == 1
+    # Twice is the same evidence, not twice the evidence.
+    assert record_comfyui_history(hub, history) == 1
+
+    result = propose_companions(hub, ids["lonely"])
+    assert proposed(result, "vae") == [(ids["vae_a"], "checkpoint")]
+    assert result["vae"][0]["recipes"] == 0
+    assert result["vae"][0]["history_runs"] == 1
+    # `twin` is two shelf rows, and the errored run proves nothing.
+    assert result["text_encoder"] == []
+    # Only unambiguous shelf ids are kept: never a name, never a guess.
+    stored = {
+        int(row["model_id"])
+        for row in hub.fetchall("SELECT model_id FROM comfyui_history_model")
+    }
+    assert stored == {ids["lonely"], ids["vae_a"]}
+
+    recipe_side = propose_companions(hub, ids["ckpt_a"])["vae"][0]
+    assert (recipe_side["recipes"], recipe_side["history_runs"]) == (1, 0)
+
+
+def test_a_run_ranks_behind_a_recipe_and_a_forgotten_model_drops_out(
+    companions_shelf,
+):
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    vae_b = shelf_file(hub, "vae_b.safetensors", "vae")
+    record_comfyui_history(
+        hub,
+        {
+            str(n): history_entry(
+                generation_graph(
+                    "ckpt_a.safetensors",
+                    "vae_b.safetensors",
+                    "clip_shared.safetensors",
+                )
+            )
+            for n in range(3)
+        },
+    )
+
+    result = propose_companions(hub, ids["ckpt_a"])
+    assert [item["id"] for item in result["vae"]] == [ids["vae_a"], vae_b]
+    assert result["vae"][1]["history_runs"] == 3
+
+    with hub.transaction() as conn:
+        model_shelf_service._purge(conn, [vae_b])
+    assert [item["id"] for item in propose_companions(hub, ids["ckpt_a"])["vae"]] == [
+        ids["vae_a"]
+    ]
 
 
 # ---------------------------------------------------------------------------
