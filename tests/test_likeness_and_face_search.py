@@ -822,7 +822,7 @@ def test_face_search_character_without_reference_faces_is_422():
 # the embeddings and tags below are hand-written and either sweep would
 # overwrite them; the planner itself keeps running so the import still works.
 
-_SET_KEYS = ["m1", "m2", "m3", "near", "far", "bare"]
+_SET_KEYS = ["m1", "m2", "m3", "near", "far", "bare", "odd"]
 
 
 def _unit(vec) -> bytes:
@@ -923,6 +923,8 @@ def set_env():
             _set_embedding(server, ids["m3"], _unit([0.9, -0.436, 0, 0, 0, 0, 0, 0]))
             _set_embedding(server, ids["near"], _unit([0.98, 0, 0.199, 0, 0, 0, 0, 0]))
             _set_embedding(server, ids["far"], _unit([0, 0, 0, 1, 0, 0, 0, 0]))
+            # A narrower embedding, as a member embedded by an older CLIP model.
+            _set_embedding(server, ids["odd"], _unit([1, 0, 0, 0]))
 
             sentinels = ["__tag", "__tag:wd14"]
             _add_tags(server, ids["m1"], ["beach", "sunset", "dog", *sentinels])
@@ -939,6 +941,10 @@ def set_env():
                 "shared": _create_set(client, "Shared", [ids["m1"], ids["near"]]),
                 "unembedded": _create_set(client, "Unembedded", [ids["bare"]]),
                 "empty": _create_set(client, "Empty", []),
+                "single": _create_set(client, "Single", [ids["m1"]]),
+                "mixed": _create_set(
+                    client, "Mixed", [ids[k] for k in ("m1", "m2", "m3", "odd")]
+                ),
             }
             yield client, server, ids, sets
 
@@ -982,9 +988,35 @@ def test_likeness_search_by_set_returns_the_set_cohesion(set_env):
     assert resp.status_code == 200, resp.text
     rows = resp.json()
     assert rows
-    # Members sit at 1.0, 0.9, 0.9 to their centroid: the median is 0.9.
+    # Leave-one-out: each member against the centroid of the OTHER two. m1
+    # sits exactly on the others' mean (1.0); m2 and m3 sit well off theirs,
+    # so the median is theirs - lower than the 0.9 they score against a
+    # centroid they helped build.
+    members = np.stack(
+        [
+            np.frombuffer(_unit(v), dtype=np.float32)
+            for v in (
+                [1, 0, 0, 0, 0, 0, 0, 0],
+                [0.9, 0.436, 0, 0, 0, 0, 0, 0],
+                [0.9, -0.436, 0, 0, 0, 0, 0, 0],
+            )
+        ]
+    )
+    others = members.sum(axis=0) - members
+    loo = (members * others).sum(axis=1) / np.linalg.norm(others, axis=1)
+    expected = float(np.median(loo))
+    assert expected < 0.85
     for row in rows:
-        assert row["cohesion"] == pytest.approx(0.9, abs=1e-3), row
+        assert row["cohesion"] == pytest.approx(expected, abs=1e-4), row
+
+    # A one-picture set has nothing to compare against: no cohesion, rather
+    # than a 1.0 that would seat the caller's cut above every candidate.
+    resp = _likeness_search(
+        client, source_set_id=sets["single"], exclude_set_id=sets["single"]
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()
+    assert all("cohesion" not in row for row in resp.json())
 
     # A plain picture-sourced search carries no set fields at all.
     resp = _likeness_search(client, source_picture_ids=ids["m1"], top_n=500)
@@ -1099,3 +1131,17 @@ def test_likeness_search_by_set_still_scope_filters_results_for_a_share_token(
     assert ids["near"] in returned, "in-scope match was over-blocked"
     assert ids["m2"] not in returned, "out-of-scope picture leaked"
     assert ids["far"] not in returned, "out-of-scope picture leaked"
+
+
+def test_likeness_search_by_set_survives_mixed_embedding_widths(set_env):
+    """A set (and a library) spanning a CLIP model change still searches: the
+    odd-width member is left out of the centroid and out of the candidates."""
+    client, _server, ids, sets = set_env
+
+    resp = _likeness_search(
+        client, source_set_id=sets["mixed"], exclude_set_id=sets["mixed"], top_n=500
+    )
+    assert resp.status_code == 200, resp.text
+    returned = [row["picture_id"] for row in resp.json()]
+    assert ids["near"] in returned
+    assert ids["odd"] not in returned

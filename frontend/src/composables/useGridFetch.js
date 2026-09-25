@@ -16,7 +16,11 @@ import { getProjectSummary } from "../api/projects";
 import { useEntityListsStore } from "../stores/useEntityListsStore";
 import { getStackColor, getStackThreshold } from "../utils/utils.js";
 import { cutFaceSuggestions } from "../utils/faceSuggestionCut.js";
-import { cutSetSuggestions, setCohesion } from "../utils/setSuggestionCut.js";
+import {
+  cutSetSuggestions,
+  setCohesion,
+  SET_SUGGEST_FALLBACK_THRESHOLD,
+} from "../utils/setSuggestionCut.js";
 import {
   getPictureId,
   PIL_IMAGE_EXTENSIONS,
@@ -821,12 +825,19 @@ export function useGridFetch(
           }
           // Seat the strength slider at the set's own cohesion the first time
           // the list arrives: no fixed default suits both a tight photoshoot
-          // and a loose theme. A refetch keeps whatever the user dragged to.
-          if (setSuggestThreshold && setSuggestThreshold.value == null) {
+          // and a loose theme. Floored, so the seat never lands above the
+          // set's own median. A one-picture set has no cohesion and takes the
+          // fixed fallback. A refetch keeps whatever the user dragged to.
+          if (
+            setSuggestThreshold &&
+            setSuggestThreshold.value == null &&
+            ranked.length
+          ) {
             const cohesion = setCohesion(ranked);
-            if (cohesion != null) {
-              setSuggestThreshold.value = Math.round(cohesion * 100) / 100;
-            }
+            setSuggestThreshold.value =
+              cohesion != null
+                ? Math.floor(cohesion * 100) / 100
+                : SET_SUGGEST_FALLBACK_THRESHOLD;
           }
         }
         const rowsById = setSuggestRanked?.value?.rowsById ?? {};

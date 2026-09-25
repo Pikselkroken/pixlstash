@@ -15,6 +15,13 @@
  */
 
 /**
+ * The strength cut seated when the set reports no cohesion (a one-picture set
+ * has nothing to compare its member against). A CLIP cosine this high reads as
+ * "clearly the same kind of picture" without demanding near-duplicates.
+ */
+export const SET_SUGGEST_FALLBACK_THRESHOLD = 0.75;
+
+/**
  * How many signature tags the set has, read off the ranked list (every match
  * carries the same `tags_total`). Zero when unknown or when the set has none.
  *

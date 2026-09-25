@@ -84,6 +84,24 @@ def _encode_query_image(server, pil_image: Image.Image) -> np.ndarray:
     return emb
 
 
+def _leave_one_out_cohesion(member_matrix: np.ndarray) -> float | None:
+    """Median similarity of each member to the centroid of the OTHER members.
+
+    Leave-one-out, because a member's similarity to a centroid it helped build
+    is inflated, and the smaller the set the worse: a one-member set would score
+    1.0 and a two-member set sits above its own pairwise similarity, seating
+    any cut built on it above every outside candidate. ``None`` for a single
+    member, which has nothing to compare against.
+    """
+    if member_matrix.shape[0] < 2:
+        return None
+    others = member_matrix.sum(axis=0) - member_matrix  # (M, D)
+    norms = np.linalg.norm(others, axis=1)
+    norms[norms == 0] = 1.0
+    sims = np.einsum("ij,ij->i", member_matrix, others) / norms
+    return round(float(np.median(sims)), 6)
+
+
 def register_routes(router, server):
     """Register the likeness-search endpoint on *router*."""
 
@@ -108,7 +126,8 @@ def register_routes(router, server):
             "**Suggesting pictures for a set**\n"
             "- `source_set_id` queries with the set's centroid: the normalised mean "
             "of its members' embeddings. Every match carries `cohesion`, the median "
-            "similarity of the set's own members to that centroid, so a caller can "
+            "similarity of each member to the centroid of the others (absent for a "
+            "one-picture set), so a caller can "
             'seat its cut at "as alike as a typical member".\n'
             "- `exclude_set_id` drops pictures already in that set.\n"
             "- `include_tag_counts` (with `source_set_id`) adds `tags_matched` and "
@@ -324,12 +343,28 @@ def register_routes(router, server):
             # One query vector: for unit vectors the mean of the cosines to every
             # member equals the cosine to their mean, so the centroid is exact
             # `combine="mean"` at a fraction of the cost.
-            member_matrix = np.stack(member_embeddings).astype(np.float32)
+            #
+            # A set whose members span a CLIP model change holds two widths, and
+            # a mean across them is meaningless: keep the most common width.
+            widths = [emb.shape[0] for emb in member_embeddings]
+            width = max(set(widths), key=widths.count)
+            if len(set(widths)) > 1:
+                logger.warning(
+                    "likeness-search: set %d mixes embedding widths %s; building "
+                    "its centroid from the %d members of width %d only",
+                    source_set_id,
+                    sorted(set(widths)),
+                    widths.count(width),
+                    width,
+                )
+            member_matrix = np.stack(
+                [emb for emb in member_embeddings if emb.shape[0] == width]
+            ).astype(np.float32)
             centroid = member_matrix.mean(axis=0)
             norm = float(np.linalg.norm(centroid))
             if norm > 0:
                 centroid = centroid / norm
-            cohesion = round(float(np.median(member_matrix @ centroid)), 6)
+            cohesion = _leave_one_out_cohesion(member_matrix)
             query_embeddings = [centroid]
         elif effective_source_ids:
             # Fast path: fetch stored CLIP embeddings for all source pictures.
@@ -410,6 +445,19 @@ def register_routes(router, server):
         )
         if excluded_picture_ids:
             candidates = [c for c in candidates if c[0] not in excluded_picture_ids]
+        # A vault that has been through a CLIP model change holds two widths,
+        # and a cosine between them is not a similarity (the face search skips
+        # them the same way).
+        query_width = query_embeddings[0].shape[0]
+        mismatched = sum(1 for c in candidates if c[1].shape[0] != query_width)
+        if mismatched:
+            logger.warning(
+                "likeness-search: skipping %d candidate pictures whose embedding "
+                "width differs from the query's %d",
+                mismatched,
+                query_width,
+            )
+            candidates = [c for c in candidates if c[1].shape[0] == query_width]
         if not candidates:
             return []
 

@@ -8971,7 +8971,7 @@ async function handleAddSetSuggestions() {
   } catch (e) {
     noticeStore.error(
       `Couldn't add those pictures to ${pictureSet.name}. ${errorDetail(e)}`,
-      { scope: "set-suggest-add" },
+      { key: "set-suggest-add" },
     );
   } finally {
     setSuggestAddBusy.value = false;

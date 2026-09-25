@@ -355,6 +355,19 @@ describe("the set suggestion search", () => {
     wrapper.unmount();
   });
 
+  it("seats a fallback cut when the set reports no cohesion", async () => {
+    mockSetSearch([
+      [{ picture_id: 101, likeness: 0.9, tags_matched: 0, tags_total: 0 }],
+    ]);
+    const wrapper = mountGrid();
+    await wrapper.vm.$nextTick();
+    await armSetSuggestion(wrapper);
+
+    expect(wrapper.vm.setSuggestThreshold).toBe(0.75);
+    expect(wrapper.vm.setSuggestAddIds).toEqual([101]);
+    wrapper.unmount();
+  });
+
   it("is dropped by a view change", async () => {
     mockSetSearch([suggestions]);
     const wrapper = mountGrid();
@@ -366,12 +379,23 @@ describe("the set suggestion search", () => {
     await wrapper.vm.$nextTick();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(
-      apiPost.mock.calls.filter(([url]) =>
-        String(url ?? "").includes("/pictures/likeness-search"),
-      ),
-    ).toHaveLength(0);
+    apiGet.mockClear();
+    useSelectionStore().selectedCharacter = 43;
+    await wrapper.vm.$nextTick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
     expect(wrapper.vm.searchResultsActive).toBe(false);
+    // The new view has to actually load: its own list query, not a re-cut of
+    // the cached suggestions (which would issue no request at all).
+    expect(
+      apiGet.mock.calls.some(([url]) => {
+        const u = String(url ?? "");
+        return (
+          (u.includes("/pictures/stream") || u.includes("/pictures/count")) &&
+          u.includes("character_id=43")
+        );
+      }),
+    ).toBe(true);
     wrapper.unmount();
   });
 });
