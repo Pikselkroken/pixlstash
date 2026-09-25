@@ -3456,7 +3456,9 @@ def create_router(server) -> APIRouter:
                 # a group about to be refused for some other reason.
                 repaired = run_service.repair(graph, object_info, judged)
                 if any(repaired.values()):
-                    judged, _preflight = run_service.judge(
+                    # Both halves: `_fill_inputs` reads this preflight, and it
+                    # must describe the graph that will be submitted.
+                    judged, preflight = run_service.judge(
                         graph,
                         object_info,
                         object_info_error,
