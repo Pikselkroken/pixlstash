@@ -246,7 +246,12 @@
          track: `measure()` reads the grid's `clientWidth`, which INCLUDES its
          own padding, and a padded grid would be measured 32px wider than the
          space the columns actually have. -->
-    <div v-else ref="scrollEl" class="wfv-scroll">
+    <div
+      v-else
+      ref="scrollEl"
+      class="wfv-scroll"
+      :class="{ 'wfv-scroll--edge-tab': !sidebarStore.workflowInspectorOpen }"
+    >
       <!-- One `treegrid` and one tab stop: the cursor roves with the arrow
            keys and the focused row is the only one at `tabindex="0"`. -->
       <div
@@ -943,19 +948,21 @@ watch(
 
 /** What the closed inspector would describe: a name, `N workflows`, or "". */
 const edgeTabLabel = computed(() => {
-  // A stack selected whole is several keys and one card on screen.
-  if (store.stackCover) return store.stackCover.name;
+  // `runnableCard` is the one card the inspector describes: the selected
+  // card, or for a stack selected whole the member picked in the inspector.
+  if (store.runnableCard) return store.runnableCard.name ?? "";
   const count = store.selectedKeys.length;
-  if (count === 1) return store.selectedCards[0]?.name ?? "";
   return count > 1 ? `${count} workflows` : "";
 });
 
 // The same act as the toolbar toggle, so it persists. The tab unmounts as the
-// inspector opens, so focus is handed to the inspector's first tab rather than
-// dropping to `body`.
+// inspector opens, so focus is handed to the inspector's active tab rather
+// than dropping to `body`.
 function openInspectorFromTab() {
   sidebarStore.toggleWorkflowInspector();
-  nextTick(() => document.querySelector(".wftab .inspector-tab")?.focus());
+  nextTick(() =>
+    document.querySelector(".wftab .inspector-tab--active")?.focus(),
+  );
 }
 
 function openWatchedFolder() {
@@ -1977,6 +1984,14 @@ async function filesChosen(event) {
      vertical one the reader asked for. */
   scrollbar-gutter: stable;
   padding: var(--space-3);
+}
+
+/* The closed inspector's edge tab (34px) floats over this edge: the cards
+   stop short of it, so a click on a card's edge never lands on the tab and
+   opens the inspector under the pointer. The scrollbar still runs under the
+   tab's band, which is why it opens on click only. */
+.wfv-scroll--edge-tab {
+  padding-right: calc(34px + var(--space-3));
 }
 
 /* `--wf-columns` is set from the measured width, so the painted grid and the

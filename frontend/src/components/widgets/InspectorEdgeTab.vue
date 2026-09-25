@@ -94,11 +94,11 @@ watch(
 }
 
 .inspector-edge-tab--nudge-a {
-  animation: inspector-edge-tab-bounce-a var(--dur-attention) ease-out;
+  animation: inspector-edge-tab-bounce-a var(--dur-attention) var(--ease-decelerate);
 }
 
 .inspector-edge-tab--nudge-b {
-  animation: inspector-edge-tab-bounce-b var(--dur-attention) ease-out;
+  animation: inspector-edge-tab-bounce-b var(--dur-attention) var(--ease-decelerate);
 }
 
 /* translateY(-50%) is the centring and has to ride along in every frame. */

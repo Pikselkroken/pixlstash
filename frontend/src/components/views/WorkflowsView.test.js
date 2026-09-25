@@ -1326,6 +1326,15 @@ describe("the closed inspector", () => {
     await flush();
     expect(useWorkflowsStore().selectedKeys.length).toBeGreaterThan(1);
     expect(tabLabel(wrapper)).toBe("b");
+
+    // A member picked in the inspector is what it (and Run) now describe.
+    const store = useWorkflowsStore();
+    store.cards.find((entry) => entry.key === "b").members = [
+      { key: "b1", name: "b one" },
+    ];
+    store.pickStackMember("b1");
+    await flush();
+    expect(tabLabel(wrapper)).toBe("b one");
   });
 
   it("opens the inspector on a click, and keeps it open", async () => {
@@ -1337,6 +1346,27 @@ describe("the closed inspector", () => {
       "true",
     );
     expect(edgeTab(wrapper).exists()).toBe(false);
+  });
+
+  // The tab unmounts as it opens the inspector; focus must follow into the
+  // inspector (its active tab), never drop to `body`. The inspector lives in
+  // App.vue, so a stand-in carrying its classes is mounted beside the grid.
+  it("hands focus to the inspector's active tab", async () => {
+    const wrapper = await closedGrid();
+    const pane = document.createElement("div");
+    pane.className = "wftab";
+    pane.innerHTML =
+      '<button class="inspector-tab">Recipes</button>' +
+      '<button class="inspector-tab inspector-tab--active">Workflow</button>';
+    document.body.appendChild(pane);
+    try {
+      edgeTab(wrapper).element.focus();
+      await edgeTab(wrapper).trigger("click");
+      await flush();
+      expect(document.activeElement).toBe(pane.children[1]);
+    } finally {
+      pane.remove();
+    }
   });
 
   it("nudges once per NEW selection, never for the same one again", async () => {

@@ -988,7 +988,9 @@ closed state has to say what it is hiding:
 - **Click only**, never hover: the content's scrollbar is on that edge. It is a
   `<button>` in the Tab order, named `Show inspector: <name>`, and opening from
   it persists (it is the same act as the toolbar toggle) and puts focus on the
-  inspector's first tab.
+  inspector's active tab. While it shows, the content reserves its width on
+  that edge, so a click on a card's edge never lands on it; the scrollbar
+  still runs under it.
 - **Nudge on a new selection, never on the same one again.** Over
   `--dur-attention` the tab bounces left (0 → −16 → 0 → −7 → 0 → −2 → 0px) and
   the rail toggle's glyph turns `--selected-ink` and fades back — **glyph colour
