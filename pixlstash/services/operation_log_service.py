@@ -235,12 +235,10 @@ def _normalize_ids(picture_ids: Iterable[Any]) -> list[int]:
 def _naive_utc_iso(value: Optional[datetime]) -> Optional[str]:
     """Serialise a ``deleted_at`` stamp for the recorded state.
 
-    Every ``Picture.deleted_at`` in the DB is **naive UTC** (SQLAlchemy's SQLite
-    ``DateTime`` drops the offset on write - see ``scrapheap_service._naive_utc``),
-    but a value just assigned in-session is still aware. Normalising both to
-    naive-UTC ISO here keeps the before/after comparison honest: without it the
-    same instant would compare unequal across a commit boundary and every capture
-    would look like a change.
+    Records written by older versions hold naive-UTC ISO strings, so every value
+    is normalised to that form: the same instant then compares equal across
+    versions and across a commit boundary, and a capture does not look like a
+    change just because one side carries an offset.
     """
     if value is None:
         return None
@@ -249,8 +247,12 @@ def _naive_utc_iso(value: Optional[datetime]) -> Optional[str]:
     return value.isoformat()
 
 
-def _parse_naive_utc(value) -> Optional[datetime]:
-    """Inverse of :func:`_naive_utc_iso`, tolerant of a malformed stored value."""
+def _parse_utc(value) -> Optional[datetime]:
+    """Inverse of :func:`_naive_utc_iso` as an aware UTC value.
+
+    Tolerant of a malformed stored value. The result is aware because the
+    columns it is written back to (``UTCDateTime``) refuse a naive datetime.
+    """
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -266,9 +268,9 @@ def _parse_naive_utc(value) -> Optional[datetime]:
                 value,
             )
             return None
-    if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
-    return parsed
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def capture_state_in_session(session: Session, picture_ids) -> dict[str, dict]:
@@ -705,7 +707,7 @@ def record_operation_in_session(
 
     operation = Operation(
         batch_id=batch_id,
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
         actor=actor,
         op_type=op_type,
         target_type=target_type,
@@ -914,12 +916,12 @@ def _apply_tag_predictions(session: Session, picture_id: int, predictions) -> No
                 tag=tag,
                 confidence=float(fields.get("confidence") or 0.0),
                 model_version=str(fields.get("model_version") or MANUAL_MODEL_VERSION),
-                predicted_at=_parse_naive_utc(fields.get("predicted_at")),
+                predicted_at=_parse_utc(fields.get("predicted_at")),
             )
         row.status = fields.get("status") or "PENDING"
         row.label_state = fields.get("label_state") or UNKNOWN
         row.label_source = fields.get("label_source")
-        row.labeled_at = _parse_naive_utc(fields.get("labeled_at"))
+        row.labeled_at = _parse_utc(fields.get("labeled_at"))
         row.label_model_version = fields.get("label_model_version")
         label_confidence = fields.get("label_confidence")
         row.label_confidence = (
@@ -1395,7 +1397,7 @@ def _apply_deleted(session: Session, picture: Picture, lifecycle) -> None:
     # Written back verbatim rather than re-stamped to "now": the recorded value
     # IS the retention deadline this state had, and re-stamping would silently
     # extend (or invent) a purge window on every undo.
-    picture.deleted_at = _parse_naive_utc(lifecycle.get("deleted_at"))
+    picture.deleted_at = _parse_utc(lifecycle.get("deleted_at"))
     session.add(picture)
 
 
@@ -2129,7 +2131,7 @@ def _enforce_latest_undo_unit(session: Session, operation: Operation) -> None:
 
 
 def _mark_undone(session: Session, members: list[Operation]) -> None:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     for member in members:
         member.status = STATUS_UNDONE
         member.undone_at = now

@@ -30,11 +30,11 @@ Consuming the row and NULLing the scores happen in one vault transaction, so
 that half cannot tear.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Column, DateTime, Integer, String
-from sqlmodel import Field, SQLModel
+from sqlalchemy import Column, Integer, String
+from sqlmodel import Field, SQLModel, UTCDateTime
 
 
 class PendingScoreInvalidation(SQLModel, table=True):
@@ -55,7 +55,7 @@ class PendingScoreInvalidation(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     tags: str = Field(sa_column=Column(String, nullable=False))
     created_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False),
-        default_factory=datetime.utcnow,
+        sa_column=Column(UTCDateTime(), nullable=False),
+        default_factory=lambda: datetime.now(timezone.utc),
     )
     attempts: int = Field(sa_column=Column(Integer, nullable=False, default=0))

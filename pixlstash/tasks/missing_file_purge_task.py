@@ -239,9 +239,7 @@ class MissingFilePurgeTask(BaseTask):
     @staticmethod
     def _load_move_journal(session: Session, picture_ids: list) -> list:
         """Load unexpired journal rows for any of *picture_ids*."""
-        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
-            seconds=RETENTION_S
-        )
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=RETENTION_S)
         rows: list = []
         for chunk in chunked(picture_ids):
             rows.extend(

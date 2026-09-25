@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Column, ForeignKey, Index, bindparam, text
 from sqlmodel import (
@@ -9,6 +9,7 @@ from sqlmodel import (
     Session,
     select,
     delete,
+    UTCDateTime,
 )
 from typing import List, Optional
 
@@ -194,7 +195,9 @@ class PictureLikenessQueue(SQLModel, table=True):
             index=True,
         )
     )
-    queued_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    queued_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), index=True
+    )
 
     __table_args__ = (Index("ix_picture_likeness_queue_queued_at", "queued_at"),)
 
@@ -203,7 +206,7 @@ class PictureLikenessQueue(SQLModel, table=True):
         if not picture_ids:
             return
         rows = [
-            {"picture_id": int(pid), "queued_at": datetime.utcnow()}
+            {"picture_id": int(pid), "queued_at": datetime.now(timezone.utc)}
             for pid in picture_ids
             if pid is not None
         ]
@@ -215,7 +218,7 @@ class PictureLikenessQueue(SQLModel, table=True):
                 INSERT OR IGNORE INTO picturelikenessqueue (picture_id, queued_at)
                 VALUES (:picture_id, :queued_at)
                 """
-            ),
+            ).bindparams(bindparam("queued_at", type_=UTCDateTime())),
             params=rows,
         )
 

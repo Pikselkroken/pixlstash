@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 from typing import Any
 
@@ -290,7 +290,7 @@ def _import_output_images(
         new_pictures = server.vault.db.run_task(persist)
 
         def mark_imported(session: Session, ids: list[int]):
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             pictures = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
             for pic in pictures:
                 if pic.imported_at is None:
@@ -358,7 +358,7 @@ def _assign_outputs_to_stack_top(server, stack_id: int, picture_ids: list[int]) 
         # the grid) regardless of any pre-existing NULL/gapped positions.
         normalize_stack_positions(session, stack_id)
 
-        stack.updated_at = datetime.utcnow()
+        stack.updated_at = datetime.now(timezone.utc)
         session.add(stack)
         session.commit()
 

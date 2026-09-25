@@ -275,27 +275,17 @@ class RetentionGuard:
 def _as_utc(value: Optional[datetime]) -> Optional[datetime]:
     """Normalise a possibly-naive datetime to an aware UTC datetime.
 
-    SQLite round-trips ``DateTime`` columns as naive values; the retention maths
-    compares them against ``datetime.now(timezone.utc)``, so a naive value is
-    interpreted as UTC (which is how every writer in this codebase stores it).
+    Database columns come back aware (``UTCDateTime``), but a caller may still
+    hand in a naive value (an operation-log record, a test); the retention maths
+    compares against ``datetime.now(timezone.utc)``, so a naive value is
+    interpreted as UTC (how the columns store it; rows once written in local
+    time, such as early watch-folder ``imported_at`` stamps, are read as UTC too).
     """
     if value is None:
         return None
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
-
-
-def _naive_utc(value: datetime) -> datetime:
-    """Drop the tzinfo from an aware UTC datetime for a SQL bind parameter.
-
-    SQLAlchemy's SQLite ``DateTime`` stores naive strings (the offset is dropped
-    on write), so every ``picture.deleted_at`` in the DB is naive UTC. Comparing
-    a column against an AWARE bind parameter would render a differently-shaped
-    literal and silently match nothing.
-    """
-    aware = _as_utc(value)
-    return aware.replace(tzinfo=None)
 
 
 def retention_rank(days: Optional[int]) -> float:
@@ -738,9 +728,9 @@ def _due_candidate_rows_in_session(
     across the whole batch, so paginating on the timestamp alone would skip or
     repeat rows inside such a group.
 
-    ``cutoff`` must be NAIVE UTC: SQLAlchemy's SQLite ``DateTime`` drops the
-    offset on write, so every stored ``deleted_at`` is naive and an aware bind
-    parameter would compare against a differently-formatted string.
+    ``cutoff`` must be aware: ``Picture.deleted_at`` is a ``UTCDateTime``
+    column, which converts the bind parameter to the stored naive-UTC form and
+    refuses a naive one.
     """
     query = select(
         Picture.id,
@@ -878,7 +868,7 @@ def find_due_retention_picture_ids_in_session(
         )
         due.append(int(row.id))
 
-    _scan_due_rows_in_session(session, _naive_utc(cutoff), limit, _record)
+    _scan_due_rows_in_session(session, _as_utc(cutoff), limit, _record)
     return due
 
 
@@ -921,7 +911,7 @@ def retention_impact_in_session(
         nonlocal count
         count += 1
 
-    _scan_due_rows_in_session(session, _naive_utc(cutoff), None, _count)
+    _scan_due_rows_in_session(session, _as_utc(cutoff), None, _count)
     return {
         "would_purge_count": count,
         "first_purge_at": first_purge_at.isoformat() if count else None,

@@ -32,7 +32,7 @@ import hashlib
 import json
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -166,7 +166,7 @@ def _seed_pictures(server) -> None:
                 Picture(
                     file_path=path,
                     deleted=deleted,
-                    created_at=datetime(2026, 9, 1),
+                    created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
                     workflow_structural_hash=structural,
                     workflow_hash_version="v1",
                     comfyui_positive_prompt=prompt,
@@ -583,7 +583,7 @@ def test_a_recipe_with_no_loras_credits_only_pictures_that_loaded_none(recipe_en
             Picture(
                 file_path="a_bare.png",
                 deleted=False,
-                created_at=datetime(2026, 9, 2),
+                created_at=datetime(2026, 9, 2, tzinfo=timezone.utc),
                 workflow_structural_hash=VARIANT_A,
                 workflow_hash_version="v1",
                 comfyui_positive_prompt=PROMPT,
@@ -669,7 +669,7 @@ def test_a_picture_never_read_for_metadata_is_credited_to_nobody(recipe_env):
                 Picture(
                     file_path=path,
                     deleted=False,
-                    created_at=datetime(2026, 9, 3),
+                    created_at=datetime(2026, 9, 3, tzinfo=timezone.utc),
                     workflow_structural_hash=VARIANT_A,
                     workflow_hash_version="v1",
                     comfyui_positive_prompt=None,
@@ -842,7 +842,7 @@ def test_a_picture_read_with_no_prompt_matches_a_recipe_with_no_prompt(recipe_en
             Picture(
                 file_path="a_promptless.png",
                 deleted=False,
-                created_at=datetime(2026, 9, 4),
+                created_at=datetime(2026, 9, 4, tzinfo=timezone.utc),
                 workflow_structural_hash=VARIANT_A,
                 workflow_hash_version="v1",
                 comfyui_positive_prompt=None,
@@ -872,7 +872,7 @@ def test_stacking_the_same_lora_twice_is_a_different_look(recipe_env):
             Picture(
                 file_path="a_stacked.png",
                 deleted=False,
-                created_at=datetime(2026, 9, 5),
+                created_at=datetime(2026, 9, 5, tzinfo=timezone.utc),
                 workflow_structural_hash=VARIANT_A,
                 workflow_hash_version="v1",
                 comfyui_positive_prompt=PROMPT,
@@ -1009,7 +1009,7 @@ def test_a_variant_keyed_by_a_superseded_rule_neither_stacks_nor_credits(recipe_
                 Picture(
                     file_path=path,
                     deleted=False,
-                    created_at=datetime(2026, 9, 6),
+                    created_at=datetime(2026, 9, 6, tzinfo=timezone.utc),
                     workflow_structural_hash=structural,
                     workflow_hash_version="v1",
                     comfyui_positive_prompt=PROMPT,
@@ -1550,7 +1550,7 @@ def test_a_picture_with_no_prompt_is_not_a_look(recipe_env):
                 Picture(
                     file_path=f"no_prompt_{index}.png",
                     deleted=False,
-                    created_at=datetime(2026, 9, 2),
+                    created_at=datetime(2026, 9, 2, tzinfo=timezone.utc),
                     workflow_structural_hash=VARIANT_A,
                     workflow_hash_version="v1",
                     comfyui_positive_prompt=None,
@@ -1576,7 +1576,7 @@ def test_a_picture_with_no_prompt_but_a_lora_is_still_a_look(recipe_env):
             Picture(
                 file_path="lora_only.png",
                 deleted=False,
-                created_at=datetime(2026, 9, 2),
+                created_at=datetime(2026, 9, 2, tzinfo=timezone.utc),
                 workflow_structural_hash=VARIANT_A,
                 workflow_hash_version="v1",
                 comfyui_positive_prompt=None,

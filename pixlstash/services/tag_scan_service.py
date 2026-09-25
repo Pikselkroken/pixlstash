@@ -42,7 +42,7 @@ re-parented rows get it uniformly.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -587,7 +587,7 @@ def scan_tag(
                 )
             ).all()
         }
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         new_count = 0
         prev_reviewed = 0
 

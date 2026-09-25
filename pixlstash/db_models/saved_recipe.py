@@ -38,7 +38,7 @@ link would be a second copy of that answer, wrong the moment a picture is
 re-scanned or binned.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import sqlalchemy as sa
@@ -113,4 +113,6 @@ class SavedRecipe(SQLModel, table=True):
         ),
     )
 
-    created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    created_at: Optional[datetime] = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )

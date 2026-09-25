@@ -3225,3 +3225,78 @@ def test_the_architecture_doc_guardrail_has_teeth():
     assert _architecture_doc_problems(text.replace("## Table of Contents", "")) == [
         "no '## Table of Contents' section"
     ]
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: no naive datetime is written (#1503)
+# ---------------------------------------------------------------------------
+
+
+def _naive_datetime_sites(source: str, in_models: bool) -> list[tuple[int, str]]:
+    """Return (lineno, what) for every way a naive datetime gets into a column.
+
+    ``datetime.utcnow`` / ``utcfromtimestamp`` and a bare ``datetime.now()``
+    produce naive values, which sqlmodel's ``UTCDateTime`` refuses on write. In
+    a model file a raw SQLAlchemy ``DateTime`` column also reads back naive, so
+    it would put naive values back into circulation.
+    """
+    hits = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Attribute) and node.attr in (
+            "utcnow",
+            "utcfromtimestamp",
+        ):
+            hits.append((node.lineno, f"datetime.{node.attr}"))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            attr = node.func.attr
+            tz_args = [kw.value for kw in node.keywords if kw.arg == "tz"]
+            tz_args += node.args[1:] if attr == "fromtimestamp" else node.args
+            no_tz = not tz_args or all(
+                isinstance(a, ast.Constant) and a.value is None for a in tz_args
+            )
+            if attr == "today" or (attr in ("now", "fromtimestamp") and no_tz):
+                hits.append((node.lineno, f"datetime.{attr}() without a timezone"))
+        elif in_models and (
+            (isinstance(node, ast.Name) and node.id == "DateTime")
+            or (isinstance(node, ast.Attribute) and node.attr == "DateTime")
+        ):
+            hits.append((node.lineno, "DateTime column type (use UTCDateTime)"))
+    return hits
+
+
+def test_no_naive_datetime_is_written():
+    """Every stored datetime is aware UTC; sqlmodel >= 0.0.45 raises on naive."""
+    models_dir = PIXLSTASH_DIR / "db_models"
+    offenders = []
+    for path in sorted(PIXLSTASH_DIR.rglob("*.py")):
+        if "migrations" in path.parts:
+            continue
+        in_models = models_dir in path.parents
+        for lineno, what in _naive_datetime_sites(path.read_text("utf-8"), in_models):
+            offenders.append(f"  {path.relative_to(REPO_ROOT)}:{lineno}: {what}")
+    assert not offenders, (
+        "Use datetime.now(timezone.utc) (and UTCDateTime for an explicit column); "
+        "a naive value fails on insert:\n" + "\n".join(offenders)
+    )
+
+
+def test_naive_datetime_guardrail_has_teeth():
+    planted = {
+        "default_factory=datetime.utcnow": "f = Field(default_factory=datetime.utcnow)",
+        "utcnow call": "x = datetime.utcnow()",
+        "module-qualified": "x = datetime.datetime.utcnow()",
+        "bare now": "x = datetime.now()",
+        "utcfromtimestamp": "x = datetime.utcfromtimestamp(0)",
+        "now(None)": "x = datetime.now(None)",
+        "now(tz=None)": "x = datetime.now(tz=None)",
+        "fromtimestamp": "x = datetime.fromtimestamp(0)",
+        "today": "x = datetime.today()",
+    }
+    for name, snippet in planted.items():
+        assert _naive_datetime_sites(snippet, in_models=False), name
+    assert _naive_datetime_sites("c = Column(DateTime)", in_models=True)
+    assert not _naive_datetime_sites("c = Column(UTCDateTime())", in_models=True)
+    assert not _naive_datetime_sites("x = datetime.now(timezone.utc)", False)
+    assert not _naive_datetime_sites("x = _utcnow()", in_models=False)
+    assert not _naive_datetime_sites("x = datetime.fromtimestamp(0, tz=UTC)", False)
+    assert not _naive_datetime_sites("x = datetime.fromtimestamp(0, UTC)", False)

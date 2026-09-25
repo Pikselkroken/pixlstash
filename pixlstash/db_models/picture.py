@@ -12,13 +12,13 @@ from sqlalchemy.types import LargeBinary
 from sqlmodel import (
     Boolean,
     Column,
-    DateTime,
     SQLModel,
     Field,
     Relationship,
     exists,
     select,
     Session,
+    UTCDateTime,
 )
 from typing import ClassVar, Optional, List, Union, TYPE_CHECKING
 
@@ -227,11 +227,11 @@ class Picture(SQLModel, table=True):
     size_bytes: Optional[int] = None
     size_bin_index: Optional[int] = Field(default=None, index=True)
     created_at: Optional[datetime] = Field(
-        default=None, sa_column=Column("created_at", type_=DateTime, nullable=True)
+        default=None, sa_column=Column("created_at", type_=UTCDateTime(), nullable=True)
     )
     imported_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column("imported_at", type_=DateTime, nullable=True, index=True),
+        sa_column=Column("imported_at", type_=UTCDateTime(), nullable=True, index=True),
     )
     text_embedding: Optional[np.ndarray] = Field(
         sa_column=Column("text_embedding", LargeBinary, default=None, nullable=True)
@@ -287,7 +287,7 @@ class Picture(SQLModel, table=True):
     # with deleted_at IS NULL is never auto-purged (fail-closed).
     deleted_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column("deleted_at", type_=DateTime, nullable=True, index=True),
+        sa_column=Column("deleted_at", type_=UTCDateTime(), nullable=True, index=True),
     )
     stack_id: Optional[int] = Field(
         default=None, foreign_key="picturestack.id", index=True

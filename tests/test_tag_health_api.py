@@ -11,7 +11,7 @@ import os
 import sqlite3
 import tempfile
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -162,7 +162,7 @@ def test_tag_health_aggregates_on_fixture_vault():
         p4 = _upload_named(client)  # tagged "u", no predictions → no-model row
         p5 = _upload_named(client)  # tagged "t", conf 0.05 un-reviewed → est_wrong
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         def seed(session):
             session.add(Tag(picture_id=p1, tag="t"))
@@ -329,7 +329,7 @@ def test_tag_health_scoped_restricts_signals_and_tag_list():
         p_out = _upload_named(client)  # outside:     untagged "t", conf 0.95
         p_other = _upload_named(client)  # outside:     tagged "only_out"
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         def seed(session):
             ps = PictureSet(name="scope_set")
@@ -529,7 +529,7 @@ def test_tag_health_scoped_has_model_true_for_older_version_in_scope():
         p_in = _upload_named(client)  # in the set, tagged "t", OLD-gen prediction
         p_out = _upload_named(client)  # outside, "t" CURRENT-gen prediction (newer)
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         def seed(session):
             ps = PictureSet(name="scope_set")
@@ -594,7 +594,7 @@ def test_tag_health_set_scoped_board_reports_vocabulary_both_ways():
         p_in = _upload_named(client)  # in the set: "in_vocab" + "out_vocab"
         p_out = _upload_named(client)  # outside the set: current-gen "in_vocab"
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         def seed(session):
             ps = PictureSet(name="scope_set")
@@ -665,7 +665,7 @@ def test_tag_health_has_model_false_for_out_of_vocabulary_tags():
         p_stale = _upload_named(client)  # "stale_tag", only OLD-gen prediction
         p_notag = _upload_named(client)  # "no_pred_tag", ground-truth only
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         def seed(session):
             session.add(Tag(picture_id=p_current, tag="current_tag"))
@@ -745,7 +745,7 @@ def test_tag_health_est_wrong_missing_pinned_to_current_model_version():
         p_new_wrong = _upload_named(client)  # tagged "t", current-gen conf 0.05
         p_new_missing = _upload_named(client)  # untagged, current-gen conf 0.95
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         def seed(session):
             session.add(Tag(picture_id=p_old, tag="t"))
@@ -807,7 +807,7 @@ def test_tag_health_est_missing_excludes_human_rejected_pictures():
         p_unreviewed = _upload_named(client)  # untagged, conf 0.95, no human ruling
         p_rejected = _upload_named(client)  # untagged, conf 0.95, human REJECTED
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         def seed(session):
             session.add(
@@ -867,7 +867,7 @@ def test_tag_health_est_wrong_excludes_human_confirmed_pictures():
         p_unreviewed = _upload_named(client)  # tagged "t", conf 0.05, no ruling
         p_confirmed = _upload_named(client)  # tagged "t", conf 0.05, human CONFIRMED
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         def seed(session):
             session.add(Tag(picture_id=p_unreviewed, tag="t"))
@@ -941,7 +941,7 @@ def test_tag_health_default_tag_merges_folds_across_all_signals():
         p_m = _upload_named(client)  # tagged "malformed hand"
         p_n = _upload_named(client)  # untagged
 
-        t1 = datetime.utcnow()
+        t1 = datetime.now(timezone.utc)
         t2 = t1 + timedelta(minutes=5)
 
         def seed(session):
@@ -1121,7 +1121,7 @@ def test_tag_health_soft_deleted_pictures_excluded_from_unscoped_board():
         d3 = _upload_named(client)
         d_est_wrong = _upload_named(client)  # deleted, tagged "t", 0.05, un-reviewed
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         t_live = now - timedelta(minutes=10)
         t_later = now  # strictly later than the live review timestamp
 
@@ -1323,7 +1323,7 @@ def test_tag_health_deleted_only_tag_excluded_from_unscoped_board():
         d_gt = _upload_named(client)  # deleted, tag "deleted_gt_only"
         d_pred = _upload_named(client)  # deleted, prediction "deleted_pred_only"
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         def seed(session):
             session.add(Tag(picture_id=live, tag="live_tag"))
@@ -1393,7 +1393,7 @@ def test_tag_health_ground_truth_counts_pictures_and_folds_merge_aliases():
         p_pred = _upload_named(client)  # prediction only, zero ground truth
         p_deleted = _upload_named(client)  # "malformed hand" but soft-deleted
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         def seed(session):
             session.add(Tag(picture_id=p_parent, tag="malformed hand"))
@@ -1503,7 +1503,7 @@ def test_tag_health_zero_ground_truth_agrees_with_scan_confidence_fallback():
         p_stale = _upload_named(client)  # conf 0.99 on a superseded version
         p_rejected = _upload_named(client)  # conf 0.95 but human-REJECTED (NEG)
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # Deterministic, orthogonal embeddings: scan_tag needs >= 2 pictures with
         # embeddings to get past its guard, but the fallback branch never votes
         # on them, so their values are irrelevant to the outcome.
@@ -1739,7 +1739,7 @@ def test_tag_health_stale_true_after_reviewed_suggestion():
                     source="scan",
                     score=1.0,
                     status="ACCEPTED",
-                    reviewed_at=datetime.utcnow(),
+                    reviewed_at=datetime.now(timezone.utc),
                 )
             )
             session.commit()
@@ -1770,7 +1770,7 @@ def test_tag_health_rebuild_clears_staleness():
                     source="scan",
                     score=1.0,
                     status="ACCEPTED",
-                    reviewed_at=datetime.utcnow(),
+                    reviewed_at=datetime.now(timezone.utc),
                 )
             )
             session.commit()
@@ -1837,7 +1837,7 @@ def test_tag_health_auto_rebuild_finder_fires_when_stale_and_respects_debounce()
                     source="scan",
                     score=1.0,
                     status="ACCEPTED",
-                    reviewed_at=datetime.utcnow(),
+                    reviewed_at=datetime.now(timezone.utc),
                 )
             )
             session.commit()

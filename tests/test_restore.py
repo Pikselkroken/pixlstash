@@ -3664,7 +3664,7 @@ def test_full_restore_rearms_the_scrapheap_retention_clock(server):
 
     _create_file(server, "scrapheaped.jpg")
     pic = _add_picture(server, filename="scrapheaped.jpg")
-    ancient = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400)
+    ancient = datetime.now(timezone.utc) - timedelta(days=400)
     _set_deleted(server, pic.id, ancient)
 
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")
@@ -3714,7 +3714,7 @@ def test_resource_restore_rearms_the_scrapheap_retention_clock(server):
 
     _create_file(server, "res_scrapheaped.jpg")
     pic = _add_picture(server, filename="res_scrapheaped.jpg")
-    ancient = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=400)
+    ancient = datetime.now(timezone.utc) - timedelta(days=400)
     _set_deleted(server, pic.id, ancient)
 
     cp = server.vault.snapshot_service.create_snapshot("MANUAL")

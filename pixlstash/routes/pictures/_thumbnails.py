@@ -4,7 +4,7 @@ import os
 import re
 from collections import defaultdict, OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 
 from PIL import Image
 from fastapi import (
@@ -148,7 +148,7 @@ def register_routes(router, server):
         responses={200: {"content": {"image/webp": {}}}},
     )
     async def get_thumbnail(request: Request, id: int):
-        started_at = datetime.now()
+        started_at = datetime.now(timezone.utc)
         vault = server.vault
         generation = getattr(server, "library_generation", 0)
 
@@ -178,7 +178,9 @@ def register_routes(router, server):
         existing = ImageUtils.find_thumbnail(vault.image_root, pic.file_path)
         if existing:
             if not discard_stale_thumbnail(id, pic.file_path, existing):
-                elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                elapsed_ms = (
+                    datetime.now(timezone.utc) - started_at
+                ).total_seconds() * 1000.0
                 logger.debug(
                     "Thumbnail GET cache-hit: id=%s path=%s elapsed_ms=%.1f",
                     id,
@@ -193,7 +195,9 @@ def register_routes(router, server):
 
         cached_bytes = get_cached_thumbnail_bytes(id)
         if cached_bytes:
-            elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+            elapsed_ms = (
+                datetime.now(timezone.utc) - started_at
+            ).total_seconds() * 1000.0
             logger.debug(
                 "Thumbnail GET memory-hit: id=%s elapsed_ms=%.1f",
                 id,
@@ -211,7 +215,9 @@ def register_routes(router, server):
                 # Re-check staleness inside the lock: another request may have
                 # regenerated it while this one waited.
                 if not discard_stale_thumbnail(id, pic.file_path, thumb_path):
-                    elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                    elapsed_ms = (
+                        datetime.now(timezone.utc) - started_at
+                    ).total_seconds() * 1000.0
                     logger.debug(
                         "Thumbnail GET cache-hit-after-wait: id=%s path=%s elapsed_ms=%.1f",
                         id,
@@ -226,7 +232,9 @@ def register_routes(router, server):
 
             cached_bytes = get_cached_thumbnail_bytes(id)
             if cached_bytes:
-                elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                elapsed_ms = (
+                    datetime.now(timezone.utc) - started_at
+                ).total_seconds() * 1000.0
                 logger.debug(
                     "Thumbnail GET memory-hit-after-wait: id=%s elapsed_ms=%.1f",
                     id,
@@ -282,7 +290,9 @@ def register_routes(router, server):
                 )
 
             if status == "saved" and saved_thumb:
-                elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                elapsed_ms = (
+                    datetime.now(timezone.utc) - started_at
+                ).total_seconds() * 1000.0
                 logger.debug(
                     "Thumbnail GET generated: id=%s source=%s elapsed_ms=%.1f",
                     id,
@@ -296,7 +306,9 @@ def register_routes(router, server):
                 )
 
             if status == "memory-only" and thumbnail_bytes:
-                elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+                elapsed_ms = (
+                    datetime.now(timezone.utc) - started_at
+                ).total_seconds() * 1000.0
                 logger.warning(
                     "Thumbnail GET generated-memory-only: id=%s source=%s elapsed_ms=%.1f",
                     id,
@@ -325,7 +337,7 @@ def register_routes(router, server):
                     resolved_path,
                 )
 
-        elapsed_ms = (datetime.now() - started_at).total_seconds() * 1000.0
+        elapsed_ms = (datetime.now(timezone.utc) - started_at).total_seconds() * 1000.0
         logger.warning(
             "Thumbnail GET failed: id=%s elapsed_ms=%.1f",
             id,

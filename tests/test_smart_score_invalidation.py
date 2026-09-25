@@ -13,7 +13,7 @@ import json
 import os
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import numpy as np
@@ -97,7 +97,7 @@ def _seed_prediction(server, pic_id, tag, confidence=0.9, status="PENDING"):
                 confidence=confidence,
                 model_version="test-v1",
                 status=status,
-                predicted_at=datetime.utcnow(),
+                predicted_at=datetime.now(timezone.utc),
             )
         )
         session.commit()
@@ -116,7 +116,7 @@ def _seed_human_prediction(server, pic_id, tag, label_state, confidence=0.9):
                 confidence=confidence,
                 model_version="test-v1",
                 status="PENDING",
-                predicted_at=datetime.utcnow(),
+                predicted_at=datetime.now(timezone.utc),
                 label_state=label_state,
                 label_source=HUMAN,
             )

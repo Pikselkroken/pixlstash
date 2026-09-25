@@ -27,7 +27,7 @@ builder that can actually select it.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 from typing import TYPE_CHECKING, Iterable, Optional
 
@@ -233,7 +233,7 @@ def pending_summary_in_session(
         return buckets
 
     classified = _classify(session, reviews, image_root)
-    off_layout_cutoff = datetime.utcnow() - timedelta(seconds=RETENTION_S)
+    off_layout_cutoff = datetime.now(timezone.utc) - timedelta(seconds=RETENTION_S)
     stale: list[ExternalMoveReview] = []
     for review in reviews:
         reconciled, facets = classified[review.id]

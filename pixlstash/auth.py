@@ -9,7 +9,7 @@ import time
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -434,7 +434,7 @@ def is_token_expired(token: UserToken, now: Optional[datetime] = None) -> bool:
     """Return True when *token* has passed its ``expires_at`` timestamp.
 
     A token with no ``expires_at`` never expires. *now* defaults to the current
-    UTC time; ``expires_at`` is stored naive-UTC.
+    UTC time; ``expires_at`` reads back as aware UTC.
 
     The comparison is inclusive: a token whose ``expires_at`` is exactly *now*
     has expired. The two checks this replaced disagreed on that boundary, and
@@ -442,7 +442,7 @@ def is_token_expired(token: UserToken, now: Optional[datetime] = None) -> bool:
     """
     if token.expires_at is None:
         return False
-    return token.expires_at <= (now if now is not None else datetime.utcnow())
+    return token.expires_at <= (now if now is not None else datetime.now(timezone.utc))
 
 
 @dataclass
@@ -1443,7 +1443,7 @@ class AuthService:
 
         # Read path, not the writer queue - see get_user (issue #651).
         tokens = self._db.run_immediate_read_task(fetch_candidates, user.id, prefix)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for token in tokens:
             if is_token_expired(token, now):
                 continue
@@ -1512,7 +1512,7 @@ class AuthService:
         def update_last_used(session: Session, tid: int):
             db_token = session.get(UserToken, tid)
             if db_token is not None:
-                db_token.last_used_at = datetime.utcnow()
+                db_token.last_used_at = datetime.now(timezone.utc)
                 session.add(db_token)
                 session.commit()
 
@@ -1926,6 +1926,9 @@ class AuthService:
             and expires_at.second == 0
         ):
             expires_at = expires_at.replace(hour=23, minute=59, second=59)
+        # The column refuses a naive value; a client that sent no offset meant UTC.
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
 
         token_value = secrets.token_urlsafe(32)
         token_hash = bcrypt.hash(token_value)
@@ -1952,7 +1955,7 @@ class AuthService:
                 library_uuid=self.active_library_uuid(),
                 token_hash=token_hash,
                 token_prefix=token_prefix,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
                 description=desc,
                 scope=scope,
                 resource_type=resource_type,
@@ -2169,7 +2172,7 @@ class AuthService:
             raise HTTPException(status_code=403, detail="Not allowed for scoped tokens")
 
         def _fetch(session: Session, user_id: int, rt: str) -> list[int]:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             tokens = session.exec(
                 select(UserToken).where(
                     UserToken.user_id == user_id,
@@ -2201,7 +2204,7 @@ class AuthService:
             return {"shared_ids": []}
 
         def _fetch(session: Session, user_id: int, ids: list[int]) -> list[int]:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             id_set = set(ids)
             tokens = session.exec(
                 select(UserToken).where(
@@ -2341,7 +2344,7 @@ class AuthService:
                 db_token = session.get(UserToken, token_id)
                 if db_token is None:
                     return None
-                db_token.last_used_at = datetime.utcnow()
+                db_token.last_used_at = datetime.now(timezone.utc)
                 session.add(db_token)
                 session.commit()
                 return db_token

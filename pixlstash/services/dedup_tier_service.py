@@ -85,7 +85,7 @@ import json
 from binascii import Error as BinasciiError
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Iterable, Iterator, Optional
 
@@ -2125,6 +2125,9 @@ def decode_decided_cursor(cursor: str) -> tuple[Optional[datetime], int]:
         if kind != DECIDED_CURSOR_KIND:
             raise ValueError(f"not a decided-page cursor (kind {kind!r})")
         decided_at = datetime.fromisoformat(stamp) if stamp else None
+        if decided_at is not None and decided_at.tzinfo is None:
+            # A cursor minted before the columns became aware carries naive UTC.
+            decided_at = decided_at.replace(tzinfo=timezone.utc)
         return decided_at, int(group_id)
     except (ValueError, UnicodeDecodeError, BinasciiError) as exc:
         raise DedupCursorError(f"malformed decided cursor {cursor!r}: {exc}") from exc
@@ -2854,7 +2857,7 @@ def request_scan_in_session(
             policy.threshold,
         )
         raise DedupScanBusyError(active)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if row is None:
         row = DedupScan(scope_key=scope.key)
     row.scope_type = scope.scope_type.value

@@ -1,8 +1,8 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Column, DateTime
-from sqlmodel import Field, SQLModel
+from sqlalchemy import Column
+from sqlmodel import Field, SQLModel, UTCDateTime
 
 
 class Snapshot(SQLModel, table=True):
@@ -35,7 +35,7 @@ class Snapshot(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     kind: str = Field(nullable=False, index=True)
     created_at: datetime = Field(
-        sa_column=Column("created_at", DateTime, index=True, nullable=False)
+        sa_column=Column("created_at", UTCDateTime(), index=True, nullable=False)
     )
     relative_path: str = Field(nullable=False)
     manifest_relative_path: str = Field(nullable=False)
@@ -45,5 +45,5 @@ class Snapshot(SQLModel, table=True):
     label: Optional[str] = Field(default=None)
     identity_scrubbed_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column("identity_scrubbed_at", DateTime, nullable=True),
+        sa_column=Column("identity_scrubbed_at", UTCDateTime(), nullable=True),
     )

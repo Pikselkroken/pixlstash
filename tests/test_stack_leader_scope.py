@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import itertools
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import event, func, or_
@@ -91,8 +91,8 @@ def _add_picture(session, **kwargs) -> Picture:
 
 
 def test_stack_leaders_sort_by_the_stack_updated_time(session):
-    older = _new_stack_at(session, datetime(2025, 1, 1, 12, 0, 0))
-    newer = _new_stack_at(session, datetime(2026, 1, 1, 12, 0, 0))
+    older = _new_stack_at(session, datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
+    newer = _new_stack_at(session, datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
     older_cover = _add_picture(session, stack_id=older, stack_position=0)
     _add_picture(session, stack_id=older, stack_position=1)
     newer_cover = _add_picture(session, stack_id=newer, stack_position=0)
@@ -116,8 +116,8 @@ def test_stack_leaders_sort_by_the_stack_updated_time(session):
 
 
 def test_unassigned_stack_leaders_support_recently_changed_sort(session):
-    older = _new_stack_at(session, datetime(2025, 1, 1, 12, 0, 0))
-    newer = _new_stack_at(session, datetime(2026, 1, 1, 12, 0, 0))
+    older = _new_stack_at(session, datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
+    newer = _new_stack_at(session, datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc))
     older_cover = _add_picture(session, stack_id=older, stack_position=0)
     _add_picture(session, stack_id=older, stack_position=1)
     newer_cover = _add_picture(session, stack_id=newer, stack_position=0)

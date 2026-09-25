@@ -1220,7 +1220,7 @@ class TagTask(BaseTask):
         Returns:
             Number of TagPrediction rows written or updated.
         """
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(timezone.utc)
         picture_ids = [pid for pid, scores in label_scores_by_pic_id.items() if scores]
         if not picture_ids:
             return 0

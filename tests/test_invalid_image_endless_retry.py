@@ -23,7 +23,7 @@ touches CLIP) and the real suppression path (``_filter_and_claim`` /
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlmodel import Session
 
@@ -49,7 +49,7 @@ def _write_corrupt_jpeg(path, payload: bytes = _CORRUPT_JPEG_BYTES) -> str:
 
 def _seed_picture(vault, file_path: str) -> int:
     """Insert one Picture row (embedding unset) and return its id."""
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
 
     def seed(session: Session):
         picture = Picture(

@@ -4,7 +4,7 @@ import gc
 import json
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 
@@ -49,7 +49,7 @@ def _seed_prediction(server, pic_id, tag, confidence=0.9, status="PENDING"):
             confidence=confidence,
             model_version="test-v1",
             status=status,
-            predicted_at=datetime.utcnow(),
+            predicted_at=datetime.now(timezone.utc),
         )
         session.add(prediction)
         session.commit()

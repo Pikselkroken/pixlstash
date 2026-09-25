@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Request, Query
@@ -625,7 +625,7 @@ def create_router(server) -> APIRouter:
     def _stack_order_key(pic, smart_score_by_id: dict[int, float]):
         score = pic.score or 0
         smart_score = smart_score_by_id.get(pic.id, 0.0)
-        created_at = pic.created_at or datetime.min
+        created_at = pic.created_at
         created_ts = created_at.timestamp() if isinstance(created_at, datetime) else 0.0
         return (-score, -smart_score, -created_ts, int(pic.id or 0))
 
@@ -712,7 +712,7 @@ def create_router(server) -> APIRouter:
                     continue
                 pic.stack_position = idx
                 session.add(pic)
-            stack.updated_at = datetime.utcnow()
+            stack.updated_at = datetime.now(timezone.utc)
             session.add(stack)
             session.commit()
 
@@ -1034,7 +1034,7 @@ def create_router(server) -> APIRouter:
             # enlarged) stack to the union of its members' memberships.
             reconcile_stack_membership(session, stack.id)
 
-            stack.updated_at = datetime.utcnow()
+            stack.updated_at = datetime.now(timezone.utc)
             session.add(stack)
             session.flush()
             if stack.id is None:
@@ -1109,7 +1109,7 @@ def create_router(server) -> APIRouter:
                 pic.stack_position = idx
                 session.add(pic)
 
-            stack.updated_at = datetime.utcnow()
+            stack.updated_at = datetime.now(timezone.utc)
             session.add(stack)
             session.commit()
             return ordered_ids
@@ -1192,7 +1192,7 @@ def create_router(server) -> APIRouter:
             # enlarged) stack to the union of its members' memberships.
             reconcile_stack_membership(session, stack_id)
 
-            stack.updated_at = datetime.utcnow()
+            stack.updated_at = datetime.now(timezone.utc)
             session.add(stack)
             session.commit()
             return stack
@@ -1289,7 +1289,7 @@ def create_router(server) -> APIRouter:
             # Compact to close gaps left by the removed pictures.
             _compact_stack_positions_in_session(session, stack_id)
 
-            stack.updated_at = datetime.utcnow()
+            stack.updated_at = datetime.now(timezone.utc)
             session.add(stack)
             session.flush()
             return stack
@@ -1391,7 +1391,7 @@ def create_router(server) -> APIRouter:
                 p.stack_position = idx
                 session.add(p)
 
-            stack.updated_at = datetime.utcnow()
+            stack.updated_at = datetime.now(timezone.utc)
             session.add(stack)
             session.commit()
             return [p.id for p in ordered]
