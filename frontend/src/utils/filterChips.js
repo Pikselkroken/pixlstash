@@ -57,6 +57,8 @@ export const IMPOSSIBLE_OPTIONS = [
 ];
 
 export const CONFIDENCE_THRESHOLDS = [0.9, 0.8, 0.7, 0.6];
+// Doubtful asks for an unsure tagger, so its thresholds sit lower.
+export const DOUBTFUL_THRESHOLDS = [0.6, 0.5, 0.4, 0.3];
 
 export const SMART_SCORE_BUCKET_LABELS = {
   unscored: "unscored",
