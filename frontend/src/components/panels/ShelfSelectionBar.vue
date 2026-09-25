@@ -506,9 +506,13 @@ const forgetTitle = computed(() => {
  * subset it can act on, and the tooltip says how many that is. Passing the
  * whole selection instead would compute the tri-state across rows that can
  * never be attached, so a fully-assigned person would still read as partial.
+ *
+ * Per MODEL, a ticked stack expanded into its members: the stack row carries
+ * only the cover's id, hash and attachments, so assigning it off the row
+ * reached the cover and left every other member unassigned.
  */
 const assignable = computed(() =>
-  store.selectedRows.filter(
+  store.selectedModels.filter(
     (row) => row.file_kind !== "checkpoint" && row.sha256,
   ),
 );
@@ -538,7 +542,7 @@ const membership = computed(() => {
 });
 
 const assignTitle = computed(() => {
-  const total = store.selectedRows.length;
+  const total = store.selectedModels.length;
   if (!assignable.value.length) {
     return total
       ? "Checkpoints cannot be assigned, and an unhashed file has no hash to assign by"

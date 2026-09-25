@@ -1958,6 +1958,17 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   );
 
   /**
+   * The selected models as rows, a ticked stack expanded into its members.
+   *
+   * {@link selectedModelIds} for a verb that needs more than the id: Assign
+   * addresses each model by its own `sha256` and unions its own `attachments`,
+   * and a stack row carries only the cover's.
+   */
+  const selectedModels = computed(() =>
+    selectedRows.value.flatMap((row) => row.members ?? [row]),
+  );
+
+  /**
    * The model a Shift-range measures from: the last one picked deliberately.
    *
    * Held apart from the selection itself, exactly as `lastSelectedImageId` is
@@ -2327,7 +2338,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * blind write of just the new entity, which would silently detach every other
    * character already using the model.
    *
-   * The rows are re-read from `selectedRows` rather than trusted from the
+   * The rows are re-read from `selectedModels` rather than trusted from the
    * payload: the picker emits ids it was handed, and between the menu opening
    * and the click landing the selection may have moved. Anything no longer
    * selected, or without a hash to address, is dropped rather than written.
@@ -2353,7 +2364,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }) {
     const notices = useNoticeStore();
     const wanted = new Set(subjectIds.map((id) => String(id)));
-    const targets = selectedRows.value.filter(
+    // Off `selectedModels`, not `selectedRows`: a ticked stack is one row with
+    // the cover's id and hash, and assigning it has to reach every member.
+    const targets = selectedModels.value.filter(
       (row) => wanted.has(String(row.id)) && row.sha256,
     );
     if (!targets.length) return false;
@@ -2583,6 +2596,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setIconOnSelected,
     clearIconsOnSelected,
     selectedModelIds,
+    selectedModels,
     setAttachment,
     rows,
     loading,

@@ -212,6 +212,31 @@ describe("the selection bar", () => {
     expect(tip(picker(wrapper, "character"))).toContain("the 1 of 3");
   });
 
+  it("hands Assign every member of a ticked stack, and reads theirs", async () => {
+    // One row stands for the stack, with the cover's id. Handing the picker
+    // that id alone assigned the cover and left the rest of the stack out, and
+    // the tri-state has to read partial when only some members are attached.
+    selectRows([
+      row(1, "present", {
+        stack_id: 7,
+        stack_position: 0,
+        attachments: [{ entity_type: "character", entity_id: 4 }],
+      }),
+      row(2, "present", { stack_id: 7, stack_position: 1 }),
+      row(3, "present", {
+        stack_id: 7,
+        stack_position: 2,
+        file_kind: "checkpoint",
+      }),
+    ]);
+    const wrapper = mount(ShelfSelectionBar, globalOpts);
+    expect(picker(wrapper, "character").props("subjectIds")).toEqual([1, 2]);
+    expect(picker(wrapper, "character").props("membership")["4"]).toEqual(
+      new Set(["1"]),
+    );
+    expect(tip(picker(wrapper, "character"))).toContain("the 2 of 3");
+  });
+
   it("refuses Assign when nothing in the selection can take one", async () => {
     selectRows([row(1, "present", { file_kind: "checkpoint" })]);
     const wrapper = mount(ShelfSelectionBar, globalOpts);
