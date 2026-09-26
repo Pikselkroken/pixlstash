@@ -3690,15 +3690,18 @@ def test_a_stack_that_collapses_to_one_drawn_card_carries_no_stack_id(workflow_e
     assert hidden["stack_id"] is None
 
 
-def test_a_stack_shows_the_union_of_its_members_difference_chips(workflow_env):
-    """The chips belong to the drawn card, because the cover is what is drawn.
+def test_a_stack_cover_carries_no_difference_chips(workflow_env):
+    """The chips say how a member differs from the cover, so the cover has none.
 
-    The cover has none of its own: it is what the others are compared against.
+    The grid draws the cover as the collapsed stack; the members' union printed
+    under it read as "the cover differs by" what only its members do.
     """
     cards = _by_key(_cards(workflow_env.owner))
-    assert cards[BUSY_CARD]["differs_by"], "a stack with no difference chips"
+    assert cards[BUSY_CARD]["stack_size"] == 2
+    assert cards[BUSY_CARD]["differs_by"] == []
+    assert _detail(workflow_env.owner, BUSY_CARD)["card"]["differs_by"] == []
     member = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]
-    assert set(member["differs_by"]) <= set(cards[BUSY_CARD]["differs_by"])
+    assert member["differs_by"], "the member has nothing to explain"
 
 
 def test_unstacking_a_card_takes_it_out_of_the_automatic_group(workflow_env):

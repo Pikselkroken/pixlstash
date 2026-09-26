@@ -74,7 +74,8 @@
 //                                       // first; `recipes` is how many.
 //                                       // `character_id` is null for a LoRA
 //                                       // attached to no one character
-//     differs_by: [string],             // a stack: the union over its members
+//     differs_by: [string],             // a stack member: its chips against
+//                                       // the cover; empty on the cover
 //     picture_count, rating,            // rating 1-5; 0 or null is unrated
 //     covers: [{ url, picture_id, thumbnail_width, thumbnail_height,
 //                square_crop_x, square_crop_y, square_crop_side }],
@@ -359,12 +360,20 @@ export function modelDisplayName(model) {
 const SHORT_TYPE_LABELS = { txt2img: "T2I", img2img: "I2I" };
 
 /**
- * The special-facts row: what a stack differs by, otherwise the workflow's type
- * and whether it was imported. `short` spells the type the way the card's chip
- * does (`T2I`).
+ * The special-facts row: what a stack member differs by from its cover,
+ * otherwise the workflow's type and whether it was imported. `short` spells
+ * the type the way the card's chip does (`T2I`).
+ *
+ * The cover - which is also what the grid draws for a collapsed stack - has no
+ * chips of its own, so it falls through to the type like a lone card rather
+ * than leaving its row empty.
  */
+export function differsBy(card) {
+  return isStack(card) && Boolean(card.differs_by?.length);
+}
+
 export function factChips(card, { short = false } = {}) {
-  const labels = isStack(card)
+  const labels = differsBy(card)
     ? // **First, and on a stack too.** A hidden card is only ever drawn
       // because somebody chose *Hidden: Show* (F7), and the row
       // clips to "+N" — a mark that can be clipped away is a card that reads
@@ -479,7 +488,7 @@ export function cardAccessibleName(card, { member = false } = {}) {
         : "no LoRAs",
     cast.length ? `recipe LoRAs used: ${cast.join("; ")}` : null,
     facts.length
-      ? `${isStack(card) ? "differs by" : "facts"}: ${facts.join(", ")}`
+      ? `${differsBy(card) ? "differs by" : "facts"}: ${facts.join(", ")}`
       : null,
     count === 1 ? "1 picture" : `${count} pictures`,
     ratingLabel(card.rating) ? `rated ${ratingLabel(card.rating)}` : null,
