@@ -1054,17 +1054,13 @@
   overflow-x: hidden;
   overflow-y: auto;
   padding: 0px 0 0;
-  /* Shared subtle scrollbar treatment - keep in sync with .grid-scroll-wrapper in ImageGrid.vue */
-  scrollbar-color: rgba(var(--v-theme-on-surface), 0.05) transparent;
+  /* Shared amber scrollbar treatment - keep in sync with .grid-scroll-wrapper in ImageGrid.vue */
+  scrollbar-color: rgb(var(--v-theme-accent)) transparent;
   scrollbar-width: thin;
   display: flex;
   flex-direction: column;
   align-items: stretch;
   background: transparent;
-}
-
-.sidebar-scroll:hover {
-  scrollbar-color: rgba(var(--v-theme-on-surface), 0.18) transparent;
 }
 
 .sidebar-scroll::-webkit-scrollbar {

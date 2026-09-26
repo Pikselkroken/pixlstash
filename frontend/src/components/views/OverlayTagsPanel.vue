@@ -1134,9 +1134,9 @@ defineExpose({
 }
 
 /* The overlay sidebar is a `dark-surface`, so the scrollbar keys off
-   `on-dark-surface`. The global `.is-desktop` treatment in style.css keys off
-   `on-surface` (the light-chrome pair) and does not apply in a plain browser at
-   all, which left an OS-default bar on a translucent dark panel. The bar is
+   `on-dark-surface`. The global `.is-desktop` treatment in style.css (an amber
+   thumb for the light chrome) does not apply in a plain browser at all, which
+   left an OS-default bar on a translucent dark panel. The bar is
    also the whole "there is more below" affordance here, so it stays visible
    rather than hiding until hover. Track is transparent: the drop zone's dashed
    border already draws the edge and a second line would compete. */
