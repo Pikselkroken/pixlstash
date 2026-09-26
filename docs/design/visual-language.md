@@ -770,9 +770,10 @@ These get skipped and that is exactly why a UI looks cheap.
   white on amber from 4.75 to 6.74:1 in light and 3.41 to 5.01:1 in dark. A neutral fill takes `--hover-neutral`, which
   lightens in dark and darkens in light. Never `filter: brightness()`, which moves the
   label with the fill.
-- **Amber acts, olive selects.** Amber is the key action fill and the attention dot,
-  and nothing else. Everything merely chosen is olive: a selected tile, the active
-  sidebar row, a focused group, a selected tab or table row take `--active-bar` (edge
+- **Amber acts, olive selects.** Amber is the key action fill, the attention dot
+  and the scrollbar thumb (the scroll position is a mark to find; see Scrollbars
+  below), and nothing else. Everything merely chosen is olive: a selected tile,
+  the active sidebar row, a focused group, a selected tab or table row take `--active-bar` (edge
   or ring) and `--active-wash`, the lifted olive at 0.20 in dark and the deep olive at
   0.16 in light. **No olive text or icon on an olive wash:** the selected item's label,
   icon and count take `--active-text`, the surface's own ink (7.5 - 11.2:1 at rest).
@@ -833,9 +834,14 @@ These get skipped and that is exactly why a UI looks cheap.
   is the exception `ActionReceipt`'s countdown hairline already takes (§10).
   Restore it with a scoped override on `::before`, where `@mdi/font` puts the
   animation. Never by weakening the global reset.
-- **Scrollbars:** a scroll region inside a `dark-surface` panel styles its own bar,
-  because the global `.is-desktop` treatment in `style.css` keys off `on-surface`
-  (the light-chrome pair) and does not apply in a plain browser at all. The pattern
+- **Scrollbars:** on the app's own chrome the thumb is **amber**, solid `accent`
+  over a transparent track: the global `.is-desktop` rule in `style.css` (every
+  scroller in the desktop app that sets no colour of its own), the grid
+  (`.grid-scroll-wrapper`) and the sidebar (`.sidebar-scroll`). It does not brighten
+  on hover: `accent-bright` measures 2.3 - 2.7:1 on the light chrome, under 3:1.
+  A grey thumb at 0.05 - 0.3 alpha, fading in only on hover, left the grid's scroll position impossible to find. A scroll region
+  inside a `dark-surface` panel styles its own bar, because the global
+  `.is-desktop` treatment does not apply in a plain browser at all. The pattern
   is `scrollbar-width: thin` plus
   `scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent`, going to
   `0.55` on hover, with `scrollbar-gutter: stable` so content does not reflow when
