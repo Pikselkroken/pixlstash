@@ -1262,7 +1262,9 @@ real containment is OS-level and out of scope here.
   `os.system`/`exec`/`spawn`/`posix_spawn`/`fork`/`startfile`), `ctypes.dlopen`,
   `open` in a writing mode or with writing flags, `os.truncate`, links, and
   removes/renames/`rmdir`/`rmtree`. Paths are made absolute inside the hook, so a
-  plugin that changes directory to write is still placed correctly.
+  plugin that changes directory to write is still placed correctly, and a move
+  is reported at both ends (its destination as a write). The window covers
+  attribute reads too, since a property is the plugin's code as well.
   Reads are dropped inside the hook, since every import reads dozens of `.pyc`
   files. The CLI prints a grouped summary on **every** outcome, failures
   included: a plugin that fails to import may have reached for things first.

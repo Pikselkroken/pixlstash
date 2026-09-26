@@ -283,8 +283,10 @@ class Recorder:
                 name = "this program's own symbols" if args[0] is None else args[0]
                 name = _text(name)
                 libraries.setdefault(os.path.dirname(name) or name, set()).add(name)
-            else:  # a file event, trimmed to the one path by the hook
+            else:  # a file event, trimmed by the hook to its path(s)
                 self._bucket(written if event in _WRITES else removed, args[0])
+                if event == "os.rename":  # and the move's destination
+                    self._bucket(written, args[1])
 
         lines = _counted(network) + _counted(processes)
         lines += _grouped(libraries, "loaded {n} native {what} from {where}")
@@ -363,7 +365,11 @@ def _audit(event: str, args: tuple[Any, ...]) -> None:
             and not (flags or 0) & _WRITE_FLAGS
         ):
             return
-    if event in _PATH_ARGUMENT:
+    if event == "os.rename":
+        # Both ends: the data lands at the destination, which is the
+        # directory worth naming when the move is into somewhere sensitive.
+        args = (_absolute(args[0]), _absolute(args[1]))
+    elif event in _PATH_ARGUMENT:
         args = (_absolute(args[_PATH_ARGUMENT[event]]),)
     elif event in ("socket.connect", "socket.sendto", "socket.sendmsg"):
         args = (args[1],)  # the address; the socket object is not kept
@@ -527,11 +533,13 @@ def check_plugin(
     checked = []
     for plugin in manager.get_all_plugins():
         # A plugin may override this, so it is the plugin's code as well.
+        # So may `name` be, as a property.
         with recorder.watch("plugin_schema()"):
             schema = plugin.plugin_schema()
+            name = plugin.name
         problems, warnings = _schema_findings(schema)
         check = PluginCheck(
-            name=plugin.name, schema=schema, problems=problems, warnings=warnings
+            name=name, schema=schema, problems=problems, warnings=warnings
         )
         if check.name in reserved:
             check.problems.append(
@@ -722,20 +730,22 @@ def _run_over_image(
         ``(what came back, problems)``. The result is ``None`` when the plugin
         never got as far as returning anything.
     """
-    # Decided before anything is loaded: a plugin with neither capability flag
-    # has no method for this to call, and the workflows would never reach it
-    # either, so downloading its model and initialising it is work done for a
-    # call that is not going to happen. `_schema_findings` has already warned
-    # about the flags themselves.
-    if plugin.supports_descriptions:
-        call = "generate_descriptions"
-    elif plugin.supports_tags:
-        call = "tag_images"
-    else:
-        return None, []
-
     image_path = str(Path(image).expanduser().resolve())
+    # Every read of the plugin is inside a window, attributes included: a
+    # property or `__getattr__` is the plugin's code as much as a method is.
     with recorder.watch("--image run"):
+        # Decided before anything is loaded: a plugin with neither capability
+        # flag has no method for this to call, and the workflows would never
+        # reach it either, so downloading its model and initialising it is
+        # work done for a call that is not going to happen. `_schema_findings`
+        # has already warned about the flags themselves.
+        if plugin.supports_descriptions:
+            call = "generate_descriptions"
+        elif plugin.supports_tags:
+            call = "tag_images"
+        else:
+            return None, []
+        wants_device = hasattr(plugin, "setup")
         parameters = plugin.default_params()
         try:
             if plugin.needs_download(parameters):
@@ -751,12 +761,12 @@ def _run_over_image(
     # Outside the window: picking a device imports torch, which loads its own
     # native libraries, and that is the checker's doing rather than the
     # plugin's.
-    device = _device() if hasattr(plugin, "setup") else None
+    device = _device() if wants_device else None
 
     with recorder.watch("--image run"):
         try:
             # Both workflows do this pair, in this order, before every batch.
-            if hasattr(plugin, "setup"):
+            if wants_device:
                 plugin.setup(device)
             plugin.init(parameters)
         except Exception as exc:

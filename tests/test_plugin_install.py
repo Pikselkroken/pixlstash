@@ -1430,6 +1430,63 @@ def test_a_relative_write_is_still_reported_after_its_directory_is_gone(
     assert "wrote 1 file under" in capsys.readouterr().out
 
 
+def test_a_move_is_reported_where_the_file_landed(tmp_path, capsys):
+    """A move into somewhere sensitive is named by its destination.
+
+    The source is in the temp directory, so without the destination the only
+    line would say "under /tmp" and the plugin's folder would never appear.
+    """
+    moved = _write(tmp_path / "source" / "moved.txt", "x")
+    source = _reaching(
+        tmp_path / "plugin",
+        "import os",
+        f"os.replace({str(moved)!r}, os.path.join(os.path.dirname(__file__), 'x'))",
+    )
+
+    assert _check(source) == cli.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert f"wrote 1 file under {tmp_path / 'plugin'}" in out
+    assert "removed or moved 1 file under" in out
+
+
+def _times_started(out: str) -> int:
+    """Return how often the `_SPAWN` program was reported started."""
+    match = re.search(
+        re.escape(f"started {sys.executable} -c pass") + r"(?:  \((\d+) times\))?",
+        out,
+    )
+    assert match, out
+    return int(match.group(1) or 1)
+
+
+def test_an_attribute_the_plugin_computes_is_observed_too(tmp_path, capsys):
+    """A property is the plugin's code, so reading it opens a window.
+
+    The flag is read by `plugin_schema()` as well, so the test compares a run
+    with `--image` against one without: the image run reads it once more, and
+    that read has to be counted.
+    """
+    source = _write(
+        tmp_path / "mine.py",
+        _template(
+            (
+                "    supports_descriptions = True\n",
+                "    @property\n"
+                "    def supports_descriptions(self):\n"
+                f"        {_SPAWN}\n"
+                "        return True\n",
+            )
+        ),
+    )
+    image = _write(tmp_path / "sample.jpg", "not really a jpeg")
+
+    assert _check(source) == cli.EXIT_OK
+    without_image = _times_started(capsys.readouterr().out)
+    assert _check(source, "--image", str(image)) == cli.EXIT_OK
+    assert _times_started(capsys.readouterr().out) == without_image + 1
+
+
 def test_what_it_reached_for_is_reported_even_when_it_fails_to_import(tmp_path, capsys):
     """The failing plugin is the one whose report matters most."""
     source = _reaching(tmp_path, _SPAWN, 'raise RuntimeError("boom")')
