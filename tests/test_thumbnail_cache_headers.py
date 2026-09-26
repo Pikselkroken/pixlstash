@@ -150,7 +150,7 @@ def _import_one_picture(client):
     return import_resp["results"][0]["picture_id"]
 
 
-def _age_the_cached_thumbnail(server, subdir, stem, old_version):
+def _age_the_cached_thumbnail(server, subdir, stem, old_version, image_format="PNG"):
     """Rewind a just-written cache entry to a pre-256 PixlStash.
 
     A fresh vault starts with an empty thumbnail cache, so the branch every
@@ -171,8 +171,8 @@ def _age_the_cached_thumbnail(server, subdir, stem, old_version):
     meta["version"] = old_version
     with open(meta_path, "w", encoding="utf-8") as handle:
         json.dump(meta, handle)
-    Image.new("RGBA", (64, 64), (1, 2, 3, 255)).save(
-        os.path.join(cache_dir, f"{stem}.png"), format="PNG"
+    Image.new("RGB", (64, 64), (1, 2, 3)).save(
+        os.path.join(cache_dir, f"{stem}.{image_format.lower()}"), format=image_format
     )
 
 
@@ -208,6 +208,8 @@ def test_character_thumbnail_revalidates_instead_of_going_stale():
         # Served at 256, not the 64 this route used to hardcode: the in-app
         # consumer is a 24 px mark, but external pickers render it far larger.
         assert Image.open(io.BytesIO(first.content)).size == (256, 256)
+        assert first.headers["content-type"] == "image/webp"
+        assert Image.open(io.BytesIO(first.content)).format == "WEBP"
         etag = first.headers.get("etag")
         assert etag
 
@@ -216,6 +218,7 @@ def test_character_thumbnail_revalidates_instead_of_going_stale():
         second = client.get(f"/characters/{char_id}/thumbnail")
         assert second.status_code == 200
         assert second.headers["cache-control"] == REVALIDATE_CACHE_CONTROL
+        assert second.headers["content-type"] == "image/webp"
 
         conditional = client.get(
             f"/characters/{char_id}/thumbnail",
@@ -225,7 +228,9 @@ def test_character_thumbnail_revalidates_instead_of_going_stale():
         assert conditional.content == b""
 
         # An install that already cached a 64x64 crop must not keep serving it.
-        _age_the_cached_thumbnail(server, "face_thumbnails", f"character_{char_id}", 6)
+        _age_the_cached_thumbnail(
+            server, "face_thumbnails", f"character_{char_id}", 6, image_format="WEBP"
+        )
         regenerated = client.get(f"/characters/{char_id}/thumbnail")
         assert regenerated.status_code == 200
         assert Image.open(io.BytesIO(regenerated.content)).size == (256, 256)
