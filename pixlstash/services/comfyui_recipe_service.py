@@ -2159,6 +2159,16 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
         if carriers and lane["source"] is not None:
             lane_clip = input_of(carriers[0], "clip_field")
             refuse_cycle(link_of(lane_clip))
+        elif lane["source"] is not None:
+            # No CLIP loader on this side: a checkpoint handing out the lane's
+            # model hands out its CLIP too, and that is where one starts.
+            own = [
+                (str(node_id), output)
+                for node_id, output in _sources(links, "CLIP")
+                if str(node_id) == lane["source"]["node_id"]
+            ]
+            if len(own) == 1:
+                lane_clip = own[0]
         if carriers and input_of(carriers[0], "clip_field") != lane_clip:
             raise LookupError(
                 "The LoRAs on one side of this workflow's fork take their CLIP "

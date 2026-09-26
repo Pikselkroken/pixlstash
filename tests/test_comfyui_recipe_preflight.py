@@ -1917,6 +1917,25 @@ class TestLoraChain:
         assert graph["9"]["inputs"]["conditioner"] == ["10", 1]
         assert graph["15"]["inputs"]["model1"] == ["10", 0]
 
+    def test_a_pass_with_no_clip_loader_starts_at_its_own_checkpoints_clip(self):
+        """The refiner's loader #11 is model-only; checkpoint #5 still has a CLIP."""
+        graph = self._base_and_refiner()
+        graph["11"] = {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "lora_name": "a.safetensors",
+                "strength_model": 1.0,
+                "model": ["5", 0],
+            },
+        }
+        graph["9"]["inputs"]["conditioner"] = ["5", 1]
+        chain = read_lora_chain(graph, self.INFO)
+        assert chain["lanes"][1]["clip_source"]["node_id"] == "5"
+        self._edit_lanes(graph, [], [[], [{"node_id": "11"}, {"node_id": "10"}]])
+        # #10 crossed with its CLIP, which now reads the refiner's checkpoint.
+        assert graph["10"]["inputs"]["clip"] == ["5", 1]
+        assert graph["10"]["inputs"]["model"] == ["11", 0]
+
     def test_a_clip_loader_moved_where_no_clip_is_handed_out_is_refused(self):
         """Two UNETs and two CLIP loaders: the bare lane has no CLIP to offer."""
         info = {**self.INFO, "CLIPLoader": {"output": ["CLIP"]}}
