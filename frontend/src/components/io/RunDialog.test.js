@@ -196,6 +196,20 @@ describe("Open in Workflows", () => {
     expect(wrapper.emitted("close")).toBeTruthy();
   });
 
+  it("follows a switch in the Workflow picker", async () => {
+    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    await wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .find((c) => c.props("label") === "Workflow")
+      .vm.$emit("update:modelValue", OTHER);
+    await flushPromises();
+    await openButton(wrapper).trigger("click");
+    expect(push).toHaveBeenCalledWith({
+      name: "workflows",
+      query: { card: OTHER },
+    });
+  });
+
   it("is not offered on the Workflows screen itself", async () => {
     currentRoute.name = "workflows";
     const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
