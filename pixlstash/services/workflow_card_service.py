@@ -73,7 +73,8 @@ from pixlstash.services.workflow_identity import (
     CHECKPOINT_WIDGETS,
     RECIPE,
     STRUCTURAL,
-    differs_by_reduced,
+    Difference,
+    differences_reduced,
     is_lora_widget,
     reduce_stored_document,
     slots,
@@ -266,6 +267,10 @@ class CardFigures:
     stack_size: int = 1
     member_keys: list[str] = field(default_factory=list)
     differs_by: list[str] = field(default_factory=list)
+    # What a `differs_by` chip stands for, keyed by the chip (#1597). Only the
+    # chips there is something to say about: "N nodes differ", "other
+    # checkpoint" and "other models".
+    differs_by_detail: dict[str, str] = field(default_factory=dict)
     models: list[SlotModel] = field(default_factory=list)
     loras: list[SlotModel] = field(default_factory=list)
     recipe_loras: list[RecipeLora] = field(default_factory=list)
@@ -519,13 +524,20 @@ def _manual_positions(rows: StackRows, stack_id: str) -> dict[str, int]:
 
 
 def describe_differences(
-    hub: HubDatabase, figures: list[CardFigures], stacks: list[Stack]
+    hub: HubDatabase,
+    figures: list[CardFigures],
+    stacks: list[Stack],
+    names: Optional[dict[str, list[tuple]]] = None,
 ) -> None:
     """Fill in each stacked member's "differs by" chips against its cover.
 
     Only stacked cards are described: a card on its own has nothing to differ
     from, and reducing every document in the library to answer that would be
     the one expensive thing in the grid.
+
+    *names* is :func:`read_grid`'s one ``asset_names`` read, which is what
+    puts a readable model name in an "other checkpoint" chip's detail. Left
+    out, those chips carry no detail.
     """
     by_key = {figure.card.workflow_key: figure for figure in figures}
     wanted = {
@@ -553,6 +565,7 @@ def describe_differences(
                 key,
                 exc,
             )
+    changed_models: list[tuple[CardFigures, Difference]] = []
     for stack in stacks:
         cover = for_key.get(stack.cover_key)
         if cover is None and len(stack.member_keys) > 1:
@@ -573,7 +586,7 @@ def describe_differences(
             if cover is None or member is None:
                 continue
             try:
-                chips = differs_by_reduced(cover, member)
+                differences = differences_reduced(cover, member)
             except WorkflowGraphError as exc:
                 logger.info(
                     "Card %s cannot be compared with its stack cover %s, so it "
@@ -583,10 +596,74 @@ def describe_differences(
                     exc,
                 )
                 continue
-            by_key[key].differs_by = chips
+            figure = by_key[key]
+            figure.differs_by = [difference.chip for difference in differences]
+            figure.differs_by_detail = {
+                difference.chip: difference.detail
+                for difference in differences
+                if difference.detail
+            }
+            changed_models.extend(
+                (figure, difference)
+                for difference in differences
+                if difference.cover_assets or difference.member_assets
+            )
         # The cover gets no chips, and the grid's one card per stack is the
         # cover: the chips say how a member differs from the cover, so the
         # members' union printed under the cover itself said nothing true.
+    if changed_models and names:
+        _describe_model_changes(hub, changed_models, names)
+
+
+def _describe_model_changes(
+    hub: HubDatabase,
+    changed: list[tuple[CardFigures, Difference]],
+    names: dict[str, list[tuple]],
+) -> None:
+    """Spell an "other checkpoint" chip as ``Krea 2 → Flux Dev fp8``.
+
+    The chip's assets are references; ``workflow_recipe_asset`` holds the
+    filenames they were made from, and the shelf the title a person knows the
+    model by. A reference no row names any more (the name was forgotten) reads
+    "unnamed model" rather than disappearing, so the arrow stays honest.
+    """
+    filenames = {
+        asset_reference(filename): filename
+        for pairs in names.values()
+        for _, filename in pairs
+    }
+    marks = model_marks(
+        hub,
+        sorted(
+            {
+                filenames[asset]
+                for _, difference in changed
+                for asset in difference.cover_assets + difference.member_assets
+                if asset in filenames
+            }
+        ),
+    )
+
+    def spoken(assets: tuple[str, ...]) -> str:
+        said = []
+        for asset in assets:
+            filename = filenames.get(asset)
+            if filename is None:
+                said.append("unnamed model")
+                continue
+            fields = _mark_fields(marks.get(filename.lower()), filename)
+            name = (fields.get("title") or "").strip() or _derived(filename)
+            quant = fields.get("quant")
+            said.append(f"{name} {quant}" if quant else name)
+        return ", ".join(dict.fromkeys(said))
+
+    for figure, difference in changed:
+        was, now = spoken(difference.cover_assets), spoken(difference.member_assets)
+        if was and now:
+            detail = f"{was} → {now}"
+        else:
+            detail = f"+ {now}" if now else f"− {was}"
+        figure.differs_by_detail[difference.chip] = detail
 
 
 def read_grid(
@@ -682,7 +759,15 @@ def read_grid(
     for figure in figures:
         if figure.card.workflow_key in partial:
             figure.stack_id = None
-    describe_differences(hub, visible, stacks)
+    # One read of `workflow_recipe_asset` for every pass below. Every variant,
+    # which is what the ghost pass needs and a superset of the first variants
+    # the slot and difference passes read - the passes called it separately
+    # when the ghost pass arrived, which was the same table twice for no
+    # answer the first read could not give.
+    names = asset_names(
+        hub, [variant for figure in figures for variant in figure.card.variants]
+    )
+    describe_differences(hub, visible, stacks, names)
     # Every member, not only the cover. The grid draws the cover alone, so this
     # costs it nothing - but a member opened on its own carries the difference
     # chips it earned against that cover, and a card declaring `stack_size: 1`
@@ -704,14 +789,6 @@ def read_grid(
     covered = {key for stack in stacks for key in stack.member_keys[1:]}
     drawn = [figure for figure in visible if figure.card.workflow_key not in covered]
     drawn.sort(key=_rank_order)
-    # One read of `workflow_recipe_asset` for both passes. Every variant, which
-    # is what the ghost pass needs and a superset of the first variants the
-    # slot pass reads - the two called it separately when the ghost pass
-    # arrived, which was the same table twice for no answer the first read
-    # could not give.
-    names = asset_names(
-        hub, [variant for figure in figures for variant in figure.card.variants]
-    )
     _describe_slots(hub, figures, names, _recovered_slots(figures, file_models))
     _describe_ghosts(hub, vault, figures, names)
     _describe_recipe_loras(hub, vault, figures, names)

@@ -58,7 +58,7 @@
           v-if="current?.chips?.length"
           class="app-select__value-chips"
           aria-hidden="true"
-          :items="chipItems(current.chips.slice(0, 1))"
+          :items="chipItems(current.chips.slice(0, 1), current.chipDetails)"
         />
       </div>
       <v-icon size="18" class="app-select__chevron">mdi-chevron-down</v-icon>
@@ -107,7 +107,7 @@
                 <span class="app-select__name">{{ optionName(opt) }}</span>
                 <ChipRow
                   v-if="opt.chips?.length"
-                  :items="chipItems(opt.chips)"
+                  :items="chipItems(opt.chips, opt.chipDetails)"
                 />
               </span>
             </div>
@@ -148,7 +148,8 @@ const props = defineProps({
   label: { type: String, default: "" },
   // Array of strings OR { label, value } objects. An object may also carry
   // `name` and `chips` (a second line of chips under the name) and `group`
-  // (a heading over each run of options sharing it); any option with `chips`
+  // (a heading over each run of options sharing it), plus `chipDetails`
+  // ({chip: what it stands for}, hovered and spoken); any option with `chips`
   // turns the field into a listbox that can draw them.
   options: { type: Array, default: () => [] },
   compact: { type: Boolean, default: false },
@@ -203,15 +204,25 @@ function optionName(opt) {
 
 /** The row's name and chips as one phrase, since "+N" is not read out. */
 function optionSpoken(opt) {
-  return [optionName(opt), ...(opt.chips || [])].join(", ");
+  return [
+    optionName(opt),
+    ...(opt.chips || []).map((chip) =>
+      opt.chipDetails?.[chip] ? `${chip} (${opt.chipDetails[chip]})` : chip,
+    ),
+  ].join(", ");
 }
 
 function optionId(i) {
   return i >= 0 ? `${listId}-${i}` : undefined;
 }
 
-function chipItems(chips) {
-  return chips.map((label, i) => ({ key: `chip-${i}`, label, fact: true }));
+function chipItems(chips, details) {
+  return chips.map((label, i) => ({
+    key: `chip-${i}`,
+    label,
+    fact: true,
+    title: details?.[label],
+  }));
 }
 
 function openList(index) {

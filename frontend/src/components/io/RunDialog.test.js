@@ -371,6 +371,7 @@ describe("switching to another stack member", () => {
         label: "Krea 2: Text to Image — film-grain",
         name: "Krea 2: Text to Image",
         chips: ["Cover", "film-grain"],
+        chipDetails: {},
         group,
       },
       {
@@ -378,6 +379,7 @@ describe("switching to another stack member", () => {
         label: "Krea 2: Text to Image — + upscale",
         name: "Krea 2: Text to Image",
         chips: ["+ upscale"],
+        chipDetails: {},
         group,
       },
       {
@@ -385,6 +387,7 @@ describe("switching to another stack member", () => {
         label: "Detailer pass",
         name: "Detailer pass",
         chips: [],
+        chipDetails: {},
         group,
       },
     ]);

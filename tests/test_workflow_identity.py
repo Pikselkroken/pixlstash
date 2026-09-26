@@ -11,6 +11,7 @@ import pytest
 
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
+    asset_reference,
     structural_document,
     structural_hash,
     topology_hash,
@@ -20,9 +21,12 @@ from pixlstash.services.workflow_identity import (
     RECIPE,
     STRUCTURAL,
     UPSCALE,
+    Difference,
     core_hash,
+    differences_reduced,
     differs_by,
     guess_mark,
+    reduce_stored_document,
     slots,
     special_groups,
     workflow_key,
@@ -401,6 +405,58 @@ def test_plumbing_only_is_never_claimed_when_a_model_differs():
 def test_plumbing_only_is_never_claimed_beside_an_unclassified_node():
     extra = {"98": _node("SomeCustomNode"), "99": _node("PreviewImage")}
     assert differs_by(_doc(_graph()), _doc(_graph(extra=extra))) == ["2 nodes differ"]
+
+
+def _differences(cover: dict, member: dict) -> list[Difference]:
+    return differences_reduced(
+        reduce_stored_document(_doc(cover)), reduce_stored_document(_doc(member))
+    )
+
+
+def test_a_nodes_chip_names_the_classes_it_counted():
+    """#1597: the detail says HOW, and names only what the chip counted."""
+    extra = {
+        "98": _node("SomeCustomNode"),
+        "97": _node("SomeCustomNode"),
+        "99": _node("PreviewImage"),
+    }
+    cover = _graph(loras=("alice.safetensors",))
+    # The upscale nodes are "+ upscale"'s, so the nodes chip leaves them out.
+    upscale, chip = _differences(cover, _graph(extra=extra, upscale=True))
+    assert upscale.chip == "+ upscale"
+    assert chip.chip == "4 nodes differ"
+    assert chip.detail == "+ PreviewImage · + SomeCustomNode ×2 · − LoraLoader"
+    # Reversed, the signs flip with it.
+    (back,) = _differences(_graph(extra=extra), cover)
+    assert back.detail == "+ LoraLoader · − PreviewImage · − SomeCustomNode ×2"
+
+
+def test_a_nodes_chip_with_no_class_change_says_what_did_change():
+    cover = _graph(loras=("alice.safetensors",))
+    rewired = _graph(loras=("alice.safetensors",))
+    rewired["5"]["inputs"]["model"] = ["1", 0]
+    assert [(d.chip, d.detail) for d in _differences(cover, rewired)] == [
+        ("1 node differs", "same nodes, wired differently")
+    ]
+
+
+def test_a_model_chip_carries_both_sides_base_model_first():
+    member = _graph(ckpt="other.safetensors", upscale=True)
+    member["60"] = _node("VAELoader", vae_name="new_vae.safetensors")
+    cover = _graph()
+    cover["60"] = _node("VAELoader", vae_name="old_vae.safetensors")
+    chips = {d.chip: d for d in _differences(cover, member)}
+    # The upscaler's model belongs to "+ upscale", never to this chip.
+    assert chips["other checkpoint"].cover_assets == (
+        asset_reference("base.safetensors"),
+        asset_reference("old_vae.safetensors"),
+    )
+    assert chips["other checkpoint"].member_assets == (
+        asset_reference("other.safetensors"),
+        asset_reference("new_vae.safetensors"),
+    )
+    assert chips["+ upscale"].cover_assets == ()
+    assert chips["other checkpoint"].detail is None
 
 
 # ── type ────────────────────────────────────────────────────────────────────
