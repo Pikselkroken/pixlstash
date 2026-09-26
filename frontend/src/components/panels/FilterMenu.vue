@@ -1,5 +1,5 @@
 <template>
-  <div class="fm-cascade" @keydown.left="onLeft">
+  <div class="fm-cascade" @keydown.left.capture="onLeft">
     <div ref="rootRef" class="tbm fm-root" role="group" aria-label="Filters">
       <span class="tbm-caret tbm-caret--start"></span>
       <div class="tbm-header">
@@ -98,6 +98,7 @@
             :model-value="pickValue(sub)"
             :aria-label="PICK_ONE[sub].title"
             @update:model-value="(id) => setPick(sub, id)"
+            @pick="backToRow"
           >
             <template #meta="{ option }">
               <span class="fm-n">{{ formatCount(option.count) }}</span>
@@ -500,13 +501,27 @@ function toggle(kind) {
 }
 
 // Left arrow inside a submenu returns to its row, unless it is moving a caret
-// or a chip's threshold.
+// or a chip's threshold. Caught in the capture phase so a radio group's own
+// arrow handling never sees it and changes the pick instead.
 function onLeft(event) {
-  if (!sub.value || ["INPUT", "SELECT"].includes(event.target?.tagName)) {
+  const target = event.target;
+  const field = target?.tagName === "INPUT" ? target : null;
+  if (
+    !sub.value ||
+    target?.tagName === "SELECT" ||
+    (field && (field.selectionStart || field.selectionEnd))
+  ) {
     return;
   }
-  if (!subRef.value?.contains(event.target)) return;
+  if (!subRef.value?.contains(target)) return;
   event.preventDefault();
+  event.stopPropagation();
+  backToRow();
+}
+
+// A deliberate pick in a pick-one submenu (not an arrow browsing it) is done
+// with that submenu. Score keeps its menu: it has two groups to set.
+function backToRow() {
   rowRefs[sub.value]?.focus();
   sub.value = null;
 }
