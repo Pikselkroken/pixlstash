@@ -100,7 +100,10 @@
 // **Selected means the card's BASE MODEL is selected**, never the set: the shelf's
 // verbs write one file each and two of them destroy bytes, so a card standing for
 // its whole tray would put a shared VAE behind a Delete aimed at a checkpoint. The
-// other members are selected in the tray, one row each.
+// other members are selected in the tray, one row each. One exception to the
+// drawing: while the open tray shows the base model picked from its own row, the
+// grid leaves the card unlit, so a tray pick does not read as the whole set
+// picked (`trayPicked` in `ModelSetGrid.vue`).
 
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";

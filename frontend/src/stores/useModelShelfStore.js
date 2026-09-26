@@ -2583,6 +2583,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     selectedIds,
     selectedRows,
     anchorId,
+    anchorOccurrence,
     isSelected,
     toggleSelected,
     selectFromClick,

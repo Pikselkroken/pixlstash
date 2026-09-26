@@ -84,9 +84,7 @@
             :aria-posinset="entry.cardIndex + 1"
             :aria-setsize="store.setGroups.length"
             :aria-selected="
-              selectable(entry.headId)
-                ? String(store.isSelected(entry.headId))
-                : undefined
+              selectable(entry.headId) ? String(cardSelected(entry)) : undefined
             "
             :tabindex="index === cursorIndex ? 0 : -1"
             :data-key="entry.key"
@@ -98,7 +96,7 @@
               <ModelSetCard
                 :card="entry.card"
                 :expanded="store.openSetKey === entry.key"
-                :selected="store.isSelected(entry.headId)"
+                :selected="cardSelected(entry)"
                 :panel-id="store.openSetKey === entry.key ? PANEL_ID : ''"
                 @toggle="store.toggleSet(entry.key)"
               />
@@ -465,16 +463,65 @@ const orderedEntries = computed(() =>
     .filter((entry) => selectable(entry.id)),
 );
 
-/** Click, Ctrl+click, Shift+click - the row list's own three gestures. */
-function select(id, event) {
-  if (!selectable(id)) return;
-  const ctrl = Boolean(event?.ctrlKey || event?.metaKey);
-  const entry = flatRows.value[cursorIndex.value];
-  store.selectFromClick(
-    id,
-    { ctrl, shift: event?.shiftKey },
-    orderedEntries.value,
-    entry?.id,
+/** A gesture aimed at whatever the cursor is on. */
+function selectCursor(event) {
+  selectEntry(flatRows.value[cursorIndex.value], event);
+}
+
+/**
+ * The models whose selection was made from a TRAY row rather than their card.
+ *
+ * Selection is by model id, and a set's head is drawn twice while its tray is
+ * open - as the card and as the tray's first row - so without this, picking the
+ * checkpoint in the tray lit the card too, and read as having picked the whole
+ * set. So while the open tray shows a model that was picked there, the card
+ * named after it stays unlit; close the tray and the card is the only mark left,
+ * so it lights again rather than leave a live selection drawn nowhere.
+ *
+ * Kept only for selections this grid made: a change from anywhere else (Select
+ * all, the bar, the row list) clears it, and the cards follow the selection again.
+ */
+const trayPicked = ref(new Set());
+let ownSelection = null;
+
+watch(
+  () => store.selectedIds,
+  (ids) => {
+    if (ids !== ownSelection) trayPicked.value = new Set();
+  },
+);
+
+/** The models the open tray is drawing, each with its own selection mark. */
+const trayModelIds = computed(
+  () => new Set(openMembers.value.map((member) => member.id)),
+);
+
+/** Is this card's head selected by a tray row the reader can see? */
+function shownInTray(headId) {
+  return trayPicked.value.has(headId) && trayModelIds.value.has(headId);
+}
+
+/** A card is drawn selected: its head is, and not by way of a visible tray row. */
+function cardSelected(entry) {
+  return store.isSelected(entry.headId) && !shownInTray(entry.headId);
+}
+
+/**
+ * The card heads a Shift-range from the anchor to `occurrence` passes over, or
+ * null when the store will not take it as a range (no anchor on this screen).
+ */
+function rangeCardHeads(occurrence) {
+  const order = orderedEntries.value;
+  const from = order.findIndex(
+    (item) => item.occurrence === store.anchorOccurrence,
+  );
+  const to = order.findIndex((item) => item.occurrence === occurrence);
+  if (from < 0 || to < 0) return null;
+  return new Set(
+    order
+      .slice(Math.min(from, to), Math.max(from, to) + 1)
+      .filter((item) => item.occurrence.startsWith("card:"))
+      .map((item) => item.id),
   );
 }
 
@@ -498,17 +545,21 @@ function onRowClick(entry, event) {
  * that is NOT selected selects it and acts on it alone; right-clicking one of
  * forty selected models leaves the forty alone. `ModelShelf.vue` owns the menu,
  * because there is one `ShelfSelectionBar` and two views feeding it.
+ *
+ * Takes the ENTRY, not a model id: a set's head is drawn twice while its tray
+ * is open, and the occurrence decides whether its card lights.
  */
-function openMenu(id, x, y) {
+function openMenu(entry, x, y) {
+  const id = modelIdOf(entry);
   if (!selectable(id)) return false;
-  if (!store.isSelected(id)) select(id, {});
+  if (!store.isSelected(id)) selectEntry(entry, {});
   emit("menu", { x, y });
   return true;
 }
 
 function onRowMenu(entry, event) {
   cursorId.value = entry.id;
-  if (openMenu(modelIdOf(entry), event.clientX, event.clientY)) {
+  if (openMenu(entry, event.clientX, event.clientY)) {
     event.preventDefault();
   }
 }
@@ -519,21 +570,48 @@ function onMemberClick({ member, event }) {
   selectEntry(flatRows.value[cursorIndex.value], event);
 }
 
+/** Click, Ctrl+click, Shift+click - the row list's own three gestures. */
 function selectEntry(entry, event) {
   const id = modelIdOf(entry);
   if (!selectable(id)) return;
   const ctrl = Boolean(event?.ctrlKey || event?.metaKey);
-  store.selectFromClick(
-    id,
-    { ctrl, shift: event?.shiftKey },
-    orderedEntries.value,
-    entry?.id,
-  );
+  const shift = Boolean(event?.shiftKey);
+  // Ctrl or Space on a card drawn unlit adds it, as it looks: the model is
+  // already selected from the tray, so the toggle would REMOVE it instead.
+  if (ctrl && entry.kind === "card" && shownInTray(id) && store.isSelected(id)) {
+    const next = new Set(trayPicked.value);
+    next.delete(id);
+    trayPicked.value = next;
+    store.anchorOccurrence = entry.id;
+    store.anchorId = id;
+    return;
+  }
+  // Read before the store moves the anchor. Ctrl wins over Shift, as it does there.
+  const rangeHeads = shift && !ctrl ? rangeCardHeads(entry.id) : null;
+  const before = store.selectedIds;
+  store.selectFromClick(id, { ctrl, shift }, orderedEntries.value, entry.id);
+  const after = store.selectedIds;
+  const fromTray = entry.kind === "member";
+  if (rangeHeads) {
+    // A range lights the cards it passed over, and no card it did not.
+    trayPicked.value = new Set([...after].filter((m) => !rangeHeads.has(m)));
+  } else if (ctrl) {
+    // What a card adds was not selected before, so it was never tray-picked.
+    const next = new Set([...trayPicked.value].filter((m) => after.has(m)));
+    if (fromTray) {
+      for (const m of after) if (!before.has(m)) next.add(m);
+    }
+    trayPicked.value = next;
+  } else {
+    trayPicked.value = fromTray ? new Set(after) : new Set();
+  }
+  ownSelection = after;
 }
 
 function onMemberMenu({ member, event }) {
   cursorId.value = `member:${member.id}`;
-  if (openMenu(member.id, event.clientX, event.clientY)) {
+  const entry = flatRows.value.find((row) => row.id === cursorId.value);
+  if (openMenu(entry, event.clientX, event.clientY)) {
     event.preventDefault();
   }
 }
@@ -714,7 +792,7 @@ function onKeyDown(event) {
       // takes the page's own scroll away for nothing.
       if (!selectable(modelIdOf(entry))) return;
       event.preventDefault();
-      select(modelIdOf(entry), { ctrlKey: true });
+      selectCursor({ ctrlKey: true });
       return;
     case "F2":
       // The rename key, which the verb menu advertises with an `F2` keycap - so
@@ -724,7 +802,7 @@ function onKeyDown(event) {
       // happens to hold.
       if (!selectable(modelIdOf(entry))) return;
       event.preventDefault();
-      select(modelIdOf(entry), {});
+      selectCursor({});
       emit("rename");
       return;
     case "Enter":
@@ -760,7 +838,7 @@ function onKeyDown(event) {
         const box = rowElement(entry)?.getBoundingClientRect?.();
         const x = box ? box.left + 24 : 0;
         const y = box ? box.bottom : 0;
-        if (openMenu(modelIdOf(entry), x, y)) event.preventDefault();
+        if (openMenu(entry, x, y)) event.preventDefault();
       }
   }
 }
