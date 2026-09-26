@@ -17,6 +17,11 @@ import { unwrap } from "../utils/unwrap";
  */
 const REPEATED_KEYS = { indexes: null };
 
+/** The keys, and `whole_stack=false` only when asked: the server's default is the stack. */
+function stackParams(keys, wholeStack) {
+  return wholeStack ? { workflow_key: keys } : { workflow_key: keys, whole_stack: false };
+}
+
 /**
  * Keep the look a Run popup is showing.
  *
@@ -40,16 +45,18 @@ export async function createSavedRecipe(recipe) {
  * selected member. Without a key this is every recipe in the library, and the
  * `pictures` credit is then 0 for all of them.
  *
- * @param {string} [workflowKey]
+ * @param {string|Array<string>} [workflowKey]
+ * @param {{wholeStack?: boolean}} [options] - `wholeStack: false` reads only
+ *   the keys named, for members picked inside an expanded stack.
  * @returns {Promise<Array<Object>>}
  */
-export async function listSavedRecipes(workflowKey) {
+export async function listSavedRecipes(workflowKey, { wholeStack = true } = {}) {
   const keys = (Array.isArray(workflowKey) ? workflowKey : [workflowKey]).filter(
     Boolean,
   );
   const body = await unwrap(
     apiClient.get("/recipes", {
-      params: keys.length ? { workflow_key: keys } : {},
+      params: keys.length ? stackParams(keys, wholeStack) : {},
       paramsSerializer: REPEATED_KEYS,
     }),
   );
@@ -69,16 +76,17 @@ export async function listSavedRecipes(workflowKey) {
  * `cover_picture_id` is where the Save dialog reads the strengths back from.
  *
  * @param {string|Array<string>} workflowKey - one card, or a selection.
+ * @param {{wholeStack?: boolean}} [options] - as `listSavedRecipes`.
  * @returns {Promise<Array<{prompt: string, loras: Array<Object>, pictures: number, cover_picture_id: ?number, saved: boolean}>>}
  */
-export async function listUsedLooks(workflowKey) {
+export async function listUsedLooks(workflowKey, { wholeStack = true } = {}) {
   const keys = (Array.isArray(workflowKey) ? workflowKey : [workflowKey]).filter(
     Boolean,
   );
   if (!keys.length) return [];
   const body = await unwrap(
     apiClient.get("/recipes/used", {
-      params: { workflow_key: keys },
+      params: stackParams(keys, wholeStack),
       paramsSerializer: REPEATED_KEYS,
     }),
   );

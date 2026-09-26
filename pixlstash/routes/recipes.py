@@ -57,6 +57,12 @@ MAX_REORDER_IDS = 500
 # library's; each key costs a stack resolution and every stack's variants go
 # into one ``IN`` on the picture table.
 MAX_UNION_KEYS = 100
+# Off when the owner has picked single members inside an expanded stack: they
+# asked about those workflows, not the stack around them.
+WHOLE_STACK_DESCRIPTION = (
+    "Widen each named workflow to its whole stack (the default). False reads "
+    "only the workflows named."
+)
 # A workflow key is a 64-character digest. Declared on the ITEM: `max_length`
 # on a `list[str]` bounds the list, so a ceiling written there would leave
 # every individual key unbounded - which is exactly what happened when this
@@ -268,6 +274,21 @@ def create_router(server) -> APIRouter:
             origin_client_id=getattr(request.state, "origin_client_id", None),
         )
 
+    def _resolve_keys(hub, keys: list[str], whole_stack: bool) -> list[str]:
+        """The workflows a read covers: each named one's stack, or just those named.
+
+        Deduplicated for the size of the query and not for the answer: two
+        members of one stack resolve to the same keys, and both reads end in an
+        ``IN``, which already counts a row once however many times its key was
+        listed. Keeping the list short is what this is for.
+        """
+        resolved: list[str] = []
+        for key in keys:
+            for member in effective_stack_keys(hub, key) if whole_stack else [key]:
+                if member not in resolved:
+                    resolved.append(member)
+        return resolved
+
     def _hub():
         hub = getattr(server, "hub", None)
         if hub is None:
@@ -300,6 +321,10 @@ def create_router(server) -> APIRouter:
                 "for a selection of several; the answer is the union."
             ),
         ),
+        whole_stack: bool = Query(
+            default=True,
+            description=WHOLE_STACK_DESCRIPTION,
+        ),
     ):
         server.auth.ensure_secure_when_required(request)
         workflow_keys = [key for key in workflow_key if key]
@@ -311,11 +336,7 @@ def create_router(server) -> APIRouter:
             return saved_recipe_service.read_recipes(server.vault)
 
         hub = _hub()
-        keys: list[str] = []
-        for key in workflow_keys:
-            for member in effective_stack_keys(hub, key):
-                if member not in keys:
-                    keys.append(member)
+        keys = _resolve_keys(hub, workflow_keys, whole_stack)
         recipes = saved_recipe_service.read_recipes(server.vault, keys)
         if not recipes:
             return []
@@ -398,22 +419,17 @@ def create_router(server) -> APIRouter:
                 "several; the answer is the union, counted once per look."
             ),
         ),
+        whole_stack: bool = Query(
+            default=True,
+            description=WHOLE_STACK_DESCRIPTION,
+        ),
     ):
         server.auth.ensure_secure_when_required(request)
         keys = [key for key in workflow_key if key]
         if not keys:
             return []
         hub = _hub()
-        # The union of every named workflow's stack. Deduplicated for the size
-        # of the query and not for the answer: two members of one stack resolve
-        # to the same keys, and both reads end in an ``IN``, which already
-        # counts a row once however many times its key was listed. Keeping the
-        # list short is what this is for.
-        stack_keys: list[str] = []
-        for key in keys:
-            for member in effective_stack_keys(hub, key):
-                if member not in stack_keys:
-                    stack_keys.append(member)
+        stack_keys = _resolve_keys(hub, keys, whole_stack)
         recipes = saved_recipe_service.read_recipes(server.vault, stack_keys)
         groups = saved_recipe_service.read_credit_groups(
             server.vault, variant_hashes_for_keys(hub, stack_keys)
