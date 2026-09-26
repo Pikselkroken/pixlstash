@@ -1620,6 +1620,13 @@ proves ran together, with a model free to appear in more than one.
   the same rail `.msm--head` draws, so a head row gains only the wash when it is
   ticked and what still tells head from ticked is the *Names this set* pill,
   which is text and survives greyscale.
+- **A List tray is one column whatever the card grid is doing**, so Up and Down
+  cannot step by one count across both. `verticalTarget` steps by one row inside
+  the tray and lands a CROSSING at the edge it arrives at — the tray's first row
+  coming down, its last coming up — rather than at an arithmetic column the tray
+  does not have. Stepping by the outer count carried the card's column offset
+  in: from the third card of a row, Down landed on the tray's third row, and a
+  short tray was stepped over whole.
 - **Dragging a model to a folder is a row-list gesture only.** The drop targets
   are the folder bands, and the grid has none.
 - **A card is one base model and its tray holds MODELS**, which is the shape the

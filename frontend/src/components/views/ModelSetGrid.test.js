@@ -398,9 +398,8 @@ describe("the cards", () => {
     });
   });
 
-  it("moves one list-tray row at a time even under a multi-column card grid", async () => {
-    // Make the outer grid four columns wide. The list tray remains one column,
-    // which is the mismatch that used to make Down skip its members.
+  /** A four-column card grid, which jsdom cannot give us by measuring. */
+  function stubFourColumns() {
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -414,6 +413,104 @@ describe("the cards", () => {
         disconnect() {}
       },
     );
+  }
+
+  it("enters a list tray at its first row, whatever column the card was in", async () => {
+    // **Two grids of different widths, so the crossing is not arithmetic.** A
+    // List tray is one column whatever the card grid is doing, and stepping by
+    // the outer column count carried the card's column offset into it: from the
+    // THIRD card of a row, Down landed on the tray's third row. The within-tray
+    // step was fixed without this half, so the skip survived at the boundary.
+    stubFourColumns();
+    try {
+      const { wrapper, store } = await mountGrid({
+        rows: [row(1, "realvisXL_v5"), row(3, "filmgrain_xl"), row(5, "third")],
+        support: [row(2, "sdxl_vae", "vae"), row(6, "clipL", "text_encoder")],
+        combinations: [
+          combination(
+            "5,2,6",
+            [
+              member(5, "third", "checkpoint"),
+              VAE,
+              member(6, "clipL", "text_encoder"),
+            ],
+            { pictures: 1 },
+          ),
+          combination("1,2", [CKPT, VAE], { pictures: 9 }),
+          combination("3x", [LORA], { pictures: 5 }),
+        ],
+      });
+      // The third card in the row is the one whose tray is open.
+      store.toggleSet("model:5");
+      store.setView({ trayView: "list" });
+      await wrapper.vm.$nextTick();
+      expect(
+        wrapper.findAll(".msg__row").map((c) => c.attributes("data-key")),
+      ).toEqual(["model:1", "model:3", "model:5"]);
+
+      const grid = wrapper.find('[role="treegrid"]');
+      await grid.trigger("keydown", { key: "ArrowRight" });
+      await grid.trigger("keydown", { key: "ArrowRight" });
+      await grid.trigger("keydown", { key: "ArrowDown" });
+      await grid.trigger("keydown", { key: "Enter" });
+
+      // The tray's FIRST row, not its third. Asserted on the model's name
+      // rather than a position, so the fixture order cannot make it pass for
+      // the wrong reason.
+      expect(wrapper.emitted("works-with")[0][0]).toMatchObject({
+        name: "third",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("leaves a list tray at its last row when stepping up from below it", async () => {
+    // The same crossing the other way. The tray sits between the first card row
+    // and the cards after it, so Up from one of those has to arrive at the row
+    // nearest it rather than at a column that tray does not have.
+    stubFourColumns();
+    try {
+      const { wrapper, store } = await mountGrid({
+        rows: Array.from({ length: 6 }, (_, i) => row(i + 10, `ckpt${i}`)),
+        support: [row(2, "sdxl_vae", "vae")],
+        combinations: [
+          combination("10,2", [member(10, "ckpt0", "checkpoint"), VAE], {
+            pictures: 9,
+          }),
+          ...[11, 12, 13, 14, 15].map((id, i) =>
+            combination(`${id}`, [member(id, `ckpt${i + 1}`, "checkpoint")], {
+              pictures: 8 - i,
+            }),
+          ),
+        ],
+      });
+      store.toggleSet("model:10");
+      store.setView({ trayView: "list" });
+      await wrapper.vm.$nextTick();
+
+      const grid = wrapper.find('[role="treegrid"]');
+      // Down from the first card enters the tray, Down again leaves it for the
+      // second row of cards; Up from there must come back to the tray's LAST
+      // row, which is the VAE.
+      await grid.trigger("keydown", { key: "ArrowDown" });
+      await grid.trigger("keydown", { key: "ArrowDown" });
+      await grid.trigger("keydown", { key: "ArrowDown" });
+      await grid.trigger("keydown", { key: "ArrowUp" });
+      await grid.trigger("keydown", { key: "Enter" });
+
+      expect(wrapper.emitted("works-with")[0][0]).toMatchObject({
+        name: "sdxl_vae",
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("moves one list-tray row at a time even under a multi-column card grid", async () => {
+    // Make the outer grid four columns wide. The list tray remains one column,
+    // which is the mismatch that used to make Down skip its members.
+    stubFourColumns();
     try {
       const { wrapper, store } = await mountGrid({
         rows: [row(1, "realvisXL_v5")],
