@@ -9380,6 +9380,162 @@ def test_a_lora_trained_on_another_family_is_flagged_never_dropped(cloneable):
     assert same_family["flags"] == []
 
 
+def _with_support_loaders(graph: dict) -> dict:
+    """The clone graph plus a VAE, a pair of text encoders and a GGUF encoder."""
+    graph = json.loads(json.dumps(graph))
+    graph["20"] = {
+        "class_type": "VAELoader",
+        "inputs": {"vae_name": "test-vae-fp8.safetensors"},
+    }
+    graph["21"] = {
+        "class_type": "DualCLIPLoader",
+        "inputs": {
+            "clip_name1": "test-clip-l.safetensors",
+            "clip_name2": "test-t5-fp16.safetensors",
+            "type": "flux",
+        },
+    }
+    graph["22"] = {
+        "class_type": "CLIPLoaderGGUF",
+        "inputs": {"clip_name": "test-umt5-q8.gguf", "type": "wan"},
+    }
+    return graph
+
+
+def test_the_replacements_go_with_the_checkpoint_and_load_in_the_loader(cloneable):
+    """#1596: Replace with… offers what works together AND what the loader lists.
+
+    Evidence first (the checkpoint's workflow sets and co-occurrence, here
+    stubbed), then each loader's own list: a core loader never lists GGUF, a
+    GGUF loader lists safetensors too.
+    """
+    graph = _with_support_loaders(cloneable.graph)
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    asked = []
+
+    def proposals(hub, checkpoint_id, index=None):
+        asked.append(checkpoint_id)
+
+        def entry(model_id, filename, via):
+            return {
+                "id": model_id,
+                "filename": filename,
+                "display_name": None,
+                "via": via,
+            }
+
+        return {
+            "vae": [
+                entry(1, "test-vae-bf16.safetensors", "grouped"),
+                entry(2, "test-vae-unlisted.safetensors", "checkpoint"),
+            ],
+            "text_encoder": [
+                entry(3, "test-t5-bf16.safetensors", "checkpoint"),
+                entry(4, "test-t5-q8.gguf", "family"),
+            ],
+        }
+
+    cloneable.monkeypatch.setattr(workflows_routes, "propose_companions", proposals)
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].append(
+        f"flux/{CLONE_CHECKPOINT}"
+    )
+    info["VAELoader"] = {
+        "input": {"required": {"vae_name": [["test-vae-bf16.safetensors"], {}]}}
+    }
+    both = [["test-clip-l.safetensors", "test-t5-bf16.safetensors"], {}]
+    info["DualCLIPLoader"] = {
+        "input": {"required": {"clip_name1": both, "clip_name2": both}}
+    }
+    info["CLIPLoaderGGUF"] = {
+        "input": {
+            "required": {
+                "clip_name": [["test-t5-bf16.safetensors", "test-t5-q8.gguf"], {}]
+            }
+        }
+    }
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+    def offered(replacing, **params):
+        r = cloneable.owner.get(
+            f"{API}/workflows/{RUN_CARD}/model-swap",
+            params={"replacing": replacing, **params},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        return [c["filename"] for c in body["replacements"]], body[
+            "replacements_reason"
+        ]
+
+    shelf_id = cloneable.server.hub.fetchone(
+        "SELECT id FROM model WHERE filename = ?", (_SHELF_FILENAME,)
+    )["id"]
+    assert offered("test-vae-fp8.safetensors") == (["test-vae-bf16.safetensors"], None)
+    assert asked == [shelf_id], "evidence asked about another checkpoint"
+    assert offered("test-t5-fp16.safetensors") == (["test-t5-bf16.safetensors"], None)
+    assert offered("test-umt5-q8.gguf") == (
+        ["test-t5-bf16.safetensors", "test-t5-q8.gguf"],
+        None,
+    )
+    # A checkpoint is offered what its loader lists, with no evidence asked.
+    names, _ = offered(_SHELF_FILENAME)
+    assert CLONE_CHECKPOINT in names and _SHELF_FILENAME not in names
+    # ComfyUI down: the file type decides, so a core loader gets no GGUF.
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "unreachable")
+    )
+    assert offered("test-t5-fp16.safetensors") == (["test-t5-bf16.safetensors"], None)
+    assert offered("test-vae-fp8.safetensors") == (
+        ["test-vae-bf16.safetensors", "test-vae-unlisted.safetensors"],
+        None,
+    )
+    # Nothing goes with it, or nothing that does can load here.
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "propose_companions",
+        lambda hub, checkpoint_id, index=None: {"vae": [], "text_encoder": []},
+    )
+    assert offered("test-vae-fp8.safetensors") == ([], "none_go_with_it")
+    cloneable.monkeypatch.setattr(workflows_routes, "propose_companions", proposals)
+    graph["20"]["inputs"]["vae_name"] = "test-vae-fp8.pt"
+    assert offered("test-vae-fp8.pt") == ([], "none_loadable")
+    # A kind the graph does not load the file as, or a file it does not load.
+    r = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"replacing": "test-vae-fp8.pt", "slot_kind": "text_encoder"},
+    )
+    assert r.status_code == 409, r.text
+    r = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"replacing": "test-not-in-graph.safetensors"},
+    )
+    assert r.status_code == 409, r.text
+
+
+def test_no_replacement_is_offered_without_a_checkpoint_to_go_with(cloneable):
+    graph = _with_support_loaders(cloneable.graph)
+    graph["1"]["inputs"]["ckpt_name"] = "test-not-on-shelf.safetensors"
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    body = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"replacing": "test-vae-fp8.safetensors"},
+    ).json()
+    assert (body["replacements"], body["replacements_reason"]) == (
+        [],
+        "no_checkpoint",
+    )
+
+
 def test_the_swap_options_refuse_a_checkpoint_id_that_is_not_one(cloneable):
     lora_id = cloneable.server.hub.fetchall(
         "SELECT id FROM model WHERE file_kind = 'adapter' LIMIT 1"

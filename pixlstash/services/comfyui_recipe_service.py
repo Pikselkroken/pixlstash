@@ -678,6 +678,16 @@ def _options_by_basename(value: str, options: list[str]) -> list[str]:
     ]
 
 
+def listed_as(filename: str, options: list[str]) -> str | None:
+    """How a loader lists *filename*, or ``None`` when it does not.
+
+    The rule :func:`apply_filename_swap` writes a replacement by: the exact
+    option, else the one option of that basename. Shared so a file offered as
+    a replacement is one the rewrite will then load.
+    """
+    return _matching_option(filename, options) or _option_by_basename(filename, options)
+
+
 def apply_filename_swap(
     prompt_graph: dict,
     swaps: dict[str, str],
@@ -743,7 +753,7 @@ def apply_filename_swap(
             else None
         )
         if options:
-            listed = _matching_option(now, options) or _option_by_basename(now, options)
+            listed = listed_as(now, options)
             if listed is None:
                 # Two files of that name in two folders may be two different
                 # models: writing either is a guess, so it is refused - but as

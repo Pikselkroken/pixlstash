@@ -220,6 +220,19 @@ async function settle(wrapper) {
   await flush(wrapper);
 }
 
+/**
+ * `readModelSwap` answering `?replacing=` per slot kind, as the server does:
+ * `replacements` already filtered to what goes with the checkpoint and what
+ * the loader lists (#1596).
+ */
+function replacementsByKind(byKind, reasons = {}) {
+  return (_key, { slotKind } = {}) =>
+    Promise.resolve({
+      replacements: byKind[slotKind] ?? [],
+      replacements_reason: reasons[slotKind] ?? null,
+    });
+}
+
 function textOf(wrapper) {
   return wrapper.text().replace(/\s+/g, " ");
 }
@@ -377,11 +390,13 @@ describe("a checkpoint that will not load", () => {
       missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
     );
     getWorkflowCard.mockResolvedValue(detail({ card: named }));
-    readModelSwap.mockReset().mockResolvedValue({
-      checkpoints: [
-        { id: 7, filename: "realvisXL_v5_bf16.safetensors", display_name: "RealVis 5" },
-      ],
-    });
+    readModelSwap.mockReset().mockImplementation(
+      replacementsByKind({
+        checkpoint: [
+          { id: 7, filename: "realvisXL_v5_bf16.safetensors", display_name: "RealVis 5" },
+        ],
+      }),
+    );
     const fixed = detail({
       card: named,
       model_fixes: [
@@ -700,11 +715,16 @@ describe("a VAE or text encoder that will not load (#1596)", () => {
       missing({ file: "SDXL/sdxl_vae_fp8.safetensors", folder: "vae" }),
     );
     getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
-    readModelSwap.mockReset().mockResolvedValue({
-      checkpoints: [{ id: 1, filename: "other-ckpt.safetensors" }],
-      vaes: [{ id: 7, filename: "sdxl_vae_bf16.safetensors", display_name: "SDXL VAE" }],
-      text_encoders: [{ id: 8, filename: "t5xxl_bf16.safetensors" }],
-    });
+    readModelSwap.mockReset().mockImplementation(
+      replacementsByKind({
+        checkpoint: [{ id: 1, filename: "other-ckpt.safetensors" }],
+        vae: [
+          { id: 7, filename: "sdxl_vae_bf16.safetensors", display_name: "SDXL VAE", via: "grouped" },
+          { id: 9, filename: "sdxl_vae_alt.safetensors", via: "declared" },
+        ],
+        text_encoder: [{ id: 8, filename: "t5xxl_bf16.safetensors" }],
+      }),
+    );
     const fix = {
       slot_label: "n2/vae_name",
       was: "SDXL/sdxl_vae_fp8.safetensors",
@@ -722,8 +742,17 @@ describe("a VAE or text encoder that will not load (#1596)", () => {
     expect(textOf(wrapper)).not.toContain("Checkpoint missing");
     expect(wrapper.find('[data-testid="wftab-replace-model"]').exists()).toBe(false);
     expect(row(wrapper, "text_encoder").text()).toContain("t5xxl");
+    // Asked for THIS file in a VAE slot: the server filters by what goes with
+    // the checkpoint and what the loader lists.
+    expect(readModelSwap).toHaveBeenCalledWith(KEY, {
+      replacing: "SDXL/sdxl_vae_fp8.safetensors",
+      slotKind: "vae",
+    });
+    expect(readModelSwap).toHaveBeenCalledTimes(1);
     const picker = row(wrapper, "vae").find('[data-testid="wftab-replace-vae"] select');
     expect(picker.text()).toContain("SDXL VAE");
+    // Only the file layout fits: said, not hidden.
+    expect(picker.text()).toContain("sdxl_vae_alt.safetensors (untested)");
     expect(picker.text()).not.toContain("other-ckpt");
     preflightWorkflowRun.mockResolvedValue({ groups: [] });
     await picker.setValue("sdxl_vae_bf16.safetensors");
@@ -760,11 +789,11 @@ describe("a VAE or text encoder that will not load (#1596)", () => {
       ),
     );
     getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
-    readModelSwap.mockReset().mockResolvedValue({
-      checkpoints: [],
-      vaes: [],
-      text_encoders: [{ id: 8, filename: "t5xxl_bf16.safetensors" }],
-    });
+    readModelSwap.mockReset().mockImplementation(
+      replacementsByKind(
+        { text_encoder: [{ id: 8, filename: "t5xxl_bf16.safetensors" }] },
+      ),
+    );
     const { wrapper } = await mountWith([KEY], [withSupport]);
     await settle(wrapper);
 
@@ -776,6 +805,39 @@ describe("a VAE or text encoder that will not load (#1596)", () => {
       encoders.find('[data-testid="wftab-replace-text_encoder"] select').text(),
     ).toContain("t5xxl_bf16.safetensors");
     expect(row(wrapper, "vae").text()).toContain("sdxl_vae");
+  });
+});
+
+describe("no replacement to offer (#1596)", () => {
+  it("says why instead of drawing an empty picker", async () => {
+    const withVae = card({
+      models: [
+        { name: "realvisXL_v5", kind: "checkpoint", slot_label: "n1/ckpt_name" },
+        { name: "sdxl_vae", kind: "vae", slot_label: "n2/vae_name" },
+      ],
+    });
+    preflightWorkflowRun.mockResolvedValue({
+      groups: [
+        {
+          reasons: [
+            {
+              code: "missing_models",
+              models: [{ file: "sdxl_vae_fp8.safetensors", folder: "vae" }],
+            },
+          ],
+        },
+      ],
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: withVae }));
+    readModelSwap
+      .mockReset()
+      .mockImplementation(replacementsByKind({}, { vae: "none_loadable" }));
+    const { wrapper } = await mountWith([KEY], [withVae]);
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-replace-vae"]').exists()).toBe(false);
+    expect(
+      wrapper.find('[data-testid="wftab-no-replacement-vae"]').text(),
+    ).toContain("not something this loader can load");
   });
 });
 

@@ -109,6 +109,7 @@ from pixlstash.services.comfyui_recipe_service import (
     detect_lora_targets,
     detect_model_targets,
     insert_adapter,
+    listed_as,
     listed_options,
     lora_display_name,
     plan_lora_chain,
@@ -169,6 +170,7 @@ from pixlstash.services.workflow_identity import (
 from pixlstash.services.workflow_hash import (
     MODEL_EXTENSIONS,
     SECRET_FIELD_RE,
+    SHELF_ID_FIELD,
     WorkflowGraphError,
     normalized_filename,
     structural_document,
@@ -1555,6 +1557,22 @@ class SwapFlag(BaseModel):
     modality: str | None = None
 
 
+class ModelFixCandidate(BaseModel):
+    """A shelf model that can replace a missing one (``?replacing=``)."""
+
+    id: int
+    filename: str
+    display_name: str | None = None
+    via: str | None = Field(
+        None,
+        description=(
+            "For a VAE or text encoder, the evidence it goes with the "
+            "workflow's checkpoint (`SwapProposal.via`; `declared` is "
+            "untested). Null for a checkpoint."
+        ),
+    )
+
+
 class ModelSwapOptions(BaseModel):
     """``GET /workflows/{key}/model-swap``: what the clone dialog draws."""
 
@@ -1569,6 +1587,28 @@ class ModelSwapOptions(BaseModel):
         description="Per support kind (vae, text_encoder); empty without a checkpoint.",
     )
     flags: list[SwapFlag] = Field(default_factory=list)
+    replacements: list[ModelFixCandidate] | None = Field(
+        None,
+        description=(
+            "Only with `?replacing=`: the shelf models the Workflow tab may "
+            "offer in place of that file (`PUT …/model-fix`). A VAE or text "
+            "encoder must go with the workflow's checkpoint (a workflow set "
+            "grouping them, or recipes and ComfyUI runs that loaded them "
+            "together), and every kind must be one the loader naming the file "
+            "can load: listed by it when ComfyUI answers, of the same file "
+            "type when it does not."
+        ),
+    )
+    replacements_reason: (
+        Literal["no_checkpoint", "none_go_with_it", "none_loadable"] | None
+    ) = Field(
+        None,
+        description=(
+            "Why `replacements` is empty: the checkpoint is not on the shelf, "
+            "so nothing says what goes with it; nothing does; or nothing that "
+            "does can be loaded by this loader."
+        ),
+    )
 
 
 # Ceiling on one clone's swap map. A graph names a handful of model files; the
@@ -5047,6 +5087,116 @@ def create_router(server) -> APIRouter:
         listed = {normalized_filename(option) for option in options}
         return [m for m in kept if normalized_filename(m.filename) in listed]
 
+    def _fix_replacements(
+        request: Request,
+        card,
+        graph: dict,
+        models: dict[int, SwapModel],
+        index: tuple,
+        replacing: str,
+        kind: str | None,
+    ) -> tuple[list[ModelFixCandidate], str | None]:
+        """What the Workflow tab may offer in place of *replacing*.
+
+        Read off the graph a run submits, with the owner's fixes applied, so a
+        replacement that has gone missing too is answered for the loader it
+        sits in. Two filters, both required:
+
+        * **It goes with the checkpoint** (VAEs and text encoders):
+          :func:`propose_companions` for the graph's base model, which is the
+          owner's workflow sets first, then the recipes and ComfyUI runs that
+          loaded the two together. ``declared`` entries are the cold case and
+          are marked by their ``via``.
+        * **The loader can load it**: listed by every loader naming the file,
+          by the rule the rewrite writes it with (:func:`listed_as`), when
+          ComfyUI answers; of the same file type when it cannot be asked. A
+          GGUF loader lists safetensors too; a core one never lists GGUF.
+
+        Returns:
+            ``(candidates, reason)``, *reason* set only when there are none.
+
+        Raises:
+            HTTPException: 409 when the graph loads *replacing* in no slot a
+                fix can fill (of *kind*, when given).
+        """
+        _apply_model_fixes(card, graph, None)
+        wanted = normalized_filename(replacing)
+        loaders = [
+            (cls, widget, value, fix_kind)
+            for _node, cls, widget, value in iter_model_fields_api(graph)
+            if normalized_filename(value) == wanted
+            and (fix_kind := model_fix_kind(cls, widget)) is not None
+            and kind in (None, fix_kind)
+        ]
+        if not loaders:
+            raise HTTPException(
+                status_code=409, detail="This workflow does not load that model."
+            )
+        kind = loaders[0][3]
+        loaders = [entry for entry in loaders if entry[3] == kind]
+        if kind == FILE_CHECKPOINT:
+            candidates = [
+                ModelFixCandidate(
+                    id=m.id, filename=m.filename, display_name=m.display_name
+                )
+                for m in sorted(
+                    (m for m in models.values() if m.file_kind == FILE_CHECKPOINT),
+                    key=lambda m: (m.display_name or m.filename).lower(),
+                )
+            ]
+        else:
+            base = next(
+                (
+                    slot.model
+                    for _cls, _widget, slot in _swap_slots(graph, models, index)
+                    if slot.kind in BASE_MODEL_KINDS and slot.model is not None
+                ),
+                None,
+            ) or next(
+                (
+                    models.get(int(value))
+                    for _node, _cls, widget, value in iter_model_fields_api(graph)
+                    if widget == SHELF_ID_FIELD and value.isdigit()
+                ),
+                None,
+            )
+            if base is None or base.file_kind != FILE_CHECKPOINT:
+                return [], "no_checkpoint"
+            candidates = [
+                ModelFixCandidate(
+                    id=entry["id"],
+                    filename=entry["filename"],
+                    display_name=entry["display_name"],
+                    via=entry["via"],
+                )
+                for entry in propose_companions(_hub(), base.id, index)[kind]
+            ]
+        candidates = [
+            c for c in candidates if normalized_filename(c.filename) != wanted
+        ]
+        if not candidates:
+            return [], "none_go_with_it"
+        object_info, error = _read_object_info(_comfyui_url(_user(request)))
+        for cls, widget, value, _kind in loaders:
+            options = listed_options(object_info, cls, widget)
+            if options:
+                candidates = [c for c in candidates if listed_as(c.filename, options)]
+            else:
+                logger.info(
+                    "Offering %s replacements for %s by file type, ComfyUI "
+                    "could not say what it lists: %s",
+                    cls,
+                    value,
+                    error or "the field is not enumerated",
+                )
+                extension = os.path.splitext(value)[1].lower()
+                candidates = [
+                    c
+                    for c in candidates
+                    if os.path.splitext(c.filename)[1].lower() == extension
+                ]
+        return candidates, None if candidates else "none_loadable"
+
     @router.get(
         "/workflows/{workflow_key}/model-swap",
         summary="What a workflow could be cloned onto",
@@ -5067,7 +5217,11 @@ def create_router(server) -> APIRouter:
         },
     )
     def read_model_swap(
-        request: Request, workflow_key: str, checkpoint_id: int | None = None
+        request: Request,
+        workflow_key: str,
+        checkpoint_id: int | None = None,
+        replacing: str | None = Query(None, min_length=1, max_length=MAX_VALUE_LENGTH),
+        slot_kind: Literal["checkpoint", "vae", "text_encoder"] | None = None,
     ):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
@@ -5091,6 +5245,18 @@ def create_router(server) -> APIRouter:
             vaes=of_kind(FILE_VAE),
             text_encoders=of_kind(FILE_TEXT_ENCODER),
         )
+        if replacing is not None:
+            # The Workflow tab's "Replace with…", not the clone dialog.
+            options.replacements, options.replacements_reason = _fix_replacements(
+                request,
+                card,
+                deepcopy(source.graph),
+                models,
+                index,
+                replacing,
+                slot_kind,
+            )
+            return options
         if checkpoint_id is None:
             # Asked once, on open: the choice lists are what the dialog draws
             # then, and it does not re-read them per checkpoint.

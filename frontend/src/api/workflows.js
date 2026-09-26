@@ -329,14 +329,26 @@ export async function duplicateWorkflow(workflowKey) {
  * Call it on open and on each checkpoint choice, never per keystroke: the
  * server reads the whole shelf and every recipe to answer.
  *
+ * With `replacing` (the Workflow tab's "Replace with…", #1596): also
+ * `replacements`, the shelf models that go with the workflow's checkpoint and
+ * that the loader naming that file can load, and `replacements_reason` when
+ * there are none.
+ *
  * @param {string} workflowKey
- * @param {{checkpointId?: number}} [options]
+ * @param {{checkpointId?: number, replacing?: string, slotKind?: string}} [options]
  * @returns {Promise<Object>}
  */
-export async function readModelSwap(workflowKey, { checkpointId } = {}) {
+export async function readModelSwap(
+  workflowKey,
+  { checkpointId, replacing, slotKind } = {},
+) {
+  const params = {};
+  if (checkpointId != null) params.checkpoint_id = checkpointId;
+  if (replacing != null) params.replacing = replacing;
+  if (slotKind != null) params.slot_kind = slotKind;
   return unwrap(
     apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}/model-swap`, {
-      params: checkpointId == null ? {} : { checkpoint_id: checkpointId },
+      params,
     }),
   );
 }

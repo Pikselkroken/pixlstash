@@ -242,17 +242,24 @@
                   is not installed in ComfyUI.
                 </p>
                 <AppSelect
-                  v-if="row.options.length"
+                  v-if="entry.options.length"
                   model-value=""
                   :label="`Replace with a ${row.noun} from your shelf`"
                   hide-label
-                  :options="row.options"
+                  :options="entry.options"
                   :disabled="busy === 'model-fix'"
                   :data-testid="`wftab-replace-${row.kind}`"
                   @update:model-value="
                     (now) => replaceModel(row.kind, entry.file, now)
                   "
                 />
+                <p
+                  v-else-if="entry.noReplacement"
+                  class="wftab-note wftab-quiet"
+                  :data-testid="`wftab-no-replacement-${row.kind}`"
+                >
+                  {{ entry.noReplacement }}
+                </p>
                 <p
                   v-if="entry.fix"
                   class="wftab-note wftab-quiet"
@@ -983,8 +990,7 @@ const BASE_MODEL_FOLDERS = new Set(["checkpoints", "diffusion_models"]);
 
 /**
  * The support rows a missing file can be replaced in (#1596): the model-fix
- * `slot_kind`, the pre-flight's folder for it, and the model-swap list the
- * candidates come from. `clip_vision` is not `text_encoders`, so a vision
+ * `slot_kind` and the pre-flight's folder for it. `clip_vision` is not `text_encoders`, so a vision
  * encoder is never offered a text encoder.
  */
 const SUPPORT_KINDS = [
@@ -993,7 +999,6 @@ const SUPPORT_KINDS = [
     label: "VAE",
     cardKind: "vae",
     folder: "vae",
-    swapList: "vaes",
     noun: "VAE",
     missingText: "VAE missing",
   },
@@ -1002,7 +1007,6 @@ const SUPPORT_KINDS = [
     label: "CLIP",
     cardKind: "clip",
     folder: "text_encoders",
-    swapList: "text_encoders",
     noun: "text encoder",
     missingText: "Text encoder missing",
   },
@@ -1092,26 +1096,44 @@ const replacementMissing = computed(
 );
 
 /**
- * `GET …/model-swap` for the selected card, read only when the pre-flight
- * says a file is missing: the shelf models each kind of row can offer.
+ * `GET …/model-swap?replacing=` per missing file, keyed `kind:file`: the
+ * shelf models that go with the workflow's checkpoint and that the file's
+ * loader can load (`replacements`), and why there are none
+ * (`replacements_reason`). Read only when the pre-flight says a file is
+ * missing.
  */
-const swapLists = ref(null);
+const replacementsByFile = ref({});
 
-/** A "Replace with…" picker's options from one model-swap list. */
-function replaceOptionsFrom(models) {
+/** Why a missing file has no "Replace with…", as the row says it. */
+const NO_REPLACEMENT_TEXT = {
+  no_checkpoint:
+    "Nothing to offer: the checkpoint is not on your shelf, so nothing says what goes with it.",
+  none_go_with_it: "Nothing on your shelf is known to work with this checkpoint.",
+  none_loadable:
+    "What works with this checkpoint is not something this loader can load.",
+};
+
+/** A "Replace with…" picker's options for one missing file, or `[]`. */
+function replaceOptionsFor(kind, file) {
+  const models = replacementsByFile.value[`${kind}:${file}`]?.replacements;
   return models?.length
     ? [
         { value: "", label: "Replace with…" },
         ...models.map((model) => ({
           value: model.filename,
-          label: model.display_name || model.filename,
+          // `declared`: only the file layout fits; nothing has run with it.
+          label: `${model.display_name || model.filename}${
+            model.via === "declared" ? " (untested)" : ""
+          }`,
         })),
       ]
     : [];
 }
 
 const replaceOptions = computed(() =>
-  replaceOptionsFrom(swapLists.value?.checkpoints),
+  missingCheckpointFile.value
+    ? replaceOptionsFor("checkpoint", missingCheckpointFile.value)
+    : [],
 );
 
 /** Whether two recorded values name one file, whatever their folders. */
@@ -1137,6 +1159,11 @@ const supportRows = computed(() =>
         id: `missing:${file}`,
         file,
         fix: fixes.find((fix) => sameFile(fix.now, file)) ?? null,
+        options: replaceOptionsFor(spec.kind, file),
+        noReplacement:
+          NO_REPLACEMENT_TEXT[
+            replacementsByFile.value[`${spec.kind}:${file}`]?.replacements_reason
+          ] ?? "",
       })),
       ...fixes
         .filter((fix) => !missing.some((file) => sameFile(fix.now, file)))
@@ -1154,11 +1181,7 @@ const supportRows = computed(() =>
     if (!entries.length && spec.kind === "vae") {
       entries = [{ id: "vae", text: "From the checkpoint" }];
     }
-    return {
-      ...spec,
-      entries,
-      options: replaceOptionsFrom(swapLists.value?.[spec.swapList]),
-    };
+    return { ...spec, entries };
   }).filter((row) => row.entries.length),
 );
 
@@ -1812,7 +1835,7 @@ async function checkInstalled(key) {
   missingBaseFiles.value = [];
   missingFiles.value = {};
   preflightAnswered.value = false;
-  swapLists.value = null;
+  replacementsByFile.value = {};
   if (!key) return;
   await new Promise((resolve) => setTimeout(resolve, PREFLIGHT_SETTLE_MS));
   if (check !== installedCheck) return;
@@ -1849,17 +1872,31 @@ async function checkInstalled(key) {
     return;
   }
   // Only a file ComfyUI named can be replaced: a forgotten name is no file.
-  const replaceable =
-    missingBaseFiles.value.some((file) => file !== FORGOTTEN_MODEL) ||
-    Object.values(missingFiles.value).some((files) => files.length);
-  if (!replaceable) return;
-  try {
-    const swap = await readModelSwap(key);
+  const asks = [
+    ...(missingCheckpointFile.value &&
+    missingBaseFiles.value.includes(missingCheckpointFile.value)
+      ? [["checkpoint", missingCheckpointFile.value]]
+      : []),
+    ...SUPPORT_KINDS.flatMap((spec) =>
+      (missingFiles.value[spec.kind] ?? []).map((file) => [spec.kind, file]),
+    ),
+  ];
+  const found = {};
+  for (const [kind, file] of asks) {
+    try {
+      found[`${kind}:${file}`] = await readModelSwap(key, {
+        replacing: file,
+        slotKind: kind,
+      });
+    } catch (err) {
+      console.warn(
+        `[workflows] could not read replacements for ${file} on ${key}`,
+        err,
+      );
+    }
     if (check !== installedCheck || !stillOn(key)) return;
-    swapLists.value = swap ?? null;
-  } catch (err) {
-    console.warn(`[workflows] could not read replacements for ${key}`, err);
   }
+  replacementsByFile.value = found;
 }
 </script>
 
