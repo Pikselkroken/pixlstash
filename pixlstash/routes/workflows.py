@@ -1379,6 +1379,13 @@ class SwapProposal(BaseModel):
         )
     )
     recipes: int = Field(description="How many recipes name the two together.")
+    history_runs: int = Field(
+        default=0,
+        description=(
+            "How many runs in ComfyUI's own history, as of the last workflow "
+            "pull, loaded the two together."
+        ),
+    )
 
 
 class SwapFlag(BaseModel):
@@ -4507,11 +4514,12 @@ def create_router(server) -> APIRouter:
         description=(
             "The model files this workflow loads, the shelf's checkpoints, VAEs "
             "and text encoders to choose from, and - once a checkpoint is "
-            "chosen - the VAEs and text encoders recipes on this machine have "
-            "run beside it, and the LoRAs and ControlNets trained on another "
-            "family. When no recipe answers, support files whose layout the "
-            "checkpoint's architecture declares are proposed as `declared`, "
-            "never as evidence."
+            "chosen - the VAEs and text encoders recipes on this machine, or "
+            "runs in ComfyUI's history as of the last workflow pull, have run "
+            "beside it, and the LoRAs and ControlNets trained on another "
+            "family. When no recipe or run answers, support files whose layout "
+            "the checkpoint's architecture declares are proposed as "
+            "`declared`, never as evidence."
         ),
         response_model=ModelSwapOptions,
         responses={

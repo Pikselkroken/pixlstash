@@ -51,8 +51,11 @@ from pixlstash.services.model_features import (
 from pixlstash.services.stack_detector import repair_stacks
 from pixlstash.services.workflow_hash import (
     SHA256_FIELD_RE,
+    WorkflowGraphError,
+    assets_from_reduction,
     digests_with_prefix,
     normalized_filename,
+    reduce_api_graph,
 )
 from pixlstash.services.workflow_library_service import (
     cover_order,
@@ -908,6 +911,60 @@ def fetch_companions(hub, ids: list[int]) -> dict:
     return result
 
 
+def record_comfyui_history(hub, history: dict) -> int:
+    """File which shelf models ran together in each finished ComfyUI run.
+
+    *history* is ``GET /history`` as ComfyUI answers it. A run counts only when
+    its status says it finished: a run that errored proves nothing about its
+    files working together. Each asset name resolves the way a recipe's does
+    (:func:`resolve_recipe_models`), but **only an unambiguous match is kept**,
+    because what is stored is the model id and a guess stored as an id stops
+    reading as a guess. A name the shelf does not hold is not stored at all, so
+    nothing here keeps a model name the shelf has forgotten.
+
+    Idempotent: a run read twice writes nothing new, and one re-read after the
+    shelf gained a file gains that file.
+
+    Returns:
+        How many finished runs named at least one shelf model.
+    """
+    by_name, by_digest, _filenames, _names = recipe_asset_index(hub)
+    sorted_digests = sorted(by_digest)
+    rows: list[tuple[str, int]] = []
+    runs = 0
+    for prompt_id, entry in history.items():
+        try:
+            if entry["status"]["status_str"] != "success":
+                continue
+            nodes = reduce_api_graph(entry["prompt"][2])
+        except (KeyError, IndexError, TypeError, WorkflowGraphError) as exc:
+            logger.info(
+                "Skipped ComfyUI run %s from the history: no finished graph (%s: %s)",
+                prompt_id,
+                type(exc).__name__,
+                exc,
+            )
+            continue
+        found: set[int] = set()
+        for widget, value in assets_from_reduction(nodes):
+            if SHA256_FIELD_RE.search(widget):
+                matched = models_for_digest(value, by_digest, sorted_digests)
+            else:
+                matched = by_name.get(value, set())
+            if len(matched) == 1:
+                found |= matched
+        if found:
+            runs += 1
+            rows.extend((str(prompt_id), model_id) for model_id in found)
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO comfyui_history_model (prompt_id, model_id) "
+            "VALUES (?, ?)",
+            rows,
+        )
+    return runs
+
+
 def known_base_model(row) -> Optional[str]:
     """The base model a clone may reason about for one ``model`` row, or ``None``.
 
@@ -959,6 +1016,14 @@ def propose_companions(
        that fits says the file loads, not that it suits, so these carry
        ``recipes`` 0 and the caller must present them as untested.
 
+    **ComfyUI's own runs count too** (#1518): the ``comfyui_history_model``
+    rows a workflow pull read off ``GET /history``, so a checkpoint used in
+    ComfyUI but in nothing PixlStash filed still has evidence. Nothing here asks
+    ComfyUI; the rows are whatever the last pull left. The two are counted
+    apart, ``recipes`` and ``history_runs``, and recipe evidence ranks first.
+    A run is evidence at every step, so ``declared`` answers only when neither
+    kind does.
+
     A checkpoint nothing in its family has run with, whose family declares no
     layout for a kind or whose shelf holds no file of that layout, proposes
     nothing for that kind, and the caller is expected to say so. A support file a
@@ -973,8 +1038,8 @@ def propose_companions(
 
     Returns:
         ``{"vae": [...], "text_encoder": [...]}``, each entry ``{"id",
-        "filename", "display_name", "family", "via", "recipes"}``, most recipes
-        first. ``family`` is the file's own layout (``clip_l``, ``t5_xxl``), which
+        "filename", "display_name", "family", "via", "recipes",
+        "history_runs"}``, most recipes first, then most runs. ``family`` is the file's own layout (``clip_l``, ``t5_xxl``), which
         is how a caller tells two text encoders apart. Both lists empty for an
         unknown id.
     """
@@ -1024,17 +1089,28 @@ def propose_companions(
             )
         )
 
+    # ComfyUI's own runs (#1518), already resolved to unambiguous model ids by
+    # `record_comfyui_history`, so nothing is subtracted from them.
+    runs: dict[str, set[int]] = {}
+    for row in hub.fetchall("SELECT prompt_id, model_id FROM comfyui_history_model"):
+        runs.setdefault(row["prompt_id"], set()).add(int(row["model_id"]))
+
+    def tally(witnesses, kind, anchors, skip) -> dict[int, int]:
+        counts: dict[int, int] = {}
+        for key, members in witnesses.items():
+            if not members & anchors:
+                continue
+            for member in members - skip.get(key, set()):
+                row = models.get(member)
+                if row is not None and row["file_kind"] == kind and row["filename"]:
+                    counts[member] = counts.get(member, 0) + 1
+        return counts
+
     for kind in SUPPORT_FILE_KINDS:
         for via, anchors in ladder:
-            counts: dict[int, int] = {}
-            for recipe, members in recipe_models.items():
-                if not members & anchors:
-                    continue
-                for member in members - ambiguous.get(recipe, set()):
-                    row = models.get(member)
-                    if row is not None and row["file_kind"] == kind and row["filename"]:
-                        counts[member] = counts.get(member, 0) + 1
-            if not counts:
+            by_recipe = tally(recipe_models, kind, anchors, ambiguous)
+            by_run = tally(runs, kind, anchors, {})
+            if not by_recipe and not by_run:
                 continue
             proposals[kind] = [
                 {
@@ -1043,13 +1119,15 @@ def propose_companions(
                     "display_name": models[model_id]["display_name"],
                     "family": models[model_id]["family"],
                     "via": via,
-                    "recipes": count,
+                    "recipes": by_recipe.get(model_id, 0),
+                    "history_runs": by_run.get(model_id, 0),
                 }
-                for model_id, count in sorted(
-                    counts.items(),
-                    key=lambda item: (
-                        -item[1],
-                        (models[item[0]]["filename"] or "").lower(),
+                for model_id in sorted(
+                    by_recipe.keys() | by_run.keys(),
+                    key=lambda m: (
+                        -by_recipe.get(m, 0),
+                        -by_run.get(m, 0),
+                        (models[m]["filename"] or "").lower(),
                     ),
                 )
             ]
@@ -1065,6 +1143,7 @@ def propose_companions(
                 "family": row["family"],
                 "via": VIA_DECLARED,
                 "recipes": 0,
+                "history_runs": 0,
             }
             for model_id, row in sorted(
                 models.items(), key=lambda item: (item[1]["filename"] or "").lower()

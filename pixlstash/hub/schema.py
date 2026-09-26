@@ -1026,6 +1026,26 @@ CREATE TABLE IF NOT EXISTS workflow_pulled_file (
 )
 """
 
+# Which shelf models ran together in one ComfyUI run, read off ComfyUI's own
+# ``GET /history`` by the workflow pull (#1518). Companion proposals count it
+# beside ``workflow_recipe_asset``, so a checkpoint used in ComfyUI but never in
+# a picture PixlStash filed still has evidence - kept here because ComfyUI
+# forgets its history on restart and the shelf must not need it running.
+#
+# **Model ids, never names.** A run's asset names are resolved to shelf rows at
+# pull time and only an unambiguous match is kept, so this table adds no place a
+# model filename lives and "forget this model's name" has nothing new to reach.
+# ``model_id`` is a plain column, not a foreign key: ``model.id`` is
+# AUTOINCREMENT and never reused, a row whose model is gone is simply skipped,
+# and a foreign key would make this a third child in the model-table rebuild.
+_V2_COMFYUI_HISTORY_MODEL = """
+CREATE TABLE IF NOT EXISTS comfyui_history_model (
+    prompt_id  TEXT NOT NULL,
+    model_id   INTEGER NOT NULL,
+    PRIMARY KEY (prompt_id, model_id)
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1080,6 +1100,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_UNSTACKED,
     _V2_WORKFLOW_ORIGIN,
     _V2_WORKFLOW_PULLED_FILE,
+    _V2_COMFYUI_HISTORY_MODEL,
     *_V2_WORKFLOW_INDEXES,
 )
 

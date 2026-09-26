@@ -246,14 +246,25 @@ function isOriginal(model) {
   return model.id === baseSlot.value?.model?.id;
 }
 
+/**
+ * The proposal's only evidence is ComfyUI's own run history (#1518), read at
+ * the last workflow pull, rather than a picture or workflow in this library.
+ */
+function onlyComfyUI(proposal) {
+  return !proposal.recipes && proposal.history_runs > 0;
+}
+
 function provenance(row) {
   const chosen = chosenCheckpoint.value;
   if (!chosen || isOriginal(chosen) || row.touched) return "";
-  if (row.via === "checkpoint") return "Used with this checkpoint";
+  const where = row.onlyComfyUI ? " in ComfyUI" : "";
+  if (row.via === "checkpoint") return `Used with this checkpoint${where}`;
   if (row.via === "base_model") {
-    return `Used with other ${chosenCheckpoint.value.base_model} checkpoints`;
+    return `Used with other ${chosenCheckpoint.value.base_model} checkpoints${where}`;
   }
-  if (row.via === "family") return "Used with other checkpoints of its family";
+  if (row.via === "family") {
+    return `Used with other checkpoints of its family${where}`;
+  }
   if (row.via === "declared") {
     return "Untested: nothing has run with this family, the file type fits it";
   }
@@ -373,6 +384,7 @@ watch(
             family: slot.model?.family ?? null,
             value: own,
             via: null,
+            onlyComfyUI: false,
             touched: false,
             leftover: null,
           };
@@ -450,6 +462,7 @@ watch(checkpointId, async () => {
     if (own) {
       taken.add(own.id);
       row.via = own.via;
+      row.onlyComfyUI = onlyComfyUI(own);
     }
   }
   for (const row of rows.value) {
@@ -464,7 +477,11 @@ watch(checkpointId, async () => {
     );
     if (next) {
       taken.add(next.id);
-      Object.assign(row, { value: next.filename, via: next.via });
+      Object.assign(row, {
+        value: next.filename,
+        via: next.via,
+        onlyComfyUI: onlyComfyUI(next),
+      });
     }
   }
   // Why a row kept its file, said only once every row has been filled: a
@@ -484,6 +501,7 @@ function resetRows() {
     Object.assign(row, {
       value: row.own,
       via: null,
+      onlyComfyUI: false,
       touched: false,
       leftover: null,
     });

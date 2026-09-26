@@ -1633,6 +1633,9 @@ class ComfyUIWorkflowPullSummary(BaseModel):
     missing_model_files: list[str] = []
     # The cards the pull filed a file on.
     workflow_keys: list[str] = []
+    # Finished runs in ComfyUI's /history that named a shelf model, filed as
+    # companion evidence (#1518); None when the history could not be read.
+    history_runs: int | None = None
 
 
 class ComfyUIWorkflowPullStateResponse(BaseModel):
