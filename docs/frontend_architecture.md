@@ -1744,6 +1744,12 @@ watcher the model shelf uses. See §9.1b for the destination itself.
   as its cover and never sums its members, so a stack filter would answer with
   more pictures than the link said. A card with no pictures draws the figure
   as plain text; there is nothing to show.
+- **`?card=<key>` moves the cursor too** (the Run popup's *Open in
+  Workflows*, the lightbox Edit tab's *Open*). `WorkflowTab` selects the card
+  and opens the rail; the grid puts the cursor, and so focus and the scroll, on
+  its row, once per value and only on a hit. A stack member's stack is opened
+  first and the cursor lands on its row in the panel. A key the grid does not
+  list (hidden, one-off, filtered) moves nothing; the rail still shows it.
 - **`?topology=<hash>` is honoured here**, as it was on the shelf: the link a
   picture's Recipe section pushes selects the first card in sort order whose
   `topology_hash` matches and moves the cursor onto it. Once per VALUE, not
