@@ -1631,6 +1631,11 @@ def test_a_near_miss_is_offered_kept_separate_and_merged(shelf_env):
         assert merged["offer"] is None
         body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
         assert all(c["covered_by"] == [set_id] for c in body["combinations"])
+        # The offer read every library's recipes; the route still serves only
+        # this library's: the pictureless "om-elsewhere" combination and the
+        # hub-wide list stay on the server.
+        assert "hub_combinations" not in body
+        assert len(body["combinations"]) == 3
     finally:
         _wipe_sets(server)
         _wipe_recipes(server)
