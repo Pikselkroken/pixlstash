@@ -8,6 +8,7 @@ import {
   headModel,
   rowBaseModel,
   kindCounts,
+  offerText,
   setCard,
   setGroups,
   setName,
@@ -453,6 +454,38 @@ describe("hand-made sets (#1520)", () => {
       ["lora", ["add:lora"]],
       ["other", ["add:other"]],
     ]);
+  });
+
+  it("puts the merge offer's ghosts before each slot's ＋, a checkpoint ghost in place of it (#1523)", () => {
+    const incomplete = {
+      id: 9,
+      members: [{ sha256: "h3", slot: "lora", on_shelf: true, id: 3 }],
+      offer: {
+        picture_count: 0,
+        recipes: 2,
+        models: [
+          { id: 1, sha256: "h1", slot: "checkpoint" },
+          { id: 5, sha256: "h5", slot: "lora" },
+        ],
+      },
+    };
+    const keys = setSlots(incomplete).map(({ slot, items }) => [
+      slot.id,
+      items.map((i) => i.key),
+    ]);
+    expect(keys).toEqual([
+      ["checkpoint", ["g:h1"]],
+      ["text_encoder", ["add:text_encoder"]],
+      ["vae", ["add:vae"]],
+      ["lora", ["m:h3", "g:h5", "add:lora"]],
+      ["other", ["add:other"]],
+    ]);
+    // No picture in this library: counted in recipes instead.
+    expect(offerText(incomplete)).toBe("2 recipes need 2 more");
+    expect(handMadeCard(incomplete).offer).toEqual({
+      adds: 2,
+      text: "2 recipes need 2 more",
+    });
   });
 
   it("compares base models the way the server fills a member's", () => {

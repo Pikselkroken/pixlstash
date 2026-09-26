@@ -558,6 +558,8 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/models/workflow-sets/{set_id}/members/remove"): RoutePolicy(
         _OWNER
     ),
+    # The models kept out of a set's merge offer (#1523): same rows, same tier.
+    ("PUT", "/api/v1/models/workflow-sets/{set_id}/declines"): RoutePolicy(_OWNER),
     # The shelf's sixth verb, and the one route on this block that spawns a
     # process on the host's desktop. Same authority - and same red-line tier -
     # as POST /pictures/{id}/open-location: what it can do is bounded by what

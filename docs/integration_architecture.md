@@ -563,6 +563,14 @@ Rules neither side may drift from:
    returned**: a deleted set's members as `{sha256, slot, label}`, removed
    members the same way, added ones through `members/remove`. No server-side
    undo exists. A refusal is a 409 whose `detail` is the sentence to show.
+   **The merge offer (#1523)** rides on each set too: `offer` (null, or
+   `{head_id, head_name, picture_count, recipes, covers, models: [{id, sha256,
+   name, kind, slot, picture_count, recipes}]}`), `declined` (sha256s kept out)
+   and `kept_separate` (pictures here those hold back). The server decides the
+   offer; the client draws it as ghosts and merges by posting `models` to
+   `members` with their `slot`. `PUT .../{set_id}/declines` (`{sha256: [...]}`,
+   the whole list) answers `{set, previous}`, and putting `previous` back is
+   the undo. `picture_count` counts this library; `recipes` counts every one.
 
 ### 2.3 The `/workflows` contract (v1.11)
 

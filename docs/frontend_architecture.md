@@ -1760,6 +1760,22 @@ the shelf's workflow sets section) and served as `hand_made` on
 - **Clone with new models** labels proposals with `via: "grouped"` "Grouped by
   you" and lists them first in its selects; one with `prepick: false` (the set
   offers several of that kind) is shown but not pre-picked.
+- **The merge offer is ghosts in the tray (#1523).** A set the server gives an
+  `offer` wears it on the card (a lasting "N pictures need K more · Merge…"
+  pill over the cover, and a dashed `+K` chip) until the owner merges or keeps
+  it separate: nothing is a toast, nothing is one-time. The pill opens the tray
+  with the cursor on the **offer strip**, a `kind: "slot"` entry keyed `offer`
+  with `slotIndex: -1`, so Up/Down walk through it. `setSlots` adds each offered
+  model as a **ghost** tile (`g:<sha256>`, dashed, faded mark, picture count,
+  Add) in the slot it would land in, before the ＋; a checkpoint ghost takes the
+  ＋'s place. Enter on the strip merges all, Enter on a ghost adds it, Delete or
+  Backspace on a ghost keeps it out (stopped, so the shelf's file Delete never
+  sees it). A merge is `addToHandMadeSet` with `joined`, whose receipt counts
+  the pictures that joined; Keep separate and Offer again are
+  `keepOutOfHandMadeSet` / `offerMergeAgain`, each with Undo. With models kept
+  out and no offer left, the tray shows "Kept separate from N pictures ·
+  Offer again". The set's menu carries Merge with the pictures' set… (the
+  grid's exposed `openOffer`), Keep separate and Offer the merge again.
 
 #### `WorkflowsView.vue` (`views/`) + `StackPanel.vue` (`panels/`), v1.12 F1a / F2
 

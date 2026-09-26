@@ -134,6 +134,7 @@ from pixlstash.services.model_workflow_sets import (
     delete_set,
     remove_members,
     rename_set,
+    set_declines,
 )
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
@@ -823,6 +824,35 @@ class HandMadeSetMember(BaseModel):
     file_size: Optional[int] = None
 
 
+class MergeOfferModel(BaseModel):
+    """A model the merge offer would add to a hand-made set (#1523)."""
+
+    id: int = Field(description="Hub `model.id`; add it by this.")
+    sha256: str = Field(description="What Keep separate records.")
+    name: str
+    kind: str = Field(description="`file_kind`.")
+    slot: WorkflowSetSlot = Field(description="The slot it would land in.")
+    picture_count: int = Field(
+        description="Kept pictures in the active library that used it."
+    )
+    recipes: int = Field(description="Recipes, in any library, that used it.")
+
+
+class MergeOffer(BaseModel):
+    """The pictures' set a hand-made set could take in by adding models (#1523)."""
+
+    head_id: int = Field(description="The file the pictures' set is named after.")
+    head_name: str
+    picture_count: int = Field(
+        description="Kept pictures in the active library that would join."
+    )
+    recipes: int = Field(description="Recipes, in any library, that would join.")
+    covers: list[WorkflowSetCover] = Field(default_factory=list)
+    models: list[MergeOfferModel] = Field(
+        description="What the merge adds, by slot, most pictures first."
+    )
+
+
 class HandMadeSet(BaseModel):
     """A workflow set the owner put together (#1520)."""
 
@@ -843,6 +873,22 @@ class HandMadeSet(BaseModel):
     covers: list[WorkflowSetCover] = Field(default_factory=list)
     members: list[HandMadeSetMember] = Field(
         description="Checkpoint, text encoders, VAEs, LoRAs, others; by name within."
+    )
+    declined: list[str] = Field(
+        default_factory=list,
+        description="Sha256s the owner kept out of the merge offer (#1523).",
+    )
+    offer: Optional[MergeOffer] = Field(
+        default=None,
+        description=(
+            "Models recipes used with this set's checkpoint that it lacks, and "
+            "the pictures that would join if they were added. Derived per "
+            "request; nothing joins without the owner adding them (#1523)."
+        ),
+    )
+    kept_separate: int = Field(
+        default=0,
+        description="Kept pictures here the offer leaves out because of `declined`.",
     )
 
 
@@ -942,6 +988,24 @@ class WorkflowSetRemoveRequest(BaseModel):
             "Members to take out, by full digest. One not in the set is ignored."
         ),
     )
+
+
+class WorkflowSetDeclinesRequest(BaseModel):
+    """Body of ``PUT /models/workflow-sets/{set_id}/declines``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sha256: list[Digest] = Field(
+        max_length=MAX_MODELS_PER_EDIT,
+        description="The whole list; empty offers the merge again.",
+    )
+
+
+class WorkflowSetDeclinesResponse(BaseModel):
+    """Body of ``PUT /models/workflow-sets/{set_id}/declines``."""
+
+    set: HandMadeSet
+    previous: list[str] = Field(description="The list before; putting it undoes.")
 
 
 class RemovedWorkflowSetMember(BaseModel):
@@ -1095,9 +1159,17 @@ def _cover_strip(covers) -> list[WorkflowSetCover]:
 
 def _hand_made_set(entry: dict) -> HandMadeSet:
     """One ``attach_hand_made`` entry as the response model."""
+    offer = entry.get("offer")
     return HandMadeSet(
-        **{key: value for key, value in entry.items() if key != "covers"},
+        **{
+            key: value for key, value in entry.items() if key not in ("covers", "offer")
+        },
         covers=_cover_strip(entry["covers"]),
+        offer=(
+            MergeOffer(**{**offer, "covers": _cover_strip(offer["covers"])})
+            if offer
+            else None
+        ),
     )
 
 
@@ -1963,6 +2035,26 @@ def create_router(server) -> APIRouter:
             set=_one_set(set_id),
             removed=[RemovedWorkflowSetMember(**row) for row in removed],
         )
+
+    @router.put(
+        "/models/workflow-sets/{set_id}/declines",
+        summary="Keep models out of a workflow set's merge offer",
+        description=(
+            "Replaces the list of models (by sha256) the set's merge offer "
+            "leaves out: Keep separate adds to it, Offer again empties it. "
+            "Returns the list as it was, so putting that back undoes the call. "
+            "Touches no member and no file."
+        ),
+        tags=["model_shelf"],
+        response_model=WorkflowSetDeclinesResponse,
+    )
+    def put_workflow_set_declines(
+        set_id: int, request: Request, payload: WorkflowSetDeclinesRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        with _workflow_set_errors():
+            previous = set_declines(server.hub, set_id, payload.sha256)
+        return WorkflowSetDeclinesResponse(set=_one_set(set_id), previous=previous)
 
     @router.post(
         "/models/{model_id}/open-location",
