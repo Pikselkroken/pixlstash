@@ -424,6 +424,10 @@ describe("FilterMenu", () => {
     field.element.setSelectionRange(4, 4);
     await field.trigger("keydown", { key: "ArrowLeft" });
     expect(wrapper.find(".fm-sub").exists()).toBe(true);
+    // A selection from the start still collapses first.
+    field.element.setSelectionRange(0, 2);
+    await field.trigger("keydown", { key: "ArrowLeft" });
+    expect(wrapper.find(".fm-sub").exists()).toBe(true);
 
     field.element.setSelectionRange(0, 0);
     await field.trigger("keydown", { key: "ArrowLeft" });
