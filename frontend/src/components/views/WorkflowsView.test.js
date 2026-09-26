@@ -975,6 +975,42 @@ describe("the empty state", () => {
   });
 });
 
+// ── Arriving by card key ──────────────────────────────────────────────────
+//
+// `/workflows?card=<key>` is what the Run popup's Open in Workflows and the
+// lightbox Edit tab's Open push. WorkflowTab selects the card; the grid has to
+// show it, which means the cursor (and so focus, and so the scroll) on its row.
+describe("arriving on ?card=", () => {
+  it("puts the cursor and focus on that card's row", async () => {
+    route.query = { card: "f" };
+    const wrapper = await grid();
+    await flush();
+
+    expect(cursorKey(wrapper)).toBe("f");
+    expect(document.activeElement?.dataset?.key).toBe("f");
+  });
+
+  it("opens the stack a member sits in and lands on the member's row", async () => {
+    route.query = { card: "e2" };
+    const wrapper = await grid();
+    await flush();
+    await flush();
+
+    expect(useWorkflowsStore().openStackKey).toBe("e");
+    expect(cursorKey(wrapper)).toBe("e2");
+    expect(document.activeElement?.dataset?.key).toBe("e2");
+  });
+
+  it("moves nothing for a key the grid does not list", async () => {
+    route.query = { card: "nothing" };
+    const wrapper = await grid();
+    await flush();
+
+    expect(useWorkflowsStore().openStackKey).toBeFalsy();
+    expect(cursorKey(wrapper)).toBe("a");
+  });
+});
+
 // ── The Recipe section's Open ─────────────────────────────────────────────
 //
 // `/workflows?topology=<hash>` is the link a picture's Recipe section pushes.

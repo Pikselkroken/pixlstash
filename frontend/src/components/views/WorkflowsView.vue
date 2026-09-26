@@ -933,6 +933,46 @@ watch(
   { immediate: true },
 );
 
+// ── Arriving by card key (`?card=<key>`) ─────────────────────────────────
+//
+// The Run popup's *Open in Workflows* and the lightbox Edit tab's *Open*.
+// `WorkflowTab` selects the card and opens the rail; this half puts the grid's
+// cursor on it, which focuses the row and so scrolls it into view, as
+// `?topology=` does. A stack MEMBER has no grid row of its own, so its stack is
+// opened first and the cursor lands on the member's row in the panel. A key
+// the grid does not list (hidden, a one-off, filtered out) moves nothing: the
+// rail still shows the card, which is the link's answer.
+//
+// Honoured once per value and only on a hit, for the reasons given above.
+let honouredCardKey = null;
+
+watch(
+  [() => route.query?.card, () => store.sortedCards],
+  async ([wanted]) => {
+    if (typeof wanted !== "string" || !wanted) {
+      honouredCardKey = null;
+      return;
+    }
+    if (honouredCardKey === wanted || !store.loaded) return;
+    let rowId = `card:${wanted}`;
+    if (!store.sortedCards.some((entry) => entry.key === wanted)) {
+      const cover = store.sortedCards.find((entry) =>
+        (entry.member_keys ?? []).includes(wanted),
+      );
+      if (!cover) return;
+      honouredCardKey = wanted;
+      await store.openStack(cover.key);
+      rowId = `member:${wanted}`;
+    }
+    honouredCardKey = wanted;
+    if (sortMenuOpen.value) return;
+    nextTick(() =>
+      moveCursor(flatRows.value.findIndex((entry) => entry.id === rowId)),
+    );
+  },
+  { immediate: true },
+);
+
 // ── The closed inspector (visual-language "Closed inspector") ─────────────
 //
 // A NEW selection nudges the inspector: the edge tab bounces and the rail
