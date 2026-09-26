@@ -307,6 +307,7 @@ import {
   checkpointModel,
   coverCellStyle,
   modelDisplayName,
+  differsBy,
   factChips as cardFactChips,
 } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
@@ -494,7 +495,9 @@ function checkpointChips(member, index) {
  * row says instead.
  */
 function factChips(member, index) {
-  return index === 0 ? [] : cardFactChips(member);
+  // A member whose chips could not be computed would fall back to its type
+  // chips, which in this column would read as differences.
+  return index === 0 || !differsBy(member) ? [] : cardFactChips(member);
 }
 
 // ── The member menu ───────────────────────────────────────────────────────

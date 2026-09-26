@@ -338,6 +338,22 @@ describe("StackPanel", () => {
     expect(chips[2]).toContain("other checkpoint");
   });
 
+  it("blanks a member's Differs by when it has no chips of its own", async () => {
+    useWorkflowPrefsStore().setStackView("list");
+    const wrapper = makePanel({
+      members: [
+        MEMBERS[0],
+        member("uncompared", { type: "txt2img", imported: true }),
+      ],
+    });
+    await wrapper.vm.$nextTick();
+
+    // No `differs_by` means the server could not compare it with the cover;
+    // its type chips in this column would read as a difference.
+    const row = wrapper.findAll(".stack-panel__row")[1];
+    expect(row.findAll(".stack-panel__facts .chip-row__label")).toHaveLength(0);
+  });
+
   it("draws no checkpoint chip for a model whose name was forgotten", async () => {
     useWorkflowPrefsStore().setStackView("list");
     const wrapper = makePanel({
