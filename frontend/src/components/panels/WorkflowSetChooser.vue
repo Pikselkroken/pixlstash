@@ -318,10 +318,16 @@ const targetKey = computed(() =>
     : activeKey.value,
 );
 
-/** Ticked rows the filter still shows: what Add adds. */
-const checkedShown = computed(() =>
-  items.value.filter((item) => checked.value.has(item.id)).map((i) => i.id),
-);
+/**
+ * What Add adds: every ticked row, or under a filter the ticked rows it still
+ * shows. Not the drawn rows alone: a group cut at `SECTION_DEPTH` keeps its
+ * ticked rows behind "Show more".
+ */
+const checkedShown = computed(() => {
+  if (!props.query.trim()) return [...checked.value];
+  const shown = new Set(items.value.map((item) => item.id));
+  return [...checked.value].filter((id) => shown.has(id));
+});
 
 const targetId = computed(() => {
   const item = items.value.find((entry) => entry.id === targetKey.value);

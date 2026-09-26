@@ -1462,9 +1462,7 @@ describe("hand-made sets (#1520)", () => {
       "Added filmgrain xl and Soft Light",
     );
     await chooser.trigger("keydown", { key: "Escape" });
-    expect(operations.receipt.summary).toBe(
-      'Added 2 LoRAs to "realvisXL v5"',
-    );
+    expect(operations.receipt.summary).toBe('Added 2 LoRAs to "realvisXL v5"');
 
     removeWorkflowSetMembers.mockReset().mockResolvedValue({ removed: [] });
     await operations.takeLocalReceiptAction();
@@ -1804,6 +1802,39 @@ describe("hand-made sets (#1520)", () => {
     expect(chooser.find(".wsc__gone").text()).toBe(
       "filmgrain xl also matches, and is already in this set.",
     );
+  });
+
+  it("adds every ticked row of a checklist, not only the ones drawn before Show more", async () => {
+    const loras = Array.from({ length: 10 }, (_, i) =>
+      row(20 + i, `lora_${i}`),
+    );
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), ...loras],
+      combinations: [
+        combination("1,20", [
+          CKPT,
+          ...loras.map((r) => member(r.id, r.filename, "adapter")),
+        ]),
+      ],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    addWorkflowSetMembers
+      .mockReset()
+      .mockResolvedValue({ set: handSet(10, [SET_CKPT]), added: [] });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Fill from pictures"))
+      .trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    // Eight drawn, ten ticked: Add counts and adds all ten.
+    expect(chooser.findAll('[role="option"]')).toHaveLength(8);
+    const add = chooser.findAll("button").find((b) => b.text() === "Add 10");
+    expect(add).toBeTruthy();
+    await add.trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers.mock.calls[0][1]).toHaveLength(10);
   });
 
   it("adds nothing from a checklist on Enter once every row is unticked", async () => {

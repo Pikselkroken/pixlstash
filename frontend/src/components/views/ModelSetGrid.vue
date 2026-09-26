@@ -1316,7 +1316,9 @@ async function undoLastPick() {
   if (done) {
     if (still) pickNote.value = `Took out ${last.name}`;
   } else if (still) {
+    // Back in the set: the line goes back to the adds, not an earlier undo.
     picked.value = [...picked.value, last];
+    pickNote.value = "";
   } else {
     // The popup closed while the undo was out, and it failed: the model is
     // still in the set, so it still gets its receipt.
