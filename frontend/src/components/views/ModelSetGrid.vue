@@ -633,7 +633,29 @@ function isMenuKey(event) {
   return event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey);
 }
 
+/**
+ * Up/Down pressed in the open tray's header bar (the Grid/List switch, Close).
+ *
+ * The bar sits between the card and its members, so Down enters the tray at its
+ * first member and Up returns to the card, wherever the cursor last was: a
+ * mouse click on the switch does not move it. Returns true when handled.
+ */
+function headerStep(event) {
+  const down = event.key === "ArrowDown";
+  if (!down && event.key !== "ArrowUp") return false;
+  if (!event.target?.closest?.(".msp__header")) return false;
+  event.preventDefault();
+  const rows = flatRows.value;
+  moveCursor(
+    down
+      ? rows.findIndex((e) => e.kind === "member")
+      : rows.findIndex((e) => e.kind === "card" && e.key === store.openSetKey),
+  );
+  return true;
+}
+
 function onKeyDown(event) {
+  if (headerStep(event)) return;
   if (targetOwnsTheGesture(event)) return;
   const entry = flatRows.value[cursorIndex.value];
   const cols = Math.max(1, columns.value);

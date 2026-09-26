@@ -46,6 +46,7 @@
             <span class="stack-panel__spacer"></span>
             <Segmented
               :options="VIEW_OPTIONS"
+              orientation="horizontal"
               :model-value="view"
               variant="icon-label"
               aria-label="Show the stack as"

@@ -365,6 +365,33 @@ describe("the cards", () => {
     expect(store.openSetKey).toBe("");
   });
 
+  it("steps off the Grid/List switch into the tray, not back to Grid", async () => {
+    // Clicking List leaves focus on the switch. Down there used to be the
+    // radiogroup's "next option" and flipped the tray straight back to Grid.
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [combination("1,2", [CKPT, VAE])],
+    });
+    store.toggleSet("model:1");
+    store.setView({ trayView: "list" });
+    await wrapper.vm.$nextTick();
+
+    const list = wrapper.findAll('.msp__header [role="radio"]')[1];
+    await list.trigger("keydown", { key: "ArrowDown" });
+    expect(store.view.trayView).toBe("list");
+    const grid = wrapper.find('[role="treegrid"]');
+    await grid.trigger("keydown", { key: "Enter" });
+    // The cursor is on a member, so Enter asks what it has run with.
+    expect(wrapper.emitted("works-with")).toHaveLength(1);
+
+    // Up from the switch returns to the card, whose Enter closes the tray.
+    await list.trigger("keydown", { key: "ArrowUp" });
+    expect(store.view.trayView).toBe("list");
+    await grid.trigger("keydown", { key: "Enter" });
+    expect(store.openSetKey).toBe("");
+  });
+
   it("draws the tray as a list when the reader asks for one", async () => {
     // The Workflows stack panel's own switch, so a reader learns it once. The
     // columns differ because a set's members are models.
