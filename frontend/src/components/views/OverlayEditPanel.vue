@@ -525,15 +525,26 @@ watch(
   },
 );
 
-// So the lightbox can drop its own ComfyUI bar while this tab shows the run.
-watch(
-  () => runHere.value?.status === "running",
-  (running) => emit("running", running),
-);
+// Whether the grid's ComfyUI state on screen is this tab's run: while it runs,
+// and through the runner's short "complete" tail after it, which the tab's own
+// Last edit already says. The lightbox drops its own bar for as long as this
+// holds. A later run from the grid's menus flips the runner back to running,
+// which this done run does not claim.
+const tellsRun = computed(() => {
+  const status = runHere.value?.status;
+  if (status === "running") return true;
+  return (
+    status === "done" &&
+    !!props.comfyuiProgress?.visible &&
+    props.comfyuiProgress?.status === "completed"
+  );
+});
+
+watch(tellsRun, (running) => emit("running", running));
 
 onBeforeUnmount(() => {
   clearTimeout(resolveTimer);
-  if (runHere.value?.status === "running") emit("running", false);
+  if (tellsRun.value) emit("running", false);
 });
 
 // Only offered once the result has been found, so it always has somewhere to go.

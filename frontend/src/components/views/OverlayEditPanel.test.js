@@ -297,6 +297,26 @@ describe("the Edit tab", () => {
     expect(wrapper.emitted("running")).toEqual([[true], [false]]);
   });
 
+  it("claims the runner's complete tail, but not a later run's", async () => {
+    const wrapper = await mountPanel();
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    await wrapper.setProps({
+      comfyuiProgress: { visible: true, status: "completed" },
+    });
+    // "ComfyUI complete" is this run's, and Last edit already says it.
+    expect(wrapper.emitted("running")).toEqual([[true]]);
+    await wrapper.setProps({
+      comfyuiProgress: { visible: false, status: "idle" },
+    });
+    expect(wrapper.emitted("running")).toEqual([[true], [false]]);
+    // A run from the grid's menus: the lightbox bar is its to show.
+    await wrapper.setProps({
+      comfyuiProgress: { visible: true, status: "running" },
+    });
+    expect(wrapper.emitted("running")).toEqual([[true], [false]]);
+  });
+
   it("keeps the run on the picture it was for", async () => {
     const wrapper = await mountPanel();
     await wrapper.find("textarea").setValue("golden hour");
