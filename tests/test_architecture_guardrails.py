@@ -3307,19 +3307,12 @@ def test_plugin_check_is_imported_only_by_the_cli():
 
     `sys.addaudithook` cannot be undone, so a server that imported
     `plugin_check` and ran a check would carry the hook for its whole life.
+    A plain text search rather than an `ast` walk, so a relative import or an
+    `importlib.import_module` string is caught as well.
     """
-    importers = set()
-    for path in sorted(PIXLSTASH_DIR.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                names = [alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                names = [node.module] + [
-                    f"{node.module}.{alias.name}" for alias in node.names
-                ]
-            else:
-                continue
-            if "pixlstash.plugin_check" in names:
-                importers.add(path.relative_to(REPO_ROOT).as_posix())
-    assert importers == {"pixlstash/cli.py"}
+    mentions = {
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in PIXLSTASH_DIR.rglob("*.py")
+        if "plugin_check" in path.read_text(encoding="utf-8")
+    }
+    assert mentions == {"pixlstash/cli.py", "pixlstash/plugin_check.py"}

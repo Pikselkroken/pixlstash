@@ -1308,7 +1308,7 @@ def test_a_plugin_that_reaches_for_nothing_says_so_with_its_caveat(
     assert _check(source) == cli.EXIT_OK
 
     out = capsys.readouterr().out
-    assert "nothing it watches for was seen" in out
+    assert "none of what it watches for was seen" in out
     assert "That is not a clean bill" in out
     assert "a plugin written to hide from this can" in out
     assert not (tmp_path / "__pycache__").exists()
@@ -1359,6 +1359,45 @@ def test_a_write_is_reported_by_directory_and_a_read_is_not(tmp_path, capsys):
     out = capsys.readouterr().out
     assert f"wrote 30 files under {tmp_path}" in out
     assert out.count("wrote ") == 1
+
+
+def test_a_write_after_changing_directory_is_placed_where_it_landed(tmp_path, capsys):
+    """Placed against the directory of the moment, not the checker's.
+
+    Resolved at print time instead, this reports the write under wherever the
+    command was run from: a confidently wrong directory.
+    """
+    # Inside the plugin's folder, so it is bucketed as that folder, which the
+    # directory the command runs from is not.
+    elsewhere = tmp_path / "plugin" / "elsewhere"
+    elsewhere.mkdir(parents=True)
+    source = _reaching(
+        tmp_path / "plugin",
+        "import os",
+        "_back = os.getcwd()",
+        f"os.chdir({str(elsewhere)!r})",
+        'open("note.txt", "a").close()',
+        "os.chdir(_back)",
+    )
+
+    assert _check(source) == cli.EXIT_OK
+    assert f"wrote 1 file under {tmp_path / 'plugin'}" in capsys.readouterr().out
+
+
+def test_a_datagram_is_reported_without_a_connect(tmp_path, capsys):
+    """UDP needs no connect(), so an empty report there would be false."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        source = _reaching(
+            tmp_path,
+            "import socket as _s",
+            f'_s.socket(_s.AF_INET, _s.SOCK_DGRAM).sendto(b"x", ("127.0.0.1", {port}))',
+        )
+
+        assert _check(source) == cli.EXIT_OK
+
+    assert f"sent to 127.0.0.1:{port}" in capsys.readouterr().out
 
 
 def test_what_it_reached_for_is_reported_even_when_it_fails_to_import(tmp_path, capsys):

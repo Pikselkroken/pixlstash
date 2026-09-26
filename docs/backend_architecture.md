@@ -1260,7 +1260,9 @@ real containment is OS-level and out of scope here.
   `setup`, `init` and the caption/tag call — and keeps the events in
   `WATCHED_EVENTS`: host lookups, connections, programs started (`subprocess`,
   `os.system`/`exec`/`spawn`/`posix_spawn`/`fork`/`startfile`), `ctypes.dlopen`,
-  `open` in a writing mode or with writing flags, and removes/renames/`rmtree`.
+  `open` in a writing mode or with writing flags, `os.truncate`, links, and
+  removes/renames/`rmdir`/`rmtree`. Paths are made absolute inside the hook, so a
+  plugin that changes directory to write is still placed correctly.
   Reads are dropped inside the hook, since every import reads dozens of `.pyc`
   files. The CLI prints a grouped summary on **every** outcome, failures
   included: a plugin that fails to import may have reached for things first.
@@ -1288,8 +1290,9 @@ real containment is OS-level and out of scope here.
   - **It can be defeated, and nothing may say otherwise.** The hook cannot be
     removed, but the recorder's list, the active-recorder global and
     `sys.stdout` all live in the plugin's own interpreter, so a plugin that
-    imports `pixlstash.plugin_check` can blank the report. Native code and
-    threads that act after the window closes are not seen either. What it
+    imports `pixlstash.plugin_check` can blank the report. Code acting outside
+    the windows (a thread the plugin started), compiled extension modules and
+    other native code, and events not in the list are not seen either. What it
     catches is the careless and the surprising — telemetry, a `pip install` at
     import, an unannounced download — not a plugin written to evade it. So
     every summary, empty or not, says it is what was *seen while this command

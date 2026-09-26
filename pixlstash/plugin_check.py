@@ -108,7 +108,10 @@ RECOMMENDED_FIELD_KEYS = ("label", "type")
 WATCHED_EVENTS = frozenset(
     {
         "socket.getaddrinfo",  # the host name; connect only sees the address
+        "socket.gethostbyname",
         "socket.connect",  # also raised by connect_ex
+        "socket.sendto",  # UDP needs no connect
+        "socket.sendmsg",
         "subprocess.Popen",
         "os.system",
         "os.exec",
@@ -116,13 +119,31 @@ WATCHED_EVENTS = frozenset(
         "os.spawn",
         "os.fork",
         "os.startfile",  # Windows
+        "os.startfile/2",  # Windows, with arguments
         "ctypes.dlopen",
         "open",  # kept only when the mode or flags write
+        "os.truncate",  # empties a file without opening it
+        "os.symlink",
+        "os.link",
         "os.remove",  # also raised by os.unlink
         "os.rename",  # also raised by os.replace
+        "os.rmdir",
         "shutil.rmtree",
     }
 )
+
+#: The file events, and which argument names the file they write or remove.
+_PATH_ARGUMENT = {
+    "open": 0,
+    "os.truncate": 0,
+    "os.symlink": 1,
+    "os.link": 1,
+    "os.remove": 0,
+    "os.rename": 0,
+    "os.rmdir": 0,
+    "shutil.rmtree": 0,
+}
+_WRITES = frozenset({"open", "os.truncate", "os.symlink", "os.link"})
 
 #: ``os.open`` reports flags rather than a mode string, so these mark a write.
 _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
@@ -133,9 +154,10 @@ _MAX_LINES = 8
 #: Said under every report, empty or not: the report is what was seen, and a
 #: reader who takes it for what the plugin can do has been misled by it.
 BLIND_SPOTS = (
-    "native code, threads that outlive this command and code that only runs "
-    "later in the server are not observed, and a plugin written to hide from "
-    "this can."
+    "it does not see anything the plugin did outside the calls into it (a "
+    "thread it started, say), compiled extension modules or other native code, "
+    "anything that only runs later in the server, or anything it does not "
+    "watch for, and a plugin written to hide from this can."
 )
 
 _active: Recorder | None = None
@@ -238,15 +260,17 @@ class Recorder:
         written: dict[str, set[str]] = {}
         removed: dict[str, set[str]] = {}
         for event, args in self.events:
-            if event == "socket.getaddrinfo":
+            if event in ("socket.getaddrinfo", "socket.gethostbyname"):
                 network[f"looked up {_text(args[0])}"] += 1
             elif event == "socket.connect":
                 network[f"connected to {_address(args[0])}"] += 1
+            elif event in ("socket.sendto", "socket.sendmsg"):
+                network[f"sent to {_address(args[0])}"] += 1
             elif event == "os.fork":
                 processes["forked this process"] += 1
             elif event == "os.system":
                 processes[f"ran the shell command {_clip(_text(args[0]))}"] += 1
-            elif event == "os.startfile":
+            elif event in ("os.startfile", "os.startfile/2"):
                 processes[f"opened {_text(args[0])} with its default program"] += 1
             elif event in (
                 "subprocess.Popen",
@@ -259,10 +283,8 @@ class Recorder:
                 name = "this program's own symbols" if args[0] is None else args[0]
                 name = _text(name)
                 libraries.setdefault(os.path.dirname(name) or name, set()).add(name)
-            elif event == "open":
-                self._bucket(written, args[0])
-            else:  # os.remove, os.rename, shutil.rmtree: the first is the source
-                self._bucket(removed, args[0])
+            else:  # a file event, trimmed to the one path by the hook
+                self._bucket(written if event in _WRITES else removed, args[0])
 
         lines = _counted(network) + _counted(processes)
         lines += _grouped(libraries, "loaded {n} native {what} from {where}")
@@ -270,9 +292,9 @@ class Recorder:
         lines += _grouped(removed, "removed or moved {n} {what} under {where}")
         if not lines:
             return [
-                "While this command ran, nothing it watches for was seen: no "
-                "connections, no programs started, no native libraries loaded, "
-                "no files written or removed.",
+                "While this command ran, none of what it watches for was seen "
+                "(lookups and connections, programs started, libraries loaded "
+                "through ctypes, files written or removed).",
                 f"That is not a clean bill: {BLIND_SPOTS}",
             ]
         return [
@@ -290,7 +312,7 @@ class Recorder:
         if isinstance(path, int):
             buckets.setdefault("an open file descriptor", set()).add(str(path))
             return
-        target = Path(os.path.abspath(_text(path)))
+        target = Path(os.path.abspath(_text(path)))  # made absolute by the hook
         cache = Path.home() / ".cache"
         for root in (self.plugin_dir, Path(tempfile.gettempdir())):
             if root is not None and target.is_relative_to(root):
@@ -320,14 +342,15 @@ def _audit(event: str, args: tuple[Any, ...]) -> None:
     """Record *event* on the active recorder, if it is one worth reporting.
 
     Runs on every audit event in the process for the rest of its life, so it
-    returns at once when there is nothing to do, and it does no I/O and no path
-    resolution of its own, which would raise events of their own.
+    returns at once when there is nothing to do. It opens nothing and resolves
+    no symlinks, which would raise events of its own; making a path absolute
+    only reads the working directory, which raises none.
     """
     recorder = _active
     if recorder is None or event not in WATCHED_EVENTS:
         return
     if event == "open":
-        path, mode, flags = args
+        _path, mode, flags = args
         # `mode` is a string from open(), None from os.open(); reads are every
         # .pyc of every import and never worth a line.
         if (
@@ -335,10 +358,30 @@ def _audit(event: str, args: tuple[Any, ...]) -> None:
             and not (flags or 0) & _WRITE_FLAGS
         ):
             return
-        args = (path,)
-    elif event == "socket.connect":
+    if event in _PATH_ARGUMENT:
+        args = (_absolute(args[_PATH_ARGUMENT[event]]),)
+    elif event in ("socket.connect", "socket.sendto", "socket.sendmsg"):
         args = (args[1],)  # the address; the socket object is not kept
     recorder.events.append((event, args))
+
+
+def _absolute(path: Any) -> Any:
+    """Return *path* made absolute against the working directory right now.
+
+    Now rather than when the summary is printed: a plugin that changes
+    directory, writes and changes back would otherwise be reported as writing
+    wherever the checker happens to be. A path relative to a ``dir_fd`` is
+    still placed against the working directory, which is wrong, and rare.
+    """
+    if not isinstance(path, (str, bytes, os.PathLike)):
+        return path  # a file descriptor, bucketed as one
+    try:
+        return os.path.abspath(path)
+    except (OSError, ValueError):
+        # A deleted working directory. Kept relative rather than raised: an
+        # exception here would fail the plugin's own call, and this hook must
+        # never change what the plugin does. It is still reported, relative.
+        return path
 
 
 def _text(value: Any) -> str:
