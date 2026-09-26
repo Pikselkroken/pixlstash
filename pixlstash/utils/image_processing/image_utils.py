@@ -168,6 +168,41 @@ class ImageUtils:
             return None
 
     @staticmethod
+    def frame_count(file_path: str) -> Optional[int]:
+        """Number of frames in a video or image file, or ``None`` if unreadable.
+
+        A still image is 1; an animated GIF, WebP or APNG is its frame count.
+        A video's is the container's own figure, which some codecs estimate.
+        Cached by (file_path, mtime) like :meth:`extract_embedded_metadata`.
+        """
+        if not file_path or not os.path.exists(file_path):
+            return None
+        try:
+            mtime = os.stat(file_path).st_mtime
+        except OSError as exc:
+            logger.warning("Failed to stat %s for its frame count: %s", file_path, exc)
+            return None
+        return ImageUtils._frame_count_cached(file_path, mtime)
+
+    @staticmethod
+    @functools.lru_cache(maxsize=512)
+    def _frame_count_cached(file_path: str, mtime: float) -> Optional[int]:
+        try:
+            if VideoUtils.is_video_file(file_path):
+                cap = cv2.VideoCapture(file_path)
+                try:
+                    count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                finally:
+                    cap.release()
+            else:
+                with Image.open(file_path) as img:
+                    count = int(getattr(img, "n_frames", 1))
+        except Exception as exc:
+            logger.warning("Failed to count frames in %s: %s", file_path, exc)
+            return None
+        return count if count > 0 else None
+
+    @staticmethod
     def resolve_picture_path(
         image_root: Optional[str], file_path: Optional[str]
     ) -> Optional[str]:
