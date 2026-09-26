@@ -5132,8 +5132,19 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=409, detail="This workflow does not load that model."
             )
-        kind = loaders[0][3]
-        loaders = [entry for entry in loaders if entry[3] == kind]
+        kinds = {entry[3] for entry in loaders}
+        if len(kinds) > 1:
+            # One file in slots of two kinds: which the owner means is a
+            # guess, and serving one would hide the other's answer.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This workflow loads that model as a "
+                    + " and a ".join(_FIX_KIND_NAMES[k] for k in sorted(kinds))
+                    + "; say which kind to replace."
+                ),
+            )
+        kind = kinds.pop()
         if kind == FILE_CHECKPOINT:
             candidates = [
                 ModelFixCandidate(

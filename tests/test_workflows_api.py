@@ -9505,6 +9505,16 @@ def test_the_replacements_go_with_the_checkpoint_and_load_in_the_loader(cloneabl
     cloneable.monkeypatch.setattr(workflows_routes, "propose_companions", proposals)
     graph["20"]["inputs"]["vae_name"] = "test-vae-fp8.pt"
     assert offered("test-vae-fp8.pt") == ([], "none_loadable")
+    # One file in slots of two kinds: which to replace is the caller's to say.
+    graph["22"]["inputs"]["clip_name"] = "test-vae-fp8.pt"
+    r = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"replacing": "test-vae-fp8.pt"},
+    )
+    assert r.status_code == 409, r.text
+    assert "as a text encoder and a VAE" in r.json()["detail"], r.text
+    assert offered("test-vae-fp8.pt", slot_kind="vae") == ([], "none_loadable")
+    graph["22"]["inputs"]["clip_name"] = "test-umt5-q8.gguf"
     # A kind the graph does not load the file as, or a file it does not load.
     r = cloneable.owner.get(
         f"{API}/workflows/{RUN_CARD}/model-swap",

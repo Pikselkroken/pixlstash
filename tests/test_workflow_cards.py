@@ -1066,6 +1066,46 @@ def test_a_text_encoder_fix_names_encoder_slots_and_never_a_vision_one(hub):
     assert model_fix_labels(hub, keys.topology_hash, missing, "checkpoint") == []
 
 
+def test_a_vision_encoder_of_a_replaced_text_encoders_name_is_not_flagged(hub):
+    """The asset rows say `clip_name`, not which loader: the document decides."""
+    missing = "test-t5-fp8.safetensors"
+
+    def encoders(text, vision):
+        return _graph(
+            extra={
+                "8": _node(
+                    "DualCLIPLoader",
+                    clip_name1="test-clip-l.safetensors",
+                    clip_name2=text,
+                ),
+                "9": _node("CLIPVisionLoader", clip_name=vision),
+            }
+        )
+
+    as_text = record_api_graph(hub, encoders(missing, "test-vision.safetensors"))
+    as_vision = record_api_graph(hub, encoders("test-t5-bf16.safetensors", missing))
+    assert as_text.topology_hash == as_vision.topology_hash
+    set_model_fix(
+        hub,
+        as_text.topology_hash,
+        model_fix_labels(hub, as_text.topology_hash, missing, "text_encoder"),
+        missing,
+        "test-t5-bf16.safetensors",
+        {},
+        kind="text_encoder",
+    )
+    cards = [
+        Card(
+            workflow_key=card_of(hub, keys.structural_hash),
+            topology_hash=keys.topology_hash,
+            variants=[keys.structural_hash],
+        )
+        for keys in (as_text, as_vision)
+    ]
+
+    assert _superseded_variants(hub, cards) == {as_text.structural_hash}
+
+
 def test_a_hub_made_before_the_slot_kind_reads_its_fixes_as_checkpoints(tmp_path):
     """A development hub that ran #1587: its fixes were all checkpoints."""
     path = str(tmp_path / "older.db")
