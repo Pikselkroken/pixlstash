@@ -961,6 +961,9 @@ function openChooser(mode, el, slotId = "") {
     slotId,
     target: box ? [box.left, box.bottom] : [0, 0],
     returnTo: slotId ? `slot:add:${slotId}` : cursorId.value,
+    // Decided by what the TRIGGER is, not by where the cursor was: a Fill
+    // button opened while the cursor rested on a ＋ tile is still a button.
+    triggerIsTile: Boolean(slotId),
     // The control that asked - a ＋ tile or a Fill button in the tray's bar.
     // A Fill button is not a cursor stop, so the cursor alone cannot return
     // focus to it.
@@ -1021,13 +1024,13 @@ function openFill(mode) {
 }
 
 function closeChooser() {
-  const { returnTo, trigger } = chooser.value ?? {};
+  const { returnTo, trigger, triggerIsTile } = chooser.value ?? {};
   chooser.value = null;
   // A Fill button still on screen takes its focus back directly. A ＋ tile
   // goes through the cursor, which also keeps the grid's roving tab stop on
   // it - and a tile that vanished (the Checkpoint ＋, once filled) is handled
   // by whoever filled it.
-  if (trigger?.isConnected && !returnTo?.startsWith("slot:add:")) {
+  if (trigger?.isConnected && !triggerIsTile) {
     trigger.focus?.();
     return;
   }
@@ -1436,7 +1439,8 @@ function onHandKey(event, entry) {
   if (event.key === "Delete" || event.key === "Backspace") {
     event.preventDefault();
     event.stopPropagation();
-    deleteSets(entry);
+    // Not on a held key: one press, one delete, as N is one press, one set.
+    if (!event.repeat) deleteSets(entry);
     return true;
   }
   if (event.key === "F2") {

@@ -224,9 +224,18 @@ watch(
         .map((item) => item.id),
     );
     activeKey.value = items.value[0]?.id ?? null;
-    await nextTick();
-    // v-menu mounts its content a tick after it opens.
-    setTimeout(() => (fieldRef.value ?? listRef.value)?.focus(), 0);
+    // v-menu mounts its teleported content asynchronously, and how long that
+    // takes is not ours to know: keep looking for a few frames rather than
+    // betting on one tick and leaving focus on <body> when it loses.
+    for (let tries = 0; tries < 10 && props.open; tries += 1) {
+      await nextTick();
+      const target = fieldRef.value ?? listRef.value;
+      if (target) {
+        target.focus();
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
   },
   { immediate: true },
 );

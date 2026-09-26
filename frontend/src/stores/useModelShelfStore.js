@@ -1914,7 +1914,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
                   console.warn("[ModelShelf] a set undo failed", { err });
                   notices.push({
                     level: "error",
-                    text: errorDetail(err) || "That could not be undone.",
+                    // `err.message` too: an undo that partly failed says how
+                    // much itself, and that sentence is not a server detail.
+                    text:
+                      errorDetail(err) ||
+                      err?.message ||
+                      "That could not be undone.",
                   });
                 }
                 await loadWorkflowSets({ force: true });
@@ -1997,15 +2002,25 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           (failed
             ? ` ${failed} could not be deleted and ${failed === 1 ? "is" : "are"} still there.`
             : ""),
-        undo: ({ deleted }) =>
-          Promise.all(
+        // Settled one by one, like the delete: one set that cannot come back
+        // must not hide the ones that did, and the failure says how many.
+        undo: async ({ deleted }) => {
+          const settled = await Promise.allSettled(
             deleted.map((snapshot) =>
               createWorkflowSet({
                 name: snapshot.name ?? null,
                 members: (snapshot.members ?? []).map(memberBack),
               }),
             ),
-          ),
+          );
+          const failed = settled.filter((r) => r.status === "rejected");
+          if (failed.length === deleted.length) throw failed[0].reason;
+          if (failed.length) {
+            throw new Error(
+              `${failed.length} of ${deleted.length} sets could not be restored.`,
+            );
+          }
+        },
         failure: "The set could not be deleted.",
       },
     );

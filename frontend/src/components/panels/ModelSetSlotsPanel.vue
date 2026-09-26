@@ -295,8 +295,9 @@ const baseInputEl = ref(null);
 // that returns a fresh object on every refetch while it is up, and resetting on
 // identity wiped whatever the reader was typing into the field.
 watch(
-  () =>
-    props.baseOffer ? `${props.baseOffer.key}|${props.baseOffer.guess}` : "",
+  // The offer's identity alone: a refetch that refines the guess mid-offer
+  // must not wipe what is being typed either.
+  () => props.baseOffer?.key ?? "",
   () => {
     baseValue.value = props.baseOffer?.guess ?? "";
     baseHint.value = "";

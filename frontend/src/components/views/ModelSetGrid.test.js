@@ -1753,6 +1753,121 @@ describe("hand-made sets (#1520)", () => {
     wrapper.unmount();
   });
 
+  it("says how many sets an undo of a delete could not bring back", async () => {
+    deleteWorkflowSet.mockImplementation((id) =>
+      Promise.resolve({ deleted: handSet(id, [SET_CKPT], { name: `S${id}` }) }),
+    );
+    createWorkflowSet.mockImplementation(({ name }) =>
+      name === "S11"
+        ? Promise.reject(new Error("refused"))
+        : Promise.resolve(handSet(12, [])),
+    );
+    const { store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [SET_CKPT]), handSet(11, [SET_CKPT])],
+    });
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const notices = useNoticeStore();
+
+    await store.deleteHandMadeSets(store.handMadeSets);
+    await notices.notices.at(-1).action.handler();
+
+    expect(createWorkflowSet).toHaveBeenCalledTimes(2);
+    expect(notices.notices.some((n) => n.text.includes("1 of 2 sets"))).toBe(
+      true,
+    );
+  });
+
+  it("does not delete again on a held Delete", async () => {
+    deleteWorkflowSet.mockResolvedValue({ deleted: handSet(10, [SET_CKPT]) });
+    const { wrapper } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    await wrapper.find(".msg__row").trigger("click");
+    await wrapper
+      .find('[role="treegrid"]')
+      .trigger("keydown", { key: "Delete", repeat: true });
+    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to a Fill button even when the cursor rested on a ＋ tile", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      combinations: [combination("1,3", [CKPT, LORA])],
+      handMade: [handSet(10, [SET_CKPT])],
+      attach: true,
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    const grid = wrapper.find('[role="treegrid"]');
+    // Card, then the checkpoint tile, then the text-encoder slot's ＋ tile.
+    await grid.trigger("keydown", { key: "ArrowDown" });
+    await grid.trigger("keydown", { key: "ArrowDown" });
+    expect(document.activeElement?.dataset.key).toBe("add:text_encoder");
+
+    const fill = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Fill from pictures"));
+    await fill.trigger("click");
+    await wrapper
+      .find('[data-testid="workflow-set-chooser"]')
+      .trigger("keydown", { key: "Escape" });
+    await wrapper.vm.$nextTick();
+
+    expect(document.activeElement).toBe(fill.element);
+    wrapper.unmount();
+  });
+
+  it("keeps what is typed when the guess changes under an open offer", async () => {
+    const bare = slotMember(1, "realvisXL_v5", "checkpoint", {
+      base_model: null,
+    });
+    const { wrapper, store } = await mountGrid({
+      rows: [
+        {
+          ...row(1, "realvisXL_v5", "checkpoint"),
+          base_model_canonical: "SDXL",
+          base_model_source: "filename_fuzzy",
+        },
+      ],
+      handMade: [handSet(10, [bare])],
+    });
+    store.toggleSet("hand:10");
+    store.checkpointAdded = { setId: 10, modelId: 1 };
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .find('[data-testid="base-model-offer"] input')
+      .setValue("Pony");
+
+    store.rows[0].base_model_canonical = "Illustrious";
+    await wrapper.vm.$nextTick();
+
+    expect(
+      wrapper.find('[data-testid="base-model-offer"] input').element.value,
+    ).toBe("Pony");
+  });
+
+  it("puts focus in the popup's filter once it has mounted", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      handMade: [handSet(10, [SET_CKPT])],
+      attach: true,
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…")
+      .trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(document.activeElement).toBe(
+      wrapper.find('[data-testid="workflow-set-chooser"] input').element,
+    );
+    wrapper.unmount();
+  });
+
   it("marks a member whose file left the shelf, and does not let it be selected", async () => {
     const gone = slotMember(5, "old_lora", "lora", {
       on_shelf: false,
