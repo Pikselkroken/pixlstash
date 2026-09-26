@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import quote
 
 from fastapi.testclient import TestClient
@@ -62,7 +62,7 @@ def _seed(server):
             pic = Picture(
                 file_path=f"{PREFIX}/img_{i:03d}.jpg",
                 reference_folder_id=3,
-                imported_at=datetime.now(),
+                imported_at=datetime.now(timezone.utc),
             )
             session.add(pic)
             session.flush()
@@ -72,7 +72,7 @@ def _seed(server):
         deep = Picture(
             file_path=f"{PREFIX}/sub/deep.jpg",
             reference_folder_id=3,
-            imported_at=datetime.now(),
+            imported_at=datetime.now(timezone.utc),
         )
         session.add(deep)
         session.commit()

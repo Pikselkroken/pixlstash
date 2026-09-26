@@ -484,7 +484,8 @@ class ImageUtils:
 
                             dt = datetime.strptime(date_str, "%Y:%m:%d %H:%M:%S")
                             local_tz = (
-                                datetime.now().astimezone().tzinfo or timezone.utc
+                                datetime.now(timezone.utc).astimezone().tzinfo
+                                or timezone.utc
                             )
                             return dt.replace(tzinfo=local_tz).astimezone(timezone.utc)
                         except Exception as exc:

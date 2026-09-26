@@ -562,7 +562,7 @@ _UNSCANNED_PICTURE = ("not_read_yet.png", "2026-08-16T00:00:00Z")
 
 
 def _stamp(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def _seed_hub(server) -> None:

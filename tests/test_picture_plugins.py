@@ -3,7 +3,7 @@ import sys
 import tempfile
 import numpy as np
 
-from datetime import datetime
+from datetime import datetime, timezone
 from io import BytesIO
 
 from fastapi.testclient import TestClient
@@ -47,7 +47,7 @@ def test_picture_plugins_list_and_run_colour_filter():
                     image_root_path=server.vault.image_root,
                     image_bytes=img_b,
                 )
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 first.imported_at = now
                 second.imported_at = now
                 session.add(first)

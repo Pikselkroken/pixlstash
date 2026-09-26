@@ -1,8 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
-from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, ForeignKey, Integer, String, UniqueConstraint
+from sqlmodel import SQLModel, Field, UTCDateTime
 
 
 class GuestScore(SQLModel, table=True):
@@ -58,6 +58,6 @@ class GuestScore(SQLModel, table=True):
     )
     score: int = Field(nullable=False)
     scored_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False),
-        default_factory=datetime.utcnow,
+        sa_column=Column(UTCDateTime(), nullable=False),
+        default_factory=lambda: datetime.now(timezone.utc),
     )

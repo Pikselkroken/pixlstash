@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, List, Optional
 
 from sqlmodel import Column, Field, ForeignKey, Integer, Relationship, SQLModel
@@ -29,7 +29,9 @@ class Project(SQLModel, table=True):
     name: str = Field(index=True, nullable=False, unique=True)
     description: Optional[str] = Field(default=None)
     extra_metadata: Optional[str] = Field(default=None)
-    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), nullable=False
+    )
 
     # Relationships
     attachments: List["ProjectAttachment"] = Relationship(
@@ -73,7 +75,9 @@ class ProjectAttachment(SQLModel, table=True):
     mime_type: Optional[str] = Field(default=None)
     file_size: int = Field(nullable=False)
     url: Optional[str] = Field(default=None)
-    created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), nullable=False
+    )
 
     # Relationships
     project: Optional["Project"] = Relationship(back_populates="attachments")

@@ -16,7 +16,7 @@ import mimetypes
 import os
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 from fastapi import HTTPException
@@ -656,7 +656,7 @@ def _import_comfyui_outputs(
         def mark_imported(session, ids: list[int]):
             if not ids:
                 return []
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             pics = session.exec(select(Picture).where(Picture.id.in_(ids))).all()
             updated = []
             for pic in pics:
@@ -721,7 +721,7 @@ def _assign_outputs_to_stack_top(
         # the grid) regardless of any pre-existing NULL/gapped positions.
         normalize_stack_positions(session, stack_id)
 
-        stack.updated_at = datetime.utcnow()
+        stack.updated_at = datetime.now(timezone.utc)
         session.add(stack)
         session.commit()
 

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import Column, JSON
@@ -32,4 +32,6 @@ class TaggerRun(SQLModel, table=True):
     # The full report.json payload (per_tag, deltas, drift, trend, narrative, …).
     report: Optional[dict] = Field(default=None, sa_column=Column(JSON))
 
-    created_at: Optional[datetime] = Field(default_factory=datetime.utcnow, index=True)
+    created_at: Optional[datetime] = Field(
+        default_factory=lambda: datetime.now(timezone.utc), index=True
+    )

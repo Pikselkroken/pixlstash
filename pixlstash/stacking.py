@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from sqlalchemy import case
@@ -138,7 +138,7 @@ def assign_picture_to_stack(session: Session, picture_id: int, stack_id: int) ->
     pic.stack_position = None
     session.add(pic)
     normalize_stack_positions(session, stack_id)
-    stack.updated_at = datetime.utcnow()
+    stack.updated_at = datetime.now(timezone.utc)
     session.add(stack)
     session.commit()
     return True

@@ -852,8 +852,8 @@ class DedupGroupModel(BaseModel):
         default=None,
         description=(
             "On a `decided=true` page only: when the decision last became live "
-            "(a redo re-stamps it), naive-UTC ISO 8601 with microseconds and "
-            "no offset suffix, like every timestamp on this API. This is the "
+            "(a redo re-stamps it), UTC ISO 8601 with microseconds and an "
+            "explicit offset, like every timestamp on this API. This is the "
             "value the decided ordering sorts by, so it is display-ready as "
             "the row's decision time. Null on the open queue, and null for "
             "the stale edge of a resolved group with no live verdict - never "

@@ -25,7 +25,7 @@ import json
 import threading
 import time
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Session, select
@@ -297,7 +297,7 @@ class DedupScanTask(BaseTask):
             return
         scan.status = SCAN_FAILED
         scan.error = error[:2000]
-        scan.updated_at = datetime.utcnow()
+        scan.updated_at = datetime.now(timezone.utc)
         session.add(scan)
         session.commit()
 
@@ -318,7 +318,7 @@ class DedupScanTask(BaseTask):
         scan.status = SCAN_PENDING
         scan.error = None
         scan.finished_at = None
-        scan.updated_at = datetime.utcnow()
+        scan.updated_at = datetime.now(timezone.utc)
         session.add(scan)
         session.commit()
 
@@ -346,7 +346,7 @@ class DedupScanTask(BaseTask):
         scan.groups_found = 0
         scan.error = None
         scan.finished_at = None
-        scan.updated_at = datetime.utcnow()
+        scan.updated_at = datetime.now(timezone.utc)
         session.add(scan)
         session.commit()
 
@@ -357,7 +357,7 @@ class DedupScanTask(BaseTask):
         scan = session.get(DedupScan, scan_id)
         scan.groups_found = found
         scan.scanned_pictures = total_pictures if not policy.near_enabled else 0
-        scan.updated_at = datetime.utcnow()
+        scan.updated_at = datetime.now(timezone.utc)
         session.add(scan)
         session.commit()
         return {
@@ -379,7 +379,7 @@ class DedupScanTask(BaseTask):
         if scan is None:
             raise ValueError(f"DedupScan {scan_id} no longer exists")
         scan.total_buckets = len(buckets)
-        scan.updated_at = datetime.utcnow()
+        scan.updated_at = datetime.now(timezone.utc)
         session.add(scan)
         session.commit()
         return buckets
@@ -449,7 +449,7 @@ class DedupScanTask(BaseTask):
         scan.scanned_buckets = index
         scan.scanned_pictures = min(len(seen_pictures), total_pictures)
         scan.groups_found = found
-        scan.updated_at = datetime.utcnow()
+        scan.updated_at = datetime.now(timezone.utc)
         session.add(scan)
         session.commit()
         partial_reasons = []
@@ -559,7 +559,7 @@ class DedupScanTask(BaseTask):
         scan.error = "; ".join(unique_reasons)[:2000] if unique_reasons else None
         scan.scanned_pictures = total_pictures
         scan.groups_found = found
-        scan.finished_at = datetime.utcnow()
+        scan.finished_at = datetime.now(timezone.utc)
         scan.updated_at = scan.finished_at
         session.add(scan)
         session.commit()
@@ -598,7 +598,7 @@ class DedupScanTask(BaseTask):
         scan.groups_found = 0
         scan.error = None
         scan.finished_at = None
-        scan.updated_at = datetime.utcnow()
+        scan.updated_at = datetime.now(timezone.utc)
         session.add(scan)
         session.commit()
 
@@ -622,7 +622,7 @@ class DedupScanTask(BaseTask):
         scan = session.get(DedupScan, scan_id)
         scan.groups_found = found
         scan.scanned_pictures = total_pictures if not policy.near_enabled else 0
-        scan.updated_at = datetime.utcnow()
+        scan.updated_at = datetime.now(timezone.utc)
         session.add(scan)
         session.commit()
 
@@ -637,7 +637,7 @@ class DedupScanTask(BaseTask):
                 )
             scan = session.get(DedupScan, scan_id)
             scan.total_buckets = len(buckets)
-            scan.updated_at = datetime.utcnow()
+            scan.updated_at = datetime.now(timezone.utc)
             session.add(scan)
             session.commit()
 
@@ -724,7 +724,7 @@ class DedupScanTask(BaseTask):
                 scan.scanned_buckets = index
                 scan.scanned_pictures = min(len(seen_pictures), total_pictures)
                 scan.groups_found = found + near_groups
-                scan.updated_at = datetime.utcnow()
+                scan.updated_at = datetime.now(timezone.utc)
                 session.add(scan)
                 session.commit()
             found = session.get(DedupScan, scan_id).groups_found
@@ -760,7 +760,7 @@ class DedupScanTask(BaseTask):
         scan.error = "; ".join(unique_reasons)[:2000] if unique_reasons else None
         scan.scanned_pictures = total_pictures
         scan.groups_found = found
-        scan.finished_at = datetime.utcnow()
+        scan.finished_at = datetime.now(timezone.utc)
         scan.updated_at = scan.finished_at
         session.add(scan)
         session.commit()

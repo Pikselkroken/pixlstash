@@ -1,6 +1,6 @@
 import os
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import pytest
@@ -26,7 +26,7 @@ def test_empty_embedding_blob_is_work_again_after_the_0112_reset(tmp_path):
     shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "empty.jpg")
     shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "done.jpg")
     with Vault(image_root=str(tmp_path)) as vault:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         def seed(session: Session):
             missing = Picture(
@@ -104,7 +104,7 @@ def test_fetch_work_includes_missing_aesthetic_when_embedding_exists(tmp_path):
     )
     shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "complete.jpg")
     with Vault(image_root=str(tmp_path)) as vault:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         def seed(session: Session):
             needs_aesthetic = Picture(

@@ -1789,7 +1789,7 @@ def test_restore_location_is_idempotent(library):
 
 
 def test_the_journal_is_pruned_past_its_retention_window(library):
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
     from pixlstash.db_models.picture_move import RETENTION_S
 
@@ -1798,7 +1798,7 @@ def test_the_journal_is_pruned_past_its_retention_window(library):
         picture_id=library["picture_id"],
         old_path="a.png",
         new_path="b.png",
-        moved_at=datetime.utcnow() - timedelta(seconds=RETENTION_S * 2),
+        moved_at=datetime.now(timezone.utc) - timedelta(seconds=RETENTION_S * 2),
     )
     fresh = PictureMove(
         picture_id=library["picture_id"], old_path="c.png", new_path="d.png"
@@ -1918,7 +1918,7 @@ def test_an_off_layout_row_is_pruned_past_its_retention_window(library):
     at least once, not so it can sit forever as unreachable, unclearable
     state (see docs/backend_architecture.md §24.5).
     """
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
     from pixlstash.db_models.picture_move import RETENTION_S
 
@@ -1935,7 +1935,7 @@ def test_an_off_layout_row_is_pruned_past_its_retention_window(library):
             picture_id=picture_id,
             old_path=f"{root}/2024 Shoots/a.png",
             new_path=f"{root}/_unsorted/a.png",
-            detected_at=datetime.utcnow() - timedelta(seconds=RETENTION_S * 2),
+            detected_at=datetime.now(timezone.utc) - timedelta(seconds=RETENTION_S * 2),
         )
     )
     session.commit()

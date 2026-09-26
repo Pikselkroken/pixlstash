@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import sqlalchemy as sa
@@ -43,7 +43,9 @@ class Review(SQLModel, table=True):
     found: int = Field(default=0)
     prev_reviewed: int = Field(default=0)
 
-    created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    created_at: Optional[datetime] = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     refreshed_at: Optional[datetime] = Field(default=None)
 
     # Frozen ``{"receipt": {...}, "progress": {...}}`` JSON, written when the

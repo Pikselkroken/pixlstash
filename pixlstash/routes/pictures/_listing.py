@@ -1,6 +1,6 @@
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import (
@@ -690,7 +690,7 @@ def select_pictures_for_listing(
         if auth_user_id is not None:
 
             def _fetch_shared_ids(session: Session, uid: int) -> list[int]:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 return list(
                     session.exec(
                         select(UserToken.resource_id).where(

@@ -2,8 +2,8 @@ import hashlib
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Column, DateTime
-from sqlmodel import Field, SQLModel
+from sqlalchemy import Boolean, Column
+from sqlmodel import Field, SQLModel, UTCDateTime
 
 
 class DeletedFileLog(SQLModel, table=True):
@@ -39,7 +39,7 @@ class DeletedFileLog(SQLModel, table=True):
     path_sha: str = Field(index=True)
     pixel_sha: Optional[str] = Field(default=None, index=True)
     deleted_at: datetime = Field(
-        sa_column=Column("deleted_at", type_=DateTime, nullable=False)
+        sa_column=Column("deleted_at", type_=UTCDateTime(), nullable=False)
     )
     file_removed: bool = Field(
         default=True,

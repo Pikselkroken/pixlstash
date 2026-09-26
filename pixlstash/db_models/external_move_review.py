@@ -17,7 +17,7 @@ acted on (applied or dismissed) or once a read finds nothing left to reconcile
 - there is no status column, the table holds exactly what is still pending.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
@@ -45,4 +45,4 @@ class ExternalMoveReview(SQLModel, table=True):
     picture_id: int = Field(index=True)
     old_path: str
     new_path: str
-    detected_at: datetime = Field(default_factory=datetime.utcnow)
+    detected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

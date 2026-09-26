@@ -6,7 +6,7 @@ import re
 import shutil
 import uuid
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, UploadFile
@@ -368,7 +368,7 @@ def create_router(server) -> APIRouter:
                 name=normalized_name,
                 description=payload.description,
                 extra_metadata=payload.extra_metadata,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
             session.add(project)
             try:
@@ -908,7 +908,7 @@ def create_router(server) -> APIRouter:
                 json.dumps(
                     {
                         **project_data,
-                        "exported_at": datetime.utcnow().isoformat(),
+                        "exported_at": datetime.now(timezone.utc).isoformat(),
                     },
                     indent=2,
                 ),
@@ -1085,7 +1085,7 @@ def create_router(server) -> APIRouter:
                 stored_path=rel_path,
                 mime_type=mime_type,
                 file_size=len(contents),
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
             session.add(attachment)
             session.commit()
@@ -1120,7 +1120,7 @@ def create_router(server) -> APIRouter:
                 mime_type=None,
                 file_size=0,
                 url=url,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
             session.add(attachment)
             session.commit()

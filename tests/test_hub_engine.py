@@ -1099,7 +1099,9 @@ class TestAuthServiceOnTheHub:
                     library_uuid=library_uuid,
                     token_hash=bcrypt.hash(token_value),
                     token_prefix=token_value[:8],
-                    created_at=__import__("datetime").datetime.utcnow(),
+                    created_at=__import__("datetime").datetime.now(
+                        __import__("datetime").timezone.utc
+                    ),
                     description="test token",
                     scope="ALL",
                 )
@@ -1131,7 +1133,9 @@ class TestAuthServiceOnTheHub:
                     user_id=user.id,
                     token_hash=bcrypt.hash("x" * 32),
                     token_prefix="xxxxxxxx",
-                    created_at=__import__("datetime").datetime.utcnow(),
+                    created_at=__import__("datetime").datetime.now(
+                        __import__("datetime").timezone.utc
+                    ),
                     scope="ALL",
                 )
             )
@@ -1154,7 +1158,9 @@ class TestAuthServiceOnTheHub:
                     library_uuid="00000000-0000-4000-8000-000000000000",
                     token_hash=bcrypt.hash("x" * 32),
                     token_prefix="xxxxxxxx",
-                    created_at=__import__("datetime").datetime.utcnow(),
+                    created_at=__import__("datetime").datetime.now(
+                        __import__("datetime").timezone.utc
+                    ),
                     scope="ALL",
                 )
             )

@@ -17,7 +17,7 @@ re-scanned just because a tag was removed. No synthetic ``REJECTED`` prediction 
 Mirrors the vault-task conventions in :mod:`pixlstash.services.tag_prediction_service`.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import or_
@@ -395,7 +395,7 @@ def accept_suggestion(vault: "Vault", suggestion_id: int) -> dict:
 
         _apply_writeback(session, suggestion)
         suggestion.status = "ACCEPTED"
-        suggestion.reviewed_at = datetime.utcnow()
+        suggestion.reviewed_at = datetime.now(timezone.utc)
         result = {
             "picture_id": suggestion.picture_id,
             "tag": suggestion.tag,
@@ -634,7 +634,7 @@ def _resolve(session: Session, suggestion: TagSuggestion, corner: str) -> None:
         _set_tag(session, tagged_id, suggestion.tag, False)
         _set_tag(session, untagged_id, suggestion.tag, True)
         suggestion.status = "SWAPPED"
-    suggestion.reviewed_at = datetime.utcnow()
+    suggestion.reviewed_at = datetime.now(timezone.utc)
 
 
 def bulk_accept(
@@ -878,7 +878,7 @@ def fix_twin_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         # tagged twin actually lacks it (NEG). _set_tag records that on the twin.
         _set_tag(session, twin_id, suggestion.tag, suggestion.direction == "remove")
         suggestion.status = "TWIN_FIXED"
-        suggestion.reviewed_at = datetime.utcnow()
+        suggestion.reviewed_at = datetime.now(timezone.utc)
         result = {
             "picture_id": suggestion.picture_id,
             "twin_picture_id": twin_id,
@@ -927,7 +927,7 @@ def swap_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         _set_tag(session, tagged_id, suggestion.tag, False)
         _set_tag(session, untagged_id, suggestion.tag, True)
         suggestion.status = "SWAPPED"
-        suggestion.reviewed_at = datetime.utcnow()
+        suggestion.reviewed_at = datetime.now(timezone.utc)
         result = {
             "picture_id": suggestion.picture_id,
             "twin_picture_id": suggestion.twin_picture_id,
@@ -964,7 +964,7 @@ def skip_suggestion(vault: "Vault", suggestion_id: int) -> dict:
         if suggestion is None:
             raise KeyError(f"TagSuggestion not found: id={suggestion_id}")
         suggestion.status = "SKIPPED"
-        suggestion.reviewed_at = datetime.utcnow()
+        suggestion.reviewed_at = datetime.now(timezone.utc)
         result = {
             "picture_id": suggestion.picture_id,
             "tag": suggestion.tag,
@@ -1015,7 +1015,7 @@ def dismiss_suggestion(vault: "Vault", suggestion_id: int) -> dict:
             NEG if suggestion.direction == "add" else POS,
         )
         suggestion.status = "DISMISSED"
-        suggestion.reviewed_at = datetime.utcnow()
+        suggestion.reviewed_at = datetime.now(timezone.utc)
         result = {
             "picture_id": suggestion.picture_id,
             "tag": suggestion.tag,

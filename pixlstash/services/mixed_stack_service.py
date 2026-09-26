@@ -59,7 +59,7 @@ import hashlib
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Iterable, Optional
 
 import numpy as np
@@ -1680,7 +1680,7 @@ def refresh_cohesion_in_session(
                 for picture_id, sibling, distance in nearest
             ]
         )
-        row.computed_at = datetime.utcnow()
+        row.computed_at = datetime.now(timezone.utc)
         session.add(row)
         written.append(stack_id)
     session.commit()

@@ -14,7 +14,7 @@ scrapheap in would make it read as live.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from math import inf
 from typing import Optional
 
@@ -264,7 +264,7 @@ class CoverCandidate:
 
 
 # What a NULL date sorts as when the ranking above is re-expressed in Python.
-_EPOCH = datetime.min
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
 def cover_order(candidate: CoverCandidate) -> tuple:

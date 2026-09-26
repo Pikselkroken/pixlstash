@@ -235,7 +235,7 @@ Background processing is **data-driven**: each task type has a *finder* that que
 | Component | Library |
 |-----------|---------|
 | Database | **SQLite** (file-based) |
-| ORM | **SQLModel** ≥ 0.0.37 (Pydantic + SQLAlchemy) |
+| ORM | **SQLModel** ≥ 0.0.45 (Pydantic + SQLAlchemy) |
 | Migrations | **Alembic** ≥ 1.18 |
 
 ### ML Stack
@@ -773,6 +773,15 @@ Public guest scoring and shared-link endpoints.
 ## 6. Database Models
 
 All models live in [pixlstash/db_models/](../pixlstash/db_models/).
+
+**Every datetime column is aware UTC.** A plain `datetime` field maps to
+sqlmodel's `UTCDateTime`, and an explicit `sa_column` declares `UTCDateTime()`,
+never SQLAlchemy's `DateTime`. SQLite still stores naive-UTC text, so older rows
+need no migration: the type attaches UTC on read and refuses a naive value on
+write. Write `datetime.now(timezone.utc)`; `datetime.utcnow()`, a bare
+`datetime.now()` and a raw `DateTime` column in a model fail
+`tests/test_architecture_guardrails.py::test_no_naive_datetime_is_written`
+(#1503).
 
 ### Core entities
 

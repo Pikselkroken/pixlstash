@@ -1975,10 +1975,13 @@ with a 400 — never reuse a queue cursor on the decided page or across the flip
 **`decided_at` is display-ready.** It means "when this decision last became
 live" (a redo re-stamps it), even though a stacked row may sort by the newer
 stack activity described above. Format is
-**naive-UTC ISO 8601** with microseconds and **no offset suffix**
-(`"2026-07-30T12:28:53.123456"`, no trailing `Z`) — the same convention as
-every other timestamp on this API (`created_at`, the operation log's stamps) —
-so parse it as UTC. It is `null` on the open queue and `null` for the stale
+**UTC ISO 8601** with microseconds and an **explicit offset**
+(`"2026-07-30T12:28:53.123456Z"`; a route that returns a plain dict writes
+`+00:00` instead) — the same convention as every other database timestamp on
+this API (`created_at`, …), since every datetime column reads back aware UTC
+(#1503). Clients must still accept a string with no
+offset and read it as UTC: timestamps kept inside JSON payloads (the operation
+log's recorded state) are naive-UTC. It is `null` on the open queue and `null` for the stale
 edge of a resolved group whose verdict is missing or reopened (such rows sort
 into the list's tail); the server never invents a stamp for them.
 

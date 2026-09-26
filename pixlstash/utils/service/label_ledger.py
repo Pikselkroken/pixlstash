@@ -15,7 +15,7 @@ Use :func:`not_human_labeled` as the single guard predicate so model/scan writes
 clobber a human label.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Iterable, Optional
 
 from sqlalchemy import or_
@@ -106,7 +106,7 @@ def record_human_label(
         )
     ).first()
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     if pred is None:
         pred = _manual_prediction(picture_id, tag, state, now)
         session.add(pred)
@@ -192,7 +192,7 @@ def record_human_labels(
                 ).all()
             )
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     for picture_id, tag in wanted:
         pred = existing.get((picture_id, tag))
         if pred is None:

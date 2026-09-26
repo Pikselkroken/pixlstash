@@ -9,7 +9,7 @@ Phase 2 §4.6). Smart-score computation lives in the sibling
 import struct
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 from sqlalchemy import and_, asc, desc, exists, func, or_, text
@@ -142,7 +142,7 @@ def select_reference_faces_for_character(
         remaining_rows.sort(
             key=lambda row: (
                 tag_weights.get(row[1].id, 0.0),
-                row[1].created_at or datetime.max,
+                row[1].created_at or datetime.max.replace(tzinfo=timezone.utc),
                 row[1].id,
                 row[0].id or 0,
             )

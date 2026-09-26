@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional
 
 from sqlalchemy import or_
@@ -1728,7 +1728,7 @@ def prune_move_journal(session: Session, older_than: Optional[datetime] = None) 
     would let a genuine owner move between the same two folders next month be
     read as PixlStash's own.
     """
-    cutoff = older_than or (datetime.utcnow() - timedelta(seconds=RETENTION_S))
+    cutoff = older_than or (datetime.now(timezone.utc) - timedelta(seconds=RETENTION_S))
     stale = session.exec(select(PictureMove).where(PictureMove.moved_at < cutoff)).all()
     for row in stale:
         session.delete(row)

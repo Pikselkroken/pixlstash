@@ -2200,7 +2200,7 @@ class Vault:
             source_file_path=logo_src,
         )
         picture.description = "PixlStash Logo"
-        picture.imported_at = datetime.datetime.now()
+        picture.imported_at = datetime.datetime.now(datetime.timezone.utc)
 
         assert picture.file_path
 
@@ -2231,7 +2231,7 @@ class Vault:
                         source_file_path=src_path,
                     )
                     pic.description = os.path.basename(src_path)
-                    pic.imported_at = datetime.datetime.now()
+                    pic.imported_at = datetime.datetime.now(datetime.timezone.utc)
                     assert pic.file_path
                     self.db.run_task(
                         add_picture,

@@ -5,7 +5,7 @@ import time
 import uuid
 import zipfile
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from fastapi import (
@@ -830,7 +830,7 @@ def register_routes(router, server):
                     ):
                         if not ids:
                             return []
-                        now = datetime.utcnow()
+                        now = datetime.now(timezone.utc)
                         pics = session.exec(
                             select(Picture).where(Picture.id.in_(ids))
                         ).all()
