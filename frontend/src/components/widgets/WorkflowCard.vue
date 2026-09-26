@@ -244,7 +244,7 @@
       </div>
       <div class="wf-card__row wf-card__row--facts">
         <span
-          v-if="stack && facts.length"
+          v-if="differsBy(card)"
           class="wf-card__none"
           aria-hidden="true"
           >differs by</span
@@ -291,6 +291,7 @@ import {
   cardAccessibleName,
   checkpointModel,
   coverCellStyle,
+  differsBy,
   factChips,
   isStack,
   checkpointMissing,

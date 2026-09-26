@@ -483,7 +483,8 @@ class WorkflowCard(BaseModel):
 
     ``stack_size`` of 2 or more is what makes a card a stack: the grid draws
     one card per stack, the cover's, and ``member_keys`` names the rest so a
-    caller can open them. ``differs_by`` is then the union over the members.
+    caller can open them. ``differs_by`` is empty on the cover, which is what
+    the members are compared against.
     """
 
     key: str
