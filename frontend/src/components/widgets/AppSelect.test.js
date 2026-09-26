@@ -226,6 +226,26 @@ describe("AppSelect with chip options", () => {
     expect(menu.scrollTop).toBe(70);
   });
 
+  it("lets the pointer move the highlight but never the scroll", async () => {
+    const w = mountRich();
+    await combo(w).trigger("click");
+    const menu = w.find("[role='listbox']").element;
+    Object.defineProperty(menu, "clientHeight", { value: 50 });
+    opts(w).forEach((row, i) => {
+      Object.defineProperty(row.element, "offsetTop", { value: i * 40 });
+      Object.defineProperty(row.element, "offsetHeight", { value: 40 });
+    });
+    // A wheel scroll leaves the pointer over a half-shown row.
+    await opts(w)[3].trigger("mousemove");
+    await w.vm.$nextTick();
+    expect(active(w).attributes("aria-label")).toBe("Zebra");
+    expect(menu.scrollTop).toBe(0);
+    // The keyboard still brings its row (80-120px) into the 50px window.
+    await combo(w).trigger("keydown", { key: "ArrowUp" });
+    await w.vm.$nextTick();
+    expect(menu.scrollTop).toBe(70);
+  });
+
   it("starts a fresh name each time the list opens", async () => {
     const w = mountRich("a");
     await combo(w).trigger("keydown", { key: "ArrowDown" });

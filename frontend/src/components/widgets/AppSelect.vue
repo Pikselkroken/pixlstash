@@ -98,7 +98,7 @@
               :aria-selected="String(isCurrent(opt))"
               :aria-label="optionSpoken(opt)"
               @click="choose(i)"
-              @mousemove="activeIndex = i"
+              @mousemove="onRowMouseMove(i)"
             >
               <span class="app-select__check" aria-hidden="true">
                 <v-icon v-if="isCurrent(opt)">mdi-check</v-icon>
@@ -330,12 +330,24 @@ function onComboKeydown(e) {
   }
 }
 
+// The pointer moves the highlight but never the scroll: a wheel scroll fires
+// mousemove on whichever row lands under a still pointer, and snapping that
+// row into view would fight the scroll.
+let pointerMoved = false;
+function onRowMouseMove(i) {
+  if (i === activeIndex.value) return;
+  pointerMoved = true;
+  activeIndex.value = i;
+}
+
 // Scrolled within the list only: scrollIntoView would scroll the dialog's
 // body as well and jump the whole form.
 watch([open, activeIndex], () =>
   nextTick(() => {
     const menu = menuEl.value;
-    if (!menu) return;
+    const byPointer = pointerMoved;
+    pointerMoved = false;
+    if (!menu || byPointer) return;
     // Looked up in the list, not kept in a ref array: function refs in a
     // keyed v-for null out rows still on screen when the options reorder.
     const row = menu.querySelector(`[id="${optionId(activeIndex.value)}"]`);
