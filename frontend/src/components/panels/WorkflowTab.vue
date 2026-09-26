@@ -621,7 +621,12 @@ const multiple = computed(
 const stackOptions = computed(() => {
   const cover = stackCover.value;
   if (!cover) return [];
-  const rows = stackMemberOptions(cover.members);
+  // One line each: the rail's picker stays a native select, so the two-line
+  // chip rows the Run popup draws are left out here.
+  const rows = stackMemberOptions(cover.members).map(({ value, label }) => ({
+    value,
+    label,
+  }));
   return rows.length ? rows : [{ value: cover.key, label: cover.name }];
 });
 
