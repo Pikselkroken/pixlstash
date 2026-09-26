@@ -53,6 +53,7 @@ from pixlstash.hub.workflow_card_reads import (
     AUTO_STACK_PREFIX,
     Card,
     default_overrides,
+    find_card,
     instance_documents,
     picture_inputs,
     variant_documents,
@@ -8398,6 +8399,77 @@ def test_a_second_clone_onto_the_same_models_keeps_the_first_ones_name(cloneable
     assert second.json()["workflow_key"] == key
     card = cloneable.owner.get(f"{API}/workflows/{key}").json()
     assert card["card"]["name"] == "First"
+
+
+def _labels(hub, key):
+    """Each node's slot label on one card, from its stored document."""
+    (document,) = variant_documents(hub, find_card(hub, key).variants).values()
+    return topology_node_labels(document)
+
+
+def test_a_clone_carries_the_originals_pins_and_defaults_but_not_its_notes(
+    cloneable,
+):
+    """A model swap leaves every slot label where it was, so both fit as set.
+
+    Measured against a Duplicate of the same graph rather than RUN_CARD's
+    seeded document, which is a smaller fixture than the picture's graph.
+    """
+    owner, hub = cloneable.owner, cloneable.server.hub
+    copy = owner.post(f"{API}/workflows/{RUN_CARD}/duplicate").json()
+    labels = _labels(hub, copy["workflow_key"])
+    sampler, loader = labels["3"], labels["1"]
+    owner.put(
+        f"{API}/workflows/{RUN_CARD}/pins",
+        json={"pins": [{"slot_label": sampler, "input_name": "steps"}]},
+    )
+    owner.put(
+        f"{API}/workflows/{RUN_CARD}/defaults",
+        json={
+            "defaults": [
+                {"slot_label": sampler, "input_name": "steps", "value": 28},
+                # The old model as a default would undo the swap on first run.
+                {
+                    "slot_label": loader,
+                    "input_name": "ckpt_name",
+                    # Not the graph's own file: dropped by address, not value.
+                    "value": "some-other.safetensors",
+                },
+            ]
+        },
+    )
+    owner.patch(f"{API}/workflows/{RUN_CARD}", json={"notes": "Tuned on RealVis"})
+
+    r = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT})
+    assert r.status_code == 201, r.text
+    key = r.json()["workflow_key"]
+    assert _labels(hub, key) == labels
+    detail = owner.get(f"{API}/workflows/{key}").json()
+    assert detail["pins"] == [{"slot_label": sampler, "input_name": "steps"}]
+    assert default_overrides(hub, key) == {(sampler, "steps"): "28"}
+    assert detail["notes"] is None
+
+
+def test_a_clone_landing_on_a_card_with_its_own_pins_keeps_them(cloneable):
+    owner, hub = cloneable.owner, cloneable.server.hub
+    first = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT}).json()
+    key = first["workflow_key"]
+    owner.put(f"{API}/workflows/{key}/pins", json={"pins": []})
+    owner.put(
+        f"{API}/workflows/{key}/defaults",
+        json={"defaults": [{"slot_label": "mine", "input_name": "cfg", "value": 3}]},
+    )
+    owner.put(
+        f"{API}/workflows/{RUN_CARD}/pins",
+        json={"pins": [{"slot_label": "theirs", "input_name": "steps"}]},
+    )
+    owner.put(
+        f"{API}/workflows/{RUN_CARD}/defaults",
+        json={"defaults": [{"slot_label": "theirs", "input_name": "cfg", "value": 9}]},
+    )
+    assert _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT}).status_code == 201
+    assert owner.get(f"{API}/workflows/{key}").json()["pins"] == []
+    assert default_overrides(hub, key) == {("mine", "cfg"): "3"}
 
 
 def test_a_clone_that_cannot_take_every_model_is_not_written(cloneable):

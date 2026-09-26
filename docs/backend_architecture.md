@@ -3346,7 +3346,12 @@ walk the graph through `comfyui_utilities.iter_model_fields_api`. The route is
 all or nothing: any swap that did not land refuses the clone (409) rather than
 saving the old model beside the new one's VAE. It names the new card only when
 it is a card nobody has named, because a repeat clone re-keys onto the card the
-first one made. A `CLIPVisionLoader`'s `clip_name` is reported as
+first one made. By the same rule it carries the original's pins and parameter
+defaults onto a card that has none of its own (`_carry_to_clone`): both are
+addressed by `(slot label, input name)` and a filename swap moves no label.
+A default on a loader field the swap rewrote is dropped, by address and
+whatever its value, or the first run would load another model again. Notes are not carried; they describe
+the original's history. A `CLIPVisionLoader`'s `clip_name` is reported as
 `clip_vision`, never offered text encoders. The base slot is offered only
 checkpoints of its loader's file type and, when ComfyUI answers, only ones that
 loader lists, because the shelf files a diffusion-only UNET and an all-in-one
