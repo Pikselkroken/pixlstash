@@ -38,7 +38,10 @@ export const useFilterStore = defineStore("filter", () => {
   const tagConfidenceBelowFilter = ref([]);
   const faceBboxFilter = ref(null);
   const sharedOnlyFilter = ref(false);
-  const unassignedOnlyFilter = ref(false);
+  // "Problems" in All Pictures: no named person, and in no set. Independent;
+  // both on is the old combined "unassigned" view.
+  const noCharacterFilter = ref(false);
+  const noSetFilter = ref(false);
   const comfyuiModelFilter = ref([]);
   const comfyuiLoraFilter = ref([]);
   const comfyuiConfigured = ref(false);
@@ -80,7 +83,8 @@ export const useFilterStore = defineStore("filter", () => {
     tagConfidenceBelowFilter.value = [];
     faceBboxFilter.value = null;
     sharedOnlyFilter.value = false;
-    unassignedOnlyFilter.value = false;
+    noCharacterFilter.value = false;
+    noSetFilter.value = false;
     comfyuiModelFilter.value = [];
     comfyuiLoraFilter.value = [];
     impossibleSources.value = [];
@@ -101,7 +105,8 @@ export const useFilterStore = defineStore("filter", () => {
     tagConfidenceBelowFilter,
     faceBboxFilter,
     sharedOnlyFilter,
-    unassignedOnlyFilter,
+    noCharacterFilter,
+    noSetFilter,
     comfyuiModelFilter,
     comfyuiLoraFilter,
     comfyuiConfigured,

@@ -209,7 +209,8 @@ export function useGridFetch(
       referenceFolderIdFilter: referenceFolderIdFilter.value ?? null,
       filePathPrefixFilter: filePathPrefixFilter.value ?? null,
       importSourceFolderFilter: importSourceFolderFilter.value ?? null,
-      unassignedOnlyFilter: filterStore.unassignedOnlyFilter ?? false,
+      noCharacterFilter: filterStore.noCharacterFilter ?? false,
+      noSetFilter: filterStore.noSetFilter ?? false,
       applyTagFilter: userPrefsStore.applyTagFilter ?? false,
       reverseImageSearchPictureIds: reverseImageSearchPictureIds?.value ?? [],
       faceLikenessSearchFaceId: faceLikenessSearchFaceId?.value ?? null,
@@ -227,6 +228,25 @@ export function useGridFetch(
       // Narrowing to text matches changes which pictures the grid shows.
       textMatchesOnly: searchStore.textMatchesOnly === true,
     });
+  }
+
+  function _unassignedFilterOn() {
+    return !!(filterStore.noCharacterFilter || filterStore.noSetFilter);
+  }
+
+  /**
+   * "No character" and "In no set" are halves of one backend view,
+   * `character_id=UNASSIGNED`: both on is the whole of it (neither a person
+   * nor a set), one on narrows it with `unassigned_by`.
+   */
+  function _setUnassignedParams(params) {
+    params.set("character_id", String(UNASSIGNED_PICTURES_ID));
+    if (!(filterStore.noCharacterFilter && filterStore.noSetFilter)) {
+      params.set(
+        "unassigned_by",
+        filterStore.noCharacterFilter ? "character" : "set",
+      );
+    }
   }
 
   function _appendSelectionParams(params, { unassignedOnly = true } = {}) {
@@ -314,9 +334,9 @@ export function useGridFetch(
     } else if (
       selectionStore.selectedCharacter === ALL_PICTURES_ID &&
       unassignedOnly &&
-      filterStore.unassignedOnlyFilter
+      _unassignedFilterOn()
     ) {
-      params.append("character_id", UNASSIGNED_PICTURES_ID);
+      _setUnassignedParams(params);
       if (projectStore.projectViewMode === "project") {
         params.append(
           "project_id",
@@ -976,9 +996,9 @@ export function useGridFetch(
           }
         } else if (
           _selChar === ALL_PICTURES_ID &&
-          filterStore.unassignedOnlyFilter
+          _unassignedFilterOn()
         ) {
-          _charP.set("character_id", String(UNASSIGNED_PICTURES_ID));
+          _setUnassignedParams(_charP);
           if (projectStore.projectViewMode === "project") {
             _charP.set(
               "project_id",

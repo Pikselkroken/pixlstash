@@ -1337,6 +1337,7 @@ class Picture(SQLModel, table=True):
         resolution_bucket: Optional[str] = None,
         project_id: Optional[int] = None,
         only_unassigned_project: bool = False,
+        unassigned_by: Optional[str] = None,
         tags_filter: Optional[List[str]] = None,
         tags_rejected_filter: Optional[List[str]] = None,
         tags_confidence_above_filter: Optional[List[str]] = None,
@@ -1362,6 +1363,7 @@ class Picture(SQLModel, table=True):
             enforce_stack_assignment=True,
             assignment_project_id=project_id,
             assignment_unassigned_project=only_unassigned_project,
+            unassigned_by=unassigned_by,
         )
         query = query.where(
             *unassigned_conditions,
@@ -1675,8 +1677,13 @@ class Picture(SQLModel, table=True):
         enforce_stack_assignment: bool = False,
         assignment_project_id: Optional[int] = None,
         assignment_unassigned_project: bool = False,
+        unassigned_by: Optional[str] = None,
     ) -> list:
         """Build SQL predicates for pictures that should count as unassigned.
+
+        Unassigned means no named face and no set membership. ``unassigned_by``
+        narrows it to one half: ``"character"`` (no named face, sets ignored)
+        or ``"set"`` (in no set, faces ignored). ``None`` keeps both.
 
         When enforce_stack_assignment is enabled, any stack with at least one
         assigned member (character face or set membership) is treated as assigned,
@@ -1715,7 +1722,13 @@ class Picture(SQLModel, table=True):
                 PictureSet.id == PictureSetMember.set_id,
             ).where(set_scope)
 
-        conditions = [~exists(assigned_face_query), ~exists(assigned_set_query)]
+        check_faces = unassigned_by != "set"
+        check_sets = unassigned_by != "character"
+        conditions = []
+        if check_faces:
+            conditions.append(~exists(assigned_face_query))
+        if check_sets:
+            conditions.append(~exists(assigned_set_query))
 
         if not enforce_stack_assignment:
             return conditions
@@ -1752,9 +1765,10 @@ class Picture(SQLModel, table=True):
                 PictureSet.id == PictureSetMember.set_id,
             ).where(set_scope)
 
-        stack_has_assigned_face = exists(stack_assigned_face_query)
-        stack_has_set_member = exists(stack_assigned_set_query)
-        conditions.extend([~stack_has_assigned_face, ~stack_has_set_member])
+        if check_faces:
+            conditions.append(~exists(stack_assigned_face_query))
+        if check_sets:
+            conditions.append(~exists(stack_assigned_set_query))
         return conditions
 
     @staticmethod

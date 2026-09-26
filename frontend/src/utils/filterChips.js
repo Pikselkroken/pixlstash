@@ -120,8 +120,9 @@ function without(list, value) {
  * The chips for the store's current filters, in strip order.
  *
  * @param {object} store the filter store
- * @param {{ allPicturesView?: boolean }} [view] "No character" only exists in
- *   All Pictures, so a stale flag elsewhere is not shown as a filter.
+ * @param {{ allPicturesView?: boolean }} [view] "No character" and "In no
+ *   set" only exist in All Pictures, so a stale flag elsewhere is not shown
+ *   as a filter.
  * @returns {Array<{ key: string, kind: string, value: string, remove: Function }>}
  */
 /** The Workflows Filters panel's two Source answers (v1.12 F7). */
@@ -189,9 +190,14 @@ export function filterChips(store, { allPicturesView = true } = {}) {
   const push = (key, kind, value, remove) =>
     chips.push({ key, kind, value, remove });
 
-  if (allPicturesView && store.unassignedOnlyFilter) {
+  if (allPicturesView && store.noCharacterFilter) {
     push("problem:no_character", "Problem", "no character", () => {
-      store.unassignedOnlyFilter = false;
+      store.noCharacterFilter = false;
+    });
+  }
+  if (allPicturesView && store.noSetFilter) {
+    push("problem:no_set", "Problem", "in no set", () => {
+      store.noSetFilter = false;
     });
   }
   for (const source of store.impossibleSources || []) {

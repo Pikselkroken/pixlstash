@@ -8,7 +8,7 @@ from fastapi import (
 )
 from pydantic import BaseModel, ConfigDict
 from sqlmodel import select
-from typing import Optional
+from typing import Literal, Optional
 
 from pixlstash.database import OCR_TEXT_MATCH_WEIGHT
 from pixlstash.db_models import (
@@ -65,6 +65,7 @@ def register_routes(router, server):
         offset: int = Query(0),
         limit: int = Query(sys.maxsize),
         threshold: float = Query(0.5),
+        unassigned_by: Literal["character", "set"] | None = Query(None),
     ):
         query_params = {}
         format = None
@@ -87,6 +88,7 @@ def register_routes(router, server):
             offset = int(query_params.pop("offset", offset))
             limit = int(query_params.pop("limit", limit))
             character_id = query_params.pop("character_id", None)
+            query_params.pop("unassigned_by", None)
             set_id = query_params.pop("set_id", None)
             set_ids = request.query_params.getlist("set_ids")
             set_mode = query_params.pop("set_mode", "union")
@@ -171,6 +173,7 @@ def register_routes(router, server):
                         enforce_stack_assignment=True,
                         assignment_project_id=assignment_project_id,
                         assignment_unassigned_project=assignment_unassigned_project,
+                        unassigned_by=unassigned_by,
                     )
                     query_stmt = select(Picture.id).where(
                         *unassigned_conditions,

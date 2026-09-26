@@ -724,6 +724,76 @@ def test_unassigned_excludes_stack_when_any_member_is_in_set(client):
     assert summary_resp.json().get("image_count") == 0
 
 
+def test_unassigned_by_splits_no_character_from_no_set(server, client):
+    """``unassigned_by`` narrows UNASSIGNED to one half (#1488): ``character``
+    ignores sets, ``set`` ignores named faces, and leaving it out keeps both.
+    ``stack_mate`` has no named face but is stacked with ``named``, so the
+    stack rule excludes it from the character half only. (Sets need no such
+    case: set membership is stack-atomic, so a set member's mate is a member.)"""
+    ids = {}
+    for index, name in enumerate(("named", "in_set", "stack_mate", "neither")):
+        imported = upload_pictures_and_wait(
+            client,
+            [
+                (
+                    "file",
+                    (f"unassigned-by-{name}.png", random_images[index], "image/png"),
+                )
+            ],
+        )
+        ids[name] = imported["results"][0]["picture_id"]
+
+    character_resp = client.post("/characters", json={"name": "Unassigned By"})
+    assert character_resp.status_code == 200
+    character_id = character_resp.json()["character"]["id"]
+
+    def create_face(session):
+        session.add(
+            Face(
+                picture_id=ids["named"],
+                frame_index=0,
+                face_index=0,
+                character_id=character_id,
+                bbox=[0, 0, 16, 16],
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(create_face)
+
+    set_resp = client.post("/picture_sets", json={"name": "Unassigned By Set"})
+    assert set_resp.status_code == 200
+    set_id = set_resp.json()["picture_set"]["id"]
+    member_resp = client.post(f"/picture_sets/{set_id}/members/{ids['in_set']}")
+    assert member_resp.status_code == 200
+    stack_resp = client.post(
+        "/stacks", json={"picture_ids": [ids["named"], ids["stack_mate"]]}
+    )
+    assert stack_resp.status_code == 200
+
+    expected = {
+        None: {"neither"},
+        "character": {"in_set", "neither"},
+        "set": {"named", "stack_mate", "neither"},
+    }
+    for unassigned_by, names in expected.items():
+        params = {"character_id": "UNASSIGNED"}
+        if unassigned_by:
+            params["unassigned_by"] = unassigned_by
+        listed = client.get("/pictures", params=params)
+        assert listed.status_code == 200
+        listed_ids = {item["id"] for item in listed.json()}
+        assert listed_ids & set(ids.values()) == {ids[n] for n in names}, params
+        counted = client.get("/pictures/count", params=params)
+        assert counted.status_code == 200
+        assert counted.json()["count"] == len(names), params
+
+    bad = client.get(
+        "/pictures", params={"character_id": "UNASSIGNED", "unassigned_by": "both"}
+    )
+    assert bad.status_code == 422
+
+
 def test_stacking_unions_project_membership_across_members(client):
     """Stack membership is atomic: stacking pictures from different projects
     unions their project memberships so every member belongs to every project
