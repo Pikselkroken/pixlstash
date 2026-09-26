@@ -28,7 +28,12 @@ from typing import Optional
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, topology_only_key
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.workflow_identity import WORKFLOW_KEY_VERSION
+from pixlstash.services.workflow_hash import asset_reference, normalized_filename
+from pixlstash.services.workflow_identity import (
+    CHECKPOINT_WIDGETS,
+    WORKFLOW_KEY_VERSION,
+    slots,
+)
 from pixlstash.utils.sql_chunking import chunked
 
 logger = get_logger(__name__)
@@ -587,5 +592,47 @@ def picture_inputs(
             "WHERE library_uuid = ? AND workflow_key = ? "
             "ORDER BY slot_label, input_name",
             (library_uuid, workflow_key),
+        )
+    ]
+
+
+def model_fix_labels(hub: HubDatabase, topology_hash: str, was: str) -> list[str]:
+    """The base-model slots of a topology that load *was*, in any of its variants.
+
+    Every variant and not one card's: a fix is keyed per topology, so a
+    sibling card loading *was* in a slot this card's variants do not use would
+    otherwise keep its missing file. Checkpoint slots only - the replacement is
+    a checkpoint, and a VAE or text encoder slot is no place for one.
+    """
+    wanted = asset_reference(normalized_filename(was))
+    hashes = [
+        row["structural_hash"]
+        for row in hub.fetchall(
+            "SELECT structural_hash FROM workflow_recipe WHERE topology_hash = ?",
+            (topology_hash,),
+        )
+    ]
+    return sorted(
+        {
+            slot.label
+            for document in variant_documents(hub, hashes).values()
+            for slot in slots(document)
+            if slot.asset == wanted and slot.widget in CHECKPOINT_WIDGETS
+        }
+    )
+
+
+def model_fixes(hub: HubDatabase, topology_hash: str) -> list[tuple[str, str, str]]:
+    """``[(slot_label, was_name, now_name)]``: the models replaced in a topology.
+
+    The read side of ``PUT /workflows/{key}/model-fix``. Per topology, because
+    that is what a fix is keyed on (``workflow_cards.fixed_slots``).
+    """
+    return [
+        (slot_label, was_name, now_name)
+        for slot_label, was_name, now_name in hub.fetchall(
+            "SELECT slot_label, was_name, now_name FROM workflow_model_fix "
+            "WHERE topology_hash = ? ORDER BY slot_label, was_norm",
+            (topology_hash,),
         )
     ]

@@ -174,6 +174,7 @@ _WORKFLOW_ROUTES = (
 _WORKFLOW_WRITE_ROUTES = (
     ("PATCH", "/api/v1/workflows/{workflow_key}"),
     ("PUT", "/api/v1/workflows/{workflow_key}/slots"),
+    ("PUT", "/api/v1/workflows/{workflow_key}/model-fix"),
     ("PUT", "/api/v1/workflows/{workflow_key}/defaults"),
     ("PUT", "/api/v1/workflows/{workflow_key}/pins"),
     ("PUT", "/api/v1/workflows/{workflow_key}/inputs"),
@@ -396,6 +397,9 @@ def _instance_document(structural_hash: str, values: dict) -> dict:
 # The one model on the shelf: BUSY's checkpoint. Its LoRA is not, which makes
 # ``add_detail.safetensors`` a model ghost.
 _SHELF_FILENAME = "realvisxl.safetensors"
+# A shelf checkpoint no seeded graph loads: what a missing one is replaced by.
+_REPLACEMENT_FILENAME = "test-realvisxl-bf16.safetensors"
+_SECOND_REPLACEMENT = "test-realvisxl-fp16.safetensors"
 # What the shelf calls it, which is not how the file is spelled - the whole
 # point of the join (#1454). A card naming this model says ``Krea 2``, never
 # ``realvisxl``, and a card naming any model the shelf has not got still says
@@ -603,9 +607,15 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_stack")
         conn.execute("DELETE FROM workflow_unstacked")
         conn.execute("DELETE FROM workflow_recipe_instance")
+        conn.execute("DELETE FROM workflow_model_fix")
         conn.execute(
-            "DELETE FROM model WHERE filename IN (?, ?)",
-            (_SHELF_FILENAME, "add_detail.safetensors"),
+            "DELETE FROM model WHERE filename IN (?, ?, ?, ?)",
+            (
+                _SHELF_FILENAME,
+                "add_detail.safetensors",
+                _REPLACEMENT_FILENAME,
+                _SECOND_REPLACEMENT,
+            ),
         )
         # Hashed, like a checkpoint the finder has already read: an unhashed
         # one holds back every digest judgement (see the digest tests below).
@@ -3176,6 +3186,7 @@ def test_a_cover_carries_the_stored_crop_rectangle_or_nothing(workflow_env):
             # The picture the cover draws, so a client can open it (#1455).
             "picture_id": ids["busy_one.png"],
             **rectangle,
+            "superseded": False,
         }
         for cover in covers[1:]:
             assert cover["square_crop_x"] is None
@@ -3347,6 +3358,7 @@ def test_an_owner_chosen_cover_carries_its_crop_rectangle_too(workflow_env):
             # The picture the cover draws, so a client can open it (#1455).
             "picture_id": ids["forgotten.png"],
             **rectangle,
+            "superseded": False,
         }
     finally:
         # The module shares one vault: put the picture back, and take the
@@ -4591,6 +4603,117 @@ def test_merging_two_cards_keeps_the_name_of_the_one_with_most_pictures(workflow
         "the merged card took the name of the card with fewer pictures"
     )
     assert _attr_row(server, quiet_key) is None
+
+
+def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
+    workflow_env,
+):
+    """A fixed checkpoint: same card, its pictures flagged as the old model's.
+
+    Both flip variants load `realvisxl`, so after the fix every cover the card
+    has is a picture of the original model, and the card is still at its key.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('checkpoint', ?, ?, 'scanned')",
+            (_REPLACEMENT_FILENAME, _h("bf16-digest")),
+        )
+    route = f"{API}/workflows/{merged}/model-fix"
+
+    assert (
+        owner.put(
+            route, json={"was": _SHELF_FILENAME, "now": "realvisxl.safetensors"}
+        ).status_code
+        == 422
+    )
+    assert (
+        owner.put(
+            route, json={"was": _SHELF_FILENAME, "now": "test-not-on-shelf.safetensors"}
+        ).status_code
+        == 404
+    )
+    assert (
+        owner.put(
+            route, json={"was": "test-other.safetensors", "now": _REPLACEMENT_FILENAME}
+        ).status_code
+        == 409
+    )
+    assert (
+        owner.put(route, json={"was": _SHELF_FILENAME, "now": None}).status_code == 409
+    )
+
+    r = owner.put(route, json={"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME})
+    assert r.status_code == 200, r.text
+    detail = r.json()
+    assert detail["card"]["key"] == merged
+    (fix,) = detail["model_fixes"]
+    assert (fix["was"], fix["now"], fix["base_model"]) == (
+        _SHELF_FILENAME,
+        _REPLACEMENT_FILENAME,
+        True,
+    )
+    covers = detail["card"]["covers"]
+    assert covers and all(cover["superseded"] for cover in covers)
+
+    # The replacement goes missing too: the next pick replaces the ORIGINAL,
+    # never the middle link, so the card is keyed and run on one step.
+    r = owner.put(
+        route, json={"was": _REPLACEMENT_FILENAME, "now": "add_detail.safetensors"}
+    )
+    assert r.status_code == 404, "a LoRA is no shelf checkpoint"
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('checkpoint', ?, ?, 'scanned')",
+            (_SECOND_REPLACEMENT, _h("fp16-digest")),
+        )
+    r = owner.put(
+        route,
+        json={"was": _REPLACEMENT_FILENAME, "now": _SECOND_REPLACEMENT.upper()},
+    )
+    assert r.status_code == 200, r.text
+    assert [(f["was"], f["now"]) for f in r.json()["model_fixes"]] == [
+        (_SHELF_FILENAME, _SECOND_REPLACEMENT)
+    ], "the chain was stored, or the client's spelling rather than the shelf's"
+
+    r = owner.put(route, json={"was": _SECOND_REPLACEMENT, "now": None})
+    assert r.status_code == 200, r.text
+    assert r.json()["model_fixes"] == []
+    assert not any(cover["superseded"] for cover in r.json()["card"]["covers"])
+
+    # Two originals replaced by one file in two slots: naming that file is
+    # ambiguous, and fixing one original would leave the other missing.
+    with server.hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO workflow_model_fix (topology_hash, slot_label, was_norm, "
+            "now_norm, was_name, now_name) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    FLIP_TOPOLOGY,
+                    label,
+                    was,
+                    _REPLACEMENT_FILENAME,
+                    was,
+                    _REPLACEMENT_FILENAME,
+                )
+                for label, was in (
+                    ("test-slot-a/ckpt_name", "test-a.safetensors"),
+                    ("test-slot-b/ckpt_name", "test-b.safetensors"),
+                )
+            ],
+        )
+    r = owner.put(
+        route, json={"was": _REPLACEMENT_FILENAME, "now": _SECOND_REPLACEMENT}
+    )
+    assert r.status_code == 409, r.text
+    assert "test-a.safetensors" in r.json()["detail"]
+    # Undoing is not ambiguous: every slot goes back to its own original.
+    r = owner.put(route, json={"was": _REPLACEMENT_FILENAME, "now": None})
+    assert r.status_code == 200, r.text
+    assert r.json()["model_fixes"] == []
 
 
 def test_a_variant_that_will_not_reduce_keeps_its_card_and_its_attributes(
@@ -6065,6 +6188,48 @@ def test_a_run_loads_the_copy_that_is_left_and_says_it_did(runnable, merged_chec
         runnable.submitted[0]["graph"]["1"]["inputs"]["ckpt_name"] == "kept.safetensors"
     )
     assert r.json()["groups"][0]["substitutions"][0]["now"] == "kept.safetensors"
+
+
+def test_a_run_loads_the_model_the_owner_replaced_the_missing_one_with(runnable):
+    """The run half of a fixed workflow: the replacement is loaded, and said."""
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('checkpoint', ?, ?, 'scanned')",
+            (_REPLACEMENT_FILENAME, _h("bf16-digest")),
+        )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [
+        [f"sdxl/{_REPLACEMENT_FILENAME}"],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    assert "missing_models" in _reasons(
+        _preflight(runnable.owner, workflow_key=RUN_CARD)
+    )
+
+    r = runnable.owner.put(
+        f"{API}/workflows/{RUN_CARD}/model-fix",
+        json={"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME},
+    )
+    assert r.status_code == 200, r.text
+    # The fixture's key is hand-written, so the re-key moves it to the real one.
+    card = r.json()["card"]["key"]
+
+    payload = _preflight(runnable.owner, workflow_key=card)
+    assert _reasons(payload) == set(), payload
+    (swap,) = payload["groups"][0]["substitutions"]
+    assert (swap["was"], swap["now"]) == (
+        _SHELF_FILENAME,
+        f"sdxl/{_REPLACEMENT_FILENAME}",
+    )
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": card})
+    assert r.json()["status"] == "success", r.json()
+    assert runnable.submitted[0]["graph"]["1"]["inputs"]["ckpt_name"] == (
+        f"sdxl/{_REPLACEMENT_FILENAME}"
+    )
 
 
 def test_a_model_no_copy_of_which_is_left_is_still_a_missing_model(

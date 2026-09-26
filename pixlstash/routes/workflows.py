@@ -69,6 +69,8 @@ from pixlstash.hub.workflow_card_reads import (
     instance_documents,
     key_pins,
     keys_in_stack,
+    model_fix_labels,
+    model_fixes,
     picture_inputs,
     slot_marks,
 )
@@ -79,6 +81,7 @@ from pixlstash.hub.workflow_card_writes import (
     replace_picture_inputs,
     replace_pins,
     set_attributes,
+    set_model_fix,
     set_stack_order,
     stack_together,
     unstack_card,
@@ -441,6 +444,14 @@ class WorkflowCover(BaseModel):
     square_crop_x: int | None = None
     square_crop_y: int | None = None
     square_crop_side: int | None = None
+    superseded: bool = Field(
+        False,
+        description=(
+            "Made with a model the owner has since replaced in this workflow "
+            "(`PUT /workflows/{key}/model-fix`). Such a picture covers only "
+            "where no picture made with the workflow as it now stands can."
+        ),
+    )
 
 
 class WorkflowStackMember(BaseModel):
@@ -623,6 +634,17 @@ class WorkflowCards(BaseModel):
     hidden: int = 0
 
 
+class ModelFixRow(BaseModel):
+    """One model replaced in a workflow, as the Workflow tab shows it."""
+
+    slot_label: str
+    was: str = Field(description="The file the workflow originally loaded.")
+    now: str = Field(description="The file it loads instead.")
+    base_model: bool = Field(
+        description="Whether the slot is the workflow's base model (checkpoint)."
+    )
+
+
 class WorkflowCardDetail(BaseModel):
     """``GET /workflows/{workflow_key}``: one card opened."""
 
@@ -650,6 +672,15 @@ class WorkflowCardDetail(BaseModel):
             "still says which file it loads. `[]` is a graph that was read and "
             "loads no base model (an upscaler); `null` is one that was not "
             "read - the card names its base model, or has no graph to read."
+        ),
+    )
+    model_fixes: list[ModelFixRow] = Field(
+        default_factory=list,
+        description=(
+            "The models the owner replaced in this workflow because the "
+            "original is gone (`PUT /workflows/{key}/model-fix`). A run loads "
+            "`now` wherever the graph names `was`, and a picture made with it "
+            "is filed on this card."
         ),
     )
 
@@ -805,6 +836,17 @@ class CardDefaults(BaseModel):
                 )
         _one_row_per_address(value)
         return value
+
+
+class ModelFix(BaseModel):
+    """``PUT /workflows/{key}/model-fix``: replace a model, or undo that.
+
+    ``was`` is the file the workflow names, as the graph spells it; ``now`` a
+    file on the model shelf, or ``null`` to load the original again.
+    """
+
+    was: str = Field(min_length=1, max_length=MAX_VALUE_LENGTH)
+    now: str | None = Field(None, min_length=1, max_length=MAX_VALUE_LENGTH)
 
 
 class CardPins(BaseModel):
@@ -1634,6 +1676,7 @@ def _covers(covers) -> list[WorkflowCover]:
                 square_crop_x=cover.square_crop_x,
                 square_crop_y=cover.square_crop_y,
                 square_crop_side=cover.square_crop_side,
+                superseded=cover.superseded,
             )
         )
     return strip
@@ -2180,7 +2223,59 @@ def create_router(server) -> APIRouter:
                 for slot_label, input_name in pins
             ],
             graph_base_models=graph_models,
+            model_fixes=[
+                ModelFixRow(
+                    slot_label=label,
+                    was=was,
+                    now=now,
+                    base_model=label.rsplit("/", 1)[-1] in CHECKPOINT_WIDGETS,
+                )
+                for label, was, now in model_fixes(hub, card.topology_hash)
+            ],
         )
+
+    def _apply_model_fixes(card, graph: dict, object_info: dict | None) -> list[dict]:
+        """Load each model the owner replaced on this card's graph, in place.
+
+        Matched on the file, not the folder the graph filed it under: a fix is
+        keyed the way the card key is (``normalized_filename``), and the three
+        source tiers do not agree on folders. Returns the substitutions made.
+        """
+        fixes = {
+            normalized_filename(was): now
+            for _label, was, now in model_fixes(_hub(), card.topology_hash)
+        }
+        if not fixes:
+            return []
+        # Checkpoint fields only, as the fix is recorded (`model_fix_labels`):
+        # a VAE holding a file of the same name keeps it.
+        swaps = {
+            value: fixes[normalized_filename(value)]
+            for _node, _cls, widget, value in iter_model_fields_api(graph)
+            if widget in CHECKPOINT_WIDGETS and normalized_filename(value) in fixes
+        }
+        done, missed = apply_filename_swap(
+            graph, swaps, object_info, widgets=CHECKPOINT_WIDGETS
+        )
+        for swap in done:
+            logger.info(
+                "[workflows] Card %s loads %s in place of %s on node %s: the "
+                "owner replaced that model.",
+                card.workflow_key,
+                swap["now"],
+                swap["was"],
+                swap["node_id"],
+            )
+        for miss in missed:
+            logger.warning(
+                "[workflows] Card %s: the owner's replacement %s for %s was not "
+                "loaded (%s).",
+                card.workflow_key,
+                miss["now"],
+                miss["was"],
+                miss["reason"],
+            )
+        return done
 
     def _graph_base_models(card) -> list[str] | None:
         """The base-model files the card's runnable graph names, in order.
@@ -2497,6 +2592,150 @@ def create_router(server) -> APIRouter:
         touched.update(key for keys in moved.values() for key in keys)
         _announce(request, sorted(touched), "changed")
         return SlotMarkResult(key=successors[0], moved=moved)
+
+    @router.put(
+        "/workflows/{workflow_key}/model-fix",
+        summary="Replace a missing model in a workflow",
+        description=(
+            "Load another model wherever this workflow names `was` - the fix "
+            "for a workflow whose model is gone - or, with `now: null`, the "
+            "original again. The card keeps its key, its pictures and its "
+            "settings, and a picture made with the replacement is filed on it. "
+            "Applies to every card of the workflow's graph that loaded `was`. "
+            "Answers with the card, whose `key` is the one to follow."
+        ),
+        response_model=WorkflowCardDetail,
+        responses={
+            404: {"description": "No such card, or `now` is not on the shelf."},
+            409: {"description": "The workflow does not load `was`."},
+            422: {"description": "`now` names the same file as `was`."},
+            503: {"description": "No library is open."},
+        },
+    )
+    def fix_model(request: Request, workflow_key: str, payload: ModelFix = Body(...)):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        card = _require_card(hub, workflow_key)
+        was, now = payload.was, payload.now
+        fixes = model_fixes(hub, card.topology_hash)
+        # A replacement that has gone missing too is fixed from the ORIGINAL:
+        # fixes are one step on both the key side and the run side, so a
+        # chain would leave the card keyed and run on the middle link.
+        chained = [
+            fix_was
+            for _label, fix_was, fix_now in fixes
+            if normalized_filename(fix_now) == normalized_filename(was)
+        ]
+        if now is not None and len(set(map(normalized_filename, chained))) > 1:
+            # Two originals replaced by this one file in two slots: which of
+            # them the owner means is a guess, and fixing one would leave the
+            # other loading a missing file behind a 200. Undoing is not
+            # ambiguous: every slot goes back to its own original, below.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Several models were replaced by that one; replace each "
+                    f"original instead ({', '.join(sorted(set(chained)))})."
+                ),
+            )
+        if chained and now is not None:
+            was = chained[0]
+        was_norm = normalized_filename(was)
+        # (original, the slots it is replaced in), one per fix this request
+        # writes or undoes.
+        targets: list[tuple[str, list[str]]] = []
+        if now is not None:
+            # A shelf checkpoint and nothing else, written as the shelf spells
+            # it: the name goes into every graph this workflow submits.
+            row = hub.fetchone(
+                "SELECT filename FROM model WHERE lower(filename) = ? AND file_kind = ?",
+                (normalized_filename(now), FILE_CHECKPOINT),
+            )
+            if row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="That checkpoint is not on the model shelf.",
+                )
+            now = row["filename"]
+            if normalized_filename(now) == was_norm:
+                raise HTTPException(
+                    status_code=422, detail="That is the model it already loads."
+                )
+            labels = model_fix_labels(hub, card.topology_hash, was)
+            # Two originals folded onto one replacement in one slot would file
+            # the replacement's pictures on whichever row SQLite read last.
+            clash = [
+                fix_was
+                for label, fix_was, fix_now in fixes
+                if label in labels
+                and normalized_filename(fix_now) == normalized_filename(now)
+                and normalized_filename(fix_was) != was_norm
+            ]
+            if clash:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{clash[0]} is already replaced by that model in this "
+                        "workflow; undo that first."
+                    ),
+                )
+            targets = [(was, labels)] if labels else []
+        else:
+            for original in sorted(set(chained)) or [was]:
+                labels = [
+                    label
+                    for label, fix_was, _now in fixes
+                    if normalized_filename(fix_was) == normalized_filename(original)
+                ]
+                if labels:
+                    targets.append((original, labels))
+        if not targets:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This workflow does not load that model."
+                    if now is not None
+                    else "That model was not replaced."
+                ),
+            )
+        if getattr(server.vault, "library_uuid", None) is None:
+            # The re-key below picks its merge winner on the vault's picture
+            # counts and moves the vault's saved recipes, as a mark flip does.
+            raise HTTPException(
+                status_code=503,
+                detail="No library is open, so a workflow cannot be re-keyed.",
+            )
+        # The card's own key, unless a re-key moved it: then where its
+        # pictures went, as the slot marks answer.
+        key = workflow_key
+        touched = {workflow_key}
+        for original, labels in targets:
+            moved = set_model_fix(
+                hub,
+                card.topology_hash,
+                labels,
+                original,
+                now,
+                read_variant_picture_counts(server.vault),
+                keep_key=key,
+            )
+            try:
+                saved_recipe_service.rekey_recipes(server.vault, moved)
+            except Exception:
+                # The mark flip's reason: the cards have moved and this map is
+                # the only record of where each recipe set belongs.
+                logger.exception(
+                    "A model fix on topology %s re-keyed its cards but could "
+                    "not move the saved recipes with them; the cards moved as %r.",
+                    card.topology_hash,
+                    moved,
+                )
+                raise
+            touched.update(moved)
+            touched.update(k for keys in moved.values() for k in keys)
+            key = (moved.get(key) or [key])[0]
+        _announce(request, sorted(touched), "changed")
+        return _read_detail(hub, key)
 
     @router.put(
         "/workflows/{workflow_key}/defaults",
@@ -3584,14 +3823,19 @@ def create_router(server) -> APIRouter:
             # missing model the owner then cannot find (#1439). Applied to the
             # copy being submitted and never written back to the stored recipe,
             # whose filenames are the picture's provenance.
+            # The owner's replacements for models that are gone, first: they
+            # name what this workflow loads now, and the same-bytes swap below
+            # only rescues a name still missing after them.
+            group.substitutions = _apply_model_fixes(card, graph, object_info)
             if object_info is not None:
-                group.substitutions = apply_model_swap(
+                same_model = apply_model_swap(
                     graph,
                     detect_model_targets(graph, object_info),
                     aliases,
                     object_info,
                 )
-                for swap in group.substitutions:
+                group.substitutions += same_model
+                for swap in same_model:
                     logger.info(
                         "[workflows] Card %s loads %s in place of %s on node %s "
                         "(%s.%s): the same model, from the copy this shelf still "
@@ -4204,6 +4448,7 @@ def create_router(server) -> APIRouter:
         object_info, _error = _read_object_info(_comfyui_url(_user(request)))
         source = _card_source(card, object_info)
         graph = source.graph
+        _apply_model_fixes(card, graph, object_info)
         if object_info is not None:
             apply_model_swap(
                 graph,

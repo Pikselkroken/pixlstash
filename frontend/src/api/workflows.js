@@ -138,6 +138,24 @@ export async function setWorkflowDefaults(workflowKey, defaults) {
 }
 
 /**
+ * Replace a model a card's workflow loads (a missing checkpoint), or undo it.
+ *
+ * `was` is the file as the graph names it, `now` a shelf model's filename or
+ * `null` to load the original again. The card keeps its pictures, and a
+ * picture made with the replacement is filed on it. Answers with the card;
+ * follow its `card.key`.
+ *
+ * @param {string} workflowKey
+ * @param {{was: string, now: ?string}} fix
+ * @returns {Promise<Object>}
+ */
+export async function setWorkflowModelFix(workflowKey, fix) {
+  return unwrap(
+    apiClient.put(`/workflows/${encodeURIComponent(workflowKey)}/model-fix`, fix),
+  );
+}
+
+/**
  * Replace a card's whole set of pinned parameters.
  *
  * `null` forgets the choice, so the client's default pins apply again; `[]`

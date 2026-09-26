@@ -1775,6 +1775,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Mark a card's LoRA slots, which re-keys every card of the topology; PUT blocked for READ tokens; owner only",
     ),
+    ("PUT", "/api/v1/workflows/{workflow_key}/model-fix"): RoutePolicy(
+        _OWNER,
+        justification="Replace a missing model in a card's workflow, which re-keys the cards of its topology; PUT blocked for READ tokens; owner only",
+    ),
     ("PUT", "/api/v1/workflows/{workflow_key}/defaults"): RoutePolicy(
         _OWNER,
         justification="A card's parameter overrides; PUT blocked for READ tokens; owner only",

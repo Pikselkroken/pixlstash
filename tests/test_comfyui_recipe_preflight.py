@@ -2382,6 +2382,19 @@ class TestFilenameSwap:
         }
         assert unswapped == []
 
+    def test_a_widget_filter_leaves_every_other_field_naming_the_file(self):
+        """A workflow's model fix names a checkpoint: a VAE of that name stays."""
+        graph = self._graph()
+        graph["5"]["inputs"]["vae_name"] = "zimage/zimage-turbo.safetensors"
+        swapped, _ = apply_filename_swap(
+            graph,
+            {"zimage/zimage-turbo.safetensors": "krea2.safetensors"},
+            widgets=frozenset({"ckpt_name"}),
+        )
+        assert graph["4"]["inputs"]["ckpt_name"] == "krea2.safetensors"
+        assert graph["5"]["inputs"]["vae_name"] == "zimage/zimage-turbo.safetensors"
+        assert [(s["node_id"], s["field"]) for s in swapped] == [("4", "ckpt_name")]
+
     def test_a_key_matches_the_whole_name_whatever_its_case_or_separators(self):
         graph = self._graph()
         swapped, _ = apply_filename_swap(

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
@@ -190,7 +191,7 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
             )
         key = workflow_key(
             topology_hash,
-            document_slots,
+            fixed_slots(conn, topology_hash, document_slots),
             [label for label, mark in marks.items() if mark == STRUCTURAL],
         )
         # REPLACE and not IGNORE: a re-keyed variant (a flipped mark, a new
@@ -203,6 +204,33 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
             (structural_hash, topology_hash, key, WORKFLOW_KEY_VERSION),
         )
     return key
+
+
+def fixed_slots(
+    conn: sqlite3.Connection, topology_hash: str, document_slots: list[Slot]
+) -> list[Slot]:
+    """*document_slots* with each replacement model read as the one it replaced.
+
+    What files a picture made with a fixed workflow (``workflow_model_fix``) on
+    the card the original model made: a slot holding the replacement counts as
+    holding the original, so the card key comes out the same. Every writer of
+    ``workflow_variant.workflow_key`` computes the key over this, or a re-key
+    would move those pictures back off the card.
+    """
+    fixes = {
+        (label, asset_reference(now_norm)): asset_reference(was_norm)
+        for label, was_norm, now_norm in conn.execute(
+            "SELECT slot_label, was_norm, now_norm FROM workflow_model_fix "
+            "WHERE topology_hash = ?",
+            (topology_hash,),
+        ).fetchall()
+    }
+    if not fixes:
+        return document_slots
+    return [
+        replace(slot, asset=fixes.get((slot.label, slot.asset), slot.asset))
+        for slot in document_slots
+    ]
 
 
 def _freeze_marks(
