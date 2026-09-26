@@ -167,12 +167,9 @@
               <span class="mss__cell" role="gridcell">
                 <ModelMark
                   class="mss__markicon"
-                  :row="{
-                    display_name: item.member.name,
-                    filename: item.member.filename,
-                    base_model: item.member.base_model,
-                    icon_sha256: iconOf(item.member),
-                  }"
+                  :row="markOf(item.member).row"
+                  :ring="markOf(item.member).ring"
+                  :style="markOf(item.member).style"
                   aria-hidden="true"
                 />
                 <span class="mss__tilename" aria-hidden="true">{{
@@ -263,8 +260,11 @@ const props = defineProps({
   gap: { type: Number, default: 12 },
   selectedIds: { type: Object, default: () => new Set() },
   selectableIds: { type: Object, default: () => new Set() },
-  /** `model.id` → `icon_sha256`, so a tile wears the model's own mark. */
-  icons: { type: Object, default: () => new Map() },
+  /**
+   * `model.id` → `{row, ring, style}`, the shelf's own mark, so a tile wears the
+   * model's icon and the face and ring of whoever it is assigned to.
+   */
+  marks: { type: Object, default: () => new Map() },
   canFillFromSet: { type: Boolean, default: false },
   canFillFromPictures: { type: Boolean, default: false },
   /** `{name, guess}` while the one-time base-model offer is up, else null. */
@@ -349,8 +349,23 @@ function selectable(member) {
   return member.on_shelf && props.selectableIds.has(member.id);
 }
 
-function iconOf(member) {
-  return member.id != null ? (props.icons.get(member.id) ?? null) : null;
+/**
+ * What a tile's mark draws: the shelf's own for a model on the shelf, and for
+ * one that has left it a plain generated mark from its kept name, with no ring
+ * - there is no row left to say who it is assigned to.
+ */
+function markOf(member) {
+  const mark = member.id != null ? props.marks.get(member.id) : null;
+  if (mark) return mark;
+  return {
+    row: {
+      display_name: member.name,
+      filename: member.filename,
+      base_model: member.base_model,
+    },
+    ring: null,
+    style: {},
+  };
 }
 
 function tileName(member, slot) {

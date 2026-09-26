@@ -10,11 +10,21 @@
     :aria-label="accessibleName"
     data-testid="model-set-member"
   >
+    <!-- The shelf row's own mark when there is a row: the model's icon, or the
+         face of the person or set it is assigned to, inside their ring. -->
+    <ModelMark
+      v-if="shelfMark"
+      class="msm__shelfmark"
+      :row="shelfMark.row"
+      :ring="shelfMark.ring"
+      :style="shelfMark.style"
+    />
     <span
+      v-else
       class="msm__mark"
-      :style="{ backgroundColor: mark.color, color: mark.ink }"
+      :style="{ backgroundColor: initials.color, color: initials.ink }"
       aria-hidden="true"
-      >{{ mark.initials }}</span
+      >{{ initials.initials }}</span
     >
     <div class="msm__body">
       <div class="msm__top">
@@ -85,6 +95,7 @@ import {
   recipeCount,
   sharingLabel,
 } from "../../utils/workflowSets";
+import ModelMark from "./ModelMark.vue";
 import Tooltip from "./Tooltip.vue";
 
 /**
@@ -106,6 +117,8 @@ const props = defineProps({
   member: { type: Object, required: true },
   /** This model is in the shelf's selection. */
   selected: { type: Boolean, default: false },
+  /** `{row, ring, style}` from the shelf, or null for a model with no row. */
+  shelfMark: { type: Object, default: null },
 });
 
 /** The name was pressed: the grid answers with this model's companions. */
@@ -114,7 +127,7 @@ const emit = defineEmits(["pick"]);
 // The shelf's own identity square, so a model looks the same here as in the row
 // list. `generatedMark` reads a row's name and base model, so the member is
 // spelled into that shape rather than a second mark being invented.
-const mark = computed(() =>
+const initials = computed(() =>
   generatedMark({
     display_name: props.member.name,
     filename: props.member.filename,

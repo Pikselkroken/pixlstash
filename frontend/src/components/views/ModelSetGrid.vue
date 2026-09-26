@@ -70,7 +70,7 @@
             :gap="COLUMN_GAP"
             :selected-ids="store.selectedIds"
             :selectable-ids="store.setGridModelIds"
-            :icons="iconsById"
+            :marks="marksById"
             :can-fill-from-set="fillSetItems.length > 0"
             :can-fill-from-pictures="fillPictureItems.length > 0"
             :base-offer="baseOffer"
@@ -97,6 +97,7 @@
             :gap="COLUMN_GAP"
             :selected-ids="store.selectedIds"
             :selectable-ids="store.setGridModelIds"
+            :marks="marksById"
             @close="closePanel"
             @view="(value) => store.setView({ trayView: value })"
             @pick="openWorksWith"
@@ -280,7 +281,9 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
+import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { assignmentRing } from "../../utils/modelShelf";
 import {
   fillFromPictures,
   fillFromSets,
@@ -349,6 +352,38 @@ const iconsById = computed(
         .map((row) => [row.id, row.icon_sha256]),
     ),
 );
+
+const entityLists = useEntityListsStore();
+
+/**
+ * The shelf's own mark for every on-shelf model in the OPEN tray, by id:
+ * `{row, ring, style}`, exactly what a shelf row hands `ModelMark`.
+ *
+ * So a LoRA assigned to a person wears that person's face and ring here as it
+ * does in the row list, instead of a generated initials square - the tray is
+ * where a whole set's models get assigned, and it could not show who they
+ * already belong to. Only the open tray's members, not the whole shelf: a ring
+ * is a lookup per model and a closed tray draws none.
+ */
+const marksById = computed(() => {
+  const ids = new Set(
+    (openHand.value?.models ?? openGroup.value?.models ?? []).map((m) => m.id),
+  );
+  const marks = new Map();
+  for (const row of store.rows) {
+    if (!ids.has(row.id)) continue;
+    const ring = assignmentRing(row.attachments, {
+      characters: entityLists.characters,
+      sets: entityLists.pictureSets,
+    });
+    marks.set(row.id, {
+      row,
+      ring,
+      style: ring.hue ? { "--mmark-ring": ring.hue } : {},
+    });
+  }
+  return marks;
+});
 
 /** The open hand-made group, or null. */
 const openHand = computed(

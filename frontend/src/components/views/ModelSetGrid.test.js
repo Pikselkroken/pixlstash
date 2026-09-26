@@ -1010,6 +1010,81 @@ describe("when there is nothing to group", () => {
   });
 });
 
+describe("a tray shows who a model is assigned to", () => {
+  it("draws a person-assigned LoRA with that person's face, in both trays and both views", async () => {
+    const assigned = {
+      ...row(3, "filmgrain_xl"),
+      attachments: [{ entity_type: "character", entity_id: 7 }],
+    };
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), assigned],
+      combinations: [combination("1,3", [CKPT, LORA])],
+    });
+    const face = (el) =>
+      el
+        .findAll("img")
+        .some((img) =>
+          img.attributes("src")?.includes("/characters/7/thumbnail"),
+        );
+
+    // The evidence tray, Grid view: the member card.
+    store.toggleSet("model:1");
+    await wrapper.vm.$nextTick();
+    const card = wrapper
+      .findAll('[data-testid="model-set-member"]')
+      .find((el) => el.text().includes("filmgrain_xl"));
+    expect(face(card)).toBe(true);
+
+    // ...and List view.
+    store.setView({ trayView: "list" });
+    await wrapper.vm.$nextTick();
+    const listRow = wrapper.find('.msp__row[data-key="3"]');
+    expect(face(listRow)).toBe(true);
+  });
+
+  it("does the same on a hand-made set's slot tile", async () => {
+    const assigned = {
+      ...row(3, "filmgrain_xl"),
+      attachments: [{ entity_type: "character", entity_id: 7 }],
+    };
+    const member = {
+      sha256: assigned.sha256,
+      slot: "lora",
+      label: "filmgrain_xl",
+      on_shelf: true,
+      id: 3,
+      name: "filmgrain_xl",
+      filename: "filmgrain_xl",
+      kind: "adapter",
+      base_model: null,
+    };
+    const { wrapper, store } = await mountGrid({
+      rows: [assigned],
+      handMade: [
+        {
+          id: 10,
+          name: null,
+          members: [member],
+          covers: [],
+          picture_count: 0,
+          incomplete: true,
+        },
+      ],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+
+    const tile = wrapper.find(`[data-key="m:${assigned.sha256}"]`);
+    expect(
+      tile
+        .findAll("img")
+        .some((img) =>
+          img.attributes("src")?.includes("/characters/7/thumbnail"),
+        ),
+    ).toBe(true);
+  });
+});
+
 describe("hand-made sets (#1520)", () => {
   /** A hand-made set as `GET /models/workflow-sets` serves it. */
   function handSet(id, members, extra = {}) {
