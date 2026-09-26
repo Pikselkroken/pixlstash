@@ -8120,6 +8120,15 @@ def test_the_run_prompt_lands_in_the_text_node_an_encoder_reads():
     assert prompt_text_target(graph, "6") == ("6", "text")
 
 
+def test_a_textbox_with_passthrough_set_takes_no_run_prompt():
+    """The node would ignore a prompt written into its `text`."""
+    graph = _text_graph(class_type="Textbox")
+    del graph["7"]
+    assert prompt_text_target(graph, "6") == ("103", "text")
+    graph["103"]["inputs"]["passthrough"] = "overrides the text"
+    assert prompt_text_target(graph, "6") is None
+
+
 def test_a_text_node_shared_by_two_encoders_takes_no_run_prompt():
     """Positive then negative written into one node would leave both negative."""
     assert prompt_text_target(_text_graph(), "6") is None

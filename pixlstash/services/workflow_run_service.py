@@ -120,6 +120,21 @@ TEXT_NODE_CLASSES = {
 WAS_TOKEN_RE = re.compile(r"\[[^\[\]]*\]")
 
 
+def overriding_text_inputs(class_type: str, inputs: dict) -> list[str]:
+    """The inputs of a text node, other than its text, that may change its string.
+
+    Textbox's ``passthrough`` replaces its text whenever it is non-empty, so a
+    link or a non-empty string in any input but the text field counts. One
+    rule for the repair and the Run prompt's target, so they cannot drift.
+    """
+    return [
+        name
+        for name, value in inputs.items()
+        if name != TEXT_NODE_CLASSES.get(class_type)
+        and (is_link(value) or (isinstance(value, str) and value))
+    ]
+
+
 def prompt_text_target(graph: dict, node_id: str) -> Optional[tuple[str, str]]:
     """Where a detected prompt node's text literally lives, as ``(node, field)``.
 
@@ -129,6 +144,8 @@ def prompt_text_target(graph: dict, node_id: str) -> Optional[tuple[str, str]]:
     skipped, and a missing text node's repair then inlined the stored prompt.
     A text node feeding more than one input is not a target: writing the
     positive prompt and then the negative into it would leave both negative.
+    Nor is one with another input overriding its text (Textbox's
+    ``passthrough``): the node would ignore the prompt written into it.
     """
     inputs = (graph.get(node_id) or {}).get("inputs")
     if not isinstance(inputs, dict):
@@ -146,10 +163,12 @@ def prompt_text_target(graph: dict, node_id: str) -> Optional[tuple[str, str]]:
             for link in other["inputs"].values()
             if is_link(link) and str(link[0]) == str(text[0])
         )
+        source_inputs = (source or {}).get("inputs") or {}
         if (
             field
             and readers == 1
-            and isinstance((source.get("inputs") or {}).get(field), str)
+            and isinstance(source_inputs.get(field), str)
+            and not overriding_text_inputs(source["class_type"], source_inputs)
         ):
             return str(text[0]), field
     return None
@@ -742,14 +761,7 @@ def replace_missing_text_nodes(graph: dict, object_info: dict) -> list[dict]:
                 text,
             )
             continue
-        # Any other input that could change the string: Textbox's
-        # `passthrough` replaces its text whenever it is non-empty.
-        overriding = [
-            name
-            for name, value in inputs.items()
-            if name != TEXT_NODE_CLASSES[class_type]
-            and (is_link(value) or (isinstance(value, str) and value))
-        ]
+        overriding = overriding_text_inputs(class_type, inputs)
         if overriding:
             logger.info(
                 "Node %s (%s) is not on this ComfyUI and %s may change its "
