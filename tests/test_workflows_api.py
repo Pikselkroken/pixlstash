@@ -42,7 +42,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlmodel import delete, select
 
-from pixlstash import auth
+from pixlstash import auth, mcp_server
 from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
@@ -8127,6 +8127,71 @@ def test_duplicating_twice_puts_a_second_file_beside_the_first(exportable, tmp_p
     ]
     assert first != second, "the second duplicate overwrote the first"
     assert (tmp_path / first).is_file() and (tmp_path / second).is_file()
+
+
+# ---------------------------------------------------------------------------
+# The MCP round trip (#1436): export a graph, edit it, store it, preflight it
+# ---------------------------------------------------------------------------
+
+
+def _mcp_fetch(client: TestClient) -> mcp_server.Fetch:
+    """``pixlstash-mcp``'s transport, over the owner's TestClient session."""
+
+    def fetch(path, params, method="GET", body=None):
+        r = client.request(method, f"{API}{path}", params=params, json=body)
+        return r.status_code, r.headers.get("content-type", ""), r.content
+
+    return fetch
+
+
+def _mcp_json(fetch, tool: str, **arguments) -> dict:
+    content = mcp_server.call_tool(fetch, tool, arguments, allow_write=True)
+    return json.loads(content[0]["text"])
+
+
+def test_the_mcp_round_trip_stores_an_edit_as_a_new_card_once(exportable, tmp_path):
+    """Export → edit → import → preflight, through the tools an agent calls."""
+    (tmp_path / "store").mkdir()
+    _isolate_workflow_folders(tmp_path / "store", exportable.monkeypatch)
+    fetch = _mcp_fetch(exportable.owner)
+    out = tmp_path / "agent" / "graph.json"
+
+    exported = _mcp_json(
+        fetch, "export_workflow_graph", workflow_key=RUN_CARD, out_path=str(out)
+    )
+    assert exported["path"] == str(out)
+    graph = json.loads(out.read_text())
+    assert exported["nodes"] == len(graph)
+    # The runnable graph, not the scrubbed export: ComfyUI can validate it.
+    assert graph["5"]["inputs"]["text"] == EXPORT_PROMPT
+    assert graph["3"]["inputs"]["seed"] == 4242
+
+    graph["3"]["inputs"]["steps"] = 41
+    out.write_text(json.dumps(graph))
+    stored = _mcp_json(
+        fetch, "import_workflow_graph", name="mcp-edited.json", path=str(out)
+    )
+    assert stored["matched"] is False, stored
+    new_key = stored["workflow_key"]
+    assert new_key and new_key != RUN_CARD
+    assert exportable.owner.get(f"{API}/workflows/{new_key}").status_code == 200
+
+    # The same file again, under another name, is matched rather than stored:
+    # an agent retrying does not litter the grid.
+    again = _mcp_json(
+        fetch, "import_workflow_graph", name="mcp-edited-again.json", path=str(out)
+    )
+    assert again["matched"] is True, again
+    assert again["name"] == "mcp-edited.json"
+    assert not (tmp_path / "store" / "mcp-edited-again.json").exists()
+
+    # Preflight reads the stored file: this ComfyUI lacks two of its nodes, and
+    # saying so is the agent's feedback. Nothing is submitted.
+    preflight = _mcp_json(fetch, "preflight_workflow", workflow_key=new_key)
+    assert preflight["ok"] is False
+    assert [g["workflow_key"] for g in preflight["groups"]] == [new_key]
+    assert _reasons(preflight) == {"missing_nodes"}
+    assert exportable.submitted == []
 
 
 # ---------------------------------------------------------------------------

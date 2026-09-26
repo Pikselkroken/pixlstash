@@ -1,4 +1,4 @@
-"""The read-only MCP server: protocol shape, and token scope through every tool.
+"""The MCP server: protocol shape, token scope through every tool, write gating.
 
 The scope tests route the MCP tool layer through a TestClient against a real
 Server, so what they prove is that the tools reach the library only through the
@@ -41,10 +41,12 @@ def _png(size: int, colour: tuple[int, int, int]) -> bytes:
 
 
 def _fetch(client: TestClient, token: str) -> mcp_server.Fetch:
-    def fetch(path, params):
-        r = client.get(
+    def fetch(path, params, method="GET", body=None):
+        r = client.request(
+            method,
             f"{API}{path}",
             params=params,
+            json=body,
             headers={"Authorization": f"Bearer {token}"},
         )
         return r.status_code, r.headers.get("content-type", ""), r.content
@@ -52,17 +54,22 @@ def _fetch(client: TestClient, token: str) -> mcp_server.Fetch:
     return fetch
 
 
-def _call(fetch, name, **arguments) -> dict:
+def _call(fetch, tool, allow_write=False, **arguments) -> dict:
     reply = mcp_server.handle_message(
         fetch,
         {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": name, "arguments": arguments},
+            "params": {"name": tool, "arguments": arguments},
         },
+        allow_write,
     )
     return reply["result"]
+
+
+def _write(fetch, tool, **arguments) -> dict:
+    return _call(fetch, tool, allow_write=True, **arguments)
 
 
 def _picture_ids(result: dict) -> set[int]:
@@ -521,25 +528,26 @@ def test_a_broken_answer_is_a_tool_error_not_a_crash():
     assert result["isError"] is True
 
 
-def test_every_tool_request_is_a_get_through_http_fetch(monkeypatch):
+class _Response:
+    status = 200
+    headers = {"Content-Type": "application/json"}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return b"[]"
+
+
+def test_every_read_tool_request_is_a_get_through_http_fetch(monkeypatch):
     seen = []
-
-    class Response:
-        status = 200
-        headers = {"Content-Type": "application/json"}
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def read(self):
-            return b"[]"
 
     def urlopen(request, timeout):
         seen.append((request.get_method(), request.full_url, request.headers))
-        return Response()
+        return _Response()
 
     monkeypatch.setattr(
         mcp_server, "_build_opener", lambda context=None: SimpleNamespace(open=urlopen)
@@ -562,18 +570,20 @@ def test_every_tool_request_is_a_get_through_http_fetch(monkeypatch):
     assert "query=red+square" in url and "tag=cat" in url
 
 
-def test_every_tool_path_resolves_to_a_mounted_route(env):
+def test_every_tool_path_resolves_to_a_mounted_route(env, tmp_path):
     """A renamed route must break the tool, not pass a string comparison.
 
     The READ-token middleware answers a nonexistent path with the same 403 a
     real refusal gets, so the scope tests below cannot tell a dead path from an
-    enforced one. The paths here are the ones the tool code builds.
+    enforced one. The (method, path) pairs here are the ones the tool code
+    builds, for the write tools as well as the read ones.
     """
-    paths = []
+    requests = []
 
-    def fetch(path, params):
-        paths.append(path)
-        return 200, "application/json", b"[]"
+    def fetch(path, params, method="GET", body=None):
+        requests.append((method, path))
+        answer = {"workflow": {}} if path.endswith("/graph") else {}
+        return 200, "application/json", json.dumps(answer).encode()
 
     _call(fetch, "search_pictures", query="anything")
     _call(fetch, "list_pictures")
@@ -582,31 +592,52 @@ def test_every_tool_path_resolves_to_a_mounted_route(env):
     _call(fetch, "count_pictures")
     for tool in ("list_tags", "list_sets", "list_characters", "list_projects"):
         _call(fetch, tool)
+    key = "a" * 64
+    _write(fetch, "list_workflows")
+    _write(fetch, "get_workflow", workflow_key=key)
+    _write(
+        fetch,
+        "export_workflow_graph",
+        workflow_key=key,
+        out_path=str(tmp_path / "g.json"),
+    )
+    _write(fetch, "import_workflow_graph", name="x.json", workflow={})
+    _write(fetch, "preflight_workflow", workflow_key=key)
+    _write(fetch, "run_workflow", workflow_key=key)
     # Every tool is exercised, so a new one cannot skip this check by
     # forgetting to be listed here.
-    assert len(paths) == len(mcp_server.TOOLS)
+    assert len(requests) == len(mcp_server.tools_for(allow_write=True))
 
-    # Every GET path template the server mounts, via the same inventory the
-    # authz guardrails use (FastAPI's lazy routers hide them from app.routes).
-    templates = [path for method, path in api_endpoint_set(env.api) if method == "GET"]
+    # Every route the server mounts, via the same inventory the authz
+    # guardrails use (FastAPI's lazy routers hide them from app.routes). It
+    # reflects over mounted routes, so the import route, which is left out of
+    # the OpenAPI document, is still in it.
+    mounted = api_endpoint_set(env.api)
+    assert ("POST", f"{API}/comfyui/workflows/import") in mounted
     # The SPA catch-all matches every string, so it is excluded or this
     # assertion would pass on any typo.
     patterns = [
-        # Literal parts escaped, or the `.` in `/pictures/{id}.{ext}` would
-        # make that template match almost any single-segment path.
-        re.compile(
-            "^"
-            + "[^/]+".join(re.escape(part) for part in re.split(r"\{[^}]+\}", template))
-            + "$"
+        (
+            method,
+            # Literal parts escaped, or the `.` in `/pictures/{id}.{ext}` would
+            # make that template match almost any single-segment path.
+            re.compile(
+                "^"
+                + "[^/]+".join(
+                    re.escape(part) for part in re.split(r"\{[^}]+\}", template)
+                )
+                + "$"
+            ),
         )
-        for template in templates
+        for method, template in mounted
         if ":path" not in template
     ]
-    assert patterns, "no GET routes found to match against"
-    for path in paths:
-        assert any(pattern.match(f"{API}{path}") for pattern in patterns), (
-            f"no mounted route matches {path}"
-        )
+    assert patterns, "no routes found to match against"
+    for method, path in requests:
+        assert any(
+            method == route_method and pattern.match(f"{API}{path}")
+            for route_method, pattern in patterns
+        ), f"no mounted route matches {method} {path}"
 
 
 def test_listing_sees_only_what_the_token_reaches(env):
@@ -668,3 +699,223 @@ def test_list_tags_answers_a_scoped_token(env):
     result = _call(env.scoped, "list_tags")
     assert result["isError"] is False, result
     assert isinstance(json.loads(result["content"][0]["text"]), list)
+
+
+# --- --allow-write --------------------------------------------------------
+
+WRITE_TOOL_NAMES = {
+    "list_workflows",
+    "get_workflow",
+    "export_workflow_graph",
+    "import_workflow_graph",
+    "preflight_workflow",
+    "run_workflow",
+}
+
+
+def _list(allow_write):
+    reply = mcp_server.handle_message(
+        None, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, allow_write
+    )
+    return {t["name"]: t for t in reply["result"]["tools"]}
+
+
+def _instructions(allow_write):
+    reply = mcp_server.handle_message(
+        None,
+        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+        allow_write,
+    )
+    return reply["result"]["instructions"]
+
+
+def test_the_workflow_tools_exist_only_with_allow_write():
+    read_only = _list(False)
+    assert len(read_only) == 10
+    assert not WRITE_TOOL_NAMES & set(read_only)
+
+    full = _list(True)
+    assert set(full) == set(read_only) | WRITE_TOOL_NAMES
+    assert full["run_workflow"]["annotations"]["destructiveHint"] is True
+    assert full["import_workflow_graph"]["annotations"]["readOnlyHint"] is False
+
+    # Not offered, and not callable either: it never reaches the transport.
+    result = _call(
+        lambda *a, **k: pytest.fail("reached the transport"),
+        "import_workflow_graph",
+        name="x.json",
+        workflow={"1": {}},
+    )
+    assert result["isError"] is True
+    assert "Unknown tool" in result["content"][0]["text"]
+
+    # The read-only promise is made only by the read-only server.
+    assert "Everything is read-only" in _instructions(False)
+    write = _instructions(True)
+    assert "Everything is read-only" not in write
+    assert "validate" in write.lower() and "run_workflow" in write
+
+
+def test_import_posts_json_through_http_fetch(monkeypatch):
+    seen = []
+
+    def urlopen(request, timeout):
+        seen.append(request)
+        return _Response()
+
+    monkeypatch.setattr(
+        mcp_server, "_build_opener", lambda context=None: SimpleNamespace(open=urlopen)
+    )
+    fetch = mcp_server.http_fetch("http://127.0.0.1:9537/", "example-token")
+    graph = {"1": {"class_type": "KSampler", "inputs": {}}}
+    assert (
+        _write(fetch, "import_workflow_graph", name="x.json", workflow=graph)["isError"]
+        is False
+    )
+    (request,) = seen
+    assert request.get_method() == "POST"
+    assert request.full_url == "http://127.0.0.1:9537/api/v1/comfyui/workflows/import"
+    assert request.headers["Content-type"] == "application/json"
+    assert request.headers["Authorization"] == "Bearer example-token"
+    assert json.loads(request.data) == {
+        "name": "x.json",
+        "workflow": graph,
+        "overwrite": False,
+        "keep_both": False,
+    }
+
+
+def test_a_created_answer_is_success_and_a_refusal_carries_its_detail():
+    def answering(status, body):
+        return lambda path, params, method="GET", body_=None: (
+            status,
+            "application/json",
+            body,
+        )
+
+    ok = _write(
+        answering(201, b'{"name": "x.json"}'),
+        "import_workflow_graph",
+        name="x.json",
+        workflow={"1": {}},
+    )
+    assert ok["isError"] is False, ok
+    refused = _write(
+        answering(403, b'{"detail": "Owner only"}'),
+        "import_workflow_graph",
+        name="x.json",
+        workflow={"1": {}},
+    )
+    assert refused["isError"] is True
+    assert "answered 403: Owner only" in refused["content"][0]["text"]
+
+
+def test_a_workflow_key_cannot_reshape_the_request_path():
+    requested = []
+
+    def fetch(path, params, method="GET", body=None):
+        requested.append(path)
+        return 200, "application/json", b"{}"
+
+    _write(fetch, "get_workflow", workflow_key="x/../../users/me/tokens")
+    assert requested == ["/workflows/x%2F..%2F..%2Fusers%2Fme%2Ftokens"]
+    # Positive control: a well-formed key is sent as it is.
+    _write(fetch, "get_workflow", workflow_key="abc123")
+    assert requested[-1] == "/workflows/abc123"
+    # And a non-string never reaches the transport.
+    assert _write(fetch, "get_workflow", workflow_key=["abc"])["isError"] is True
+    assert len(requested) == 2
+
+
+def test_the_graph_goes_through_a_file_in_both_directions(tmp_path):
+    graph = {"3": {"class_type": "KSampler", "inputs": {"steps": 20}}}
+    sent = []
+
+    def fetch(path, params, method="GET", body=None):
+        if method == "POST":
+            sent.append(body)
+            return 200, "application/json", b'{"matched": false}'
+        answer = {"name": "Portrait", "workflow": graph, "source": "file"}
+        return 200, "application/json", json.dumps(answer).encode()
+
+    out = tmp_path / "nested" / "graph.json"
+    result = _write(
+        fetch, "export_workflow_graph", workflow_key="abc", out_path=str(out)
+    )
+    assert result["isError"] is False, result
+    summary = json.loads(result["content"][0]["text"])
+    assert summary["path"] == str(out)
+    assert summary["nodes"] == 1
+    # A path, not the graph: the agent reads the file only if it needs to.
+    assert "KSampler" not in result["content"][0]["text"]
+    assert json.loads(out.read_text()) == graph
+
+    assert (
+        _write(fetch, "import_workflow_graph", name="p.json", path=str(out))["isError"]
+        is False
+    )
+    assert sent[0]["workflow"] == graph
+
+    # The refusals say why, and none of them reaches the server.
+    (tmp_path / "bad.json").write_text("{not json")
+    (tmp_path / "list.json").write_text("[]")
+    for path, reason in [
+        (tmp_path / "absent.json", "Could not read"),
+        (tmp_path / "bad.json", "not valid JSON"),
+        (tmp_path / "list.json", "not a workflow object"),
+    ]:
+        refused = _write(fetch, "import_workflow_graph", name="p.json", path=str(path))
+        assert refused["isError"] is True
+        assert reason in refused["content"][0]["text"]
+    both = _write(
+        fetch, "import_workflow_graph", name="p.json", path=str(out), workflow=graph
+    )
+    assert both["isError"] is True
+    assert len(sent) == 1
+
+    # A path that cannot be written is a tool error naming it, not a crash.
+    blocked = tmp_path / "a-file"
+    blocked.write_text("")
+    refused = _write(
+        fetch,
+        "export_workflow_graph",
+        workflow_key="abc",
+        out_path=str(blocked / "graph.json"),
+    )
+    assert refused["isError"] is True
+    assert "Could not write" in refused["content"][0]["text"]
+
+
+def test_import_is_refused_to_a_read_token_and_reaches_the_route_for_the_owner(env):
+    """Both directions against the live server, with nothing stored.
+
+    The document is not a workflow, so the owner's call gets the route's own
+    400 - which proves it passed the gate - and nothing is written into the
+    workflow folder, which this test shares with the machine.
+    """
+    arguments = {"name": "mcp-probe.json", "workflow": {"not": "a workflow"}}
+    owner = _write(env.owner, "import_workflow_graph", **arguments)
+    assert owner["isError"] is True
+    assert "answered 400" in owner["content"][0]["text"], owner
+
+    refused = _write(env.scoped, "import_workflow_graph", **arguments)
+    assert refused["isError"] is True
+    assert "answered 403" in refused["content"][0]["text"], refused
+
+
+def test_the_start_up_probe_names_a_token_that_cannot_write(capsys):
+    def read_only(path, params):
+        assert path == "/recipes"
+        return 403, "application/json", b'{"detail": "Owner only"}'
+
+    assert mcp_server.warn_if_not_owner(read_only) is False
+    assert "full-access token" in capsys.readouterr().err
+
+    assert (
+        mcp_server.warn_if_not_owner(
+            lambda path, params: (200, "application/json", b"[]")
+        )
+        is True
+    )
+    assert mcp_server.build_parser().parse_args([]).allow_write is False
+    assert mcp_server.build_parser().parse_args(["--allow-write"]).allow_write is True

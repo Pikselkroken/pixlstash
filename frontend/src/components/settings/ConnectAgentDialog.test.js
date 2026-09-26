@@ -142,6 +142,36 @@ describe("the configuration handed to the agent", () => {
     );
   });
 
+  it("mints a full-access token and passes --allow-write only when asked", async () => {
+    const wrapper = mount(ConnectAgentDialog, {
+      props: { open: true },
+      global: { stubs: { "v-icon": true } },
+    });
+    await wrapper.findAll('[role="radio"]')[1].trigger("click");
+    // The cost is stated before anything is minted.
+    expect(wrapper.text()).toMatch(/full owner control/i);
+    await wrapper.find(".app-dialog__footer button:last-child").trigger("click");
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+
+    expect(createToken).toHaveBeenCalledWith({
+      description: "AI agent (MCP, read/write)",
+      scope: "ALL",
+    });
+    // Still two blocks, both carrying the flag.
+    expect(wrapper.findAll(".cad-code")).toHaveLength(2);
+    expect(wrapper.text()).toContain("pixlstash-mcp --allow-write");
+    const json = JSON.parse(wrapper.find(".cad-code--json").text());
+    expect(json.mcpServers.pixlstash.args).toEqual(["--allow-write"]);
+  });
+
+  it("leaves the read-only configuration without the flag", async () => {
+    const wrapper = await mintedDialog();
+    expect(wrapper.text()).not.toContain("--allow-write");
+    const json = JSON.parse(wrapper.find(".cad-code--json").text());
+    expect(json.mcpServers.pixlstash.args).toBeUndefined();
+  });
+
   it("shows no token and an error when minting fails", async () => {
     createToken.mockRejectedValue(new Error("nope"));
     const wrapper = mount(ConnectAgentDialog, {
