@@ -1726,17 +1726,32 @@ the shelf's workflow sets section) and served as `hand_made` on
   next row), Enter on ＋ opens the chooser, Backspace removes a member, Delete
   stays the file delete. A crossing into a slots tray lands at its edge, as it does for a List
   tray (`verticalTarget`, whose `trayBounds` covers `slot` entries too).
-- **One chooser for three jobs, in two modes.** `WorkflowSetChooser` only adds.
-  A slot's ＋ opens it in `pick` mode: ranked by `slotSuggestions` (your sets
-  with the same base model, then recipes with this checkpoint, then the same
-  base model, then all; unranked until a checkpoint is chosen), and ONE click
-  or Enter adds the model — no tick, no Add button. The Checkpoint popup closes
-  on its pick and the cursor lands on the new checkpoint; any other slot's stays
-  open, the added model drops out of the list, and a second click on a row still
-  being added is ignored. **Fill from pictures** (`fillFromPictures`) and **Fill
-  from a set** (`fillFromSets`) are pre-ticked checklists with one Add. Focus
-  goes back to the tile on close, since v-menu cannot restore it for a
-  programmatic open.
+- **One chooser for three jobs, in two modes.** `WorkflowSetChooser` only adds,
+  and every row is the shelf's row in miniature (#1574): `ModelMark`, the
+  `modelName` text in the shelf's weight for its state, the mono filename on a
+  second line, then the quant chip and a fixed right column (size in `pick`,
+  recipe count or source sets in a checklist), so every row lines up. Focus
+  stays in the filter in both modes. A slot's ＋ opens it in `pick` mode, with
+  no title (the tray already names the set; the set and slot are the
+  accessible name): ranked by `slotSuggestions` (your sets with the same base
+  model, then recipes with this checkpoint, then the same base model, then the
+  other base models, which start folded to one line when anything is above
+  them; unranked until a checkpoint is chosen). Empty groups are not drawn, and
+  a group label's count sits in its own column as `.fm-n`. `slotSuggestions`
+  sorts and filters by `modelName`, still matching the filename, and under a
+  filter returns the set's own matches as a `held` section the popup names
+  instead of offering. ONE click or Enter adds: Enter takes the arrow cursor
+  (the inset ring), or the top match (marked ⏎) while no arrow has been used;
+  the pointer only washes a row. The Checkpoint popup closes on its pick and
+  the cursor lands on the new checkpoint. Any other slot takes any number: the
+  popup stays open, the added row drops out, a second click on a row still
+  being added is ignored, and the adds go in `quiet` (no pill). The popup's own
+  status line narrates them with an Undo that takes back the last one, and on
+  close `store.announceAdded` raises ONE receipt for all of them. **Fill from
+  pictures** (`fillFromPictures`) and **Fill from a set** (`fillFromSets`) are
+  pre-ticked checklists with a title, grouped by slot, with Cancel and one Add;
+  Space ticks once an arrow has put the cursor down. Focus goes back to the
+  tile on close, since v-menu cannot restore it for a programmatic open.
 - **The base-model offer, once.** Suggestions follow the checkpoint's base
   model, so when a checkpoint with none goes in (the popup, Fill, or New
   workflow set with this checkpoint), the store records it in `checkpointAdded`
@@ -1750,8 +1765,8 @@ the shelf's workflow sets section) and served as `hand_made` on
   filename; `store.handMadeSets` re-resolves each through the shelf's own
   `modelName` (or `deriveModelName` on the kept label, off the shelf), so a set
   named after its checkpoint never reads `….safetensors`, and receipts go
-  through the same `withShelfNames`. The chooser is `--dialog-w-sm` wide and its
-  title wraps (`overflow-wrap: anywhere`), so no set name can run out of it.
+  through the same `withShelfNames`. The chooser is `--dialog-w-sm` wide and
+  every name in it ellipsizes, so no set name can run out of it.
 - **Every set write is `setWrite` in the store:** the call, a full refetch
   (coverage moves with membership), and a receipt whose Undo is the inverse call
   — a delete is undone by recreating the set from the snapshot the route returns,
@@ -1768,7 +1783,8 @@ the shelf's workflow sets section) and served as `hand_made` on
   deletes the sets its undo recreated (they have new ids). A create has no Redo:
   its undo is the delete verb, whose own pill replaces it. An undo that failed
   never shows "Undone". A write that changed nothing ("Nothing added") has no Undo and
-  goes to a plain notice. Errors stay notices.
+  goes to a plain notice. Errors stay notices. A `quiet` write raises no pill
+  at all, for a caller that narrates it itself (the slot picker).
 - **Clone with new models** labels proposals with `via: "grouped"` "Grouped by
   you" and lists them first in its selects; one with `prepick: false` (the set
   offers several of that kind) is shown but not pre-picked.

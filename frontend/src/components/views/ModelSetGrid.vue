@@ -216,16 +216,19 @@
     <WorkflowSetChooser
       :open="Boolean(chooser)"
       :target="chooser?.target"
-      :title="chooserTitle"
+      :label="chooserLabel"
+      :heading="chooserHeading.title"
+      :subheading="chooserHeading.sub"
       :note="chooserNote"
       :sections="chooserSections"
-      :filterable="chooser?.mode === 'slot'"
       :query="chooserQuery"
       :pick="chooser?.mode === 'slot'"
       :placeholder="chooserPlaceholder"
       :empty-text="chooserEmpty"
+      :status="chooserStatus"
       @update:query="(value) => (chooserQuery = value)"
       @add="addChosen"
+      @undo="undoLastPick"
       @close="closeChooser"
     />
   </div>
@@ -289,11 +292,17 @@ import { VIcon } from "vuetify/components";
 
 import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
-import { assignmentRing } from "../../utils/modelShelf";
+import {
+  assignmentRing,
+  formatModelSize,
+  modelName,
+} from "../../utils/modelShelf";
 import {
   fillFromPictures,
   fillFromSets,
   handMadeName,
+  recipeCount,
+  rowMatches,
   SET_SLOTS,
   setCheckpoint,
   setSlots,
@@ -894,30 +903,49 @@ const chooserSlot = computed(() =>
   SET_SLOTS.find((slot) => slot.id === chooser.value?.slotId),
 );
 
+const rowsById = computed(
+  () => new Map(store.rows.map((row) => [row.id, row])),
+);
+
+/** A shelf row for a fill item; a bare one if the shelf has lost it since. */
+function fillRow(item) {
+  return (
+    rowsById.value.get(item.id) ?? { id: item.id, display_name: item.name }
+  );
+}
+
+/**
+ * A Fill checklist's items, grouped by slot: every row is evidence of the
+ * same kind, so there is no rank to draw, only where each one will land.
+ */
+function fillSections(items, detail) {
+  const needle = chooserQuery.value.trim().toLowerCase();
+  return SET_SLOTS.map((slot) => ({
+    id: slot.id,
+    label: slot.label,
+    items: items
+      .filter((item) => item.slot === slot.id)
+      .map((item) => ({
+        id: item.id,
+        row: fillRow(item),
+        detail: detail(item),
+        checked: true,
+      }))
+      .filter((entry) => rowMatches(entry.row, needle)),
+  }));
+}
+
 const chooserSections = computed(() => {
   const mode = chooser.value?.mode;
   const set = openHand.value?.set;
   if (!mode || !set) return [];
   if (mode === "pictures") {
-    return [
-      {
-        id: "pictures",
-        label: "",
-        items: fillPictureItems.value.map((item) => ({
-          ...item,
-          checked: true,
-        })),
-      },
-    ];
+    return fillSections(fillPictureItems.value, (item) =>
+      recipeCount(item.recipes),
+    );
   }
   if (mode === "set") {
-    return [
-      {
-        id: "sets",
-        label: "",
-        items: fillSetItems.value.map((item) => ({ ...item, checked: true })),
-      },
-    ];
+    return fillSections(fillSetItems.value, (item) => item.from.join(", "));
   }
   return slotSuggestions({
     set,
@@ -928,39 +956,62 @@ const chooserSections = computed(() => {
     query: chooserQuery.value,
   }).map((section) => ({
     ...section,
-    items: section.items.map((row) => ({
-      id: row.id,
-      name: row.display_name || row.filename,
-      detail: row.base_model_canonical || row.base_model || "",
-    })),
+    items: section.held
+      ? section.items
+      : section.items.map((row) => ({
+          id: row.id,
+          row,
+          detail: formatModelSize(row.file_size),
+        })),
   }));
 });
 
-const chooserTitle = computed(() => {
+const chooserLabel = computed(() => {
   const name = openHand.value ? handMadeName(openHand.value.set) : "";
-  if (chooser.value?.mode === "pictures") {
-    const checkpoint = setCheckpoint(openHand.value?.set);
-    return `Fill "${name}" from pictures of ${checkpoint?.name ?? "its checkpoint"}`;
-  }
+  if (chooser.value?.mode === "pictures") return `Fill "${name}" from pictures`;
   if (chooser.value?.mode === "set") return `Fill "${name}" from a set`;
   return chooserSlot.value ? `${chooserSlot.value.add} to "${name}"` : "";
 });
 
-const chooserNote = computed(() => {
-  if (chooser.value?.mode === "set") {
-    const checkpoint = setCheckpoint(openHand.value?.set);
-    return checkpoint?.base_model
-      ? `From your other ${checkpoint.base_model} sets.`
-      : "From your other sets. Add a checkpoint to narrow this to its base model.";
+/** A checklist's title and context line; a slot's picker has none. */
+const chooserHeading = computed(() => {
+  const mode = chooser.value?.mode;
+  const set = openHand.value?.set;
+  if (!set || mode === "slot") return { title: "", sub: "" };
+  const into = `into ${handMadeName(set)}`;
+  const checkpoint = setCheckpoint(set);
+  if (mode === "pictures") {
+    return {
+      title: "Fill from pictures",
+      sub: `${into}, from pictures of ${checkpoint?.name ?? "its checkpoint"}`,
+    };
   }
-  if (chooser.value?.mode === "slot" && !setCheckpoint(openHand.value?.set)) {
-    return "Suggestions follow the checkpoint, so every model is listed until one is chosen.";
+  return {
+    title: "Fill from a set",
+    sub: checkpoint?.base_model
+      ? `${into}, from your other ${checkpoint.base_model} sets`
+      : `${into}, from your other sets`,
+  };
+});
+
+const chooserNote = computed(() => {
+  const mode = chooser.value?.mode;
+  const set = openHand.value?.set;
+  if (mode === "set" && !setCheckpoint(set)) {
+    return "Add a checkpoint to narrow this to its base model.";
+  }
+  if (
+    mode === "slot" &&
+    chooser.value.slotId !== "checkpoint" &&
+    !setCheckpoint(set)?.on_shelf
+  ) {
+    return "Add a checkpoint first to rank these by what works with it.";
   }
   return "";
 });
 
 const chooserPlaceholder = computed(() =>
-  chooserSlot.value ? `Filter ${chooserSlot.value.noun}` : "Filter…",
+  chooserSlot.value ? `Filter ${chooserSlot.value.noun}` : "Filter",
 );
 
 const chooserEmpty = computed(() =>
@@ -968,6 +1019,30 @@ const chooserEmpty = computed(() =>
     ? `No ${chooserSlot.value?.noun ?? "models"} on the shelf to add.`
     : "Nothing to add: the set already holds all of them.",
 );
+
+/**
+ * What a slot's picker has added since it opened, in order: its status line,
+ * the Undo in it, and the one receipt it leaves behind when it closes.
+ */
+const picked = ref([]);
+/** The last model the popup's Undo took back out, for the status line. */
+const tookOut = ref("");
+
+const chooserStatus = computed(() => {
+  const list = picked.value;
+  if (!list.length) {
+    return tookOut.value
+      ? { text: `Took out ${tookOut.value}`, undo: false }
+      : null;
+  }
+  const text =
+    list.length === 1
+      ? `Added ${list[0].name}`
+      : list.length === 2
+        ? `Added ${list[0].name} and ${list[1].name}`
+        : `Added ${list.length} ${chooserSlot.value?.noun ?? "models"}`;
+  return { text, undo: true };
+});
 
 /**
  * Open the chooser beside the control that asked for it.
@@ -980,10 +1055,13 @@ const chooserEmpty = computed(() =>
 function openChooser(mode, el, slotId = "") {
   if (!openHand.value) return;
   chooserQuery.value = "";
+  picked.value = [];
+  tookOut.value = "";
   const box = el?.getBoundingClientRect?.();
   chooser.value = {
     mode,
     slotId,
+    setId: openHand.value.set.id,
     target: box ? [box.left, box.bottom] : [0, 0],
     returnTo: slotId ? `slot:add:${slotId}` : cursorId.value,
     // Decided by what the TRIGGER is, not by where the cursor was: a Fill
@@ -1104,8 +1182,18 @@ function openFill(mode) {
 }
 
 function closeChooser() {
-  const { returnTo, trigger, triggerIsTile } = chooser.value ?? {};
+  const { returnTo, trigger, triggerIsTile, slotId, setId } =
+    chooser.value ?? {};
   chooser.value = null;
+  // What the popup added while open becomes ONE receipt now it has closed
+  // (#1573), rather than a pill per click replacing the one before.
+  const set = store.handMadeSets.find((candidate) => candidate.id === setId);
+  if (set && picked.value.length) {
+    const slot = SET_SLOTS.find((candidate) => candidate.id === slotId);
+    store.announceAdded(set, picked.value, slot?.noun ?? "models");
+  }
+  picked.value = [];
+  tookOut.value = "";
   // A Fill button still on screen takes its focus back directly. A ＋ tile
   // goes through the cursor, which also keeps the grid's roving tab stop on
   // it - and a tile that vanished (the Checkpoint ＋, once filled) is handled
@@ -1151,9 +1239,10 @@ async function addChosen(ids) {
 /**
  * One click in a slot's popup adds that model (#1520 feedback: a tick and an
  * Add button was two decisions for one). The Checkpoint slot holds one, so its
- * popup closes and the cursor lands on the checkpoint just added; any other
- * slot stays open, the added model drops out of the list, and the next one is
- * one more click.
+ * popup closes, the add raises its own receipt, and the cursor lands on the
+ * checkpoint just added. Any other slot takes any number: the popup stays open,
+ * the added model drops out of the list, the status line says what went in, and
+ * the receipt waits for the popup to close (#1574).
  */
 async function pickIntoSlot(set, slotId, ids) {
   const fresh = ids.filter((id) => !picking.has(id));
@@ -1161,21 +1250,59 @@ async function pickIntoSlot(set, slotId, ids) {
   fresh.forEach((id) => picking.add(id));
   const single = slotId === "checkpoint";
   if (single) closeChooser();
+  let result;
   try {
-    await store.addToHandMadeSet(
+    result = await store.addToHandMadeSet(
       set,
       fresh.map((id) => ({ model_id: id, slot: slotId })),
+      { quiet: !single },
     );
   } finally {
     fresh.forEach((id) => picking.delete(id));
   }
-  if (single) {
-    const sha = store.rows.find((row) => row.id === fresh[0])?.sha256;
-    const at = flatRows.value.findIndex(
-      (entry) => entry.id === `slot:m:${sha}`,
-    );
-    if (at >= 0) moveCursor(at);
+  if (!single) {
+    // By what the server stored, not what was asked: a model the set already
+    // held is not an add, and must not be undone as one.
+    const stored = new Set(result?.added ?? []);
+    const added = fresh
+      .map((id) => rowsById.value.get(id))
+      .filter((row) => row && stored.has(row.sha256))
+      .map((row) => ({
+        model_id: row.id,
+        slot: slotId,
+        sha256: row.sha256,
+        name: modelName(row).text || row.filename,
+      }));
+    // The popup may have closed while the add was out; its receipt is gone,
+    // so this one is raised on its own.
+    if (chooser.value?.setId === set.id) {
+      picked.value = [...picked.value, ...added];
+      tookOut.value = "";
+    } else {
+      store.announceAdded(
+        set,
+        added,
+        SET_SLOTS.find((s) => s.id === slotId)?.noun ?? "models",
+      );
+    }
+    return;
   }
+  const sha = store.rows.find((row) => row.id === fresh[0])?.sha256;
+  const at = flatRows.value.findIndex((entry) => entry.id === `slot:m:${sha}`);
+  if (at >= 0) moveCursor(at);
+}
+
+/** The status line's Undo: take the last add back out, quietly. */
+async function undoLastPick() {
+  const set = openHand.value?.set;
+  const last = picked.value.at(-1);
+  if (!set || !last) return;
+  picked.value = picked.value.slice(0, -1);
+  const done = await store.removeFromHandMadeSet(set, [last.sha256], {
+    quiet: true,
+  });
+  if (done) tookOut.value = last.name;
+  else picked.value = [...picked.value, last];
 }
 
 defineExpose({ openFill, openOffer });
