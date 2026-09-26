@@ -1735,6 +1735,36 @@ class TestLoraChain:
         assert [c["text"] for c in plan["changes"]][0] == "Loader #11 deleted: b"
         assert plan["lanes"][1]["order"] == ["12"]
 
+    def test_a_lane_loader_moved_to_the_trunk_needs_no_lanes(self):
+        graph = self._two_pass()
+        chain = read_lora_chain(graph, self.INFO)
+        entries = [{"node_id": n} for n in ("10", "11", "12")]
+        plan = plan_lora_chain(graph, chain, entries, self.INFO)
+        assert plan["order"] == ["10", "11", "12"]
+        assert plan["lanes"][1]["order"] == []
+
+    def test_one_loader_in_the_trunk_and_a_lane_is_refused(self):
+        graph = self._two_pass()
+        chain = read_lora_chain(graph, self.INFO)
+        with pytest.raises(LookupError, match="#12 is listed twice"):
+            plan_lora_chain(
+                graph,
+                chain,
+                [{"node_id": "10"}, {"node_id": "11"}, {"node_id": "12"}],
+                self.INFO,
+                [[], [{"node_id": "12"}]],
+            )
+
+    def test_an_unsampler_on_the_way_does_not_name_the_pass(self):
+        # #13 inverts the latent with the hires model before #15 samples it,
+        # and is met first: the lower id at the same depth.
+        graph = self._two_pass()
+        graph["13"] = {"class_type": "Unsampler", "inputs": {"model": ["12", 0]}}
+        graph["15"]["inputs"]["latent_image"] = ["13", 0]
+        info = {**self.INFO, "Unsampler": {"output": ["LATENT"]}}
+        lanes = read_lora_chain(graph, info)["lanes"]
+        assert [pass_label(lane) for lane in lanes] == ["Base pass", "Hires pass"]
+
     def test_lanes_that_do_not_match_the_chain_are_refused(self):
         graph = self._two_pass()
         chain = read_lora_chain(graph, self.INFO)

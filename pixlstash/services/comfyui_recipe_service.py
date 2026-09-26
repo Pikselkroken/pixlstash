@@ -1812,11 +1812,7 @@ def _pass_of(graph: dict, links: list[dict], starts: list[str]) -> dict:
     while level and found is None:
         seen.update(level)
         found = next(
-            (
-                n
-                for n in level
-                if "sampler" in str((graph.get(n) or {}).get("class_type")).lower()
-            ),
+            (n for n in level if _samples((graph.get(n) or {}).get("class_type"))),
             None,
         )
         level = sorted(
@@ -1845,6 +1841,18 @@ def _pass_of(graph: dict, links: list[dict], starts: list[str]) -> dict:
         "class_type": class_type,
         "title": title if title and title != class_type else None,
     }
+
+
+def _samples(class_type: Any) -> bool:
+    """Whether *class_type* reads as a sampler a pass is named by.
+
+    By name, since ``object_info`` does not say. ``Unsampler`` (an inversion
+    step) reads the model on the way to the real sampler and is not one.
+    ``KSamplerSelect`` and its kin take no link, so a search down the links
+    never reaches them.
+    """
+    name = str(class_type or "").lower()
+    return "sampler" in name and not name.startswith("unsampler")
 
 
 def pass_label(lane: dict) -> str:
@@ -2510,8 +2518,15 @@ def plan_lora_chain(
     graph = prompt_graph or {}
     read_lanes = chain.get("lanes") or []
     if lanes is None:
+        # Every pass as read, less any loader *entries* already moved into the
+        # trunk: that is a crossing, not a loader listed twice.
+        listed = {str(e["node_id"]) for e in entries if e.get("node_id") is not None}
         lanes = [
-            [{"node_id": loader["node_id"]} for loader in lane["loaders"]]
+            [
+                {"node_id": loader["node_id"]}
+                for loader in lane["loaders"]
+                if loader["node_id"] not in listed
+            ]
             for lane in read_lanes
         ]
     if len(lanes) != len(read_lanes):
