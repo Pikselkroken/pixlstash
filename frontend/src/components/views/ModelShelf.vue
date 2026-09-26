@@ -315,16 +315,20 @@
           <!-- New workflow set, on the grid only: the row list has no sets to
                make. Here in the right cluster rather than beside Add, because
                it writes on the press and the left group's rule is that nothing
-               there does. It takes the slot Sort leaves empty on the grid. N
+               there does. It takes the slot Sort leaves empty on the grid and
+               is narrower than Sort, and its label is a `.bar-btn-value`, so
+               it drops at rung 2 like Group's: the ladder's widths hold. N
                inside the grid does the same (#1575). -->
           <AppBarButton
             v-if="isSetGrid"
             icon="layers-plus"
-            tooltip="New workflow set (N)"
+            tooltip="New workflow set (N in the grid)"
+            aria-label="New workflow set"
             data-testid="new-workflow-set"
             @click="store.createHandMadeSet({})"
-            >New set</AppBarButton
           >
+            <span class="bar-btn-value">New set</span>
+          </AppBarButton>
 
           <!-- Hidden on the set grid, not disabled, exactly as the whole
                cluster is hidden on the training-runs tab and for the same

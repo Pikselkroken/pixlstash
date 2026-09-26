@@ -1697,7 +1697,8 @@ the shelf's workflow sets section) and served as `hand_made` on
 - **One grid, two kinds of card.** `flatRows` holds `store.handMadeGroups`
   newest first, then the evidence cards, and nothing else. A set is made with
   **New set** in the shelf toolbar (right cluster, shown only on the grid,
-  since it writes on the press) or `N` inside the grid. A hand-made card is `ModelSetCard` with `card.handMade`: a dashed edge, a
+  since it writes on the press) or `N` inside the grid. A hand-made card is
+  `ModelSetCard` with `card.handMade`: a dashed edge, a
   "Grouped by you" badge, the checkpoint's `ModelMark` as the cover until a
   picture belongs to it, "Incomplete: no checkpoint" in place of its facts when
   it has none, and never a recipe count.
@@ -3778,7 +3779,11 @@ on the press, and it has no selection to hang on** — Add makes a row that does
 not exist yet, the sweep proposes over the whole shelf, and `Model folders`
 edits the registry the shelf reads rather than anything in it. **Every
 other verb lives on the row's context menu or in the selection pill**, so a
-mutation is never one stray click from a view switch.
+mutation is never one stray click from a view switch. The one exception is
+**New set** on the workflow-set grid (#1575): it makes an empty set on the
+press, so it cannot sit in the left group, and it has no selection to hang on,
+so it cannot live in the pill. It sits after `Group` in the slot Sort vacates
+on the grid, and a stray press costs one Undo on its receipt.
 
 The **label rule** on the view controls: a control whose glyph is abstract AND
 whose state explains why the list looks the way it does carries its current

@@ -40,7 +40,7 @@
           A set is read off a recipe, and a recipe arrives with a picture that
           carries its workflow. Until one does, there is nothing here to group —
           which says nothing about the models on the shelf. You can still make a
-          set by hand with <strong>New set</strong> in the toolbar, or N.
+          set by hand with <strong>New set</strong> in the toolbar.
         </p>
       </div>
       <div
