@@ -256,7 +256,7 @@ class TagTask(BaseTask):
 
         try:
             ext = os.path.splitext(str(file_path))[1].lower()
-            if ext in _VIDEO_EXTS:
+            if ext in _VIDEO_EXTS or VideoUtils.is_animated_gif(str(file_path)):
                 frames = VideoUtils.extract_representative_video_frames(
                     str(file_path), count=1
                 )
@@ -338,7 +338,10 @@ class TagTask(BaseTask):
             valid_faces = [
                 face
                 for face in faces
-                if face.bbox and getattr(face, "face_index", 0) >= 0
+                if face.bbox
+                and getattr(face, "face_index", 0) >= 0
+                # The crop is taken from frame 0; a later frame's box is not in it.
+                and getattr(face, "frame_index", 0) == 0
             ]
             img = preloaded_images.get(file_path)
             if img is None:

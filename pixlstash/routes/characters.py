@@ -88,6 +88,15 @@ _LIKENESS_SEARCH_MAX_POOL_M = 2000
 _MAX_REFS_PER_CHARACTER = 10
 
 
+def _on_frame_0(face) -> bool:
+    """True when a face's box can be cropped from the picture's first frame.
+
+    The thumbnail decodes frame 0; a face found later in a video or an animated
+    GIF has a box measured on another frame.
+    """
+    return (getattr(face, "frame_index", 0) or 0) == 0
+
+
 def _may_learn_a_project_scoped_count(visible_projects: set[int] | None) -> bool:
     """Whether a project-scoped aggregate may be serialised to this caller.
 
@@ -1467,7 +1476,10 @@ def create_router(server) -> APIRouter:
                     Face.find, picture_id=pinned_id
                 )
                 best_pic = pics[0] if pics else None
-                best_face = next((f for f in faces if f.character_id == char.id), None)
+                best_face = next(
+                    (f for f in faces if f.character_id == char.id and _on_frame_0(f)),
+                    None,
+                )
                 if not (best_pic and best_face):
                     best_pic = best_face = None
 
@@ -1493,7 +1505,7 @@ def create_router(server) -> APIRouter:
                         Face.find, picture_id=pic.id
                     )
                     for face in faces:
-                        if face.character_id == char.id:
+                        if face.character_id == char.id and _on_frame_0(face):
                             best_pic = pic
                             best_face = face
                             break
@@ -1502,6 +1514,8 @@ def create_router(server) -> APIRouter:
                         break
             if not best_pic or not best_face:
                 for face in char.faces:
+                    if not _on_frame_0(face):
+                        continue
                     pic = server.vault.db.run_immediate_read_task(
                         Picture.find,
                         id=face.picture_id,

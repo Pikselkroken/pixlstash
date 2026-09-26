@@ -1156,6 +1156,51 @@ def test_0122_hands_back_every_picture_that_carries_a_workflow():
             )
 
 
+def test_0123_hands_back_every_gif_for_re_embedding():
+    """Animated GIFs are now sampled over three frames, so every GIF re-embeds.
+
+    The embedding finder selects on ``image_embedding`` / ``aesthetic_score``
+    being NULL, and ``size_bin_index`` is what makes likeness drop the pairs
+    built from the frame-0 embedding. A non-GIF keeps all four.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        done = dict(
+            image_embedding=b"\x01\x02",
+            perceptual_hash="ab" * 8,
+            aesthetic_score=0.5,
+            size_bin_index=7,
+        )
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            _insert_minimal_row(conn, "picture", file_path="a/anim.GIF", **done)
+            _insert_minimal_row(conn, "picture", file_path="a/photo.png", **done)
+            conn.execute(
+                "UPDATE alembic_version SET version_num = "
+                "'0122_rescan_pictures_for_controlnet_model_names'"
+            )
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            rows = {
+                row[0]: row[1:]
+                for row in conn.execute(
+                    "SELECT file_path, image_embedding, perceptual_hash, "
+                    "aesthetic_score, size_bin_index FROM picture"
+                )
+            }
+        assert rows == {
+            "a/anim.GIF": (None, None, None, None),
+            "a/photo.png": (b"\x01\x02", "ab" * 8, 0.5, 7),
+        }
+
+
 def _has_table(conn, name: str) -> bool:
     return (
         conn.execute(
