@@ -11,7 +11,7 @@ does **not** answer a conditional request - the only conditional logic it has is
 its own buys nothing: without a ``Cache-Control`` header the browser falls back
 to *heuristic* caching and may reuse a regenerated thumbnail for an unbounded
 window with no revalidation, and with ``no-cache`` but no 304 handling every
-revalidation would re-send the whole PNG.
+revalidation would re-send the whole image.
 
 :func:`conditional_file_response` closes both halves: it declares
 ``private, no-cache`` (always revalidate; never store in a shared proxy, because

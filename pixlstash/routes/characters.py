@@ -59,7 +59,13 @@ from pixlstash.utils.field_allowlist import (
     require_servable_field,
 )
 from pixlstash.utils.http_cache import conditional_file_response
-from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.image_processing.image_utils import (
+    THUMBNAIL_EXTENSION,
+    THUMBNAIL_FORMAT,
+    THUMBNAIL_QUALITY,
+    THUMBNAIL_WEBP_METHOD,
+    ImageUtils,
+)
 from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.scoring import (
     select_reference_faces_for_character,
@@ -1350,7 +1356,7 @@ def create_router(server) -> APIRouter:
                     "application/json": {
                         "schema": {"type": "object", "additionalProperties": True}
                     },
-                    "image/png": {},
+                    "image/webp": {},
                 }
             },
             400: {
@@ -1372,14 +1378,15 @@ def create_router(server) -> APIRouter:
         require_servable_field(Character, field, CHARACTER_EXTRA_SERVABLE_FIELDS)
 
         if field == "thumbnail":
-            # 8, not 7: the cached metadata gained ``pinned_picture_id`` and the
-            # selection it records changed meaning, so every library's existing
-            # crop has to be re-derived once rather than served under the new
-            # contract.
-            thumbnail_cache_version = 8
+            # 9, not 8: the crop became WebP. The new file name already forces
+            # the re-render; the bump keeps the metadata honest. (8 added
+            # ``pinned_picture_id``.)
+            thumbnail_cache_version = 9
             cache_dir = os.path.join(server.vault.image_root, "tmp", "face_thumbnails")
             os.makedirs(cache_dir, exist_ok=True)
-            cache_path = resolve_path_within(cache_dir, f"character_{id}.png")
+            cache_path = resolve_path_within(
+                cache_dir, f"character_{id}{THUMBNAIL_EXTENSION}"
+            )
             meta_path = resolve_path_within(cache_dir, f"character_{id}.json")
 
             def fetch_best_picture_id(session: Session, character_id: int):
@@ -1450,7 +1457,9 @@ def create_router(server) -> APIRouter:
                         == best_picture.get("pinned_picture_id")
                         and meta.get("version") == thumbnail_cache_version
                     ):
-                        return conditional_file_response(request, cache_path)
+                        return conditional_file_response(
+                            request, cache_path, media_type="image/webp"
+                        )
                 except Exception as exc:
                     logger.debug("Failed to read character thumbnail cache: %s", exc)
             char = server.vault.db.run_immediate_read_task(
@@ -1612,8 +1621,22 @@ def create_router(server) -> APIRouter:
             # renders it in a ~150 px HiDPI grid cell had nothing else to ask
             # for. Bump ``thumbnail_cache_version`` above when this changes.
             crop = crop.resize((256, 256), Image.LANCZOS)
+            save_kwargs = {
+                "format": THUMBNAIL_FORMAT,
+                "quality": THUMBNAIL_QUALITY,
+                "method": THUMBNAIL_WEBP_METHOD,
+            }
             try:
-                crop.save(cache_path, format="PNG")
+                crop.save(cache_path, **save_kwargs)
+                # The PNG crop cached before #994 is never read again.
+                legacy_png = os.path.join(cache_dir, f"character_{id}.png")
+                try:
+                    if os.path.exists(legacy_png):
+                        os.remove(legacy_png)
+                except OSError as exc:
+                    logger.warning(
+                        "Could not remove stale thumbnail %s: %s", legacy_png, exc
+                    )
                 try:
                     with open(meta_path, "w", encoding="utf-8") as handle:
                         meta_payload = dict(best_picture)
@@ -1623,13 +1646,20 @@ def create_router(server) -> APIRouter:
                     logger.debug(
                         "Failed to write character thumbnail metadata: %s", exc
                     )
-                return conditional_file_response(request, cache_path)
-            except Exception:
-                from io import BytesIO
-
+                return conditional_file_response(
+                    request, cache_path, media_type="image/webp"
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to cache character %s thumbnail at %s, serving "
+                    "uncached: %s",
+                    id,
+                    cache_path,
+                    exc,
+                )
                 buf = BytesIO()
-                crop.save(buf, format="PNG")
-                return Response(content=buf.getvalue(), media_type="image/png")
+                crop.save(buf, **save_kwargs)
+                return Response(content=buf.getvalue(), media_type="image/webp")
         try:
             if field == "project_id":
                 # The stored scalar names the character's *primary* project,

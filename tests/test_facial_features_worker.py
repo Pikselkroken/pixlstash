@@ -191,7 +191,7 @@ def test_character_thumbnail_endpoint():
             assert response.status_code == 200, (
                 f"Thumbnail endpoint failed: {response.status_code}"
             )
-            assert response.headers["content-type"] == "image/png"
+            assert response.headers["content-type"] == "image/webp"
 
             # Load the image from response
             thumb_img = Image.open(io.BytesIO(response.content))

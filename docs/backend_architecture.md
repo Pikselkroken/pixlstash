@@ -5437,7 +5437,7 @@ The refusal is **`400`**, deliberately, and the three properties are asserted ra
 | Column, large binary (`image_embedding`, `text_embedding`, `likeness_parameters`), value present | `200` | `{"<field>": "<base64>"}` |
 | Column, large binary, value `NULL` | `500` | *(pre-existing bug, see residuals)* |
 | `project_id` (picture and character) | `200` | `{"project_id": <narrowed id or null>}`, narrowed per #719 / R1b |
-| `thumbnail`, character only | `200` | raw PNG bytes, `Content-Type: image/png` |
+| `thumbnail`, character only | `200` | raw WebP bytes, `Content-Type: image/webp` |
 | **Relationship** (`projects`, `picture_sets`, `characters`, `quality`, `likeness_a`, `likeness_b`, `reference_folder`, `project`, `pictures`, `reference_picture_set`) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
 | **Unknown name** (typo, removed column) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
 | Object does not exist, servable field | `404` | `{"detail": "Picture not found"}` / `{"detail": "Character not found"}` |
