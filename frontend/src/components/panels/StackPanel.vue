@@ -691,9 +691,14 @@ const notchStyle = computed(() => {
 }
 
 /* `min-height: 0` or a grid item refuses to be shorter than its content and
-   the track never collapses. `clip`, not `hidden`: see the template. */
+   the track never collapses. `min-width: 0` for the same reason across: `clip`
+   is not a scroll container, so without it the List's minimum width would
+   widen the band past its grid area and the right-hand columns would be
+   clipped off rather than scrolled to. `clip`, not `hidden`: see the
+   template. */
 .stack-panel__body {
   min-height: 0;
+  min-width: 0;
   overflow: clip;
 }
 
@@ -836,7 +841,12 @@ const notchStyle = computed(() => {
    wide in one and narrow in the other. Fixed tracks rather than `auto`: the
    rows are separate grid containers (each is its own `role="row"`), so `auto`
    would be measured per row and the columns would step sideways down the
-   list. */
+   list.
+
+   A grid of one implicit `auto` column, so every row is exactly as wide as
+   the widest row's minimum and never narrower than the panel: when the panel
+   is narrower than the columns' floors the list scrolls sideways instead of
+   clipping the first and last columns away. */
 .stack-panel__list {
   /* Local on purpose, the way `WorkflowCard.vue` keeps `--wf-meta-h` local:
      one component's one size, named so the rule below is not a bare literal
@@ -846,14 +856,20 @@ const notchStyle = computed(() => {
      whose first column is a picture trio rather than a mark beside a label. */
   --stack-thumb-h: 80px;
 
+  display: grid;
+  overflow-x: auto;
   padding: var(--space-2) 0 var(--space-3);
 }
 
 .stack-panel__listhead,
 .stack-panel__row {
   display: grid;
+  /* Workflow is floored at the thumbnail strip plus a readable name, and is
+     the column that keeps its width: Checkpoint and Differs by give theirs up
+     first, down to one chip each. A `minmax(0, 1fr)` here was squeezed to
+     nothing by the fixed columns beside it on any panel under ~800px. */
   grid-template-columns:
-    minmax(0, 1fr) 10rem minmax(0, 14rem)
+    minmax(12rem, 1fr) minmax(6rem, 10rem) minmax(6rem, 14rem)
     5rem 5rem var(--space-8);
   align-items: center;
   gap: var(--space-3);
