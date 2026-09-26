@@ -81,7 +81,7 @@ from pixlstash.services.model_shelf_service import (
     record_comfyui_history,
     fetch_workflow_sets,
 )
-from pixlstash.services.model_workflow_sets import create_set
+from pixlstash.services.model_workflow_sets import create_set, delete_set
 from pixlstash.services.workflow_library_service import (
     scan_progress,
     topology_activity,
@@ -2521,6 +2521,44 @@ def test_evidence_that_only_repeats_a_grouped_file_still_leaves_the_declared_fal
         (clip_g, "grouped"),
         (ids["clip_shared"], "declared"),
     ]
+
+
+def test_deleting_a_set_returns_exactly_what_it_deleted(companions_shelf):
+    """The snapshot is the undo, so it is read on the transaction that deletes:
+    every member row that went, by hash, slot and label, and nothing left
+    behind in the tables (#1520 review)."""
+    hub, ids = grouped_shelf(companions_shelf)
+    set_id = create_set(
+        hub,
+        "Night",
+        [
+            {"model_id": ids["ckpt_a"]},
+            {"model_id": ids["vae_grouped"]},
+            {"sha256": "ab" * 32, "slot": "lora", "label": "Gone_LoRA.safetensors"},
+        ],
+    )
+
+    snapshot = delete_set(hub, set_id)
+
+    assert snapshot["name"] == "Night"
+    assert {(m["sha256"], m["slot"]) for m in snapshot["members"]} == {
+        (
+            hub.fetchone("SELECT sha256 FROM model WHERE id = ?", (ids["ckpt_a"],))[0],
+            "checkpoint",
+        ),
+        (
+            hub.fetchone(
+                "SELECT sha256 FROM model WHERE id = ?", (ids["vae_grouped"],)
+            )[0],
+            "vae",
+        ),
+        ("ab" * 32, "lora"),
+    }
+    gone = next(m for m in snapshot["members"] if m["sha256"] == "ab" * 32)
+    assert (gone["on_shelf"], gone["label"]) == (False, "Gone_LoRA.safetensors")
+    assert not hub.fetchall(
+        "SELECT 1 FROM model_workflow_set_member WHERE set_id = ?", (set_id,)
+    )
 
 
 def test_evidence_in_the_family_outranks_the_declared_layouts(companions_shelf):

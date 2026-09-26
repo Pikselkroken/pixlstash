@@ -1914,10 +1914,9 @@ def create_router(server) -> APIRouter:
     )
     def delete_workflow_set(set_id: int, request: Request):
         server.auth.ensure_secure_when_required(request)
-        snapshot = _one_set(set_id)
         with _workflow_set_errors():
-            delete_set(server.hub, set_id)
-        return WorkflowSetDeleteResponse(deleted=snapshot)
+            snapshot = delete_set(server.hub, set_id)
+        return WorkflowSetDeleteResponse(deleted=_hand_made_set(snapshot))
 
     @router.post(
         "/models/workflow-sets/{set_id}/members",

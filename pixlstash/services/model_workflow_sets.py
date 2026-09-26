@@ -85,22 +85,30 @@ def fetch_sets(hub) -> list[dict]:
     Each member is ``{"sha256", "slot", "label", "model"}``, where ``model`` is
     the shelf row holding those bytes or ``None`` when no row does.
     """
-    sets = [
-        {**dict(row), "members": []}
-        for row in hub.fetchall(
-            "SELECT id, name, created_at, updated_at FROM model_workflow_set "
-            "ORDER BY created_at DESC, id DESC"
-        )
-    ]
+    return _collect(
+        hub.fetchall(_SETS_SQL + " ORDER BY created_at DESC, id DESC"),
+        hub.fetchall(_MEMBERS_SQL),
+    )
+
+
+# The two reads a set is made of, shared by `fetch_sets` (every set, through
+# the hub) and `delete_set` (one set, on the transaction that deletes it).
+_SETS_SQL = "SELECT id, name, created_at, updated_at FROM model_workflow_set"
+# `model.sha256` is UNIQUE, so the LEFT JOIN yields one row per member.
+_MEMBERS_SQL = (
+    "SELECT m.set_id, m.sha256, m.slot, m.label, model.id, model.display_name, "
+    "model.filename, model.file_kind, model.base_model, "
+    "model.base_model_canonical, model.base_model_source, model.file_size "
+    "FROM model_workflow_set_member AS m "
+    "LEFT JOIN model ON model.sha256 = m.sha256"
+)
+
+
+def _collect(set_rows, member_rows) -> list[dict]:
+    """Set rows and member rows as `fetch_sets` entries, in set-row order."""
+    sets = [{**dict(row), "members": []} for row in set_rows]
     by_id = {entry["id"]: entry for entry in sets}
-    # `model.sha256` is UNIQUE, so the LEFT JOIN yields one row per member.
-    for row in hub.fetchall(
-        "SELECT m.set_id, m.sha256, m.slot, m.label, model.id, model.display_name, "
-        "model.filename, model.file_kind, model.base_model, "
-        "model.base_model_canonical, model.base_model_source, model.file_size "
-        "FROM model_workflow_set_member AS m "
-        "LEFT JOIN model ON model.sha256 = m.sha256"
-    ):
+    for row in member_rows:
         entry = by_id.get(row["set_id"])
         if entry is None:
             continue
@@ -155,26 +163,9 @@ def attach_hand_made(hub, found: dict) -> dict:
     """
     hand_made = []
     for entry in fetch_sets(hub):
-        members = sorted(
-            (_member_out(member) for member in entry["members"]),
-            key=lambda m: (SLOTS.index(m["slot"]), m["name"].lower(), m["sha256"]),
-        )
-        checkpoint = next((m for m in members if m["slot"] == SLOT_CHECKPOINT), None)
-        hand_made.append(
-            {
-                "id": entry["id"],
-                "name": entry["name"],
-                "created_at": entry["created_at"],
-                "updated_at": entry["updated_at"],
-                "incomplete": checkpoint is None,
-                "checkpoint_id": checkpoint["id"] if checkpoint else None,
-                "picture_count": 0,
-                "recipes": 0,
-                "covers": [],
-                "members": members,
-                "_on_shelf": {m["id"] for m in members if m["on_shelf"]},
-            }
-        )
+        shaped = _shape(entry)
+        shaped["_on_shelf"] = {m["id"] for m in shaped["members"] if m["on_shelf"]}
+        hand_made.append(shaped)
 
     for combination in found["combinations"]:
         ids = {model["id"] for model in combination["models"]}
@@ -199,6 +190,27 @@ def attach_hand_made(hub, found: dict) -> dict:
     ]
     found["hand_made"] = hand_made
     return found
+
+
+def _shape(entry: dict) -> dict:
+    """One `fetch_sets` entry as the API serves a set, before any coverage."""
+    members = sorted(
+        (_member_out(member) for member in entry["members"]),
+        key=lambda m: (SLOTS.index(m["slot"]), m["name"].lower(), m["sha256"]),
+    )
+    checkpoint = next((m for m in members if m["slot"] == SLOT_CHECKPOINT), None)
+    return {
+        "id": entry["id"],
+        "name": entry["name"],
+        "created_at": entry["created_at"],
+        "updated_at": entry["updated_at"],
+        "incomplete": checkpoint is None,
+        "checkpoint_id": checkpoint["id"] if checkpoint else None,
+        "picture_count": 0,
+        "recipes": 0,
+        "covers": [],
+        "members": members,
+    }
 
 
 def _require_set(conn, set_id: int) -> None:
@@ -302,16 +314,27 @@ def rename_set(hub, set_id: int, name: Optional[str]) -> None:
         )
 
 
-def delete_set(hub, set_id: int) -> None:
-    """Drop the set and its member rows. Never touches a file or a model row."""
+def delete_set(hub, set_id: int) -> dict:
+    """Drop the set and its member rows. Never touches a file or a model row.
+
+    Returns the set as it was, read on the SAME transaction that deletes it:
+    that snapshot is the undo, and read beforehand it could miss a member added
+    between the read and the delete - which the undo would then lose.
+    Coverage (pictures, covers) is not computed; an undo needs none of it.
+    """
     with hub.transaction() as conn:
         _require_set(conn, set_id)
+        (entry,) = _collect(
+            conn.execute(_SETS_SQL + " WHERE id = ?", (set_id,)).fetchall(),
+            conn.execute(_MEMBERS_SQL + " WHERE m.set_id = ?", (set_id,)).fetchall(),
+        )
         # Members first: the hub enforces foreign keys.
         conn.execute(
             "DELETE FROM model_workflow_set_member WHERE set_id = ?", (set_id,)
         )
         conn.execute("DELETE FROM model_workflow_set WHERE id = ?", (set_id,))
     logger.info("Deleted workflow set %d.", set_id)
+    return _shape(entry)
 
 
 def add_members(hub, set_id: int, members: list[dict]) -> list[str]:
