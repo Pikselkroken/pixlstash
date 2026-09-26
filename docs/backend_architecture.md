@@ -3531,9 +3531,11 @@ answer:
   has;
 - the **folder's declared role**, through `classify_model_file((), 0, path)` —
   which already trusts a folder above a parameter count, precisely because a
-  VAE and a text encoder carry no marker to find. A GGUF outside a role folder
-  is `unknown`, which the shelf shows and the owner can correct; it is never
-  guessed into `checkpoint`.
+  VAE and a text encoder carry no marker to find. `unet/` and
+  `diffusion_models/` name `checkpoint`, so a quantised Flux or Wan UNet is
+  listed by `GET /checkpoints`; hub data version 4 re-files the `unknown` rows
+  already shelved there. A GGUF outside a role folder is `unknown`, which the
+  shelf shows and the owner can correct; it is never guessed into `checkpoint`.
 
 Everything else (`family`, `weights_id`, `kind`, `param_count`, the trainer
 metadata) stays NULL, which is what an undescribed `.safetensors` records too.

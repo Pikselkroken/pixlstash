@@ -111,6 +111,11 @@ FILE_TEXT_ENCODER = "text_encoder"
 # Only genuinely different words belong here - the normaliser already folds
 # spacing and case, so a `text_encoders` entry covers `TextEncoders` too.
 #
+# `unet` and `diffusion_models` hold a bare diffusion model, which is what a
+# Flux or Wan graph loads where an SD graph loads a checkpoint, so they name
+# `checkpoint`. A `.safetensors` there usually clears the parameter count
+# anyway; a `.gguf` has no count to clear and would otherwise read `unknown`.
+#
 # Deliberately absent, each for its own reason:
 #
 # * `loras` / `lora` - an adapter is asserted from tensor markers, which is
@@ -128,6 +133,9 @@ _ROLE_FOLDERS: dict[str, str] = {
     "clip": FILE_TEXT_ENCODER,
     "textencoder": FILE_TEXT_ENCODER,
     "textencoders": FILE_TEXT_ENCODER,
+    "unet": FILE_CHECKPOINT,
+    "unets": FILE_CHECKPOINT,
+    "diffusionmodels": FILE_CHECKPOINT,
 }
 
 # Parameter count above which a marker-free file is a base checkpoint rather
@@ -518,7 +526,7 @@ def _normalise_folder(name: str) -> str:
 
 
 def role_from_folder(path: str) -> Optional[str]:
-    """Return the component role the file's own directory names, or ``None``.
+    """Return the ``file_kind`` the file's own directory names, or ``None``.
 
     Only the directory the file sits in is consulted, never an ancestor: a
     registered folder may itself be called ``vae`` (someone can register
@@ -530,8 +538,8 @@ def role_from_folder(path: str) -> Optional[str]:
         path: Path to the model file. May be relative or absolute.
 
     Returns:
-        ``"vae"``, ``"text_encoder"``, or ``None`` when the directory names no
-        role we recognise - which is the answer for a flat folder of mixed
+        ``"vae"``, ``"text_encoder"``, ``"checkpoint"``, or ``None`` when the
+        directory names no role we recognise - which is the answer for a flat folder of mixed
         downloads and must never be read as "not a VAE".
     """
     folder = os.path.basename(os.path.dirname(path))
@@ -556,14 +564,16 @@ def classify_model_file(tensor_names, param_count: int, path: str = "") -> str:
        maintains is the best evidence there is. It outranks the parameter count
        because the parameter count is *wrong* for both: they sit either side of
        a threshold that was only ever meant to separate adapters from base
-       models.
+       models. ``unet/`` and ``diffusion_models/`` name ``checkpoint``, which
+       is what files a ``.gguf`` (no parameter count at all) as a base model.
     3. **The parameter count**, for a marker-free file in a folder that says
        nothing. A count no adapter reaches asserts checkpoint.
 
     Everything else is ``"unknown"``, which the shelf shows as unknown and lets
     the user correct. ``unknown`` must never be rendered or stored as
-    checkpoint: a marker-free file too small to be a base model is most likely
-    an adapter format we have not met yet.
+    checkpoint: a marker-free file too small to be a base model, outside a
+    folder that says otherwise, is most likely an adapter format we have not
+    met yet.
 
     Args:
         tensor_names: Iterable of tensor keys from the header.

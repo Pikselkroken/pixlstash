@@ -18,9 +18,10 @@ and only two things follow from it:
   then the row is identified by the location it was found at, which is exactly
   what ``model_file`` is.
 
-``unknown`` is stored as ``unknown`` and never promoted: a marker-free file too
-small to be a base model is most likely an adapter format we have not met yet,
-so it stays visible and correctable on the shelf. A correction the owner makes
+``unknown`` is stored as ``unknown`` and never promoted by a scan: a marker-free
+file too small to be a base model is most likely an adapter format we have not
+met yet, so it stays visible and correctable on the shelf. (The one-shot hub
+data backfills in :mod:`pixlstash.hub.schema` re-file from the folder once.) A correction the owner makes
 is never re-derived away - every column a person can edit is written with
 ``COALESCE`` on the *stored* value, and ``file_kind`` is not rewritten at all,
 because the row is keyed by content and the parser would only ever repeat the
