@@ -448,10 +448,12 @@ onBeforeUnmount(() => clearTimeout(resolveTimer));
 async function showResult() {
   const current = run.value;
   if (!current) return;
+  let lookupFailed = false;
   if (!current.resultId) {
     try {
       current.resultId = await findResult(current);
     } catch (err) {
+      lookupFailed = true;
       console.warn(
         `Could not look up the result of the edit on picture ${current.sourceId}:`,
         err,
@@ -464,9 +466,12 @@ async function showResult() {
   if (current.resultId) {
     emit("show-picture", current.resultId);
   } else {
+    // Only an answered lookup can say the result is not there yet.
     run.value = {
       ...current,
-      message: "It is not in the stack yet; try again in a moment.",
+      message: lookupFailed
+        ? "Could not check the stack just now; try again in a moment."
+        : "It is not in the stack yet; try again in a moment.",
     };
   }
 }

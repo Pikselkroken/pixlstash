@@ -60,8 +60,13 @@ async function mountPanel() {
   return wrapper;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   setActivePinia(createPinia());
+  // The Show it tests reprogram these; every test starts from "no stack".
+  const pictures = await import("../../api/pictures");
+  const stacks = await import("../../api/stacks");
+  pictures.getPictureMetadata.mockReset().mockResolvedValue({ stack_id: null });
+  stacks.listStackPictures.mockReset().mockResolvedValue([]);
   window.localStorage.clear();
   listWorkflowCards.mockReset().mockResolvedValue({ cards: CARDS });
   runWorkflowCard
@@ -194,6 +199,28 @@ describe("the Edit tab", () => {
     await flush();
     expect(wrapper.emitted("show-picture")).toBeUndefined();
     expect(wrapper.text()).toContain("Running");
+  });
+
+  it("tells a failed Show it lookup apart from a result not there yet", async () => {
+    const pictures = await import("../../api/pictures");
+    const stacks = await import("../../api/stacks");
+    pictures.getPictureMetadata.mockResolvedValue({ stack_id: 3 });
+    stacks.listStackPictures.mockResolvedValue([]);
+    const wrapper = await mountPanel();
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    await wrapper.setProps({ comfyuiProgress: { status: "completed" } });
+    await flush();
+    const showIt = () =>
+      wrapper.findAll("button").find((b) => b.text() === "Show it");
+    await showIt().trigger("click");
+    await flush();
+    expect(wrapper.text()).toContain("It is not in the stack yet");
+    stacks.listStackPictures.mockRejectedValue(new Error("offline"));
+    await showIt().trigger("click");
+    await flush();
+    expect(wrapper.text()).toContain("Could not check the stack just now");
+    expect(wrapper.text()).not.toContain("It is not in the stack yet");
   });
 
   it("says why nothing was queued", async () => {
