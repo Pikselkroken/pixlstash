@@ -1023,17 +1023,23 @@ def warn_if_not_owner(fetch: Fetch) -> bool:
     The likeliest mistake is the old read-only token left in a config that now
     passes the flag; the workflow tools would then refuse on first use.
     ``/recipes`` because it is an owner-only table read, where ``/workflows``
-    computes the whole grid.
+    computes the whole grid. Only a 403 is the scope refusal; any other
+    failure says so without sending the owner off to mint a token.
     """
     try:
         _get(fetch, "/recipes")
     except ToolError as exc:
-        print(
-            f"pixlstash-mcp: --allow-write needs a full-access token ({exc}). "
-            "Mint one under API Tokens > Connect AI agent > Read and write "
-            "workflows.",
-            file=sys.stderr,
-        )
+        if str(exc).startswith("PixlStash answered 403"):
+            advice = (
+                f"--allow-write needs a full-access token ({exc}). Mint one "
+                "under API Tokens > Connect AI agent > Read and write workflows."
+            )
+        else:
+            advice = (
+                f"could not check the token's access ({exc}); the workflow "
+                "tools may refuse on first use."
+            )
+        print(f"pixlstash-mcp: {advice}", file=sys.stderr)
         return False
     except Exception as exc:  # A probe must never stop the server starting.
         logger.warning("[mcp] Start-up owner probe failed: %s", exc)

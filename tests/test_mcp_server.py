@@ -938,6 +938,14 @@ def test_the_start_up_probe_names_a_token_that_cannot_write(capsys):
     assert mcp_server.warn_if_not_owner(read_only) is False
     assert "full-access token" in capsys.readouterr().err
 
+    # Anything but a 403 is not a scope problem, so no token advice.
+    def missing(path, params):
+        return 404, "application/json", b'{"detail": "Not Found"}'
+
+    assert mcp_server.warn_if_not_owner(missing) is False
+    err = capsys.readouterr().err
+    assert "answered 404" in err and "full-access" not in err
+
     assert (
         mcp_server.warn_if_not_owner(
             lambda path, params: (200, "application/json", b"[]")
