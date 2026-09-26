@@ -3351,6 +3351,29 @@ checkpoint under one kind. Duplicate, Insert loader, the LoRA chain edit and
 Clone all write the source file's `pixlstash_bindings` back into the copy
 (`_store_copy`), which the resolved graph has lost.
 
+**The model-swap route does not cache `recipe_asset_index`, on measurement
+(#1515).** It builds the index once per request and hands it to both the slot
+list and `propose_companions` → `resolve_recipe_models`. Synthetic hub (unique
+basenames, one digest widget and the rest filename widgets per recipe), median
+of seven, for index / `resolve_recipe_models` / whole `propose_companions`:
+
+| models / copies / recipe assets | index | resolve | propose |
+|---|---|---|---|
+| 2,000 / 3,000 / 12,000 | 4 ms | 11 ms | 15 ms |
+| 10,000 / 15,000 / 160,000 | 23 ms | 176 ms | 195 ms |
+| 50,000 / 75,000 / 400,000 | 189 ms | 591 ms | 712 ms |
+
+The index is the small part; the `workflow_recipe_asset` scan in
+`resolve_recipe_models` is most of the rest, and a cache of the index alone
+would not touch it. The dialog asks once on open and once per checkpoint
+choice, so a fifth of a second at 10,000 models is acceptable. Revisit if the
+dialog starts recomputing live (per keystroke or hover): the cache then belongs
+on `resolve_recipe_models`, and its key must change on UPDATEs too (a sha256
+backfill or a renamed copy keeps every row count and rowid), so row counts and
+max rowids are not enough. The workflow grid (`read_grid`) still builds the
+index twice per request, once per `_shelf_candidates` call; at these sizes that
+is tens of milliseconds, left as is.
+
 #### The shelf catalogues more than one suffix
 
 `model_folder_scanner.SHELF_MODEL_SUFFIXES` is the one answer to "is this a
