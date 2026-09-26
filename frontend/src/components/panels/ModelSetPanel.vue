@@ -89,6 +89,7 @@
         <div class="msp__cell" role="gridcell">
           <ModelSetMemberCard
             :member="member"
+            :shelf-mark="marks.get(member.id) ?? null"
             :selected="isSelected(member)"
             @pick="(model) => emit('pick', model)"
           />
@@ -136,7 +137,14 @@
         <!-- Everything the row draws is `aria-hidden`: the row's own label reads
              all of it, exactly as the card does in Grid. -->
         <span class="msp__ident" role="gridcell" aria-hidden="true">
+          <ModelMark
+            v-if="marks.get(member.id)"
+            :row="marks.get(member.id).row"
+            :ring="marks.get(member.id).ring"
+            :style="marks.get(member.id).style"
+          />
           <span
+            v-else
             class="msp__mark"
             :style="{
               backgroundColor: markOf(member).color,
@@ -216,6 +224,7 @@ import { VIcon } from "vuetify/components";
 import { formatModelSize, generatedMark } from "../../utils/modelShelf";
 import { pictureCount } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
+import ModelMark from "../widgets/ModelMark.vue";
 import ModelSetMemberCard from "../widgets/ModelSetMemberCard.vue";
 import Segmented from "../widgets/Segmented.vue";
 
@@ -256,6 +265,12 @@ const props = defineProps({
   selectedIds: { type: Object, default: () => new Set() },
   /** The model ids this screen has a shelf row for; see `setGridModelIds`. */
   selectableIds: { type: Object, default: () => new Set() },
+  /**
+   * `model.id` → `{row, ring, style}`, the shelf row's own mark, so a member
+   * assigned to a person wears their face as it does in the row list. A member
+   * with no shelf row falls back to the generated initials.
+   */
+  marks: { type: Object, default: () => new Map() },
 });
 
 const emit = defineEmits(["close", "view", "pick", "select", "menu"]);

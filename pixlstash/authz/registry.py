@@ -546,6 +546,18 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # narrow it to: a set is a fact about the machine's models, not about a
     # picture a token was granted.
     ("GET", "/api/v1/models/workflow-sets"): RoutePolicy(_OWNER),
+    # Hand-made workflow sets (#1520): the owner's own groupings of shelf
+    # models, stored in the hub. They write hub rows only (never a file or a
+    # model row) and every answer carries the same whole-library evidence as
+    # the read above, so they sit on its tier. Keyed by a hub set id, which no
+    # share token is ever scoped to.
+    ("POST", "/api/v1/models/workflow-sets"): RoutePolicy(_OWNER),
+    ("PATCH", "/api/v1/models/workflow-sets/{set_id}"): RoutePolicy(_OWNER),
+    ("DELETE", "/api/v1/models/workflow-sets/{set_id}"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/models/workflow-sets/{set_id}/members"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/models/workflow-sets/{set_id}/members/remove"): RoutePolicy(
+        _OWNER
+    ),
     # The shelf's sixth verb, and the one route on this block that spawns a
     # process on the host's desktop. Same authority - and same red-line tier -
     # as POST /pictures/{id}/open-location: what it can do is bounded by what

@@ -897,3 +897,54 @@ class TestTombstone:
             "Clementine v3",
         )
         assert hub.execute("SELECT COUNT(*) FROM model_file").fetchone()[0] == 0
+
+
+class TestHandMadeWorkflowSets:
+    """#1520: the owner's own sets, keyed by sha256 so a member outlives its row."""
+
+    def _set(self, hub):
+        return int(
+            hub.execute(
+                "INSERT INTO model_workflow_set (created_at, updated_at) "
+                "VALUES ('t', 't')"
+            ).lastrowid
+        )
+
+    def _member(self, hub, set_id, sha256, slot):
+        hub.execute(
+            "INSERT INTO model_workflow_set_member (set_id, sha256, slot, added_at) "
+            "VALUES (?, ?, ?, 't')",
+            (set_id, sha256, slot),
+        )
+
+    def test_the_tables_arrive_on_an_existing_v2_hub(self, hub):
+        apply_migrations(hub)
+        hub.execute("DROP TABLE model_workflow_set_member")
+        hub.execute("DROP TABLE model_workflow_set")
+        apply_migrations(hub)
+        assert {"model_workflow_set", "model_workflow_set_member"} <= table_names(hub)
+        assert "AUTOINCREMENT" in ddl_for(hub, "model_workflow_set")
+        assert read_schema_version(hub) == 2
+
+    def test_a_set_holds_one_checkpoint_at_most(self, hub):
+        apply_migrations(hub)
+        set_id = self._set(hub)
+        self._member(hub, set_id, "a", "checkpoint")
+        self._member(hub, set_id, "b", "vae")
+        self._member(hub, set_id, "c", "vae")
+        with pytest.raises(sqlite3.IntegrityError):
+            self._member(hub, set_id, "d", "checkpoint")
+        # Another set's checkpoint is its own.
+        self._member(hub, self._set(hub), "d", "checkpoint")
+
+    def test_a_slot_outside_the_five_is_refused(self, hub):
+        apply_migrations(hub)
+        with pytest.raises(sqlite3.IntegrityError):
+            self._member(hub, self._set(hub), "a", "controlnet")
+
+    def test_a_member_needs_no_model_row_and_is_unique_per_set(self, hub):
+        apply_migrations(hub)
+        set_id = self._set(hub)
+        self._member(hub, set_id, "not-on-the-shelf", "lora")
+        with pytest.raises(sqlite3.IntegrityError):
+            self._member(hub, set_id, "not-on-the-shelf", "other")

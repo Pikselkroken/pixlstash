@@ -591,6 +591,11 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                          |
 | POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                        |
 | GET    | /api/v1/models/workflow-sets                                                  | model_shelf     | Which models have actually run together                     |
+| POST   | /api/v1/models/workflow-sets                                                  | model_shelf     | Make a workflow set by hand                                 |
+| PATCH  | /api/v1/models/workflow-sets/{set_id}                                         | model_shelf     | Rename a workflow set                                       |
+| DELETE | /api/v1/models/workflow-sets/{set_id}                                         | model_shelf     | Delete a workflow set                                       |
+| POST   | /api/v1/models/workflow-sets/{set_id}/members                                 | model_shelf     | Add models to a workflow set                                |
+| POST   | /api/v1/models/workflow-sets/{set_id}/members/remove                          | model_shelf     | Take models out of a workflow set                           |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                          |
 | POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager              |
 | GET    | /api/v1/models/{model_id}/samples                                             | model_shelf     | The training previews stored beside one imported checkpoint |
@@ -3270,6 +3275,42 @@ band can only put a row in one place.
   proposes no grouping at all and is not asked to - the per-recipe shape is the
   evidence, and every claim the UI makes about a pair reads it rather than the
   union drawn on top.
+
+#### Hand-made workflow sets (#1520)
+
+The owner can also say which shelf models go together, and that one IS stored:
+`model_workflow_set` and `model_workflow_set_member` in the hub (amended into v2,
+like every shelf table), read and written by
+`pixlstash/services/model_workflow_sets.py`.
+
+- **A menu, not a recipe.** Fixed slots (`checkpoint` at most one - a partial
+  unique index holds it - then `text_encoder`, `vae`, `lora`, `other`), no order,
+  no strengths. A set may be unnamed, empty, or have no checkpoint
+  (`incomplete`). The slot defaults from `file_kind`; `checkpoint` is accepted
+  for a `checkpoint` or an `unknown` file only (a diffusion file is often
+  `unknown`). Engines and files still waiting for their hash are refused (409).
+- **Members are sha256s, with no foreign key to `model`.** Forgetting or
+  deleting a file drops its `model` row; the member stays, is served
+  `on_shelf: false` under the `label` it was added with, and reconnects when a
+  row with the same digest returns. The same property makes undo simple: a
+  delete returns the set's snapshot, and re-posting its members in the
+  `{sha256, slot, label}` form recreates it, off-shelf members included.
+- **Evidence is layered on, not merged.** `attach_hand_made` takes the
+  `fetch_workflow_sets` answer unchanged and adds `covered_by` to each
+  combination (a set covers it when every model of the combination is an
+  on-shelf member; the set may hold more), a `hand_made` list whose counts and
+  covers are pooled from the combinations each set covers, and drops on-shelf
+  members from `no_set`. Covered combinations are still served: the grid hides
+  them, *Works with* reads them all. The mutators answer with the set re-read
+  through that same full evidence pass, which is a per-click cost, not per row.
+- **Clone with new models reads them first.** `propose_companions` lists, ahead
+  of the recipe ladder, the on-shelf VAEs and text encoders of every set whose
+  checkpoint member is the chosen checkpoint (`via: "grouped"`, `recipes: 0`,
+  `set_name` from the newest such set). `prepick` is true only when those sets
+  name exactly one file of that kind between them; ladder entries always carry
+  `prepick: true` and drop any file already grouped (after the ladder step is
+  chosen, so grouping never widens it). Filed by the file's own `file_kind`, not
+  by the slot it was put in.
 
 `model.family`, `model.quant` and `model.weights_id` are what the scanner reads
 off a file rather than off the shelf — `family` and `weights_id` from the

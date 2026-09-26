@@ -486,6 +486,39 @@ CREATE TABLE IF NOT EXISTS adapter_stack (
 )
 """
 
+# A hand-made workflow set (#1520): shelf models the owner says work together.
+# A menu, not a recipe - no order and no strengths, which is what separates it
+# from `adapter_stack` above and from the recipe evidence in the workflow tables.
+# In the hub for the shelf's own reason: which files go together is a fact about
+# this machine's models, not about a library. AUTOINCREMENT so a deleted set's id
+# is never reissued to a client still holding it for an undo.
+_V2_MODEL_WORKFLOW_SET = """
+CREATE TABLE IF NOT EXISTS model_workflow_set (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+)
+"""
+
+# Members are keyed by sha256, NOT by `model.id`, and carry no foreign key to
+# `model`: forgetting or deleting a file drops its model row, and the set must
+# keep the member (drawn as not on the shelf) so it reconnects when a file with
+# the same bytes comes back. `label` is the name at add time, the only name such
+# a member still has. A checkpoint still hashing has no sha256, so it cannot
+# be a member until it has one.
+_V2_MODEL_WORKFLOW_SET_MEMBER = """
+CREATE TABLE IF NOT EXISTS model_workflow_set_member (
+    set_id    INTEGER NOT NULL REFERENCES model_workflow_set(id),
+    sha256    TEXT NOT NULL,
+    slot      TEXT NOT NULL
+              CHECK (slot IN ('checkpoint', 'text_encoder', 'vae', 'lora', 'other')),
+    label     TEXT,
+    added_at  TEXT NOT NULL,
+    PRIMARY KEY (set_id, sha256)
+)
+"""
+
 _V2_MODEL_SHELF_INDEXES = (
     # The scanner's hot path: "which files does this model have, and where".
     "CREATE INDEX IF NOT EXISTS ix_model_file_model ON model_file(model_id)",
@@ -498,6 +531,13 @@ _V2_MODEL_SHELF_INDEXES = (
     # vault: the queue is a handful of rows in a table of thousands, so a full
     # index on sha256 would be almost entirely rows the finder never wants.
     "CREATE INDEX IF NOT EXISTS ix_model_hash_queue ON model(id) WHERE sha256 IS NULL",
+    # At most one checkpoint per hand-made set, held by the database so two
+    # concurrent adds cannot both land one.
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_model_workflow_set_checkpoint "
+    "ON model_workflow_set_member(set_id) WHERE slot = 'checkpoint'",
+    # "Which sets hold this file" - the clone dialog's grouped proposals.
+    "CREATE INDEX IF NOT EXISTS ix_model_workflow_set_member_sha "
+    "ON model_workflow_set_member(sha256)",
 )
 
 _V2_MODEL_SHELF_TABLES = (
@@ -508,6 +548,9 @@ _V2_MODEL_SHELF_TABLES = (
     _V2_MODEL_FILE,
     # After `model`: it references `model(id)`.
     _V2_MODEL_CAPABILITY,
+    _V2_MODEL_WORKFLOW_SET,
+    # After the set: it references `model_workflow_set(id)`.
+    _V2_MODEL_WORKFLOW_SET_MEMBER,
     *_V2_MODEL_SHELF_INDEXES,
 )
 

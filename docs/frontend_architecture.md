@@ -1551,14 +1551,15 @@ proves ran together, with a model free to appear in more than one.
   would put a shared VAE behind a Delete aimed at a checkpoint. It stands for
   its head instead — the file whose name, kind and mark the card already draws
   — and the other members are selected one at a time in the tray, where a row
-  is one model. Nothing here ever selects a SET. **A tray pick does not light
-  the card**: picking a checkpoint in the open tray selects that `model.id`
-  but leaves the card named after it unlit while the tray shows the pick,
-  because a lit card reads as the whole set picked (`trayPicked`, cleared by
-  any selection change the grid did not make, such as Select all). Close the
-  tray and the card lights, so a selection is never drawn nowhere; Ctrl/Space
-  on the unlit card lights it rather than toggling the model out. On that
-  footing the grid
+  is one model. An evidence card never selects a SET (a hand-made card does, into
+  a separate selection; see below). **A tray pick does not light the card**:
+  picking a checkpoint in the open tray - an evidence tray or a hand-made set's
+  slots - selects that `model.id` but leaves the card named after it unlit while
+  the tray shows the pick, because a lit card reads as the whole set picked
+  (`trayPicked`, cleared by any selection change the grid did not make, such as
+  Select all). Close the tray and the card lights, so a selection is never drawn
+  nowhere; Ctrl/Space on the unlit card lights it rather than toggling the model
+  out. On that footing the grid
   carries the row list's whole contract, through the same store: click
   replaces, Ctrl/Cmd+click toggles, Shift+click takes the range in DRAWN order
   (`orderedIds`, read off `flatRows`, de-duplicated because an open set's head
@@ -1683,6 +1684,82 @@ proves ran together, with a model free to appear in more than one.
   name, and it reads the whole payload rather than `visibleCombinations`: hiding a
   companion because its kind is unticked would turn a view setting into a claim
   about the evidence.
+
+##### Hand-made workflow sets (#1520)
+
+`ModelSetSlotsPanel.vue`, `WorkflowSetChooser.vue`, `WorkflowSetSelectionBar.vue`
+and `WorkflowSetRenameDialog.vue` (`panels/`) add the owner's own sets to the same
+grid. A hand-made set is a per-hub **menu** of models that work together (no
+order, no strengths), stored by hash in the hub (`docs/backend_architecture.md`,
+the shelf's workflow sets section) and served as `hand_made` on
+`GET /models/workflow-sets`.
+
+- **One grid, two kinds of card.** `flatRows` leads with the `New workflow set`
+  tile (`kind: "new"`, also the `N` key), then `store.handMadeGroups` newest
+  first, then the evidence cards. The initial cursor is the first CARD, not the
+  tile. A hand-made card is `ModelSetCard` with `card.handMade`: a dashed edge, a
+  "Grouped by you" badge, the checkpoint's `ModelMark` as the cover until a
+  picture belongs to it, "Incomplete: no checkpoint" in place of its facts when
+  it has none, and never a recipe count.
+- **Evidence is built only from what no hand-made set covers.** The server marks
+  a combination `covered_by` when every one of its models is an on-shelf member
+  of a set; `visibleCombinations` drops those, so they appear on the set's card
+  (its `picture_count` and covers) and not again as evidence. `worksWith` still
+  reads the whole payload.
+- **A hand-made card selects the SET; a tray tile selects a FILE; never both.**
+  `store.selectSet` / `selectedSetIds` is a second selection that clears the
+  model selection, and a watch on `selectedIds` clears it back. Sets get
+  `WorkflowSetSelectionBar` (Rename, Delete set, and the card's context menu);
+  files keep `ShelfSelectionBar`, which gains **Remove from set** while every
+  selected file is a member of the open hand-made tray, and **New workflow set
+  with this checkpoint** for one hashed checkpoint (from an evidence card it
+  opens the new set with Fill from pictures ready). Delete with sets selected
+  deletes the sets (grid only: leaving the grid clears the set selection, and
+  the set pill is drawn only there). The cursor entering a tray tile clears the
+  set selection, so Delete with a selected member is the shelf's file delete,
+  whose prompt now names the sets that keep the file as "Not on shelf".
+- **The tray is slots, walked by slot.** `setSlots` (`utils/workflowSets.js`)
+  gives each of the five fixed slots its member tiles plus a ＋ tile (Checkpoint
+  drops its ＋ once filled); the grid splices them in as `kind: "slot"` entries.
+  Left/Right walk tiles, Up/Down jump slot to slot (and out to the card or the
+  next row), Enter on ＋ opens the chooser, Backspace removes a member, Delete
+  stays the file delete. A crossing into a slots tray lands at its edge, as it does for a List
+  tray (`verticalTarget`, whose `trayBounds` covers `slot` entries too).
+- **One chooser for three jobs, in two modes.** `WorkflowSetChooser` only adds.
+  A slot's ＋ opens it in `pick` mode: ranked by `slotSuggestions` (your sets
+  with the same base model, then recipes with this checkpoint, then the same
+  base model, then all; unranked until a checkpoint is chosen), and ONE click
+  or Enter adds the model — no tick, no Add button. The Checkpoint popup closes
+  on its pick and the cursor lands on the new checkpoint; any other slot's stays
+  open, the added model drops out of the list, and a second click on a row still
+  being added is ignored. **Fill from pictures** (`fillFromPictures`) and **Fill
+  from a set** (`fillFromSets`) are pre-ticked checklists with one Add. Focus
+  goes back to the tile on close, since v-menu cannot restore it for a
+  programmatic open.
+- **The base-model offer, once.** Suggestions follow the checkpoint's base
+  model, so when a checkpoint with none goes in (the popup, Fill, or New
+  workflow set with this checkpoint), the store records it in `checkpointAdded`
+  and the tray shows one line with a `BaseModelInput` pre-filled from the
+  shelf's fuzzy guess (drawn as a `tbm-input`, with a placeholder: bare, the
+  combobox rendered as nothing visible), **Set** and **Not now**. Set is never
+  disabled; pressed with the field empty it says what is missing and focuses it. Set is the shelf's own
+  `editModelIds` write followed by a sets refetch; Not now, or leaving the tray,
+  drops the offer for good and leaves Set base model on the shelf menu.
+- **One name per model.** The server names a member by its display name or
+  filename; `store.handMadeSets` re-resolves each through the shelf's own
+  `modelName` (or `deriveModelName` on the kept label, off the shelf), so a set
+  named after its checkpoint never reads `….safetensors`, and receipts go
+  through the same `withShelfNames`. The chooser is `--dialog-w-sm` wide and its
+  title wraps (`overflow-wrap: anywhere`), so no set name can run out of it.
+- **Every set write is `setWrite` in the store:** the call, a full refetch
+  (coverage moves with membership), and a receipt whose Undo is the inverse call
+  — a delete is undone by recreating the set from the snapshot the route returns,
+  and a create is undone THROUGH the delete verb, so undoing it after the set was
+  filled gets its own receipt and Undo. A multi-set delete settles each call, so
+  one failure does not cost the others their Undo.
+- **Clone with new models** labels proposals with `via: "grouped"` "Grouped by
+  you" and lists them first in its selects; one with `prepick: false` (the set
+  offers several of that kind) is shown but not pre-picked.
 
 #### `WorkflowsView.vue` (`views/`) + `StackPanel.vue` (`panels/`), v1.12 F1a / F2
 

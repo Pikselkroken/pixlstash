@@ -302,6 +302,8 @@ const emit = defineEmits([
   "works-with",
   "forget",
   "delete",
+  "new-set",
+  "remove-from-set",
 ]);
 
 const store = useModelShelfStore();
@@ -336,6 +338,37 @@ function openContextMenu(x, y) {
 }
 
 const single = computed(() => store.selectedRows.length === 1);
+
+// ── Hand-made workflow sets (#1520) ─────────────────────────────────────────
+
+/**
+ * "New workflow set with this checkpoint": one base model, hashed, since a set
+ * keeps its members by hash. A checkpoint still being hashed is refused with
+ * that reason rather than failing on the server.
+ */
+const newSetTitle = computed(() => {
+  const row = store.selectedRows[0];
+  if (!row || !["checkpoint", "unknown"].includes(row.file_kind)) {
+    return "Only a checkpoint starts a set this way. The New workflow set tile on the set grid makes an empty one.";
+  }
+  if (!row.sha256) {
+    return "This checkpoint is still being hashed, and a set keeps its models by hash. Try again in a moment.";
+  }
+  return "";
+});
+
+/**
+ * Remove from set: offered while every selected file is a member of the OPEN
+ * hand-made set's tray - the one place a reader can see which set they mean.
+ */
+const removableFromSet = computed(() => {
+  const open = store.handMadeGroups?.find((g) => g.key === store.openSetKey);
+  if (!open || !store.selectedRows.length) return false;
+  const members = new Set(
+    (open.set.members ?? []).filter((m) => m.on_shelf).map((m) => m.id),
+  );
+  return store.selectedModelIds.every((id) => members.has(id));
+});
 
 /**
  * What the selection weighs, stack members included.
@@ -876,6 +909,8 @@ function onAttach(payload, attach) {
  */
 const verbHandlers = computed(() => ({
   rows: store.selectedRows,
+  newSetTitle: newSetTitle.value,
+  removableFromSet: removableFromSet.value,
   renameTitle: renameTitle.value,
   iconTitle: iconTitle.value,
   clearIconTitle: clearIconTitle.value,
@@ -978,6 +1013,15 @@ const VerbMenu = (props) => {
     );
 
   return h("div", { class: "ctx-menu shelf-menu", role: "menu" }, [
+    // Inside an open hand-made set's tray the set's own verb leads: it is what
+    // the reader is working on, and it never touches a file.
+    props.removableFromSet
+      ? item("mdi-minus-circle-outline", "Remove from set", {
+          on: () => props.onVerb("remove-from-set"),
+          title: "Takes it off this set only. The file stays on the shelf.",
+        })
+      : null,
+    props.removableFromSet ? sep() : null,
     props.single
       ? item("mdi-pencil-outline", "Rename", {
           on: () => props.onVerb("rename"),
@@ -1065,6 +1109,13 @@ const VerbMenu = (props) => {
     props.single
       ? item("mdi-connection", "Works with…", {
           on: () => props.onVerb("works-with"),
+        })
+      : null,
+    props.single
+      ? item("mdi-layers-plus", "New workflow set with this checkpoint", {
+          on: () => props.onVerb("new-set"),
+          disabled: Boolean(props.newSetTitle),
+          title: props.newSetTitle,
         })
       : null,
     item(

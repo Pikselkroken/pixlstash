@@ -81,6 +81,7 @@ from pixlstash.services.model_shelf_service import (
     record_comfyui_history,
     fetch_workflow_sets,
 )
+from pixlstash.services.model_workflow_sets import create_set, delete_set
 from pixlstash.services.workflow_library_service import (
     scan_progress,
     topology_activity,
@@ -2462,6 +2463,104 @@ def test_a_family_nothing_ran_with_proposes_the_layouts_it_declares(
     assert result["vae"][0]["family"] == "vae_4ch"
 
 
+def test_a_grouped_file_does_not_hide_the_declared_layouts_of_a_cold_checkpoint(
+    companions_shelf,
+):
+    """A set grouping only one encoder with a checkpoint nothing has run with:
+    the grouped file leads, once, and the declared fallback still answers for
+    the rest. Keying the fallback on "the list is empty" let the grouped entry
+    switch it off (#1520 rebased onto #1514)."""
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    set_base_model(hub, ids["lonely"], "SDXL 1.0")
+    set_layout(hub, ids["clip_shared"], "clip_l")
+    clip_g = shelf_file(hub, "Clip_G.safetensors", "text_encoder")
+    set_layout(hub, clip_g, "clip_g")
+    sdxl_vae = shelf_file(hub, "sdxl_vae.safetensors", "vae")
+    set_layout(hub, sdxl_vae, "vae_4ch")
+    hash_rows(hub, ids["lonely"], clip_g)
+    create_set(hub, "Cold", [{"model_id": ids["lonely"]}, {"model_id": clip_g}])
+
+    result = propose_companions(hub, ids["lonely"])
+
+    assert proposed(result, "text_encoder") == [
+        (clip_g, "grouped"),
+        (ids["clip_shared"], "declared"),
+    ]
+    assert proposed(result, "vae") == [(sdxl_vae, "declared")]
+
+
+def test_evidence_that_only_repeats_a_grouped_file_still_leaves_the_declared_fallback(
+    companions_shelf,
+):
+    """A ComfyUI run proves the checkpoint with the ONE encoder its set already
+    groups. That step tells the other encoder row nothing new, so the declared
+    layouts still answer for it rather than the row going empty (#1520 review)."""
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    set_base_model(hub, ids["lonely"], "SDXL 1.0")
+    set_layout(hub, ids["clip_shared"], "clip_l")
+    clip_g = shelf_file(hub, "Clip_G.safetensors", "text_encoder")
+    set_layout(hub, clip_g, "clip_g")
+    hash_rows(hub, ids["lonely"], clip_g)
+    create_set(hub, "Cold", [{"model_id": ids["lonely"]}, {"model_id": clip_g}])
+    record_comfyui_history(
+        hub,
+        {
+            "ran": history_entry(
+                generation_graph(
+                    "lonely.safetensors", "vae_a.safetensors", "Clip_G.safetensors"
+                )
+            )
+        },
+    )
+
+    result = propose_companions(hub, ids["lonely"])
+
+    assert proposed(result, "text_encoder") == [
+        (clip_g, "grouped"),
+        (ids["clip_shared"], "declared"),
+    ]
+
+
+def test_deleting_a_set_returns_exactly_what_it_deleted(companions_shelf):
+    """The snapshot is the undo, so it is read on the transaction that deletes:
+    every member row that went, by hash, slot and label, and nothing left
+    behind in the tables (#1520 review)."""
+    hub, ids = grouped_shelf(companions_shelf)
+    set_id = create_set(
+        hub,
+        "Night",
+        [
+            {"model_id": ids["ckpt_a"]},
+            {"model_id": ids["vae_grouped"]},
+            {"sha256": "ab" * 32, "slot": "lora", "label": "Gone_LoRA.safetensors"},
+        ],
+    )
+
+    snapshot = delete_set(hub, set_id)
+
+    assert snapshot["name"] == "Night"
+    assert {(m["sha256"], m["slot"]) for m in snapshot["members"]} == {
+        (
+            hub.fetchone("SELECT sha256 FROM model WHERE id = ?", (ids["ckpt_a"],))[0],
+            "checkpoint",
+        ),
+        (
+            hub.fetchone(
+                "SELECT sha256 FROM model WHERE id = ?", (ids["vae_grouped"],)
+            )[0],
+            "vae",
+        ),
+        ("ab" * 32, "lora"),
+    }
+    gone = next(m for m in snapshot["members"] if m["sha256"] == "ab" * 32)
+    assert (gone["on_shelf"], gone["label"]) == (False, "Gone_LoRA.safetensors")
+    assert not hub.fetchall(
+        "SELECT 1 FROM model_workflow_set_member WHERE set_id = ?", (set_id,)
+    )
+
+
 def test_evidence_in_the_family_outranks_the_declared_layouts(companions_shelf):
     ids = companions_shelf.ids
     hub = companions_shelf.hub
@@ -2622,6 +2721,147 @@ def test_a_run_ranks_behind_a_recipe_and_a_forgotten_model_drops_out(
     assert [item["id"] for item in propose_companions(hub, ids["ckpt_a"])["vae"]] == [
         ids["vae_a"]
     ]
+
+
+def hash_rows(hub, *model_ids):
+    """Give rows a digest: a hand-made set holds files by sha256."""
+    with hub.transaction() as conn:
+        conn.executemany(
+            "UPDATE model SET sha256 = printf('%064d', id) WHERE id = ?",
+            [(model_id,) for model_id in model_ids],
+        )
+
+
+def grouped_shelf(companions_shelf):
+    """The companions shelf plus a VAE only a hand-made set pairs with A."""
+    hub = companions_shelf.hub
+    ids = dict(companions_shelf.ids)
+    ids["vae_grouped"] = shelf_file(hub, "vae_grouped.safetensors", "vae")
+    hash_rows(
+        hub,
+        *(
+            ids[name]
+            for name in ("ckpt_a", "ckpt_b", "vae_a", "clip_shared", "vae_grouped")
+        ),
+    )
+    return hub, ids
+
+
+def test_a_hand_made_set_proposes_its_members_ahead_of_the_evidence(
+    companions_shelf,
+):
+    hub, ids = grouped_shelf(companions_shelf)
+    create_set(
+        hub,
+        "Night",
+        [
+            {"model_id": ids["ckpt_a"]},
+            {"model_id": ids["vae_grouped"]},
+            {"model_id": ids["clip_shared"]},
+        ],
+    )
+
+    result = propose_companions(hub, ids["ckpt_a"])
+
+    assert proposed(result, "vae") == [
+        (ids["vae_grouped"], "grouped"),
+        (ids["vae_a"], "checkpoint"),
+    ]
+    grouped, recipe = result["vae"]
+    assert (grouped["set_name"], grouped["prepick"], grouped["recipes"]) == (
+        "Night",
+        True,
+        0,
+    )
+    assert (recipe["set_name"], recipe["prepick"]) == (None, True)
+    # The recipe also names the grouped encoder: listed once, as grouped.
+    assert proposed(result, "text_encoder") == [(ids["clip_shared"], "grouped")]
+
+
+def test_a_grouped_kind_is_prepicked_only_when_the_sets_agree_on_one_file(
+    companions_shelf,
+):
+    hub, ids = grouped_shelf(companions_shelf)
+    for name in ("One", "Two"):
+        create_set(
+            hub,
+            name,
+            [{"model_id": ids["ckpt_a"]}, {"model_id": ids["vae_grouped"]}],
+        )
+    agreed = propose_companions(hub, ids["ckpt_a"])
+    assert [(e["id"], e["prepick"]) for e in agreed["vae"][:1]] == [
+        (ids["vae_grouped"], True)
+    ]
+    # The newest matching set names it.
+    assert agreed["vae"][0]["set_name"] == "Two"
+
+    create_set(hub, None, [{"model_id": ids["ckpt_a"]}, {"model_id": ids["vae_a"]}])
+    split = propose_companions(hub, ids["ckpt_a"])
+    assert [(e["id"], e["via"], e["prepick"]) for e in split["vae"]] == [
+        (ids["vae_a"], "grouped", False),
+        (ids["vae_grouped"], "grouped", False),
+    ]
+    assert split["vae"][0]["set_name"] is None
+
+
+def test_a_grouped_encoder_pair_of_two_layouts_is_prepicked_each(
+    companions_shelf,
+):
+    """A Flux set holds one clip_l and one t5_xxl: one file per row, so both are
+    pre-picked. Counting per kind would refuse both and hand the rows to
+    weaker, ungrouped evidence (#1520 review)."""
+    hub, ids = grouped_shelf(companions_shelf)
+    clip = shelf_file(hub, "Clip_L.safetensors", "text_encoder")
+    t5 = shelf_file(hub, "T5_XXL.safetensors", "text_encoder")
+    hash_rows(hub, clip, t5)
+    with hub.transaction() as conn:
+        conn.execute("UPDATE model SET family = 'clip_l' WHERE id = ?", (clip,))
+        conn.execute("UPDATE model SET family = 't5_xxl' WHERE id = ?", (t5,))
+    create_set(
+        hub,
+        "Flux",
+        [{"model_id": ids["ckpt_a"]}, {"model_id": clip}, {"model_id": t5}],
+    )
+
+    result = propose_companions(hub, ids["ckpt_a"])
+
+    grouped = {
+        e["id"]: e["prepick"] for e in result["text_encoder"] if e["via"] == "grouped"
+    }
+    assert grouped == {clip: True, t5: True}
+
+
+def test_a_set_without_this_checkpoint_or_off_the_shelf_proposes_nothing(
+    companions_shelf,
+):
+    hub, ids = grouped_shelf(companions_shelf)
+    # No checkpoint - A itself is there, but filed as "other" - then another
+    # checkpoint's set.
+    create_set(
+        hub,
+        "Loose",
+        [
+            {"model_id": ids["ckpt_a"], "slot": "other"},
+            {"model_id": ids["vae_grouped"]},
+        ],
+    )
+    create_set(
+        hub, "B", [{"model_id": ids["ckpt_b"]}, {"model_id": ids["vae_grouped"]}]
+    )
+    # A's own set, holding a VAE whose file is no longer on the shelf.
+    create_set(
+        hub,
+        "Gone",
+        [
+            {"model_id": ids["ckpt_a"]},
+            {"sha256": "ab" * 32, "slot": "vae", "label": "vanished.safetensors"},
+        ],
+    )
+
+    result = propose_companions(hub, ids["ckpt_a"])
+
+    assert proposed(result, "vae") == [(ids["vae_a"], "checkpoint")]
+    assert proposed(result, "text_encoder") == [(ids["clip_shared"], "checkpoint")]
 
 
 # ---------------------------------------------------------------------------

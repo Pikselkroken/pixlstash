@@ -1433,19 +1433,36 @@ class SwapProposal(BaseModel):
     family: str | None = None
     via: str = Field(
         description=(
-            "Which step answered: checkpoint (ran with this checkpoint), "
-            "base_model (with another of the same base model), family "
-            "(with another of the same architecture) or declared (nothing "
-            "has run with it: its file layout is one the architecture "
-            "declares, which is not evidence it suits)."
+            "Which step answered: grouped (a hand-made workflow set pairs it "
+            "with this checkpoint; listed first), checkpoint (ran with this "
+            "checkpoint), base_model (with another of the same base model), "
+            "family (with another of the same architecture) or declared "
+            "(nothing has run with it: its file layout is one the "
+            "architecture declares, which is not evidence it suits)."
         )
     )
-    recipes: int = Field(description="How many recipes name the two together.")
+    recipes: int = Field(
+        description="How many recipes name the two together; 0 for grouped."
+    )
     history_runs: int = Field(
         default=0,
         description=(
             "How many runs in ComfyUI's own history, as of the last workflow "
-            "pull, loaded the two together."
+            "pull, loaded the two together; 0 for grouped."
+        ),
+    )
+    set_name: str | None = Field(
+        None,
+        description=(
+            "grouped only: the name of the newest workflow set grouping it, "
+            "null when that set has no name."
+        ),
+    )
+    prepick: bool = Field(
+        True,
+        description=(
+            "Whether the dialog may select it for the owner. False for a "
+            "grouped file when the matching sets group several of that kind."
         ),
     )
 

@@ -500,7 +500,8 @@ half was moved onto `/recipe` and deleted here.
 
 ### 2.2c The `/models/workflow-sets` contract (#1438)
 
-One route behind the model shelf's `Workflow set` axis, and the split of work
+One read behind the model shelf's `Workflow set` axis (plus the hand-made set
+writes of rule 8), and the split of work
 across the seam is the whole of the contract: **the server resolves the evidence
 and groups nothing; the client folds.**
 
@@ -548,6 +549,20 @@ Rules neither side may drift from:
    names a picture per cover, so it is on the shelf's owner tier with no
    per-object scope to narrow it to. The client fetches it when something needs
    it and again after a scan, never on a filter tick.
+8. **Hand-made sets ride on the same payload (#1520).** Each combination carries
+   `covered_by` (ids of the owner's sets holding all its models on the shelf),
+   `no_set` omits on-shelf set members, and `hand_made` lists the sets, newest
+   first: `{id, name, created_at, updated_at, incomplete, checkpoint_id,
+   picture_count, recipes, covers, members}`, each member `{sha256, slot, label,
+   on_shelf, id, name, filename, kind, base_model, file_size}`. They are written
+   by `POST /models/workflow-sets` (201, the set), `PATCH` and `DELETE
+   /models/workflow-sets/{set_id}` (the set; `{deleted: set}`),
+   `POST .../{set_id}/members` (`{set, added: [sha256]}`) and
+   `POST .../{set_id}/members/remove` (`{set, removed: [{sha256, slot,
+   label}]}`), all owner-only. **Undo is the client re-posting what a write
+   returned**: a deleted set's members as `{sha256, slot, label}`, removed
+   members the same way, added ones through `members/remove`. No server-side
+   undo exists. A refusal is a 409 whose `detail` is the sentence to show.
 
 ### 2.3 The `/workflows` contract (v1.11)
 

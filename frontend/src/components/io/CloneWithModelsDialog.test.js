@@ -225,6 +225,116 @@ describe("CloneWithModelsDialog", () => {
     expect(wrapper.text()).not.toContain("Used with");
   });
 
+  it("pre-picks a grouped file, labels it, and lists it ahead of the shelf (#1520)", async () => {
+    const GROUPED_VAE = {
+      id: 5,
+      filename: "Grouped-VAE.safetensors",
+      display_name: null,
+      file_kind: "vae",
+    };
+    readModelSwap.mockImplementation(async (key, { checkpointId } = {}) =>
+      checkpointId == null
+        ? { ...OPTIONS, vaes: [...OPTIONS.vaes, GROUPED_VAE] }
+        : {
+            ...CHOSEN,
+            vaes: [...OPTIONS.vaes, GROUPED_VAE],
+            proposals: {
+              ...CHOSEN.proposals,
+              vae: [
+                {
+                  id: 5,
+                  filename: "Grouped-VAE.safetensors",
+                  via: "grouped",
+                  recipes: 0,
+                  set_name: "Night",
+                  prepick: true,
+                },
+                ...CHOSEN.proposals.vae,
+              ],
+            },
+          },
+    );
+    const wrapper = open();
+    await flushPromises();
+    await selects(wrapper)[0].setValue("2");
+    await flushPromises();
+
+    const vae = selects(wrapper)[1];
+    expect(vae.element.value).toBe("Grouped-VAE.safetensors");
+    expect(wrapper.text()).toContain('Grouped by you in "Night"');
+    // After the workflow's own file, which always leads, the grouped file
+    // heads the shelf's options, labelled.
+    const labels = vae.findAll("option").map((option) => option.text());
+    expect(labels.slice(1, 3)).toEqual([
+      "Grouped-VAE.safetensors · Grouped by you",
+      expect.not.stringContaining("Grouped by you"),
+    ]);
+  });
+
+  it("labels only the grouped ROW when two shelf rows share its basename", async () => {
+    const TWIN = { ...OPTIONS.vaes[0], id: 9 };
+    readModelSwap.mockImplementation(async (key, { checkpointId } = {}) =>
+      checkpointId == null
+        ? { ...OPTIONS, vaes: [...OPTIONS.vaes, TWIN] }
+        : {
+            ...CHOSEN,
+            vaes: [...OPTIONS.vaes, TWIN],
+            proposals: {
+              ...CHOSEN.proposals,
+              vae: [
+                {
+                  id: 9,
+                  filename: TWIN.filename,
+                  via: "grouped",
+                  recipes: 0,
+                  set_name: null,
+                  prepick: true,
+                },
+              ],
+            },
+          },
+    );
+    const wrapper = open();
+    await flushPromises();
+    await selects(wrapper)[0].setValue("2");
+    await flushPromises();
+
+    const labels = selects(wrapper)[1]
+      .findAll("option")
+      .map((option) => option.text());
+    expect(labels.filter((l) => l.includes("Grouped by you"))).toHaveLength(1);
+  });
+
+  it("does not pre-pick a grouped file the set offers alongside others", async () => {
+    readModelSwap.mockImplementation(async (key, { checkpointId } = {}) =>
+      checkpointId == null
+        ? OPTIONS
+        : {
+            ...CHOSEN,
+            proposals: {
+              ...CHOSEN.proposals,
+              vae: [
+                {
+                  id: 3,
+                  filename: "flux2-vae.safetensors",
+                  via: "grouped",
+                  recipes: 0,
+                  set_name: null,
+                  prepick: false,
+                },
+              ],
+            },
+          },
+    );
+    const wrapper = open();
+    await flushPromises();
+    await selects(wrapper)[0].setValue("2");
+    await flushPromises();
+
+    expect(selects(wrapper)[1].element.value).toBe("ae.safetensors");
+    expect(wrapper.text()).not.toContain("Grouped by you in");
+  });
+
   it("clones by filename, only what changed, under the typed name", async () => {
     const wrapper = open();
     await flushPromises();
