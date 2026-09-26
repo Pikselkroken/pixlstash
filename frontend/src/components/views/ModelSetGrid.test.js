@@ -1827,7 +1827,12 @@ describe("hand-made sets (#1520)", () => {
     await option.trigger("click");
     expect(option.attributes("aria-selected")).toBe("false");
 
-    await chooser.find("input").trigger("keydown", { key: "Enter" });
+    const field = chooser.find("input");
+    await field.trigger("keydown", { key: "Enter" });
+    // Nor with the cursor put down on that unticked row.
+    await field.trigger("keydown", { key: "ArrowDown" });
+    expect(chooser.find(".wsc__r--cur").exists()).toBe(true);
+    await field.trigger("keydown", { key: "Enter" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(addWorkflowSetMembers).not.toHaveBeenCalled();
   });

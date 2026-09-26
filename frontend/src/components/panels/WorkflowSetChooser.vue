@@ -437,8 +437,12 @@ function move(step) {
 }
 
 function submit() {
+  // A checklist adds what is ticked and nothing else: its cursor row is only
+  // where Space ticks.
   let ids = props.pick ? [] : [...checkedShown.value];
-  if (!ids.length && targetKey.value != null) ids = [targetKey.value];
+  if (!ids.length && props.pick && targetKey.value != null) {
+    ids = [targetKey.value];
+  }
   if (ids.length) emit("add", ids);
 }
 
