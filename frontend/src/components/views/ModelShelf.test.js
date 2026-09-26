@@ -5374,9 +5374,12 @@ describe("the set grid is what the shelf opens on", () => {
     return { wrapper, store };
   }
 
-  it("deletes selected hand-made sets on Delete and on no other key (#1520)", async () => {
-    // A review asked whether any key reaching the window with a set selected
-    // would delete it. Only Delete does; arrows and N are the grid's.
+  it("the shelf's WINDOW listener deletes selected sets on Delete and no other key (#1520)", async () => {
+    // Scope: the shelf-level listener only, with the grid stubbed out. A
+    // review asked whether any key reaching the window with a set selected
+    // would delete it; only Delete does. Backspace ON a focused hand-made card
+    // is the grid's own gesture (the Mac keyboard's Delete key sends it) and
+    // is covered in ModelSetGrid.test.js, so the two do not contradict.
     deleteWorkflowSet.mockReset().mockResolvedValue({
       deleted: { id: 10, name: "Kit", members: [] },
     });

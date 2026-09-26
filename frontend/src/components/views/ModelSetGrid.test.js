@@ -1338,10 +1338,12 @@ describe("hand-made sets (#1520)", () => {
   });
 
   it("adds a model to a slot with ONE click, and stays open for the next", async () => {
+    // `added` is the digests the server stored, as the route returns it.
+    const shaOf = (modelId) => String(modelId).repeat(64).slice(0, 64);
     addWorkflowSetMembers.mockReset().mockImplementation((id, members) =>
       Promise.resolve({
         set: handSet(10, [SET_CKPT]),
-        added: members.map(String),
+        added: members.map((m) => shaOf(m.model_id)),
       }),
     );
     const { wrapper, store } = await mountGrid({
@@ -1776,6 +1778,21 @@ describe("hand-made sets (#1520)", () => {
     expect(notices.notices.some((n) => n.text.includes("1 of 2 sets"))).toBe(
       true,
     );
+  });
+
+  it("deletes a focused set on Backspace too, the Mac keyboard's Delete key", async () => {
+    deleteWorkflowSet.mockResolvedValue({ deleted: handSet(10, [SET_CKPT]) });
+    const { wrapper } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    await wrapper.find(".msg__row").trigger("click");
+    await wrapper
+      .find('[role="treegrid"]')
+      .trigger("keydown", { key: "Backspace" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // Deleting a set touches no file, and its receipt offers Undo.
+    expect(deleteWorkflowSet).toHaveBeenCalledWith(10);
   });
 
   it("does not delete again on a held Delete", async () => {
