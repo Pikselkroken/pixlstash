@@ -1294,6 +1294,17 @@ def test_used_looks_with_whole_stack_false_are_the_named_cards_own(recipe_env):
     assert [(look["prompt"], look["pictures"]) for look in r.json()] == [(PROMPT, 1)]
 
 
+def test_a_narrowed_look_is_marked_saved_by_a_siblings_recipe(recipe_env):
+    """Saved on A, it runs on B too (D10), so B's own look is already kept."""
+    _save(recipe_env.owner, CARD_A, prompt=PROMPT, loras=_ada())
+    r = recipe_env.owner.get(
+        f"{API}/recipes/used",
+        params={"workflow_key": [CARD_B], "whole_stack": "false"},
+    )
+    assert r.status_code == 200, r.text
+    assert [look["saved"] for look in r.json()] == [True]
+
+
 def test_one_look_spelled_two_ways_is_one_row(recipe_env):
     """`a_match` and `b_match` load the same file under different names.
 

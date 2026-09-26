@@ -945,6 +945,11 @@ describe("the Recipes tab (v1.12 F6)", () => {
     await flush(wrapper);
     expect(tab().props("wholeStack")).toBe(false);
 
+    // The cover's own row in the open panel is one member like the others.
+    store.selectedKeys = [KEY];
+    await flush(wrapper);
+    expect(tab().props("wholeStack")).toBe(false);
+
     // The whole stack selected, open or not, is the stack again.
     store.selectedKeys = [KEY, OTHER, MOVED];
     await flush(wrapper);

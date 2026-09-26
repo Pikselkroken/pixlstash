@@ -2417,7 +2417,11 @@ new code calls a *variant*. Owner-only, like everything under `/workflows`.
   so the tab passes the **selected** card's key and a selected member lists its
   stack's recipes; only the header names the stack, from `parentStack ?? card`
   and its `stack_size` (never `member_keys.length`, which leaves the card's own
-  key out and would call a stack of six "five workflows").
+  key out and would call a stack of six "five workflows"). **Except inside an
+  expanded stack**: members picked in the open panel (`recipesNarrowed`: every
+  selected key within `stackKeys(openStackKey)`, and not the whole stack) send
+  `whole_stack=false`, so the list is theirs alone and the header names the
+  member. `saved` marks still count the whole stack's recipes.
 - **The order is written back whole on every move.** `PUT /recipes/order` takes
   the complete ordered id list and refuses it entirely if one id is unknown, so
   a half-applied order is never left behind. The rail moves first and is put

@@ -370,6 +370,16 @@ describe("WorkflowRecipesTab", () => {
     expect(listUsedLooks).toHaveBeenCalledWith([KEY], { wholeStack: false });
   });
 
+  it("reads again when only the stack flag changes", async () => {
+    // Collapsing the panel with a member selected keeps the keys and flips
+    // the flag alone; the list must widen back to the stack.
+    const wrapper = render({ workflowKeys: [KEY], wholeStack: false });
+    await flushPromises();
+    await wrapper.setProps({ wholeStack: true });
+    await flushPromises();
+    expect(listSavedRecipes).toHaveBeenLastCalledWith([KEY], { wholeStack: true });
+  });
+
   it("opens the Run popup ON THE RECIPE, not on the card", async () => {
     const wrapper = render();
     await flushPromises();

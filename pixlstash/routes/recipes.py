@@ -7,7 +7,8 @@ with a snapshot (``db_models/saved_recipe.py``).
 
 **A recipe belongs to one workflow and runs on its whole stack** (decision
 D10). ``GET /recipes?workflow_key=…`` therefore answers with every member's
-recipes, resolved through the hub, and an Unstack leaves each recipe with the
+recipes, resolved through the hub (``whole_stack=false`` reads only the
+workflows named, for members picked inside an expanded stack), and an Unstack leaves each recipe with the
 workflow it was saved from because that is the only thing the row names.
 
 **Every route here is ``OWNER_ONLY``, and that is a decision.** A recipe holds
@@ -307,7 +308,8 @@ def create_router(server) -> APIRouter:
         description=(
             "The owner's saved recipes, each with how many kept pictures it "
             "accounts for. Given a workflow key, the recipes of every workflow "
-            "in that one's stack; given none, every recipe in the library."
+            "in that one's stack (only that workflow's with `whole_stack=false`); "
+            "given none, every recipe in the library."
         ),
         response_model=list[SavedRecipeOut],
     )
@@ -317,7 +319,8 @@ def create_router(server) -> APIRouter:
             default_factory=list,
             max_length=MAX_UNION_KEYS,
             description=(
-                "Show the recipes of this workflow's whole stack. Repeat it "
+                "Show the recipes of this workflow (its whole stack unless "
+                "`whole_stack=false`). Repeat it "
                 "for a selection of several; the answer is the union."
             ),
         ),
@@ -405,7 +408,9 @@ def create_router(server) -> APIRouter:
             "for; a look a saved recipe already keeps says so in `saved`. A library "
             "that has never saved a recipe still has these, so the Recipes tab "
             "has something to show and something to save from. Name several "
-            "workflows to get the union across all of their stacks."
+            "workflows to get the union across all of their stacks. With "
+            "`whole_stack=false` only the named workflows' pictures are read; "
+            "`saved` still counts every recipe of their stacks."
         ),
         response_model=list[UsedLook],
     )
@@ -415,7 +420,8 @@ def create_router(server) -> APIRouter:
             default_factory=list,
             max_length=MAX_UNION_KEYS,
             description=(
-                "A workflow whose stack to read. Repeat it for a selection of "
+                "A workflow to read (its whole stack unless `whole_stack=false`). "
+                "Repeat it for a selection of "
                 "several; the answer is the union, counted once per look."
             ),
         ),
@@ -429,10 +435,15 @@ def create_router(server) -> APIRouter:
         if not keys:
             return []
         hub = _hub()
-        stack_keys = _resolve_keys(hub, keys, whole_stack)
-        recipes = saved_recipe_service.read_recipes(server.vault, stack_keys)
+        read_keys = _resolve_keys(hub, keys, whole_stack)
+        # ``saved`` is judged against the whole stack's recipes even when the
+        # looks are narrowed: a recipe saved on a sibling runs on this member
+        # too (D10), so its look here is kept, not one to save again.
+        recipes = saved_recipe_service.read_recipes(
+            server.vault, _resolve_keys(hub, keys, True)
+        )
         groups = saved_recipe_service.read_credit_groups(
-            server.vault, variant_hashes_for_keys(hub, stack_keys)
+            server.vault, variant_hashes_for_keys(hub, read_keys)
         )
         return saved_recipe_service.used_looks(groups, recipes)
 

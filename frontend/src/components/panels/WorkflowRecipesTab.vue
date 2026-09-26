@@ -338,7 +338,8 @@ const props = defineProps({
    *
    * A selection of several is the union of their stacks, counted once: two
    * members of one stack resolve to the same keys, and the server folds them
-   * before it reads any picture.
+   * before it reads any picture. With `wholeStack` false it is the union of
+   * the keys themselves.
    */
   workflowKeys: { type: Array, default: () => [] },
   /**
@@ -406,7 +407,11 @@ const subtitle = computed(() => {
     }
   }
   if (props.stackSize > 1) {
-    parts.push(`runs on any of its ${props.stackSize} workflows`);
+    parts.push(
+      props.wholeStack
+        ? `runs on any of its ${props.stackSize} workflows`
+        : `recipes run on any of the stack's ${props.stackSize} workflows`,
+    );
   }
   return parts.join(" · ");
 });
