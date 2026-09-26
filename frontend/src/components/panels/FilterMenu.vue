@@ -98,6 +98,7 @@
             :model-value="pickValue(sub)"
             :aria-label="PICK_ONE[sub].title"
             @update:model-value="(id) => setPick(sub, id)"
+            @pick="backToRow"
           >
             <template #meta="{ option }">
               <span class="fm-n">{{ formatCount(option.count) }}</span>
@@ -515,6 +516,12 @@ function onLeft(event) {
   if (!subRef.value?.contains(target)) return;
   event.preventDefault();
   event.stopPropagation();
+  backToRow();
+}
+
+// A deliberate pick in a pick-one submenu (not an arrow browsing it) is done
+// with that submenu. Score keeps its menu: it has two groups to set.
+function backToRow() {
   rowRefs[sub.value]?.focus();
   sub.value = null;
 }

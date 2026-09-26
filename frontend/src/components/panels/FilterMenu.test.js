@@ -246,15 +246,19 @@ describe("FilterMenu", () => {
 
       await group.trigger("keydown", { key: "ArrowDown" });
       expect(store[field]).toBe(on);
+      // An arrow browses; only a deliberate pick closes the submenu.
+      expect(wrapper.find(".fm-sub").exists()).toBe(true);
       // Enter on the chosen row is a click on it: it confirms, never undoes.
       await row().trigger("click");
       expect(store[field]).toBe(on);
+      expect(wrapper.find(".fm-sub").exists()).toBe(false);
 
-      const radios = group.findAll('[role="radio"]');
+      await openKind(wrapper, kind);
+      const radios = wrapper.findAll('.fm-sub [role="radio"]');
       expect(radios[0].attributes("aria-checked")).toBe("false");
       await radios[0].trigger("click");
       expect(store[field]).toBe(off);
-      expect(radios[0].attributes("aria-checked")).toBe("true");
+      expect(wrapper.find(".fm-sub").exists()).toBe(false);
     },
   );
 
