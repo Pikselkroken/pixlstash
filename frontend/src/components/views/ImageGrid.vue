@@ -2183,7 +2183,6 @@ async function editSelectionWithComfyui() {
     );
     return;
   }
-  if (overlayOpen.value) closeOverlay(false);
   runDialogStore.openRun({
     kind: "edit",
     pictureIds: ids,

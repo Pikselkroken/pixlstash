@@ -496,8 +496,8 @@
           Filters
         </button>
         <!-- The three run entries, mirrored word for word in SelectionMenu.vue
-             and asserted by frontend/e2e/specs/menu-parity.spec.js: both act
-             on the SELECTION, so none is context-only. -->
+             and asserted by frontend/e2e/specs/menu-parity.spec.js: all three
+             act on the SELECTION, so none is context-only. -->
         <button
           v-if="comfyuiConfigured"
           class="ctx-item"

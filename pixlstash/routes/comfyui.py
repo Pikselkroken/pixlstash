@@ -2174,11 +2174,14 @@ def create_router(server) -> APIRouter:
         },
     )
     def card_for_comfyui_workflow(request: Request, workflow_name: str):
-        # Sync on purpose: filing reads the file and writes the hub.
-        name, _path, document = _load_stored_workflow(workflow_name)
-        _topology_hash, card_key = _file_in_hub(
-            getattr(server, "hub", None), name, document
-        )
+        # Sync on purpose: filing reads the file and writes the hub. Under the
+        # inbox lock, as the import is, so a delete cannot trash the file
+        # between the read and the filing and leave a card naming it.
+        with workflow_inbox.INBOX_LOCK:
+            name, _path, document = _load_stored_workflow(workflow_name)
+            _topology_hash, card_key = _file_in_hub(
+                getattr(server, "hub", None), name, document
+            )
         if not card_key:
             # `_file_in_hub` has logged why.
             raise HTTPException(
