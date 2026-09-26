@@ -965,7 +965,8 @@ the two sides have agreed:
    workflow with nothing to show would outrank every workflow made before 1970.
 4. **The grid draws one card per stack.** `stack_size` ≥ 2 makes a card a
    stack; the card drawn is the cover, `member_keys` names the rest, and the
-   cover's `differs_by` is the union over the members. The order is a manual
+   cover's `differs_by` is empty: the chips say how a member differs from the
+   cover, so they have nothing to say on the cover itself. The order is a manual
    assignment, then an unstacking, then the automatic group by `core_hash`; a
    stored member row is filed under the core hash it was written against, so a
    card that has since left its group simply is not found in it and takes
@@ -1068,6 +1069,14 @@ the two sides have agreed:
    these: they are what the model shelf draws a model with, and a card that has
    to draw itself out of its models rather than its pictures would otherwise
    need a second request per model to do it.
+
+   **A stored workflow is put on its card on request.** `POST
+   /api/v1/comfyui/workflows/{workflow_name}/card` (`OWNER_ONLY`) files a
+   stored workflow, user or built-in, through the import's own
+   `_file_in_hub` and answers `{name, workflow_key}`. A built-in is never
+   imported, so this is how it gets a card: Edit with ComfyUI asks it for
+   the Flux.2 Klein edit workflow and opens the Run popup on the key.
+   Idempotent; 404 for an unknown name, 409 when the graph cannot be filed.
 
    **ComfyUI converts such a file, PixlStash does not (#1530).** `POST
    /api/v1/comfyui/workflows/convert` (`OWNER_ONLY`) takes `{name, workflow,

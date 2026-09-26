@@ -30,6 +30,7 @@ import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
 import ImageOverlay from "./ImageOverlay.vue";
+import { isReadOnly } from "../../utils/apiClient";
 
 enableAutoUnmount(afterEach);
 
@@ -116,6 +117,11 @@ const STUBS = {
   ComfyUiRunner: true,
   ProgressOverlay: true,
   VTooltip: true,
+  OverlayEditPanel: {
+    name: "OverlayEditPanel",
+    props: ["pictureId", "active"],
+    template: "<div class='edit-stub'></div>",
+  },
 };
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -129,7 +135,11 @@ const tabLabels = (wrapper) =>
 
 const activeTab = (wrapper) => labelOf(wrapper.find(".inspector-tab--active"));
 
-async function openOn(id, allImages, { attach = false } = {}) {
+async function openOn(
+  id,
+  allImages,
+  { attach = false, comfyuiConfigured = false } = {},
+) {
   const wrapper = mount(ImageOverlay, {
     // Focus only moves for real in an attached tree, so the test that is
     // about focus asks for one; the rest do not pay for it.
@@ -142,6 +152,7 @@ async function openOn(id, allImages, { attach = false } = {}) {
       tagUpdate: { key: 0, pictureIds: [] },
       descriptionUpdate: { key: 0, pictureIds: [] },
       smartScoreUpdate: { key: 0, pictureIds: [] },
+      comfyuiConfigured,
     },
     global: { stubs: STUBS },
   });
@@ -158,6 +169,7 @@ beforeEach(() => {
   recipeRefusal = null;
   recipeThrows = false;
   getMock.mockClear();
+  isReadOnly.value = false;
 });
 
 const recipePanel = (wrapper) =>
@@ -326,5 +338,66 @@ describe("the lightbox Recipe tab follows the picture", () => {
     await flush();
     await flush();
     expect(tabLabels(wrapper)).toEqual([]);
+  });
+});
+
+// The Edit tab (#1381) hangs off the machine and the session, never the
+// picture's recipe: a holiday photo gets it too. Absent, not disabled, where it
+// cannot be used - the Recipe tab's rule.
+describe("the lightbox Edit tab", () => {
+  const configured = { comfyuiConfigured: true };
+
+  it("sits after Recipe when ComfyUI is configured", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Edit"]);
+  });
+
+  it("is offered on a picture with no recipe", async () => {
+    picturesWithARecipe = new Set();
+    const wrapper = await openOn(7, undefined, configured);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Edit"]);
+  });
+
+  it("is absent without ComfyUI", async () => {
+    const wrapper = await openOn(7);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
+    expect(wrapper.find(".edit-stub").exists()).toBe(false);
+  });
+
+  it("is absent in a read-only session", async () => {
+    isReadOnly.value = true;
+    const wrapper = await openOn(7, undefined, configured);
+    expect(tabLabels(wrapper)).not.toContain("Edit");
+    expect(wrapper.find(".edit-stub").exists()).toBe(false);
+  });
+
+  it("is absent on a video, and the choice comes back after it", async () => {
+    const wrapper = await openOn(
+      7,
+      [
+        { id: 7, tags: [] },
+        { id: 9, tags: [], format: "mp4" },
+      ],
+      configured,
+    );
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    expect(activeTab(wrapper)).toBe("Edit");
+    expect(
+      wrapper.findComponent({ name: "OverlayEditPanel" }).props("active"),
+    ).toBe(true);
+
+    await wrapper.setProps({ initialImageId: 9 });
+    await flush();
+    await flush();
+    expect(tabLabels(wrapper)).not.toContain("Edit");
+    expect(wrapper.find(".overlay-sidebar-group").isVisible()).toBe(true);
+    // Hidden, not unmounted: the typed instruction and a run in flight live
+    // in the panel.
+    expect(wrapper.find(".edit-stub").exists()).toBe(true);
+
+    await wrapper.setProps({ initialImageId: 7 });
+    await flush();
+    await flush();
+    expect(activeTab(wrapper)).toBe("Edit");
   });
 });

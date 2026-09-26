@@ -41,6 +41,8 @@
     @character-created="emit('refresh-sidebar')"
     @run-recipe="openRunForPicture"
     @use-as-input="runWorkflowOnPicture"
+    @show-picture="moveOverlayTo"
+    @edit-more-options="openRunFromEditTab"
   />
   <ImageImporter
     ref="imageImporterRef"
@@ -149,6 +151,7 @@
       @open-plugin-panel="handleContextMenuOpenPluginPanel"
       @make-more="makeMoreLikeSelection"
       @run-workflow="runWorkflowOnSelection"
+      @edit-with-comfyui="editSelectionWithComfyui"
       @segment="openSegmentDialog"
       @auto-tag="handleAutoTag"
       @generate-description="handleGenerateDescription"
@@ -1160,6 +1163,7 @@
           @selection-menu-open="toolbarSelectionMenuOpen = $event"
           @make-more="makeMoreLikeSelection"
           @run-workflow="runWorkflowOnSelection"
+          @edit-with-comfyui="editSelectionWithComfyui"
         />
       </template>
     </GridActionPill>
@@ -1343,6 +1347,7 @@ import {
 import { getSharedPictureIds, revokeTokensByResource } from "../../api/users";
 import { listTaggers } from "../../api/taggers";
 import { preflightWorkflowRun } from "../../api/workflows";
+import { cardForWorkflow } from "../../api/comfyui";
 import {
   faceBoxColor,
   formatUserDate,
@@ -2153,6 +2158,41 @@ function runWorkflowOnSelection() {
   );
 }
 
+/** The built-in workflow "Edit with ComfyUI…" runs: Flux.2 Klein image edit. */
+const EDIT_WORKFLOW = "Flux2-Klein-Image-Edit.json";
+
+/**
+ * "Edit with ComfyUI…", from either grid menu: the Run popup on the built-in
+ * edit workflow, each selected picture fed into its one picture input and the
+ * prompt box left empty for the instruction.
+ *
+ * The built-in has no card until it is asked for, so the key is fetched on
+ * each gesture; the route is idempotent and answers the card already filed.
+ */
+async function editSelectionWithComfyui() {
+  const ids = selectedImageIds.value
+    .map((id) => Number(getPictureId(id)))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (isReadOnly.value || !ids.length) return;
+  let workflowKey;
+  try {
+    ({ workflow_key: workflowKey } = await cardForWorkflow(EDIT_WORKFLOW));
+  } catch (err) {
+    console.warn(`Could not open the ${EDIT_WORKFLOW} workflow:`, err);
+    noticeStore.warning(
+      `Could not open the image edit workflow. ${errorDetail(err)}`,
+      { key: "edit-with-comfyui" },
+    );
+    return;
+  }
+  runDialogStore.openRun({
+    kind: "edit",
+    pictureIds: ids,
+    workflowKey,
+    emptyPrompt: true,
+  });
+}
+
 /**
  * The lightbox's "Use as input for…" — the same popup, over ONE picture.
  *
@@ -2166,6 +2206,26 @@ function runWorkflowOnPicture(pictureId) {
   const id = Number(getPictureId(pictureId));
   if (!Number.isFinite(id) || id <= 0) return;
   openRunWithWorkflowPicker([id]);
+}
+
+/**
+ * The lightbox Edit tab's *More options…* (#1381): the Run popup on this
+ * picture, with the tab's workflow and instruction already filled in. With no
+ * instruction typed the popup starts from the picture's own prompt, as *Use as
+ * input for…* does: `emptyPrompt` would send `""` over a recipe prompt, which
+ * blanks every positive prompt node in the graph.
+ */
+function openRunFromEditTab({ pictureId, workflowKey, prompt } = {}) {
+  const id = Number(getPictureId(pictureId));
+  if (!Number.isFinite(id) || id <= 0 || isReadOnly.value) return;
+  if (overlayOpen.value) closeOverlay(false);
+  runDialogStore.openRun({
+    kind: "selection",
+    pictureIds: [id],
+    workflowKey: workflowKey || undefined,
+    pickWorkflow: true,
+    prompt: prompt || undefined,
+  });
 }
 
 // What a run with no selection files its output into: the set, project and

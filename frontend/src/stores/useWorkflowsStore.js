@@ -57,15 +57,16 @@ import { errorMessage } from "../utils/apiError";
  */
 export const PANEL_COLLAPSE_MS = 600;
 
-export const SORT_KEYS = ["rating", "used", "pictures"];
+export const SORT_KEYS = ["rating", "used", "pictures", "name"];
 
 export const SORT_LABELS = {
   rating: { label: "Your ratings" },
   used: { label: "Recently used" },
   pictures: { label: "Picture count" },
+  name: { label: "Name" },
 };
 
-/** The sort keys, each as `(card) => number`, descending. */
+/** The numeric sort keys, each as `(card) => number`, descending. */
 const SORT_VALUES = {
   // `rank`, not `rating`: it is the same stars smoothed towards the library's
   // mean, which is what makes a 5.0 from one picture rank below a 4.8 from
@@ -77,6 +78,11 @@ const SORT_VALUES = {
   used: (card) => (card.last_used ? Date.parse(card.last_used) : -Infinity),
   pictures: (card) => card.picture_count ?? 0,
 };
+
+// Name is the one key that reads A to Z rather than highest first. Numeric so
+// "v2" sorts before "v10"; the collator already keeps "flux" beside "Flux".
+const nameCollator = new Intl.Collator(undefined, { numeric: true });
+const byName = (a, b) => nameCollator.compare(a.name ?? "", b.name ?? "");
 
 /**
  * What the Filters panel starts on (v1.12 F7).
@@ -234,10 +240,12 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   });
 
   const sortedCards = computed(() => {
-    const value = SORT_VALUES[sortKey.value] ?? SORT_VALUES.rating;
     // A copy: `cards` is the fetch order and a sort in place would make the
     // next resort depend on the last one.
-    return [...filteredCards.value].sort((a, b) => value(b) - value(a));
+    const copy = [...filteredCards.value];
+    if (sortKey.value === "name") return copy.sort(byName);
+    const value = SORT_VALUES[sortKey.value] ?? SORT_VALUES.rating;
+    return copy.sort((a, b) => value(b) - value(a));
   });
 
   /**

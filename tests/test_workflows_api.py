@@ -43,7 +43,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlmodel import delete, select
 
-from pixlstash import auth
+from pixlstash import auth, mcp_server
 from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
@@ -193,6 +193,8 @@ _WORKFLOW_WRITE_ROUTES = (
     ("DELETE", "/api/v1/workflows/{workflow_key}"),
     # ComfyUI's conversion of an editor file (#1530): writes stored files.
     ("POST", "/api/v1/comfyui/workflows/convert"),
+    # Edit with ComfyUI: files a stored workflow on its card in the hub.
+    ("POST", "/api/v1/comfyui/workflows/{workflow_name}/card"),
 )
 
 
@@ -2677,6 +2679,38 @@ def test_an_enveloped_conversion_is_stored_unwrapped(workflow_env, converting):
     assert stored["prompt"] == _EDITOR_CONVERTED
 
 
+def test_a_built_in_workflow_is_put_on_a_card_that_runs_its_file(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Edit with ComfyUI opens the Run popup on the built-in edit workflow's card.
+
+    A built-in is never imported, so nothing files it until this route does.
+    """
+    builtin = comfyui_module._workflow_builtin_dir()
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", builtin)],
+    )
+    owner = workflow_env.owner
+    path = f"{API}/comfyui/workflows/Flux2-Klein-Image-Edit.json/card"
+
+    r = owner.post(path)
+    assert r.status_code == 200, r.text
+    key = r.json()["workflow_key"]
+    assert r.json()["name"] == "Flux2-Klein-Image-Edit.json"
+    # Idempotent: the second ask answers the same card.
+    assert owner.post(path).json()["workflow_key"] == key
+
+    r = owner.get(f"{API}/workflows/{key}/graph")
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "file"
+    assert r.json()["workflow"]["76"]["class_type"] == "LoadImage"
+
+    assert owner.post(f"{API}/comfyui/workflows/nope.json/card").status_code == 404
+
+
 def test_deleting_a_converted_file_takes_its_conversion_with_it(
     workflow_env, converting
 ):
@@ -3719,15 +3753,18 @@ def test_a_stack_that_collapses_to_one_drawn_card_carries_no_stack_id(workflow_e
     assert hidden["stack_id"] is None
 
 
-def test_a_stack_shows_the_union_of_its_members_difference_chips(workflow_env):
-    """The chips belong to the drawn card, because the cover is what is drawn.
+def test_a_stack_cover_carries_no_difference_chips(workflow_env):
+    """The chips say how a member differs from the cover, so the cover has none.
 
-    The cover has none of its own: it is what the others are compared against.
+    The grid draws the cover as the collapsed stack; the members' union printed
+    under it read as "the cover differs by" what only its members do.
     """
     cards = _by_key(_cards(workflow_env.owner))
-    assert cards[BUSY_CARD]["differs_by"], "a stack with no difference chips"
+    assert cards[BUSY_CARD]["stack_size"] == 2
+    assert cards[BUSY_CARD]["differs_by"] == []
+    assert _detail(workflow_env.owner, BUSY_CARD)["card"]["differs_by"] == []
     member = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]
-    assert set(member["differs_by"]) <= set(cards[BUSY_CARD]["differs_by"])
+    assert member["differs_by"], "the member has nothing to explain"
 
 
 def test_unstacking_a_card_takes_it_out_of_the_automatic_group(workflow_env):
@@ -8565,6 +8602,71 @@ def test_duplicating_twice_puts_a_second_file_beside_the_first(exportable, tmp_p
     ]
     assert first != second, "the second duplicate overwrote the first"
     assert (tmp_path / first).is_file() and (tmp_path / second).is_file()
+
+
+# ---------------------------------------------------------------------------
+# The MCP round trip (#1436): export a graph, edit it, store it, preflight it
+# ---------------------------------------------------------------------------
+
+
+def _mcp_fetch(client: TestClient) -> mcp_server.Fetch:
+    """``pixlstash-mcp``'s transport, over the owner's TestClient session."""
+
+    def fetch(path, params, method="GET", body=None):
+        r = client.request(method, f"{API}{path}", params=params, json=body)
+        return r.status_code, r.headers.get("content-type", ""), r.content
+
+    return fetch
+
+
+def _mcp_json(fetch, tool: str, **arguments) -> dict:
+    content = mcp_server.call_tool(fetch, tool, arguments, allow_write=True)
+    return json.loads(content[0]["text"])
+
+
+def test_the_mcp_round_trip_stores_an_edit_as_a_new_card_once(exportable, tmp_path):
+    """Export → edit → import → preflight, through the tools an agent calls."""
+    (tmp_path / "store").mkdir()
+    _isolate_workflow_folders(tmp_path / "store", exportable.monkeypatch)
+    fetch = _mcp_fetch(exportable.owner)
+    out = tmp_path / "agent" / "graph.json"
+
+    exported = _mcp_json(
+        fetch, "export_workflow_graph", workflow_key=RUN_CARD, out_path=str(out)
+    )
+    assert exported["path"] == str(out)
+    graph = json.loads(out.read_text())
+    assert exported["nodes"] == len(graph)
+    # The runnable graph, not the scrubbed export: ComfyUI can validate it.
+    assert graph["5"]["inputs"]["text"] == EXPORT_PROMPT
+    assert graph["3"]["inputs"]["seed"] == 4242
+
+    graph["3"]["inputs"]["steps"] = 41
+    out.write_text(json.dumps(graph))
+    stored = _mcp_json(
+        fetch, "import_workflow_graph", name="mcp-edited.json", path=str(out)
+    )
+    assert stored["matched"] is False, stored
+    new_key = stored["workflow_key"]
+    assert new_key and new_key != RUN_CARD
+    assert exportable.owner.get(f"{API}/workflows/{new_key}").status_code == 200
+
+    # The same file again, under another name, is matched rather than stored:
+    # an agent retrying does not litter the grid.
+    again = _mcp_json(
+        fetch, "import_workflow_graph", name="mcp-edited-again.json", path=str(out)
+    )
+    assert again["matched"] is True, again
+    assert again["name"] == "mcp-edited.json"
+    assert not (tmp_path / "store" / "mcp-edited-again.json").exists()
+
+    # Preflight reads the stored file: this ComfyUI lacks two of its nodes, and
+    # saying so is the agent's feedback. Nothing is submitted.
+    preflight = _mcp_json(fetch, "preflight_workflow", workflow_key=new_key)
+    assert preflight["ok"] is False
+    assert [g["workflow_key"] for g in preflight["groups"]] == [new_key]
+    assert _reasons(preflight) == {"missing_nodes"}
+    assert exportable.submitted == []
 
 
 # ---------------------------------------------------------------------------

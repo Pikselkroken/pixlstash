@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 const COMFYUI_GATED_ACTIONS = [
   { label: "Make more like these…", event: "make-more" },
   { label: "Run a workflow on these…", event: "run-workflow" },
+  { label: "Edit with ComfyUI…", event: "edit-with-comfyui" },
 ];
 
 const MENU_SOURCES = [

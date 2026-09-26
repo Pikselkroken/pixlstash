@@ -307,7 +307,6 @@ class Stack:
     stack_id: str
     kind: str
     member_keys: list[str]
-    differs_by: list[str] = field(default_factory=list)
 
     @property
     def cover_key(self) -> str:
@@ -477,7 +476,7 @@ def _manual_positions(rows: StackRows, stack_id: str) -> dict[str, int]:
 def describe_differences(
     hub: HubDatabase, figures: list[CardFigures], stacks: list[Stack]
 ) -> None:
-    """Fill in each stacked member's "differs by" chips, and each stack's union.
+    """Fill in each stacked member's "differs by" chips against its cover.
 
     Only stacked cards are described: a card on its own has nothing to differ
     from, and reducing every document in the library to answer that would be
@@ -511,7 +510,6 @@ def describe_differences(
             )
     for stack in stacks:
         cover = for_key.get(stack.cover_key)
-        union: list[str] = []
         if cover is None and len(stack.member_keys) > 1:
             # Nothing to compare the members against, so the whole stack shows
             # no chips. Said out loud rather than fallen through silently: a
@@ -541,15 +539,9 @@ def describe_differences(
                 )
                 continue
             by_key[key].differs_by = chips
-            union.extend(chip for chip in chips if chip not in union)
-        stack.differs_by = union
-        # The grid draws ONE card per stack -- the cover, wearing the stack's
-        # size and the union of what its members differ by -- so the union has
-        # to land on the cover's own figure. The cover has no chips of its own:
-        # it is what the others are compared against.
-        cover_figure = by_key.get(stack.cover_key)
-        if cover_figure is not None:
-            cover_figure.differs_by = union
+        # The cover gets no chips, and the grid's one card per stack is the
+        # cover: the chips say how a member differs from the cover, so the
+        # members' union printed under the cover itself said nothing true.
 
 
 def read_grid(

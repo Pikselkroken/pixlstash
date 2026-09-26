@@ -113,6 +113,17 @@ describe("card chips", () => {
     ]);
   });
 
+  it("gives a stack's cover its type, since it differs from nothing", () => {
+    const cover = { ...STACK, differs_by: [], imported: true };
+    expect(factChips(cover).map((c) => c.label)).toEqual([
+      "txt2img",
+      "imported",
+    ]);
+    const spoken = cardAccessibleName(cover);
+    expect(spoken).toContain("facts: txt2img, imported");
+    expect(spoken).not.toContain("differs by");
+  });
+
   // A hidden card is only ever drawn because somebody ticked *Show hidden
   // workflows* (F7). Unmarked it is indistinguishable from a card that was
   // never hidden, in the one grid it was deliberately kept out of — and it

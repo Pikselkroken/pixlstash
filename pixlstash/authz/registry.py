@@ -1461,6 +1461,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="LoRA loader insertion; reaches the owner's ComfyUI; owner only",
     ),
+    ("POST", "/api/v1/comfyui/workflows/{workflow_name}/card"): RoutePolicy(
+        _OWNER,
+        justification="File a stored workflow on its Workflows card and return the key; writes the hub like the import beside it; owner only",
+    ),
     ("GET", "/api/v1/comfyui/pixlstash-node"): RoutePolicy(
         _OWNER,
         justification="Whether the owner's ComfyUI has the ComfyUI-PixlStash node; reaches the owner's ComfyUI; owner only",
