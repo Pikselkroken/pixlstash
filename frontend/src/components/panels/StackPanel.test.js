@@ -214,13 +214,19 @@ describe("StackPanel", () => {
         member("b", { name: "realvisXL_v5 portraits" }),
         // …and so is one that is nothing BUT the prefix.
         member("c", { name: "realvisXL_v5: " }),
+        member("d", { name: "realvisXL_v5:   " }),
       ],
     });
     await wrapper.vm.$nextTick();
 
     const rows = wrapper.findAll(".stack-panel__row");
     expect(rows.map((row) => row.find(".stack-panel__rowname").text())).toEqual(
-      ["Text to Image", "realvisXL_v5 portraits", "realvisXL_v5:"],
+      [
+        "Text to Image",
+        "realvisXL_v5 portraits",
+        "realvisXL_v5:",
+        "realvisXL_v5:",
+      ],
     );
     // The accessible name keeps the whole name.
     expect(rows[0].attributes("aria-label")).toContain(

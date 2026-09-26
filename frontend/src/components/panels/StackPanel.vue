@@ -491,9 +491,11 @@ function listName(member) {
   const model = checkpointModel(member);
   const prefix = model?.name ? `${modelDisplayName(model)}: ` : null;
   const name = member.name ?? "";
-  return prefix && name.startsWith(prefix) && name.length > prefix.length
-    ? name.slice(prefix.length)
-    : name;
+  // Trimmed, so a name that is the prefix and whitespace keeps the full name
+  // rather than drawing a blank row.
+  const rest =
+    prefix && name.startsWith(prefix) ? name.slice(prefix.length).trim() : "";
+  return rest || name;
 }
 
 /**
