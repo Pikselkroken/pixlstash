@@ -143,6 +143,21 @@ describe("the Edit tab", () => {
     expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
   });
 
+  it("hands More options the instruction trimmed, blank as empty", async () => {
+    const wrapper = await mountPanel();
+    const moreOptions = wrapper.findAll("button").find((b) =>
+      b.text().includes("More options"),
+    );
+    await wrapper.find("textarea").setValue("   ");
+    await moreOptions.trigger("click");
+    await wrapper.find("textarea").setValue("  warmer light ");
+    await moreOptions.trigger("click");
+    expect(wrapper.emitted("more-options").map(([p]) => p.prompt)).toEqual([
+      "",
+      "warmer light",
+    ]);
+  });
+
   it("says why nothing was queued", async () => {
     runWorkflowCard.mockResolvedValue({
       prompts: [],

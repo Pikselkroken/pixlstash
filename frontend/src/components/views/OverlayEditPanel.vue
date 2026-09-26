@@ -473,7 +473,9 @@ function onMoreOptions() {
   emit("more-options", {
     pictureId: id,
     workflowKey: workflowKey.value,
-    prompt: instruction.value,
+    // Trimmed as Run trims it, so a blank box means the same thing on both
+    // paths: no instruction.
+    prompt: instruction.value.trim(),
   });
 }
 
