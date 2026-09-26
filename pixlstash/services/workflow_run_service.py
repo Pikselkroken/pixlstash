@@ -21,6 +21,7 @@ rather than in a caller.
 
 from __future__ import annotations
 
+import io
 import json
 import re
 from copy import deepcopy
@@ -106,9 +107,46 @@ SEED_NODE_CLASSES = frozenset(
 # `CR Text`. The string becomes a literal in whatever the node fed.
 TEXT_NODE_CLASSES = {"Text Multiline": "text", "CR Text": "text"}
 
-# WAS's own `[token]` substitutions (`[time]`, `[hostname]`, custom ones). A
-# literal cannot expand them, so a text carrying one keeps its refusal.
-WAS_TOKEN_RE = re.compile(r"\[[A-Za-z_][\w ]*\]")
+# WAS's own `[token]` substitutions (`[time]`, `[time(%Y)]`, custom names of
+# any spelling). A literal cannot expand them, so a text holding anything in
+# square brackets keeps its refusal; core ComfyUI gives brackets no meaning.
+WAS_TOKEN_RE = re.compile(r"\[[^\[\]]*\]")
+
+
+def prompt_text_target(graph: dict, node_id: str) -> Optional[tuple[str, str]]:
+    """Where a detected prompt node's text literally lives, as ``(node, field)``.
+
+    The encoder's own ``text`` when it holds a string; otherwise, when that
+    input is a link from output 0 of a :data:`TEXT_NODE_CLASSES` node, that
+    node's text field. Without the hop a prompt typed into the Run popup was
+    skipped, and a missing text node's repair then inlined the stored prompt.
+    A text node feeding more than one input is not a target: writing the
+    positive prompt and then the negative into it would leave both negative.
+    """
+    inputs = (graph.get(node_id) or {}).get("inputs")
+    if not isinstance(inputs, dict):
+        return None
+    text = inputs.get("text")
+    if isinstance(text, str):
+        return node_id, "text"
+    if is_link(text) and text[1] == 0:
+        source = graph.get(str(text[0]))
+        field = TEXT_NODE_CLASSES.get((source or {}).get("class_type"))
+        readers = sum(
+            1
+            for other in graph.values()
+            if isinstance(other, dict) and isinstance(other.get("inputs"), dict)
+            for link in other["inputs"].values()
+            if is_link(link) and str(link[0]) == str(text[0])
+        )
+        if (
+            field
+            and readers == 1
+            and isinstance((source.get("inputs") or {}).get(field), str)
+        ):
+            return str(text[0]), field
+    return None
+
 
 # Where the source of a runnable graph came from, in the order tried.
 FROM_FILE = "file"
@@ -705,8 +743,11 @@ def replace_missing_text_nodes(graph: dict, object_info: dict) -> list[dict]:
                     class_type,
                 )
                 continue
+            # The node's own loop, line for line.
             text = "\n".join(
-                line for line in text.splitlines() if not line.strip().startswith("#")
+                line.replace("\n", "")
+                for line in io.StringIO(text)
+                if not line.strip().startswith("#")
             )
         consumers = [
             (str(other_id), str(name), link)
@@ -769,6 +810,9 @@ REPAIRS: tuple[Repair, ...] = (
         "bypassed_loras",
         bypass_missing_loras,
     ),
+    # Text before seed, and the order is load-bearing: the seed repair's
+    # rollback restores the graph it was handed, which must already hold the
+    # text replacement it reports.
     Repair(MISSING_NODES, "replaced_nodes", replace_missing_text_nodes),
     Repair(MISSING_NODES, "replaced_nodes", replace_missing_seed_nodes),
 )

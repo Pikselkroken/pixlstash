@@ -81,6 +81,7 @@ from pixlstash.services.workflow_run_service import (
     place_recipe_loras,
     repair,
     replace_missing_seed_nodes,
+    prompt_text_target,
     replace_missing_text_nodes,
     skip_requested_loras,
 )
@@ -8096,6 +8097,32 @@ def test_a_text_node_read_on_another_output_keeps_its_refusal():
     graph["7"]["inputs"]["text"] = ["103", 1]
     assert replace_missing_text_nodes(graph, SEED_INFO) == []
     assert "103" in graph
+
+
+def test_cr_text_keeps_its_comment_lines_and_brackets():
+    """Only WAS's node drops `#` lines and expands tokens."""
+    graph = _text_graph(class_type="CR Text", text="# kept\na [red] fox")
+    assert replace_missing_text_nodes(graph, SEED_INFO)
+    assert graph["6"]["inputs"]["text"] == "# kept\na [red] fox"
+
+
+def test_a_was_time_format_token_keeps_its_refusal():
+    graph = _text_graph(text="made on [time(%Y-%m-%d)]")
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+
+
+def test_the_run_prompt_lands_in_the_text_node_an_encoder_reads():
+    """Else the repair would inline the stored prompt, not the typed one."""
+    graph = _text_graph()
+    del graph["7"]
+    assert prompt_text_target(graph, "6") == ("103", "text")
+    graph["6"]["inputs"]["text"] = "literal"
+    assert prompt_text_target(graph, "6") == ("6", "text")
+
+
+def test_a_text_node_shared_by_two_encoders_takes_no_run_prompt():
+    """Positive then negative written into one node would leave both negative."""
+    assert prompt_text_target(_text_graph(), "6") is None
 
 
 def test_the_registry_reports_text_and_seed_replacements_together():
