@@ -3106,14 +3106,16 @@ repair is a registry entry plus its `RunGroup` field. Three ship:
   replacement: "seed", consumers: [{node_id, field}]}`.
 - **`missing_nodes` → `replaced_nodes`** (second entry, same report):
   `replace_missing_text_nodes`. A custom text node this ComfyUI lacks
-  (`TEXT_NODE_CLASSES`: WAS's `Text Multiline`, Comfyroll's `CR Text`) only
-  hands its string on, so every link from it becomes that string, however many
+  (`TEXT_NODE_CLASSES`: WAS's `Text Multiline`, Comfyroll's `CR Text`,
+  Chibi-Nodes' `Textbox`, core's `PrimitiveStringMultiline` on an older
+  ComfyUI) only hands its string on, so every link from it becomes that string, however many
   inputs it fed. It runs after `_apply_prompts`, which writes a Run popup
   prompt through `prompt_text_target`: past a linked encoder into the text
   node itself, when that node feeds only that encoder, so the typed prompt is
   what gets inlined. `Text Multiline` drops its `#` comment lines as the node
   does; one holding anything in square brackets (a WAS token) keeps its
-  refusal, as do a wired text and a consumer reading any output but the first.
+  refusal, as do a wired text, another input set that may override it
+  (`Textbox`'s `passthrough`), and a consumer reading any output but the first.
   It runs before the seed repair, whose rollback restores the graph it was
   handed. Entries carry `replacement: "text"`, which the Run popup reads to
   word its notice.

@@ -101,11 +101,18 @@ SEED_NODE_CLASSES = frozenset(
     {"Seed (rgthree)", "Seed", "SeedGenerator", "Seed Generator", "CR Seed"}
 )
 
-# Custom text nodes that only hand their own string on, by class_type, to the
-# input holding that string. Same allow-list terms as the seed nodes: WAS's
-# `Text Multiline` (which also drops its `#` comment lines) and Comfyroll's
-# `CR Text`. The string becomes a literal in whatever the node fed.
-TEXT_NODE_CLASSES = {"Text Multiline": "text", "CR Text": "text"}
+# Text nodes that only hand their own string on, by class_type, to the input
+# holding that string. Same allow-list terms as the seed nodes: WAS's
+# `Text Multiline` (which also drops its `#` comment lines), Comfyroll's
+# `CR Text`, Chibi-Nodes' `Textbox` and core's `PrimitiveStringMultiline`
+# (absent on an older ComfyUI). The string becomes a literal in whatever the
+# node fed.
+TEXT_NODE_CLASSES = {
+    "Text Multiline": "text",
+    "CR Text": "text",
+    "Textbox": "text",
+    "PrimitiveStringMultiline": "value",
+}
 
 # WAS's own `[token]` substitutions (`[time]`, `[time(%Y)]`, custom names of
 # any spelling). A literal cannot expand them, so a text holding anything in
@@ -705,7 +712,8 @@ def replace_missing_text_nodes(graph: dict, object_info: dict) -> list[dict]:
 
     Keeps its refusal, logged: a class that IS installed, one outside
     :data:`TEXT_NODE_CLASSES`, a node whose text is wired from elsewhere or is
-    not a string, a WAS text holding a ``[token]`` only the node expands, and a
+    not a string, one with another input set that may override it (Textbox's
+    ``passthrough``), a WAS text holding a ``[token]`` only the node expands, and a
     consumer reading any output other than the first.
 
     Args:
@@ -732,6 +740,23 @@ def replace_missing_text_nodes(graph: dict, object_info: dict) -> list[dict]:
                 node_id,
                 class_type,
                 text,
+            )
+            continue
+        # Any other input that could change the string: Textbox's
+        # `passthrough` replaces its text whenever it is non-empty.
+        overriding = [
+            name
+            for name, value in inputs.items()
+            if name != TEXT_NODE_CLASSES[class_type]
+            and (is_link(value) or (isinstance(value, str) and value))
+        ]
+        if overriding:
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI and %s may change its "
+                "text, so it keeps its refusal.",
+                node_id,
+                class_type,
+                ", ".join(overriding),
             )
             continue
         if class_type == "Text Multiline":

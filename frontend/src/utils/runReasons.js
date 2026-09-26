@@ -69,7 +69,7 @@ export const PICTURE_INPUT_UNFILLED = "picture_input_unfilled";
  * Not a refusal either: a custom node the server replaced (#1463).
  *
  * A seed node (rgthree's `Seed (rgthree)` and its kin) or a text node (WAS's
- * `Text Multiline`, Comfyroll's `CR Text`) this ComfyUI lacks: its link becomes
+ * `Text Multiline`, `CR Text`, `Textbox`, `PrimitiveStringMultiline`) this ComfyUI lacks: its link becomes
  * a literal, so the run goes ahead without the pack. `RunGroup.replaced_nodes` carries it.
  */
 export const NODES_REPLACED = "nodes_replaced";

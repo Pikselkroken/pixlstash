@@ -8125,6 +8125,26 @@ def test_a_text_node_shared_by_two_encoders_takes_no_run_prompt():
     assert prompt_text_target(_text_graph(), "6") is None
 
 
+def test_a_primitive_string_multiline_is_replaced_from_its_value():
+    graph = _text_graph(class_type="PrimitiveStringMultiline")
+    graph["103"]["inputs"] = {"value": "# kept\na [red] fox"}
+    assert replace_missing_text_nodes(graph, SEED_INFO)
+    assert graph["6"]["inputs"]["text"] == "# kept\na [red] fox"
+
+
+def test_a_textbox_is_replaced_unless_its_passthrough_is_set():
+    graph = _text_graph(class_type="Textbox")
+    graph["103"]["inputs"]["passthrough"] = ""
+    assert replace_missing_text_nodes(graph, SEED_INFO)
+    assert graph["6"]["inputs"]["text"] == "a platypus in a toga"
+
+    for passthrough in ("overrides the text", ["5", 0]):
+        graph = _text_graph(class_type="Textbox")
+        graph["103"]["inputs"]["passthrough"] = passthrough
+        assert replace_missing_text_nodes(graph, SEED_INFO) == []
+        assert "103" in graph
+
+
 def test_the_registry_reports_text_and_seed_replacements_together():
     graph = dict(_seed_graph(), **_text_graph())
     done = repair(graph, SEED_INFO, [Reason(MISSING_NODES)])
