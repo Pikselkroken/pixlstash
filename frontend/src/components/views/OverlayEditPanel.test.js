@@ -7,8 +7,10 @@ import { createPinia, setActivePinia } from "pinia";
 
 const listWorkflowCards = vi.fn();
 const runWorkflowCard = vi.fn();
+const preflightWorkflowRun = vi.fn();
 vi.mock("../../api/workflows", () => ({
   listWorkflowCards: (...a) => listWorkflowCards(...a),
+  preflightWorkflowRun: (...a) => preflightWorkflowRun(...a),
   runWorkflowCard: (...a) => runWorkflowCard(...a),
 }));
 vi.mock("../../api/pictures", () => ({
@@ -69,6 +71,7 @@ beforeEach(async () => {
   stacks.listStackPictures.mockReset().mockResolvedValue([]);
   window.localStorage.clear();
   listWorkflowCards.mockReset().mockResolvedValue({ cards: CARDS });
+  preflightWorkflowRun.mockReset().mockResolvedValue({ ok: true, groups: [] });
   runWorkflowCard
     .mockReset()
     .mockResolvedValue({ prompts: [{ prompt_id: "p1" }], groups: [] });
@@ -89,6 +92,45 @@ describe("the Edit tab", () => {
     const wrapper = await mountPanel();
     expect(wrapper.find("[role=menu]").exists()).toBe(false);
     expect(wrapper.text()).toContain("Open Workflows");
+  });
+
+  it("leaves out an edit card the pre-flight says cannot run", async () => {
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "i2i"
+              ? [{ code: "missing_models", models: [] }]
+              : [],
+        },
+      ],
+    }));
+    const wrapper = await mountPanel();
+    const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
+    expect(rows).toEqual(["Widen, Outpaint"]);
+    // Asked the way the run asks: this picture, that card.
+    expect(preflightWorkflowRun).toHaveBeenCalledWith({
+      picture_ids: [7],
+      target: "i2i",
+    });
+  });
+
+  it("keeps every card when ComfyUI cannot be asked, or the check fails", async () => {
+    preflightWorkflowRun.mockImplementation(async ({ target }) => {
+      if (target === "out") throw new Error("offline");
+      return { groups: [{ reasons: [{ code: "comfyui_unreachable" }] }] };
+    });
+    const wrapper = await mountPanel();
+    expect(wrapper.findAll("[role=menuitemradio]")).toHaveLength(2);
+  });
+
+  it("says the edit cards cannot run when every one was left out", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      groups: [{ reasons: [{ code: "missing_nodes", nodes: ["Foo"] }] }],
+    });
+    const wrapper = await mountPanel();
+    expect(wrapper.find("[role=menu]").exists()).toBe(false);
+    expect(wrapper.text()).toContain("can run as they stand");
   });
 
   it("runs the picture through the chosen card with the instruction", async () => {
