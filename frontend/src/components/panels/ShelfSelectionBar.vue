@@ -349,7 +349,7 @@ const single = computed(() => store.selectedRows.length === 1);
 const newSetTitle = computed(() => {
   const row = store.selectedRows[0];
   if (!row || !["checkpoint", "unknown"].includes(row.file_kind)) {
-    return "Only a checkpoint starts a set this way. The New workflow set tile on the set grid makes an empty one.";
+    return "Only a checkpoint starts a set this way. New set in the toolbar of the set grid makes an empty one.";
   }
   if (!row.sha256) {
     return "This checkpoint is still being hashed, and a set keeps its models by hash. Try again in a moment.";

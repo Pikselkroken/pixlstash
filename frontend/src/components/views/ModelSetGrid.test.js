@@ -637,10 +637,8 @@ describe("the models no recipe names", () => {
 
     // The treegrid holds the cards and nothing else: a ghost inside it would be
     // the last thing Down reaches, and it is not a set.
-    // One card, plus the New workflow set tile (#1520) - which is a row, and
-    // is the only other thing the arrows may walk to.
     const grid = wrapper.find('[role="treegrid"]');
-    expect(grid.findAll('[role="row"]')).toHaveLength(2);
+    expect(grid.findAll('[role="row"]')).toHaveLength(1);
     expect(grid.findAll(".msg__row")).toHaveLength(1);
     expect(grid.find(".msg__ghost").exists()).toBe(false);
   });
@@ -1026,12 +1024,10 @@ describe("when there is nothing to group", () => {
     });
 
     expect(wrapper.text()).toContain("No picture in this library records");
-    // The grid is still there, holding only the New workflow set tile: making
-    // a set by hand is what an owner with no recorded pictures can do (#1520).
-    expect(wrapper.findAll(".msg__row")).toHaveLength(0);
-    expect(wrapper.find('[data-testid="new-workflow-set"]').exists()).toBe(
-      true,
-    );
+    // Making a set by hand is what an owner with no recorded pictures can
+    // still do, so the empty state names the toolbar button (#1575).
+    expect(wrapper.text()).toContain("New set in the toolbar");
+    expect(wrapper.findAll('[role="row"]')).toHaveLength(0);
   });
 
   it("reports a failed read rather than an empty grid", async () => {
@@ -1243,7 +1239,7 @@ describe("hand-made sets (#1520)", () => {
     });
   });
 
-  it("makes a set from the keyboard with N and from the tile", async () => {
+  it("makes a set from the keyboard with N", async () => {
     createWorkflowSet.mockResolvedValue(handSet(12, []));
     const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5", "checkpoint")],
@@ -1254,9 +1250,6 @@ describe("hand-made sets (#1520)", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(createWorkflowSet).toHaveBeenCalledTimes(1);
     expect(store.openSetKey).toBe("hand:12");
-
-    await wrapper.find('[data-testid="new-workflow-set"]').trigger("click");
-    expect(createWorkflowSet).toHaveBeenCalledTimes(2);
   });
 
   it("walks the tray's slots and removes a member with Backspace, keeping the file", async () => {
@@ -1331,7 +1324,7 @@ describe("hand-made sets (#1520)", () => {
     const { useNoticeStore } = await import("../../stores/useNoticeStore");
     const notices = useNoticeStore();
 
-    await wrapper.find('[data-testid="new-workflow-set"]').trigger("click");
+    await wrapper.find('[role="treegrid"]').trigger("keydown", { key: "n" });
     await new Promise((resolve) => setTimeout(resolve, 0));
     await notices.notices.at(-1).action.handler();
 

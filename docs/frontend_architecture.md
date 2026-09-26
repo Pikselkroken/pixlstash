@@ -1694,10 +1694,10 @@ order, no strengths), stored by hash in the hub (`docs/backend_architecture.md`,
 the shelf's workflow sets section) and served as `hand_made` on
 `GET /models/workflow-sets`.
 
-- **One grid, two kinds of card.** `flatRows` leads with the `New workflow set`
-  tile (`kind: "new"`, also the `N` key), then `store.handMadeGroups` newest
-  first, then the evidence cards. The initial cursor is the first CARD, not the
-  tile. A hand-made card is `ModelSetCard` with `card.handMade`: a dashed edge, a
+- **One grid, two kinds of card.** `flatRows` holds `store.handMadeGroups`
+  newest first, then the evidence cards, and nothing else. A set is made with
+  **New set** in the shelf toolbar (right cluster, shown only on the grid,
+  since it writes on the press) or `N` inside the grid. A hand-made card is `ModelSetCard` with `card.handMade`: a dashed edge, a
   "Grouped by you" badge, the checkpoint's `ModelMark` as the cover until a
   picture belongs to it, "Incomplete: no checkpoint" in place of its facts when
   it has none, and never a recipe count.

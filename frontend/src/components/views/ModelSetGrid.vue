@@ -26,9 +26,9 @@
       <AppButton @click="store.resetFilters()">Reset filters</AppButton>
     </div>
     <div v-else class="msg__scroll">
-      <!-- No evidence to draw, said above a grid that still holds the New
-           workflow set tile: making a set by hand is exactly what an owner
-           with no recorded pictures can still do (#1520). -->
+      <!-- No evidence to draw, said above the (empty) grid. The toolbar's New
+           set button still works: making a set by hand is exactly what an
+           owner with no recorded pictures can still do (#1520, #1575). -->
       <div
         v-if="nothingShown && !hasHandMade"
         class="msg__state msg__state--inline"
@@ -40,7 +40,7 @@
           A set is read off a recipe, and a recipe arrives with a picture that
           carries its workflow. Until one does, there is nothing here to group —
           which says nothing about the models on the shelf. You can still make a
-          set by hand.
+          set by hand with <strong>New set</strong> in the toolbar, or N.
         </p>
       </div>
       <div
@@ -109,31 +109,6 @@
             @select="onMemberClick"
             @menu="onMemberMenu"
           />
-
-          <!-- The way in to a hand-made set, first because the grid leads with
-               the newest sets. A row like any card, so the arrows reach it and
-               Enter presses it; N does the same from anywhere in the grid. -->
-          <div
-            v-else-if="entry.kind === 'new'"
-            class="msg__newrow"
-            role="row"
-            aria-level="1"
-            aria-label="New workflow set"
-            aria-keyshortcuts="N"
-            :tabindex="index === cursorIndex ? 0 : -1"
-            data-key="new"
-            @click="onNewClick(entry)"
-          >
-            <div class="msg__cell" role="gridcell">
-              <div class="msg__new" data-testid="new-workflow-set">
-                <v-icon size="24" aria-hidden="true">mdi-plus</v-icon>
-                <span class="msg__new-label" aria-hidden="true"
-                  >New workflow set</span
-                >
-                <kbd class="msg__kbd" aria-hidden="true">N</kbd>
-              </div>
-            </div>
-          </div>
 
           <div
             v-else-if="entry.kind === 'card'"
@@ -465,7 +440,7 @@ const flatRows = computed(() => {
     headId: group.head?.id ?? null,
     cardIndex: hand.length + cardIndex,
   }));
-  const cards = [{ kind: "new", id: "new", key: "new" }, ...hand, ...evidence];
+  const cards = [...hand, ...evidence];
   const openKey = store.openSetKey;
   if (!openKey) return cards;
   const at = cards.findIndex((entry) => entry.key === openKey);
@@ -551,10 +526,7 @@ const openColumnIndex = computed(() => {
 const cursorIndex = computed(() => {
   const at = flatRows.value.findIndex((entry) => entry.id === cursorId.value);
   if (at >= 0) return at;
-  // The first CARD, not the New tile ahead of it: the grid is opened to read
-  // sets, and the tile is one arrow (or N) away.
-  const card = flatRows.value.findIndex((entry) => entry.kind === "card");
-  return card >= 0 ? card : (firstStop(0, 1) ?? 0);
+  return firstStop(0, 1) ?? 0;
 });
 
 /** The cursor's key when it is inside the panel, else "". */
@@ -622,7 +594,7 @@ watch(
         ? (openHand.value.set.members ?? []).length
         : openMembers.value.length;
       announcement.value = `${openName.value} opened, ${count} models`;
-      // A set opened from outside the grid - just made, from the tile or from
+      // A set opened from outside the grid - just made, from the toolbar or from
       // a checkpoint's menu - takes the cursor, and the view scrolls to it.
       const at = flatRows.value.findIndex(
         (entry) => entry.kind === "card" && entry.key === key,
@@ -829,11 +801,6 @@ function selectSetEntry(entry, event = {}) {
 function openSetMenu(entry, x, y) {
   if (!store.selectedSetIds.has(entry.setId)) selectSetEntry(entry);
   emit("set-menu", { x, y, el: rowElement(entry) });
-}
-
-function onNewClick(entry) {
-  cursorId.value = entry.id;
-  createSet();
 }
 
 /** Make an empty set and open it. Its tray says what to add first. */
@@ -1273,7 +1240,7 @@ function onMemberMenu({ member, event }) {
 
 /** Is this flat entry somewhere the cursor can rest? Holes are not. */
 function isStop(entry) {
-  return ["card", "member", "slot", "new"].includes(entry?.kind);
+  return ["card", "member", "slot"].includes(entry?.kind);
 }
 
 /**
@@ -1398,7 +1365,6 @@ function verticalStop(index, cols, direction) {
  */
 function rowElement(entry) {
   if (!entry) return undefined;
-  if (entry.kind === "new") return gridEl.value?.querySelector(".msg__newrow");
   const selector =
     entry.kind === "member" || entry.kind === "slot"
       ? ".msp__member"
@@ -1486,7 +1452,7 @@ function headerStep(event) {
 }
 
 /**
- * The keys a hand-made set, its tray and the New tile answer differently.
+ * The keys a hand-made set and its tray answer differently.
  *
  * @returns {boolean} true when the press was handled here.
  */
@@ -1499,11 +1465,6 @@ function onHandKey(event, entry) {
     !event.repeat &&
     (event.key === "n" || event.key === "N")
   ) {
-    event.preventDefault();
-    createSet();
-    return true;
-  }
-  if (entry?.kind === "new" && (event.key === "Enter" || event.key === " ")) {
     event.preventDefault();
     createSet();
     return true;
@@ -1697,39 +1658,6 @@ function onKeyDown(event) {
 
 .msg__state--inline {
   padding: 0 0 var(--space-4);
-}
-
-/* The New workflow set tile: a dashed card-sized target, the design's ＋. */
-.msg__new {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  box-sizing: border-box;
-  aspect-ratio: 6 / 5;
-  border: 1px dashed rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-  cursor: pointer;
-}
-
-.msg__new:hover {
-  background: var(--hover-wash);
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.msg__new-label {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-}
-
-.msg__kbd {
-  padding: 0 var(--space-2);
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-sm);
-  font-family: inherit;
-  font-size: var(--text-2xs);
 }
 
 .msg__state {

@@ -312,6 +312,20 @@
             <ShelfSortPanel section="group" />
           </v-menu>
 
+          <!-- New workflow set, on the grid only: the row list has no sets to
+               make. Here in the right cluster rather than beside Add, because
+               it writes on the press and the left group's rule is that nothing
+               there does. It takes the slot Sort leaves empty on the grid. N
+               inside the grid does the same (#1575). -->
+          <AppBarButton
+            v-if="isSetGrid"
+            icon="layers-plus"
+            tooltip="New workflow set (N)"
+            data-testid="new-workflow-set"
+            @click="store.createHandMadeSet({})"
+            >New set</AppBarButton
+          >
+
           <!-- Hidden on the set grid, not disabled, exactly as the whole
                cluster is hidden on the training-runs tab and for the same
                reason: the five sort keys order the ROW LIST, and that list is

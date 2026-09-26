@@ -970,6 +970,23 @@ describe("refetching after an edit", () => {
     expect(wrapper.find(".set-grid-stub").element).toBe(grid);
   });
 
+  it("offers New set in the toolbar on the set grid only (#1575)", async () => {
+    const wrapper = await mountShelf([adapter()]);
+    const store = useModelShelfStore();
+    const create = vi.spyOn(store, "createHandMadeSet").mockResolvedValue(null);
+    const button = () => wrapper.find('[data-testid="new-workflow-set"]');
+    expect(button().exists()).toBe(false);
+
+    store.setView({ groupBy: "workflow_set" });
+    await wrapper.vm.$nextTick();
+    await button().trigger("click");
+    expect(create).toHaveBeenCalledWith({});
+
+    store.setView({ groupBy: "none" });
+    await wrapper.vm.$nextTick();
+    expect(button().exists()).toBe(false);
+  });
+
   it("says it is reading, not 'no models', while Reset refetches an empty view", async () => {
     const wrapper = await mountShelf([]);
     await useModelShelfStore().setFilters(
