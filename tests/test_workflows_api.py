@@ -8373,8 +8373,20 @@ def test_a_lora_trained_on_another_family_is_flagged_never_dropped(cloneable):
             "kind": "lora",
             "base_model": "SDXL 1.0",
             "family": "sdxl",
+            "modality": "image",
         }
     ]
+    assert body["checkpoint_modality"] == "image"
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'Wan 2.2' WHERE sha256 = ?",
+            (RUN_ADAPTER_DIGEST,),
+        )
+    video = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"checkpoint_id": cloneable.checkpoint_id},
+    ).json()
+    assert [(f["family"], f["modality"]) for f in video["flags"]] == [("wan", "video")]
     with hub.transaction() as conn:
         conn.execute(
             "UPDATE model SET base_model = 'FLUX.1 schnell' WHERE sha256 = ?",

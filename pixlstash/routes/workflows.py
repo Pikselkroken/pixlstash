@@ -193,7 +193,7 @@ from pixlstash.utils.adapter_header import (
     FILE_VAE,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
-from pixlstash.utils.known_base_models import family_of
+from pixlstash.utils.known_base_models import family_of, modality_of
 
 logger = get_logger(__name__)
 
@@ -1384,6 +1384,7 @@ class SwapFlag(BaseModel):
     kind: str
     base_model: str
     family: str
+    modality: str | None = None
 
 
 class ModelSwapOptions(BaseModel):
@@ -1394,6 +1395,7 @@ class ModelSwapOptions(BaseModel):
     vaes: list[SwapModel]
     text_encoders: list[SwapModel]
     checkpoint_family: str | None = None
+    checkpoint_modality: str | None = None
     proposals: dict[str, list[SwapProposal]] = Field(
         default_factory=dict,
         description="Per support kind (vae, text_encoder); empty without a checkpoint.",
@@ -4548,21 +4550,27 @@ def create_router(server) -> APIRouter:
         if chosen is None or chosen.file_kind != FILE_CHECKPOINT:
             raise HTTPException(status_code=404, detail="Unknown checkpoint.")
         options.checkpoint_family = family_of(chosen.base_model)
+        options.checkpoint_modality = modality_of(chosen.base_model)
         options.proposals = {
             kind: [SwapProposal(**entry) for entry in entries]
             for kind, entries in propose_companions(hub, checkpoint_id, index).items()
         }
-        # Only where both sides fold to a known family and differ: an unknown
-        # family is never a flag, and a VAE or text encoder carries no base
-        # model to compare (evidence answers for those, not a table).
+        # Only where both sides fold to a known family and differ in family
+        # or modality: an unknown family is never a flag, and a VAE or text
+        # encoder carries no base model to compare (evidence answers for
+        # those, not a table).
         for slot in options.slots:
             if slot.kind not in ("lora", "controlnet") or slot.model is None:
                 continue
             family = family_of(slot.model.base_model)
+            modality = modality_of(slot.model.base_model)
             if (
                 family
                 and options.checkpoint_family
-                and family != options.checkpoint_family
+                and (
+                    family != options.checkpoint_family
+                    or modality != options.checkpoint_modality
+                )
             ):
                 options.flags.append(
                     SwapFlag(
@@ -4570,6 +4578,7 @@ def create_router(server) -> APIRouter:
                         kind=slot.kind,
                         base_model=slot.model.base_model,
                         family=family,
+                        modality=modality,
                     )
                 )
         return options

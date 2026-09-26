@@ -72,6 +72,7 @@ from pixlstash.utils.known_base_models import (
     SOURCE_USER,
     family_of,
     fold,
+    modality_of,
     rank,
 )
 from pixlstash.utils.sql_chunking import chunked
@@ -947,7 +948,9 @@ def propose_companions(
        label (:func:`known_base_model`: the identified label unless it is a
        fuzzy guess), when this checkpoint has one;
     3. ``family`` - recipes naming any base model of the same architecture
-       family (:func:`family_of`), when the label folds to one.
+       family (:func:`family_of`), when the label folds to one, and never
+       across modalities (:func:`modality_of`): a video base does not answer
+       for an image checkpoint, nor the reverse.
 
     A checkpoint no recipe names and whose family nothing on the shelf has run
     with proposes nothing, and the caller is expected to say so. A support file a
@@ -1000,6 +1003,7 @@ def propose_companions(
         )
     family = family_of(label)
     if family:
+        modality = modality_of(label)
         ladder.append(
             (
                 VIA_FAMILY,
@@ -1007,6 +1011,7 @@ def propose_companions(
                     model_id
                     for model_id, row in consumers.items()
                     if family_of(known_base_model(row)) == family
+                    and modality_of(known_base_model(row)) == modality
                 },
             )
         )

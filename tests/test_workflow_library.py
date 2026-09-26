@@ -107,6 +107,7 @@ from pixlstash.tasks.missing_comfyui_extraction_finder import (
     MissingComfyUIExtractionFinder,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.known_base_models import KNOWN_BASE_MODELS
 
 LIBRARY = "11111111-2222-4333-8444-555555555555"
 OTHER_LIBRARY = "99999999-8888-4777-8666-555555555555"
@@ -2397,6 +2398,20 @@ def test_a_base_model_nothing_ran_with_widens_to_its_family(companions_shelf):
     result = propose_companions(companions_shelf.hub, ids["lonely"])
 
     assert proposed(result, "vae") == [(ids["vae_a"], "family")]
+
+
+def test_the_family_step_never_crosses_from_image_to_video(
+    companions_shelf, monkeypatch
+):
+    """No family spans two modalities today, so one is made to for the test."""
+    ids = companions_shelf.ids
+    set_base_model(companions_shelf.hub, ids["ckpt_a"], "FLUX.1 dev")
+    set_base_model(companions_shelf.hub, ids["lonely"], "FLUX.1 schnell")
+    monkeypatch.setitem(KNOWN_BASE_MODELS["FLUX.1 dev"], "modality", "video")
+
+    result = propose_companions(companions_shelf.hub, ids["lonely"])
+
+    assert result == {"vae": [], "text_encoder": []}
 
 
 def test_a_checkpoint_nothing_in_its_family_ran_with_proposes_nothing(

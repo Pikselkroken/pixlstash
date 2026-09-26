@@ -67,10 +67,7 @@
       </p>
       <p v-for="flag in flags" :key="flag.filename" class="cwm-note cwm-warn">
         <v-icon size="14">mdi-alert-circle-outline</v-icon>
-        <span
-          >“{{ flag.filename }}” was trained on {{ flag.base_model }}; this
-          checkpoint is {{ chosenCheckpoint?.base_model }}.</span
-        >
+        <span>{{ flagSentence(flag) }}</span>
       </p>
     </template>
 
@@ -107,7 +104,8 @@
  *
  * LoRAs are never dropped. One trained on another family than the new
  * checkpoint is named, and stays; removing it would change what the workflow
- * makes without anybody having asked.
+ * makes without anybody having asked. Where one side is a video model and the
+ * other an image model, the note says that too.
  *
  * Swapped by filename (`swaps` is graph filename -> new filename), so every
  * loader naming the file changes together, wherever it sits in the graph.
@@ -144,6 +142,7 @@ const loadError = ref("");
 const checkpointId = ref("");
 const rows = ref([]);
 const flags = ref([]);
+const checkpointModality = ref(null);
 const name = ref("");
 const nameTouched = ref(false);
 const cloning = ref(false);
@@ -261,6 +260,20 @@ function provenance(row) {
     return "Nothing of this encoder type has run with this checkpoint or its family: keeps the workflow's file";
   }
   return "Nothing on your shelf has run with this checkpoint or its family: keeps the workflow's file";
+}
+
+const MODALITY_NOUN = { image: "an image model", video: "a video model" };
+
+/** A flag's note; names image vs video only where the two sides differ. */
+function flagSentence(flag) {
+  const lora = flag.base_model;
+  const checkpoint = chosenCheckpoint.value?.base_model;
+  const mine = MODALITY_NOUN[flag.modality];
+  const theirs = MODALITY_NOUN[checkpointModality.value];
+  if (mine && theirs && mine !== theirs) {
+    return `“${flag.filename}” was trained on ${lora}, ${mine}; this checkpoint is ${checkpoint}, ${theirs}.`;
+  }
+  return `“${flag.filename}” was trained on ${lora}; this checkpoint is ${checkpoint}.`;
 }
 
 /** Base loaders after the first (a refiner, Wan 2.2's second expert). */
@@ -417,6 +430,7 @@ watch(checkpointId, async () => {
   if (seq !== readSeq) return;
   proposing.value = false;
   flags.value = body.flags || [];
+  checkpointModality.value = body.checkpoint_modality ?? null;
   const taken = new Set();
   const byKind = {};
   // From the workflow's own files every time: a row filled for the previous
