@@ -45,7 +45,7 @@
           class="wsc__list"
           role="listbox"
           :aria-label="title"
-          :aria-multiselectable="single ? 'false' : 'true'"
+          :aria-multiselectable="pick ? 'false' : 'true'"
           :tabindex="filterable ? -1 : 0"
           :aria-activedescendant="filterable ? undefined : activeId"
           @keydown="onKeydown"
@@ -68,17 +68,15 @@
               class="wsc__item"
               :class="{ 'wsc__item--active': item.id === activeKey }"
               role="option"
-              :aria-selected="String(checked.has(item.id))"
-              @click="toggle(item.id)"
+              :aria-selected="pick ? undefined : String(checked.has(item.id))"
+              @click="choose(item.id)"
               @mouseenter="activeKey = item.id"
             >
               <v-icon class="wsc__box" aria-hidden="true">{{
-                checked.has(item.id)
-                  ? single
-                    ? "mdi-radiobox-marked"
-                    : "mdi-checkbox-marked-outline"
-                  : single
-                    ? "mdi-radiobox-blank"
+                pick
+                  ? "mdi-plus"
+                  : checked.has(item.id)
+                    ? "mdi-checkbox-marked-outline"
                     : "mdi-checkbox-blank-outline"
               }}</v-icon>
               <span class="wsc__name">{{ item.name }}</span>
@@ -100,12 +98,17 @@
         </div>
       </div>
       <div class="tbm-footer wsc__footer">
-        <span class="wsc__hint">Adds only · nothing already in the set</span>
+        <span class="wsc__hint">{{
+          pick
+            ? "Click a model to add it"
+            : "Adds only · nothing already in the set"
+        }}</span>
         <span class="tbm-spacer"></span>
-        <AppButton variant="ghost" size="sm" @click="emit('close')"
-          >Cancel</AppButton
-        >
+        <AppButton variant="ghost" size="sm" @click="emit('close')">{{
+          pick ? "Done" : "Cancel"
+        }}</AppButton>
         <AppButton
+          v-if="!pick"
           variant="primary"
           size="sm"
           :disabled="!checked.size"
@@ -121,15 +124,17 @@
 /**
  * The one chooser a hand-made workflow set is filled through (#1520).
  *
- * Three callers, one shape: a slot's ＋ tile (ranked sections, type to filter),
- * **Fill from pictures** and **Fill from a set** (flat checklists). All three
- * only ADD - nothing here takes a model out of a set - which is why the footer
- * says so rather than leaving a reader to wonder whether unticking removes.
+ * Three callers, two modes. A slot's ＋ tile is `pick`: ranked sections, type to
+ * filter, and ONE click (or Enter, or Space) adds the model under it - no tick
+ * and no Add button, because choosing a LoRA is one decision, not two. The
+ * caller decides whether the popup stays open for the next one. **Fill from
+ * pictures** and **Fill from a set** are checklists that arrive pre-ticked, so
+ * their one click is Add. All of it only ADDS - nothing here takes a model out
+ * of a set - which is why the footer says so.
  *
- * Keyboard: the arrows walk the options across sections, Space ticks, Enter adds
- * what is ticked (or, with nothing ticked, the one under the cursor), Escape
- * closes. The Checkpoint slot is `single`: one tick replaces the last, because a
- * set holds exactly one checkpoint.
+ * Keyboard: the arrows walk the options across sections, Enter adds the one
+ * under the cursor (in a checklist, what is ticked, else that one), Space ticks
+ * in a checklist, Escape closes.
  */
 import { computed, nextTick, ref, useId, watch } from "vue";
 import { VIcon } from "vuetify/components";
@@ -151,7 +156,8 @@ const props = defineProps({
   filterable: { type: Boolean, default: false },
   query: { type: String, default: "" },
   placeholder: { type: String, default: "Filter…" },
-  single: { type: Boolean, default: false },
+  /** One click adds the model under it; no ticks, no Add button. */
+  pick: { type: Boolean, default: false },
   emptyText: { type: String, default: "Nothing to add." },
 });
 
@@ -227,8 +233,18 @@ watch(items, (list) => {
   }
 });
 
+/** A click on an option: add it outright in `pick` mode, else tick it. */
+function choose(id) {
+  if (props.pick) {
+    activeKey.value = id;
+    emit("add", [id]);
+    return;
+  }
+  toggle(id);
+}
+
 function toggle(id) {
-  const next = props.single ? new Set() : new Set(checked.value);
+  const next = new Set(checked.value);
   if (checked.value.has(id)) next.delete(id);
   else next.add(id);
   checked.value = next;
@@ -249,7 +265,7 @@ function move(step) {
 }
 
 function submit() {
-  let ids = [...checked.value];
+  let ids = props.pick ? [] : [...checked.value];
   if (!ids.length && activeKey.value != null) ids = [activeKey.value];
   if (ids.length) emit("add", ids);
 }
@@ -263,7 +279,7 @@ function onKeydown(event) {
     move(-1);
   } else if (event.key === " " && event.target === listRef.value) {
     event.preventDefault();
-    if (activeKey.value != null) toggle(activeKey.value);
+    if (activeKey.value != null) choose(activeKey.value);
   } else if (event.key === "Enter") {
     event.preventDefault();
     submit();

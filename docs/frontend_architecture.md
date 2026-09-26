@@ -1724,12 +1724,24 @@ the shelf's workflow sets section) and served as `hand_made` on
   next row), Enter on ＋ opens the chooser, Backspace removes a member, Delete
   stays the file delete. Down from a card into a List tray or a slots tray lands
   on its first row (`intoTray`).
-- **One chooser for three jobs.** `WorkflowSetChooser` is a popup checklist that
-  only adds: a slot's ＋ (ranked by `slotSuggestions` — your sets with the same
-  base model, then recipes with this checkpoint, then the same base model, then
-  all; unranked until a checkpoint is chosen), **Fill from pictures**
-  (`fillFromPictures`) and **Fill from a set** (`fillFromSets`). Focus goes back
-  to the tile on close, since v-menu cannot restore it for a programmatic open.
+- **One chooser for three jobs, in two modes.** `WorkflowSetChooser` only adds.
+  A slot's ＋ opens it in `pick` mode: ranked by `slotSuggestions` (your sets
+  with the same base model, then recipes with this checkpoint, then the same
+  base model, then all; unranked until a checkpoint is chosen), and ONE click
+  or Enter adds the model — no tick, no Add button. The Checkpoint popup closes
+  on its pick and the cursor lands on the new checkpoint; any other slot's stays
+  open, the added model drops out of the list, and a second click on a row still
+  being added is ignored. **Fill from pictures** (`fillFromPictures`) and **Fill
+  from a set** (`fillFromSets`) are pre-ticked checklists with one Add. Focus
+  goes back to the tile on close, since v-menu cannot restore it for a
+  programmatic open.
+- **The base-model offer, once.** Suggestions follow the checkpoint's base
+  model, so when a checkpoint with none goes in (the popup, Fill, or New
+  workflow set with this checkpoint), the store records it in `checkpointAdded`
+  and the tray shows one line with a `BaseModelInput` pre-filled from the
+  shelf's fuzzy guess, **Set** and **Not now**. Set is the shelf's own
+  `editModelIds` write followed by a sets refetch; Not now, or leaving the tray,
+  drops the offer for good and leaves Set base model on the shelf menu.
 - **Every set write is `setWrite` in the store:** the call, a full refetch
   (coverage moves with membership), and a receipt whose Undo is the inverse call
   — a delete is undone by recreating the set from the snapshot the route returns,

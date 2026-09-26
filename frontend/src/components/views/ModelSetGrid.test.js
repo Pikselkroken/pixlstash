@@ -65,6 +65,7 @@ vi.mock("../../api/modelIcons", () => ({
 }));
 
 import ModelSetGrid from "./ModelSetGrid.vue";
+import WorkflowSetChooser from "../panels/WorkflowSetChooser.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 
@@ -1249,6 +1250,176 @@ describe("hand-made sets (#1520)", () => {
     store.setView({ groupBy: "none" });
     await wrapper.vm.$nextTick();
     expect([...store.selectedSetIds]).toEqual([]);
+  });
+
+  it("adds a model to a slot with ONE click, and stays open for the next", async () => {
+    addWorkflowSetMembers.mockReset().mockImplementation((id, members) =>
+      Promise.resolve({
+        set: handSet(10, [SET_CKPT]),
+        added: members.map(String),
+      }),
+    );
+    const { wrapper, store } = await mountGrid({
+      rows: [
+        row(1, "realvisXL_v5", "checkpoint"),
+        row(3, "filmgrain_xl"),
+        row(5, "Soft_Light"),
+      ],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+
+    const loraTile = wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…");
+    await loraTile.trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    // No tick box and no Add button: the click on the row IS the add.
+    expect(chooser.text()).not.toMatch(/\bAdd \d/);
+    expect(chooser.findAll("button").map((b) => b.text())).not.toContain("Add");
+
+    const option = (name) =>
+      chooser.findAll('[role="option"]').find((o) => o.text().includes(name));
+    await option("filmgrain_xl").trigger("click");
+    await option("Soft_Light").trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // Still open for the next pick.
+    expect(wrapper.findComponent(WorkflowSetChooser).props("open")).toBe(true);
+    expect(addWorkflowSetMembers.mock.calls).toEqual([
+      [10, [{ model_id: 3, slot: "lora" }]],
+      [10, [{ model_id: 5, slot: "lora" }]],
+    ]);
+  });
+
+  it("closes the Checkpoint popup on its one pick and lands on the new checkpoint", async () => {
+    const CKPT_ROW = row(1, "realvisXL_v5", "checkpoint");
+    addWorkflowSetMembers.mockReset().mockResolvedValue({
+      set: handSet(10, [SET_CKPT]),
+      added: [SET_CKPT.sha256],
+    });
+    const { wrapper, store } = await mountGrid({
+      rows: [CKPT_ROW],
+      handMade: [handSet(10, [])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    // The refetch after the add serves the set with its checkpoint.
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [],
+      no_set: [],
+      hand_made: [handSet(10, [SET_CKPT])],
+    });
+
+    await wrapper.find(".mss__tile--add").trigger("click");
+    await wrapper
+      .find('[data-testid="workflow-set-chooser"] [role="option"]')
+      .trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    expect(addWorkflowSetMembers).toHaveBeenCalledWith(10, [
+      { model_id: 1, slot: "checkpoint" },
+    ]);
+    expect(wrapper.findComponent(WorkflowSetChooser).props("open")).toBe(false);
+    const tile = wrapper.find(`[data-key="m:${SET_CKPT.sha256}"]`);
+    expect(tile.attributes("tabindex")).toBe("0");
+  });
+
+  it("offers once to set the base model of a checkpoint that has none", async () => {
+    const bare = slotMember(1, "realvisXL_v5", "checkpoint", {
+      base_model: null,
+    });
+    const ckptRow = {
+      ...row(1, "realvisXL_v5", "checkpoint"),
+      base_model_canonical: "SDXL",
+      base_model_source: "filename_fuzzy",
+    };
+    addWorkflowSetMembers.mockReset().mockResolvedValue({
+      set: handSet(10, [bare]),
+      added: [bare.sha256],
+    });
+    const { wrapper, store } = await mountGrid({
+      rows: [ckptRow],
+      handMade: [handSet(10, [])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [],
+      no_set: [],
+      hand_made: [handSet(10, [bare])],
+    });
+    const { editModels } = await import("../../api/modelShelf");
+    editModels.mockResolvedValue({ updated: [1] });
+
+    await wrapper.find(".mss__tile--add").trigger("click");
+    await wrapper
+      .find('[data-testid="workflow-set-chooser"] [role="option"]')
+      .trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await wrapper.vm.$nextTick();
+
+    const offer = wrapper.find('[data-testid="base-model-offer"]');
+    expect(offer.text()).toContain("realvisXL_v5 has no base model");
+    // Pre-filled from the shelf's own guess, never stored until confirmed.
+    const set = offer.findAll("button").find((b) => b.text() === "Set SDXL");
+    expect(set).toBeTruthy();
+    await set.trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(editModels).toHaveBeenCalledWith([1], { base_model: "SDXL" });
+    expect(wrapper.find('[data-testid="base-model-offer"]').exists()).toBe(
+      false,
+    );
+  });
+
+  it("does not offer again once dismissed, nor for a checkpoint that has a base model", async () => {
+    const bare = slotMember(1, "realvisXL_v5", "checkpoint", {
+      base_model: null,
+    });
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [bare])],
+    });
+    store.toggleSet("hand:10");
+    store.checkpointAdded = { setId: 10, modelId: 1 };
+    await wrapper.vm.$nextTick();
+    const offer = wrapper.find('[data-testid="base-model-offer"]');
+    await offer
+      .findAll("button")
+      .find((b) => b.text() === "Not now")
+      .trigger("click");
+    expect(wrapper.find('[data-testid="base-model-offer"]').exists()).toBe(
+      false,
+    );
+
+    // An offer left unanswered goes when its tray closes, and does not come
+    // back when the tray reopens.
+    store.checkpointAdded = { setId: 10, modelId: 1 };
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="base-model-offer"]').exists()).toBe(
+      true,
+    );
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="base-model-offer"]').exists()).toBe(
+      false,
+    );
+
+    // A checkpoint that already has one is never asked about.
+    store.checkpointAdded = { setId: 10, modelId: 1 };
+    store.workflowSets = {
+      ...store.workflowSets,
+      handMade: [handSet(10, [SET_CKPT])],
+    };
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-testid="base-model-offer"]').exists()).toBe(
+      false,
+    );
   });
 
   it("marks a member whose file left the shelf, and does not let it be selected", async () => {

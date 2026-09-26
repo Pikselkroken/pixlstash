@@ -1768,6 +1768,25 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   /** Selected hand-made set ids. */
   const selectedSetIds = ref(new Set());
+
+  /**
+   * A checkpoint just put into a set, `{setId, modelId}`, or null.
+   *
+   * The design offers to set a checkpoint's base model ONCE, at the moment it
+   * goes in, because the slot suggestions follow it. Recorded here, by every
+   * write that can put one in (the slot popup, New workflow set with this
+   * checkpoint), so the tray can ask whichever gesture it came from.
+   */
+  const checkpointAdded = ref(null);
+
+  function noteCheckpoint(setId, members) {
+    const checkpoint = members.find(
+      (m) => m.slot === "checkpoint" && m.model_id != null,
+    );
+    if (checkpoint) {
+      checkpointAdded.value = { setId, modelId: checkpoint.model_id };
+    }
+  }
   let setAnchor = null;
 
   const selectedSets = computed(() =>
@@ -1890,6 +1909,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (created) {
       clearSelection();
       openSetKey.value = `hand:${created.id}`;
+      noteCheckpoint(created.id, body.members ?? []);
     }
     return created;
   }
@@ -1954,19 +1974,24 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * @param {Object} set
    * @param {Array<{model_id: number, slot?: string}>} members
    */
-  function addToHandMadeSet(set, members) {
-    if (!members.length) return Promise.resolve(null);
-    return setWrite(() => addWorkflowSetMembers(set.id, members), {
-      receipt: ({ added }) =>
-        added.length
-          ? `Added ${added.length} ${added.length === 1 ? "model" : "models"} to "${handMadeName(set)}".`
-          : `Nothing added: "${handMadeName(set)}" already holds ${
-              members.length === 1 ? "it" : "them"
-            }.`,
-      undo: ({ added }) =>
-        added.length ? removeWorkflowSetMembers(set.id, added) : null,
-      failure: "Those models could not be added to the set.",
-    });
+  async function addToHandMadeSet(set, members) {
+    if (!members.length) return null;
+    const result = await setWrite(
+      () => addWorkflowSetMembers(set.id, members),
+      {
+        receipt: ({ added }) =>
+          added.length
+            ? `Added ${added.length} ${added.length === 1 ? "model" : "models"} to "${handMadeName(set)}".`
+            : `Nothing added: "${handMadeName(set)}" already holds ${
+                members.length === 1 ? "it" : "them"
+              }.`,
+        undo: ({ added }) =>
+          added.length ? removeWorkflowSetMembers(set.id, added) : null,
+        failure: "Those models could not be added to the set.",
+      },
+    );
+    if (result?.added?.length) noteCheckpoint(set.id, members);
+    return result;
   }
 
   /** Take members off a set, by hash. The files stay on the shelf. */
@@ -2842,6 +2867,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setsError.value = "";
     openSetKey.value = "";
     selectedSetIds.value = new Set();
+    checkpointAdded.value = null;
   }
 
   const unsubscribeSessionReset = onSessionReset(resetForSession);
@@ -2928,6 +2954,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     addToHandMadeSet,
     removeFromHandMadeSet,
     handMadeSetsHolding,
+    checkpointAdded,
     worksWithModel,
     offlineMounts,
     renderedCount,

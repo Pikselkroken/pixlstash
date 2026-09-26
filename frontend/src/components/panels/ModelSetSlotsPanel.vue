@@ -78,6 +78,41 @@
       </div>
     </div>
 
+    <!-- Offered once, when a checkpoint with no base model goes in: the
+         suggestions in this set follow it. "Not now" leaves Set base model on
+         the shelf menu. -->
+    <div
+      v-if="baseOffer"
+      class="msp__note mss__base"
+      role="row"
+      aria-level="2"
+      data-testid="base-model-offer"
+    >
+      <div role="gridcell">
+        <v-icon size="16">mdi-cube-outline</v-icon>
+        <span class="mss__basetext"
+          ><strong>{{ baseOffer.name }}</strong> has no base model. Suggestions
+          in this set follow it.</span
+        >
+        <BaseModelInput
+          v-model="baseValue"
+          class="mss__baseinput"
+          @confirm="submitBase"
+          @cancel="emit('dismiss-base')"
+        />
+        <AppButton
+          variant="primary"
+          size="sm"
+          :disabled="!baseValue.trim()"
+          @click="submitBase"
+          >{{ baseValue.trim() ? `Set ${baseValue.trim()}` : "Set" }}</AppButton
+        >
+        <AppButton variant="ghost" size="sm" @click="emit('dismiss-base')"
+          >Not now</AppButton
+        >
+      </div>
+    </div>
+
     <div class="mss__slots" role="presentation">
       <div
         v-for="{ slot, items } in slots"
@@ -195,11 +230,12 @@
  * The rows are cursor stops of the grid's roving index; this component only
  * draws them and reports gestures, exactly as `ModelSetPanel` does.
  */
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
 import { pictureCount, setSlots } from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
+import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ModelMark from "../widgets/ModelMark.vue";
 
 const props = defineProps({
@@ -217,6 +253,8 @@ const props = defineProps({
   icons: { type: Object, default: () => new Map() },
   canFillFromSet: { type: Boolean, default: false },
   canFillFromPictures: { type: Boolean, default: false },
+  /** `{name, guess}` while the one-time base-model offer is up, else null. */
+  baseOffer: { type: Object, default: null },
 });
 
 const emit = defineEmits([
@@ -230,6 +268,21 @@ const emit = defineEmits([
 ]);
 
 const slots = computed(() => setSlots(props.set));
+
+/** The offer's field, starting from the shelf's own guess when it has one. */
+const baseValue = ref("");
+watch(
+  () => props.baseOffer,
+  (offer) => {
+    baseValue.value = offer?.guess ?? "";
+  },
+  { immediate: true },
+);
+
+function submitBase() {
+  const value = baseValue.value.trim();
+  if (value) emit("set-base", value);
+}
 
 const incomplete = computed(
   () => !(props.set.members ?? []).some((m) => m.slot === "checkpoint"),
@@ -359,6 +412,25 @@ const notchStyle = computed(() => {
 .mss__warn .v-icon {
   flex-shrink: 0;
   color: rgb(var(--v-theme-surface-warning));
+}
+
+.mss__base > [role="gridcell"] {
+  flex-wrap: wrap;
+  align-items: center;
+  background: rgba(var(--v-theme-surface-info), 0.14);
+}
+
+.mss__base .v-icon {
+  flex-shrink: 0;
+  color: rgb(var(--v-theme-surface-info));
+}
+
+.mss__basetext {
+  flex: 1 1 16rem;
+}
+
+.mss__baseinput {
+  flex: 0 1 12rem;
 }
 
 .msp__pill {

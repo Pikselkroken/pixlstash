@@ -73,6 +73,9 @@
             :icons="iconsById"
             :can-fill-from-set="fillSetItems.length > 0"
             :can-fill-from-pictures="fillPictureItems.length > 0"
+            :base-offer="baseOffer"
+            @set-base="setCheckpointBase"
+            @dismiss-base="store.checkpointAdded = null"
             @close="closePanel"
             @select="onSlotClick"
             @menu="onSlotMenu"
@@ -211,7 +214,7 @@
       :sections="chooserSections"
       :filterable="chooser?.mode === 'slot'"
       :query="chooserQuery"
-      :single="chooser?.slotId === 'checkpoint'"
+      :pick="chooser?.mode === 'slot'"
       :placeholder="chooserPlaceholder"
       :empty-text="chooserEmpty"
       @update:query="(value) => (chooserQuery = value)"
@@ -926,6 +929,49 @@ function openChooser(mode, el, slotId = "") {
   };
 }
 
+/**
+ * The one-time "has no base model" offer for the open set, or null.
+ *
+ * Up while the checkpoint the store just recorded going into THIS set is still
+ * its checkpoint and still has no base model. The guess is the shelf's own
+ * fuzzy identification, which the shelf shows as a guess and never stores as
+ * the base model - here it only pre-fills the field.
+ */
+const baseOffer = computed(() => {
+  const added = store.checkpointAdded;
+  const set = openHand.value?.set;
+  if (!added || !set || added.setId !== set.id) return null;
+  const checkpoint = setCheckpoint(set);
+  if (!checkpoint || checkpoint.id !== added.modelId || checkpoint.base_model) {
+    return null;
+  }
+  const row = store.rows.find((candidate) => candidate.id === checkpoint.id);
+  const fuzzy = String(row?.base_model_source ?? "").endsWith("_fuzzy");
+  return {
+    name: checkpoint.name,
+    guess: fuzzy ? (row?.base_model_canonical ?? "") : "",
+  };
+});
+
+// Once means once: leaving the set's tray takes the offer away for good.
+watch(
+  () => store.openSetKey,
+  (key) => {
+    const added = store.checkpointAdded;
+    if (added && key !== `hand:${added.setId}`) store.checkpointAdded = null;
+  },
+);
+
+/** Set base model, from the offer: the shelf's own write, then the sets again. */
+async function setCheckpointBase(value) {
+  const modelId = store.checkpointAdded?.modelId;
+  store.checkpointAdded = null;
+  if (modelId == null) return;
+  if (await store.editModelIds([modelId], { base_model: value })) {
+    await store.loadWorkflowSets({ force: true });
+  }
+}
+
 /** Exposed so the shelf can open a new set with Fill from pictures ready. */
 function openFill(mode) {
   const button = gridEl.value?.querySelector?.(
@@ -942,23 +988,55 @@ function closeChooser() {
   if (at >= 0) moveCursor(at);
 }
 
+/** Models a slot pick is still adding, so a quick second click is not a second add. */
+const picking = new Set();
+
 async function addChosen(ids) {
   const set = openHand.value?.set;
   const mode = chooser.value?.mode;
   if (!set || !mode) return;
-  let members;
   if (mode === "slot") {
-    members = ids.map((id) => ({ model_id: id, slot: chooser.value.slotId }));
-  } else {
-    const items =
-      mode === "pictures" ? fillPictureItems.value : fillSetItems.value;
-    const wanted = new Set(ids);
-    members = items
-      .filter((item) => wanted.has(item.id))
-      .map((item) => ({ model_id: item.id, slot: item.slot }));
+    await pickIntoSlot(set, chooser.value.slotId, ids);
+    return;
   }
+  const items =
+    mode === "pictures" ? fillPictureItems.value : fillSetItems.value;
+  const wanted = new Set(ids);
+  const members = items
+    .filter((item) => wanted.has(item.id))
+    .map((item) => ({ model_id: item.id, slot: item.slot }));
   closeChooser();
   await store.addToHandMadeSet(set, members);
+}
+
+/**
+ * One click in a slot's popup adds that model (#1520 feedback: a tick and an
+ * Add button was two decisions for one). The Checkpoint slot holds one, so its
+ * popup closes and the cursor lands on the checkpoint just added; any other
+ * slot stays open, the added model drops out of the list, and the next one is
+ * one more click.
+ */
+async function pickIntoSlot(set, slotId, ids) {
+  const fresh = ids.filter((id) => !picking.has(id));
+  if (!fresh.length) return;
+  fresh.forEach((id) => picking.add(id));
+  const single = slotId === "checkpoint";
+  if (single) closeChooser();
+  try {
+    await store.addToHandMadeSet(
+      set,
+      fresh.map((id) => ({ model_id: id, slot: slotId })),
+    );
+  } finally {
+    fresh.forEach((id) => picking.delete(id));
+  }
+  if (single) {
+    const sha = store.rows.find((row) => row.id === fresh[0])?.sha256;
+    const at = flatRows.value.findIndex(
+      (entry) => entry.id === `slot:m:${sha}`,
+    );
+    if (at >= 0) moveCursor(at);
+  }
 }
 
 defineExpose({ openFill });
