@@ -567,6 +567,71 @@ describe("selection and the verbs", () => {
     expect(card().classes()).toContain("msc--on");
   });
 
+  it("adds an unlit card with Ctrl or Space rather than toggling its model out", async () => {
+    const { wrapper, store } = await openTray();
+    const card = () => wrapper.find('[data-testid="model-set-card"]');
+    const members = () => wrapper.findAll(".msp__member");
+
+    await members()[0].trigger("click");
+    await wrapper.find(".msg__row").trigger("click", { ctrlKey: true });
+    expect([...store.selectedIds]).toEqual([1]);
+    expect(card().classes()).toContain("msc--on");
+
+    // Space is the keyboard's Ctrl+click and must answer the same way.
+    await members()[0].trigger("click");
+    const grid = wrapper.find('[role="treegrid"]');
+    await grid.trigger("keydown", { key: "ArrowUp" });
+    await grid.trigger("keydown", { key: " " });
+    expect([...store.selectedIds]).toEqual([1]);
+    expect(card().classes()).toContain("msc--on");
+  });
+
+  it("lights the card again once the tray showing the pick closes", async () => {
+    // Otherwise the bar is armed over a grid that marks nothing selected.
+    const { wrapper, store } = await openTray();
+    await wrapper.findAll(".msp__member")[0].trigger("click");
+    store.toggleSet("model:1");
+    await wrapper.vm.$nextTick();
+
+    expect([...store.selectedIds]).toEqual([1]);
+    expect(wrapper.find('[data-testid="model-set-card"]').classes()).toContain(
+      "msc--on",
+    );
+  });
+
+  it("lights the card a Shift range passes over, and not one it does not", async () => {
+    const { wrapper, store } = await openTray();
+    const card = () => wrapper.find('[data-testid="model-set-card"]');
+    const members = () => wrapper.findAll(".msp__member");
+
+    // Within the tray: the range never touches the card.
+    await members()[0].trigger("click");
+    await members()[1].trigger("click", { shiftKey: true });
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+    expect(card().classes()).not.toContain("msc--on");
+
+    // From the card down into the tray: the card is in the range.
+    await wrapper.find(".msg__row").trigger("click");
+    await members()[1].trigger("click", { shiftKey: true });
+    expect([...store.selectedIds].sort()).toEqual([1, 2]);
+    expect(card().classes()).toContain("msc--on");
+  });
+
+  it("forgets a tray pick that Ctrl took back out", async () => {
+    const { wrapper, store } = await openTray();
+    const member = () => wrapper.findAll(".msp__member")[0];
+
+    await member().trigger("click");
+    await member().trigger("click", { ctrlKey: true });
+    expect([...store.selectedIds]).toEqual([]);
+    await wrapper.find(".msg__row").trigger("click", { ctrlKey: true });
+
+    expect([...store.selectedIds]).toEqual([1]);
+    expect(wrapper.find('[data-testid="model-set-card"]').classes()).toContain(
+      "msc--on",
+    );
+  });
+
   it("does not light another set's card when its checkpoint is picked in this tray", async () => {
     const { wrapper, store } = await mountGrid({
       rows: [row(1, "realvisXL_v5"), row(4, "juggernautXL_v9")],

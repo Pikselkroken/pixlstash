@@ -474,7 +474,9 @@ function selectCursor(event) {
  * Selection is by model id, and a set's head is drawn twice while its tray is
  * open - as the card and as the tray's first row - so without this, picking the
  * checkpoint in the tray lit the card too, and read as having picked the whole
- * set. A card is drawn selected only when the pick came from a card.
+ * set. So while the open tray shows a model that was picked there, the card
+ * named after it stays unlit; close the tray and the card is the only mark left,
+ * so it lights again rather than leave a live selection drawn nowhere.
  *
  * Kept only for selections this grid made: a change from anywhere else (Select
  * all, the bar, the row list) clears it, and the cards follow the selection again.
@@ -489,9 +491,19 @@ watch(
   },
 );
 
-/** A card is drawn selected: its head is, and not by way of a tray row. */
+/** The models the open tray is drawing, each with its own selection mark. */
+const trayModelIds = computed(
+  () => new Set(openMembers.value.map((member) => member.id)),
+);
+
+/** Is this card's head selected by a tray row the reader can see? */
+function shownInTray(headId) {
+  return trayPicked.value.has(headId) && trayModelIds.value.has(headId);
+}
+
+/** A card is drawn selected: its head is, and not by way of a visible tray row. */
 function cardSelected(entry) {
-  return store.isSelected(entry.headId) && !trayPicked.value.has(entry.headId);
+  return store.isSelected(entry.headId) && !shownInTray(entry.headId);
 }
 
 /**
@@ -560,6 +572,16 @@ function selectEntry(entry, event) {
   if (!selectable(id)) return;
   const ctrl = Boolean(event?.ctrlKey || event?.metaKey);
   const shift = Boolean(event?.shiftKey);
+  // Ctrl or Space on a card drawn unlit adds it, as it looks: the model is
+  // already selected from the tray, so the toggle would REMOVE it instead.
+  if (ctrl && entry.kind === "card" && shownInTray(id) && store.isSelected(id)) {
+    const next = new Set(trayPicked.value);
+    next.delete(id);
+    trayPicked.value = next;
+    store.anchorOccurrence = entry.id;
+    store.anchorId = id;
+    return;
+  }
   // Read before the store moves the anchor. Ctrl wins over Shift, as it does there.
   const rangeHeads = shift && !ctrl ? rangeCardHeads(entry.id) : null;
   const before = store.selectedIds;
