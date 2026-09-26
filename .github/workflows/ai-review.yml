@@ -46,6 +46,27 @@ jobs:
     if: github.event.sender.type != 'Bot'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Shared by both PR-Agent steps. The secrets stay on the steps that need them.
+    env:
+      # Pinned here because env overrides win over any .pr_agent.toml, which
+      # could otherwise point the key at another host.
+      OPENROUTER.API_BASE: https://openrouter.ai/api/v1
+      # Without a cap a looping generation runs until the job timeout: OpenRouter
+      # keeps the connection alive, so ai_timeout never fires. Reasoning tokens count
+      # against it, and PR-Agent subtracts it from MAX_MODEL_TOKENS for the diff.
+      OPENROUTER.MAX_TOKENS: "40000"
+      OPENROUTER.REASONING_EFFORT: "medium"
+      CONFIG.MODEL: openrouter/${{ vars.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash' }}
+      # The upstream default fallback is an OpenAI model we hold no key for.
+      CONFIG.FALLBACK_MODELS: "[]"
+      # Required for models missing from PR-Agent's token table; each step's
+      # CONFIG.MAX_MODEL_TOKENS is what we actually send.
+      CONFIG.CUSTOM_MODEL_MAX_TOKENS: "1000000"
+      GITHUB_ACTION_CONFIG.AUTO_DESCRIBE: "false"
+      GITHUB_ACTION_CONFIG.PR_ACTIONS: '["opened", "reopened", "ready_for_review"]'
+      GITHUB_ACTION_CONFIG.HANDLE_PUSH_TRIGGER: "true"
+      # The review rules, read from main for review and improve alike.
+      CONFIG.REPO_CONTEXT_FILES: '[".github/review-context.md"]'
     steps:
       - name: Decide whether this PR is reviewed
         id: gate
@@ -54,9 +75,13 @@ jobs:
           script: |
             const ownerId = Number(process.env.REVIEW_OWNER_ID);
             const is = (user) => user?.id === ownerId;
-            const decide = (run, why) => {
+            // /improve runs in its own step with a smaller chunk budget; every
+            // other command runs in the review step.
+            const decide = (run, why, command = "") => {
               core.info(why);
-              core.setOutput("run", String(run));
+              const improve = command === "/improve";
+              core.setOutput("review", String(run && !improve));
+              core.setOutput("improve", String(run && (improve || !command)));
             };
 
             if (context.eventName === "issue_comment") {
@@ -64,7 +89,8 @@ jobs:
               if (!issue.pull_request) return decide(false, "Comment is not on a PR.");
               if (!is(comment.user)) return decide(false, "Commenter is not the review owner.");
               if (!comment.body.trimStart().startsWith("/")) return decide(false, "Comment is not a command.");
-              return decide(true, "Review owner issued a command.");
+              const command = comment.body.trim().split(/\s+/)[0];
+              return decide(true, "Review owner issued a command.", command);
             }
 
             const pr = context.payload.pull_request;
@@ -79,38 +105,41 @@ jobs:
             }
             decide(false, "Someone other than the review owner triggered this; comment a command to review it.");
 
-      - name: PR-Agent
-        if: steps.gate.outputs.run == 'true'
+      # /review and /improve need different diff budgets, and PR-Agent has one
+      # setting for both (CONFIG.MAX_MODEL_TOKENS), so each gets its own step.
+      - name: PR-Agent review
+        if: steps.gate.outputs.review == 'true'
         # Digest of the pragent/pr-agent:0.46.0-github_action image.
         uses: docker://pragent/pr-agent@sha256:65e5b196e38cecd7df8a71fe29942052e081a0c6645132c2ac874df60b1760c7 # v0.46.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENROUTER.KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          # Pinned here because env overrides win over any .pr_agent.toml, which
-          # could otherwise point the key at another host.
-          OPENROUTER.API_BASE: https://openrouter.ai/api/v1
-          # Without a cap a looping generation runs until the job timeout: OpenRouter
-          # keeps the connection alive, so ai_timeout never fires. Reasoning tokens count
-          # against it, and PR-Agent subtracts it from MAX_MODEL_TOKENS for the diff.
-          # 20000 was too low: on a ~76k-token diff /improve spent it all reasoning and
-          # returned empty content (finish_reason: length), failing the suggestions.
-          OPENROUTER.MAX_TOKENS: "40000"
-          OPENROUTER.REASONING_EFFORT: "medium"
-          CONFIG.MODEL: openrouter/${{ vars.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash' }}
-          # The upstream default fallback is an OpenAI model we hold no key for.
-          CONFIG.FALLBACK_MODELS: "[]"
-          # Required for models missing from PR-Agent's token table; the
-          # second line is what we actually send.
-          CONFIG.CUSTOM_MODEL_MAX_TOKENS: "1000000"
+          # /review never chunks: the whole diff must fit in one call.
           CONFIG.MAX_MODEL_TOKENS: "160000"
-          GITHUB_ACTION_CONFIG.AUTO_DESCRIBE: "false"
           GITHUB_ACTION_CONFIG.AUTO_REVIEW: "true"
+          GITHUB_ACTION_CONFIG.AUTO_IMPROVE: "false"
+          GITHUB_ACTION_CONFIG.PUSH_COMMANDS: '["/review"]'
+
+      - name: PR-Agent improve
+        if: steps.gate.outputs.improve == 'true'
+        uses: docker://pragent/pr-agent@sha256:65e5b196e38cecd7df8a71fe29942052e081a0c6645132c2ac874df60b1760c7 # v0.46.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENROUTER.KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # /improve splits the diff into chunks of MAX_MODEL_TOKENS minus the
+          # 40000 output cap (~25k of diff). One ~54k-token chunk made the model
+          # reason until the cap and return nothing; a ~38k one worked.
+          CONFIG.MAX_MODEL_TOKENS: "65000"
+          # Measure chunks with line numbers already added. Without it PR-Agent
+          # sizes the chunks bare, adds line numbers afterwards and clips the
+          # overflow, silently dropping ~30% of a large diff.
+          PR_CODE_SUGGESTIONS.DECOUPLE_HUNKS: "true"
+          # Enough calls for ~250k tokens of diff; files past the last call are
+          # not reviewed.
+          PR_CODE_SUGGESTIONS.MAX_NUMBER_OF_CALLS: "10"
+          GITHUB_ACTION_CONFIG.AUTO_REVIEW: "false"
           GITHUB_ACTION_CONFIG.AUTO_IMPROVE: "true"
-          GITHUB_ACTION_CONFIG.PR_ACTIONS: '["opened", "reopened", "ready_for_review"]'
-          GITHUB_ACTION_CONFIG.HANDLE_PUSH_TRIGGER: "true"
-          GITHUB_ACTION_CONFIG.PUSH_COMMANDS: '["/review", "/improve"]'
+          GITHUB_ACTION_CONFIG.PUSH_COMMANDS: '["/improve"]'
           # /improve posts each suggestion as an inline, committable review comment
           # instead of one summary table.
           PR_CODE_SUGGESTIONS.COMMITABLE_CODE_SUGGESTIONS: "true"
-          # The review rules, read from main for review and improve alike.
-          CONFIG.REPO_CONTEXT_FILES: '[".github/review-context.md"]'
