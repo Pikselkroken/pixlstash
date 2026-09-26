@@ -50,7 +50,7 @@
         <p
           v-if="provenance(row)"
           class="cwm-note"
-          :class="{ 'cwm-warn': !row.via }"
+          :class="{ 'cwm-warn': !row.via || row.via === 'declared' }"
         >
           {{ provenance(row) }}
         </p>
@@ -97,10 +97,11 @@
  * Choose the checkpoint and the VAE and text-encoder rows fill themselves in
  * from what recipes on this machine have run beside it (`GET
  * /workflows/{key}/model-swap?checkpoint_id=`), widened from that checkpoint to
- * its base model to its family, each row saying which step answered. **A row
- * nothing answers keeps the workflow's own file and says so**: there is no
- * compatibility table behind this, only evidence, and a checkpoint nothing has
- * run with proposes nothing.
+ * its base model to its family, each row saying which step answered. When no
+ * recipe answers, the server falls back to files whose layout the checkpoint's
+ * architecture declares (`via: "declared"`), and the row says plainly that
+ * nothing has run with it. **A row nothing answers keeps the workflow's own
+ * file and says so.**
  *
  * LoRAs are never dropped. One trained on another family than the new
  * checkpoint is named, and stays; removing it would change what the workflow
@@ -253,6 +254,9 @@ function provenance(row) {
     return `Used with other ${chosenCheckpoint.value.base_model} checkpoints`;
   }
   if (row.via === "family") return "Used with other checkpoints of its family";
+  if (row.via === "declared") {
+    return "Untested: nothing has run with this family, the file type fits it";
+  }
   if (row.leftover === "taken") {
     return "The suggestion went to another row: keeps the workflow's file";
   }

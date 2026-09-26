@@ -375,6 +375,49 @@ KNOWN_BASE_MODELS: dict[str, dict] = {
 }
 
 
+# Architecture family -> the support-file layouts it loads, per support kind.
+#
+# The one bridge between the two ``family`` vocabularies: the base-model
+# families above and the tensor layouts `adapter_header.family_from_header`
+# stores on a VAE or text encoder (``vae_4ch``, ``vae_16ch``, ``clip_l``,
+# ``clip_h``, ``clip_g``, ``t5_xxl``, ``umt5_xxl``). It is a **declaration, not
+# evidence**: a layout that fits says the file will load, not that it was made
+# for this family (SD 1.5's and SDXL's VAEs share ``vae_4ch``, FLUX's and SD
+# 3.5's share ``vae_16ch``, and neither pair is interchangeable), so `propose_companions` reaches for it only when no recipe
+# answers and labels what it proposes as coming from here.
+#
+# Only what that vocabulary can say, and only what is certain. A family whose
+# companion has no recognised layout (FLUX.2, Qwen-Image, Krea 2, the Qwen and
+# Gemma encoders, the 3D video VAEs) declares that kind not at all rather than
+# something close, Chroma declares no VAE because Radiance needs none, and Wan
+# is left out until every release in its family is known to load UMT5-XXL.
+COMPANION_LAYOUTS: dict[str, dict[str, frozenset[str]]] = {
+    "sd15": {"vae": frozenset({"vae_4ch"}), "text_encoder": frozenset({"clip_l"})},
+    "sd21": {"vae": frozenset({"vae_4ch"}), "text_encoder": frozenset({"clip_h"})},
+    "sdxl": {
+        "vae": frozenset({"vae_4ch"}),
+        "text_encoder": frozenset({"clip_l", "clip_g"}),
+    },
+    "sd35": {
+        "vae": frozenset({"vae_16ch"}),
+        "text_encoder": frozenset({"clip_l", "clip_g", "t5_xxl"}),
+    },
+    "flux1": {
+        "vae": frozenset({"vae_16ch"}),
+        "text_encoder": frozenset({"clip_l", "t5_xxl"}),
+    },
+    "chroma": {"text_encoder": frozenset({"t5_xxl"})},
+    "zimage": {"vae": frozenset({"vae_16ch"})},
+    "hidream": {
+        "vae": frozenset({"vae_16ch"}),
+        "text_encoder": frozenset({"clip_l", "clip_g", "t5_xxl"}),
+    },
+    "pixart": {"vae": frozenset({"vae_4ch"}), "text_encoder": frozenset({"t5_xxl"})},
+    "auraflow": {"vae": frozenset({"vae_4ch"})},
+    "kolors": {"vae": frozenset({"vae_4ch"})},
+}
+
+
 def _norm(value: str) -> str:
     """Fold case, spacing and punctuation away. The whole spacing axis dies here."""
     return re.sub(r"[^a-z0-9]", "", value.casefold())

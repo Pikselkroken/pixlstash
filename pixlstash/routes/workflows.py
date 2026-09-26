@@ -1372,8 +1372,10 @@ class SwapProposal(BaseModel):
     via: str = Field(
         description=(
             "Which step answered: checkpoint (ran with this checkpoint), "
-            "base_model (with another of the same base model) or family "
-            "(with another of the same architecture)."
+            "base_model (with another of the same base model), family "
+            "(with another of the same architecture) or declared (nothing "
+            "has run with it: its file layout is one the architecture "
+            "declares, which is not evidence it suits)."
         )
     )
     recipes: int = Field(description="How many recipes name the two together.")
@@ -4507,8 +4509,9 @@ def create_router(server) -> APIRouter:
             "and text encoders to choose from, and - once a checkpoint is "
             "chosen - the VAEs and text encoders recipes on this machine have "
             "run beside it, and the LoRAs and ControlNets trained on another "
-            "family. Proposals are evidence only: a checkpoint nothing has run "
-            "with proposes nothing."
+            "family. When no recipe answers, support files whose layout the "
+            "checkpoint's architecture declares are proposed as `declared`, "
+            "never as evidence."
         ),
         response_model=ModelSwapOptions,
         responses={

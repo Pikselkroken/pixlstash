@@ -68,6 +68,7 @@ from pixlstash.utils.adapter_header import (
     FILE_VAE,
 )
 from pixlstash.utils.known_base_models import (
+    COMPANION_LAYOUTS,
     SOURCE_FILENAME,
     SOURCE_USER,
     family_of,
@@ -923,10 +924,12 @@ def known_base_model(row) -> Optional[str]:
 
 
 # The widening ladder `propose_companions` climbs, narrowest first. Each answer
-# carries the step that produced it, so a weaker inference reads as weaker.
+# carries the step that produced it, so a weaker inference reads as weaker. The
+# last step is not evidence at all, and says so.
 VIA_CHECKPOINT = "checkpoint"
 VIA_BASE_MODEL = "base_model"
 VIA_FAMILY = "family"
+VIA_DECLARED = "declared"
 
 
 def propose_companions(
@@ -935,11 +938,10 @@ def propose_companions(
     """The VAEs and text encoders recipes have run beside *checkpoint_id*.
 
     :func:`fetch_companions` read forwards: the same co-occurrence evidence, asked
-    "what goes with this" rather than "what would deleting this orphan". **It is
-    evidence and nothing else**: there is no table joining a checkpoint's
-    architecture to a VAE's tensor layout, and a VAE carries no ``base_model``
-    to compare, so a support file is proposed only because a recipe on this hub
-    named it beside a checkpoint.
+    "what goes with this" rather than "what would deleting this orphan". A VAE
+    carries no ``base_model`` to compare, so the first three steps propose a
+    support file only because a recipe on this hub named it beside a
+    checkpoint. The fourth is the cold case, and is not evidence.
 
     Per support kind, the first step of the ladder with any answer wins:
 
@@ -950,10 +952,16 @@ def propose_companions(
     3. ``family`` - recipes naming any base model of the same architecture
        family (:func:`family_of`), when the label folds to one, and never
        across modalities (:func:`modality_of`): a video base does not answer
-       for an image checkpoint, nor the reverse.
+       for an image checkpoint, nor the reverse;
+    4. ``declared`` - no recipe at all: the shelf's support files whose stored
+       tensor layout (``model.family``) the family declares in
+       :data:`~pixlstash.utils.known_base_models.COMPANION_LAYOUTS`. A layout
+       that fits says the file loads, not that it suits, so these carry
+       ``recipes`` 0 and the caller must present them as untested.
 
-    A checkpoint no recipe names and whose family nothing on the shelf has run
-    with proposes nothing, and the caller is expected to say so. A support file a
+    A checkpoint nothing in its family has run with, whose family declares no
+    layout for a kind or whose shelf holds no file of that layout, proposes
+    nothing for that kind, and the caller is expected to say so. A support file a
     recipe reached only through an ambiguous name is not proposed from that
     recipe: it may be another row's file. Nor is one with no filename, which a
     clone has nothing to write for.
@@ -1046,6 +1054,23 @@ def propose_companions(
                 )
             ]
             break
+        layouts = COMPANION_LAYOUTS.get(family, {}).get(kind)
+        if proposals[kind] or not layouts:
+            continue
+        proposals[kind] = [
+            {
+                "id": model_id,
+                "filename": row["filename"],
+                "display_name": row["display_name"],
+                "family": row["family"],
+                "via": VIA_DECLARED,
+                "recipes": 0,
+            }
+            for model_id, row in sorted(
+                models.items(), key=lambda item: (item[1]["filename"] or "").lower()
+            )
+            if row["file_kind"] == kind and row["filename"] and row["family"] in layouts
+        ]
     return proposals
 
 

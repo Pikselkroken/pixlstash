@@ -2414,9 +2414,10 @@ def test_the_family_step_never_crosses_from_image_to_video(
     assert result == {"vae": [], "text_encoder": []}
 
 
-def test_a_checkpoint_nothing_in_its_family_ran_with_proposes_nothing(
+def test_a_cold_checkpoint_with_no_file_of_a_declared_layout_proposes_nothing(
     companions_shelf,
 ):
+    """SDXL declares layouts, but no support file here has one recorded."""
     ids = companions_shelf.ids
     set_base_model(companions_shelf.hub, ids["ckpt_a"], "FLUX.1 dev")
     set_base_model(companions_shelf.hub, ids["lonely"], "SDXL 1.0")
@@ -2425,6 +2426,67 @@ def test_a_checkpoint_nothing_in_its_family_ran_with_proposes_nothing(
 
     assert result == {"vae": [], "text_encoder": []}
     assert propose_companions(companions_shelf.hub, 999_999) == result
+
+
+def set_layout(hub, model_id, layout):
+    with hub.transaction() as conn:
+        conn.execute("UPDATE model SET family = ? WHERE id = ?", (layout, model_id))
+
+
+def test_a_family_nothing_ran_with_proposes_the_layouts_it_declares(
+    companions_shelf,
+):
+    """The cold case: labelled `declared`, counted as no recipe, and only the
+    layouts SDXL takes, never the FLUX VAE or the T5 beside them."""
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    set_base_model(hub, ids["ckpt_a"], "FLUX.1 dev")
+    set_base_model(hub, ids["lonely"], "SDXL 1.0")
+    set_layout(hub, ids["vae_a"], "vae_16ch")
+    set_layout(hub, ids["clip_shared"], "clip_l")
+    sdxl_vae = shelf_file(hub, "sdxl_vae.safetensors", "vae")
+    set_layout(hub, sdxl_vae, "vae_4ch")
+    clip_g = shelf_file(hub, "Clip_G.safetensors", "text_encoder")
+    set_layout(hub, clip_g, "clip_g")
+    set_layout(hub, shelf_file(hub, "t5xxl.safetensors", "text_encoder"), "t5_xxl")
+
+    result = propose_companions(hub, ids["lonely"])
+
+    assert proposed(result, "vae") == [(sdxl_vae, "declared")]
+    assert proposed(result, "text_encoder") == [
+        (clip_g, "declared"),
+        (ids["clip_shared"], "declared"),
+    ]
+    assert {item["recipes"] for kind in result.values() for item in kind} == {0}
+    assert result["vae"][0]["family"] == "vae_4ch"
+
+
+def test_evidence_in_the_family_outranks_the_declared_layouts(companions_shelf):
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    set_base_model(hub, ids["ckpt_a"], "FLUX.1 dev")
+    set_base_model(hub, ids["lonely"], "FLUX.1 schnell")
+    set_layout(hub, ids["vae_a"], "vae_16ch")
+    set_layout(hub, shelf_file(hub, "another_ae.safetensors", "vae"), "vae_16ch")
+
+    result = propose_companions(hub, ids["lonely"])
+
+    assert proposed(result, "vae") == [(ids["vae_a"], "family")]
+
+
+def test_a_kind_the_family_declares_no_layout_for_proposes_nothing(hub):
+    """Z-Image's encoder is a Qwen, which no stored layout names: its VAE is
+    declared, its text encoder is not, and a T5 is no stand-in."""
+    ckpt = shelf_file(hub, "zimage.safetensors", "checkpoint")
+    set_base_model(hub, ckpt, "Z-Image Turbo")
+    vae = shelf_file(hub, "ae.safetensors", "vae")
+    set_layout(hub, vae, "vae_16ch")
+    set_layout(hub, shelf_file(hub, "t5xxl.safetensors", "text_encoder"), "t5_xxl")
+
+    result = propose_companions(hub, ckpt)
+
+    assert proposed(result, "vae") == [(vae, "declared")]
+    assert result["text_encoder"] == []
 
 
 def identify_base_model(hub, model_id, canonical, source):
