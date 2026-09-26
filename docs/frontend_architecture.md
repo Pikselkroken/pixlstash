@@ -1749,8 +1749,10 @@ the shelf's workflow sets section) and served as `hand_made` on
   status line narrates them with an Undo that takes back the last one, and on
   close `store.announceAdded` raises ONE receipt for all of them. **Fill from
   pictures** (`fillFromPictures`) and **Fill from a set** (`fillFromSets`) are
-  pre-ticked checklists with a title, grouped by slot, with Cancel and one Add;
-  Space ticks once an arrow has put the cursor down. Focus goes back to the
+  pre-ticked checklists with a title, grouped by slot, with Cancel and one Add
+  that adds the ticked rows the filter still shows (Enter too, never an
+  unticked row); Space ticks once an arrow has put the cursor down. Rows take
+  `mousedown.prevent`, so a click never takes focus out of the filter. Focus goes back to the
   tile on close, since v-menu cannot restore it for a programmatic open.
 - **The base-model offer, once.** Suggestions follow the checkpoint's base
   model, so when a checkpoint with none goes in (the popup, Fill, or New

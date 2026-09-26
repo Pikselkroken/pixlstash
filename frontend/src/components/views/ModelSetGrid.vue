@@ -1025,23 +1025,24 @@ const chooserEmpty = computed(() =>
  * the Undo in it, and the one receipt it leaves behind when it closes.
  */
 const picked = ref([]);
-/** The last model the popup's Undo took back out, for the status line. */
-const tookOut = ref("");
+/**
+ * What the status line says when the last thing that happened was not an
+ * add: an Undo, or a pick the set already held.
+ */
+const pickNote = ref("");
 
 const chooserStatus = computed(() => {
   const list = picked.value;
-  if (!list.length) {
-    return tookOut.value
-      ? { text: `Took out ${tookOut.value}`, undo: false }
-      : null;
-  }
+  const undo = list.length > 0;
+  if (pickNote.value) return { text: pickNote.value, undo };
+  if (!undo) return null;
   const text =
     list.length === 1
       ? `Added ${list[0].name}`
       : list.length === 2
         ? `Added ${list[0].name} and ${list[1].name}`
         : `Added ${list.length} ${chooserSlot.value?.noun ?? "models"}`;
-  return { text, undo: true };
+  return { text, undo };
 });
 
 /**
@@ -1056,7 +1057,7 @@ function openChooser(mode, el, slotId = "") {
   if (!openHand.value) return;
   chooserQuery.value = "";
   picked.value = [];
-  tookOut.value = "";
+  pickNote.value = "";
   const box = el?.getBoundingClientRect?.();
   chooser.value = {
     mode,
@@ -1186,14 +1187,14 @@ function closeChooser() {
     chooser.value ?? {};
   chooser.value = null;
   // What the popup added while open becomes ONE receipt now it has closed
-  // (#1573), rather than a pill per click replacing the one before.
+  // (#1573, #1574), rather than a pill per click replacing the one before.
   const set = store.handMadeSets.find((candidate) => candidate.id === setId);
   if (set && picked.value.length) {
     const slot = SET_SLOTS.find((candidate) => candidate.id === slotId);
     store.announceAdded(set, picked.value, slot?.noun ?? "models");
   }
   picked.value = [];
-  tookOut.value = "";
+  pickNote.value = "";
   // A Fill button still on screen takes its focus back directly. A ＋ tile
   // goes through the cursor, which also keeps the grid's roving tab stop on
   // it - and a tile that vanished (the Checkpoint ＋, once filled) is handled
@@ -1273,11 +1274,19 @@ async function pickIntoSlot(set, slotId, ids) {
         sha256: row.sha256,
         name: modelName(row).text || row.filename,
       }));
-    // The popup may have closed while the add was out; its receipt is gone,
-    // so this one is raised on its own.
-    if (chooser.value?.setId === set.id) {
+    // The popup may have closed while the add was out - or another opened on
+    // the same set - so its receipt is gone and this one is raised on its own.
+    const open = chooser.value;
+    if (
+      open?.mode === "slot" &&
+      open.setId === set.id &&
+      open.slotId === slotId
+    ) {
       picked.value = [...picked.value, ...added];
-      tookOut.value = "";
+      // Stored nothing, with no error (the error is its own notice): say so
+      // rather than leave the click looking ignored.
+      pickNote.value =
+        result && !added.length ? "Already in this set, nothing added" : "";
     } else {
       store.announceAdded(
         set,
@@ -1294,15 +1303,26 @@ async function pickIntoSlot(set, slotId, ids) {
 
 /** The status line's Undo: take the last add back out, quietly. */
 async function undoLastPick() {
-  const set = openHand.value?.set;
+  const { setId, slotId } = chooser.value ?? {};
+  const set = store.handMadeSets.find((candidate) => candidate.id === setId);
   const last = picked.value.at(-1);
   if (!set || !last) return;
   picked.value = picked.value.slice(0, -1);
   const done = await store.removeFromHandMadeSet(set, [last.sha256], {
     quiet: true,
   });
-  if (done) tookOut.value = last.name;
-  else picked.value = [...picked.value, last];
+  const still =
+    chooser.value?.setId === setId && chooser.value?.slotId === slotId;
+  if (done) {
+    if (still) pickNote.value = `Took out ${last.name}`;
+  } else if (still) {
+    picked.value = [...picked.value, last];
+  } else {
+    // The popup closed while the undo was out, and it failed: the model is
+    // still in the set, so it still gets its receipt.
+    const noun = SET_SLOTS.find((slot) => slot.id === slotId)?.noun;
+    store.announceAdded(set, [last], noun ?? "models");
+  }
 }
 
 defineExpose({ openFill, openOffer });

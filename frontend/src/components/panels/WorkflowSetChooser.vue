@@ -80,14 +80,11 @@
               class="wsc__r"
               :class="{
                 'wsc__r--cur': item.id === activeKey,
-                'wsc__r--enter': item.id === targetKey,
+                'wsc__r--enter': pick && item.id === targetKey,
               }"
               role="option"
-              :aria-selected="
-                pick
-                  ? String(item.id === targetKey)
-                  : String(checked.has(item.id))
-              "
+              :aria-selected="pick ? undefined : String(checked.has(item.id))"
+              @mousedown.prevent
               @click="choose(item.id)"
             >
               <v-icon v-if="!pick" class="wsc__box" aria-hidden="true">{{
@@ -112,7 +109,7 @@
               <!-- What Enter would add, where the size was: says which row
                    the key acts on without making it look pressed. -->
               <span
-                v-if="item.id === targetKey"
+                v-if="pick && item.id === targetKey"
                 class="fm-kbd wsc__enter"
                 aria-hidden="true"
                 >⏎</span
@@ -123,6 +120,7 @@
               type="button"
               class="wsc__more"
               tabindex="-1"
+              @mousedown.prevent
               @click="expand(section.id)"
             >
               <v-icon size="16" aria-hidden="true">mdi-chevron-down</v-icon>
@@ -132,7 +130,10 @@
             </button>
           </template>
         </template>
-        <p v-if="!items.length && !collapsedLeft" class="wsc__empty">
+        <p
+          v-if="!items.length && !collapsedLeft && !heldOnly"
+          class="wsc__empty"
+        >
           {{ query.trim() ? `Nothing matches "${query.trim()}".` : emptyText }}
         </p>
       </div>
@@ -168,7 +169,7 @@
         <AppButton
           variant="primary"
           size="sm"
-          :disabled="!checked.size"
+          :disabled="!checkedShown.length"
           @click="submit"
           >{{ addLabel }}</AppButton
         >
@@ -301,11 +302,26 @@ const items = computed(() =>
   shownSections.value.filter((s) => !s.held).flatMap((s) => s.items),
 );
 
+/** The filter found models the set already holds, which the list names. */
+const heldOnly = computed(() => shownSections.value.some((s) => s.held));
+
 /** A folded section still waiting below the last row. */
 const collapsedLeft = computed(() => shownSections.value.some((s) => s.cut));
 
-/** The row Enter acts on: the cursor, else the top match. */
-const targetKey = computed(() => activeKey.value ?? items.value[0]?.id ?? null);
+/**
+ * The row Enter acts on in `pick` mode: the cursor, else the top match. A
+ * checklist's Enter adds what is ticked, so there it is only the cursor.
+ */
+const targetKey = computed(() =>
+  props.pick
+    ? (activeKey.value ?? items.value[0]?.id ?? null)
+    : activeKey.value,
+);
+
+/** Ticked rows the filter still shows: what Add adds. */
+const checkedShown = computed(() =>
+  items.value.filter((item) => checked.value.has(item.id)).map((i) => i.id),
+);
 
 const targetId = computed(() => {
   const item = items.value.find((entry) => entry.id === targetKey.value);
@@ -321,11 +337,14 @@ function heldText(rows) {
     const { text } = modelName(rows[0]);
     return `${text || rows[0].filename} also matches, and is already in this set.`;
   }
-  return `${rows.length} more match, and are already in this set.`;
+  const lead = items.value.length
+    ? `${rows.length} more match`
+    : `${rows.length} match`;
+  return `${lead}, and are already in this set.`;
 }
 
 const addLabel = computed(() =>
-  checked.value.size ? `Add ${checked.value.size}` : "Add",
+  checkedShown.value.length ? `Add ${checkedShown.value.length}` : "Add",
 );
 
 // A fresh open starts from the callers' pre-ticks with no cursor down, and
@@ -418,7 +437,7 @@ function move(step) {
 }
 
 function submit() {
-  let ids = props.pick ? [] : [...checked.value];
+  let ids = props.pick ? [] : [...checkedShown.value];
   if (!ids.length && targetKey.value != null) ids = [targetKey.value];
   if (ids.length) emit("add", ids);
 }
@@ -643,6 +662,9 @@ defineExpose({ expand });
 
 .wsc__more {
   display: flex;
+  border: 0;
+  background: none;
+  font: inherit;
   align-items: center;
   gap: var(--space-2);
   width: 100%;

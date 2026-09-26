@@ -1759,6 +1759,79 @@ describe("hand-made sets (#1520)", () => {
     expect(heading.find(".fm-n").text()).toBe("10");
   });
 
+  it("credits a pick only with what the server stored", async () => {
+    // The set already held it: the route stores nothing and says so.
+    addWorkflowSetMembers
+      .mockReset()
+      .mockResolvedValue({ set: handSet(10, [SET_CKPT]), added: [] });
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…")
+      .trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    await chooser.find('[role="option"]').trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const status = chooser.find('[role="status"]');
+    expect(status.text()).toContain("Already in this set, nothing added");
+    expect(status.findAll("button")).toHaveLength(0);
+    await chooser.trigger("keydown", { key: "Escape" });
+    expect(useOperationStore().receipt).toBe(null);
+  });
+
+  it("names a filter's only matches as already in the set, not as nothing", async () => {
+    const held = slotMember(3, "filmgrain_xl", "lora");
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      handMade: [handSet(10, [SET_CKPT, held])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…")
+      .trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    await chooser.find("input").setValue("grain");
+
+    expect(chooser.find(".wsc__empty").exists()).toBe(false);
+    expect(chooser.find(".wsc__gone").text()).toBe(
+      "filmgrain xl also matches, and is already in this set.",
+    );
+  });
+
+  it("adds nothing from a checklist on Enter once every row is unticked", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      combinations: [combination("1,3", [CKPT, LORA])],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    addWorkflowSetMembers.mockReset();
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Fill from pictures"))
+      .trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    // A checklist marks no row with ⏎: Enter adds what is ticked.
+    expect(chooser.find(".wsc__enter").exists()).toBe(false);
+    const option = chooser.find('[role="option"]');
+    expect(option.attributes("aria-selected")).toBe("true");
+    await option.trigger("click");
+    expect(option.attributes("aria-selected")).toBe("false");
+
+    await chooser.find("input").trigger("keydown", { key: "Enter" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers).not.toHaveBeenCalled();
+  });
+
   it("folds the other base models to one line under the ranked groups", async () => {
     const sdxl = (id, name) => ({ ...row(id, name), base_model: "SDXL" });
     const { wrapper, store } = await mountGrid({
