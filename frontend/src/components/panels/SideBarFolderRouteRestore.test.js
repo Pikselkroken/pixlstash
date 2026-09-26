@@ -601,26 +601,35 @@ describe("restoring /ref-folder/:id", () => {
 // upward from a fixed 190px height estimate, so a taller menu (a picture set's)
 // opened downward one row too long and lost its last entry off the window.
 describe("sidebar context menu placement", () => {
-  it("opens upward when its measured height would overflow the window", async () => {
+  /** Right-click the first folder row at y=550 with the menu `menuH` tall. */
+  async function openMenuAt550(menuH) {
     vi.spyOn(window, "innerHeight", "get").mockReturnValue(800);
     vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(
       function () {
-        return this.classList.contains("sidebar-ctx-menu") ? 300 : 0;
+        return this.classList.contains("sidebar-ctx-menu") ? menuH : 0;
       },
     );
     const wrapper = await mountSidebar({ teleport: true });
     routeToFolder(SUB); // expands the folder section so its rows render
     await flushPromises();
-
-    // 550 + 190 fits in 800; 550 + 300 does not.
     const rows = wrapper.findAll(".sidebar-folder-root-row");
     await rows[0].trigger("contextmenu", { clientX: 20, clientY: 550 });
     await flushPromises();
+    return { wrapper, menu: document.querySelector(".sidebar-ctx-menu") };
+  }
 
-    const menu = document.querySelector(".sidebar-ctx-menu");
+  it("opens upward when its measured height would overflow the window", async () => {
+    // 550 + 190 fits in 800; 550 + 300 does not.
+    const { wrapper, menu } = await openMenuAt550(300);
     expect(menu.style.bottom).toBe("250px");
     expect(menu.style.top).toBe("");
+    wrapper.unmount();
+  });
 
+  it("opens downward when its measured height fits below", async () => {
+    const { wrapper, menu } = await openMenuAt550(100);
+    expect(menu.style.top).toBe("550px");
+    expect(menu.style.bottom).toBe("");
     wrapper.unmount();
   });
 });
