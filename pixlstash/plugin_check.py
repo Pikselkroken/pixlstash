@@ -312,7 +312,12 @@ class Recorder:
         if isinstance(path, int):
             buckets.setdefault("an open file descriptor", set()).add(str(path))
             return
-        target = Path(os.path.abspath(_text(path)))  # made absolute by the hook
+        try:
+            target = Path(os.path.abspath(_text(path)))  # made absolute by the hook
+        except (OSError, ValueError):
+            # The working directory is gone, which is when the hook kept this
+            # path relative too. Reported as it was given rather than raised.
+            target = Path(_text(path))
         cache = Path.home() / ".cache"
         for root in (self.plugin_dir, Path(tempfile.gettempdir())):
             if root is not None and target.is_relative_to(root):

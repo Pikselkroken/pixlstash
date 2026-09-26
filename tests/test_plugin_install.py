@@ -1400,6 +1400,36 @@ def test_a_datagram_is_reported_without_a_connect(tmp_path, capsys):
     assert f"sent to 127.0.0.1:{port}" in capsys.readouterr().out
 
 
+def test_a_relative_write_is_still_reported_after_its_directory_is_gone(
+    tmp_path, capsys
+):
+    """The hook keeps the path relative when there is no working directory.
+
+    So the summary has to cope with the same case rather than raising out of
+    the command after the plugin has already run.
+    """
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    source = _reaching(
+        tmp_path / "plugin",
+        "import os",
+        f"os.chdir({str(gone)!r})",
+        f"os.rmdir({str(gone)!r})",
+        # The audit event fires before the call fails for want of a directory.
+        "try:",
+        '    open("left.txt", "w")',
+        "except OSError:",
+        "    pass",
+    )
+    back = os.getcwd()
+    try:
+        assert _check(source) == cli.EXIT_OK
+    finally:
+        os.chdir(back)
+
+    assert "wrote 1 file under" in capsys.readouterr().out
+
+
 def test_what_it_reached_for_is_reported_even_when_it_fails_to_import(tmp_path, capsys):
     """The failing plugin is the one whose report matters most."""
     source = _reaching(tmp_path, _SPAWN, 'raise RuntimeError("boom")')
