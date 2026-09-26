@@ -370,10 +370,31 @@ describe("switching to another stack member", () => {
       `${name} — 1 node differs (1)`,
       `${name} — 1 node differs (2)`,
     ]);
-    // The name line carries the number too, or the two rows draw alike.
+    // The name line is numbered only where the chips under it tie as well.
     expect(wrapper.vm.workflowOptions.slice(2).map((row) => row.name)).toEqual([
       `${name} (1)`,
       `${name} (2)`,
+    ]);
+  });
+
+  it("numbers a name only where the two-line rows would draw alike", async () => {
+    // The cover and a member tie on the one-line label, which the rail's
+    // native select still needs numbered; the Cover chip already tells the
+    // two-line rows apart, so their names stay as the grid prints them.
+    const name = "Krea 2";
+    const members = [
+      { key: KEY, name, sets_apart: ["film-grain"], differs_by: [] },
+      { key: OTHER, name, sets_apart: ["film-grain"], differs_by: [] },
+      { key: "c".repeat(64), name, sets_apart: ["realvisxl"], differs_by: [] },
+    ];
+    getWorkflowCard.mockResolvedValue({ card: card({ members }) });
+    const wrapper = await mountRun();
+    expect(
+      wrapper.vm.workflowOptions.map((row) => [row.label, row.name]),
+    ).toEqual([
+      [`${name} — film-grain (1)`, name],
+      [`${name} — film-grain (2)`, name],
+      [`${name} — realvisxl`, name],
     ]);
   });
 

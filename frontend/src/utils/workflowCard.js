@@ -508,16 +508,19 @@ function memberApart(member) {
   return [...models, ...chips];
 }
 
-/** Rows that still read alike are numbered, as the Pictures rows are. */
-function numberAlike(rows) {
+/**
+ * Rows that still read alike are numbered, as the Pictures rows are. `field`
+ * is numbered wherever `drawn` (what that row shows) ties with another row's.
+ */
+function numberAlike(rows, field, drawn) {
   const total = {};
-  for (const row of rows) total[row.label] = (total[row.label] || 0) + 1;
+  for (const row of rows) total[drawn(row)] = (total[drawn(row)] || 0) + 1;
   const seen = {};
   return rows.map((row) => {
-    if (total[row.label] < 2) return row;
-    seen[row.label] = (seen[row.label] || 0) + 1;
-    const n = ` (${seen[row.label]})`;
-    return { ...row, label: `${row.label}${n}`, name: `${row.name}${n}` };
+    const key = drawn(row);
+    if (total[key] < 2) return row;
+    seen[key] = (seen[key] || 0) + 1;
+    return { ...row, [field]: `${row[field]} (${seen[key]})` };
   });
 }
 
@@ -533,19 +536,25 @@ function numberAlike(rows) {
 export function stackMemberOptions(members) {
   const list = members || [];
   const group = `This stack · ${list.length} workflows`;
+  const rows = list.map((member, index) => {
+    const apart = memberApart(member);
+    return {
+      value: member.key,
+      label: apart.length
+        ? `${member.name} — ${apart.join(", ")}`
+        : member.name,
+      name: member.name,
+      // Index 0 is the cover: the server lists the stack in its own order.
+      chips: index === 0 ? ["Cover", ...apart] : apart,
+      group,
+    };
+  });
+  // Each line is numbered on what it shows: the one-line `label` where two
+  // labels tie, the two-line `name` only where the chips under it tie too
+  // (a cover and a member alike but for the "Cover" chip already differ).
   return numberAlike(
-    list.map((member, index) => {
-      const apart = memberApart(member);
-      return {
-        value: member.key,
-        label: apart.length
-          ? `${member.name} — ${apart.join(", ")}`
-          : member.name,
-        name: member.name,
-        // Index 0 is the cover: the server lists the stack in its own order.
-        chips: index === 0 ? ["Cover", ...apart] : apart,
-        group,
-      };
-    }),
+    numberAlike(rows, "label", (row) => row.label),
+    "name",
+    (row) => `${row.name}\n${row.chips.join("\n")}`,
   );
 }
