@@ -3,14 +3,19 @@ import { defineStore } from "pinia";
 import { clearModelIcons, setModelIcon } from "../api/modelIcons";
 import { mergeModelCopies } from "../api/modelFiles";
 import {
+  addWorkflowSetMembers,
   BASE_MODEL_UNASSIGNED,
+  createWorkflowSet,
   deleteModels,
+  deleteWorkflowSet,
   editModels,
   fetchWorkflowSets,
   forgetModels,
   listAdapters,
   listBaseModelCompletions,
   listCheckpoints,
+  removeWorkflowSetMembers,
+  renameWorkflowSet,
   setAdapterAttachments,
 } from "../api/modelShelf";
 import { onSessionReset } from "../utils/apiClient";
@@ -33,7 +38,13 @@ import {
   offlineFolders,
   UNSET_GROUP_KEY,
 } from "../utils/modelShelf";
-import { setCard, setGroups, worksWith } from "../utils/workflowSets";
+import {
+  handMadeCard,
+  handMadeName,
+  setCard,
+  setGroups,
+  worksWith,
+} from "../utils/workflowSets";
 
 /** Where the `Show` selection is remembered between visits. */
 const FILTERS_KEY = "pixlstash:modelShelfFilters";
@@ -1508,7 +1519,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   // row list: `fetchRows` runs on every `Show` checkbox and this one is a window
   // over every kept picture in the vault. Fetched once when something needs it
   // and again after a scan, never per filter tick.
-  const workflowSets = ref({ combinations: [], noSet: [] });
+  const workflowSets = ref({ combinations: [], noSet: [], handMade: [] });
   const setsLoading = ref(false);
   const setsError = ref("");
   const setsLoaded = ref(false);
@@ -1546,6 +1557,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       workflowSets.value = {
         combinations: body.combinations,
         noSet: body.no_set,
+        handMade: body.hand_made ?? [],
       };
       setsLoaded.value = true;
     } catch (err) {
@@ -1586,8 +1598,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   const visibleCombinations = computed(() => {
     const shown = shownModelIds.value;
-    return workflowSets.value.combinations.filter((combination) =>
-      (combination.models ?? []).some((model) => shown.has(model.id)),
+    return workflowSets.value.combinations.filter(
+      (combination) =>
+        // A combination one of the owner's sets can build is drawn on THAT
+        // card and not again as evidence (#1520): evidence cards are built only
+        // from the pictures no hand-made set covers.
+        !combination.covered_by?.length &&
+        (combination.models ?? []).some((model) => shown.has(model.id)),
     );
   });
 
@@ -1603,6 +1620,23 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setGroups(visibleCombinations.value).map((group) => ({
       ...group,
       card: setCard(group),
+    })),
+  );
+
+  /**
+   * The owner's own sets (#1520), newest first, each shaped as the grid draws
+   * it. Not narrowed by `Show`: the owner made them, and a kind checkbox hiding
+   * one would read as the set having gone. `models` is the ON-SHELF members, the
+   * ones a tray row can select; the slots draw every member from `set`.
+   */
+  const handMadeSets = computed(() => workflowSets.value.handMade ?? []);
+  const handMadeGroups = computed(() =>
+    handMadeSets.value.map((set) => ({
+      key: `hand:${set.id}`,
+      set,
+      head: null,
+      models: (set.members ?? []).filter((m) => m.on_shelf && m.id != null),
+      card: handMadeCard(set),
     })),
   );
 
@@ -1644,6 +1678,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const setGridModelIds = computed(() => {
     const known = new Set(rows.value.map((row) => row.id));
     const ids = new Set();
+    const hand = handMadeGroups.value.find((g) => g.key === openSetKey.value);
+    for (const model of hand?.models ?? []) {
+      if (known.has(model.id)) ids.add(model.id);
+    }
     for (const group of setGroupList.value) {
       // A closed tray is not on screen. Keeping all its members here made
       // Select all and the verb bar reach files with no selected representation.
@@ -1713,12 +1751,224 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * than in the grid because the key lives here and the grid is not the only
    * thing that can change what it names.
    */
-  watch(setGroupList, (groups) => {
+  watch([setGroupList, handMadeGroups], ([groups, hand]) => {
     if (!openSetKey.value) return;
-    if (!groups.some((group) => group.key === openSetKey.value)) {
+    if (![...groups, ...hand].some((group) => group.key === openSetKey.value)) {
       openSetKey.value = "";
     }
   });
+
+  // ── Hand-made sets: selection and verbs (#1520) ───────────────────────────
+  //
+  // **Sets are selected as sets, and never together with files.** A hand-made
+  // card stands for the SET, whose verbs (Rename, Delete set) touch no file; a
+  // tray member stands for one file, whose verbs are the shelf's. Holding both
+  // at once would put a file Delete and a set Delete behind one pill, so taking
+  // either kind drops the other.
+
+  /** Selected hand-made set ids. */
+  const selectedSetIds = ref(new Set());
+  let setAnchor = null;
+
+  const selectedSets = computed(() =>
+    handMadeSets.value.filter((set) => selectedSetIds.value.has(set.id)),
+  );
+
+  /**
+   * Click, Ctrl+click, Shift+click on a hand-made card.
+   *
+   * @param {number} id
+   * @param {{ctrl?: boolean, shift?: boolean}} mods
+   * @param {Array<number>} ordered - the set ids in drawn order, for a range.
+   */
+  function selectSet(id, { ctrl = false, shift = false } = {}, ordered = []) {
+    clearSelection();
+    if (shift && setAnchor != null) {
+      const from = ordered.indexOf(setAnchor);
+      const to = ordered.indexOf(id);
+      if (from >= 0 && to >= 0) {
+        const [a, b] = from < to ? [from, to] : [to, from];
+        selectedSetIds.value = new Set(ordered.slice(a, b + 1));
+        return;
+      }
+    }
+    const next = ctrl ? new Set(selectedSetIds.value) : new Set();
+    if (ctrl && next.has(id)) next.delete(id);
+    else next.add(id);
+    selectedSetIds.value = next;
+    setAnchor = id;
+  }
+
+  function clearSetSelection() {
+    if (selectedSetIds.value.size) selectedSetIds.value = new Set();
+  }
+
+  // A set that is gone cannot stay selected.
+  watch(handMadeSets, (sets) => {
+    const live = new Set(sets.map((set) => set.id));
+    const kept = [...selectedSetIds.value].filter((id) => live.has(id));
+    if (kept.length !== selectedSetIds.value.size) {
+      selectedSetIds.value = new Set(kept);
+    }
+  });
+
+  /**
+   * Run one set write, refetch, and show its receipt with Undo.
+   *
+   * Every change to a set gets a receipt and every receipt offers Undo; the
+   * undo is itself a set write, and says so when it lands. The refetch is the
+   * whole payload because coverage moves with membership: adding one LoRA can
+   * pull a combination off the evidence cards and onto this one.
+   *
+   * @returns {Promise<*>} what `write` resolved to, or null when it failed.
+   */
+  async function setWrite(write, { receipt, undo, failure }) {
+    const notices = useNoticeStore();
+    let result;
+    try {
+      result = await write();
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || failure,
+      });
+      return null;
+    }
+    await loadWorkflowSets({ force: true });
+    const text = typeof receipt === "function" ? receipt(result) : receipt;
+    if (text) {
+      notices.push({
+        level: "success",
+        text,
+        action: undo
+          ? {
+              label: "Undo",
+              handler: async () => {
+                try {
+                  await undo(result);
+                } catch (err) {
+                  notices.push({
+                    level: "error",
+                    text: errorDetail(err) || "That could not be undone.",
+                  });
+                }
+                await loadWorkflowSets({ force: true });
+              },
+            }
+          : null,
+      });
+    }
+    return result;
+  }
+
+  /** A removed or deleted member, as the create and add routes take it back. */
+  function memberBack(member) {
+    return { sha256: member.sha256, slot: member.slot, label: member.label };
+  }
+
+  /**
+   * Make a set, optionally with members, and open its tray.
+   *
+   * @param {{name?: string|null, members?: Array<Object>}} [body]
+   * @returns {Promise<Object|null>} the new set.
+   */
+  async function createHandMadeSet(body = {}) {
+    const created = await setWrite(() => createWorkflowSet(body), {
+      receipt: (set) =>
+        `Made "${handMadeName(set)}" with ${(set.members ?? []).length} ${
+          (set.members ?? []).length === 1 ? "model" : "models"
+        }.`,
+      undo: (set) => deleteWorkflowSet(set.id),
+      failure: "The set could not be made.",
+    });
+    if (created) {
+      clearSelection();
+      openSetKey.value = `hand:${created.id}`;
+    }
+    return created;
+  }
+
+  /** Rename one set; an empty name goes back to the checkpoint's. */
+  function renameHandMadeSet(set, name) {
+    const before = set.name ?? null;
+    const next = String(name ?? "").trim() || null;
+    if (next === before) return Promise.resolve(set);
+    return setWrite(() => renameWorkflowSet(set.id, next), {
+      receipt: (renamed) => `Renamed the set "${handMadeName(renamed)}".`,
+      undo: () => renameWorkflowSet(set.id, before),
+      failure: "The set could not be renamed.",
+    });
+  }
+
+  /**
+   * Delete sets. Files are never touched, so there is no confirm: the receipt's
+   * Undo recreates each set from the snapshot the server returned.
+   */
+  async function deleteHandMadeSets(sets) {
+    if (!sets.length) return null;
+    return setWrite(
+      () => Promise.all(sets.map((set) => deleteWorkflowSet(set.id))),
+      {
+        receipt: (results) =>
+          results.length === 1
+            ? `Deleted the set "${handMadeName(results[0].deleted)}". No file was touched.`
+            : `Deleted ${results.length} sets. No file was touched.`,
+        undo: (results) =>
+          Promise.all(
+            results.map(({ deleted }) =>
+              createWorkflowSet({
+                name: deleted.name ?? null,
+                members: (deleted.members ?? []).map(memberBack),
+              }),
+            ),
+          ),
+        failure: "The set could not be deleted.",
+      },
+    );
+  }
+
+  /**
+   * Add shelf models to a set, each in its own slot unless one is given.
+   *
+   * @param {Object} set
+   * @param {Array<{model_id: number, slot?: string}>} members
+   */
+  function addToHandMadeSet(set, members) {
+    if (!members.length) return Promise.resolve(null);
+    return setWrite(() => addWorkflowSetMembers(set.id, members), {
+      receipt: ({ added }) =>
+        added.length
+          ? `Added ${added.length} ${added.length === 1 ? "model" : "models"} to "${handMadeName(set)}".`
+          : `Nothing added: "${handMadeName(set)}" already holds ${
+              members.length === 1 ? "it" : "them"
+            }.`,
+      undo: ({ added }) =>
+        added.length ? removeWorkflowSetMembers(set.id, added) : null,
+      failure: "Those models could not be added to the set.",
+    });
+  }
+
+  /** Take members off a set, by hash. The files stay on the shelf. */
+  function removeFromHandMadeSet(set, sha256s) {
+    if (!sha256s.length) return Promise.resolve(null);
+    return setWrite(() => removeWorkflowSetMembers(set.id, sha256s), {
+      receipt: ({ removed }) =>
+        `Took ${removed.length} ${removed.length === 1 ? "model" : "models"} off "${handMadeName(set)}". The ${
+          removed.length === 1 ? "file stays" : "files stay"
+        } on the shelf.`,
+      undo: ({ removed }) =>
+        addWorkflowSetMembers(set.id, removed.map(memberBack)),
+      failure: "Those models could not be taken off the set.",
+    });
+  }
+
+  /** The hand-made sets holding any of these model ids, for the delete warning. */
+  function handMadeSetsHolding(ids) {
+    const wanted = new Set(ids);
+    return handMadeSets.value.filter((set) =>
+      (set.members ?? []).some((m) => m.on_shelf && wanted.has(m.id)),
+    );
+  }
 
   /**
    * What one model has been seen beside, ranked by the recipes backing each.
@@ -2090,7 +2340,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // The anchor stays where it was: dragging a range out and back with
       // repeated Shift+clicks has to measure from the same end each time.
       selectedIds.value = new Set(
-        sequence.slice(start, end + 1).map(idOf).flatMap(withinRange),
+        sequence
+          .slice(start, end + 1)
+          .map(idOf)
+          .flatMap(withinRange),
       );
       return;
     }
@@ -2130,6 +2383,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     anchorId.value = null;
     anchorOccurrence.value = null;
   }
+
+  // Taking files drops any selected hand-made sets (#1520): the pill has one
+  // vocabulary at a time. Here rather than beside `selectSet` because a watch on
+  // `selectedIds` cannot run before the ref is declared.
+  watch(selectedIds, (ids) => {
+    if (ids.size) clearSetSelection();
+  });
 
   /**
    * Drop ids the shelf no longer holds.
@@ -2546,11 +2806,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     // derived from this machine's models and this library's pictures, and the
     // credential that could read both has just changed.
     setsEpoch += 1;
-    workflowSets.value = { combinations: [], noSet: [] };
+    workflowSets.value = { combinations: [], noSet: [], handMade: [] };
     setsLoaded.value = false;
     setsLoading.value = false;
     setsError.value = "";
     openSetKey.value = "";
+    selectedSetIds.value = new Set();
   }
 
   const unsubscribeSessionReset = onSessionReset(resetForSession);
@@ -2625,6 +2886,18 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     noSetRows,
     openSetKey,
     toggleSet,
+    handMadeSets,
+    handMadeGroups,
+    selectedSetIds,
+    selectedSets,
+    selectSet,
+    clearSetSelection,
+    createHandMadeSet,
+    renameHandMadeSet,
+    deleteHandMadeSets,
+    addToHandMadeSet,
+    removeFromHandMadeSet,
+    handMadeSetsHolding,
     worksWithModel,
     offlineMounts,
     renderedCount,

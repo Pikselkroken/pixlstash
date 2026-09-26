@@ -190,14 +190,75 @@ export async function fetchModelCompanions(ids) {
  * the CLIENT's (see `utils/workflowSets.js`): the server groups nothing, so the
  * toolbar can price every fold setting without another request.
  *
- * @returns {Promise<{combinations: Array<Object>, no_set: Array<number>}>}
+ * `hand_made` is the owner's own sets (#1520), newest first; a combination one
+ * of them covers carries its id in `covered_by`.
+ *
+ * @returns {Promise<{combinations: Array<Object>, no_set: Array<number>,
+ *   hand_made: Array<Object>}>}
  */
 export async function fetchWorkflowSets() {
   const body = await unwrap(apiClient.get("/models/workflow-sets"));
   return {
     combinations: Array.isArray(body?.combinations) ? body.combinations : [],
     no_set: Array.isArray(body?.no_set) ? body.no_set : [],
+    hand_made: Array.isArray(body?.hand_made) ? body.hand_made : [],
   };
+}
+
+// ── Hand-made workflow sets (#1520) ─────────────────────────────────────────
+//
+// A per-hub menu of models that work together, stored by hash so a member that
+// leaves the shelf stays in the set and reconnects when the file returns. None
+// of these calls touches a file or a shelf row.
+
+/**
+ * Make a set. Every argument is optional: the grid's tile makes an empty one.
+ *
+ * @param {{name?: string|null, members?: Array<Object>}} [body] - a member is
+ *   `{model_id, slot?}`, or `{sha256, slot, label?}` to put back one that was
+ *   removed or deleted (the undo), whether or not its file is on the shelf now.
+ * @returns {Promise<Object>} the set, as `hand_made` entries are shaped.
+ */
+export async function createWorkflowSet(body = {}) {
+  return unwrap(apiClient.post("/models/workflow-sets", body));
+}
+
+/** Rename a set; `null` goes back to the checkpoint's name. */
+export async function renameWorkflowSet(id, name) {
+  return unwrap(apiClient.patch(`/models/workflow-sets/${id}`, { name }));
+}
+
+/**
+ * Delete a set. Files and shelf rows are untouched.
+ *
+ * @returns {Promise<{deleted: Object}>} the set as it was, which is the undo.
+ */
+export async function deleteWorkflowSet(id) {
+  return unwrap(apiClient.delete(`/models/workflow-sets/${id}`));
+}
+
+/**
+ * Add members to a set. One already in it is skipped, not an error.
+ *
+ * @returns {Promise<{set: Object, added: Array<string>}>} `added` is the hashes
+ *   actually written, which is what an undo takes back out.
+ */
+export async function addWorkflowSetMembers(id, members) {
+  return unwrap(
+    apiClient.post(`/models/workflow-sets/${id}/members`, { members }),
+  );
+}
+
+/**
+ * Take members off a set, by hash. The files stay on the shelf.
+ *
+ * @returns {Promise<{set: Object, removed: Array<Object>}>} `removed` carries
+ *   `{sha256, slot, label}`, which is what an undo puts back.
+ */
+export async function removeWorkflowSetMembers(id, sha256) {
+  return unwrap(
+    apiClient.post(`/models/workflow-sets/${id}/members/remove`, { sha256 }),
+  );
 }
 
 /**

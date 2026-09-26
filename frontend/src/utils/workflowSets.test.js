@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  fillFromPictures,
+  fillFromSets,
+  handMadeCard,
+  handMadeName,
   headModel,
   kindCounts,
   setCard,
   setGroups,
   setName,
+  setSlots,
   sharingLabel,
+  slotSuggestions,
   worksWith,
 } from "./workflowSets";
 
@@ -298,5 +304,144 @@ describe("setName", () => {
 
   it("falls back to the members it has when a set is all adapters", () => {
     expect(setName(combination("5", [LORA]))).toBe("filmgrain_xl");
+  });
+});
+
+describe("hand-made sets (#1520)", () => {
+  const shelfRow = (id, name, fileKind, base = "SDXL") => ({
+    id,
+    sha256: `h${id}`,
+    file_kind: fileKind,
+    display_name: name,
+    filename: `${name}.safetensors`,
+    base_model: base,
+  });
+  const slotMember = (id, name, slot, extra = {}) => ({
+    sha256: `h${id}`,
+    slot,
+    label: name,
+    on_shelf: true,
+    id,
+    name,
+    base_model: "SDXL",
+    ...extra,
+  });
+
+  const rows = [
+    shelfRow(1, "RealVis XL", "checkpoint"),
+    shelfRow(2, "Film Grain", "adapter"),
+    shelfRow(3, "Soft Light", "adapter"),
+    shelfRow(4, "Ink Wash", "adapter"),
+    shelfRow(5, "Flux LoRA", "adapter", "Flux"),
+    shelfRow(6, "Tagger", "engine"),
+  ];
+  const mine = { id: 1, members: [slotMember(1, "RealVis XL", "checkpoint")] };
+  const other = {
+    id: 2,
+    members: [
+      slotMember(9, "Juggernaut", "checkpoint"),
+      slotMember(3, "Soft Light", "lora"),
+    ],
+  };
+  const combinations = [
+    {
+      key: "1,4",
+      recipes: 2,
+      picture_count: 2,
+      models: [
+        { id: 1, name: "RealVis XL", kind: "checkpoint" },
+        { id: 4, name: "Ink Wash", kind: "adapter" },
+      ],
+    },
+  ];
+
+  it("ranks your sets, then recipes with the checkpoint, then the base model, then all", () => {
+    const sections = slotSuggestions({
+      set: mine,
+      slotId: "lora",
+      rows,
+      sets: [mine, other],
+      combinations,
+    });
+    const names = Object.fromEntries(
+      sections.map((s) => [s.id, s.items.map((r) => r.display_name)]),
+    );
+    expect(names).toEqual({
+      sets: ["Soft Light"],
+      checkpoint: ["Ink Wash"],
+      base: ["Film Grain"],
+      all: ["Flux LoRA"],
+    });
+  });
+
+  it("is one unfiltered list until a checkpoint is chosen, and never offers an engine", () => {
+    const sections = slotSuggestions({
+      set: { id: 3, members: [] },
+      slotId: "other",
+      rows,
+      sets: [],
+      combinations,
+    });
+    expect(sections).toHaveLength(1);
+    const names = sections[0].items.map((r) => r.display_name);
+    expect(names).not.toContain("Tagger");
+    expect(names).toContain("RealVis XL");
+  });
+
+  it("filters by the typed text and leaves out what the set already holds", () => {
+    const held = {
+      ...mine,
+      members: [...mine.members, slotMember(2, "Film Grain", "lora")],
+    };
+    const sections = slotSuggestions({
+      set: held,
+      slotId: "lora",
+      rows,
+      sets: [held],
+      combinations,
+      query: "  in",
+    });
+    const all = sections.flatMap((s) => s.items.map((r) => r.display_name));
+    expect(all).toEqual(["Ink Wash"]);
+  });
+
+  it("fills from pictures with what ran beside the checkpoint, in its own slot", () => {
+    expect(fillFromPictures(mine, combinations, rows)).toMatchObject([
+      { id: 4, slot: "lora" },
+    ]);
+    expect(
+      fillFromPictures({ id: 5, members: [] }, combinations, rows),
+    ).toEqual([]);
+  });
+
+  it("fills from a set with other sets' members, never their checkpoint", () => {
+    expect(fillFromSets(mine, [mine, other])).toMatchObject([
+      { id: 3, slot: "lora", from: ["Juggernaut"] },
+    ]);
+  });
+
+  it("lists every slot with its ＋, and drops Checkpoint's once it holds one", () => {
+    const keys = setSlots(mine).map(({ slot, items }) => [
+      slot.id,
+      items.map((i) => i.key),
+    ]);
+    expect(keys).toEqual([
+      ["checkpoint", ["m:h1"]],
+      ["text_encoder", ["add:text_encoder"]],
+      ["vae", ["add:vae"]],
+      ["lora", ["add:lora"]],
+      ["other", ["add:other"]],
+    ]);
+  });
+
+  it("names a set by its own name, its checkpoint's, or Untitled set", () => {
+    expect(handMadeName({ name: "Kit", members: mine.members })).toBe("Kit");
+    expect(handMadeName(mine)).toBe("RealVis XL");
+    expect(handMadeName({ members: [] })).toBe("Untitled set");
+    expect(handMadeCard({ id: 4, members: [] })).toMatchObject({
+      handMade: true,
+      incomplete: true,
+      name: "Untitled set",
+    });
   });
 });

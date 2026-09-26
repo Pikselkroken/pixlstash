@@ -25,6 +25,11 @@ vi.mock("vuetify/components", async () => {
 });
 
 const fetchWorkflowSets = vi.fn();
+const createWorkflowSet = vi.fn();
+const deleteWorkflowSet = vi.fn();
+const addWorkflowSetMembers = vi.fn();
+const removeWorkflowSetMembers = vi.fn();
+const renameWorkflowSet = vi.fn();
 // One double per result set, like the store's own suite: `/adapters` is ONE
 // route serving five `file_kind`s, and a single mock would answer the engines
 // and support requests with the same rows and make the shelf look duplicated.
@@ -46,6 +51,11 @@ vi.mock("../../api/modelShelf", () => ({
   deleteModels: vi.fn(),
   setAdapterAttachments: vi.fn(),
   fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
+  createWorkflowSet: (...args) => createWorkflowSet(...args),
+  deleteWorkflowSet: (...args) => deleteWorkflowSet(...args),
+  addWorkflowSetMembers: (...args) => addWorkflowSetMembers(...args),
+  removeWorkflowSetMembers: (...args) => removeWorkflowSetMembers(...args),
+  renameWorkflowSet: (...args) => renameWorkflowSet(...args),
 }));
 
 vi.mock("../../api/modelIcons", () => ({
@@ -125,10 +135,15 @@ async function mountGrid({
   noSet = [],
   rows = [],
   support = [],
+  handMade = [],
 } = {}) {
   listAdapters.mockResolvedValue(rows);
   listSupport.mockResolvedValue(support);
-  fetchWorkflowSets.mockResolvedValue({ combinations, no_set: noSet });
+  fetchWorkflowSets.mockResolvedValue({
+    combinations,
+    no_set: noSet,
+    hand_made: handMade,
+  });
   const store = useModelShelfStore();
   await store.fetchRows();
   const wrapper = mount(ModelSetGrid, globalOpts);
@@ -582,8 +597,11 @@ describe("the models no recipe names", () => {
 
     // The treegrid holds the cards and nothing else: a ghost inside it would be
     // the last thing Down reaches, and it is not a set.
+    // One card, plus the New workflow set tile (#1520) - which is a row, and
+    // is the only other thing the arrows may walk to.
     const grid = wrapper.find('[role="treegrid"]');
-    expect(grid.findAll('[role="row"]')).toHaveLength(1);
+    expect(grid.findAll('[role="row"]')).toHaveLength(2);
+    expect(grid.findAll(".msg__row")).toHaveLength(1);
     expect(grid.find(".msg__ghost").exists()).toBe(false);
   });
 });
@@ -613,10 +631,10 @@ describe("selection and the verbs", () => {
 
     const grid = wrapper.find('[role="treegrid"]');
     expect(grid.attributes("aria-multiselectable")).toBe("true");
-    await grid.find('[role="row"]').trigger("click");
+    await grid.find(".msg__row").trigger("click");
 
     expect([...store.selectedIds]).toEqual([1]);
-    expect(grid.find('[role="row"]').attributes("aria-selected")).toBe("true");
+    expect(grid.find(".msg__row").attributes("aria-selected")).toBe("true");
     expect(wrapper.find('[data-testid="model-set-card"]').classes()).toContain(
       "msc--on",
     );
@@ -798,7 +816,9 @@ describe("selection and the verbs", () => {
     const { wrapper, store } = await openTray();
 
     await wrapper.findAll(".msp__member")[1].trigger("click");
-    await wrapper.findAll(".msp__member")[2].trigger("click", { ctrlKey: true });
+    await wrapper
+      .findAll(".msp__member")[2]
+      .trigger("click", { ctrlKey: true });
     await wrapper
       .findAll(".msp__member")[2]
       .trigger("contextmenu", { clientX: 1, clientY: 2 });
@@ -847,7 +867,10 @@ describe("selection and the verbs", () => {
       rows: [row(1, "a"), row(2, "b"), row(3, "c")],
       support: [row(4, "d", "vae")],
       combinations: [
-        combination("1,4", [member(1, "a", "checkpoint"), member(4, "d", "vae")]),
+        combination("1,4", [
+          member(1, "a", "checkpoint"),
+          member(4, "d", "vae"),
+        ]),
         combination("2", [member(2, "b", "checkpoint")]),
         combination("3", [member(3, "c", "checkpoint")]),
       ],
@@ -963,7 +986,12 @@ describe("when there is nothing to group", () => {
     });
 
     expect(wrapper.text()).toContain("No picture in this library records");
-    expect(wrapper.find('[role="treegrid"]').exists()).toBe(false);
+    // The grid is still there, holding only the New workflow set tile: making
+    // a set by hand is what an owner with no recorded pictures can do (#1520).
+    expect(wrapper.findAll(".msg__row")).toHaveLength(0);
+    expect(wrapper.find('[data-testid="new-workflow-set"]').exists()).toBe(
+      true,
+    );
   });
 
   it("reports a failed read rather than an empty grid", async () => {
@@ -976,5 +1004,193 @@ describe("when there is nothing to group", () => {
     await wrapper.vm.$nextTick();
 
     expect(wrapper.find('[role="alert"]').text()).toContain("hub is busy");
+  });
+});
+
+describe("hand-made sets (#1520)", () => {
+  /** A hand-made set as `GET /models/workflow-sets` serves it. */
+  function handSet(id, members, extra = {}) {
+    return {
+      id,
+      name: null,
+      created_at: "2026-09-26T08:00:00Z",
+      updated_at: "2026-09-26T08:00:00Z",
+      incomplete: !members.some((m) => m.slot === "checkpoint"),
+      checkpoint_id: members.find((m) => m.slot === "checkpoint")?.id ?? null,
+      picture_count: 0,
+      recipes: 0,
+      covers: [],
+      members,
+      ...extra,
+    };
+  }
+
+  function slotMember(id, name, slot, extra = {}) {
+    return {
+      sha256: String(id).repeat(64).slice(0, 64),
+      slot,
+      label: name,
+      on_shelf: true,
+      id,
+      name,
+      filename: name,
+      kind: slot === "lora" ? "adapter" : slot,
+      base_model: "SDXL",
+      file_size: 1000,
+      ...extra,
+    };
+  }
+
+  const SET_CKPT = slotMember(1, "realvisXL_v5", "checkpoint");
+  const SET_VAE = slotMember(2, "sdxl_vae", "vae");
+
+  it("draws every hand-made card as grouped by you, and says when it has no checkpoint", async () => {
+    const { wrapper } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      handMade: [
+        handSet(10, [SET_CKPT]),
+        handSet(11, [slotMember(3, "filmgrain_xl", "lora")]),
+      ],
+    });
+
+    const cards = wrapper.findAll('[data-testid="model-set-card"]');
+    expect(cards).toHaveLength(2);
+    for (const card of cards) {
+      expect(card.attributes("aria-label")).toContain("grouped by you");
+      expect(card.text()).toContain("Grouped by you");
+    }
+    // Named after its checkpoint, and "Untitled set" without one.
+    expect(cards[0].attributes("aria-label")).toMatch(/^realvisXL_v5/);
+    expect(cards[1].attributes("aria-label")).toMatch(/^Untitled set/);
+    expect(cards[0].text()).not.toContain("Incomplete");
+    expect(cards[1].text()).toContain("Incomplete: no checkpoint");
+    // Honesty: no recipe count on a hand-made card.
+    expect(cards[0].text()).not.toMatch(/recipe/);
+  });
+
+  it("draws a combination the set covers on the set and not again as evidence", async () => {
+    const { wrapper } = await mountGrid({
+      rows: [
+        row(1, "realvisXL_v5", "checkpoint"),
+        row(4, "juggernautXL_v9", "checkpoint"),
+      ],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [
+        { ...combination("1,2", [CKPT, VAE]), covered_by: [10] },
+        combination("4", [OTHER_CKPT]),
+      ],
+      handMade: [handSet(10, [SET_CKPT, SET_VAE], { picture_count: 1 })],
+    });
+
+    const names = wrapper
+      .findAll('[data-testid="model-set-card"]')
+      .map((card) => card.attributes("aria-label").split(",")[0]);
+    expect(names).toEqual(["realvisXL_v5", "juggernautXL_v9"]);
+  });
+
+  it("selects the SET on a hand-made card, never a file, and deletes it with Delete and an Undo", async () => {
+    deleteWorkflowSet.mockResolvedValue({
+      deleted: handSet(10, [SET_CKPT], { name: "Portrait kit" }),
+    });
+    createWorkflowSet.mockResolvedValue(handSet(12, [SET_CKPT]));
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [SET_CKPT], { name: "Portrait kit" })],
+    });
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const notices = useNoticeStore();
+
+    const card = wrapper.find(".msg__row");
+    await card.trigger("click");
+    expect([...store.selectedSetIds]).toEqual([10]);
+    expect([...store.selectedIds]).toEqual([]);
+    expect(card.attributes("aria-selected")).toBe("true");
+
+    await wrapper
+      .find('[role="treegrid"]')
+      .trigger("keydown", { key: "Delete" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(deleteWorkflowSet).toHaveBeenCalledWith(10);
+
+    const receipt = notices.notices.at(-1);
+    expect(receipt.text).toContain('Deleted the set "Portrait kit"');
+    expect(receipt.action.label).toBe("Undo");
+    await receipt.action.handler();
+    // The undo recreates the set from the snapshot, by hash and slot.
+    expect(createWorkflowSet).toHaveBeenCalledWith({
+      name: "Portrait kit",
+      members: [
+        { sha256: SET_CKPT.sha256, slot: "checkpoint", label: SET_CKPT.label },
+      ],
+    });
+  });
+
+  it("makes a set from the keyboard with N and from the tile", async () => {
+    createWorkflowSet.mockResolvedValue(handSet(12, []));
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      combinations: [combination("1", [CKPT])],
+    });
+
+    await wrapper.find('[role="treegrid"]').trigger("keydown", { key: "n" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(createWorkflowSet).toHaveBeenCalledTimes(1);
+    expect(store.openSetKey).toBe("hand:12");
+
+    await wrapper.find('[data-testid="new-workflow-set"]').trigger("click");
+    expect(createWorkflowSet).toHaveBeenCalledTimes(2);
+  });
+
+  it("walks the tray's slots and removes a member with Backspace, keeping the file", async () => {
+    removeWorkflowSetMembers.mockResolvedValue({
+      set: handSet(10, [SET_CKPT]),
+      removed: [{ sha256: SET_VAE.sha256, slot: "vae", label: "sdxl_vae" }],
+    });
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      support: [row(2, "sdxl_vae", "vae")],
+      handMade: [handSet(10, [SET_CKPT, SET_VAE])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+
+    const panel = wrapper.find('[data-testid="model-set-slots-panel"]');
+    // Checkpoint holds its one and offers no ＋; the other four slots do.
+    const addTiles = panel.findAll(".mss__tile--add");
+    expect(addTiles.map((tile) => tile.attributes("aria-label"))).toEqual([
+      "Add text encoder…",
+      "Add VAE…",
+      "Add LoRA…",
+      "Add…",
+    ]);
+
+    const grid = wrapper.find('[role="treegrid"]');
+    // Card → checkpoint tile → the text-encoder slot → the VAE slot's member.
+    await grid.trigger("keydown", { key: "ArrowDown" });
+    await grid.trigger("keydown", { key: "ArrowDown" });
+    await grid.trigger("keydown", { key: "ArrowDown" });
+    await grid.trigger("keydown", { key: "Backspace" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [SET_VAE.sha256]);
+  });
+
+  it("marks a member whose file left the shelf, and does not let it be selected", async () => {
+    const gone = slotMember(5, "old_lora", "lora", {
+      on_shelf: false,
+      id: null,
+    });
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [SET_CKPT, gone])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+
+    const tile = wrapper.find(".mss__tile--gone");
+    expect(tile.text()).toContain("Not on shelf");
+    expect(tile.attributes("aria-selected")).toBeUndefined();
+    await tile.trigger("click");
+    expect([...store.selectedIds]).toEqual([]);
   });
 });

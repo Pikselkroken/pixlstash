@@ -207,6 +207,7 @@ const globalOpts = {
       ModelFoldersDialog: true,
       ShelfEditDialog: true,
       ShelfMoveDialog: true,
+      WorkflowSetRenameDialog: true,
       MergeCopiesDialog: true,
 
       // Same reason, for the same provider: it wraps `AppDialog`. Its own suite

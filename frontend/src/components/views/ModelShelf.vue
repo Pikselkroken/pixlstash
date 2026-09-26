@@ -489,9 +489,12 @@
            destroys the scrollport and drops the reader back at the top. -->
       <ModelSetGrid
         v-if="isSetGrid && !firstRead && !store.error"
+        ref="setGridRef"
         @works-with="showWorksWith"
         @menu="openGridMenu"
         @rename="startRenameSelected"
+        @set-menu="({ x, y }) => setBarRef?.openContextMenu(x, y)"
+        @rename-set="startRenameSet"
       />
       <p v-else-if="firstRead" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
@@ -1414,8 +1417,20 @@
         @forget="confirmForget"
         @delete="confirmDelete"
         @works-with="openWorksWith"
+        @new-set="newSetWithCheckpoint"
+        @remove-from-set="removeSelectedFromSet"
+      />
+      <WorkflowSetSelectionBar
+        ref="setBarRef"
+        @rename="startRenameSet"
+        @delete="store.deleteHandMadeSets(store.selectedSets)"
       />
     </div>
+    <WorkflowSetRenameDialog
+      :set="renamingSet"
+      @close="renamingSet = null"
+      @save="saveSetName"
+    />
 
     <ModelWorksWithDialog :model="worksWithModel" @close="closeWorksWith" />
     <ShelfEditDialog :verb="editVerb" @close="editVerb = ''" />
@@ -1549,6 +1564,8 @@ import { useRoute, useRouter } from "vue-router";
 import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
 import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
+import WorkflowSetRenameDialog from "../panels/WorkflowSetRenameDialog.vue";
+import WorkflowSetSelectionBar from "../panels/WorkflowSetSelectionBar.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import MergeCopiesDialog from "../panels/MergeCopiesDialog.vue";
@@ -1818,6 +1835,17 @@ async function askAndDelete(permanent) {
     });
   }
   const leftBehind = companionsSentences(companions, ids.length);
+  // The owner's own sets keep a deleted member by its hash, marked "Not on
+  // shelf" (#1520), so the prompt says how far the delete reaches and names the
+  // safer verb rather than leaving the reader to find a greyed tile later.
+  const holding = store.handMadeSetsHolding(ids);
+  const inSets = holding.length
+    ? ` ${many ? "They stay" : "It stays"} in ${
+        holding.length === 1
+          ? `your set "${holding[0].name || "Untitled set"}"`
+          : `${holding.length} of your workflow sets`
+      }, marked Not on shelf. To take ${many ? "them" : "it"} off a set only, use Remove from set.`
+    : "";
   const ok = await confirm({
     title: permanent
       ? `Permanently delete ${many ? `${ids.length} models?` : "this model?"}`
@@ -1826,7 +1854,8 @@ async function askAndDelete(permanent) {
       (permanent
         ? `The files for ${subject} are deleted permanently from this machine, along with everything recorded about them.`
         : `The files for ${subject} go to your ${trash}, where you can put them back. The shelf stops listing them.`) +
-      (leftBehind ? ` ${leftBehind}` : ""),
+      (leftBehind ? ` ${leftBehind}` : "") +
+      inSets,
     warning: permanent
       ? "There is no undo for this."
       : `A very large file may be too big for the ${trash} and be deleted outright.`,
@@ -2372,6 +2401,14 @@ function onShelfKeydown(event) {
     store.selectVisible();
     return;
   }
+  // Selected hand-made SETS (#1520) answer the same two keys with the set
+  // vocabulary: Escape clears, Delete deletes the sets - never a file.
+  if (store.selectedSets.length) {
+    event.preventDefault();
+    if (event.key === "Escape") store.clearSetSelection();
+    else store.deleteHandMadeSets(store.selectedSets);
+    return;
+  }
   // Escape and Delete are both about a selection, and the guard above no longer
   // asks for one.
   if (!store.selectedRows.length) return;
@@ -2387,6 +2424,56 @@ function onShelfKeydown(event) {
 
 onMounted(() => window.addEventListener("keydown", onShelfKeydown));
 onUnmounted(() => window.removeEventListener("keydown", onShelfKeydown));
+
+// ── Hand-made workflow sets (#1520) ─────────────────────────────────────────
+
+const setGridRef = ref(null);
+const setBarRef = ref(null);
+/** The set the rename dialog is open on, or null. */
+const renamingSet = ref(null);
+
+function startRenameSet() {
+  if (store.selectedSets.length === 1)
+    renamingSet.value = store.selectedSets[0];
+}
+
+async function saveSetName(name) {
+  const set = renamingSet.value;
+  renamingSet.value = null;
+  if (set) await store.renameHandMadeSet(set, name);
+}
+
+/**
+ * "New workflow set with this checkpoint", from a checkpoint's menu.
+ *
+ * The set grid is where a set is filled, so the shelf goes there. Asked from an
+ * EVIDENCE card, the new set opens with Fill from pictures ready: that card is
+ * the pictures, and they are what the owner is most likely to want to keep.
+ */
+async function newSetWithCheckpoint() {
+  const row = store.selectedRows[0];
+  if (!row) return;
+  const fromEvidence = isSetGrid.value;
+  if (!isSetGrid.value) store.setView({ groupBy: "workflow_set" });
+  const created = await store.createHandMadeSet({
+    members: [{ model_id: row.id, slot: "checkpoint" }],
+  });
+  if (created && fromEvidence) {
+    await nextTick();
+    setGridRef.value?.openFill("pictures");
+  }
+}
+
+/** Remove from set: the selected members of the open hand-made tray. */
+function removeSelectedFromSet() {
+  const open = store.handMadeGroups.find((g) => g.key === store.openSetKey);
+  if (!open) return;
+  const ids = new Set(store.selectedModelIds);
+  const hashes = (open.set.members ?? [])
+    .filter((m) => m.on_shelf && ids.has(m.id))
+    .map((m) => m.sha256);
+  store.removeFromHandMadeSet(open.set, hashes);
+}
 
 // ── The thumbnail verb ──────────────────────────────────────────────────────
 

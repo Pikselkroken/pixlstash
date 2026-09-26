@@ -1683,6 +1683,57 @@ proves ran together, with a model free to appear in more than one.
   companion because its kind is unticked would turn a view setting into a claim
   about the evidence.
 
+##### Hand-made workflow sets (#1520)
+
+`ModelSetSlotsPanel.vue`, `WorkflowSetChooser.vue`, `WorkflowSetSelectionBar.vue`
+and `WorkflowSetRenameDialog.vue` (`panels/`) add the owner's own sets to the same
+grid. A hand-made set is a per-hub **menu** of models that work together (no
+order, no strengths), stored by hash in the hub (`docs/backend_architecture.md`,
+the shelf's workflow sets section) and served as `hand_made` on
+`GET /models/workflow-sets`.
+
+- **One grid, two kinds of card.** `flatRows` leads with the `New workflow set`
+  tile (`kind: "new"`, also the `N` key), then `store.handMadeGroups` newest
+  first, then the evidence cards. The initial cursor is the first CARD, not the
+  tile. A hand-made card is `ModelSetCard` with `card.handMade`: a dashed edge, a
+  "Grouped by you" badge, the checkpoint's `ModelMark` as the cover until a
+  picture belongs to it, "Incomplete: no checkpoint" in place of its facts when
+  it has none, and never a recipe count.
+- **Evidence is built only from what no hand-made set covers.** The server marks
+  a combination `covered_by` when every one of its models is an on-shelf member
+  of a set; `visibleCombinations` drops those, so they appear on the set's card
+  (its `picture_count` and covers) and not again as evidence. `worksWith` still
+  reads the whole payload.
+- **A hand-made card selects the SET; a tray tile selects a FILE; never both.**
+  `store.selectSet` / `selectedSetIds` is a second selection that clears the
+  model selection, and a watch on `selectedIds` clears it back. Sets get
+  `WorkflowSetSelectionBar` (Rename, Delete set, and the card's context menu);
+  files keep `ShelfSelectionBar`, which gains **Remove from set** while every
+  selected file is a member of the open hand-made tray, and **New workflow set
+  with this checkpoint** for one hashed checkpoint (from an evidence card it
+  opens the new set with Fill from pictures ready). Delete on a set card deletes
+  the set; Delete on a member tile is the shelf's file delete, whose prompt now
+  names the sets that keep the file as "Not on shelf".
+- **The tray is slots, walked by slot.** `setSlots` (`utils/workflowSets.js`)
+  gives each of the five fixed slots its member tiles plus a ＋ tile (Checkpoint
+  drops its ＋ once filled); the grid splices them in as `kind: "slot"` entries.
+  Left/Right walk tiles, Up/Down jump slot to slot (and out to the card or the
+  next row), Enter on ＋ opens the chooser, Backspace removes a member, Delete
+  stays the file delete. Down from a card into a List tray or a slots tray lands
+  on its first row (`intoTray`).
+- **One chooser for three jobs.** `WorkflowSetChooser` is a popup checklist that
+  only adds: a slot's ＋ (ranked by `slotSuggestions` — your sets with the same
+  base model, then recipes with this checkpoint, then the same base model, then
+  all; unranked until a checkpoint is chosen), **Fill from pictures**
+  (`fillFromPictures`) and **Fill from a set** (`fillFromSets`). Focus goes back
+  to the tile on close, since v-menu cannot restore it for a programmatic open.
+- **Every set write is `setWrite` in the store:** the call, a full refetch
+  (coverage moves with membership), and a receipt whose Undo is the inverse call
+  — a delete is undone by recreating the set from the snapshot the route returns.
+- **Clone with new models** labels proposals with `via: "grouped"` "Grouped by
+  you" and lists them first in its selects; one with `prepick: false` (the set
+  offers several of that kind) is shown but not pre-picked.
+
 #### `WorkflowsView.vue` (`views/`) + `StackPanel.vue` (`panels/`), v1.12 F1a / F2
 
 The Workflows grid, **on `/workflows`** (`WORKFLOW_ROUTES`,
