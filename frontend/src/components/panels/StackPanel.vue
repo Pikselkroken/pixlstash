@@ -864,7 +864,7 @@ const notchStyle = computed(() => {
 .stack-panel__listhead,
 .stack-panel__row {
   display: grid;
-  /* Workflow is floored at the thumbnail strip plus a readable name, and is
+  /* Workflow is floored at the thumbnail strip plus the start of a name, and is
      the column that keeps its width: Checkpoint and Differs by give theirs up
      first, down to one chip each. A `minmax(0, 1fr)` here was squeezed to
      nothing by the fixed columns beside it on any panel under ~800px. */
@@ -911,10 +911,10 @@ const notchStyle = computed(() => {
   border-left-color: var(--active-bar);
 }
 
-/* `overflow: hidden` like `__ckpt` and `__facts`: the trio is `flex: none` and
-   the workflow track is `minmax(0, 1fr)`, so under width pressure something
-   has to give. Clipped at the column edge rather than painted over Checkpoint
-   — and the trio is 96px wide now, so the squeeze starts sooner than it did. */
+/* `overflow: hidden` like `__ckpt` and `__facts`: the trio is `flex: none`,
+   and at the track's 12rem floor a long name plus the Cover pill still does
+   not fit, so something has to give. Clipped at the column edge rather than
+   painted over Checkpoint. */
 .stack-panel__ident {
   display: flex;
   align-items: center;

@@ -703,6 +703,20 @@ describe("StackPanel List thumbnails", () => {
     expect(rule(".stack-panel__thumbs").flex).toBe("none");
   });
 
+  // The Workflow track was `minmax(0, 1fr)` beside fixed columns and was
+  // squeezed to a sliver on an ordinary panel: it needs a real floor, and a
+  // panel narrower than every floor scrolls the list rather than clipping it.
+  it("floors the workflow column and scrolls a narrow list sideways", () => {
+    const [first] = rule(".stack-panel__listhead,\n.stack-panel__row")[
+      "grid-template-columns"
+    ].split(/\s+(?![^(]*\))/);
+    expect(first).toBe("minmax(12rem, 1fr)");
+    expect(rule(".stack-panel__list")["overflow-x"]).toBe("auto");
+    // Without it the list's minimum width widens the clipped body instead,
+    // and the right-hand columns are cut off with nothing to scroll.
+    expect(rule(".stack-panel__body")["min-width"]).toBe("0");
+  });
+
   // The row's waiting cell and the card's are the same grey. At 36px nobody
   // could tell; at 80 two different greys sat side by side on one screen.
   it("paints a waiting cell in the card's own fill", () => {
