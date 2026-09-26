@@ -42,16 +42,22 @@
         :aria-label="label || undefined"
         aria-haspopup="listbox"
         :aria-expanded="String(open)"
-        :aria-controls="open ? listId : undefined"
+        :aria-controls="listId"
         :aria-activedescendant="open ? optionId(activeIndex) : undefined"
         :aria-disabled="disabled || undefined"
         @click="toggle"
         @keydown="onComboKeydown"
       >
-        <span class="app-select__value">{{ optionName(current) }}</span>
+        <!-- The value is spoken whole, the name and every chip with commas
+             between; the field draws only the first chip. -->
+        <span class="visually-hidden">{{ current ? optionSpoken(current) : "" }}</span>
+        <span class="app-select__value" aria-hidden="true">{{
+          optionName(current)
+        }}</span>
         <ChipRow
           v-if="current?.chips?.length"
           class="app-select__value-chips"
+          aria-hidden="true"
           :items="chipItems(current.chips.slice(0, 1))"
         />
       </div>

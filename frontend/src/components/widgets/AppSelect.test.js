@@ -51,6 +51,18 @@ describe("AppSelect with chip options", () => {
     expect(w.find("[role='listbox']").exists()).toBe(false);
   });
 
+  it("speaks the closed value whole, every chip included", () => {
+    const w = mountRich();
+    // What is not aria-hidden is what a screen reader reads as the value.
+    const spoken = [...combo(w).element.querySelectorAll("*")]
+      .filter((el) => !el.closest("[aria-hidden='true']") && !el.children.length)
+      .map((el) => el.textContent.trim())
+      .filter(Boolean);
+    expect(spoken).toEqual(["Krea, + upscale, flux"]);
+    // Required on a combobox (ARIA 1.2), open or not.
+    expect(combo(w).attributes("aria-controls")).toBeTruthy();
+  });
+
   it("opens on the chosen row, with one heading per group", async () => {
     const w = mountRich();
     await combo(w).trigger("keydown", { key: "ArrowDown" });
