@@ -1808,7 +1808,7 @@ A focused list — read before changing anything that crosses the boundary.
 14. **`X-Client-Id` / `origin_client_id` is for echo-matching only — never authorization.** It is attacker-controllable; any access decision based on it is a vulnerability. Every mutating in-request emit must carry `source`/`origin_client_id` in the event `data` dict, or the originating tab will full-reload on its own change.
 15. **`PUT /picture_sets/{id}/members` replaces; `POST` on the same path appends.** Same path, same body, opposite effect. The PUT refuses (400) a replacement that would leave a non-empty set empty unless the body carries `allow_empty: true`, and reports `removed` beside `members`. Removing one picture is `DELETE /picture_sets/{id}/members/{picture_id}`; its `picture_id` is an integer, so a non-numeric segment is a 422, never a 500 (#1580).
 16. **`original_file_name` is not unique.** It is the basename the file arrived with, and generators reuse names (`image_00008.png`) freely; many pictures can share one. Never join on it; join on `id`.
-17. **`Picture.source_picture_id` is not provenance.** It is a work marker: set on a generated or plugin output so `SourceFaceLikenessTask` can copy character assignments from the source's faces, then cleared once that task has run. A NULL says nothing about whether the picture was derived from another, and crops record no parent.
+17. **`Picture.source_picture_id` is not provenance.** It is a work marker: set on a generated or plugin output so `SourceFaceLikenessTask` can copy character assignments from the source's faces, then cleared once that task has run. A NULL says nothing about whether the picture was derived from another.
 
 ---
 

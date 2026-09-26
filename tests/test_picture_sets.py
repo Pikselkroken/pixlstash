@@ -307,20 +307,20 @@ def test_reassigning_set_project_reconciles_member_picture_memberships():
         gc.collect()
 
 
-def _first_test_image():
+def _first_test_image(index=0):
     import glob
 
     candidates = glob.glob(
         os.path.join(os.path.dirname(__file__), "..", "pictures", "*.png")
     ) + glob.glob(os.path.join(os.path.dirname(__file__), "..", "pictures", "*.jpg"))
     assert candidates, "No test images found in pictures/ directory"
-    path = candidates[0]
+    path = candidates[index]
     mime = "image/png" if path.lower().endswith(".png") else "image/jpeg"
     return path, mime
 
 
-def _import_one_picture(client):
-    path, mime = _first_test_image()
+def _import_one_picture(client, index=0):
+    path, mime = _first_test_image(index)
     with open(path, "rb") as image_file:
         import_resp = upload_pictures_and_wait(
             client, [("file", (os.path.basename(path), image_file, mime))]
@@ -641,11 +641,7 @@ def test_member_routes_refuse_bad_ids_and_empty_replace():
     refuses to empty a set unless ``allow_empty`` is passed."""
     temp_dir, client, server = setup_server_with_temp_db()
     try:
-        path, mime = _first_test_image()
-        with open(path, "rb") as image_file:
-            first = upload_pictures_and_wait(
-                client, [("file", (os.path.basename(path), image_file, mime))]
-            )["results"][0]["picture_id"]
+        first = _import_one_picture(client)
         set_id = client.post("/picture_sets", json={"name": "Guarded"}).json()[
             "picture_set"
         ]["id"]
@@ -659,9 +655,13 @@ def test_member_routes_refuse_bad_ids_and_empty_replace():
             assert resp.status_code == 200
             return set(resp.json()["picture_ids"])
 
+        # A partial replace reports what it evicted.
+        second = _import_one_picture(client, index=1)
+        resp = client.put(members_url, json={"picture_ids": [first, second]})
+        assert resp.json() == {"status": "success", "members": 2, "removed": 0}
         resp = client.put(members_url, json={"picture_ids": [first]})
         assert resp.status_code == 200
-        assert resp.json() == {"status": "success", "members": 1, "removed": 0}
+        assert resp.json() == {"status": "success", "members": 1, "removed": 1}
 
         for body in ({"picture_ids": []}, {}, {"picture_ids": [987654]}):
             resp = client.put(members_url, json=body)
