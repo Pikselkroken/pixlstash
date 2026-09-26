@@ -126,7 +126,7 @@
           Stack with the original
         </label>
 
-        <template v-if="run">
+        <template v-if="runHere">
           <div class="section-label section-label--on-dark edit-sec">
             <span>{{ runHeading }}</span>
             <span v-if="run.status === 'running'" class="edit-aside"
@@ -172,14 +172,20 @@
                 <template v-if="run.stack">· added to the original's stack</template>
               </div>
               <button
-                v-if="run.stack"
+                v-if="run.stack && run.resultId"
                 type="button"
                 class="edit-link"
                 @click="showResult"
               >
                 Show it
               </button>
-              <p v-if="run.message" class="edit-note">{{ run.message }}</p>
+              <p v-else-if="run.stack && run.lookedInVain" class="edit-note">
+                It has not reached the stack yet. It will be there once it is
+                imported.
+              </p>
+              <p v-else-if="run.stack" class="edit-note">
+                Adding it to the stack…
+              </p>
             </div>
           </div>
         </template>
@@ -270,7 +276,7 @@ const props = defineProps({
   comfyuiProgressPercent: { type: Number, default: 0 },
 });
 
-const emit = defineEmits(["show-picture", "more-options"]);
+const emit = defineEmits(["show-picture", "more-options", "running"]);
 const router = useRouter();
 
 /** The card types this tab lists, as `workflow_type` spells them. */
@@ -303,7 +309,7 @@ const submitError = ref("");
 /**
  * The run this tab started last, or null.
  * `{sourceId, workflowName, instruction, stack, status, message, beforeIds,
- * resultId}` - `status` is running | done | failed.
+ * resultId, lookedInVain}` - `status` is running | done | failed.
  */
 const run = ref(null);
 
@@ -352,6 +358,25 @@ watch(storageKey, () => {
     workflowKey.value = rememberedKey.value;
   }
 });
+
+// The run belongs to the picture it started from (and the picture it made);
+// stepping to any other picture shows that picture's form, not this run.
+const runHere = computed(() => {
+  const current = run.value;
+  if (!current) return null;
+  const here = String(props.pictureId);
+  return String(current.sourceId) === here || String(current.resultId) === here
+    ? current
+    : null;
+});
+
+// A refusal is about the picture it was for.
+watch(
+  () => props.pictureId,
+  () => {
+    submitError.value = "";
+  },
+);
 
 const runHeading = computed(() => {
   if (run.value?.status === "running") return "Running";
@@ -452,9 +477,10 @@ async function findResult(current) {
 }
 
 let resolveTimer = null;
-// ponytail: polls the stack a few times after ComfyUI finishes, because the
-// output is imported a moment later; a `picture_imported` hook would be exact.
-const RESOLVE_ATTEMPTS = 5;
+// ponytail: polls the stack after ComfyUI finishes, because the output is
+// imported a moment later; a `picture_imported` hook would be exact. Half a
+// minute covers a slow import; *Show it* appears only once the poll finds it.
+const RESOLVE_ATTEMPTS = 20;
 const RESOLVE_DELAY_MS = 1500;
 
 async function resolveResult(current, attempt = 1) {
@@ -474,6 +500,8 @@ async function resolveResult(current, attempt = 1) {
       () => resolveResult(run.value, attempt + 1),
       RESOLVE_DELAY_MS,
     );
+  } else if (!current.resultId) {
+    run.value = { ...current, lookedInVain: true };
   }
 }
 
@@ -497,36 +525,33 @@ watch(
   },
 );
 
-onBeforeUnmount(() => clearTimeout(resolveTimer));
+// Whether the grid's ComfyUI state on screen is this tab's run: while it runs,
+// and through the runner's short "complete" tail after it, which the tab's own
+// Last edit already says. The lightbox drops its own bar for as long as this
+// holds. A later run from the grid's menus flips the runner back to running,
+// which this done run does not claim.
+const tellsRun = computed(() => {
+  const status = runHere.value?.status;
+  if (status === "running") return true;
+  return (
+    status === "done" &&
+    !!props.comfyuiProgress?.visible &&
+    props.comfyuiProgress?.status === "completed"
+  );
+});
 
-async function showResult() {
+watch(tellsRun, (running) => emit("running", running));
+
+onBeforeUnmount(() => {
+  clearTimeout(resolveTimer);
+  if (tellsRun.value) emit("running", false);
+});
+
+// Only offered once the result has been found, so it always has somewhere to go.
+function showResult() {
   const current = run.value;
-  if (!current) return;
-  let lookupFailed = false;
-  if (!current.resultId) {
-    try {
-      current.resultId = await findResult(current);
-    } catch (err) {
-      lookupFailed = true;
-      console.warn(
-        `Could not look up the result of the edit on picture ${current.sourceId}:`,
-        err,
-      );
-    }
-    // A newer run may have started while the lookup was out; it owns the tab.
-    if (run.value !== current) return;
-    run.value = { ...current };
-  }
-  if (current.resultId) {
-    emit("show-picture", current.resultId);
-  } else {
-    // Only an answered lookup can say the result is not there yet.
-    run.value = {
-      ...current,
-      message: lookupFailed
-        ? "Could not check the stack just now; try again in a moment."
-        : "It is not in the stack yet; try again in a moment.",
-    };
+  if (current?.resultId) {
+    emit("show-picture", current.resultId, current.sourceId);
   }
 }
 

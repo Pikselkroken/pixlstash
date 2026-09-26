@@ -397,7 +397,7 @@
       </header>
 
       <div
-        v-if="comfyuiProgress && comfyuiProgress.visible"
+        v-if="comfyuiProgress && comfyuiProgress.visible && !editTabShowsRun"
         class="overlay-progress overlay-progress--comfyui"
         :class="{
           'overlay-progress--error': comfyuiProgress.status === 'failed',
@@ -824,7 +824,8 @@
             :active="sidebarTab === 'edit'"
             :comfyui-progress="comfyuiProgress"
             :comfyui-progress-percent="comfyuiProgressPercent"
-            @show-picture="(id) => emit('show-picture', id)"
+            @show-picture="showEditResult"
+            @running="(on) => (editRunning = on)"
             @more-options="(payload) => emit('edit-more-options', payload)"
           />
         </AppInspector>
@@ -901,6 +902,7 @@ import {
 import {
   getPictureMetadata,
   listPictureFaces,
+  listPicturesByIds,
   listPictureDetections,
   addPictureFace,
   downloadPicture,
@@ -1139,6 +1141,13 @@ const editTabShown = computed(
     editTabAvailable.value &&
     !!image.value?.id &&
     !isSupportedVideoFile(getOverlayFormat(image.value)),
+);
+// Whether a run the Edit tab started is still going. While that tab is on
+// screen its own bar reports the run, so the lightbox's ComfyUI bar would be a
+// second copy. A run from the grid's menus still gets the lightbox bar.
+const editRunning = ref(false);
+const editTabShowsRun = computed(
+  () => editRunning.value && sidebarOpen.value && sidebarTab.value === "edit",
 );
 // The reader's CHOICE is remembered even while the tab it names is gone, so
 // stepping over a photo in a run of ComfyUI pictures does not silently move
@@ -1395,6 +1404,59 @@ function setOverlayImageById(nextId) {
     return;
   }
   // Tag state reset is handled by OverlayTagsPanel's image-id watcher.
+}
+
+/**
+ * The Edit tab's *Show it*: move to the picture its run made. The grid defers
+ * `picture_imported` inserts while the lightbox is open (§9.1), so the result
+ * is usually in neither the frozen snapshot nor the live list, and a plain
+ * `initialImageId` move found nothing and did nothing. Its grid row is read by
+ * id and slotted in after the picture the run started from, so next/prev and
+ * the filmstrip agree with what is on screen; then the grid is told, so the
+ * URL follows. Only this path reads by id: the runner's own step to a newest
+ * member goes by the grid's `overlayImageId`, which does not follow filmstrip
+ * steps, and letting it through would pull a reader off a picture they moved to.
+ */
+async function showEditResult(id, sourceId) {
+  const idKey = String(id);
+  const fromId = image.value?.id;
+  if (!open.value || idKey === "") return;
+  if (!allImageById.value.has(idKey) && !filmstripImageById.value.has(idKey)) {
+    let row = null;
+    try {
+      const rows = await listPicturesByIds([idKey], { fields: "grid" });
+      row = Array.isArray(rows) ? rows[0] : null;
+    } catch (err) {
+      console.warn(`Could not read edited picture ${idKey} to show it:`, err);
+    }
+    // Overtaken: the lightbox closed or the reader moved on meanwhile.
+    if (!open.value || image.value?.id !== fromId) return;
+    if (!row) {
+      noticeStore.error("Couldn't open the edited picture. Try again.", {
+        key: "edit-show-result",
+      });
+      return;
+    }
+    const list = overlayImages.value.slice();
+    if (!list.some((item) => String(item?.id) === idKey)) {
+      const anchor = String(sourceId ?? fromId);
+      const at = list.findIndex((item) => String(item?.id) === anchor);
+      list.splice(at === -1 ? list.length : at + 1, 0, row);
+      frozenAllImages.value = list;
+      // The stack grew by this read, not by a restructure seen on the grid:
+      // re-record its signature, or the next grid repaint reads the change as
+      // one and sends the reader back to the leader.
+      const stackId = getPictureStackId(row);
+      if (stackId && overlayStackSignatures.value.has(stackId)) {
+        const next = new Map(overlayStackSignatures.value);
+        next.set(stackId, getOverlayStackSignature(stackId));
+        overlayStackSignatures.value = next;
+      }
+    }
+  }
+  setOverlayImageById(idKey);
+  void ensureOverlayFilmstripForImage();
+  emit("show-picture", id);
 }
 
 const emit = defineEmits([

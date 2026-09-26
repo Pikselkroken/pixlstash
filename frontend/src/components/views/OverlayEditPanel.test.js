@@ -231,54 +231,50 @@ describe("the Edit tab", () => {
     expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
   });
 
-  it("drops a Show it lookup that a newer run overtook", async () => {
+  it("offers Show it only once the result has reached the stack", async () => {
     const pictures = await import("../../api/pictures");
     const stacks = await import("../../api/stacks");
     pictures.getPictureMetadata.mockResolvedValue({ stack_id: 3 });
+    stacks.listStackPictures.mockResolvedValue([{ id: 7 }]);
     const wrapper = await mountPanel();
-    await wrapper.find("textarea").setValue("first");
-    await wrapper.find("button.run").trigger("click");
-    await flush();
-    await wrapper.setProps({ comfyuiProgress: { status: "completed" } });
-    await flush();
-    // Held open, so a second run can start while Show it is looking.
-    let answer;
-    stacks.listStackPictures.mockImplementation(
-      () => new Promise((resolve) => (answer = resolve)),
-    );
-    const showIt = wrapper.findAll("button").find((b) => b.text() === "Show it");
-    await showIt.trigger("click");
-    stacks.listStackPictures.mockResolvedValue([]);
-    await wrapper.setProps({ comfyuiProgress: { status: "running" } });
-    await wrapper.find("textarea").setValue("second");
-    await wrapper.find("button.run").trigger("click");
-    await flush();
-    answer([{ id: 99, created_at: "2026-01-01T00:00:00Z" }]);
-    await flush();
-    expect(wrapper.emitted("show-picture")).toBeUndefined();
-    expect(wrapper.text()).toContain("Running");
-  });
-
-  it("tells a failed Show it lookup apart from a result not there yet", async () => {
-    const pictures = await import("../../api/pictures");
-    const stacks = await import("../../api/stacks");
-    pictures.getPictureMetadata.mockResolvedValue({ stack_id: 3 });
-    stacks.listStackPictures.mockResolvedValue([]);
-    const wrapper = await mountPanel();
-    await wrapper.find("button.run").trigger("click");
-    await flush();
-    await wrapper.setProps({ comfyuiProgress: { status: "completed" } });
-    await flush();
     const showIt = () =>
       wrapper.findAll("button").find((b) => b.text() === "Show it");
-    await showIt().trigger("click");
-    await flush();
-    expect(wrapper.text()).toContain("It is not in the stack yet");
-    stacks.listStackPictures.mockRejectedValue(new Error("offline"));
-    await showIt().trigger("click");
-    await flush();
-    expect(wrapper.text()).toContain("Could not check the stack just now");
-    expect(wrapper.text()).not.toContain("It is not in the stack yet");
+    vi.useFakeTimers();
+    try {
+      await wrapper.find("button.run").trigger("click");
+      await vi.advanceTimersByTimeAsync(0);
+      await wrapper.setProps({ comfyuiProgress: { status: "completed" } });
+      await vi.advanceTimersByTimeAsync(0);
+      // Imported a moment after ComfyUI finishes: no link to a missing picture.
+      expect(showIt()).toBeUndefined();
+      expect(wrapper.text()).toContain("Adding it to the stack");
+      stacks.listStackPictures.mockResolvedValue([
+        { id: 7 },
+        { id: 99, created_at: "2026-01-01T00:00:00Z" },
+      ]);
+      await vi.advanceTimersByTimeAsync(1500);
+      await showIt().trigger("click");
+      expect(wrapper.emitted("show-picture")).toEqual([[99, 7]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says so, with no link, when the result never reaches the stack", async () => {
+    const pictures = await import("../../api/pictures");
+    pictures.getPictureMetadata.mockResolvedValue({ stack_id: 3 });
+    const wrapper = await mountPanel();
+    vi.useFakeTimers();
+    try {
+      await wrapper.find("button.run").trigger("click");
+      await vi.advanceTimersByTimeAsync(0);
+      await wrapper.setProps({ comfyuiProgress: { status: "completed" } });
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(wrapper.text()).toContain("It has not reached the stack yet");
+      expect(wrapper.text()).not.toContain("Show it");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says why nothing was queued", async () => {
@@ -291,6 +287,51 @@ describe("the Edit tab", () => {
     await flush();
     expect(wrapper.text()).toContain("Nothing was queued");
     expect(wrapper.text()).not.toContain("Running");
+  });
+
+  it("tells the lightbox while its run is going", async () => {
+    const wrapper = await mountPanel();
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    await wrapper.setProps({ comfyuiProgress: { status: "completed" } });
+    expect(wrapper.emitted("running")).toEqual([[true], [false]]);
+  });
+
+  it("claims the runner's complete tail, but not a later run's", async () => {
+    const wrapper = await mountPanel();
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    await wrapper.setProps({
+      comfyuiProgress: { visible: true, status: "completed" },
+    });
+    // "ComfyUI complete" is this run's, and Last edit already says it.
+    expect(wrapper.emitted("running")).toEqual([[true]]);
+    await wrapper.setProps({
+      comfyuiProgress: { visible: false, status: "idle" },
+    });
+    expect(wrapper.emitted("running")).toEqual([[true], [false]]);
+    // A run from the grid's menus: the lightbox bar is its to show.
+    await wrapper.setProps({
+      comfyuiProgress: { visible: true, status: "running" },
+    });
+    expect(wrapper.emitted("running")).toEqual([[true], [false]]);
+  });
+
+  it("keeps the run on the picture it was for", async () => {
+    const wrapper = await mountPanel();
+    await wrapper.find("textarea").setValue("golden hour");
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    expect(wrapper.text()).toContain("Running");
+    await wrapper.setProps({ pictureId: 8 });
+    // Another picture: its own form, and the lightbox's bar back for the run.
+    expect(wrapper.text()).not.toContain("Running");
+    expect(wrapper.emitted("running")).toEqual([[true], [false]]);
+    await wrapper.setProps({ comfyuiProgress: { status: "completed" } });
+    expect(wrapper.text()).not.toContain("Last edit");
+    await wrapper.setProps({ pictureId: 7 });
+    expect(wrapper.text()).toContain("Last edit");
+    expect(wrapper.text()).toContain("“golden hour”");
   });
 
   it("marks the run finished when ComfyUI completes", async () => {
