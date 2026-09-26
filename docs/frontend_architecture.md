@@ -1550,7 +1550,11 @@ proves ran together, with a model free to appear in more than one.
   would put a shared VAE behind a Delete aimed at a checkpoint. It stands for
   its head instead — the file whose name, kind and mark the card already draws
   — and the other members are selected one at a time in the tray, where a row
-  is one model. Nothing here ever selects a SET. On that footing the grid
+  is one model. Nothing here ever selects a SET. **A card is drawn selected
+  only when the pick came from a card**: picking its checkpoint in the tray
+  selects the same `model.id` but leaves the card unlit, because a lit card
+  reads as the whole set picked (`trayPicked`, cleared by any selection change
+  the grid did not make, such as Select all). On that footing the grid
   carries the row list's whole contract, through the same store: click
   replaces, Ctrl/Cmd+click toggles, Shift+click takes the range in DRAWN order
   (`orderedIds`, read off `flatRows`, de-duplicated because an open set's head
