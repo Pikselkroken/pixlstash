@@ -579,7 +579,9 @@ one; image filters are re-scanned every time the Filters menu is listed.
 one verb that imports the plugin instead of reading it: it loads the file the
 way the server does, registers what it defines, and checks that the parameter
 schema is one the settings screen can render — so a typo costs a command rather
-than a restart. `--image PATH` runs it over one picture as well, and stops
+than a restart, and it ends by listing the connections, programs and file
+writes it saw the plugin make while it ran. `--image PATH` runs it over one
+picture as well, and stops
 instead of running when the plugin reports its model is not present — though a
 plugin that downloads inside `init()` still will, since by then it is the
 plugin's code deciding.

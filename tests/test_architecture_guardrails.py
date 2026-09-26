@@ -3300,3 +3300,26 @@ def test_naive_datetime_guardrail_has_teeth():
     assert not _naive_datetime_sites("x = _utcnow()", in_models=False)
     assert not _naive_datetime_sites("x = datetime.fromtimestamp(0, tz=UTC)", False)
     assert not _naive_datetime_sites("x = datetime.fromtimestamp(0, UTC)", False)
+
+
+def test_plugin_check_is_imported_only_by_the_cli():
+    """The `plugins test` audit hook must never be installed in the server.
+
+    `sys.addaudithook` cannot be undone, so a server that imported
+    `plugin_check` and ran a check would carry the hook for its whole life.
+    """
+    importers = set()
+    for path in sorted(PIXLSTASH_DIR.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module] + [
+                    f"{node.module}.{alias.name}" for alias in node.names
+                ]
+            else:
+                continue
+            if "pixlstash.plugin_check" in names:
+                importers.add(path.relative_to(REPO_ROOT).as_posix())
+    assert importers == {"pixlstash/cli.py"}

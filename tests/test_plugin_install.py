@@ -16,6 +16,7 @@ import io
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import zipfile
@@ -1272,6 +1273,153 @@ def test_image_stops_when_the_plugin_says_its_model_is_missing(tmp_path, capsys)
     captured = capsys.readouterr()
     assert "Stopping rather than fetching them" in captured.err
     assert "Ran over" not in captured.out
+
+
+#: Every splice below goes straight after the template's imports.
+_IMPORTS = "from pixlstash.tagger_plugins.base import TaggerPlugin\n"
+
+#: A process started without the word "subprocess" in the source, which is
+#: the issue's case against an `ast` scan: this is invisible to one.
+_SPAWN = (
+    '__import__("subpro" + "cess").run([__import__("sys").executable, "-c", "pass"])'
+)
+
+
+def _reaching(tmp_path: Path, *lines: str, name: str = "mine.py") -> Path:
+    """Write a copy of the template whose module body runs *lines*."""
+    return _write(
+        tmp_path / name, _template((_IMPORTS, _IMPORTS + "\n".join(lines) + "\n"))
+    )
+
+
+def test_a_plugin_that_reaches_for_nothing_says_so_with_its_caveat(
+    tmp_path, capsys, monkeypatch
+):
+    """Nothing seen is said as nothing seen, never as "safe".
+
+    A fresh copy of the template would get a `.pyc` beside it on import, which
+    the import system writes, not the plugin. Bytecode writing is switched off
+    inside the window rather than filtered out of the report, so there is no
+    `__pycache__` for a plugin to hide its own writes in.
+    """
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
+    source = _write(tmp_path / "mine.py", _template())
+
+    assert _check(source) == cli.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert "nothing it watches for was seen" in out
+    assert "That is not a clean bill" in out
+    assert "a plugin written to hide from this can" in out
+    assert not (tmp_path / "__pycache__").exists()
+
+
+def test_a_spawned_process_is_reported(tmp_path, capsys):
+    source = _reaching(tmp_path, _SPAWN)
+
+    assert _check(source) == cli.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert f"started {sys.executable} -c pass" in out
+    assert "This is what was seen, not what the plugin can do" in out
+
+
+def test_a_connection_is_reported(tmp_path, capsys):
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        source = _reaching(
+            tmp_path,
+            f'__import__("socket").create_connection(("127.0.0.1", {port})).close()',
+        )
+
+        assert _check(source) == cli.EXIT_OK
+
+    assert f"connected to 127.0.0.1:{port}" in capsys.readouterr().out
+
+
+def test_a_write_is_reported_by_directory_and_a_read_is_not(tmp_path, capsys):
+    """Grouped by directory, because a model download is one fact, not 400.
+
+    The read is of a file in the same folder, so counting it would make 31.
+    """
+    source = _reaching(
+        tmp_path,
+        "import os",
+        'OUT = os.path.join(os.path.dirname(__file__), "out")',
+        "os.makedirs(OUT, exist_ok=True)",
+        "for i in range(30):",
+        '    open(os.path.join(OUT, f"{i}.txt"), "w").close()',
+        "open(__file__).read()",
+    )
+
+    assert _check(source) == cli.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert f"wrote 30 files under {tmp_path}" in out
+    assert out.count("wrote ") == 1
+
+
+def test_what_it_reached_for_is_reported_even_when_it_fails_to_import(tmp_path, capsys):
+    """The failing plugin is the one whose report matters most."""
+    source = _reaching(tmp_path, _SPAWN, 'raise RuntimeError("boom")')
+
+    assert _check(source) == cli.EXIT_REFUSED
+
+    captured = capsys.readouterr()
+    assert "boom" in captured.err
+    assert f"started {sys.executable} -c pass" in captured.out
+
+
+def test_image_run_is_observed_but_picking_a_device_is_not(
+    tmp_path, capsys, monkeypatch
+):
+    """Picking a device imports torch, which is the checker's doing.
+
+    So a write made while choosing it must not be reported as the plugin's,
+    and the spawn inside the plugin's own `init()` must be.
+    """
+    from pixlstash import plugin_check
+
+    sentinel = tmp_path / "device" / "picked.txt"
+    sentinel.parent.mkdir()
+
+    def device():
+        open(sentinel, "w").close()
+        return "cpu"
+
+    monkeypatch.setattr(plugin_check, "_device", device)
+    source = _write(
+        tmp_path / "plugin" / "mine.py",
+        _template(
+            ("self._model = object()", f"{_SPAWN}\n        self._model = object()")
+        ),
+    )
+    image = _write(tmp_path / "sample.jpg", "not really a jpeg")
+
+    assert _check(source, "--image", str(image)) == cli.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert sentinel.exists()
+    assert f"started {sys.executable} -c pass" in out
+    assert "wrote " not in out
+
+
+def test_interrupting_a_hung_import_prints_what_was_seen(tmp_path, capsys):
+    """Ctrl-C on a plugin that never returns turns the hang into a finding.
+
+    The raise stands in for the Ctrl-C. It only reaches the CLI because the
+    loader catches `(Exception, SystemExit)` rather than `BaseException`; a
+    wider catch there fails this rather than silently eating the interrupt.
+    """
+    source = _reaching(tmp_path, _SPAWN, "raise KeyboardInterrupt")
+
+    assert _check(source) == cli.EXIT_REFUSED
+
+    out = capsys.readouterr().out
+    assert "had not returned from load" in out
+    assert f"started {sys.executable} -c pass" in out
 
 
 def test_schema_types_match_the_component_that_renders_them():
