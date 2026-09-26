@@ -76,6 +76,30 @@ describe("AppSelect with chip options", () => {
     expect(opts(w)[0].attributes("aria-label")).toBe("Krea, Cover");
   });
 
+  it("hovers and speaks what a chip stands for, keeping the option focusless", async () => {
+    // #1597: the detail is a native `title` on the chip, which takes no
+    // focus, and the option's aria-label says it for the keyboard reader.
+    const options = [
+      OPTIONS[0],
+      { ...OPTIONS[1], chipDetails: { "+ upscale": "+ ImageScaleBy" } },
+    ];
+    const w = mount(AppSelect, {
+      props: { modelValue: "b", label: "Workflow", options },
+      attachTo: document.body,
+    });
+    await combo(w).trigger("keydown", { key: "ArrowDown" });
+    expect(active(w).attributes("aria-label")).toBe(
+      "Krea, + upscale (+ ImageScaleBy), flux",
+    );
+    const chips = active(w).findAll(".chip-row > .chip-row__chip");
+    expect(chips.map((c) => c.attributes("title"))).toEqual([
+      "+ ImageScaleBy",
+      undefined,
+    ]);
+    expect(chips.every((c) => c.attributes("tabindex") === undefined)).toBe(true);
+    w.unmount();
+  });
+
   it("moves with the arrows and picks with Enter, which the dialog never sees", async () => {
     const w = mountRich();
     await combo(w).trigger("keydown", { key: "ArrowDown" });

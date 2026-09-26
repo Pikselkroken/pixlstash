@@ -1277,6 +1277,8 @@ def fetch_workflow_sets(hub, vault) -> dict:
         (``id``, ``name``, ``filename``, ``kind``, ``file_size``,
         ``ambiguous``), ``recipes``, ``picture_count`` and ``covers`` (up to
         :data:`SET_COVER_DEPTH` cover candidates, best first).
+        ``hub_combinations`` is the same list before the "a picture here" cut,
+        so it holds every library's recipes; only the merge offer reads it.
     """
     recipe_models, ambiguous, unresolved = resolve_recipe_models(hub)
     pictures = vault.db.run_immediate_read_task(
@@ -1324,17 +1326,12 @@ def fetch_workflow_sets(hub, vault) -> dict:
         row = models[model_id]
         return row["display_name"] or row["filename"] or f"model {model_id}"
 
-    combinations = []
+    every = []
     for present, entry in grouped.items():
-        # A combination with no kept picture in this library is not a set here:
-        # the grid draws what the library has made, and a recipe that made
-        # nothing in it has no cover, no count and nothing to show.
-        if not entry["picture_count"]:
-            continue
         ordered = sorted(
             present, key=lambda m: (_set_kind_rank(models[m]), name(m).lower())
         )
-        combinations.append(
+        every.append(
             {
                 "key": ",".join(str(m) for m in sorted(present)),
                 "models": [
@@ -1357,7 +1354,11 @@ def fetch_workflow_sets(hub, vault) -> dict:
         )
     # Biggest evidence first, so the grid opens on the combinations the library
     # actually leans on; the key breaks ties so a refetch draws the same order.
-    combinations.sort(key=lambda c: (-c["picture_count"], -c["recipes"], c["key"]))
+    every.sort(key=lambda c: (-c["picture_count"], -c["recipes"], c["key"]))
+    # A combination with no kept picture in this library is not a set here:
+    # the grid draws what the library has made, and a recipe that made nothing
+    # in it has no cover, no count and nothing to show.
+    combinations = [c for c in every if c["picture_count"]]
 
     # Read off the combinations that SURVIVED, not off `grouped`: a model whose
     # only recipes made no kept picture here would otherwise be in no
@@ -1368,6 +1369,9 @@ def fetch_workflow_sets(hub, vault) -> dict:
     }
     return {
         "combinations": combinations,
+        # Every library's recipes, pictures here or not: the hand-made sets'
+        # merge offer is a hub fact, like the sets (#1523). Not served.
+        "hub_combinations": every,
         # Engines are left out, and that is the honesty rule rather than an
         # exception to it. `no_set` means "nothing here has been made with
         # these", which is a statement a reader can act on for a checkpoint and

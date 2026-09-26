@@ -31,6 +31,7 @@
                models where a stack's are workflows. -->
           <Segmented
             :options="VIEW_OPTIONS"
+            orientation="horizontal"
             :model-value="view"
             variant="icon-label"
             aria-label="Show the models as"

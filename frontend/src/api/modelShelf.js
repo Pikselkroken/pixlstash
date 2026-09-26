@@ -191,7 +191,8 @@ export async function fetchModelCompanions(ids) {
  * toolbar can price every fold setting without another request.
  *
  * `hand_made` is the owner's own sets (#1520), newest first; a combination one
- * of them covers carries its id in `covered_by`.
+ * of them covers carries its id in `covered_by`. A set may carry a merge
+ * `offer` and the `declined` models kept out of it (#1523).
  *
  * @returns {Promise<{combinations: Array<Object>, no_set: Array<number>,
  *   hand_made: Array<Object>}>}
@@ -258,6 +259,19 @@ export async function addWorkflowSetMembers(id, members) {
 export async function removeWorkflowSetMembers(id, sha256) {
   return unwrap(
     apiClient.post(`/models/workflow-sets/${id}/members/remove`, { sha256 }),
+  );
+}
+
+/**
+ * Replace the models kept out of a set's merge offer (#1523): Keep separate
+ * adds to the list, Offer again empties it.
+ *
+ * @returns {Promise<{set: Object, previous: Array<string>}>} `previous` is the
+ *   list before, which is what an undo puts back.
+ */
+export async function setWorkflowSetDeclines(id, sha256) {
+  return unwrap(
+    apiClient.put(`/models/workflow-sets/${id}/declines`, { sha256 }),
   );
 }
 

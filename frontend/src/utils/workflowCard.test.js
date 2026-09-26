@@ -13,6 +13,7 @@ import {
   checkpointUnread,
   lorasUnread,
   modelDisplayName,
+  stackMemberOptions,
 } from "./workflowCard";
 
 describe("fitChipCount", () => {
@@ -111,6 +112,45 @@ describe("card chips", () => {
       "txt2img",
       "imported",
     ]);
+  });
+
+  it("says what a chip stands for, on hover and in the accessible name", () => {
+    // #1597: "2 nodes differ" says THAT, the detail says HOW.
+    const member = {
+      ...STACK,
+      differs_by: ["other checkpoint", "2 nodes differ"],
+      differs_by_detail: {
+        "other checkpoint": "Krea 2 → Flux Dev fp8",
+        "2 nodes differ": "+ ImageScaleBy · − LoraLoaderModelOnly",
+      },
+    };
+    expect(factChips(member).map((c) => c.title)).toEqual([
+      "Krea 2 → Flux Dev fp8",
+      "+ ImageScaleBy · − LoraLoaderModelOnly",
+    ]);
+    // The chips are aria-hidden, so the name is where a reader hears it.
+    expect(cardAccessibleName(member)).toContain(
+      "differs by: other checkpoint (Krea 2 → Flux Dev fp8), 2 nodes differ " +
+        "(+ ImageScaleBy · − LoraLoaderModelOnly)",
+    );
+    // A chip with nothing more to say gets no title rather than an empty one.
+    expect(factChips(STACK).map((c) => c.title)).toEqual([undefined, undefined]);
+  });
+
+  it("hands a picker option the details of the chips it draws", () => {
+    const detail = { "1 node differs": "+ ImageScaleBy" };
+    const [, member] = stackMemberOptions([
+      { key: "a", name: "Krea", sets_apart: [], differs_by: [] },
+      {
+        key: "b",
+        name: "Krea",
+        sets_apart: [],
+        differs_by: ["1 node differs"],
+        differs_by_detail: detail,
+      },
+    ]);
+    expect(member.chips).toEqual(["1 node differs"]);
+    expect(member.chipDetails).toEqual(detail);
   });
 
   it("gives a stack's cover its type, since it differs from nothing", () => {

@@ -1223,9 +1223,31 @@ function verticalTarget(direction) {
   return target;
 }
 
+/**
+ * Up/Down pressed in the open tray's header bar (the Grid/List switch, Close).
+ *
+ * The bar sits between the card and its members, so Down enters the tray at its
+ * first member and Up returns to the card, wherever the cursor last was: a
+ * mouse click on the switch does not move it. Returns true when handled.
+ */
+function headerStep(event) {
+  const down = event.key === "ArrowDown";
+  if (!down && event.key !== "ArrowUp") return false;
+  if (!event.target?.closest?.(".stack-panel__header")) return false;
+  event.preventDefault();
+  const rows = flatRows.value;
+  moveCursor(
+    down
+      ? rows.findIndex((e) => e.kind === "member")
+      : rows.findIndex((e) => e.kind === "card" && e.key === store.openStackKey),
+  );
+  return true;
+}
+
 function onKeyDown(event) {
   // The sort popover owns its own keys, Escape included.
   if (sortMenuOpen.value) return;
+  if (headerStep(event)) return;
   const entry = flatRows.value[cursorIndex.value];
   // Alt+Up / Alt+Down MOVE the row rather than travelling to another, and
   // only inside the panel: the grid's own order is the sort, which is not

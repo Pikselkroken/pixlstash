@@ -565,6 +565,46 @@ def differs_by_reduced(
     describing a stack costs, and it grows with the stack rather than with the
     library.
     """
+    return [
+        difference.chip
+        for difference in differences_reduced(
+            cover_nodes, member_nodes, upscale_factor=upscale_factor
+        )
+    ]
+
+
+@dataclass(frozen=True)
+class Difference:
+    """One ``differs_by`` chip and what it stands for (#1597).
+
+    ``detail`` spells out an ``N nodes differ`` chip: the node classes added
+    and removed, or that the same nodes load other models or are wired
+    differently. It is ``None`` on every other chip.
+
+    ``cover_assets`` and ``member_assets`` are set on ``other checkpoint`` /
+    ``other models``: the non-LoRA models only the cover loads and only the
+    member loads, as the stored document's asset references, base models first.
+    Readable names live only in ``workflow_recipe_asset``, so turning them into
+    words is the caller's.
+
+    **No settings.** A stored document nulls every parameter (steps, cfg, a
+    seed alike), and a card is many recipes with many settings, so there is no
+    one "steps 20 -> 28" for a card to state.
+    """
+
+    chip: str
+    detail: Optional[str] = None
+    cover_assets: tuple[str, ...] = ()
+    member_assets: tuple[str, ...] = ()
+
+
+def differences_reduced(
+    cover_nodes: dict[str, ReducedNode],
+    member_nodes: dict[str, ReducedNode],
+    *,
+    upscale_factor: Optional[float] = None,
+) -> list[Difference]:
+    """:func:`differs_by_reduced` with what each chip stands for."""
     cover = _class_counts(cover_nodes)
     member = _class_counts(member_nodes)
     added, removed = member - cover, cover - member
@@ -572,8 +612,10 @@ def differs_by_reduced(
     def count(counter: Counter, group: Optional[str]) -> int:
         return sum(n for (_, g), n in counter.items() if g == group)
 
-    chips: list[str] = []
-    unclassified = 0
+    chips: list[Difference] = []
+    # The groups whose class changes the "N nodes differ" chip counts, so its
+    # detail names exactly the nodes it counted.
+    unclassified_groups: set[Optional[str]] = {LORA, None}
     # A step one side lacks brings its own models (an upscaler, a detector);
     # they are that step's chip, not "other models".
     chipped: set[str] = set()
@@ -582,30 +624,40 @@ def differs_by_reduced(
         if plus or minus:
             chipped.add(group)
         if plus and minus:
-            unclassified += plus + minus
+            unclassified_groups.add(group)
         elif plus:
             factor = (
                 f" {upscale_factor:g}×" if group == UPSCALE and upscale_factor else ""
             )
-            chips.append(f"+ {label}{factor}")
+            chips.append(Difference(f"+ {label}{factor}"))
         elif minus:
-            chips.append(f"− {label}")
+            chips.append(Difference(f"− {label}"))
 
     cover_slots = _slots_outside(cover_nodes, chipped)
     member_slots = _slots_outside(member_nodes, chipped)
-    models_differ = _assets(cover_slots, lora=False) != _assets(
-        member_slots, lora=False
-    )
-    if models_differ:
+    cover_models = _assets(cover_slots, lora=False)
+    member_models = _assets(member_slots, lora=False)
+    if cover_models != member_models:
         checkpoint = _assets(cover_slots, lora=False, widgets=CHECKPOINT_WIDGETS)
-        if checkpoint != _assets(member_slots, lora=False, widgets=CHECKPOINT_WIDGETS):
-            chips.append("other checkpoint")
-        else:
-            chips.append("other models")
+        chip = (
+            "other checkpoint"
+            if checkpoint
+            != _assets(member_slots, lora=False, widgets=CHECKPOINT_WIDGETS)
+            else "other models"
+        )
+        chips.append(
+            Difference(
+                chip,
+                cover_assets=_changed_assets(cover_models - member_models),
+                member_assets=_changed_assets(member_models - cover_models),
+            )
+        )
 
     plumbing = count(added, PLUMBING) + count(removed, PLUMBING)
-    unclassified += sum(
-        count(counter, group) for counter in (added, removed) for group in (LORA, None)
+    unclassified = sum(
+        count(counter, group)
+        for counter in (added, removed)
+        for group in unclassified_groups
     )
     if (
         plumbing
@@ -614,30 +666,84 @@ def differs_by_reduced(
         and _stripped_key(cover_nodes, {PLUMBING}, keep_widgets=True)
         == _stripped_key(member_nodes, {PLUMBING}, keep_widgets=True)
     ):
-        return ["plumbing only"]
+        return [Difference("plumbing only")]
     unclassified += plumbing
+    unclassified_groups.add(PLUMBING)
+    detail = _class_changes(added, removed, unclassified_groups)
     if not chips and not unclassified:
         # Same classes and the same models overall, but not on the same
         # loaders (a base and a refiner swapped) or not wired the same way.
         # Never [] for graphs that are not the same.
-        unclassified = _nodes_differing(cover_nodes, member_nodes)
+        unclassified, detail = _nodes_differing(cover_nodes, member_nodes)
     if unclassified:
         chips.append(
-            "1 node differs" if unclassified == 1 else f"{unclassified} nodes differ"
+            Difference(
+                "1 node differs"
+                if unclassified == 1
+                else f"{unclassified} nodes differ",
+                detail=detail,
+            )
         )
     return chips
 
 
+def _class_changes(
+    added: Counter, removed: Counter, groups: Collection[Optional[str]]
+) -> str:
+    """``+ ImageScaleBy · − LoraLoaderModelOnly ×2`` for the counted groups."""
+    parts = [
+        f"{sign} {cls}" + (f" ×{n}" if n > 1 else "")
+        for sign, counter in (("+", added), ("−", removed))
+        for (cls, group), n in sorted(counter.items(), key=lambda kv: kv[0][0])
+        if group in groups
+    ]
+    return " · ".join(parts)
+
+
+def _changed_assets(changed: Counter) -> tuple[str, ...]:
+    """The asset references in *changed*, base models first, then by widget."""
+    return tuple(
+        asset
+        for widget, asset in sorted(
+            changed, key=lambda wa: (wa[0] not in CHECKPOINT_WIDGETS, wa)
+        )
+    )
+
+
 def _nodes_differing(
     cover_nodes: dict[str, ReducedNode], member_nodes: dict[str, ReducedNode]
-) -> int:
+) -> tuple[int, Optional[str]]:
+    """How many nodes differ when no class does, and how they differ."""
     if graph_key(cover_nodes) == graph_key(member_nodes):
-        return 0
+        return 0, None
     cover = Counter((n.class_type, n.widgets) for n in cover_nodes.values())
     member = Counter((n.class_type, n.widgets) for n in member_nodes.values())
     # Wiring alone can differ with every node descriptor equal; that is still
     # at least one node that differs.
-    return max(sum((cover - member).values()), sum((member - cover).values()), 1)
+    count = max(sum((cover - member).values()), sum((member - cover).values()), 1)
+    moved = sorted(
+        {
+            f"{cls}: other {'picture' if _names_pictures(cls, widgets) else 'model'}"
+            for cls, widgets in (cover - member) + (member - cover)
+        }
+    )
+    if moved:
+        return count, " · ".join(moved)
+    return count, "same nodes, wired differently"
+
+
+def _names_pictures(class_type: str, widgets: tuple) -> bool:
+    """Whether every asset a node names is a picture input, as :func:`_slots` reads it.
+
+    The stored document keeps an input picture's reference beside the models,
+    so a changed ``LoadImage`` is "other picture", never "other model".
+    """
+    named = [name for name, value in widgets if value is not None]
+    return bool(named) and all(
+        _PICTURE_WIDGET_RE.search(name)
+        or name in INPUT_IMAGE_FIELDS.get(class_type, ())
+        for name in named
+    )
 
 
 def _slots_outside(

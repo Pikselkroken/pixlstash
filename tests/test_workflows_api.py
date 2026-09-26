@@ -2167,6 +2167,14 @@ def test_a_stack_names_its_members_and_what_sets_each_apart(workflow_env):
     # Chips are against the cover, so the cover has none of its own.
     assert by_key[BUSY_CARD]["differs_by"] == []
     assert by_key[FORGOTTEN_CARD]["differs_by"] == member["differs_by"]
+    # What each chip stands for (#1597): the shelf's name for the cover's
+    # checkpoint against the member's forgotten one, and the node classes.
+    assert member["differs_by_detail"] == {
+        "other checkpoint": "Krea 2 → unnamed model",
+        "2 nodes differ": "+ LoraLoader · − KSamplerAdvanced",
+    }
+    assert by_key[FORGOTTEN_CARD]["differs_by_detail"] == member["differs_by_detail"]
+    assert by_key[BUSY_CARD]["differs_by_detail"] == {}
 
 
 def test_generated_names_that_collide_are_numbered():

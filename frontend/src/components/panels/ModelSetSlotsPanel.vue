@@ -126,6 +126,76 @@
       </div>
     </div>
 
+    <!-- The merge offer (#1523): lasting, until the owner merges or keeps the
+         set separate. A cursor stop ahead of the slots, so Enter merges. -->
+    <div
+      v-if="set.offer"
+      :id="`${panelId}-row-offer`"
+      class="mss__offer msp__member"
+      :class="{ 'mss__offer--cur': cursorKey === 'offer' }"
+      role="row"
+      aria-level="2"
+      :aria-label="`${offerLead}. ${offerNote} Enter merges.`"
+      :tabindex="cursorKey === 'offer' ? 0 : -1"
+      data-key="offer"
+      data-testid="merge-offer-strip"
+      @click="emit('cursor', 'offer')"
+    >
+      <div class="mss__offercell" role="gridcell">
+        <span
+          v-if="set.offer.covers.length"
+          class="mss__mosaic"
+          :class="`mss__mosaic--${set.offer.covers.length}`"
+          aria-hidden="true"
+        >
+          <img
+            v-for="cover in set.offer.covers"
+            :key="cover.picture_id"
+            :src="pictureThumbnailUrl(cover.picture_id, { version: cover.version })"
+            alt=""
+            loading="lazy"
+          />
+        </span>
+        <span class="mss__offertext" aria-hidden="true"
+          ><strong>{{ offerLead }}</strong>
+          <span class="mss__offernote">{{ offerNote }}</span></span
+        >
+        <AppButton
+          variant="ghost"
+          size="sm"
+          tabindex="-1"
+          tooltip="Keep this set separate from those pictures. The set's menu can offer the merge again."
+          @click.stop="emit('keep-separate')"
+          >Keep separate</AppButton
+        >
+        <AppButton
+          variant="primary"
+          size="sm"
+          icon-left="table-arrow-down"
+          tabindex="-1"
+          @click.stop="emit('merge')"
+          >Merge, add {{ set.offer.models.length }}</AppButton
+        >
+      </div>
+    </div>
+    <div
+      v-else-if="set.declined?.length"
+      class="msp__note mss__kept"
+      role="row"
+      aria-level="2"
+    >
+      <div role="gridcell">
+        <span>{{
+          set.kept_separate
+            ? `Kept separate from ${pictureCount(set.kept_separate)}.`
+            : "Some models are kept out of this set's merge offer."
+        }}</span>
+        <AppButton variant="ghost" size="sm" @click="emit('offer-again')"
+          >Offer again</AppButton
+        >
+      </div>
+    </div>
+
     <div class="mss__slots" role="presentation">
       <div
         v-for="{ slot, items } in slots"
@@ -198,6 +268,40 @@
                 />
               </span>
             </div>
+            <!-- A model the merge would add, drawn where it would land. -->
+            <div
+              v-else-if="item.ghost"
+              :id="`${panelId}-row-${item.key}`"
+              class="mss__tile mss__tile--ghost msp__member"
+              role="row"
+              aria-level="2"
+              :aria-label="ghostName(item.ghost, slot)"
+              :tabindex="cursorKey === item.key ? 0 : -1"
+              :data-key="item.key"
+              @click="emit('cursor', item.key)"
+            >
+              <span class="mss__cell" role="gridcell">
+                <ModelMark
+                  class="mss__markicon mss__ghostmark"
+                  :row="{ display_name: item.ghost.name }"
+                  aria-hidden="true"
+                />
+                <span class="mss__tilename" aria-hidden="true">{{
+                  item.ghost.name
+                }}</span>
+                <span class="mss__ghostcount num" aria-hidden="true">{{
+                  ghostCount(item.ghost)
+                }}</span>
+                <AppButton
+                  variant="outline"
+                  size="sm"
+                  tabindex="-1"
+                  :tooltip="`Add ${item.ghost.name} to this set`"
+                  @click.stop="emit('add-ghost', item.ghost)"
+                  >Add</AppButton
+                >
+              </span>
+            </div>
             <div
               v-else
               :id="`${panelId}-row-${item.key}`"
@@ -243,7 +347,12 @@
 import { computed, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
 
-import { pictureCount, setSlots } from "../../utils/workflowSets";
+import { pictureThumbnailUrl } from "../../api/pictures";
+import {
+  pictureCount,
+  recipeCount,
+  setSlots,
+} from "../../utils/workflowSets";
 import AppButton from "../widgets/AppButton.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ModelMark from "../widgets/ModelMark.vue";
@@ -283,6 +392,13 @@ const emit = defineEmits([
   "pick",
   "set-base",
   "dismiss-base",
+  // The merge offer (#1523): the strip's two verbs, one ghost's Add, the kept
+  // line's Offer again, and a click that only moves the cursor.
+  "merge",
+  "keep-separate",
+  "add-ghost",
+  "offer-again",
+  "cursor",
 ]);
 
 const slots = computed(() => setSlots(props.set));
@@ -375,6 +491,33 @@ function markOf(member) {
     ring: null,
     style: {},
   };
+}
+
+/** The strip's first line: which pictures, of which file. */
+const offerLead = computed(() => {
+  const offer = props.set.offer;
+  if (!offer) return "";
+  const who = offer.picture_count
+    ? `${pictureCount(offer.picture_count)} more`
+    : recipeCount(offer.recipes);
+  const n = offer.models.length;
+  return `${who} of ${offer.head_name} used the ${n === 1 ? "dashed model" : `${n} dashed models`} below`;
+});
+
+const offerNote = computed(() => {
+  const n = props.set.offer?.models.length ?? 0;
+  return `Adding ${n === 1 ? "it" : `all ${n}`} brings them into this set.`;
+});
+
+/** "812 pictures", or the recipes when none of its pictures is here. */
+function ghostCount(ghost) {
+  return ghost.picture_count
+    ? pictureCount(ghost.picture_count)
+    : recipeCount(ghost.recipes);
+}
+
+function ghostName(ghost, slot) {
+  return `${ghost.name}, ${slot.label}, offered: used in ${ghostCount(ghost)}. Enter adds it, Delete keeps it out.`;
 }
 
 function tileName(member, slot) {
@@ -615,5 +758,91 @@ const notchStyle = computed(() => {
 
 .mss__remove {
   flex-shrink: 0;
+}
+
+/* The merge offer strip: dashed like the ghosts it announces. */
+.mss__offer {
+  margin: var(--space-4) var(--space-4) 0;
+  border: 1px dashed rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  cursor: default;
+}
+
+.mss__offer--cur,
+.mss__offer:focus-visible {
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
+}
+
+.mss__offercell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.mss__offertext {
+  flex: 1;
+  min-width: 0;
+}
+
+.mss__offernote {
+  display: block;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
+}
+
+/* The pictures' set's own covers, the card mosaic in miniature. */
+.mss__mosaic {
+  display: grid;
+  flex: none;
+  gap: 1px;
+  width: var(--bar-height);
+  height: var(--control-h-bar);
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+
+.mss__mosaic--2 {
+  grid-template-columns: 1fr 1fr;
+}
+
+.mss__mosaic--3 {
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.mss__mosaic--3 img:first-child {
+  grid-row: 1 / 3;
+}
+
+.mss__mosaic img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mss__kept > [role="gridcell"] {
+  align-items: center;
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
+}
+
+/* A ghost: a model the merge would add. Dashed like a ＋ tile, full ink, and
+   never struck through - struck is "Not on shelf", which this is not. */
+.mss__tile--ghost {
+  border-style: dashed;
+  background: transparent;
+  cursor: default;
+}
+
+.mss__ghostmark {
+  opacity: var(--opacity-disabled);
+}
+
+.mss__ghostcount {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
 }
 </style>

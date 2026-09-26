@@ -15,6 +15,12 @@ when every model in it is an on-shelf member of the set; the set then carries
 that combination's recipe and picture counts and its covers. The combinations
 come from :func:`~pixlstash.services.model_shelf_service.fetch_workflow_sets`
 unchanged, and :func:`attach_hand_made` layers the sets over them.
+
+**The merge offer is read too (#1523).** A set whose pictures' set is a near
+miss - recipes with the same checkpoint that used models the set lacks - is
+offered those models. Nothing is stored for the offer but the models the owner
+kept out of it ("Keep separate"), so it survives restarts by being re-derived,
+and nothing joins a set until the owner adds the models.
 """
 
 from __future__ import annotations
@@ -88,6 +94,7 @@ def fetch_sets(hub) -> list[dict]:
     return _collect(
         hub.fetchall(_SETS_SQL + " ORDER BY created_at DESC, id DESC"),
         hub.fetchall(_MEMBERS_SQL),
+        hub.fetchall("SELECT set_id, sha256 FROM model_workflow_set_decline"),
     )
 
 
@@ -104,10 +111,13 @@ _MEMBERS_SQL = (
 )
 
 
-def _collect(set_rows, member_rows) -> list[dict]:
+def _collect(set_rows, member_rows, decline_rows=()) -> list[dict]:
     """Set rows and member rows as `fetch_sets` entries, in set-row order."""
-    sets = [{**dict(row), "members": []} for row in set_rows]
+    sets = [{**dict(row), "members": [], "declined": []} for row in set_rows]
     by_id = {entry["id"]: entry for entry in sets}
+    for row in decline_rows:
+        if row["set_id"] in by_id:
+            by_id[row["set_id"]]["declined"].append(row["sha256"])
     for row in member_rows:
         entry = by_id.get(row["set_id"])
         if entry is None:
@@ -159,7 +169,8 @@ def attach_hand_made(hub, found: dict) -> dict:
     ``covered_by`` (the ids of the sets covering it; the combination itself is
     kept, since the client's *Works with* reads all of them), ``no_set`` loses
     the on-shelf members of any set, and ``hand_made`` is added, newest first.
-    Each set's ``covers`` are cover candidates, like a combination's.
+    Each set's ``covers`` are cover candidates, like a combination's, and each
+    set carries its merge ``offer`` (see :func:`_attach_offers`).
     """
     hand_made = []
     for entry in fetch_sets(hub):
@@ -181,15 +192,159 @@ def attach_hand_made(hub, found: dict) -> dict:
 
     grouped: set[int] = set()
     for entry in hand_made:
-        grouped |= entry.pop("_on_shelf")
+        grouped |= entry["_on_shelf"]
         entry["covers"] = sorted(entry["covers"], key=cover_order, reverse=True)[
             :SET_COVER_DEPTH
         ]
     found["no_set"] = [
         model_id for model_id in found["no_set"] if model_id not in grouped
     ]
+    _attach_offers(
+        hand_made,
+        found.get("hub_combinations", found["combinations"]),
+        {
+            int(row["id"]): row["sha256"]
+            for row in hub.fetchall("SELECT id, sha256 FROM model")
+        },
+    )
+    for entry in hand_made:
+        entry.pop("_on_shelf")
     found["hand_made"] = hand_made
     return found
+
+
+def _attach_offers(hand_made: list[dict], combinations, digests) -> None:
+    """Give each set its merge ``offer`` and ``kept_separate`` count (#1523).
+
+    A *pictures' set* is the combinations no hand-made set covers, grouped by
+    the file they are named after (their head), exactly as the grid groups its
+    evidence cards. A set is offered the pictures' set of its own checkpoint;
+    a set with no checkpoint only one whose models include all of the set's,
+    or every incomplete set would be offered every card. Only combinations
+    whose missing models could all be added are counted: a file still hashing
+    or an engine cannot be a member, and a model the owner kept out of this set
+    stays out. Every combination is read, not only this library's: a set is a
+    hub fact, so its offer must be too.
+
+    One pictures' set is offered to one set at most, the one needing fewest
+    models added, so two sets sharing a checkpoint never both claim the same
+    pictures.
+
+    Args:
+        hand_made: the shaped sets, each still holding its ``_on_shelf`` ids.
+        combinations: every combination, pictures in this library or not.
+        digests: ``model.id`` -> sha256 (None while hashing).
+    """
+    by_head: dict[int, list[tuple[dict, set[int]]]] = {}
+    for combination in combinations:
+        ids = {model["id"] for model in combination["models"]}
+        if any(ids <= entry["_on_shelf"] for entry in hand_made):
+            continue
+        by_head.setdefault(combination["models"][0]["id"], []).append(
+            (combination, ids)
+        )
+
+    candidates = []
+    for entry in hand_made:
+        held = entry["_on_shelf"]
+        if not held:
+            continue
+        if entry["incomplete"]:
+            heads = [
+                head
+                for head, group in by_head.items()
+                if group[0][0]["models"][0]["kind"] in _CHECKPOINT_KINDS
+                and held <= set().union(*(ids for _, ids in group))
+            ]
+        else:
+            # A checkpoint off the shelf has no id, so it matches no head.
+            heads = [entry["checkpoint_id"]] if entry["checkpoint_id"] else []
+        declined = set(entry["declined"])
+        for head in heads:
+            group = by_head.get(head, [])
+            offered = _near_miss(group, held, declined, digests)
+            every = _near_miss(group, held, set(), digests)
+            kept = _pictures(every) - _pictures(offered)
+            # Heads hold disjoint combinations, so a set's counts add up.
+            entry["kept_separate"] += kept
+            if offered:
+                missing = set().union(*(extra for _, extra in offered))
+                candidates.append((len(missing), entry["id"], head, entry, offered))
+
+    taken_heads: set[int] = set()
+    for _, _, head, entry, offered in sorted(candidates, key=lambda c: c[:2]):
+        if head in taken_heads or entry["offer"] is not None:
+            continue
+        taken_heads.add(head)
+        entry["offer"] = _offer(head, offered, entry["incomplete"], digests)
+
+
+def _near_miss(group, held: set[int], declined: set[str], digests) -> list:
+    """The combinations of *group* the set could take: ``[(combination, extra)]``.
+
+    *extra* is the models it would have to add. A combination with one it
+    cannot add - no digest yet, an engine, a model kept separate - is left out.
+    """
+    found = []
+    for combination, ids in group:
+        extra = ids - held
+        kinds = {model["id"]: model["kind"] for model in combination["models"]}
+        if extra and all(
+            digests.get(model_id)
+            and digests[model_id] not in declined
+            and kinds[model_id] != FILE_ENGINE
+            for model_id in extra
+        ):
+            found.append((combination, extra))
+    return found
+
+
+def _pictures(offered) -> int:
+    return sum(combination["picture_count"] for combination, _ in offered)
+
+
+def _offer(head: int, offered, incomplete: bool, digests) -> dict:
+    """The offer one set is shown: the pictures that would join, the models."""
+    models: dict[int, dict] = {}
+    for combination, extra in offered:
+        for model in combination["models"]:
+            if model["id"] not in extra:
+                continue
+            seen = models.setdefault(
+                model["id"],
+                {
+                    "id": model["id"],
+                    "sha256": digests[model["id"]],
+                    "name": model["name"],
+                    "kind": model["kind"],
+                    "slot": _merge_slot(model, head, incomplete),
+                    "picture_count": 0,
+                    "recipes": 0,
+                },
+            )
+            seen["picture_count"] += combination["picture_count"]
+            seen["recipes"] += combination["recipes"]
+    covers = [cover for combination, _ in offered for cover in combination["covers"]]
+    return {
+        "head_id": head,
+        "head_name": offered[0][0]["models"][0]["name"],
+        "picture_count": _pictures(offered),
+        "recipes": sum(combination["recipes"] for combination, _ in offered),
+        "covers": sorted(covers, key=cover_order, reverse=True)[:SET_COVER_DEPTH],
+        "models": sorted(
+            models.values(),
+            key=lambda m: (SLOTS.index(m["slot"]), -m["picture_count"], m["name"]),
+        ),
+    }
+
+
+def _merge_slot(model: dict, head: int, incomplete: bool) -> str:
+    """Where a merged model lands: the head fills an empty checkpoint slot, any
+    other checkpoint-kind file (a refiner) goes to Other, the rest by kind."""
+    if model["id"] == head and incomplete:
+        return SLOT_CHECKPOINT
+    slot = _DEFAULT_SLOT.get(model["kind"], "other")
+    return "other" if slot == SLOT_CHECKPOINT else slot
 
 
 def _shape(entry: dict) -> dict:
@@ -210,6 +365,9 @@ def _shape(entry: dict) -> dict:
         "recipes": 0,
         "covers": [],
         "members": members,
+        "declined": sorted(entry.get("declined", ())),
+        "offer": None,
+        "kept_separate": 0,
     }
 
 
@@ -328,9 +486,12 @@ def delete_set(hub, set_id: int) -> dict:
             conn.execute(_SETS_SQL + " WHERE id = ?", (set_id,)).fetchall(),
             conn.execute(_MEMBERS_SQL + " WHERE m.set_id = ?", (set_id,)).fetchall(),
         )
-        # Members first: the hub enforces foreign keys.
+        # Members and declines first: the hub enforces foreign keys.
         conn.execute(
             "DELETE FROM model_workflow_set_member WHERE set_id = ?", (set_id,)
+        )
+        conn.execute(
+            "DELETE FROM model_workflow_set_decline WHERE set_id = ?", (set_id,)
         )
         conn.execute("DELETE FROM model_workflow_set WHERE id = ?", (set_id,))
     logger.info("Deleted workflow set %d.", set_id)
@@ -379,3 +540,38 @@ def remove_members(hub, set_id: int, sha256s: list[str]) -> list[dict]:
                 (_now(), set_id),
             )
     return removed
+
+
+def set_declines(hub, set_id: int, sha256s: list[str]) -> list[str]:
+    """Replace the models kept out of this set's merge offer (#1523).
+
+    A whole-list write, so Keep separate, Offer again and each one's undo are
+    the same call. Returns the list as it was, sorted: that is the undo.
+    """
+    wanted = sorted({sha.lower() for sha in sha256s})
+    now = _now()
+    with hub.transaction() as conn:
+        _require_set(conn, set_id)
+        previous = [
+            row["sha256"]
+            for row in conn.execute(
+                "SELECT sha256 FROM model_workflow_set_decline WHERE set_id = ? "
+                "ORDER BY sha256",
+                (set_id,),
+            )
+        ]
+        conn.execute(
+            "DELETE FROM model_workflow_set_decline WHERE set_id = ?", (set_id,)
+        )
+        conn.executemany(
+            "INSERT INTO model_workflow_set_decline (set_id, sha256, declined_at) "
+            "VALUES (?, ?, ?)",
+            [(set_id, sha, now) for sha in wanted],
+        )
+    logger.info(
+        "Workflow set %d keeps %d model(s) out of its merge offer (was %d).",
+        set_id,
+        len(wanted),
+        len(previous),
+    )
+    return previous

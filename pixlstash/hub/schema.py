@@ -519,6 +519,22 @@ CREATE TABLE IF NOT EXISTS model_workflow_set_member (
 )
 """
 
+# A model the owner kept OUT of a hand-made set's merge offer (#1523, "Keep
+# separate"). Keyed by sha256 like a member, so a decline outlives the file's
+# shelf row. Only the offer reads it: a declined model is never offered to that
+# set again, while a picture needing some OTHER model still brings the offer
+# back for that one. Clearing the rows is "Offer the merge again". CASCADE so
+# a build that predates this table can still delete a set that has declines.
+_V2_MODEL_WORKFLOW_SET_DECLINE = """
+CREATE TABLE IF NOT EXISTS model_workflow_set_decline (
+    set_id       INTEGER NOT NULL
+                 REFERENCES model_workflow_set(id) ON DELETE CASCADE,
+    sha256       TEXT NOT NULL,
+    declined_at  TEXT NOT NULL,
+    PRIMARY KEY (set_id, sha256)
+)
+"""
+
 _V2_MODEL_SHELF_INDEXES = (
     # The scanner's hot path: "which files does this model have, and where".
     "CREATE INDEX IF NOT EXISTS ix_model_file_model ON model_file(model_id)",
@@ -551,6 +567,7 @@ _V2_MODEL_SHELF_TABLES = (
     _V2_MODEL_WORKFLOW_SET,
     # After the set: it references `model_workflow_set(id)`.
     _V2_MODEL_WORKFLOW_SET_MEMBER,
+    _V2_MODEL_WORKFLOW_SET_DECLINE,
     *_V2_MODEL_SHELF_INDEXES,
 )
 

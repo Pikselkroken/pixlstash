@@ -563,6 +563,14 @@ Rules neither side may drift from:
    returned**: a deleted set's members as `{sha256, slot, label}`, removed
    members the same way, added ones through `members/remove`. No server-side
    undo exists. A refusal is a 409 whose `detail` is the sentence to show.
+   **The merge offer (#1523)** rides on each set too: `offer` (null, or
+   `{head_id, head_name, picture_count, recipes, covers, models: [{id, sha256,
+   name, kind, slot, picture_count, recipes}]}`), `declined` (sha256s kept out)
+   and `kept_separate` (pictures here those hold back). The server decides the
+   offer; the client draws it as ghosts and merges by posting `models` to
+   `members` with their `slot`. `PUT .../{set_id}/declines` (`{sha256: [...]}`,
+   the whole list) answers `{set, previous}`, and putting `previous` back is
+   the undo. `picture_count` counts this library; `recipes` counts every one.
 
 ### 2.3 The `/workflows` contract (v1.11)
 
@@ -777,7 +785,7 @@ knows from its pictures exports and duplicates like any other:
 | `POST /api/v1/workflows/{workflow_key}/clone-with-models` | A copy with model files replaced, a card of its own, named as asked when nobody has named that card; the original's pins and defaults are carried where the card has none (a default on a swapped loader field is not), its notes never. Body `{name, swaps: {graph filename: new filename}}`. All or nothing: 409, and no file, when any swap could not be written (`not_in_graph`, `not_on_comfyui`, `several_on_comfyui`) or when every swap names the file already loaded. `verified` is false when any name went in unchecked | `201 {name, workflow_key, swapped, unswapped: [{was, now, reason}], verified}` |
 | `DELETE /api/v1/workflows/{workflow_key}` | Send the imported file to the trash | `{deleted, workflow_key}` |
 | `GET /api/v1/recipes/{recipe_id}/export` | The saved recipe as a file | `{filename, recipe, shares: [string]}` |
-| `GET /api/v1/recipes/used?workflow_key=…` | Every look this workflow's own pictures were made with, a saved recipe's included and flagged `saved`. `workflow_key` repeats for a selection of several and the answer is the union. **The Recipes tab's list, filled without anybody pressing Save** | `[{prompt, loras: [{filename}], pictures, cover_picture_id, saved}]` |
+| `GET /api/v1/recipes/used?workflow_key=…` | Every look this workflow's own pictures were made with, a saved recipe's included and flagged `saved`. `workflow_key` repeats for a selection of several and the answer is the union. **The Recipes tab's list, filled without anybody pressing Save**. `whole_stack=false` (on this route and `GET /recipes`) reads only the keys named rather than each one's stack: the tab sends it when the selection is members picked inside an expanded stack | `[{prompt, loras: [{filename}], pictures, cover_picture_id, saved}]` |
 
 Five rules the client must not re-derive:
 
@@ -1004,6 +1012,17 @@ the two sides have agreed:
    not (shelf title, plus its quant), minus any its own `name` already says,
    and `differs_by` is its own chips against the cover. Recipe LoRAs are left
    out, since they vary inside one card.
+
+   **`differs_by_detail` says what a chip stands for** (#1597), on the card
+   and on each member, keyed by the chip so `differs_by` stays a plain list of
+   strings: `+ ImageScaleBy · − LoraLoaderModelOnly` for an "N nodes differ"
+   chip (only the classes it counted), or `Krea 2 → Flux Dev fp8` for "other
+   checkpoint" / "other models" (shelf title, plus its quant; a forgotten name
+   reads "unnamed model"). A chip with nothing more to say is absent. **No
+   settings**: a stored document nulls every parameter and a card spans many
+   recipes, so there is no single "steps 20 → 28" to state. Clients show it as
+   a hover `title` on the chip and speak it in the accessible name, since the
+   chips themselves are `aria-hidden`.
 
    **`stack_id` (v1.12 F2) is what a client WRITES to the stack by.**
    `PUT /workflows/stacks/{stack_id}/order` and
