@@ -477,6 +477,16 @@ class WorkflowStackMember(BaseModel):
         default_factory=list,
         description="This member's chips against the cover; empty on the cover.",
     )
+    differs_by_detail: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "What a `differs_by` chip stands for, keyed by the chip: the node "
+            'classes an "N nodes differ" chip counted (`+ ImageScaleBy · − '
+            "LoraLoaderModelOnly`), or the cover's models against this "
+            'member\'s for "other checkpoint" / "other models" (`Krea 2 → '
+            "Flux Dev fp8`). A chip with nothing more to say is absent."
+        ),
+    )
 
 
 class WorkflowCard(BaseModel):
@@ -538,6 +548,16 @@ class WorkflowCard(BaseModel):
         ),
     )
     differs_by: list[str] = Field(default_factory=list)
+    differs_by_detail: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "What a `differs_by` chip stands for, keyed by the chip: the node "
+            'classes an "N nodes differ" chip counted (`+ ImageScaleBy · − '
+            "LoraLoaderModelOnly`), or the cover's models against this "
+            'member\'s for "other checkpoint" / "other models" (`Krea 2 → '
+            "Flux Dev fp8`). A chip with nothing more to say is absent."
+        ),
+    )
     picture_count: int = 0
     rating: float | None = Field(
         None, description="Mean of the stars this card has; null when it has none."
@@ -1968,6 +1988,7 @@ def _stack_members(
                     dict.fromkeys(n for n in names if n not in shared and n not in name)
                 ),
                 differs_by=member.differs_by if position else [],
+                differs_by_detail=member.differs_by_detail if position else {},
             )
         )
     return members
@@ -2002,6 +2023,7 @@ def _card(figure, defaults=(), figures_by_key=None, names=None) -> WorkflowCard:
         ],
         specials=None if figure.card.specials is None else list(figure.card.specials),
         differs_by=figure.differs_by,
+        differs_by_detail=figure.differs_by_detail,
         picture_count=figure.pictures,
         rating=figure.rating,
         covers=_covers(figure.covers),

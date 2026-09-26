@@ -76,6 +76,11 @@
 //                                       // attached to no one character
 //     differs_by: [string],             // a stack member: its chips against
 //                                       // the cover; empty on the cover
+//     differs_by_detail: {chip: string},// what a chip stands for (#1597):
+//                                       // "+ ImageScaleBy · − LoraLoader"
+//                                       // for "N nodes differ", "Krea 2 →
+//                                       // Flux Dev" for "other checkpoint".
+//                                       // Only chips with more to say
 //     picture_count, rating,            // rating 1-5; 0 or null is unrated
 //     covers: [{ url, picture_id, thumbnail_width, thumbnail_height,
 //                square_crop_x, square_crop_y, square_crop_side }],
@@ -110,7 +115,7 @@
 //                                       // card; `routes/workflows.py` is what
 //                                       // excludes self on the way out, and
 //                                       // fills it for a stack only.
-//     members: [{ key, name, sets_apart, differs_by }],
+//     members: [{ key, name, sets_apart, differs_by, differs_by_detail }],
 //                                       // the WHOLE stack in its order, this
 //                                       // card included; [] outside one.
 //                                       // Members often share a generated
@@ -372,6 +377,12 @@ export function differsBy(card) {
   return isStack(card) && Boolean(card.differs_by?.length);
 }
 
+/** A chip as it is spoken: its label, then what it stands for, if known. */
+export function chipSpoken(label, details) {
+  const detail = details?.[label];
+  return detail ? `${label} (${detail})` : label;
+}
+
 export function factChips(card, { short = false } = {}) {
   const labels = differsBy(card)
     ? // **First, and on a stack too.** A hidden card is only ever drawn
@@ -392,7 +403,14 @@ export function factChips(card, { short = false } = {}) {
         (short && SHORT_TYPE_LABELS[card.type]) || card.type_label || card.type,
         card.imported ? "imported" : null,
       ].filter(Boolean);
-  return labels.map((label, i) => ({ key: `fact-${i}`, label, fact: true }));
+  // The detail is a hover `title` only: every chip row is aria-hidden, and
+  // `cardAccessibleName` speaks it through `chipSpoken` instead.
+  return labels.map((label, i) => ({
+    key: `fact-${i}`,
+    label,
+    fact: true,
+    title: card.differs_by_detail?.[label],
+  }));
 }
 
 /**
@@ -458,7 +476,9 @@ export function cardAccessibleName(card, { member = false } = {}) {
     const quant = quantBadge(lora.quant);
     return `${modelDisplayName(lora)}, ${quant ? `${quant.title}, ` : ""}workflow LoRA`;
   });
-  const facts = factChips(card).map((chip) => chip.label);
+  const facts = factChips(card).map((chip) =>
+    chipSpoken(chip.label, card.differs_by_detail),
+  );
   const parts = [
     card.name,
     isStack(card) && !member ? `stack of ${card.stack_size} workflows` : null,
@@ -546,6 +566,9 @@ export function stackMemberOptions(members) {
       name: member.name,
       // Index 0 is the cover: the server lists the stack in its own order.
       chips: index === 0 ? ["Cover", ...apart] : apart,
+      // What a chip stands for, keyed by the chip: `AppSelect` hovers it and
+      // speaks it in the option's accessible name.
+      chipDetails: member.differs_by_detail || {},
       group,
     };
   });

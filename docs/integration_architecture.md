@@ -1013,6 +1013,17 @@ the two sides have agreed:
    and `differs_by` is its own chips against the cover. Recipe LoRAs are left
    out, since they vary inside one card.
 
+   **`differs_by_detail` says what a chip stands for** (#1597), on the card
+   and on each member, keyed by the chip so `differs_by` stays a plain list of
+   strings: `+ ImageScaleBy · − LoraLoaderModelOnly` for an "N nodes differ"
+   chip (only the classes it counted), or `Krea 2 → Flux Dev fp8` for "other
+   checkpoint" / "other models" (shelf title, plus its quant; a forgotten name
+   reads "unnamed model"). A chip with nothing more to say is absent. **No
+   settings**: a stored document nulls every parameter and a card spans many
+   recipes, so there is no single "steps 20 → 28" to state. Clients show it as
+   a hover `title` on the chip and speak it in the accessible name, since the
+   chips themselves are `aria-hidden`.
+
    **`stack_id` (v1.12 F2) is what a client WRITES to the stack by.**
    `PUT /workflows/stacks/{stack_id}/order` and
    `POST /workflows/stacks/{stack_id}/unstack` take either a stored stack's id

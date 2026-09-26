@@ -5,6 +5,7 @@
       v-show="i < visibleCount"
       :key="item.key ?? i"
       :class="chipClass(item)"
+      :title="item.title || undefined"
     >
       <v-icon v-if="item.icon" size="12" class="chip-row__icon">{{
         `mdi-${item.icon}`
@@ -88,7 +89,7 @@ import { VIcon } from "vuetify/components";
 import { fitChipCount } from "../../utils/workflowCard";
 
 const props = defineProps({
-  /** `{ key?, label, icon?, dashed?, fact? }` */
+  /** `{ key?, label, icon?, dashed?, fact?, title? }`; `title` is a hover. */
   items: { type: Array, default: () => [] },
 });
 
