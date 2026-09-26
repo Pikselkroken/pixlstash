@@ -31,4 +31,14 @@ describe("recipes api", () => {
       expect(wireQuery(call)).toBe("workflow_key=a&workflow_key=b");
     }
   });
+
+  it("asks for whole_stack=false only when told to", async () => {
+    await listUsedLooks(["a"], { wholeStack: false });
+    await listSavedRecipes(["a"], { wholeStack: false });
+    await listSavedRecipes(["a"]);
+    const [used, saved, plain] = apiClient.get.mock.calls.map(wireQuery);
+    expect(used).toBe("workflow_key=a&whole_stack=false");
+    expect(saved).toBe("workflow_key=a&whole_stack=false");
+    expect(plain).toBe("workflow_key=a");
+  });
 });

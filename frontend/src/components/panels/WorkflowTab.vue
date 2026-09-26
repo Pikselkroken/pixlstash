@@ -41,6 +41,7 @@
     <WorkflowRecipesTab
       v-else-if="showingRecipes"
       :workflow-keys="recipeKeys"
+      :whole-stack="!recipesNarrowed"
       :stack-name="recipesStack.name"
       :stack-size="recipesStack.size"
     />
@@ -788,6 +789,19 @@ const recipeKeys = computed(() =>
 );
 
 /**
+ * Members picked inside the expanded stack, rather than the stack selected
+ * whole: the Recipes list is then theirs alone. A collapsed stack card, or a
+ * card the `?topology=` link selected with its stack shut, still lists the
+ * whole stack's recipes, because that is what the card on screen stands for.
+ */
+const recipesNarrowed = computed(() => {
+  const open = store.openStackKey;
+  if (!open || stackCover.value) return false;
+  const inside = new Set(store.stackKeys(open));
+  return recipeKeys.value.every((key) => inside.has(key));
+});
+
+/**
  * What heads the Recipes tab: the stack, when the selected card is a member.
  *
  * `stack_size` rather than `member_keys.length`, which leaves the card's own
@@ -804,6 +818,14 @@ const recipesStack = computed(() => {
   if (multiple.value) {
     const count = store.selectedKeys.length;
     return { name: `${count} workflows selected`, size: 0 };
+  }
+  // One member picked out of the open stack lists its own recipes, so it is
+  // what the header names; the size stays, since they still run on the stack.
+  if (recipesNarrowed.value) {
+    return {
+      name: card.value?.name || "",
+      size: Number((parentStack.value || card.value)?.stack_size) || 0,
+    };
   }
   const stack = parentStack.value || card.value;
   return {

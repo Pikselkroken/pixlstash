@@ -333,13 +333,20 @@ import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   /**
-   * The selected cards' keys. Every one's whole stack is listed, as one union.
+   * The selected cards' keys. Every one's whole stack is listed, as one union,
+   * unless `wholeStack` is false.
    *
    * A selection of several is the union of their stacks, counted once: two
    * members of one stack resolve to the same keys, and the server folds them
-   * before it reads any picture.
+   * before it reads any picture. With `wholeStack` false it is the union of
+   * the keys themselves.
    */
   workflowKeys: { type: Array, default: () => [] },
+  /**
+   * False when the keys are members picked inside an expanded stack: then the
+   * list is theirs alone, not the stack around them.
+   */
+  wholeStack: { type: Boolean, default: true },
   /** What the header names - the stack, when a member is selected. */
   stackName: { type: String, default: "" },
   /** How many workflows that stack holds; 1 or 0 means it is not a stack. */
@@ -400,7 +407,11 @@ const subtitle = computed(() => {
     }
   }
   if (props.stackSize > 1) {
-    parts.push(`runs on any of its ${props.stackSize} workflows`);
+    parts.push(
+      props.wholeStack
+        ? `runs on any of its ${props.stackSize} workflows`
+        : `recipes run on any of the stack's ${props.stackSize} workflows`,
+    );
   }
   return parts.join(" · ");
 });
@@ -459,7 +470,9 @@ function keyedLooks(used) {
  */
 async function refreshLooks(token) {
   try {
-    const used = await listUsedLooks(props.workflowKeys.filter(Boolean));
+    const used = await listUsedLooks(props.workflowKeys.filter(Boolean), {
+      wholeStack: props.wholeStack,
+    });
     if (token === loadToken) looks.value = keyedLooks(used);
   } catch (err) {
     // The recipe is gone either way; only a mark below may be stale until
@@ -494,8 +507,8 @@ async function load() {
     // in the first, so reading them apart could mark a look against a list
     // of saved recipes that is not the one on screen.
     const [saved, used] = await Promise.all([
-      listSavedRecipes(keys),
-      listUsedLooks(keys),
+      listSavedRecipes(keys, { wholeStack: props.wholeStack }),
+      listUsedLooks(keys, { wholeStack: props.wholeStack }),
     ]);
     if (!mine()) return;
     recipes.value = saved;
@@ -515,7 +528,11 @@ async function load() {
 // Run popup opened from this very tab, which leaves the list behind the dialog
 // one recipe out of date on a screen the selection never moved off.
 watch(
-  [() => props.workflowKeys, () => workflows.recipesEpoch],
+  [
+    () => props.workflowKeys,
+    () => props.wholeStack,
+    () => workflows.recipesEpoch,
+  ],
   () => load(),
   { immediate: true },
 );

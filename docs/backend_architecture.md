@@ -4213,7 +4213,10 @@ else, so `GET /recipes?workflow_key=…` resolves the effective stack in the hub
 (`hub/workflow_cards.effective_stack_keys`: an explicit `workflow_stack_member`
 row whatever its stack's kind, then `workflow_unstacked`, then the automatic
 `core_hash` group) and lists every member's recipes — and an Unstack leaves each recipe with its own workflow
-because there was never a stack id to break.
+because there was never a stack id to break. `whole_stack=false` skips that resolution and reads
+only the keys named (recipes and credit alike): the Recipes tab sends it when the
+selection is members picked inside an expanded stack, and a collapsed stack card
+still gets the whole stack.
 
 **A re-keying is the one thing a saved recipe does not survive.** It names its
 workflow by `workflow_key`, so a `WORKFLOW_KEY_VERSION` bump or a flipped slot
