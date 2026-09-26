@@ -226,8 +226,10 @@ const checkpointOptions = computed(() => {
 });
 
 /**
- * The filenames the owner's own sets offer for each row kind (#1520), so the
- * choice list can lead with them, labelled. Empty until a checkpoint is chosen.
+ * The shelf model IDS the owner's own sets offer for each row kind (#1520), so
+ * the choice list can lead with them, labelled. By id, never by filename: two
+ * shelf rows can share a basename, and only one of them is in the set. Empty
+ * until a checkpoint is chosen.
  */
 const groupedByKind = ref({});
 
@@ -236,11 +238,11 @@ function optionsFor(row) {
     options.value?.[row.kind === "vae" ? "vaes" : "text_encoders"] || [];
   const grouped = new Set(groupedByKind.value[row.kind] ?? []);
   const list = [
-    ...shelf.filter((model) => grouped.has(model.filename)),
-    ...shelf.filter((model) => !grouped.has(model.filename)),
+    ...shelf.filter((model) => grouped.has(model.id)),
+    ...shelf.filter((model) => !grouped.has(model.id)),
   ].map((model) => ({
     value: model.filename,
-    label: grouped.has(model.filename)
+    label: grouped.has(model.id)
       ? `${modelLabel(model)} · Grouped by you`
       : modelLabel(model),
   }));
@@ -477,7 +479,7 @@ watch(checkpointId, async () => {
       row.kind,
       (body.proposals?.[PROPOSAL_KIND[row.kind]] || [])
         .filter((p) => p.via === "grouped")
-        .map((p) => p.filename),
+        .map((p) => p.id),
     ]),
   );
   for (const row of rows.value) {

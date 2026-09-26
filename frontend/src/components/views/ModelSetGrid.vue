@@ -803,7 +803,7 @@ function selectSetEntry(entry, event = {}) {
 /** Right-click, Menu or Shift+F10 on a hand-made card: the set's own menu. */
 function openSetMenu(entry, x, y) {
   if (!store.selectedSetIds.has(entry.setId)) selectSetEntry(entry);
-  emit("set-menu", { x, y });
+  emit("set-menu", { x, y, el: rowElement(entry) });
 }
 
 function onNewClick(entry) {

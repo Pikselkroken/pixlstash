@@ -271,6 +271,40 @@ describe("CloneWithModelsDialog", () => {
     ]);
   });
 
+  it("labels only the grouped ROW when two shelf rows share its basename", async () => {
+    const TWIN = { ...OPTIONS.vaes[0], id: 9 };
+    readModelSwap.mockImplementation(async (key, { checkpointId } = {}) =>
+      checkpointId == null
+        ? { ...OPTIONS, vaes: [...OPTIONS.vaes, TWIN] }
+        : {
+            ...CHOSEN,
+            vaes: [...OPTIONS.vaes, TWIN],
+            proposals: {
+              ...CHOSEN.proposals,
+              vae: [
+                {
+                  id: 9,
+                  filename: TWIN.filename,
+                  via: "grouped",
+                  recipes: 0,
+                  set_name: null,
+                  prepick: true,
+                },
+              ],
+            },
+          },
+    );
+    const wrapper = open();
+    await flushPromises();
+    await selects(wrapper)[0].setValue("2");
+    await flushPromises();
+
+    const labels = selects(wrapper)[1]
+      .findAll("option")
+      .map((option) => option.text());
+    expect(labels.filter((l) => l.includes("Grouped by you"))).toHaveLength(1);
+  });
+
   it("does not pre-pick a grouped file the set offers alongside others", async () => {
     readModelSwap.mockImplementation(async (key, { checkpointId } = {}) =>
       checkpointId == null

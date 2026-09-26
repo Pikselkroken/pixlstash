@@ -493,7 +493,7 @@
         @works-with="showWorksWith"
         @menu="openGridMenu"
         @rename="startRenameSelected"
-        @set-menu="({ x, y }) => setBarRef?.openContextMenu(x, y)"
+        @set-menu="({ x, y, el }) => setBarRef?.openContextMenu(x, y, el)"
         @rename-set="startRenameSet"
       />
       <p v-else-if="firstRead" class="shelf-state">Reading the shelf…</p>

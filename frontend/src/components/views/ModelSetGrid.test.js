@@ -1143,6 +1143,8 @@ describe("hand-made sets (#1520)", () => {
     expect(cards[1].attributes("aria-label")).toMatch(/^Untitled set/);
     expect(cards[0].text()).not.toContain("Incomplete");
     expect(cards[1].text()).toContain("Incomplete: no checkpoint");
+    // The name says what is drawn: the warning, not the facts it replaces.
+    expect(cards[1].attributes("aria-label")).not.toContain("no picture yet");
     // Honesty: no recipe count on a hand-made card.
     expect(cards[0].text()).not.toMatch(/recipe/);
   });
@@ -1439,6 +1441,9 @@ describe("hand-made sets (#1520)", () => {
 
     const offer = wrapper.find('[data-testid="base-model-offer"]');
     expect(offer.text()).toContain("realvisXL v5 has no base model");
+    // A stray `>` once rendered as text after the hint's closing tag.
+    expect(offer.text()).not.toContain(">");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     // Pre-filled from the shelf's own guess, never stored until confirmed.
     const set = offer.findAll("button").find((b) => b.text() === "Set SDXL");
     expect(set).toBeTruthy();
@@ -1446,6 +1451,11 @@ describe("hand-made sets (#1520)", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(editModels).toHaveBeenCalledWith([1], { base_model: "SDXL" });
+    // `set-base` is a declared event, not one Vue warns about on every press.
+    expect(
+      warn.mock.calls.some((call) => String(call[0]).includes("set-base")),
+    ).toBe(false);
+    warn.mockRestore();
     expect(wrapper.find('[data-testid="base-model-offer"]').exists()).toBe(
       false,
     );
@@ -1535,6 +1545,32 @@ describe("hand-made sets (#1520)", () => {
     const panel = wrapper.find('[data-testid="model-set-slots-panel"]');
     expect(panel.text()).not.toContain(".safetensors");
     expect(panel.text()).toContain("Film Grain XL");
+  });
+
+  it("says a checkpoint left the shelf, not that there is none", async () => {
+    const gone = slotMember(1, "realvisXL_v5", "checkpoint", {
+      on_shelf: false,
+      id: null,
+    });
+    const { wrapper } = await mountGrid({
+      rows: [],
+      handMade: [handSet(10, [gone], { incomplete: false })],
+    });
+    const card = wrapper.find('[data-testid="model-set-card"]');
+    expect(card.text()).toContain("Checkpoint not on shelf");
+    expect(card.text()).not.toContain("No checkpoint yet");
+  });
+
+  it("hands the shelf the card to refocus when the set menu closes", async () => {
+    const { wrapper } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    const card = wrapper.find(".msg__row");
+    await card.trigger("contextmenu", { clientX: 5, clientY: 6 });
+    const [{ x, y, el }] = wrapper.emitted("set-menu")[0];
+    expect([x, y]).toEqual([5, 6]);
+    expect(el).toBe(card.element);
   });
 
   it("marks a member whose file left the shelf, and does not let it be selected", async () => {

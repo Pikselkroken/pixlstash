@@ -123,7 +123,6 @@
           role="status"
           >{{ baseHint }}</span
         >
-        >
       </div>
     </div>
 
@@ -279,6 +278,8 @@ const emit = defineEmits([
   "add",
   "fill",
   "pick",
+  "set-base",
+  "dismiss-base",
 ]);
 
 const slots = computed(() => setSlots(props.set));

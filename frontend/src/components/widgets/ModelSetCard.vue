@@ -58,7 +58,12 @@
           icon_sha256: card.markIcon || null,
         }"
       />
-      <span v-else class="msc__empty-line">No checkpoint yet</span>
+      <!-- Only a set with NO checkpoint says so. One whose checkpoint file has
+           left the shelf still has it, kept by hash: say that instead. -->
+      <span v-else-if="card.incomplete" class="msc__empty-line"
+        >No checkpoint yet</span
+      >
+      <span v-else class="msc__empty-line">Checkpoint not on shelf</span>
     </div>
     <div v-else class="msc__cover msc__cover--empty" aria-hidden="true">
       <span class="msc__empty-line">No picture to show</span>
@@ -210,7 +215,8 @@ const accessibleName = computed(() => {
       kindLabel,
       incomplete ? "incomplete: no checkpoint" : null,
       kinds.length ? `with ${kinds.join(", ")}` : "nothing else in it yet",
-      facts.join(", "),
+      // What is drawn: an incomplete card shows its warning in place of facts.
+      incomplete ? null : facts.join(", "),
     ]
       .filter(Boolean)
       .join(", ");
