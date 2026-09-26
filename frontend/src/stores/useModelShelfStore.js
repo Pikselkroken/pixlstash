@@ -2057,7 +2057,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
             ? ` ${failed} could not be deleted and ${failed === 1 ? "is" : "are"} still there.`
             : ""),
         // Settled one by one, like the delete: one set that cannot come back
-        // must not hide the ones that did, and the failure says how many.
+        // must not hide the ones that did, and the failure says how many. A
+        // partial restore still counts as undone, so Redo can delete the sets
+        // that did come back.
         undo: async ({ deleted }) => {
           const settled = await Promise.allSettled(
             deleted.map((snapshot) =>
@@ -2070,11 +2072,17 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           const failed = settled.filter((r) => r.status === "rejected");
           if (failed.length === deleted.length) throw failed[0].reason;
           if (failed.length) {
-            throw new Error(
-              `${failed.length} of ${deleted.length} sets could not be restored.`,
-            );
+            console.warn("[ModelShelf] a set restore failed", {
+              reasons: failed.map((r) => r.reason),
+            });
+            useNoticeStore().push({
+              level: "error",
+              text: `${failed.length} of ${deleted.length} sets could not be restored.`,
+            });
           }
-          return settled.map((r) => r.value);
+          return settled
+            .filter((r) => r.status === "fulfilled")
+            .map((r) => r.value);
         },
         // The restored sets have new ids, so Redo deletes those.
         redo: (restored) => deleteHandMadeSets(restored),

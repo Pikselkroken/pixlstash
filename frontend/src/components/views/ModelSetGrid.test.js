@@ -1848,9 +1848,14 @@ describe("hand-made sets (#1520)", () => {
     const notices = useNoticeStore();
 
     await store.deleteHandMadeSets(store.handMadeSets);
-    await useOperationStore().takeLocalReceiptAction();
+    const operations = useOperationStore();
+    await operations.takeLocalReceiptAction();
 
     expect(createWorkflowSet).toHaveBeenCalledTimes(2);
+    // The one that came back can still be redone away.
+    expect(operations.receipt.mode).toBe("undone");
+    await operations.takeLocalReceiptAction();
+    expect(deleteWorkflowSet).toHaveBeenLastCalledWith(12);
     expect(notices.notices.some((n) => n.text.includes("1 of 2 sets"))).toBe(
       true,
     );

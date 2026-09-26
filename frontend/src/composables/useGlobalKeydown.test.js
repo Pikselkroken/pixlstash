@@ -96,6 +96,10 @@ describe("the undo chord", () => {
     store.showLocalReceipt({ summary: "Added", icon: "mdi-plus", undo, redo });
     press("y");
     expect(undo).not.toHaveBeenCalled();
+    // The wrong direction says which way works, never "not undoable".
+    expect(notices.notices.at(-1).text).toContain(
+      "Undo takes that change back",
+    );
     press("z");
     await vi.waitFor(() => expect(store.receipt?.mode).toBe("undone"));
     expect(undo).toHaveBeenCalledTimes(1);

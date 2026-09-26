@@ -176,6 +176,15 @@ export function useGlobalKeydown({
           : null;
         if (local && wantsUndo === (local.mode !== "undone")) {
           operationStore.takeLocalReceiptAction();
+        } else if (local) {
+          // The pill offers the other direction; "not undoable" would be false.
+          noticeStore.push({
+            level: "info",
+            key: SHELF_NO_UNDO_KEY,
+            text: wantsUndo
+              ? "Nothing more to undo here - Redo puts that change back."
+              : "Nothing to redo - Undo takes that change back.",
+          });
         } else if (isUndoBlindDestination()) {
           noticeStore.push({
             level: "info",

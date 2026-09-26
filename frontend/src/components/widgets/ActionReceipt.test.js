@@ -441,6 +441,9 @@ describe("ActionReceipt - local receipts (#1573)", () => {
     await pending;
     expect(store.receipt.mode).toBe("undone");
     expect(store.receipt.mergedCount).toBe(0);
+    // The flipped pill drains on its own window; the hold was the call's only.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(store.receipt).toBe(null);
 
     raiseLocal(store, vi.fn().mockResolvedValue(false));
     await store.takeLocalReceiptAction();
