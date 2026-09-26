@@ -142,13 +142,17 @@
 // There is no ⓘ here either: everything the card knows is already on it, and the
 // detail a reader wants next is the file list, which is one ▸ away.
 //
-// **Selected means the card's BASE MODEL is selected**, never the set: the shelf's
-// verbs write one file each and two of them destroy bytes, so a card standing for
-// its whole tray would put a shared VAE behind a Delete aimed at a checkpoint. The
-// other members are selected in the tray, one row each. One exception to the
-// drawing: while the open tray shows the base model picked from its own row, the
-// grid leaves the card unlit, so a tray pick does not read as the whole set
-// picked (`trayPicked` in `ModelSetGrid.vue`).
+// **On an evidence card, selected means its BASE MODEL is selected**, never the
+// set: the shelf's verbs write one file each and two of them destroy bytes, so a
+// card standing for its whole tray would put a shared VAE behind a Delete aimed
+// at a checkpoint. The other members are selected in the tray, one row each. One
+// exception to the drawing: while the open tray shows the base model picked from
+// its own row, the grid leaves the card unlit, so a tray pick does not read as
+// the whole set picked (`trayPicked` in `ModelSetGrid.vue`).
+//
+// A HAND-MADE card (`card.handMade`, #1520) is the owner's set rather than the
+// evidence for one: dashed, badged "Grouped by you", no recipe count, and
+// selected means the SET is selected - its verbs touch no file.
 
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
@@ -357,7 +361,7 @@ const accessibleName = computed(() => {
 }
 
 .msc__badge--hand {
-  border: 1px dashed rgba(var(--v-theme-on-dark-surface), 0.6);
+  border: 1px dashed currentColor;
 }
 
 .msc__warn {

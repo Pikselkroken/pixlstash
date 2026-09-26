@@ -153,6 +153,8 @@ async function mountGrid({
 }
 
 beforeEach(() => {
+  createWorkflowSet.mockReset();
+  deleteWorkflowSet.mockReset();
   setActivePinia(createPinia());
   window.localStorage.clear();
   listAdapters.mockReset().mockResolvedValue([]);
@@ -1173,6 +1175,80 @@ describe("hand-made sets (#1520)", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [SET_VAE.sha256]);
+  });
+
+  it("undoes a create through the delete verb, so that undo has an Undo too", async () => {
+    createWorkflowSet.mockResolvedValue(handSet(12, []));
+    deleteWorkflowSet.mockResolvedValue({
+      deleted: handSet(12, [SET_CKPT]),
+    });
+    const { wrapper } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+    });
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const notices = useNoticeStore();
+
+    await wrapper.find('[data-testid="new-workflow-set"]').trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await notices.notices.at(-1).action.handler();
+
+    expect(deleteWorkflowSet).toHaveBeenCalledWith(12);
+    const receipt = notices.notices.at(-1);
+    expect(receipt.text).toContain("Deleted the set");
+    expect(receipt.action.label).toBe("Undo");
+  });
+
+  it("keeps the receipt and Undo for the sets it did delete when one fails", async () => {
+    deleteWorkflowSet.mockImplementation((id) =>
+      id === 11
+        ? Promise.reject(new Error("gone"))
+        : Promise.resolve({ deleted: handSet(id, [SET_CKPT]) }),
+    );
+    const { store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [SET_CKPT]), handSet(11, [SET_CKPT])],
+    });
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const notices = useNoticeStore();
+
+    await store.deleteHandMadeSets(store.handMadeSets);
+
+    const receipt = notices.notices.at(-1);
+    expect(receipt.text).toContain("1 could not be deleted");
+    expect(receipt.action.label).toBe("Undo");
+  });
+
+  it("does not make a set per repeat of a held N", async () => {
+    createWorkflowSet.mockResolvedValue(handSet(12, []));
+    const { wrapper } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      combinations: [combination("1", [CKPT])],
+    });
+    const grid = wrapper.find('[role="treegrid"]');
+    await grid.trigger("keydown", { key: "n", repeat: true });
+    expect(createWorkflowSet).not.toHaveBeenCalled();
+  });
+
+  it("drops the set selection when the cursor enters a tray, and when the grid is left", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    await wrapper.find(".msg__row").trigger("click");
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    expect([...store.selectedSetIds]).toEqual([10]);
+
+    await wrapper
+      .find('[role="treegrid"]')
+      .trigger("keydown", { key: "ArrowDown" });
+    expect([...store.selectedSetIds]).toEqual([]);
+
+    await wrapper.find(".msg__row").trigger("click");
+    expect([...store.selectedSetIds]).toEqual([10]);
+    store.setView({ groupBy: "none" });
+    await wrapper.vm.$nextTick();
+    expect([...store.selectedSetIds]).toEqual([]);
   });
 
   it("marks a member whose file left the shelf, and does not let it be selected", async () => {

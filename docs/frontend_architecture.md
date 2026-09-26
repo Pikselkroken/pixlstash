@@ -1550,14 +1550,15 @@ proves ran together, with a model free to appear in more than one.
   would put a shared VAE behind a Delete aimed at a checkpoint. It stands for
   its head instead — the file whose name, kind and mark the card already draws
   — and the other members are selected one at a time in the tray, where a row
-  is one model. Nothing here ever selects a SET. **A tray pick does not light
-  the card**: picking a checkpoint in the open tray selects that `model.id`
-  but leaves the card named after it unlit while the tray shows the pick,
-  because a lit card reads as the whole set picked (`trayPicked`, cleared by
-  any selection change the grid did not make, such as Select all). Close the
-  tray and the card lights, so a selection is never drawn nowhere; Ctrl/Space
-  on the unlit card lights it rather than toggling the model out. On that
-  footing the grid
+  is one model. An evidence card never selects a SET (a hand-made card does, into
+  a separate selection; see below). **A tray pick does not light the card**:
+  picking a checkpoint in the open tray - an evidence tray or a hand-made set's
+  slots - selects that `model.id` but leaves the card named after it unlit while
+  the tray shows the pick, because a lit card reads as the whole set picked
+  (`trayPicked`, cleared by any selection change the grid did not make, such as
+  Select all). Close the tray and the card lights, so a selection is never drawn
+  nowhere; Ctrl/Space on the unlit card lights it rather than toggling the model
+  out. On that footing the grid
   carries the row list's whole contract, through the same store: click
   replaces, Ctrl/Cmd+click toggles, Shift+click takes the range in DRAWN order
   (`orderedIds`, read off `flatRows`, de-duplicated because an open set's head
@@ -1711,9 +1712,11 @@ the shelf's workflow sets section) and served as `hand_made` on
   files keep `ShelfSelectionBar`, which gains **Remove from set** while every
   selected file is a member of the open hand-made tray, and **New workflow set
   with this checkpoint** for one hashed checkpoint (from an evidence card it
-  opens the new set with Fill from pictures ready). Delete on a set card deletes
-  the set; Delete on a member tile is the shelf's file delete, whose prompt now
-  names the sets that keep the file as "Not on shelf".
+  opens the new set with Fill from pictures ready). Delete with sets selected
+  deletes the sets (grid only: leaving the grid clears the set selection, and
+  the set pill is drawn only there). The cursor entering a tray tile clears the
+  set selection, so Delete with a selected member is the shelf's file delete,
+  whose prompt now names the sets that keep the file as "Not on shelf".
 - **The tray is slots, walked by slot.** `setSlots` (`utils/workflowSets.js`)
   gives each of the five fixed slots its member tiles plus a ＋ tile (Checkpoint
   drops its ＋ once filled); the grid splices them in as `kind: "slot"` entries.
@@ -1729,7 +1732,10 @@ the shelf's workflow sets section) and served as `hand_made` on
   to the tile on close, since v-menu cannot restore it for a programmatic open.
 - **Every set write is `setWrite` in the store:** the call, a full refetch
   (coverage moves with membership), and a receipt whose Undo is the inverse call
-  — a delete is undone by recreating the set from the snapshot the route returns.
+  — a delete is undone by recreating the set from the snapshot the route returns,
+  and a create is undone THROUGH the delete verb, so undoing it after the set was
+  filled gets its own receipt and Undo. A multi-set delete settles each call, so
+  one failure does not cost the others their Undo.
 - **Clone with new models** labels proposals with `via: "grouped"` "Grouped by
   you" and lists them first in its selects; one with `prepick: false` (the set
   offers several of that kind) is shown but not pre-picked.

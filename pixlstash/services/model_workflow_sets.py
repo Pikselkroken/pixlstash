@@ -214,31 +214,25 @@ def _require_set(conn, set_id: int) -> None:
 def _resolve(conn, member: dict) -> tuple[str, str, Optional[str]]:
     """One requested member as ``(sha256, slot, label)``, or a refusal.
 
-    *member* is ``{"model_id", "slot"?}`` or ``{"sha256", "slot", "label"?}``;
-    the second form is how an undo puts back a member no longer on the shelf.
-    The kind rules apply whenever a shelf row holds the bytes.
+    *member* is ``{"model_id", "slot"?}`` or ``{"sha256", "slot", "label"?}``.
+    The second form is how an undo puts a member back, so it is restored as it
+    was, in the slot it held: re-applying the kind rules there would refuse a
+    member whose file was re-kinded since it went in, and roll back the whole
+    undo with the set lost. The kind rules apply to the ``model_id`` form.
     """
-    if member.get("model_id") is not None:
-        row = conn.execute(
-            "SELECT id, sha256, file_kind, display_name, filename FROM model "
-            "WHERE id = ?",
-            (member["model_id"],),
-        ).fetchone()
-        if row is None:
-            raise WorkflowSetNotFoundError(
-                f"No model with id {member['model_id']} on the shelf."
-            )
-        label = _model_name(row)
-    else:
-        sha256 = member["sha256"].lower()
-        row = conn.execute(
-            "SELECT id, sha256, file_kind, display_name, filename FROM model "
-            "WHERE sha256 = ?",
-            (sha256,),
-        ).fetchone()
-        label = member.get("label")
-        if row is None:
-            return sha256, member["slot"], label
+    if member.get("model_id") is None:
+        return member["sha256"].lower(), member["slot"], member.get("label")
+    row = conn.execute(
+        "SELECT id, sha256, file_kind, display_name, filename FROM model WHERE id = ?",
+        (member["model_id"],),
+    ).fetchone()
+    if row is None:
+        raise WorkflowSetNotFoundError(
+            f"No model with id {member['model_id']} on the shelf."
+        )
+    # Cut to what the undo path accepts back (`label` is capped at 500 on the
+    # request), or a long display name would make its own undo a 422.
+    label = _model_name(row)[:500]
 
     name = _model_name(row)
     if row["file_kind"] == FILE_ENGINE:

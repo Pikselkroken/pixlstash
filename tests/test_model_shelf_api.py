@@ -1316,6 +1316,50 @@ def test_a_set_is_renamed_and_its_name_cleared(shelf_env):
         _wipe_sets(shelf_env.server)
 
 
+def test_undo_puts_a_member_back_even_after_its_file_was_re_kinded(shelf_env):
+    """The sha256 form restores a member as it was. Re-applying the kind rules
+    there refused a checkpoint the owner had since re-kinded, rolled back the
+    whole re-post and lost the set (#1520 review)."""
+    ids = shelf_env.model_ids
+    server = shelf_env.server
+    ckpt = ids["base_xl.safetensors"]
+    sha = hashlib.sha256(b"Base XL re-kinded").hexdigest()
+    before = server.hub.fetchone(
+        "SELECT sha256, file_kind, kind FROM model WHERE id = ?", (ckpt,)
+    )
+    with server.hub.transaction() as conn:
+        conn.execute("UPDATE model SET sha256 = ? WHERE id = ?", (sha, ckpt))
+    try:
+        set_id = _new_set(shelf_env, members=[{"model_id": ckpt}])["id"]
+        snapshot = shelf_env.owner.delete(
+            f"{API}/models/workflow-sets/{set_id}"
+        ).json()["deleted"]
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET file_kind = 'adapter', kind = 'lora' WHERE id = ?",
+                (ckpt,),
+            )
+
+        restored = _new_set(
+            shelf_env,
+            members=[
+                {"sha256": m["sha256"], "slot": m["slot"], "label": m["label"]}
+                for m in snapshot["members"]
+            ],
+        )
+
+        assert [(m["sha256"], m["slot"]) for m in restored["members"]] == [
+            (sha, "checkpoint")
+        ]
+    finally:
+        _wipe_sets(server)
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET sha256 = ?, file_kind = ?, kind = ? WHERE id = ?",
+                (before["sha256"], before["file_kind"], before["kind"], ckpt),
+            )
+
+
 def test_a_deleted_set_comes_back_whole_from_its_snapshot(shelf_env):
     """Undo is a re-post of the snapshot, and a member whose file has left the
     shelf since is put back as not on shelf, then reconnects by hash."""

@@ -2706,6 +2706,33 @@ def test_a_grouped_kind_is_prepicked_only_when_the_sets_agree_on_one_file(
     assert split["vae"][0]["set_name"] is None
 
 
+def test_a_grouped_encoder_pair_of_two_layouts_is_prepicked_each(
+    companions_shelf,
+):
+    """A Flux set holds one clip_l and one t5_xxl: one file per row, so both are
+    pre-picked. Counting per kind would refuse both and hand the rows to
+    weaker, ungrouped evidence (#1520 review)."""
+    hub, ids = grouped_shelf(companions_shelf)
+    clip = shelf_file(hub, "Clip_L.safetensors", "text_encoder")
+    t5 = shelf_file(hub, "T5_XXL.safetensors", "text_encoder")
+    hash_rows(hub, clip, t5)
+    with hub.transaction() as conn:
+        conn.execute("UPDATE model SET family = 'clip_l' WHERE id = ?", (clip,))
+        conn.execute("UPDATE model SET family = 't5_xxl' WHERE id = ?", (t5,))
+    create_set(
+        hub,
+        "Flux",
+        [{"model_id": ids["ckpt_a"]}, {"model_id": clip}, {"model_id": t5}],
+    )
+
+    result = propose_companions(hub, ids["ckpt_a"])
+
+    grouped = {
+        e["id"]: e["prepick"] for e in result["text_encoder"] if e["via"] == "grouped"
+    }
+    assert grouped == {clip: True, t5: True}
+
+
 def test_a_set_without_this_checkpoint_or_off_the_shelf_proposes_nothing(
     companions_shelf,
 ):

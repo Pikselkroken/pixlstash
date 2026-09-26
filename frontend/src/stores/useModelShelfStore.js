@@ -1815,8 +1815,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /**
    * Run one set write, refetch, and show its receipt with Undo.
    *
-   * Every change to a set gets a receipt and every receipt offers Undo; the
-   * undo is itself a set write, and says so when it lands. The refetch is the
+   * Every change to a set gets a receipt and every receipt offers Undo. An
+   * undo that could itself lose work - undoing a create after the set has been
+   * filled - goes through the delete verb, so it gets a receipt and an Undo of
+   * its own; a failed undo says so. The refetch is the
    * whole payload because coverage moves with membership: adding one LoRA can
    * pull a combination off the evidence cards and onto this one.
    *
@@ -1847,6 +1849,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
                 try {
                   await undo(result);
                 } catch (err) {
+                  console.warn("[ModelShelf] a set undo failed", { err });
                   notices.push({
                     level: "error",
                     text: errorDetail(err) || "That could not be undone.",
@@ -1878,7 +1881,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         `Made "${handMadeName(set)}" with ${(set.members ?? []).length} ${
           (set.members ?? []).length === 1 ? "model" : "models"
         }.`,
-      undo: (set) => deleteWorkflowSet(set.id),
+      // Through the delete verb, not a bare call: this receipt stays up while
+      // the set is filled, and undoing it then would take every model added
+      // since with no way back. The delete's own receipt offers that way back.
+      undo: (set) => deleteHandMadeSets([set]),
       failure: "The set could not be made.",
     });
     if (created) {
@@ -1907,18 +1913,33 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   async function deleteHandMadeSets(sets) {
     if (!sets.length) return null;
     return setWrite(
-      () => Promise.all(sets.map((set) => deleteWorkflowSet(set.id))),
+      // Settled one by one: a set another tab already deleted must not cost
+      // the receipt - and so the Undo - of the ones this call did delete.
+      async () => {
+        const settled = await Promise.allSettled(
+          sets.map((set) => deleteWorkflowSet(set.id)),
+        );
+        const deleted = settled
+          .filter((r) => r.status === "fulfilled")
+          .map((r) => r.value.deleted);
+        const failed = settled.filter((r) => r.status === "rejected");
+        if (!deleted.length) throw failed[0].reason;
+        return { deleted, failed: failed.length };
+      },
       {
-        receipt: (results) =>
-          results.length === 1
-            ? `Deleted the set "${handMadeName(results[0].deleted)}". No file was touched.`
-            : `Deleted ${results.length} sets. No file was touched.`,
-        undo: (results) =>
+        receipt: ({ deleted, failed }) =>
+          (deleted.length === 1
+            ? `Deleted the set "${handMadeName(deleted[0])}". No file was touched.`
+            : `Deleted ${deleted.length} sets. No file was touched.`) +
+          (failed
+            ? ` ${failed} could not be deleted and ${failed === 1 ? "is" : "are"} still there.`
+            : ""),
+        undo: ({ deleted }) =>
           Promise.all(
-            results.map(({ deleted }) =>
+            deleted.map((snapshot) =>
               createWorkflowSet({
-                name: deleted.name ?? null,
-                members: (deleted.members ?? []).map(memberBack),
+                name: snapshot.name ?? null,
+                members: (snapshot.members ?? []).map(memberBack),
               }),
             ),
           ),
@@ -2390,6 +2411,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   watch(selectedIds, (ids) => {
     if (ids.size) clearSetSelection();
   });
+
+  // Sets are selected on the set grid only; leaving it must not leave a
+  // selection behind that Delete could act on unseen.
+  watch(
+    () => view.groupBy,
+    (axis) => {
+      if (axis !== GRID_GROUP_BY) clearSetSelection();
+    },
+  );
 
   /**
    * Drop ids the shelf no longer holds.

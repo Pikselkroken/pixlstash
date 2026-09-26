@@ -1398,7 +1398,10 @@
          at one would have taken a shared VAE with it. A card stands for its BASE
          MODEL now and a tray row for one file, so everything this bar can be
          aimed at on that screen is exactly one model, which is what its verbs
-         write. One bar for both views, so the refusals cannot drift. -->
+         write. One bar for both views, so the refusals cannot drift.
+         A hand-made set card (#1520) selects its SET instead, which takes the
+         second pill below: its verbs touch no file, and the two selections
+         clear each other so only one pill is ever up. -->
     <div v-if="isShelfTab" class="selbar-float">
       <ShelfSelectionBar
         ref="selBarRef"
@@ -1421,6 +1424,7 @@
         @remove-from-set="removeSelectedFromSet"
       />
       <WorkflowSetSelectionBar
+        v-if="isSetGrid"
         ref="setBarRef"
         @rename="startRenameSet"
         @delete="store.deleteHandMadeSets(store.selectedSets)"
@@ -2403,7 +2407,7 @@ function onShelfKeydown(event) {
   }
   // Selected hand-made SETS (#1520) answer the same two keys with the set
   // vocabulary: Escape clears, Delete deletes the sets - never a file.
-  if (store.selectedSets.length) {
+  if (store.selectedSets.length && isSetGrid.value) {
     event.preventDefault();
     if (event.key === "Escape") store.clearSetSelection();
     else store.deleteHandMadeSets(store.selectedSets);

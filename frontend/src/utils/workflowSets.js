@@ -613,18 +613,26 @@ export function fillFromPictures(set, combinations, rows) {
   if (!checkpoint?.on_shelf) return [];
   const held = new Set((set.members ?? []).map((m) => m.sha256));
   const byId = new Map((rows ?? []).map((row) => [row.id, row]));
-  return worksWith(combinations, checkpoint.id)
-    .companions.map((c) => ({ ...c, row: byId.get(c.id) }))
-    .filter(
-      (c) => c.row?.sha256 && !held.has(c.row.sha256) && c.kind !== "engine",
-    )
-    .map((c) => ({
-      id: c.id,
-      name: c.name,
-      kindLabel: c.kindLabel,
-      detail: `${c.kindLabel || "Model"} · ${recipeCount(c.recipes)}`,
-      slot: defaultSlot(c.kind),
-    }));
+  return (
+    worksWith(combinations, checkpoint.id)
+      .companions.map((c) => ({ ...c, row: byId.get(c.id) }))
+      // Another checkpoint (a refiner) is not offered: the set holds one, and
+      // one refused member fails the whole all-or-nothing add.
+      .filter(
+        (c) =>
+          c.row?.sha256 &&
+          !held.has(c.row.sha256) &&
+          c.kind !== "engine" &&
+          defaultSlot(c.kind) !== "checkpoint",
+      )
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        kindLabel: c.kindLabel,
+        detail: `${c.kindLabel || "Model"} · ${recipeCount(c.recipes)}`,
+        slot: defaultSlot(c.kind),
+      }))
+  );
 }
 
 /**

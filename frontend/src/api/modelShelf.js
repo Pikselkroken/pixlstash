@@ -223,7 +223,7 @@ export async function createWorkflowSet(body = {}) {
   return unwrap(apiClient.post("/models/workflow-sets", body));
 }
 
-/** Rename a set; `null` goes back to the checkpoint's name. */
+/** Rename a set. `null` clears the name; the set is then shown by its checkpoint. */
 export async function renameWorkflowSet(id, name) {
   return unwrap(apiClient.patch(`/models/workflow-sets/${id}`, { name }));
 }

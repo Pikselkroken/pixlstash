@@ -1148,6 +1148,13 @@ def propose_companions(
                 int(row["model_id"]), row["name"]
             )
 
+    def layout_count(kind: str, model_id: int) -> int:
+        # Per LAYOUT, not per kind: a Flux set's clip_l and t5_xxl are one file
+        # each for two different rows, and counting them together would refuse
+        # to pre-pick either and hand both rows to weaker, ungrouped evidence.
+        family = models[model_id]["family"]
+        return sum(1 for other in grouped[kind] if models[other]["family"] == family)
+
     for kind in SUPPORT_FILE_KINDS:
         proposals[kind] = [
             {
@@ -1159,7 +1166,7 @@ def propose_companions(
                 "recipes": 0,
                 "history_runs": 0,
                 "set_name": set_name,
-                "prepick": len(grouped[kind]) == 1,
+                "prepick": layout_count(kind, model_id) == 1,
             }
             for model_id, set_name in sorted(
                 grouped[kind].items(),

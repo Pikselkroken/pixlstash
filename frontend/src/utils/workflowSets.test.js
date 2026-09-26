@@ -414,6 +414,26 @@ describe("hand-made sets (#1520)", () => {
     ).toEqual([]);
   });
 
+  it("never offers a second checkpoint from pictures, since the add is all or nothing", () => {
+    const withRefiner = [
+      ...combinations,
+      {
+        key: "1,7",
+        recipes: 1,
+        picture_count: 1,
+        models: [
+          { id: 1, name: "RealVis XL", kind: "checkpoint" },
+          { id: 7, name: "Refiner", kind: "checkpoint" },
+        ],
+      },
+    ];
+    const ids = fillFromPictures(mine, withRefiner, [
+      ...rows,
+      shelfRow(7, "Refiner", "checkpoint"),
+    ]).map((item) => item.id);
+    expect(ids).toEqual([4]);
+  });
+
   it("fills from a set with other sets' members, never their checkpoint", () => {
     expect(fillFromSets(mine, [mine, other])).toMatchObject([
       { id: 3, slot: "lora", from: ["Juggernaut"] },

@@ -245,7 +245,12 @@
  * whole SET would put a shared VAE behind a Delete aimed at a checkpoint. It
  * stands for its head instead - the file whose name, kind and mark the card
  * already draws - and the other members of the set are selected one at a time in
- * the tray, where each row is one model. Nothing here ever selects a SET.
+ * the tray, where each row is one model. An EVIDENCE card never selects a set.
+ *
+ * **A hand-made card is the exception, and it is safe for the same reason**
+ * (#1520): it selects its SET into a separate selection (`selectedSetIds`)
+ * whose verbs - Rename, Delete set - touch no file, and taking a set drops any
+ * selected files and vice versa, so no pill ever holds both vocabularies.
  *
  * **A RUN is the one thing a card can stand for besides one file, and it has to
  * be.** `shownModelIds` fans a run out into its members, so a card can be named
@@ -1198,6 +1203,9 @@ function moveCursor(index, extend = false) {
   const entry = flatRows.value[index];
   if (!isStop(entry)) return;
   cursorId.value = entry.id;
+  // Into a hand-made tray, the cursor is on FILES: a set selection left behind
+  // would turn the Delete a reader aims at a member into a set delete.
+  if (entry.kind === "slot") store.clearSetSelection();
   if (extend) selectEntry(entry, { shiftKey: true });
   nextTick(() => rowElement(entry)?.focus());
 }
@@ -1246,7 +1254,13 @@ function isMenuKey(event) {
  */
 function onHandKey(event, entry) {
   const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
-  if (plain && !event.shiftKey && (event.key === "n" || event.key === "N")) {
+  // Not on a held key: each repeat would make another empty set.
+  if (
+    plain &&
+    !event.shiftKey &&
+    !event.repeat &&
+    (event.key === "n" || event.key === "N")
+  ) {
     event.preventDefault();
     createSet();
     return true;
