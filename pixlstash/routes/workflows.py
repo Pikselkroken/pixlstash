@@ -147,6 +147,7 @@ from pixlstash.routes.comfyui import (
     _read_object_info,
     _resolve_workflow_path,
     _shelf_adapter,
+    runnable_document,
     store_workflow_copy,
     trash_user_workflow,
 )
@@ -2580,7 +2581,7 @@ def create_router(server) -> APIRouter:
             path, _source = _resolve_workflow_path(card.file_name)
             if path:
                 try:
-                    file_document = _load_workflow_json(path)
+                    file_document = runnable_document(path, _load_workflow_json(path))
                 except (OSError, ValueError) as exc:
                     logger.warning(
                         "Card %s names workflow file %s, which will not load, so "

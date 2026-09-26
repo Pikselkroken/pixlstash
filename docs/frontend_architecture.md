@@ -2175,6 +2175,13 @@ can no longer see.
   straight back. `loading` is cleared with the epoch because the old epoch's
   `finally` will not, and every caller follows it with `fetchCards()`, which
   early-returns while `loading` is set.
+- **An editor file not converted yet says so in Defaults** (#1530). An
+  imported card with `variant_count: 0` is a ComfyUI editor file with no API
+  graph (integration §2, the card note on `variant_count`), so the Defaults
+  section reads "Parameters are not available yet" and names ComfyUI's
+  *Convert for PixlStash* command instead of "no defaults". The gesture starts
+  in ComfyUI, so PixlStash offers no convert button of its own; `ui_format`
+  in `utils/runReasons.js` says the same under Run….
 - **Defaults are whole-set writes.** Resetting one value sends every other
   edited value back untouched, which is the only way "reset one" exists on a
   route that replaces the set. The pin is the same shape. The detail route

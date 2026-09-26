@@ -1065,6 +1065,24 @@ the two sides have agreed:
    to draw itself out of its models rather than its pictures would otherwise
    need a second request per model to do it.
 
+   **ComfyUI converts such a file, PixlStash does not (#1530).** `POST
+   /api/v1/comfyui/workflows/convert` (`OWNER_ONLY`) takes `{name, workflow,
+   output}`: what ComfyUI's own `app.graphToPrompt()` returns for the workflow
+   on its canvas, sent by the ComfyUI-PixlStash node one workflow at a time,
+   the gesture starting in ComfyUI. `workflow` is matched against the stored
+   files by content (stored first, as an import would, when nothing matches);
+   `output` is written **beside** that file as `<name>.json.api`
+   (`{converted_from, prompt}`), never over it, so the file stays
+   byte-identical to what ComfyUI holds. `converted_from` is the digest of the
+   editor file it was made from, and a conversion of another version of the
+   file is ignored. Every reader that files, runs or parameterises a stored
+   file goes through `routes/comfyui.py::runnable_document` (and
+   `_file_in_hub` through `converted_graph`), so the file is filed as the API
+   graph: its card gains a recipe, `variant_count` rises above 0, and the key
+   moves to the recipe's card. The response names the stored file, whether it
+   was already stored, and that key. A client reads an imported card with
+   `variant_count: 0` as an editor file not converted yet.
+
 **The file-keyed workflow routes are retired (#1410).** `GET` / `PUT
 /api/v1/comfyui/workflows/{workflow_name}/inputs` (#1305), `GET .../parameters`
 and `PUT .../pins` (#1306), `POST .../run` (#1307), and `POST
