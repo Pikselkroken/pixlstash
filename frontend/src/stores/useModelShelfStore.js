@@ -2160,10 +2160,17 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return queued;
   }
 
-  // What each set's list was after this session's last write to it, so a
-  // queued write never reads a refetch that has not landed yet.
+  // What each set's list was after this session's last write to it, as the
+  // server answered it. Kept across refetches: one that left before the last
+  // write landed would otherwise hand the next write a stale list. Dropped
+  // only for a set that is gone.
   const latestDeclines = new Map();
-  watch(handMadeSets, () => latestDeclines.clear());
+  watch(handMadeSets, (sets) => {
+    const live = new Set(sets.map((set) => set.id));
+    for (const id of [...latestDeclines.keys()]) {
+      if (!live.has(id)) latestDeclines.delete(id);
+    }
+  });
 
   /** The hand-made sets holding any of these model ids, for the delete warning. */
   function handMadeSetsHolding(ids) {

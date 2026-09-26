@@ -2138,6 +2138,22 @@ describe("hand-made sets (#1520)", () => {
       ]);
     });
 
+    it("never builds the next Keep separate from a refetch that is out of date", async () => {
+      const { store } = await mountOffer();
+      setWorkflowSetDeclines.mockImplementation(async (id, sha256) => ({
+        set: handSet(id, [SET_CKPT], { declined: sha256 }),
+      }));
+      // Every refetch answers from before the writes, as one that left
+      // before they landed would.
+      const set = () => store.handMadeSets[0];
+      await store.keepOutOfHandMadeSet(set(), [GHOST_LORA]);
+      await store.keepOutOfHandMadeSet(set(), [GHOST_OTHER]);
+      expect(setWorkflowSetDeclines).toHaveBeenLastCalledWith(10, [
+        GHOST_LORA.sha256,
+        GHOST_OTHER.sha256,
+      ]);
+    });
+
     it("says what was kept separate and offers the merge again", async () => {
       setWorkflowSetDeclines.mockResolvedValue({
         set: handSet(10, [SET_CKPT]),
