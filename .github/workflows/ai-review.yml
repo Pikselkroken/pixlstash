@@ -127,9 +127,13 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENROUTER.KEY: ${{ secrets.OPENROUTER_API_KEY }}
           # /improve splits the diff into chunks of MAX_MODEL_TOKENS minus the
-          # 40000 output cap (~25k of diff). One ~54k-token chunk made the model
-          # reason until the cap and return nothing; a ~38k one worked.
-          CONFIG.MAX_MODEL_TOKENS: "65000"
+          # output cap: 89000 - 64000 keeps ~25k of diff per chunk. One ~54k-token
+          # chunk made the model reason until the cap and return nothing.
+          CONFIG.MAX_MODEL_TOKENS: "89000"
+          # ~25k-token chunks reason for up to ~37k tokens, and now and then one
+          # runs past 40000 and returns nothing (finish_reason: length), so
+          # /improve gets more room than /review needs.
+          OPENROUTER.MAX_TOKENS: "64000"
           # Measure chunks with line numbers already added. Without it PR-Agent
           # sizes the chunks bare, adds line numbers afterwards and clips the
           # overflow, silently dropping ~30% of a large diff.
