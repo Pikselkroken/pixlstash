@@ -550,6 +550,55 @@ function firstStop(index, step) {
 }
 
 /**
+ * Where the open tray's rows begin and end in `flatRows`.
+ *
+ * `null` with no tray open. In List the block is exactly the member entries -
+ * the padding only tops a block up to a whole number of TRAY rows, and a
+ * one-column tray is already whole - so scanning for them bounds it exactly.
+ */
+const trayBounds = computed(() => {
+  const rows = flatRows.value;
+  const first = rows.findIndex((entry) => entry.kind === "member");
+  if (first < 0) return null;
+  let last = first;
+  while (last + 1 < rows.length && rows[last + 1].kind === "member") last += 1;
+  return { first, last };
+});
+
+/**
+ * Where a vertical step from the cursor lands.
+ *
+ * **Two grids of different widths, so a crossing is not arithmetic.** A List
+ * tray is one column whatever the card grid above it is doing, so the column a
+ * reader is travelling down has no counterpart on the other side. Stepping by
+ * the outer count carried that column offset into the tray: from the third card
+ * of a row, Down landed on the tray's third row rather than its first, and with
+ * a short tray it stepped over the tray entirely.
+ *
+ * So a crossing lands at the EDGE it arrives at - the tray's first row coming
+ * down, its last coming up - and inside the tray the step is one row, which is
+ * what the tray is drawn as.
+ */
+function verticalTarget(direction) {
+  const from = cursorIndex.value;
+  const cols = Math.max(1, columns.value);
+  const tray = trayBounds.value;
+  if (tray && trayColumns.value === 1) {
+    if (flatRows.value[from]?.kind === "member") {
+      return firstStop(from + direction, direction);
+    }
+    const target = from + direction * cols;
+    if (direction > 0 && from < tray.first && target >= tray.first) {
+      return tray.first;
+    }
+    if (direction < 0 && from > tray.last && target <= tray.last) {
+      return tray.last;
+    }
+  }
+  return verticalStop(from + direction * cols, cols, direction);
+}
+
+/**
  * The row above or below `index`, keeping its column.
  *
  * Steps by WHOLE ROWS over the padding holes, never one index at a time: a
@@ -636,7 +685,6 @@ function isMenuKey(event) {
 function onKeyDown(event) {
   if (targetOwnsTheGesture(event)) return;
   const entry = flatRows.value[cursorIndex.value];
-  const cols = Math.max(1, columns.value);
   const extend = event.shiftKey;
   switch (event.key) {
     case "ArrowRight":
@@ -649,21 +697,11 @@ function onKeyDown(event) {
       return;
     case "ArrowDown":
       event.preventDefault();
-      moveCursor(
-        entry?.kind === "member" && store.view.trayView === "list"
-          ? firstStop(cursorIndex.value + 1, 1)
-          : verticalStop(cursorIndex.value + cols, cols, 1),
-        extend,
-      );
+      moveCursor(verticalTarget(1), extend);
       return;
     case "ArrowUp":
       event.preventDefault();
-      moveCursor(
-        entry?.kind === "member" && store.view.trayView === "list"
-          ? firstStop(cursorIndex.value - 1, -1)
-          : verticalStop(cursorIndex.value - cols, cols, -1),
-        extend,
-      );
+      moveCursor(verticalTarget(-1), extend);
       return;
     case " ":
       // Space toggles, exactly as it does on a row: the keyboard's Ctrl+click,
