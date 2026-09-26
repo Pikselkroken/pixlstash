@@ -594,6 +594,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/models/workflow-sets                                                  | model_shelf     | Make a workflow set by hand                                 |
 | PATCH  | /api/v1/models/workflow-sets/{set_id}                                         | model_shelf     | Rename a workflow set                                       |
 | DELETE | /api/v1/models/workflow-sets/{set_id}                                         | model_shelf     | Delete a workflow set                                       |
+| PUT    | /api/v1/models/workflow-sets/{set_id}/declines                                | model_shelf     | Keep models out of a workflow set's merge offer             |
 | POST   | /api/v1/models/workflow-sets/{set_id}/members                                 | model_shelf     | Add models to a workflow set                                |
 | POST   | /api/v1/models/workflow-sets/{set_id}/members/remove                          | model_shelf     | Take models out of a workflow set                           |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                          |
@@ -3304,6 +3305,21 @@ like every shelf table), read and written by
   members from `no_set`. Covered combinations are still served: the grid hides
   them, *Works with* reads them all. The mutators answer with the set re-read
   through that same full evidence pass, which is a per-click cost, not per row.
+- **The merge offer is derived, and only the declines are stored (#1523).**
+  `_attach_offers` groups the combinations no set covers by their head (the
+  grid's own evidence cards, but over `hub_combinations`: every library's
+  recipes, not only those with a picture here). A set is offered its own
+  checkpoint's group; a set with no checkpoint only a group whose models
+  include all of its own. Only combinations whose missing models can all be
+  added count: hashed, not an engine, and not in `model_workflow_set_decline`
+  for that set. One group goes to one set, the one needing fewest models added.
+  The offer is `{head_id, head_name, picture_count, recipes, covers, models}`,
+  each model with the slot it would take (the head fills an empty Checkpoint,
+  a second checkpoint goes to Other). Merging is the ordinary members add;
+  Keep separate is `PUT .../declines`, a whole-list write that returns the old
+  list as its undo. `kept_separate` counts the pictures here the declines hold
+  back. The declines cascade with their set (so a build that predates the
+  table can still delete one); a delete's undo does not restore them.
 - **Clone with new models reads them first.** `propose_companions` lists, ahead
   of the recipe ladder, the on-shelf VAEs and text encoders of every set whose
   checkpoint member is the chosen checkpoint (`via: "grouped"`, `recipes: 0`,

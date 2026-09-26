@@ -1428,6 +1428,9 @@
         ref="setBarRef"
         @rename="startRenameSet"
         @delete="store.deleteHandMadeSets(store.selectedSets)"
+        @merge-offer="setGridRef?.openOffer(store.selectedSets[0]?.id)"
+        @keep-separate="store.keepOutOfHandMadeSet(store.selectedSets[0])"
+        @offer-again="store.offerMergeAgain(store.selectedSets[0])"
       />
     </div>
     <WorkflowSetRenameDialog

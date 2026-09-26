@@ -68,6 +68,22 @@
     <div v-else class="msc__cover msc__cover--empty" aria-hidden="true">
       <span class="msc__empty-line">No picture to show</span>
     </div>
+    <!-- The lasting merge offer (#1523): on the cover until the owner merges
+         or keeps the set separate. Opens the tray on its offer strip. Not a
+         tab stop: the grid owns Tab, and the keyboard reaches the offer
+         through the tray and the set's menu. -->
+    <button
+      v-if="card.offer"
+      class="msc__offer"
+      type="button"
+      tabindex="-1"
+      aria-hidden="true"
+      data-testid="merge-offer"
+      @click="emit('offer')"
+    >
+      <span class="msc__offer-text">{{ card.offer.text }}</span>
+      <span class="msc__offer-go">Merge…</span>
+    </button>
 
     <!-- The visible rows are hidden from assistive tech: the card's own label
          already reads all of them, including what "+N" clipped. -->
@@ -178,7 +194,7 @@ const props = defineProps({
   selected: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["toggle"]);
+const emit = defineEmits(["toggle", "offer"]);
 
 /**
  * The URL a browser loads one cover from.
@@ -196,13 +212,17 @@ function coverSrc(cover) {
 }
 
 /** Row 2: the per-kind tally of everything else in the set. */
-const kindChips = computed(() =>
-  props.card.kinds.map((entry, i) => ({
+const kindChips = computed(() => [
+  ...props.card.kinds.map((entry, i) => ({
     key: `kind-${i}`,
     label: entry,
     icon: "cube-outline",
   })),
-);
+  // What a merge would add, dashed like the ghosts in the tray (#1523).
+  ...(props.card.offer
+    ? [{ key: "offer", label: `+${props.card.offer.adds}`, dashed: true }]
+    : []),
+]);
 
 // "+N" is not a control, so this is the only place a screen reader hears the
 // chips a narrow card clipped - and the only place it hears the whole set.
@@ -221,6 +241,9 @@ const accessibleName = computed(() => {
       kinds.length ? `with ${kinds.join(", ")}` : "nothing else in it yet",
       // What is drawn: an incomplete card shows its warning in place of facts.
       incomplete ? null : facts.join(", "),
+      props.card.offer
+        ? `merge offered: ${props.card.offer.text}, in the set's menu`
+        : null,
     ]
       .filter(Boolean)
       .join(", ");
@@ -388,6 +411,48 @@ const accessibleName = computed(() => {
 .msc__empty-line {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The merge offer: the scrim badge's pill, stretched along the cover's foot.
+   Placed on the card rather than inside the cover so both hand-made covers
+   (pictures or the checkpoint's mark) carry it from one element. */
+.msc__offer {
+  position: absolute;
+  left: var(--space-3);
+  right: var(--space-3);
+  bottom: calc(var(--msc-meta-h) + var(--space-3));
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-1) 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--scrim-photo-strong);
+  color: rgb(var(--v-theme-on-dark-surface));
+  font: inherit;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.msc__offer-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-align: start;
+  text-overflow: ellipsis;
+}
+
+.msc__offer-go {
+  flex-shrink: 0;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  background: rgb(var(--v-theme-accent));
+  color: rgb(var(--v-theme-on-accent));
+  line-height: var(--tag-h-xs);
 }
 
 /* The shipped scrim badge: a dark chip over an arbitrary photo. */

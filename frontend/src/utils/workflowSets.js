@@ -481,8 +481,24 @@ export function handMadeCard(set) {
     // A checkpoint kept by hash whose file has left the shelf: the cover says
     // so, and so must the card's accessible name.
     checkpointOffShelf: Boolean(checkpoint && !checkpoint.on_shelf),
+    offer: set.offer ? { adds: set.offer.models.length, text: offerText(set) } : null,
     size: members.length,
   };
+}
+
+/**
+ * The merge offer in a few words (#1523): "1 204 pictures need 3 more". Counted
+ * in recipes when none of those pictures is in this library, since the offer
+ * reads every library's recipes.
+ */
+export function offerText(set) {
+  const offer = set?.offer;
+  if (!offer) return "";
+  const adds = offer.models.length;
+  const who = offer.picture_count
+    ? pictureCount(offer.picture_count)
+    : recipeCount(offer.recipes);
+  return `${who} need ${adds} more`;
 }
 
 /**
@@ -688,18 +704,25 @@ export function fillFromSets(set, sets) {
 /**
  * A hand-made set's tray, slot by slot, in the order it is drawn and walked.
  *
- * Every member tile, then the slot's ＋ tile - which the Checkpoint slot drops
- * once it holds its one. The keys are what the tray and the grid's cursor agree
- * on: `m:<sha256>` for a member, `add:<slot>` for a ＋ tile.
+ * Every member tile, then the merge offer's ghosts for that slot (#1523), then
+ * the slot's ＋ tile - which the Checkpoint slot drops once it holds its one,
+ * or once a ghost stands where it would land. The keys are what the tray and
+ * the grid's cursor agree on: `m:<sha256>` for a member, `g:<sha256>` for a
+ * ghost, `add:<slot>` for a ＋ tile.
  *
- * @returns {Array<{slot: Object, items: Array<{key, member: Object|null}>}>}
+ * @returns {Array<{slot: Object, items: Array<{key, member: Object|null,
+ *   ghost?: Object}>}>}
  */
 export function setSlots(set) {
   const members = set?.members ?? [];
+  const ghosts = set?.offer?.models ?? [];
   return SET_SLOTS.map((slot) => {
     const held = members.filter((m) => m.slot === slot.id);
     const items = held.map((member) => ({ key: `m:${member.sha256}`, member }));
-    if (slot.id !== "checkpoint" || !held.length) {
+    for (const ghost of ghosts.filter((g) => g.slot === slot.id)) {
+      items.push({ key: `g:${ghost.sha256}`, member: null, ghost });
+    }
+    if (slot.id !== "checkpoint" || !items.length) {
       items.push({ key: `add:${slot.id}`, member: null });
     }
     return { slot, items };

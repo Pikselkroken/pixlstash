@@ -30,6 +30,7 @@ const deleteWorkflowSet = vi.fn();
 const addWorkflowSetMembers = vi.fn();
 const removeWorkflowSetMembers = vi.fn();
 const renameWorkflowSet = vi.fn();
+const setWorkflowSetDeclines = vi.fn();
 // One double per result set, like the store's own suite: `/adapters` is ONE
 // route serving five `file_kind`s, and a single mock would answer the engines
 // and support requests with the same rows and make the shelf look duplicated.
@@ -56,6 +57,7 @@ vi.mock("../../api/modelShelf", () => ({
   addWorkflowSetMembers: (...args) => addWorkflowSetMembers(...args),
   removeWorkflowSetMembers: (...args) => removeWorkflowSetMembers(...args),
   renameWorkflowSet: (...args) => renameWorkflowSet(...args),
+  setWorkflowSetDeclines: (...args) => setWorkflowSetDeclines(...args),
 }));
 
 vi.mock("../../api/modelIcons", () => ({
@@ -163,6 +165,7 @@ beforeEach(() => {
   addWorkflowSetMembers.mockReset();
   removeWorkflowSetMembers.mockReset();
   renameWorkflowSet.mockReset();
+  setWorkflowSetDeclines.mockReset();
   setActivePinia(createPinia());
   window.localStorage.clear();
   listAdapters.mockReset().mockResolvedValue([]);
@@ -2014,5 +2017,240 @@ describe("hand-made sets (#1520)", () => {
     expect(tile.attributes("aria-selected")).toBeUndefined();
     await tile.trigger("click");
     expect([...store.selectedIds]).toEqual([]);
+  });
+
+  describe("the merge offer (#1523)", () => {
+    const GHOST_LORA = {
+      id: 3,
+      sha256: "3".repeat(64),
+      name: "filmgrain_xl",
+      kind: "adapter",
+      slot: "lora",
+      picture_count: 812,
+      recipes: 4,
+    };
+    const GHOST_OTHER = {
+      id: 5,
+      sha256: "5".repeat(64),
+      name: "ultrasharp",
+      kind: "unknown",
+      slot: "other",
+      picture_count: 1204,
+      recipes: 6,
+    };
+    const OFFER = {
+      head_id: 1,
+      head_name: "realvisXL_v5",
+      picture_count: 1204,
+      recipes: 6,
+      covers: [{ picture_id: 7, version: "v7" }],
+      models: [GHOST_LORA, GHOST_OTHER],
+    };
+
+    async function mountOffer(extra = {}, { attach = false } = {}) {
+      return mountGrid({
+        attach,
+        rows: [
+          row(1, "realvisXL_v5", "checkpoint"),
+          row(3, "filmgrain_xl"),
+          row(5, "ultrasharp", "unknown"),
+        ],
+        handMade: [
+          handSet(10, [SET_CKPT], { name: "Portrait kit", offer: OFFER, ...extra }),
+        ],
+      });
+    }
+
+    it("puts a lasting offer on the card that opens the tray on its strip", async () => {
+      const { wrapper, store } = await mountOffer();
+      const card = wrapper.find('[data-testid="model-set-card"]');
+      expect(card.find('[data-testid="merge-offer"]').text()).toContain(
+        "1204 pictures need 2 more",
+      );
+      expect(card.text()).toContain("+2");
+      expect(card.attributes("aria-label")).toContain("merge offered");
+
+      await card.find('[data-testid="merge-offer"]').trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await wrapper.vm.$nextTick();
+      expect(store.openSetKey).toBe("hand:10");
+      const strip = wrapper.find('[data-testid="merge-offer-strip"]');
+      expect(strip.attributes("tabindex")).toBe("0");
+      expect(strip.text()).toContain("Merge, add 2");
+      // The ghosts stand in the slots they would land in, with their counts.
+      const ghosts = wrapper.findAll(".mss__tile--ghost");
+      expect(ghosts.map((g) => g.attributes("data-key"))).toEqual([
+        `g:${GHOST_LORA.sha256}`,
+        `g:${GHOST_OTHER.sha256}`,
+      ]);
+      expect(ghosts[0].text()).toContain("812 pictures");
+    });
+
+    it("merges on Enter at the strip, with a receipt that counts who joined and an Undo", async () => {
+      addWorkflowSetMembers.mockResolvedValue({
+        set: handSet(10, [SET_CKPT], { picture_count: 1204 }),
+        added: [GHOST_LORA.sha256, GHOST_OTHER.sha256],
+      });
+      const { wrapper, store } = await mountOffer();
+      const { useNoticeStore } = await import("../../stores/useNoticeStore");
+      const notices = useNoticeStore();
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+
+      const grid = wrapper.find('[role="treegrid"]');
+      await grid.trigger("keydown", { key: "ArrowDown" });
+      await grid.trigger("keydown", { key: "Enter" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(addWorkflowSetMembers).toHaveBeenCalledWith(10, [
+        { model_id: 3, slot: "lora" },
+        { model_id: 5, slot: "other" },
+      ]);
+      const receipt = notices.notices.at(-1);
+      expect(receipt.text).toContain('Added 2 models to "Portrait kit"');
+      expect(receipt.text).toContain("1204 pictures joined it");
+      await receipt.action.handler();
+      expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [
+        GHOST_LORA.sha256,
+        GHOST_OTHER.sha256,
+      ]);
+    });
+
+    it("keeps one ghost out with Delete, never reaching the file delete", async () => {
+      setWorkflowSetDeclines.mockResolvedValue({
+        set: handSet(10, [SET_CKPT]),
+        previous: ["9".repeat(64)],
+      });
+      // Attached, so a press the grid let through would reach the window.
+      const { wrapper, store } = await mountOffer(
+        { declined: ["9".repeat(64)] },
+        { attach: true },
+      );
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+
+      const grid = wrapper.find('[role="treegrid"]');
+      // Card → strip → checkpoint → text encoders' ＋ → VAE's ＋ → LoRA ghost.
+      for (let i = 0; i < 5; i += 1) {
+        await grid.trigger("keydown", { key: "ArrowDown" });
+      }
+      const onWindowKey = vi.fn();
+      window.addEventListener("keydown", onWindowKey);
+      await grid.trigger("keydown", { key: "Delete" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      window.removeEventListener("keydown", onWindowKey);
+
+      // Added to what the set already keeps out, never replacing it.
+      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
+        "9".repeat(64),
+        GHOST_LORA.sha256,
+      ]);
+      expect(onWindowKey).not.toHaveBeenCalled();
+      wrapper.unmount();
+      const { useNoticeStore } = await import("../../stores/useNoticeStore");
+      const receipt = useNoticeStore().notices.at(-1);
+      // In the shelf's own name for it.
+      expect(receipt.text).toContain('Kept filmgrain xl out of "Portrait kit"');
+      await receipt.action.handler();
+      expect(setWorkflowSetDeclines).toHaveBeenLastCalledWith(10, [
+        "9".repeat(64),
+      ]);
+    });
+
+    it("keeps the whole offer separate with Delete on the strip, never reaching the file delete", async () => {
+      setWorkflowSetDeclines.mockResolvedValue({
+        set: handSet(10, [SET_CKPT]),
+        previous: [],
+      });
+      const { wrapper, store } = await mountOffer({}, { attach: true });
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      const grid = wrapper.find('[role="treegrid"]');
+      await grid.trigger("keydown", { key: "ArrowDown" });
+      const onWindowKey = vi.fn();
+      window.addEventListener("keydown", onWindowKey);
+      await grid.trigger("keydown", { key: "Delete" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      window.removeEventListener("keydown", onWindowKey);
+
+      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
+        GHOST_LORA.sha256,
+        GHOST_OTHER.sha256,
+      ]);
+      expect(onWindowKey).not.toHaveBeenCalled();
+      wrapper.unmount();
+    });
+
+    it("undoes an older Keep separate without dropping a newer one", async () => {
+      const { store } = await mountOffer();
+      // A server that remembers the list, so each refetch reads it back.
+      let stored = [];
+      setWorkflowSetDeclines.mockImplementation(async (id, sha256) => {
+        stored = sha256;
+        return { set: handSet(id, [SET_CKPT], { declined: sha256 }) };
+      });
+      fetchWorkflowSets.mockImplementation(async () => ({
+        combinations: [],
+        no_set: [],
+        hand_made: [
+          handSet(10, [SET_CKPT], { offer: OFFER, declined: stored }),
+        ],
+      }));
+      const { useNoticeStore } = await import("../../stores/useNoticeStore");
+      const notices = useNoticeStore();
+      const set = () => store.handMadeSets[0];
+
+      // Both fired before either answers, as two quick Deletes would be.
+      await Promise.all([
+        store.keepOutOfHandMadeSet(set(), [GHOST_LORA]),
+        store.keepOutOfHandMadeSet(set(), [GHOST_OTHER]),
+      ]);
+      expect(setWorkflowSetDeclines).toHaveBeenLastCalledWith(10, [
+        GHOST_LORA.sha256,
+        GHOST_OTHER.sha256,
+      ]);
+
+      await notices.notices.at(-2).action.handler();
+      expect(setWorkflowSetDeclines).toHaveBeenLastCalledWith(10, [
+        GHOST_OTHER.sha256,
+      ]);
+    });
+
+    it("never builds the next Keep separate from a refetch that is out of date", async () => {
+      const { store } = await mountOffer();
+      setWorkflowSetDeclines.mockImplementation(async (id, sha256) => ({
+        set: handSet(id, [SET_CKPT], { declined: sha256 }),
+      }));
+      // Every refetch answers from before the writes, as one that left
+      // before they landed would.
+      const set = () => store.handMadeSets[0];
+      await store.keepOutOfHandMadeSet(set(), [GHOST_LORA]);
+      await store.keepOutOfHandMadeSet(set(), [GHOST_OTHER]);
+      expect(setWorkflowSetDeclines).toHaveBeenLastCalledWith(10, [
+        GHOST_LORA.sha256,
+        GHOST_OTHER.sha256,
+      ]);
+    });
+
+    it("says what was kept separate and offers the merge again", async () => {
+      setWorkflowSetDeclines.mockResolvedValue({
+        set: handSet(10, [SET_CKPT]),
+        previous: [GHOST_LORA.sha256],
+      });
+      const { wrapper, store } = await mountOffer({
+        offer: null,
+        declined: [GHOST_LORA.sha256],
+        kept_separate: 812,
+      });
+      expect(wrapper.find('[data-testid="merge-offer"]').exists()).toBe(false);
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+
+      const kept = wrapper.find(".mss__kept");
+      expect(kept.text()).toContain("Kept separate from 812 pictures.");
+      await kept.find("button").trigger("click");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, []);
+    });
   });
 });
