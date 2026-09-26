@@ -81,6 +81,7 @@ from pixlstash.services.model_shelf_service import (
     record_comfyui_history,
     fetch_workflow_sets,
 )
+from pixlstash.services.model_workflow_sets import create_set
 from pixlstash.services.workflow_library_service import (
     scan_progress,
     topology_activity,
@@ -2622,6 +2623,120 @@ def test_a_run_ranks_behind_a_recipe_and_a_forgotten_model_drops_out(
     assert [item["id"] for item in propose_companions(hub, ids["ckpt_a"])["vae"]] == [
         ids["vae_a"]
     ]
+
+
+def hash_rows(hub, *model_ids):
+    """Give rows a digest: a hand-made set holds files by sha256."""
+    with hub.transaction() as conn:
+        conn.executemany(
+            "UPDATE model SET sha256 = printf('%064d', id) WHERE id = ?",
+            [(model_id,) for model_id in model_ids],
+        )
+
+
+def grouped_shelf(companions_shelf):
+    """The companions shelf plus a VAE only a hand-made set pairs with A."""
+    hub = companions_shelf.hub
+    ids = dict(companions_shelf.ids)
+    ids["vae_grouped"] = shelf_file(hub, "vae_grouped.safetensors", "vae")
+    hash_rows(
+        hub,
+        *(
+            ids[name]
+            for name in ("ckpt_a", "ckpt_b", "vae_a", "clip_shared", "vae_grouped")
+        ),
+    )
+    return hub, ids
+
+
+def test_a_hand_made_set_proposes_its_members_ahead_of_the_evidence(
+    companions_shelf,
+):
+    hub, ids = grouped_shelf(companions_shelf)
+    create_set(
+        hub,
+        "Night",
+        [
+            {"model_id": ids["ckpt_a"]},
+            {"model_id": ids["vae_grouped"]},
+            {"model_id": ids["clip_shared"]},
+        ],
+    )
+
+    result = propose_companions(hub, ids["ckpt_a"])
+
+    assert proposed(result, "vae") == [
+        (ids["vae_grouped"], "grouped"),
+        (ids["vae_a"], "checkpoint"),
+    ]
+    grouped, recipe = result["vae"]
+    assert (grouped["set_name"], grouped["prepick"], grouped["recipes"]) == (
+        "Night",
+        True,
+        0,
+    )
+    assert (recipe["set_name"], recipe["prepick"]) == (None, True)
+    # The recipe also names the grouped encoder: listed once, as grouped.
+    assert proposed(result, "text_encoder") == [(ids["clip_shared"], "grouped")]
+
+
+def test_a_grouped_kind_is_prepicked_only_when_the_sets_agree_on_one_file(
+    companions_shelf,
+):
+    hub, ids = grouped_shelf(companions_shelf)
+    for name in ("One", "Two"):
+        create_set(
+            hub,
+            name,
+            [{"model_id": ids["ckpt_a"]}, {"model_id": ids["vae_grouped"]}],
+        )
+    agreed = propose_companions(hub, ids["ckpt_a"])
+    assert [(e["id"], e["prepick"]) for e in agreed["vae"][:1]] == [
+        (ids["vae_grouped"], True)
+    ]
+    # The newest matching set names it.
+    assert agreed["vae"][0]["set_name"] == "Two"
+
+    create_set(hub, None, [{"model_id": ids["ckpt_a"]}, {"model_id": ids["vae_a"]}])
+    split = propose_companions(hub, ids["ckpt_a"])
+    assert [(e["id"], e["via"], e["prepick"]) for e in split["vae"]] == [
+        (ids["vae_a"], "grouped", False),
+        (ids["vae_grouped"], "grouped", False),
+    ]
+    assert split["vae"][0]["set_name"] is None
+
+
+def test_a_set_without_this_checkpoint_or_off_the_shelf_proposes_nothing(
+    companions_shelf,
+):
+    hub, ids = grouped_shelf(companions_shelf)
+    # No checkpoint - A itself is there, but filed as "other" - then another
+    # checkpoint's set.
+    create_set(
+        hub,
+        "Loose",
+        [
+            {"model_id": ids["ckpt_a"], "slot": "other"},
+            {"model_id": ids["vae_grouped"]},
+        ],
+    )
+    create_set(
+        hub, "B", [{"model_id": ids["ckpt_b"]}, {"model_id": ids["vae_grouped"]}]
+    )
+    # A's own set, holding a VAE whose file is no longer on the shelf.
+    create_set(
+        hub,
+        "Gone",
+        [
+            {"model_id": ids["ckpt_a"]},
+            {"sha256": "ab" * 32, "slot": "vae", "label": "vanished.safetensors"},
+        ],
+    )
+
+    result = propose_companions(hub, ids["ckpt_a"])
+
+    assert proposed(result, "vae") == [(ids["vae_a"], "checkpoint")]
+    assert proposed(result, "text_encoder") == [(ids["clip_shared"], "checkpoint")]
 
 
 # ---------------------------------------------------------------------------
