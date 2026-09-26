@@ -28,9 +28,26 @@
       <div class="edit-scroll">
         <div class="section-label section-label--on-dark edit-sec">
           <span :id="workflowLabelId">Workflow</span>
-          <span v-if="workflowKey === rememberedKey" class="edit-aside"
-            >last used</span
-          >
+          <span class="edit-sec-end">
+            <span v-if="workflowKey === rememberedKey" class="edit-aside"
+              >last used</span
+            >
+            <!-- The Recipe tab's "Open", on the card this tab would run. -->
+            <button
+              v-if="workflowKey"
+              class="edit-sec-act"
+              type="button"
+              @click="openInWorkflows"
+            >
+              <Tooltip
+                text="Show this workflow in the Workflows view"
+                activator="parent"
+                :describe="false"
+              />
+              Open
+              <v-icon size="14">mdi-chevron-right</v-icon>
+            </button>
+          </span>
         </div>
         <!-- The app's one menu in its on-dark skin, not a native <select>:
              an OS-drawn popup ignores the theme (PluginSelect was a <select>
@@ -227,6 +244,7 @@
 import { computed, onBeforeUnmount, ref, useId, watch } from "vue";
 import { useRouter } from "vue-router";
 import AppButton from "../widgets/AppButton.vue";
+import Tooltip from "../widgets/Tooltip.vue";
 import {
   listWorkflowCards,
   preflightWorkflowRun,
@@ -519,6 +537,11 @@ function onInstructionKeydown(event) {
   }
 }
 
+function openInWorkflows() {
+  if (!workflowKey.value) return;
+  router.push({ name: "workflows", query: { card: workflowKey.value } });
+}
+
 function onMoreOptions() {
   const id = Number(props.pictureId);
   if (!Number.isFinite(id) || id <= 0) return;
@@ -624,6 +647,31 @@ defineExpose({ submit });
 
 .edit-scroll > .edit-sec:first-child {
   padding-top: 0;
+}
+
+.edit-sec-end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The Recipe tab's `.recipe-sec-act`, in this tab's label row. */
+.edit-sec-act {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: var(--weight-medium);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-dark-surface), 0.75);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.edit-sec-act:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .edit-aside {
