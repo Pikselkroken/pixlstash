@@ -4678,6 +4678,37 @@ describe("Delete", () => {
     wrapper.unmount();
   });
 
+  it("says a file in a hand-made set stays there, trashed or deleted for good (#1520)", async () => {
+    const wrapper = await mountWithSelection();
+    const store = useModelShelfStore();
+    store.workflowSets = {
+      ...store.workflowSets,
+      handMade: [
+        {
+          id: 10,
+          name: "Kit",
+          members: [
+            { sha256: "x".repeat(64), slot: "lora", on_shelf: true, id: 1 },
+          ],
+        },
+      ],
+    };
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await pressDelete();
+    await pressDelete({ shiftKey: true });
+
+    // Membership is kept by hash in a table neither delete touches, so the
+    // sentence holds for both - and says HOW, beside "everything recorded".
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
+    for (const [said] of confirmSpy.mock.calls) {
+      expect(said).toContain('It stays in your set "Kit"');
+      expect(said).toContain("kept by its file hash");
+    }
+    confirmSpy.mockRestore();
+    wrapper.unmount();
+  });
+
   it("makes Shift+Delete a permanent one, and says so in the prompt", async () => {
     const wrapper = await mountWithSelection();
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);

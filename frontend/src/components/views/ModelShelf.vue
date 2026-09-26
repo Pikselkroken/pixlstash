@@ -1843,13 +1843,16 @@ async function askAndDelete(permanent) {
   // The owner's own sets keep a deleted member by its hash, marked "Not on
   // shelf" (#1520), so the prompt says how far the delete reaches and names the
   // safer verb rather than leaving the reader to find a greyed tile later.
+  // True on BOTH paths: set membership lives in its own table keyed by hash,
+  // which neither the trash nor a permanent delete touches - "kept by its file
+  // hash" is what squares it with a permanent delete's "everything recorded".
   const holding = store.handMadeSetsHolding(ids);
   const inSets = holding.length
     ? ` ${many ? "They stay" : "It stays"} in ${
         holding.length === 1
           ? `your set "${handMadeName(holding[0])}"`
           : `${holding.length} of your workflow sets`
-      }, marked Not on shelf. To take ${many ? "them" : "it"} off a set only, use Remove from set.`
+      }, kept by ${many ? "their" : "its"} file hash and marked Not on shelf. To take ${many ? "them" : "it"} off a set only, use Remove from set.`
     : "";
   const ok = await confirm({
     title: permanent
