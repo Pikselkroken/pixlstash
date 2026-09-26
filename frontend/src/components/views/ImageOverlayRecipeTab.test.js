@@ -31,6 +31,7 @@ import { createPinia, setActivePinia } from "pinia";
 
 import ImageOverlay from "./ImageOverlay.vue";
 import { isReadOnly } from "../../utils/apiClient";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 
 enableAutoUnmount(afterEach);
 
@@ -59,6 +60,9 @@ const recipeBody = (id) =>
 // Set by the test that drives the read's failure path.
 let recipeThrows = false;
 
+// What a read of pictures by id (`/pictures?id=…&fields=grid`) answers.
+let gridRows = [];
+
 const getMock = vi.fn(async (url) => {
   if (typeof url === "string" && url.includes("/recipe")) {
     if (recipeThrows) {
@@ -76,6 +80,9 @@ const getMock = vi.fn(async (url) => {
       });
     }
     return { data: answer };
+  }
+  if (typeof url === "string" && url.startsWith("/pictures?id=")) {
+    return { data: gridRows };
   }
   if (typeof url === "string" && url.includes("/metadata")) {
     return { data: { id: 7, tags: [] } };
@@ -119,7 +126,7 @@ const STUBS = {
   VTooltip: true,
   OverlayEditPanel: {
     name: "OverlayEditPanel",
-    props: ["pictureId", "active"],
+    props: ["pictureId", "active", "comfyuiProgress", "comfyuiProgressPercent"],
     template: "<div class='edit-stub'></div>",
   },
 };
@@ -168,6 +175,7 @@ beforeEach(() => {
   pendingRecipe = null;
   recipeRefusal = null;
   recipeThrows = false;
+  gridRows = [];
   getMock.mockClear();
   isReadOnly.value = false;
 });
@@ -399,5 +407,76 @@ describe("the lightbox Edit tab", () => {
     await flush();
     await flush();
     expect(activeTab(wrapper)).toBe("Edit");
+  });
+
+  const editPanel = (wrapper) =>
+    wrapper.findComponent({ name: "OverlayEditPanel" });
+  const lightboxBar = (wrapper) =>
+    wrapper.find(".overlay-progress--comfyui").exists();
+  const running = { visible: true, status: "running", message: "ComfyUI" };
+
+  it("drops the lightbox ComfyUI bar only while the Edit tab shows the run", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    await wrapper.setProps({ comfyuiProgress: running });
+    // A run from the grid's menus: the Edit tab has nothing of its own.
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    expect(lightboxBar(wrapper)).toBe(true);
+    editPanel(wrapper).vm.$emit("running", true);
+    await flush();
+    expect(lightboxBar(wrapper)).toBe(false);
+    // On Info the tab's bar is out of sight, so the lightbox's comes back.
+    await wrapper.findAll(".inspector-tab")[0].trigger("click");
+    expect(lightboxBar(wrapper)).toBe(true);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    editPanel(wrapper).vm.$emit("running", false);
+    await flush();
+    expect(lightboxBar(wrapper)).toBe(true);
+  });
+
+  it("shows an edit result the grid has not inserted yet", async () => {
+    gridRows = [{ id: 8, stack_id: "s1", tags: [] }];
+    const wrapper = await openOn(
+      7,
+      [
+        { id: 7, stack_id: "s1", tags: [] },
+        { id: 5, tags: [] },
+      ],
+      configured,
+    );
+    editPanel(wrapper).vm.$emit("show-picture", 8, 7);
+    await flush();
+    await flush();
+    expect(editPanel(wrapper).props("pictureId")).toBe(8);
+    expect(wrapper.emitted("show-picture")).toEqual([[8]]);
+    expect(getMock).toHaveBeenCalledWith("/pictures?id=8&fields=grid");
+  });
+
+  it("stays put and says so when the result cannot be read", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    const error = vi.spyOn(useNoticeStore(), "error");
+    editPanel(wrapper).vm.$emit("show-picture", 8, 7);
+    await flush();
+    await flush();
+    expect(editPanel(wrapper).props("pictureId")).toBe(7);
+    expect(wrapper.emitted("show-picture")).toBeUndefined();
+    expect(error).toHaveBeenCalledOnce();
+  });
+
+  it("does not move a reader who stepped on while the result was read", async () => {
+    gridRows = [{ id: 8, tags: [] }];
+    const wrapper = await openOn(
+      7,
+      [
+        { id: 7, tags: [] },
+        { id: 5, tags: [] },
+      ],
+      configured,
+    );
+    editPanel(wrapper).vm.$emit("show-picture", 8, 7);
+    await wrapper.setProps({ initialImageId: 5 });
+    await flush();
+    await flush();
+    expect(editPanel(wrapper).props("pictureId")).toBe(5);
+    expect(wrapper.emitted("show-picture")).toBeUndefined();
   });
 });

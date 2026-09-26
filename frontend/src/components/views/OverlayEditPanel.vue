@@ -503,7 +503,10 @@ watch(
   (running) => emit("running", running),
 );
 
-onBeforeUnmount(() => clearTimeout(resolveTimer));
+onBeforeUnmount(() => {
+  clearTimeout(resolveTimer);
+  if (run.value?.status === "running") emit("running", false);
+});
 
 async function showResult() {
   const current = run.value;
@@ -524,7 +527,7 @@ async function showResult() {
     run.value = { ...current };
   }
   if (current.resultId) {
-    emit("show-picture", current.resultId);
+    emit("show-picture", current.resultId, current.sourceId);
   } else {
     // Only an answered lookup can say the result is not there yet.
     run.value = {

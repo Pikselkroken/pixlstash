@@ -135,29 +135,6 @@ describe("ImageOverlay follows a picture created while it was open", () => {
     expect(shownId(wrapper)).toBe(8);
   });
 
-  it("moves to a new picture the grid has not inserted yet", async () => {
-    // The grid defers inserts while the lightbox is open (§9.1), so the Edit
-    // tab's Show it names an id in neither list. It is read by id instead.
-    setActivePinia(createPinia());
-    getMock.mockImplementation(async (url) => {
-      if (url === "/pictures?id=8&fields=grid") {
-        return { data: [{ id: 8, stack_id: "s1", tags: [] }] };
-      }
-      return { data: url.includes("/metadata") ? { tags: [] } : [] };
-    });
-    try {
-      const wrapper = await openOverlayOn(7, [
-        { id: 7, stack_id: "s1", stackCount: 1, tags: [] },
-      ]);
-      await wrapper.setProps({ initialImageId: 8 });
-      await flush();
-      await flush();
-      expect(shownId(wrapper)).toBe(8);
-    } finally {
-      getMock.mockReset();
-    }
-  });
-
   it("still ignores a background refetch that drops the open picture", async () => {
     setActivePinia(createPinia());
     const wrapper = await openOverlayOn(7, [

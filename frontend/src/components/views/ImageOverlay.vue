@@ -824,7 +824,7 @@
             :active="sidebarTab === 'edit'"
             :comfyui-progress="comfyuiProgress"
             :comfyui-progress-percent="comfyuiProgressPercent"
-            @show-picture="(id) => emit('show-picture', id)"
+            @show-picture="showEditResult"
             @running="(on) => (editRunning = on)"
             @more-options="(payload) => emit('edit-more-options', payload)"
           />
@@ -1400,8 +1400,6 @@ function setOverlayImageById(nextId) {
   } else {
     if (!image.value) {
       image.value = { id: nextId, tags: [] };
-    } else if (open.value && !isSameImage) {
-      void moveToUnlistedPicture(nextIdKey);
     }
     return;
   }
@@ -1409,41 +1407,56 @@ function setOverlayImageById(nextId) {
 }
 
 /**
- * Move to a picture that neither the frozen snapshot nor the live grid list
- * holds. A ComfyUI result imported while the lightbox is open is the case: the
- * grid defers the insert until the lightbox closes (§9.1), so the Edit tab's
- * *Show it* and the runner's step to the newest stack member both named an id
- * nothing could resolve, and the move was a silent no-op. Its grid row is read
- * and slotted in after the current picture, so next/prev and the filmstrip
- * agree with what is on screen.
+ * The Edit tab's *Show it*: move to the picture its run made. The grid defers
+ * `picture_imported` inserts while the lightbox is open (§9.1), so the result
+ * is usually in neither the frozen snapshot nor the live list, and a plain
+ * `initialImageId` move found nothing and did nothing. Its grid row is read by
+ * id and slotted in after the picture the run started from, so next/prev and
+ * the filmstrip agree with what is on screen; then the grid is told, so the
+ * URL follows. Only this path reads by id: the runner's own step to a newest
+ * member goes by the grid's `overlayImageId`, which does not follow filmstrip
+ * steps, and letting it through would pull a reader off a picture they moved to.
  */
-async function moveToUnlistedPicture(idKey) {
+async function showEditResult(id, sourceId) {
+  const idKey = String(id);
   const fromId = image.value?.id;
-  let row = null;
-  try {
-    const rows = await listPicturesByIds([idKey], { fields: "grid" });
-    row = Array.isArray(rows) ? rows[0] : null;
-  } catch (err) {
-    console.warn(`Could not read picture ${idKey} to show it:`, err);
-    return;
-  }
-  // Overtaken: the lightbox closed, moved on, or was asked for another one.
-  if (
-    !row ||
-    !open.value ||
-    String(initialImageId.value) !== idKey ||
-    image.value?.id !== fromId
-  ) {
-    return;
-  }
-  const list = overlayImages.value.slice();
-  if (!list.some((item) => String(item?.id) === idKey)) {
-    const at = list.findIndex((item) => String(item?.id) === String(fromId));
-    list.splice(at === -1 ? list.length : at + 1, 0, row);
-    frozenAllImages.value = list;
+  if (!open.value || idKey === "") return;
+  if (!allImageById.value.has(idKey) && !filmstripImageById.value.has(idKey)) {
+    let row = null;
+    try {
+      const rows = await listPicturesByIds([idKey], { fields: "grid" });
+      row = Array.isArray(rows) ? rows[0] : null;
+    } catch (err) {
+      console.warn(`Could not read edited picture ${idKey} to show it:`, err);
+    }
+    // Overtaken: the lightbox closed or the reader moved on meanwhile.
+    if (!open.value || image.value?.id !== fromId) return;
+    if (!row) {
+      noticeStore.error("Couldn't open the edited picture. Try again.", {
+        key: "edit-show-result",
+      });
+      return;
+    }
+    const list = overlayImages.value.slice();
+    if (!list.some((item) => String(item?.id) === idKey)) {
+      const anchor = String(sourceId ?? fromId);
+      const at = list.findIndex((item) => String(item?.id) === anchor);
+      list.splice(at === -1 ? list.length : at + 1, 0, row);
+      frozenAllImages.value = list;
+      // The stack grew by this read, not by a restructure seen on the grid:
+      // re-record its signature, or the next grid repaint reads the change as
+      // one and sends the reader back to the leader.
+      const stackId = getPictureStackId(row);
+      if (stackId && overlayStackSignatures.value.has(stackId)) {
+        const next = new Map(overlayStackSignatures.value);
+        next.set(stackId, getOverlayStackSignature(stackId));
+        overlayStackSignatures.value = next;
+      }
+    }
   }
   setOverlayImageById(idKey);
   void ensureOverlayFilmstripForImage();
+  emit("show-picture", id);
 }
 
 const emit = defineEmits([
