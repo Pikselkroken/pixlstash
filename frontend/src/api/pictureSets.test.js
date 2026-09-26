@@ -13,6 +13,7 @@ import {
   deletePictureSet,
   getPictureSetMembership,
   addPictureToSet,
+  bulkAddPicturesToSet,
   removePictureFromSet,
   getLockedMembers,
 } from "./pictureSets";
@@ -25,6 +26,16 @@ beforeEach(() => {
 });
 
 describe("api/pictureSets", () => {
+  // One call, so the server records one operation and the user gets one Undo.
+  it("bulkAddPicturesToSet POSTs every id in one request", async () => {
+    apiClient.post.mockResolvedValue({ data: { added: 3 } });
+    await bulkAddPicturesToSet(7, [1, 2, 3]);
+    expect(apiClient.post).toHaveBeenCalledTimes(1);
+    expect(apiClient.post).toHaveBeenCalledWith("/picture_sets/7/members", {
+      picture_ids: [1, 2, 3],
+    });
+  });
+
   it("listPictureSets GETs /picture_sets with no config by default", async () => {
     apiClient.get.mockResolvedValue({ data: [{ id: 1 }] });
     const result = await listPictureSets();

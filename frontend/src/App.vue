@@ -274,6 +274,7 @@ const {
   handleUpdateCheckForUpdates,
   handleEmptyScrapheapFromSidebar,
   handleSuggestPicturesForCharacter,
+  handleSuggestPicturesForSet,
 } = useAppSettingsHandlers({
   gridContainer,
   pushAppRoute,
@@ -706,6 +707,7 @@ defineExpose({
             :dockerVariant="dockerVariant"
             @empty-scrapheap="handleEmptyScrapheapFromSidebar"
             @suggest-pictures-for-character="handleSuggestPicturesForCharacter"
+            @suggest-pictures-for-set="handleSuggestPicturesForSet"
             @view-project="handleViewProject"
             @select-character="handleSelectCharacter"
             @select-insights="handleSelectInsights"
