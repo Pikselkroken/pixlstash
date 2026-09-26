@@ -545,17 +545,21 @@ function onRowClick(entry, event) {
  * that is NOT selected selects it and acts on it alone; right-clicking one of
  * forty selected models leaves the forty alone. `ModelShelf.vue` owns the menu,
  * because there is one `ShelfSelectionBar` and two views feeding it.
+ *
+ * Takes the ENTRY, not a model id: a set's head is drawn twice while its tray
+ * is open, and the occurrence decides whether its card lights.
  */
-function openMenu(id, x, y) {
+function openMenu(entry, x, y) {
+  const id = modelIdOf(entry);
   if (!selectable(id)) return false;
-  if (!store.isSelected(id)) selectCursor({});
+  if (!store.isSelected(id)) selectEntry(entry, {});
   emit("menu", { x, y });
   return true;
 }
 
 function onRowMenu(entry, event) {
   cursorId.value = entry.id;
-  if (openMenu(modelIdOf(entry), event.clientX, event.clientY)) {
+  if (openMenu(entry, event.clientX, event.clientY)) {
     event.preventDefault();
   }
 }
@@ -606,7 +610,8 @@ function selectEntry(entry, event) {
 
 function onMemberMenu({ member, event }) {
   cursorId.value = `member:${member.id}`;
-  if (openMenu(member.id, event.clientX, event.clientY)) {
+  const entry = flatRows.value.find((row) => row.id === cursorId.value);
+  if (openMenu(entry, event.clientX, event.clientY)) {
     event.preventDefault();
   }
 }
@@ -795,7 +800,7 @@ function onKeyDown(event) {
         const box = rowElement(entry)?.getBoundingClientRect?.();
         const x = box ? box.left + 24 : 0;
         const y = box ? box.bottom : 0;
-        if (openMenu(modelIdOf(entry), x, y)) event.preventDefault();
+        if (openMenu(entry, x, y)) event.preventDefault();
       }
   }
 }

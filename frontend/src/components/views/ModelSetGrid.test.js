@@ -586,6 +586,19 @@ describe("selection and the verbs", () => {
     expect(card().classes()).toContain("msc--on");
   });
 
+  it("right-clicking the checkpoint's tray row selects that row, not its card", async () => {
+    // The head occurs twice; a lookup by model id would find the card first.
+    const { wrapper, store } = await openTray();
+    await wrapper
+      .findAll(".msp__member")[0]
+      .trigger("contextmenu", { clientX: 1, clientY: 2 });
+
+    expect([...store.selectedIds]).toEqual([1]);
+    expect(wrapper.find('[data-testid="model-set-card"]').classes()).not.toContain(
+      "msc--on",
+    );
+  });
+
   it("lights the card again once the tray showing the pick closes", async () => {
     // Otherwise the bar is armed over a grid that marks nothing selected.
     const { wrapper, store } = await openTray();
