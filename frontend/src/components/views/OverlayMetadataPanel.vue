@@ -153,17 +153,14 @@ const pictureInfoEntries = computed(() => {
       value: `${isVideo ? "Video" : "Image"} · ${format.toUpperCase()}`,
     });
 
-    if (isVideo) {
-      const frameCount =
-        props.image.frame_count ||
-        props.image.frames ||
-        props.image.metadata?.frame_count ||
-        props.image.metadata?.frames ||
-        null;
-      if (frameCount) {
-        entries.push({ label: "Frames", value: String(frameCount) });
-      }
+    // From GET /pictures/{id}/metadata. A still image is 1 frame, which says
+    // nothing, so an image only shows the row when it is animated (GIF etc.).
+    const frameCount = Number(props.image.frame_count) || 0;
+    if (frameCount > 1 || (isVideo && frameCount > 0)) {
+      entries.push({ label: "Frames", value: frameCount.toLocaleString() });
+    }
 
+    if (isVideo) {
       const durationSeconds =
         props.videoDuration ||
         props.image.duration ||

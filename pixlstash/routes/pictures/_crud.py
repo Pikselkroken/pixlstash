@@ -134,6 +134,13 @@ class PictureFullMetadataResponse(BaseModel):
     tags: Optional[list] = None
     smartScore: Optional[float] = None
     metadata: Optional[dict] = None
+    frame_count: Optional[int] = Field(
+        default=None,
+        description=(
+            "Frames in the file: 1 for a still image, more for a video or an "
+            "animated GIF/WebP/PNG. Null when the file cannot be read."
+        ),
+    )
     locked: bool = Field(
         default=False,
         description=(
@@ -899,6 +906,7 @@ def register_routes(router, server):
             pic_dict["smartScore"] = pic.smart_score  # already stored in DB
 
         embedded_metadata = {}
+        file_path = None
         try:
             file_path = ImageUtils.resolve_picture_path(
                 server.vault.image_root, pic.file_path
@@ -918,6 +926,8 @@ def register_routes(router, server):
 
         if embedded_metadata:
             pic_dict["metadata"] = embedded_metadata
+
+        pic_dict["frame_count"] = ImageUtils.frame_count(file_path)
 
         if embedded_metadata:
             logger.debug(

@@ -3606,12 +3606,13 @@ async function fetchOverlayMetadata(imageId) {
     // The picture's own BYTES, where the server is unconditionally
     // authoritative and this component never holds an optimistic value. The
     // local-wins default above is right for everything the overlay can edit and
-    // wrong for these two: `orientation` is what `mediaVersion` builds the
-    // cache-buster from, so keeping a stale copy leaves `fullImageSrc` pointing
-    // at the file the `<img>` has already decoded. An in-place rotate moves it
+    // wrong for these: `frame_count` goes stale on an in-place edit, and
+    // `orientation` is what `mediaVersion` builds the cache-buster from, so
+    // keeping a stale copy leaves `fullImageSrc` pointing at the file the
+    // `<img>` has already decoded. An in-place rotate moves it
     // and nothing else, which is exactly the case a local-wins merge would
     // swallow whole.
-    for (const field of ["pixel_sha", "orientation"]) {
+    for (const field of ["pixel_sha", "orientation", "frame_count"]) {
       if (data[field] !== undefined && data[field] !== null) {
         merged[field] = data[field];
       }

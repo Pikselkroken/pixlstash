@@ -413,6 +413,8 @@ def test_upload_existing_picture(client):
     assert 200 == fetch_r1.status_code, "Error: " + fetch_r1.text
     fetched_picture = fetch_r1.json()
     assert fetched_picture["id"] == picture_id_1
+    # A still PNG is one frame; the lightbox hides the Frames row for it.
+    assert fetched_picture["frame_count"] == 1
 
     # Upload a new file
     img_bytes2 = random_images[1]
