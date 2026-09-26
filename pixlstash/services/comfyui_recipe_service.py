@@ -682,6 +682,7 @@ def apply_filename_swap(
     prompt_graph: dict,
     swaps: dict[str, str],
     object_info: dict | None = None,
+    widgets: frozenset[str] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Point every loader naming one file at another file instead.
 
@@ -707,6 +708,9 @@ def apply_filename_swap(
         prompt_graph: The API-format graph, mutated in place.
         swaps: The graph's filename -> the filename to load instead.
         object_info: The map from :func:`fetch_object_info`, or ``None``.
+        widgets: Only rewrite fields of these names, or every model field when
+            ``None``. A workflow's model fix names a checkpoint, and a VAE
+            field holding a file of the same name is no place for one.
 
     Returns:
         ``(substitutions, unswapped)``. One ``{node_id, class_type, field, was,
@@ -724,6 +728,8 @@ def apply_filename_swap(
     matched: set[str] = set()
     # Listed first, then written: the walk reads the inputs it rewrites.
     for node_id, class_type, field, value in list(iter_model_fields_api(prompt_graph)):
+        if widgets is not None and field not in widgets:
+            continue
         key = _swap_key(value, swaps)
         if key is None:
             continue

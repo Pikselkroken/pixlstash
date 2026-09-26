@@ -126,6 +126,71 @@
             <p v-else class="wftab-note wftab-quiet">
               No file name was kept for it anywhere.
             </p>
+            <!-- The fix: another shelf model in its place. The card keeps its
+                 pictures, and what the replacement makes is filed on it. -->
+            <AppSelect
+              v-if="replaceOptions.length"
+              model-value=""
+              label="Replace with a model from your shelf"
+              hide-label
+              :options="replaceOptions"
+              :disabled="busy === 'model-fix'"
+              data-testid="wftab-replace-model"
+              @update:model-value="replaceCheckpoint"
+            />
+            <!-- The replacement has gone missing too: say what it was, and
+                 keep the way back reachable. Choosing another above replaces
+                 the original, never the replacement. -->
+            <p
+              v-if="replacementMissing"
+              class="wftab-note wftab-quiet"
+              data-testid="wftab-fix-missing"
+            >
+              Replaced by {{ fileName(checkpointFix.now) }}, which is missing
+              too.
+              <AppButton
+                variant="ghost"
+                size="sm"
+                icon-only
+                icon-left="undo"
+                :tooltip="`Undo: load ${fileName(checkpointFix.was)} again`"
+                :disabled="busy === 'model-fix'"
+                @click="replaceCheckpoint(null)"
+              />
+            </p>
+          </div>
+          <!-- Replaced by the owner: what it loads now, flagged, and the
+               original a hover away, because this is not the workflow as its
+               pictures were made. -->
+          <div
+            v-else-if="checkpointFix"
+            class="wftab-fixed"
+            data-testid="wftab-fixed-model"
+          >
+            <span class="wftab-value">
+              <v-icon size="16" class="wftab-fixed-flag" aria-hidden="true"
+                >mdi-alert-outline</v-icon
+              >
+              <Tooltip
+                :text="`Replaced. This workflow originally used ${fileName(checkpointFix.was)}`"
+                activator="parent"
+              />
+              {{ fileName(checkpointFix.now) }}
+              <span class="visually-hidden"
+                >, replaced. This workflow originally used
+                {{ fileName(checkpointFix.was) }}</span
+              >
+            </span>
+            <AppButton
+              variant="ghost"
+              size="sm"
+              icon-only
+              icon-left="undo"
+              data-testid="wftab-undo-fix"
+              :tooltip="`Undo: load ${fileName(checkpointFix.was)} again`"
+              :disabled="busy === 'model-fix'"
+              @click="replaceCheckpoint(null)"
+            />
           </div>
           <span v-else-if="checkpointLabel" class="wftab-value">{{
             checkpointLabel
@@ -486,7 +551,9 @@ import {
   getWorkflowCard,
   patchWorkflowCard,
   preflightWorkflowRun,
+  readModelSwap,
   setWorkflowDefaults,
+  setWorkflowModelFix,
   setWorkflowPins,
   setWorkflowSlots,
   workflowCoverUrl,
@@ -861,6 +928,77 @@ const missingCheckpointFile = computed(
     graphBaseModel.value ||
     checkpointLabel.value,
 );
+
+/** The owner's replacement for this card's base model, or null. */
+const checkpointFix = computed(
+  () => (detail.value?.model_fixes ?? []).find((fix) => fix.base_model) ?? null,
+);
+
+/**
+ * Whether the pre-flight says the replacement itself is missing, rather than
+ * some other base model of the graph.
+ */
+const replacementMissing = computed(
+  () =>
+    Boolean(checkpointFix.value) &&
+    missingBaseFiles.value.some(
+      (file) =>
+        fileName(file).toLowerCase() ===
+        fileName(checkpointFix.value.now).toLowerCase(),
+    ),
+);
+
+/** The shelf models a missing base model can be replaced with. */
+const replaceCandidates = ref([]);
+
+const replaceOptions = computed(() =>
+  replaceCandidates.value.length
+    ? [
+        { value: "", label: "Replace with…" },
+        ...replaceCandidates.value.map((model) => ({
+          value: model.filename,
+          label: model.display_name || model.filename,
+        })),
+      ]
+    : [],
+);
+
+/**
+ * Replace the missing base model with `now`, or undo the replacement (`null`).
+ *
+ * The card keeps its key unless a re-key moved it, so the answer's key is
+ * followed; the grid is re-read because pictures already made with the
+ * replacement join this card. The pre-flight is asked again: it is what says
+ * whether the base model now loads.
+ */
+function replaceCheckpoint(now) {
+  const key = selectedKey.value;
+  const was = now === null ? checkpointFix.value?.was : missingCheckpointFile.value;
+  if (!key || !was || now === "") return;
+  const unmoved = selectionMark();
+  return queueWrite("model-fix", async () => {
+    try {
+      const body = await setWorkflowModelFix(key, { was, now });
+      store.forgetMembers();
+      await store.fetchCards();
+      if (!unmoved()) return;
+      const moved = body?.card?.key;
+      if (moved && moved !== key) {
+        store.select(moved);
+        return;
+      }
+      detail.value = body;
+      void checkInstalled(key);
+    } catch (err) {
+      fail(
+        err,
+        now === null
+          ? "Could not undo that replacement."
+          : "Could not replace that model.",
+      );
+    }
+  });
+}
 
 /** A recorded model value as a person looks for it: the file, no folders. */
 function fileName(value) {
@@ -1464,32 +1602,45 @@ watch(
  */
 watch(
   () => (detail.value ? selectedKey.value : null),
-  async (key) => {
-    const check = ++installedCheck;
-    missingBaseFiles.value = [];
-    preflightAnswered.value = false;
-    if (!key) return;
-    await new Promise((resolve) => setTimeout(resolve, PREFLIGHT_SETTLE_MS));
-    if (check !== installedCheck) return;
-    try {
-      const answer = await preflightWorkflowRun({
-        workflow_key: key,
-        values: [],
-      });
-      if (check !== installedCheck || !stillOn(key)) return;
-      preflightAnswered.value = true;
-      missingBaseFiles.value = (answer?.groups ?? [])
-        .flatMap((group) => group.reasons ?? [])
-        .filter((reason) => reason.code === "missing_models")
-        .flatMap((reason) => reason.models ?? [])
-        .filter((model) => BASE_MODEL_FOLDERS.has(model.folder))
-        .map((model) => String(model.file));
-    } catch (err) {
-      console.warn(`[workflows] could not pre-flight ${key}`, err);
-    }
-  },
+  (key) => checkInstalled(key),
   { immediate: true },
 );
+
+async function checkInstalled(key) {
+  const check = ++installedCheck;
+  missingBaseFiles.value = [];
+  preflightAnswered.value = false;
+  replaceCandidates.value = [];
+  if (!key) return;
+  await new Promise((resolve) => setTimeout(resolve, PREFLIGHT_SETTLE_MS));
+  if (check !== installedCheck) return;
+  try {
+    const answer = await preflightWorkflowRun({
+      workflow_key: key,
+      values: [],
+    });
+    if (check !== installedCheck || !stillOn(key)) return;
+    preflightAnswered.value = true;
+    missingBaseFiles.value = (answer?.groups ?? [])
+      .flatMap((group) => group.reasons ?? [])
+      .filter((reason) => reason.code === "missing_models")
+      .flatMap((reason) => reason.models ?? [])
+      .filter((model) => BASE_MODEL_FOLDERS.has(model.folder))
+      .map((model) => String(model.file));
+  } catch (err) {
+    console.warn(`[workflows] could not pre-flight ${key}`, err);
+    return;
+  }
+  // Only a file ComfyUI named can be replaced: a forgotten name is no file.
+  if (!missingBaseFiles.value.some((file) => file !== FORGOTTEN_MODEL)) return;
+  try {
+    const swap = await readModelSwap(key);
+    if (check !== installedCheck || !stillOn(key)) return;
+    replaceCandidates.value = swap?.checkpoints ?? [];
+  } catch (err) {
+    console.warn(`[workflows] could not read replacements for ${key}`, err);
+  }
+}
 </script>
 
 <style scoped>
@@ -1639,6 +1790,26 @@ watch(
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
+}
+
+/* A replaced base model: the value field as every other row draws it, with
+   an icon-only Undo beside it. */
+.wftab-fixed {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.wftab-fixed > .wftab-value {
+  flex: 1;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.wftab-fixed-flag {
+  flex-shrink: 0;
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 /* The hue drawn as text, so the surface variant: the fill is 2.1:1 on the

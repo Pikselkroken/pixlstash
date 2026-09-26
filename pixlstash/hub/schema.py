@@ -1106,6 +1106,26 @@ CREATE TABLE IF NOT EXISTS comfyui_history_model (
 )
 """
 
+# A model the owner replaced in a workflow because the original is gone (an
+# FP8 checkpoint swapped for its BF16 build, say). **Keyed by topology and slot,
+# not by card**: a picture made with the replacement in that slot is filed on
+# the card the original made (``workflow_cards.fixed_slots``), so the card
+# keeps its pictures, its name and its settings. The names are kept as the
+# graph spelled them - ``was_name`` is what a run rewrites, and what the
+# Workflow tab shows as the original - and the normalized forms are what the
+# card key and the asset rows are matched on.
+_V2_WORKFLOW_MODEL_FIX = """
+CREATE TABLE IF NOT EXISTS workflow_model_fix (
+    topology_hash  TEXT NOT NULL,
+    slot_label     TEXT NOT NULL,
+    was_norm       TEXT NOT NULL,
+    now_norm       TEXT NOT NULL,
+    was_name       TEXT NOT NULL,
+    now_name       TEXT NOT NULL,
+    PRIMARY KEY (topology_hash, slot_label, was_norm)
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1161,6 +1181,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_ORIGIN,
     _V2_WORKFLOW_PULLED_FILE,
     _V2_COMFYUI_HISTORY_MODEL,
+    _V2_WORKFLOW_MODEL_FIX,
     *_V2_WORKFLOW_INDEXES,
 )
 

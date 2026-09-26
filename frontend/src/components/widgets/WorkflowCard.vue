@@ -36,6 +36,23 @@
           alt=""
           loading="lazy"
         />
+        <!-- Made with a model the owner has since replaced in this workflow
+             (a missing checkpoint fixed): the picture is the card's, the
+             model is not the one it runs now. Such covers sort last. -->
+        <span
+          v-if="cell.superseded"
+          class="wf-card__badge wf-card__pic-flag"
+          data-testid="wf-card-superseded"
+        >
+          <Tooltip
+            text="Made with the model this workflow has since replaced"
+            activator="parent"
+          />
+          <v-icon size="12" aria-hidden="true">mdi-alert-outline</v-icon>
+          <span class="visually-hidden"
+            >Made with the model this workflow has since replaced</span
+          >
+        </span>
       </span>
       <span class="wf-card__badge wf-card__badge--end" aria-hidden="true">
         <v-icon size="12">mdi-image-multiple</v-icon>{{ card.picture_count }}
@@ -416,6 +433,7 @@ const coverCells = computed(() => {
     // `?? null`, so a payload served before #1455 offers the menu no picture
     // rather than one named `undefined`.
     id: cover.picture_id ?? null,
+    superseded: Boolean(cover.superseded),
   }));
 });
 // Ratings run 1-5; 0 or null is "not rated".
@@ -783,6 +801,18 @@ const accessibleName = computed(() =>
 
 .wf-card__badge--end {
   right: var(--space-3);
+}
+
+/* Per picture, so on the cell's own corner - bottom-left, clear of the stack
+   count and picture count on the cover's top corners - and hoverable for its
+   tooltip. */
+.wf-card__pic-flag {
+  top: auto;
+  bottom: var(--space-2);
+  left: var(--space-2);
+  z-index: 1;
+  color: rgb(var(--v-theme-dark-surface-warning));
+  pointer-events: auto;
 }
 
 .wf-card__badge--bottom {

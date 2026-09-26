@@ -24,6 +24,8 @@ const setWorkflowPins = vi.fn();
 const setWorkflowSlots = vi.fn();
 const stackWorkflows = vi.fn();
 const getLoraChain = vi.fn();
+const readModelSwap = vi.fn();
+const setWorkflowModelFix = vi.fn();
 
 vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
@@ -38,6 +40,8 @@ vi.mock("../../api/workflows", () => ({
   workflowCoverUrl: (cover) => cover?.url ?? "",
   stackWorkflows: (...args) => stackWorkflows(...args),
   getLoraChain: (...args) => getLoraChain(...args),
+  readModelSwap: (...args) => readModelSwap(...args),
+  setWorkflowModelFix: (...args) => setWorkflowModelFix(...args),
 }));
 
 const getPixlstashNode = vi.fn();
@@ -366,6 +370,110 @@ describe("a checkpoint that will not load", () => {
       "realvisXL_v5.safetensors is not installed in ComfyUI.",
     );
     expect(line.tooltip).toBe("SDXL/realvisXL_v5.safetensors");
+  });
+
+  it("offers the shelf's checkpoints and replaces the missing file with one", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap.mockReset().mockResolvedValue({
+      checkpoints: [
+        { id: 7, filename: "realvisXL_v5_bf16.safetensors", display_name: "RealVis 5" },
+      ],
+    });
+    const fixed = detail({
+      card: named,
+      model_fixes: [
+        {
+          slot_label: "n1/ckpt_name",
+          was: "SDXL/realvisXL_v5_fp8.safetensors",
+          now: "realvisXL_v5_bf16.safetensors",
+          base_model: true,
+        },
+      ],
+    });
+    setWorkflowModelFix.mockReset().mockResolvedValue(fixed);
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+
+    const picker = wrapper.find('[data-testid="wftab-replace-model"] select');
+    expect(picker.text()).toContain("RealVis 5");
+    preflightWorkflowRun.mockResolvedValue({ groups: [] });
+    await picker.setValue("realvisXL_v5_bf16.safetensors");
+    await settle(wrapper);
+
+    // The graph's own spelling of the missing file, folders and all: that is
+    // what the server matches the stored graphs on.
+    expect(setWorkflowModelFix).toHaveBeenCalledWith(KEY, {
+      was: "SDXL/realvisXL_v5_fp8.safetensors",
+      now: "realvisXL_v5_bf16.safetensors",
+    });
+    expect(textOf(wrapper)).not.toContain("Checkpoint missing");
+    const row = wrapper.find('[data-testid="wftab-fixed-model"]');
+    expect(row.text()).toContain("realvisXL_v5_bf16.safetensors");
+    // The original, a hover away: the provenance the flag is there for.
+    expect(row.find("tooltip-stub").attributes("text")).toBe(
+      "Replaced. This workflow originally used realvisXL_v5_fp8.safetensors",
+    );
+
+    setWorkflowModelFix.mockResolvedValue(detail({ card: named }));
+    await row.find('[data-testid="wftab-undo-fix"]').trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowModelFix).toHaveBeenLastCalledWith(KEY, {
+      was: "SDXL/realvisXL_v5_fp8.safetensors",
+      now: null,
+    });
+  });
+
+  it("says the replacement is missing only when it is the file missing", async () => {
+    const fix = {
+      slot_label: "n1/ckpt_name",
+      was: "realvisXL_v5_fp8.safetensors",
+      now: "realvisXL_v5_bf16.safetensors",
+      base_model: true,
+    };
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: named, model_fixes: [fix] }),
+    );
+    readModelSwap.mockReset().mockResolvedValue({ checkpoints: [] });
+
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/refiner.safetensors"),
+    );
+    let { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(textOf(wrapper)).toContain("Checkpoint missing");
+    expect(wrapper.find('[data-testid="wftab-fix-missing"]').exists()).toBe(
+      false,
+    );
+    wrapper.unmount();
+    mounted.pop();
+
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_bf16.safetensors"),
+    );
+    ({ wrapper } = await mountWith([KEY], [named]));
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-fix-missing"]').text()).toContain(
+      "Replaced by realvisXL_v5_bf16.safetensors, which is missing too.",
+    );
+  });
+
+  it("offers no replacement for a file nobody can name", async () => {
+    preflightWorkflowRun.mockResolvedValue(missingFile("(forgotten model)"));
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: unnamed, graph_base_models: [] }),
+    );
+    readModelSwap.mockReset().mockResolvedValue({
+      checkpoints: [{ id: 7, filename: "x.safetensors" }],
+    });
+    const { wrapper } = await mountWith([KEY], [unnamed]);
+    await settle(wrapper);
+    expect(readModelSwap).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="wftab-replace-model"]').exists()).toBe(
+      false,
+    );
   });
 
   it("names an unnamed checkpoint from the graph a run would submit", async () => {

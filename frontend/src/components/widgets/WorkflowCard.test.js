@@ -753,6 +753,20 @@ describe("WorkflowCard", () => {
     );
   });
 
+  it("flags a cover made with the model the workflow has since replaced", () => {
+    const cells = mountCard({
+      ...BARE,
+      covers: [cover("/new.webp"), { ...cover("/old.webp"), superseded: true }],
+    }).findAll(".wf-card__pic");
+
+    expect(cells[0].find('[data-testid="wf-card-superseded"]').exists()).toBe(
+      false,
+    );
+    expect(cells[1].find('[data-testid="wf-card-superseded"]').text()).toContain(
+      "Made with the model this workflow has since replaced",
+    );
+  });
+
   it("shows no rating for an unrated workflow", () => {
     const wrapper = mountCard({ ...BARE, rating: 0 });
     expect(wrapper.find(".wf-card__badge--bottom").exists()).toBe(false);

@@ -327,9 +327,18 @@ def forget_asset_names(hub: HubDatabase, normalized_filename: str) -> int:
             (normalized_filename,),
         )
         removed = cursor.rowcount or 0
+        # A model replaced in a workflow keeps both names, as spelled, for the
+        # Workflow tab; forgetting either takes the replacement with it. The
+        # variants stay on the cards they are on until something re-keys them.
+        fixes = conn.execute(
+            "DELETE FROM workflow_model_fix WHERE was_norm = ? OR now_norm = ?",
+            (normalized_filename, normalized_filename),
+        ).rowcount
     logger.info(
-        "Forgot the readable name of a workflow asset from %s recipe row(s).",
+        "Forgot the readable name of a workflow asset from %s recipe row(s) "
+        "and %s model replacement(s).",
         removed,
+        fixes or 0,
     )
     return removed
 
@@ -500,6 +509,13 @@ def forget_model_ghosts(
                 "DELETE FROM workflow_recipe_asset "
                 f"WHERE normalized_filename IN ({placeholders})",
                 tuple(batch),
+            )
+            # A replaced model is by definition a ghost, and its fix row keeps
+            # the name as spelled: forgetting the name takes the fix with it.
+            conn.execute(
+                "DELETE FROM workflow_model_fix "
+                f"WHERE was_norm IN ({placeholders}) OR now_norm IN ({placeholders})",
+                (*batch, *batch),
             )
     logger.info("Forgot %d model name(s) or digest(s) not on the shelf.", len(names))
     return len(names)
