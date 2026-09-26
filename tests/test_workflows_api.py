@@ -4702,6 +4702,25 @@ def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
     assert r.status_code == 409, r.text
     assert "as a checkpoint and a text encoder" in r.json()["detail"], r.text
     monkeypatch.setattr(workflows_routes, "model_fix_labels", real_labels)
+    # Shelf kinds the workflow loads `was` as none of: said, never a guess.
+    with server.hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES (?, 'test-support-pair.safetensors', ?, 'scanned')",
+            [("vae", _h("pair-vae")), ("text_encoder", _h("pair-te"))],
+        )
+    r = owner.put(
+        route, json={"was": _SHELF_FILENAME, "now": "test-support-pair.safetensors"}
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        "This workflow does not load that model as a text encoder or a VAE."
+    ), r.text
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM model WHERE sha256 IN (?, ?)",
+            (_h("pair-vae"), _h("pair-te")),
+        )
     with server.hub.transaction() as conn:
         conn.execute("DELETE FROM model WHERE sha256 = ?", (_h("te-digest"),))
 
@@ -9533,6 +9552,9 @@ def test_the_replacements_go_with_the_checkpoint_and_load_in_the_loader(cloneabl
         params={"replacing": "test-vae-fp8.pt", "slot_kind": "text_encoder"},
     )
     assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        "This workflow loads that model as a VAE, not a text encoder."
+    ), r.text
     r = cloneable.owner.get(
         f"{API}/workflows/{RUN_CARD}/model-swap",
         params={"replacing": "test-not-in-graph.safetensors"},

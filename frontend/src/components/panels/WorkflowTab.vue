@@ -1111,6 +1111,7 @@ const NO_REPLACEMENT_TEXT = {
   none_go_with_it: "Nothing on your shelf is known to work with this checkpoint.",
   none_loadable:
     "What works with this checkpoint is not something this loader can load.",
+  unread: "Could not read what could replace it just now.",
 };
 
 /** A "Replace with…" picker's options for one missing file, or `[]`. */
@@ -1881,21 +1882,26 @@ async function checkInstalled(key) {
       (missingFiles.value[spec.kind] ?? []).map((file) => [spec.kind, file]),
     ),
   ];
+  const results = await Promise.allSettled(
+    asks.map(([kind, file]) =>
+      readModelSwap(key, { replacing: file, slotKind: kind }),
+    ),
+  );
+  if (check !== installedCheck || !stillOn(key)) return;
   const found = {};
-  for (const [kind, file] of asks) {
-    try {
-      found[`${kind}:${file}`] = await readModelSwap(key, {
-        replacing: file,
-        slotKind: kind,
-      });
-    } catch (err) {
-      console.warn(
-        `[workflows] could not read replacements for ${file} on ${key}`,
-        err,
-      );
+  results.forEach((result, index) => {
+    const [kind, file] = asks[index];
+    if (result.status === "fulfilled") {
+      found[`${kind}:${file}`] = result.value;
+      return;
     }
-    if (check !== installedCheck || !stillOn(key)) return;
-  }
+    // Said on the row, not left as a missing picker nobody can explain.
+    found[`${kind}:${file}`] = { replacements_reason: "unread" };
+    console.warn(
+      `[workflows] could not read replacements for ${file} on ${key}`,
+      result.reason,
+    );
+  });
   replacementsByFile.value = found;
 }
 </script>

@@ -2748,7 +2748,18 @@ def create_router(server) -> APIRouter:
                             + "; say which kind to replace."
                         ),
                     )
-                row = matching[0] if matching else rows[0]
+                if not matching:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "This workflow does not load that model as a "
+                            + " or a ".join(
+                                _FIX_KIND_NAMES[r["file_kind"]] for r in rows
+                            )
+                            + "."
+                        ),
+                    )
+                row = matching[0]
             else:
                 row = next((r for r in rows if kind in (None, r["file_kind"])), None)
             if row is None:
@@ -5130,13 +5141,24 @@ def create_router(server) -> APIRouter:
         """
         _apply_model_fixes(card, graph, None)
         wanted = normalized_filename(replacing)
-        loaders = [
+        every_loader = [
             (cls, widget, value, fix_kind)
             for _node, cls, widget, value in iter_model_fields_api(graph)
             if normalized_filename(value) == wanted
             and (fix_kind := model_fix_kind(cls, widget)) is not None
-            and kind in (None, fix_kind)
         ]
+        loaders = [entry for entry in every_loader if kind in (None, entry[3])]
+        if not loaders and every_loader:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This workflow loads that model as a "
+                    + " and a ".join(
+                        _FIX_KIND_NAMES[k] for k in sorted({e[3] for e in every_loader})
+                    )
+                    + f", not a {_FIX_KIND_NAMES[kind]}."
+                ),
+            )
         if not loaders:
             raise HTTPException(
                 status_code=409, detail="This workflow does not load that model."

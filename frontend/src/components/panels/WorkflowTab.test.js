@@ -839,6 +839,31 @@ describe("no replacement to offer (#1596)", () => {
       wrapper.find('[data-testid="wftab-no-replacement-vae"]').text(),
     ).toContain("not something this loader can load");
   });
+
+  it("says a failed read rather than showing nothing", async () => {
+    const withVae = card({
+      models: [{ name: "sdxl_vae", kind: "vae", slot_label: "n2/vae_name" }],
+    });
+    preflightWorkflowRun.mockResolvedValue({
+      groups: [
+        {
+          reasons: [
+            {
+              code: "missing_models",
+              models: [{ file: "sdxl_vae_fp8.safetensors", folder: "vae" }],
+            },
+          ],
+        },
+      ],
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: withVae }));
+    readModelSwap.mockReset().mockRejectedValue(new Error("offline"));
+    const { wrapper } = await mountWith([KEY], [withVae]);
+    await settle(wrapper);
+    expect(
+      wrapper.find('[data-testid="wftab-no-replacement-vae"]').text(),
+    ).toContain("Could not read what could replace it just now.");
+  });
 });
 
 describe("a default's provenance and reset", () => {
