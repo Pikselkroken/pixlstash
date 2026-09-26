@@ -446,9 +446,9 @@ class WorkflowCover(BaseModel):
 class WorkflowStackMember(BaseModel):
     """One card of a stack, as a picker lists it without reading its card.
 
-    Members of one stack are usually generated the same ``name`` - they share a
-    base model and a type - so ``sets_apart`` says what this one loads that
-    not every member does, and ``differs_by`` is its chips against the cover
+    Members of one stack usually share a base model and a type, so their
+    generated names differ only by a number (:func:`_display_names`);
+    ``sets_apart`` says what this one loads that not every member does, and ``differs_by`` is its chips against the cover
     for the difference that is not a model (a step added, nodes rewired).
     """
 
@@ -1565,16 +1565,13 @@ def _covers(covers) -> list[WorkflowCover]:
     return strip
 
 
-# The last resort, when a card has nothing identifying at all.
-#
-# **It is a last resort and not the ordinary answer.** It used to be reached by
-# every card that was not imported from a file - which is most of a library
-# built from pictures - so a grid of forty workflows read "Untitled workflow"
-# forty times, and the name row, which is the card's only identifying text,
-# identified nothing. Duplicating the checkpoint onto the name row was avoided
-# on the grounds that it has a row of its own; a constant is worse than a
-# duplicate, because a duplicate at least tells two cards apart.
-UNNAMED_CARD = "Untitled workflow"
+# The last resort, when a card has no base model to be named after and no type
+# to say what it does. Never shown bare where two cards reach it: the grid
+# numbers every generated name it would otherwise print twice
+# (:func:`_display_names`), so the name row, the card's only identifying text,
+# always tells cards apart. It used to be "Untitled workflow", printed forty
+# times on a grid of forty such cards.
+UNNAMED_CARD = "Workflow"
 
 
 def _model_stem(name: str) -> str:
@@ -1682,24 +1679,44 @@ def _display_name(card, models=()) -> str:
         stem = card.file_name.rsplit("/", 1)[-1]
         return stem[: -len(".json")] if stem.lower().endswith(".json") else stem
     slot = _base_model_slot(models)
-    if slot is None:
-        # No base model: every name forgotten, or a graph that loads none. The
-        # stand-in, deliberately, rather than the VAE.
-        return UNNAMED_CARD
     # The shelf's name first. Stripped, because `display_name` is free text off
     # a safetensors header or a text field, and a name of three spaces renders
     # the row blank exactly as the empty stem below would.
-    stem = (slot.title or "").strip() or _model_stem(slot.name)
-    if not stem:
-        # These are graph widget values - third-party strings out of whatever
-        # workflow was imported - so the stem can come back empty where the
-        # whole name was an extension (".safetensors") or ended in a separator
-        # ("SDXL/"). An empty name renders the row blank and reads "About null"
-        # in the label, which is the hole `UNNAMED_CARD` exists to close.
-        return UNNAMED_CARD
+    stem = ((slot.title or "").strip() or _model_stem(slot.name)) if slot else ""
     label = _TYPE_LABELS.get(card.workflow_type)
+    if not stem:
+        # No base model: every name forgotten, a graph that loads none, or a
+        # stem that came back empty (these are third-party widget values, so
+        # the whole name can be an extension or end in a separator). Named for
+        # what it does rather than after its VAE; the grid numbers the
+        # duplicates this makes.
+        return (label or UNNAMED_CARD) + _specials_suffix(card)
     named = f"{stem}: {label}" if label else stem
     return named + _specials_suffix(card)
+
+
+def _display_names(figures) -> dict[str, str]:
+    """Every card's name, by key, with no generated name printed twice.
+
+    A name the owner typed or a workflow file's is left alone however many
+    cards share it: renaming what somebody chose is inventing. Generated names
+    that collide are numbered ``Text to Image (2)``, ``(3)``, in key order so a
+    card keeps its number from one read to the next.
+    """
+    # ponytail: key order is stable across reads but a new card can shift the
+    # numbers after it; store a sequence on the card if that ever matters.
+    names = {}
+    generated = {}
+    for figure in sorted(figures, key=lambda f: f.card.workflow_key):
+        card = figure.card
+        name = _display_name(card, figure.models)
+        names[card.workflow_key] = name
+        if not card.name and not card.file_name:
+            generated.setdefault(name, []).append(card.workflow_key)
+    for name, keys in generated.items():
+        for number, key in enumerate(keys[1:], start=2):
+            names[key] = f"{name} ({number})"
+    return names
 
 
 # What a workflow file may be before the grid declines to parse it. A real one
@@ -1798,11 +1815,15 @@ def _slot_names(figure) -> list[str]:
     return names
 
 
-def _stack_members(figure, figures_by_key) -> list[WorkflowStackMember]:
+def _stack_members(
+    figure, figures_by_key, card_names=None
+) -> list[WorkflowStackMember]:
     """The stack *figure* is in, each member named and told apart.
 
-    A model the member's own name already says (the checkpoint a generated
-    name starts with) is not said again.
+    *card_names* is :func:`_display_names` over the grid, so a member reads
+    as its own card does; left out, each is named alone. A model the member's own
+    name already says (the checkpoint a generated name starts with) is not
+    said again.
     """
     if not figures_by_key or figure.stack_size < 2:
         return []
@@ -1819,7 +1840,9 @@ def _stack_members(figure, figures_by_key) -> list[WorkflowStackMember]:
     shared = set.intersection(*(set(names) for names in loads))
     members = []
     for position, (member, names) in enumerate(zip(figures, loads)):
-        name = _display_name(member.card, member.models)
+        name = (card_names or {}).get(member.card.workflow_key) or _display_name(
+            member.card, member.models
+        )
         members.append(
             WorkflowStackMember(
                 key=member.card.workflow_key,
@@ -1833,15 +1856,18 @@ def _stack_members(figure, figures_by_key) -> list[WorkflowStackMember]:
     return members
 
 
-def _card(figure, defaults=(), figures_by_key=None) -> WorkflowCard:
+def _card(figure, defaults=(), figures_by_key=None, names=None) -> WorkflowCard:
     """Render one card's figures in the shape ``workflowCard.js`` documents.
 
     *figures_by_key* (every card of the grid, by key) is what names the other
     members of its stack (``members``); left out, the card lists none.
+    *names* is :func:`_display_names` over the same grid, which is what keeps
+    two generated names apart; left out, the card is named alone.
     """
     return WorkflowCard(
         key=figure.card.workflow_key,
-        name=_display_name(figure.card, figure.models),
+        name=(names or {}).get(figure.card.workflow_key)
+        or _display_name(figure.card, figure.models),
         type=figure.card.workflow_type,
         type_label=_TYPE_LABELS.get(figure.card.workflow_type),
         imported=figure.card.imported,
@@ -1881,7 +1907,7 @@ def _card(figure, defaults=(), figures_by_key=None) -> WorkflowCard:
         member_keys=[
             key for key in figure.member_keys if key != figure.card.workflow_key
         ],
-        members=_stack_members(figure, figures_by_key),
+        members=_stack_members(figure, figures_by_key, names),
         stack_id=figure.stack_id,
         ghosts=figure.ghosts,
         model_ghosts=figure.model_ghosts,
@@ -2020,9 +2046,11 @@ def create_router(server) -> APIRouter:
             file_models=_file_models,
         )
         figures_by_key = by_key(grid.figures)
+        names = _display_names(grid.figures)
         return WorkflowCards(
             cards=[
-                _card(figure, figures_by_key=figures_by_key) for figure in grid.cards
+                _card(figure, figures_by_key=figures_by_key, names=names)
+                for figure in grid.cards
             ],
             one_offs=grid.one_offs,
             hidden=grid.hidden,
@@ -2063,7 +2091,10 @@ def create_router(server) -> APIRouter:
         )
         return WorkflowCardDetail(
             card=_card(
-                figure, card_defaults(hub, server.vault, card), by_key(grid.figures)
+                figure,
+                card_defaults(hub, server.vault, card),
+                by_key(grid.figures),
+                _display_names(grid.figures),
             ),
             notes=card.notes,
             hidden=card.hidden,

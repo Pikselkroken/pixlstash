@@ -94,6 +94,7 @@ from pixlstash.services.model_shelf_service import replace_attachments
 from pixlstash.services.workflow_card_service import (
     CardFigures,
     SlotModel,
+    by_key,
     model_marks,
 )
 from pixlstash.services.workflow_identity import (
@@ -1715,6 +1716,11 @@ def test_a_card_is_never_nameless(workflow_env):
         )
 
     assert workflows_routes._display_name(_nameless(), []) == UNNAMED_CARD
+    # Nothing to name it after but what it does: its type, and its extras.
+    assert (
+        workflows_routes._display_name(_nameless("upscale", ("face_detailer",)), [])
+        == "Upscale + FaceDetailer"
+    )
 
     # A graph whose names survive but which loads no checkpoint still gets a
     # name: the first slot it does load.
@@ -1737,13 +1743,15 @@ def test_a_card_is_never_nameless(workflow_env):
     ]
     assert workflows_routes._display_name(unet_only, flux) == "flux1 dev: Text to Image"
 
-    # A graph that loads a VAE and an upscaler but no base model at all takes
-    # the stand-in rather than being named after either.
+    # A graph that loads a VAE and an upscaler but no base model at all is
+    # named for what it does rather than after either.
     accessories = [
         SlotModel(name="ae.safetensors", kind="vae"),
         SlotModel(name="4x-UltraSharp.pth", kind="upscale"),
     ]
-    assert workflows_routes._display_name(_nameless(), accessories) == UNNAMED_CARD
+    assert (
+        workflows_routes._display_name(_nameless("upscale"), accessories) == "Upscale"
+    )
 
     # **An empty stem is as nameless as a null one.** These are graph widget
     # values - third-party strings out of whatever workflow was imported - so
@@ -1751,7 +1759,9 @@ def test_a_card_is_never_nameless(workflow_env):
     # reaches here and would render the row blank and read "About null".
     for hostile in (".safetensors", "SDXL/", "loras\\"):
         hostile_slots = [SlotModel(name=hostile, kind="checkpoint")]
-        assert workflows_routes._display_name(unet_only, hostile_slots) == UNNAMED_CARD
+        assert (
+            workflows_routes._display_name(unet_only, hostile_slots) == "Text to Image"
+        )
 
     # A checkpoint outranks a unet where a graph carries both.
     both = [
@@ -2080,6 +2090,53 @@ def test_a_stack_names_its_members_and_what_sets_each_apart(workflow_env):
     # Chips are against the cover, so the cover has none of its own.
     assert by_key[BUSY_CARD]["differs_by"] == []
     assert by_key[FORGOTTEN_CARD]["differs_by"] == member["differs_by"]
+
+
+def test_generated_names_that_collide_are_numbered():
+    """No two cards print one generated name; an owner's or a file's is theirs.
+
+    Numbered in key order, so a card keeps its number from one read to the
+    next whatever order the grid ranks them in.
+    """
+    plain = SlotModel(name="realvisxl", kind="checkpoint")
+
+    def figure(key, **card):
+        return CardFigures(
+            card=Card(
+                workflow_key=key, topology_hash=key, workflow_type="txt2img", **card
+            ),
+            models=[plain],
+        )
+
+    figures = [
+        figure("d" * 64),
+        figure("a" * 64),
+        figure("c" * 64, name="Portrait"),
+        figure("b" * 64, name="Portrait"),
+        figure("e" * 64, file_name="realvisxl: Text to Image.json"),
+        figure("f" * 64),
+    ]
+    names = workflows_routes._display_names(figures)
+    assert names == {
+        "a" * 64: "realvisxl: Text to Image",
+        "d" * 64: "realvisxl: Text to Image (2)",
+        "f" * 64: "realvisxl: Text to Image (3)",
+        "b" * 64: "Portrait",
+        "c" * 64: "Portrait",
+        "e" * 64: "realvisxl: Text to Image",
+    }
+    # The card and its stack listing read the name from the same map.
+    for member in (figures[0], figures[1]):
+        member.stack_size = 2
+        member.member_keys = ["a" * 64, "d" * 64]
+    card = workflows_routes._card(
+        figures[0], figures_by_key=by_key(figures), names=names
+    )
+    assert card.name == "realvisxl: Text to Image (2)"
+    assert [m.name for m in card.members] == [
+        "realvisxl: Text to Image",
+        "realvisxl: Text to Image (2)",
+    ]
 
 
 def test_stack_members_are_told_apart_by_what_not_every_member_loads():
