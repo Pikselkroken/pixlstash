@@ -387,4 +387,59 @@ describe("FilterMenu", () => {
     expect(document.activeElement?.getAttribute("role")).toBe("radio");
     wrapper.unmount();
   });
+
+  it("returns ← from a pick-one submenu to its row without changing the pick", async () => {
+    const store = useFilterStore();
+    store.stackStateFilter = "stacked";
+    const wrapper = mount(FilterMenu, {
+      props: { countBaseQuery: "set_id=4", open: true },
+      global: { stubs: { "v-icon": true, Tooltip: true } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    await openKind(wrapper, "Stacks");
+    const radio = document.activeElement;
+    expect(radio?.getAttribute("role")).toBe("radio");
+
+    radio.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
+    );
+    await flushPromises();
+    expect(store.stackStateFilter).toBe("stacked");
+    expect(wrapper.find(".fm-sub").exists()).toBe(false);
+    expect(document.activeElement?.textContent).toContain("Stacks");
+    wrapper.unmount();
+  });
+
+  it("lets ← move the caret in a search field, and leaves once it is at the start", async () => {
+    const wrapper = mount(FilterMenu, {
+      props: { countBaseQuery: "set_id=4", open: true },
+      global: { stubs: { "v-icon": true, Tooltip: true } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    await openKind(wrapper, "Checkpoint");
+    const field = wrapper.find(".fm-sub input");
+    await field.setValue("flux");
+    field.element.setSelectionRange(4, 4);
+    await field.trigger("keydown", { key: "ArrowLeft" });
+    expect(wrapper.find(".fm-sub").exists()).toBe(true);
+
+    field.element.setSelectionRange(0, 0);
+    await field.trigger("keydown", { key: "ArrowLeft" });
+    expect(wrapper.find(".fm-sub").exists()).toBe(false);
+    expect(document.activeElement?.textContent).toContain("Checkpoint");
+    wrapper.unmount();
+  });
+
+  it("leaves ← to a chip's threshold select", async () => {
+    const store = useFilterStore();
+    store.tagConfidenceAboveFilter = ["hat:0.20"];
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Tag confidence");
+    await wrapper
+      .find(".ftf-thr-select")
+      .trigger("keydown", { key: "ArrowLeft" });
+    expect(wrapper.find(".fm-sub").exists()).toBe(true);
+  });
 });
