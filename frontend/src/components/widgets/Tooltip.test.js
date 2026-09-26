@@ -222,4 +222,25 @@ describe("Tooltip", () => {
     expect(tip().props("modelValue")).toBe(true);
     w.unmount();
   });
+  // The grid context menu stacks at 2000 outside Vuetify's stack, the same
+  // z-index a lone tip gets, and won the tie on DOM order: its tips opened
+  // behind it. A tip inside a `data-tooltip-layer` renders inside that surface,
+  // on the side the surface names; one outside keeps Vuetify's body container.
+  it("renders inside a tooltip layer, on the side the layer names", async () => {
+    const w = mountHost(
+      `<div><div class="menu" data-tooltip-layer="end"><button class="in">In<Tooltip text="Inside tip" activator="parent" /></button></div>
+       <button class="out">Out<Tooltip text="Outside tip" activator="parent" /></button></div>`,
+    );
+    await flushPromises();
+    await w.find("button.in").trigger("mouseenter");
+    await w.find("button.out").trigger("mouseenter");
+    await settle();
+    const [inner, outer] = w.findAllComponents(components.VTooltip);
+    const menu = w.find(".menu").element;
+    expect(menu.textContent).toContain("Inside tip");
+    expect(inner.props("location")).toBe("end");
+    expect(menu.textContent).not.toContain("Outside tip");
+    expect(outer.props("location")).toBe("top");
+    w.unmount();
+  });
 });

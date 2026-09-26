@@ -1073,6 +1073,12 @@ stay only for the surfaces that remain in the document, and no fourth one is add
 two elements that need a plus-one belong in one stacking context, ordered by DOM
 order. A raw z-index is drift, and a raw value equal to a rung is a bug.
 
+**A tip over a surface on `--z-overlay` joins that surface's stacking context.** The
+grid context menu is teleported at 2000, the base Vuetify gives a lone tooltip, and won
+that tie on DOM order. It carries `data-tooltip-layer`, and `Tooltip` renders a tip
+whose control sits inside it *inside* it, so the tip is ordered by the menu, not by a
+bigger number. Such a surface must not clip (`overflow`, `transform`).
+
 ---
 
 ## 15. Using this system
