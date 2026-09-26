@@ -1240,10 +1240,11 @@ const workflowOptions = computed(() => {
   }
   // "Run a workflow on these…" opens with the whole library in the picker;
   // otherwise only the stack's own members, which is the switch the design
-  // describes.
+  // describes. Under the stack's heading, the library's cards get their own.
+  const group = rows.some((option) => option.group) ? "Other workflows" : undefined;
   for (const row of props.source?.pickWorkflow ? cards.value : []) {
     if (!rows.some((option) => option.value === row.key)) {
-      rows.push({ value: row.key, label: row.name });
+      rows.push({ value: row.key, label: row.name, group });
     }
   }
   return rows;

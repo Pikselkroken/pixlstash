@@ -362,10 +362,31 @@ describe("switching to another stack member", () => {
     ];
     getWorkflowCard.mockResolvedValue({ card: card({ members }) });
     const wrapper = await mountRun();
+    // The two-line row (#1525): the name, then what sets it apart as chips,
+    // the cover marked, all under the stack's heading.
+    const group = "This stack · 3 workflows";
     expect(wrapper.vm.workflowOptions).toEqual([
-      { value: KEY, label: "Krea 2: Text to Image — film-grain" },
-      { value: OTHER, label: "Krea 2: Text to Image — + upscale" },
-      { value: "c".repeat(64), label: "Detailer pass" },
+      {
+        value: KEY,
+        label: "Krea 2: Text to Image — film-grain",
+        name: "Krea 2: Text to Image",
+        chips: ["Cover", "film-grain"],
+        group,
+      },
+      {
+        value: OTHER,
+        label: "Krea 2: Text to Image — + upscale",
+        name: "Krea 2: Text to Image",
+        chips: ["+ upscale"],
+        group,
+      },
+      {
+        value: "c".repeat(64),
+        label: "Detailer pass",
+        name: "Detailer pass",
+        chips: [],
+        group,
+      },
     ]);
     // Read off the card itself: no member's card is fetched to name it.
     expect(getWorkflowCard).toHaveBeenCalledTimes(1);
@@ -392,6 +413,32 @@ describe("switching to another stack member", () => {
       `${name} — realvisxl, + upscale`,
       `${name} — 1 node differs (1)`,
       `${name} — 1 node differs (2)`,
+    ]);
+    // The name line is numbered only where the chips under it tie as well.
+    expect(wrapper.vm.workflowOptions.slice(2).map((row) => row.name)).toEqual([
+      `${name} (1)`,
+      `${name} (2)`,
+    ]);
+  });
+
+  it("numbers a name only where the two-line rows would draw alike", async () => {
+    // The cover and a member tie on the one-line label, which the rail's
+    // native select still needs numbered; the Cover chip already tells the
+    // two-line rows apart, so their names stay as the grid prints them.
+    const name = "Krea 2";
+    const members = [
+      { key: KEY, name, sets_apart: ["film-grain"], differs_by: [] },
+      { key: OTHER, name, sets_apart: ["film-grain"], differs_by: [] },
+      { key: "c".repeat(64), name, sets_apart: ["realvisxl"], differs_by: [] },
+    ];
+    getWorkflowCard.mockResolvedValue({ card: card({ members }) });
+    const wrapper = await mountRun();
+    expect(
+      wrapper.vm.workflowOptions.map((row) => [row.label, row.name]),
+    ).toEqual([
+      [`${name} — film-grain (1)`, name],
+      [`${name} — film-grain (2)`, name],
+      [`${name} — realvisxl`, name],
     ]);
   });
 
@@ -969,6 +1016,35 @@ describe("\"Run a workflow on these…\", which opens with no workflow chosen", 
 
     expect(wrapper.vm.defaults.length).toBeGreaterThan(0);
     expect(wrapper.vm.canRun).toBe(true);
+  });
+
+  it("heads the library's cards apart from the picked stack's members", async () => {
+    const members = [
+      { key: KEY, name: "Krea 2", sets_apart: [], differs_by: [] },
+      { key: OTHER, name: "Krea 2", sets_apart: [], differs_by: ["+ upscale"] },
+    ];
+    getWorkflowCard.mockResolvedValue({ card: card({ members }) });
+    listWorkflowCards.mockResolvedValue({
+      cards: [
+        { key: KEY, name: "Krea 2" },
+        { key: "e".repeat(64), name: "Portrait" },
+      ],
+    });
+    const wrapper = await mountRun({
+      kind: "selection",
+      pictureIds: [1, 2],
+      pickWorkflow: true,
+    });
+    wrapper.vm.workflowKey = KEY;
+    await flushPromises();
+
+    expect(
+      wrapper.vm.workflowOptions.map((row) => [row.value, row.group]),
+    ).toEqual([
+      [KEY, "This stack · 2 workflows"],
+      [OTHER, "This stack · 2 workflows"],
+      ["e".repeat(64), "Other workflows"],
+    ]);
   });
 });
 

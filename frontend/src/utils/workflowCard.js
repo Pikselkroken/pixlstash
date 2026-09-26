@@ -499,37 +499,62 @@ export function cardAccessibleName(card, { member = false } = {}) {
 // The chips that only say a model differs, which `sets_apart` already names.
 const MODEL_CHIPS = new Set(["other checkpoint", "other models"]);
 
-/** "Name — what sets it apart": the models only it loads, then its chips. */
-function memberLabel(member) {
+/** What sets a member apart: the models only it loads, then its chips. */
+function memberApart(member) {
   const models = member.sets_apart || [];
   const chips = (member.differs_by || []).filter(
     (chip) => !models.length || !MODEL_CHIPS.has(chip),
   );
-  const apart = [...models, ...chips];
-  return apart.length ? `${member.name} — ${apart.join(", ")}` : member.name;
+  return [...models, ...chips];
 }
 
-/** Rows that still read alike are numbered, as the Pictures rows are. */
-function numberAlike(rows) {
+/**
+ * Rows that still read alike are numbered, as the Pictures rows are. `field`
+ * is numbered wherever `drawn` (what that row shows) ties with another row's.
+ */
+function numberAlike(rows, field, drawn) {
   const total = {};
-  for (const row of rows) total[row.label] = (total[row.label] || 0) + 1;
+  for (const row of rows) total[drawn(row)] = (total[drawn(row)] || 0) + 1;
   const seen = {};
   return rows.map((row) => {
-    if (total[row.label] < 2) return row;
-    seen[row.label] = (seen[row.label] || 0) + 1;
-    return { ...row, label: `${row.label} (${seen[row.label]})` };
+    const key = drawn(row);
+    if (total[key] < 2) return row;
+    seen[key] = (seen[key] || 0) + 1;
+    return { ...row, [field]: `${row[field]} (${seen[key]})` };
   });
 }
 
 /**
  * A stack's members as picker options, in the stack's order: members often
  * share a generated name, so each says what sets it apart from the others.
+ *
+ * `label` is the one-line "Name — what sets it apart" a native select shows.
+ * `name`, `chips` and `group` are the two-line row (#1525): the name, then
+ * what sets it apart as chips, the cover marked "Cover", under one heading
+ * for the stack. `AppSelect` draws that row for any option carrying `chips`.
  */
 export function stackMemberOptions(members) {
-  return numberAlike(
-    (members || []).map((member) => ({
+  const list = members || [];
+  const group = `This stack · ${list.length} workflows`;
+  const rows = list.map((member, index) => {
+    const apart = memberApart(member);
+    return {
       value: member.key,
-      label: memberLabel(member),
-    })),
+      label: apart.length
+        ? `${member.name} — ${apart.join(", ")}`
+        : member.name,
+      name: member.name,
+      // Index 0 is the cover: the server lists the stack in its own order.
+      chips: index === 0 ? ["Cover", ...apart] : apart,
+      group,
+    };
+  });
+  // Each line is numbered on what it shows: the one-line `label` where two
+  // labels tie, the two-line `name` only where the chips under it tie too
+  // (a cover and a member alike but for the "Cover" chip already differ).
+  return numberAlike(
+    numberAlike(rows, "label", (row) => row.label),
+    "name",
+    (row) => `${row.name}\n${row.chips.join("\n")}`,
   );
 }
