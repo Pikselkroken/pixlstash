@@ -291,8 +291,10 @@ _WORKFLOW_KEY = {
     "type": "string",
     "description": "The workflow card's key (see list_workflows).",
 }
-# The run body is `RunRequest`'s; the route validates it, so only the fields an
-# agent is likely to need are described and anything else passes through.
+# The run body is `RunRequest`'s; the route validates it. Only the fields an
+# agent is likely to need are described, and extra fields are not invited:
+# the route ignores a field it does not know, so a guessed one would be
+# dropped without a word.
 _RUN_SCHEMA = {
     "type": "object",
     "properties": {
@@ -314,7 +316,6 @@ _RUN_SCHEMA = {
         },
     },
     "required": ["workflow_key"],
-    "additionalProperties": True,
 }
 
 WORKFLOW_TOOLS = [
@@ -349,7 +350,8 @@ WORKFLOW_TOOLS = [
         "format, prompt and seed kept, credentials blanked) to a JSON file on "
         "this machine and return the path, not the graph. Changes nothing in "
         "PixlStash, but it does write a file: to out_path if given, "
-        "overwriting what is there, else to PixlStash's cache folder. Hand "
+        "overwriting what is there, else to PixlStash's cache folder, where "
+        "exporting the same workflow again replaces the last export. Hand "
         "that path to a ComfyUI MCP server to inspect, edit or validate it.",
         "inputSchema": {
             "type": "object",
@@ -362,7 +364,13 @@ WORKFLOW_TOOLS = [
             },
             "required": ["workflow_key"],
         },
-        "annotations": {"readOnlyHint": True, "openWorldHint": False},
+        # Writes, and may overwrite, a file on this machine: a client must
+        # not auto-approve it as a read.
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "openWorldHint": False,
+        },
     },
     {
         "name": "import_workflow_graph",
@@ -393,9 +401,10 @@ WORKFLOW_TOOLS = [
             },
             "required": ["name"],
         },
+        # overwrite replaces a stored workflow file.
         "annotations": {
             "readOnlyHint": False,
-            "destructiveHint": False,
+            "destructiveHint": True,
             "openWorldHint": False,
         },
     },
@@ -554,7 +563,9 @@ def _quoted_key(arguments: dict, name: str = "workflow_key") -> str:
     """An opaque key, percent-encoded so no argument can reshape the path."""
     value = arguments.get(name)
     if not isinstance(value, str) or not value or len(value) > MAX_KEY_LENGTH:
-        raise ToolError(f"{name} must be a non-empty string")
+        raise ToolError(
+            f"{name} must be a non-empty string of at most {MAX_KEY_LENGTH} characters"
+        )
     return urllib.parse.quote(value, safe="")
 
 
@@ -723,7 +734,9 @@ def _call_workflow_tool(fetch: Fetch, name: str, arguments: dict) -> list[dict] 
             raise ToolError("out_path must be a non-empty string")
         key = _quoted_key(arguments)
         graph = json.loads(_get(fetch, f"/workflows/{key}/graph")[1])
-        workflow = graph["workflow"]
+        workflow = graph.get("workflow") if isinstance(graph, dict) else None
+        if not isinstance(workflow, dict):
+            raise ToolError("PixlStash answered with no workflow graph")
         summary = {
             "path": _write_graph(out_path, arguments["workflow_key"], workflow),
             "format": "api",
@@ -927,7 +940,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="MCP server (stdio) for a running PixlStash server. "
         "Authenticates with the API token in PIXLSTASH_TOKEN; mint a READ "
         "token, optionally restricted to a set, character or project, and the "
-        "agent sees exactly what that token sees.",
+        "agent sees exactly what that token sees. --allow-write needs a "
+        "full-access token instead.",
     )
     parser.add_argument(
         "--url",
@@ -1008,7 +1022,8 @@ def warn_if_not_owner(fetch: Fetch) -> bool:
 
     The likeliest mistake is the old read-only token left in a config that now
     passes the flag; the workflow tools would then refuse on first use.
-    ``/recipes`` because it is the cheapest owner-only read.
+    ``/recipes`` because it is an owner-only table read, where ``/workflows``
+    computes the whole grid.
     """
     try:
         _get(fetch, "/recipes")

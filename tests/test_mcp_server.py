@@ -116,6 +116,8 @@ def env():
                     mint(scope="READ", resource_type="picture", resource_id=ids[0]),
                 ),
                 owner=_fetch(bare, mint(scope="ALL")),
+                # What the read-only Connect dialog mints: unscoped READ.
+                reader=_fetch(bare, mint(scope="READ")),
             )
 
 
@@ -736,8 +738,24 @@ def test_the_workflow_tools_exist_only_with_allow_write():
 
     full = _list(True)
     assert set(full) == set(read_only) | WRITE_TOOL_NAMES
-    assert full["run_workflow"]["annotations"]["destructiveHint"] is True
-    assert full["import_workflow_graph"]["annotations"]["readOnlyHint"] is False
+    # A client auto-approves a read-only tool, so each hint is pinned: the
+    # file writer and the stored-file overwriter are not reads.
+    hints = {
+        name: (
+            tool["annotations"]["readOnlyHint"],
+            tool["annotations"].get("destructiveHint"),
+        )
+        for name, tool in full.items()
+        if name in WRITE_TOOL_NAMES
+    }
+    assert hints == {
+        "list_workflows": (True, None),
+        "get_workflow": (True, None),
+        "export_workflow_graph": (False, True),
+        "import_workflow_graph": (False, True),
+        "preflight_workflow": (True, None),
+        "run_workflow": (False, True),
+    }
 
     # Not offered, and not callable either: it never reaches the transport.
     result = _call(
@@ -873,6 +891,14 @@ def test_the_graph_goes_through_a_file_in_both_directions(tmp_path):
     assert both["isError"] is True
     assert len(sent) == 1
 
+    # An answer without a graph is said plainly, not as a KeyError.
+    def graphless(path, params, method="GET", body=None):
+        return 200, "application/json", b'{"name": "x"}'
+
+    empty = _write(graphless, "export_workflow_graph", workflow_key="abc")
+    assert empty["isError"] is True
+    assert "no workflow graph" in empty["content"][0]["text"]
+
     # A path that cannot be written is a tool error naming it, not a crash.
     blocked = tmp_path / "a-file"
     blocked.write_text("")
@@ -898,9 +924,10 @@ def test_import_is_refused_to_a_read_token_and_reaches_the_route_for_the_owner(e
     assert owner["isError"] is True
     assert "answered 400" in owner["content"][0]["text"], owner
 
-    refused = _write(env.scoped, "import_workflow_graph", **arguments)
-    assert refused["isError"] is True
-    assert "answered 403" in refused["content"][0]["text"], refused
+    for token in (env.reader, env.scoped):
+        refused = _write(token, "import_workflow_graph", **arguments)
+        assert refused["isError"] is True
+        assert "answered 403" in refused["content"][0]["text"], refused
 
 
 def test_the_start_up_probe_names_a_token_that_cannot_write(capsys):
@@ -919,3 +946,38 @@ def test_the_start_up_probe_names_a_token_that_cannot_write(capsys):
     )
     assert mcp_server.build_parser().parse_args([]).allow_write is False
     assert mcp_server.build_parser().parse_args(["--allow-write"]).allow_write is True
+
+
+def test_the_default_export_goes_to_the_cache_under_a_safe_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcp_server, "_graph_dir", lambda: str(tmp_path / "graphs"))
+
+    def fetch(path, params, method="GET", body=None):
+        return 200, "application/json", b'{"workflow": {"1": {}}}'
+
+    result = _write(fetch, "export_workflow_graph", workflow_key="ab/../c")
+    path = json.loads(result["content"][0]["text"])["path"]
+    # The key cannot climb out of the cache folder through the file name.
+    assert path == str(tmp_path / "graphs" / "ab____c.json")
+    assert json.loads(open(path).read()) == {"1": {}}
+
+
+def test_main_probes_for_an_owner_token_only_with_allow_write(monkeypatch):
+    probed = []
+    monkeypatch.setenv("PIXLSTASH_TOKEN", "example-token")
+    monkeypatch.setattr(mcp_server, "http_fetch", lambda *a: None)
+    monkeypatch.setattr(mcp_server, "warn_if_unreachable", lambda fetch, url: True)
+    monkeypatch.setattr(
+        mcp_server, "warn_if_not_owner", lambda fetch: probed.append(True)
+    )
+    served = []
+    monkeypatch.setattr(
+        mcp_server, "serve", lambda fetch, allow_write=False: served.append(allow_write)
+    )
+    monkeypatch.setattr(
+        mcp_server.sys, "stdin", SimpleNamespace(reconfigure=lambda **k: None)
+    )
+
+    assert mcp_server.main(["--url", "http://example.test"]) == 0
+    assert (probed, served) == ([], [False])
+    assert mcp_server.main(["--url", "http://example.test", "--allow-write"]) == 0
+    assert (probed, served) == ([True], [False, True])

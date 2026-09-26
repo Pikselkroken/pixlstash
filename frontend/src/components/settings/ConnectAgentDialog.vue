@@ -16,7 +16,7 @@ import { createToken } from "../../api/users";
 import { copyText } from "../../utils/clipboard";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
-import OptionRows from "../widgets/OptionRows.vue";
+import Segmented from "../widgets/Segmented.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -133,11 +133,19 @@ async function copy(key, text) {
     :open="open"
     title="Connect an AI agent"
     @close="emit('close')"
-    @accept="!token && !loading && create()"
+    @accept="!token && !loading && !allowWrite && create()"
   >
     <!-- Step 1: explain what the agent gets, then mint on an explicit press. -->
     <template v-if="!token">
-      <OptionRows v-model="mode" :options="MODES" aria-label="Access" />
+      <div class="cad-block">
+        <span id="cad-access-label" class="section-label">Agent access</span>
+        <Segmented
+          v-model="mode"
+          :options="MODES"
+          full
+          aria-labelledby="cad-access-label"
+        />
+      </div>
       <template v-if="!allowWrite">
         <p class="cad-hint">
           Creates a read-only token and the configuration to paste into an MCP
@@ -157,9 +165,9 @@ async function copy(key, text) {
           before storing them.
         </p>
         <p class="cad-warn">
-          This needs a full-access token. Any agent that can read its own
-          configuration file then has full owner control of PixlStash, whatever
-          tools it is offered. Revoke it from the token list when you are done.
+          This mints a full-access token. Any agent that can read its own
+          configuration file has full owner control of PixlStash, whatever
+          tools it is offered.
         </p>
       </template>
       <p v-if="error" class="cad-error">{{ error }}</p>
@@ -167,7 +175,12 @@ async function copy(key, text) {
 
     <!-- Step 2: the token is in both blocks, and is not readable again. -->
     <template v-else>
-      <p class="cad-hint">
+      <p class="cad-hint cad-minted">
+        {{
+          allowWrite
+            ? "Full-access token for reading and writing workflows. Revoke it from the token list when you are done."
+            : "Read-only token."
+        }}
         The token is shown once and cannot be read back. Copy one of these now.
       </p>
       <p v-if="remoteUrl" class="cad-warn">
@@ -236,7 +249,7 @@ async function copy(key, text) {
         :loading="loading"
         @click="create"
       >
-        Create token
+        {{ allowWrite ? "Create full-access token" : "Create token" }}
       </AppButton>
     </template>
   </AppDialog>

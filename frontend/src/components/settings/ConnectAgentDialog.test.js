@@ -158,6 +158,8 @@ describe("the configuration handed to the agent", () => {
       description: "AI agent (MCP, read/write)",
       scope: "ALL",
     });
+    // Step 2 says which kind of token this is, beside the blocks copied.
+    expect(wrapper.find(".cad-minted").text()).toMatch(/full-access/i);
     // Still two blocks, both carrying the flag.
     expect(wrapper.findAll(".cad-code")).toHaveLength(2);
     expect(wrapper.text()).toContain("pixlstash-mcp --allow-write");
@@ -165,8 +167,20 @@ describe("the configuration handed to the agent", () => {
     expect(json.mcpServers.pixlstash.args).toEqual(["--allow-write"]);
   });
 
+  it("never mints a full-access token from Enter alone", async () => {
+    const wrapper = mount(ConnectAgentDialog, {
+      props: { open: true },
+      global: { stubs: { "v-icon": true } },
+    });
+    await wrapper.findAll('[role="radio"]')[1].trigger("click");
+    wrapper.findComponent({ name: "AppDialog" }).vm.$emit("accept");
+    await wrapper.vm.$nextTick();
+    expect(createToken).not.toHaveBeenCalled();
+  });
+
   it("leaves the read-only configuration without the flag", async () => {
     const wrapper = await mintedDialog();
+    expect(wrapper.find(".cad-minted").text()).toMatch(/read-only/i);
     expect(wrapper.text()).not.toContain("--allow-write");
     const json = JSON.parse(wrapper.find(".cad-code--json").text());
     expect(json.mcpServers.pixlstash.args).toBeUndefined();
