@@ -362,7 +362,7 @@ class Florence2Service:
         try:
             ext = os.path.splitext(image_path)[1].lower()
             caption = None
-            if ext in _VIDEO_EXTS:
+            if ext in _VIDEO_EXTS or VideoUtils.is_animated_gif(image_path):
                 frames = VideoUtils.extract_representative_video_frames(
                     image_path, count=3
                 )
@@ -1253,7 +1253,7 @@ class Florence2Plugin(TaggerPlugin):
                 return results
             path_str = str(path)
             ext = os.path.splitext(path_str)[1].lower()
-            if ext in _VIDEO_EXTS:
+            if ext in _VIDEO_EXTS or VideoUtils.is_animated_gif(path_str):
                 results[path_str] = self.service.generate_caption(
                     path_str, _retry_on_cpu=False
                 )

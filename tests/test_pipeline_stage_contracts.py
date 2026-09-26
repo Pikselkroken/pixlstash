@@ -35,6 +35,7 @@ from pixlstash.tasks.missing_tag_finder import MissingTagFinder
 from pixlstash.tasks.missing_tag_prediction_finder import MissingTagPredictionFinder
 from pixlstash.tasks.tag_task import TagTask
 from pixlstash.tasks.task_type import TaskType
+from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.vault import Vault
 
 PACKAGE = Path(__file__).resolve().parent.parent / "pixlstash"
@@ -553,6 +554,74 @@ def test_a_full_card_on_a_video_is_never_recorded_as_no_faces(tmp_path, monkeypa
 
     with pytest.raises(RuntimeError, match="out of memory"):
         task._extract_features([pic])
+
+
+# ── an animated GIF is sampled like a clip (#1487) ─────────────────────────
+
+
+_GIF_COLOURS = [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
+
+
+def _write_gif(path, n_frames):
+    """A 64x64 GIF with one solid colour per frame, so every frame differs."""
+    frames = [Image.new("RGB", (64, 64), c) for c in _GIF_COLOURS[:n_frames]]
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=100)
+    return str(path)
+
+
+def test_only_a_gif_with_more_than_one_frame_is_animated(tmp_path, monkeypatch):
+    animated = _write_gif(tmp_path / "anim.gif", 3)
+    still = _write_gif(tmp_path / "still.gif", 1)
+
+    assert VideoUtils.is_animated_gif(animated)
+    assert not VideoUtils.is_animated_gif(still)
+    assert VideoUtils.is_multiframe_file(animated)
+    assert not VideoUtils.is_multiframe_file(still)
+
+    # A non-GIF is decided by its extension and never opened.
+    monkeypatch.setattr(
+        "pixlstash.utils.image_processing.video_utils.Image.open",
+        lambda *_a, **_k: pytest.fail("a .png was opened to ask if it is animated"),
+    )
+    assert not VideoUtils.is_animated_gif(str(tmp_path / "x.png"))
+
+
+def test_the_video_sampler_reads_distinct_frames_from_a_gif(tmp_path):
+    """The fact the routing rests on: cv2 opens a GIF and seeks it."""
+    frames = VideoUtils.extract_representative_video_frames(
+        _write_gif(tmp_path / "anim.gif", 3), count=3
+    )
+
+    assert len(frames) == 3
+    assert [f.convert("RGB").getpixel((32, 32)) for f in frames] == _GIF_COLOURS
+
+
+def test_an_animated_gif_takes_the_video_face_path(tmp_path):
+    """An animated GIF gets frame 0 plus later frames, as a clip does.
+
+    ``.gif`` is an image extension, so the multi-frame test must come before
+    the image branch; after it, every GIF reads as one still and the detector
+    sees one frame.
+    """
+    _write_gif(tmp_path / "anim.gif", 3)
+    pic = SimpleNamespace(id=5, file_path="anim.gif", description="animated gif")
+    detector = _RecordingDetector()
+    task = _clip_task(tmp_path, [], detector=detector)
+    task._pictures = [pic]
+    task._preload_cancel = threading.Event()
+    task._preload_lock = threading.Lock()
+    task._preload_started_at = None
+
+    task._preload_images()
+    frames, _inv_scale = task._preloaded_images[str(tmp_path / "anim.gif")]
+    assert [index for index, _frame in frames] == [0, 1, 2]
+    task._extract_features([pic])
+    assert detector.seen == [(64, 64, 3)] * 3
+
+    detector.seen.clear()
+    task._preloaded_images = {}  # the synchronous read, when preload missed it
+    task._extract_features([pic])
+    assert detector.seen == [(64, 64, 3)] * 3
 
 
 # ── the tag window ──────────────────────────────────────────────────────────

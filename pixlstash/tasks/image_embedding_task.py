@@ -127,7 +127,7 @@ class ImageEmbeddingTask(BaseTask):
                 return []
             try:
                 full_path = os.path.join(self._db.image_root, file_path)
-                if VideoUtils.is_video_file(file_path):
+                if VideoUtils.is_multiframe_file(full_path):
                     images = [
                         frame.convert("RGB")
                         for frame in VideoUtils.extract_representative_video_frames(

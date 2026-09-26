@@ -256,7 +256,7 @@ class TagTask(BaseTask):
 
         try:
             ext = os.path.splitext(str(file_path))[1].lower()
-            if ext in _VIDEO_EXTS:
+            if ext in _VIDEO_EXTS or VideoUtils.is_animated_gif(str(file_path)):
                 frames = VideoUtils.extract_representative_video_frames(
                     str(file_path), count=1
                 )

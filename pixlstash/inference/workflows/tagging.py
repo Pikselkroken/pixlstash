@@ -305,7 +305,7 @@ class TaggingWorkflow:
         for image_path in image_paths:
             path = str(image_path)
             ext = os.path.splitext(path)[1].lower()
-            if ext in _VIDEO_EXTS:
+            if ext in _VIDEO_EXTS or VideoUtils.is_animated_gif(path):
                 frames = VideoUtils.extract_representative_video_frames(path, count=1)
                 if not frames:
                     continue
@@ -542,7 +542,7 @@ class TaggingWorkflow:
                 break
             path = str(image_path)
             ext = os.path.splitext(path)[1].lower()
-            if ext in _VIDEO_EXTS:
+            if ext in _VIDEO_EXTS or VideoUtils.is_animated_gif(path):
                 if path in preloaded_map:
                     items.append((f"{path}#frame0", preloaded_map[path]))
                     continue

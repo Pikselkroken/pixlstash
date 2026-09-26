@@ -138,8 +138,11 @@ class FaceModelRefreshTask(BaseTask):
         )
         ext = os.path.splitext(file_path)[1].lower()
         units: list[tuple[int, object, float]] = []
+        # Same routing as the extractor, so an animated GIF is refreshed across
+        # the frames it was scanned on.
+        is_multiframe = FaceExtractionTask._is_multiframe(file_path)
 
-        if ext in self._IMAGE_EXTS:
+        if ext in self._IMAGE_EXTS and not is_multiframe:
             img, inv_scale = ImageUtils.load_image_bgr_reduced(
                 file_path, FaceExtractionTask.INFERENCE_MAX_SIDE
             )
@@ -152,7 +155,7 @@ class FaceModelRefreshTask(BaseTask):
                 )
                 return []
             units.append((0, img, inv_scale))
-        elif ext in self._VIDEO_EXTS:
+        elif is_multiframe:
             cap = cv2.VideoCapture(file_path)
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             if frame_count < 1:

@@ -214,6 +214,26 @@ def test_the_preload_pool_does_the_cpu_work_and_keeps_batch_order(tmp_path):
         assert sorted(workflow.preprocessed) == sorted(e[4] for e in preloaded)
 
 
+def test_an_animated_gif_preloads_three_frames_and_a_still_gif_one(tmp_path):
+    """An animated GIF is averaged over the frames a video is (#1487)."""
+    from PIL import Image as PILImage
+
+    frames = [PILImage.new("RGB", (32, 24), c) for c in ("red", "green", "blue")]
+    frames[0].save(
+        tmp_path / "anim.gif", save_all=True, append_images=frames[1:], duration=100
+    )
+    frames[0].save(tmp_path / "still.gif")
+    with Vault(image_root=str(tmp_path)) as vault:
+        task = ImageEmbeddingTask(
+            database=vault.db,
+            clip_workflow=_RecordingWorkflow(),
+            batch=[(1, "anim.gif"), (2, "still.gif")],
+        )
+        task._preload_images_task()
+
+        assert [entry[0] for entry in task._preloaded_images] == [1, 1, 1, 2]
+
+
 def test_the_worker_uses_the_preloaded_tensors_and_hashes(tmp_path, monkeypatch):
     from PIL import Image as PILImage
 
