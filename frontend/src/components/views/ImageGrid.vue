@@ -41,6 +41,8 @@
     @character-created="emit('refresh-sidebar')"
     @run-recipe="openRunForPicture"
     @use-as-input="runWorkflowOnPicture"
+    @show-picture="moveOverlayTo"
+    @edit-more-options="openRunFromEditTab"
   />
   <ImageImporter
     ref="imageImporterRef"
@@ -2166,6 +2168,26 @@ function runWorkflowOnPicture(pictureId) {
   const id = Number(getPictureId(pictureId));
   if (!Number.isFinite(id) || id <= 0) return;
   openRunWithWorkflowPicker([id]);
+}
+
+/**
+ * The lightbox Edit tab's *More options…* (#1381): the Run popup on this
+ * picture, with the tab's workflow and instruction already filled in. With no
+ * instruction typed the popup starts from the picture's own prompt, as *Use as
+ * input for…* does: `emptyPrompt` would send `""` over a recipe prompt, which
+ * blanks every positive prompt node in the graph.
+ */
+function openRunFromEditTab({ pictureId, workflowKey, prompt } = {}) {
+  const id = Number(getPictureId(pictureId));
+  if (!Number.isFinite(id) || id <= 0 || isReadOnly.value) return;
+  if (overlayOpen.value) closeOverlay(false);
+  runDialogStore.openRun({
+    kind: "selection",
+    pictureIds: [id],
+    workflowKey: workflowKey || undefined,
+    pickWorkflow: true,
+    prompt: prompt || undefined,
+  });
 }
 
 // What a run with no selection files its output into: the set, project and
