@@ -2552,6 +2552,17 @@ def create_router(server) -> APIRouter:
             for _label, fix_was, fix_now in fixes
             if normalized_filename(fix_now) == normalized_filename(was)
         ]
+        if len(set(map(normalized_filename, chained))) > 1:
+            # Two originals replaced by this one file in two slots: which of
+            # them the owner means is a guess, and fixing one would leave the
+            # other loading a missing file behind a 200.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Several models were replaced by that one; replace each "
+                    f"original instead ({', '.join(sorted(set(chained)))})."
+                ),
+            )
         if chained:
             was = chained[0]
         was_norm = normalized_filename(was)

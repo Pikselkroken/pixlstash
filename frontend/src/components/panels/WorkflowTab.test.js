@@ -421,6 +421,40 @@ describe("a checkpoint that will not load", () => {
     });
   });
 
+  it("says the replacement is missing only when it is the file missing", async () => {
+    const fix = {
+      slot_label: "n1/ckpt_name",
+      was: "realvisXL_v5_fp8.safetensors",
+      now: "realvisXL_v5_bf16.safetensors",
+      base_model: true,
+    };
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: named, model_fixes: [fix] }),
+    );
+    readModelSwap.mockReset().mockResolvedValue({ checkpoints: [] });
+
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/refiner.safetensors"),
+    );
+    let { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(textOf(wrapper)).toContain("Checkpoint missing");
+    expect(wrapper.find('[data-testid="wftab-fix-missing"]').exists()).toBe(
+      false,
+    );
+    wrapper.unmount();
+    mounted.pop();
+
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_bf16.safetensors"),
+    );
+    ({ wrapper } = await mountWith([KEY], [named]));
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-fix-missing"]').text()).toContain(
+      "Replaced by realvisXL_v5_bf16.safetensors, which is missing too.",
+    );
+  });
+
   it("offers no replacement for a file nobody can name", async () => {
     preflightWorkflowRun.mockResolvedValue(missingFile("(forgotten model)"));
     getWorkflowCard.mockResolvedValue(

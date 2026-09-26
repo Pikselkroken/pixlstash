@@ -142,7 +142,7 @@
                  keep the way back reachable. Choosing another above replaces
                  the original, never the replacement. -->
             <p
-              v-if="checkpointFix"
+              v-if="replacementMissing"
               class="wftab-note wftab-quiet"
               data-testid="wftab-fix-missing"
             >
@@ -898,6 +898,20 @@ const missingCheckpointFile = computed(
 /** The owner's replacement for this card's base model, or null. */
 const checkpointFix = computed(
   () => (detail.value?.model_fixes ?? []).find((fix) => fix.base_model) ?? null,
+);
+
+/**
+ * Whether the pre-flight says the replacement itself is missing, rather than
+ * some other base model of the graph.
+ */
+const replacementMissing = computed(
+  () =>
+    Boolean(checkpointFix.value) &&
+    missingBaseFiles.value.some(
+      (file) =>
+        fileName(file).toLowerCase() ===
+        fileName(checkpointFix.value.now).toLowerCase(),
+    ),
 );
 
 /** The shelf models a missing base model can be replaced with. */

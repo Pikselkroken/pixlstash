@@ -4616,6 +4616,33 @@ def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
     assert r.json()["model_fixes"] == []
     assert not any(cover["superseded"] for cover in r.json()["card"]["covers"])
 
+    # Two originals replaced by one file in two slots: naming that file is
+    # ambiguous, and fixing one original would leave the other missing.
+    with server.hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO workflow_model_fix (topology_hash, slot_label, was_norm, "
+            "now_norm, was_name, now_name) VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    FLIP_TOPOLOGY,
+                    label,
+                    was,
+                    _REPLACEMENT_FILENAME,
+                    was,
+                    _REPLACEMENT_FILENAME,
+                )
+                for label, was in (
+                    ("test-slot-a/ckpt_name", "test-a.safetensors"),
+                    ("test-slot-b/ckpt_name", "test-b.safetensors"),
+                )
+            ],
+        )
+    r = owner.put(
+        route, json={"was": _REPLACEMENT_FILENAME, "now": _SECOND_REPLACEMENT}
+    )
+    assert r.status_code == 409, r.text
+    assert "test-a.safetensors" in r.json()["detail"]
+
 
 def test_a_variant_that_will_not_reduce_keeps_its_card_and_its_attributes(
     workflow_env,

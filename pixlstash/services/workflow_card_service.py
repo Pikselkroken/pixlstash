@@ -388,7 +388,9 @@ def _figures(
 def _superseded_variants(hub: HubDatabase, cards: list[Card]) -> frozenset[str]:
     """The variants that load a model the owner replaced in their workflow.
 
-    Nothing to read, and no cost, on a hub where nobody has replaced one.
+    In a checkpoint slot, where a fix applies: a VAE naming a file of the same
+    name is still what the workflow loads there. Nothing to read, and no cost,
+    on a hub where nobody has replaced one.
     """
     replaced: dict[str, set[str]] = {}
     for topology_hash, was_norm in hub.fetchall(
@@ -406,7 +408,11 @@ def _superseded_variants(hub: HubDatabase, cards: list[Card]) -> frozenset[str]:
     return frozenset(
         variant
         for variant, pairs in asset_names(hub, list(topology_of)).items()
-        if any(name in replaced[topology_of[variant]] for _widget, name in pairs)
+        if any(
+            name in replaced[topology_of[variant]]
+            for widget, name in pairs
+            if widget in CHECKPOINT_WIDGETS
+        )
     )
 
 

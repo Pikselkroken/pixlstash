@@ -928,6 +928,49 @@ def test_a_fix_targets_checkpoint_slots_across_the_whole_topology(hub):
     ]
 
 
+def test_a_vae_naming_the_replaced_file_does_not_flag_its_pictures(hub):
+    """A fix is a checkpoint's: a VAE of that name is still what loads there."""
+    replaced = "test-model-fp8.safetensors"
+    fixed = record_api_graph(
+        hub,
+        _graph(
+            ckpt=replaced,
+            extra={
+                "8": _node("VAELoader", vae_name="test-vae-a.safetensors"),
+                "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+            },
+        ),
+    )
+    vae_only = record_api_graph(
+        hub,
+        _graph(
+            ckpt="test-other.safetensors",
+            extra={
+                "8": _node("VAELoader", vae_name=replaced),
+                "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+            },
+        ),
+    )
+    set_model_fix(
+        hub,
+        fixed.topology_hash,
+        model_fix_labels(hub, fixed.topology_hash, replaced),
+        replaced,
+        "test-model-bf16.safetensors",
+        {},
+    )
+    cards = [
+        Card(
+            workflow_key=card_of(hub, keys.structural_hash),
+            topology_hash=keys.topology_hash,
+            variants=[keys.structural_hash],
+        )
+        for keys in (fixed, vae_only)
+    ]
+
+    assert _superseded_variants(hub, cards) == {fixed.structural_hash}
+
+
 def test_the_fixed_card_keeps_its_own_name_whoever_has_more_pictures(hub):
     """The owner is fixing THIS card, not folding it into the replacement's."""
     old = record_api_graph(hub, _graph(ckpt="test-model-fp8.safetensors"))
