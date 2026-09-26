@@ -3079,7 +3079,7 @@ Skipped when ComfyUI could not be inspected (nothing is known to repair) and
 when `_apply_loras` has already refused (that run is not happening). The
 reports go on the group only when it is actually submitted, and every
 registered field is cleared when the batch rule zeroes the request. A new
-repair is a registry entry plus its `RunGroup` field. Two ship:
+repair is a registry entry plus its `RunGroup` field. Three ship:
 
 - **`missing_models` → `bypassed_loras`**: the LoRA bypass above.
 - **`missing_nodes` → `replaced_nodes`**: `replace_missing_seed_nodes`. A custom
@@ -3104,6 +3104,15 @@ repair is a registry entry plus its `RunGroup` field. Two ship:
   hires-fix or refiner pair built to share one seed would get two; and a node
   whose own seed is wired from elsewhere. Each entry is `{node_id, class_type,
   replacement: "seed", consumers: [{node_id, field}]}`.
+- **`missing_nodes` → `replaced_nodes`** (second entry, same report):
+  `replace_missing_text_nodes`. A custom text node this ComfyUI lacks
+  (`TEXT_NODE_CLASSES`: WAS's `Text Multiline`, Comfyroll's `CR Text`) only
+  hands its string on, so every link from it becomes that string, however many
+  inputs it fed. It runs after `_apply_prompts`, so a prompt typed into the Run
+  popup is what gets inlined. `Text Multiline` drops its `#` comment lines as
+  the node does; one holding a WAS `[token]` keeps its refusal, as do a wired
+  text and a consumer reading any output but the first. Entries carry
+  `replacement: "text"`, which the Run popup reads to word its notice.
 - **An allow-list, not a general rewriter.** A replacement that is *nearly*
   right silently changes what the picture looks like, which is worse than the
   refusal. The candidates the issue names for later (custom primitive nodes,

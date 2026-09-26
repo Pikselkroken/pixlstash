@@ -1120,8 +1120,9 @@ class RunGroup(BaseModel):
     # never writes back a set it has not seen.
     picture_inputs: list[RunPictureInput] = Field(default_factory=list)
     # A custom node this ComfyUI lacks, replaced by what PixlStash already does
-    # (#1463): today only a seed node, whose link becomes a literal the run's
-    # own seed pass then writes. Reported on the same terms as a bypass: the
+    # (#1463): a seed node, whose link becomes a literal the run's
+    # own seed pass then writes, or a text node, whose string is inlined.
+    # Reported on the same terms as a bypass: the
     # graph that runs is not the one the card names, and the owner is told so
     # before the run rather than after.
     replaced_nodes: list[dict] = Field(default_factory=list)

@@ -129,6 +129,18 @@ describe("a replaced seed node, which is not a refusal either", () => {
   });
 });
 
+describe("a replaced text node", () => {
+  it("says the text is written into what it fed, and nothing about seeds", () => {
+    const wrapper = mountNotice({
+      code: "nodes_replaced",
+      nodes: [{ node_id: "103", class_type: "Text Multiline", replacement: "text" }],
+    });
+    expect(wrapper.text()).toContain("the text node Text Multiline");
+    expect(wrapper.text()).toContain("writes the text straight into what it fed");
+    expect(wrapper.text()).not.toContain("seed");
+  });
+});
+
 describe("a recipe LoRA with no loader, which is not a refusal (#1478)", () => {
   const reason = {
     code: "loras_unplaced",

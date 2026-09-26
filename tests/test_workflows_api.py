@@ -81,6 +81,7 @@ from pixlstash.services.workflow_run_service import (
     place_recipe_loras,
     repair,
     replace_missing_seed_nodes,
+    replace_missing_text_nodes,
     skip_requested_loras,
 )
 from pixlstash.utils.known_base_models import fold
@@ -8043,6 +8044,64 @@ def test_a_seed_node_whose_own_seed_is_wired_is_left_alone():
     graph["7"] = {"class_type": "PrimitiveInt", "inputs": {"value": 5}}
     assert replace_missing_seed_nodes(graph, SEED_INFO) == []
     assert "9" in graph
+
+
+def _text_graph(class_type="Text Multiline", text="a platypus in a toga"):
+    """Two encoders both fed by one text node of *class_type*."""
+    return {
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": ["103", 0]}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": ["103", 0]}},
+        "103": {"class_type": class_type, "inputs": {"text": text}},
+    }
+
+
+def test_a_text_node_is_replaced_by_its_own_string_in_every_consumer():
+    graph = _text_graph(text="# a note\na platypus\n  # another\nin a toga")
+    replaced = replace_missing_text_nodes(graph, SEED_INFO)
+    assert [n["replacement"] for n in replaced] == ["text"]
+    assert "103" not in graph
+    assert graph["6"]["inputs"]["text"] == "a platypus\nin a toga"
+    assert graph["7"]["inputs"]["text"] == "a platypus\nin a toga"
+
+
+def test_an_installed_text_node_is_not_replaced():
+    info = dict(SEED_INFO, **{"Text Multiline": {"input": {}, "output": ["STRING"]}})
+    graph = _text_graph()
+    assert replace_missing_text_nodes(graph, info) == []
+    assert "103" in graph
+
+
+def test_a_text_node_outside_the_allow_list_is_never_replaced():
+    graph = _text_graph(class_type="Prompt Styler (some pack)")
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+    assert "103" in graph
+
+
+def test_a_was_text_with_a_token_keeps_its_refusal():
+    """`[time]` is expanded by the node; a literal would send it verbatim."""
+    graph = _text_graph(text="a platypus at [time]")
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+    assert graph["6"]["inputs"]["text"] == ["103", 0]
+
+
+def test_a_text_node_whose_text_is_wired_keeps_its_refusal():
+    graph = _text_graph(text=["5", 0])
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+    assert "103" in graph
+
+
+def test_a_text_node_read_on_another_output_keeps_its_refusal():
+    """`CR Text`'s second output is its help text, not the prompt."""
+    graph = _text_graph(class_type="CR Text")
+    graph["7"]["inputs"]["text"] = ["103", 1]
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+    assert "103" in graph
+
+
+def test_the_registry_reports_text_and_seed_replacements_together():
+    graph = dict(_seed_graph(), **_text_graph())
+    done = repair(graph, SEED_INFO, [Reason(MISSING_NODES)])
+    assert sorted(n["node_id"] for n in done["replaced_nodes"]) == ["103", "9"]
 
 
 def test_the_registry_repairs_only_what_judge_reported():

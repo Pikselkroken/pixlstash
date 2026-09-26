@@ -22,6 +22,7 @@ rather than in a caller.
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -98,6 +99,16 @@ _FOLDER_BY_FIELD = {
 SEED_NODE_CLASSES = frozenset(
     {"Seed (rgthree)", "Seed", "SeedGenerator", "Seed Generator", "CR Seed"}
 )
+
+# Custom text nodes that only hand their own string on, by class_type, to the
+# input holding that string. Same allow-list terms as the seed nodes: WAS's
+# `Text Multiline` (which also drops its `#` comment lines) and Comfyroll's
+# `CR Text`. The string becomes a literal in whatever the node fed.
+TEXT_NODE_CLASSES = {"Text Multiline": "text", "CR Text": "text"}
+
+# WAS's own `[token]` substitutions (`[time]`, `[hostname]`, custom ones). A
+# literal cannot expand them, so a text carrying one keeps its refusal.
+WAS_TOKEN_RE = re.compile(r"\[[A-Za-z_][\w ]*\]")
 
 # Where the source of a runnable graph came from, in the order tried.
 FROM_FILE = "file"
@@ -646,6 +657,95 @@ def replace_missing_seed_nodes(graph: dict, object_info: dict) -> list[dict]:
     return replaced
 
 
+def replace_missing_text_nodes(graph: dict, object_info: dict) -> list[dict]:
+    """Drop every custom text node this ComfyUI lacks, inlining its string.
+
+    A prompt typed into WAS's ``Text Multiline`` is ``missing_nodes`` on an
+    install without WAS, although the node does nothing but hand its string to
+    a ``CLIPTextEncode``. So each link from it becomes that string and the node
+    leaves the graph. Unlike a seed, one string may feed any number of inputs.
+
+    Keeps its refusal, logged: a class that IS installed, one outside
+    :data:`TEXT_NODE_CLASSES`, a node whose text is wired from elsewhere or is
+    not a string, a WAS text holding a ``[token]`` only the node expands, and a
+    consumer reading any output other than the first.
+
+    Args:
+        graph: The API-format graph, mutated in place.
+        object_info: The map this ComfyUI published.
+
+    Returns:
+        ``[{node_id, class_type, replacement: "text", consumers}, …]``.
+    """
+    replaced: list[dict] = []
+    for node_id in [str(key) for key in graph]:
+        node = graph.get(node_id)
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        if class_type not in TEXT_NODE_CLASSES or class_type in object_info:
+            continue
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        text = inputs.get(TEXT_NODE_CLASSES[class_type])
+        if not isinstance(text, str):
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI and its text is not a "
+                "literal (%r), so it keeps its refusal.",
+                node_id,
+                class_type,
+                text,
+            )
+            continue
+        if class_type == "Text Multiline":
+            if WAS_TOKEN_RE.search(text):
+                logger.info(
+                    "Node %s (%s) is not on this ComfyUI and its text holds a "
+                    "[token] only the node expands, so it keeps its refusal.",
+                    node_id,
+                    class_type,
+                )
+                continue
+            text = "\n".join(
+                line for line in text.splitlines() if not line.strip().startswith("#")
+            )
+        consumers = [
+            (str(other_id), str(name), link)
+            for other_id, other in graph.items()
+            if isinstance(other, dict) and isinstance(other.get("inputs"), dict)
+            for name, link in other["inputs"].items()
+            if is_link(link) and str(link[0]) == node_id
+        ]
+        if any(link[1] != 0 for _, _, link in consumers):
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI and something reads an "
+                "output other than its text, so it keeps its refusal.",
+                node_id,
+                class_type,
+            )
+            continue
+        for other_id, name, _ in consumers:
+            graph[other_id]["inputs"][name] = text
+        del graph[node_id]
+        logger.info(
+            "Node %s (%s) is not on this ComfyUI, so it is replaced: %s now "
+            "holds its text.",
+            node_id,
+            class_type,
+            ", ".join(f"{other}.{name}" for other, name, _ in consumers) or "nothing",
+        )
+        replaced.append(
+            {
+                "node_id": node_id,
+                "class_type": class_type,
+                "replacement": "text",
+                "consumers": [
+                    {"node_id": other, "field": name} for other, name, _ in consumers
+                ],
+            }
+        )
+    return replaced
+
+
 @dataclass(frozen=True)
 class Repair:
     """One refusal PixlStash can answer by changing the graph (#1463).
@@ -669,6 +769,7 @@ REPAIRS: tuple[Repair, ...] = (
         "bypassed_loras",
         bypass_missing_loras,
     ),
+    Repair(MISSING_NODES, "replaced_nodes", replace_missing_text_nodes),
     Repair(MISSING_NODES, "replaced_nodes", replace_missing_seed_nodes),
 )
 
@@ -691,7 +792,7 @@ def repair(
     codes = {reason.code for reason in reasons}
     done: dict[str, list[dict]] = {}
     for entry in REPAIRS:
-        done[entry.report] = (
+        done.setdefault(entry.report, []).extend(
             entry.apply(graph, object_info) if entry.code in codes else []
         )
     return done
