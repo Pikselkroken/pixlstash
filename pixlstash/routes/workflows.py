@@ -1121,8 +1121,9 @@ class RunGroup(BaseModel):
     # never writes back a set it has not seen.
     picture_inputs: list[RunPictureInput] = Field(default_factory=list)
     # A custom node this ComfyUI lacks, replaced by what PixlStash already does
-    # (#1463): today only a seed node, whose link becomes a literal the run's
-    # own seed pass then writes. Reported on the same terms as a bypass: the
+    # (#1463): a seed node, whose link becomes a literal the run's
+    # own seed pass then writes, or a text node, whose string is inlined.
+    # Reported on the same terms as a bypass: the
     # graph that runs is not the one the card names, and the owner is told so
     # before the run rather than after.
     replaced_nodes: list[dict] = Field(default_factory=list)
@@ -2715,9 +2716,9 @@ def create_router(server) -> APIRouter:
             if text is None:
                 continue
             for node_id in node_ids:
-                inputs = (graph.get(node_id) or {}).get("inputs")
-                if isinstance(inputs, dict) and isinstance(inputs.get("text"), str):
-                    inputs["text"] = text
+                target = run_service.prompt_text_target(graph, node_id)
+                if target is not None:
+                    graph[target[0]]["inputs"][target[1]] = text
 
     def _apply_loras(
         graph: dict, loras: list[RunLora], object_info: dict | None
@@ -3722,7 +3723,8 @@ def create_router(server) -> APIRouter:
             "lora_not_skippable. Likewise a custom seed node this ComfyUI "
             "lacks (rgthree's Seed and its kin) is replaced by the run's own "
             "seed and named in replaced_nodes, where every input it fed is one "
-            "the seed pass writes. A "
+            "the seed pass writes; so is a plain text node (Text Multiline, "
+            "CR Text, Textbox, PrimitiveStringMultiline), its string inlined. A "
             "body that cannot be interpreted against the card answers "
             "400/404/422 here exactly as it does on the run, so the two never "
             "disagree."

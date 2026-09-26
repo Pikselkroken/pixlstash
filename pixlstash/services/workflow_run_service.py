@@ -21,7 +21,9 @@ rather than in a caller.
 
 from __future__ import annotations
 
+import io
 import json
+import re
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
@@ -98,6 +100,79 @@ _FOLDER_BY_FIELD = {
 SEED_NODE_CLASSES = frozenset(
     {"Seed (rgthree)", "Seed", "SeedGenerator", "Seed Generator", "CR Seed"}
 )
+
+# Text nodes that only hand their own string on, by class_type, to the input
+# holding that string. Same allow-list terms as the seed nodes: WAS's
+# `Text Multiline` (which also drops its `#` comment lines), Comfyroll's
+# `CR Text`, Chibi-Nodes' `Textbox` and core's `PrimitiveStringMultiline`
+# (absent on an older ComfyUI). The string becomes a literal in whatever the
+# node fed.
+TEXT_NODE_CLASSES = {
+    "Text Multiline": "text",
+    "CR Text": "text",
+    "Textbox": "text",
+    "PrimitiveStringMultiline": "value",
+}
+
+# WAS's own `[token]` substitutions (`[time]`, `[time(%Y)]`, custom names of
+# any spelling). A literal cannot expand them, so a text holding anything in
+# square brackets keeps its refusal; core ComfyUI gives brackets no meaning.
+WAS_TOKEN_RE = re.compile(r"\[[^\[\]]*\]")
+
+
+def overriding_text_inputs(class_type: str, inputs: dict) -> list[str]:
+    """The inputs of a text node, other than its text, that may change its string.
+
+    Textbox's ``passthrough`` replaces its text whenever it is non-empty, so a
+    link or a non-empty string in any input but the text field counts. One
+    rule for the repair and the Run prompt's target, so they cannot drift.
+    """
+    return [
+        name
+        for name, value in inputs.items()
+        if name != TEXT_NODE_CLASSES.get(class_type)
+        and (is_link(value) or (isinstance(value, str) and value))
+    ]
+
+
+def prompt_text_target(graph: dict, node_id: str) -> Optional[tuple[str, str]]:
+    """Where a detected prompt node's text literally lives, as ``(node, field)``.
+
+    The encoder's own ``text`` when it holds a string; otherwise, when that
+    input is a link from output 0 of a :data:`TEXT_NODE_CLASSES` node, that
+    node's text field. Without the hop a prompt typed into the Run popup was
+    skipped, and a missing text node's repair then inlined the stored prompt.
+    A text node feeding more than one input is not a target: writing the
+    positive prompt and then the negative into it would leave both negative.
+    Nor is one with another input overriding its text (Textbox's
+    ``passthrough``): the node would ignore the prompt written into it.
+    """
+    inputs = (graph.get(node_id) or {}).get("inputs")
+    if not isinstance(inputs, dict):
+        return None
+    text = inputs.get("text")
+    if isinstance(text, str):
+        return node_id, "text"
+    if is_link(text) and text[1] == 0:
+        source = graph.get(str(text[0]))
+        field = TEXT_NODE_CLASSES.get((source or {}).get("class_type"))
+        readers = sum(
+            1
+            for other in graph.values()
+            if isinstance(other, dict) and isinstance(other.get("inputs"), dict)
+            for link in other["inputs"].values()
+            if is_link(link) and str(link[0]) == str(text[0])
+        )
+        source_inputs = (source or {}).get("inputs") or {}
+        if (
+            field
+            and readers == 1
+            and isinstance(source_inputs.get(field), str)
+            and not overriding_text_inputs(source["class_type"], source_inputs)
+        ):
+            return str(text[0]), field
+    return None
+
 
 # Where the source of a runnable graph came from, in the order tried.
 FROM_FILE = "file"
@@ -646,6 +721,109 @@ def replace_missing_seed_nodes(graph: dict, object_info: dict) -> list[dict]:
     return replaced
 
 
+def replace_missing_text_nodes(graph: dict, object_info: dict) -> list[dict]:
+    """Drop every custom text node this ComfyUI lacks, inlining its string.
+
+    A prompt typed into WAS's ``Text Multiline`` is ``missing_nodes`` on an
+    install without WAS, although the node does nothing but hand its string to
+    a ``CLIPTextEncode``. So each link from it becomes that string and the node
+    leaves the graph. Unlike a seed, one string may feed any number of inputs.
+
+    Keeps its refusal, logged: a class that IS installed, one outside
+    :data:`TEXT_NODE_CLASSES`, a node whose text is wired from elsewhere or is
+    not a string, one with another input set that may override it (Textbox's
+    ``passthrough``), a WAS text holding a ``[token]`` only the node expands, and a
+    consumer reading any output other than the first.
+
+    Args:
+        graph: The API-format graph, mutated in place.
+        object_info: The map this ComfyUI published.
+
+    Returns:
+        ``[{node_id, class_type, replacement: "text", consumers}, …]``.
+    """
+    replaced: list[dict] = []
+    for node_id in [str(key) for key in graph]:
+        node = graph.get(node_id)
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        if class_type not in TEXT_NODE_CLASSES or class_type in object_info:
+            continue
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        text = inputs.get(TEXT_NODE_CLASSES[class_type])
+        if not isinstance(text, str):
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI and its text is not a "
+                "literal (%r), so it keeps its refusal.",
+                node_id,
+                class_type,
+                text,
+            )
+            continue
+        overriding = overriding_text_inputs(class_type, inputs)
+        if overriding:
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI and %s may change its "
+                "text, so it keeps its refusal.",
+                node_id,
+                class_type,
+                ", ".join(overriding),
+            )
+            continue
+        if class_type == "Text Multiline":
+            if WAS_TOKEN_RE.search(text):
+                logger.info(
+                    "Node %s (%s) is not on this ComfyUI and its text holds a "
+                    "[token] only the node expands, so it keeps its refusal.",
+                    node_id,
+                    class_type,
+                )
+                continue
+            # The node's own loop, line for line.
+            text = "\n".join(
+                line.replace("\n", "")
+                for line in io.StringIO(text)
+                if not line.strip().startswith("#")
+            )
+        consumers = [
+            (str(other_id), str(name), link)
+            for other_id, other in graph.items()
+            if isinstance(other, dict) and isinstance(other.get("inputs"), dict)
+            for name, link in other["inputs"].items()
+            if is_link(link) and str(link[0]) == node_id
+        ]
+        if any(link[1] != 0 for _, _, link in consumers):
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI and something reads an "
+                "output other than its text, so it keeps its refusal.",
+                node_id,
+                class_type,
+            )
+            continue
+        for other_id, name, _ in consumers:
+            graph[other_id]["inputs"][name] = text
+        del graph[node_id]
+        logger.info(
+            "Node %s (%s) is not on this ComfyUI, so it is replaced: %s now "
+            "holds its text.",
+            node_id,
+            class_type,
+            ", ".join(f"{other}.{name}" for other, name, _ in consumers) or "nothing",
+        )
+        replaced.append(
+            {
+                "node_id": node_id,
+                "class_type": class_type,
+                "replacement": "text",
+                "consumers": [
+                    {"node_id": other, "field": name} for other, name, _ in consumers
+                ],
+            }
+        )
+    return replaced
+
+
 @dataclass(frozen=True)
 class Repair:
     """One refusal PixlStash can answer by changing the graph (#1463).
@@ -669,6 +847,10 @@ REPAIRS: tuple[Repair, ...] = (
         "bypassed_loras",
         bypass_missing_loras,
     ),
+    # Text before seed, and the order is load-bearing: the seed repair's
+    # rollback restores the graph it was handed, which must already hold the
+    # text replacement it reports.
+    Repair(MISSING_NODES, "replaced_nodes", replace_missing_text_nodes),
     Repair(MISSING_NODES, "replaced_nodes", replace_missing_seed_nodes),
 )
 
@@ -691,7 +873,7 @@ def repair(
     codes = {reason.code for reason in reasons}
     done: dict[str, list[dict]] = {}
     for entry in REPAIRS:
-        done[entry.report] = (
+        done.setdefault(entry.report, []).extend(
             entry.apply(graph, object_info) if entry.code in codes else []
         )
     return done

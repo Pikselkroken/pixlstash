@@ -81,6 +81,8 @@ from pixlstash.services.workflow_run_service import (
     place_recipe_loras,
     repair,
     replace_missing_seed_nodes,
+    prompt_text_target,
+    replace_missing_text_nodes,
     skip_requested_loras,
 )
 from pixlstash.utils.known_base_models import fold
@@ -8046,6 +8048,119 @@ def test_a_seed_node_whose_own_seed_is_wired_is_left_alone():
     graph["7"] = {"class_type": "PrimitiveInt", "inputs": {"value": 5}}
     assert replace_missing_seed_nodes(graph, SEED_INFO) == []
     assert "9" in graph
+
+
+def _text_graph(class_type="Text Multiline", text="a platypus in a toga"):
+    """Two encoders both fed by one text node of *class_type*."""
+    return {
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": ["103", 0]}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": ["103", 0]}},
+        "103": {"class_type": class_type, "inputs": {"text": text}},
+    }
+
+
+def test_a_text_node_is_replaced_by_its_own_string_in_every_consumer():
+    graph = _text_graph(text="# a note\na platypus\n  # another\nin a toga")
+    replaced = replace_missing_text_nodes(graph, SEED_INFO)
+    assert [n["replacement"] for n in replaced] == ["text"]
+    assert "103" not in graph
+    assert graph["6"]["inputs"]["text"] == "a platypus\nin a toga"
+    assert graph["7"]["inputs"]["text"] == "a platypus\nin a toga"
+
+
+def test_an_installed_text_node_is_not_replaced():
+    info = dict(SEED_INFO, **{"Text Multiline": {"input": {}, "output": ["STRING"]}})
+    graph = _text_graph()
+    assert replace_missing_text_nodes(graph, info) == []
+    assert "103" in graph
+
+
+def test_a_text_node_outside_the_allow_list_is_never_replaced():
+    graph = _text_graph(class_type="Prompt Styler (some pack)")
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+    assert "103" in graph
+
+
+def test_a_was_text_with_a_token_keeps_its_refusal():
+    """`[time]` is expanded by the node; a literal would send it verbatim."""
+    graph = _text_graph(text="a platypus at [time]")
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+    assert graph["6"]["inputs"]["text"] == ["103", 0]
+
+
+def test_a_text_node_whose_text_is_wired_keeps_its_refusal():
+    graph = _text_graph(text=["5", 0])
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+    assert "103" in graph
+
+
+def test_a_text_node_read_on_another_output_keeps_its_refusal():
+    """`CR Text`'s second output is its help text, not the prompt."""
+    graph = _text_graph(class_type="CR Text")
+    graph["7"]["inputs"]["text"] = ["103", 1]
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+    assert "103" in graph
+
+
+def test_cr_text_keeps_its_comment_lines_and_brackets():
+    """Only WAS's node drops `#` lines and expands tokens."""
+    graph = _text_graph(class_type="CR Text", text="# kept\na [red] fox")
+    assert replace_missing_text_nodes(graph, SEED_INFO)
+    assert graph["6"]["inputs"]["text"] == "# kept\na [red] fox"
+
+
+def test_a_was_time_format_token_keeps_its_refusal():
+    graph = _text_graph(text="made on [time(%Y-%m-%d)]")
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+
+
+def test_the_run_prompt_lands_in_the_text_node_an_encoder_reads():
+    """Else the repair would inline the stored prompt, not the typed one."""
+    graph = _text_graph()
+    del graph["7"]
+    assert prompt_text_target(graph, "6") == ("103", "text")
+    graph["6"]["inputs"]["text"] = "literal"
+    assert prompt_text_target(graph, "6") == ("6", "text")
+
+
+def test_a_textbox_with_passthrough_set_takes_no_run_prompt():
+    """The node would ignore a prompt written into its `text`."""
+    graph = _text_graph(class_type="Textbox")
+    del graph["7"]
+    assert prompt_text_target(graph, "6") == ("103", "text")
+    graph["103"]["inputs"]["passthrough"] = "overrides the text"
+    assert prompt_text_target(graph, "6") is None
+
+
+def test_a_text_node_shared_by_two_encoders_takes_no_run_prompt():
+    """Positive then negative written into one node would leave both negative."""
+    assert prompt_text_target(_text_graph(), "6") is None
+
+
+def test_a_primitive_string_multiline_is_replaced_from_its_value():
+    graph = _text_graph(class_type="PrimitiveStringMultiline")
+    graph["103"]["inputs"] = {"value": "# kept\na [red] fox"}
+    assert replace_missing_text_nodes(graph, SEED_INFO)
+    assert graph["6"]["inputs"]["text"] == "# kept\na [red] fox"
+
+
+def test_a_textbox_is_replaced_unless_its_passthrough_is_set():
+    graph = _text_graph(class_type="Textbox")
+    graph["103"]["inputs"]["passthrough"] = ""
+    assert replace_missing_text_nodes(graph, SEED_INFO)
+    assert graph["6"]["inputs"]["text"] == "a platypus in a toga"
+
+    for passthrough in ("overrides the text", ["5", 0]):
+        graph = _text_graph(class_type="Textbox")
+        graph["103"]["inputs"]["passthrough"] = passthrough
+        assert replace_missing_text_nodes(graph, SEED_INFO) == []
+        assert "103" in graph
+
+
+def test_the_registry_reports_text_and_seed_replacements_together():
+    graph = dict(_seed_graph(), **_text_graph())
+    done = repair(graph, SEED_INFO, [Reason(MISSING_NODES)])
+    assert sorted(n["node_id"] for n in done["replaced_nodes"]) == ["103", "9"]
 
 
 def test_the_registry_repairs_only_what_judge_reported():
