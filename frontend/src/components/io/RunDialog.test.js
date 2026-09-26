@@ -52,7 +52,11 @@ vi.mock("../../api/pictureSets", () => ({
   listPictureSets: vi.fn().mockResolvedValue([]),
 }));
 const push = vi.fn();
-vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
+const currentRoute = { name: "home" };
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push }),
+  useRoute: () => currentRoute,
+}));
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
   return vuetifyComponentStubs();
@@ -137,6 +141,7 @@ async function mountRun(source = { kind: "picture", pictureIds: [42] }) {
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
+  currentRoute.name = "home";
   getWorkflowCard.mockImplementation(async (key) =>
     key === OTHER
       ? {
@@ -170,6 +175,31 @@ beforeEach(() => {
     seed_text: "418220931",
     settings: { steps: 12 },
     lora_slots: [],
+  });
+});
+
+describe("Open in Workflows", () => {
+  const openButton = (wrapper) =>
+    wrapper.findAll("button").find((b) => b.text() === "Open in Workflows");
+
+  it("closes the popup and selects the card it runs on the Workflows screen", async () => {
+    const wrapper = await mountRun({
+      kind: "edit",
+      pictureIds: [42],
+      workflowKey: OTHER,
+    });
+    await openButton(wrapper).trigger("click");
+    expect(push).toHaveBeenCalledWith({
+      name: "workflows",
+      query: { card: OTHER },
+    });
+    expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
+  it("is not offered on the Workflows screen itself", async () => {
+    currentRoute.name = "workflows";
+    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    expect(openButton(wrapper)).toBeUndefined();
   });
 });
 

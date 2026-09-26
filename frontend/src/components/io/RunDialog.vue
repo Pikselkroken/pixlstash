@@ -56,7 +56,22 @@
       <!-- ── Right: the form, four columns ──────────────────────────────── -->
       <div class="rund-form">
         <div class="rund-f rund-f--4">
-          <span class="rund-l">Workflow</span>
+          <span class="rund-l">
+            Workflow<span class="rund-sp" />
+            <!-- Not on the Workflows view itself: there the card is already
+                 in the grid behind this popup. -->
+            <AppButton
+              v-if="activeKey && route?.name !== 'workflows'"
+              size="sm"
+              variant="ghost"
+              icon-left="sitemap-outline"
+              tooltip="Close this and show the workflow in the Workflows view"
+              :disabled="submitting"
+              @click="openInWorkflows"
+            >
+              Open in Workflows
+            </AppButton>
+          </span>
           <AppSelect
             v-model="workflowKey"
             label="Workflow"
@@ -584,7 +599,7 @@
  * identical row was one press away from here.
  */
 import { computed, nextTick, reactive, ref, useId, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { VIcon } from "vuetify/components";
 
 import { getPictureRecipe } from "../../api/comfyui";
@@ -637,6 +652,7 @@ const props = defineProps({
 
 const emit = defineEmits(["close", "run", "open-settings"]);
 const router = useRouter();
+const route = useRoute();
 
 /**
  * `MAX_RUNS_PER_REQUEST` (`pixlstash/routes/comfyui.py`), which `_plan`
@@ -1846,6 +1862,18 @@ function editLoras(workflowKey) {
   if (!key) return;
   emit("close");
   void router?.push?.(editLorasRoute(key));
+}
+
+/**
+ * "Open in Workflows": the card this popup runs, selected on the Workflows
+ * screen with its rail open. The popup closes, as it does for Edit LoRAs…,
+ * because the screen it opens on is behind it.
+ */
+function openInWorkflows() {
+  if (!activeKey.value || submitting.value) return;
+  const key = activeKey.value;
+  emit("close");
+  void router?.push?.({ name: "workflows", query: { card: key } });
 }
 
 async function loadAdapters() {
