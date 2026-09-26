@@ -2665,7 +2665,21 @@ def create_router(server) -> APIRouter:
                     status_code=404,
                     detail="That model is not on the model shelf.",
                 )
-            row = next((r for r in rows if kind in (None, r["file_kind"])), None)
+            if kind is None and len(rows) > 1:
+                # One filename on the shelf under several kinds, and the caller
+                # did not say which: the kind the workflow loads `was` as.
+                row = next(
+                    (
+                        r
+                        for r in rows
+                        if model_fix_labels(
+                            hub, card.topology_hash, was, r["file_kind"]
+                        )
+                    ),
+                    rows[0],
+                )
+            else:
+                row = next((r for r in rows if kind in (None, r["file_kind"])), None)
             if row is None:
                 raise HTTPException(
                     status_code=422,
