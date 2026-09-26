@@ -6258,6 +6258,42 @@ def test_a_run_loads_the_model_the_owner_replaced_the_missing_one_with(runnable)
     )
 
 
+def test_a_vae_fix_never_rewrites_a_checkpoint_of_the_same_name(runnable):
+    """#1596: a fix is its slot kind's; the run rewrite asks each field's kind."""
+    label = next(
+        slot.label for slot in slots(RUN_DOCUMENT) if slot.widget == "ckpt_name"
+    )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_model_fix (topology_hash, slot_label, was_norm, "
+            "now_norm, was_name, now_name, slot_kind) VALUES (?, ?, ?, ?, ?, ?, 'vae')",
+            (
+                RUN_TOPOLOGY,
+                label,
+                _SHELF_FILENAME,
+                "test-vae.safetensors",
+                _SHELF_FILENAME,
+                "test-vae.safetensors",
+            ),
+        )
+    # ComfyUI lists the VAE in the checkpoint field too, so only the kind
+    # filter can keep the rewrite out of it.
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [
+        [_SHELF_FILENAME, "test-vae.safetensors"],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    try:
+        payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+        assert payload["groups"][0]["substitutions"] == [], payload
+    finally:
+        with runnable.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM workflow_model_fix")
+
+
 def test_a_model_no_copy_of_which_is_left_is_still_a_missing_model(
     runnable, merged_checkpoint
 ):
