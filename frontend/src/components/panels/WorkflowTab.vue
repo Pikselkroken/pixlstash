@@ -149,13 +149,14 @@
               Replaced by {{ fileName(checkpointFix.now) }}, which is missing
               too.
               <AppButton
+                variant="ghost"
                 size="sm"
+                icon-only
+                icon-left="undo"
+                :tooltip="`Undo: load ${fileName(checkpointFix.was)} again`"
                 :disabled="busy === 'model-fix'"
-                :aria-label="`Undo replacing ${fileName(checkpointFix.was)}`"
                 @click="replaceCheckpoint(null)"
-              >
-                Undo
-              </AppButton>
+              />
             </p>
           </div>
           <!-- Replaced by the owner: what it loads now, flagged, and the
@@ -181,14 +182,15 @@
               >
             </span>
             <AppButton
+              variant="ghost"
               size="sm"
+              icon-only
+              icon-left="undo"
               data-testid="wftab-undo-fix"
-              :aria-label="`Undo replacing ${fileName(checkpointFix.was)}`"
+              :tooltip="`Undo: load ${fileName(checkpointFix.was)} again`"
               :disabled="busy === 'model-fix'"
               @click="replaceCheckpoint(null)"
-            >
-              Undo
-            </AppButton>
+            />
           </div>
           <span v-else-if="checkpointLabel" class="wftab-value">{{
             checkpointLabel
@@ -1731,7 +1733,7 @@ async function checkInstalled(key) {
 }
 
 /* A replaced base model: the value field as every other row draws it, with
-   Undo beside it. */
+   an icon-only Undo beside it. */
 .wftab-fixed {
   display: flex;
   align-items: center;
