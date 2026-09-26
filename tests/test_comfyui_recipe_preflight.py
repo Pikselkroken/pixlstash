@@ -26,6 +26,7 @@ from pixlstash.services.comfyui_recipe_service import (
     bypass_node,
     insert_adapter,
     model_filename_fields,
+    pass_label,
     plan_lora_chain,
     plan_lora_insertion,
     preflight_prompt,
@@ -1616,22 +1617,189 @@ class TestLoraChain:
         # A CLIP reader of the chain's end like any other.
         assert "68" in {s["node_id"] for s in chain["sinks"]}
 
-    def test_a_branch_ends_the_chain_and_says_why(self):
-        """A two-pass sampler: #11's model is read by the next loader AND #7.
+    def _two_pass(self):
+        """Loaders #10, #11 for both passes, then #12 on the hires pass only.
 
-        The chain stops at #11, so a LoRA added at its end reaches both; #12
-        is past the branch, left as it is, and the owner is told why the list
-        is shorter than the workflow.
+        Base pass #3 reads #11 straight; hires pass #15 reads #12. The encoders
+        read #11's CLIP, and #12's CLIP output is read by nothing, the way a
+        LoraLoader on a hires branch is usually wired.
         """
-        graph = self._graph()
-        graph["7"]["inputs"]["model2"] = ["11", 0]
+        graph = self._graph(loaders=("a", "b"))
+        del graph["7"]
+        graph["12"] = self._loader("c.safetensors", 0.7, ["11", 0], ["11", 1])
+        for node_id, title, model in (
+            ("3", "Base pass", ["11", 0]),
+            ("15", "Hires pass", ["12", 0]),
+        ):
+            graph[node_id] = {
+                "class_type": "TwinSampler",
+                "inputs": {"model1": model, "positive": ["6", 0]},
+                "_meta": {"title": title},
+            }
+        return graph
+
+    def _edit_lanes(self, graph, entries, lanes):
         chain = read_lora_chain(graph, self.INFO)
+        plan = plan_lora_chain(graph, chain, entries, self.INFO, lanes)
+        apply_lora_chain(graph, plan, self.INFO)
+        return plan
+
+    def test_a_fork_reads_as_a_trunk_and_one_lane_per_pass(self):
+        chain = read_lora_chain(self._two_pass(), self.INFO)
         assert [loader["node_id"] for loader in chain["loaders"]] == ["10", "11"]
-        model_readers = {s["node_id"] for s in chain["sinks"] if s["type"] == "MODEL"}
-        assert model_readers == {"7", "12"}
+        # Every reader of the trunk's model is a lane; the trunk keeps its CLIP.
+        assert {(s["node_id"], s["type"]) for s in chain["sinks"]} == {
+            ("6", "CLIP"),
+            ("8", "CLIP"),
+        }
+        lanes = chain["lanes"]
+        assert [lane["pass"] for lane in lanes] == [
+            {"node_id": "3", "class_type": "TwinSampler", "title": "Base pass"},
+            {"node_id": "15", "class_type": "TwinSampler", "title": "Hires pass"},
+        ]
+        assert [[x["node_id"] for x in lane["loaders"]] for lane in lanes] == [
+            [],
+            ["12"],
+        ]
+        assert [(s["node_id"], s["field"]) for s in lanes[0]["sinks"]] == [
+            ("3", "model1")
+        ]
+        assert [(s["node_id"], s["field"]) for s in lanes[1]["sinks"]] == [
+            ("15", "model1")
+        ]
+        assert chain["branch_note"] is None
+
+    def test_a_straight_chain_has_no_lanes(self):
+        assert read_lora_chain(self._graph(), self.INFO)["lanes"] == []
+
+    def test_one_edit_per_pass_rewires_each_lane_off_the_trunk(self):
+        graph = self._two_pass()
+        plan = self._edit_lanes(
+            graph,
+            [{"node_id": "10", "strength": 0.9}],
+            [
+                [{"node_id": None, "adapter": self.NEW, "strength": 0.3}],
+                [{"node_id": "11"}],
+            ],
+        )
+        new = str(max(int(n) for n in graph))
+        assert "12" not in graph
+        # The base lane has nothing reading a CLIP, so its new loader has none.
+        assert graph[new]["class_type"] == "LoraLoaderModelOnly"
+        assert graph[new]["inputs"]["model"] == ["10", 0]
+        assert graph["3"]["inputs"]["model1"] == [new, 0]
+        # #11 crossed the fork: only the hires pass reads it now.
+        assert graph["11"]["inputs"]["model"] == ["10", 0]
+        assert graph["11"]["inputs"]["clip"] == ["10", 1]
+        assert graph["15"]["inputs"]["model1"] == ["11", 0]
+        # The encoders follow the trunk's CLIP end, which is #10 now.
+        assert graph["6"]["inputs"]["conditioner"] == ["10", 1]
+        assert graph["8"]["inputs"]["conditioner"] == ["10", 1]
+        assert [c["text"] for c in plan["changes"][:4]] == [
+            "Loader #12 deleted: c",
+            "A loader added for skin-detail-xl at 0.30, on Base pass only",
+            "#11 b moved to Hires pass only; nothing there reads its CLIP, so it "
+            "no longer changes the prompt",
+            "#10 a from 0.50 to 0.90",
+        ]
+
+    def test_a_loader_moved_into_the_trunk_reaches_both_passes_and_back(self):
+        original = self._two_pass()
+        graph = json.loads(json.dumps(original))
+        plan = self._edit_lanes(
+            graph,
+            [{"node_id": "10"}, {"node_id": "11"}, {"node_id": "12"}],
+            [[], []],
+        )
+        assert graph["3"]["inputs"]["model1"] == ["12", 0]
+        assert graph["15"]["inputs"]["model1"] == ["12", 0]
+        assert graph["6"]["inputs"]["conditioner"] == ["12", 1]
+        assert plan["changes"][0]["text"] == (
+            "#12 c moved before the fork: both passes get it"
+        )
+        # Read again, #12 is the trunk's end and both lanes are empty; moving it
+        # back to the hires pass is the workflow it came from.
+        chain = read_lora_chain(graph, self.INFO)
+        assert [loader["node_id"] for loader in chain["loaders"]] == ["10", "11", "12"]
+        self._edit_lanes(
+            graph, [{"node_id": "10"}, {"node_id": "11"}], [[], [{"node_id": "12"}]]
+        )
+        assert graph == original
+
+    def test_lanes_left_out_keep_every_pass_as_read(self):
+        graph = self._two_pass()
+        chain = read_lora_chain(graph, self.INFO)
+        plan = plan_lora_chain(graph, chain, [{"node_id": "10"}], self.INFO)
+        assert [c["text"] for c in plan["changes"]][0] == "Loader #11 deleted: b"
+        assert plan["lanes"][1]["order"] == ["12"]
+
+    def test_lanes_that_do_not_match_the_chain_are_refused(self):
+        graph = self._two_pass()
+        chain = read_lora_chain(graph, self.INFO)
+        with pytest.raises(LookupError, match="goes 2 ways"):
+            plan_lora_chain(graph, chain, [], self.INFO, [[]])
+
+    def test_a_fork_further_down_a_lane_ends_that_lane_and_says_why(self):
+        """#12's model goes to the hires sampler AND to loader #13."""
+        graph = self._two_pass()
+        graph["13"] = self._loader("a.safetensors", 1.0, ["12", 0], ["12", 1])
+        graph["16"] = {"class_type": "TwinSampler", "inputs": {"model1": ["13", 0]}}
+        chain = read_lora_chain(graph, self.INFO)
+        assert [x["node_id"] for x in chain["lanes"][1]["loaders"]] == ["12"]
         note = chain["branch_note"]
-        assert note.startswith("The chain stops at #11 LoraLoader, because its model")
-        assert "goes 2 ways" in note and "#12 LoraLoader is past the branch" in note
+        assert note.startswith("The chain stops at #12 LoraLoader, because its model")
+        assert "goes 2 ways" in note and "#13 LoraLoader is past the branch" in note
+
+    def test_a_lane_taking_its_clip_from_elsewhere_is_refused(self):
+        """#12 reads the checkpoint's CLIP, not the trunk's end at #11."""
+        graph = self._two_pass()
+        graph["12"]["inputs"]["clip"] = ["4", 1]
+        with pytest.raises(LookupError, match="take their CLIP from somewhere"):
+            read_lora_chain(graph, self.INFO)
+
+    def _two_models(self):
+        """Wan 2.2's shape: high noise #1 → #10 → #3, low noise #2 → #15."""
+        return {
+            "1": {"class_type": "UnetLoaderGGUF", "inputs": {}},
+            "2": {"class_type": "UnetLoaderGGUF", "inputs": {}},
+            "10": {
+                "class_type": "LoraLoaderModelOnly",
+                "inputs": {
+                    "lora_name": "a.safetensors",
+                    "strength_model": 1.0,
+                    "model": ["1", 0],
+                },
+            },
+            "3": {"class_type": "TwinSampler", "inputs": {"model1": ["10", 0]}},
+            "15": {"class_type": "TwinSampler", "inputs": {"model1": ["2", 0]}},
+        }
+
+    def test_two_models_read_as_one_lane_each_with_no_trunk(self):
+        chain = read_lora_chain(self._two_models(), self.INFO)
+        assert chain["model_source"] is None and chain["loaders"] == []
+        assert [lane["source"]["node_id"] for lane in chain["lanes"]] == ["1", "2"]
+        assert [lane["pass"]["title"] for lane in chain["lanes"]] == [None, None]
+        assert pass_label(chain["lanes"][1]) == "TwinSampler #15"
+
+    def test_a_loader_moved_between_two_models_changes_which_model_it_patches(self):
+        graph = self._two_models()
+        plan = self._edit_lanes(graph, [], [[], [{"node_id": "10"}]])
+        assert graph["10"]["inputs"]["model"] == ["2", 0]
+        assert graph["15"]["inputs"]["model1"] == ["10", 0]
+        assert graph["3"]["inputs"]["model1"] == ["1", 0]
+        assert plan["changes"][0]["text"] == "#10 a moved to TwinSampler #15 only"
+
+    def test_two_models_have_no_trunk_to_add_to(self):
+        graph = self._two_models()
+        chain = read_lora_chain(graph, self.INFO)
+        with pytest.raises(LookupError, match="no LoRA can go before them all"):
+            plan_lora_chain(
+                graph,
+                chain,
+                [{"node_id": None, "adapter": self.NEW, "strength": 1.0}],
+                self.INFO,
+                [[{"node_id": "10"}], []],
+            )
 
     def test_a_straight_chain_has_no_branch_note(self):
         assert read_lora_chain(self._graph(), self.INFO)["branch_note"] is None
@@ -1654,11 +1822,12 @@ class TestLoraChain:
         assert chain["model_source"]["node_id"] == "4"
         assert [loader["node_id"] for loader in chain["loaders"]] == ["10"]
 
-    def test_two_model_sources_are_refused(self):
+    def test_a_second_model_that_goes_several_ways_is_refused(self):
         graph = self._graph(loaders=("a",))
         graph["5"] = {"class_type": "UnetLoaderGGUF", "inputs": {}}
         graph["7"]["inputs"]["model2"] = ["5", 0]
-        with pytest.raises(LookupError, match="loads 2 models"):
+        graph["9"] = {"class_type": "TwinSampler", "inputs": {"model1": ["5", 0]}}
+        with pytest.raises(LookupError, match="loads 2 models, and the one from #5"):
             read_lora_chain(graph, self.INFO)
 
     def test_the_untyped_reading_follows_the_model_links_and_lists_every_slot(self):
@@ -1681,9 +1850,11 @@ class TestLoraChain:
         # Refused for its shape: the read-only view still says what the chain
         # runs between, and nothing untyped does.
         graph = self._graph()
-        # A second model source for the sampler's other input.
+        # A second model source for the sampler's other input, which also
+        # goes to a second sampler.
         graph["5"] = {"class_type": "UnetLoaderGGUF", "inputs": {}}
         graph["7"]["inputs"]["model2"] = ["5", 0]
+        graph["9"] = {"class_type": "TwinSampler", "inputs": {"model1": ["5", 0]}}
         with pytest.raises(LookupError, match="loads 2 models"):
             read_lora_chain(graph, self.INFO)
         chain = read_lora_chain_untyped(graph, self.INFO)

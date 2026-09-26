@@ -3028,8 +3028,9 @@ section, not a site of its own in `_plan`.
 source, the LoRA loaders in the order a run applies them, and what reads the
 result. `read_lora_chain` types every link from `object_info`, as
 `plan_lora_insertion` does, and refuses (the route answers `editable: false` with
-the sentence) a graph it cannot edit honestly: several model sources, or a CLIP
-chain in a different order from the MODEL one. Only the MODEL path counts: the
+the sentence) a graph it cannot edit honestly: loaders that start from
+different places, a second model that itself goes several ways, or a CLIP chain
+in a different order from the MODEL one. Only the MODEL path counts: the
 graph is first cut to the nodes an output node (`output_node` in `object_info`)
 reads, as ComfyUI runs it, so a leftover UNET loader wired into nothing is not a
 second model; another kind of model (an upscaler's, `WANVIDEOMODEL`) is on a
@@ -3037,11 +3038,15 @@ path of its own and ignored. Only a plain one-slot loader wired into the MODEL
 path is an editable link; any other node that loads a LoRA (a stacker, a prompt
 tag, a character prompt builder) stays as an ordinary node the chain runs
 around, so a loader can always be added between the model source and what reads
-the model. **A branch ends the chain**: when a loader's model is read by the
-next loader and by something else (a second sampler pass with an extra LoRA),
-the chain stops there, a LoRA added at its end reaches every reader, the
-loaders past the branch are left as they are, and `branch_note` tells the owner
-why the list is shorter than the workflow. A refused chain,
+the model. **Where the model forks, the chain is a tree**: the loaders every
+pass reads are the trunk (`loaders`), and each node reading the fork (a base
+sampler, a hires pass, a detailer) starts a **lane** (`lanes`) with the loaders
+only it reads, named by the sampler it reaches (its ComfyUI title when it has
+one). A workflow loading one model per pass (Wan 2.2 high/low noise) has no
+trunk: `model_source` is null and each lane names its own. A lane's CLIP must
+come off the trunk's CLIP end. Only a further fork inside a lane, or loaders
+past a node that is not a loader, are left as they are, and `branch_note` tells
+the owner why the list is shorter than the workflow. A refused chain,
 or one read with ComfyUI unreachable, goes through `read_lora_chain_untyped`,
 which follows the `model` links so the chain can still be looked at; when
 ComfyUI did answer it also types the two ends best effort (the model source and
@@ -3049,9 +3054,12 @@ what reads the chain's end), so the read-only view names what the chain runs
 between. Each loader carries the shelf digest it loads, when exactly one shelf
 LoRA matches.
 
-`PUT` takes the whole chain as the owner left it. An existing loader is kept by
-`node_id` (moved and re-weighted, its id kept), a new one is added by shelf
-`sha256`, and every loader left out is deleted through `bypass_node`.
+`PUT` takes the whole chain as the owner left it: `entries` for the trunk and,
+for a tree, `lanes` with one list per lane (left out, every lane stays as read).
+An existing loader is kept by `node_id` (moved and re-weighted, its id kept)
+and may land in any segment, which is how it crosses the fork; a new one is
+added by shelf `sha256`, carrying a CLIP only where its segment has a CLIP
+reader; and every loader left out is deleted through `bypass_node`.
 `plan_lora_chain` validates the whole edit before `apply_lora_chain` touches the
 graph, and the result is written as a **new** file through `_store_copy`, so one
 save is one new card and the original file never changes. `dry_run` answers the

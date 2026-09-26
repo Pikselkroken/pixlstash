@@ -1263,8 +1263,40 @@ class LoraChainLoader(BaseModel):
     on_shelf: bool = False
 
 
+class LoraChainPass(BaseModel):
+    """The node a lane's model ends in: its sampler, as the owner names it."""
+
+    node_id: str
+    class_type: str | None = None
+    title: str | None = Field(
+        None, description="The node's ComfyUI title, when it is not just its class."
+    )
+
+
+class LoraChainLane(BaseModel):
+    """One pass past the fork: the loaders only it reads, and what reads them."""
+
+    source: LoraChainSource | None = Field(
+        None,
+        description="The lane's own model, when the workflow loads one per pass; "
+        "null for a lane off the shared trunk.",
+    )
+    sampler: LoraChainPass
+    sink: LoraChainSink = Field(default_factory=LoraChainSink)
+    loaders: list[LoraChainLoader] = Field(default_factory=list)
+    added_loader_class: str | None = Field(
+        None, description="The loader class Add would insert in this lane."
+    )
+
+
 class LoraChain(BaseModel):
-    """``GET /workflows/{key}/lora-chain``: the LoRA chain as the editor shows it."""
+    """``GET /workflows/{key}/lora-chain``: the LoRA chain as the editor shows it.
+
+    A straight chain is ``loaders`` between ``source`` and ``sink``. Where the
+    model forks, ``loaders`` is the trunk every pass reads and ``lanes`` holds
+    one entry per pass; a workflow loading a model per pass has no ``source``
+    and every lane names its own.
+    """
 
     workflow_key: str
     editable: bool = False
@@ -1278,11 +1310,17 @@ class LoraChain(BaseModel):
     added_loader_class: str | None = Field(
         None, description="The loader class Add a LoRA would insert."
     )
+    lanes: list[LoraChainLane] = Field(
+        default_factory=list,
+        description="One per pass where the model forks, in run order; empty "
+        "for a straight chain.",
+    )
     branch_note: str | None = Field(
         None,
         description=(
-            "Why the chain stops before some of the workflow's loaders: the "
-            "model branches at its end, so those loaders are left as they are."
+            "Why the chain stops before some of the workflow's loaders: a node "
+            "that is not a loader, or a further branch, so those loaders are "
+            "left as they are."
         ),
     )
 
@@ -1307,11 +1345,18 @@ class LoraChainEntry(BaseModel):
 
 
 class LoraChainEdit(BaseModel):
-    """``PUT /workflows/{key}/lora-chain``: the whole chain, in apply order."""
+    """``PUT /workflows/{key}/lora-chain``: the whole chain, in apply order.
+
+    ``entries`` is the trunk (the whole chain when it is straight); ``lanes``
+    one list per lane of the chain as read, in its order. A loader may land in
+    any of them, which is how it crosses the fork. ``lanes`` left out keeps
+    every pass as it is.
+    """
 
     entries: list[LoraChainEntry] = Field(
         default_factory=list, max_length=MAX_RUN_LORAS
     )
+    lanes: list[list[LoraChainEntry]] | None = Field(None, max_length=MAX_RUN_LORAS)
     name: str | None = Field(None, max_length=MAX_NAME_LENGTH)
     dry_run: StrictBool = False
 
@@ -4220,9 +4265,10 @@ def create_router(server) -> APIRouter:
         ``name`` becomes the shelf's filename, since a hash names nothing to a
         reader.
         """
+        every = _chain_loaders(chain)
         by_name, digests = adapter_digest_index(hub)
-        found = _slot_digests(chain["loaders"], (by_name, digests))
-        for loader in chain["loaders"]:
+        found = _slot_digests(every, (by_name, digests))
+        for loader in every:
             digest = found.get((str(loader["node_id"]), str(loader["field"])))
             loader["sha256"] = digest
             if loader.get("by") != "digest":
@@ -4244,17 +4290,67 @@ def create_router(server) -> APIRouter:
                 continue
             loader["name"] = lora_display_name(filenames[-1]) if filenames else digest
 
+    def _chain_loaders(chain: dict) -> list[dict]:
+        """Every loader of *chain*: the trunk's, then each lane's."""
+        return chain["loaders"] + [
+            loader for lane in chain.get("lanes") or [] for loader in lane["loaders"]
+        ]
+
+    def _loader_payload(loader: dict) -> LoraChainLoader:
+        return LoraChainLoader(
+            node_id=str(loader["node_id"]),
+            class_type=loader.get("class_type"),
+            field=str(loader["field"]),
+            filename=str(loader["value"]),
+            name=loader["name"],
+            strength=loader["strengths"].get("model"),
+            # A model-only loader has no CLIP strength to show, and a loader
+            # read untyped says nothing about its wiring either.
+            strength_clip=loader["strengths"].get("clip"),
+            sha256=loader.get("sha256"),
+            on_shelf=loader.get("sha256") is not None,
+        )
+
+    def _sink_payload(sinks: list[dict], summary: str | None) -> LoraChainSink:
+        return LoraChainSink(
+            summary=summary,
+            consumers=[LoraChainConsumer(**sink) for sink in sinks],
+        )
+
     def _chain_payload(
         workflow_key: str, chain: dict, refusal: str | None, object_info
     ) -> LoraChain:
         model = chain.get("model_source")
         clip = chain.get("clip_source")
         same_node = bool(model and clip and clip["node_id"] == model["node_id"])
-        added = None
-        if refusal is None:
-            added = "LoraLoader" if clip is not None else "LoraLoaderModelOnly"
-            if added not in (object_info or {}):
-                added = None
+
+        def added_class(with_clip: bool) -> str | None:
+            # The class plan_lora_chain puts in, named before the owner picks.
+            if refusal is not None:
+                return None
+            added = "LoraLoader" if with_clip else "LoraLoaderModelOnly"
+            return added if added in (object_info or {}) else None
+
+        lanes = []
+        for lane in chain.get("lanes") or []:
+            source = lane["source"]
+            lanes.append(
+                LoraChainLane(
+                    source=None
+                    if source is None
+                    else LoraChainSource(
+                        node_id=str(source["node_id"]),
+                        class_type=source.get("class_type"),
+                        outputs=["MODEL"],
+                    ),
+                    sampler=LoraChainPass(**lane["pass"]),
+                    sink=_sink_payload(lane["sinks"], lane.get("sink_summary")),
+                    loaders=[_loader_payload(loader) for loader in lane["loaders"]],
+                    added_loader_class=added_class(
+                        any(sink["type"] == "CLIP" for sink in lane["sinks"])
+                    ),
+                )
+            )
         return LoraChain(
             workflow_key=workflow_key,
             editable=refusal is None,
@@ -4271,27 +4367,11 @@ def create_router(server) -> APIRouter:
             else LoraChainClipSource(
                 node_id=str(clip["node_id"]), class_type=clip.get("class_type")
             ),
-            sink=LoraChainSink(
-                summary=chain.get("sink_summary"),
-                consumers=[LoraChainConsumer(**sink) for sink in chain["sinks"]],
-            ),
-            loaders=[
-                LoraChainLoader(
-                    node_id=str(loader["node_id"]),
-                    class_type=loader.get("class_type"),
-                    field=str(loader["field"]),
-                    filename=str(loader["value"]),
-                    name=loader["name"],
-                    strength=loader["strengths"].get("model"),
-                    # A model-only loader has no CLIP strength to show, and a
-                    # loader read untyped says nothing about its wiring either.
-                    strength_clip=loader["strengths"].get("clip"),
-                    sha256=loader.get("sha256"),
-                    on_shelf=loader.get("sha256") is not None,
-                )
-                for loader in chain["loaders"]
-            ],
-            added_loader_class=added,
+            sink=_sink_payload(chain["sinks"], chain.get("sink_summary")),
+            loaders=[_loader_payload(loader) for loader in chain["loaders"]],
+            # No trunk to add to when every pass loads its own model.
+            added_loader_class=added_class(clip is not None) if model else None,
+            lanes=lanes,
             branch_note=chain.get("branch_note"),
         )
 
@@ -4302,10 +4382,12 @@ def create_router(server) -> APIRouter:
             "The LoRA loaders between this workflow's model source and what "
             "reads the model, in the order a run applies them, each with its "
             "strength and the shelf LoRA it loads. Typed from ComfyUI's "
-            "object_info: when ComfyUI cannot be reached, or the chain is one "
-            "PixlStash cannot edit honestly (two model sources, a stacker, a "
-            "branching chain), editable is false, refusal says why, and the "
-            "loaders are still listed as read from the graph."
+            "object_info. Where the model forks, loaders is the trunk every "
+            "pass reads and lanes holds one entry per pass. When ComfyUI "
+            "cannot be reached, or the chain is one PixlStash cannot edit "
+            "honestly (loaders that start from different places, CLIP passed "
+            "in another order than the model), editable is false, refusal says "
+            "why, and the loaders are still listed as read from the graph."
         ),
         response_model=LoraChain,
         responses={
@@ -4350,7 +4432,8 @@ def create_router(server) -> APIRouter:
         summary="Edit a workflow's LoRA chain",
         description=(
             "Write a copy of this workflow with its LoRA chain as the owner "
-            "left it: entries in apply order, an existing loader by node_id "
+            "left it: entries in apply order (and, for a forked chain, lanes: "
+            "one list per pass), an existing loader by node_id "
             "(moved and re-weighted, its id kept), a new one by the shelf "
             "sha256 of its LoRA, and every loader left out deleted. One call "
             "is one new card; the original file is never changed. dry_run "
@@ -4400,48 +4483,58 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         _shelf_chain(hub, chain)
         loaded = {
-            loader["node_id"]: loader.get("sha256") for loader in chain["loaders"]
+            loader["node_id"]: loader.get("sha256") for loader in _chain_loaders(chain)
         }
-        entries: list[dict] = []
-        for entry in payload.entries:
-            if entry.node_id is not None:
-                wanted = entry.sha256.strip().lower() if entry.sha256 else None
-                if (
-                    wanted
-                    and entry.node_id in loaded
-                    and loaded[entry.node_id] != wanted
-                ):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            f"Loader #{entry.node_id} loads another LoRA, and a "
-                            "loader cannot be pointed at a different one here. "
-                            "Delete it and add the new one."
-                        ),
+
+        def planned(asked: list[LoraChainEntry]) -> list[dict]:
+            entries: list[dict] = []
+            for entry in asked:
+                if entry.node_id is not None:
+                    wanted = entry.sha256.strip().lower() if entry.sha256 else None
+                    if (
+                        wanted
+                        and entry.node_id in loaded
+                        and loaded[entry.node_id] != wanted
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                f"Loader #{entry.node_id} loads another LoRA, and a "
+                                "loader cannot be pointed at a different one here. "
+                                "Delete it and add the new one."
+                            ),
+                        )
+                    entries.append(
+                        {"node_id": entry.node_id, "strength": entry.strength}
                     )
-                entries.append({"node_id": entry.node_id, "strength": entry.strength})
-                continue
-            try:
-                adapter = _shelf_adapter(hub, entry.sha256)
-            except HTTPException as exc:
-                if exc.status_code == 503:
-                    raise
-                # Not on the shelf, or not a LoRA: the chain the owner asked for
-                # cannot be built, which is this route's conflict and not a
-                # malformed request.
-                raise HTTPException(status_code=409, detail=exc.detail) from exc
-            entries.append(
-                {
-                    "node_id": None,
-                    "adapter": adapter,
-                    "strength": entry.strength,
-                    "name": lora_display_name(
-                        (adapter["filenames"] or [adapter["sha256"]])[-1]
-                    ),
-                }
-            )
+                    continue
+                try:
+                    adapter = _shelf_adapter(hub, entry.sha256)
+                except HTTPException as exc:
+                    if exc.status_code == 503:
+                        raise
+                    # Not on the shelf, or not a LoRA: the chain the owner asked for
+                    # cannot be built, which is this route's conflict and not a
+                    # malformed request.
+                    raise HTTPException(status_code=409, detail=exc.detail) from exc
+                entries.append(
+                    {
+                        "node_id": None,
+                        "adapter": adapter,
+                        "strength": entry.strength,
+                        "name": lora_display_name(
+                            (adapter["filenames"] or [adapter["sha256"]])[-1]
+                        ),
+                    }
+                )
+            return entries
+
+        entries = planned(payload.entries)
+        lanes = (
+            None if payload.lanes is None else [planned(lane) for lane in payload.lanes]
+        )
         try:
-            plan = plan_lora_chain(graph, chain, entries, object_info)
+            plan = plan_lora_chain(graph, chain, entries, object_info, lanes)
             if not plan["changes"]:
                 raise HTTPException(
                     status_code=409,

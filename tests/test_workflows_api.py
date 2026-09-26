@@ -9148,9 +9148,9 @@ def _serve_chain(chained, document, info=None):
 def test_a_chain_refused_for_its_shape_still_names_both_ends(chained):
     """ComfyUI answered, so the read-only view says what the chain runs between.
 
-    Refused because a second checkpoint feeds another sampler, so which model
-    the LoRAs are for is the owner's call. Wrong if the sink summary is None:
-    that is the dialog's empty bottom node.
+    Refused because a second checkpoint feeds two more samplers, so there is
+    no single chain for it. Wrong if the sink summary is None: that is the
+    dialog's empty bottom node.
     """
     _serve_chain(
         chained,
@@ -9161,6 +9161,10 @@ def test_a_chain_refused_for_its_shape_still_names_both_ends(chained):
                     "inputs": {"ckpt_name": "realvisxl.safetensors"},
                 },
                 "7": {
+                    "class_type": "KSampler",
+                    "inputs": {"seed": 1, "model": ["8", 0], "positive": ["6", 0]},
+                },
+                "9": {
                     "class_type": "KSampler",
                     "inputs": {"seed": 1, "model": ["8", 0], "positive": ["6", 0]},
                 },
@@ -9178,13 +9182,8 @@ def test_a_chain_refused_for_its_shape_still_names_both_ends(chained):
     )
 
 
-def test_a_branch_ends_the_chain_and_the_editor_is_told_why(chained):
-    """A second sampler pass reads loader #2 before #5: the chain stops at #2.
-
-    Wrong if `editable` is false (a branch used to refuse the whole chain),
-    or `branch_note` is missing: the list is shorter than the workflow, and
-    the owner is owed the reason.
-    """
+def _two_pass_chain(chained):
+    """A second sampler pass, #7 "Hires pass", reads loader #2 before #5."""
     _serve_chain(
         chained,
         _chain_document_with(
@@ -9192,16 +9191,61 @@ def test_a_branch_ends_the_chain_and_the_editor_is_told_why(chained):
                 "7": {
                     "class_type": "KSampler",
                     "inputs": {"seed": 1, "model": ["2", 0], "positive": ["6", 0]},
+                    "_meta": {"title": "Hires pass"},
                 }
             }
         ),
     )
+
+
+def test_a_fork_is_read_as_a_trunk_and_one_lane_per_pass(chained):
+    """#2 is the trunk; #3 gets #5 on its own lane, #7 an empty one.
+
+    Wrong if `editable` is false (a fork used to stop the chain at #2 and
+    leave #5 to ComfyUI), or a lane is missing its sampler.
+    """
+    _two_pass_chain(chained)
     r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
     assert r.status_code == 200, r.text
     chain = r.json()
     assert chain["editable"] is True, chain["refusal"]
     assert [loader["node_id"] for loader in chain["loaders"]] == ["2"]
-    assert chain["branch_note"].startswith("The chain stops at #2 LoraLoader")
+    assert chain["branch_note"] is None
+    lanes = chain["lanes"]
+    assert [lane["sampler"] for lane in lanes] == [
+        {"node_id": "3", "class_type": "KSampler", "title": None},
+        {"node_id": "7", "class_type": "KSampler", "title": "Hires pass"},
+    ]
+    assert [[x["node_id"] for x in lane["loaders"]] for lane in lanes] == [["5"], []]
+    # #5's CLIP feeds the prompt, so #3's lane adds a CLIP-carrying loader;
+    # nothing on #7's side reads a CLIP.
+    assert [lane["added_loader_class"] for lane in lanes] == ["LoraLoader", None]
+
+
+def test_a_loader_moved_across_the_fork_is_written_to_both_passes(chained):
+    _two_pass_chain(chained)
+    r = _chain_edit(
+        chained.owner,
+        {"node_id": "2"},
+        {"node_id": "5"},
+        lanes=[[], []],
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["changes"][0]["text"] == (
+        "#5 Mystery_Style moved before the fork: both passes get it"
+    )
+    written = json.loads((chained.tmp_path / body["name"]).read_text())
+    assert written["3"]["inputs"]["model"] == ["5", 0]
+    assert written["7"]["inputs"]["model"] == ["5", 0]
+    assert written["6"]["inputs"]["clip"] == ["5", 1]
+
+
+def test_lanes_that_do_not_match_the_fork_are_a_409(chained):
+    _two_pass_chain(chained)
+    r = _chain_edit(chained.owner, {"node_id": "2"}, lanes=[[{"node_id": "5"}]])
+    assert r.status_code == 409, r.text
+    assert "goes 2 ways" in r.json()["detail"]
 
 
 def test_a_character_prompt_builder_does_not_stop_a_lora_being_added(chained):
