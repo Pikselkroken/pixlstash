@@ -5,6 +5,7 @@ import {
   ref,
   onBeforeUnmount,
   onMounted,
+  onUpdated,
   watch,
   nextTick,
 } from "vue";
@@ -407,12 +408,23 @@ const sidebarCtxHeader = ref(null);
 // (auto-hide, dock mode).
 const sidebarCtxEmpty = ref(false);
 
+// The rendered menu's height. It depends on the target (a set's menu is
+// several rows taller than a folder's), so a fixed estimate flipped the taller
+// menus one row too late and clipped their last entry. Measured after every
+// render; the correcting re-render lands before paint.
+const sidebarCtxMenuEl = ref(null);
+const sidebarCtxMenuH = ref(0);
+onUpdated(() => {
+  if (sidebarCtxMenuEl.value) {
+    sidebarCtxMenuH.value = sidebarCtxMenuEl.value.offsetHeight;
+  }
+});
+
 // Computed style for the main context menu - opens upward when near the bottom.
 const sidebarCtxMenuStyle = computed(() => {
   const MENU_W = 165;
-  const MENU_H = 190; // actual menu height estimate
   const x = Math.min(sidebarCtxX.value, window.innerWidth - MENU_W - 8);
-  if (sidebarCtxY.value + MENU_H > window.innerHeight - 8) {
+  if (sidebarCtxY.value + sidebarCtxMenuH.value > window.innerHeight - 8) {
     return {
       left: x + "px",
       bottom: window.innerHeight - sidebarCtxY.value + "px",
@@ -7762,6 +7774,7 @@ defineExpose({
   <Teleport to="body">
     <div
       v-if="sidebarCtxVisible"
+      ref="sidebarCtxMenuEl"
       class="ctx-menu sidebar-ctx-menu"
       :style="sidebarCtxMenuStyle"
       @contextmenu.prevent
