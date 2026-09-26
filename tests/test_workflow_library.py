@@ -2463,6 +2463,33 @@ def test_a_family_nothing_ran_with_proposes_the_layouts_it_declares(
     assert result["vae"][0]["family"] == "vae_4ch"
 
 
+def test_a_grouped_file_does_not_hide_the_declared_layouts_of_a_cold_checkpoint(
+    companions_shelf,
+):
+    """A set grouping only one encoder with a checkpoint nothing has run with:
+    the grouped file leads, once, and the declared fallback still answers for
+    the rest. Keying the fallback on "the list is empty" let the grouped entry
+    switch it off (#1520 rebased onto #1514)."""
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    set_base_model(hub, ids["lonely"], "SDXL 1.0")
+    set_layout(hub, ids["clip_shared"], "clip_l")
+    clip_g = shelf_file(hub, "Clip_G.safetensors", "text_encoder")
+    set_layout(hub, clip_g, "clip_g")
+    sdxl_vae = shelf_file(hub, "sdxl_vae.safetensors", "vae")
+    set_layout(hub, sdxl_vae, "vae_4ch")
+    hash_rows(hub, ids["lonely"], clip_g)
+    create_set(hub, "Cold", [{"model_id": ids["lonely"]}, {"model_id": clip_g}])
+
+    result = propose_companions(hub, ids["lonely"])
+
+    assert proposed(result, "text_encoder") == [
+        (clip_g, "grouped"),
+        (ids["clip_shared"], "declared"),
+    ]
+    assert proposed(result, "vae") == [(sdxl_vae, "declared")]
+
+
 def test_evidence_in_the_family_outranks_the_declared_layouts(companions_shelf):
     ids = companions_shelf.ids
     hub = companions_shelf.hub

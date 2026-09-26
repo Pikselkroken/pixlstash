@@ -1173,6 +1173,11 @@ def propose_companions(
                 key=lambda item: (models[item[0]]["filename"] or "").lower(),
             )
         ]
+        # Whether a RECIPE step answered. Not `proposals[kind]`: the grouped
+        # entries are already in there, and reading them as evidence would
+        # skip the declared fallback for a row the owner's sets do not cover
+        # (a Flux set grouping a clip_l leaves its t5 row with nothing).
+        ladder_found = False
         for via, anchors in ladder:
             by_recipe = tally(recipe_models, kind, anchors, ambiguous)
             by_run = tally(runs, kind, anchors, {})
@@ -1203,11 +1208,12 @@ def propose_companions(
                 # the ladder past the step that found it.
                 if model_id not in grouped[kind]
             ]
+            ladder_found = True
             break
         layouts = COMPANION_LAYOUTS.get(family, {}).get(kind)
-        if proposals[kind] or not layouts:
+        if ladder_found or not layouts:
             continue
-        proposals[kind] = [
+        proposals[kind] += [
             {
                 "id": model_id,
                 "filename": row["filename"],
@@ -1220,7 +1226,11 @@ def propose_companions(
             for model_id, row in sorted(
                 models.items(), key=lambda item: (item[1]["filename"] or "").lower()
             )
-            if row["file_kind"] == kind and row["filename"] and row["family"] in layouts
+            if row["file_kind"] == kind
+            and row["filename"]
+            and row["family"] in layouts
+            # Listed above as grouped already, under the owner's own word.
+            and model_id not in grouped[kind]
         ]
     return proposals
 
