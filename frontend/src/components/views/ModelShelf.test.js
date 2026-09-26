@@ -27,6 +27,7 @@ const listUnclassified = vi.fn();
 const listSupport = vi.fn();
 const deleteModels = vi.fn();
 const fetchModelCompanions = vi.fn();
+const deleteWorkflowSet = vi.fn();
 
 vi.mock("../../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
@@ -46,6 +47,7 @@ vi.mock("../../api/modelShelf", () => ({
   deleteModels: (...args) => deleteModels(...args),
   // Asked before the delete prompt opens; answered per test.
   fetchModelCompanions: (...args) => fetchModelCompanions(...args),
+  deleteWorkflowSet: (...args) => deleteWorkflowSet(...args),
   // The base-model field asks for its completion list as it opens. Answered
   // with nothing here: the list is the widget's own suite's business, and left
   // unmocked this is a network call on a double-click.
@@ -977,9 +979,7 @@ describe("refetching after an edit", () => {
     listAdapters.mockReturnValue(new Promise(() => {}));
     useModelShelfStore().resetFilters();
     await wrapper.vm.$nextTick();
-    expect(textOf(wrapper.find(".shelf-state"))).toContain(
-      "Reading the shelf",
-    );
+    expect(textOf(wrapper.find(".shelf-state"))).toContain("Reading the shelf");
   });
 
   it("still says it is reading before the first rows arrive", async () => {
@@ -988,9 +988,7 @@ describe("refetching after an edit", () => {
     useModelShelfStore().setView({ groupBy: "none" });
     const wrapper = mount(ModelShelf, globalOpts);
     await wrapper.vm.$nextTick();
-    expect(textOf(wrapper.find(".shelf-state"))).toContain(
-      "Reading the shelf",
-    );
+    expect(textOf(wrapper.find(".shelf-state"))).toContain("Reading the shelf");
   });
 });
 
@@ -5128,9 +5126,9 @@ describe("acting inside a run", () => {
       wrapper.findAll(".shelf-row-label .shelf-chip").map((c) => c.text()),
     ).not.toContain("Cover");
     // Not on the member rows: exactly one file covers a run.
-    expect(wrapper.findAll(".shelf-row--member .stack-cover-flag")).toHaveLength(
-      0,
-    );
+    expect(
+      wrapper.findAll(".shelf-row--member .stack-cover-flag"),
+    ).toHaveLength(0);
     wrapper.unmount();
   });
 
@@ -5375,6 +5373,29 @@ describe("the set grid is what the shelf opens on", () => {
     await wrapper.vm.$nextTick();
     return { wrapper, store };
   }
+
+  it("deletes selected hand-made sets on Delete and on no other key (#1520)", async () => {
+    // A review asked whether any key reaching the window with a set selected
+    // would delete it. Only Delete does; arrows and N are the grid's.
+    deleteWorkflowSet.mockReset().mockResolvedValue({
+      deleted: { id: 10, name: "Kit", members: [] },
+    });
+    const { store } = await shelfOnTheGrid();
+    store.workflowSets = {
+      ...store.workflowSets,
+      handMade: [{ id: 10, name: "Kit", members: [] }],
+    };
+    store.selectSet(10);
+    for (const key of ["ArrowDown", "n", "F2", "Backspace"]) {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key }));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(deleteWorkflowSet).toHaveBeenCalledWith(10);
+  });
 
   it("floats the verb bar over the grid, as it does over the list", async () => {
     // It did not, while a card stood for a whole SET: a Delete aimed at one

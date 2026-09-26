@@ -2406,12 +2406,20 @@ function onShelfKeydown(event) {
     return;
   }
   // Selected hand-made SETS (#1520) answer the same two keys with the set
-  // vocabulary: Escape clears, Delete deletes the sets - never a file.
+  // vocabulary: Escape clears, Delete deletes the sets - never a file. The
+  // early return above already admits only these two keys here; the check is
+  // restated so this block is correct read on its own.
   if (store.selectedSets.length && isSetGrid.value) {
-    event.preventDefault();
-    if (event.key === "Escape") store.clearSetSelection();
-    else store.deleteHandMadeSets(store.selectedSets);
-    return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      store.clearSetSelection();
+      return;
+    }
+    if (event.key === "Delete") {
+      event.preventDefault();
+      store.deleteHandMadeSets(store.selectedSets);
+      return;
+    }
   }
   // Escape and Delete are both about a selection, and the guard above no longer
   // asks for one.
