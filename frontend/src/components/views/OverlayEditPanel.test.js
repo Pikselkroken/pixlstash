@@ -23,6 +23,7 @@ vi.mock("../../utils/apiClient", () => ({
 
 import OverlayEditPanel from "./OverlayEditPanel.vue";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
+import { useLibrariesStore } from "../../stores/useLibrariesStore";
 
 enableAutoUnmount(afterEach);
 
@@ -131,6 +132,15 @@ describe("the Edit tab", () => {
     first.unmount();
     const second = await mountPanel();
     expect(checkedRow(second)).toBe("Widen, Outpaint");
+  });
+
+  it("re-reads the last card once the library list arrives", async () => {
+    window.localStorage.setItem("pixlstash:editTabWorkflow:lib-1", "out");
+    const wrapper = await mountPanel();
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
+    useLibrariesStore().libraries = [{ uuid: "lib-1", is_active: true }];
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
   });
 
   it("says why nothing was queued", async () => {

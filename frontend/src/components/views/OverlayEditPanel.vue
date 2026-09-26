@@ -300,6 +300,18 @@ const storageKey = computed(
   () => `${LAST_KEY_PREFIX}${libraries.activeLibrary?.uuid || ""}`,
 );
 
+// The library list can arrive after the cards did (a lightbox opened from a
+// deep link), which moves the key from "no library" to the real one. Read the
+// remembered card again under it, or the first run would be remembered under
+// one key and looked up under another. A library SWITCH reloads the page.
+watch(storageKey, () => {
+  if (!loaded.value) return;
+  rememberedKey.value = readRemembered();
+  if (cards.value.some((card) => card.key === rememberedKey.value)) {
+    workflowKey.value = rememberedKey.value;
+  }
+});
+
 const runHeading = computed(() => {
   if (run.value?.status === "running") return "Running";
   if (run.value?.status === "failed") return "Edit failed";
