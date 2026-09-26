@@ -82,7 +82,7 @@
               You can keep browsing.
               {{
                 run.stack
-                  ? "The result joins this stack when it lands."
+                  ? "The result joins the original's stack when it lands."
                   : "The result is saved to your library when it lands."
               }}
             </p>
@@ -103,7 +103,7 @@
               </div>
               <div class="edit-note">
                 {{ run.workflowName }}
-                <template v-if="run.stack">· added to this picture's stack</template>
+                <template v-if="run.stack">· added to the original's stack</template>
               </div>
               <button
                 v-if="run.stack"
@@ -128,10 +128,9 @@
           size="sm"
           block
           :loading="submitting"
-          :aria-disabled="submitting ? 'true' : undefined"
           @click="submit"
         >
-          <v-icon size="16">mdi-play</v-icon>
+          <v-icon v-if="!submitting" size="16">mdi-play</v-icon>
           Run edit
         </AppButton>
         <div class="edit-foot-row">
@@ -260,7 +259,9 @@ async function loadCards() {
   loading.value = true;
   loadError.value = "";
   try {
-    const { cards: all } = await listWorkflowCards();
+    // One-offs too: a workflow pulled from ComfyUI with few pictures is one,
+    // and it is exactly the edit workflow somebody has only just added.
+    const { cards: all } = await listWorkflowCards({ includeOneOffs: true });
     cards.value = all.filter((card) => EDIT_TYPES.has(card.type));
     rememberedKey.value = readRemembered();
     const known = cards.value.some((card) => card.key === rememberedKey.value);
@@ -408,6 +409,14 @@ async function submit() {
     const before = stack.value
       ? (await stackMemberIds(id)).ids
       : new Set([String(id)]);
+    // Filed where the Run popup would file it: the set, project and person in
+    // view, which the grid keeps on the store. Sent only when there is one.
+    const view = runDialog.context || {};
+    const destination = {
+      set_id: view.set_id ?? null,
+      project_id: view.project_id ?? null,
+      character_id: view.character_id ?? null,
+    };
     const answer = await runWorkflowCard({
       picture_ids: [id],
       target: workflowKey.value,
@@ -415,6 +424,9 @@ async function submit() {
       // every positive prompt node in the graph.
       prompt: text || null,
       stack: stack.value,
+      ...(Object.values(destination).some((value) => value != null)
+        ? { destination }
+        : {}),
       client_id: runDialog.hasRunner
         ? runDialog.context?.client_id || null
         : null,

@@ -1,4 +1,4 @@
-- The picture viewer has a new **Edit** tab whenever ComfyUI is connected. Pick
+- The picture viewer has a new **Edit** tab whenever ComfyUI is set up. Pick
   an image-to-image, inpaint or outpaint workflow, type what should change and
   press Run edit (or Ctrl+Enter): the picture goes through that workflow without
   you leaving the viewer, and the result joins the picture's stack. **Show it**

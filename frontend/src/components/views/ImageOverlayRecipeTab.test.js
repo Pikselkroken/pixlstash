@@ -391,6 +391,9 @@ describe("the lightbox Edit tab", () => {
     await flush();
     expect(tabLabels(wrapper)).not.toContain("Edit");
     expect(wrapper.find(".overlay-sidebar-group").isVisible()).toBe(true);
+    // Hidden, not unmounted: the typed instruction and a run in flight live
+    // in the panel.
+    expect(wrapper.find(".edit-stub").exists()).toBe(true);
 
     await wrapper.setProps({ initialImageId: 7 });
     await flush();

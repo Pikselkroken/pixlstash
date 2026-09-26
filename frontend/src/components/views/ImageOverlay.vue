@@ -815,10 +815,10 @@
           />
 
           <!-- `v-show` inside a `v-if`: the typed instruction, the chosen
-               workflow and a run in flight survive a trip to Info and back,
-               and the whole panel goes with the tab. -->
+               workflow and a run in flight survive a trip to Info and a step
+               over a video, where the tab itself is absent. -->
           <OverlayEditPanel
-            v-if="editTabShown"
+            v-if="editTabAvailable"
             v-show="sidebarTab === 'edit'"
             :picture-id="image?.id ?? null"
             :active="sidebarTab === 'edit'"
@@ -1122,22 +1122,27 @@ const chosenSidebarTab = ref("info");
 // take the tab away for the length of one file read on every filmstrip step
 // and put it back, under the reader's cursor.
 const recipeTabShown = ref(false);
-// The reader's CHOICE is remembered even while the tab it names is gone, so
-// stepping over a photo in a run of ComfyUI pictures does not silently move
-// them to Info for the rest of the walk.
 // ── Edit (#1381) ───────────────────────────────────────────────────────────
 //
 // Offered whenever this machine has a ComfyUI and the session may write,
 // whether or not the picture has a recipe: a holiday photo gets Edit too. Absent
 // rather than disabled when it cannot be used, by the Recipe tab's rule, and
 // absent on a video (the design's answer: no edit workflow takes one yet).
+//
+// The PANEL hangs off `editTabAvailable` alone, so stepping over a video hides
+// the tab without unmounting the typed instruction or a run in flight.
+const editTabAvailable = computed(
+  () => comfyuiConfigured.value && !isReadOnly.value,
+);
 const editTabShown = computed(
   () =>
-    comfyuiConfigured.value &&
-    !isReadOnly.value &&
+    editTabAvailable.value &&
     !!image.value?.id &&
     !isSupportedVideoFile(getOverlayFormat(image.value)),
 );
+// The reader's CHOICE is remembered even while the tab it names is gone, so
+// stepping over a photo in a run of ComfyUI pictures does not silently move
+// them to Info for the rest of the walk.
 const sidebarTab = computed({
   get: () => {
     const chosen = chosenSidebarTab.value;

@@ -64,6 +64,7 @@ describe("the Edit tab", () => {
     const wrapper = await mountPanel();
     const options = wrapper.findAll("option").map((o) => o.element.value);
     expect(options).toEqual(["out", "i2i"]);
+    expect(listWorkflowCards).toHaveBeenCalledWith({ includeOneOffs: true });
     expect(wrapper.find("select").element.value).toBe("i2i");
   });
 
@@ -92,6 +93,18 @@ describe("the Edit tab", () => {
     // lightbox to the output, and this design stays on the original.
     expect(started).toHaveBeenCalledWith([{ prompt_id: "p1" }], []);
     expect(wrapper.text()).toContain("Running");
+  });
+
+  it("files the output into the set in view, as the Run popup does", async () => {
+    const wrapper = await mountPanel();
+    useRunDialogStore().context = { set_id: 4 };
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    expect(runWorkflowCard.mock.calls[0][0].destination).toEqual({
+      set_id: 4,
+      project_id: null,
+      character_id: null,
+    });
   });
 
   it("leaves the workflow's own prompt alone when the box is empty", async () => {
