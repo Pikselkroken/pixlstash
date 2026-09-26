@@ -389,7 +389,7 @@ describe("a checkpoint that will not load", () => {
           slot_label: "n1/ckpt_name",
           was: "SDXL/realvisXL_v5_fp8.safetensors",
           now: "realvisXL_v5_bf16.safetensors",
-          base_model: true,
+          slot_kind: "checkpoint",
         },
       ],
     });
@@ -408,10 +408,13 @@ describe("a checkpoint that will not load", () => {
     expect(setWorkflowModelFix).toHaveBeenCalledWith(KEY, {
       was: "SDXL/realvisXL_v5_fp8.safetensors",
       now: "realvisXL_v5_bf16.safetensors",
+      slot_kind: "checkpoint",
     });
     expect(textOf(wrapper)).not.toContain("Checkpoint missing");
     const row = wrapper.find('[data-testid="wftab-fixed-model"]');
     expect(row.text()).toContain("realvisXL_v5_bf16.safetensors");
+    // A checkpoint's fix is the Checkpoint row's, never the VAE row's.
+    expect(wrapper.find('[data-testid="wftab-fixed-vae"]').exists()).toBe(false);
     // The original, a hover away: the provenance the flag is there for.
     expect(row.find("tooltip-stub").attributes("text")).toBe(
       "Replaced. This workflow originally used realvisXL_v5_fp8.safetensors",
@@ -423,6 +426,7 @@ describe("a checkpoint that will not load", () => {
     expect(setWorkflowModelFix).toHaveBeenLastCalledWith(KEY, {
       was: "SDXL/realvisXL_v5_fp8.safetensors",
       now: null,
+      slot_kind: "checkpoint",
     });
   });
 
@@ -431,7 +435,7 @@ describe("a checkpoint that will not load", () => {
       slot_label: "n1/ckpt_name",
       was: "realvisXL_v5_fp8.safetensors",
       now: "realvisXL_v5_bf16.safetensors",
-      base_model: true,
+      slot_kind: "checkpoint",
     };
     getWorkflowCard.mockResolvedValue(
       detail({ card: named, model_fixes: [fix] }),
@@ -669,6 +673,109 @@ describe("a checkpoint that will not load", () => {
     const { wrapper } = await mountWith([KEY], [flux]);
     expect(textOf(wrapper)).toContain("flux1-dev");
     expect(textOf(wrapper)).not.toContain("Checkpoint missing");
+  });
+});
+
+describe("a VAE or text encoder that will not load (#1596)", () => {
+  const withSupport = card({
+    models: [
+      { name: "realvisXL_v5", kind: "checkpoint", slot_label: "n1/ckpt_name" },
+      { name: "sdxl_vae", kind: "vae", slot_label: "n2/vae_name" },
+      { name: "t5xxl", kind: "clip", slot_label: "n3/clip_name" },
+    ],
+  });
+
+  function missing(...models) {
+    return {
+      groups: [{ reasons: [{ code: "missing_models", models }] }],
+    };
+  }
+
+  function row(wrapper, kind) {
+    return wrapper.find(`[data-testid="wftab-row-${kind}"]`);
+  }
+
+  it("offers the shelf's VAEs and replaces the missing one, and only that row", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missing({ file: "SDXL/sdxl_vae_fp8.safetensors", folder: "vae" }),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
+    readModelSwap.mockReset().mockResolvedValue({
+      checkpoints: [{ id: 1, filename: "other-ckpt.safetensors" }],
+      vaes: [{ id: 7, filename: "sdxl_vae_bf16.safetensors", display_name: "SDXL VAE" }],
+      text_encoders: [{ id: 8, filename: "t5xxl_bf16.safetensors" }],
+    });
+    const fix = {
+      slot_label: "n2/vae_name",
+      was: "SDXL/sdxl_vae_fp8.safetensors",
+      now: "sdxl_vae_bf16.safetensors",
+      slot_kind: "vae",
+    };
+    setWorkflowModelFix
+      .mockReset()
+      .mockResolvedValue(detail({ card: withSupport, model_fixes: [fix] }));
+    const { wrapper } = await mountWith([KEY], [withSupport]);
+    await settle(wrapper);
+
+    expect(textOf(wrapper)).toContain("VAE missing");
+    // Not the checkpoint's picker, and not the text encoder row.
+    expect(textOf(wrapper)).not.toContain("Checkpoint missing");
+    expect(wrapper.find('[data-testid="wftab-replace-model"]').exists()).toBe(false);
+    expect(row(wrapper, "text_encoder").text()).toContain("t5xxl");
+    const picker = row(wrapper, "vae").find('[data-testid="wftab-replace-vae"] select');
+    expect(picker.text()).toContain("SDXL VAE");
+    expect(picker.text()).not.toContain("other-ckpt");
+    preflightWorkflowRun.mockResolvedValue({ groups: [] });
+    await picker.setValue("sdxl_vae_bf16.safetensors");
+    await settle(wrapper);
+
+    expect(setWorkflowModelFix).toHaveBeenCalledWith(KEY, {
+      was: "SDXL/sdxl_vae_fp8.safetensors",
+      now: "sdxl_vae_bf16.safetensors",
+      slot_kind: "vae",
+    });
+    const fixed = row(wrapper, "vae").find('[data-testid="wftab-fixed-vae"]');
+    expect(fixed.text()).toContain("sdxl_vae_bf16.safetensors");
+    expect(fixed.find("tooltip-stub").attributes("text")).toBe(
+      "Replaced. This workflow originally used sdxl_vae_fp8.safetensors",
+    );
+    // The Checkpoint row is untouched by a VAE fix.
+    expect(wrapper.find('[data-testid="wftab-fixed-model"]').exists()).toBe(false);
+
+    setWorkflowModelFix.mockResolvedValue(detail({ card: withSupport }));
+    await fixed.find('[data-testid="wftab-undo-vae"]').trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowModelFix).toHaveBeenLastCalledWith(KEY, {
+      was: "SDXL/sdxl_vae_fp8.safetensors",
+      now: null,
+      slot_kind: "vae",
+    });
+  });
+
+  it("shows a missing text encoder on its own row, and never a vision one", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missing(
+        { file: "t5xxl_fp8.safetensors", folder: "text_encoders" },
+        { file: "clip_vision_h.safetensors", folder: "clip_vision" },
+      ),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
+    readModelSwap.mockReset().mockResolvedValue({
+      checkpoints: [],
+      vaes: [],
+      text_encoders: [{ id: 8, filename: "t5xxl_bf16.safetensors" }],
+    });
+    const { wrapper } = await mountWith([KEY], [withSupport]);
+    await settle(wrapper);
+
+    const encoders = row(wrapper, "text_encoder");
+    expect(encoders.text()).toContain("Text encoder missing");
+    expect(encoders.text()).toContain("t5xxl_fp8.safetensors");
+    expect(textOf(wrapper)).not.toContain("clip_vision_h");
+    expect(
+      encoders.find('[data-testid="wftab-replace-text_encoder"] select').text(),
+    ).toContain("t5xxl_bf16.safetensors");
+    expect(row(wrapper, "vae").text()).toContain("sdxl_vae");
   });
 });
 

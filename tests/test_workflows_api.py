@@ -4621,6 +4621,11 @@ def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
             "VALUES ('checkpoint', ?, ?, 'scanned')",
             (_REPLACEMENT_FILENAME, _h("bf16-digest")),
         )
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('vae', 'test-vae-bf16.safetensors', ?, 'scanned')",
+            (_h("vae-digest"),),
+        )
     route = f"{API}/workflows/{merged}/model-fix"
 
     assert (
@@ -4644,16 +4649,31 @@ def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
     assert (
         owner.put(route, json={"was": _SHELF_FILENAME, "now": None}).status_code == 409
     )
+    # #1596: the replacement's kind is the slot's. The workflow loads its
+    # checkpoint in no VAE slot, and a checkpoint is no VAE.
+    r = owner.put(
+        route, json={"was": _SHELF_FILENAME, "now": "test-vae-bf16.safetensors"}
+    )
+    assert r.status_code == 409 and "as a VAE" in r.json()["detail"], r.text
+    r = owner.put(
+        route,
+        json={
+            "was": _SHELF_FILENAME,
+            "now": _REPLACEMENT_FILENAME,
+            "slot_kind": "vae",
+        },
+    )
+    assert r.status_code == 422 and "not a VAE" in r.json()["detail"], r.text
 
     r = owner.put(route, json={"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME})
     assert r.status_code == 200, r.text
     detail = r.json()
     assert detail["card"]["key"] == merged
     (fix,) = detail["model_fixes"]
-    assert (fix["was"], fix["now"], fix["base_model"]) == (
+    assert (fix["was"], fix["now"], fix["slot_kind"]) == (
         _SHELF_FILENAME,
         _REPLACEMENT_FILENAME,
-        True,
+        "checkpoint",
     )
     covers = detail["card"]["covers"]
     assert covers and all(cover["superseded"] for cover in covers)
@@ -4711,6 +4731,12 @@ def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
     assert r.status_code == 409, r.text
     assert "test-a.safetensors" in r.json()["detail"]
     # Undoing is not ambiguous: every slot goes back to its own original.
+    # An undo of one kind leaves a fix of another kind alone.
+    r = owner.put(
+        route,
+        json={"was": _REPLACEMENT_FILENAME, "now": None, "slot_kind": "vae"},
+    )
+    assert r.status_code == 409, r.text
     r = owner.put(route, json={"was": _REPLACEMENT_FILENAME, "now": None})
     assert r.status_code == 200, r.text
     assert r.json()["model_fixes"] == []

@@ -216,9 +216,93 @@
                the graph a run would submit, not the pre-flight. -->
           <span v-else class="wftab-value wftab-quiet">Not recorded</span>
         </div>
-        <div class="wftab-field">
-          <span class="wftab-label">VAE</span>
-          <span class="wftab-value">{{ vaeLabel }}</span>
+        <!-- The VAE and the text encoders (#1596): missing and replaced the
+             way the Checkpoint row is, one entry per file. -->
+        <div
+          v-for="row in supportRows"
+          :key="row.kind"
+          class="wftab-field"
+          :data-testid="`wftab-row-${row.kind}`"
+        >
+          <span class="wftab-label">{{ row.label }}</span>
+          <div class="wftab-entries">
+            <template v-for="entry in row.entries" :key="entry.id">
+              <div v-if="entry.file" class="wftab-missing">
+                <p class="wftab-warn">
+                  <v-icon size="16">mdi-alert-outline</v-icon>
+                  {{ row.missingText }}
+                </p>
+                <p class="wftab-note wftab-quiet">
+                  <span class="wftab-file"
+                    ><Tooltip :text="entry.file" activator="parent" />{{
+                      fileName(entry.file)
+                    }}</span
+                  >
+                  is not installed in ComfyUI.
+                </p>
+                <AppSelect
+                  v-if="row.options.length"
+                  model-value=""
+                  :label="`Replace with a ${row.noun} from your shelf`"
+                  hide-label
+                  :options="row.options"
+                  :disabled="busy === 'model-fix'"
+                  :data-testid="`wftab-replace-${row.kind}`"
+                  @update:model-value="
+                    (now) => replaceModel(row.kind, entry.file, now)
+                  "
+                />
+                <p
+                  v-if="entry.fix"
+                  class="wftab-note wftab-quiet"
+                  :data-testid="`wftab-fix-missing-${row.kind}`"
+                >
+                  Replaced by {{ fileName(entry.fix.now) }}, which is missing
+                  too.
+                  <AppButton
+                    variant="ghost"
+                    size="sm"
+                    icon-only
+                    icon-left="undo"
+                    :tooltip="`Undo: load ${fileName(entry.fix.was)} again`"
+                    :disabled="busy === 'model-fix'"
+                    @click="replaceModel(row.kind, entry.fix.was, null)"
+                  />
+                </p>
+              </div>
+              <div
+                v-else-if="entry.fix"
+                class="wftab-fixed"
+                :data-testid="`wftab-fixed-${row.kind}`"
+              >
+                <span class="wftab-value">
+                  <v-icon size="16" class="wftab-fixed-flag" aria-hidden="true"
+                    >mdi-alert-outline</v-icon
+                  >
+                  <Tooltip
+                    :text="`Replaced. This workflow originally used ${fileName(entry.fix.was)}`"
+                    activator="parent"
+                  />
+                  {{ fileName(entry.fix.now) }}
+                  <span class="visually-hidden"
+                    >, replaced. This workflow originally used
+                    {{ fileName(entry.fix.was) }}</span
+                  >
+                </span>
+                <AppButton
+                  variant="ghost"
+                  size="sm"
+                  icon-only
+                  icon-left="undo"
+                  :data-testid="`wftab-undo-${row.kind}`"
+                  :tooltip="`Undo: load ${fileName(entry.fix.was)} again`"
+                  :disabled="busy === 'model-fix'"
+                  @click="replaceModel(row.kind, entry.fix.was, null)"
+                />
+              </div>
+              <span v-else class="wftab-value">{{ entry.text }}</span>
+            </template>
+          </div>
         </div>
 
         <!-- The chain, in the order it applies (#1478). "Edit LoRAs…" is
@@ -875,6 +959,33 @@ const checkpointIsUnread = computed(() =>
 /** ComfyUI's folders for a base model, as `missing_models` names them. */
 const BASE_MODEL_FOLDERS = new Set(["checkpoints", "diffusion_models"]);
 
+/**
+ * The support rows a missing file can be replaced in (#1596): the model-fix
+ * `slot_kind`, the pre-flight's folder for it, and the model-swap list the
+ * candidates come from. `clip_vision` is not `text_encoders`, so a vision
+ * encoder is never offered a text encoder.
+ */
+const SUPPORT_KINDS = [
+  {
+    kind: "vae",
+    label: "VAE",
+    cardKind: "vae",
+    folder: "vae",
+    swapList: "vaes",
+    noun: "VAE",
+    missingText: "VAE missing",
+  },
+  {
+    kind: "text_encoder",
+    label: "CLIP",
+    cardKind: "clip",
+    folder: "text_encoders",
+    swapList: "text_encoders",
+    noun: "text encoder",
+    missingText: "Text encoder missing",
+  },
+];
+
 /** What the pre-flight reports for a name the hub forgot: names no file. */
 const FORGOTTEN_MODEL = "(forgotten model)";
 
@@ -890,6 +1001,8 @@ const PREFLIGHT_SETTLE_MS = 250;
  * whether it has: an unreachable ComfyUI leaves the card's own answer.
  */
 const missingBaseFiles = ref([]);
+/** The same for each support kind (`SUPPORT_KINDS`), by `slot_kind`. */
+const missingFiles = ref({});
 const preflightAnswered = ref(false);
 let installedCheck = 0;
 // A rail that has closed asks nothing: an ask still settling is superseded.
@@ -936,7 +1049,10 @@ const missingCheckpointFile = computed(
 
 /** The owner's replacement for this card's base model, or null. */
 const checkpointFix = computed(
-  () => (detail.value?.model_fixes ?? []).find((fix) => fix.base_model) ?? null,
+  () =>
+    (detail.value?.model_fixes ?? []).find(
+      (fix) => fix.slot_kind === "checkpoint",
+    ) ?? null,
 );
 
 /**
@@ -953,37 +1069,103 @@ const replacementMissing = computed(
     ),
 );
 
-/** The shelf models a missing base model can be replaced with. */
-const replaceCandidates = ref([]);
+/**
+ * `GET …/model-swap` for the selected card, read only when the pre-flight
+ * says a file is missing: the shelf models each kind of row can offer.
+ */
+const swapLists = ref(null);
 
-const replaceOptions = computed(() =>
-  replaceCandidates.value.length
+/** A "Replace with…" picker's options from one model-swap list. */
+function replaceOptionsFrom(models) {
+  return models?.length
     ? [
         { value: "", label: "Replace with…" },
-        ...replaceCandidates.value.map((model) => ({
+        ...models.map((model) => ({
           value: model.filename,
           label: model.display_name || model.filename,
         })),
       ]
-    : [],
+    : [];
+}
+
+const replaceOptions = computed(() =>
+  replaceOptionsFrom(swapLists.value?.checkpoints),
 );
 
+/** Whether two recorded values name one file, whatever their folders. */
+function sameFile(a, b) {
+  return fileName(a).toLowerCase() === fileName(b).toLowerCase();
+}
+
 /**
- * Replace the missing base model with `now`, or undo the replacement (`null`).
+ * The VAE row, and a CLIP row where the workflow names any, each as entries:
+ * a missing file (with its replacement when that is what is missing), a
+ * replaced one, or the plain value. The plain values stand only where neither
+ * of the others does, as the Checkpoint row's do: the card's names are what
+ * the recipes recorded, which after a fix is the original.
+ */
+const supportRows = computed(() =>
+  SUPPORT_KINDS.map((spec) => {
+    const fixes = (detail.value?.model_fixes ?? []).filter(
+      (fix) => fix.slot_kind === spec.kind,
+    );
+    const missing = missingFiles.value[spec.kind] ?? [];
+    let entries = [
+      ...missing.map((file) => ({
+        id: `missing:${file}`,
+        file,
+        fix: fixes.find((fix) => sameFile(fix.now, file)) ?? null,
+      })),
+      ...fixes
+        .filter((fix) => !missing.some((file) => sameFile(fix.now, file)))
+        .map((fix) => ({ id: `fix:${fix.slot_label}`, fix })),
+    ];
+    if (!entries.length) {
+      const models = (card.value?.models ?? []).filter(
+        (model) => model.kind === spec.cardKind && modelDisplayName(model),
+      );
+      entries = models.map((model, index) => ({
+        id: `model:${model.slot_label || index}`,
+        text: withQuant(modelDisplayName(model), model),
+      }));
+    }
+    if (!entries.length && spec.kind === "vae") {
+      entries = [{ id: "vae", text: "From the checkpoint" }];
+    }
+    return {
+      ...spec,
+      entries,
+      options: replaceOptionsFrom(swapLists.value?.[spec.swapList]),
+    };
+  }).filter((row) => row.entries.length),
+);
+
+/** Replace the missing base model with `now`, or undo that (`null`). */
+function replaceCheckpoint(now) {
+  const was = now === null ? checkpointFix.value?.was : missingCheckpointFile.value;
+  return replaceModel("checkpoint", was, now);
+}
+
+/**
+ * Replace the missing file `was` in slots of `kind` with the shelf model
+ * `now`, or undo the replacement of `was` (`now: null`).
  *
  * The card keeps its key unless a re-key moved it, so the answer's key is
  * followed; the grid is re-read because pictures already made with the
  * replacement join this card. The pre-flight is asked again: it is what says
- * whether the base model now loads.
+ * whether the model now loads.
  */
-function replaceCheckpoint(now) {
+function replaceModel(kind, was, now) {
   const key = selectedKey.value;
-  const was = now === null ? checkpointFix.value?.was : missingCheckpointFile.value;
   if (!key || !was || now === "") return;
   const unmoved = selectionMark();
   return queueWrite("model-fix", async () => {
     try {
-      const body = await setWorkflowModelFix(key, { was, now });
+      const body = await setWorkflowModelFix(key, {
+        was,
+        now,
+        slot_kind: kind,
+      });
       store.forgetMembers();
       await store.fetchCards();
       if (!unmoved()) return;
@@ -1009,14 +1191,6 @@ function replaceCheckpoint(now) {
 function fileName(value) {
   return String(value).split(/[\\/]/).pop();
 }
-
-const vaeLabel = computed(() => {
-  const found = (card.value?.models ?? []).find(
-    (model) => model.kind === "vae",
-  );
-  const name = modelDisplayName(found);
-  return name ? withQuant(name, found) : "From the checkpoint";
-});
 
 const loraSlots = computed(() =>
   (card.value?.loras ?? []).map((lora, index) => ({
@@ -1614,8 +1788,9 @@ watch(
 async function checkInstalled(key) {
   const check = ++installedCheck;
   missingBaseFiles.value = [];
+  missingFiles.value = {};
   preflightAnswered.value = false;
-  replaceCandidates.value = [];
+  swapLists.value = null;
   if (!key) return;
   await new Promise((resolve) => setTimeout(resolve, PREFLIGHT_SETTLE_MS));
   if (check !== installedCheck) return;
@@ -1626,22 +1801,40 @@ async function checkInstalled(key) {
     });
     if (check !== installedCheck || !stillOn(key)) return;
     preflightAnswered.value = true;
-    missingBaseFiles.value = (answer?.groups ?? [])
+    const missing = (answer?.groups ?? [])
       .flatMap((group) => group.reasons ?? [])
       .filter((reason) => reason.code === "missing_models")
-      .flatMap((reason) => reason.models ?? [])
-      .filter((model) => BASE_MODEL_FOLDERS.has(model.folder))
-      .map((model) => String(model.file));
+      .flatMap((reason) => reason.models ?? []);
+    const filesIn = (folders) => [
+      ...new Set(
+        missing
+          .filter((model) => folders.has(model.folder))
+          .map((model) => String(model.file)),
+      ),
+    ];
+    missingBaseFiles.value = filesIn(BASE_MODEL_FOLDERS);
+    // A forgotten name is no file anybody could replace.
+    missingFiles.value = Object.fromEntries(
+      SUPPORT_KINDS.map((spec) => [
+        spec.kind,
+        filesIn(new Set([spec.folder])).filter(
+          (file) => file !== FORGOTTEN_MODEL,
+        ),
+      ]),
+    );
   } catch (err) {
     console.warn(`[workflows] could not pre-flight ${key}`, err);
     return;
   }
   // Only a file ComfyUI named can be replaced: a forgotten name is no file.
-  if (!missingBaseFiles.value.some((file) => file !== FORGOTTEN_MODEL)) return;
+  const replaceable =
+    missingBaseFiles.value.some((file) => file !== FORGOTTEN_MODEL) ||
+    Object.values(missingFiles.value).some((files) => files.length);
+  if (!replaceable) return;
   try {
     const swap = await readModelSwap(key);
     if (check !== installedCheck || !stillOn(key)) return;
-    replaceCandidates.value = swap?.checkpoints ?? [];
+    swapLists.value = swap ?? null;
   } catch (err) {
     console.warn(`[workflows] could not read replacements for ${key}`, err);
   }
@@ -1790,7 +1983,8 @@ async function checkInstalled(key) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.wftab-missing {
+.wftab-missing,
+.wftab-entries {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);

@@ -40,6 +40,7 @@ from pixlstash.services.workflow_identity import (
     slots,
     workflow_key,
 )
+from pixlstash.utils.adapter_header import FILE_CHECKPOINT
 
 logger = get_logger(__name__)
 
@@ -241,10 +242,13 @@ def set_model_fix(
     now: Optional[str],
     variant_pictures: dict[str, int],
     keep_key: Optional[str] = None,
+    kind: str = FILE_CHECKPOINT,
 ) -> dict[str, list[str]]:
     """Replace model *was* with *now* in these slots of one topology, or undo it.
 
-    ``now=None`` takes the replacement back out. Either way every variant of
+    ``now=None`` takes the replacement back out. *kind* is the shelf
+    ``file_kind`` the slots take (``workflow_identity.model_fix_kind``), kept
+    so the Workflow tab can say which row a fix belongs to. Either way every variant of
     the topology is re-keyed in the same transaction, the way a mark flip is:
     setting a fix folds the pictures already made with *now* onto the card the
     original made, and undoing it moves them back onto a card of their own.
@@ -267,9 +271,18 @@ def set_model_fix(
         if now is not None:
             conn.executemany(
                 "INSERT INTO workflow_model_fix (topology_hash, slot_label, "
-                "was_norm, now_norm, was_name, now_name) VALUES (?, ?, ?, ?, ?, ?)",
+                "was_norm, now_norm, was_name, now_name, slot_kind) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (topology_hash, label, was_norm, normalized_filename(now), was, now)
+                    (
+                        topology_hash,
+                        label,
+                        was_norm,
+                        normalized_filename(now),
+                        was,
+                        now,
+                        kind,
+                    )
                     for label in slot_labels
                 ],
             )

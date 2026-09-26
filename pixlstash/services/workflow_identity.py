@@ -46,6 +46,7 @@ from pixlstash.services.workflow_hash import (
     reduce_api_graph,
 )
 from pixlstash.services.workflow_io import is_picture_loader
+from pixlstash.utils.adapter_header import FILE_CHECKPOINT, FILE_TEXT_ENCODER, FILE_VAE
 
 # Stamped beside every cached value, so a change of rule re-keys visibly.
 # Stack overrides are keyed on workflow keys, not on core hashes, so a
@@ -107,6 +108,27 @@ CHECKPOINT_WIDGETS = frozenset(
         "checkpoint_id",
     }
 )
+
+
+def model_fix_kind(class_type: str, widget: str) -> Optional[str]:
+    """The shelf ``file_kind`` a model fix may put in this loader field, or ``None``.
+
+    A fix replaces a missing file with a shelf model of the kind the slot
+    takes (``PUT /workflows/{key}/model-fix``), and every read of a fix -
+    which slots it names, which fields a run rewrites, which covers it
+    supersedes - asks this, so a file of the same name in another kind of
+    slot is never touched. ``clip_name`` on a vision loader is an image
+    encoder, not a text encoder (the clone dialog's rule, and the pre-flight's
+    ``clip_vision`` folder).
+    """
+    if widget in CHECKPOINT_WIDGETS:
+        return FILE_CHECKPOINT
+    if widget == "vae_name":
+        return FILE_VAE
+    if widget.startswith("clip_name") and "CLIPVision" not in class_type:
+        return FILE_TEXT_ENCODER
+    return None
+
 
 PLUMBING = "plumbing"
 UPSCALE = "upscale"

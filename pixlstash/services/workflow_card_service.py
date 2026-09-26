@@ -75,6 +75,7 @@ from pixlstash.services.workflow_identity import (
     STRUCTURAL,
     differs_by_reduced,
     is_lora_widget,
+    model_fix_kind,
     reduce_stored_document,
     slots,
     topology_node_labels,
@@ -387,15 +388,15 @@ def _figures(
 def _superseded_variants(hub: HubDatabase, cards: list[Card]) -> frozenset[str]:
     """The variants that load a model the owner replaced in their workflow.
 
-    In a checkpoint slot, where a fix applies: a VAE naming a file of the same
-    name is still what the workflow loads there. Nothing to read, and no cost,
-    on a hub where nobody has replaced one.
+    In a slot of the kind the fix was made for: a VAE naming a file of the
+    same name as a replaced checkpoint is still what the workflow loads there.
+    Nothing to read, and no cost, on a hub where nobody has replaced one.
     """
-    replaced: dict[str, set[str]] = {}
-    for topology_hash, was_norm in hub.fetchall(
-        "SELECT topology_hash, was_norm FROM workflow_model_fix"
+    replaced: dict[str, set[tuple[str, str]]] = {}
+    for topology_hash, kind, was_norm in hub.fetchall(
+        "SELECT topology_hash, slot_kind, was_norm FROM workflow_model_fix"
     ):
-        replaced.setdefault(topology_hash, set()).add(was_norm)
+        replaced.setdefault(topology_hash, set()).add((kind, was_norm))
     if not replaced:
         return frozenset()
     topology_of = {
@@ -407,10 +408,12 @@ def _superseded_variants(hub: HubDatabase, cards: list[Card]) -> frozenset[str]:
     return frozenset(
         variant
         for variant, pairs in asset_names(hub, list(topology_of)).items()
+        # ponytail: the asset rows name the widget and not the loader, so a
+        # CLIP vision `clip_name` reads as a text encoder here. Only a cover
+        # flag; the run rewrite (`model_fix_kind` on the class) is exact.
         if any(
-            name in replaced[topology_of[variant]]
+            (model_fix_kind("", widget), name) in replaced[topology_of[variant]]
             for widget, name in pairs
-            if widget in CHECKPOINT_WIDGETS
         )
     )
 

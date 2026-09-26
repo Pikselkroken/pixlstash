@@ -35,6 +35,8 @@ from pixlstash.services.comfyui_recipe_service import (
     sanitize_prompt_graph,
     unchecked_preflight,
 )
+from pixlstash.services.workflow_identity import model_fix_kind
+from pixlstash.utils.adapter_header import FILE_CHECKPOINT, FILE_TEXT_ENCODER, FILE_VAE
 from pixlstash.utils.comfyui_utilities import extract_recipe_extras
 
 GRAPH = {
@@ -2389,11 +2391,34 @@ class TestFilenameSwap:
         swapped, _ = apply_filename_swap(
             graph,
             {"zimage/zimage-turbo.safetensors": "krea2.safetensors"},
-            widgets=frozenset({"ckpt_name"}),
+            fields=lambda _cls, field: field == "ckpt_name",
         )
         assert graph["4"]["inputs"]["ckpt_name"] == "krea2.safetensors"
         assert graph["5"]["inputs"]["vae_name"] == "zimage/zimage-turbo.safetensors"
         assert [(s["node_id"], s["field"]) for s in swapped] == [("4", "ckpt_name")]
+
+    def test_a_text_encoder_fix_leaves_a_vision_encoder_of_that_name(self):
+        """#1596: the run rewrite asks the loader's class, not just the field."""
+        graph = self._graph()
+        graph["7"] = {
+            "class_type": "CLIPVisionLoader",
+            "inputs": {"clip_name": "qwen_3_4b.safetensors"},
+        }
+        swapped, _ = apply_filename_swap(
+            graph,
+            {"qwen_3_4b.safetensors": "qwen_3_4b_bf16.safetensors"},
+            fields=lambda cls, field: model_fix_kind(cls, field) == FILE_TEXT_ENCODER,
+        )
+        assert graph["6"]["inputs"]["clip_name1"] == "qwen_3_4b_bf16.safetensors"
+        assert graph["7"]["inputs"]["clip_name"] == "qwen_3_4b.safetensors"
+        assert [(s["node_id"], s["field"]) for s in swapped] == [("6", "clip_name1")]
+
+    def test_model_fix_kind_reads_the_slot_a_shelf_kind_may_fill(self):
+        assert model_fix_kind("UNETLoader", "unet_name") == FILE_CHECKPOINT
+        assert model_fix_kind("VAELoader", "vae_name") == FILE_VAE
+        assert model_fix_kind("TripleCLIPLoader", "clip_name3") == FILE_TEXT_ENCODER
+        assert model_fix_kind("CLIPVisionLoader", "clip_name") is None
+        assert model_fix_kind("LoraLoader", "lora_name") is None
 
     def test_a_key_matches_the_whole_name_whatever_its_case_or_separators(self):
         graph = self._graph()

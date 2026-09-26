@@ -164,6 +164,7 @@ from pixlstash.services.workflow_identity import (
     CHECKPOINT_WIDGETS,
     RECIPE,
     STRUCTURAL,
+    model_fix_kind,
 )
 from pixlstash.services.workflow_hash import (
     MODEL_EXTENSIONS,
@@ -640,8 +641,11 @@ class ModelFixRow(BaseModel):
     slot_label: str
     was: str = Field(description="The file the workflow originally loaded.")
     now: str = Field(description="The file it loads instead.")
-    base_model: bool = Field(
-        description="Whether the slot is the workflow's base model (checkpoint)."
+    slot_kind: Literal["checkpoint", "vae", "text_encoder"] = Field(
+        description=(
+            "The kind of model the slot takes, which is also the shelf kind "
+            "of `now`: the Workflow tab row the fix belongs to."
+        )
     )
 
 
@@ -838,15 +842,27 @@ class CardDefaults(BaseModel):
         return value
 
 
+# A model fix's slot kinds as its refusals say them.
+_FIX_KIND_NAMES = {
+    FILE_CHECKPOINT: "checkpoint",
+    FILE_VAE: "VAE",
+    FILE_TEXT_ENCODER: "text encoder",
+}
+
+
 class ModelFix(BaseModel):
     """``PUT /workflows/{key}/model-fix``: replace a model, or undo that.
 
     ``was`` is the file the workflow names, as the graph spells it; ``now`` a
     file on the model shelf, or ``null`` to load the original again.
+    ``slot_kind`` names the kind of slot being fixed; the shelf kind of
+    ``now`` decides it when left out, and an undo without it undoes every
+    kind.
     """
 
     was: str = Field(min_length=1, max_length=MAX_VALUE_LENGTH)
     now: str | None = Field(None, min_length=1, max_length=MAX_VALUE_LENGTH)
+    slot_kind: Literal["checkpoint", "vae", "text_encoder"] | None = None
 
 
 class CardPins(BaseModel):
@@ -2224,13 +2240,8 @@ def create_router(server) -> APIRouter:
             ],
             graph_base_models=graph_models,
             model_fixes=[
-                ModelFixRow(
-                    slot_label=label,
-                    was=was,
-                    now=now,
-                    base_model=label.rsplit("/", 1)[-1] in CHECKPOINT_WIDGETS,
-                )
-                for label, was, now in model_fixes(hub, card.topology_hash)
+                ModelFixRow(slot_label=label, was=was, now=now, slot_kind=kind)
+                for label, was, now, kind in model_fixes(hub, card.topology_hash)
             ],
         )
 
@@ -2242,21 +2253,34 @@ def create_router(server) -> APIRouter:
         source tiers do not agree on folders. Returns the substitutions made.
         """
         fixes = {
-            normalized_filename(was): now
-            for _label, was, now in model_fixes(_hub(), card.topology_hash)
+            (kind, normalized_filename(was)): now
+            for _label, was, now, kind in model_fixes(_hub(), card.topology_hash)
         }
         if not fixes:
             return []
-        # Checkpoint fields only, as the fix is recorded (`model_fix_labels`):
-        # a VAE holding a file of the same name keeps it.
-        swaps = {
-            value: fixes[normalized_filename(value)]
-            for _node, _cls, widget, value in iter_model_fields_api(graph)
-            if widget in CHECKPOINT_WIDGETS and normalized_filename(value) in fixes
-        }
-        done, missed = apply_filename_swap(
-            graph, swaps, object_info, widgets=CHECKPOINT_WIDGETS
-        )
+        # Fields of the kind each fix was recorded for (`model_fix_labels`):
+        # a VAE holding a file of the same name as a replaced checkpoint
+        # keeps it.
+        done, missed = [], []
+        for kind in sorted({kind for kind, _was in fixes}):
+            swaps = {
+                value: fixes[(kind, normalized_filename(value))]
+                for _node, cls, widget, value in iter_model_fields_api(graph)
+                if model_fix_kind(cls, widget) == kind
+                and (kind, normalized_filename(value)) in fixes
+            }
+            if not swaps:
+                continue
+            kind_done, kind_missed = apply_filename_swap(
+                graph,
+                swaps,
+                object_info,
+                fields=lambda cls, widget, kind=kind: (
+                    model_fix_kind(cls, widget) == kind
+                ),
+            )
+            done += kind_done
+            missed += kind_missed
         for swap in done:
             logger.info(
                 "[workflows] Card %s loads %s in place of %s on node %s: the "
@@ -2597,7 +2621,8 @@ def create_router(server) -> APIRouter:
         "/workflows/{workflow_key}/model-fix",
         summary="Replace a missing model in a workflow",
         description=(
-            "Load another model wherever this workflow names `was` - the fix "
+            "Load another model wherever this workflow names `was` in a slot "
+            "of `now`'s kind (a checkpoint, a VAE or a text encoder) - the fix "
             "for a workflow whose model is gone - or, with `now: null`, the "
             "original again. The card keeps its key, its pictures and its "
             "settings, and a picture made with the replacement is filed on it. "
@@ -2607,8 +2632,12 @@ def create_router(server) -> APIRouter:
         response_model=WorkflowCardDetail,
         responses={
             404: {"description": "No such card, or `now` is not on the shelf."},
-            409: {"description": "The workflow does not load `was`."},
-            422: {"description": "`now` names the same file as `was`."},
+            409: {"description": "The workflow does not load `was` there."},
+            422: {
+                "description": (
+                    "`now` names the same file as `was`, or is not of `slot_kind`."
+                )
+            },
             503: {"description": "No library is open."},
         },
     )
@@ -2616,14 +2645,47 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
         card = _require_card(hub, workflow_key)
-        was, now = payload.was, payload.now
-        fixes = model_fixes(hub, card.topology_hash)
+        was, now, kind = payload.was, payload.now, payload.slot_kind
+        if now is not None:
+            # A shelf model of a kind a slot can take, and nothing else,
+            # written as the shelf spells it: the name goes into every graph
+            # this workflow submits. Its kind is the kind of slot it fixes.
+            rows = hub.fetchall(
+                "SELECT filename, file_kind FROM model WHERE lower(filename) = ? "
+                "AND file_kind IN (?, ?, ?) ORDER BY file_kind",
+                (
+                    normalized_filename(now),
+                    FILE_CHECKPOINT,
+                    FILE_VAE,
+                    FILE_TEXT_ENCODER,
+                ),
+            )
+            if not rows:
+                raise HTTPException(
+                    status_code=404,
+                    detail="That model is not on the model shelf.",
+                )
+            row = next((r for r in rows if kind in (None, r["file_kind"])), None)
+            if row is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"That is a {_FIX_KIND_NAMES[rows[0]['file_kind']]}, "
+                        f"not a {_FIX_KIND_NAMES[kind]}."
+                    ),
+                )
+            now, kind = row["filename"], row["file_kind"]
+        fixes = [
+            fix
+            for fix in model_fixes(hub, card.topology_hash)
+            if kind in (None, fix[3])
+        ]
         # A replacement that has gone missing too is fixed from the ORIGINAL:
         # fixes are one step on both the key side and the run side, so a
         # chain would leave the card keyed and run on the middle link.
         chained = [
             fix_was
-            for _label, fix_was, fix_now in fixes
+            for _label, fix_was, fix_now, _kind in fixes
             if normalized_filename(fix_now) == normalized_filename(was)
         ]
         if now is not None and len(set(map(normalized_filename, chained))) > 1:
@@ -2645,28 +2707,16 @@ def create_router(server) -> APIRouter:
         # writes or undoes.
         targets: list[tuple[str, list[str]]] = []
         if now is not None:
-            # A shelf checkpoint and nothing else, written as the shelf spells
-            # it: the name goes into every graph this workflow submits.
-            row = hub.fetchone(
-                "SELECT filename FROM model WHERE lower(filename) = ? AND file_kind = ?",
-                (normalized_filename(now), FILE_CHECKPOINT),
-            )
-            if row is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail="That checkpoint is not on the model shelf.",
-                )
-            now = row["filename"]
             if normalized_filename(now) == was_norm:
                 raise HTTPException(
                     status_code=422, detail="That is the model it already loads."
                 )
-            labels = model_fix_labels(hub, card.topology_hash, was)
+            labels = model_fix_labels(hub, card.topology_hash, was, kind)
             # Two originals folded onto one replacement in one slot would file
             # the replacement's pictures on whichever row SQLite read last.
             clash = [
                 fix_was
-                for label, fix_was, fix_now in fixes
+                for label, fix_was, fix_now, _kind in fixes
                 if label in labels
                 and normalized_filename(fix_now) == normalized_filename(now)
                 and normalized_filename(fix_was) != was_norm
@@ -2684,7 +2734,7 @@ def create_router(server) -> APIRouter:
             for original in sorted(set(chained)) or [was]:
                 labels = [
                     label
-                    for label, fix_was, _now in fixes
+                    for label, fix_was, _now, _kind in fixes
                     if normalized_filename(fix_was) == normalized_filename(original)
                 ]
                 if labels:
@@ -2693,7 +2743,8 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "This workflow does not load that model."
+                    f"This workflow does not load that model as a "
+                    f"{_FIX_KIND_NAMES[kind]}."
                     if now is not None
                     else "That model was not replaced."
                 ),
@@ -2718,6 +2769,7 @@ def create_router(server) -> APIRouter:
                 now,
                 read_variant_picture_counts(server.vault),
                 keep_key=key,
+                kind=kind or FILE_CHECKPOINT,
             )
             try:
                 saved_recipe_service.rekey_recipes(server.vault, moved)
