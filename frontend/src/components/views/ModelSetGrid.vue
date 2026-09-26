@@ -1286,7 +1286,9 @@ async function pickIntoSlot(set, slotId, ids) {
       // Stored nothing, with no error (the error is its own notice): say so
       // rather than leave the click looking ignored.
       pickNote.value =
-        result && !added.length ? "Already in this set, nothing added" : "";
+        result && !result.added?.length
+          ? "Already in this set, nothing added"
+          : "";
     } else {
       store.announceAdded(
         set,
