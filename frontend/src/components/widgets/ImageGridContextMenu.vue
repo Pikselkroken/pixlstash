@@ -6,6 +6,7 @@
       class="image-ctx-menu ctx-menu"
       :class="{ 'ctx-flip-sub': submenusFlip, 'ctx-menu--on-dark': onDark }"
       :style="menuStyle"
+      :data-tooltip-layer="submenusFlip ? 'end' : 'start'"
       role="menu"
       aria-orientation="vertical"
       tabindex="-1"
