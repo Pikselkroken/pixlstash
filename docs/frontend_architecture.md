@@ -2105,15 +2105,21 @@ watcher the model shelf uses. See §9.1b for the destination itself.
   for the card, and a `toBeTruthy()` on the `src` passed straight over it.
   **One `grid-template-columns`, declared on the header and the rows alike**:
   each row is its own grid container, so `auto` tracks would be measured per
-  row and the columns would step sideways down the list. The checkpoint column
-  draws a chip **only where it differs from the cover's**, the cover's own row
-  never; a column repeating one model name down every row says nothing, and
-  what is not shared is the whole point of List. A model whose name was
-  forgotten draws nothing rather than a label-less chip, and two forgotten
-  names are not read as the same model. **"Differs by" is blank on the cover's
-  row for the same reason**: the cover has no difference chips of its own, and
-  its type chips in that column would read as a difference, beside a
-  Checkpoint cell deliberately left empty. The Cover pill is
+  row and the columns would step sideways down the list. **The Workflow track
+  has a floor** (`minmax(12rem, 1fr)`) and Checkpoint and Differs by shrink
+  first; a panel narrower than every floor scrolls the list sideways
+  (`overflow-x: auto` on a one-column grid, `min-width: 0` on the clipped
+  body) rather than clipping the first and last columns. At `minmax(0, 1fr)`
+  the fixed columns squeezed Workflow to a sliver on an ordinary panel. The
+  checkpoint column draws **every row's checkpoint, the cover's included**,
+  and the Workflow column drops a generated name's leading "<checkpoint>: "
+  (`listName`), because the column beside it says it. Drawn only where it
+  differed from the cover's, the column read as empty while the model sat in
+  the name; whether it differs is Differs by's "other checkpoint". A model
+  whose name was forgotten draws nothing rather than a label-less chip.
+  **"Differs by" is blank on the cover's row**: the cover has no difference
+  chips of its own, and its type chips in that column would read as a
+  difference. The Cover pill is
   what that row says instead — **and the blanking reaches the row's accessible
   name**, which is the whole of what a screen reader hears here, every cell but
   ⋯ being `aria-hidden`. Left in, the label told a reader the cover differed
