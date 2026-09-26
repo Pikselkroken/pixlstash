@@ -928,6 +928,32 @@ describe("\"Run a workflow on these…\", which opens with no workflow chosen", 
   });
 });
 
+describe("Edit with ComfyUI, the built-in edit card over the selection", () => {
+  it("reads no recipe and sends the pictures to the card with the typed prompt", async () => {
+    const wrapper = await mountRun({
+      kind: "edit",
+      pictureIds: [42],
+      workflowKey: KEY,
+      emptyPrompt: true,
+    });
+    // The picture is what is edited, not a recipe to replay.
+    expect(getPictureRecipe).not.toHaveBeenCalled();
+    expect(wrapper.vm.title).toBe("Edit with ComfyUI");
+    const box = wrapper
+      .findAllComponents({ name: "AppTextarea" })
+      .find((c) => c.props("label") === "Prompt");
+    expect(box.props("modelValue")).toBe("");
+    await box.vm.$emit("update:modelValue", "make it night time");
+    await wrapper.vm.submit();
+    await flushPromises();
+
+    const body = runWorkflowCard.mock.calls[0][0];
+    expect(body.picture_ids).toEqual([42]);
+    expect(body.target).toBe(KEY);
+    expect(body.prompt).toBe("make it night time");
+  });
+});
+
 describe("the body it sends", () => {
   it("names pictures as the source and the card as the target", async () => {
     const wrapper = await mountRun();

@@ -1522,6 +1522,13 @@ class ComfyUIWorkflowLoraInsertionResponse(ComfyUILoraInsertionResponse):
     has_lora_loader: Optional[bool] = False
 
 
+class ComfyUIWorkflowCardResponse(BaseModel):
+    """The Workflows card a stored workflow runs as."""
+
+    name: str
+    workflow_key: str
+
+
 class ComfyUIWorkflowListResponse(BaseModel):
     """List of ComfyUI workflows, by name.
 
@@ -2149,6 +2156,42 @@ def create_router(server) -> APIRouter:
             "workflow": name,
             **_describe_lora_insertion(graph, object_info, error),
         }
+
+    @router.post(
+        "/comfyui/workflows/{workflow_name}/card",
+        summary="Put a stored workflow on its Workflows card",
+        description=(
+            "Files a stored workflow, user or built-in, on its Workflows card "
+            "the way an import files it, and returns the card's key so the Run "
+            "popup can open on it. A built-in has no card until something asks: "
+            "Edit with ComfyUI asks for the built-in image edit workflow. "
+            "Idempotent: a workflow already filed answers its existing card."
+        ),
+        response_model=ComfyUIWorkflowCardResponse,
+        responses={
+            404: {"description": "No stored workflow has this name."},
+            409: {"description": "The workflow's graph could not be put on a card."},
+        },
+    )
+    def card_for_comfyui_workflow(request: Request, workflow_name: str):
+        # Sync on purpose: filing reads the file and writes the hub.
+        name, _path, document = _load_stored_workflow(workflow_name)
+        _topology_hash, card_key = _file_in_hub(
+            getattr(server, "hub", None), name, document
+        )
+        if not card_key:
+            # `_file_in_hub` has logged why.
+            raise HTTPException(
+                status_code=409,
+                detail=f"PixlStash could not put the workflow {name} on a card.",
+            )
+        announce_changed_workflows(
+            server,
+            [card_key],
+            "imported",
+            origin_client_id=getattr(request.state, "origin_client_id", None),
+        )
+        return {"name": name, "workflow_key": card_key}
 
     @router.post(
         "/comfyui/abort",

@@ -185,6 +185,8 @@ _WORKFLOW_WRITE_ROUTES = (
     ("DELETE", "/api/v1/workflows/{workflow_key}"),
     # ComfyUI's conversion of an editor file (#1530): writes stored files.
     ("POST", "/api/v1/comfyui/workflows/convert"),
+    # Edit with ComfyUI: files a stored workflow on its card in the hub.
+    ("POST", "/api/v1/comfyui/workflows/{workflow_name}/card"),
 )
 
 
@@ -2554,6 +2556,38 @@ def test_an_enveloped_conversion_is_stored_unwrapped(workflow_env, converting):
     assert r.status_code == 200, r.text
     stored = json.loads((converting.folder / "editor.json.api").read_text())
     assert stored["prompt"] == _EDITOR_CONVERTED
+
+
+def test_a_built_in_workflow_is_put_on_a_card_that_runs_its_file(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Edit with ComfyUI opens the Run popup on the built-in edit workflow's card.
+
+    A built-in is never imported, so nothing files it until this route does.
+    """
+    builtin = comfyui_module._workflow_builtin_dir()
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        comfyui_module,
+        "_workflow_dirs",
+        lambda: [("user", str(tmp_path)), ("built-in", builtin)],
+    )
+    owner = workflow_env.owner
+    path = f"{API}/comfyui/workflows/Flux2-Klein-Image-Edit.json/card"
+
+    r = owner.post(path)
+    assert r.status_code == 200, r.text
+    key = r.json()["workflow_key"]
+    assert r.json()["name"] == "Flux2-Klein-Image-Edit.json"
+    # Idempotent: the second ask answers the same card.
+    assert owner.post(path).json()["workflow_key"] == key
+
+    r = owner.get(f"{API}/workflows/{key}/graph")
+    assert r.status_code == 200, r.text
+    assert r.json()["source"] == "file"
+    assert r.json()["workflow"]["76"]["class_type"] == "LoadImage"
+
+    assert owner.post(f"{API}/comfyui/workflows/nope.json/card").status_code == 404
 
 
 def test_deleting_a_converted_file_takes_its_conversion_with_it(

@@ -191,6 +191,7 @@
           <AppTextarea
             v-model="prompt"
             label="Prompt"
+            :placeholder="isEdit ? 'Describe the change, e.g. make it night time' : ''"
             :rows="3"
             :disabled="submitting"
             @keydown.stop
@@ -879,9 +880,16 @@ const savedRecipe = computed(() => props.source?.savedRecipe || null);
 /** A card with no source picture picks where its output is filed. */
 const picksDestination = computed(() => !pictureIds.value.length);
 
-const title = computed(() =>
-  kind.value === "card" ? "Run workflow" : "Run recipe",
-);
+/**
+ * "edit" is "Edit with ComfyUI…" (the grid's menus): the built-in image edit
+ * card run over the selection, which fills its picture input. The pictures are
+ * what is edited, not recipes to replay, so none of their recipes is read.
+ */
+const isEdit = computed(() => kind.value === "edit");
+const title = computed(() => {
+  if (isEdit.value) return "Edit with ComfyUI";
+  return kind.value === "card" ? "Run workflow" : "Run recipe";
+});
 const subtitle = computed(() => card.value?.name || "");
 const sourceName = computed(
   () => props.source?.name || card.value?.name || "This run",
@@ -897,6 +905,7 @@ const sourceName = computed(
  */
 const coverUrl = computed(() => {
   if (props.source?.coverUrl) return props.source.coverUrl;
+  if (isEdit.value && pictureIds.value.length) return thumbUrl(pictureIds.value[0]);
   const cover = card.value?.covers?.[0];
   return cover ? workflowCoverUrl(cover) : "";
 });
@@ -905,6 +914,9 @@ const seedText = computed(() => recipe.value?.seed_text || "");
 const sourceKindLine = computed(() => {
   const many = pictureIds.value.length;
   if (kind.value === "card") return "Workflow, with no picture behind it";
+  if (isEdit.value) {
+    return many > 1 ? `${many} pictures to edit, one run each` : "The picture to edit";
+  }
   if (many > 1) return `${many} pictures, all on this workflow`;
   return "This picture's recipe";
 });
@@ -1956,7 +1968,7 @@ async function load() {
     }
     // One picture is a recipe to prefill from; several are a card the server
     // already agreed they share, so the card alone is the honest source.
-    if (pictureIds.value.length === 1) {
+    if (pictureIds.value.length === 1 && !isEdit.value) {
       const data = await getPictureRecipe(pictureIds.value[0], { preflight: false });
       if (!mine()) return;
       recipe.value = data?.reason === "no_prompt_chunk" ? null : data;
