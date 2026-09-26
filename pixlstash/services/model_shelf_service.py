@@ -1173,7 +1173,8 @@ def propose_companions(
                 key=lambda item: (models[item[0]]["filename"] or "").lower(),
             )
         ]
-        # Whether a RECIPE step answered. Not `proposals[kind]`: the grouped
+        # Whether an EVIDENCE step answered, on recipes or ComfyUI runs (#1518).
+        # Not `proposals[kind]`: the grouped
         # entries are already in there, and reading them as evidence would
         # skip the declared fallback for a row the owner's sets do not cover
         # (a Flux set grouping a clip_l leaves its t5 row with nothing).

@@ -1814,12 +1814,20 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   const checkpointAdded = ref(null);
 
+  /**
+   * Record a checkpoint that went in, read off the SERVER's answer - the
+   * members it actually stored - never the request: a member added without a
+   * slot is placed by the server, and a refused one never went in at all.
+   *
+   * @param {number} setId
+   * @param {Array<Object>} members - the stored members that were just added.
+   */
   function noteCheckpoint(setId, members) {
     const checkpoint = members.find(
-      (m) => m.slot === "checkpoint" && m.model_id != null,
+      (m) => m.slot === "checkpoint" && m.on_shelf && m.id != null,
     );
     if (checkpoint) {
-      checkpointAdded.value = { setId, modelId: checkpoint.model_id };
+      checkpointAdded.value = { setId, modelId: checkpoint.id };
     }
   }
   let setAnchor = null;
@@ -1944,7 +1952,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (created) {
       clearSelection();
       openSetKey.value = `hand:${created.id}`;
-      noteCheckpoint(created.id, body.members ?? []);
+      noteCheckpoint(created.id, created.members ?? []);
     }
     return created;
   }
@@ -2025,7 +2033,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         failure: "Those models could not be added to the set.",
       },
     );
-    if (result?.added?.length) noteCheckpoint(set.id, members);
+    if (result?.added?.length) {
+      const added = new Set(result.added);
+      noteCheckpoint(
+        set.id,
+        (result.set?.members ?? []).filter((m) => added.has(m.sha256)),
+      );
+    }
     return result;
   }
 

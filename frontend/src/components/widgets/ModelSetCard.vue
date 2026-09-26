@@ -213,7 +213,11 @@ const accessibleName = computed(() => {
       name,
       "grouped by you",
       kindLabel,
-      incomplete ? "incomplete: no checkpoint" : null,
+      incomplete
+        ? "incomplete: no checkpoint"
+        : props.card.checkpointOffShelf
+          ? "checkpoint not on shelf"
+          : null,
       kinds.length ? `with ${kinds.join(", ")}` : "nothing else in it yet",
       // What is drawn: an incomplete card shows its warning in place of facts.
       incomplete ? null : facts.join(", "),

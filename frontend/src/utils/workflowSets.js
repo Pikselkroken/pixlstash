@@ -478,6 +478,9 @@ export function handMadeCard(set) {
     // What the cover draws when no picture belongs to the set yet: the
     // checkpoint's own mark, or nothing (a dashed empty cover).
     markModel: checkpoint?.on_shelf ? checkpoint : null,
+    // A checkpoint kept by hash whose file has left the shelf: the cover says
+    // so, and so must the card's accessible name.
+    checkpointOffShelf: Boolean(checkpoint && !checkpoint.on_shelf),
     size: members.length,
   };
 }

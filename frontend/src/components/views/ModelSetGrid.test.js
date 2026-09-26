@@ -160,6 +160,9 @@ async function mountGrid({
 beforeEach(() => {
   createWorkflowSet.mockReset();
   deleteWorkflowSet.mockReset();
+  addWorkflowSetMembers.mockReset();
+  removeWorkflowSetMembers.mockReset();
+  renameWorkflowSet.mockReset();
   setActivePinia(createPinia());
   window.localStorage.clear();
   listAdapters.mockReset().mockResolvedValue([]);
@@ -1563,6 +1566,7 @@ describe("hand-made sets (#1520)", () => {
     const card = wrapper.find('[data-testid="model-set-card"]');
     expect(card.text()).toContain("Checkpoint not on shelf");
     expect(card.text()).not.toContain("No checkpoint yet");
+    expect(card.attributes("aria-label")).toContain("checkpoint not on shelf");
 
     // Not stuck: the off-shelf checkpoint's tile keeps its Remove, which is
     // what frees the slot for a replacement.
@@ -1650,6 +1654,53 @@ describe("hand-made sets (#1520)", () => {
 
     expect(document.activeElement).toBe(fill.element);
     wrapper.unmount();
+  });
+
+  it("offers the base model for a checkpoint the SERVER stored, whatever the request said", async () => {
+    const bare = slotMember(1, "realvisXL_v5", "checkpoint", {
+      base_model: null,
+    });
+    const { store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [])],
+    });
+    // No slot in the request: the server placed it in Checkpoint.
+    addWorkflowSetMembers.mockResolvedValue({
+      set: handSet(10, [bare]),
+      added: [bare.sha256],
+    });
+    await store.addToHandMadeSet(store.handMadeSets[0], [{ model_id: 1 }]);
+    expect(store.checkpointAdded).toEqual({ setId: 10, modelId: 1 });
+
+    // Asked for, but nothing was stored: no offer.
+    store.checkpointAdded = null;
+    addWorkflowSetMembers.mockResolvedValue({
+      set: handSet(10, []),
+      added: [],
+    });
+    await store.addToHandMadeSet(store.handMadeSets[0], [
+      { model_id: 1, slot: "checkpoint" },
+    ]);
+    expect(store.checkpointAdded).toBe(null);
+  });
+
+  it("says nothing matched, not that a group is empty, while filtering", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…")
+      .trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    await chooser.find("input").setValue("zzz-nothing");
+
+    const counts = chooser.findAll(".wsc__count").map((c) => c.text());
+    expect(counts.length).toBeGreaterThan(0);
+    expect(counts.every((c) => c === "no matches")).toBe(true);
   });
 
   it("marks a member whose file left the shelf, and does not let it be selected", async () => {
