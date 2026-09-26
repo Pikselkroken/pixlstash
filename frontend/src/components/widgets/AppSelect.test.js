@@ -145,6 +145,15 @@ describe("AppSelect with chip options", () => {
     expect(w.emitted("update:modelValue")).toEqual([["c"]]);
   });
 
+  it("keeps the value when Shift+Tab backs out of the list", async () => {
+    const w = mountRich();
+    await combo(w).trigger("keydown", { key: "ArrowDown" });
+    await combo(w).trigger("keydown", { key: "ArrowDown" });
+    await combo(w).trigger("keydown", { key: "Tab", shiftKey: true });
+    expect(combo(w).attributes("aria-expanded")).toBe("false");
+    expect(w.emitted("update:modelValue")).toBeUndefined();
+  });
+
   it("names each run of rows as a group", async () => {
     const w = mountRich();
     await combo(w).trigger("click");

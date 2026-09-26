@@ -319,8 +319,11 @@ function onComboKeydown(e) {
     e.stopPropagation();
     open.value = false;
   } else if (e.key === "Tab") {
-    // Tab takes the row it leaves on, as the ARIA pattern does.
-    choose(activeIndex.value);
+    // Tab takes the row it leaves on, as the ARIA pattern does. Shift+Tab is
+    // backing out: it closes the list and keeps the value, since a new pick
+    // reloads the whole form around the field.
+    if (e.shiftKey) open.value = false;
+    else choose(activeIndex.value);
   } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
     const i = typeahead(e.key);
     if (i >= 0) activeIndex.value = i;
