@@ -1385,6 +1385,27 @@ function isMenuKey(event) {
 }
 
 /**
+ * Up/Down pressed in the open tray's header bar (the Grid/List switch, Close).
+ *
+ * The bar sits between the card and its members, so Down enters the tray at its
+ * first member and Up returns to the card, wherever the cursor last was: a
+ * mouse click on the switch does not move it. Returns true when handled.
+ */
+function headerStep(event) {
+  const down = event.key === "ArrowDown";
+  if (!down && event.key !== "ArrowUp") return false;
+  if (!event.target?.closest?.(".msp__header")) return false;
+  event.preventDefault();
+  const rows = flatRows.value;
+  moveCursor(
+    down
+      ? rows.findIndex((e) => e.kind === "member" || e.kind === "slot")
+      : rows.findIndex((e) => e.kind === "card" && e.key === store.openSetKey),
+  );
+  return true;
+}
+
+/**
  * The keys a hand-made set, its tray and the New tile answer differently.
  *
  * @returns {boolean} true when the press was handled here.
@@ -1464,6 +1485,7 @@ function onHandKey(event, entry) {
 }
 
 function onKeyDown(event) {
+  if (headerStep(event)) return;
   if (targetOwnsTheGesture(event)) return;
   const entry = flatRows.value[cursorIndex.value];
   const extend = event.shiftKey;

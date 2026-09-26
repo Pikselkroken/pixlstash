@@ -174,3 +174,24 @@ describe("OptionRows", () => {
     w.unmount();
   });
 });
+
+describe("Segmented", () => {
+  it("leaves Up and Down to its container when horizontal", async () => {
+    // A switch in a grid's header: Down means "into the grid", so the group
+    // must neither flip its value nor swallow the press.
+    const outer = vi.fn();
+    document.body.addEventListener("keydown", outer);
+    const w = mount(Segmented, {
+      props: { options: OPTIONS, modelValue: "a", orientation: "horizontal" },
+      attachTo: document.body,
+    });
+    await w.trigger("keydown", { key: "ArrowDown" });
+    await w.trigger("keydown", { key: "ArrowUp" });
+    expect(w.emitted("update:modelValue")).toBeUndefined();
+    expect(outer).toHaveBeenCalledTimes(2);
+    await w.trigger("keydown", { key: "ArrowRight" });
+    expect(w.emitted("update:modelValue")).toEqual([["c"]]);
+    document.body.removeEventListener("keydown", outer);
+    w.unmount();
+  });
+});

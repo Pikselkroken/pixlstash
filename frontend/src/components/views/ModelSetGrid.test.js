@@ -390,6 +390,33 @@ describe("the cards", () => {
     expect(store.openSetKey).toBe("");
   });
 
+  it("steps off the Grid/List switch into the tray, not back to Grid", async () => {
+    // Clicking List leaves focus on the switch. Down there used to be the
+    // radiogroup's "next option" and flipped the tray straight back to Grid.
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [combination("1,2", [CKPT, VAE])],
+    });
+    store.toggleSet("model:1");
+    store.setView({ trayView: "list" });
+    await wrapper.vm.$nextTick();
+
+    const list = wrapper.findAll('.msp__header [role="radio"]')[1];
+    await list.trigger("keydown", { key: "ArrowDown" });
+    expect(store.view.trayView).toBe("list");
+    const grid = wrapper.find('[role="treegrid"]');
+    await grid.trigger("keydown", { key: "Enter" });
+    // The cursor is on a member, so Enter asks what it has run with.
+    expect(wrapper.emitted("works-with")).toHaveLength(1);
+
+    // Up from the switch returns to the card, whose Enter closes the tray.
+    await list.trigger("keydown", { key: "ArrowUp" });
+    expect(store.view.trayView).toBe("list");
+    await grid.trigger("keydown", { key: "Enter" });
+    expect(store.openSetKey).toBe("");
+  });
+
   it("draws the tray as a list when the reader asks for one", async () => {
     // The Workflows stack panel's own switch, so a reader learns it once. The
     // columns differ because a set's members are models.
@@ -1261,6 +1288,33 @@ describe("hand-made sets (#1520)", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [SET_VAE.sha256]);
+  });
+
+  it("enters the tray at its first tile on Down from the header bar", async () => {
+    removeWorkflowSetMembers.mockResolvedValue({
+      set: handSet(10, [SET_VAE]),
+      removed: [{ sha256: SET_CKPT.sha256, slot: "checkpoint" }],
+    });
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      support: [row(2, "sdxl_vae", "vae")],
+      handMade: [handSet(10, [SET_CKPT, SET_VAE])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+
+    // The header's rows are slot tiles, not members; Down must still land.
+    await wrapper.find(".msp__header button:not([disabled])").trigger("keydown", {
+      key: "ArrowDown",
+    });
+    await wrapper.find('[role="treegrid"]').trigger("keydown", {
+      key: "Backspace",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [
+      SET_CKPT.sha256,
+    ]);
   });
 
   it("undoes a create through the delete verb, so that undo has an Undo too", async () => {
