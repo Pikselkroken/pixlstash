@@ -2729,17 +2729,26 @@ def create_router(server) -> APIRouter:
                 )
             if kind is None and len(rows) > 1:
                 # One filename on the shelf under several kinds, and the caller
-                # did not say which: the kind the workflow loads `was` as.
-                row = next(
-                    (
-                        r
-                        for r in rows
-                        if model_fix_labels(
-                            hub, card.topology_hash, was, r["file_kind"]
-                        )
-                    ),
-                    rows[0],
-                )
+                # did not say which: the kind the workflow loads `was` as. Two
+                # such kinds are a guess that would fix one slot and leave the
+                # other missing behind a 200, so ask, as `?replacing=` does.
+                matching = [
+                    r
+                    for r in rows
+                    if model_fix_labels(hub, card.topology_hash, was, r["file_kind"])
+                ]
+                if len(matching) > 1:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "This workflow loads that model as a "
+                            + " and a ".join(
+                                _FIX_KIND_NAMES[r["file_kind"]] for r in matching
+                            )
+                            + "; say which kind to replace."
+                        ),
+                    )
+                row = matching[0] if matching else rows[0]
             else:
                 row = next((r for r in rows if kind in (None, r["file_kind"])), None)
             if row is None:

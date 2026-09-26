@@ -4614,7 +4614,7 @@ def test_merging_two_cards_keeps_the_name_of_the_one_with_most_pictures(workflow
 
 
 def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
-    workflow_env,
+    workflow_env, monkeypatch
 ):
     """A fixed checkpoint: same card, its pictures flagged as the old model's.
 
@@ -4690,6 +4690,18 @@ def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
     assert r.json()["detail"] == (
         "That is a checkpoint or a text encoder, not a VAE."
     ), r.text
+    # The workflow loading `was` in slots of both of those kinds, and the
+    # caller not saying which: refused, never one fixed and one left missing.
+    real_labels = workflows_routes.model_fix_labels
+    monkeypatch.setattr(
+        workflows_routes,
+        "model_fix_labels",
+        lambda hub, topology, was, kind: [f"test-slot/{kind}"],
+    )
+    r = owner.put(route, json={"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME})
+    assert r.status_code == 409, r.text
+    assert "as a checkpoint and a text encoder" in r.json()["detail"], r.text
+    monkeypatch.setattr(workflows_routes, "model_fix_labels", real_labels)
     with server.hub.transaction() as conn:
         conn.execute("DELETE FROM model WHERE sha256 = ?", (_h("te-digest"),))
 
