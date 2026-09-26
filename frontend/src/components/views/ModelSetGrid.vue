@@ -1512,13 +1512,14 @@ function onHandKey(event, entry) {
     }
     if (
       (event.key === "Delete" || event.key === "Backspace") &&
-      entry.ghost
+      (entry.ghost || entry.offer)
     ) {
-      // Keep this one model out. Stopped, so the shelf's file Delete never
-      // sees a press aimed at a model that is not in the set.
+      // Keep one model out (a ghost) or the whole offer (the strip). Stopped,
+      // so the shelf's file Delete never sees a press aimed at a row that
+      // holds no file.
       event.preventDefault();
       event.stopPropagation();
-      if (!event.repeat) keepSeparate([entry.ghost]);
+      if (!event.repeat) keepSeparate(entry.ghost ? [entry.ghost] : undefined);
       return true;
     }
     if (event.key === "Backspace" && entry.member) {

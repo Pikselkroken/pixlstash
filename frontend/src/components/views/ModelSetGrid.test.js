@@ -2103,6 +2103,30 @@ describe("hand-made sets (#1520)", () => {
       ]);
     });
 
+    it("keeps the whole offer separate with Delete on the strip, never reaching the file delete", async () => {
+      setWorkflowSetDeclines.mockResolvedValue({
+        set: handSet(10, [SET_CKPT]),
+        previous: [],
+      });
+      const { wrapper, store } = await mountOffer({}, { attach: true });
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      const grid = wrapper.find('[role="treegrid"]');
+      await grid.trigger("keydown", { key: "ArrowDown" });
+      const onWindowKey = vi.fn();
+      window.addEventListener("keydown", onWindowKey);
+      await grid.trigger("keydown", { key: "Delete" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      window.removeEventListener("keydown", onWindowKey);
+
+      expect(setWorkflowSetDeclines).toHaveBeenCalledWith(10, [
+        GHOST_LORA.sha256,
+        GHOST_OTHER.sha256,
+      ]);
+      expect(onWindowKey).not.toHaveBeenCalled();
+      wrapper.unmount();
+    });
+
     it("undoes an older Keep separate without dropping a newer one", async () => {
       const { store } = await mountOffer();
       // A server that remembers the list, so each refetch reads it back.

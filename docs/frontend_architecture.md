@@ -1769,8 +1769,8 @@ the shelf's workflow sets section) and served as `hand_made` on
   model as a **ghost** tile (`g:<sha256>`, dashed, faded mark, picture count,
   Add) in the slot it would land in, before the ＋; a checkpoint ghost takes the
   ＋'s place. Enter on the strip merges all, Enter on a ghost adds it, Delete or
-  Backspace on a ghost keeps it out (stopped, so the shelf's file Delete never
-  sees it). A merge is `addToHandMadeSet` with `joined`, whose receipt counts
+  Backspace keeps a ghost out, or on the strip keeps the whole offer separate
+  (stopped either way, so the shelf's file Delete never sees it). A merge is `addToHandMadeSet` with `joined`, whose receipt counts
   the pictures that joined; Keep separate and Offer again are
   `keepOutOfHandMadeSet` / `offerMergeAgain`, each with Undo. The server
   stores the kept-out list whole, so the store queues those writes and applies
