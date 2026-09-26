@@ -537,7 +537,7 @@ def describe_differences(
 
     *names* is :func:`read_grid`'s one ``asset_names`` read, which is what
     puts a readable model name in an "other checkpoint" chip's detail. Left
-    out, those chips carry no detail.
+    out, every model in that detail reads "unnamed model".
     """
     by_key = {figure.card.workflow_key: figure for figure in figures}
     wanted = {
@@ -611,8 +611,8 @@ def describe_differences(
         # The cover gets no chips, and the grid's one card per stack is the
         # cover: the chips say how a member differs from the cover, so the
         # members' union printed under the cover itself said nothing true.
-    if changed_models and names:
-        _describe_model_changes(hub, changed_models, names)
+    if changed_models:
+        _describe_model_changes(hub, changed_models, names or {})
 
 
 def _describe_model_changes(

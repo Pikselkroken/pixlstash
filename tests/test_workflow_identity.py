@@ -440,6 +440,18 @@ def test_a_nodes_chip_with_no_class_change_says_what_did_change():
     ]
 
 
+def test_a_changed_node_says_whether_it_was_a_model_or_a_picture():
+    cover = _graph(img2img=True, input_picture="a.png")
+    picture = _graph(img2img=True, input_picture="b.png")
+    assert [(d.chip, d.detail) for d in _differences(cover, picture)] == [
+        ("1 node differs", "LoadImage: other picture")
+    ]
+    # A LoRA is not an "other models" chip, so a swapped one lands here.
+    alice = _graph(loras=("alice.safetensors",))
+    bob = _graph(loras=("bob.safetensors",))
+    assert [d.detail for d in _differences(alice, bob)] == ["LoraLoader: other model"]
+
+
 def test_a_model_chip_carries_both_sides_base_model_first():
     member = _graph(ckpt="other.safetensors", upscale=True)
     member["60"] = _node("VAELoader", vae_name="new_vae.safetensors")

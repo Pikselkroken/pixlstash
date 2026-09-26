@@ -699,10 +699,29 @@ def _nodes_differing(
     # Wiring alone can differ with every node descriptor equal; that is still
     # at least one node that differs.
     count = max(sum((cover - member).values()), sum((member - cover).values()), 1)
-    moved = sorted({cls for cls, _ in (cover - member) + (member - cover)})
+    moved = sorted(
+        {
+            f"{cls}: other {'picture' if _names_pictures(cls, widgets) else 'model'}"
+            for cls, widgets in (cover - member) + (member - cover)
+        }
+    )
     if moved:
-        return count, " · ".join(f"{cls}: other model" for cls in moved)
+        return count, " · ".join(moved)
     return count, "same nodes, wired differently"
+
+
+def _names_pictures(class_type: str, widgets: tuple) -> bool:
+    """Whether every asset a node names is a picture input, as :func:`_slots` reads it.
+
+    The stored document keeps an input picture's reference beside the models,
+    so a changed ``LoadImage`` is "other picture", never "other model".
+    """
+    named = [name for name, value in widgets if value is not None]
+    return bool(named) and all(
+        _PICTURE_WIDGET_RE.search(name)
+        or name in INPUT_IMAGE_FIELDS.get(class_type, ())
+        for name in named
+    )
 
 
 def _slots_outside(
