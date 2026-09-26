@@ -918,6 +918,44 @@ describe("the Recipes tab (v1.12 F6)", () => {
     expect(tab.props("workflowKeys")).toEqual([KEY, OTHER]);
   });
 
+  it("lists only the members picked inside an expanded stack", async () => {
+    const stack = card({ stack_size: 3, member_keys: [OTHER, MOVED] });
+    const { wrapper, store } = await mountWith([KEY], [stack]);
+    store.members = {
+      [KEY]: [card({ key: OTHER, name: "Member B" }), card({ key: MOVED })],
+    };
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text().trim() === "Recipes")
+      .trigger("click");
+    await flush(wrapper);
+    const tab = () => wrapper.findComponent({ name: "WorkflowRecipesTab" });
+
+    // Collapsed: the cover stands for the stack.
+    expect(tab().props("wholeStack")).toBe(true);
+
+    store.openStackKey = KEY;
+    store.selectedKeys = [OTHER];
+    await flush(wrapper);
+    expect(tab().props("workflowKeys")).toEqual([OTHER]);
+    expect(tab().props("wholeStack")).toBe(false);
+    expect(tab().props("stackName")).toBe("Member B");
+
+    store.selectedKeys = [OTHER, MOVED];
+    await flush(wrapper);
+    expect(tab().props("wholeStack")).toBe(false);
+
+    // The cover's own row in the open panel is one member like the others.
+    store.selectedKeys = [KEY];
+    await flush(wrapper);
+    expect(tab().props("wholeStack")).toBe(false);
+
+    // The whole stack selected, open or not, is the stack again.
+    store.selectedKeys = [KEY, OTHER, MOVED];
+    await flush(wrapper);
+    expect(tab().props("wholeStack")).toBe(true);
+  });
+
   it("puts the refused Run… back when the Workflow tab is chosen", async () => {
     // The footer belongs to the Workflow body, and Run… has to stay on screen
     // and refuse rather than vanish. Leaving the Recipes tab is what brings

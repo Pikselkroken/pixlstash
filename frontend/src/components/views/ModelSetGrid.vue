@@ -83,6 +83,11 @@
             @add="({ slotId, el }) => openChooser('slot', el, slotId)"
             @fill="({ mode, el }) => openChooser(mode, el)"
             @pick="openWorksWith"
+            @merge="mergeOffer()"
+            @keep-separate="keepSeparate()"
+            @add-ghost="(ghost) => mergeOffer([ghost])"
+            @offer-again="store.offerMergeAgain(openHand.set)"
+            @cursor="(key) => moveToKey(key)"
           />
 
           <ModelSetPanel
@@ -168,6 +173,7 @@
                 "
                 :panel-id="store.openSetKey === entry.key ? PANEL_ID : ''"
                 @toggle="store.toggleSet(entry.key)"
+                @offer="openOffer(entry.setId)"
               />
             </div>
           </div>
@@ -478,8 +484,25 @@ const flatRows = computed(() => {
     // A hand-made tray's stops are its tiles, slot by slot. Padded to whole
     // GRID rows, so every card after it keeps naming its column; inside the
     // tray the arrows walk slots rather than columns (see `onKeyDown`).
-    const tiles = setSlots(openHand.value.set).flatMap(
-      ({ slot, items }, slotIndex) =>
+    // The merge offer's strip (#1523) is the tray's first stop, a slot row
+    // of its own above the Checkpoint slot, so Up and Down step through it.
+    const offer = openHand.value.set.offer
+      ? [
+          {
+            kind: "slot",
+            id: "slot:offer",
+            key: "offer",
+            slotId: "",
+            slotIndex: -1,
+            member: null,
+            offer: true,
+            first: true,
+          },
+        ]
+      : [];
+    const tiles = [
+      ...offer,
+      ...setSlots(openHand.value.set).flatMap(({ slot, items }, slotIndex) =>
         items.map((item, itemIndex) => ({
           kind: "slot",
           id: `slot:${item.key}`,
@@ -487,9 +510,11 @@ const flatRows = computed(() => {
           slotId: slot.id,
           slotIndex,
           member: item.member,
-          first: slotIndex === 0 && itemIndex === 0,
+          ghost: item.ghost ?? null,
+          first: !offer.length && slotIndex === 0 && itemIndex === 0,
         })),
-    );
+      ),
+    ];
     const padded = Math.ceil(Math.max(tiles.length, 1) / cols) * cols;
     while (tiles.length < padded) {
       tiles.push({ kind: "hole", id: `hole:block:${tiles.length}` });
@@ -1015,6 +1040,61 @@ async function setCheckpointBase(value) {
   }
 }
 
+// ── The merge offer (#1523) ───────────────────────────────────────────────
+
+/** Put the cursor on a tray stop by its key, if it is drawn. */
+function moveToKey(key) {
+  const at = flatRows.value.findIndex(
+    (entry) => entry.kind === "slot" && entry.key === key,
+  );
+  if (at >= 0) moveCursor(at);
+  return at >= 0;
+}
+
+/**
+ * Open a set's tray with the cursor on its offer strip: the card's lozenge,
+ * and Merge with the pictures' set… in the set's menu.
+ */
+async function openOffer(setId) {
+  const key = `hand:${setId}`;
+  if (store.openSetKey !== key) store.toggleSet(key);
+  await nextTick();
+  moveToKey("offer");
+}
+
+/**
+ * After a merge or a Keep separate the strip, or the ghost, is gone: the
+ * cursor goes where the reader expects - `key` if it is drawn now, else the
+ * tray's first stop - and never to <body>.
+ */
+function settleCursor(key) {
+  if (key && moveToKey(key)) return;
+  if (flatRows.value.some((entry) => entry.id === cursorId.value)) return;
+  const first = flatRows.value.findIndex((entry) => entry.kind === "slot");
+  if (first >= 0) moveCursor(first);
+}
+
+/** Merge, add all - or one ghost's Add, which lands the cursor on its tile. */
+async function mergeOffer(models) {
+  const set = openHand.value?.set;
+  const adding = models ?? set?.offer?.models ?? [];
+  if (!set || !adding.length) return;
+  await store.addToHandMadeSet(
+    set,
+    adding.map((model) => ({ model_id: model.id, slot: model.slot })),
+    { joined: true },
+  );
+  settleCursor(adding.length === 1 ? `m:${adding[0].sha256}` : "");
+}
+
+/** Keep separate: the whole offer, or one ghost (Delete on it). */
+async function keepSeparate(models) {
+  const set = openHand.value?.set;
+  if (!set?.offer) return;
+  await store.keepOutOfHandMadeSet(set, models);
+  settleCursor("");
+}
+
 /** Exposed so the shelf can open a new set with Fill from pictures ready. */
 function openFill(mode) {
   const button = gridEl.value?.querySelector?.(
@@ -1098,7 +1178,7 @@ async function pickIntoSlot(set, slotId, ids) {
   }
 }
 
-defineExpose({ openFill });
+defineExpose({ openFill, openOffer });
 
 /**
  * Right-click a card or a tray row: the shelf's full verb inventory, at the
@@ -1385,6 +1465,27 @@ function isMenuKey(event) {
 }
 
 /**
+ * Up/Down pressed in the open tray's header bar (the Grid/List switch, Close).
+ *
+ * The bar sits between the card and its members, so Down enters the tray at its
+ * first member and Up returns to the card, wherever the cursor last was: a
+ * mouse click on the switch does not move it. Returns true when handled.
+ */
+function headerStep(event) {
+  const down = event.key === "ArrowDown";
+  if (!down && event.key !== "ArrowUp") return false;
+  if (!event.target?.closest?.(".msp__header")) return false;
+  event.preventDefault();
+  const rows = flatRows.value;
+  moveCursor(
+    down
+      ? rows.findIndex((e) => e.kind === "member" || e.kind === "slot")
+      : rows.findIndex((e) => e.kind === "card" && e.key === store.openSetKey),
+  );
+  return true;
+}
+
+/**
  * The keys a hand-made set, its tray and the New tile answer differently.
  *
  * @returns {boolean} true when the press was handled here.
@@ -1419,11 +1520,27 @@ function onHandKey(event, entry) {
     }
     if (event.key === "Enter") {
       event.preventDefault();
-      if (!entry.member) {
+      if (entry.offer) {
+        mergeOffer();
+      } else if (entry.ghost) {
+        mergeOffer([entry.ghost]);
+      } else if (!entry.member) {
         openChooser("slot", rowElement(entry), entry.slotId);
       } else if (entry.member.on_shelf) {
         openWorksWith(entry.member);
       }
+      return true;
+    }
+    if (
+      (event.key === "Delete" || event.key === "Backspace") &&
+      (entry.ghost || entry.offer)
+    ) {
+      // Keep one model out (a ghost) or the whole offer (the strip). Stopped,
+      // so the shelf's file Delete never sees a press aimed at a row that
+      // holds no file.
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) keepSeparate(entry.ghost ? [entry.ghost] : undefined);
       return true;
     }
     if (event.key === "Backspace" && entry.member) {
@@ -1464,6 +1581,7 @@ function onHandKey(event, entry) {
 }
 
 function onKeyDown(event) {
+  if (headerStep(event)) return;
   if (targetOwnsTheGesture(event)) return;
   const entry = flatRows.value[cursorIndex.value];
   const extend = event.shiftKey;

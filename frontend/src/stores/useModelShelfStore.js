@@ -17,6 +17,7 @@ import {
   removeWorkflowSetMembers,
   renameWorkflowSet,
   setAdapterAttachments,
+  setWorkflowSetDeclines,
 } from "../api/modelShelf";
 import { onSessionReset } from "../utils/apiClient";
 import { useNoticeStore } from "./useNoticeStore";
@@ -42,6 +43,7 @@ import {
 import {
   handMadeCard,
   handMadeName,
+  pictureCount,
   setCard,
   setGroups,
   worksWith,
@@ -1663,8 +1665,21 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   function withShelfNames(set) {
     if (!set) return set;
     const byId = new Map(rows.value.map((row) => [row.id, row]));
+    const shelfName = (model) => {
+      const row = byId.get(model.id);
+      return (row && modelName(row).text) || model.name;
+    };
     return {
       ...set,
+      // The merge offer's models (#1523) are always on the shelf.
+      offer: set.offer && {
+        ...set.offer,
+        head_name: shelfName({ id: set.offer.head_id, name: set.offer.head_name }),
+        models: (set.offer.models ?? []).map((model) => ({
+          ...model,
+          name: shelfName(model),
+        })),
+      },
       members: (set.members ?? []).map((member) => {
         const row = member.id != null ? byId.get(member.id) : null;
         const kept = member.label || member.name || "";
@@ -2065,18 +2080,27 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    *
    * @param {Object} set
    * @param {Array<{model_id: number, slot?: string}>} members
+   * @param {{joined?: boolean}} [options] - `joined` says in the receipt how
+   *   many pictures joined the set, which is what a merge (#1523) is for.
    */
-  async function addToHandMadeSet(set, members) {
+  async function addToHandMadeSet(set, members, { joined = false } = {}) {
     if (!members.length) return null;
+    const before = Number(set.picture_count) || 0;
     const result = await setWrite(
       () => addWorkflowSetMembers(set.id, members),
       {
-        receipt: ({ added }) =>
-          added.length
-            ? `Added ${added.length} ${added.length === 1 ? "model" : "models"} to "${setLabel(set)}".`
-            : `Nothing added: "${setLabel(set)}" already holds ${
-                members.length === 1 ? "it" : "them"
-              }.`,
+        receipt: ({ added, set: after }) => {
+          if (!added.length) {
+            return `Nothing added: "${setLabel(set)}" already holds ${
+              members.length === 1 ? "it" : "them"
+            }.`;
+          }
+          const gained = (Number(after?.picture_count) || 0) - before;
+          return (
+            `Added ${added.length} ${added.length === 1 ? "model" : "models"} to "${setLabel(set)}".` +
+            (joined && gained > 0 ? ` ${pictureCount(gained)} joined it.` : "")
+          );
+        },
         undo: ({ added }) =>
           added.length ? removeWorkflowSetMembers(set.id, added) : null,
         failure: "Those models could not be added to the set.",
@@ -2109,6 +2133,82 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       key: setReceiptKey(set.id, "remove"),
     });
   }
+
+  /**
+   * Keep models out of a set's merge offer (#1523): all of them ("Keep
+   * separate"), or one ghost.
+   *
+   * The server stores the list whole, so every write here is a DELTA applied to
+   * the latest list at the moment it runs, one at a time: two quick Deletes on
+   * two ghosts both land, and undoing an older Keep separate takes out only
+   * what that one added rather than putting back a list a later one extended.
+   *
+   * @param {Object} set - a set from `handMadeSets`, carrying its `offer`.
+   * @param {Array<Object>} [models] - offered models; all of them if omitted.
+   */
+  function keepOutOfHandMadeSet(set, models) {
+    const offer = set.offer;
+    const out = (models ?? offer?.models ?? []).map((m) => m.sha256);
+    if (!out.length) return Promise.resolve(null);
+    const receipt = models
+      ? `Kept ${models.map((m) => m.name).join(", ")} out of "${setLabel(set)}".`
+      : `Kept "${setLabel(set)}" separate from ${
+          offer.picture_count
+            ? pictureCount(offer.picture_count)
+            : "those recipes"
+        }.`;
+    return setWrite(() => changeDeclines(set.id, { add: out }), {
+      receipt,
+      undo: () => changeDeclines(set.id, { remove: out }),
+      failure: "The set could not be kept separate.",
+    });
+  }
+
+  /** Forget every Keep separate on a set, so its merge offer comes back. */
+  function offerMergeAgain(set) {
+    return setWrite(() => changeDeclines(set.id, { clear: true }), {
+      receipt: `The merge is offered again on "${setLabel(set)}".`,
+      undo: ({ previous }) => changeDeclines(set.id, { add: previous }),
+      failure: "The merge could not be offered again.",
+    });
+  }
+
+  let declineQueue = Promise.resolve();
+
+  /**
+   * One change to a set's kept-out list, queued behind any still in flight
+   * and computed from the list the last write returned.
+   */
+  function changeDeclines(setId, { add = [], remove = [], clear = false }) {
+    const run = async () => {
+      const current =
+        latestDeclines.get(setId) ??
+        handMadeSets.value.find((s) => s.id === setId)?.declined ??
+        [];
+      const gone = new Set(remove);
+      const next = clear
+        ? []
+        : [...new Set([...current.filter((sha) => !gone.has(sha)), ...add])];
+      const result = await setWorkflowSetDeclines(setId, next);
+      latestDeclines.set(setId, result?.set?.declined ?? next);
+      return result;
+    };
+    const queued = declineQueue.then(run, run);
+    declineQueue = queued.catch(() => null);
+    return queued;
+  }
+
+  // What each set's list was after this session's last write to it, as the
+  // server answered it. Kept across refetches: one that left before the last
+  // write landed would otherwise hand the next write a stale list. Dropped
+  // only for a set that is gone.
+  const latestDeclines = new Map();
+  watch(handMadeSets, (sets) => {
+    const live = new Set(sets.map((set) => set.id));
+    for (const id of [...latestDeclines.keys()]) {
+      if (!live.has(id)) latestDeclines.delete(id);
+    }
+  });
 
   /** The hand-made sets holding any of these model ids, for the delete warning. */
   function handMadeSetsHolding(ids) {
@@ -3055,6 +3155,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     deleteHandMadeSets,
     addToHandMadeSet,
     removeFromHandMadeSet,
+    keepOutOfHandMadeSet,
+    offerMergeAgain,
     handMadeSetsHolding,
     checkpointAdded,
     worksWithModel,

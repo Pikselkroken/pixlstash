@@ -66,6 +66,37 @@
         <span class="ctx-label-text">Rename</span>
         <span class="ctx-shortcut">F2</span>
       </button>
+      <!-- The merge offer (#1523), for the one set the menu is about. -->
+      <template v-if="offered">
+        <button
+          class="ctx-item"
+          type="button"
+          role="menuitem"
+          @click="verb('merge-offer')"
+        >
+          <v-icon class="ctx-icon">mdi-table-arrow-down</v-icon>
+          <span class="ctx-label-text">Merge with the pictures' set…</span>
+        </button>
+        <button
+          class="ctx-item"
+          type="button"
+          role="menuitem"
+          @click="verb('keep-separate')"
+        >
+          <v-icon class="ctx-icon">mdi-call-split</v-icon>
+          <span class="ctx-label-text">Keep separate</span>
+        </button>
+      </template>
+      <button
+        v-if="store.selectedSets.length === 1 && store.selectedSets[0].declined?.length"
+        class="ctx-item"
+        type="button"
+        role="menuitem"
+        @click="verb('offer-again')"
+      >
+        <v-icon class="ctx-icon">mdi-table-arrow-down</v-icon>
+        <span class="ctx-label-text">Offer the merge again</span>
+      </button>
       <button
         class="ctx-item"
         type="button"
@@ -97,7 +128,13 @@ import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 
-const emit = defineEmits(["rename", "delete"]);
+const emit = defineEmits([
+  "rename",
+  "delete",
+  "merge-offer",
+  "keep-separate",
+  "offer-again",
+]);
 
 const store = useModelShelfStore();
 
@@ -108,6 +145,11 @@ const countLabel = computed(() => {
   const n = store.selectedSets.length;
   return n === 1 ? "1 set" : `${n} sets`;
 });
+
+/** The one selected set carries a merge offer (#1523). */
+const offered = computed(
+  () => store.selectedSets.length === 1 && Boolean(store.selectedSets[0].offer),
+);
 
 function clear() {
   store.clearSetSelection();
