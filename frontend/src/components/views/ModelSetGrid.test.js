@@ -1868,6 +1868,45 @@ describe("hand-made sets (#1520)", () => {
     wrapper.unmount();
   });
 
+  it("enters a hand-made tray at its first tile from any column of a wide grid", async () => {
+    // Four columns: the hand-made card sits in the second (the New tile is
+    // first), so column arithmetic alone would land on the tray's SECOND tile.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor() {}
+        observe(element) {
+          Object.defineProperty(element, "clientWidth", {
+            configurable: true,
+            value: 1000,
+          });
+        }
+        disconnect() {}
+      },
+    );
+    try {
+      const { wrapper, store } = await mountGrid({
+        rows: [row(1, "realvisXL_v5", "checkpoint")],
+        support: [row(2, "sdxl_vae", "vae")],
+        handMade: [handSet(10, [SET_CKPT, SET_VAE])],
+        attach: true,
+      });
+      store.toggleSet("hand:10");
+      await wrapper.vm.$nextTick();
+      await wrapper.find(".msg__row").trigger("click");
+
+      await wrapper
+        .find('[role="treegrid"]')
+        .trigger("keydown", { key: "ArrowDown" });
+      await wrapper.vm.$nextTick();
+
+      expect(document.activeElement?.dataset.key).toBe(`m:${SET_CKPT.sha256}`);
+      wrapper.unmount();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("marks a member whose file left the shelf, and does not let it be selected", async () => {
     const gone = slotMember(5, "old_lora", "lora", {
       on_shelf: false,

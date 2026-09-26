@@ -1722,8 +1722,8 @@ the shelf's workflow sets section) and served as `hand_made` on
   drops its ＋ once filled); the grid splices them in as `kind: "slot"` entries.
   Left/Right walk tiles, Up/Down jump slot to slot (and out to the card or the
   next row), Enter on ＋ opens the chooser, Backspace removes a member, Delete
-  stays the file delete. Down from a card into a List tray or a slots tray lands
-  on its first row (`intoTray`).
+  stays the file delete. A crossing into a slots tray lands at its edge, as it does for a List
+  tray (`verticalTarget`, whose `trayBounds` covers `slot` entries too).
 - **One chooser for three jobs, in two modes.** `WorkflowSetChooser` only adds.
   A slot's ＋ opens it in `pick` mode: ranked by `slotSuggestions` (your sets
   with the same base model, then recipes with this checkpoint, then the same
