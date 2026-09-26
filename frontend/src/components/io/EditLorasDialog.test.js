@@ -578,3 +578,144 @@ describe("opened from Save as recipe", () => {
     expect(textOf(wrapper)).toContain("No changes");
   });
 });
+
+describe("a forked chain, drawn side by side", () => {
+  function forked(overrides = {}) {
+    return chain({
+      loaders: [
+        loader("10", "film-look-v2.safetensors", 0.6),
+        loader("11", "hairstyle-v3.safetensors", 0.65),
+      ],
+      sink: {
+        summary: "2 text encoders read clip",
+        consumers: [
+          { node_id: "6", class_type: "CLIPTextEncode", field: "clip", type: "CLIP" },
+        ],
+      },
+      lanes: [
+        {
+          source: null,
+          sampler: { node_id: "3", class_type: "KSampler", title: "Base pass" },
+          sink: { summary: "KSampler #3 reads model", consumers: [] },
+          loaders: [loader("12", "lightning-8step.safetensors", 1.0)],
+          added_loader_class: "LoraLoaderModelOnly",
+        },
+        {
+          source: null,
+          sampler: { node_id: "15", class_type: "KSampler", title: null },
+          sink: { summary: "KSampler #15 reads model", consumers: [] },
+          loaders: [loader("13", "detail-tweaker-xl.safetensors", 0.5)],
+          added_loader_class: "LoraLoaderModelOnly",
+        },
+      ],
+      ...overrides,
+    });
+  }
+
+  function laneRows(wrapper, index) {
+    return wrapper
+      .findAll("[data-testid='eld-lane']")
+      [index].findAll(".eld-row")
+      .map((row) => row.find(".eld-name-text").text());
+  }
+
+  it("draws the shared loaders once, then one lane per pass with its sampler", async () => {
+    getLoraChain.mockResolvedValue(forked());
+    const wrapper = await mountDialog();
+    const trunk = wrapper.find("[data-testid='eld-trunk']");
+    expect(trunk.text()).toContain("Both passes");
+    expect(trunk.findAll(".eld-row").map((row) => row.find(".eld-name-text").text())).toEqual([
+      "film-look-v2",
+      "hairstyle-v3",
+    ]);
+    const lanes = wrapper.findAll("[data-testid='eld-lane']");
+    expect(lanes.map((lane) => lane.find(".eld-lane-head").text().replace(/\s+/g, " "))).toEqual([
+      "Base pass KSampler #3 · 3 LoRAs in all",
+      "KSampler #15 3 LoRAs in all",
+    ]);
+    expect(laneRows(wrapper, 0)).toEqual(["lightning-8step"]);
+    expect(laneRows(wrapper, 1)).toEqual(["detail-tweaker-xl"]);
+    // A lane row counts on from the trunk: the third LoRA its sampler gets.
+    expect(lanes[1].find(".eld-pos").text()).toBe("3");
+  });
+
+  it("moves a loader across the fork from the row menu, and sends each pass", async () => {
+    getLoraChain.mockResolvedValue(forked());
+    const wrapper = await mountDialog();
+    const hires = wrapper.findAll("[data-testid='eld-lane']")[1].find(".eld-row");
+    const targets = hires.findAll("[data-move]").map((item) => item.text());
+    expect(targets).toEqual(["Move to both passes", "Move to Base pass"]);
+    await hires.find("[data-move='0']").trigger("click");
+    await flushPromises();
+
+    expect(laneRows(wrapper, 0)).toEqual(["lightning-8step", "detail-tweaker-xl"]);
+    expect(laneRows(wrapper, 1)).toEqual([]);
+    expect(wrapper.find("[role=status][aria-live=polite]").text()).toBe(
+      "detail-tweaker-xl moved to Base pass, at 4.",
+    );
+    expect(textOf(wrapper)).toContain("1 change");
+
+    await button(wrapper, "Save…").trigger("click");
+    await flushPromises();
+    const body = saveLoraChain.mock.calls[0][1];
+    expect(body.entries.map((entry) => entry.node_id)).toEqual(["10", "11"]);
+    expect(body.lanes.map((lane) => lane.map((entry) => entry.node_id))).toEqual([
+      ["12", "13"],
+      [],
+    ]);
+  });
+
+  it("keeps Alt+arrow inside the row's own segment", async () => {
+    getLoraChain.mockResolvedValue(forked());
+    const wrapper = await mountDialog();
+    const last = wrapper.find("[data-testid='eld-trunk']").findAll(".eld-row")[1];
+    await last.find("[data-focus='handle']").trigger("keydown", {
+      key: "ArrowDown",
+      altKey: true,
+    });
+    await flushPromises();
+    expect(laneRows(wrapper, 0)).toEqual(["lightning-8step"]);
+    expect(textOf(wrapper)).toContain("No changes");
+    // Nothing moved, so nothing is announced as moving.
+    expect(wrapper.find("[role=status][aria-live=polite]").text()).toBe("");
+  });
+
+  it("adds a LoRA to one pass only", async () => {
+    getLoraChain.mockResolvedValue(forked());
+    const wrapper = await mountDialog();
+    const lane = wrapper.findAll("[data-testid='eld-lane']")[1];
+    await lane.find("button[aria-label='Add a LoRA for KSampler #15 only']").trigger("click");
+    await flushPromises();
+    await wrapper.find("select").setValue("sha-skin");
+    await flushPromises();
+    await button(wrapper, "Save…").trigger("click");
+    await flushPromises();
+    const body = saveLoraChain.mock.calls[0][1];
+    expect(body.lanes[1]).toEqual([
+      { node_id: "13", strength: 0.5 },
+      { node_id: null, sha256: "sha-skin", strength: 1 },
+    ]);
+    expect(body.lanes[0]).toEqual([{ node_id: "12", strength: 1 }]);
+  });
+
+  it("has no trunk when every pass loads its own model", async () => {
+    const [base, hires] = forked().lanes;
+    getLoraChain.mockResolvedValue(
+      forked({
+        source: null,
+        loaders: [],
+        lanes: [
+          { ...base, source: { node_id: "1", class_type: "UNETLoader", outputs: ["MODEL"] } },
+          { ...hires, source: { node_id: "2", class_type: "UNETLoader", outputs: ["MODEL"] } },
+        ],
+      }),
+    );
+    const wrapper = await mountDialog();
+    expect(wrapper.find("[data-testid='eld-trunk']").exists()).toBe(false);
+    expect(wrapper.find(".eld-fork").exists()).toBe(false);
+    const row = wrapper.findAll("[data-testid='eld-lane']")[0].find(".eld-row");
+    expect(row.findAll("[data-move]").map((item) => item.text())).toEqual([
+      "Move to KSampler #15",
+    ]);
+  });
+});

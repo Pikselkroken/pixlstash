@@ -372,9 +372,11 @@ export async function deleteWorkflowFile(workflowKey) {
  * @param {string} workflowKey
  * @returns {Promise<{workflow_key: string, editable: boolean, refusal: ?string,
  *   source: ?Object, sink: ?Object, loaders: Array<Object>,
- *   added_loader_class: ?string, branch_note: ?string}>} `branch_note` says
- *   why the list stops before some of the workflow's loaders (the model
- *   branches at the chain's end); null for a straight chain.
+ *   added_loader_class: ?string, lanes: Array<Object>, branch_note: ?string}>}
+ *   Where the model forks, `loaders` is the trunk every pass reads and `lanes`
+ *   holds one `{source, sampler, sink, loaders, added_loader_class}` per pass;
+ *   empty for a straight chain. `branch_note` says why loaders past a further
+ *   branch are left as they are.
  */
 export async function getLoraChain(workflowKey) {
   return unwrap(
@@ -387,14 +389,16 @@ export async function getLoraChain(workflowKey) {
  *
  * `entries` is the whole chain in apply order: an existing loader by
  * `node_id` (kept, maybe moved or re-weighted), a new one by the shelf
- * `sha256` with `node_id: null`. An existing loader left out is deleted. The
+ * `sha256` with `node_id: null`. For a forked chain `entries` is the trunk
+ * and `lanes` one such list per lane, in the read's order; an existing loader
+ * may sit in any of them. An existing loader left out of all is deleted. The
  * original file is never modified: a write answers 201 with the new card's
  * `workflow_key`, and `dry_run: true` answers 200 with only the `changes` the
  * confirm step lists.
  *
  * @param {string} workflowKey
  * @param {{entries: Array<{node_id: ?string, sha256?: string, strength?: number}>,
- *   name: ?string, dry_run: boolean}} body
+ *   lanes?: Array<Array<Object>>, name: ?string, dry_run: boolean}} body
  * @returns {Promise<{dry_run: boolean, name: ?string, workflow_key: ?string,
  *   changes: Array<{kind: string, node_id: ?string, text: string}>}>}
  */

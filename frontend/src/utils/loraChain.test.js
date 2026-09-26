@@ -61,3 +61,20 @@ describe("loraChain", () => {
     });
   });
 });
+
+describe("countChanges across a fork", () => {
+  const read = [
+    { node_id: "10", strength: 1, lane: null },
+    { node_id: "12", strength: 1, lane: 0 },
+    { node_id: "13", strength: 1, lane: 1 },
+  ];
+  const row = (nodeId, lane) => ({ nodeId, lane, strength: 1, isNew: false, deleted: false });
+
+  it("counts a loader taken across the fork as one change", () => {
+    expect(countChanges(read, [row("10", null), row("12", 0), row("13", 0)])).toBe(1);
+  });
+
+  it("counts nothing for the chain as read", () => {
+    expect(countChanges(read, [row("10", null), row("12", 0), row("13", 1)])).toBe(0);
+  });
+});
