@@ -95,6 +95,7 @@ from platformdirs import user_data_dir
 # stay thin and delegate to it. See pixlstash/services/comfyui_service.py.
 from pixlstash.services.comfyui_service import (
     _comfyui_abort,
+    comfyui_can_open_workflows,
     library_ids_named,
     pixlstash_node_refusals,
     swap_pixlstash_savers,
@@ -1543,6 +1544,12 @@ class ComfyUIWorkflowDeleteResponse(BaseModel):
     name: str
 
 
+class ComfyUIPixlstashNodeResponse(BaseModel):
+    """Whether the owner's ComfyUI can open a PixlStash workflow link."""
+
+    can_open_workflows: Optional[bool] = None
+
+
 class ComfyUIAbortResponse(BaseModel):
     """Result of aborting the active ComfyUI run."""
 
@@ -2153,6 +2160,21 @@ def create_router(server) -> APIRouter:
             "workflow": name,
             **_describe_lora_insertion(graph, object_info, error),
         }
+
+    @router.get(
+        "/comfyui/pixlstash-node",
+        summary="Whether ComfyUI can open a PixlStash workflow",
+        description=(
+            "Asks the configured ComfyUI's /extensions whether the "
+            "ComfyUI-PixlStash node's open_workflow.js is loaded, the script "
+            "that reads ?pixlstash_workflow=<key>. can_open_workflows is null "
+            "when ComfyUI cannot be asked."
+        ),
+        response_model=ComfyUIPixlstashNodeResponse,
+    )
+    def get_comfyui_pixlstash_node(request: Request):
+        comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
+        return {"can_open_workflows": comfyui_can_open_workflows(comfyui_url)}
 
     @router.post(
         "/comfyui/abort",

@@ -1461,6 +1461,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="LoRA loader insertion; reaches the owner's ComfyUI; owner only",
     ),
+    ("GET", "/api/v1/comfyui/pixlstash-node"): RoutePolicy(
+        _OWNER,
+        justification="Whether the owner's ComfyUI has the ComfyUI-PixlStash node; reaches the owner's ComfyUI; owner only",
+    ),
     ("POST", "/api/v1/comfyui/abort"): RoutePolicy(
         _OWNER,
         justification="Abort generation; POST blocked for READ tokens; owner only",

@@ -388,14 +388,15 @@
              `?pixlstash_workflow=` and loads the graph, so without the node
              ComfyUI opens on whatever it had last. It opens what Run… runs
              (`runTarget`), and is refused rather than hidden otherwise, for
-             Run…'s reason. The tooltip is its accessible name. -->
+             Run…'s reason or a ComfyUI without the node. The tooltip is its
+             accessible name. -->
         <AppButton
           v-if="canOpenComfyui"
           icon-only
           tooltip="Open in ComfyUI"
           data-testid="wftab-open-comfyui"
-          :aria-disabled="runTarget ? undefined : 'true'"
-          :aria-describedby="multiple ? 'wftab-open-reason' : undefined"
+          :aria-disabled="runTarget && !comfyuiLacksNode ? undefined : 'true'"
+          :aria-describedby="openDescribedBy"
           @click="openInComfyui"
         >
           <template #icon="{ size }"><ComfyuiIcon :size="size" /></template>
@@ -434,6 +435,14 @@
           class="wftab-note wftab-quiet"
         >
           Open one workflow, or one whole stack, at a time
+        </p>
+        <p
+          v-else-if="comfyuiLacksNode && canOpenComfyui"
+          id="wftab-open-node-reason"
+          class="wftab-note wftab-quiet"
+        >
+          Opening a workflow needs the ComfyUI-PixlStash node in ComfyUI.
+          Install or update it, then restart ComfyUI.
         </p>
         <p v-if="multiple" id="wftab-run-reason" class="wftab-note wftab-quiet">
           Run one workflow, or one whole stack, at a time
@@ -482,6 +491,7 @@ import {
   setWorkflowSlots,
   workflowCoverUrl,
 } from "../../api/workflows";
+import { getPixlstashNode } from "../../api/comfyui";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -540,6 +550,30 @@ const desktop = typeof window !== "undefined" ? window.pixlstashDesktop : null;
 /** Whether there is a ComfyUI to open, and a way to open it from here. */
 const canOpenComfyui = computed(
   () => Boolean(filterStore.comfyuiUrl) && (!desktop || !!desktop.openComfyui),
+);
+
+/**
+ * ComfyUI answered that it lacks the ComfyUI-PixlStash node's
+ * `open_workflow.js`, so a link would open on whatever it had last. Only a
+ * definite no refuses: an unreachable ComfyUI, or a failed ask, leaves the
+ * button to try.
+ */
+const comfyuiLacksNode = ref(false);
+let nodeCheck = 0;
+watch(
+  () => canOpenComfyui.value && filterStore.comfyuiUrl,
+  async (url) => {
+    const check = ++nodeCheck;
+    comfyuiLacksNode.value = false;
+    if (!url) return;
+    try {
+      const { can_open_workflows: canOpen } = await getPixlstashNode();
+      if (check === nodeCheck) comfyuiLacksNode.value = canOpen === false;
+    } catch (err) {
+      console.warn("[workflows] could not ask ComfyUI for the PixlStash node", err);
+    }
+  },
+  { immediate: true },
 );
 const runDialog = useRunDialogStore();
 const tasksStore = useTasksStore();
@@ -1326,6 +1360,12 @@ const runDescribedBy = computed(() =>
   multiple.value ? "wftab-run-reason" : undefined,
 );
 
+/** Why Open in ComfyUI refuses, when it does. */
+const openDescribedBy = computed(() => {
+  if (multiple.value) return "wftab-open-reason";
+  return comfyuiLacksNode.value ? "wftab-open-node-reason" : undefined;
+});
+
 /**
  * Run… opens the Run popup on THIS card (v1.12 F5).
  *
@@ -1361,7 +1401,7 @@ function run() {
  */
 function openInComfyui() {
   const target = runTarget.value;
-  if (!target || !filterStore.comfyuiUrl) return;
+  if (!target || !filterStore.comfyuiUrl || comfyuiLacksNode.value) return;
   let url;
   try {
     url = new URL(filterStore.comfyuiUrl);
