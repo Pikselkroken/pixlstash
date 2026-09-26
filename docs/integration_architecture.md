@@ -638,7 +638,9 @@ Seven rules the client must not re-derive:
    `comfyui_unreachable`, `ui_format`, `missing_nodes: {nodes}`,
    `missing_models: {models: [{file, folder}]}`, `a1111`,
    `picture_input_unfilled: {inputs: [{slot_label, input_name, title}]}`,
-   `no_lora_loader`, `pixlstash_nodes`, `no_save_node`, `no_runnable_source`,
+   `no_lora_loader`,
+   `pixlstash_nodes: {nodes: [{node_id, class_type, title, why, kind?, id?}]}`,
+   `no_save_node`, `no_runnable_source`,
    `lora_not_skippable: {node_id, field, file, message}`.
    `picture_input_unfilled` replaced `fixed_input_deleted` in #1457 with the
    same payload shape plus each input's `title` (a slot label is a hash); a client that only knows the old code no longer
@@ -1107,8 +1109,7 @@ way, or a missing node whose reader declares a non-model type (a seed from an
 uninstalled pack), does not stop it.
 `has_lora_loader` is `null` for a UI-format file, which may carry a loader
 nobody can read. `pixlstash_loader` says the digest loader could be the one
-inserted, which leaves the outputs unreplayable by a later replay of the same
-recipe. `GET /api/v1/comfyui/pictures/{id}/recipe` carries the same `{plan,
+inserted, which needs the ComfyUI-PixlStash pack installed. `GET /api/v1/comfyui/pictures/{id}/recipe` carries the same `{plan,
 reason}` as `lora_insertion` when its `lora_slots` is empty. A run recomputes
 the plan rather than trusting one sent back, and the loader is the run's, never
 written into the stored file.

@@ -31,7 +31,7 @@ export async function listWorkflows() {
  * `plan` is `{model, clip, rewires, pixlstash_loader}`: the node the loader
  * takes the model from (and the CLIP, `null` for a model-only loader), every
  * input it would rewire, and whether the loader may be the ComfyUI-PixlStash
- * one, which leaves the pictures un-replayable by "Generate variants". It is `null` when no loader can be added, and `reason` says why;
+ * one, which needs the node pack installed. It is `null` when no loader can be added, and `reason` says why;
  * `has_lora_loader` is true when there is a loader to swap instead. Owner-only,
  * since it asks the owner's ComfyUI.
  *

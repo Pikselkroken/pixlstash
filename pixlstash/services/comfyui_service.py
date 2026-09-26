@@ -14,6 +14,7 @@ function itself and in ``docs/backend_architecture.md`` §15. Preserve it exactl
 import json
 import mimetypes
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -327,27 +328,219 @@ def _extract_output_node_ids(workflow: dict, payload: dict) -> list[str]:
     return save_nodes
 
 
-def graph_has_pixlstash_nodes(workflow: dict) -> bool:
-    """True when *workflow* calls back into PixlStash from inside the graph.
+# What a run of each ComfyUI-PixlStash node needs (#1521). A class of the
+# pack that is not named below is refused, so a node added to the pack later
+# stays refused until it has an entry here. The problems each entry answers are
+# in ``docs/backend_architecture.md`` §4.
+#
+# A loader that names a project, set or character serialises its choice as
+# ``"<name> #<id>"`` in this widget, and the id is frozen: it runs only when
+# the id is one this library has.
+PIXLSTASH_LIBRARY_LOADERS: dict[str, tuple[str, str]] = {
+    "PixlStashProjectLoader": ("pixlstash_project", "project"),
+    "PixlStashSetLoader": ("pixlstash_set", "set"),
+    "PixlStashCharacterLoader": ("pixlstash_character", "character"),
+}
+# Allowed wherever they appear. The model loaders address a file by its
+# digest, which is the same on every hub; the searches and gates read the
+# library through ids wired from a loader above, and write nothing.
+PIXLSTASH_ALLOWED_NODES = frozenset(
+    {
+        "PixlStashAdapterLoader",
+        "PixlStashVAELoader",
+        "PixlStashCLIPLoader",
+        "PixlStashLikenessSearch",
+        "PixlStashSemanticSearch",
+        "PixlStashFaceLikenessGate",
+        "PixlStashPictureLikenessGate",
+    }
+)
+# Sources its own input: baked ``picture_ids``, or its own sort and filters
+# when that is empty. Allowed only where the run writes the ids in itself.
+PIXLSTASH_PICTURE_LOADER = "PixlStashPictureLoader"
+# Names a shelf row id, which is per-hub. Allowed only from a stored workflow
+# file, which was authored against this hub's shelf.
+PIXLSTASH_CHECKPOINT_LOADER = "PixlStashCheckpointLoader"
 
-    Every class in the ComfyUI-PixlStash pack is prefixed, so the prefix is the
-    rule: a node added to the pack later is covered without editing this.
+# The pack's own rule for reading the id out of a loader's choice.
+_LIBRARY_ID_RE = re.compile(r"#(\d+)\s*$")
 
-    Such a graph is a cycle - PixlStash runs ComfyUI, which calls PixlStash -
-    and it carries **frozen ids**: the loaders serialise a choice as
-    ``"<name> #<id>"``, so a replayed file re-applies whatever project, set,
-    character or picture id was current when it was authored. That is fine for a
-    template the owner picks now, and wrong for a recipe replay, where the ids
-    can name a deleted project or one belonging to a different library.
+
+def _pixlstash_nodes(workflow: dict) -> list[tuple[str, dict]]:
+    """Every ComfyUI-PixlStash node in *workflow*, as ``(node_id, node)``.
+
+    Every class in the pack is prefixed, so the prefix is the rule: a node
+    added to the pack later is found without editing this, and refused as
+    ``no_policy`` until it has an entry above.
     """
     if not isinstance(workflow, dict):
-        return False
-    return any(
-        isinstance(node, dict)
+        return []
+    return [
+        (str(node_id), node)
+        for node_id, node in workflow.items()
+        if isinstance(node, dict)
         and isinstance(node.get("class_type"), str)
         and node["class_type"].startswith(PIXLSTASH_NODE_PREFIX)
+    ]
+
+
+def _library_choice(node: dict) -> tuple[str, int | None | bool, str]:
+    """``(kind, id, name)`` a library loader names: id ``None`` for no id,
+    ``False`` for a value that cannot be read (a link, where the choice is made
+    elsewhere)."""
+    field, kind = PIXLSTASH_LIBRARY_LOADERS[node["class_type"]]
+    value = (node.get("inputs") or {}).get(field, "")
+    if not isinstance(value, str):
+        return kind, False, ""
+    match = _LIBRARY_ID_RE.search(value)
+    if not match:
+        return kind, None, ""
+    return kind, int(match.group(1)), value[: match.start()].strip()
+
+
+def library_ids_named(workflow: dict) -> dict[str, set[int]]:
+    """Every project, set and character id the graph's loaders name, by kind.
+
+    What the caller looks up in the vault before asking
+    :func:`pixlstash_node_refusals`, which is pure.
+    """
+    named: dict[str, set[int]] = {}
+    for _node_id, node in _pixlstash_nodes(workflow):
+        if node["class_type"] not in PIXLSTASH_LIBRARY_LOADERS:
+            continue
+        kind, library_id, _name = _library_choice(node)
+        if library_id is not None and library_id is not False:
+            named.setdefault(kind, set()).add(library_id)
+    return named
+
+
+def pixlstash_node_refusals(
+    workflow: dict,
+    *,
+    library_ids: dict[str, dict[int, str]] | None = None,
+    picture_loader: bool = False,
+    from_file: bool = False,
+) -> list[dict]:
+    """Every ComfyUI-PixlStash node in *workflow* that may not run, and why.
+
+    Each entry is ``{node_id, class_type, title, why}``; ``why`` is one of
+    ``not_in_library`` (with ``kind`` and ``id``), ``unreadable_id``,
+    ``picks_its_own_picture``, ``per_hub_checkpoint``, ``imports_itself`` and
+    ``no_policy``. Empty means every such node may run.
+
+    The defaults are the strictest answer, so a caller that says nothing about
+    its run refuses rather than allows.
+
+    Args:
+        workflow: The API-format graph, as it will be submitted.
+        library_ids: The ids :func:`library_ids_named` found that this library
+            has, by kind, each with its name. A loader runs only when both
+            match: ids start at 1 in every library, so an id alone would run
+            another library's "Portraits #3" against this one's project 3.
+        picture_loader: Whether the run writes the picture loader's ids itself
+            (a card run's picture inputs). The caller then owns refusing a
+            loader it did not feed.
+        from_file: Whether the graph is a stored workflow file.
+    """
+    present = library_ids or {}
+    refused = []
+    for node_id, node in _pixlstash_nodes(workflow):
+        class_type = node["class_type"]
+        why: dict = {}
+        if class_type in PIXLSTASH_ALLOWED_NODES:
+            continue
+        if class_type in PIXLSTASH_LIBRARY_LOADERS:
+            kind, library_id, name = _library_choice(node)
+            if library_id is False:
+                why = {"why": "unreadable_id", "kind": kind}
+            elif library_id is not None and (
+                library_id not in present.get(kind, {})
+                or (name and present[kind][library_id] != name)
+            ):
+                why = {"why": "not_in_library", "kind": kind, "id": library_id}
+        elif class_type == PIXLSTASH_PICTURE_LOADER:
+            if not picture_loader:
+                why = {"why": "picks_its_own_picture"}
+        elif class_type == PIXLSTASH_CHECKPOINT_LOADER:
+            if not from_file:
+                why = {"why": "per_hub_checkpoint"}
+        elif class_type in PIXLSTASH_SAVER_CLASSES:
+            # Never submitted: swap_pixlstash_savers takes it out first.
+            why = {"why": "imports_itself"}
+        else:
+            why = {"why": "no_policy"}
+        if why:
+            refused.append(
+                {
+                    "node_id": node_id,
+                    "class_type": class_type,
+                    "title": (node.get("_meta") or {}).get("title") or class_type,
+                    **why,
+                }
+            )
+    return refused
+
+
+def unfed_picture_loaders(workflow: dict, fed: set[str]) -> list[dict]:
+    """The picture loaders a run allowed but did not write ids into.
+
+    The other half of ``picture_loader=True``: such a loader would read the
+    ids baked into the file, or pick pictures by its own sort, so it is refused
+    the way :func:`pixlstash_node_refusals` would have.
+    """
+    return [
+        {
+            "node_id": node_id,
+            "class_type": node["class_type"],
+            "title": (node.get("_meta") or {}).get("title") or node["class_type"],
+            "why": "picks_its_own_picture",
+        }
+        for node_id, node in _pixlstash_nodes(workflow)
+        if node["class_type"] == PIXLSTASH_PICTURE_LOADER and node_id not in fed
+    ]
+
+
+def swap_pixlstash_savers(workflow: dict) -> list[str]:
+    """Replace every ComfyUI-PixlStash saver with ``SaveImage``, in place.
+
+    The saver imports its outputs itself, which competes with the import the
+    run is already doing and applies the project, set and character ids baked
+    into the file. ``SaveImage`` on the same images and prefix leaves the run's
+    own import as the only one. The node keeps its id and title, so an explicit
+    ``pixlstash_output_nodes`` still names it. A saver whose output another
+    node reads is left alone, since ``SaveImage`` has none to hand on.
+
+    Returns:
+        The ids of the nodes swapped.
+    """
+    read = {
+        str(value[0])
         for node in workflow.values()
-    )
+        if isinstance(node, dict)
+        for value in (node.get("inputs") or {}).values()
+        if isinstance(value, list) and len(value) == 2
+    }
+    swapped = []
+    for node_id, node in _pixlstash_nodes(workflow):
+        if node["class_type"] not in PIXLSTASH_SAVER_CLASSES:
+            continue
+        if node_id in read:
+            # Something reads its `picture_ids` output, which SaveImage does
+            # not have: left as it is, and refused as `imports_itself`.
+            continue
+        inputs = node.get("inputs") or {}
+        if inputs.get("images") is None:
+            # Nothing to hand to SaveImage: left as it is, and refused as
+            # `imports_itself` rather than queued as a SaveImage ComfyUI
+            # then rejects.
+            continue
+        node["class_type"] = "SaveImage"
+        node["inputs"] = {
+            "images": inputs.get("images"),
+            "filename_prefix": inputs.get("filename_prefix") or "PixlStash",
+        }
+        swapped.append(node_id)
+    return swapped
 
 
 def graph_has_pixlstash_saver(workflow: dict) -> bool:

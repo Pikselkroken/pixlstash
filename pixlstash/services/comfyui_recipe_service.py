@@ -1378,18 +1378,14 @@ def _widget_defaults(node_spec: dict) -> dict:
 
 
 def _inserted_loader(
-    adapter: dict, object_info: dict, with_clip: bool, digest_loader: bool = True
+    adapter: dict, object_info: dict, with_clip: bool
 ) -> tuple[str, str, str]:
     """``(class, field, value)`` of the loader to insert for *adapter*.
 
     ComfyUI's own loader first, when this ComfyUI lists the file: it needs no
-    node pack, and a picture made with it stays replayable by "Generate
-    variants", which refuses any graph carrying a PixlStash node. The
-    ComfyUI-PixlStash loader when the file is not there by name, since it
-    resolves the file by its digest and fetches it when it has to.
-
-    ``digest_loader=False`` leaves the second out, for a replay: its output
-    would carry a PixlStash node, which "Generate variants" then refuses.
+    node pack. The ComfyUI-PixlStash loader when the file is not there by
+    name, since it resolves the file by its digest and fetches it when it has
+    to.
 
     Raises:
         LookupError: When neither can load it, saying why the first could not.
@@ -1410,8 +1406,6 @@ def _inserted_loader(
                 reason = "That LoRA is on your shelf but not on this ComfyUI"
             if name is not None:
                 return core, "lora_name", name
-    if not digest_loader:
-        raise LookupError(f"{reason}.")
     if PIXLSTASH_ADAPTER_LOADER in object_info:
         return PIXLSTASH_ADAPTER_LOADER, "adapter_sha256", adapter["sha256"]
     raise LookupError(
@@ -1425,7 +1419,6 @@ def insert_adapter(
     plan: dict,
     adapter: Optional[dict],
     object_info: dict,
-    digest_loader: bool = True,
 ) -> dict:
     """Add a LoRA loader carrying *adapter* to *prompt_graph*, as *plan* says.
 
@@ -1446,7 +1439,6 @@ def insert_adapter(
             file, so the workflow has a slot to swap from then on. No adapter
             means no digest loader either - nothing has a digest to resolve.
         object_info: The map the plan was made with.
-        digest_loader: Whether the ComfyUI-PixlStash loader may be used.
 
     Returns:
         ``{"node_id", "class_type"}`` of the loader added.
@@ -1471,9 +1463,7 @@ def insert_adapter(
             )
         field = value = None
     else:
-        loader, field, value = _inserted_loader(
-            adapter, object_info, clip is not None, digest_loader
-        )
+        loader, field, value = _inserted_loader(adapter, object_info, clip is not None)
     spec = object_info.get(loader) or {}
     outputs = spec.get("output") if isinstance(spec.get("output"), list) else []
     sources = {"MODEL": plan["model"], "CLIP": clip}
@@ -2278,9 +2268,7 @@ def plan_lora_chain(
         adapter = entry.get("adapter")
         if not adapter:
             raise LookupError("A new loader needs a LoRA from your model shelf.")
-        loader_class, field, value = _inserted_loader(
-            adapter, object_info, with_clip, digest_loader=False
-        )
+        loader_class, field, value = _inserted_loader(adapter, object_info, with_clip)
         spec = object_info.get(loader_class) or {}
         outputs = spec.get("output") if isinstance(spec.get("output"), list) else []
         model_field = _input_of_type(spec, "MODEL")

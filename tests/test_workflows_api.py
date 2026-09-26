@@ -46,7 +46,7 @@ from pixlstash import auth
 from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Picture, ReferenceFolder
+from pixlstash.db_models import Picture, Project, ReferenceFolder
 from pixlstash.db_models.saved_recipe import SavedRecipe
 from pixlstash.event_types import EventType
 from pixlstash.hub.workflow_card_reads import (
@@ -6061,28 +6061,159 @@ def test_consent_does_not_reach_a_missing_model(runnable):
     assert healthy["runs"] == 0, healthy
 
 
-def test_a_graph_with_pixlstash_nodes_is_refused(runnable):
-    """It would read and write the library while PixlStash is running it.
+def _pack_refusals(payload) -> dict[str, str]:
+    """``{node_id: why}`` from every group's ``pixlstash_nodes`` reason."""
+    return {
+        node["node_id"]: node["why"]
+        for group in payload["groups"]
+        for reason in group["reasons"]
+        if reason["code"] == "pixlstash_nodes"
+        for node in reason["nodes"]
+    }
 
-    The node is put in the stored graph and DETECTED, rather than the detector
-    being replaced with `lambda: True`: patching it would guard the plumbing
-    and say nothing about whether such a graph is recognised.
+
+def test_a_pack_checkpoint_loader_is_refused_outside_a_stored_file(runnable):
+    """It names a shelf row id, which is per-hub (#1521).
+
+    The card here runs from its stored INSTANCE, which a picture of any hub
+    may have written; the same loader from a stored file is allowed in
+    `test_a_pack_graph_runs_from_a_file_with_the_picture_fed_by_id`. A pack
+    node with no policy entry is refused beside it, whatever the source.
     """
     info = json.loads(json.dumps(RUN_OBJECT_INFO))
-    info["PixlStashPictureLoader"] = {"input": {"required": {}}}
+    info["PixlStashCheckpointLoader"] = {"input": {"required": {}}}
+    info["PixlStashSomethingNew"] = {"input": {"required": {}}}
     runnable.monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (info, None)
     )
     with runnable.server.hub.transaction() as conn:
         instance = json.loads(json.dumps(RUN_DOCUMENT))
         instance["3"]["inputs"].update({"steps": 24, "cfg": 6.5})
-        instance["5"] = {"class_type": "PixlStashPictureLoader", "inputs": {}}
+        instance["5"] = {
+            "class_type": "PixlStashCheckpointLoader",
+            "inputs": {"checkpoint_id": "12"},
+        }
+        instance["6"] = {"class_type": "PixlStashSomethingNew", "inputs": {}}
         conn.execute(
             "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
             (json.dumps(instance), RUN_INSTANCE),
         )
     payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
-    assert "pixlstash_nodes" in _reasons(payload), payload
+    assert _pack_refusals(payload) == {
+        "5": "per_hub_checkpoint",
+        "6": "no_policy",
+    }, payload
+
+
+def _pack_graph(project: str | None = None) -> dict:
+    """`_i2i_graph` built on the pack: its picture loader and its saver."""
+    graph = _i2i_graph()
+    graph["5"] = {
+        "class_type": "PixlStashPictureLoader",
+        "inputs": {"picture_ids": "7,8"},
+    }
+    graph["4"] = {
+        "class_type": "PixlStashPictureSaver",
+        "inputs": {"images": ["3", 0], "filename_prefix": "out", "save_workflow": True},
+    }
+    graph["9"] = {
+        "class_type": "PixlStashCheckpointLoader",
+        "inputs": {"checkpoint_id": "12"},
+    }
+    if project is not None:
+        graph["10"] = {
+            "class_type": "PixlStashProjectLoader",
+            "inputs": {"pixlstash_project": project},
+        }
+        graph["5"]["inputs"]["pixlstash_project"] = ["10", 0]
+    return graph
+
+
+@pytest.fixture
+def pack(i2i):
+    info = json.loads(json.dumps(I2I_OBJECT_INFO))
+    for cls in (
+        "PixlStashPictureLoader",
+        "PixlStashCheckpointLoader",
+        "PixlStashProjectLoader",
+    ):
+        info[cls] = {"input": {"required": {}}}
+    i2i.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    return i2i
+
+
+def test_a_pack_graph_runs_from_a_file_with_the_picture_fed_by_id(pack):
+    """Picture loader fed now, saver swapped, checkpoint loader from a file.
+
+    The loader is handed the selected picture's ID, never its baked `7,8`, and
+    nothing is uploaded, because it fetches the picture itself. The saver is
+    submitted as `SaveImage`, so this run's import is the only one.
+    """
+    pack.graph = _pack_graph()
+    subject = _add_picture(pack.server, pack.tmp_path, "pack-subject.png")
+    r = pack.owner.post(
+        f"{API}/workflows/run", json={"picture_ids": [subject], "target": RUN_CARD}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "success", r.json()
+    [submitted] = pack.submitted
+    assert submitted["graph"]["5"]["inputs"]["picture_ids"] == str(subject)
+    assert submitted["graph"]["4"]["class_type"] == "SaveImage"
+    assert submitted["graph"]["4"]["inputs"] == {
+        "images": ["3", 0],
+        "filename_prefix": "out",
+    }
+    assert pack.uploads == []
+
+
+def test_a_pack_picture_loader_nothing_feeds_does_not_run(pack):
+    """No selection: its baked ids are never used, and it says so."""
+    pack.graph = _pack_graph()
+    payload = _preflight(pack.owner, workflow_key=RUN_CARD)
+    assert "picture_input_unfilled" in _reasons(payload), payload
+    assert _pack_refusals(payload) == {}, payload
+
+    # Opted out of by the file's bindings, so no input can fill it either.
+    pack.graph["pixlstash_bindings"] = []
+    payload = _preflight(pack.owner, workflow_key=RUN_CARD)
+    assert _pack_refusals(payload) == {"5": "picks_its_own_picture"}, payload
+
+
+def test_a_pack_project_loader_runs_only_on_a_project_this_library_has(pack):
+    subject = _add_picture(pack.server, pack.tmp_path, "pack-project.png")
+
+    def write(session):
+        project = Project(name="Pack project 1521")
+        session.add(project)
+        session.commit()
+        return project.id
+
+    project_id = pack.server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+    body = {"picture_ids": [subject], "target": RUN_CARD}
+
+    pack.graph = _pack_graph(f"Pack project 1521 #{project_id}")
+    payload = _preflight(pack.owner, **body)
+    assert _reasons(payload) == set(), payload
+
+    pack.graph = _pack_graph(f"Somewhere else #{project_id + 1000}")
+    payload = _preflight(pack.owner, **body)
+    [reason] = [
+        reason
+        for reason in payload["groups"][0]["reasons"]
+        if reason["code"] == "pixlstash_nodes"
+    ]
+    assert reason["nodes"] == [
+        {
+            "node_id": "10",
+            "class_type": "PixlStashProjectLoader",
+            "title": "PixlStashProjectLoader",
+            "why": "not_in_library",
+            "kind": "project",
+            "id": project_id + 1000,
+        }
+    ], reason
 
 
 def test_a_lora_asked_for_where_there_is_no_loader_says_so(runnable):

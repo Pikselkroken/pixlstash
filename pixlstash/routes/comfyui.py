@@ -95,8 +95,11 @@ from platformdirs import user_data_dir
 # stay thin and delegate to it. See pixlstash/services/comfyui_service.py.
 from pixlstash.services.comfyui_service import (
     _comfyui_abort,
-    graph_has_pixlstash_nodes,
+    library_ids_named,
+    pixlstash_node_refusals,
+    swap_pixlstash_savers,
 )
+from pixlstash.services.workflow_library_service import read_library_ids
 
 # Re-exported so existing call sites and tests that import these helpers from
 # this module keep resolving after the move into services/comfyui_service.py.
@@ -780,7 +783,6 @@ def _describe_lora_insertion(
     graph: dict | None,
     object_info: dict | None,
     error: str | None,
-    digest_loader: bool = True,
 ) -> dict | None:
     """Where a LoRA loader would go, for the owner to see before a run (#1376).
 
@@ -788,9 +790,6 @@ def _describe_lora_insertion(
         graph: The API-format graph, or ``None`` for a UI-format file.
         object_info: The map already read for this request, or ``None``.
         error: Why ComfyUI could not be asked, when it could not.
-        digest_loader: Whether this surface's run would allow the
-            ComfyUI-PixlStash loader; ``False`` for a replay, so the plan does
-            not warn about a node that route will never insert.
 
     Returns:
         ``None`` when the graph already has a LoRA loader, else
@@ -814,7 +813,6 @@ def _describe_lora_insertion(
         }
     try:
         plan = plan_lora_insertion(graph, object_info)
-        plan["pixlstash_loader"] = plan["pixlstash_loader"] and digest_loader
         return {"plan": plan, "reason": None}
     except LookupError as exc:
         logger.info("No LoRA loader can be added to this graph: %s", exc)
@@ -1778,6 +1776,9 @@ class ComfyUIPictureRecipeResponse(BaseModel):
 
     available: bool = False
     reason: Optional[str] = None
+    # With `reason: "pixlstash_nodes"`, the ComfyUI-PixlStash nodes a variant
+    # may not run, as `{node_id, class_type, title, why}` (#1521).
+    pixlstash_nodes: list[dict] = []
     # Which generator wrote the recipe: "comfyui" for an embedded API graph,
     # "a1111" for a picture whose recipe is A1111 infotext.
     source: str = "comfyui"
@@ -2604,11 +2605,29 @@ def create_router(server) -> APIRouter:
         )
         preflight, seed_targets = _inspect_graph(graph, judged_against, judged_error)
         source_is_imported, source_label = _picture_source_origin(server, pic_id)
-        # A graph that calls back into PixlStash cannot be replayed as "a
-        # variant of this picture" - see the run route's refusal for why. Reported
+        # A ComfyUI-PixlStash node that may not run in a variant of this
+        # picture (#1521): the picture loader would not read this picture, a
+        # checkpoint loader names another hub's shelf row, and a loader's
+        # project, set or character must be one this library has. The run
+        # swaps a saver for SaveImage, so it is judged as swapped. Reported
         # here so the dialog can say so before the user commits to a run, and
         # offer the workflow to paste into ComfyUI instead.
-        has_pixlstash_nodes = graph_has_pixlstash_nodes(graph)
+        #
+        # Only the unscoped owner has the ids looked up: this route serves
+        # share links, and an answer that depends on whether project N exists
+        # would tell one about projects outside its scope (#708's class). A
+        # scoped reader is told every id is unchecked, and cannot run it anyway.
+        as_run = json.loads(json.dumps(graph))
+        swap_pixlstash_savers(as_run)
+        refused_nodes = pixlstash_node_refusals(
+            as_run,
+            library_ids=(
+                read_library_ids(server.vault, library_ids_named(as_run))
+                if server.auth.is_unscoped_owner_request(request)
+                else {}
+            ),
+        )
+        has_pixlstash_nodes = bool(refused_nodes)
         return {
             # "Same workflow, new seed" is only a meaningful offer when there
             # IS a seed to change. Without one the re-run is byte-identical,
@@ -2620,6 +2639,8 @@ def create_router(server) -> APIRouter:
                 if has_pixlstash_nodes
                 else (None if seed_targets else "no_seed_input")
             ),
+            # Which nodes, and why, in the run pre-flight's shape.
+            "pixlstash_nodes": refused_nodes,
             "source": "comfyui",
             # Named for the chunk it came out of, because the two are not
             # equally trustworthy: the API chunk is what ComfyUI executed, the
@@ -2682,11 +2703,7 @@ def create_router(server) -> APIRouter:
             "seed_inputs": seed_targets,
             "lora_slots": detect_lora_targets(graph),
             "lora_insertion": _describe_lora_insertion(
-                graph,
-                object_info,
-                object_info_error,
-                # A replay never inserts it, so it is never a warning here.
-                digest_loader=False,
+                graph, object_info, object_info_error
             ),
             "preflight": preflight,
         }

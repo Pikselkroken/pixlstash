@@ -1049,13 +1049,6 @@ class TestLoraInsertion:
         assert inputs["adapter_kind"] == "— Any —"
         assert inputs["clip"] == ["4", 1]
 
-        # A replay never gets it: its variant would carry a PixlStash node,
-        # which Generate variants refuses to replay.
-        graph = self._checkpoint_graph()
-        with pytest.raises(LookupError, match="not on this ComfyUI"):
-            insert_adapter(graph, plan, elsewhere, info, digest_loader=False)
-        assert "9" not in graph
-
         # Neither: refused, saying why the core loader could not.
         graph = self._checkpoint_graph()
         with pytest.raises(LookupError, match="not on this ComfyUI.*ComfyUI-PixlStash"):
