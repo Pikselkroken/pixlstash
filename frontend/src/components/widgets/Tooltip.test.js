@@ -228,7 +228,7 @@ describe("Tooltip", () => {
   // on the side the surface names; one outside keeps Vuetify's body container.
   it("renders inside a tooltip layer, on the side the layer names", async () => {
     const w = mountHost(
-      `<div><div class="menu" data-tooltip-layer="start"><button class="in">In<Tooltip text="Inside tip" activator="parent" /></button></div>
+      `<div><div class="menu" data-tooltip-layer="end"><button class="in">In<Tooltip text="Inside tip" activator="parent" /></button></div>
        <button class="out">Out<Tooltip text="Outside tip" activator="parent" /></button></div>`,
     );
     await flushPromises();
@@ -238,7 +238,7 @@ describe("Tooltip", () => {
     const [inner, outer] = w.findAllComponents(components.VTooltip);
     const menu = w.find(".menu").element;
     expect(menu.textContent).toContain("Inside tip");
-    expect(inner.props("location")).toBe("start");
+    expect(inner.props("location")).toBe("end");
     expect(menu.textContent).not.toContain("Outside tip");
     expect(outer.props("location")).toBe("top");
     w.unmount();

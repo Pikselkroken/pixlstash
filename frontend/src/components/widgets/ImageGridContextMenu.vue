@@ -6,7 +6,7 @@
       class="image-ctx-menu ctx-menu"
       :class="{ 'ctx-flip-sub': submenusFlip, 'ctx-menu--on-dark': onDark }"
       :style="menuStyle"
-      :data-tooltip-layer="submenusFlip ? 'end' : 'start'"
+      :data-tooltip-layer="tooltipSide"
       role="menu"
       aria-orientation="vertical"
       tabindex="-1"
@@ -905,6 +905,7 @@ const menuRef = ref(null);
 const adjustedX = ref(props.x);
 const adjustedY = ref(props.y);
 const submenusFlip = ref(false);
+const tooltipSide = ref("top");
 const autoTagSubmenuOpen = ref(false);
 const descriptionSubmenuOpen = ref(false);
 const findFacesSubmenuOpen = ref(false);
@@ -1086,6 +1087,17 @@ async function clampPosition() {
   );
   // Flip submenus leftward when there is not enough room to the right for a ~185px submenu
   submenusFlip.value = newX + rect.width + 185 > window.innerWidth - 8;
+  // Row tips open on the left, away from right-opening sub-menus, when a
+  // widest tip fits there. Otherwise above the row: a sub-menu starts level
+  // with its row's top, so a tip above covers neither. The right side never
+  // works: sub-menus flip left exactly when it has no room.
+  const tipWidth = parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue(
+      "--tooltip-max-w",
+    ),
+  );
+  tooltipSide.value =
+    !submenusFlip.value && newX >= tipWidth + 16 ? "start" : "top";
 }
 
 // Element focused before the menu opened, so Escape / an action can return
