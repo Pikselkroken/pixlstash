@@ -1113,7 +1113,9 @@ CREATE TABLE IF NOT EXISTS comfyui_history_model (
 # keeps its pictures, its name and its settings. The names are kept as the
 # graph spelled them - ``was_name`` is what a run rewrites, and what the
 # Workflow tab shows as the original - and the normalized forms are what the
-# card key and the asset rows are matched on.
+# card key and the asset rows are matched on. ``slot_kind`` is the shelf
+# ``file_kind`` the slot takes (``workflow_identity.model_fix_kind``): a
+# checkpoint, a VAE or a text encoder.
 _V2_WORKFLOW_MODEL_FIX = """
 CREATE TABLE IF NOT EXISTS workflow_model_fix (
     topology_hash  TEXT NOT NULL,
@@ -1122,6 +1124,7 @@ CREATE TABLE IF NOT EXISTS workflow_model_fix (
     now_norm       TEXT NOT NULL,
     was_name       TEXT NOT NULL,
     now_name       TEXT NOT NULL,
+    slot_kind      TEXT NOT NULL DEFAULT 'checkpoint',
     PRIMARY KEY (topology_hash, slot_label, was_norm)
 )
 """
@@ -1442,6 +1445,18 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS ix_workflow_origin_content "
         "ON workflow_origin(content_hash)"
     )
+
+    # The slot kind of a model fix (#1596), guarded the same way. A hub that
+    # ran #1587 holds checkpoint fixes only, which is what the default says.
+    fix_columns = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(workflow_model_fix)").fetchall()
+    }
+    if "slot_kind" not in fix_columns:
+        conn.execute(
+            "ALTER TABLE workflow_model_fix ADD COLUMN "
+            "slot_kind TEXT NOT NULL DEFAULT 'checkpoint'"
+        )
 
     # The icon column (shelf plan, the sixth verb) lands the same way the rest
     # of v2 does: amended in place rather than as a v3, because a build shipped

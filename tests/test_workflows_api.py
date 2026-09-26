@@ -4614,7 +4614,7 @@ def test_merging_two_cards_keeps_the_name_of_the_one_with_most_pictures(workflow
 
 
 def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
-    workflow_env,
+    workflow_env, monkeypatch
 ):
     """A fixed checkpoint: same card, its pictures flagged as the old model's.
 
@@ -4628,6 +4628,11 @@ def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
             "INSERT INTO model (file_kind, filename, sha256, provenance) "
             "VALUES ('checkpoint', ?, ?, 'scanned')",
             (_REPLACEMENT_FILENAME, _h("bf16-digest")),
+        )
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('vae', 'test-vae-bf16.safetensors', ?, 'scanned')",
+            (_h("vae-digest"),),
         )
     route = f"{API}/workflows/{merged}/model-fix"
 
@@ -4652,16 +4657,82 @@ def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
     assert (
         owner.put(route, json={"was": _SHELF_FILENAME, "now": None}).status_code == 409
     )
+    # #1596: the replacement's kind is the slot's. The workflow loads its
+    # checkpoint in no VAE slot, and a checkpoint is no VAE.
+    r = owner.put(
+        route, json={"was": _SHELF_FILENAME, "now": "test-vae-bf16.safetensors"}
+    )
+    assert r.status_code == 409 and "as a VAE" in r.json()["detail"], r.text
+    r = owner.put(
+        route,
+        json={
+            "was": _SHELF_FILENAME,
+            "now": _REPLACEMENT_FILENAME,
+            "slot_kind": "vae",
+        },
+    )
+    assert r.status_code == 422 and "not a VAE" in r.json()["detail"], r.text
+    # Every kind the shelf holds the file under, never just the first.
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('text_encoder', ?, ?, 'scanned')",
+            (_REPLACEMENT_FILENAME, _h("te-digest")),
+        )
+    r = owner.put(
+        route,
+        json={
+            "was": _SHELF_FILENAME,
+            "now": _REPLACEMENT_FILENAME,
+            "slot_kind": "vae",
+        },
+    )
+    assert r.json()["detail"] == (
+        "That is a checkpoint or a text encoder, not a VAE."
+    ), r.text
+    # The workflow loading `was` in slots of both of those kinds, and the
+    # caller not saying which: refused, never one fixed and one left missing.
+    real_labels = workflows_routes.model_fix_labels
+    monkeypatch.setattr(
+        workflows_routes,
+        "model_fix_labels",
+        lambda hub, topology, was, kind: [f"test-slot/{kind}"],
+    )
+    r = owner.put(route, json={"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME})
+    assert r.status_code == 409, r.text
+    assert "as a checkpoint and a text encoder" in r.json()["detail"], r.text
+    monkeypatch.setattr(workflows_routes, "model_fix_labels", real_labels)
+    # Shelf kinds the workflow loads `was` as none of: said, never a guess.
+    with server.hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES (?, 'test-support-pair.safetensors', ?, 'scanned')",
+            [("vae", _h("pair-vae")), ("text_encoder", _h("pair-te"))],
+        )
+    r = owner.put(
+        route, json={"was": _SHELF_FILENAME, "now": "test-support-pair.safetensors"}
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        "This workflow does not load that model as a text encoder or a VAE."
+    ), r.text
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "DELETE FROM model WHERE sha256 IN (?, ?)",
+            (_h("pair-vae"), _h("pair-te")),
+        )
+    with server.hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE sha256 = ?", (_h("te-digest"),))
 
     r = owner.put(route, json={"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME})
     assert r.status_code == 200, r.text
     detail = r.json()
     assert detail["card"]["key"] == merged
     (fix,) = detail["model_fixes"]
-    assert (fix["was"], fix["now"], fix["base_model"]) == (
+    assert (fix["was"], fix["now"], fix["slot_kind"]) == (
         _SHELF_FILENAME,
         _REPLACEMENT_FILENAME,
-        True,
+        "checkpoint",
     )
     covers = detail["card"]["covers"]
     assert covers and all(cover["superseded"] for cover in covers)
@@ -4719,9 +4790,60 @@ def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
     assert r.status_code == 409, r.text
     assert "test-a.safetensors" in r.json()["detail"]
     # Undoing is not ambiguous: every slot goes back to its own original.
+    # An undo of one kind leaves a fix of another kind alone.
+    r = owner.put(
+        route,
+        json={"was": _REPLACEMENT_FILENAME, "now": None, "slot_kind": "vae"},
+    )
+    assert r.status_code == 409, r.text
     r = owner.put(route, json={"was": _REPLACEMENT_FILENAME, "now": None})
     assert r.status_code == 200, r.text
     assert r.json()["model_fixes"] == []
+
+
+def test_a_missing_replacement_is_replaced_from_the_original_whatever_the_shelf(
+    workflow_env,
+):
+    """The chain again, with the new file on the shelf under two kinds.
+
+    No variant was made with the first replacement, so no stored graph names
+    it: the kind it is loaded as is the one its fix recorded, and the second
+    pick replaces the ORIGINAL rather than being refused.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    with server.hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES (?, ?, ?, 'scanned')",
+            [
+                ("checkpoint", _REPLACEMENT_FILENAME, _h("chain-bf16")),
+                ("checkpoint", "test-chain-pair.safetensors", _h("chain-ckpt")),
+                ("vae", "test-chain-pair.safetensors", _h("chain-vae")),
+            ],
+        )
+    route = f"{API}/workflows/{merged}/model-fix"
+    try:
+        r = owner.put(
+            route, json={"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME}
+        )
+        assert r.status_code == 200, r.text
+        key = r.json()["card"]["key"]
+        r = owner.put(
+            f"{API}/workflows/{key}/model-fix",
+            json={"was": _REPLACEMENT_FILENAME, "now": "test-chain-pair.safetensors"},
+        )
+        assert r.status_code == 200, r.text
+        assert [
+            (f["was"], f["now"], f["slot_kind"]) for f in r.json()["model_fixes"]
+        ] == [(_SHELF_FILENAME, "test-chain-pair.safetensors", "checkpoint")]
+    finally:
+        with server.hub.transaction() as conn:
+            conn.execute("DELETE FROM workflow_model_fix")
+            conn.execute(
+                "DELETE FROM model WHERE sha256 IN (?, ?, ?)",
+                (_h("chain-bf16"), _h("chain-ckpt"), _h("chain-vae")),
+            )
 
 
 def test_a_variant_that_will_not_reduce_keeps_its_card_and_its_attributes(
@@ -6238,6 +6360,42 @@ def test_a_run_loads_the_model_the_owner_replaced_the_missing_one_with(runnable)
     assert runnable.submitted[0]["graph"]["1"]["inputs"]["ckpt_name"] == (
         f"sdxl/{_REPLACEMENT_FILENAME}"
     )
+
+
+def test_a_vae_fix_never_rewrites_a_checkpoint_of_the_same_name(runnable):
+    """#1596: a fix is its slot kind's; the run rewrite asks each field's kind."""
+    label = next(
+        slot.label for slot in slots(RUN_DOCUMENT) if slot.widget == "ckpt_name"
+    )
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_model_fix (topology_hash, slot_label, was_norm, "
+            "now_norm, was_name, now_name, slot_kind) VALUES (?, ?, ?, ?, ?, ?, 'vae')",
+            (
+                RUN_TOPOLOGY,
+                label,
+                _SHELF_FILENAME,
+                "test-vae.safetensors",
+                _SHELF_FILENAME,
+                "test-vae.safetensors",
+            ),
+        )
+    # ComfyUI lists the VAE in the checkpoint field too, so only the kind
+    # filter can keep the rewrite out of it.
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [
+        [_SHELF_FILENAME, "test-vae.safetensors"],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    try:
+        payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+        assert payload["groups"][0]["substitutions"] == [], payload
+    finally:
+        with runnable.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM workflow_model_fix")
 
 
 def test_a_model_no_copy_of_which_is_left_is_still_a_missing_model(
@@ -9296,6 +9454,175 @@ def test_a_lora_trained_on_another_family_is_flagged_never_dropped(cloneable):
         params={"checkpoint_id": cloneable.checkpoint_id},
     ).json()
     assert same_family["flags"] == []
+
+
+def _with_support_loaders(graph: dict) -> dict:
+    """The clone graph plus a VAE, a pair of text encoders and a GGUF encoder."""
+    graph = json.loads(json.dumps(graph))
+    graph["20"] = {
+        "class_type": "VAELoader",
+        "inputs": {"vae_name": "test-vae-fp8.safetensors"},
+    }
+    graph["21"] = {
+        "class_type": "DualCLIPLoader",
+        "inputs": {
+            "clip_name1": "test-clip-l.safetensors",
+            "clip_name2": "test-t5-fp16.safetensors",
+            "type": "flux",
+        },
+    }
+    graph["22"] = {
+        "class_type": "CLIPLoaderGGUF",
+        "inputs": {"clip_name": "test-umt5-q8.gguf", "type": "wan"},
+    }
+    return graph
+
+
+def test_the_replacements_go_with_the_checkpoint_and_load_in_the_loader(cloneable):
+    """#1596: Replace with… offers what works together AND what the loader lists.
+
+    Evidence first (the checkpoint's workflow sets and co-occurrence, here
+    stubbed), then each loader's own list: a core loader never lists GGUF, a
+    GGUF loader lists safetensors too.
+    """
+    graph = _with_support_loaders(cloneable.graph)
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    asked = []
+
+    def proposals(hub, checkpoint_id, index=None):
+        asked.append(checkpoint_id)
+
+        def entry(model_id, filename, via):
+            return {
+                "id": model_id,
+                "filename": filename,
+                "display_name": None,
+                "via": via,
+            }
+
+        return {
+            "vae": [
+                entry(1, "test-vae-bf16.safetensors", "grouped"),
+                entry(2, "test-vae-unlisted.safetensors", "checkpoint"),
+            ],
+            "text_encoder": [
+                entry(3, "test-t5-bf16.safetensors", "checkpoint"),
+                entry(4, "test-t5-q8.gguf", "family"),
+            ],
+        }
+
+    cloneable.monkeypatch.setattr(workflows_routes, "propose_companions", proposals)
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].append(
+        f"flux/{CLONE_CHECKPOINT}"
+    )
+    info["VAELoader"] = {
+        "input": {"required": {"vae_name": [["test-vae-bf16.safetensors"], {}]}}
+    }
+    both = [["test-clip-l.safetensors", "test-t5-bf16.safetensors"], {}]
+    info["DualCLIPLoader"] = {
+        "input": {"required": {"clip_name1": both, "clip_name2": both}}
+    }
+    info["CLIPLoaderGGUF"] = {
+        "input": {
+            "required": {
+                "clip_name": [["test-t5-bf16.safetensors", "test-t5-q8.gguf"], {}]
+            }
+        }
+    }
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+    def offered(replacing, **params):
+        r = cloneable.owner.get(
+            f"{API}/workflows/{RUN_CARD}/model-swap",
+            params={"replacing": replacing, **params},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        return [c["filename"] for c in body["replacements"]], body[
+            "replacements_reason"
+        ]
+
+    shelf_id = cloneable.server.hub.fetchone(
+        "SELECT id FROM model WHERE filename = ?", (_SHELF_FILENAME,)
+    )["id"]
+    assert offered("test-vae-fp8.safetensors") == (["test-vae-bf16.safetensors"], None)
+    assert asked == [shelf_id], "evidence asked about another checkpoint"
+    assert offered("test-t5-fp16.safetensors") == (["test-t5-bf16.safetensors"], None)
+    assert offered("test-umt5-q8.gguf") == (
+        ["test-t5-bf16.safetensors", "test-t5-q8.gguf"],
+        None,
+    )
+    # A checkpoint is offered what its loader lists, with no evidence asked.
+    names, _ = offered(_SHELF_FILENAME)
+    assert CLONE_CHECKPOINT in names and _SHELF_FILENAME not in names
+    # ComfyUI down: the file type decides, so a core loader gets no GGUF.
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "unreachable")
+    )
+    assert offered("test-t5-fp16.safetensors") == (["test-t5-bf16.safetensors"], None)
+    assert offered("test-vae-fp8.safetensors") == (
+        ["test-vae-bf16.safetensors", "test-vae-unlisted.safetensors"],
+        None,
+    )
+    # Nothing goes with it, or nothing that does can load here.
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "propose_companions",
+        lambda hub, checkpoint_id, index=None: {"vae": [], "text_encoder": []},
+    )
+    assert offered("test-vae-fp8.safetensors") == ([], "none_go_with_it")
+    cloneable.monkeypatch.setattr(workflows_routes, "propose_companions", proposals)
+    graph["20"]["inputs"]["vae_name"] = "test-vae-fp8.pt"
+    assert offered("test-vae-fp8.pt") == ([], "none_loadable")
+    # One file in slots of two kinds: which to replace is the caller's to say.
+    graph["22"]["inputs"]["clip_name"] = "test-vae-fp8.pt"
+    r = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"replacing": "test-vae-fp8.pt"},
+    )
+    assert r.status_code == 409, r.text
+    assert "as a text encoder and a VAE" in r.json()["detail"], r.text
+    assert offered("test-vae-fp8.pt", slot_kind="vae") == ([], "none_loadable")
+    graph["22"]["inputs"]["clip_name"] = "test-umt5-q8.gguf"
+    # A kind the graph does not load the file as, or a file it does not load.
+    r = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"replacing": "test-vae-fp8.pt", "slot_kind": "text_encoder"},
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["detail"] == (
+        "This workflow loads that model as a VAE, not a text encoder."
+    ), r.text
+    r = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"replacing": "test-not-in-graph.safetensors"},
+    )
+    assert r.status_code == 409, r.text
+
+
+def test_no_replacement_is_offered_without_a_checkpoint_to_go_with(cloneable):
+    graph = _with_support_loaders(cloneable.graph)
+    graph["1"]["inputs"]["ckpt_name"] = "test-not-on-shelf.safetensors"
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    body = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"replacing": "test-vae-fp8.safetensors"},
+    ).json()
+    assert (body["replacements"], body["replacements_reason"]) == (
+        [],
+        "no_checkpoint",
+    )
 
 
 def test_the_swap_options_refuse_a_checkpoint_id_that_is_not_one(cloneable):

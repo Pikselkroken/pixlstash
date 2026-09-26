@@ -24,7 +24,7 @@ import math
 import random
 import re
 from copy import deepcopy
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import requests
 
@@ -678,11 +678,21 @@ def _options_by_basename(value: str, options: list[str]) -> list[str]:
     ]
 
 
+def listed_as(filename: str, options: list[str]) -> str | None:
+    """How a loader lists *filename*, or ``None`` when it does not.
+
+    The rule :func:`apply_filename_swap` writes a replacement by: the exact
+    option, else the one option of that basename. Shared so a file offered as
+    a replacement is one the rewrite will then load.
+    """
+    return _matching_option(filename, options) or _option_by_basename(filename, options)
+
+
 def apply_filename_swap(
     prompt_graph: dict,
     swaps: dict[str, str],
     object_info: dict | None = None,
-    widgets: frozenset[str] | None = None,
+    fields: Callable[[str, str], bool] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     """Point every loader naming one file at another file instead.
 
@@ -708,9 +718,10 @@ def apply_filename_swap(
         prompt_graph: The API-format graph, mutated in place.
         swaps: The graph's filename -> the filename to load instead.
         object_info: The map from :func:`fetch_object_info`, or ``None``.
-        widgets: Only rewrite fields of these names, or every model field when
-            ``None``. A workflow's model fix names a checkpoint, and a VAE
-            field holding a file of the same name is no place for one.
+        fields: Only rewrite the fields for which ``fields(class_type,
+            field)`` is true, or every model field when ``None``. A
+            workflow's model fix names one kind of model, and a field of
+            another kind holding a file of the same name is no place for it.
 
     Returns:
         ``(substitutions, unswapped)``. One ``{node_id, class_type, field, was,
@@ -728,7 +739,7 @@ def apply_filename_swap(
     matched: set[str] = set()
     # Listed first, then written: the walk reads the inputs it rewrites.
     for node_id, class_type, field, value in list(iter_model_fields_api(prompt_graph)):
-        if widgets is not None and field not in widgets:
+        if fields is not None and not fields(class_type, field):
             continue
         key = _swap_key(value, swaps)
         if key is None:
@@ -742,7 +753,7 @@ def apply_filename_swap(
             else None
         )
         if options:
-            listed = _matching_option(now, options) or _option_by_basename(now, options)
+            listed = listed_as(now, options)
             if listed is None:
                 # Two files of that name in two folders may be two different
                 # models: writing either is a guess, so it is refused - but as

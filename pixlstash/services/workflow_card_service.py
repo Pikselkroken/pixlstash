@@ -76,6 +76,7 @@ from pixlstash.services.workflow_identity import (
     Difference,
     differences_reduced,
     is_lora_widget,
+    model_fix_kind,
     reduce_stored_document,
     slots,
     topology_node_labels,
@@ -89,6 +90,7 @@ from pixlstash.services.workflow_library_service import (
     read_instance_hashes,
 )
 from pixlstash.services.workflow_parameters import FEATURED_NAMES
+from pixlstash.utils.adapter_header import FILE_TEXT_ENCODER
 from pixlstash.utils.known_base_models import fold
 from pixlstash.utils.model_utils import (
     canonical_quant,
@@ -392,15 +394,21 @@ def _figures(
 def _superseded_variants(hub: HubDatabase, cards: list[Card]) -> frozenset[str]:
     """The variants that load a model the owner replaced in their workflow.
 
-    In a checkpoint slot, where a fix applies: a VAE naming a file of the same
-    name is still what the workflow loads there. Nothing to read, and no cost,
-    on a hub where nobody has replaced one.
+    In a slot of the kind the fix was made for: a VAE naming a file of the
+    same name as a replaced checkpoint is still what the workflow loads there.
+    Nothing to read, and no cost, on a hub where nobody has replaced one.
+
+    The asset rows name the widget and not the loader, which is exact for
+    every kind but one: ``clip_name`` is a text encoder on a CLIP loader and
+    an image encoder on a CLIP vision one. A variant matched only that way is
+    confirmed against its stored document's slots, which carry the loader
+    class, so the document read is paid for that case alone.
     """
-    replaced: dict[str, set[str]] = {}
-    for topology_hash, was_norm in hub.fetchall(
-        "SELECT topology_hash, was_norm FROM workflow_model_fix"
+    replaced: dict[str, set[tuple[str, str]]] = {}
+    for topology_hash, kind, was_norm in hub.fetchall(
+        "SELECT topology_hash, slot_kind, was_norm FROM workflow_model_fix"
     ):
-        replaced.setdefault(topology_hash, set()).add(was_norm)
+        replaced.setdefault(topology_hash, set()).add((kind, was_norm))
     if not replaced:
         return frozenset()
     topology_of = {
@@ -409,15 +417,42 @@ def _superseded_variants(hub: HubDatabase, cards: list[Card]) -> frozenset[str]:
         if card.topology_hash in replaced
         for variant in card.variants
     }
-    return frozenset(
-        variant
-        for variant, pairs in asset_names(hub, list(topology_of)).items()
-        if any(
-            name in replaced[topology_of[variant]]
+    superseded: set[str] = set()
+    to_confirm: list[str] = []
+    for variant, pairs in asset_names(hub, list(topology_of)).items():
+        kinds = {
+            kind
             for widget, name in pairs
-            if widget in CHECKPOINT_WIDGETS
-        )
-    )
+            if (kind := model_fix_kind("", widget), name)
+            in replaced[topology_of[variant]]
+        }
+        if kinds - {FILE_TEXT_ENCODER}:
+            superseded.add(variant)
+        elif kinds:
+            to_confirm.append(variant)
+    for variant, document in variant_documents(hub, to_confirm).items():
+        wanted = {
+            asset_reference(name)
+            for kind, name in replaced[topology_of[variant]]
+            if kind == FILE_TEXT_ENCODER
+        }
+        try:
+            found = slots(document)
+        except WorkflowGraphError as exc:
+            logger.warning(
+                "Variant %s: its stored document will not reduce, so its "
+                "covers are not marked as made with a replaced text encoder: %s",
+                variant,
+                exc,
+            )
+            continue
+        if any(
+            slot.asset in wanted
+            and model_fix_kind(slot.class_type, slot.widget) == FILE_TEXT_ENCODER
+            for slot in found
+        ):
+            superseded.add(variant)
+    return frozenset(superseded)
 
 
 def _rank(figures: list[CardFigures]) -> None:

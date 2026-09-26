@@ -837,14 +837,14 @@ def test_a_card_whose_only_file_a_pull_wrote_is_not_hand_imported(hub):
     assert hand()[api_key] is True
 
 
-def _base_slot_label(hub, topology_hash):
+def _base_slot_label(hub, topology_hash, widget="ckpt_name"):
     slots = json.loads(
         hub.fetchone(
             "SELECT slots FROM workflow_topology_core WHERE topology_hash = ?",
             (topology_hash,),
         )["slots"]
     )
-    return next(slot["label"] for slot in slots if slot["widget"] == "ckpt_name")
+    return next(slot["label"] for slot in slots if slot["widget"] == widget)
 
 
 def test_a_replaced_model_keeps_the_card_and_its_pictures(hub):
@@ -874,7 +874,12 @@ def test_a_replaced_model_keeps_the_card_and_its_pictures(hub):
     assert card_of(hub, early.structural_hash) == card
     assert moved == {apart: [card]}
     assert model_fixes(hub, old.topology_hash) == [
-        (label, "sdxl/test-model-FP8.safetensors", "test-model-bf16.safetensors")
+        (
+            label,
+            "sdxl/test-model-FP8.safetensors",
+            "test-model-bf16.safetensors",
+            "checkpoint",
+        )
     ]
     later = record_api_graph(
         hub, _graph(ckpt="test-model-bf16.safetensors", preview=False, extra=None)
@@ -923,8 +928,11 @@ def test_a_fix_targets_checkpoint_slots_across_the_whole_topology(hub):
     sibling = record_api_graph(hub, with_vae(missing, missing))
     assert card_of(hub, mine.structural_hash) != card_of(hub, sibling.structural_hash)
 
-    assert model_fix_labels(hub, mine.topology_hash, missing) == [
+    assert model_fix_labels(hub, mine.topology_hash, missing, "checkpoint") == [
         _base_slot_label(hub, mine.topology_hash)
+    ]
+    assert model_fix_labels(hub, mine.topology_hash, missing, "vae") == [
+        _base_slot_label(hub, mine.topology_hash, "vae_name")
     ]
 
 
@@ -954,7 +962,7 @@ def test_a_vae_naming_the_replaced_file_does_not_flag_its_pictures(hub):
     set_model_fix(
         hub,
         fixed.topology_hash,
-        model_fix_labels(hub, fixed.topology_hash, replaced),
+        model_fix_labels(hub, fixed.topology_hash, replaced, "checkpoint"),
         replaced,
         "test-model-bf16.safetensors",
         {},
@@ -969,6 +977,152 @@ def test_a_vae_naming_the_replaced_file_does_not_flag_its_pictures(hub):
     ]
 
     assert _superseded_variants(hub, cards) == {fixed.structural_hash}
+
+
+def _with_vae(ckpt, vae):
+    return _graph(
+        ckpt=ckpt,
+        extra={
+            "8": _node("VAELoader", vae_name=vae),
+            "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+        },
+    )
+
+
+def test_a_replaced_vae_keeps_the_card_and_leaves_a_checkpoint_of_that_name(hub):
+    """#1596: a missing VAE fixed as #1587 fixes a checkpoint, in its own slot.
+
+    The sibling card loads the missing file as its CHECKPOINT: a VAE fix must
+    neither name that slot nor flag that card's pictures.
+    """
+    missing = "test-vae-fp8.safetensors"
+    old = record_api_graph(hub, _with_vae("test-base.safetensors", missing))
+    new = record_api_graph(
+        hub, _with_vae("test-base.safetensors", "test-vae-bf16.safetensors")
+    )
+    as_checkpoint = record_api_graph(hub, _with_vae(missing, "test-vae-a.safetensors"))
+    card = card_of(hub, old.structural_hash)
+    other = card_of(hub, as_checkpoint.structural_hash)
+    assert card_of(hub, new.structural_hash) != card
+    vae_label = _base_slot_label(hub, old.topology_hash, "vae_name")
+
+    labels = model_fix_labels(hub, old.topology_hash, missing, "vae")
+    assert labels == [vae_label]
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        labels,
+        missing,
+        "test-vae-bf16.safetensors",
+        {},
+        kind="vae",
+    )
+
+    assert card_of(hub, new.structural_hash) == card
+    assert card_of(hub, as_checkpoint.structural_hash) == other
+    assert model_fixes(hub, old.topology_hash) == [
+        (vae_label, missing, "test-vae-bf16.safetensors", "vae")
+    ]
+    cards = [
+        Card(
+            workflow_key=card_of(hub, keys.structural_hash),
+            topology_hash=keys.topology_hash,
+            variants=[keys.structural_hash],
+        )
+        for keys in (old, new, as_checkpoint)
+    ]
+    assert _superseded_variants(hub, cards) == {old.structural_hash}
+
+
+def test_a_text_encoder_fix_names_encoder_slots_and_never_a_vision_one(hub):
+    """``clip_name`` on a CLIP vision loader is an image encoder, not a text one."""
+    missing = "test-t5-fp8.safetensors"
+    keys = record_api_graph(
+        hub,
+        _graph(
+            extra={
+                "8": _node(
+                    "DualCLIPLoader",
+                    clip_name1="test-clip-l.safetensors",
+                    clip_name2=missing,
+                ),
+                "9": _node("CLIPVisionLoader", clip_name=missing),
+            }
+        ),
+    )
+    label = {
+        (slot["class_type"], slot["widget"]): slot["label"]
+        for slot in json.loads(
+            hub.fetchone(
+                "SELECT slots FROM workflow_topology_core WHERE topology_hash = ?",
+                (keys.topology_hash,),
+            )["slots"]
+        )
+    }
+
+    assert model_fix_labels(hub, keys.topology_hash, missing, "text_encoder") == [
+        label[("DualCLIPLoader", "clip_name2")]
+    ]
+    assert model_fix_labels(hub, keys.topology_hash, missing, "checkpoint") == []
+
+
+def test_a_vision_encoder_of_a_replaced_text_encoders_name_is_not_flagged(hub):
+    """The asset rows say `clip_name`, not which loader: the document decides."""
+    missing = "test-t5-fp8.safetensors"
+
+    def encoders(text, vision):
+        return _graph(
+            extra={
+                "8": _node(
+                    "DualCLIPLoader",
+                    clip_name1="test-clip-l.safetensors",
+                    clip_name2=text,
+                ),
+                "9": _node("CLIPVisionLoader", clip_name=vision),
+            }
+        )
+
+    as_text = record_api_graph(hub, encoders(missing, "test-vision.safetensors"))
+    as_vision = record_api_graph(hub, encoders("test-t5-bf16.safetensors", missing))
+    assert as_text.topology_hash == as_vision.topology_hash
+    set_model_fix(
+        hub,
+        as_text.topology_hash,
+        model_fix_labels(hub, as_text.topology_hash, missing, "text_encoder"),
+        missing,
+        "test-t5-bf16.safetensors",
+        {},
+        kind="text_encoder",
+    )
+    cards = [
+        Card(
+            workflow_key=card_of(hub, keys.structural_hash),
+            topology_hash=keys.topology_hash,
+            variants=[keys.structural_hash],
+        )
+        for keys in (as_text, as_vision)
+    ]
+
+    assert _superseded_variants(hub, cards) == {as_text.structural_hash}
+
+
+def test_a_hub_made_before_the_slot_kind_reads_its_fixes_as_checkpoints(tmp_path):
+    """A development hub that ran #1587: its fixes were all checkpoints."""
+    path = str(tmp_path / "older.db")
+    database = HubDatabase(path)
+    with database.transaction() as conn:
+        conn.execute("ALTER TABLE workflow_model_fix DROP COLUMN slot_kind")
+        conn.execute(
+            "INSERT INTO workflow_model_fix (topology_hash, slot_label, was_norm, "
+            "now_norm, was_name, now_name) VALUES ('t', 'l', 'a', 'b', 'a', 'b')"
+        )
+    database.close()
+
+    reopened = HubDatabase(path)
+    try:
+        assert model_fixes(reopened, "t") == [("l", "a", "b", "checkpoint")]
+    finally:
+        reopened.close()
 
 
 def test_the_fixed_card_keeps_its_own_name_whoever_has_more_pictures(hub):

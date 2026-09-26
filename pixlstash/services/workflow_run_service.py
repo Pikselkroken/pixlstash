@@ -189,7 +189,9 @@ def model_folder(class_type: str, field_name: str) -> Optional[str]:
     """
     if LORA_FILENAME_FIELD_RE.match(field_name or ""):
         return "loras"
-    if class_type == "CLIPVisionLoader":
+    # By substring, as `model_fix_kind` and the clone dialog read it: a
+    # wrapped vision loader is still no place for a text encoder.
+    if "CLIPVision" in class_type:
         return "clip_vision"
     if class_type == "UpscaleModelLoader":
         return "upscale_models"
