@@ -2552,10 +2552,11 @@ def create_router(server) -> APIRouter:
             for _label, fix_was, fix_now in fixes
             if normalized_filename(fix_now) == normalized_filename(was)
         ]
-        if len(set(map(normalized_filename, chained))) > 1:
+        if now is not None and len(set(map(normalized_filename, chained))) > 1:
             # Two originals replaced by this one file in two slots: which of
             # them the owner means is a guess, and fixing one would leave the
-            # other loading a missing file behind a 200.
+            # other loading a missing file behind a 200. Undoing is not
+            # ambiguous: every slot goes back to its own original, below.
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -2563,9 +2564,12 @@ def create_router(server) -> APIRouter:
                     f"original instead ({', '.join(sorted(set(chained)))})."
                 ),
             )
-        if chained:
+        if chained and now is not None:
             was = chained[0]
         was_norm = normalized_filename(was)
+        # (original, the slots it is replaced in), one per fix this request
+        # writes or undoes.
+        targets: list[tuple[str, list[str]]] = []
         if now is not None:
             # A shelf checkpoint and nothing else, written as the shelf spells
             # it: the name goes into every graph this workflow submits.
@@ -2601,13 +2605,17 @@ def create_router(server) -> APIRouter:
                         "workflow; undo that first."
                     ),
                 )
+            targets = [(was, labels)] if labels else []
         else:
-            labels = [
-                label
-                for label, fix_was, _now in fixes
-                if normalized_filename(fix_was) == was_norm
-            ]
-        if not labels:
+            for original in sorted(set(chained)) or [was]:
+                labels = [
+                    label
+                    for label, fix_was, _now in fixes
+                    if normalized_filename(fix_was) == normalized_filename(original)
+                ]
+                if labels:
+                    targets.append((original, labels))
+        if not targets:
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -2623,33 +2631,37 @@ def create_router(server) -> APIRouter:
                 status_code=503,
                 detail="No library is open, so a workflow cannot be re-keyed.",
             )
-        moved = set_model_fix(
-            hub,
-            card.topology_hash,
-            labels,
-            was,
-            now,
-            read_variant_picture_counts(server.vault),
-            keep_key=workflow_key,
-        )
-        try:
-            saved_recipe_service.rekey_recipes(server.vault, moved)
-        except Exception:
-            # The mark flip's reason: the cards have moved and this map is the
-            # only record of where each recipe set belongs.
-            logger.exception(
-                "A model fix on topology %s re-keyed its cards but could not "
-                "move the saved recipes with them; the cards moved as %r.",
-                card.topology_hash,
-                moved,
-            )
-            raise
-        touched = {workflow_key, *moved}
-        touched.update(key for keys in moved.values() for key in keys)
-        _announce(request, sorted(touched), "changed")
-        # The card's own key, unless the re-key moved it: then where its
+        # The card's own key, unless a re-key moved it: then where its
         # pictures went, as the slot marks answer.
-        return _read_detail(hub, (moved.get(workflow_key) or [workflow_key])[0])
+        key = workflow_key
+        touched = {workflow_key}
+        for original, labels in targets:
+            moved = set_model_fix(
+                hub,
+                card.topology_hash,
+                labels,
+                original,
+                now,
+                read_variant_picture_counts(server.vault),
+                keep_key=key,
+            )
+            try:
+                saved_recipe_service.rekey_recipes(server.vault, moved)
+            except Exception:
+                # The mark flip's reason: the cards have moved and this map is
+                # the only record of where each recipe set belongs.
+                logger.exception(
+                    "A model fix on topology %s re-keyed its cards but could "
+                    "not move the saved recipes with them; the cards moved as %r.",
+                    card.topology_hash,
+                    moved,
+                )
+                raise
+            touched.update(moved)
+            touched.update(k for keys in moved.values() for k in keys)
+            key = (moved.get(key) or [key])[0]
+        _announce(request, sorted(touched), "changed")
+        return _read_detail(hub, key)
 
     @router.put(
         "/workflows/{workflow_key}/defaults",

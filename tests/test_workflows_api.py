@@ -4642,6 +4642,10 @@ def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
     )
     assert r.status_code == 409, r.text
     assert "test-a.safetensors" in r.json()["detail"]
+    # Undoing is not ambiguous: every slot goes back to its own original.
+    r = owner.put(route, json={"was": _REPLACEMENT_FILENAME, "now": None})
+    assert r.status_code == 200, r.text
+    assert r.json()["model_fixes"] == []
 
 
 def test_a_variant_that_will_not_reduce_keeps_its_card_and_its_attributes(
