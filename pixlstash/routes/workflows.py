@@ -69,10 +69,10 @@ from pixlstash.hub.workflow_card_reads import (
     instance_documents,
     key_pins,
     keys_in_stack,
+    model_fix_labels,
     model_fixes,
     picture_inputs,
     slot_marks,
-    variant_documents,
 )
 from pixlstash.hub.workflow_card_writes import (
     AUTO_STACK_PREFIX,
@@ -169,11 +169,9 @@ from pixlstash.services.workflow_hash import (
     MODEL_EXTENSIONS,
     SECRET_FIELD_RE,
     WorkflowGraphError,
-    asset_reference,
     normalized_filename,
     structural_document,
 )
-from pixlstash.services.workflow_identity import slots as document_slots
 from pixlstash.services.workflow_identity import topology_node_labels
 from pixlstash.services.workflow_inputs import (
     CardInput,
@@ -2570,15 +2568,7 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(
                     status_code=422, detail="That is the model it already loads."
                 )
-            wanted = asset_reference(was_norm)
-            labels = sorted(
-                {
-                    slot.label
-                    for document in variant_documents(hub, card.variants).values()
-                    for slot in document_slots(document)
-                    if not slot.is_lora and slot.asset == wanted
-                }
-            )
+            labels = model_fix_labels(hub, card.topology_hash, was)
             # Two originals folded onto one replacement in one slot would file
             # the replacement's pictures on whichever row SQLite read last.
             clash = [

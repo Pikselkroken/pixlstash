@@ -20,7 +20,12 @@ from pixlstash.hub.workflows import (
     record_api_graph,
     record_ui_graph,
 )
-from pixlstash.hub.workflow_card_reads import Card, card_index, model_fixes
+from pixlstash.hub.workflow_card_reads import (
+    Card,
+    card_index,
+    model_fix_labels,
+    model_fixes,
+)
 from pixlstash.hub.workflow_card_writes import set_attributes, set_model_fix
 from pixlstash.services.workflow_card_service import _figures, _superseded_variants
 from pixlstash.services.workflow_library_service import CoverCandidate
@@ -35,7 +40,7 @@ from pixlstash.services.workflow_identity import (
 from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tasks.workflow_card_backfill_finder import WorkflowCardBackfillFinder
 from pixlstash.tasks.workflow_card_backfill_task import WorkflowCardBackfillTask
-from tests.test_workflow_identity import _graph
+from tests.test_workflow_identity import _graph, _node
 
 CARD_TABLES = (
     "workflow_variant",
@@ -892,6 +897,35 @@ def test_a_replaced_model_keeps_the_card_and_its_pictures(hub):
     assert card_of(hub, old.structural_hash) == card
     assert card_of(hub, early.structural_hash) == apart
     assert model_fixes(hub, old.topology_hash) == []
+
+
+def test_a_fix_targets_checkpoint_slots_across_the_whole_topology(hub):
+    """Every card of the graph, and never a VAE slot naming the same file.
+
+    Only the sibling card loads the missing file, so its slot is found from
+    the topology rather than from the card being fixed. It also has a VAE
+    slot holding a file of that name, which is no place for a checkpoint.
+    """
+    missing = "test-model-fp8.safetensors"
+
+    def with_vae(ckpt, vae):
+        return _graph(
+            ckpt=ckpt,
+            extra={
+                "8": _node("VAELoader", vae_name=vae),
+                "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+            },
+        )
+
+    mine = record_api_graph(
+        hub, with_vae("test-other.safetensors", "test-vae-a.safetensors")
+    )
+    sibling = record_api_graph(hub, with_vae(missing, missing))
+    assert card_of(hub, mine.structural_hash) != card_of(hub, sibling.structural_hash)
+
+    assert model_fix_labels(hub, mine.topology_hash, missing) == [
+        _base_slot_label(hub, mine.topology_hash)
+    ]
 
 
 def test_the_fixed_card_keeps_its_own_name_whoever_has_more_pictures(hub):
