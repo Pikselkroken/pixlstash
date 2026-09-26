@@ -719,9 +719,9 @@ describe("selection and the verbs", () => {
       .trigger("contextmenu", { clientX: 1, clientY: 2 });
 
     expect([...store.selectedIds]).toEqual([1]);
-    expect(wrapper.find('[data-testid="model-set-card"]').classes()).not.toContain(
-      "msc--on",
-    );
+    expect(
+      wrapper.find('[data-testid="model-set-card"]').classes(),
+    ).not.toContain("msc--on");
   });
 
   it("lights the card again once the tray showing the pick closes", async () => {
@@ -1922,6 +1922,25 @@ describe("hand-made sets (#1520)", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it("does not light a checkpoint's evidence card for a pick in a hand-made tray", async () => {
+    // #1589's rule, carried to the slots tray: the pick is drawn on the tile
+    // the reader clicked, not on a card elsewhere that happens to share it.
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      combinations: [combination("1,3", [CKPT, LORA])],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+
+    await wrapper.find(`[data-key="m:${SET_CKPT.sha256}"]`).trigger("click");
+    await wrapper.vm.$nextTick();
+
+    expect([...store.selectedIds]).toEqual([1]);
+    const evidence = wrapper.find('.msg__row[data-key="model:1"]');
+    expect(evidence.attributes("aria-selected")).toBe("false");
   });
 
   it("marks a member whose file left the shelf, and does not let it be selected", async () => {
