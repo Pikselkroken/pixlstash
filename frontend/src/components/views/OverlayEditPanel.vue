@@ -284,7 +284,12 @@ const chosenCard = computed(
   () => cards.value.find((card) => card.key === workflowKey.value) || null,
 );
 
+// Whether the reader has picked a card by hand since the list loaded, which the
+// late library key below must not overrule.
+let choseByHand = false;
+
 function choose(key) {
+  choseByHand = true;
   workflowKey.value = key;
   pickerOpen.value = false;
   refocusPicker = true;
@@ -307,7 +312,10 @@ const storageKey = computed(
 watch(storageKey, () => {
   if (!loaded.value) return;
   rememberedKey.value = readRemembered();
-  if (cards.value.some((card) => card.key === rememberedKey.value)) {
+  if (
+    !choseByHand &&
+    cards.value.some((card) => card.key === rememberedKey.value)
+  ) {
     workflowKey.value = rememberedKey.value;
   }
 });
@@ -341,9 +349,10 @@ async function loadCards() {
   loading.value = true;
   loadError.value = "";
   try {
-    // One-offs too: a workflow pulled from ComfyUI with few pictures is one,
-    // and it is exactly the edit workflow somebody has only just added.
-    const { cards: all } = await listWorkflowCards({ includeOneOffs: true });
+    // The Workflows grid's own list: one card per stack, its cover, and no
+    // one-offs. Every variant and every pulled experiment made the picker too
+    // long to be any use.
+    const { cards: all } = await listWorkflowCards();
     cards.value = all.filter((card) => EDIT_TYPES.has(card.type));
     rememberedKey.value = readRemembered();
     const known = cards.value.some((card) => card.key === rememberedKey.value);
@@ -448,6 +457,8 @@ async function showResult() {
         err,
       );
     }
+    // A newer run may have started while the lookup was out; it owns the tab.
+    if (run.value !== current) return;
     run.value = { ...current };
   }
   if (current.resultId) {

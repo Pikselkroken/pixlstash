@@ -74,7 +74,8 @@ describe("the Edit tab", () => {
     const wrapper = await mountPanel();
     const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
     expect(rows).toEqual(["Widen, Outpaint", "Relight, Image to Image"]);
-    expect(listWorkflowCards).toHaveBeenCalledWith({ includeOneOffs: true });
+    // The grid's default list: stack covers, one-offs left out.
+    expect(listWorkflowCards).toHaveBeenCalledWith();
     expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
   });
 
@@ -156,6 +157,43 @@ describe("the Edit tab", () => {
       "",
       "warmer light",
     ]);
+  });
+
+  it("keeps a card picked by hand when the library list arrives late", async () => {
+    window.localStorage.setItem("pixlstash:editTabWorkflow:lib-1", "i2i");
+    const wrapper = await mountPanel();
+    await wrapper.findAll("[role=menuitemradio]")[0].trigger("click");
+    useLibrariesStore().libraries = [{ uuid: "lib-1", is_active: true }];
+    await flush();
+    expect(checkedRow(wrapper)).toBe("Widen, Outpaint");
+  });
+
+  it("drops a Show it lookup that a newer run overtook", async () => {
+    const pictures = await import("../../api/pictures");
+    const stacks = await import("../../api/stacks");
+    pictures.getPictureMetadata.mockResolvedValue({ stack_id: 3 });
+    const wrapper = await mountPanel();
+    await wrapper.find("textarea").setValue("first");
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    await wrapper.setProps({ comfyuiProgress: { status: "completed" } });
+    await flush();
+    // Held open, so a second run can start while Show it is looking.
+    let answer;
+    stacks.listStackPictures.mockImplementation(
+      () => new Promise((resolve) => (answer = resolve)),
+    );
+    const showIt = wrapper.findAll("button").find((b) => b.text() === "Show it");
+    await showIt.trigger("click");
+    stacks.listStackPictures.mockResolvedValue([]);
+    await wrapper.setProps({ comfyuiProgress: { status: "running" } });
+    await wrapper.find("textarea").setValue("second");
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    answer([{ id: 99, created_at: "2026-01-01T00:00:00Z" }]);
+    await flush();
+    expect(wrapper.emitted("show-picture")).toBeUndefined();
+    expect(wrapper.text()).toContain("Running");
   });
 
   it("says why nothing was queued", async () => {
