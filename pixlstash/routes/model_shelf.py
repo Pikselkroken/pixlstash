@@ -1106,9 +1106,14 @@ def _workflow_set_errors():
     """The set service's refusals as HTTP answers."""
     try:
         yield
+    # Logged at info, not warning: these are answers to the owner's request
+    # (a set that is gone, a second checkpoint), not faults of the server, but
+    # the log should still say what was refused and why.
     except WorkflowSetNotFoundError as exc:
+        logger.info("Workflow set request answered 404: %s", exc)
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except WorkflowSetRefusedError as exc:
+        logger.info("Workflow set request refused (409): %s", exc)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 

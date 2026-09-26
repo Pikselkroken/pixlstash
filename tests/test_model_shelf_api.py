@@ -31,6 +31,7 @@ the refused token is live.
 
 from __future__ import annotations
 
+import logging
 import hashlib
 import itertools
 import json
@@ -1219,7 +1220,7 @@ def test_an_engine_an_unhashed_file_and_an_unknown_id_are_refused(shelf_env):
             conn.execute("DELETE FROM model WHERE id = ?", (engine,))
 
 
-def test_adding_twice_is_a_no_op_and_a_second_checkpoint_is_refused(shelf_env):
+def test_adding_twice_is_a_no_op_and_a_second_checkpoint_is_refused(shelf_env, caplog):
     ids = shelf_env.model_ids
     try:
         set_id = _new_set(
@@ -1236,16 +1237,19 @@ def test_adding_twice_is_a_no_op_and_a_second_checkpoint_is_refused(shelf_env):
         assert r.json()["added"] == []
         assert len(r.json()["set"]["members"]) == 2
 
-        r = shelf_env.owner.post(
-            url,
-            json={
-                "members": [
-                    {"model_id": ids["bob.safetensors"]},
-                    {"model_id": ids["mystery.safetensors"], "slot": "checkpoint"},
-                ]
-            },
-        )
+        with caplog.at_level(logging.INFO, logger="pixlstash.routes.model_shelf"):
+            r = shelf_env.owner.post(
+                url,
+                json={
+                    "members": [
+                        {"model_id": ids["bob.safetensors"]},
+                        {"model_id": ids["mystery.safetensors"], "slot": "checkpoint"},
+                    ]
+                },
+            )
         assert r.status_code == 409, r.text
+        # The refusal is in the server log with its reason, not only the answer.
+        assert "already has a checkpoint" in caplog.text
         assert r.json()["detail"] == (
             "This set already has a checkpoint. Remove it first."
         )
