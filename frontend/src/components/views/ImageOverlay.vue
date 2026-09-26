@@ -397,7 +397,7 @@
       </header>
 
       <div
-        v-if="comfyuiProgress && comfyuiProgress.visible"
+        v-if="comfyuiProgress && comfyuiProgress.visible && !editTabShowsRun"
         class="overlay-progress overlay-progress--comfyui"
         :class="{
           'overlay-progress--error': comfyuiProgress.status === 'failed',
@@ -825,6 +825,7 @@
             :comfyui-progress="comfyuiProgress"
             :comfyui-progress-percent="comfyuiProgressPercent"
             @show-picture="(id) => emit('show-picture', id)"
+            @running="(on) => (editRunning = on)"
             @more-options="(payload) => emit('edit-more-options', payload)"
           />
         </AppInspector>
@@ -901,6 +902,7 @@ import {
 import {
   getPictureMetadata,
   listPictureFaces,
+  listPicturesByIds,
   listPictureDetections,
   addPictureFace,
   downloadPicture,
@@ -1139,6 +1141,13 @@ const editTabShown = computed(
     editTabAvailable.value &&
     !!image.value?.id &&
     !isSupportedVideoFile(getOverlayFormat(image.value)),
+);
+// Whether a run the Edit tab started is still going. While that tab is on
+// screen its own bar reports the run, so the lightbox's ComfyUI bar would be a
+// second copy. A run from the grid's menus still gets the lightbox bar.
+const editRunning = ref(false);
+const editTabShowsRun = computed(
+  () => editRunning.value && sidebarOpen.value && sidebarTab.value === "edit",
 );
 // The reader's CHOICE is remembered even while the tab it names is gone, so
 // stepping over a photo in a run of ComfyUI pictures does not silently move
@@ -1391,10 +1400,50 @@ function setOverlayImageById(nextId) {
   } else {
     if (!image.value) {
       image.value = { id: nextId, tags: [] };
+    } else if (open.value && !isSameImage) {
+      void moveToUnlistedPicture(nextIdKey);
     }
     return;
   }
   // Tag state reset is handled by OverlayTagsPanel's image-id watcher.
+}
+
+/**
+ * Move to a picture that neither the frozen snapshot nor the live grid list
+ * holds. A ComfyUI result imported while the lightbox is open is the case: the
+ * grid defers the insert until the lightbox closes (§9.1), so the Edit tab's
+ * *Show it* and the runner's step to the newest stack member both named an id
+ * nothing could resolve, and the move was a silent no-op. Its grid row is read
+ * and slotted in after the current picture, so next/prev and the filmstrip
+ * agree with what is on screen.
+ */
+async function moveToUnlistedPicture(idKey) {
+  const fromId = image.value?.id;
+  let row = null;
+  try {
+    const rows = await listPicturesByIds([idKey], { fields: "grid" });
+    row = Array.isArray(rows) ? rows[0] : null;
+  } catch (err) {
+    console.warn(`Could not read picture ${idKey} to show it:`, err);
+    return;
+  }
+  // Overtaken: the lightbox closed, moved on, or was asked for another one.
+  if (
+    !row ||
+    !open.value ||
+    String(initialImageId.value) !== idKey ||
+    image.value?.id !== fromId
+  ) {
+    return;
+  }
+  const list = overlayImages.value.slice();
+  if (!list.some((item) => String(item?.id) === idKey)) {
+    const at = list.findIndex((item) => String(item?.id) === String(fromId));
+    list.splice(at === -1 ? list.length : at + 1, 0, row);
+    frozenAllImages.value = list;
+  }
+  setOverlayImageById(idKey);
+  void ensureOverlayFilmstripForImage();
 }
 
 const emit = defineEmits([

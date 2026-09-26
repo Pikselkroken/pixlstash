@@ -270,7 +270,7 @@ const props = defineProps({
   comfyuiProgressPercent: { type: Number, default: 0 },
 });
 
-const emit = defineEmits(["show-picture", "more-options"]);
+const emit = defineEmits(["show-picture", "more-options", "running"]);
 const router = useRouter();
 
 /** The card types this tab lists, as `workflow_type` spells them. */
@@ -495,6 +495,12 @@ watch(
       };
     }
   },
+);
+
+// So the lightbox can drop its own ComfyUI bar while this tab shows the run.
+watch(
+  () => run.value?.status === "running",
+  (running) => emit("running", running),
 );
 
 onBeforeUnmount(() => clearTimeout(resolveTimer));

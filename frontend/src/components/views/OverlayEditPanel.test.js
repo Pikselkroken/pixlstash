@@ -293,6 +293,14 @@ describe("the Edit tab", () => {
     expect(wrapper.text()).not.toContain("Running");
   });
 
+  it("tells the lightbox while its run is going", async () => {
+    const wrapper = await mountPanel();
+    await wrapper.find("button.run").trigger("click");
+    await flush();
+    await wrapper.setProps({ comfyuiProgress: { status: "completed" } });
+    expect(wrapper.emitted("running")).toEqual([[true], [false]]);
+  });
+
   it("marks the run finished when ComfyUI completes", async () => {
     const wrapper = await mountPanel();
     await wrapper.find("textarea").setValue("golden hour");
