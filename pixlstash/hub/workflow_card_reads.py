@@ -589,3 +589,19 @@ def picture_inputs(
             (library_uuid, workflow_key),
         )
     ]
+
+
+def model_fixes(hub: HubDatabase, topology_hash: str) -> list[tuple[str, str, str]]:
+    """``[(slot_label, was_name, now_name)]``: the models replaced in a topology.
+
+    The read side of ``PUT /workflows/{key}/model-fix``. Per topology, because
+    that is what a fix is keyed on (``workflow_cards.fixed_slots``).
+    """
+    return [
+        (slot_label, was_name, now_name)
+        for slot_label, was_name, now_name in hub.fetchall(
+            "SELECT slot_label, was_name, now_name FROM workflow_model_fix "
+            "WHERE topology_hash = ? ORDER BY slot_label, was_norm",
+            (topology_hash,),
+        )
+    ]

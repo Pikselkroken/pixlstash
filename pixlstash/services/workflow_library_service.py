@@ -261,6 +261,9 @@ class CoverCandidate:
     square_crop_x: Optional[int] = None
     square_crop_y: Optional[int] = None
     square_crop_side: Optional[int] = None
+    # Made with a model the owner has since replaced in this workflow
+    # (``workflow_model_fix``). Set by the workflows grid, never by the query.
+    superseded: bool = False
 
 
 # What a NULL date sorts as when the ranking above is re-expressed in Python.

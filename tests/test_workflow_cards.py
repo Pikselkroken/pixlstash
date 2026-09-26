@@ -16,10 +16,14 @@ from pixlstash.hub.workflow_cards import record_identity
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflows import (
     forget_asset_names,
+    forget_model_ghosts,
     record_api_graph,
     record_ui_graph,
 )
-from pixlstash.hub.workflow_card_reads import card_index
+from pixlstash.hub.workflow_card_reads import Card, card_index, model_fixes
+from pixlstash.hub.workflow_card_writes import set_attributes, set_model_fix
+from pixlstash.services.workflow_card_service import _figures, _superseded_variants
+from pixlstash.services.workflow_library_service import CoverCandidate
 from pixlstash.services.workflow_identity import (
     CORE_VERSION,
     FACE_DETAILER,
@@ -46,6 +50,7 @@ CARD_TABLES = (
     "workflow_stack",
     "workflow_stack_member",
     "workflow_unstacked",
+    "workflow_model_fix",
 )
 
 SPEED_LORA = "test-lightning-8step.safetensors"
@@ -825,3 +830,159 @@ def test_a_card_whose_only_file_a_pull_wrote_is_not_hand_imported(hub):
         hub, "api copy.json", keys.topology_hash, keys.structural_hash
     )
     assert hand()[api_key] is True
+
+
+def _base_slot_label(hub, topology_hash):
+    slots = json.loads(
+        hub.fetchone(
+            "SELECT slots FROM workflow_topology_core WHERE topology_hash = ?",
+            (topology_hash,),
+        )["slots"]
+    )
+    return next(slot["label"] for slot in slots if slot["widget"] == "ckpt_name")
+
+
+def test_a_replaced_model_keeps_the_card_and_its_pictures(hub):
+    """A missing checkpoint replaced: runs with the new one land on the old card.
+
+    The pictures already made with the replacement join it when the fix is set,
+    one filed afterwards lands there on its own, and undoing the fix sends both
+    back to a card of their own - the original's pictures never move.
+    """
+    old = record_api_graph(hub, _graph(ckpt="test-model-fp8.safetensors"))
+    early = record_api_graph(hub, _graph(ckpt="test-model-bf16.safetensors"))
+    card = card_of(hub, old.structural_hash)
+    apart = card_of(hub, early.structural_hash)
+    assert apart != card
+    label = _base_slot_label(hub, old.topology_hash)
+
+    moved = set_model_fix(
+        hub,
+        old.topology_hash,
+        [label],
+        "sdxl/test-model-FP8.safetensors",
+        "test-model-bf16.safetensors",
+        {},
+    )
+
+    assert card_of(hub, old.structural_hash) == card
+    assert card_of(hub, early.structural_hash) == card
+    assert moved == {apart: [card]}
+    assert model_fixes(hub, old.topology_hash) == [
+        (label, "sdxl/test-model-FP8.safetensors", "test-model-bf16.safetensors")
+    ]
+    later = record_api_graph(
+        hub, _graph(ckpt="test-model-bf16.safetensors", preview=False, extra=None)
+    )
+    assert later.structural_hash == early.structural_hash
+    # A second run of the replacement with a different graph value spelling
+    # still files on the card: the key reads the file, not its folder.
+    folder = record_api_graph(hub, _graph(ckpt="sdxl/test-model-bf16.safetensors"))
+    assert card_of(hub, folder.structural_hash) == card
+
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        [label],
+        "sdxl/test-model-FP8.safetensors",
+        None,
+        {},
+    )
+
+    assert card_of(hub, old.structural_hash) == card
+    assert card_of(hub, early.structural_hash) == apart
+    assert model_fixes(hub, old.topology_hash) == []
+
+
+def test_the_fixed_card_keeps_its_own_name_whoever_has_more_pictures(hub):
+    """The owner is fixing THIS card, not folding it into the replacement's."""
+    old = record_api_graph(hub, _graph(ckpt="test-model-fp8.safetensors"))
+    new = record_api_graph(hub, _graph(ckpt="test-model-bf16.safetensors"))
+    card = card_of(hub, old.structural_hash)
+    other = card_of(hub, new.structural_hash)
+    set_attributes(hub, card, name="The one being fixed")
+    set_attributes(hub, other, name="The busier card")
+
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        [_base_slot_label(hub, old.topology_hash)],
+        "test-model-fp8.safetensors",
+        "test-model-bf16.safetensors",
+        {old.structural_hash: 1, new.structural_hash: 30},
+        keep_key=card,
+    )
+
+    assert card_of(hub, new.structural_hash) == card
+    assert (
+        hub.fetchone("SELECT name FROM workflow_attr WHERE workflow_key = ?", (card,))[
+            "name"
+        ]
+        == "The one being fixed"
+    )
+
+
+def test_forgetting_a_replaced_model_forgets_the_replacement(hub):
+    keys = record_api_graph(hub, _graph(ckpt="test-private-name.safetensors"))
+    set_model_fix(
+        hub,
+        keys.topology_hash,
+        [_base_slot_label(hub, keys.topology_hash)],
+        "test-private-name.safetensors",
+        "test-model-bf16.safetensors",
+        {},
+    )
+
+    forget_asset_names(hub, "test-private-name.safetensors")
+
+    assert "test-private-name" not in json.dumps(all_card_rows(hub))
+
+
+def test_forgetting_model_ghosts_forgets_their_replacements(hub):
+    """Settings › Privacy's purge: a replaced model is a ghost by definition."""
+    keys = record_api_graph(hub, _graph(ckpt="test-private-name.safetensors"))
+    set_model_fix(
+        hub,
+        keys.topology_hash,
+        [_base_slot_label(hub, keys.topology_hash)],
+        "test-private-name.safetensors",
+        "test-model-bf16.safetensors",
+        {},
+    )
+
+    assert forget_model_ghosts(hub)
+
+    assert "test-private-name" not in json.dumps(all_card_rows(hub))
+
+
+def test_covers_made_with_the_replaced_model_are_flagged_and_go_last(hub):
+    old = record_api_graph(hub, _graph(ckpt="test-model-fp8.safetensors"))
+    new = record_api_graph(hub, _graph(ckpt="test-model-bf16.safetensors"))
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        [_base_slot_label(hub, old.topology_hash)],
+        "test-model-fp8.safetensors",
+        "test-model-bf16.safetensors",
+        {},
+    )
+    key = card_of(hub, old.structural_hash)
+    card = Card(
+        workflow_key=key,
+        topology_hash=old.topology_hash,
+        variants=[old.structural_hash, new.structural_hash],
+    )
+    superseded = _superseded_variants(hub, [card])
+    assert superseded == {old.structural_hash}
+
+    candidates = [
+        # The old model's picture is rated higher, and still goes last.
+        CoverCandidate(old.structural_hash, 1, 5, 0.9, None),
+        CoverCandidate(new.structural_hash, 2, 2, 0.1, None),
+    ]
+    (figure,) = _figures([card], {}, candidates, {}, superseded)
+
+    assert [(c.picture_id, c.superseded) for c in figure.covers] == [
+        (2, False),
+        (1, True),
+    ]

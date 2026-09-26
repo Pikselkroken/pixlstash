@@ -43,7 +43,7 @@ Three orderings are decided here and nowhere else:
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Optional
 
@@ -342,8 +342,14 @@ def _figures(
     activity: dict[str, VariantActivity],
     candidates: list[CoverCandidate],
     saved_recipes: dict[str, int],
+    superseded: frozenset[str] = frozenset(),
 ) -> list[CardFigures]:
-    """Fold each card's variants into one set of counts and one cover strip."""
+    """Fold each card's variants into one set of counts and one cover strip.
+
+    A picture of a *superseded* variant - made with a model the owner has
+    since replaced - is flagged and covers only where no picture made with
+    the workflow as it now stands can.
+    """
     by_variant: dict[str, list[CoverCandidate]] = {}
     for candidate in candidates:
         by_variant.setdefault(candidate.structural_hash, []).append(candidate)
@@ -364,11 +370,44 @@ def _figures(
                     figure.last_used is None or seen.last_used > figure.last_used
                 ):
                     figure.last_used = seen.last_used
-            strip.extend(by_variant.get(structural_hash, ()))
-        strip.sort(key=cover_order, reverse=True)
+            strip.extend(
+                replace(candidate, superseded=True)
+                if structural_hash in superseded
+                else candidate
+                for candidate in by_variant.get(structural_hash, ())
+            )
+        strip.sort(
+            key=lambda candidate: (not candidate.superseded, cover_order(candidate)),
+            reverse=True,
+        )
         figure.covers = strip[:COVER_DEPTH]
         figures.append(figure)
     return figures
+
+
+def _superseded_variants(hub: HubDatabase, cards: list[Card]) -> frozenset[str]:
+    """The variants that load a model the owner replaced in their workflow.
+
+    Nothing to read, and no cost, on a hub where nobody has replaced one.
+    """
+    replaced: dict[str, set[str]] = {}
+    for topology_hash, was_norm in hub.fetchall(
+        "SELECT topology_hash, was_norm FROM workflow_model_fix"
+    ):
+        replaced.setdefault(topology_hash, set()).add(was_norm)
+    if not replaced:
+        return frozenset()
+    topology_of = {
+        variant: card.topology_hash
+        for card in cards
+        if card.topology_hash in replaced
+        for variant in card.variants
+    }
+    return frozenset(
+        variant
+        for variant, pairs in asset_names(hub, list(topology_of)).items()
+        if any(name in replaced[topology_of[variant]] for _widget, name in pairs)
+    )
 
 
 def _rank(figures: list[CardFigures]) -> None:
@@ -583,7 +622,9 @@ def read_grid(
     """
     cards = card_index(hub)
     activity, candidates, saved_recipes = read_card_grid(vault, COVER_DEPTH)
-    figures = _figures(cards, activity, candidates, saved_recipes)
+    figures = _figures(
+        cards, activity, candidates, saved_recipes, _superseded_variants(hub, cards)
+    )
     _rank(figures)
 
     # Hidden cards and one-offs come out BEFORE the grouping, so a stack is
