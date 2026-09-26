@@ -137,6 +137,7 @@ async function mountGrid({
   rows = [],
   support = [],
   handMade = [],
+  attach = false,
 } = {}) {
   listAdapters.mockResolvedValue(rows);
   listSupport.mockResolvedValue(support);
@@ -147,7 +148,10 @@ async function mountGrid({
   });
   const store = useModelShelfStore();
   await store.fetchRows();
-  const wrapper = mount(ModelSetGrid, globalOpts);
+  const wrapper = mount(ModelSetGrid, {
+    ...globalOpts,
+    ...(attach ? { attachTo: document.body } : {}),
+  });
   await new Promise((resolve) => setTimeout(resolve, 0));
   await wrapper.vm.$nextTick();
   return { wrapper, store };
@@ -1552,13 +1556,20 @@ describe("hand-made sets (#1520)", () => {
       on_shelf: false,
       id: null,
     });
-    const { wrapper } = await mountGrid({
+    const { wrapper, store } = await mountGrid({
       rows: [],
       handMade: [handSet(10, [gone], { incomplete: false })],
     });
     const card = wrapper.find('[data-testid="model-set-card"]');
     expect(card.text()).toContain("Checkpoint not on shelf");
     expect(card.text()).not.toContain("No checkpoint yet");
+
+    // Not stuck: the off-shelf checkpoint's tile keeps its Remove, which is
+    // what frees the slot for a replacement.
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    const tile = wrapper.find(`[data-key="m:${gone.sha256}"]`);
+    expect(tile.find(".mss__remove").exists()).toBe(true);
   });
 
   it("hands the shelf the card to refocus when the set menu closes", async () => {
@@ -1571,6 +1582,74 @@ describe("hand-made sets (#1520)", () => {
     const [{ x, y, el }] = wrapper.emitted("set-menu")[0];
     expect([x, y]).toEqual([5, 6]);
     expect(el).toBe(card.element);
+  });
+
+  it("counts a whole section in its heading, not the rows drawn before Show all", async () => {
+    const loras = Array.from({ length: 10 }, (_, i) =>
+      row(20 + i, `lora_${i}`),
+    );
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), ...loras],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…")
+      .trigger("click");
+
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    // Eight drawn, ten in the section.
+    expect(chooser.findAll('[role="option"]')).toHaveLength(8);
+    const heading = chooser
+      .findAll(".wsc__head")
+      .find((h) => h.text().includes("All other"));
+    expect(heading.find(".wsc__count").text()).toBe("10");
+  });
+
+  it("keeps what is typed in the base-model field across a refetch", async () => {
+    const bare = slotMember(1, "realvisXL_v5", "checkpoint", {
+      base_model: null,
+    });
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [bare])],
+    });
+    store.toggleSet("hand:10");
+    store.checkpointAdded = { setId: 10, modelId: 1 };
+    await wrapper.vm.$nextTick();
+    const field = wrapper.find('[data-testid="base-model-offer"] input');
+    await field.setValue("Pony");
+
+    await store.loadWorkflowSets({ force: true });
+    await wrapper.vm.$nextTick();
+
+    expect(
+      wrapper.find('[data-testid="base-model-offer"] input').element.value,
+    ).toBe("Pony");
+  });
+
+  it("gives focus back to the Fill button when its checklist closes", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      combinations: [combination("1,3", [CKPT, LORA])],
+      handMade: [handSet(10, [SET_CKPT])],
+      attach: true,
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    const fill = wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Fill from pictures"));
+    await fill.trigger("click");
+    await wrapper
+      .find('[data-testid="workflow-set-chooser"]')
+      .trigger("keydown", { key: "Escape" });
+    await wrapper.vm.$nextTick();
+
+    expect(document.activeElement).toBe(fill.element);
+    wrapper.unmount();
   });
 
   it("marks a member whose file left the shelf, and does not let it be selected", async () => {

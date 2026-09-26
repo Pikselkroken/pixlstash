@@ -57,8 +57,10 @@
               role="presentation"
             >
               {{ section.label }}
+              <!-- The section's real size, not the rows drawn before "Show
+                   all": a section of twenty cut to eight must say twenty. -->
               <span class="wsc__count num">{{
-                section.items.length ? section.items.length : "none yet"
+                section.items.length + section.more || "none yet"
               }}</span>
             </div>
             <div

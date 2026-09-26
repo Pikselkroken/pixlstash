@@ -961,6 +961,10 @@ function openChooser(mode, el, slotId = "") {
     slotId,
     target: box ? [box.left, box.bottom] : [0, 0],
     returnTo: slotId ? `slot:add:${slotId}` : cursorId.value,
+    // The control that asked - a ＋ tile or a Fill button in the tray's bar.
+    // A Fill button is not a cursor stop, so the cursor alone cannot return
+    // focus to it.
+    trigger: el ?? null,
   };
 }
 
@@ -983,6 +987,7 @@ const baseOffer = computed(() => {
   const row = store.rows.find((candidate) => candidate.id === checkpoint.id);
   const fuzzy = String(row?.base_model_source ?? "").endsWith("_fuzzy");
   return {
+    key: `${set.id}:${checkpoint.id}`,
     name: checkpoint.name,
     guess: fuzzy ? (row?.base_model_canonical ?? "") : "",
   };
@@ -1016,8 +1021,16 @@ function openFill(mode) {
 }
 
 function closeChooser() {
-  const returnTo = chooser.value?.returnTo;
+  const { returnTo, trigger } = chooser.value ?? {};
   chooser.value = null;
+  // A Fill button still on screen takes its focus back directly. A ＋ tile
+  // goes through the cursor, which also keeps the grid's roving tab stop on
+  // it - and a tile that vanished (the Checkpoint ＋, once filled) is handled
+  // by whoever filled it.
+  if (trigger?.isConnected && !returnTo?.startsWith("slot:add:")) {
+    trigger.focus?.();
+    return;
+  }
   // Programmatic overlays drop focus to <body>; put it back on the tile.
   const at = flatRows.value.findIndex((entry) => entry.id === returnTo);
   if (at >= 0) moveCursor(at);

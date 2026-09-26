@@ -266,7 +266,10 @@ const props = defineProps({
   marks: { type: Object, default: () => new Map() },
   canFillFromSet: { type: Boolean, default: false },
   canFillFromPictures: { type: Boolean, default: false },
-  /** `{name, guess}` while the one-time base-model offer is up, else null. */
+  /**
+   * `{key, name, guess}` while the one-time base-model offer is up, else null.
+   * `key` names the offer (set and checkpoint), so a refetch is not a new one.
+   */
   baseOffer: { type: Object, default: null },
 });
 
@@ -288,10 +291,14 @@ const slots = computed(() => setSlots(props.set));
 const baseValue = ref("");
 const baseHint = ref("");
 const baseInputEl = ref(null);
+// Reset only when a DIFFERENT offer appears. The parent's offer is a computed
+// that returns a fresh object on every refetch while it is up, and resetting on
+// identity wiped whatever the reader was typing into the field.
 watch(
-  () => props.baseOffer,
-  (offer) => {
-    baseValue.value = offer?.guess ?? "";
+  () =>
+    props.baseOffer ? `${props.baseOffer.key}|${props.baseOffer.guess}` : "",
+  () => {
+    baseValue.value = props.baseOffer?.guess ?? "";
     baseHint.value = "";
   },
   { immediate: true },

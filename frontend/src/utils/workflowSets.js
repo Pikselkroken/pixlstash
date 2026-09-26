@@ -490,9 +490,22 @@ function fitsSlot(row, slot) {
   return Boolean(row?.sha256) && slot.kinds.includes(row?.file_kind);
 }
 
-/** A row's base model as the set picker compares it. */
+/**
+ * A row's base model as the set picker compares it: the client's copy of the
+ * server's `known_base_model`, because the other side of every comparison is a
+ * set member's `base_model`, which the server fills with exactly that.
+ *
+ * The identified label unless it is a fuzzy guess, else the folded raw value,
+ * else the raw one. Not `baseModelKey` (the shelf's grouping key): that one
+ * takes a fuzzy guess too, so a guessed "SDXL" row never matched a set whose
+ * checkpoint the server reported by its folded raw label.
+ */
 export function rowBaseModel(row) {
-  return row?.base_model_canonical || row?.base_model || null;
+  const canonical = row?.base_model_canonical;
+  if (canonical && !String(row?.base_model_source ?? "").endsWith("_fuzzy")) {
+    return canonical;
+  }
+  return row?.base_model_folded || row?.base_model || null;
 }
 
 /**

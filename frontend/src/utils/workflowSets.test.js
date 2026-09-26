@@ -6,6 +6,7 @@ import {
   handMadeCard,
   handMadeName,
   headModel,
+  rowBaseModel,
   kindCounts,
   setCard,
   setGroups,
@@ -452,6 +453,27 @@ describe("hand-made sets (#1520)", () => {
       ["lora", ["add:lora"]],
       ["other", ["add:other"]],
     ]);
+  });
+
+  it("compares base models the way the server fills a member's", () => {
+    // A fuzzy guess is not the base model; the folded raw label is.
+    expect(
+      rowBaseModel({
+        base_model: "sdxl_base_v1-0",
+        base_model_folded: "SDXL 1.0",
+        base_model_canonical: "SDXL",
+        base_model_source: "filename_fuzzy",
+      }),
+    ).toBe("SDXL 1.0");
+    expect(
+      rowBaseModel({
+        base_model: "sdxl_base_v1-0",
+        base_model_folded: "SDXL 1.0",
+        base_model_canonical: "SDXL 1.0",
+        base_model_source: "filename",
+      }),
+    ).toBe("SDXL 1.0");
+    expect(rowBaseModel({ base_model: "MyBase" })).toBe("MyBase");
   });
 
   it("names a set by its own name, its checkpoint's, or Untitled set", () => {
