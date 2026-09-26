@@ -634,3 +634,45 @@ def test_members_endpoint_expands_stack_siblings():
         server.close()
         temp_dir.cleanup()
         gc.collect()
+
+
+def test_member_routes_refuse_bad_ids_and_empty_replace():
+    """Issue #1580: a non-numeric member path is a 422, not a 500, and PUT
+    refuses to empty a set unless ``allow_empty`` is passed."""
+    temp_dir, client, server = setup_server_with_temp_db()
+    try:
+        path, mime = _first_test_image()
+        with open(path, "rb") as image_file:
+            first = upload_pictures_and_wait(
+                client, [("file", (os.path.basename(path), image_file, mime))]
+            )["results"][0]["picture_id"]
+        set_id = client.post("/picture_sets", json={"name": "Guarded"}).json()[
+            "picture_set"
+        ]["id"]
+        members_url = f"/api/v1/picture_sets/{set_id}/members"
+
+        assert client.post(f"{members_url}/remove").status_code == 422
+        assert client.delete(f"{members_url}/abc").status_code == 422
+
+        def member_ids():
+            resp = client.get(members_url)
+            assert resp.status_code == 200
+            return set(resp.json()["picture_ids"])
+
+        resp = client.put(members_url, json={"picture_ids": [first]})
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "success", "members": 1, "removed": 0}
+
+        for body in ({"picture_ids": []}, {}, {"picture_ids": [987654]}):
+            resp = client.put(members_url, json=body)
+            assert resp.status_code == 400, (body, resp.text)
+            assert member_ids() == {first}
+
+        resp = client.put(members_url, json={"picture_ids": [], "allow_empty": True})
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "success", "members": 0, "removed": 1}
+        assert member_ids() == set()
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
