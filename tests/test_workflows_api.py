@@ -4664,6 +4664,26 @@ def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
         },
     )
     assert r.status_code == 422 and "not a VAE" in r.json()["detail"], r.text
+    # Every kind the shelf holds the file under, never just the first.
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('text_encoder', ?, ?, 'scanned')",
+            (_REPLACEMENT_FILENAME, _h("te-digest")),
+        )
+    r = owner.put(
+        route,
+        json={
+            "was": _SHELF_FILENAME,
+            "now": _REPLACEMENT_FILENAME,
+            "slot_kind": "vae",
+        },
+    )
+    assert r.json()["detail"] == (
+        "That is a checkpoint or a text encoder, not a VAE."
+    ), r.text
+    with server.hub.transaction() as conn:
+        conn.execute("DELETE FROM model WHERE sha256 = ?", (_h("te-digest"),))
 
     r = owner.put(route, json={"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME})
     assert r.status_code == 200, r.text

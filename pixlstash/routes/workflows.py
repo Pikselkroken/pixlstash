@@ -2684,8 +2684,12 @@ def create_router(server) -> APIRouter:
                 raise HTTPException(
                     status_code=422,
                     detail=(
-                        f"That is a {_FIX_KIND_NAMES[rows[0]['file_kind']]}, "
-                        f"not a {_FIX_KIND_NAMES[kind]}."
+                        "That is a "
+                        + " or a ".join(
+                            _FIX_KIND_NAMES[k]
+                            for k in sorted({r["file_kind"] for r in rows})
+                        )
+                        + f", not a {_FIX_KIND_NAMES[kind]}."
                     ),
                 )
             now, kind = row["filename"], row["file_kind"]
