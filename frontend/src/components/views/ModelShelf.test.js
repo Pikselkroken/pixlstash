@@ -171,6 +171,7 @@ import ModelShelf from "./ModelShelf.vue";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useOperationStore } from "../../stores/useOperationStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
@@ -4952,6 +4953,50 @@ describe("the two views of the shelf", () => {
     await wrapper.vm.$nextTick();
     expect(store.selectedRows).toHaveLength(0);
     wrapper.unmount();
+  });
+
+  it("draws a set receipt on the grid's pill, never a library one, and drops it on leaving", async () => {
+    const wrapper = await mountShelf([adapter({ id: 1 })]);
+    const operations = useOperationStore();
+    operations.showReceipt(
+      operations.buildReceipt({ id: 1, op_type: "pictures.score" }, "did"),
+    );
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".receipt").exists()).toBe(false);
+
+    operations.showLocalReceipt({
+      summary: 'Added 1 model to "Portrait kit".',
+      icon: "mdi-playlist-plus",
+      undo: vi.fn(),
+      redo: vi.fn(),
+    });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".receipt .r-text").text()).toBe(
+      'Added 1 model to "Portrait kit"',
+    );
+
+    // The runs tab keeps the shelf mounted, and must not keep its receipt.
+    nav.route.name = "models-runs";
+    await wrapper.vm.$nextTick();
+    expect(operations.receipt).toBe(null);
+    operations.showLocalReceipt({
+      summary: "Late",
+      icon: "mdi-plus",
+      undo: vi.fn(),
+      redo: vi.fn(),
+    });
+    expect(operations.receipt).toBe(null);
+
+    nav.route.name = "models";
+    await wrapper.vm.$nextTick();
+    operations.showLocalReceipt({
+      summary: "Back",
+      icon: "mdi-plus",
+      undo: vi.fn(),
+      redo: vi.fn(),
+    });
+    wrapper.unmount();
+    expect(operations.receipt).toBe(null);
   });
 
   it("does not dock the shelf's pill over the runs grid", async () => {

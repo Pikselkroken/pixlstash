@@ -612,12 +612,7 @@ only if measured; do not build it speculatively.
   `:focus-visible`.
 - Reaching an action by keyboard is guaranteed by the §6 rule that any notice with an
   action is sticky. Without that rule, a keyboard-only user can be structurally unable to
-  reach an "Undo". Known exception: the Models shelf's workflow-set edit receipts (add,
-  remove, rename, create) carry Undo on a 10s window, restarted by each repeat and paused
-  by `:focus-within`, because a picker that writes once per click stacked sticky cards
-  faster than anyone could dismiss them. Their Undo is a convenience: each of those
-  edits is redone by hand in the same tray. Deleting a set, which nothing else brings
-  back, keeps a sticky Undo.
+  reach an "Undo".
 - `:focus-within` pauses the timer, so tabbing into a notice does not race it.
 
 **Contrast, verified against the shipped themes** (WCAG floors: text 4.5:1, non-text 3:1):

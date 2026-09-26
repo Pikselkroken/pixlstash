@@ -1402,7 +1402,7 @@
          A hand-made set card (#1520) selects its SET instead, which takes the
          second pill below: its verbs touch no file, and the two selections
          clear each other so only one pill is ever up. -->
-    <div v-if="isShelfTab" class="selbar-float">
+    <div v-if="isShelfTab" ref="selFloatEl" class="selbar-float">
       <ShelfSelectionBar
         ref="selBarRef"
         @rename="startRenameSelected"
@@ -1433,6 +1433,10 @@
         @offer-again="store.offerMergeAgain(store.selectedSets[0])"
       />
     </div>
+    <!-- The set receipts (#1573): the grid's own pill, lifted clear of the
+         selection pill when both are up. Local receipts only - a library
+         action's Undo would revert something this screen cannot show. -->
+    <ActionReceipt v-if="isShelfTab" local-only :lift-px="receiptLift" />
     <WorkflowSetRenameDialog
       :set="renamingSet"
       @close="renamingSet = null"
@@ -1581,6 +1585,8 @@ import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelWorksWithDialog from "../panels/ModelWorksWithDialog.vue";
 import ModelSetGrid from "./ModelSetGrid.vue";
+import ActionReceipt from "../widgets/ActionReceipt.vue";
+import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import TbOverflowMenu from "../panels/TbOverflowMenu.vue";
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
@@ -1615,6 +1621,7 @@ import {
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useOperationStore } from "../../stores/useOperationStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
@@ -2462,6 +2469,33 @@ onUnmounted(() => window.removeEventListener("keydown", onShelfKeydown));
 
 const setGridRef = ref(null);
 const setBarRef = ref(null);
+
+// The set receipt sits above whichever selection pill is up, lifted by its
+// MEASURED height the way the grid lifts its own (`actionReceiptLift`). Local
+// rather than through the bottom-anchor registry: the pills never registered
+// there, and doing so would move the notice stack as well.
+const selFloatEl = ref(null);
+const selFloatHeight = ref(0);
+let selFloatObserver = null;
+watch(
+  selFloatEl,
+  (el) => {
+    selFloatObserver?.disconnect();
+    selFloatObserver = null;
+    selFloatHeight.value = el?.offsetHeight || 0;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    selFloatObserver = new ResizeObserver(([entry]) => {
+      selFloatHeight.value =
+        entry.borderBoxSize?.[0]?.blockSize ?? entry.target.offsetHeight;
+    });
+    selFloatObserver.observe(el);
+  },
+  { flush: "post" },
+);
+onUnmounted(() => selFloatObserver?.disconnect());
+const receiptLift = computed(() =>
+  selFloatHeight.value > 0 ? selFloatHeight.value + FLOATING_BOTTOM_GAP_PX : 0,
+);
 /** The set the rename dialog is open on, or null. */
 const renamingSet = ref(null);
 
@@ -2916,6 +2950,15 @@ const route = useRoute();
 const router = useRouter();
 
 const isShelfTab = computed(() => route.name !== "models-runs");
+
+// Set receipts exist only while this tab shows them: their Undo means nothing
+// on the runs tab or another screen, and a write landing after the reader left
+// must not raise one there.
+const operationStore = useOperationStore();
+watch(isShelfTab, (on) => operationStore.setLocalReceiptHost(on), {
+  immediate: true,
+});
+onUnmounted(() => operationStore.setLocalReceiptHost(false));
 
 /** How many runs the other view is showing, for the count beside the tabs. */
 const runsCount = ref(null);

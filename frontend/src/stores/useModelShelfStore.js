@@ -21,6 +21,7 @@ import {
 } from "../api/modelShelf";
 import { onSessionReset } from "../utils/apiClient";
 import { useNoticeStore } from "./useNoticeStore";
+import { useOperationStore } from "./useOperationStore";
 import { errorDetail } from "../utils/apiError";
 import {
   adapterKindKey,
@@ -331,20 +332,17 @@ const MAX_MODELS_PER_ICON_SET = 500;
 // had committed. It also leaves sockets for the row thumbnails.
 const ICON_SET_CONCURRENCY = 6;
 
-// How long a set edit's receipt stays up. Explicit, so its Undo does not make it
-// sticky (notice-surface.md §6 rule 1): the tray's one-click picker writes once
-// per click, and sticky receipts stacked faster than anyone could dismiss them.
-// Hover and focus pause the countdown. Delete set passes 0 instead: nothing
-// else brings a deleted set back.
-const SET_RECEIPT_MS = 10_000;
-
-// The verbs whose receipts coalesce, one card per set and verb: a card counting
-// "Added" and "Took off" in one ×N would promise an Undo of the burst.
-const SET_RECEIPT_VERBS = ["add", "remove", "rename"];
-
-function setReceiptKey(setId, verb) {
-  return `workflow-set:${setId}:${verb}`;
-}
+// The glyph on each set verb's receipt: the one on the control that did it
+// where there is one, else the picture sets' own add/remove glyphs.
+const SET_RECEIPT_ICONS = {
+  create: "mdi-plus",
+  add: "mdi-playlist-plus",
+  remove: "mdi-playlist-minus",
+  rename: "mdi-pencil-outline",
+  delete: "mdi-layers-remove",
+  "keep-out": "mdi-call-split",
+  "offer-again": "mdi-table-arrow-down",
+};
 
 /** What each curated column is called in a receipt. */
 const FIELD_WORDS = {
@@ -1907,21 +1905,34 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /**
    * Run one set write, refetch, and show its receipt with Undo.
    *
-   * Every change to a set gets a receipt and every receipt offers Undo. An
-   * undo that could itself lose work - undoing a create after the set has been
-   * filled - goes through the delete verb, so it gets a receipt and an Undo of
-   * its own; a failed undo says so. Repeats of one verb on one set share a
-   * receipt (`key`): a burst of clicks updates one card and its count, and its
-   * Undo is the latest write's. The refetch is the
-   * whole payload because coverage moves with membership: adding one LoRA can
-   * pull a combination off the evidence cards and onto this one.
+   * The receipt is the grid's own pill (`ActionReceipt`, raised through
+   * `showLocalReceipt`), because sets are not in the operation log but a
+   * receipt must read the same everywhere: one at a time, a draining countdown,
+   * Undo flipping to Redo. Each write replaces the pill, so its Undo is always
+   * the latest write's, as on the grid. An undo that could itself lose
+   * work - undoing a create after the set has been filled - goes through the
+   * delete verb, so it gets a receipt and an Undo of its own; a failed undo says
+   * so. The refetch is the whole payload because coverage moves with
+   * membership: adding one LoRA can pull a combination off the evidence cards
+   * and onto this one.
    *
+   * @param {Function} write - the call.
+   * @param {Object} options
+   * @param {string|Function} options.receipt - the sentence, or one from the
+   *   result.
+   * @param {Function} options.undo - reverses the result; may resolve a value
+   *   `redo` needs.
+   * @param {Function} [options.redo] - `(undoResult) => Promise`, for a write
+   *   that cannot simply run again (a restored set has a new id). Defaults to
+   *   running `write` again.
+   * @param {Function} [options.hasUndo] - `(result) => boolean`; false narrates
+   *   in a plain notice, for a write that changed nothing.
+   * @param {string} options.verb - a `SET_RECEIPT_ICONS` key.
+   * @param {string} options.failure - the sentence when the write fails.
    * @returns {Promise<*>} what `write` resolved to, or null when it failed.
    */
-  async function setWrite(
-    write,
-    { receipt, undo, failure, key, timeout = SET_RECEIPT_MS },
-  ) {
+  async function setWrite(write, options) {
+    const { receipt, undo, redo, hasUndo, verb, failure } = options;
     const notices = useNoticeStore();
     let result;
     try {
@@ -1935,37 +1946,40 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     }
     await loadWorkflowSets({ force: true });
     const text = typeof receipt === "function" ? receipt(result) : receipt;
-    if (text) {
-      const noticeKey = typeof key === "function" ? key(result) : key;
-      notices.push({
-        level: "success",
-        text,
-        timeout,
-        key: noticeKey ?? undefined,
-        action: undo
-          ? {
-              label: "Undo",
-              handler: async () => {
-                try {
-                  await undo(result);
-                } catch (err) {
-                  console.warn("[ModelShelf] a set undo failed", { err });
-                  notices.push({
-                    level: "error",
-                    // `err.message` too: an undo that partly failed says how
-                    // much itself, and that sentence is not a server detail.
-                    text:
-                      errorDetail(err) ||
-                      err?.message ||
-                      "That could not be undone.",
-                  });
-                }
-                await loadWorkflowSets({ force: true });
-              },
-            }
-          : null,
-      });
+    if (!text) return result;
+    if (hasUndo && !hasUndo(result)) {
+      notices.push({ level: "info", text });
+      return result;
     }
+    let undone;
+    useOperationStore().showLocalReceipt({
+      summary: text,
+      icon: SET_RECEIPT_ICONS[verb],
+      destructive: verb === "delete",
+      undo: async () => {
+        try {
+          // `false` is an undo that failed through a verb which already said
+          // so (undoing a create runs the delete verb, which never throws).
+          const out = await undo(result);
+          if (out === false) return false;
+          undone = out;
+          return true;
+        } catch (err) {
+          console.warn("[ModelShelf] a set undo failed", { err });
+          notices.push({
+            level: "error",
+            // `err.message` too: an undo that partly failed says how much
+            // itself, and that sentence is not a server detail.
+            text:
+              errorDetail(err) || err?.message || "That could not be undone.",
+          });
+          return false;
+        } finally {
+          await loadWorkflowSets({ force: true });
+        }
+      },
+      redo: () => (redo ? redo(undone) : setWrite(write, options)),
+    });
     return result;
   }
 
@@ -1989,9 +2003,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // Through the delete verb, not a bare call: this receipt can still be up
       // while the set is filled, and undoing it then would take every model added
       // since with no way back. The delete's own receipt offers that way back.
-      undo: (set) => deleteHandMadeSets([set]),
+      undo: async (set) => (await deleteHandMadeSets([set])) ?? false,
+      verb: "create",
       failure: "The set could not be made.",
-      // Unkeyed, so the first add cannot replace this card and its way back.
     });
     if (created) {
       clearSelection();
@@ -2009,8 +2023,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return setWrite(() => renameWorkflowSet(set.id, next), {
       receipt: (renamed) => `Renamed the set "${setLabel(renamed)}".`,
       undo: () => renameWorkflowSet(set.id, before),
+      verb: "rename",
       failure: "The set could not be renamed.",
-      key: setReceiptKey(set.id, "rename"),
     });
   }
 
@@ -2032,13 +2046,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           .map((r) => r.value.deleted);
         const failed = settled.filter((r) => r.status === "rejected");
         if (!deleted.length) throw failed[0].reason;
-        // An edit receipt's Undo would write to a set that is gone.
-        const notices = useNoticeStore();
-        for (const set of deleted) {
-          for (const verb of SET_RECEIPT_VERBS) {
-            notices.dismissByKey(setReceiptKey(set.id, verb));
-          }
-        }
         return { deleted, failed: failed.length };
       },
       {
@@ -2067,10 +2074,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
               `${failed.length} of ${deleted.length} sets could not be restored.`,
             );
           }
+          return settled.map((r) => r.value);
         },
+        // The restored sets have new ids, so Redo deletes those.
+        redo: (restored) => deleteHandMadeSets(restored),
+        verb: "delete",
         failure: "The set could not be deleted.",
-        // Sticky and unkeyed: every delete keeps its own way back.
-        timeout: 0,
       },
     );
   }
@@ -2101,12 +2110,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
             (joined && gained > 0 ? ` ${pictureCount(gained)} joined it.` : "")
           );
         },
-        undo: ({ added }) =>
-          added.length ? removeWorkflowSetMembers(set.id, added) : null,
+        undo: ({ added }) => removeWorkflowSetMembers(set.id, added),
+        hasUndo: ({ added }) => added.length > 0,
+        verb: "add",
         failure: "Those models could not be added to the set.",
-        // A "Nothing added" must not take the previous add's Undo off its card.
-        key: ({ added }) =>
-          added.length ? setReceiptKey(set.id, "add") : null,
       },
     );
     if (result?.added?.length) {
@@ -2129,8 +2136,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         } on the shelf.`,
       undo: ({ removed }) =>
         addWorkflowSetMembers(set.id, removed.map(memberBack)),
+      verb: "remove",
       failure: "Those models could not be taken off the set.",
-      key: setReceiptKey(set.id, "remove"),
     });
   }
 
@@ -2160,6 +2167,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return setWrite(() => changeDeclines(set.id, { add: out }), {
       receipt,
       undo: () => changeDeclines(set.id, { remove: out }),
+      verb: "keep-out",
       failure: "The set could not be kept separate.",
     });
   }
@@ -2169,6 +2177,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return setWrite(() => changeDeclines(set.id, { clear: true }), {
       receipt: `The merge is offered again on "${setLabel(set)}".`,
       undo: ({ previous }) => changeDeclines(set.id, { add: previous }),
+      verb: "offer-again",
       failure: "The merge could not be offered again.",
     });
   }
