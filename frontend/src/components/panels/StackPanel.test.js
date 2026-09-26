@@ -180,7 +180,7 @@ describe("StackPanel", () => {
     ]);
   });
 
-  it("names the cover and, in Checkpoint, shows only what differs", async () => {
+  it("names the cover and shows every row's checkpoint", async () => {
     useWorkflowPrefsStore().setStackView("list");
     const wrapper = makePanel();
     await wrapper.vm.$nextTick();
@@ -189,15 +189,49 @@ describe("StackPanel", () => {
     expect(rows[0].find(".stack-panel__pill").text()).toBe("Cover");
     expect(rows[1].find(".stack-panel__pill").exists()).toBe(false);
 
-    // The cover is what the column is measured against, and `second` shares
-    // its checkpoint — so only `third` names one.
+    // Every row, the cover's and the one sharing it included: blanked where
+    // it matched the cover's, the column read as empty while the model sat in
+    // the Workflow column's generated name.
     // The first visible chip's label: `ChipRow` keeps a hidden copy of every
     // chip to measure against, so the cell's own `text()` reads each one twice.
     const checkpoints = rows.map((row) => {
       const chip = row.find(".stack-panel__ckpt .chip-row__label");
       return chip.exists() ? chip.text() : "";
     });
-    expect(checkpoints).toEqual(["", "", "juggernautXL_v9"]);
+    expect(checkpoints).toEqual([
+      "realvisXL_v5",
+      "realvisXL_v5",
+      "juggernautXL_v9",
+    ]);
+  });
+
+  it("drops a generated name's checkpoint prefix from the Workflow column", async () => {
+    useWorkflowPrefsStore().setStackView("list");
+    const wrapper = makePanel({
+      members: [
+        member("a", { name: "realvisXL_v5: Text to Image" }),
+        // An owner's name that merely mentions the model is left alone…
+        member("b", { name: "realvisXL_v5 portraits" }),
+        // …and so is one that is nothing BUT the prefix.
+        member("c", { name: "realvisXL_v5: " }),
+        member("d", { name: "realvisXL_v5:   " }),
+      ],
+    });
+    await wrapper.vm.$nextTick();
+
+    const rows = wrapper.findAll(".stack-panel__row");
+    expect(rows.map((row) => row.find(".stack-panel__rowname").text())).toEqual(
+      [
+        "Text to Image",
+        "realvisXL_v5 portraits",
+        "realvisXL_v5:",
+        "realvisXL_v5:",
+      ],
+    );
+    // The accessible name keeps the whole name.
+    expect(rows[0].attributes("aria-label")).toContain(
+      "realvisXL_v5: Text to Image",
+    );
   });
 
   it("names the differing checkpoint the way the SHELF names it", async () => {
@@ -365,12 +399,14 @@ describe("StackPanel", () => {
     });
     await wrapper.vm.$nextTick();
 
-    // A chip with no label is a bordered glyph reading "differs, by nothing
-    // in particular", and two forgotten names are not evidence of a shared
-    // model either.
-    expect(wrapper.findAll(".stack-panel__ckpt .chip-row__chip")).toHaveLength(
-      0,
-    );
+    // A chip with no label is a bordered glyph reading nothing.
+    const rows = wrapper.findAll(".stack-panel__row");
+    for (const row of rows.slice(1)) {
+      expect(row.findAll(".stack-panel__ckpt .chip-row__chip")).toHaveLength(0);
+    }
+    expect(
+      rows[0].findAll(".stack-panel__ckpt .chip-row__chip").length,
+    ).toBeGreaterThan(0);
   });
 
   it("offers the same menu from ⋯ and right-click, in Grid and in List", async () => {
@@ -701,6 +737,20 @@ describe("StackPanel List thumbnails", () => {
   it("clips the workflow column like the two columns beside it", () => {
     expect(rule(".stack-panel__ident").overflow).toBe("hidden");
     expect(rule(".stack-panel__thumbs").flex).toBe("none");
+  });
+
+  // The Workflow track was `minmax(0, 1fr)` beside fixed columns and was
+  // squeezed to a sliver on an ordinary panel: it needs a real floor, and a
+  // panel narrower than every floor scrolls the list rather than clipping it.
+  it("floors the workflow column and scrolls a narrow list sideways", () => {
+    const [first] = rule(".stack-panel__listhead,\n.stack-panel__row")[
+      "grid-template-columns"
+    ].split(/\s+(?![^(]*\))/);
+    expect(first).toBe("minmax(12rem, 1fr)");
+    expect(rule(".stack-panel__list")["overflow-x"]).toBe("auto");
+    // Without it the list's minimum width widens the clipped body instead,
+    // and the right-hand columns are cut off with nothing to scroll.
+    expect(rule(".stack-panel__body")["min-width"]).toBe("0");
   });
 
   // The row's waiting cell and the card's are the same grey. At 36px nobody

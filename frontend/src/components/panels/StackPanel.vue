@@ -171,16 +171,16 @@
                 />
               </span>
             </span>
-            <span class="stack-panel__rowname">{{ member.name }}</span>
+            <span class="stack-panel__rowname">{{ listName(member) }}</span>
             <span v-if="index === 0" class="stack-panel__pill">Cover</span>
           </span>
-          <!-- A chip only when it DIFFERS from the cover's: a column repeating
-               one model name down every row says nothing about the stack, and
-               the whole point of List is what is not shared. -->
+          <!-- Every row's checkpoint, the cover's included: left blank on the
+               rows that shared the cover's, the column read as empty while the
+               model sat in the Workflow column's generated name instead. -->
           <span class="stack-panel__ckpt" role="gridcell" aria-hidden="true">
             <ChipRow
-              v-if="checkpointChips(member, index).length"
-              :items="checkpointChips(member, index)"
+              v-if="checkpointChips(member).length"
+              :items="checkpointChips(member)"
             />
           </span>
           <span class="stack-panel__facts" role="gridcell" aria-hidden="true">
@@ -464,26 +464,38 @@ function rowName(member, index) {
 }
 
 /**
- * The checkpoint chip, drawn only when it differs from the cover's.
+ * The member's checkpoint chip, on every row.
  *
- * The cover's own row never draws one: it is what the column is measured
- * against, so a chip there would read as a difference from itself.
+ * Labelled by shelf name, as the card's name row is, so the panel and the grid
+ * do not call one model two things. Whether it differs from the cover's is the
+ * Differs by column's "other checkpoint", not this one's.
  */
-function checkpointChips(member, index) {
+function checkpointChips(member) {
   const model = checkpointModel(member);
   // `name` is nullable — a recipe whose asset names were forgotten is one of
   // the states the card shape carries — and a chip with no label is a
-  // bordered glyph reading "differs, by nothing in particular". Two forgotten
-  // names are not evidence of sharing a model either, so both are dropped
-  // rather than compared.
-  if (!model?.name || index === 0) return [];
-  const cover = checkpointModel(props.members[0]);
-  // Compared by FILE and labelled by shelf name. Two files the shelf happens
-  // to call the same thing are still two files, so the comparison stays on
-  // `name`; the chip says what the card's name row says, so the panel and the
-  // grid do not call one model two things.
-  if (cover?.name === model.name) return [];
+  // bordered glyph reading nothing.
+  if (!model?.name) return [];
   return [{ key: "ckpt", label: modelDisplayName(model), icon: "cube-outline" }];
+}
+
+/**
+ * The member's name as the Workflow column shows it: a GENERATED name's
+ * leading "<checkpoint>: " dropped, because the Checkpoint column beside it
+ * already says it (`_display_name` in `routes/workflows.py` builds
+ * "Krea 2: Text to Image"). Only an exact prefix match is dropped, so a name
+ * the owner typed is left alone unless it spells the same thing. The row's
+ * accessible name keeps the whole name.
+ */
+function listName(member) {
+  const model = checkpointModel(member);
+  const prefix = model?.name ? `${modelDisplayName(model)}: ` : null;
+  const name = member.name ?? "";
+  // Trimmed, so a name that is the prefix and whitespace keeps the full name
+  // rather than drawing a blank row.
+  const rest =
+    prefix && name.startsWith(prefix) ? name.slice(prefix.length).trim() : "";
+  return rest || name;
 }
 
 /**
@@ -491,9 +503,8 @@ function checkpointChips(member, index) {
  *
  * The cover has no difference chips of its own (it is what the others are
  * compared against), so `factChips` would give it its type chips instead —
- * and this column's whole job is what is NOT shared, beside a Checkpoint cell
- * deliberately left blank for that same reason. The Cover pill is what the
- * row says instead.
+ * and this column's whole job is what is NOT shared. The Cover pill is what
+ * the row says instead.
  */
 function factChips(member, index) {
   // A member whose chips could not be computed would fall back to its type
@@ -691,9 +702,14 @@ const notchStyle = computed(() => {
 }
 
 /* `min-height: 0` or a grid item refuses to be shorter than its content and
-   the track never collapses. `clip`, not `hidden`: see the template. */
+   the track never collapses. `min-width: 0` for the same reason across: `clip`
+   is not a scroll container, so without it the List's minimum width would
+   widen the band past its grid area and the right-hand columns would be
+   clipped off rather than scrolled to. `clip`, not `hidden`: see the
+   template. */
 .stack-panel__body {
   min-height: 0;
+  min-width: 0;
   overflow: clip;
 }
 
@@ -836,7 +852,12 @@ const notchStyle = computed(() => {
    wide in one and narrow in the other. Fixed tracks rather than `auto`: the
    rows are separate grid containers (each is its own `role="row"`), so `auto`
    would be measured per row and the columns would step sideways down the
-   list. */
+   list.
+
+   A grid of one implicit `auto` column, so every row is exactly as wide as
+   the widest row's minimum and never narrower than the panel: when the panel
+   is narrower than the columns' floors the list scrolls sideways instead of
+   clipping the first and last columns away. */
 .stack-panel__list {
   /* Local on purpose, the way `WorkflowCard.vue` keeps `--wf-meta-h` local:
      one component's one size, named so the rule below is not a bare literal
@@ -846,14 +867,20 @@ const notchStyle = computed(() => {
      whose first column is a picture trio rather than a mark beside a label. */
   --stack-thumb-h: 80px;
 
+  display: grid;
+  overflow-x: auto;
   padding: var(--space-2) 0 var(--space-3);
 }
 
 .stack-panel__listhead,
 .stack-panel__row {
   display: grid;
+  /* Workflow is floored at the thumbnail strip plus the start of a name, and is
+     the column that keeps its width: Checkpoint and Differs by give theirs up
+     first, down to one chip each. A `minmax(0, 1fr)` here was squeezed to
+     nothing by the fixed columns beside it on any panel under ~800px. */
   grid-template-columns:
-    minmax(0, 1fr) 10rem minmax(0, 14rem)
+    minmax(12rem, 1fr) minmax(6rem, 10rem) minmax(6rem, 14rem)
     5rem 5rem var(--space-8);
   align-items: center;
   gap: var(--space-3);
@@ -895,10 +922,10 @@ const notchStyle = computed(() => {
   border-left-color: var(--active-bar);
 }
 
-/* `overflow: hidden` like `__ckpt` and `__facts`: the trio is `flex: none` and
-   the workflow track is `minmax(0, 1fr)`, so under width pressure something
-   has to give. Clipped at the column edge rather than painted over Checkpoint
-   — and the trio is 96px wide now, so the squeeze starts sooner than it did. */
+/* `overflow: hidden` like `__ckpt` and `__facts`: the trio is `flex: none`,
+   and at the track's 12rem floor a long name plus the Cover pill still does
+   not fit, so something has to give. Clipped at the column edge rather than
+   painted over Checkpoint. */
 .stack-panel__ident {
   display: flex;
   align-items: center;
