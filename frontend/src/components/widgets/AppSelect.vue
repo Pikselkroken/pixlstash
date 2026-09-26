@@ -86,7 +86,6 @@
               v-for="{ opt, i } in section.rows"
               :id="optionId(i)"
               :key="String(opt.value)"
-              :ref="(el) => (optionEls[i] = el)"
               class="ctx-item app-select__option"
               :class="{ 'app-select__option--active': i === activeIndex }"
               role="option"
@@ -185,7 +184,6 @@ const listId = useId();
 const rootEl = ref(null);
 const wrapEl = ref(null);
 const menuEl = ref(null);
-const optionEls = [];
 const open = ref(false);
 const activeIndex = ref(-1);
 
@@ -328,8 +326,11 @@ function onComboKeydown(e) {
 watch([open, activeIndex], () =>
   nextTick(() => {
     const menu = menuEl.value;
-    const row = optionEls[activeIndex.value];
-    if (!menu || !row) return;
+    if (!menu) return;
+    // Looked up in the list, not kept in a ref array: function refs in a
+    // keyed v-for null out rows still on screen when the options reorder.
+    const row = menu.querySelector(`[id="${optionId(activeIndex.value)}"]`);
+    if (!row) return;
     if (row.offsetTop < menu.scrollTop) menu.scrollTop = row.offsetTop;
     else if (row.offsetTop + row.offsetHeight > menu.scrollTop + menu.clientHeight)
       menu.scrollTop = row.offsetTop + row.offsetHeight - menu.clientHeight;

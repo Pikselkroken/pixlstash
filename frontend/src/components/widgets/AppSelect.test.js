@@ -181,6 +181,30 @@ describe("AppSelect with chip options", () => {
     expect(active(w).attributes("aria-label")).toBe("Krea, + upscale, flux");
   });
 
+  it("scrolls the list to the active row after the options change", async () => {
+    const w = mountRich();
+    await combo(w).trigger("click");
+    // Reordered and shrunk under the open list, as a late card read can.
+    await w.setProps({
+      options: [
+        { value: "n", label: "New", chips: ["x"] },
+        OPTIONS[0],
+        OPTIONS[1],
+      ],
+    });
+    // jsdom has no layout: every row 40px tall, the list 50px high.
+    const menu = w.find("[role='listbox']").element;
+    Object.defineProperty(menu, "clientHeight", { value: 50 });
+    opts(w).forEach((row, i) => {
+      Object.defineProperty(row.element, "offsetTop", { value: i * 40 });
+      Object.defineProperty(row.element, "offsetHeight", { value: 40 });
+    });
+    await combo(w).trigger("keydown", { key: "End" });
+    await w.vm.$nextTick();
+    // The last row (80-120px) is brought fully into the 50px window.
+    expect(menu.scrollTop).toBe(70);
+  });
+
   it("starts a fresh name each time the list opens", async () => {
     const w = mountRich("a");
     await combo(w).trigger("keydown", { key: "ArrowDown" });
