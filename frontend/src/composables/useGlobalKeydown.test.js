@@ -88,6 +88,27 @@ describe("the undo chord", () => {
     expect(store.redo).not.toHaveBeenCalled();
   });
 
+  it("takes a live local receipt's action on the shelf instead of declining", async () => {
+    mountShelfMarker();
+    const undo = vi.fn().mockResolvedValue(true);
+    const redo = vi.fn().mockResolvedValue({});
+    store.setLocalReceiptHost(true);
+    store.showLocalReceipt({ summary: "Added", icon: "mdi-plus", undo, redo });
+    press("y");
+    expect(undo).not.toHaveBeenCalled();
+    // The wrong direction says which way works, never "not undoable".
+    expect(notices.notices.at(-1).text).toContain(
+      "Undo takes that change back",
+    );
+    press("z");
+    await vi.waitFor(() => expect(store.receipt?.mode).toBe("undone"));
+    expect(undo).toHaveBeenCalledTimes(1);
+    press("y");
+    await vi.waitFor(() => expect(redo).toHaveBeenCalledTimes(1));
+    expect(store.undo).not.toHaveBeenCalled();
+    expect(store.redo).not.toHaveBeenCalled();
+  });
+
   it("says why, once, however many times the chord is pressed", () => {
     mountShelfMarker();
     press("z");

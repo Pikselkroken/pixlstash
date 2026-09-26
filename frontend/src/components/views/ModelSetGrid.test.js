@@ -70,6 +70,7 @@ import ModelSetGrid from "./ModelSetGrid.vue";
 import WorkflowSetChooser from "../panels/WorkflowSetChooser.vue";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { useModelShelfStore } from "../../stores/useModelShelfStore";
+import { useOperationStore } from "../../stores/useOperationStore";
 
 const globalOpts = {
   global: {
@@ -167,6 +168,8 @@ beforeEach(() => {
   renameWorkflowSet.mockReset();
   setWorkflowSetDeclines.mockReset();
   setActivePinia(createPinia());
+  // The grid is mounted without the shelf, which is what declares the host.
+  useOperationStore().setLocalReceiptHost(true);
   window.localStorage.clear();
   listAdapters.mockReset().mockResolvedValue([]);
   listSupport.mockReset().mockResolvedValue([]);
@@ -1215,8 +1218,7 @@ describe("hand-made sets (#1520)", () => {
       rows: [row(1, "realvisXL_v5", "checkpoint")],
       handMade: [handSet(10, [SET_CKPT], { name: "Portrait kit" })],
     });
-    const { useNoticeStore } = await import("../../stores/useNoticeStore");
-    const notices = useNoticeStore();
+    const operations = useOperationStore();
 
     const card = wrapper.find(".msg__row");
     await card.trigger("click");
@@ -1230,10 +1232,10 @@ describe("hand-made sets (#1520)", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(deleteWorkflowSet).toHaveBeenCalledWith(10);
 
-    const receipt = notices.notices.at(-1);
-    expect(receipt.text).toContain('Deleted the set "Portrait kit"');
-    expect(receipt.action.label).toBe("Undo");
-    await receipt.action.handler();
+    expect(operations.receipt.summary).toContain(
+      'Deleted the set "Portrait kit"',
+    );
+    await operations.takeLocalReceiptAction();
     // The undo recreates the set from the snapshot, by hash and slot.
     expect(createWorkflowSet).toHaveBeenCalledWith({
       name: "Portrait kit",
@@ -1241,6 +1243,10 @@ describe("hand-made sets (#1520)", () => {
         { sha256: SET_CKPT.sha256, slot: "checkpoint", label: SET_CKPT.label },
       ],
     });
+    // Redo deletes the set the undo made, which has a new id.
+    expect(operations.receipt.mode).toBe("undone");
+    await operations.takeLocalReceiptAction();
+    expect(deleteWorkflowSet).toHaveBeenLastCalledWith(12);
   });
 
   it("makes a set from the keyboard with N and from the tile", async () => {
@@ -1328,17 +1334,33 @@ describe("hand-made sets (#1520)", () => {
     const { wrapper } = await mountGrid({
       rows: [row(1, "realvisXL_v5", "checkpoint")],
     });
-    const { useNoticeStore } = await import("../../stores/useNoticeStore");
-    const notices = useNoticeStore();
+    const operations = useOperationStore();
 
     await wrapper.find('[data-testid="new-workflow-set"]').trigger("click");
     await new Promise((resolve) => setTimeout(resolve, 0));
-    await notices.notices.at(-1).action.handler();
+    await operations.takeLocalReceiptAction();
 
     expect(deleteWorkflowSet).toHaveBeenCalledWith(12);
-    const receipt = notices.notices.at(-1);
-    expect(receipt.text).toContain("Deleted the set");
-    expect(receipt.action.label).toBe("Undo");
+    // The delete's pill stays up, not the create's flipped to Redo.
+    expect(operations.receipt.summary).toContain("Deleted the set");
+    expect(operations.receipt.mode).toBe("did");
+  });
+
+  it("never says a create was undone when its delete failed", async () => {
+    createWorkflowSet.mockResolvedValue(handSet(12, []));
+    deleteWorkflowSet.mockRejectedValue(new Error("gone"));
+    const { wrapper } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+    });
+    const operations = useOperationStore();
+
+    await wrapper.find('[data-testid="new-workflow-set"]').trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await operations.takeLocalReceiptAction();
+
+    // No "Undone" and so no Redo, which would make the set a second time.
+    expect(operations.receipt).toBe(null);
+    expect(createWorkflowSet).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the receipt and Undo for the sets it did delete when one fails", async () => {
@@ -1351,14 +1373,11 @@ describe("hand-made sets (#1520)", () => {
       rows: [row(1, "realvisXL_v5", "checkpoint")],
       handMade: [handSet(10, [SET_CKPT]), handSet(11, [SET_CKPT])],
     });
-    const { useNoticeStore } = await import("../../stores/useNoticeStore");
-    const notices = useNoticeStore();
-
     await store.deleteHandMadeSets(store.handMadeSets);
 
-    const receipt = notices.notices.at(-1);
-    expect(receipt.text).toContain("1 could not be deleted");
-    expect(receipt.action.label).toBe("Undo");
+    const receipt = useOperationStore().receipt;
+    expect(receipt.summary).toContain("1 could not be deleted");
+    expect(receipt.local.undo).toBeTypeOf("function");
   });
 
   it("does not make a set per repeat of a held N", async () => {
@@ -1829,12 +1848,78 @@ describe("hand-made sets (#1520)", () => {
     const notices = useNoticeStore();
 
     await store.deleteHandMadeSets(store.handMadeSets);
-    await notices.notices.at(-1).action.handler();
+    const operations = useOperationStore();
+    await operations.takeLocalReceiptAction();
 
     expect(createWorkflowSet).toHaveBeenCalledTimes(2);
+    // The one that came back can still be redone away.
+    expect(operations.receipt.mode).toBe("undone");
+    await operations.takeLocalReceiptAction();
+    expect(deleteWorkflowSet).toHaveBeenLastCalledWith(12);
     expect(notices.notices.some((n) => n.text.includes("1 of 2 sets"))).toBe(
       true,
     );
+  });
+
+  it("narrates set edits on the grid's receipt pill: one at a time, Undo then Redo", async () => {
+    const loras = [3, 4, 5, 6, 7].map((id) =>
+      slotMember(id, `lora_${id}`, "lora"),
+    );
+    const { store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const notices = useNoticeStore();
+    const operations = useOperationStore();
+
+    for (const lora of loras) {
+      addWorkflowSetMembers.mockResolvedValueOnce({
+        set: handSet(10, [SET_CKPT, lora]),
+        added: [lora.sha256],
+      });
+      await store.addToHandMadeSet(store.handMadeSets[0], [{ model_id: 3 }]);
+    }
+    expect(notices.notices).toHaveLength(0);
+    expect(operations.receipt.summary).toBe('Added 1 model to "realvisXL v5"');
+    // Replaced, never counted: on the grid "+N" means Undo takes all N back.
+    expect(operations.receipt.mergedCount).toBe(0);
+    expect(operations.receipt.durationMs).toBe(5000);
+
+    // A repeat that added nothing has no Undo: a plain notice, pill untouched.
+    const pill = operations.receipt;
+    addWorkflowSetMembers.mockResolvedValueOnce({
+      set: handSet(10, [SET_CKPT]),
+      added: [],
+    });
+    await store.addToHandMadeSet(store.handMadeSets[0], [{ model_id: 3 }]);
+    expect(notices.notices).toHaveLength(1);
+    expect(operations.receipt).toBe(pill);
+
+    // Undo is the last add's, not the burst's, and flips the pill to Redo.
+    removeWorkflowSetMembers.mockResolvedValue({ removed: [] });
+    await operations.takeLocalReceiptAction();
+    expect(removeWorkflowSetMembers).toHaveBeenCalledTimes(1);
+    expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [
+      loras.at(-1).sha256,
+    ]);
+    expect(operations.receipt.mode).toBe("undone");
+    addWorkflowSetMembers.mockResolvedValueOnce({
+      set: handSet(10, [SET_CKPT, loras[0]]),
+      added: [loras[0].sha256],
+    });
+    await operations.takeLocalReceiptAction();
+    expect(addWorkflowSetMembers).toHaveBeenLastCalledWith(10, [
+      { model_id: 3 },
+    ]);
+    expect(operations.receipt.mode).toBe("did");
+
+    // A delete replaces the pill, with the longer window and its own Undo.
+    deleteWorkflowSet.mockResolvedValue({ deleted: handSet(10, [SET_CKPT]) });
+    await store.deleteHandMadeSets(store.handMadeSets);
+    expect(operations.receipt.summary).toContain("Deleted the set");
+    expect(operations.receipt.durationMs).toBe(8000);
+    expect(operations.receipt.mergedCount).toBe(0);
   });
 
   it("deletes a focused set on Backspace too, the Mac keyboard's Delete key", async () => {
@@ -2092,8 +2177,7 @@ describe("hand-made sets (#1520)", () => {
         added: [GHOST_LORA.sha256, GHOST_OTHER.sha256],
       });
       const { wrapper, store } = await mountOffer();
-      const { useNoticeStore } = await import("../../stores/useNoticeStore");
-      const notices = useNoticeStore();
+      const operations = useOperationStore();
       store.toggleSet("hand:10");
       await wrapper.vm.$nextTick();
 
@@ -2106,10 +2190,11 @@ describe("hand-made sets (#1520)", () => {
         { model_id: 3, slot: "lora" },
         { model_id: 5, slot: "other" },
       ]);
-      const receipt = notices.notices.at(-1);
-      expect(receipt.text).toContain('Added 2 models to "Portrait kit"');
-      expect(receipt.text).toContain("1204 pictures joined it");
-      await receipt.action.handler();
+      expect(operations.receipt.summary).toContain(
+        'Added 2 models to "Portrait kit"',
+      );
+      expect(operations.receipt.summary).toContain("1204 pictures joined it");
+      await operations.takeLocalReceiptAction();
       expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [
         GHOST_LORA.sha256,
         GHOST_OTHER.sha256,
@@ -2147,11 +2232,12 @@ describe("hand-made sets (#1520)", () => {
       ]);
       expect(onWindowKey).not.toHaveBeenCalled();
       wrapper.unmount();
-      const { useNoticeStore } = await import("../../stores/useNoticeStore");
-      const receipt = useNoticeStore().notices.at(-1);
+      const operations = useOperationStore();
       // In the shelf's own name for it.
-      expect(receipt.text).toContain('Kept filmgrain xl out of "Portrait kit"');
-      await receipt.action.handler();
+      expect(operations.receipt.summary).toContain(
+        'Kept filmgrain xl out of "Portrait kit"',
+      );
+      await operations.takeLocalReceiptAction();
       expect(setWorkflowSetDeclines).toHaveBeenLastCalledWith(10, [
         "9".repeat(64),
       ]);
@@ -2181,7 +2267,7 @@ describe("hand-made sets (#1520)", () => {
       wrapper.unmount();
     });
 
-    it("undoes an older Keep separate without dropping a newer one", async () => {
+    it("undoes the newer Keep separate without dropping an older one", async () => {
       const { store } = await mountOffer();
       // A server that remembers the list, so each refetch reads it back.
       let stored = [];
@@ -2196,8 +2282,7 @@ describe("hand-made sets (#1520)", () => {
           handSet(10, [SET_CKPT], { offer: OFFER, declined: stored }),
         ],
       }));
-      const { useNoticeStore } = await import("../../stores/useNoticeStore");
-      const notices = useNoticeStore();
+      const operations = useOperationStore();
       const set = () => store.handMadeSets[0];
 
       // Both fired before either answers, as two quick Deletes would be.
@@ -2210,9 +2295,10 @@ describe("hand-made sets (#1520)", () => {
         GHOST_OTHER.sha256,
       ]);
 
-      await notices.notices.at(-2).action.handler();
+      // One pill: the latest write's, which takes out only its own.
+      await operations.takeLocalReceiptAction();
       expect(setWorkflowSetDeclines).toHaveBeenLastCalledWith(10, [
-        GHOST_OTHER.sha256,
+        GHOST_LORA.sha256,
       ]);
     });
 

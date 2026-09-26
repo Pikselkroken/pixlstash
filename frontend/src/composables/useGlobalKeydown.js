@@ -29,7 +29,8 @@ export const SHELF_NO_UNDO_KEY = "shelf-no-undo";
 
 /**
  * The roots of every destination that replaces the grid and narrates nothing:
- * no `ActionReceipt`, no `UndoControl`. One list rather than a check per
+ * no `ActionReceipt` for library actions, no `UndoControl`. The shelf mounts
+ * one for its own set edits only, and the chord takes that pill's action. One list rather than a check per
  * screen, because the population is what the invariant is about - the model
  * shelf was guarded alone and the other three were not, so the chord reverted
  * a library action with nothing on screen to say it had happened (#1415).
@@ -167,7 +168,24 @@ export function useGlobalKeydown({
       const wantsRedo = key === "y" || (key === "z" && e.shiftKey);
       if (wantsUndo || wantsRedo) {
         e.preventDefault();
-        if (isUndoBlindDestination()) {
+        // A local receipt (the shelf's set edits, #1573) is only live while
+        // its screen shows it (`setLocalReceiptHost`), and its pill shows the
+        // chord, so the chord takes that pill's action.
+        const local = operationStore.receipt?.local
+          ? operationStore.receipt
+          : null;
+        if (local && wantsUndo === (local.mode !== "undone")) {
+          operationStore.takeLocalReceiptAction();
+        } else if (local) {
+          // The pill offers the other direction; "not undoable" would be false.
+          noticeStore.push({
+            level: "info",
+            key: SHELF_NO_UNDO_KEY,
+            text: wantsUndo
+              ? "Nothing more to undo here - Redo puts that change back."
+              : "Nothing to redo - Undo takes that change back.",
+          });
+        } else if (isUndoBlindDestination()) {
           noticeStore.push({
             level: "info",
             key: SHELF_NO_UNDO_KEY,

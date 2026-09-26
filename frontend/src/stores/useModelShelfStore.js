@@ -21,6 +21,7 @@ import {
 } from "../api/modelShelf";
 import { onSessionReset } from "../utils/apiClient";
 import { useNoticeStore } from "./useNoticeStore";
+import { useOperationStore } from "./useOperationStore";
 import { errorDetail } from "../utils/apiError";
 import {
   adapterKindKey,
@@ -330,6 +331,18 @@ const MAX_MODELS_PER_ICON_SET = 500;
 // the client's own 60 s timeout, which would report as failed writes the server
 // had committed. It also leaves sockets for the row thumbnails.
 const ICON_SET_CONCURRENCY = 6;
+
+// The glyph on each set verb's receipt: the one on the control that did it
+// where there is one, else the picture sets' own add/remove glyphs.
+const SET_RECEIPT_ICONS = {
+  create: "mdi-plus",
+  add: "mdi-playlist-plus",
+  remove: "mdi-playlist-minus",
+  rename: "mdi-pencil-outline",
+  delete: "mdi-layers-remove",
+  "keep-out": "mdi-call-split",
+  "offer-again": "mdi-table-arrow-down",
+};
 
 /** What each curated column is called in a receipt. */
 const FIELD_WORDS = {
@@ -1892,16 +1905,34 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   /**
    * Run one set write, refetch, and show its receipt with Undo.
    *
-   * Every change to a set gets a receipt and every receipt offers Undo. An
-   * undo that could itself lose work - undoing a create after the set has been
-   * filled - goes through the delete verb, so it gets a receipt and an Undo of
-   * its own; a failed undo says so. The refetch is the
-   * whole payload because coverage moves with membership: adding one LoRA can
-   * pull a combination off the evidence cards and onto this one.
+   * The receipt is the grid's own pill (`ActionReceipt`, raised through
+   * `showLocalReceipt`), because sets are not in the operation log but a
+   * receipt must read the same everywhere: one at a time, a draining countdown,
+   * Undo flipping to Redo. Each write replaces the pill, so its Undo is always
+   * the latest write's, as on the grid. An undo that could itself lose
+   * work - undoing a create after the set has been filled - goes through the
+   * delete verb, so it gets a receipt and an Undo of its own; a failed undo says
+   * so. The refetch is the whole payload because coverage moves with
+   * membership: adding one LoRA can pull a combination off the evidence cards
+   * and onto this one.
    *
+   * @param {Function} write - the call.
+   * @param {Object} options
+   * @param {string|Function} options.receipt - the sentence, or one from the
+   *   result.
+   * @param {Function} options.undo - reverses the result; may resolve a value
+   *   `redo` needs.
+   * @param {Function} [options.redo] - `(undoResult) => Promise`, for a write
+   *   that cannot simply run again (a restored set has a new id). Defaults to
+   *   running `write` again.
+   * @param {Function} [options.hasUndo] - `(result) => boolean`; false narrates
+   *   in a plain notice, for a write that changed nothing.
+   * @param {string} options.verb - a `SET_RECEIPT_ICONS` key.
+   * @param {string} options.failure - the sentence when the write fails.
    * @returns {Promise<*>} what `write` resolved to, or null when it failed.
    */
-  async function setWrite(write, { receipt, undo, failure }) {
+  async function setWrite(write, options) {
+    const { receipt, undo, redo, hasUndo, verb, failure } = options;
     const notices = useNoticeStore();
     let result;
     try {
@@ -1915,34 +1946,40 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     }
     await loadWorkflowSets({ force: true });
     const text = typeof receipt === "function" ? receipt(result) : receipt;
-    if (text) {
-      notices.push({
-        level: "success",
-        text,
-        action: undo
-          ? {
-              label: "Undo",
-              handler: async () => {
-                try {
-                  await undo(result);
-                } catch (err) {
-                  console.warn("[ModelShelf] a set undo failed", { err });
-                  notices.push({
-                    level: "error",
-                    // `err.message` too: an undo that partly failed says how
-                    // much itself, and that sentence is not a server detail.
-                    text:
-                      errorDetail(err) ||
-                      err?.message ||
-                      "That could not be undone.",
-                  });
-                }
-                await loadWorkflowSets({ force: true });
-              },
-            }
-          : null,
-      });
+    if (!text) return result;
+    if (hasUndo && !hasUndo(result)) {
+      notices.push({ level: "info", text });
+      return result;
     }
+    let undone;
+    useOperationStore().showLocalReceipt({
+      summary: text,
+      icon: SET_RECEIPT_ICONS[verb],
+      destructive: verb === "delete",
+      undo: async () => {
+        try {
+          // `false` is an undo that failed through a verb which already said
+          // so (undoing a create runs the delete verb, which never throws).
+          const out = await undo(result);
+          if (out === false) return false;
+          undone = out;
+          return true;
+        } catch (err) {
+          console.warn("[ModelShelf] a set undo failed", { err });
+          notices.push({
+            level: "error",
+            // `err.message` too: an undo that partly failed says how much
+            // itself, and that sentence is not a server detail.
+            text:
+              errorDetail(err) || err?.message || "That could not be undone.",
+          });
+          return false;
+        } finally {
+          await loadWorkflowSets({ force: true });
+        }
+      },
+      redo: () => (redo ? redo(undone) : setWrite(write, options)),
+    });
     return result;
   }
 
@@ -1963,10 +2000,11 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         `Made "${setLabel(set)}" with ${(set.members ?? []).length} ${
           (set.members ?? []).length === 1 ? "model" : "models"
         }.`,
-      // Through the delete verb, not a bare call: this receipt stays up while
-      // the set is filled, and undoing it then would take every model added
+      // Through the delete verb, not a bare call: this receipt can still be up
+      // while the set is filled, and undoing it then would take every model added
       // since with no way back. The delete's own receipt offers that way back.
-      undo: (set) => deleteHandMadeSets([set]),
+      undo: async (set) => (await deleteHandMadeSets([set])) ?? false,
+      verb: "create",
       failure: "The set could not be made.",
     });
     if (created) {
@@ -1985,6 +2023,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return setWrite(() => renameWorkflowSet(set.id, next), {
       receipt: (renamed) => `Renamed the set "${setLabel(renamed)}".`,
       undo: () => renameWorkflowSet(set.id, before),
+      verb: "rename",
       failure: "The set could not be renamed.",
     });
   }
@@ -2018,7 +2057,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
             ? ` ${failed} could not be deleted and ${failed === 1 ? "is" : "are"} still there.`
             : ""),
         // Settled one by one, like the delete: one set that cannot come back
-        // must not hide the ones that did, and the failure says how many.
+        // must not hide the ones that did, and the failure says how many. A
+        // partial restore still counts as undone, so Redo can delete the sets
+        // that did come back.
         undo: async ({ deleted }) => {
           const settled = await Promise.allSettled(
             deleted.map((snapshot) =>
@@ -2031,11 +2072,21 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           const failed = settled.filter((r) => r.status === "rejected");
           if (failed.length === deleted.length) throw failed[0].reason;
           if (failed.length) {
-            throw new Error(
-              `${failed.length} of ${deleted.length} sets could not be restored.`,
-            );
+            console.warn("[ModelShelf] a set restore failed", {
+              reasons: failed.map((r) => r.reason),
+            });
+            useNoticeStore().push({
+              level: "error",
+              text: `${failed.length} of ${deleted.length} sets could not be restored.`,
+            });
           }
+          return settled
+            .filter((r) => r.status === "fulfilled")
+            .map((r) => r.value);
         },
+        // The restored sets have new ids, so Redo deletes those.
+        redo: (restored) => deleteHandMadeSets(restored),
+        verb: "delete",
         failure: "The set could not be deleted.",
       },
     );
@@ -2067,8 +2118,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
             (joined && gained > 0 ? ` ${pictureCount(gained)} joined it.` : "")
           );
         },
-        undo: ({ added }) =>
-          added.length ? removeWorkflowSetMembers(set.id, added) : null,
+        undo: ({ added }) => removeWorkflowSetMembers(set.id, added),
+        hasUndo: ({ added }) => added.length > 0,
+        verb: "add",
         failure: "Those models could not be added to the set.",
       },
     );
@@ -2092,6 +2144,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         } on the shelf.`,
       undo: ({ removed }) =>
         addWorkflowSetMembers(set.id, removed.map(memberBack)),
+      verb: "remove",
       failure: "Those models could not be taken off the set.",
     });
   }
@@ -2122,6 +2175,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return setWrite(() => changeDeclines(set.id, { add: out }), {
       receipt,
       undo: () => changeDeclines(set.id, { remove: out }),
+      verb: "keep-out",
       failure: "The set could not be kept separate.",
     });
   }
@@ -2131,6 +2185,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return setWrite(() => changeDeclines(set.id, { clear: true }), {
       receipt: `The merge is offered again on "${setLabel(set)}".`,
       undo: ({ previous }) => changeDeclines(set.id, { add: previous }),
+      verb: "offer-again",
       failure: "The merge could not be offered again.",
     });
   }

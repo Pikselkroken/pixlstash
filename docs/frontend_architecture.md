@@ -1333,7 +1333,7 @@ First caller: the model shelf's thumbnail verb (§9.1). The workflow Fixed and
 run-time Picker modes are its second and third.
 
 #### `ActionReceipt.vue` (465 lines, `widgets/`)
-The transient undo pill, built to the owner's "Undo / Redo System" design. One instance, mounted by `ImageGrid` in the selection pill's slot; reads `useOperationStore` directly (the receipt is inherently singular, so there is nothing to prop-drill). Props: `liftPx` — how far to sit above the selection bar, MEASURED by the caller via `useAnchorHeight("selection-bar")`, never assumed. States: default / coalesced (`+N`, grouped by the server's `batch_id`) / undone-with-Redo / not-undoable ("Can't be undone", never a dead button). A `--countdown-h` hairline drains over the dwell window (5s, 8s destructive) as a `scaleX` animation whose `animation-play-state` pauses on hover and focus-within in lockstep with the store's timer (WCAG 2.2.1); it is the one animation that deliberately survives `prefers-reduced-motion`, because it is the time-remaining readout rather than decoration. Sits on `--z-floating` and registers `"action-receipt"` with `useBottomAnchor` — the measured element is the pointer-transparent wrapper (pill + lift), so the notice stack clears the whole thing. Announces through ONE persistent `role="status"` region rather than the remounted pill, throttled so a burst of actions reads once.
+The transient undo pill, built to the owner's "Undo / Redo System" design. One instance per screen: `ImageGrid` mounts it in the selection pill's slot (so do the Duplicates queue and, `localOnly`, the model shelf); reads `useOperationStore` directly (the receipt is inherently singular, so there is nothing to prop-drill). Props: `liftPx` — how far to sit above the selection bar, MEASURED by the caller via `useAnchorHeight("selection-bar")`, never assumed. States: default / coalesced (`+N`, grouped by the server's `batch_id`) / undone-with-Redo / not-undoable ("Can't be undone", never a dead button). A `--countdown-h` hairline drains over the dwell window (5s, 8s destructive) as a `scaleX` animation whose `animation-play-state` pauses on hover and focus-within in lockstep with the store's timer (WCAG 2.2.1); it is the one animation that deliberately survives `prefers-reduced-motion`, because it is the time-remaining readout rather than decoration. **Local receipts** (#1573): `useOperationStore.showLocalReceipt` raises a receipt for a write that is not in the operation log, carrying its own `undo` / `redo` (`entry.local`), which `useActionReceipt.takeAction` and the `Ctrl+Z` handler route to through `takeLocalReceiptAction` (which holds the countdown while the call is out, so a slow undo is still narrated). Never `+N`: a local Undo reverts one write. They exist only while a host screen says it is showing (`setLocalReceiptHost`): the model shelf's list tab, whose set edits are the one consumer. Off, a live one is retired and a late one is not raised, so a set Undo can never land on the runs tab, the grid or the lightbox. The shelf mounts a second instance with `localOnly`, which neither draws nor announces library receipts: their Undo would revert something that screen cannot show. Sits on `--z-floating` and registers `"action-receipt"` with `useBottomAnchor` — the measured element is the pointer-transparent wrapper (pill + lift), so the notice stack clears the whole thing. Announces through ONE persistent `role="status"` region rather than the remounted pill, throttled so a burst of actions reads once.
 
 **The second sentence.** The server's `summary` says what an operation *did*; an action that deliberately left something alone can add one sentence about what it did **not** do, by calling `useOperationStore.noteNextReceipt(opType, note)` immediately before the `refresh()` that will narrate it. `useActionReceipt` appends it to `text` (and therefore to the announcement) on both surfaces, and drops it once the pill flips to "Undone", where it would describe work that has just been taken back. The note is armed for one op type and consumed by the **first** receipt built afterwards, matching or not, so it can never drift onto an unrelated action. This exists so a skip belongs on the same pill as the move it qualifies: split across a pill and a notice, the half that needed a decision gets dismissed along with the half that did not. First and only consumer: `stack.keep_cover_only`'s skipped stacks.
 
@@ -1350,6 +1350,7 @@ The lightbox's own narration of the same single receipt, mounted by `ImageOverla
 |---|---|---|
 | The grid and the app shell | `App.vue` `handleGlobalKeydown` | `useOperationStore.undo()`, narrated by the grid `ActionReceipt`. |
 | The lightbox | `ImageOverlay.handleKeydown` | The same store, narrated by `OverlayActionReceipt`. |
+| The model shelf | `useGlobalKeydown` | The live **local** receipt's own action (set edits, #1573; only live while the list tab shows it); otherwise it declines out loud. |
 | A review session | `ReviewSessionsOverlay.handleKeyDown` → `ReviewSessionView.attemptUndo` | The **review's own** single-step undo (`POST /tag_suggestions/{id}/reopen`), never the operation stack. |
 
 The lightbox and the review overlay both register a `window` keydown listener in their own `onMounted` and stop propagation while open, and a child mounts before its parent — so **App's binding is unreachable from either**, whatever its own guards say. (`isModalOverlayOpen()` never fired for the lightbox in the first place: it looks for a Vuetify scrim, and `.image-overlay` renders its own.) That is why the binding is re-implemented per surface rather than centralised.
@@ -1756,7 +1757,18 @@ the shelf's workflow sets section) and served as `hand_made` on
   — a delete is undone by recreating the set from the snapshot the route returns,
   and a create is undone THROUGH the delete verb, so undoing it after the set was
   filled gets its own receipt and Undo. A multi-set delete settles each call, so
-  one failure does not cost the others their Undo.
+  one failure does not cost the others their Undo. **The receipt is the grid's
+  own pill** (#1573): `setWrite` raises it through
+  `useOperationStore.showLocalReceipt`, and `ModelShelf` mounts `ActionReceipt`
+  `local-only`, lifted over its selection pills by their measured height. One
+  pill at a time, the 5 s drain (8 s for a delete), Undo flipping to Redo, and
+  `Ctrl+Z` / `Ctrl+Y` acting on it while it is up. Each write replaces the pill,
+  never `+N` (on the grid that means Undo takes all N back), so Undo is always
+  the latest write's. Redo runs the write again, except a delete's, which
+  deletes the sets its undo recreated (they have new ids). A create has no Redo:
+  its undo is the delete verb, whose own pill replaces it. An undo that failed
+  never shows "Undone". A write that changed nothing ("Nothing added") has no Undo and
+  goes to a plain notice. Errors stay notices.
 - **Clone with new models** labels proposals with `via: "grouped"` "Grouped by
   you" and lists them first in its selects; one with `prepick: false` (the set
   offers several of that kind) is shown but not pre-picked.
@@ -3386,7 +3398,8 @@ too** (`useGlobalKeydown`, the `UNDO_BLIND_ROOTS` check beside the existing
 modal guard — `.shelf, .wfv, .mv, .ins`, every destination that replaces
 the grid and narrates nothing; the shelf was guarded alone until #1415 and the
 other three took the chord silently):
-the shelf mounts no `ActionReceipt` either, and `UndoControl` is the app's only
+the shelf mounts `ActionReceipt` only for its own set edits (`local-only`,
+and the chord takes that pill's action while it is up), and `UndoControl` is the app's only
 renderer of the "Changed elsewhere" warning, so the chord would otherwise
 revert a library action with nothing on screen to say it happened — the same
 "every undo raises a receipt" invariant the modal guard protects. It declines
@@ -5314,7 +5327,9 @@ This is about a folder they have not set up, which the folders dialog is the
 place to say. Since #904 it is an item inside `+ Add ▾` behind a
 `v-if="hasSourceFolder"`, not a toolbar button of its own.
 
-**Receipts are notices, not `useActionReceipt`.** That composable is built on
+**Receipts are notices, not `useActionReceipt`** — except the workflow-set
+edits, which are reversible and narrate on the grid's pill as local receipts
+(see the hand-made sets section). That composable is built on
 `useOperationStore`, which is the vault-only operation log with undo keycaps —
 the exact machinery the shelf ruled out. Shelf outcomes go through
 `useNoticeStore`, the same idiom folder registration already uses, and
