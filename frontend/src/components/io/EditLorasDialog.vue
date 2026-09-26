@@ -885,8 +885,16 @@ function onDrop(target) {
   const to = rows.value.findIndex((row) => row.id === target.id);
   onDragEnd();
   if (from < 0 || to < 0 || from === to) return;
-  rows.value[from].lane = target.lane;
+  const row = rows.value[from];
+  const crossed = row.lane !== target.lane;
+  row.lane = target.lane;
   place(from, to, { focus: false });
+  // Across the fork the pass is the news, not the place in it.
+  if (crossed) {
+    say(
+      `${row.name || "The new LoRA"} moved to ${segmentLabel(row.lane)}, at ${positions.value[row.id]}.`,
+    );
+  }
 }
 
 /** The drop slot's words while a row from another segment is lifted. */
@@ -1364,11 +1372,15 @@ defineExpose({ rows, step, changeCount });
   border-left: var(--space-3) solid transparent;
 }
 
-/* One lane per sampler. Two fit the xl dialog; past three the dialog goes
-   fullscreen, and past that the lanes scroll sideways at a floor width. */
+/* One lane per sampler. Two fit the xl dialog; from three the dialog goes
+   fullscreen, and past what fits the lanes scroll sideways at a floor of
+   half the default dialog's width. */
 .eld-lanes {
   display: grid;
-  grid-template-columns: repeat(var(--eld-lanes), minmax(18rem, 1fr));
+  grid-template-columns: repeat(
+    var(--eld-lanes),
+    minmax(calc(var(--dialog-w-md) / 2), 1fr)
+  );
   gap: var(--space-5);
   overflow-x: auto;
 }

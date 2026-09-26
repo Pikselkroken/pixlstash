@@ -1638,6 +1638,25 @@ describe("the LoRA chain (#1478)", () => {
     expect(wrapper.findComponent({ name: "Segmented" }).exists()).toBe(true);
   });
 
+  it("lists a forked chain's lane loaders after its trunk", async () => {
+    const [first, second] = loraChain().loaders;
+    getLoraChain.mockResolvedValue(
+      loraChain({
+        source: null,
+        loaders: [],
+        lanes: [
+          { sampler: { node_id: "3" }, loaders: [first] },
+          { sampler: { node_id: "15" }, loaders: [second] },
+        ],
+      }),
+    );
+    const { wrapper } = await mountChain();
+    expect(
+      wrapper.findAll(".wftab-chain-name").map((name) => name.text()),
+    ).toEqual(["lightning-8step", "neon-rain-v2"]);
+    expect(textOf(wrapper)).not.toContain("No LoRA loader");
+  });
+
   it("offers Edit LoRAs… on a workflow with no loader at all", async () => {
     getLoraChain.mockResolvedValue(loraChain({ loaders: [] }));
     const { wrapper } = await mountChain();

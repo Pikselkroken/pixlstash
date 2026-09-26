@@ -120,7 +120,7 @@
                     aria-haspopup="menu"
                   />
                 </template>
-                <div class="ctx-menu" role="menu">
+                <div class="ctx-menu" role="menu" tabindex="-1" @keydown="onMenuKeydown">
                   <button
                     v-for="target in moveTargets"
                     :key="String(target.lane)"
@@ -162,6 +162,8 @@
  * says what was pressed.
  */
 import { VIcon, VMenu } from "vuetify/components";
+
+import { onMenuKeydown } from "../../utils/menuKeyboard";
 
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";

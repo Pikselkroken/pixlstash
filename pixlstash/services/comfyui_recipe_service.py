@@ -1790,32 +1790,58 @@ def _sink_summary(sinks: list[dict]) -> str | None:
     return summary or None
 
 
-def _pass_of(graph: dict, links: list[dict], node_id: str) -> dict:
-    """The node a lane's model ends in, as the owner names that pass.
+def _pass_of(graph: dict, links: list[dict], starts: list[str]) -> dict:
+    """The sampler a lane's model reaches, as the owner names that pass.
 
-    Followed down the MODEL links while each node hands the model to exactly
-    one other (a model patch before its sampler), so a pass is named by what
-    samples it rather than by the patch in between. ``title`` is the node's
-    ComfyUI title when the owner gave it one, ``None`` when it is only the
-    class name again.
+    Searched breadth first down every link from the lane's readers, nearest
+    first, for a node whose class is a sampler (``KSampler``,
+    ``SamplerCustomAdvanced``): a model patch, a guider or a scheduler is on the
+    way to one, and the pass is named by what samples it. A lane that reaches
+    no sampler (a face detailer) is named by the first node its model stops at.
+    ``title`` is the node's ComfyUI title when the owner gave it one, ``None``
+    when it is only the class name again.
     """
+    onward: dict[str, set[str]] = {}
+    for node_id, node in graph.items():
+        for value in ((node or {}).get("inputs") or {}).values():
+            if is_link(value):
+                onward.setdefault(str(value[0]), set()).add(str(node_id))
     seen: set[str] = set()
-    current = str(node_id)
-    while current not in seen:
-        seen.add(current)
-        onward = {
-            link["node_id"]
-            for link in links
-            if link["type"] == "MODEL" and str(link["source"][0]) == current
-        }
-        if len(onward) != 1:
-            break
-        current = next(iter(onward))
-    node = graph.get(current) or {}
+    level = sorted({str(n) for n in starts}, key=_node_order_key)
+    found = None
+    while level and found is None:
+        seen.update(level)
+        found = next(
+            (
+                n
+                for n in level
+                if "sampler" in str((graph.get(n) or {}).get("class_type")).lower()
+            ),
+            None,
+        )
+        level = sorted(
+            {m for n in level for m in onward.get(n, ()) if m not in seen},
+            key=_node_order_key,
+        )
+    if found is None:
+        # No sampler downstream: follow the model while it goes one way.
+        found = str(sorted(starts, key=_node_order_key)[0])
+        visited: set[str] = set()
+        while found not in visited:
+            visited.add(found)
+            model_onward = {
+                link["node_id"]
+                for link in links
+                if link["type"] == "MODEL" and str(link["source"][0]) == found
+            }
+            if len(model_onward) != 1:
+                break
+            found = next(iter(model_onward))
+    node = graph.get(found) or {}
     class_type = node.get("class_type")
     title = str((node.get("_meta") or {}).get("title") or "").strip()
     return {
-        "node_id": current,
+        "node_id": found,
         "class_type": class_type,
         "title": title if title and title != class_type else None,
     }
@@ -1998,16 +2024,24 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
                 fork = (trunk[-1], loaders[trunk[-1]]["model_out"])
                 by_node = readers_by_node(fork)
         if len(by_node) > 1:
+            # A lane per loader run off the fork, and one per sampler for the
+            # readers that are not loaders: a guider and a scheduler reading
+            # the same model are one pass (SamplerCustomAdvanced's), while a
+            # base and a hires sampler reading it straight are two.
+            plain: dict[str, set[str]] = {}
             for node_id in by_node:
                 order = run_from({node_id: by_node[node_id]})
+                if not order:
+                    sampler = _pass_of(graph, links, [node_id])["node_id"]
+                    plain.setdefault(sampler, set()).add(node_id)
+                    continue
                 lanes.append(
-                    {
-                        "source": None,
-                        "start": fork,
-                        "order": order,
-                        "own": None if order else node_id,
-                    }
+                    {"source": None, "start": fork, "order": order, "own": None}
                 )
+            for own in plain.values():
+                lanes.append({"source": None, "start": fork, "order": [], "own": own})
+            if len(lanes) < 2:
+                lanes = []
 
     members = set(trunk) | {n for lane in lanes for n in lane["order"]}
     off_chain = sorted(set(loaders) - members, key=_node_order_key)
@@ -2058,11 +2092,12 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
             else None
         )
 
-    def sinks_of(end: tuple | None, own: str | None = None) -> list[dict]:
+    def sinks_of(end: tuple | None, own: set[str] | None = None) -> list[dict]:
         return [
             {key: link[key] for key in ("node_id", "class_type", "field", "type")}
             for link in (readers.get(end, []) if end is not None else [])
-            if link["node_id"] not in members and own in (None, link["node_id"])
+            if link["node_id"] not in members
+            and (own is None or link["node_id"] in own)
         ]
 
     def in_order(sinks: list[dict]) -> list[dict]:
@@ -2111,22 +2146,32 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
                 else []
             )
         )
-        first = next(
-            (s["node_id"] for s in lane_sinks if s["type"] == "MODEL"),
-            None,
-        ) or (lane["own"] or end[0])
+        starts = [s["node_id"] for s in lane_sinks if s["type"] == "MODEL"] or [end[0]]
         read_lanes.append(
             {
                 "source": lane["source"],
-                "pass": _pass_of(graph, links, first),
+                "pass": _pass_of(graph, links, starts),
                 "loaders": [loaders[n] for n in order],
                 "sinks": lane_sinks,
                 "sink_summary": _sink_summary(lane_sinks),
             }
         )
-        note_for(order[-1] if order else (lane["own"] or end[0]), lane_sinks)
+        note_for(
+            order[-1] if order else min(lane["own"] or {end[0]}, key=_node_order_key),
+            lane_sinks,
+        )
     if not lanes and off_chain:
         note_for(model_end[0], sinks)
+    named = [lane["pass"]["node_id"] for lane in read_lanes]
+    for node_id in named:
+        if named.count(node_id) > 1:
+            # Two branches that meet again (a model merge) are one pass, and
+            # a move "to KSampler #3 only" would name both sides alike.
+            raise LookupError(
+                f"The branches of this workflow's model meet again at #{node_id} "
+                f"{graph[node_id].get('class_type')}, so there are no separate "
+                "passes to edit their LoRAs by. Change them in ComfyUI."
+            )
     # "In the order ComfyUI runs them" as near as ids say it: the base sampler
     # is normally the lower id.
     read_lanes.sort(key=lambda lane: _node_order_key(lane["pass"]["node_id"]))
@@ -2472,6 +2517,11 @@ def plan_lora_chain(
             # that lane reads one; elsewhere its CLIP half would reach nothing.
             "with_clip": any(s["type"] == "CLIP" for s in lane["sinks"]),
             "clip_read": any(s["type"] == "CLIP" for s in lane["sinks"]),
+            # Who a CLIP half there reaches, said in the change: those text
+            # encoders may well feed every pass, so "only" is the model's.
+            "clip_names": _readers_named(
+                [s for s in lane["sinks"] if s["type"] == "CLIP"], rail=False
+            )[0],
             "label": pass_label(lane),
         }
         for lane_entries, lane in zip(lanes, read_lanes)
@@ -2585,11 +2635,17 @@ def plan_lora_chain(
             )
             order.append(node_id)
             where = ""
-            if read_lanes:
+            if read_lanes and index == 0:
+                where = f", before the fork: {everyone} get it"
+            elif read_lanes and clip_field:
                 where = (
-                    f", before the fork: {everyone} get it"
-                    if index == 0
-                    else f", on {segment['label']} only"
+                    f", its model on {segment['label']} only; its CLIP goes to "
+                    f"{segment['clip_names']}"
+                )
+            elif read_lanes:
+                where = (
+                    f", on {segment['label']} only, as {loader_class}: nothing on "
+                    "that side reads a CLIP, so it does not change the prompt"
                 )
             added_changes.append(
                 {
@@ -2675,6 +2731,8 @@ def _crossed_change(
             # Nothing on that side reads a CLIP, so the loader's text-encoder
             # half stops reaching any prompt. Said, because it changes pictures.
             text += "; nothing there reads its CLIP, so it no longer changes the prompt"
+        elif wiring[node_id]["clip_field"]:
+            text += f"; its CLIP goes to {segment['clip_names']}"
     return {"kind": "moved", "node_id": node_id, "text": text}
 
 

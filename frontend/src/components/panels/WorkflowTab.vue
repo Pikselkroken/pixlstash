@@ -869,9 +869,15 @@ const editPictures = ref(0);
 /** A LoRA to open with its loader already deleted (Save-as-recipe's hand-over). */
 const editDrop = ref("");
 
-/** The loaders as the inspector lists them: the shelf's name, and a strength. */
+/**
+ * The loaders as the inspector lists them: the shelf's name, and a strength.
+ * A forked chain's lanes are listed after its trunk, so every loader shows.
+ */
 const chainLoaders = computed(() =>
-  (chain.value?.loaders ?? []).map((loader) => {
+  [
+    ...(chain.value?.loaders ?? []),
+    ...(chain.value?.lanes ?? []).flatMap((lane) => lane.loaders ?? []),
+  ].map((loader) => {
     const strength = Number(loader.strength);
     return {
       node_id: String(loader.node_id),

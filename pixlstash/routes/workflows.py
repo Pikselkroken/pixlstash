@@ -1357,6 +1357,16 @@ class LoraChainEdit(BaseModel):
         default_factory=list, max_length=MAX_RUN_LORAS
     )
     lanes: list[list[LoraChainEntry]] | None = Field(None, max_length=MAX_RUN_LORAS)
+
+    @model_validator(mode="after")
+    def _within_the_cap(self) -> "LoraChainEdit":
+        # The cap is on the whole tree, not per list: every entry may cost a
+        # shelf lookup before the plan is checked.
+        total = len(self.entries) + sum(len(lane) for lane in self.lanes or [])
+        if total > MAX_RUN_LORAS:
+            raise ValueError(f"at most {MAX_RUN_LORAS} loaders in one chain")
+        return self
+
     name: str | None = Field(None, max_length=MAX_NAME_LENGTH)
     dry_run: StrictBool = False
 

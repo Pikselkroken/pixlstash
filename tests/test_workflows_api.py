@@ -9241,6 +9241,14 @@ def test_a_loader_moved_across_the_fork_is_written_to_both_passes(chained):
     assert written["6"]["inputs"]["clip"] == ["5", 1]
 
 
+def test_the_loader_cap_counts_every_lane(chained):
+    """32 loaders in all, not 32 per list: each one may cost a shelf lookup."""
+    _two_pass_chain(chained)
+    lane = [{"node_id": "5"}] * 17
+    r = _chain_edit(chained.owner, {"node_id": "2"}, lanes=[lane, lane], dry_run=True)
+    assert r.status_code == 422, r.text
+
+
 def test_lanes_that_do_not_match_the_fork_are_a_409(chained):
     _two_pass_chain(chained)
     r = _chain_edit(chained.owner, {"node_id": "2"}, lanes=[[{"node_id": "5"}]])

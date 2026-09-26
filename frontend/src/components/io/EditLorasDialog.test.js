@@ -613,9 +613,9 @@ describe("a forked chain, drawn side by side", () => {
   }
 
   function laneRows(wrapper, index) {
-    return wrapper
-      .findAll("[data-testid='eld-lane']")
-      [index].findAll(".eld-row")
+    const lane = wrapper.findAll("[data-testid='eld-lane']")[index];
+    return lane
+      .findAll(".eld-row")
       .map((row) => row.find(".eld-name-text").text());
   }
 
@@ -663,6 +663,19 @@ describe("a forked chain, drawn side by side", () => {
       ["12", "13"],
       [],
     ]);
+  });
+
+  it("says which pass a row dropped across the fork landed in", async () => {
+    getLoraChain.mockResolvedValue(forked());
+    const wrapper = await mountDialog();
+    const lanes = wrapper.findAll("[data-testid='eld-lane']");
+    await lanes[1].find("[data-focus='handle']").trigger("dragstart");
+    await lanes[0].find(".eld-row").trigger("drop");
+    await flushPromises();
+    expect(laneRows(wrapper, 0)).toEqual(["detail-tweaker-xl", "lightning-8step"]);
+    expect(wrapper.find("[role=status][aria-live=polite]").text()).toBe(
+      "detail-tweaker-xl moved to Base pass, at 3.",
+    );
   });
 
   it("keeps Alt+arrow inside the row's own segment", async () => {

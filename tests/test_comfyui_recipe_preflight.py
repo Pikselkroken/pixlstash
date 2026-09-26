@@ -1697,7 +1697,9 @@ class TestLoraChain:
         assert graph["8"]["inputs"]["conditioner"] == ["10", 1]
         assert [c["text"] for c in plan["changes"][:4]] == [
             "Loader #12 deleted: c",
-            "A loader added for skin-detail-xl at 0.30, on Base pass only",
+            "A loader added for skin-detail-xl at 0.30, on Base pass only, as "
+            "LoraLoaderModelOnly: nothing on that side reads a CLIP, so it does "
+            "not change the prompt",
             "#11 b moved to Hires pass only; nothing there reads its CLIP, so it "
             "no longer changes the prompt",
             "#10 a from 0.50 to 0.90",
@@ -1749,6 +1751,88 @@ class TestLoraChain:
         note = chain["branch_note"]
         assert note.startswith("The chain stops at #12 LoraLoader, because its model")
         assert "goes 2 ways" in note and "#13 LoraLoader is past the branch" in note
+
+    def test_a_lane_add_says_where_its_clip_goes(self):
+        """#12's CLIP feeds encoder #9, so a new hires loader carries one too."""
+        graph = self._two_pass()
+        graph["9"] = {
+            "class_type": "PromptEncoder",
+            "inputs": {"conditioner": ["12", 1]},
+        }
+        plan = self._edit_lanes(
+            graph,
+            [{"node_id": "10"}, {"node_id": "11"}],
+            [[], [{"node_id": "12"}, {"node_id": None, "adapter": self.NEW}]],
+        )
+        new = str(max(int(n) for n in graph))
+        assert graph[new]["class_type"] == "LoraLoader"
+        assert graph[new]["inputs"]["clip"] == ["12", 1]
+        assert graph["9"]["inputs"]["conditioner"] == [new, 1]
+        assert plan["changes"][0]["text"] == (
+            "A loader added for skin-detail-xl at 1.00, its model on Hires pass "
+            "only; its CLIP goes to #9 PromptEncoder"
+        )
+
+    def test_a_guider_and_a_scheduler_on_one_model_are_one_pass(self):
+        """SamplerCustomAdvanced's shape: a straight chain, not a fork."""
+        info = {
+            **self.INFO,
+            "BasicGuider": {"output": ["GUIDER"]},
+            "BasicScheduler": {"output": ["SIGMAS"]},
+            "SamplerCustomAdvanced": {"output": ["LATENT"]},
+        }
+        graph = {
+            "1": {"class_type": "UnetLoaderGGUF", "inputs": {}},
+            "10": {
+                "class_type": "LoraLoaderModelOnly",
+                "inputs": {
+                    "lora_name": "a.safetensors",
+                    "strength_model": 1.0,
+                    "model": ["1", 0],
+                },
+            },
+            "22": {"class_type": "BasicGuider", "inputs": {"model": ["10", 0]}},
+            "17": {"class_type": "BasicScheduler", "inputs": {"model": ["10", 0]}},
+            "30": {
+                "class_type": "SamplerCustomAdvanced",
+                "inputs": {"guider": ["22", 0], "sigmas": ["17", 0]},
+            },
+        }
+        chain = read_lora_chain(graph, info)
+        assert chain["lanes"] == []
+        assert [s["node_id"] for s in chain["sinks"]] == ["17", "22"]
+
+    def test_a_nested_fork_names_the_lane_by_its_own_sampler(self):
+        graph = self._two_pass()
+        graph["13"] = self._loader("a.safetensors", 1.0, ["12", 0], ["12", 1])
+        graph["16"] = {
+            "class_type": "TwinSampler",
+            "inputs": {"model1": ["13", 0]},
+            "_meta": {"title": "Upscale pass"},
+        }
+        lanes = read_lora_chain(graph, self.INFO)["lanes"]
+        assert [pass_label(lane) for lane in lanes] == ["Base pass", "Hires pass"]
+
+    def test_branches_that_merge_again_are_refused(self):
+        graph = self._graph(loaders=())
+        del graph["7"]
+        info = {**self.INFO, "ModelMergeSimple": {"output": ["MODEL"]}}
+        graph["10"] = self._loader("a.safetensors", 1.0, ["4", 0], ["4", 1])
+        graph["11"] = self._loader("b.safetensors", 1.0, ["4", 0], ["4", 1])
+        graph["20"] = {
+            "class_type": "ModelMergeSimple",
+            "inputs": {"model1": ["10", 0], "model2": ["11", 0]},
+        }
+        graph["7"] = {"class_type": "TwinSampler", "inputs": {"model1": ["20", 0]}}
+        with pytest.raises(LookupError, match="meet again at #7 TwinSampler"):
+            read_lora_chain(graph, info)
+
+    def test_two_models_into_one_sampler_are_refused(self):
+        graph = self._graph(loaders=("a",))
+        graph["5"] = {"class_type": "UnetLoaderGGUF", "inputs": {}}
+        graph["7"]["inputs"]["model2"] = ["5", 0]
+        with pytest.raises(LookupError, match="meet again at #7"):
+            read_lora_chain(graph, self.INFO)
 
     def test_a_lane_taking_its_clip_from_elsewhere_is_refused(self):
         """#12 reads the checkpoint's CLIP, not the trunk's end at #11."""

@@ -3041,8 +3041,11 @@ around, so a loader can always be added between the model source and what reads
 the model. **Where the model forks, the chain is a tree**: the loaders every
 pass reads are the trunk (`loaders`), and each node reading the fork (a base
 sampler, a hires pass, a detailer) starts a **lane** (`lanes`) with the loaders
-only it reads, named by the sampler it reaches (its ComfyUI title when it has
-one). A workflow loading one model per pass (Wan 2.2 high/low noise) has no
+only it reads. Readers that are not loaders are grouped by the sampler they
+reach, so a guider and a scheduler feeding one `SamplerCustomAdvanced` stay one
+straight chain. A lane is named by the nearest sampler downstream of it (its
+ComfyUI title when it has one), and branches that meet again at one node (a
+model merge) are refused, since they are not separate passes. A workflow loading one model per pass (Wan 2.2 high/low noise) has no
 trunk: `model_source` is null and each lane names its own. A lane's CLIP must
 come off the trunk's CLIP end. Only a further fork inside a lane, or loaders
 past a node that is not a loader, are left as they are, and `branch_note` tells
@@ -3059,7 +3062,9 @@ for a tree, `lanes` with one list per lane (left out, every lane stays as read).
 An existing loader is kept by `node_id` (moved and re-weighted, its id kept)
 and may land in any segment, which is how it crosses the fork; a new one is
 added by shelf `sha256`, carrying a CLIP only where its segment has a CLIP
-reader; and every loader left out is deleted through `bypass_node`.
+reader; and every loader left out is deleted through `bypass_node`. The change
+list says where a lane loader's CLIP half goes, since the text encoders it
+reaches may feed every pass. The cap of 32 loaders counts the whole tree.
 `plan_lora_chain` validates the whole edit before `apply_lora_chain` touches the
 graph, and the result is written as a **new** file through `_store_copy`, so one
 save is one new card and the original file never changes. `dry_run` answers the
