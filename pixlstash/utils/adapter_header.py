@@ -111,6 +111,11 @@ FILE_TEXT_ENCODER = "text_encoder"
 # Only genuinely different words belong here - the normaliser already folds
 # spacing and case, so a `text_encoders` entry covers `TextEncoders` too.
 #
+# `unet` and `diffusion_models` hold a bare diffusion model, which is what a
+# Flux or Wan graph loads where an SD graph loads a checkpoint, so they name
+# `checkpoint`. A `.safetensors` there usually clears the parameter count
+# anyway; a `.gguf` has no count to clear and would otherwise read `unknown`.
+#
 # Deliberately absent, each for its own reason:
 #
 # * `loras` / `lora` - an adapter is asserted from tensor markers, which is
@@ -128,6 +133,9 @@ _ROLE_FOLDERS: dict[str, str] = {
     "clip": FILE_TEXT_ENCODER,
     "textencoder": FILE_TEXT_ENCODER,
     "textencoders": FILE_TEXT_ENCODER,
+    "unet": FILE_CHECKPOINT,
+    "unets": FILE_CHECKPOINT,
+    "diffusionmodels": FILE_CHECKPOINT,
 }
 
 # Parameter count above which a marker-free file is a base checkpoint rather
@@ -530,8 +538,8 @@ def role_from_folder(path: str) -> Optional[str]:
         path: Path to the model file. May be relative or absolute.
 
     Returns:
-        ``"vae"``, ``"text_encoder"``, or ``None`` when the directory names no
-        role we recognise - which is the answer for a flat folder of mixed
+        ``"vae"``, ``"text_encoder"``, ``"checkpoint"``, or ``None`` when the
+        directory names no role we recognise - which is the answer for a flat folder of mixed
         downloads and must never be read as "not a VAE".
     """
     folder = os.path.basename(os.path.dirname(path))

@@ -63,7 +63,7 @@ CURRENT_SCHEMA_VERSION = 2
 # reasoning the model-shelf tables were amended into v2 for. ``user_version`` is
 # free (nothing in PixlStash has ever written it), costs no DDL, and an older
 # build ignores it entirely.
-CURRENT_DATA_VERSION = 3
+CURRENT_DATA_VERSION = 4
 
 # `model_file.state` for a copy the last scan actually looked at, spelled out
 # rather than imported from `services.model_folder_scanner`. That module imports
@@ -1477,7 +1477,9 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
         )
 
 
-def _backfill_component_roles(conn: sqlite3.Connection) -> int:
+def _backfill_component_roles(
+    conn: sqlite3.Connection, kinds: tuple[str, ...] = (FILE_UNKNOWN, FILE_CHECKPOINT)
+) -> int:
     """Re-file VAEs and text encoders that were registered before they had kinds.
 
     Every row on an existing shelf was classified by tensor markers and a
@@ -1487,7 +1489,8 @@ def _backfill_component_roles(conn: sqlite3.Connection) -> int:
     directory each file sits in says which it is, and the directory is already
     in the hub - so this needs no rescan and reads no bytes.
 
-    Only ``unknown`` and ``checkpoint`` rows are considered. An ``adapter`` was
+    Only ``unknown`` and ``checkpoint`` rows are considered (``kinds`` narrows
+    that for a later pass). An ``adapter`` was
     asserted from markers the file cannot strip, and an ``engine`` was declared
     by us rather than derived, so neither is a guess this can improve on.
 
@@ -1510,6 +1513,7 @@ def _backfill_component_roles(conn: sqlite3.Connection) -> int:
 
     Args:
         conn: An open hub connection, inside the caller's transaction.
+        kinds: The stored ``file_kind`` values eligible for re-filing.
 
     Returns:
         How many rows were re-filed.
@@ -1522,8 +1526,8 @@ def _backfill_component_roles(conn: sqlite3.Connection) -> int:
         "FROM model m "
         "JOIN model_file mf ON mf.model_id = m.id "
         "JOIN model_folder f ON f.id = mf.model_folder_id "
-        "WHERE m.file_kind IN (?, ?)",
-        (FILE_UNKNOWN, FILE_CHECKPOINT),
+        f"WHERE m.file_kind IN ({', '.join('?' * len(kinds))})",
+        kinds,
     ).fetchall()
 
     # Gathered per state so the present copies can be preferred whole. Taking
@@ -1549,12 +1553,15 @@ def _backfill_component_roles(conn: sqlite3.Connection) -> int:
         (role,) = roles
         if role is None:
             continue
-        conn.execute("UPDATE model SET file_kind = ? WHERE id = ?", (role, model_id))
-        refiled += 1
+        # A checkpoint in `unet/` already says what its folder says.
+        refiled += conn.execute(
+            "UPDATE model SET file_kind = ? WHERE id = ? AND file_kind <> ?",
+            (role, model_id, role),
+        ).rowcount
     if refiled:
         logger.info(
-            "Re-filed %d model rows as VAEs or text encoders from the folder "
-            "they sit in; they were registered before those kinds existed.",
+            "Re-filed %d model rows from the role folder they sit in; they were "
+            "registered before that folder named a kind.",
             refiled,
         )
     return refiled
@@ -1741,6 +1748,12 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     _drop_blank_recipe_assets(conn)
                 if data_version < 3:
                     _backfill_base_model_canonical(conn)
+                if data_version < 4:
+                    # `unet/` and `diffusion_models/` started naming
+                    # `checkpoint` (#1607). Only `unknown` is re-filed: a row
+                    # stored as anything else was either classified already
+                    # or corrected by the owner.
+                    _backfill_component_roles(conn, (FILE_UNKNOWN,))
                 # No placeholder: PRAGMA takes no parameters, and the value is
                 # this module's own constant rather than anything from outside.
                 conn.execute(f"PRAGMA user_version = {CURRENT_DATA_VERSION:d}")

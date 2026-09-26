@@ -853,6 +853,25 @@ class TestComponentRoleBackfill:
             "SELECT file_kind FROM model WHERE id = ?", (model_id,)
         ).fetchone() == ("checkpoint",)
 
+    def test_a_data_v3_hub_refiles_an_unknown_gguf_in_unet_only(self, hub):
+        # #1607: `unet/` and `diffusion_models/` came to name `checkpoint`
+        # after the first pass had run. The second pass re-files `unknown`
+        # alone, so a VAE-folder row the owner corrected to `checkpoint` stays.
+        apply_migrations(hub)
+        hub.execute("PRAGMA user_version = 3")
+        folder_id = add_folder(hub, "/models")
+        gguf = add_model(hub, file_kind="unknown", sha256="g", kind=None)
+        add_file(hub, gguf, folder_id, "diffusion_models/flux1-dev-Q4_K_M.gguf")
+        corrected = add_model(hub, file_kind="checkpoint", sha256="k", kind=None)
+        add_file(hub, corrected, folder_id, "VAE/odd.safetensors")
+        hub.commit()
+
+        apply_migrations(hub)
+
+        kinds = dict(hub.execute("SELECT id, file_kind FROM model").fetchall())
+        assert (kinds[gguf], kinds[corrected]) == ("checkpoint", "checkpoint")
+        assert hub.execute("PRAGMA user_version").fetchone()[0] == 4
+
     def test_a_fresh_hub_records_the_backfill_as_done(self, hub):
         apply_migrations(hub)
 
