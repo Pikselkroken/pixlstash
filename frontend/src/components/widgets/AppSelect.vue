@@ -133,7 +133,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref, useId, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from "vue";
 import { VIcon } from "vuetify/components";
 import ChipRow from "./ChipRow.vue";
 import FieldLabel from "./FieldLabel.vue";
@@ -237,6 +237,15 @@ function onFocusOut(e) {
 // Run popup's list can hold the whole library.
 let typed = "";
 let typedTimer = null;
+function resetTyped() {
+  clearTimeout(typedTimer);
+  typed = "";
+}
+// A name half-typed into one opening of the list is not carried into the
+// next, where its leftover would read a Space as more of the name.
+watch(open, (isOpen) => isOpen || resetTyped());
+onBeforeUnmount(resetTyped);
+
 function typeahead(char) {
   clearTimeout(typedTimer);
   typedTimer = setTimeout(() => (typed = ""), 500);
@@ -326,6 +335,19 @@ watch([open, activeIndex], () =>
       menu.scrollTop = row.offsetTop + row.offsetHeight - menu.clientHeight;
   }),
 );
+
+// The options can change under an open list (the library's cards arriving
+// late in "Run a workflow on these…"): the highlight follows its row by
+// value, so it never points past the end or at a different row.
+watch(normalizedOptions, (next, prev) => {
+  if (!next.length) {
+    open.value = false;
+    return;
+  }
+  const value = prev?.[activeIndex.value]?.value;
+  const i = next.findIndex((o) => String(o.value) === String(value));
+  activeIndex.value = i >= 0 ? i : Math.min(activeIndex.value, next.length - 1);
+});
 
 watch(
   () => props.disabled,

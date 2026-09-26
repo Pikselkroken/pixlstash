@@ -168,6 +168,29 @@ describe("AppSelect with chip options", () => {
     w.unmount();
   });
 
+  it("keeps the highlight on its row when the options change under it", async () => {
+    const w = mountRich();
+    await combo(w).trigger("keydown", { key: "ArrowDown" });
+    await combo(w).trigger("keydown", { key: "End" });
+    expect(active(w).attributes("aria-label")).toBe("Zebra");
+    // A row arrives ahead of it: the highlight moves with Zebra.
+    await w.setProps({ options: [{ value: "n", label: "New", chips: ["x"] }, ...OPTIONS] });
+    expect(active(w).attributes("aria-label")).toBe("Zebra");
+    // Zebra goes: the highlight stays inside the list rather than past it.
+    await w.setProps({ options: OPTIONS.slice(0, 2) });
+    expect(active(w).attributes("aria-label")).toBe("Krea, + upscale, flux");
+  });
+
+  it("starts a fresh name each time the list opens", async () => {
+    const w = mountRich("a");
+    await combo(w).trigger("keydown", { key: "ArrowDown" });
+    await combo(w).trigger("keydown", { key: "k" });
+    await combo(w).trigger("keydown", { key: "Escape" });
+    // Straight after closing, Space opens the list; it is not more of "k".
+    await combo(w).trigger("keydown", { key: " " });
+    expect(combo(w).attributes("aria-expanded")).toBe("true");
+  });
+
   it("does not open while disabled", async () => {
     const w = mount(AppSelect, {
       props: { modelValue: "a", options: OPTIONS, disabled: true },
