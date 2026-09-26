@@ -1705,6 +1705,13 @@ def test_declines_refuse_an_unknown_set_and_a_short_digest(shelf_env):
         _declines(shelf_env, set_id, [ADAPTER_NO_BASE_2])
         r = shelf_env.owner.delete(f"{API}/models/workflow-sets/{set_id}")
         assert r.status_code == 200, r.text
+        assert (
+            shelf_env.server.hub.fetchone(
+                "SELECT COUNT(*) AS n FROM model_workflow_set_decline WHERE set_id = ?",
+                (set_id,),
+            )["n"]
+            == 0
+        )
     finally:
         _wipe_sets(shelf_env.server)
 

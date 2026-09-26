@@ -1772,7 +1772,9 @@ the shelf's workflow sets section) and served as `hand_made` on
   Backspace on a ghost keeps it out (stopped, so the shelf's file Delete never
   sees it). A merge is `addToHandMadeSet` with `joined`, whose receipt counts
   the pictures that joined; Keep separate and Offer again are
-  `keepOutOfHandMadeSet` / `offerMergeAgain`, each with Undo. With models kept
+  `keepOutOfHandMadeSet` / `offerMergeAgain`, each with Undo. The server
+  stores the kept-out list whole, so the store queues those writes and applies
+  each as a delta to the latest list: an older Undo never drops a newer one. With models kept
   out and no offer left, the tray shows "Kept separate from N pictures ·
   Offer again". The set's menu carries Merge with the pictures' set… (the
   grid's exposed `openOffer`), Keep separate and Offer the merge again.

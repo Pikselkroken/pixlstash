@@ -2098,41 +2098,72 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   /**
    * Keep models out of a set's merge offer (#1523): all of them ("Keep
-   * separate"), or one ghost. The list is stored whole, so the undo is the
-   * list as it was.
+   * separate"), or one ghost.
+   *
+   * The server stores the list whole, so every write here is a DELTA applied to
+   * the latest list at the moment it runs, one at a time: two quick Deletes on
+   * two ghosts both land, and undoing an older Keep separate takes out only
+   * what that one added rather than putting back a list a later one extended.
    *
    * @param {Object} set - a set from `handMadeSets`, carrying its `offer`.
    * @param {Array<Object>} [models] - offered models; all of them if omitted.
    */
   function keepOutOfHandMadeSet(set, models) {
     const offer = set.offer;
-    const out = models ?? offer?.models ?? [];
+    const out = (models ?? offer?.models ?? []).map((m) => m.sha256);
     if (!out.length) return Promise.resolve(null);
-    const next = [
-      ...new Set([...(set.declined ?? []), ...out.map((m) => m.sha256)]),
-    ];
     const receipt = models
-      ? `Kept ${out.map((m) => m.name).join(", ")} out of "${setLabel(set)}".`
+      ? `Kept ${models.map((m) => m.name).join(", ")} out of "${setLabel(set)}".`
       : `Kept "${setLabel(set)}" separate from ${
           offer.picture_count
             ? pictureCount(offer.picture_count)
             : "those recipes"
         }.`;
-    return setWrite(() => setWorkflowSetDeclines(set.id, next), {
+    return setWrite(() => changeDeclines(set.id, { add: out }), {
       receipt,
-      undo: ({ previous }) => setWorkflowSetDeclines(set.id, previous),
+      undo: () => changeDeclines(set.id, { remove: out }),
       failure: "The set could not be kept separate.",
     });
   }
 
   /** Forget every Keep separate on a set, so its merge offer comes back. */
   function offerMergeAgain(set) {
-    return setWrite(() => setWorkflowSetDeclines(set.id, []), {
+    return setWrite(() => changeDeclines(set.id, { clear: true }), {
       receipt: `The merge is offered again on "${setLabel(set)}".`,
-      undo: ({ previous }) => setWorkflowSetDeclines(set.id, previous),
+      undo: ({ previous }) => changeDeclines(set.id, { add: previous }),
       failure: "The merge could not be offered again.",
     });
   }
+
+  let declineQueue = Promise.resolve();
+
+  /**
+   * One change to a set's kept-out list, queued behind any still in flight
+   * and computed from the list the last write returned.
+   */
+  function changeDeclines(setId, { add = [], remove = [], clear = false }) {
+    const run = async () => {
+      const current =
+        latestDeclines.get(setId) ??
+        handMadeSets.value.find((s) => s.id === setId)?.declined ??
+        [];
+      const gone = new Set(remove);
+      const next = clear
+        ? []
+        : [...new Set([...current.filter((sha) => !gone.has(sha)), ...add])];
+      const result = await setWorkflowSetDeclines(setId, next);
+      latestDeclines.set(setId, result?.set?.declined ?? next);
+      return result;
+    };
+    const queued = declineQueue.then(run, run);
+    declineQueue = queued.catch(() => null);
+    return queued;
+  }
+
+  // What each set's list was after this session's last write to it, so a
+  // queued write never reads a refetch that has not landed yet.
+  const latestDeclines = new Map();
+  watch(handMadeSets, () => latestDeclines.clear());
 
   /** The hand-made sets holding any of these model ids, for the delete warning. */
   function handMadeSetsHolding(ids) {

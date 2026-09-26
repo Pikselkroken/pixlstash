@@ -2103,6 +2103,41 @@ describe("hand-made sets (#1520)", () => {
       ]);
     });
 
+    it("undoes an older Keep separate without dropping a newer one", async () => {
+      const { store } = await mountOffer();
+      // A server that remembers the list, so each refetch reads it back.
+      let stored = [];
+      setWorkflowSetDeclines.mockImplementation(async (id, sha256) => {
+        stored = sha256;
+        return { set: handSet(id, [SET_CKPT], { declined: sha256 }) };
+      });
+      fetchWorkflowSets.mockImplementation(async () => ({
+        combinations: [],
+        no_set: [],
+        hand_made: [
+          handSet(10, [SET_CKPT], { offer: OFFER, declined: stored }),
+        ],
+      }));
+      const { useNoticeStore } = await import("../../stores/useNoticeStore");
+      const notices = useNoticeStore();
+      const set = () => store.handMadeSets[0];
+
+      // Both fired before either answers, as two quick Deletes would be.
+      await Promise.all([
+        store.keepOutOfHandMadeSet(set(), [GHOST_LORA]),
+        store.keepOutOfHandMadeSet(set(), [GHOST_OTHER]),
+      ]);
+      expect(setWorkflowSetDeclines).toHaveBeenLastCalledWith(10, [
+        GHOST_LORA.sha256,
+        GHOST_OTHER.sha256,
+      ]);
+
+      await notices.notices.at(-2).action.handler();
+      expect(setWorkflowSetDeclines).toHaveBeenLastCalledWith(10, [
+        GHOST_OTHER.sha256,
+      ]);
+    });
+
     it("says what was kept separate and offers the merge again", async () => {
       setWorkflowSetDeclines.mockResolvedValue({
         set: handSet(10, [SET_CKPT]),

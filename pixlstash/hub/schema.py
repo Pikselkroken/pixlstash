@@ -523,10 +523,12 @@ CREATE TABLE IF NOT EXISTS model_workflow_set_member (
 # separate"). Keyed by sha256 like a member, so a decline outlives the file's
 # shelf row. Only the offer reads it: a declined model is never offered to that
 # set again, while a picture needing some OTHER model still brings the offer
-# back for that one. Clearing the rows is "Offer the merge again".
+# back for that one. Clearing the rows is "Offer the merge again". CASCADE so
+# a build that predates this table can still delete a set that has declines.
 _V2_MODEL_WORKFLOW_SET_DECLINE = """
 CREATE TABLE IF NOT EXISTS model_workflow_set_decline (
-    set_id       INTEGER NOT NULL REFERENCES model_workflow_set(id),
+    set_id       INTEGER NOT NULL
+                 REFERENCES model_workflow_set(id) ON DELETE CASCADE,
     sha256       TEXT NOT NULL,
     declined_at  TEXT NOT NULL,
     PRIMARY KEY (set_id, sha256)

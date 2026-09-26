@@ -3317,7 +3317,8 @@ like every shelf table), read and written by
   a second checkpoint goes to Other). Merging is the ordinary members add;
   Keep separate is `PUT .../declines`, a whole-list write that returns the old
   list as its undo. `kept_separate` counts the pictures here the declines hold
-  back. A delete drops a set's declines with it; its undo does not restore them.
+  back. The declines cascade with their set (so a build that predates the
+  table can still delete one); a delete's undo does not restore them.
 - **Clone with new models reads them first.** `propose_companions` lists, ahead
   of the recipe ladder, the on-shelf VAEs and text encoders of every set whose
   checkpoint member is the chosen checkpoint (`via: "grouped"`, `recipes: 0`,

@@ -265,7 +265,8 @@ def _attach_offers(hand_made: list[dict], combinations, digests) -> None:
             offered = _near_miss(group, held, declined, digests)
             every = _near_miss(group, held, set(), digests)
             kept = _pictures(every) - _pictures(offered)
-            entry["kept_separate"] = max(entry["kept_separate"], kept)
+            # Heads hold disjoint combinations, so a set's counts add up.
+            entry["kept_separate"] += kept
             if offered:
                 missing = set().union(*(extra for _, extra in offered))
                 candidates.append((len(missing), entry["id"], head, entry, offered))
