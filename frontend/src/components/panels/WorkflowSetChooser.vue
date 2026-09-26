@@ -290,10 +290,25 @@ defineExpose({ expand: (id) => expanded.value.add(id) });
 </script>
 
 <style scoped>
-/* The filter menu's own width token: this is the same kind of surface, a
-   field over a checklist. */
+/* A step wider than the filter menu, because its title carries a set's name
+   and its rows a model name beside a detail: the small-dialog width, still
+   capped by the window. `box-sizing` so the border sits inside the cap. */
 .wsc {
-  width: min(var(--filter-menu-w), calc(100vw - var(--space-6) * 2));
+  box-sizing: border-box;
+  width: min(var(--dialog-w-sm), calc(100vw - var(--space-6) * 2));
+}
+
+/* Nothing in here may run out of the popup, whatever it is asked to name.
+   `.tbm-title` is `nowrap` for one-word menu titles; this one names a set, so
+   it wraps - at a word where it can, mid-word where a filename leaves none. */
+.wsc .tbm-title {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.wsc__note {
+  overflow-wrap: anywhere;
 }
 
 .wsc__note {

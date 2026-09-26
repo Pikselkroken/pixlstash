@@ -1744,6 +1744,12 @@ the shelf's workflow sets section) and served as `hand_made` on
   disabled; pressed with the field empty it says what is missing and focuses it. Set is the shelf's own
   `editModelIds` write followed by a sets refetch; Not now, or leaving the tray,
   drops the offer for good and leaves Set base model on the shelf menu.
+- **One name per model.** The server names a member by its display name or
+  filename; `store.handMadeSets` re-resolves each through the shelf's own
+  `modelName` (or `deriveModelName` on the kept label, off the shelf), so a set
+  named after its checkpoint never reads `….safetensors`, and receipts go
+  through the same `withShelfNames`. The chooser is `--dialog-w-sm` wide and its
+  title wraps (`overflow-wrap: anywhere`), so no set name can run out of it.
 - **Every set write is `setWrite` in the store:** the call, a full refetch
   (coverage moves with membership), and a receipt whose Undo is the inverse call
   — a delete is undone by recreating the set from the snapshot the route returns,

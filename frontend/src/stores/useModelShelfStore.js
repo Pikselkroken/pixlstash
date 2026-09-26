@@ -30,6 +30,7 @@ import {
   capabilityLabel,
   compareGroups,
   defaultSortDirection,
+  deriveModelName,
   fileKindLabel,
   locationState,
   presentCopies,
@@ -1629,7 +1630,41 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * one would read as the set having gone. `models` is the ON-SHELF members, the
    * ones a tray row can select; the slots draw every member from `set`.
    */
-  const handMadeSets = computed(() => workflowSets.value.handMade ?? []);
+  const handMadeSets = computed(() =>
+    (workflowSets.value.handMade ?? []).map(withShelfNames),
+  );
+
+  /**
+   * A set with every member called what the shelf calls it (#1520 feedback).
+   *
+   * The server names a member by its stored display name or its FILENAME, so a
+   * set named after its checkpoint read "realvisXL_v5.safetensors" while the
+   * shelf row beside it read "RealVis XL v5". On the shelf, a member takes the
+   * row's own `modelName`; off it, the label it was kept under, with a filename
+   * run through the same `deriveModelName` the shelf uses. Every set this store
+   * hands out or names in a receipt goes through here, so one name is shown
+   * everywhere.
+   */
+  function withShelfNames(set) {
+    if (!set) return set;
+    const byId = new Map(rows.value.map((row) => [row.id, row]));
+    return {
+      ...set,
+      members: (set.members ?? []).map((member) => {
+        const row = member.id != null ? byId.get(member.id) : null;
+        const kept = member.label || member.name || "";
+        const name = row
+          ? modelName(row).text || member.name
+          : (/\.[a-z0-9]{2,12}$/i.test(kept) && deriveModelName(kept)) || kept;
+        return { ...member, name: name || member.name };
+      }),
+    };
+  }
+
+  /** What a set is called, in the shelf's names - for receipts. */
+  function setLabel(set) {
+    return handMadeName(withShelfNames(set));
+  }
   const handMadeGroups = computed(() =>
     handMadeSets.value.map((set) => ({
       key: `hand:${set.id}`,
@@ -1897,7 +1932,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   async function createHandMadeSet(body = {}) {
     const created = await setWrite(() => createWorkflowSet(body), {
       receipt: (set) =>
-        `Made "${handMadeName(set)}" with ${(set.members ?? []).length} ${
+        `Made "${setLabel(set)}" with ${(set.members ?? []).length} ${
           (set.members ?? []).length === 1 ? "model" : "models"
         }.`,
       // Through the delete verb, not a bare call: this receipt stays up while
@@ -1920,7 +1955,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     const next = String(name ?? "").trim() || null;
     if (next === before) return Promise.resolve(set);
     return setWrite(() => renameWorkflowSet(set.id, next), {
-      receipt: (renamed) => `Renamed the set "${handMadeName(renamed)}".`,
+      receipt: (renamed) => `Renamed the set "${setLabel(renamed)}".`,
       undo: () => renameWorkflowSet(set.id, before),
       failure: "The set could not be renamed.",
     });
@@ -1949,7 +1984,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       {
         receipt: ({ deleted, failed }) =>
           (deleted.length === 1
-            ? `Deleted the set "${handMadeName(deleted[0])}". No file was touched.`
+            ? `Deleted the set "${setLabel(deleted[0])}". No file was touched.`
             : `Deleted ${deleted.length} sets. No file was touched.`) +
           (failed
             ? ` ${failed} could not be deleted and ${failed === 1 ? "is" : "are"} still there.`
@@ -1981,8 +2016,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       {
         receipt: ({ added }) =>
           added.length
-            ? `Added ${added.length} ${added.length === 1 ? "model" : "models"} to "${handMadeName(set)}".`
-            : `Nothing added: "${handMadeName(set)}" already holds ${
+            ? `Added ${added.length} ${added.length === 1 ? "model" : "models"} to "${setLabel(set)}".`
+            : `Nothing added: "${setLabel(set)}" already holds ${
                 members.length === 1 ? "it" : "them"
               }.`,
         undo: ({ added }) =>
@@ -1999,7 +2034,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     if (!sha256s.length) return Promise.resolve(null);
     return setWrite(() => removeWorkflowSetMembers(set.id, sha256s), {
       receipt: ({ removed }) =>
-        `Took ${removed.length} ${removed.length === 1 ? "model" : "models"} off "${handMadeName(set)}". The ${
+        `Took ${removed.length} ${removed.length === 1 ? "model" : "models"} off "${setLabel(set)}". The ${
           removed.length === 1 ? "file stays" : "files stay"
         } on the shelf.`,
       undo: ({ removed }) =>

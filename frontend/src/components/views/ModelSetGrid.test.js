@@ -1062,8 +1062,9 @@ describe("hand-made sets (#1520)", () => {
       expect(card.attributes("aria-label")).toContain("grouped by you");
       expect(card.text()).toContain("Grouped by you");
     }
-    // Named after its checkpoint, and "Untitled set" without one.
-    expect(cards[0].attributes("aria-label")).toMatch(/^realvisXL_v5/);
+    // Named after its checkpoint, in the shelf's own name for it, and
+    // "Untitled set" without one.
+    expect(cards[0].attributes("aria-label")).toMatch(/^realvisXL v5/);
     expect(cards[1].attributes("aria-label")).toMatch(/^Untitled set/);
     expect(cards[0].text()).not.toContain("Incomplete");
     expect(cards[1].text()).toContain("Incomplete: no checkpoint");
@@ -1088,7 +1089,7 @@ describe("hand-made sets (#1520)", () => {
     const names = wrapper
       .findAll('[data-testid="model-set-card"]')
       .map((card) => card.attributes("aria-label").split(",")[0]);
-    expect(names).toEqual(["realvisXL_v5", "juggernautXL_v9"]);
+    expect(names).toEqual(["realvisXL v5", "juggernautXL_v9"]);
   });
 
   it("selects the SET on a hand-made card, never a file, and deletes it with Delete and an Undo", async () => {
@@ -1362,7 +1363,7 @@ describe("hand-made sets (#1520)", () => {
     await wrapper.vm.$nextTick();
 
     const offer = wrapper.find('[data-testid="base-model-offer"]');
-    expect(offer.text()).toContain("realvisXL_v5 has no base model");
+    expect(offer.text()).toContain("realvisXL v5 has no base model");
     // Pre-filled from the shelf's own guess, never stored until confirmed.
     const set = offer.findAll("button").find((b) => b.text() === "Set SDXL");
     expect(set).toBeTruthy();
@@ -1437,6 +1438,28 @@ describe("hand-made sets (#1520)", () => {
     expect(wrapper.find('[data-testid="base-model-offer"]').exists()).toBe(
       false,
     );
+  });
+
+  it("calls a set and its members what the shelf calls them, never the filename", async () => {
+    const onShelf = slotMember(1, "RealVisXL_V5.safetensors", "checkpoint", {
+      filename: "RealVisXL_V5.safetensors",
+    });
+    const gone = slotMember(5, "Film_Grain_XL.safetensors", "lora", {
+      on_shelf: false,
+      id: null,
+    });
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "RealVisXL_V5.safetensors", "checkpoint")],
+      handMade: [handSet(10, [onShelf, gone])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+
+    const card = wrapper.find('[data-testid="model-set-card"]');
+    expect(card.attributes("aria-label")).toMatch(/^RealVisXL V5,/);
+    const panel = wrapper.find('[data-testid="model-set-slots-panel"]');
+    expect(panel.text()).not.toContain(".safetensors");
+    expect(panel.text()).toContain("Film Grain XL");
   });
 
   it("marks a member whose file left the shelf, and does not let it be selected", async () => {

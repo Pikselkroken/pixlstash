@@ -1569,6 +1569,7 @@ import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
 import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
 import WorkflowSetRenameDialog from "../panels/WorkflowSetRenameDialog.vue";
+import { handMadeName } from "../../utils/workflowSets";
 import WorkflowSetSelectionBar from "../panels/WorkflowSetSelectionBar.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
@@ -1846,7 +1847,7 @@ async function askAndDelete(permanent) {
   const inSets = holding.length
     ? ` ${many ? "They stay" : "It stays"} in ${
         holding.length === 1
-          ? `your set "${holding[0].name || "Untitled set"}"`
+          ? `your set "${handMadeName(holding[0])}"`
           : `${holding.length} of your workflow sets`
       }, marked Not on shelf. To take ${many ? "them" : "it"} off a set only, use Remove from set.`
     : "";
