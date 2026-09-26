@@ -1739,7 +1739,9 @@ the shelf's workflow sets section) and served as `hand_made` on
   model, so when a checkpoint with none goes in (the popup, Fill, or New
   workflow set with this checkpoint), the store records it in `checkpointAdded`
   and the tray shows one line with a `BaseModelInput` pre-filled from the
-  shelf's fuzzy guess, **Set** and **Not now**. Set is the shelf's own
+  shelf's fuzzy guess (drawn as a `tbm-input`, with a placeholder: bare, the
+  combobox rendered as nothing visible), **Set** and **Not now**. Set is never
+  disabled; pressed with the field empty it says what is missing and focuses it. Set is the shelf's own
   `editModelIds` write followed by a sets refetch; Not now, or leaving the tray,
   drops the offer for good and leaves Set base model on the shelf menu.
 - **Every set write is `setWrite` in the store:** the call, a full refetch

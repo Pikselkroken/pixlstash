@@ -1410,6 +1410,23 @@ describe("hand-made sets (#1520)", () => {
       false,
     );
 
+    // With no guess the field is empty and Set still answers: it says what
+    // is missing instead of greying out with no reason.
+    store.checkpointAdded = { setId: 10, modelId: 1 };
+    await wrapper.vm.$nextTick();
+    const empty = wrapper.find('[data-testid="base-model-offer"]');
+    expect(empty.find("input").attributes("placeholder")).toContain(
+      "Type a base model",
+    );
+    const setButton = empty.findAll("button").find((b) => b.text() === "Set");
+    expect(setButton.attributes("disabled")).toBeUndefined();
+    await setButton.trigger("click");
+    expect(empty.text()).toContain("Type or pick a base model first.");
+    const { editModels } = await import("../../api/modelShelf");
+    expect(editModels).not.toHaveBeenCalled();
+    store.checkpointAdded = null;
+    await wrapper.vm.$nextTick();
+
     // A checkpoint that already has one is never asked about.
     store.checkpointAdded = { setId: 10, modelId: 1 };
     store.workflowSets = {

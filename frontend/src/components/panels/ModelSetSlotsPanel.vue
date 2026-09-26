@@ -94,21 +94,35 @@
           ><strong>{{ baseOffer.name }}</strong> has no base model. Suggestions
           in this set follow it.</span
         >
+        <!-- The field is the shelf's own base-model combobox, drawn with the
+             app's input style: bare, it rendered as nothing a reader could see
+             to type into. -->
         <BaseModelInput
+          ref="baseInputEl"
           v-model="baseValue"
-          class="mss__baseinput"
+          class="tbm-input mss__baseinput"
+          placeholder="Type a base model, e.g. SDXL 1.0"
+          aria-label="Base model"
+          :aria-describedby="baseHint ? `${panelId}-base-hint` : undefined"
           @confirm="submitBase"
           @cancel="emit('dismiss-base')"
         />
-        <AppButton
-          variant="primary"
-          size="sm"
-          :disabled="!baseValue.trim()"
-          @click="submitBase"
-          >{{ baseValue.trim() ? `Set ${baseValue.trim()}` : "Set" }}</AppButton
-        >
+        <!-- Never disabled: a Set that greys out with nothing saying why is a
+             dead end. Pressed with the field empty it says what is missing and
+             puts the cursor where to fix it. -->
+        <AppButton variant="primary" size="sm" @click="submitBase">{{
+          baseValue.trim() ? `Set ${baseValue.trim()}` : "Set"
+        }}</AppButton>
         <AppButton variant="ghost" size="sm" @click="emit('dismiss-base')"
           >Not now</AppButton
+        >
+        <span
+          v-if="baseHint"
+          :id="`${panelId}-base-hint`"
+          class="mss__basehint"
+          role="status"
+          >{{ baseHint }}</span
+        >
         >
       </div>
     </div>
@@ -271,17 +285,29 @@ const slots = computed(() => setSlots(props.set));
 
 /** The offer's field, starting from the shelf's own guess when it has one. */
 const baseValue = ref("");
+const baseHint = ref("");
+const baseInputEl = ref(null);
 watch(
   () => props.baseOffer,
   (offer) => {
     baseValue.value = offer?.guess ?? "";
+    baseHint.value = "";
   },
   { immediate: true },
 );
+watch(baseValue, () => {
+  if (baseValue.value.trim()) baseHint.value = "";
+});
 
 function submitBase() {
   const value = baseValue.value.trim();
-  if (value) emit("set-base", value);
+  if (value) {
+    emit("set-base", value);
+    return;
+  }
+  baseHint.value = "Type or pick a base model first.";
+  // The combobox's root IS the input, so its element takes the focus.
+  (baseInputEl.value?.$el ?? baseInputEl.value)?.focus?.();
 }
 
 const incomplete = computed(
@@ -430,7 +456,14 @@ const notchStyle = computed(() => {
 }
 
 .mss__baseinput {
-  flex: 0 1 12rem;
+  flex: 0 1 14rem;
+  width: auto;
+}
+
+.mss__basehint {
+  flex-basis: 100%;
+  font-size: var(--text-xs);
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 .msp__pill {
