@@ -16,6 +16,7 @@ import io
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import zipfile
@@ -1272,6 +1273,279 @@ def test_image_stops_when_the_plugin_says_its_model_is_missing(tmp_path, capsys)
     captured = capsys.readouterr()
     assert "Stopping rather than fetching them" in captured.err
     assert "Ran over" not in captured.out
+
+
+#: Every splice below goes straight after the template's imports.
+_IMPORTS = "from pixlstash.tagger_plugins.base import TaggerPlugin\n"
+
+#: A process started without the word "subprocess" in the source, which is
+#: the issue's case against an `ast` scan: this is invisible to one.
+_SPAWN = (
+    '__import__("subpro" + "cess").run([__import__("sys").executable, "-c", "pass"])'
+)
+
+
+def _reaching(tmp_path: Path, *lines: str, name: str = "mine.py") -> Path:
+    """Write a copy of the template whose module body runs *lines*."""
+    return _write(
+        tmp_path / name, _template((_IMPORTS, _IMPORTS + "\n".join(lines) + "\n"))
+    )
+
+
+def test_a_plugin_that_reaches_for_nothing_says_so_with_its_caveat(
+    tmp_path, capsys, monkeypatch
+):
+    """Nothing seen is said as nothing seen, never as "safe".
+
+    A fresh copy of the template would get a `.pyc` beside it on import, which
+    the import system writes, not the plugin. Bytecode writing is switched off
+    inside the window rather than filtered out of the report, so there is no
+    `__pycache__` for a plugin to hide its own writes in.
+    """
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
+    source = _write(tmp_path / "mine.py", _template())
+
+    assert _check(source) == cli.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert "none of what it watches for was seen" in out
+    assert "That is not a clean bill" in out
+    assert "a plugin written to hide from this can" in out
+    assert not (tmp_path / "__pycache__").exists()
+
+
+def test_a_spawned_process_is_reported(tmp_path, capsys):
+    source = _reaching(tmp_path, _SPAWN)
+
+    assert _check(source) == cli.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert f"started {sys.executable} -c pass" in out
+    assert "This is what was seen, not what the plugin can do" in out
+
+
+def test_a_connection_is_reported(tmp_path, capsys):
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        source = _reaching(
+            tmp_path,
+            f'__import__("socket").create_connection(("127.0.0.1", {port})).close()',
+        )
+
+        assert _check(source) == cli.EXIT_OK
+
+    assert f"connected to 127.0.0.1:{port}" in capsys.readouterr().out
+
+
+def test_a_write_is_reported_by_directory_and_a_read_is_not(tmp_path, capsys):
+    """Grouped by directory, because a model download is one fact, not 400.
+
+    The read is of a file in the same folder, so counting it would make 31.
+    """
+    source = _reaching(
+        tmp_path,
+        "import os",
+        'OUT = os.path.join(os.path.dirname(__file__), "out")',
+        "os.makedirs(OUT, exist_ok=True)",
+        "for i in range(30):",
+        '    open(os.path.join(OUT, f"{i}.txt"), "w").close()',
+        "open(__file__).read()",
+    )
+
+    assert _check(source) == cli.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert f"wrote 30 files under {tmp_path}" in out
+    assert out.count("wrote ") == 1
+
+
+def test_a_write_after_changing_directory_is_placed_where_it_landed(tmp_path, capsys):
+    """Placed against the directory of the moment, not the checker's.
+
+    Resolved at print time instead, this reports the write under wherever the
+    command was run from: a confidently wrong directory.
+    """
+    # Inside the plugin's folder, so it is bucketed as that folder, which the
+    # directory the command runs from is not.
+    elsewhere = tmp_path / "plugin" / "elsewhere"
+    elsewhere.mkdir(parents=True)
+    source = _reaching(
+        tmp_path / "plugin",
+        "import os",
+        "_back = os.getcwd()",
+        f"os.chdir({str(elsewhere)!r})",
+        'open("note.txt", "a").close()',
+        "os.chdir(_back)",
+    )
+
+    assert _check(source) == cli.EXIT_OK
+    assert f"wrote 1 file under {tmp_path / 'plugin'}" in capsys.readouterr().out
+
+
+def test_a_datagram_is_reported_without_a_connect(tmp_path, capsys):
+    """UDP needs no connect(), so an empty report there would be false."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        source = _reaching(
+            tmp_path,
+            "import socket as _s",
+            f'_s.socket(_s.AF_INET, _s.SOCK_DGRAM).sendto(b"x", ("127.0.0.1", {port}))',
+        )
+
+        assert _check(source) == cli.EXIT_OK
+
+    assert f"sent to 127.0.0.1:{port}" in capsys.readouterr().out
+
+
+def test_a_relative_write_is_still_reported_after_its_directory_is_gone(
+    tmp_path, capsys
+):
+    """The hook keeps the path relative when there is no working directory.
+
+    So the summary has to cope with the same case rather than raising out of
+    the command after the plugin has already run.
+    """
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    source = _reaching(
+        tmp_path / "plugin",
+        "import os",
+        f"os.chdir({str(gone)!r})",
+        f"os.rmdir({str(gone)!r})",
+        # The audit event fires before the call fails for want of a directory.
+        "try:",
+        '    open("left.txt", "w")',
+        "except OSError:",
+        "    pass",
+    )
+    back = os.getcwd()
+    try:
+        assert _check(source) == cli.EXIT_OK
+    finally:
+        os.chdir(back)
+
+    assert "wrote 1 file under" in capsys.readouterr().out
+
+
+def test_a_move_is_reported_where_the_file_landed(tmp_path, capsys):
+    """A move into somewhere sensitive is named by its destination.
+
+    The source is in the temp directory, so without the destination the only
+    line would say "under /tmp" and the plugin's folder would never appear.
+    """
+    moved = _write(tmp_path / "source" / "moved.txt", "x")
+    source = _reaching(
+        tmp_path / "plugin",
+        "import os",
+        f"os.replace({str(moved)!r}, os.path.join(os.path.dirname(__file__), 'x'))",
+    )
+
+    assert _check(source) == cli.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert f"wrote 1 file under {tmp_path / 'plugin'}" in out
+    assert "removed or moved 1 file under" in out
+
+
+def _times_started(out: str) -> int:
+    """Return how often the `_SPAWN` program was reported started."""
+    match = re.search(
+        re.escape(f"started {sys.executable} -c pass") + r"(?:  \((\d+) times\))?",
+        out,
+    )
+    assert match, out
+    return int(match.group(1) or 1)
+
+
+def test_an_attribute_the_plugin_computes_is_observed_too(tmp_path, capsys):
+    """A property is the plugin's code, so reading it opens a window.
+
+    The flag is read by `plugin_schema()` as well, so the test compares a run
+    with `--image` against one without: the image run reads it once more, and
+    that read has to be counted.
+    """
+    source = _write(
+        tmp_path / "mine.py",
+        _template(
+            (
+                "    supports_descriptions = True\n",
+                "    @property\n"
+                "    def supports_descriptions(self):\n"
+                f"        {_SPAWN}\n"
+                "        return True\n",
+            )
+        ),
+    )
+    image = _write(tmp_path / "sample.jpg", "not really a jpeg")
+
+    assert _check(source) == cli.EXIT_OK
+    without_image = _times_started(capsys.readouterr().out)
+    assert _check(source, "--image", str(image)) == cli.EXIT_OK
+    assert _times_started(capsys.readouterr().out) == without_image + 1
+
+
+def test_what_it_reached_for_is_reported_even_when_it_fails_to_import(tmp_path, capsys):
+    """The failing plugin is the one whose report matters most."""
+    source = _reaching(tmp_path, _SPAWN, 'raise RuntimeError("boom")')
+
+    assert _check(source) == cli.EXIT_REFUSED
+
+    captured = capsys.readouterr()
+    assert "boom" in captured.err
+    assert f"started {sys.executable} -c pass" in captured.out
+
+
+def test_image_run_is_observed_but_picking_a_device_is_not(
+    tmp_path, capsys, monkeypatch
+):
+    """Picking a device imports torch, which is the checker's doing.
+
+    So a write made while choosing it must not be reported as the plugin's,
+    and the spawn inside the plugin's own `init()` must be.
+    """
+    from pixlstash import plugin_check
+
+    sentinel = tmp_path / "device" / "picked.txt"
+    sentinel.parent.mkdir()
+
+    def device():
+        open(sentinel, "w").close()
+        return "cpu"
+
+    monkeypatch.setattr(plugin_check, "_device", device)
+    source = _write(
+        tmp_path / "plugin" / "mine.py",
+        _template(
+            ("self._model = object()", f"{_SPAWN}\n        self._model = object()")
+        ),
+    )
+    image = _write(tmp_path / "sample.jpg", "not really a jpeg")
+
+    assert _check(source, "--image", str(image)) == cli.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert sentinel.exists()
+    assert f"started {sys.executable} -c pass" in out
+    assert "wrote " not in out
+
+
+def test_interrupting_a_hung_import_prints_what_was_seen(tmp_path, capsys):
+    """Ctrl-C on a plugin that never returns turns the hang into a finding.
+
+    The raise stands in for the Ctrl-C. It only reaches the CLI because the
+    loader catches `(Exception, SystemExit)` rather than `BaseException`; a
+    wider catch there fails this rather than silently eating the interrupt.
+    """
+    source = _reaching(tmp_path, _SPAWN, "raise KeyboardInterrupt")
+
+    assert _check(source) == cli.EXIT_REFUSED
+
+    out = capsys.readouterr().out
+    assert "had not returned from load" in out
+    assert f"started {sys.executable} -c pass" in out
 
 
 def test_schema_types_match_the_component_that_renders_them():

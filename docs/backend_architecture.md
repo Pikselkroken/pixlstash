@@ -1192,10 +1192,9 @@ the plugin's contract, never its intent. A report a user reads as a safety
 verdict is worse than no report, and would also be the second time a
 "reassuring" plugin surface got the trust boundary wrong (the `plugins list`
 listing already has to say out loud that it imports nothing and therefore cannot
-see an import-time failure). Observing what a plugin *reaches for* — an audit
-hook over `socket.connect` / `subprocess.Popen` / writes — is tracked separately
-and is disclosure, not containment; real containment is OS-level and out of
-scope here.
+see an import-time failure). What it does report about behaviour is what the
+plugin was *seen reaching for*, which is disclosure, not containment (below);
+real containment is OS-level and out of scope here.
 
 - **The load is `TaggerPluginManager.load_plugin_from_path`, the server's own
   loader** — extracted from the body of `_load_user_plugins`, which now calls
@@ -1254,6 +1253,53 @@ scope here.
   inside `init()` — which is where `from_pretrained_local_first` does it, and so
   where an author copying the shipped captioners will do it — is already past
   that gate.
+- **What it reports it reached for, and what that is not** (issue #979). A
+  `sys.addaudithook` observer, `plugin_check.Recorder`, is switched on only
+  around calls into the plugin — `load_plugin_from_path`, each
+  `plugin_schema()`, and under `--image` `default_params`, `needs_download`,
+  `setup`, `init` and the caption/tag call — and keeps the events in
+  `WATCHED_EVENTS`: host lookups, connections, programs started (`subprocess`,
+  `os.system`/`exec`/`spawn`/`posix_spawn`/`fork`/`startfile`), `ctypes.dlopen`,
+  `open` in a writing mode or with writing flags, `os.truncate`, links, and
+  removes/renames/`rmdir`/`rmtree`. Paths are made absolute inside the hook, so a
+  plugin that changes directory to write is still placed correctly, and a move
+  is reported at both ends (its destination as a write). The window covers
+  attribute reads too, since a property is the plugin's code as well.
+  Reads are dropped inside the hook, since every import reads dozens of `.pyc`
+  files. The CLI prints a grouped summary on **every** outcome, failures
+  included: a plugin that fails to import may have reached for things first.
+  Files and native libraries are **grouped by root**, not listed — the plugin's
+  own folder, the temp directory, a child of `~/.cache` (so a model download is
+  one `~/.cache/huggingface` line), else the parent directory.
+  - **The checker's own work stays outside the window.** Its `ast` reads are
+    before or after it, and `_device()`, which imports torch to pick a device,
+    runs *between* the `needs_download` and `setup` windows so torch's own
+    library loads are not reported as the plugin's.
+  - **Bytecode writes are prevented, not filtered.** `sys.dont_write_bytecode`
+    is set inside the window, so the import system writes no `.pyc` for the
+    plugin or a dependency it imports first. Filtering `__pycache__` out of the
+    report instead would hand a plugin a directory to hide writes in.
+  - **The hook lives for the rest of the process**, since there is no
+    `sys.removeaudithook`. It is installed lazily on the first window, never at
+    import, and `test_plugin_check_is_imported_only_by_the_cli` keeps the
+    module out of everything but `cli.py`, so the server never carries it.
+  - **Ctrl-C prints what had been seen.** A plugin that never returns from its
+    module body hangs this command exactly as it hangs the boot;
+    `KeyboardInterrupt` passes through the loader (which catches `(Exception,
+    SystemExit)`, not `BaseException`), and the CLI names the phase it was in
+    and prints the summary. Running the load in a subprocess with a timeout,
+    which would also survive a segfault or `os._exit()`, is a separate step.
+  - **It can be defeated, and nothing may say otherwise.** The hook cannot be
+    removed, but the recorder's list, the active-recorder global and
+    `sys.stdout` all live in the plugin's own interpreter, so a plugin that
+    imports `pixlstash.plugin_check` can blank the report. Code acting outside
+    the windows (a thread the plugin started), compiled extension modules and
+    other native code, and events not in the list are not seen either. What it
+    catches is the careless and the surprising — telemetry, a `pip install` at
+    import, an unannounced download — not a plugin written to evade it. So
+    every summary, empty or not, says it is what was *seen while this command
+    ran* and carries that blind-spot sentence, and an empty one says "that is
+    not a clean bill" rather than anything like "no network access".
 - **Only captioning plugins.** Image filters have a different base class and a
   different parameter schema (`string` + `enum`, no `select`), so `plugins test`
   says so and stops rather than reporting "No TaggerPlugin subclass found",

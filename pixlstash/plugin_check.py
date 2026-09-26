@@ -8,8 +8,8 @@ server, wait for the boot, read the error row under Settings › Auto-tagging.
 about whether a plugin is safe to install, because finding out whether it loads
 means *running it*: the module body - and, with ``--image``, the model - execute
 in this process, with the caller's permissions, exactly as they would in the
-server's.  Nothing is sandboxed and nothing inspects what the code does, so the
-only safe input is a plugin the caller would have installed anyway.  Anything
+server's.  Nothing is sandboxed, so the only safe input is a plugin the caller
+would have installed anyway.  Anything
 printed here is a statement about the plugin's *contract*, never about its
 intent, and no wording in this module or its CLI verb may blur the two: a
 report read as a safety verdict is worse than no report.
@@ -40,10 +40,25 @@ falls through to the component's ``v-else`` and becomes a text box; so does a
 Passing here is not the same as working in PixlStash.  A plugin that hangs at
 import hangs the server's boot, and it would hang this command too; nothing
 here says the captions are any good, and nothing here says the plugin is safe.
+
+**What the plugin reached for** is reported too, by a :class:`Recorder`: a
+``sys.addaudithook`` observer that is switched on only while the plugin's own
+code runs and collects the few audit events worth telling someone who is about
+to install it - connections, programs started, native libraries, files written
+or removed.  That is *disclosure, not containment*: the hook never blocks
+anything, and everything it records lives in the plugin's own interpreter,
+where a plugin written to hide from it can reach it too.  So its wording says what was seen
+while this command ran, never what the plugin does or is.  Once installed the
+hook stays for the life of the process, which is why this module must only ever
+be imported by the CLI (``test_plugin_check_is_imported_only_by_the_cli``).
 """
 
 from __future__ import annotations
 
+import os
+import sys
+import tempfile
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -88,6 +103,66 @@ REQUIRED_FIELD_KEYS = ("name", "default")
 #: label.
 RECOMMENDED_FIELD_KEYS = ("label", "type")
 
+#: Audit events worth telling someone who is about to install a plugin.
+#: Everything else (imports, every read, compile, exec) is noise at this moment.
+WATCHED_EVENTS = frozenset(
+    {
+        "socket.getaddrinfo",  # the host name; connect only sees the address
+        "socket.gethostbyname",
+        "socket.connect",  # also raised by connect_ex
+        "socket.sendto",  # UDP needs no connect
+        "socket.sendmsg",
+        "subprocess.Popen",
+        "os.system",
+        "os.exec",
+        "os.posix_spawn",
+        "os.spawn",
+        "os.fork",
+        "os.startfile",  # Windows
+        "os.startfile/2",  # Windows, with arguments
+        "ctypes.dlopen",
+        "open",  # kept only when the mode or flags write
+        "os.truncate",  # empties a file without opening it
+        "os.symlink",
+        "os.link",
+        "os.remove",  # also raised by os.unlink
+        "os.rename",  # also raised by os.replace
+        "os.rmdir",
+        "shutil.rmtree",
+    }
+)
+
+#: The file events, and which argument names the file they write or remove.
+_PATH_ARGUMENT = {
+    "open": 0,
+    "os.truncate": 0,
+    "os.symlink": 1,
+    "os.link": 1,
+    "os.remove": 0,
+    "os.rename": 0,
+    "os.rmdir": 0,
+    "shutil.rmtree": 0,
+}
+_WRITES = frozenset({"open", "os.truncate", "os.symlink", "os.link"})
+
+#: ``os.open`` reports flags rather than a mode string, so these mark a write.
+_WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_APPEND | os.O_TRUNC
+
+#: Lines printed per group before the rest are counted rather than listed.
+_MAX_LINES = 8
+
+#: Said under every report, empty or not: the report is what was seen, and a
+#: reader who takes it for what the plugin can do has been misled by it.
+BLIND_SPOTS = (
+    "it does not see anything the plugin did outside the calls into it (a "
+    "thread it started, say), compiled extension modules or other native code, "
+    "anything that only runs later in the server, or anything it does not "
+    "watch for, and a plugin written to hide from this can."
+)
+
+_active: Recorder | None = None
+_hook_installed = False
+
 
 @dataclass
 class PluginCheck:
@@ -115,6 +190,8 @@ class CheckReport:
     checked: list[PluginCheck]
     #: Load errors, worded as the server's Auto-tagging screen words them.
     failures: list[str]
+    #: What the plugin's code was seen reaching for while it ran.
+    reached: Recorder
 
     @property
     def ok(self) -> bool:
@@ -126,12 +203,279 @@ class CheckReport:
         )
 
 
-def check_plugin(path: str, image: str | None = None) -> CheckReport:
+class Recorder:
+    """Collects the watched audit events raised while plugin code runs.
+
+    Used as ``with recorder.watch(phase):`` around each call into the plugin,
+    and never around the checker's own work, so what it holds is what the
+    plugin reached for rather than what checking it cost. It can be entered
+    any number of times, one after the other.
+
+    Inside the window bytecode writing is switched off, so the import system
+    writes no ``.pyc`` for the plugin or a dependency it imports first. A write
+    under ``__pycache__`` is then the plugin's own, which is better than
+    filtering them out and handing a plugin a directory to hide writes in.
+    """
+
+    def __init__(self, plugin_dir: Path | None = None) -> None:
+        #: ``(event, args)`` in the order seen, args trimmed to what is printed.
+        self.events: list[tuple[str, tuple[Any, ...]]] = []
+        #: What the plugin was doing, while it was; ``None`` between windows.
+        self.phase: str | None = None
+        #: Writes under here are grouped as the plugin's own folder.
+        self.plugin_dir = plugin_dir
+        self._saved: tuple[Recorder | None, bool] | None = None
+
+    def watch(self, phase: str) -> Recorder:
+        """Name the phase the next window covers, for the Ctrl-C message."""
+        self.phase = phase
+        return self
+
+    def __enter__(self) -> Recorder:
+        global _active
+        _install_hook()
+        self._saved = (_active, sys.dont_write_bytecode)
+        sys.dont_write_bytecode = True
+        _active = self
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        global _active
+        _active, sys.dont_write_bytecode = self._saved
+        # Kept when an exception is on its way through, which is the
+        # KeyboardInterrupt the CLI names the phase from.
+        if exc_type is None:
+            self.phase = None
+
+    def summary(self) -> list[str]:
+        """Return the report, as lines, blind spots included.
+
+        Worded as what was *seen while this command ran* in every case,
+        including the empty one: "nothing seen" printed as "no network access"
+        would be a safety verdict this cannot give.
+        """
+        network: Counter[str] = Counter()
+        processes: Counter[str] = Counter()
+        libraries: dict[str, set[str]] = {}
+        written: dict[str, set[str]] = {}
+        removed: dict[str, set[str]] = {}
+        for event, args in self.events:
+            if event in ("socket.getaddrinfo", "socket.gethostbyname"):
+                network[f"looked up {_text(args[0])}"] += 1
+            elif event == "socket.connect":
+                network[f"connected to {_address(args[0])}"] += 1
+            elif event in ("socket.sendto", "socket.sendmsg"):
+                network[f"sent to {_address(args[0])}"] += 1
+            elif event == "os.fork":
+                processes["forked this process"] += 1
+            elif event == "os.system":
+                processes[f"ran the shell command {_clip(_text(args[0]))}"] += 1
+            elif event in ("os.startfile", "os.startfile/2"):
+                processes[f"opened {_text(args[0])} with its default program"] += 1
+            elif event in (
+                "subprocess.Popen",
+                "os.exec",
+                "os.posix_spawn",
+                "os.spawn",
+            ):
+                processes[f"started {_command(*args)}"] += 1
+            elif event == "ctypes.dlopen":
+                name = "this program's own symbols" if args[0] is None else args[0]
+                name = _text(name)
+                libraries.setdefault(os.path.dirname(name) or name, set()).add(name)
+            else:  # a file event, trimmed by the hook to its path(s)
+                self._bucket(written if event in _WRITES else removed, args[0])
+                if event == "os.rename":  # and the move's destination
+                    self._bucket(written, args[1])
+
+        lines = _counted(network) + _counted(processes)
+        lines += _grouped(libraries, "loaded {n} native {what} from {where}")
+        lines += _grouped(written, "wrote {n} {what} under {where}")
+        lines += _grouped(removed, "removed or moved {n} {what} under {where}")
+        if not lines:
+            return [
+                "While this command ran, none of what it watches for was seen "
+                "(lookups and connections, programs started, libraries loaded "
+                "through ctypes, files written or removed).",
+                f"That is not a clean bill: {BLIND_SPOTS}",
+            ]
+        return [
+            "While this command ran, the plugin's code:",
+            *(f"  {line}" for line in lines),
+            f"This is what was seen, not what the plugin can do: {BLIND_SPOTS}",
+        ]
+
+    def _bucket(self, buckets: dict[str, set[str]], path: Any) -> None:
+        """File *path* under the root a reader would recognise it by.
+
+        Grouped rather than listed: a model download writes hundreds of files
+        into one cache, which is one fact and not hundreds.
+        """
+        if isinstance(path, int):
+            buckets.setdefault("an open file descriptor", set()).add(str(path))
+            return
+        try:
+            target = Path(os.path.abspath(_text(path)))  # made absolute by the hook
+        except (OSError, ValueError):
+            # The working directory is gone, which is when the hook kept this
+            # path relative too. Reported as it was given rather than raised.
+            target = Path(_text(path))
+        cache = Path.home() / ".cache"
+        for root in (self.plugin_dir, Path(tempfile.gettempdir())):
+            if root is not None and target.is_relative_to(root):
+                break
+        else:
+            if target.is_relative_to(cache) and target != cache:
+                root = cache / target.relative_to(cache).parts[0]
+            else:
+                root = target.parent
+        buckets.setdefault(_shown(root), set()).add(str(target))
+
+
+def _install_hook() -> None:
+    """Install the audit hook, once, the first time a window opens.
+
+    Never at import: importing this module changes nothing about a process,
+    running a check does. There is no way to remove the hook afterwards, which
+    is fine for a short-lived CLI and is why the server must never import this.
+    """
+    global _hook_installed
+    if not _hook_installed:
+        sys.addaudithook(_audit)
+        _hook_installed = True
+
+
+def _audit(event: str, args: tuple[Any, ...]) -> None:
+    """Record *event* on the active recorder, if it is one worth reporting.
+
+    Runs on every audit event in the process for the rest of its life, so it
+    returns at once when there is nothing to do. It opens nothing and resolves
+    no symlinks, which would raise events of its own; making a path absolute
+    only reads the working directory, which raises none.
+    """
+    recorder = _active
+    if recorder is None or event not in WATCHED_EVENTS:
+        return
+    if event == "open":
+        _path, mode, flags = args
+        # `mode` is a string from open(), None from os.open(); reads are every
+        # .pyc of every import and never worth a line.
+        if (
+            not (mode and any(c in mode for c in "wax+"))
+            and not (flags or 0) & _WRITE_FLAGS
+        ):
+            return
+    if event == "os.rename":
+        # Both ends: the data lands at the destination, which is the
+        # directory worth naming when the move is into somewhere sensitive.
+        args = (_absolute(args[0]), _absolute(args[1]))
+    elif event in _PATH_ARGUMENT:
+        args = (_absolute(args[_PATH_ARGUMENT[event]]),)
+    elif event in ("socket.connect", "socket.sendto", "socket.sendmsg"):
+        args = (args[1],)  # the address; the socket object is not kept
+    recorder.events.append((event, args))
+
+
+def _absolute(path: Any) -> Any:
+    """Return *path* made absolute against the working directory right now.
+
+    Now rather than when the summary is printed: a plugin that changes
+    directory, writes and changes back would otherwise be reported as writing
+    wherever the checker happens to be. A path relative to a ``dir_fd`` is
+    still placed against the working directory, which is wrong, and rare.
+    """
+    if not isinstance(path, (str, bytes, os.PathLike)):
+        return path  # a file descriptor, bucketed as one
+    try:
+        return os.path.abspath(path)
+    except (OSError, ValueError):
+        # A deleted working directory. Kept relative rather than raised: an
+        # exception here would fail the plugin's own call, and this hook must
+        # never change what the plugin does. It is still reported, relative.
+        return path
+
+
+def _text(value: Any) -> str:
+    """Return *value* as text, decoding a bytes path the way the OS would."""
+    return os.fsdecode(value) if isinstance(value, bytes) else str(value)
+
+
+def _clip(text: str, limit: int = 60) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _address(address: Any) -> str:
+    """Return a connect() address as ``host:port``, or a socket's path."""
+    if isinstance(address, tuple) and len(address) >= 2:
+        host = _text(address[0])
+        return f"[{host}]:{address[1]}" if ":" in host else f"{host}:{address[1]}"
+    return _text(address)
+
+
+def _command(*args: Any) -> str:
+    """Return the program and a clipped argument list from a spawn event.
+
+    ``os.spawn`` puts a mode first; every other spawn event starts with the
+    executable, which ``subprocess`` leaves ``None`` on Windows, where the
+    argument list (or the whole command line, as one string) says it instead.
+    """
+    if args and isinstance(args[0], int):
+        args = args[1:]
+    executable, argv = args[0], args[1]
+    if isinstance(argv, (str, bytes)):
+        return _clip(_text(executable or argv))
+    argv = [_text(a) for a in argv]
+    program = _text(executable) if executable is not None else argv[0]
+    return _clip(" ".join([program, *argv[1:]]))
+
+
+def _shown(path: Path) -> str:
+    """Return *path* with the home directory written as ``~``."""
+    home = Path.home()
+    return (
+        f"~{os.sep}{path.relative_to(home)}" if path.is_relative_to(home) else str(path)
+    )
+
+
+def _counted(lines: Counter[str]) -> list[str]:
+    """Return each distinct line once, with how often it was seen."""
+    shown = [
+        line if count == 1 else f"{line}  ({count} times)"
+        for line, count in lines.items()
+    ]
+    return _capped(shown, "more")
+
+
+def _grouped(buckets: dict[str, set[str]], template: str) -> list[str]:
+    """Return one line per bucket, largest first."""
+    shown = []
+    for where, items in sorted(buckets.items(), key=lambda item: -len(item[1])):
+        n = len(items)
+        if "native" in template:
+            what = "library" if n == 1 else "libraries"
+        else:
+            what = "file" if n == 1 else "files"
+        shown.append(template.format(n=n, what=what, where=where))
+    return _capped(shown, "more directories")
+
+
+def _capped(lines: list[str], more: str) -> list[str]:
+    if len(lines) <= _MAX_LINES:
+        return lines
+    return [*lines[:_MAX_LINES], f"+{len(lines) - _MAX_LINES} {more}"]
+
+
+def check_plugin(
+    path: str, image: str | None = None, recorder: Recorder | None = None
+) -> CheckReport:
     """Load the plugin at *path* as the server does and check its contract.
 
     Args:
         path: A ``*.py`` file, or a folder holding ``__init__.py``.
         image: Optional image to caption or tag with the schema's defaults.
+        recorder: Where to record what the plugin reaches for. The CLI passes
+            its own so that it can still print it after a Ctrl-C; otherwise a
+            fresh one is made.
 
     Returns:
         A :class:`CheckReport`.
@@ -158,6 +502,13 @@ def check_plugin(path: str, image: str | None = None) -> CheckReport:
         raise PluginError(f"{image} is not a file.")
 
     failures = _ineligible(target)
+    if recorder is None:
+        recorder = Recorder()
+    # abspath, not resolve: the events carry the paths as the plugin spelled
+    # them, and a symlinked temp directory would otherwise never match.
+    recorder.plugin_dir = Path(
+        os.path.abspath(target if target.is_dir() else target.parent)
+    )
 
     # No user_dir and no first-party plugins: this loads the one thing it was
     # pointed at, and never the installed plugins beside it or a torch-heavy
@@ -166,7 +517,8 @@ def check_plugin(path: str, image: str | None = None) -> CheckReport:
     # cannot re-enter discovery and wipe what was just loaded.
     manager = TaggerPluginManager(user_dir=None, first_party=[])
     manager.reload()
-    manager.load_plugin_from_path(str(target))
+    with recorder.watch("load"):
+        manager.load_plugin_from_path(str(target))
 
     failures += [
         f"{error['name']}: {error['message']}" for error in manager.list_errors()
@@ -180,10 +532,14 @@ def check_plugin(path: str, image: str | None = None) -> CheckReport:
 
     checked = []
     for plugin in manager.get_all_plugins():
-        schema = plugin.plugin_schema()
+        # A plugin may override this, so it is the plugin's code as well.
+        # So may `name` be, as a property.
+        with recorder.watch("plugin_schema()"):
+            schema = plugin.plugin_schema()
+            name = plugin.name
         problems, warnings = _schema_findings(schema)
         check = PluginCheck(
-            name=plugin.name, schema=schema, problems=problems, warnings=warnings
+            name=name, schema=schema, problems=problems, warnings=warnings
         )
         if check.name in reserved:
             check.problems.append(
@@ -197,12 +553,14 @@ def check_plugin(path: str, image: str | None = None) -> CheckReport:
                 "other is skipped, so one of the two never runs."
             )
         if image is not None:
-            check.output, run_problems = _run_over_image(plugin, image)
+            check.output, run_problems = _run_over_image(plugin, image, recorder)
             check.problems.extend(run_problems)
         checked.append(check)
     if not checked:
         failures.extend(_wrong_kind_hint(target))
-    return CheckReport(path=target, checked=checked, failures=failures)
+    return CheckReport(
+        path=target, checked=checked, failures=failures, reached=recorder
+    )
 
 
 def _ineligible(target: Path) -> list[str]:
@@ -354,7 +712,9 @@ def _select_problems(where: str, definition: dict[str, Any]) -> list[str]:
     ]
 
 
-def _run_over_image(plugin: TaggerPlugin, image: str) -> tuple[Any | None, list[str]]:
+def _run_over_image(
+    plugin: TaggerPlugin, image: str, recorder: Recorder
+) -> tuple[Any | None, list[str]]:
     """Init the plugin and run it over one image, as the workflows do.
 
     This asks ``needs_download()`` first and stops if the answer is yes, so
@@ -370,43 +730,52 @@ def _run_over_image(plugin: TaggerPlugin, image: str) -> tuple[Any | None, list[
         ``(what came back, problems)``. The result is ``None`` when the plugin
         never got as far as returning anything.
     """
-    # Decided before anything is loaded: a plugin with neither capability flag
-    # has no method for this to call, and the workflows would never reach it
-    # either, so downloading its model and initialising it is work done for a
-    # call that is not going to happen. `_schema_findings` has already warned
-    # about the flags themselves.
-    if plugin.supports_descriptions:
-        call = "generate_descriptions"
-    elif plugin.supports_tags:
-        call = "tag_images"
-    else:
-        return None, []
-
     image_path = str(Path(image).expanduser().resolve())
-    parameters = plugin.default_params()
+    # Every read of the plugin is inside a window, attributes included: a
+    # property or `__getattr__` is the plugin's code as much as a method is.
+    with recorder.watch("--image run"):
+        # Decided before anything is loaded: a plugin with neither capability
+        # flag has no method for this to call, and the workflows would never
+        # reach it either, so downloading its model and initialising it is
+        # work done for a call that is not going to happen. `_schema_findings`
+        # has already warned about the flags themselves.
+        if plugin.supports_descriptions:
+            call = "generate_descriptions"
+        elif plugin.supports_tags:
+            call = "tag_images"
+        else:
+            return None, []
+        wants_device = hasattr(plugin, "setup")
+        parameters = plugin.default_params()
+        try:
+            if plugin.needs_download(parameters):
+                return None, [
+                    "needs_download() is True: the plugin says its model files "
+                    "are not on this machine. Stopping rather than fetching "
+                    "them - download it from Settings › Auto-tagging, then run "
+                    "this again."
+                ]
+        except Exception as exc:
+            return None, [f"needs_download() raised {type(exc).__name__}: {exc}"]
 
-    try:
-        if plugin.needs_download(parameters):
-            return None, [
-                "needs_download() is True: the plugin says its model files are "
-                "not on this machine. Stopping rather than fetching them - "
-                "download it from Settings › Auto-tagging, then run this again."
-            ]
-    except Exception as exc:
-        return None, [f"needs_download() raised {type(exc).__name__}: {exc}"]
+    # Outside the window: picking a device imports torch, which loads its own
+    # native libraries, and that is the checker's doing rather than the
+    # plugin's.
+    device = _device() if wants_device else None
 
-    try:
-        # Both workflows do this pair, in this order, before every batch.
-        if hasattr(plugin, "setup"):
-            plugin.setup(_device())
-        plugin.init(parameters)
-    except Exception as exc:
-        return None, [f"init() raised {type(exc).__name__}: {exc}"]
+    with recorder.watch("--image run"):
+        try:
+            # Both workflows do this pair, in this order, before every batch.
+            if wants_device:
+                plugin.setup(device)
+            plugin.init(parameters)
+        except Exception as exc:
+            return None, [f"init() raised {type(exc).__name__}: {exc}"]
 
-    try:
-        result = getattr(plugin, call)([image_path], parameters=parameters)
-    except Exception as exc:
-        return None, [f"{call}() raised {type(exc).__name__}: {exc}"]
+        try:
+            result = getattr(plugin, call)([image_path], parameters=parameters)
+        except Exception as exc:
+            return None, [f"{call}() raised {type(exc).__name__}: {exc}"]
 
     if not isinstance(result, dict):
         return result, [

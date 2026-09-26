@@ -69,10 +69,16 @@ exit code and you are scripting against "will this work", not "is this tidy".
 
 **It is a development aid, not a security scanner.** It does not tell you whether a plugin
 is safe — it *runs* it, in that process, with your permissions, exactly as the server
-would. Nothing is sandboxed and nothing inspects what the code does, so the rule for
-`plugins test` is the same as the rule for installing: only run a plugin you would have
+would. Nothing is sandboxed, so the rule for `plugins test` is the same as the rule for installing: only run a plugin you would have
 installed anyway. Checking somebody else's plugin with this command is not a way to find
 out whether you should trust it; by the time it prints anything, their code has run.
+
+It does end with what your code was *seen reaching for* while it ran: host lookups and
+connections, programs started, native libraries loaded, files written or removed, grouped
+by folder. A model download in `init()` shows up there as writes under
+`~/.cache/huggingface`; that is expected and not a problem. It is a list of what was seen,
+not a verdict: a plugin written to hide from it can, and an empty list does not mean a
+plugin is safe.
 
 Passing is a contract check and neither a quality one nor a safety one: nothing here says
 the captions are any good, and a plugin that hangs at import will hang the server's boot
