@@ -1478,9 +1478,15 @@ def _apply_v2(conn: sqlite3.Connection) -> None:
 
 
 def _backfill_component_roles(
-    conn: sqlite3.Connection, kinds: tuple[str, ...] = (FILE_UNKNOWN, FILE_CHECKPOINT)
+    conn: sqlite3.Connection,
+    kinds: tuple[str, ...] = (FILE_UNKNOWN, FILE_CHECKPOINT),
+    only_role: str | None = None,
 ) -> int:
-    """Re-file VAEs and text encoders that were registered before they had kinds.
+    """Re-file models whose role folder was not yet read when they were shelved.
+
+    Written for VAEs and text encoders (data version 1); data version 4 runs it
+    again for the ``unet/`` and ``diffusion_models/`` folders, restricted with
+    ``only_role`` so it cannot touch the folders the first pass already did.
 
     Every row on an existing shelf was classified by tensor markers and a
     parameter count alone, and those two cannot see a support file: a VAE and a
@@ -1514,6 +1520,7 @@ def _backfill_component_roles(
     Args:
         conn: An open hub connection, inside the caller's transaction.
         kinds: The stored ``file_kind`` values eligible for re-filing.
+        only_role: When set, re-file only rows whose folder names this role.
 
     Returns:
         How many rows were re-filed.
@@ -1551,7 +1558,7 @@ def _backfill_component_roles(
         if len(roles) != 1:
             continue
         (role,) = roles
-        if role is None:
+        if role is None or (only_role is not None and role != only_role):
             continue
         # A checkpoint in `unet/` already says what its folder says.
         refiled += conn.execute(
@@ -1750,10 +1757,12 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                     _backfill_base_model_canonical(conn)
                 if data_version < 4:
                     # `unet/` and `diffusion_models/` started naming
-                    # `checkpoint` (#1607). Only `unknown` is re-filed: a row
-                    # stored as anything else was either classified already
-                    # or corrected by the owner.
-                    _backfill_component_roles(conn, (FILE_UNKNOWN,))
+                    # `checkpoint` (#1607). Only `unknown` rows in those
+                    # folders: an `unknown` left in `vae/` after pass 1 is an
+                    # owner's correction, and so is any other kind.
+                    _backfill_component_roles(
+                        conn, (FILE_UNKNOWN,), only_role=FILE_CHECKPOINT
+                    )
                 # No placeholder: PRAGMA takes no parameters, and the value is
                 # this module's own constant rather than anything from outside.
                 conn.execute(f"PRAGMA user_version = {CURRENT_DATA_VERSION:d}")

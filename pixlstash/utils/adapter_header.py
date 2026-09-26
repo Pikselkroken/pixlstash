@@ -526,7 +526,7 @@ def _normalise_folder(name: str) -> str:
 
 
 def role_from_folder(path: str) -> Optional[str]:
-    """Return the component role the file's own directory names, or ``None``.
+    """Return the ``file_kind`` the file's own directory names, or ``None``.
 
     Only the directory the file sits in is consulted, never an ancestor: a
     registered folder may itself be called ``vae`` (someone can register
@@ -564,14 +564,16 @@ def classify_model_file(tensor_names, param_count: int, path: str = "") -> str:
        maintains is the best evidence there is. It outranks the parameter count
        because the parameter count is *wrong* for both: they sit either side of
        a threshold that was only ever meant to separate adapters from base
-       models.
+       models. ``unet/`` and ``diffusion_models/`` name ``checkpoint``, which
+       is what files a ``.gguf`` (no parameter count at all) as a base model.
     3. **The parameter count**, for a marker-free file in a folder that says
        nothing. A count no adapter reaches asserts checkpoint.
 
     Everything else is ``"unknown"``, which the shelf shows as unknown and lets
     the user correct. ``unknown`` must never be rendered or stored as
-    checkpoint: a marker-free file too small to be a base model is most likely
-    an adapter format we have not met yet.
+    checkpoint: a marker-free file too small to be a base model, outside a
+    folder that says otherwise, is most likely an adapter format we have not
+    met yet.
 
     Args:
         tensor_names: Iterable of tensor keys from the header.
