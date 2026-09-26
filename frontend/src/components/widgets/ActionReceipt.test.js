@@ -449,4 +449,27 @@ describe("ActionReceipt - local receipts (#1573)", () => {
     await store.takeLocalReceiptAction();
     expect(store.receipt).toBe(null);
   });
+
+  it("lets a receipt the undo raised drain on its own window", async () => {
+    const store = useOperationStore();
+    store.setLocalReceiptHost(true);
+    // Undoing a create runs the delete verb, which raises its own pill.
+    raiseLocal(
+      store,
+      vi.fn(async () => {
+        store.showLocalReceipt({
+          summary: "Deleted the set",
+          icon: "mdi-layers-remove",
+          destructive: true,
+          undo: vi.fn(),
+          redo: vi.fn(),
+        });
+        return true;
+      }),
+    );
+    await store.takeLocalReceiptAction();
+    expect(store.receipt.summary).toBe("Deleted the set");
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(store.receipt).toBe(null);
+  });
 });
