@@ -3046,8 +3046,9 @@ reach, so a guider and a scheduler feeding one `SamplerCustomAdvanced` stay one
 straight chain. A lane is named by the nearest sampler downstream of it (its
 ComfyUI title when it has one), and branches that meet again at one node (a
 model merge) are refused, since they are not separate passes. A workflow loading one model per pass (Wan 2.2 high/low noise) has no
-trunk: `model_source` is null and each lane names its own. A lane's CLIP must
-come off the trunk's CLIP end. Only a further fork inside a lane, or loaders
+trunk: `model_source` is null and each lane names its own, CLIP included when
+each pass encodes its own prompt (SDXL base and refiner). A lane off a trunk
+must take its CLIP from the trunk's CLIP end. Only a further fork inside a lane, or loaders
 past a node that is not a loader, are left as they are, and `branch_note` tells
 the owner why the list is shorter than the workflow. A refused chain,
 or one read with ComfyUI unreachable, goes through `read_lora_chain_untyped`,

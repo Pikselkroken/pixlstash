@@ -2072,20 +2072,37 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
             )
         return carriers
 
+    model_readers = {link["node_id"] for link in links if link["type"] == "MODEL"}
+
+    def refuse_cycle(source: dict | None) -> None:
+        # A loader would feed a node its own CLIP input comes through: a cycle
+        # ComfyUI refuses, after the run is queued.
+        if source is not None and source["node_id"] in model_readers:
+            raise LookupError(
+                f"#{source['node_id']} {source['class_type']} hands out "
+                "this workflow's CLIP and reads its model, so a LoRA loader cannot "
+                "sit in front of both. Change the chain in ComfyUI."
+            )
+
     trunk_clip = clip_run(trunk)
     if trunk_clip:
         clip_source = link_of(input_of(trunk_clip[0], "clip_field"))
         clip_end = (trunk_clip[-1], loaders[trunk_clip[-1]]["clip_out"])
     else:
-        clip_source = _source_of(graph, links, "CLIP")
-        if clip_source is not None and clip_source["node_id"] in {
-            link["node_id"] for link in links if link["type"] == "MODEL"
-        }:
-            raise LookupError(
-                f"#{clip_source['node_id']} {clip_source['class_type']} hands out "
-                "this workflow's CLIP and reads its model, so a LoRA loader cannot "
-                "sit in front of both. Change the chain in ComfyUI."
+        if model_source is None:
+            # A model per pass may come with a text encoder per pass (SDXL's
+            # base and refiner checkpoints). Each lane then starts its CLIP
+            # where its own loaders read it; one shared source is only the
+            # fallback for a lane that has none.
+            clip_roots = _sources(links, "CLIP")
+            clip_source = (
+                link_of((str(clip_roots[0][0]), clip_roots[0][1]))
+                if len(clip_roots) == 1
+                else None
             )
+        else:
+            clip_source = _source_of(graph, links, "CLIP")
+        refuse_cycle(clip_source)
         clip_end = (
             (str(clip_source["node_id"]), clip_source["output"])
             if clip_source is not None
@@ -2130,7 +2147,11 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
     for lane in lanes:
         order = lane["order"]
         carriers = clip_run(order)
-        if carriers and input_of(carriers[0], "clip_field") != clip_end:
+        lane_clip = clip_end
+        if carriers and lane["source"] is not None:
+            lane_clip = input_of(carriers[0], "clip_field")
+            refuse_cycle(link_of(lane_clip))
+        if carriers and input_of(carriers[0], "clip_field") != lane_clip:
             raise LookupError(
                 "The LoRAs on one side of this workflow's fork take their CLIP "
                 "from somewhere other than the chain they branch off, so "
@@ -2150,6 +2171,10 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
         read_lanes.append(
             {
                 "source": lane["source"],
+                # Where a lane with a model of its own starts its CLIP; a lane
+                # off the trunk starts at the trunk's CLIP end, wherever the
+                # edit leaves it.
+                "clip_source": link_of(lane_clip) if lane_clip is not None else None,
                 "pass": _pass_of(graph, links, starts),
                 "loaders": [loaders[n] for n in order],
                 "sinks": lane_sinks,
@@ -2683,12 +2708,25 @@ def plan_lora_chain(
     for segment, lane in zip(segments[1:], read_lanes):
         source = lane["source"]
         start = [source["node_id"], source["output"]] if source else model_end
+        clip_start = _lane_clip_start(lane, clip_end)
+        carrier = next((n for n in segment["order"] if wiring[n]["clip_field"]), None)
+        if carrier is not None and clip_start is None:
+            raise LookupError(
+                f"#{carrier} {names[carrier]} carries a CLIP, and nothing on "
+                f"{segment['label']}'s side hands one out for it to read. Change "
+                "it in ComfyUI."
+            )
         lane_model, lane_clip = _wire_segment(
-            None, segment["order"], wiring, start, clip_end
+            None, segment["order"], wiring, start, clip_start
         )
         rewired += moved_sinks(lane["sinks"], lane_model, lane_clip)
         plan_lanes.append(
-            {"order": segment["order"], "source": source, "sinks": lane["sinks"]}
+            {
+                "order": segment["order"],
+                "source": source,
+                "clip_source": lane.get("clip_source"),
+                "sinks": lane["sinks"],
+            }
         )
 
     changes = [
@@ -2717,6 +2755,15 @@ def plan_lora_chain(
         "sinks": chain["sinks"],
         "changes": changes,
     }
+
+
+def _lane_clip_start(lane: dict, clip_end: list | None) -> list | None:
+    """Where a lane's CLIP chain starts: its own source for a lane with a
+    model of its own, the trunk's CLIP end (as the edit leaves it) otherwise."""
+    if lane.get("source") is None:
+        return clip_end
+    clip = lane.get("clip_source")
+    return [clip["node_id"], clip["output"]] if clip else None
 
 
 def _crossed_change(
@@ -2779,7 +2826,7 @@ def apply_lora_chain(prompt_graph: dict, plan: dict, object_info: dict) -> None:
         source = lane["source"]
         start = [source["node_id"], source["output"]] if source else model_end
         lane_model, lane_clip = _wire_segment(
-            work, lane["order"], wiring, start, clip_end
+            work, lane["order"], wiring, start, _lane_clip_start(lane, clip_end)
         )
         rewire(lane["sinks"], lane_model, lane_clip)
     prompt_graph.clear()

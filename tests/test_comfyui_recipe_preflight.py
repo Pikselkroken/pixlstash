@@ -1834,6 +1834,80 @@ class TestLoraChain:
         with pytest.raises(LookupError, match="meet again at #7"):
             read_lora_chain(graph, self.INFO)
 
+    def _base_and_refiner(self):
+        """Two checkpoints, each with its own CLIP: #4 → #10 → #3, #5 → #11 → #15.
+
+        Each pass encodes its own prompt from its own loader's CLIP (#6, #9).
+        """
+        graph = {
+            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
+            "5": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
+            "10": self._loader("a.safetensors", 0.5, ["4", 0], ["4", 1]),
+            "11": self._loader("b.safetensors", 0.6, ["5", 0], ["5", 1]),
+            "6": {"class_type": "PromptEncoder", "inputs": {"conditioner": ["10", 1]}},
+            "9": {"class_type": "PromptEncoder", "inputs": {"conditioner": ["11", 1]}},
+        }
+        for node_id, model, prompt in (("3", "10", "6"), ("15", "11", "9")):
+            graph[node_id] = {
+                "class_type": "TwinSampler",
+                "inputs": {"model1": [model, 0], "positive": [prompt, 0]},
+            }
+        return graph
+
+    def test_a_model_per_pass_with_a_clip_per_pass_is_editable(self):
+        chain = read_lora_chain(self._base_and_refiner(), self.INFO)
+        assert chain["model_source"] is None and chain["clip_source"] is None
+        assert [lane["clip_source"]["node_id"] for lane in chain["lanes"]] == [
+            "4",
+            "5",
+        ]
+        assert [
+            [(s["node_id"], s["type"]) for s in lane["sinks"]]
+            for lane in chain["lanes"]
+        ] == [[("3", "MODEL"), ("6", "CLIP")], [("15", "MODEL"), ("9", "CLIP")]]
+
+    def test_each_pass_keeps_its_own_clip_through_an_edit(self):
+        graph = self._base_and_refiner()
+        self._edit_lanes(
+            graph,
+            [],
+            [
+                [{"node_id": None, "adapter": self.NEW}],
+                [{"node_id": "11"}, {"node_id": "10"}],
+            ],
+        )
+        new = str(max(int(n) for n in graph))
+        # The base pass's new loader reads checkpoint #4's CLIP, not #5's.
+        assert graph[new]["inputs"]["model"] == ["4", 0]
+        assert graph[new]["inputs"]["clip"] == ["4", 1]
+        assert graph["6"]["inputs"]["conditioner"] == [new, 1]
+        # #10 crossed into the refiner's chain, CLIP and all.
+        assert graph["10"]["inputs"]["model"] == ["11", 0]
+        assert graph["10"]["inputs"]["clip"] == ["11", 1]
+        assert graph["9"]["inputs"]["conditioner"] == ["10", 1]
+        assert graph["15"]["inputs"]["model1"] == ["10", 0]
+
+    def test_a_clip_loader_moved_where_no_clip_is_handed_out_is_refused(self):
+        """Two UNETs and two CLIP loaders: the bare lane has no CLIP to offer."""
+        info = {**self.INFO, "CLIPLoader": {"output": ["CLIP"]}}
+        graph = self._two_models()
+        graph["30"] = {"class_type": "CLIPLoader", "inputs": {}}
+        graph["31"] = {"class_type": "CLIPLoader", "inputs": {}}
+        graph["10"] = self._loader("a.safetensors", 1.0, ["1", 0], ["30", 0])
+        graph["6"] = {
+            "class_type": "PromptEncoder",
+            "inputs": {"conditioner": ["10", 1]},
+        }
+        graph["9"] = {
+            "class_type": "PromptEncoder",
+            "inputs": {"conditioner": ["31", 0]},
+        }
+        graph["3"]["inputs"]["positive"] = ["6", 0]
+        graph["15"]["inputs"]["positive"] = ["9", 0]
+        chain = read_lora_chain(graph, info)
+        with pytest.raises(LookupError, match="nothing on TwinSampler #15's side"):
+            plan_lora_chain(graph, chain, [], info, [[], [{"node_id": "10"}]])
+
     def test_a_lane_taking_its_clip_from_elsewhere_is_refused(self):
         """#12 reads the checkpoint's CLIP, not the trunk's end at #11."""
         graph = self._two_pass()
