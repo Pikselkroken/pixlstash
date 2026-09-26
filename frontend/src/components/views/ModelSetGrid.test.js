@@ -1454,6 +1454,72 @@ describe("hand-made sets (#1520)", () => {
       [10, [{ model_id: 3, slot: "lora" }]],
       [10, [{ model_id: 5, slot: "lora" }]],
     ]);
+    // Narrated in the popup's own status line, in the shelf's names, and no
+    // pill yet: the adds are one receipt once the popup closes (#1574).
+    const operations = useOperationStore();
+    expect(operations.receipt).toBe(null);
+    expect(chooser.find('[role="status"]').text()).toContain(
+      "Added filmgrain xl and Soft Light",
+    );
+    await chooser.trigger("keydown", { key: "Escape" });
+    expect(operations.receipt.summary).toBe('Added 2 LoRAs to "realvisXL v5"');
+
+    removeWorkflowSetMembers.mockReset().mockResolvedValue({ removed: [] });
+    await operations.takeLocalReceiptAction();
+    expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [
+      shaOf(3),
+      shaOf(5),
+    ]);
+  });
+
+  it("takes back the last pick from the popup's own Undo, without a pill", async () => {
+    const shaOf = (modelId) => String(modelId).repeat(64).slice(0, 64);
+    addWorkflowSetMembers.mockReset().mockImplementation((id, members) =>
+      Promise.resolve({
+        set: handSet(10, [SET_CKPT]),
+        added: members.map((m) => shaOf(m.model_id)),
+      }),
+    );
+    removeWorkflowSetMembers
+      .mockReset()
+      .mockImplementation((id, shas) => Promise.resolve({ removed: shas }));
+    const { wrapper, store } = await mountGrid({
+      rows: [
+        row(1, "realvisXL_v5", "checkpoint"),
+        row(3, "filmgrain_xl"),
+        row(5, "Soft_Light"),
+      ],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…")
+      .trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    const field = chooser.find("input");
+    // Enter with no arrow used adds the top match.
+    await field.trigger("keydown", { key: "Enter" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers).toHaveBeenCalledWith(10, [
+      { model_id: 3, slot: "lora" },
+    ]);
+
+    const undo = chooser
+      .find('[role="status"]')
+      .findAll("button")
+      .find((b) => b.text() === "Undo");
+    await undo.trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [shaOf(3)]);
+    expect(chooser.find('[role="status"]').text()).toContain(
+      "Took out filmgrain xl",
+    );
+    // Nothing left to announce once it closes.
+    await chooser.trigger("keydown", { key: "Escape" });
+    expect(useOperationStore().receipt).toBe(null);
   });
 
   it("closes the Checkpoint popup on its one pick and lands on the new checkpoint", async () => {
@@ -1682,12 +1748,159 @@ describe("hand-made sets (#1520)", () => {
       .trigger("click");
 
     const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
-    // Eight drawn, ten in the section.
+    // Eight drawn, ten in the section. The one group is the other base
+    // models, so it is drawn open rather than folded to a single line.
     expect(chooser.findAll('[role="option"]')).toHaveLength(8);
     const heading = chooser
-      .findAll(".wsc__head")
-      .find((h) => h.text().includes("All other"));
-    expect(heading.find(".wsc__count").text()).toBe("10");
+      .findAll(".wsc__gh")
+      .find((h) => h.text().includes("Other base models"));
+    expect(heading.find(".fm-n").text()).toBe("10");
+  });
+
+  it("credits a pick only with what the server stored", async () => {
+    // The set already held it: the route stores nothing and says so.
+    addWorkflowSetMembers
+      .mockReset()
+      .mockResolvedValue({ set: handSet(10, [SET_CKPT]), added: [] });
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…")
+      .trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    await chooser.find('[role="option"]').trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const status = chooser.find('[role="status"]');
+    expect(status.text()).toContain("Already in this set, nothing added");
+    expect(status.findAll("button")).toHaveLength(0);
+    await chooser.trigger("keydown", { key: "Escape" });
+    expect(useOperationStore().receipt).toBe(null);
+  });
+
+  it("names a filter's only matches as already in the set, not as nothing", async () => {
+    const held = slotMember(3, "filmgrain_xl", "lora");
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      handMade: [handSet(10, [SET_CKPT, held])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…")
+      .trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    await chooser.find("input").setValue("grain");
+
+    expect(chooser.find(".wsc__empty").exists()).toBe(false);
+    expect(chooser.find(".wsc__gone").text()).toBe(
+      "filmgrain xl also matches, and is already in this set.",
+    );
+  });
+
+  it("adds every ticked row of a checklist, not only the ones drawn before Show more", async () => {
+    const loras = Array.from({ length: 10 }, (_, i) =>
+      row(20 + i, `lora_${i}`),
+    );
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), ...loras],
+      combinations: [
+        combination("1,20", [
+          CKPT,
+          ...loras.map((r) => member(r.id, r.filename, "adapter")),
+        ]),
+      ],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    addWorkflowSetMembers
+      .mockReset()
+      .mockResolvedValue({ set: handSet(10, [SET_CKPT]), added: [] });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Fill from pictures"))
+      .trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    // Eight drawn, ten ticked: Add counts and adds all ten.
+    expect(chooser.findAll('[role="option"]')).toHaveLength(8);
+    const add = chooser.findAll("button").find((b) => b.text() === "Add 10");
+    expect(add).toBeTruthy();
+    await add.trigger("click");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers.mock.calls[0][1]).toHaveLength(10);
+  });
+
+  it("adds nothing from a checklist on Enter once every row is unticked", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      combinations: [combination("1,3", [CKPT, LORA])],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    addWorkflowSetMembers.mockReset();
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text().includes("Fill from pictures"))
+      .trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    // A checklist marks no row with ⏎: Enter adds what is ticked.
+    expect(chooser.find(".wsc__enter").exists()).toBe(false);
+    const option = chooser.find('[role="option"]');
+    expect(option.attributes("aria-selected")).toBe("true");
+    await option.trigger("click");
+    expect(option.attributes("aria-selected")).toBe("false");
+
+    const field = chooser.find("input");
+    await field.trigger("keydown", { key: "Enter" });
+    // Nor with the cursor put down on that unticked row.
+    await field.trigger("keydown", { key: "ArrowDown" });
+    expect(chooser.find(".wsc__r--cur").exists()).toBe(true);
+    await field.trigger("keydown", { key: "Enter" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(addWorkflowSetMembers).not.toHaveBeenCalled();
+  });
+
+  it("folds the other base models to one line under the ranked groups", async () => {
+    const sdxl = (id, name) => ({ ...row(id, name), base_model: "SDXL" });
+    const { wrapper, store } = await mountGrid({
+      rows: [
+        row(1, "realvisXL_v5", "checkpoint"),
+        sdxl(3, "filmgrain_xl"),
+        row(20, "flux_lora_a"),
+        row(21, "flux_lora_b"),
+      ],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…")
+      .trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+
+    // Empty groups are not drawn at all.
+    expect(chooser.findAll(".wsc__gh").map((h) => h.text())).toEqual([
+      "SDXL LoRAs1",
+    ]);
+    expect(chooser.findAll('[role="option"]')).toHaveLength(1);
+    const fold = chooser.find(".wsc__more");
+    expect(fold.text()).toBe("2 LoRAs for other base models");
+
+    // Down off the last row unfolds it, as the button would.
+    const field = chooser.find("input");
+    await field.trigger("keydown", { key: "ArrowDown" });
+    await field.trigger("keydown", { key: "ArrowDown" });
+    expect(chooser.findAll('[role="option"]')).toHaveLength(3);
+    expect(chooser.find(".wsc__r--cur").text()).toContain("flux_lora_a");
   });
 
   it("keeps what is typed in the base-model field across a refetch", async () => {
@@ -1776,9 +1989,11 @@ describe("hand-made sets (#1520)", () => {
     const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
     await chooser.find("input").setValue("zzz-nothing");
 
-    const counts = chooser.findAll(".wsc__count").map((c) => c.text());
-    expect(counts.length).toBeGreaterThan(0);
-    expect(counts.every((c) => c === "no matches")).toBe(true);
+    // No stack of empty headings: one line saying the filter found nothing.
+    expect(chooser.findAll(".wsc__gh")).toHaveLength(0);
+    expect(chooser.find(".wsc__empty").text()).toBe(
+      'Nothing matches "zzz-nothing".',
+    );
   });
 
   it("reveals a cut section from the keyboard by arrowing past its last row", async () => {
@@ -1799,12 +2014,14 @@ describe("hand-made sets (#1520)", () => {
     const field = chooser.find("input");
     expect(chooser.findAll('[role="option"]')).toHaveLength(8);
 
-    for (let i = 0; i < 8; i += 1) {
+    // No cursor until an arrow puts one down: the first ↓ lands on lora_0.
+    expect(chooser.find(".wsc__r--cur").exists()).toBe(false);
+    for (let i = 0; i < 9; i += 1) {
       await field.trigger("keydown", { key: "ArrowDown" });
     }
 
     expect(chooser.findAll('[role="option"]')).toHaveLength(10);
-    expect(chooser.find(".wsc__item--active").text()).toContain("lora_8");
+    expect(chooser.find(".wsc__r--cur").text()).toContain("lora_8");
   });
 
   it("lands on the open set's card when the tile a chooser came from is gone", async () => {

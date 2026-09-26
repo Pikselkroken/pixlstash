@@ -403,8 +403,61 @@ describe("hand-made sets (#1520)", () => {
       combinations,
       query: "  in",
     });
-    const all = sections.flatMap((s) => s.items.map((r) => r.display_name));
-    expect(all).toEqual(["Ink Wash"]);
+    const offered = sections
+      .filter((s) => !s.held)
+      .flatMap((s) => s.items.map((r) => r.display_name));
+    expect(offered).toEqual(["Ink Wash"]);
+    // A match the set already holds is not offered, but comes back so the
+    // picker can say why the search does not list it.
+    const heldSection = sections.find((s) => s.held);
+    expect(heldSection.items.map((r) => r.display_name)).toEqual(["Film Grain"]);
+  });
+
+  it("names, sorts and filters by the shelf's name, and still finds the filename (#1574)", () => {
+    const file = (id, filename, extra = {}) => ({
+      id,
+      sha256: `f${id}`,
+      file_kind: "checkpoint",
+      display_name: null,
+      filename,
+      base_model: "SDXL",
+      ...extra,
+    });
+    const shelf = [
+      file(20, "Juggernaut_XL.fp8.safetensors"),
+      // The shelf calls this "Flux.1 Dev": first by what is shown, last by
+      // what is on disk.
+      file(21, "zz_flux1-dev.safetensors", { matched_name: "Flux.1 Dev" }),
+    ];
+    const ids = (query) =>
+      slotSuggestions({
+        set: { id: 3, members: [] },
+        slotId: "checkpoint",
+        rows: shelf,
+        sets: [],
+        combinations: [],
+        query,
+      })[0].items.map((r) => r.id);
+    expect(ids("")).toEqual([21, 20]);
+    // Typing the drawn name finds it though the file spells it differently.
+    expect(ids("flux.1 d")).toEqual([21]);
+    // What is on disk still matches: the quant postfix the name drops.
+    expect(ids(".fp8.")).toEqual([20]);
+  });
+
+  it("names the base-model group plainly and folds the other base models", () => {
+    const sections = slotSuggestions({
+      set: mine,
+      slotId: "lora",
+      rows,
+      sets: [mine],
+      combinations: [],
+    });
+    const base = sections.find((s) => s.id === "base");
+    const all = sections.find((s) => s.id === "all");
+    expect(base.label).toBe("SDXL LoRAs");
+    expect(all.label).toBe("Other base models");
+    expect(all.collapsed).toBe("1 more for another base model");
   });
 
   it("fills from pictures with what ran beside the checkpoint, in its own slot", () => {

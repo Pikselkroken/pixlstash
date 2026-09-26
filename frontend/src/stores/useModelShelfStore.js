@@ -1929,10 +1929,12 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    *   in a plain notice, for a write that changed nothing.
    * @param {string} options.verb - a `SET_RECEIPT_ICONS` key.
    * @param {string} options.failure - the sentence when the write fails.
+   * @param {boolean} [options.quiet] - no receipt: the caller narrates it, as
+   *   the set picker does while it is open (#1574). A failure still says so.
    * @returns {Promise<*>} what `write` resolved to, or null when it failed.
    */
   async function setWrite(write, options) {
-    const { receipt, undo, redo, hasUndo, verb, failure } = options;
+    const { receipt, undo, redo, hasUndo, verb, failure, quiet } = options;
     const notices = useNoticeStore();
     let result;
     try {
@@ -1945,12 +1947,33 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       return null;
     }
     await loadWorkflowSets({ force: true });
+    if (quiet) return result;
     const text = typeof receipt === "function" ? receipt(result) : receipt;
     if (!text) return result;
     if (hasUndo && !hasUndo(result)) {
       notices.push({ level: "info", text });
       return result;
     }
+    raiseSetReceipt(
+      text,
+      verb,
+      () => undo(result),
+      (undone) => (redo ? redo(undone) : setWrite(write, options)),
+    );
+    return result;
+  }
+
+  /**
+   * The grid's pill for one set write, with Undo and Redo.
+   *
+   * @param {string} text - the sentence.
+   * @param {string} verb - a `SET_RECEIPT_ICONS` key.
+   * @param {Function} undo - `() => Promise`; resolves `false` for an undo that
+   *   failed through a verb which already said so, else what `redo` needs.
+   * @param {Function} redo - `(undoResult) => Promise`.
+   */
+  function raiseSetReceipt(text, verb, undo, redo) {
+    const notices = useNoticeStore();
     let undone;
     useOperationStore().showLocalReceipt({
       summary: text,
@@ -1960,7 +1983,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         try {
           // `false` is an undo that failed through a verb which already said
           // so (undoing a create runs the delete verb, which never throws).
-          const out = await undo(result);
+          const out = await undo();
           if (out === false) return false;
           undone = out;
           return true;
@@ -1978,9 +2001,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
           await loadWorkflowSets({ force: true });
         }
       },
-      redo: () => (redo ? redo(undone) : setWrite(write, options)),
+      redo: () => redo(undone),
     });
-    return result;
   }
 
   /** A removed or deleted member, as the create and add routes take it back. */
@@ -2097,10 +2119,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    *
    * @param {Object} set
    * @param {Array<{model_id: number, slot?: string}>} members
-   * @param {{joined?: boolean}} [options] - `joined` says in the receipt how
-   *   many pictures joined the set, which is what a merge (#1523) is for.
+   * @param {{joined?: boolean, quiet?: boolean}} [options] - `joined` says in
+   *   the receipt how many pictures joined the set, which is what a merge
+   *   (#1523) is for; `quiet` raises no receipt (see `announceAdded`).
    */
-  async function addToHandMadeSet(set, members, { joined = false } = {}) {
+  async function addToHandMadeSet(
+    set,
+    members,
+    { joined = false, quiet = false } = {},
+  ) {
     if (!members.length) return null;
     const before = Number(set.picture_count) || 0;
     const result = await setWrite(
@@ -2122,6 +2149,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
         hasUndo: ({ added }) => added.length > 0,
         verb: "add",
         failure: "Those models could not be added to the set.",
+        quiet,
       },
     );
     if (result?.added?.length) {
@@ -2134,10 +2162,43 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     return result;
   }
 
+  /**
+   * One receipt for the models a set picker added while it was open (#1574).
+   *
+   * The picker adds quietly and narrates each add in its own status line, so
+   * five LoRAs picked one by one are one pill when it closes, not five that
+   * replace each other. Undo takes all of them back out.
+   *
+   * @param {Object} set
+   * @param {Array<{model_id: number, slot: string, sha256: string, name: string}>}
+   *   added - in the order they went in.
+   * @param {string} noun - the slot's plural, e.g. "LoRAs".
+   */
+  function announceAdded(set, added, noun) {
+    if (!added.length) return;
+    const what =
+      added.length === 1 ? `"${added[0].name}"` : `${added.length} ${noun}`;
+    raiseSetReceipt(
+      `Added ${what} to "${setLabel(set)}".`,
+      "add",
+      () =>
+        removeWorkflowSetMembers(
+          set.id,
+          added.map((m) => m.sha256),
+        ),
+      () =>
+        addToHandMadeSet(
+          set,
+          added.map(({ model_id, slot }) => ({ model_id, slot })),
+        ),
+    );
+  }
+
   /** Take members off a set, by hash. The files stay on the shelf. */
-  function removeFromHandMadeSet(set, sha256s) {
+  function removeFromHandMadeSet(set, sha256s, { quiet = false } = {}) {
     if (!sha256s.length) return Promise.resolve(null);
     return setWrite(() => removeWorkflowSetMembers(set.id, sha256s), {
+      quiet,
       receipt: ({ removed }) =>
         `Took ${removed.length} ${removed.length === 1 ? "model" : "models"} off "${setLabel(set)}". The ${
           removed.length === 1 ? "file stays" : "files stay"
@@ -3171,6 +3232,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     renameHandMadeSet,
     deleteHandMadeSets,
     addToHandMadeSet,
+    announceAdded,
     removeFromHandMadeSet,
     keepOutOfHandMadeSet,
     offerMergeAgain,

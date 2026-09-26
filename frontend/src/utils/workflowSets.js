@@ -23,7 +23,7 @@
 // drawn as a pair, and that is not a claim they cannot work. The models no recipe
 // names arrive from the server under `no_set` and get a card of their own.
 
-import { fileKindLabel } from "./modelShelf";
+import { fileKindLabel, modelName } from "./modelShelf";
 
 /**
  * How many covers a card's mosaic draws.
@@ -528,13 +528,34 @@ export function rowBaseModel(row) {
 }
 
 /**
+ * Does a shelf row match the picker's filter? The name the shelf shows, so
+ * typing what is on screen finds it, and the filename, for someone typing what
+ * is on disk (#1574).
+ *
+ * @param {Object} row - a shelf row.
+ * @param {string} needle - the trimmed, lowercased filter text.
+ */
+export function rowMatches(row, needle) {
+  if (!needle) return true;
+  return `${modelName(row).text}\n${row?.filename || ""}`
+    .toLowerCase()
+    .includes(needle);
+}
+
+/**
  * The picker's sections for one slot of one set, ranked as the design ranks them.
  *
  * With a checkpoint chosen: your other sets with the same base model, then what
- * recipes have run with this checkpoint, then the same base model, then all. With
- * none, one unfiltered list - suggestions follow the checkpoint, so there is
- * nothing to rank by yet. A model appears once, in the first section it earns,
- * and never when the set already holds it.
+ * recipes have run with this checkpoint, then the same base model, then the
+ * other base models - which the picker starts collapsed, since it is the group
+ * least often wanted. With none, one unfiltered list - suggestions follow the
+ * checkpoint, so there is nothing to rank by yet. A model appears once, in the
+ * first section it earns, and never when the set already holds it; under a
+ * filter, the matches the set already holds come back as a last `held` section,
+ * so the picker can say why they are not offered.
+ *
+ * Sorted by the name the shelf shows (`modelName`), so the list is alphabetical
+ * in the names it draws.
  *
  * @param {Object} args
  * @param {Object} args.set - the hand-made set being filled.
@@ -543,7 +564,8 @@ export function rowBaseModel(row) {
  * @param {Array<Object>} args.sets - every hand-made set.
  * @param {Array<Object>} args.combinations - the evidence payload.
  * @param {string} [args.query] - the type-to-filter text.
- * @returns {Array<{id: string, label: string, items: Array<Object>, total: number}>}
+ * @returns {Array<{id: string, label: string, items: Array<Object>, total: number,
+ *   collapsed?: string, held?: boolean}>}
  */
 export function slotSuggestions({
   set,
@@ -558,27 +580,26 @@ export function slotSuggestions({
   const held = new Set((set?.members ?? []).map((m) => m.sha256));
   const needle = query.trim().toLowerCase();
   const byId = new Map();
+  const heldMatches = [];
   for (const row of rows ?? []) {
-    if (!fitsSlot(row, slot) || held.has(row.sha256)) continue;
-    const name = row.display_name || row.filename || "";
-    if (
-      needle &&
-      !`${name} ${row.filename || ""}`.toLowerCase().includes(needle)
-    )
-      continue;
-    byId.set(row.id, row);
+    if (!fitsSlot(row, slot) || !rowMatches(row, needle)) continue;
+    if (held.has(row.sha256)) heldMatches.push(row);
+    else byId.set(row.id, row);
   }
   const sorted = (items) =>
     [...items].sort((a, b) =>
-      (a.display_name || a.filename || "").localeCompare(
-        b.display_name || b.filename || "",
-      ),
+      modelName(a).text.localeCompare(modelName(b).text),
     );
+  const heldSection =
+    needle && heldMatches.length
+      ? [{ id: "held", label: "", items: sorted(heldMatches), held: true }]
+      : [];
   const checkpoint = setCheckpoint(set);
   if (!checkpoint?.on_shelf) {
     const all = sorted(byId.values());
     return [
       { id: "all", label: `All ${slot.noun}`, items: all, total: all.length },
+      ...heldSection,
     ];
   }
   const base = checkpoint.base_model;
@@ -626,12 +647,23 @@ export function slotSuggestions({
       items: withCheckpoint,
     },
     base
-      ? { id: "base", label: `Other ${base} ${slot.noun}`, items: sameBase }
+      ? { id: "base", label: `${base} ${slot.noun}`, items: sameBase }
       : null,
-    { id: "all", label: `All other ${slot.noun}`, items: rest },
+    base
+      ? {
+          id: "all",
+          label: "Other base models",
+          items: rest,
+          collapsed:
+            rest.length === 1
+              ? "1 more for another base model"
+              : `${rest.length} ${slot.noun} for other base models`,
+        }
+      : { id: "all", label: `All other ${slot.noun}`, items: rest },
   ]
     .filter(Boolean)
-    .map((section) => ({ ...section, total: section.items.length }));
+    .map((section) => ({ ...section, total: section.items.length }))
+    .concat(heldSection);
 }
 
 /**
@@ -661,6 +693,7 @@ export function fillFromPictures(set, combinations, rows) {
         id: c.id,
         name: c.name,
         kindLabel: c.kindLabel,
+        recipes: c.recipes,
         detail: `${c.kindLabel || "Model"} · ${recipeCount(c.recipes)}`,
         slot: defaultSlot(c.kind),
       }))
