@@ -1091,8 +1091,7 @@ way, or a missing node whose reader declares a non-model type (a seed from an
 uninstalled pack), does not stop it.
 `has_lora_loader` is `null` for a UI-format file, which may carry a loader
 nobody can read. `pixlstash_loader` says the digest loader could be the one
-inserted, which leaves the outputs unreplayable by a later replay of the same
-recipe. `GET /api/v1/comfyui/pictures/{id}/recipe` carries the same `{plan,
+inserted, which needs the ComfyUI-PixlStash pack installed. `GET /api/v1/comfyui/pictures/{id}/recipe` carries the same `{plan,
 reason}` as `lora_insertion` when its `lora_slots` is empty. A run recomputes
 the plan rather than trusting one sent back, and the loader is the run's, never
 written into the stored file.

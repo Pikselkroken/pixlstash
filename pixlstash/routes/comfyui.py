@@ -673,7 +673,6 @@ def _describe_lora_insertion(
     graph: dict | None,
     object_info: dict | None,
     error: str | None,
-    digest_loader: bool = True,
 ) -> dict | None:
     """Where a LoRA loader would go, for the owner to see before a run (#1376).
 
@@ -681,9 +680,6 @@ def _describe_lora_insertion(
         graph: The API-format graph, or ``None`` for a UI-format file.
         object_info: The map already read for this request, or ``None``.
         error: Why ComfyUI could not be asked, when it could not.
-        digest_loader: Whether this surface's run would allow the
-            ComfyUI-PixlStash loader; ``False`` for a replay, so the plan does
-            not warn about a node that route will never insert.
 
     Returns:
         ``None`` when the graph already has a LoRA loader, else
@@ -707,7 +703,6 @@ def _describe_lora_insertion(
         }
     try:
         plan = plan_lora_insertion(graph, object_info)
-        plan["pixlstash_loader"] = plan["pixlstash_loader"] and digest_loader
         return {"plan": plan, "reason": None}
     except LookupError as exc:
         logger.info("No LoRA loader can be added to this graph: %s", exc)
@@ -2483,11 +2478,7 @@ def create_router(server) -> APIRouter:
             "seed_inputs": seed_targets,
             "lora_slots": detect_lora_targets(graph),
             "lora_insertion": _describe_lora_insertion(
-                graph,
-                object_info,
-                object_info_error,
-                # A replay never inserts it, so it is never a warning here.
-                digest_loader=False,
+                graph, object_info, object_info_error
             ),
             "preflight": preflight,
         }
