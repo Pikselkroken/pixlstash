@@ -272,9 +272,10 @@
                     size="sm"
                     icon-only
                     icon-left="undo"
-                    :tooltip="`Undo: load ${fileName(entry.fix.was)} again`"
+                    :tooltip="`Undo: load ${entry.originals} again`"
                     :disabled="busy === 'model-fix'"
-                    @click="replaceModel(row.kind, entry.fix.was, null)"
+                    :data-testid="`wftab-undo-missing-${row.kind}`"
+                    @click="replaceModel(row.kind, entry.file, null)"
                   />
                 </p>
               </div>
@@ -1160,6 +1161,14 @@ const supportRows = computed(() =>
         id: `missing:${file}`,
         file,
         fix: fixes.find((fix) => sameFile(fix.now, file)) ?? null,
+        // Every original this file replaced: two slots may share one
+        // replacement, and the pre-flight names the file, not the slot. The
+        // undo is sent by the replacement's name, which the server resolves
+        // to all of them.
+        originals: fixes
+          .filter((fix) => sameFile(fix.now, file))
+          .map((fix) => fileName(fix.was))
+          .join(" and "),
         options: replaceOptionsFor(spec.kind, file),
         noReplacement:
           NO_REPLACEMENT_TEXT[

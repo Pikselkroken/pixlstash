@@ -808,6 +808,52 @@ describe("a VAE or text encoder that will not load (#1596)", () => {
   });
 });
 
+describe("a missing replacement shared by two slots (#1596)", () => {
+  it("undoes every original it replaced, by the replacement's name", async () => {
+    const withVaes = card({
+      models: [{ name: "sdxl_vae", kind: "vae", slot_label: "n2/vae_name" }],
+    });
+    const fixes = ["a", "b"].map((slot) => ({
+      slot_label: `${slot}/vae_name`,
+      was: `vae_${slot}_fp8.safetensors`,
+      now: "vae_bf16.safetensors",
+      slot_kind: "vae",
+    }));
+    preflightWorkflowRun.mockResolvedValue({
+      groups: [
+        {
+          reasons: [
+            {
+              code: "missing_models",
+              models: [{ file: "SDXL/vae_bf16.safetensors", folder: "vae" }],
+            },
+          ],
+        },
+      ],
+    });
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: withVaes, model_fixes: fixes }),
+    );
+    readModelSwap.mockReset().mockImplementation(replacementsByKind({}));
+    setWorkflowModelFix
+      .mockReset()
+      .mockResolvedValue(detail({ card: withVaes }));
+    const { wrapper } = await mountWith([KEY], [withVaes]);
+    await settle(wrapper);
+    const undo = wrapper.find('[data-testid="wftab-undo-missing-vae"]');
+    expect(undo.attributes("aria-label")).toBe(
+      "Undo: load vae_a_fp8.safetensors and vae_b_fp8.safetensors again",
+    );
+    await undo.trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowModelFix).toHaveBeenCalledWith(KEY, {
+      was: "SDXL/vae_bf16.safetensors",
+      now: null,
+      slot_kind: "vae",
+    });
+  });
+});
+
 describe("no replacement to offer (#1596)", () => {
   it("says why instead of drawing an empty picker", async () => {
     const withVae = card({
