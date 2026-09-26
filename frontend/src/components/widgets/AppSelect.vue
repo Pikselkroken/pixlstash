@@ -1,5 +1,5 @@
 <template>
-  <div class="app-select">
+  <div ref="rootEl" class="app-select">
     <FieldLabel v-if="label && !hideLabel">{{ label }}</FieldLabel>
     <div
       v-if="multiple"
@@ -42,7 +42,7 @@
         :aria-label="label || undefined"
         aria-haspopup="listbox"
         :aria-expanded="String(open)"
-        :aria-controls="listId"
+        :aria-controls="open ? listId : undefined"
         :aria-activedescendant="open ? optionId(activeIndex) : undefined"
         :aria-disabled="disabled || undefined"
         @click="toggle"
@@ -61,38 +61,51 @@
       <div
         v-if="open"
         :id="listId"
+        ref="menuEl"
         class="ctx-menu app-select__menu"
         role="listbox"
         :aria-label="label || undefined"
         @mousedown.prevent
       >
-        <template v-for="(opt, i) in normalizedOptions" :key="String(opt.value)">
-          <template
-            v-if="opt.group && opt.group !== normalizedOptions[i - 1]?.group"
-          >
-            <div v-if="i > 0" class="ctx-sep" role="presentation" />
-            <div class="ctx-label section-label" role="presentation">
-              {{ opt.group }}
-            </div>
-          </template>
+        <!-- One group per heading, so a screen reader hears which rows are
+             the stack and which the rest of the library. -->
+        <template v-for="(section, s) in sections" :key="s">
+          <div v-if="s > 0" class="ctx-sep" role="presentation" />
           <div
-            :id="optionId(i)"
-            :ref="(el) => (optionEls[i] = el)"
-            class="ctx-item app-select__option"
-            :class="{ 'app-select__option--active': i === activeIndex }"
-            role="option"
-            :aria-selected="String(isCurrent(opt))"
-            :aria-label="optionSpoken(opt)"
-            @click="choose(i)"
-            @mousemove="activeIndex = i"
+            :role="section.group ? 'group' : 'presentation'"
+            :aria-labelledby="section.group ? `${listId}-g${s}` : undefined"
           >
-            <span class="app-select__check" aria-hidden="true">
-              <v-icon v-if="isCurrent(opt)" size="16">mdi-check</v-icon>
-            </span>
-            <span class="app-select__text">
-              <span class="app-select__name">{{ optionName(opt) }}</span>
-              <ChipRow v-if="opt.chips?.length" :items="chipItems(opt.chips)" />
-            </span>
+            <div
+              v-if="section.group"
+              :id="`${listId}-g${s}`"
+              class="ctx-label section-label"
+            >
+              {{ section.group }}
+            </div>
+            <div
+              v-for="{ opt, i } in section.rows"
+              :id="optionId(i)"
+              :key="String(opt.value)"
+              :ref="(el) => (optionEls[i] = el)"
+              class="ctx-item app-select__option"
+              :class="{ 'app-select__option--active': i === activeIndex }"
+              role="option"
+              :aria-selected="String(isCurrent(opt))"
+              :aria-label="optionSpoken(opt)"
+              @click="choose(i)"
+              @mousemove="activeIndex = i"
+            >
+              <span class="app-select__check" aria-hidden="true">
+                <v-icon v-if="isCurrent(opt)">mdi-check</v-icon>
+              </span>
+              <span class="app-select__text">
+                <span class="app-select__name">{{ optionName(opt) }}</span>
+                <ChipRow
+                  v-if="opt.chips?.length"
+                  :items="chipItems(opt.chips)"
+                />
+              </span>
+            </div>
           </div>
         </template>
       </div>
@@ -157,8 +170,21 @@ const current = computed(() =>
   normalizedOptions.value.find((o) => isCurrent(o)),
 );
 
+/** Consecutive options sharing a `group`, each run under one heading. */
+const sections = computed(() => {
+  const out = [];
+  normalizedOptions.value.forEach((opt, i) => {
+    const last = out[out.length - 1];
+    if (last && last.group === opt.group) last.rows.push({ opt, i });
+    else out.push({ group: opt.group, rows: [{ opt, i }] });
+  });
+  return out;
+});
+
 const listId = useId();
+const rootEl = ref(null);
 const wrapEl = ref(null);
+const menuEl = ref(null);
 const optionEls = [];
 const open = ref(false);
 const activeIndex = ref(-1);
@@ -197,6 +223,7 @@ function toggle() {
 }
 
 function choose(i) {
+  if (props.disabled) return;
   const opt = normalizedOptions.value[i];
   open.value = false;
   if (opt && !isCurrent(opt)) emit("update:modelValue", opt.value);
@@ -217,7 +244,10 @@ function typeahead(char) {
   const opts = normalizedOptions.value;
   // A fresh single letter starts after the current row, so repeating it
   // walks every option that starts with it.
-  const from = typed.length === 1 ? activeIndex.value + 1 : activeIndex.value;
+  const start = open.value
+    ? activeIndex.value
+    : opts.findIndex((o) => isCurrent(o));
+  const from = typed.length === 1 ? start + 1 : start;
   for (let step = 0; step < opts.length; step++) {
     const i = (Math.max(from, 0) + step) % opts.length;
     if (optionName(opts[i]).toLowerCase().startsWith(typed)) return i;
@@ -227,6 +257,16 @@ function typeahead(char) {
 
 function onComboKeydown(e) {
   if (props.disabled) return;
+  // A space inside a name being typed is part of the name, not "pick".
+  if (e.key === " " && typed) {
+    e.preventDefault();
+    const i = typeahead(" ");
+    if (i >= 0) {
+      if (open.value) activeIndex.value = i;
+      else openList(i);
+    }
+    return;
+  }
   const last = normalizedOptions.value.length - 1;
   const clamp = (i) => Math.min(Math.max(i, 0), last);
   if (!open.value) {
@@ -266,17 +306,46 @@ function onComboKeydown(e) {
     e.stopPropagation();
     open.value = false;
   } else if (e.key === "Tab") {
-    open.value = false;
+    // Tab takes the row it leaves on, as the ARIA pattern does.
+    choose(activeIndex.value);
   } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
     const i = typeahead(e.key);
     if (i >= 0) activeIndex.value = i;
   }
 }
 
+// Scrolled within the list only: scrollIntoView would scroll the dialog's
+// body as well and jump the whole form.
 watch([open, activeIndex], () =>
-  nextTick(() =>
-    optionEls[activeIndex.value]?.scrollIntoView?.({ block: "nearest" }),
-  ),
+  nextTick(() => {
+    const menu = menuEl.value;
+    const row = optionEls[activeIndex.value];
+    if (!menu || !row) return;
+    if (row.offsetTop < menu.scrollTop) menu.scrollTop = row.offsetTop;
+    else if (row.offsetTop + row.offsetHeight > menu.scrollTop + menu.clientHeight)
+      menu.scrollTop = row.offsetTop + row.offsetHeight - menu.clientHeight;
+  }),
+);
+
+watch(
+  () => props.disabled,
+  (off) => {
+    if (off) open.value = false;
+  },
+);
+
+// The field changes element when the options gain or lose chips (a stack
+// picked in "Run a workflow on these…"). Whoever was on the old one is put
+// on the new one, rather than dropped to <body>.
+watch(
+  rich,
+  () => {
+    if (!rootEl.value?.contains(document.activeElement)) return;
+    nextTick(() =>
+      rootEl.value?.querySelector("select, [role='combobox']")?.focus(),
+    );
+  },
+  { flush: "pre" },
 );
 
 function isSelected(value) {
@@ -378,7 +447,12 @@ function toggleValue(value, checked) {
 }
 .app-select__combo:focus-visible {
   outline: var(--focus-width) solid var(--focus-stroke);
-  outline-offset: 2px;
+  outline-offset: var(--focus-offset);
+}
+/* The chips stop short of the chevron, which a compact field's padding
+   does not clear. */
+.app-select__combo.app-select__field--compact {
+  padding-right: 38px;
 }
 .app-select__combo--disabled {
   cursor: default;
@@ -419,6 +493,10 @@ function toggleValue(value, checked) {
 .app-select__option--active {
   background: var(--hover-wash);
 }
+/* One wash at a time: the arrowed-to row, which the pointer also moves. */
+.ctx-item.app-select__option:hover:not(.app-select__option--active) {
+  background: transparent;
+}
 .app-select__option[aria-selected="true"] .app-select__name {
   font-weight: var(--weight-medium);
 }
@@ -427,6 +505,7 @@ function toggleValue(value, checked) {
   display: inline-flex;
   flex-shrink: 0;
   width: var(--gutter-glyph);
+  font-size: var(--gutter-glyph);
   color: var(--selected-ink);
 }
 .app-select__text {

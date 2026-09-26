@@ -102,11 +102,70 @@ describe("AppSelect with chip options", () => {
     expect(w.emitted("update:modelValue")).toEqual([["d"]]);
   });
 
-  it("jumps to a typed name", async () => {
+  it("jumps to a typed name, a repeated letter walking the matches", async () => {
+    const w = mountRich("a");
+    await combo(w).trigger("keydown", { key: "ArrowDown" });
+    await combo(w).trigger("keydown", { key: "k" });
+    // From the cover, the next "k" is the second Krea, not the cover again.
+    expect(active(w).attributes("aria-label")).toBe("Krea, + upscale, flux");
+  });
+
+  it("reads a space inside a typed name as part of it", async () => {
+    const opts = [
+      { value: "p", label: "Pix", chips: ["x"] },
+      { value: "q", label: "Pix b", chips: ["y"] },
+    ];
+    const w = mount(AppSelect, { props: { modelValue: "p", options: opts } });
+    await combo(w).trigger("keydown", { key: "ArrowDown" });
+    for (const key of ["p", "i", "x", " ", "b"]) {
+      await combo(w).trigger("keydown", { key });
+    }
+    expect(combo(w).attributes("aria-expanded")).toBe("true");
+    expect(active(w).attributes("aria-label")).toBe("Pix b, y");
+    expect(w.emitted("update:modelValue")).toBeUndefined();
+  });
+
+  it("takes the active row on Tab", async () => {
     const w = mountRich();
     await combo(w).trigger("keydown", { key: "ArrowDown" });
-    await combo(w).trigger("keydown", { key: "z" });
-    expect(active(w).attributes("aria-label")).toBe("Zebra");
+    await combo(w).trigger("keydown", { key: "ArrowDown" });
+    await combo(w).trigger("keydown", { key: "Tab" });
+    expect(w.emitted("update:modelValue")).toEqual([["c"]]);
+  });
+
+  it("names each run of rows as a group", async () => {
+    const w = mountRich();
+    await combo(w).trigger("click");
+    const groups = w.findAll("[role='group']");
+    expect(groups.map((g) => w.find(`#${g.attributes("aria-labelledby")}`).text()))
+      .toEqual([GROUP, "Other workflows"]);
+    expect(groups.map((g) => g.findAll("[role='option']").length)).toEqual([3, 1]);
+  });
+
+  it("closes and stops picking once disabled", async () => {
+    const w = mountRich();
+    await combo(w).trigger("click");
+    const row = opts(w)[3];
+    await w.setProps({ disabled: true });
+    expect(w.find("[role='listbox']").exists()).toBe(false);
+    await row.trigger("click");
+    expect(w.emitted("update:modelValue")).toBeUndefined();
+  });
+
+  it("keeps focus on the field when the options gain or lose chips", async () => {
+    const plain = [{ value: "a", label: "A" }];
+    const w = mount(AppSelect, {
+      props: { modelValue: "a", options: plain },
+      attachTo: document.body,
+    });
+    w.find("select").element.focus();
+    await w.setProps({ options: OPTIONS });
+    await w.vm.$nextTick();
+    expect(document.activeElement).toBe(combo(w).element);
+    await w.setProps({ options: plain });
+    await w.vm.$nextTick();
+    expect(document.activeElement).toBe(w.find("select").element);
+    w.unmount();
   });
 
   it("does not open while disabled", async () => {
