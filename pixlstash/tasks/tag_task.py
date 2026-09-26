@@ -338,7 +338,10 @@ class TagTask(BaseTask):
             valid_faces = [
                 face
                 for face in faces
-                if face.bbox and getattr(face, "face_index", 0) >= 0
+                if face.bbox
+                and getattr(face, "face_index", 0) >= 0
+                # The crop is taken from frame 0; a later frame's box is not in it.
+                and getattr(face, "frame_index", 0) == 0
             ]
             img = preloaded_images.get(file_path)
             if img is None:

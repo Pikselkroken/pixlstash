@@ -624,6 +624,29 @@ def test_an_animated_gif_takes_the_video_face_path(tmp_path):
     assert detector.seen == [(64, 64, 3)] * 3
 
 
+def test_face_export_crops_only_faces_measured_on_frame_0(tmp_path):
+    """Export crops from the decoded first frame, so a later frame's box is skipped.
+
+    Before #1487 every GIF face was on frame 0; now an animated GIF also has
+    faces on later frames, whose boxes would crop the wrong region.
+    """
+    import zipfile
+
+    from pixlstash.utils.service.export_utils import ExportUtils
+
+    faces = [
+        SimpleNamespace(id=1, face_index=0, frame_index=0, bbox=[0, 0, 8, 8]),
+        SimpleNamespace(id=2, face_index=1, frame_index=2, bbox=[8, 8, 16, 16]),
+    ]
+    with zipfile.ZipFile(tmp_path / "out.zip", "w") as zf:
+        ExportUtils._export_features_to_zip(
+            Image.new("RGB", (32, 32)), "image_00001", faces, {}, "face", zf
+        )
+        names = zf.namelist()
+
+    assert names == ["image_00001_face_001.png"]
+
+
 # ── the tag window ──────────────────────────────────────────────────────────
 
 

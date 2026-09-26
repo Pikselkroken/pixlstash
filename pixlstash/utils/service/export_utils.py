@@ -184,6 +184,9 @@ class ExportUtils:
             index = getattr(feature, f"{feature_type}_index", 0)
             if index < 0 or not feature.bbox:
                 continue
+            if getattr(feature, "frame_index", 0) != 0:
+                # Measured on a later frame of an animated GIF; img is frame 0.
+                continue
             bbox = feature.bbox
             crop = img.crop(bbox)
             if scale < 1.0:
@@ -623,6 +626,8 @@ class ExportUtils:
                     if getattr(face, "face_index", 0) < 0:
                         continue
                     if not face.bbox:
+                        continue
+                    if getattr(face, "frame_index", 0) != 0:
                         continue
                     total_items += 1
 

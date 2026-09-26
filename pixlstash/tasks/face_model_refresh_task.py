@@ -138,8 +138,8 @@ class FaceModelRefreshTask(BaseTask):
         )
         ext = os.path.splitext(file_path)[1].lower()
         units: list[tuple[int, object, float]] = []
-        # Same routing as the extractor, so an animated GIF is refreshed across
-        # the frames it was scanned on.
+        # Same routing as the extractor, so both sample an animated GIF across
+        # the same frames.
         is_multiframe = FaceExtractionTask._is_multiframe(file_path)
 
         if ext in self._IMAGE_EXTS and not is_multiframe:

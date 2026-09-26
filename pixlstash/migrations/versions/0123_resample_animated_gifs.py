@@ -1,10 +1,11 @@
 """Re-embed GIFs now that animated ones are sampled like videos, for #1487.
 
-An animated GIF used to be embedded, hashed and scored from frame 0 alone; it now
+An animated GIF used to be embedded and scored from frame 0 alone; it now
 averages the same three frames a video does (``VideoUtils.is_animated_gif``).
 ``ImageEmbeddingTask`` selects on ``image_embedding IS NULL`` or
-``aesthetic_score IS NULL``, so those are cleared on every ``.gif``. A static GIF
-recomputes to the same values.
+``aesthetic_score IS NULL``, so those are cleared on every ``.gif``, with the
+``perceptual_hash`` that task writes alongside them (still frame 0, now decoded
+by cv2 as a video's is). A static GIF recomputes to the same values.
 
 Likeness pairs are written with insert-or-ignore, so re-queueing a picture never
 replaces a pair built from the old embedding. ``size_bin_index`` is cleared as
