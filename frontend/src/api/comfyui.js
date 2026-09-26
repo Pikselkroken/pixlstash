@@ -189,3 +189,13 @@ export async function getPictureRecipe(pictureId, { preflight = true } = {}) {
 export async function abortRun() {
   return unwrap(apiClient.post(comfyUrl("/abort")));
 }
+
+/**
+ * Whether the configured ComfyUI can open a PixlStash workflow link: it needs
+ * the ComfyUI-PixlStash node's `open_workflow.js`. Owner-only.
+ * @returns {Promise<{can_open_workflows: ?boolean}>} `null` when ComfyUI
+ *   cannot be asked.
+ */
+export async function getPixlstashNode() {
+  return unwrap(apiClient.get(comfyUrl("/pixlstash-node")));
+}

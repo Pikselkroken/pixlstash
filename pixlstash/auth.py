@@ -261,6 +261,9 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
         # ComfyUI lacks and which cards the pull filed on. The prefix below
         # refuses it today; this is the untemplated half, for the rollback.
         "/api/v1/comfyui/workflows/pull",
+        # Whether the owner's ComfyUI has the ComfyUI-PixlStash node: it
+        # reaches the owner's ComfyUI, so the rollback must not hand it out.
+        "/api/v1/comfyui/pixlstash-node",
     }
 )
 

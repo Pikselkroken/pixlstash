@@ -2108,7 +2108,10 @@ can no longer see.
   Run…. ComfyUI takes no workflow from a URL, so it opens the configured
   address with `?pixlstash_workflow=<key>`, and the ComfyUI-PixlStash node reads
   the key and fetches `GET /workflows/{key}/graph`. Without that node ComfyUI
-  opens on whatever it had last. In a browser it is a synchronous `window.open`
+  opens on whatever it had last, so the tab asks `GET /comfyui/pixlstash-node`
+  once per address (the server reads ComfyUI's `/extensions` for the node's
+  `open_workflow.js`) and refuses the button with a reason on a definite no;
+  an unreachable ComfyUI leaves it to try. In a browser it is a synchronous `window.open`
   (one after an await is a blocked popup). **On the desktop it goes through
   `pixlstashDesktop.openComfyui`** (`desktop:openComfyui`), because the shell's
   `openExternalSafely` refuses `http:` and ComfyUI is plain `http:`: the channel

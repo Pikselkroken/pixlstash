@@ -38,6 +38,7 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
+import requests
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlmodel import delete, select
@@ -119,7 +120,12 @@ from pixlstash.services.workflow_export import (
 from pixlstash.services.workflow_inputs import card_input_modes
 from pixlstash.services.workflow_io import detect_workflow_io
 import pixlstash.routes.comfyui as comfyui_module
-from pixlstash.services import saved_recipe_service, workflow_bindings, workflow_inbox
+from pixlstash.services import (
+    comfyui_service,
+    saved_recipe_service,
+    workflow_bindings,
+    workflow_inbox,
+)
 from pixlstash.server import Server
 from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
 from pixlstash.tasks.task_type import TaskType
@@ -1457,6 +1463,63 @@ def test_the_insertion_preview_is_owner_only(
     assert r.status_code == 403, r.text
     # The positive control: the owner still reads it, with the belts down.
     assert workflow_env.owner.get(path).status_code == 200
+
+
+def _extensions_answer(monkeypatch, answer):
+    """Stand ComfyUI's ``GET /extensions`` in for the node check."""
+
+    def fake_get(url, timeout):
+        if isinstance(answer, Exception):
+            raise answer
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: answer)
+
+    monkeypatch.setattr(
+        comfyui_service,
+        "requests",
+        SimpleNamespace(get=fake_get, RequestException=requests.RequestException),
+    )
+
+
+def test_the_node_check_is_owner_only(workflow_env, monkeypatch):
+    """Both directions at the gate, with the GET belt emptied."""
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+    _extensions_answer(monkeypatch, [])
+    path = f"{API}/comfyui/pixlstash-node"
+    assert_real_route(workflow_env.server.api, "GET", path)
+    token = _mint(
+        workflow_env.owner,
+        "node check probe",
+        resource_type="character",
+        resource_id=workflow_env.character_id,
+    )
+    client = _bearer(workflow_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the scoped token is dead; the refusal below would prove nothing"
+    )
+    assert client.get(path).status_code == 403
+    assert workflow_env.owner.get(path).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "answer, expected",
+    [
+        (["/extensions/ComfyUI-PixlStash/open_workflow.js"], True),
+        (["/extensions/comfyui-pixlstash/js/open_workflow.js"], True),
+        # The pack from before Open in ComfyUI, and another pack's same name.
+        (["/extensions/ComfyUI-PixlStash/picker.js"], False),
+        (["/extensions/other-pack/open_workflow.js"], False),
+        (requests.ConnectionError("refused"), None),
+        ({"not": "a list"}, None),
+    ],
+)
+def test_the_node_check_reads_comfyuis_extensions(
+    workflow_env, monkeypatch, answer, expected
+):
+    """Only the node's own open_workflow.js counts; unreachable is ``null``."""
+    _extensions_answer(monkeypatch, answer)
+    r = workflow_env.owner.get(f"{API}/comfyui/pixlstash-node")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"can_open_workflows": expected}
 
 
 def test_the_workflow_list_says_which_files_have_a_lora_loader(
