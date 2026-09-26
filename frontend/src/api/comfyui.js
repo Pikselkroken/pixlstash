@@ -26,6 +26,21 @@ export async function listWorkflows() {
 }
 
 /**
+ * Put a stored workflow, user or built-in, on its Workflows card.
+ *
+ * A built-in has no card until something asks, so this is how the Run popup
+ * gets a key to open on. Idempotent; owner-only.
+ *
+ * @param {string} name - the workflow's `name` as listed.
+ * @returns {Promise<{name: string, workflow_key: string}>}
+ */
+export async function cardForWorkflow(name) {
+  return unwrap(
+    apiClient.post(comfyUrl(`/workflows/${encodeURIComponent(name)}/card`)),
+  );
+}
+
+/**
  * Where a LoRA loader would be added to a saved workflow that has none (#1376).
  *
  * `plan` is `{model, clip, rewires, pixlstash_loader}`: the node the loader

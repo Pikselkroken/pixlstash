@@ -19,8 +19,10 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    * The single Run popup's source, or null when it is closed.
    *
    * `{kind, pictureIds, workflowKey, pickWorkflow, name, coverUrl}`:
-   *   kind          - "picture" | "selection" | "card", for the left column's
-   *                   wording and for which body the run sends.
+   *   kind          - "picture" | "selection" | "card" | "edit", for the left
+   *                   column's wording and for which body the run sends.
+   *                   "edit" is Edit with ComfyUI: the built-in edit card over
+   *                   the selection, reading none of the pictures' recipes.
    *   pictureIds    - what the run is made from; empty for a card.
    *   workflowKey   - the card to run, when it is already known.
    *   pickWorkflow  - open with the workflow picker unset ("Run a workflow on

@@ -150,6 +150,7 @@
             @open-plugin-panel="openPluginPanel()"
             @make-more="$emit('make-more')"
             @run-workflow="$emit('run-workflow')"
+            @edit-with-comfyui="$emit('edit-with-comfyui')"
             @reverse-image-search="$emit('reverse-image-search')"
             @segment="$emit('segment')"
             @rotate-left="$emit('rotate-left')"
@@ -307,6 +308,7 @@ const emit = defineEmits([
   "clear-impossible-tags",
   "make-more",
   "run-workflow",
+  "edit-with-comfyui",
 ]);
 
 const isScrapheapView = computed(() => {

@@ -496,9 +496,9 @@
           <v-icon class="ctx-icon">mdi-tune-variant</v-icon>
           Filters
         </button>
-        <!-- The two run entries, mirrored word for word in SelectionMenu.vue
-             and asserted by frontend/e2e/specs/menu-parity.spec.js: both act
-             on the SELECTION, so neither is context-only. -->
+        <!-- The three run entries, mirrored word for word in SelectionMenu.vue
+             and asserted by frontend/e2e/specs/menu-parity.spec.js: all three
+             act on the SELECTION, so none is context-only. -->
         <button
           v-if="comfyuiConfigured"
           class="ctx-item"
@@ -520,6 +520,19 @@
         >
           <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
           Run a workflow on these…
+        </button>
+        <button
+          v-if="comfyuiConfigured"
+          class="ctx-item"
+          :disabled="!selectedImageIds.length || isReadOnly"
+          @click="delegate('edit-with-comfyui')"
+        >
+          <Tooltip
+            text="Change these pictures with a written instruction, using the Flux.2 Klein edit workflow"
+            activator="parent"
+          />
+          <v-icon class="ctx-icon">mdi-auto-fix</v-icon>
+          Edit with ComfyUI…
         </button>
         <button
           class="ctx-item"
@@ -886,6 +899,7 @@ const emit = defineEmits([
   "open-plugin-panel",
   "make-more",
   "run-workflow",
+  "edit-with-comfyui",
   "use-as-input",
   "segment",
   "auto-tag",
