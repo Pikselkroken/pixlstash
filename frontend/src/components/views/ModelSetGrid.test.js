@@ -1780,6 +1780,61 @@ describe("hand-made sets (#1520)", () => {
     );
   });
 
+  it("keeps one timed receipt per set however many adds, and a sticky one for delete", async () => {
+    const loras = [3, 4, 5, 6, 7].map((id) =>
+      slotMember(id, `lora_${id}`, "lora"),
+    );
+    const { store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), row(3, "filmgrain_xl")],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const notices = useNoticeStore();
+
+    for (const lora of loras) {
+      addWorkflowSetMembers.mockResolvedValueOnce({
+        set: handSet(10, [SET_CKPT, lora]),
+        added: [lora.sha256],
+      });
+      await store.addToHandMadeSet(store.handMadeSets[0], [{ model_id: 3 }]);
+    }
+    // A repeat that added nothing gets its own card, not the add's Undo.
+    addWorkflowSetMembers.mockResolvedValueOnce({
+      set: handSet(10, [SET_CKPT]),
+      added: [],
+    });
+    await store.addToHandMadeSet(store.handMadeSets[0], [{ model_id: 3 }]);
+    expect(notices.notices).toHaveLength(2);
+    const [card] = notices.notices;
+    expect(card.count).toBe(5);
+    expect(card.timeout).toBe(10_000);
+
+    // Its Undo is the last add's, not the burst's.
+    removeWorkflowSetMembers.mockResolvedValue({ removed: [] });
+    await card.action.handler();
+    expect(removeWorkflowSetMembers).toHaveBeenCalledTimes(1);
+    expect(removeWorkflowSetMembers).toHaveBeenCalledWith(10, [
+      loras.at(-1).sha256,
+    ]);
+
+    addWorkflowSetMembers.mockResolvedValueOnce({
+      set: handSet(10, [SET_CKPT, loras[0]]),
+      added: [loras[0].sha256],
+    });
+    await store.addToHandMadeSet(store.handMadeSets[0], [{ model_id: 3 }]);
+    expect(notices.notices.some((n) => n.text.startsWith("Added"))).toBe(true);
+    deleteWorkflowSet.mockResolvedValue({ deleted: handSet(10, [SET_CKPT]) });
+    await store.deleteHandMadeSets(store.handMadeSets);
+    // The set's add receipt goes with it; the delete's stays until dismissed.
+    const deleted = notices.notices.filter((n) =>
+      n.text.includes("Deleted the set"),
+    );
+    expect(deleted).toHaveLength(1);
+    expect(notices.notices.some((n) => n.text.startsWith("Added"))).toBe(false);
+    expect(deleted[0].timeout).toBe(0);
+    expect(deleted[0].action.label).toBe("Undo");
+  });
+
   it("deletes a focused set on Backspace too, the Mac keyboard's Delete key", async () => {
     deleteWorkflowSet.mockResolvedValue({ deleted: handSet(10, [SET_CKPT]) });
     const { wrapper } = await mountGrid({

@@ -1756,7 +1756,14 @@ the shelf's workflow sets section) and served as `hand_made` on
   — a delete is undone by recreating the set from the snapshot the route returns,
   and a create is undone THROUGH the delete verb, so undoing it after the set was
   filled gets its own receipt and Undo. A multi-set delete settles each call, so
-  one failure does not cost the others their Undo.
+  one failure does not cost the others their Undo. Add, remove and rename
+  receipts share one notice per set and verb (key
+  `workflow-set:<id>:<verb>`), so a burst of picker clicks updates one card and
+  its count, and its Undo is the latest write's; a "Nothing added" is unkeyed,
+  so it cannot replace a real add's Undo, and so is create. All but a delete's
+  leave after `SET_RECEIPT_MS` (paused on hover and focus). A delete's receipt
+  is sticky and unkeyed, and a delete retires the set's keyed receipts, whose
+  Undo would write to a set that is gone.
 - **Clone with new models** labels proposals with `via: "grouped"` "Grouped by
   you" and lists them first in its selects; one with `prepick: false` (the set
   offers several of that kind) is shown but not pre-picked.
