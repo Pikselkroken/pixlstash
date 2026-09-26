@@ -1184,7 +1184,7 @@ def propose_companions(
             by_run = tally(runs, kind, anchors, {})
             if not by_recipe and not by_run:
                 continue
-            proposals[kind] += [
+            step = [
                 {
                     "id": model_id,
                     "filename": models[model_id]["filename"],
@@ -1209,7 +1209,12 @@ def propose_companions(
                 # the ladder past the step that found it.
                 if model_id not in grouped[kind]
             ]
-            ladder_found = True
+            proposals[kind] += step
+            # Found only if the step added something. Evidence that merely
+            # repeats files the owner already grouped tells the other rows of
+            # this kind nothing new, so the declared fallback still answers
+            # for them.
+            ladder_found = bool(step)
             break
         layouts = COMPANION_LAYOUTS.get(family, {}).get(kind)
         if ladder_found or not layouts:

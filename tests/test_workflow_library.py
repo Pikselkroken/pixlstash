@@ -2490,6 +2490,39 @@ def test_a_grouped_file_does_not_hide_the_declared_layouts_of_a_cold_checkpoint(
     assert proposed(result, "vae") == [(sdxl_vae, "declared")]
 
 
+def test_evidence_that_only_repeats_a_grouped_file_still_leaves_the_declared_fallback(
+    companions_shelf,
+):
+    """A ComfyUI run proves the checkpoint with the ONE encoder its set already
+    groups. That step tells the other encoder row nothing new, so the declared
+    layouts still answer for it rather than the row going empty (#1520 review)."""
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    set_base_model(hub, ids["lonely"], "SDXL 1.0")
+    set_layout(hub, ids["clip_shared"], "clip_l")
+    clip_g = shelf_file(hub, "Clip_G.safetensors", "text_encoder")
+    set_layout(hub, clip_g, "clip_g")
+    hash_rows(hub, ids["lonely"], clip_g)
+    create_set(hub, "Cold", [{"model_id": ids["lonely"]}, {"model_id": clip_g}])
+    record_comfyui_history(
+        hub,
+        {
+            "ran": history_entry(
+                generation_graph(
+                    "lonely.safetensors", "vae_a.safetensors", "Clip_G.safetensors"
+                )
+            )
+        },
+    )
+
+    result = propose_companions(hub, ids["lonely"])
+
+    assert proposed(result, "text_encoder") == [
+        (clip_g, "grouped"),
+        (ids["clip_shared"], "declared"),
+    ]
+
+
 def test_evidence_in_the_family_outranks_the_declared_layouts(companions_shelf):
     ids = companions_shelf.ids
     hub = companions_shelf.hub
