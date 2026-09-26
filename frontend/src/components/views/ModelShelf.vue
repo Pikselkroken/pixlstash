@@ -2389,7 +2389,15 @@ function onShelfKeydown(event) {
     !event.altKey &&
     !event.shiftKey &&
     String(event.key).toLowerCase() === "a";
-  if (event.key !== "Escape" && event.key !== "Delete" && !wantsSelectAll) {
+  // F2 is let through for a selected hand-made set, whose pill and menu
+  // advertise it; a row's own F2 is handled on the row.
+  const renamesSet = event.key === "F2" && store.selectedSets.length > 0;
+  if (
+    event.key !== "Escape" &&
+    event.key !== "Delete" &&
+    !wantsSelectAll &&
+    !renamesSet
+  ) {
     return;
   }
   if (!shelfOwnsTheKey(event)) return;
@@ -2421,7 +2429,13 @@ function onShelfKeydown(event) {
       store.deleteHandMadeSets(store.selectedSets);
       return;
     }
+    if (event.key === "F2") {
+      event.preventDefault();
+      startRenameSet();
+      return;
+    }
   }
+  if (renamesSet) return;
   // Escape and Delete are both about a selection, and the guard above no longer
   // asks for one.
   if (!store.selectedRows.length) return;

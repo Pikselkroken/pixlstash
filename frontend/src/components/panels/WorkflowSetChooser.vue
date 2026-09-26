@@ -257,6 +257,15 @@ function toggle(id) {
 }
 
 function move(step) {
+  // Down off the last drawn row of a section cut to SECTION_DEPTH reveals the
+  // rest of it, which is the keyboard's "Show all": the button itself is not a
+  // stop, and Enter belongs to adding.
+  if (step > 0) {
+    const cut = shownSections.value.find(
+      (section) => section.more && section.items.at(-1)?.id === activeKey.value,
+    );
+    if (cut) expanded.value = new Set([...expanded.value, cut.id]);
+  }
   const list = items.value;
   if (!list.length) return;
   const at = list.findIndex((item) => item.id === activeKey.value);

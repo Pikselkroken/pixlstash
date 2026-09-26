@@ -93,11 +93,11 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
 from pixlstash.pixl_logging import get_logger
@@ -922,15 +922,25 @@ class WorkflowSetMembersRequest(BaseModel):
     )
 
 
+# A member's digest as the remove route takes it: exactly 64 characters.
+Digest = Annotated[str, StringConstraints(min_length=64, max_length=64)]
+
+
 class WorkflowSetRemoveRequest(BaseModel):
     """Body of ``POST /models/workflow-sets/{set_id}/members/remove``."""
 
     model_config = ConfigDict(extra="forbid")
 
-    sha256: list[str] = Field(
+    # Each item a full-length digest: a malformed one is a 422 rather than a
+    # string that silently matches nothing. Length, not a hex pattern: the
+    # members it names already exist, so this only has to reject what cannot
+    # be one of them, and the add path's hex check guards what goes in.
+    sha256: list[Digest] = Field(
         min_length=1,
         max_length=MAX_MODELS_PER_EDIT,
-        description="Members to take out. One not in the set is ignored.",
+        description=(
+            "Members to take out, by full digest. One not in the set is ignored."
+        ),
     )
 
 

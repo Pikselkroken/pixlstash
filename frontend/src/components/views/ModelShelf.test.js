@@ -5397,6 +5397,23 @@ describe("the set grid is what the shelf opens on", () => {
     expect(deleteWorkflowSet).toHaveBeenCalledWith(10);
   });
 
+  it("renames a selected hand-made set on F2, as its pill says (#1520)", async () => {
+    const { wrapper, store } = await shelfOnTheGrid();
+    store.workflowSets = {
+      ...store.workflowSets,
+      handMade: [{ id: 10, name: "Kit", members: [] }],
+    };
+    store.selectSet(10);
+    await wrapper.vm.$nextTick();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "F2" }));
+    await wrapper.vm.$nextTick();
+
+    expect(
+      wrapper.findComponent({ name: "WorkflowSetRenameDialog" }).props("set"),
+    ).toMatchObject({ id: 10 });
+  });
+
   it("floats the verb bar over the grid, as it does over the list", async () => {
     // It did not, while a card stood for a whole SET: a Delete aimed at one
     // could have taken a shared VAE with it. A card stands for its BASE MODEL

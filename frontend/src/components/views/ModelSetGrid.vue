@@ -1031,9 +1031,17 @@ function closeChooser() {
     trigger.focus?.();
     return;
   }
-  // Programmatic overlays drop focus to <body>; put it back on the tile.
+  // Programmatic overlays drop focus to <body>; put it back on the tile, or,
+  // when that is gone too, on the open set's card - never nowhere.
   const at = flatRows.value.findIndex((entry) => entry.id === returnTo);
-  if (at >= 0) moveCursor(at);
+  if (at >= 0) {
+    moveCursor(at);
+    return;
+  }
+  const card = flatRows.value.findIndex(
+    (entry) => entry.kind === "card" && entry.key === store.openSetKey,
+  );
+  moveCursor(card >= 0 ? card : (firstStop(0, 1) ?? 0));
 }
 
 /** Models a slot pick is still adding, so a quick second click is not a second add. */

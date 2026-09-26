@@ -1289,6 +1289,11 @@ def test_removing_members_reports_them_and_keeps_an_emptied_set(shelf_env):
             ).status_code
             == 404
         )
+        # A string that cannot be a digest is refused, not silently ignored.
+        assert (
+            shelf_env.owner.post(url, json={"sha256": ["not-a-digest"]}).status_code
+            == 422
+        )
     finally:
         _wipe_sets(shelf_env.server)
 

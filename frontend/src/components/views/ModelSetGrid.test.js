@@ -1703,6 +1703,56 @@ describe("hand-made sets (#1520)", () => {
     expect(counts.every((c) => c === "no matches")).toBe(true);
   });
 
+  it("reveals a cut section from the keyboard by arrowing past its last row", async () => {
+    const loras = Array.from({ length: 10 }, (_, i) =>
+      row(20 + i, `lora_${i}`),
+    );
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint"), ...loras],
+      handMade: [handSet(10, [SET_CKPT])],
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .findAll(".mss__tile--add")
+      .find((tile) => tile.attributes("aria-label") === "Add LoRA…")
+      .trigger("click");
+    const chooser = wrapper.find('[data-testid="workflow-set-chooser"]');
+    const field = chooser.find("input");
+    expect(chooser.findAll('[role="option"]')).toHaveLength(8);
+
+    for (let i = 0; i < 8; i += 1) {
+      await field.trigger("keydown", { key: "ArrowDown" });
+    }
+
+    expect(chooser.findAll('[role="option"]')).toHaveLength(10);
+    expect(chooser.find(".wsc__item--active").text()).toContain("lora_8");
+  });
+
+  it("lands on the open set's card when the tile a chooser came from is gone", async () => {
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [])],
+      attach: true,
+    });
+    store.toggleSet("hand:10");
+    await wrapper.vm.$nextTick();
+    await wrapper.find(".mss__tile--add").trigger("click");
+    // The Checkpoint ＋ goes away underneath the open chooser.
+    store.workflowSets = {
+      ...store.workflowSets,
+      handMade: [handSet(10, [SET_CKPT])],
+    };
+    await wrapper.vm.$nextTick();
+    await wrapper
+      .find('[data-testid="workflow-set-chooser"]')
+      .trigger("keydown", { key: "Escape" });
+    await wrapper.vm.$nextTick();
+
+    expect(document.activeElement).toBe(wrapper.find(".msg__row").element);
+    wrapper.unmount();
+  });
+
   it("marks a member whose file left the shelf, and does not let it be selected", async () => {
     const gone = slotMember(5, "old_lora", "lora", {
       on_shelf: false,
