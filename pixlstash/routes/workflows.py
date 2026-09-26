@@ -2737,6 +2737,18 @@ def create_router(server) -> APIRouter:
                     for r in rows
                     if model_fix_labels(hub, card.topology_hash, was, r["file_kind"])
                 ]
+                if not matching:
+                    # `was` may be a replacement that has gone missing too: the
+                    # stored graphs name the original, so the kind the
+                    # workflow loads `was` as is the one its fix recorded.
+                    chained_kinds = {
+                        fix_kind
+                        for _label, _was, fix_now, fix_kind in model_fixes(
+                            hub, card.topology_hash
+                        )
+                        if normalized_filename(fix_now) == normalized_filename(was)
+                    }
+                    matching = [r for r in rows if r["file_kind"] in chained_kinds]
                 if len(matching) > 1:
                     raise HTTPException(
                         status_code=409,

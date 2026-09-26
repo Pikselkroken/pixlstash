@@ -4801,6 +4801,51 @@ def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
     assert r.json()["model_fixes"] == []
 
 
+def test_a_missing_replacement_is_replaced_from_the_original_whatever_the_shelf(
+    workflow_env,
+):
+    """The chain again, with the new file on the shelf under two kinds.
+
+    No variant was made with the first replacement, so no stored graph names
+    it: the kind it is loaded as is the one its fix recorded, and the second
+    pick replaces the ORIGINAL rather than being refused.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    with server.hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES (?, ?, ?, 'scanned')",
+            [
+                ("checkpoint", _REPLACEMENT_FILENAME, _h("chain-bf16")),
+                ("checkpoint", "test-chain-pair.safetensors", _h("chain-ckpt")),
+                ("vae", "test-chain-pair.safetensors", _h("chain-vae")),
+            ],
+        )
+    route = f"{API}/workflows/{merged}/model-fix"
+    try:
+        r = owner.put(
+            route, json={"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME}
+        )
+        assert r.status_code == 200, r.text
+        key = r.json()["card"]["key"]
+        r = owner.put(
+            f"{API}/workflows/{key}/model-fix",
+            json={"was": _REPLACEMENT_FILENAME, "now": "test-chain-pair.safetensors"},
+        )
+        assert r.status_code == 200, r.text
+        assert [
+            (f["was"], f["now"], f["slot_kind"]) for f in r.json()["model_fixes"]
+        ] == [(_SHELF_FILENAME, "test-chain-pair.safetensors", "checkpoint")]
+    finally:
+        with server.hub.transaction() as conn:
+            conn.execute("DELETE FROM workflow_model_fix")
+            conn.execute(
+                "DELETE FROM model WHERE sha256 IN (?, ?, ?)",
+                (_h("chain-bf16"), _h("chain-ckpt"), _h("chain-vae")),
+            )
+
+
 def test_a_variant_that_will_not_reduce_keeps_its_card_and_its_attributes(
     workflow_env,
 ):

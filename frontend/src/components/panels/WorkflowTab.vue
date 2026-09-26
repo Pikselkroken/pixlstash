@@ -1875,6 +1875,7 @@ async function checkInstalled(key) {
   // Only a file ComfyUI named can be replaced: a forgotten name is no file.
   const asks = [
     ...(missingCheckpointFile.value &&
+    missingCheckpointFile.value !== FORGOTTEN_MODEL &&
     missingBaseFiles.value.includes(missingCheckpointFile.value)
       ? [["checkpoint", missingCheckpointFile.value]]
       : []),
