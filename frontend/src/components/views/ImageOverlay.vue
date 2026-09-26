@@ -813,6 +813,20 @@
             @run="emit('run-recipe', image?.id)"
             @use-as-input="emit('use-as-input', image?.id)"
           />
+
+          <!-- `v-show` inside a `v-if`: the typed instruction, the chosen
+               workflow and a run in flight survive a trip to Info and a step
+               over a video, where the tab itself is absent. -->
+          <OverlayEditPanel
+            v-if="editTabAvailable"
+            v-show="sidebarTab === 'edit'"
+            :picture-id="image?.id ?? null"
+            :active="sidebarTab === 'edit'"
+            :comfyui-progress="comfyuiProgress"
+            :comfyui-progress-percent="comfyuiProgressPercent"
+            @show-picture="(id) => emit('show-picture', id)"
+            @more-options="(payload) => emit('edit-more-options', payload)"
+          />
         </AppInspector>
 
         <!-- The lightbox's own narration of an undoable action. Last child of
@@ -916,6 +930,7 @@ import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
 import OverlayFilmstrip from "./OverlayFilmstrip.vue";
 import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
 import OverlayRecipePanel from "./OverlayRecipePanel.vue";
+import OverlayEditPanel from "./OverlayEditPanel.vue";
 import OverlayTagsPanel from "./OverlayTagsPanel.vue";
 import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
 import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
@@ -1107,14 +1122,34 @@ const chosenSidebarTab = ref("info");
 // take the tab away for the length of one file read on every filmstrip step
 // and put it back, under the reader's cursor.
 const recipeTabShown = ref(false);
+// ── Edit (#1381) ───────────────────────────────────────────────────────────
+//
+// Offered whenever this machine has a ComfyUI and the session may write,
+// whether or not the picture has a recipe: a holiday photo gets Edit too. Absent
+// rather than disabled when it cannot be used, by the Recipe tab's rule, and
+// absent on a video (the design's answer: no edit workflow takes one yet).
+//
+// The PANEL hangs off `editTabAvailable` alone, so stepping over a video hides
+// the tab without unmounting the typed instruction or a run in flight.
+const editTabAvailable = computed(
+  () => comfyuiConfigured.value && !isReadOnly.value,
+);
+const editTabShown = computed(
+  () =>
+    editTabAvailable.value &&
+    !!image.value?.id &&
+    !isSupportedVideoFile(getOverlayFormat(image.value)),
+);
 // The reader's CHOICE is remembered even while the tab it names is gone, so
 // stepping over a photo in a run of ComfyUI pictures does not silently move
 // them to Info for the rest of the walk.
 const sidebarTab = computed({
-  get: () =>
-    chosenSidebarTab.value === "recipe" && !recipeTabShown.value
-      ? "info"
-      : chosenSidebarTab.value,
+  get: () => {
+    const chosen = chosenSidebarTab.value;
+    if (chosen === "recipe" && !recipeTabShown.value) return "info";
+    if (chosen === "edit" && !editTabShown.value) return "info";
+    return chosen;
+  },
   set: (value) => {
     chosenSidebarTab.value = value;
   },
@@ -1124,6 +1159,21 @@ const sidebarTab = computed({
 // by another name, which is the thing hiding Recipe was meant to avoid. With
 // no tabs the band is gone and the pane is the plain inspector every other
 // screen uses.
+const sidebarTabs = computed(() => {
+  const tabs = [
+    { value: "info", label: "Info", icon: "mdi-information-outline" },
+  ];
+  if (recipeTabShown.value) {
+    tabs.push({ value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" });
+  }
+  if (editTabShown.value) {
+    // `mdi-sitemap-outline` is the app's ComfyUI workflow glyph everywhere
+    // else (the Run popup, *Use as input for…*, the Workflows view).
+    tabs.push({ value: "edit", label: "Edit", icon: "mdi-sitemap-outline" });
+  }
+  return tabs.length > 1 ? tabs : [];
+});
+
 // **The band taking focus with it when it goes.** Arrow keys are a window
 // listener, so a reader can step the filmstrip with focus sitting on a tab
 // button; the next picture having no recipe then unmounts the button under
@@ -1132,20 +1182,18 @@ const sidebarTab = computed({
 // it happened. It catches Info as well as Recipe, which means a reader who
 // never opened Recipe loses focus the same way. The canvas is where the
 // receipt's Escape path already sends it.
-watch(recipeTabShown, (shown) => {
-  if (shown) return;
-  const active = document.activeElement;
-  if (!active || !active.closest?.(".inspector-tabs")) return;
-  nextTick(() => overlayCanvasRef.value?.focus?.());
-});
-
-const sidebarTabs = computed(() =>
-  recipeTabShown.value
-    ? [
-        { value: "info", label: "Info", icon: "mdi-information-outline" },
-        { value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" },
-      ]
-    : [],
+// Edit coming and going removes tab buttons the same way, so the rule is on the
+// band as a whole: whenever the tab set changes and the focused tab button did
+// not survive it.
+watch(
+  () => sidebarTabs.value.map((tab) => tab.value).join(","),
+  () => {
+    const active = document.activeElement;
+    if (!active || !active.closest?.(".inspector-tabs")) return;
+    nextTick(() => {
+      if (!active.isConnected) overlayCanvasRef.value?.focus?.();
+    });
+  },
 );
 
 const chromeHidden = ref(false);
@@ -1365,6 +1413,9 @@ const emit = defineEmits([
   // the lightbox asks for it rather than hosting a second one.
   "run-recipe",
   "use-as-input",
+  // The Edit tab (#1381): step to its result, or open the Run popup on it.
+  "show-picture",
+  "edit-more-options",
 ]);
 
 const descriptionPanelRef = ref(null);
