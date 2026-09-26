@@ -2173,12 +2173,16 @@ def create_router(server) -> APIRouter:
         }
         if not fixes:
             return []
+        # Checkpoint fields only, as the fix is recorded (`model_fix_labels`):
+        # a VAE holding a file of the same name keeps it.
         swaps = {
             value: fixes[normalized_filename(value)]
-            for _node, _cls, _widget, value in iter_model_fields_api(graph)
-            if normalized_filename(value) in fixes
+            for _node, _cls, widget, value in iter_model_fields_api(graph)
+            if widget in CHECKPOINT_WIDGETS and normalized_filename(value) in fixes
         }
-        done, missed = apply_filename_swap(graph, swaps, object_info)
+        done, missed = apply_filename_swap(
+            graph, swaps, object_info, widgets=CHECKPOINT_WIDGETS
+        )
         for swap in done:
             logger.info(
                 "[workflows] Card %s loads %s in place of %s on node %s: the "
