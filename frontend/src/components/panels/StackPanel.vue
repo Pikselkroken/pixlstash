@@ -308,6 +308,7 @@ import {
   checkpointModel,
   coverCellStyle,
   modelDisplayName,
+  differsBy,
   factChips as cardFactChips,
 } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
@@ -446,8 +447,8 @@ function thumbsOf(member) {
  * A List row's accessible name, plus the one thing the row adds: its place.
  *
  * **The cover's `differs_by` is dropped**, for the reason its two chip cells
- * are left blank: it is the UNION of what the OTHER rows differ by, carried
- * on the cover because the grid draws one tile per stack. Every cell but ⋯ is
+ * are left blank: the server serves it empty, and a payload from before that
+ * carried the UNION of what the OTHER rows differ by. Every cell but ⋯ is
  * `aria-hidden`, so this string is the whole of what a screen reader hears —
  * and left in, it tells a reader the cover differs from itself by the very
  * things its siblings differ from it by, while the row in front of a sighted
@@ -488,15 +489,16 @@ function checkpointChips(member, index) {
 /**
  * The member's difference chips — and none at all on the cover's row.
  *
- * The cover card carries the UNION of what its members differ by: it is what
- * the grid draws, and one tile has to say what is under it. Inside the panel
- * that makes the first row list its siblings' differences as though they were
- * its own, in the one column whose whole job is what is NOT shared — and
- * beside a Checkpoint cell deliberately left blank for that same reason. The
- * Cover pill is what the row says instead.
+ * The cover has no difference chips of its own (it is what the others are
+ * compared against), so `factChips` would give it its type chips instead —
+ * and this column's whole job is what is NOT shared, beside a Checkpoint cell
+ * deliberately left blank for that same reason. The Cover pill is what the
+ * row says instead.
  */
 function factChips(member, index) {
-  return index === 0 ? [] : cardFactChips(member);
+  // A member whose chips could not be computed would fall back to its type
+  // chips, which in this column would read as differences.
+  return index === 0 || !differsBy(member) ? [] : cardFactChips(member);
 }
 
 // ── The member menu ───────────────────────────────────────────────────────

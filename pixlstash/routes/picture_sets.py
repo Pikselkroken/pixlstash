@@ -175,6 +175,7 @@ class PictureSetBulkReplaceResponse(BaseModel):
 
     status: str
     members: int
+    removed: int
 
 
 class LockedSetSummary(BaseModel):
@@ -1814,7 +1815,7 @@ def create_router(server) -> APIRouter:
         description="Adds one picture to a set when the set and picture are valid and membership does not already exist.",
         response_model=PictureSetAddPictureResponse,
     )
-    def add_picture_to_set(id: int, picture_id: str, request: Request):
+    def add_picture_to_set(id: int, picture_id: int, request: Request):
         origin_client_id = getattr(request.state, "origin_client_id", None)
         reference_character_id = _find_reference_character_id_for_set(id)
 
@@ -1826,7 +1827,7 @@ def create_router(server) -> APIRouter:
             enforce_set_not_locked(session, picture_set, "add pictures to a locked set")
             # Sets are atomic for stacks: adding any stacked picture adds every
             # member of its stack.
-            target_ids = expand_picture_ids_to_stacks(session, [int(picture_id)])
+            target_ids = expand_picture_ids_to_stacks(session, [picture_id])
             pictures = session.exec(
                 select(Picture).where(
                     Picture.id.in_(target_ids),
@@ -1874,14 +1875,10 @@ def create_router(server) -> APIRouter:
             **operation_log_service.request_context(request),
         )
         if success:
-            try:
-                changed_ids = [int(picture_id)]
-            except (TypeError, ValueError):
-                changed_ids = []
             server.vault.notify(
                 EventType.CHANGED_PICTURES,
                 {
-                    "picture_ids": changed_ids,
+                    "picture_ids": [picture_id],
                     "source": "ui",
                     "origin_client_id": origin_client_id,
                     "change_kind": "updated",
@@ -1908,7 +1905,7 @@ def create_router(server) -> APIRouter:
         description="Removes one picture membership from a picture set.",
         response_model=PictureSetRemovePictureResponse,
     )
-    def remove_picture_from_set(id: int, picture_id: str, request: Request):
+    def remove_picture_from_set(id: int, picture_id: int, request: Request):
         origin_client_id = getattr(request.state, "origin_client_id", None)
         reference_character_id = _find_reference_character_id_for_set(id)
 
@@ -1923,7 +1920,7 @@ def create_router(server) -> APIRouter:
             # every member of its stack from the set. This also covers the case
             # where the requested id is a collapsed-stack leader shown because a
             # different member of its stack is the one actually in the set.
-            target_ids = expand_picture_ids_to_stacks(session, [int(picture_id)])
+            target_ids = expand_picture_ids_to_stacks(session, [picture_id])
             members = session.exec(
                 select(PictureSetMember).where(
                     PictureSetMember.set_id == id,
@@ -2050,7 +2047,16 @@ def create_router(server) -> APIRouter:
     @router.put(
         "/picture_sets/{id}/members",
         summary="Bulk replace picture set members",
-        description="Atomically replaces the entire member list of a set. All existing members are removed and the provided picture ids become the new members.",
+        description=(
+            "Atomically replaces the entire member list of a set: every existing "
+            "member not named in `picture_ids` is removed. This is the destructive "
+            "twin of `POST /picture_sets/{id}/members`, which appends. A request "
+            "that would leave the set empty (an empty or missing `picture_ids`, or "
+            "ids that are all unknown or deleted) is refused with a 400 unless "
+            "`allow_empty` is true. The response reports the members remaining "
+            "and how many were removed. To remove single pictures use "
+            "`DELETE /picture_sets/{id}/members/{picture_id}`."
+        ),
         response_model=PictureSetBulkReplaceResponse,
     )
     def bulk_replace_pictures_in_set(
@@ -2066,6 +2072,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400, detail="All picture ids must be integers"
             )
+        allow_empty = payload.get("allow_empty", False) is True
 
         def bulk_replace(session, set_id, picture_ids):
             picture_set = session.get(PictureSet, set_id)
@@ -2077,26 +2084,32 @@ def create_router(server) -> APIRouter:
             )
             # Sets are atomic for stacks: keep every member of any stack together.
             picture_ids = expand_picture_ids_to_stacks(session, picture_ids)
-            # Remove all existing members
+            member_ids: list[int] = []
+            for pic_id in dict.fromkeys(picture_ids):
+                pic = session.get(Picture, pic_id)
+                if pic and not pic.deleted:
+                    member_ids.append(pic_id)
             existing_members = session.exec(
                 select(PictureSetMember).where(PictureSetMember.set_id == set_id)
             ).all()
+            # Issue #1580: an empty replacement silently wiped a live set. Refuse
+            # before touching anything unless the caller asked for it by name.
+            if not member_ids and existing_members and not allow_empty:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Refusing to remove all {len(existing_members)} member(s): "
+                        "PUT replaces the whole set and no valid picture id was "
+                        "given. Pass allow_empty=true to empty the set, or use "
+                        "DELETE /picture_sets/{id}/members/{picture_id} to remove "
+                        "single pictures."
+                    ),
+                )
             for m in existing_members:
                 session.delete(m)
-            # Add new members
-            added = 0
-            seen = set()
-            member_ids: list[int] = []
-            for pic_id in picture_ids:
-                if pic_id in seen:
-                    continue
-                seen.add(pic_id)
-                pic = session.get(Picture, pic_id)
-                if not pic or pic.deleted:
-                    continue
+            for pic_id in member_ids:
                 session.add(PictureSetMember(set_id=set_id, picture_id=pic_id))
-                member_ids.append(pic_id)
-                added += 1
+            removed = len({m.picture_id for m in existing_members} - set(member_ids))
             # Issue #125: propagate to every project the set belongs to, not just
             # the primary FK.
             reconcile_entity_projects_change(
@@ -2106,7 +2119,7 @@ def create_router(server) -> APIRouter:
                 remove_project_ids=[],
             )
             session.flush()
-            return added
+            return {"members": len(member_ids), "removed": removed}
 
         def _current_members(session):
             # A replace-all also EVICTS members the request never named. They must
@@ -2116,7 +2129,7 @@ def create_router(server) -> APIRouter:
                 select(PictureSetMember.picture_id).where(PictureSetMember.set_id == id)
             ).all()
 
-        added, _operation = operation_log_service.run_recorded_metadata_task(
+        result, _operation = operation_log_service.run_recorded_metadata_task(
             server.vault,
             bulk_replace,
             id,
@@ -2128,7 +2141,7 @@ def create_router(server) -> APIRouter:
             summary=f"Replaced a set's members with {len(picture_ids)} picture(s)",
             **operation_log_service.request_context(request),
         )
-        if added is None:
+        if result is None:
             raise HTTPException(status_code=404, detail="Picture set not found")
         server.vault.notify(
             EventType.CHANGED_PICTURES,
@@ -2139,6 +2152,6 @@ def create_router(server) -> APIRouter:
                 "change_kind": "updated",
             },
         )
-        return {"status": "success", "members": added}
+        return {"status": "success", **result}
 
     return router

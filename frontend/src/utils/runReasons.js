@@ -68,9 +68,9 @@ export const PICTURE_INPUT_UNFILLED = "picture_input_unfilled";
 /**
  * Not a refusal either: a custom node the server replaced (#1463).
  *
- * Today only a seed node (rgthree's `Seed (rgthree)` and its kin) this ComfyUI
- * lacks: its link becomes a literal and the run's own seed pass writes it, so
- * the run goes ahead without the pack. `RunGroup.replaced_nodes` carries it.
+ * A seed node (rgthree's `Seed (rgthree)` and its kin) or a text node (WAS's
+ * `Text Multiline`, `CR Text`, `Textbox`, `PrimitiveStringMultiline`) this ComfyUI lacks: its link becomes
+ * a literal, so the run goes ahead without the pack. `RunGroup.replaced_nodes` carries it.
  */
 export const NODES_REPLACED = "nodes_replaced";
 
@@ -145,10 +145,27 @@ export function readReason(reason) {
     case NODES_REPLACED: {
       // Named by class, once each, in the sentence: a node is not a file, and
       // the files list would draw it as one.
-      const nodes = [...new Set(names(reason.nodes, "class_type"))];
-      const one = nodes.length === 1;
+      const of = (kind) => [
+        ...new Set(
+          names(
+            (reason.nodes || []).filter(
+              (node) => (node?.replacement || "seed") === kind,
+            ),
+            "class_type",
+          ),
+        ),
+      ];
+      const sentence = (nodes, kind, instead) =>
+        nodes.length
+          ? `This ComfyUI does not have ${nodes.length === 1 ? `the ${kind} node` : `the ${kind} nodes`} ${nodes.join(", ")}, so PixlStash ${instead} instead. The run goes ahead without ${nodes.length === 1 ? "it" : "them"}.`
+          : "";
       return read(
-        `This ComfyUI does not have ${one ? "the seed node" : "the seed nodes"} ${nodes.join(", ")}, so PixlStash writes the seed straight into the sampler instead. The run goes ahead without ${one ? "it" : "them"}.`,
+        [
+          sentence(of("seed"), "seed", "writes the seed straight into the sampler"),
+          sentence(of("text"), "text", "writes the text straight into what it fed"),
+        ]
+          .filter(Boolean)
+          .join(" "),
         null,
         [],
         false,

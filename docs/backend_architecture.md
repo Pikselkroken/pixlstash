@@ -314,7 +314,7 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | [pixlstash/stacking.py](../pixlstash/stacking.py) | Picture stacking (duplicates / variants). |
 | [pixlstash/image_loading_dataset_prepper.py](../pixlstash/image_loading_dataset_prepper.py) | Dataset preparation utilities for offline training scripts. |
 | [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (list/create/attach/detach/relocate/backup/prepare-legacy-identity/rename) and `plugins` (install/test/list/remove). Only the `libraries` group opens the hub — see §8.1. |
-| [pixlstash/mcp_server.py](../pixlstash/mcp_server.py) | Read-only MCP server (`pixlstash-mcp`, stdio). An HTTP client of a running server: every tool is a fixed `GET` on an existing route, sent with the token in `PIXLSTASH_TOKEN`, so token scope is enforced by the auth middleware and the authz gate (§16), not here. No write tools, no routes of its own. |
+| [pixlstash/mcp_server.py](../pixlstash/mcp_server.py) | MCP server (`pixlstash-mcp`, stdio). An HTTP client of a running server: every tool is a fixed request on an existing route, sent with the token in `PIXLSTASH_TOKEN`, so token scope is enforced by the auth middleware and the authz gate (§16), not here. No routes of its own. Read tools are `GET`s; `--allow-write` adds the workflow tools (list, graph export/import, preflight, run), all owner-only routes, so they need an `ALL` token. The export and import tools also write and read a JSON file on this machine: the handoff to ComfyUI's own MCP server, whose tools take workflows by path. |
 | [pixlstash/plugin_install.py](../pixlstash/plugin_install.py) | Backs `pixlstash-cli plugins available/install/list/remove`. Classifies a plugin source with `ast` (never by importing it), resolves the destination, and copies it; also lists what the plugins repository publishes. See §8.1. |
 | [pixlstash/plugin_check.py](../pixlstash/plugin_check.py) | Backs `pixlstash-cli plugins test`. The one plugin verb that *does* import, through the server's own loader, and the only place the parameter schema is checked against what the UI renders. See §8.1. |
 
@@ -591,6 +591,11 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                          |
 | POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                        |
 | GET    | /api/v1/models/workflow-sets                                                  | model_shelf     | Which models have actually run together                     |
+| POST   | /api/v1/models/workflow-sets                                                  | model_shelf     | Make a workflow set by hand                                 |
+| PATCH  | /api/v1/models/workflow-sets/{set_id}                                         | model_shelf     | Rename a workflow set                                       |
+| DELETE | /api/v1/models/workflow-sets/{set_id}                                         | model_shelf     | Delete a workflow set                                       |
+| POST   | /api/v1/models/workflow-sets/{set_id}/members                                 | model_shelf     | Add models to a workflow set                                |
+| POST   | /api/v1/models/workflow-sets/{set_id}/members/remove                          | model_shelf     | Take models out of a workflow set                           |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                          |
 | POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager              |
 | GET    | /api/v1/models/{model_id}/samples                                             | model_shelf     | The training previews stored beside one imported checkpoint |
@@ -3028,8 +3033,9 @@ section, not a site of its own in `_plan`.
 source, the LoRA loaders in the order a run applies them, and what reads the
 result. `read_lora_chain` types every link from `object_info`, as
 `plan_lora_insertion` does, and refuses (the route answers `editable: false` with
-the sentence) a graph it cannot edit honestly: several model sources, or a CLIP
-chain in a different order from the MODEL one. Only the MODEL path counts: the
+the sentence) a graph it cannot edit honestly: loaders that start from
+different places, a second model that itself goes several ways, or a CLIP chain
+in a different order from the MODEL one. Only the MODEL path counts: the
 graph is first cut to the nodes an output node (`output_node` in `object_info`)
 reads, as ComfyUI runs it, so a leftover UNET loader wired into nothing is not a
 second model; another kind of model (an upscaler's, `WANVIDEOMODEL`) is on a
@@ -3037,11 +3043,19 @@ path of its own and ignored. Only a plain one-slot loader wired into the MODEL
 path is an editable link; any other node that loads a LoRA (a stacker, a prompt
 tag, a character prompt builder) stays as an ordinary node the chain runs
 around, so a loader can always be added between the model source and what reads
-the model. **A branch ends the chain**: when a loader's model is read by the
-next loader and by something else (a second sampler pass with an extra LoRA),
-the chain stops there, a LoRA added at its end reaches every reader, the
-loaders past the branch are left as they are, and `branch_note` tells the owner
-why the list is shorter than the workflow. A refused chain,
+the model. **Where the model forks, the chain is a tree**: the loaders every
+pass reads are the trunk (`loaders`), and each node reading the fork (a base
+sampler, a hires pass, a detailer) starts a **lane** (`lanes`) with the loaders
+only it reads. Readers that are not loaders are grouped by the sampler they
+reach, so a guider and a scheduler feeding one `SamplerCustomAdvanced` stay one
+straight chain. A lane is named by the nearest sampler downstream of it (its
+ComfyUI title when it has one), and branches that meet again at one node (a
+model merge) are refused, since they are not separate passes. A workflow loading one model per pass (Wan 2.2 high/low noise) has no
+trunk: `model_source` is null and each lane names its own, CLIP included when
+each pass encodes its own prompt (SDXL base and refiner). A lane off a trunk
+must take its CLIP from the trunk's CLIP end. Only a further fork inside a lane, or loaders
+past a node that is not a loader, are left as they are, and `branch_note` tells
+the owner why the list is shorter than the workflow. A refused chain,
 or one read with ComfyUI unreachable, goes through `read_lora_chain_untyped`,
 which follows the `model` links so the chain can still be looked at; when
 ComfyUI did answer it also types the two ends best effort (the model source and
@@ -3049,9 +3063,14 @@ what reads the chain's end), so the read-only view names what the chain runs
 between. Each loader carries the shelf digest it loads, when exactly one shelf
 LoRA matches.
 
-`PUT` takes the whole chain as the owner left it. An existing loader is kept by
-`node_id` (moved and re-weighted, its id kept), a new one is added by shelf
-`sha256`, and every loader left out is deleted through `bypass_node`.
+`PUT` takes the whole chain as the owner left it: `entries` for the trunk and,
+for a tree, `lanes` with one list per lane (left out, every lane stays as read).
+An existing loader is kept by `node_id` (moved and re-weighted, its id kept)
+and may land in any segment, which is how it crosses the fork; a new one is
+added by shelf `sha256`, carrying a CLIP only where its segment has a CLIP
+reader; and every loader left out is deleted through `bypass_node`. The change
+list says where a lane loader's CLIP half goes, since the text encoders it
+reaches may feed every pass. The cap of 32 loaders counts the whole tree.
 `plan_lora_chain` validates the whole edit before `apply_lora_chain` touches the
 graph, and the result is written as a **new** file through `_store_copy`, so one
 save is one new card and the original file never changes. `dry_run` answers the
@@ -3079,7 +3098,7 @@ Skipped when ComfyUI could not be inspected (nothing is known to repair) and
 when `_apply_loras` has already refused (that run is not happening). The
 reports go on the group only when it is actually submitted, and every
 registered field is cleared when the batch rule zeroes the request. A new
-repair is a registry entry plus its `RunGroup` field. Two ship:
+repair is a registry entry plus its `RunGroup` field. Three ship:
 
 - **`missing_models` → `bypassed_loras`**: the LoRA bypass above.
 - **`missing_nodes` → `replaced_nodes`**: `replace_missing_seed_nodes`. A custom
@@ -3104,6 +3123,21 @@ repair is a registry entry plus its `RunGroup` field. Two ship:
   hires-fix or refiner pair built to share one seed would get two; and a node
   whose own seed is wired from elsewhere. Each entry is `{node_id, class_type,
   replacement: "seed", consumers: [{node_id, field}]}`.
+- **`missing_nodes` → `replaced_nodes`** (second entry, same report):
+  `replace_missing_text_nodes`. A custom text node this ComfyUI lacks
+  (`TEXT_NODE_CLASSES`: WAS's `Text Multiline`, Comfyroll's `CR Text`,
+  Chibi-Nodes' `Textbox`, core's `PrimitiveStringMultiline` on an older
+  ComfyUI) only hands its string on, so every link from it becomes that string, however many
+  inputs it fed. It runs after `_apply_prompts`, which writes a Run popup
+  prompt through `prompt_text_target`: past a linked encoder into the text
+  node itself, when that node feeds only that encoder, so the typed prompt is
+  what gets inlined. `Text Multiline` drops its `#` comment lines as the node
+  does; one holding anything in square brackets (a WAS token) keeps its
+  refusal, as do a wired text, another input set that may override it
+  (`Textbox`'s `passthrough`), and a consumer reading any output but the first.
+  It runs before the seed repair, whose rollback restores the graph it was
+  handed. Entries carry `replacement: "text"`, which the Run popup reads to
+  word its notice.
 - **An allow-list, not a general rewriter.** A replacement that is *nearly*
   right silently changes what the picture looks like, which is worse than the
   refusal. The candidates the issue names for later (custom primitive nodes,
@@ -3241,6 +3275,42 @@ band can only put a row in one place.
   proposes no grouping at all and is not asked to - the per-recipe shape is the
   evidence, and every claim the UI makes about a pair reads it rather than the
   union drawn on top.
+
+#### Hand-made workflow sets (#1520)
+
+The owner can also say which shelf models go together, and that one IS stored:
+`model_workflow_set` and `model_workflow_set_member` in the hub (amended into v2,
+like every shelf table), read and written by
+`pixlstash/services/model_workflow_sets.py`.
+
+- **A menu, not a recipe.** Fixed slots (`checkpoint` at most one - a partial
+  unique index holds it - then `text_encoder`, `vae`, `lora`, `other`), no order,
+  no strengths. A set may be unnamed, empty, or have no checkpoint
+  (`incomplete`). The slot defaults from `file_kind`; `checkpoint` is accepted
+  for a `checkpoint` or an `unknown` file only (a diffusion file is often
+  `unknown`). Engines and files still waiting for their hash are refused (409).
+- **Members are sha256s, with no foreign key to `model`.** Forgetting or
+  deleting a file drops its `model` row; the member stays, is served
+  `on_shelf: false` under the `label` it was added with, and reconnects when a
+  row with the same digest returns. The same property makes undo simple: a
+  delete returns the set's snapshot, and re-posting its members in the
+  `{sha256, slot, label}` form recreates it, off-shelf members included.
+- **Evidence is layered on, not merged.** `attach_hand_made` takes the
+  `fetch_workflow_sets` answer unchanged and adds `covered_by` to each
+  combination (a set covers it when every model of the combination is an
+  on-shelf member; the set may hold more), a `hand_made` list whose counts and
+  covers are pooled from the combinations each set covers, and drops on-shelf
+  members from `no_set`. Covered combinations are still served: the grid hides
+  them, *Works with* reads them all. The mutators answer with the set re-read
+  through that same full evidence pass, which is a per-click cost, not per row.
+- **Clone with new models reads them first.** `propose_companions` lists, ahead
+  of the recipe ladder, the on-shelf VAEs and text encoders of every set whose
+  checkpoint member is the chosen checkpoint (`via: "grouped"`, `recipes: 0`,
+  `set_name` from the newest such set). `prepick` is true only when those sets
+  name exactly one file of that kind between them; ladder entries always carry
+  `prepick: true` and drop any file already grouped (after the ladder step is
+  chosen, so grouping never widens it). Filed by the file's own `file_kind`, not
+  by the slot it was put in.
 
 `model.family`, `model.quant` and `model.weights_id` are what the scanner reads
 off a file rather than off the shelf — `family` and `weights_id` from the

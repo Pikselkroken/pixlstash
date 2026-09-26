@@ -7,8 +7,10 @@ import { createPinia, setActivePinia } from "pinia";
 
 const listWorkflowCards = vi.fn();
 const runWorkflowCard = vi.fn();
+const preflightWorkflowRun = vi.fn();
 vi.mock("../../api/workflows", () => ({
   listWorkflowCards: (...a) => listWorkflowCards(...a),
+  preflightWorkflowRun: (...a) => preflightWorkflowRun(...a),
   runWorkflowCard: (...a) => runWorkflowCard(...a),
 }));
 vi.mock("../../api/pictures", () => ({
@@ -16,7 +18,8 @@ vi.mock("../../api/pictures", () => ({
   pictureThumbnailUrl: (id) => `/thumb/${id}`,
 }));
 vi.mock("../../api/stacks", () => ({ listStackPictures: vi.fn(async () => []) }));
-vi.mock("vue-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+const push = vi.fn();
+vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
 vi.mock("../../utils/apiClient", () => ({
   onSessionReset: () => () => {},
 }));
@@ -46,6 +49,7 @@ async function mountPanel() {
       stubs: {
         AppButton: { template: "<button class='run' @click=\"$emit('click')\"><slot /></button>" },
         "v-icon": true,
+        Tooltip: true,
         // Renders the field and the menu side by side, so the rows can be
         // read and clicked without Vuetify's overlay.
         "v-menu": {
@@ -68,13 +72,28 @@ beforeEach(async () => {
   pictures.getPictureMetadata.mockReset().mockResolvedValue({ stack_id: null });
   stacks.listStackPictures.mockReset().mockResolvedValue([]);
   window.localStorage.clear();
+  push.mockReset();
   listWorkflowCards.mockReset().mockResolvedValue({ cards: CARDS });
+  preflightWorkflowRun.mockReset().mockResolvedValue({ ok: true, groups: [] });
   runWorkflowCard
     .mockReset()
     .mockResolvedValue({ prompts: [{ prompt_id: "p1" }], groups: [] });
 });
 
 describe("the Edit tab", () => {
+  it("opens the chosen workflow in the Workflows view", async () => {
+    const wrapper = await mountPanel();
+    const out = wrapper
+      .findAll("[role=menuitemradio]")
+      .find((row) => row.text().includes("Widen"));
+    await out.trigger("click");
+    await wrapper.find(".edit-sec-act").trigger("click");
+    expect(push).toHaveBeenCalledWith({
+      name: "workflows",
+      query: { card: "out" },
+    });
+  });
+
   it("lists only the edit card types, an Image to Image card first", async () => {
     const wrapper = await mountPanel();
     const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
@@ -89,6 +108,45 @@ describe("the Edit tab", () => {
     const wrapper = await mountPanel();
     expect(wrapper.find("[role=menu]").exists()).toBe(false);
     expect(wrapper.text()).toContain("Open Workflows");
+  });
+
+  it("leaves out an edit card the pre-flight says cannot run", async () => {
+    preflightWorkflowRun.mockImplementation(async ({ target }) => ({
+      groups: [
+        {
+          reasons:
+            target === "i2i"
+              ? [{ code: "missing_models", models: [] }]
+              : [],
+        },
+      ],
+    }));
+    const wrapper = await mountPanel();
+    const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
+    expect(rows).toEqual(["Widen, Outpaint"]);
+    // Asked the way the run asks: this picture, that card.
+    expect(preflightWorkflowRun).toHaveBeenCalledWith({
+      picture_ids: [7],
+      target: "i2i",
+    });
+  });
+
+  it("keeps every card when ComfyUI cannot be asked, or the check fails", async () => {
+    preflightWorkflowRun.mockImplementation(async ({ target }) => {
+      if (target === "out") throw new Error("offline");
+      return { groups: [{ reasons: [{ code: "comfyui_unreachable" }] }] };
+    });
+    const wrapper = await mountPanel();
+    expect(wrapper.findAll("[role=menuitemradio]")).toHaveLength(2);
+  });
+
+  it("says the edit cards cannot run when every one was left out", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      groups: [{ reasons: [{ code: "missing_nodes", nodes: ["Foo"] }] }],
+    });
+    const wrapper = await mountPanel();
+    expect(wrapper.find("[role=menu]").exists()).toBe(false);
+    expect(wrapper.text()).toContain("can run as they stand");
   });
 
   it("runs the picture through the chosen card with the instruction", async () => {

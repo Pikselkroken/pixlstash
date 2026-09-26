@@ -483,7 +483,8 @@ class WorkflowCard(BaseModel):
 
     ``stack_size`` of 2 or more is what makes a card a stack: the grid draws
     one card per stack, the cover's, and ``member_keys`` names the rest so a
-    caller can open them. ``differs_by`` is then the union over the members.
+    caller can open them. ``differs_by`` is empty on the cover, which is what
+    the members are compared against.
     """
 
     key: str
@@ -1120,8 +1121,9 @@ class RunGroup(BaseModel):
     # never writes back a set it has not seen.
     picture_inputs: list[RunPictureInput] = Field(default_factory=list)
     # A custom node this ComfyUI lacks, replaced by what PixlStash already does
-    # (#1463): today only a seed node, whose link becomes a literal the run's
-    # own seed pass then writes. Reported on the same terms as a bypass: the
+    # (#1463): a seed node, whose link becomes a literal the run's
+    # own seed pass then writes, or a text node, whose string is inlined.
+    # Reported on the same terms as a bypass: the
     # graph that runs is not the one the card names, and the owner is told so
     # before the run rather than after.
     replaced_nodes: list[dict] = Field(default_factory=list)
@@ -1263,8 +1265,40 @@ class LoraChainLoader(BaseModel):
     on_shelf: bool = False
 
 
+class LoraChainPass(BaseModel):
+    """The node a lane's model ends in: its sampler, as the owner names it."""
+
+    node_id: str
+    class_type: str | None = None
+    title: str | None = Field(
+        None, description="The node's ComfyUI title, when it is not just its class."
+    )
+
+
+class LoraChainLane(BaseModel):
+    """One pass past the fork: the loaders only it reads, and what reads them."""
+
+    source: LoraChainSource | None = Field(
+        None,
+        description="The lane's own model, when the workflow loads one per pass; "
+        "null for a lane off the shared trunk.",
+    )
+    sampler: LoraChainPass
+    sink: LoraChainSink = Field(default_factory=LoraChainSink)
+    loaders: list[LoraChainLoader] = Field(default_factory=list)
+    added_loader_class: str | None = Field(
+        None, description="The loader class Add would insert in this lane."
+    )
+
+
 class LoraChain(BaseModel):
-    """``GET /workflows/{key}/lora-chain``: the LoRA chain as the editor shows it."""
+    """``GET /workflows/{key}/lora-chain``: the LoRA chain as the editor shows it.
+
+    A straight chain is ``loaders`` between ``source`` and ``sink``. Where the
+    model forks, ``loaders`` is the trunk every pass reads and ``lanes`` holds
+    one entry per pass; a workflow loading a model per pass has no ``source``
+    and every lane names its own.
+    """
 
     workflow_key: str
     editable: bool = False
@@ -1278,11 +1312,17 @@ class LoraChain(BaseModel):
     added_loader_class: str | None = Field(
         None, description="The loader class Add a LoRA would insert."
     )
+    lanes: list[LoraChainLane] = Field(
+        default_factory=list,
+        description="One per pass where the model forks, in run order; empty "
+        "for a straight chain.",
+    )
     branch_note: str | None = Field(
         None,
         description=(
-            "Why the chain stops before some of the workflow's loaders: the "
-            "model branches at its end, so those loaders are left as they are."
+            "Why the chain stops before some of the workflow's loaders: a node "
+            "that is not a loader, or a further branch, so those loaders are "
+            "left as they are."
         ),
     )
 
@@ -1307,11 +1347,28 @@ class LoraChainEntry(BaseModel):
 
 
 class LoraChainEdit(BaseModel):
-    """``PUT /workflows/{key}/lora-chain``: the whole chain, in apply order."""
+    """``PUT /workflows/{key}/lora-chain``: the whole chain, in apply order.
+
+    ``entries`` is the trunk (the whole chain when it is straight); ``lanes``
+    one list per lane of the chain as read, in its order. A loader may land in
+    any of them, which is how it crosses the fork. ``lanes`` left out keeps
+    every pass as it is.
+    """
 
     entries: list[LoraChainEntry] = Field(
         default_factory=list, max_length=MAX_RUN_LORAS
     )
+    lanes: list[list[LoraChainEntry]] | None = Field(None, max_length=MAX_RUN_LORAS)
+
+    @model_validator(mode="after")
+    def _within_the_cap(self) -> "LoraChainEdit":
+        # The cap is on the whole tree, not per list: every entry may cost a
+        # shelf lookup before the plan is checked.
+        total = len(self.entries) + sum(len(lane) for lane in self.lanes or [])
+        if total > MAX_RUN_LORAS:
+            raise ValueError(f"at most {MAX_RUN_LORAS} loaders in one chain")
+        return self
+
     name: str | None = Field(None, max_length=MAX_NAME_LENGTH)
     dry_run: StrictBool = False
 
@@ -1376,19 +1433,36 @@ class SwapProposal(BaseModel):
     family: str | None = None
     via: str = Field(
         description=(
-            "Which step answered: checkpoint (ran with this checkpoint), "
-            "base_model (with another of the same base model), family "
-            "(with another of the same architecture) or declared (nothing "
-            "has run with it: its file layout is one the architecture "
-            "declares, which is not evidence it suits)."
+            "Which step answered: grouped (a hand-made workflow set pairs it "
+            "with this checkpoint; listed first), checkpoint (ran with this "
+            "checkpoint), base_model (with another of the same base model), "
+            "family (with another of the same architecture) or declared "
+            "(nothing has run with it: its file layout is one the "
+            "architecture declares, which is not evidence it suits)."
         )
     )
-    recipes: int = Field(description="How many recipes name the two together.")
+    recipes: int = Field(
+        description="How many recipes name the two together; 0 for grouped."
+    )
     history_runs: int = Field(
         default=0,
         description=(
             "How many runs in ComfyUI's own history, as of the last workflow "
-            "pull, loaded the two together."
+            "pull, loaded the two together; 0 for grouped."
+        ),
+    )
+    set_name: str | None = Field(
+        None,
+        description=(
+            "grouped only: the name of the newest workflow set grouping it, "
+            "null when that set has no name."
+        ),
+    )
+    prepick: bool = Field(
+        True,
+        description=(
+            "Whether the dialog may select it for the owner. False for a "
+            "grouped file when the matching sets group several of that kind."
         ),
     )
 
@@ -2714,9 +2788,9 @@ def create_router(server) -> APIRouter:
             if text is None:
                 continue
             for node_id in node_ids:
-                inputs = (graph.get(node_id) or {}).get("inputs")
-                if isinstance(inputs, dict) and isinstance(inputs.get("text"), str):
-                    inputs["text"] = text
+                target = run_service.prompt_text_target(graph, node_id)
+                if target is not None:
+                    graph[target[0]]["inputs"][target[1]] = text
 
     def _apply_loras(
         graph: dict, loras: list[RunLora], object_info: dict | None
@@ -3721,7 +3795,8 @@ def create_router(server) -> APIRouter:
             "lora_not_skippable. Likewise a custom seed node this ComfyUI "
             "lacks (rgthree's Seed and its kin) is replaced by the run's own "
             "seed and named in replaced_nodes, where every input it fed is one "
-            "the seed pass writes. A "
+            "the seed pass writes; so is a plain text node (Text Multiline, "
+            "CR Text, Textbox, PrimitiveStringMultiline), its string inlined. A "
             "body that cannot be interpreted against the card answers "
             "400/404/422 here exactly as it does on the run, so the two never "
             "disagree."
@@ -4251,9 +4326,10 @@ def create_router(server) -> APIRouter:
         ``name`` becomes the shelf's filename, since a hash names nothing to a
         reader.
         """
+        every = _chain_loaders(chain)
         by_name, digests = adapter_digest_index(hub)
-        found = _slot_digests(chain["loaders"], (by_name, digests))
-        for loader in chain["loaders"]:
+        found = _slot_digests(every, (by_name, digests))
+        for loader in every:
             digest = found.get((str(loader["node_id"]), str(loader["field"])))
             loader["sha256"] = digest
             if loader.get("by") != "digest":
@@ -4275,17 +4351,67 @@ def create_router(server) -> APIRouter:
                 continue
             loader["name"] = lora_display_name(filenames[-1]) if filenames else digest
 
+    def _chain_loaders(chain: dict) -> list[dict]:
+        """Every loader of *chain*: the trunk's, then each lane's."""
+        return chain["loaders"] + [
+            loader for lane in chain.get("lanes") or [] for loader in lane["loaders"]
+        ]
+
+    def _loader_payload(loader: dict) -> LoraChainLoader:
+        return LoraChainLoader(
+            node_id=str(loader["node_id"]),
+            class_type=loader.get("class_type"),
+            field=str(loader["field"]),
+            filename=str(loader["value"]),
+            name=loader["name"],
+            strength=loader["strengths"].get("model"),
+            # A model-only loader has no CLIP strength to show, and a loader
+            # read untyped says nothing about its wiring either.
+            strength_clip=loader["strengths"].get("clip"),
+            sha256=loader.get("sha256"),
+            on_shelf=loader.get("sha256") is not None,
+        )
+
+    def _sink_payload(sinks: list[dict], summary: str | None) -> LoraChainSink:
+        return LoraChainSink(
+            summary=summary,
+            consumers=[LoraChainConsumer(**sink) for sink in sinks],
+        )
+
     def _chain_payload(
         workflow_key: str, chain: dict, refusal: str | None, object_info
     ) -> LoraChain:
         model = chain.get("model_source")
         clip = chain.get("clip_source")
         same_node = bool(model and clip and clip["node_id"] == model["node_id"])
-        added = None
-        if refusal is None:
-            added = "LoraLoader" if clip is not None else "LoraLoaderModelOnly"
-            if added not in (object_info or {}):
-                added = None
+
+        def added_class(with_clip: bool) -> str | None:
+            # The class plan_lora_chain puts in, named before the owner picks.
+            if refusal is not None:
+                return None
+            added = "LoraLoader" if with_clip else "LoraLoaderModelOnly"
+            return added if added in (object_info or {}) else None
+
+        lanes = []
+        for lane in chain.get("lanes") or []:
+            source = lane["source"]
+            lanes.append(
+                LoraChainLane(
+                    source=None
+                    if source is None
+                    else LoraChainSource(
+                        node_id=str(source["node_id"]),
+                        class_type=source.get("class_type"),
+                        outputs=["MODEL"],
+                    ),
+                    sampler=LoraChainPass(**lane["pass"]),
+                    sink=_sink_payload(lane["sinks"], lane.get("sink_summary")),
+                    loaders=[_loader_payload(loader) for loader in lane["loaders"]],
+                    added_loader_class=added_class(
+                        any(sink["type"] == "CLIP" for sink in lane["sinks"])
+                    ),
+                )
+            )
         return LoraChain(
             workflow_key=workflow_key,
             editable=refusal is None,
@@ -4302,27 +4428,11 @@ def create_router(server) -> APIRouter:
             else LoraChainClipSource(
                 node_id=str(clip["node_id"]), class_type=clip.get("class_type")
             ),
-            sink=LoraChainSink(
-                summary=chain.get("sink_summary"),
-                consumers=[LoraChainConsumer(**sink) for sink in chain["sinks"]],
-            ),
-            loaders=[
-                LoraChainLoader(
-                    node_id=str(loader["node_id"]),
-                    class_type=loader.get("class_type"),
-                    field=str(loader["field"]),
-                    filename=str(loader["value"]),
-                    name=loader["name"],
-                    strength=loader["strengths"].get("model"),
-                    # A model-only loader has no CLIP strength to show, and a
-                    # loader read untyped says nothing about its wiring either.
-                    strength_clip=loader["strengths"].get("clip"),
-                    sha256=loader.get("sha256"),
-                    on_shelf=loader.get("sha256") is not None,
-                )
-                for loader in chain["loaders"]
-            ],
-            added_loader_class=added,
+            sink=_sink_payload(chain["sinks"], chain.get("sink_summary")),
+            loaders=[_loader_payload(loader) for loader in chain["loaders"]],
+            # No trunk to add to when every pass loads its own model.
+            added_loader_class=added_class(clip is not None) if model else None,
+            lanes=lanes,
             branch_note=chain.get("branch_note"),
         )
 
@@ -4333,10 +4443,12 @@ def create_router(server) -> APIRouter:
             "The LoRA loaders between this workflow's model source and what "
             "reads the model, in the order a run applies them, each with its "
             "strength and the shelf LoRA it loads. Typed from ComfyUI's "
-            "object_info: when ComfyUI cannot be reached, or the chain is one "
-            "PixlStash cannot edit honestly (two model sources, a stacker, a "
-            "branching chain), editable is false, refusal says why, and the "
-            "loaders are still listed as read from the graph."
+            "object_info. Where the model forks, loaders is the trunk every "
+            "pass reads and lanes holds one entry per pass. When ComfyUI "
+            "cannot be reached, or the chain is one PixlStash cannot edit "
+            "honestly (loaders that start from different places, CLIP passed "
+            "in another order than the model), editable is false, refusal says "
+            "why, and the loaders are still listed as read from the graph."
         ),
         response_model=LoraChain,
         responses={
@@ -4381,7 +4493,8 @@ def create_router(server) -> APIRouter:
         summary="Edit a workflow's LoRA chain",
         description=(
             "Write a copy of this workflow with its LoRA chain as the owner "
-            "left it: entries in apply order, an existing loader by node_id "
+            "left it: entries in apply order (and, for a forked chain, lanes: "
+            "one list per pass), an existing loader by node_id "
             "(moved and re-weighted, its id kept), a new one by the shelf "
             "sha256 of its LoRA, and every loader left out deleted. One call "
             "is one new card; the original file is never changed. dry_run "
@@ -4431,48 +4544,58 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         _shelf_chain(hub, chain)
         loaded = {
-            loader["node_id"]: loader.get("sha256") for loader in chain["loaders"]
+            loader["node_id"]: loader.get("sha256") for loader in _chain_loaders(chain)
         }
-        entries: list[dict] = []
-        for entry in payload.entries:
-            if entry.node_id is not None:
-                wanted = entry.sha256.strip().lower() if entry.sha256 else None
-                if (
-                    wanted
-                    and entry.node_id in loaded
-                    and loaded[entry.node_id] != wanted
-                ):
-                    raise HTTPException(
-                        status_code=409,
-                        detail=(
-                            f"Loader #{entry.node_id} loads another LoRA, and a "
-                            "loader cannot be pointed at a different one here. "
-                            "Delete it and add the new one."
-                        ),
+
+        def planned(asked: list[LoraChainEntry]) -> list[dict]:
+            entries: list[dict] = []
+            for entry in asked:
+                if entry.node_id is not None:
+                    wanted = entry.sha256.strip().lower() if entry.sha256 else None
+                    if (
+                        wanted
+                        and entry.node_id in loaded
+                        and loaded[entry.node_id] != wanted
+                    ):
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                f"Loader #{entry.node_id} loads another LoRA, and a "
+                                "loader cannot be pointed at a different one here. "
+                                "Delete it and add the new one."
+                            ),
+                        )
+                    entries.append(
+                        {"node_id": entry.node_id, "strength": entry.strength}
                     )
-                entries.append({"node_id": entry.node_id, "strength": entry.strength})
-                continue
-            try:
-                adapter = _shelf_adapter(hub, entry.sha256)
-            except HTTPException as exc:
-                if exc.status_code == 503:
-                    raise
-                # Not on the shelf, or not a LoRA: the chain the owner asked for
-                # cannot be built, which is this route's conflict and not a
-                # malformed request.
-                raise HTTPException(status_code=409, detail=exc.detail) from exc
-            entries.append(
-                {
-                    "node_id": None,
-                    "adapter": adapter,
-                    "strength": entry.strength,
-                    "name": lora_display_name(
-                        (adapter["filenames"] or [adapter["sha256"]])[-1]
-                    ),
-                }
-            )
+                    continue
+                try:
+                    adapter = _shelf_adapter(hub, entry.sha256)
+                except HTTPException as exc:
+                    if exc.status_code == 503:
+                        raise
+                    # Not on the shelf, or not a LoRA: the chain the owner asked for
+                    # cannot be built, which is this route's conflict and not a
+                    # malformed request.
+                    raise HTTPException(status_code=409, detail=exc.detail) from exc
+                entries.append(
+                    {
+                        "node_id": None,
+                        "adapter": adapter,
+                        "strength": entry.strength,
+                        "name": lora_display_name(
+                            (adapter["filenames"] or [adapter["sha256"]])[-1]
+                        ),
+                    }
+                )
+            return entries
+
+        entries = planned(payload.entries)
+        lanes = (
+            None if payload.lanes is None else [planned(lane) for lane in payload.lanes]
+        )
         try:
-            plan = plan_lora_chain(graph, chain, entries, object_info)
+            plan = plan_lora_chain(graph, chain, entries, object_info, lanes)
             if not plan["changes"]:
                 raise HTTPException(
                     status_code=409,

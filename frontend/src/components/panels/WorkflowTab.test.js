@@ -40,6 +40,11 @@ vi.mock("../../api/workflows", () => ({
   getLoraChain: (...args) => getLoraChain(...args),
 }));
 
+const getPixlstashNode = vi.fn();
+vi.mock("../../api/comfyui", () => ({
+  getPixlstashNode: (...args) => getPixlstashNode(...args),
+}));
+
 // *Show all N pictures* (F7) leaves this screen for the library, and
 // `?tab=recipes` (#1480) arrives on it from the lightbox's match banner.
 const push = vi.fn();
@@ -1113,6 +1118,8 @@ describe("Open in ComfyUI", () => {
   let open;
   beforeEach(() => {
     open = vi.spyOn(window, "open").mockImplementation(() => null);
+    getPixlstashNode.mockReset();
+    getPixlstashNode.mockResolvedValue({ can_open_workflows: true });
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -1218,6 +1225,33 @@ describe("Open in ComfyUI", () => {
     );
     await button.trigger("click");
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("refuses, with the reason, when ComfyUI lacks the PixlStash node", async () => {
+    configure();
+    getPixlstashNode.mockResolvedValue({ can_open_workflows: false });
+    const { wrapper } = await mountWith([KEY], [card()]);
+    await flush(wrapper);
+
+    const button = openButton(wrapper);
+    expect(button.attributes("aria-disabled")).toBe("true");
+    const described = button.attributes("aria-describedby");
+    expect(wrapper.find(`#${described}`).text()).toContain(
+      "needs the ComfyUI-PixlStash node",
+    );
+    await button.trigger("click");
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("still opens when ComfyUI cannot be asked about the node", async () => {
+    configure();
+    getPixlstashNode.mockResolvedValue({ can_open_workflows: null });
+    const { wrapper } = await mountWith([KEY], [card()]);
+    await flush(wrapper);
+
+    await openButton(wrapper).trigger("click");
+
+    expect(open).toHaveBeenCalled();
   });
 
   it("opens a stack selected whole on its cover, as Run… runs it", async () => {
@@ -1636,6 +1670,25 @@ describe("the LoRA chain (#1478)", () => {
     ).toBe("In the order the chain applies them. 3 of 4 are on your model shelf.");
     // B1's workflow/look mark stays beside it.
     expect(wrapper.findComponent({ name: "Segmented" }).exists()).toBe(true);
+  });
+
+  it("lists a forked chain's lane loaders after its trunk", async () => {
+    const [first, second] = loraChain().loaders;
+    getLoraChain.mockResolvedValue(
+      loraChain({
+        source: null,
+        loaders: [],
+        lanes: [
+          { sampler: { node_id: "3" }, loaders: [first] },
+          { sampler: { node_id: "15" }, loaders: [second] },
+        ],
+      }),
+    );
+    const { wrapper } = await mountChain();
+    expect(
+      wrapper.findAll(".wftab-chain-name").map((name) => name.text()),
+    ).toEqual(["lightning-8step", "neon-rain-v2"]);
+    expect(textOf(wrapper)).not.toContain("No LoRA loader");
   });
 
   it("offers Edit LoRAs… on a workflow with no loader at all", async () => {

@@ -467,7 +467,7 @@ const stackTitle = computed(() => {
  * counted as a one-off — deliberately, so that `POST /workflows/stacks/{id}/
  * unstack` cannot be attempted and refused (`useWorkflowsStore.reorderMembers`
  * says the same of the reorder route). Such a card still draws as a stack: ▸,
- * the layered count, a "differs by" row. Gating on the id alone therefore told
+ * the layered count. Gating on the id alone therefore told
  * a reader looking at a stack that nothing in their selection was one, which
  * is a sentence they can see is false — so the two refusals are separated and
  * the second names the way out.

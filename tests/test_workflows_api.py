@@ -38,11 +38,12 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
+import requests
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlmodel import delete, select
 
-from pixlstash import auth
+from pixlstash import auth, mcp_server
 from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
@@ -81,6 +82,8 @@ from pixlstash.services.workflow_run_service import (
     place_recipe_loras,
     repair,
     replace_missing_seed_nodes,
+    prompt_text_target,
+    replace_missing_text_nodes,
     skip_requested_loras,
 )
 from pixlstash.utils.known_base_models import fold
@@ -117,7 +120,12 @@ from pixlstash.services.workflow_export import (
 from pixlstash.services.workflow_inputs import card_input_modes
 from pixlstash.services.workflow_io import detect_workflow_io
 import pixlstash.routes.comfyui as comfyui_module
-from pixlstash.services import saved_recipe_service, workflow_bindings, workflow_inbox
+from pixlstash.services import (
+    comfyui_service,
+    saved_recipe_service,
+    workflow_bindings,
+    workflow_inbox,
+)
 from pixlstash.server import Server
 from pixlstash.tasks.ghost_cascade_task import GhostCascadeTask
 from pixlstash.tasks.task_type import TaskType
@@ -1455,6 +1463,63 @@ def test_the_insertion_preview_is_owner_only(
     assert r.status_code == 403, r.text
     # The positive control: the owner still reads it, with the belts down.
     assert workflow_env.owner.get(path).status_code == 200
+
+
+def _extensions_answer(monkeypatch, answer):
+    """Stand ComfyUI's ``GET /extensions`` in for the node check."""
+
+    def fake_get(url, timeout):
+        if isinstance(answer, Exception):
+            raise answer
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: answer)
+
+    monkeypatch.setattr(
+        comfyui_service,
+        "requests",
+        SimpleNamespace(get=fake_get, RequestException=requests.RequestException),
+    )
+
+
+def test_the_node_check_is_owner_only(workflow_env, monkeypatch):
+    """Both directions at the gate, with the GET belt emptied."""
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+    _extensions_answer(monkeypatch, [])
+    path = f"{API}/comfyui/pixlstash-node"
+    assert_real_route(workflow_env.server.api, "GET", path)
+    token = _mint(
+        workflow_env.owner,
+        "node check probe",
+        resource_type="character",
+        resource_id=workflow_env.character_id,
+    )
+    client = _bearer(workflow_env.server, token)
+    assert client.get(f"{API}/pictures").status_code == 200, (
+        "the scoped token is dead; the refusal below would prove nothing"
+    )
+    assert client.get(path).status_code == 403
+    assert workflow_env.owner.get(path).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "answer, expected",
+    [
+        (["/extensions/ComfyUI-PixlStash/open_workflow.js"], True),
+        (["/extensions/comfyui-pixlstash/js/open_workflow.js"], True),
+        # The pack from before Open in ComfyUI, and another pack's same name.
+        (["/extensions/ComfyUI-PixlStash/picker.js"], False),
+        (["/extensions/other-pack/open_workflow.js"], False),
+        (requests.ConnectionError("refused"), None),
+        ({"not": "a list"}, None),
+    ],
+)
+def test_the_node_check_reads_comfyuis_extensions(
+    workflow_env, monkeypatch, answer, expected
+):
+    """Only the node's own open_workflow.js counts; unreachable is ``null``."""
+    _extensions_answer(monkeypatch, answer)
+    r = workflow_env.owner.get(f"{API}/comfyui/pixlstash-node")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"can_open_workflows": expected}
 
 
 def test_the_workflow_list_says_which_files_have_a_lora_loader(
@@ -3690,15 +3755,18 @@ def test_a_stack_that_collapses_to_one_drawn_card_carries_no_stack_id(workflow_e
     assert hidden["stack_id"] is None
 
 
-def test_a_stack_shows_the_union_of_its_members_difference_chips(workflow_env):
-    """The chips belong to the drawn card, because the cover is what is drawn.
+def test_a_stack_cover_carries_no_difference_chips(workflow_env):
+    """The chips say how a member differs from the cover, so the cover has none.
 
-    The cover has none of its own: it is what the others are compared against.
+    The grid draws the cover as the collapsed stack; the members' union printed
+    under it read as "the cover differs by" what only its members do.
     """
     cards = _by_key(_cards(workflow_env.owner))
-    assert cards[BUSY_CARD]["differs_by"], "a stack with no difference chips"
+    assert cards[BUSY_CARD]["stack_size"] == 2
+    assert cards[BUSY_CARD]["differs_by"] == []
+    assert _detail(workflow_env.owner, BUSY_CARD)["card"]["differs_by"] == []
     member = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]
-    assert set(member["differs_by"]) <= set(cards[BUSY_CARD]["differs_by"])
+    assert member["differs_by"], "the member has nothing to explain"
 
 
 def test_unstacking_a_card_takes_it_out_of_the_automatic_group(workflow_env):
@@ -8045,6 +8113,119 @@ def test_a_seed_node_whose_own_seed_is_wired_is_left_alone():
     assert "9" in graph
 
 
+def _text_graph(class_type="Text Multiline", text="a platypus in a toga"):
+    """Two encoders both fed by one text node of *class_type*."""
+    return {
+        "6": {"class_type": "CLIPTextEncode", "inputs": {"text": ["103", 0]}},
+        "7": {"class_type": "CLIPTextEncode", "inputs": {"text": ["103", 0]}},
+        "103": {"class_type": class_type, "inputs": {"text": text}},
+    }
+
+
+def test_a_text_node_is_replaced_by_its_own_string_in_every_consumer():
+    graph = _text_graph(text="# a note\na platypus\n  # another\nin a toga")
+    replaced = replace_missing_text_nodes(graph, SEED_INFO)
+    assert [n["replacement"] for n in replaced] == ["text"]
+    assert "103" not in graph
+    assert graph["6"]["inputs"]["text"] == "a platypus\nin a toga"
+    assert graph["7"]["inputs"]["text"] == "a platypus\nin a toga"
+
+
+def test_an_installed_text_node_is_not_replaced():
+    info = dict(SEED_INFO, **{"Text Multiline": {"input": {}, "output": ["STRING"]}})
+    graph = _text_graph()
+    assert replace_missing_text_nodes(graph, info) == []
+    assert "103" in graph
+
+
+def test_a_text_node_outside_the_allow_list_is_never_replaced():
+    graph = _text_graph(class_type="Prompt Styler (some pack)")
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+    assert "103" in graph
+
+
+def test_a_was_text_with_a_token_keeps_its_refusal():
+    """`[time]` is expanded by the node; a literal would send it verbatim."""
+    graph = _text_graph(text="a platypus at [time]")
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+    assert graph["6"]["inputs"]["text"] == ["103", 0]
+
+
+def test_a_text_node_whose_text_is_wired_keeps_its_refusal():
+    graph = _text_graph(text=["5", 0])
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+    assert "103" in graph
+
+
+def test_a_text_node_read_on_another_output_keeps_its_refusal():
+    """`CR Text`'s second output is its help text, not the prompt."""
+    graph = _text_graph(class_type="CR Text")
+    graph["7"]["inputs"]["text"] = ["103", 1]
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+    assert "103" in graph
+
+
+def test_cr_text_keeps_its_comment_lines_and_brackets():
+    """Only WAS's node drops `#` lines and expands tokens."""
+    graph = _text_graph(class_type="CR Text", text="# kept\na [red] fox")
+    assert replace_missing_text_nodes(graph, SEED_INFO)
+    assert graph["6"]["inputs"]["text"] == "# kept\na [red] fox"
+
+
+def test_a_was_time_format_token_keeps_its_refusal():
+    graph = _text_graph(text="made on [time(%Y-%m-%d)]")
+    assert replace_missing_text_nodes(graph, SEED_INFO) == []
+
+
+def test_the_run_prompt_lands_in_the_text_node_an_encoder_reads():
+    """Else the repair would inline the stored prompt, not the typed one."""
+    graph = _text_graph()
+    del graph["7"]
+    assert prompt_text_target(graph, "6") == ("103", "text")
+    graph["6"]["inputs"]["text"] = "literal"
+    assert prompt_text_target(graph, "6") == ("6", "text")
+
+
+def test_a_textbox_with_passthrough_set_takes_no_run_prompt():
+    """The node would ignore a prompt written into its `text`."""
+    graph = _text_graph(class_type="Textbox")
+    del graph["7"]
+    assert prompt_text_target(graph, "6") == ("103", "text")
+    graph["103"]["inputs"]["passthrough"] = "overrides the text"
+    assert prompt_text_target(graph, "6") is None
+
+
+def test_a_text_node_shared_by_two_encoders_takes_no_run_prompt():
+    """Positive then negative written into one node would leave both negative."""
+    assert prompt_text_target(_text_graph(), "6") is None
+
+
+def test_a_primitive_string_multiline_is_replaced_from_its_value():
+    graph = _text_graph(class_type="PrimitiveStringMultiline")
+    graph["103"]["inputs"] = {"value": "# kept\na [red] fox"}
+    assert replace_missing_text_nodes(graph, SEED_INFO)
+    assert graph["6"]["inputs"]["text"] == "# kept\na [red] fox"
+
+
+def test_a_textbox_is_replaced_unless_its_passthrough_is_set():
+    graph = _text_graph(class_type="Textbox")
+    graph["103"]["inputs"]["passthrough"] = ""
+    assert replace_missing_text_nodes(graph, SEED_INFO)
+    assert graph["6"]["inputs"]["text"] == "a platypus in a toga"
+
+    for passthrough in ("overrides the text", ["5", 0]):
+        graph = _text_graph(class_type="Textbox")
+        graph["103"]["inputs"]["passthrough"] = passthrough
+        assert replace_missing_text_nodes(graph, SEED_INFO) == []
+        assert "103" in graph
+
+
+def test_the_registry_reports_text_and_seed_replacements_together():
+    graph = dict(_seed_graph(), **_text_graph())
+    done = repair(graph, SEED_INFO, [Reason(MISSING_NODES)])
+    assert sorted(n["node_id"] for n in done["replaced_nodes"]) == ["103", "9"]
+
+
 def test_the_registry_repairs_only_what_judge_reported():
     """Keyed on reason code: a repair runs only against its own refusal."""
     graph = _seed_graph()
@@ -8536,6 +8717,71 @@ def test_duplicating_twice_puts_a_second_file_beside_the_first(exportable, tmp_p
     ]
     assert first != second, "the second duplicate overwrote the first"
     assert (tmp_path / first).is_file() and (tmp_path / second).is_file()
+
+
+# ---------------------------------------------------------------------------
+# The MCP round trip (#1436): export a graph, edit it, store it, preflight it
+# ---------------------------------------------------------------------------
+
+
+def _mcp_fetch(client: TestClient) -> mcp_server.Fetch:
+    """``pixlstash-mcp``'s transport, over the owner's TestClient session."""
+
+    def fetch(path, params, method="GET", body=None):
+        r = client.request(method, f"{API}{path}", params=params, json=body)
+        return r.status_code, r.headers.get("content-type", ""), r.content
+
+    return fetch
+
+
+def _mcp_json(fetch, tool: str, **arguments) -> dict:
+    content = mcp_server.call_tool(fetch, tool, arguments, allow_write=True)
+    return json.loads(content[0]["text"])
+
+
+def test_the_mcp_round_trip_stores_an_edit_as_a_new_card_once(exportable, tmp_path):
+    """Export → edit → import → preflight, through the tools an agent calls."""
+    (tmp_path / "store").mkdir()
+    _isolate_workflow_folders(tmp_path / "store", exportable.monkeypatch)
+    fetch = _mcp_fetch(exportable.owner)
+    out = tmp_path / "agent" / "graph.json"
+
+    exported = _mcp_json(
+        fetch, "export_workflow_graph", workflow_key=RUN_CARD, out_path=str(out)
+    )
+    assert exported["path"] == str(out)
+    graph = json.loads(out.read_text())
+    assert exported["nodes"] == len(graph)
+    # The runnable graph, not the scrubbed export: ComfyUI can validate it.
+    assert graph["5"]["inputs"]["text"] == EXPORT_PROMPT
+    assert graph["3"]["inputs"]["seed"] == 4242
+
+    graph["3"]["inputs"]["steps"] = 41
+    out.write_text(json.dumps(graph))
+    stored = _mcp_json(
+        fetch, "import_workflow_graph", name="mcp-edited.json", path=str(out)
+    )
+    assert stored["matched"] is False, stored
+    new_key = stored["workflow_key"]
+    assert new_key and new_key != RUN_CARD
+    assert exportable.owner.get(f"{API}/workflows/{new_key}").status_code == 200
+
+    # The same file again, under another name, is matched rather than stored:
+    # an agent retrying does not litter the grid.
+    again = _mcp_json(
+        fetch, "import_workflow_graph", name="mcp-edited-again.json", path=str(out)
+    )
+    assert again["matched"] is True, again
+    assert again["name"] == "mcp-edited.json"
+    assert not (tmp_path / "store" / "mcp-edited-again.json").exists()
+
+    # Preflight reads the stored file: this ComfyUI lacks two of its nodes, and
+    # saying so is the agent's feedback. Nothing is submitted.
+    preflight = _mcp_json(fetch, "preflight_workflow", workflow_key=new_key)
+    assert preflight["ok"] is False
+    assert [g["workflow_key"] for g in preflight["groups"]] == [new_key]
+    assert _reasons(preflight) == {"missing_nodes"}
+    assert exportable.submitted == []
 
 
 # ---------------------------------------------------------------------------
@@ -9239,9 +9485,9 @@ def _serve_chain(chained, document, info=None):
 def test_a_chain_refused_for_its_shape_still_names_both_ends(chained):
     """ComfyUI answered, so the read-only view says what the chain runs between.
 
-    Refused because a second checkpoint feeds another sampler, so which model
-    the LoRAs are for is the owner's call. Wrong if the sink summary is None:
-    that is the dialog's empty bottom node.
+    Refused because a second checkpoint feeds two more samplers, so there is
+    no single chain for it. Wrong if the sink summary is None: that is the
+    dialog's empty bottom node.
     """
     _serve_chain(
         chained,
@@ -9252,6 +9498,10 @@ def test_a_chain_refused_for_its_shape_still_names_both_ends(chained):
                     "inputs": {"ckpt_name": "realvisxl.safetensors"},
                 },
                 "7": {
+                    "class_type": "KSampler",
+                    "inputs": {"seed": 1, "model": ["8", 0], "positive": ["6", 0]},
+                },
+                "9": {
                     "class_type": "KSampler",
                     "inputs": {"seed": 1, "model": ["8", 0], "positive": ["6", 0]},
                 },
@@ -9269,13 +9519,8 @@ def test_a_chain_refused_for_its_shape_still_names_both_ends(chained):
     )
 
 
-def test_a_branch_ends_the_chain_and_the_editor_is_told_why(chained):
-    """A second sampler pass reads loader #2 before #5: the chain stops at #2.
-
-    Wrong if `editable` is false (a branch used to refuse the whole chain),
-    or `branch_note` is missing: the list is shorter than the workflow, and
-    the owner is owed the reason.
-    """
+def _two_pass_chain(chained):
+    """A second sampler pass, #7 "Hires pass", reads loader #2 before #5."""
     _serve_chain(
         chained,
         _chain_document_with(
@@ -9283,16 +9528,69 @@ def test_a_branch_ends_the_chain_and_the_editor_is_told_why(chained):
                 "7": {
                     "class_type": "KSampler",
                     "inputs": {"seed": 1, "model": ["2", 0], "positive": ["6", 0]},
+                    "_meta": {"title": "Hires pass"},
                 }
             }
         ),
     )
+
+
+def test_a_fork_is_read_as_a_trunk_and_one_lane_per_pass(chained):
+    """#2 is the trunk; #3 gets #5 on its own lane, #7 an empty one.
+
+    Wrong if `editable` is false (a fork used to stop the chain at #2 and
+    leave #5 to ComfyUI), or a lane is missing its sampler.
+    """
+    _two_pass_chain(chained)
     r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
     assert r.status_code == 200, r.text
     chain = r.json()
     assert chain["editable"] is True, chain["refusal"]
     assert [loader["node_id"] for loader in chain["loaders"]] == ["2"]
-    assert chain["branch_note"].startswith("The chain stops at #2 LoraLoader")
+    assert chain["branch_note"] is None
+    lanes = chain["lanes"]
+    assert [lane["sampler"] for lane in lanes] == [
+        {"node_id": "3", "class_type": "KSampler", "title": None},
+        {"node_id": "7", "class_type": "KSampler", "title": "Hires pass"},
+    ]
+    assert [[x["node_id"] for x in lane["loaders"]] for lane in lanes] == [["5"], []]
+    # #5's CLIP feeds the prompt, so #3's lane adds a CLIP-carrying loader;
+    # nothing on #7's side reads a CLIP.
+    assert [lane["added_loader_class"] for lane in lanes] == ["LoraLoader", None]
+
+
+def test_a_loader_moved_across_the_fork_is_written_to_both_passes(chained):
+    _two_pass_chain(chained)
+    r = _chain_edit(
+        chained.owner,
+        {"node_id": "2"},
+        {"node_id": "5"},
+        lanes=[[], []],
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["changes"][0]["text"] == (
+        "#5 Mystery_Style moved before the fork: both passes get it"
+    )
+    written = json.loads((chained.tmp_path / body["name"]).read_text())
+    assert written["3"]["inputs"]["model"] == ["5", 0]
+    assert written["7"]["inputs"]["model"] == ["5", 0]
+    assert written["6"]["inputs"]["clip"] == ["5", 1]
+
+
+def test_the_loader_cap_counts_every_lane(chained):
+    """32 loaders in all, not 32 per list: each one may cost a shelf lookup."""
+    _two_pass_chain(chained)
+    lane = [{"node_id": "5"}] * 17
+    r = _chain_edit(chained.owner, {"node_id": "2"}, lanes=[lane, lane], dry_run=True)
+    assert r.status_code == 422, r.text
+
+
+def test_lanes_that_do_not_match_the_fork_are_a_409(chained):
+    _two_pass_chain(chained)
+    r = _chain_edit(chained.owner, {"node_id": "2"}, lanes=[[{"node_id": "5"}]])
+    assert r.status_code == 409, r.text
+    assert "goes 2 ways" in r.json()["detail"]
 
 
 def test_a_character_prompt_builder_does_not_stop_a_lora_being_added(chained):

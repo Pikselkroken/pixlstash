@@ -27,6 +27,7 @@ const listUnclassified = vi.fn();
 const listSupport = vi.fn();
 const deleteModels = vi.fn();
 const fetchModelCompanions = vi.fn();
+const deleteWorkflowSet = vi.fn();
 
 vi.mock("../../api/modelShelf", () => ({
   BASE_MODEL_UNASSIGNED: "UNASSIGNED",
@@ -46,6 +47,7 @@ vi.mock("../../api/modelShelf", () => ({
   deleteModels: (...args) => deleteModels(...args),
   // Asked before the delete prompt opens; answered per test.
   fetchModelCompanions: (...args) => fetchModelCompanions(...args),
+  deleteWorkflowSet: (...args) => deleteWorkflowSet(...args),
   // The base-model field asks for its completion list as it opens. Answered
   // with nothing here: the list is the widget's own suite's business, and left
   // unmocked this is a network call on a double-click.
@@ -207,6 +209,7 @@ const globalOpts = {
       ModelFoldersDialog: true,
       ShelfEditDialog: true,
       ShelfMoveDialog: true,
+      WorkflowSetRenameDialog: true,
       MergeCopiesDialog: true,
 
       // Same reason, for the same provider: it wraps `AppDialog`. Its own suite
@@ -976,9 +979,7 @@ describe("refetching after an edit", () => {
     listAdapters.mockReturnValue(new Promise(() => {}));
     useModelShelfStore().resetFilters();
     await wrapper.vm.$nextTick();
-    expect(textOf(wrapper.find(".shelf-state"))).toContain(
-      "Reading the shelf",
-    );
+    expect(textOf(wrapper.find(".shelf-state"))).toContain("Reading the shelf");
   });
 
   it("still says it is reading before the first rows arrive", async () => {
@@ -987,9 +988,7 @@ describe("refetching after an edit", () => {
     useModelShelfStore().setView({ groupBy: "none" });
     const wrapper = mount(ModelShelf, globalOpts);
     await wrapper.vm.$nextTick();
-    expect(textOf(wrapper.find(".shelf-state"))).toContain(
-      "Reading the shelf",
-    );
+    expect(textOf(wrapper.find(".shelf-state"))).toContain("Reading the shelf");
   });
 });
 
@@ -4679,6 +4678,37 @@ describe("Delete", () => {
     wrapper.unmount();
   });
 
+  it("says a file in a hand-made set stays there, trashed or deleted for good (#1520)", async () => {
+    const wrapper = await mountWithSelection();
+    const store = useModelShelfStore();
+    store.workflowSets = {
+      ...store.workflowSets,
+      handMade: [
+        {
+          id: 10,
+          name: "Kit",
+          members: [
+            { sha256: "x".repeat(64), slot: "lora", on_shelf: true, id: 1 },
+          ],
+        },
+      ],
+    };
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    await pressDelete();
+    await pressDelete({ shiftKey: true });
+
+    // Membership is kept by hash in a table neither delete touches, so the
+    // sentence holds for both - and says HOW, beside "everything recorded".
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
+    for (const [said] of confirmSpy.mock.calls) {
+      expect(said).toContain('It stays in your set "Kit"');
+      expect(said).toContain("kept by its file hash");
+    }
+    confirmSpy.mockRestore();
+    wrapper.unmount();
+  });
+
   it("makes Shift+Delete a permanent one, and says so in the prompt", async () => {
     const wrapper = await mountWithSelection();
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
@@ -5127,9 +5157,9 @@ describe("acting inside a run", () => {
       wrapper.findAll(".shelf-row-label .shelf-chip").map((c) => c.text()),
     ).not.toContain("Cover");
     // Not on the member rows: exactly one file covers a run.
-    expect(wrapper.findAll(".shelf-row--member .stack-cover-flag")).toHaveLength(
-      0,
-    );
+    expect(
+      wrapper.findAll(".shelf-row--member .stack-cover-flag"),
+    ).toHaveLength(0);
     wrapper.unmount();
   });
 
@@ -5374,6 +5404,49 @@ describe("the set grid is what the shelf opens on", () => {
     await wrapper.vm.$nextTick();
     return { wrapper, store };
   }
+
+  it("the shelf's WINDOW listener deletes selected sets on Delete and no other key (#1520)", async () => {
+    // Scope: the shelf-level listener only, with the grid stubbed out. A
+    // review asked whether any key reaching the window with a set selected
+    // would delete it; only Delete does. Backspace ON a focused hand-made card
+    // is the grid's own gesture (the Mac keyboard's Delete key sends it) and
+    // is covered in ModelSetGrid.test.js, so the two do not contradict.
+    deleteWorkflowSet.mockReset().mockResolvedValue({
+      deleted: { id: 10, name: "Kit", members: [] },
+    });
+    const { store } = await shelfOnTheGrid();
+    store.workflowSets = {
+      ...store.workflowSets,
+      handMade: [{ id: 10, name: "Kit", members: [] }],
+    };
+    store.selectSet(10);
+    for (const key of ["ArrowDown", "n", "F2", "Backspace"]) {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key }));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(deleteWorkflowSet).toHaveBeenCalledWith(10);
+  });
+
+  it("renames a selected hand-made set on F2, as its pill says (#1520)", async () => {
+    const { wrapper, store } = await shelfOnTheGrid();
+    store.workflowSets = {
+      ...store.workflowSets,
+      handMade: [{ id: 10, name: "Kit", members: [] }],
+    };
+    store.selectSet(10);
+    await wrapper.vm.$nextTick();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "F2" }));
+    await wrapper.vm.$nextTick();
+
+    expect(
+      wrapper.findComponent({ name: "WorkflowSetRenameDialog" }).props("set"),
+    ).toMatchObject({ id: 10 });
+  });
 
   it("floats the verb bar over the grid, as it does over the list", async () => {
     // It did not, while a card stood for a whole SET: a Delete aimed at one

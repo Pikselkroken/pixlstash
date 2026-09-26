@@ -987,6 +987,10 @@ VIA_CHECKPOINT = "checkpoint"
 VIA_BASE_MODEL = "base_model"
 VIA_FAMILY = "family"
 VIA_DECLARED = "declared"
+# Not a ladder step: a hand-made workflow set (#1520) that names this checkpoint.
+# The owner's own word, so it is listed ahead of every step of the ladder,
+# the declared-layout fallback included.
+VIA_GROUPED = "grouped"
 
 
 def propose_companions(
@@ -1036,12 +1040,23 @@ def propose_companions(
         checkpoint_id: The ``model.id`` the clone will load instead.
         index: A :func:`recipe_asset_index` already built in this request.
 
+    **Grouped by the owner comes first.** Ahead of the ladder, every
+    hand-made workflow set whose checkpoint member is this checkpoint proposes
+    its on-shelf VAE and text-encoder members (``via: "grouped"``, ``recipes:
+    0``, ``set_name`` the newest such set's name). ``prepick`` says whether the
+    dialog may select one for the owner: true when the matching sets between
+    them name exactly one on-shelf file of that kind, false when they name
+    several. A set with no checkpoint never matches, and a member off the shelf
+    is skipped. Ladder entries follow, minus any file already grouped, each
+    with ``prepick`` true and ``set_name`` null.
+
     Returns:
         ``{"vae": [...], "text_encoder": [...]}``, each entry ``{"id",
         "filename", "display_name", "family", "via", "recipes",
-        "history_runs"}``, most recipes first, then most runs. ``family`` is the file's own layout (``clip_l``, ``t5_xxl``), which
-        is how a caller tells two text encoders apart. Both lists empty for an
-        unknown id.
+        "history_runs", "set_name", "prepick"}``: grouped entries first, then
+        most recipes first, then most runs. ``family`` is the file's own layout
+        (``clip_l``, ``t5_xxl``), which is how a caller tells two text encoders
+        apart. Both lists empty for an unknown id.
     """
     models = {
         int(row["id"]): row
@@ -1106,13 +1121,70 @@ def propose_companions(
                     counts[member] = counts.get(member, 0) + 1
         return counts
 
+    # Newest set first, so a file two sets group reads under the newest name.
+    grouped: dict[str, dict[int, Optional[str]]] = {
+        kind: {} for kind in SUPPORT_FILE_KINDS
+    }
+    for row in hub.fetchall(
+        "SELECT s.name, member_model.id AS model_id "
+        "FROM model_workflow_set AS s "
+        "JOIN model_workflow_set_member AS ckpt "
+        "  ON ckpt.set_id = s.id AND ckpt.slot = 'checkpoint' "
+        "JOIN model AS ckpt_model ON ckpt_model.sha256 = ckpt.sha256 "
+        "JOIN model_workflow_set_member AS member "
+        "  ON member.set_id = s.id AND member.slot IN ('vae', 'text_encoder') "
+        "JOIN model AS member_model ON member_model.sha256 = member.sha256 "
+        "WHERE ckpt_model.id = ? "
+        "ORDER BY s.created_at DESC, s.id DESC",
+        (checkpoint_id,),
+    ):
+        row_model = models.get(int(row["model_id"]))
+        # Filed by what the file IS, so a VAE never lands in the encoder list
+        # whichever slot it was put in; no filename means nothing to write.
+        if row_model is None or not row_model["filename"]:
+            continue
+        if row_model["file_kind"] in grouped:
+            grouped[row_model["file_kind"]].setdefault(
+                int(row["model_id"]), row["name"]
+            )
+
+    def layout_count(kind: str, model_id: int) -> int:
+        # Per LAYOUT, not per kind: a Flux set's clip_l and t5_xxl are one file
+        # each for two different rows, and counting them together would refuse
+        # to pre-pick either and hand both rows to weaker, ungrouped evidence.
+        family = models[model_id]["family"]
+        return sum(1 for other in grouped[kind] if models[other]["family"] == family)
+
     for kind in SUPPORT_FILE_KINDS:
+        proposals[kind] = [
+            {
+                "id": model_id,
+                "filename": models[model_id]["filename"],
+                "display_name": models[model_id]["display_name"],
+                "family": models[model_id]["family"],
+                "via": VIA_GROUPED,
+                "recipes": 0,
+                "history_runs": 0,
+                "set_name": set_name,
+                "prepick": layout_count(kind, model_id) == 1,
+            }
+            for model_id, set_name in sorted(
+                grouped[kind].items(),
+                key=lambda item: (models[item[0]]["filename"] or "").lower(),
+            )
+        ]
+        # Whether an EVIDENCE step answered, on recipes or ComfyUI runs (#1518).
+        # Not `proposals[kind]`: the grouped
+        # entries are already in there, and reading them as evidence would
+        # skip the declared fallback for a row the owner's sets do not cover
+        # (a Flux set grouping a clip_l leaves its t5 row with nothing).
+        ladder_found = False
         for via, anchors in ladder:
             by_recipe = tally(recipe_models, kind, anchors, ambiguous)
             by_run = tally(runs, kind, anchors, {})
             if not by_recipe and not by_run:
                 continue
-            proposals[kind] = [
+            step = [
                 {
                     "id": model_id,
                     "filename": models[model_id]["filename"],
@@ -1121,6 +1193,8 @@ def propose_companions(
                     "via": via,
                     "recipes": by_recipe.get(model_id, 0),
                     "history_runs": by_run.get(model_id, 0),
+                    "set_name": None,
+                    "prepick": True,
                 }
                 for model_id in sorted(
                     by_recipe.keys() | by_run.keys(),
@@ -1130,12 +1204,22 @@ def propose_companions(
                         (models[m]["filename"] or "").lower(),
                     ),
                 )
+                # Already listed above as grouped. Dropped here rather than
+                # before the step is chosen, so grouping a file never widens
+                # the ladder past the step that found it.
+                if model_id not in grouped[kind]
             ]
+            proposals[kind] += step
+            # Found only if the step added something. Evidence that merely
+            # repeats files the owner already grouped tells the other rows of
+            # this kind nothing new, so the declared fallback still answers
+            # for them.
+            ladder_found = bool(step)
             break
         layouts = COMPANION_LAYOUTS.get(family, {}).get(kind)
-        if proposals[kind] or not layouts:
+        if ladder_found or not layouts:
             continue
-        proposals[kind] = [
+        proposals[kind] += [
             {
                 "id": model_id,
                 "filename": row["filename"],
@@ -1148,7 +1232,11 @@ def propose_companions(
             for model_id, row in sorted(
                 models.items(), key=lambda item: (item[1]["filename"] or "").lower()
             )
-            if row["file_kind"] == kind and row["filename"] and row["family"] in layouts
+            if row["file_kind"] == kind
+            and row["filename"]
+            and row["family"] in layouts
+            # Listed above as grouped already, under the owner's own word.
+            and model_id not in grouped[kind]
         ]
     return proposals
 

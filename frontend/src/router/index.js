@@ -31,7 +31,8 @@ import App from "../App.vue";
 //                                            banner, #1480; honoured by WorkflowTab)
 //   /workflows?card=<key>                   → …selected by card KEY, rail open on its
 //                                            Workflow tab (a topology can hold several
-//                                            cards; this names exactly one)
+//                                            cards; this names exactly one; the Run
+//                                            popup's "Open in Workflows")
 //   /workflows?card=<key>&edit=loras        → …with Edit LoRAs… open on it (#1478)
 //   /workflows?card=<key>&edit=loras&drop_lora=<filename>
 //                                          → …and that LoRA's loader already deleted

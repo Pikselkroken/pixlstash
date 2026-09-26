@@ -354,3 +354,354 @@ export function setName(combination) {
       .join(" · ") || "Unnamed set"
   );
 }
+
+// ── Hand-made sets (#1520) ───────────────────────────────────────────────────
+//
+// **A hand-made set is a MENU, not a recipe.** The owner lists models that work
+// together, slot by slot, to seed new workflows; there is no order, no strength
+// and no graph. Evidence is kept apart from it on purpose: a hand-made card never
+// shows a recipe count as if it were its own, and an evidence card never changes
+// membership through a gesture. A picture belongs to a hand-made set only when
+// EVERY model it used is in the set - the server works that out and reports it
+// as the set's `picture_count` and the combinations' `covered_by`.
+
+/**
+ * The fixed slots every hand-made set has, in the order the tray draws them.
+ *
+ * `kinds` are the `file_kind`s a slot offers in its picker. Checkpoint also takes
+ * `unknown`, because a Flux or Wan diffusion file is often filed that way and is
+ * still the base model of its set.
+ */
+export const SET_SLOTS = [
+  {
+    id: "checkpoint",
+    label: "Checkpoint",
+    hint: "exactly one",
+    add: "Add checkpoint",
+    noun: "checkpoints",
+    kinds: ["checkpoint", "unknown"],
+  },
+  {
+    id: "text_encoder",
+    label: "Text encoders",
+    hint: "any number",
+    add: "Add text encoder",
+    noun: "text encoders",
+    kinds: ["text_encoder"],
+  },
+  {
+    id: "vae",
+    label: "VAE",
+    hint: "any number",
+    add: "Add VAE",
+    noun: "VAEs",
+    kinds: ["vae"],
+  },
+  {
+    id: "lora",
+    label: "LoRAs",
+    hint: "any number",
+    add: "Add LoRA",
+    noun: "LoRAs",
+    kinds: ["adapter"],
+  },
+  {
+    id: "other",
+    label: "Other",
+    hint: "upscalers, ControlNets",
+    add: "Add",
+    noun: "other models",
+    kinds: ["unknown", "checkpoint", "vae", "text_encoder", "adapter"],
+  },
+];
+
+/** The slot a file goes in when nobody says otherwise; the server's own rule. */
+export function defaultSlot(fileKind) {
+  return (
+    {
+      checkpoint: "checkpoint",
+      vae: "vae",
+      text_encoder: "text_encoder",
+      adapter: "lora",
+    }[fileKind] ?? "other"
+  );
+}
+
+/** The set's checkpoint member, or null. */
+export function setCheckpoint(set) {
+  return (set?.members ?? []).find((m) => m.slot === "checkpoint") ?? null;
+}
+
+/**
+ * What a set is called: its own name, else its checkpoint's, else "Untitled set".
+ */
+export function handMadeName(set) {
+  return set?.name || setCheckpoint(set)?.name || "Untitled set";
+}
+
+/** The base model a set's suggestions follow: its checkpoint's, or null. */
+export function handMadeBase(set) {
+  return setCheckpoint(set)?.base_model || null;
+}
+
+/**
+ * One hand-made set as `ModelSetCard` draws it.
+ *
+ * The same card shape as an evidence card, so the grid reads as one grid, with
+ * the words changed: "Grouped by you", a picture count only when pictures really
+ * belong to the set, and the incomplete warning when there is no checkpoint.
+ */
+export function handMadeCard(set) {
+  const members = set.members ?? [];
+  const checkpoint = setCheckpoint(set);
+  const pictures = Number(set.picture_count) || 0;
+  const offShelf = members.filter((m) => !m.on_shelf).length;
+  return {
+    key: `hand:${set.id}`,
+    handMade: true,
+    incomplete: Boolean(set.incomplete ?? !checkpoint),
+    name: handMadeName(set),
+    kindLabel: checkpoint?.base_model || "",
+    kinds: kindCounts(
+      members
+        .filter((m) => m.slot !== "checkpoint")
+        .map((m) => ({ ...m, kindLabel: memberKindLabel(m) })),
+    ),
+    facts: [
+      members.length === 1 ? "1 model" : `${members.length} models`,
+      pictures ? pictureCount(pictures) : "no picture yet",
+      offShelf ? `${offShelf} not on shelf` : null,
+    ].filter(Boolean),
+    pictures,
+    recipes: Number(set.recipes) || 0,
+    covers: set.covers ?? [],
+    // What the cover draws when no picture belongs to the set yet: the
+    // checkpoint's own mark, or nothing (a dashed empty cover).
+    markModel: checkpoint?.on_shelf ? checkpoint : null,
+    // A checkpoint kept by hash whose file has left the shelf: the cover says
+    // so, and so must the card's accessible name.
+    checkpointOffShelf: Boolean(checkpoint && !checkpoint.on_shelf),
+    size: members.length,
+  };
+}
+
+/**
+ * Does this shelf row belong in this slot's picker? Engines never do: no slot
+ * lists `engine`. A row still waiting for its hash cannot be kept by hash yet.
+ */
+function fitsSlot(row, slot) {
+  return Boolean(row?.sha256) && slot.kinds.includes(row?.file_kind);
+}
+
+/**
+ * A row's base model as the set picker compares it: the client's copy of the
+ * server's `known_base_model`, because the other side of every comparison is a
+ * set member's `base_model`, which the server fills with exactly that.
+ *
+ * The identified label unless it is a fuzzy guess, else the folded raw value,
+ * else the raw one. Not `baseModelKey` (the shelf's grouping key): that one
+ * takes a fuzzy guess too, so a guessed "SDXL" row never matched a set whose
+ * checkpoint the server reported by its folded raw label.
+ */
+export function rowBaseModel(row) {
+  const canonical = row?.base_model_canonical;
+  if (canonical && !String(row?.base_model_source ?? "").endsWith("_fuzzy")) {
+    return canonical;
+  }
+  return row?.base_model_folded || row?.base_model || null;
+}
+
+/**
+ * The picker's sections for one slot of one set, ranked as the design ranks them.
+ *
+ * With a checkpoint chosen: your other sets with the same base model, then what
+ * recipes have run with this checkpoint, then the same base model, then all. With
+ * none, one unfiltered list - suggestions follow the checkpoint, so there is
+ * nothing to rank by yet. A model appears once, in the first section it earns,
+ * and never when the set already holds it.
+ *
+ * @param {Object} args
+ * @param {Object} args.set - the hand-made set being filled.
+ * @param {string} args.slotId
+ * @param {Array<Object>} args.rows - the shelf's rows.
+ * @param {Array<Object>} args.sets - every hand-made set.
+ * @param {Array<Object>} args.combinations - the evidence payload.
+ * @param {string} [args.query] - the type-to-filter text.
+ * @returns {Array<{id: string, label: string, items: Array<Object>, total: number}>}
+ */
+export function slotSuggestions({
+  set,
+  slotId,
+  rows,
+  sets,
+  combinations,
+  query = "",
+}) {
+  const slot = SET_SLOTS.find((s) => s.id === slotId);
+  if (!slot) return [];
+  const held = new Set((set?.members ?? []).map((m) => m.sha256));
+  const needle = query.trim().toLowerCase();
+  const byId = new Map();
+  for (const row of rows ?? []) {
+    if (!fitsSlot(row, slot) || held.has(row.sha256)) continue;
+    const name = row.display_name || row.filename || "";
+    if (
+      needle &&
+      !`${name} ${row.filename || ""}`.toLowerCase().includes(needle)
+    )
+      continue;
+    byId.set(row.id, row);
+  }
+  const sorted = (items) =>
+    [...items].sort((a, b) =>
+      (a.display_name || a.filename || "").localeCompare(
+        b.display_name || b.filename || "",
+      ),
+    );
+  const checkpoint = setCheckpoint(set);
+  if (!checkpoint?.on_shelf) {
+    const all = sorted(byId.values());
+    return [
+      { id: "all", label: `All ${slot.noun}`, items: all, total: all.length },
+    ];
+  }
+  const base = checkpoint.base_model;
+  const used = new Set();
+  const take = (ids) => {
+    const items = [];
+    for (const id of ids) {
+      if (used.has(id) || !byId.has(id)) continue;
+      used.add(id);
+      items.push(byId.get(id));
+    }
+    return items;
+  };
+  const inSets = take(
+    (sets ?? [])
+      .filter(
+        (other) => other.id !== set.id && base && handMadeBase(other) === base,
+      )
+      .flatMap((other) =>
+        (other.members ?? [])
+          .filter((m) => m.slot === slotId && m.on_shelf)
+          .map((m) => m.id),
+      ),
+  );
+  const withCheckpoint = take(
+    worksWith(combinations, checkpoint.id).companions.map((c) => c.id),
+  );
+  const sameBase = base
+    ? take(
+        sorted(
+          [...byId.values()].filter((row) => rowBaseModel(row) === base),
+        ).map((row) => row.id),
+      )
+    : [];
+  const rest = take(sorted(byId.values()).map((row) => row.id));
+  return [
+    {
+      id: "sets",
+      label: base ? `In your ${base} sets` : "In your sets",
+      items: inSets,
+    },
+    {
+      id: "checkpoint",
+      label: "Used with this checkpoint",
+      items: withCheckpoint,
+    },
+    base
+      ? { id: "base", label: `Other ${base} ${slot.noun}`, items: sameBase }
+      : null,
+    { id: "all", label: `All other ${slot.noun}`, items: rest },
+  ]
+    .filter(Boolean)
+    .map((section) => ({ ...section, total: section.items.length }));
+}
+
+/**
+ * What "Fill from pictures" offers: every model recipes have run with this
+ * set's checkpoint that the set does not hold, strongest evidence first.
+ *
+ * @returns {Array<{id, name, kindLabel, recipes, slot, sha256}>}
+ */
+export function fillFromPictures(set, combinations, rows) {
+  const checkpoint = setCheckpoint(set);
+  if (!checkpoint?.on_shelf) return [];
+  const held = new Set((set.members ?? []).map((m) => m.sha256));
+  const byId = new Map((rows ?? []).map((row) => [row.id, row]));
+  return (
+    worksWith(combinations, checkpoint.id)
+      .companions.map((c) => ({ ...c, row: byId.get(c.id) }))
+      // Another checkpoint (a refiner) is not offered: the set holds one, and
+      // one refused member fails the whole all-or-nothing add.
+      .filter(
+        (c) =>
+          c.row?.sha256 &&
+          !held.has(c.row.sha256) &&
+          c.kind !== "engine" &&
+          defaultSlot(c.kind) !== "checkpoint",
+      )
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        kindLabel: c.kindLabel,
+        detail: `${c.kindLabel || "Model"} · ${recipeCount(c.recipes)}`,
+        slot: defaultSlot(c.kind),
+      }))
+  );
+}
+
+/**
+ * What "Fill from a set" offers: the members of your other sets with the same
+ * base model (every other set, while this one has no checkpoint), each once,
+ * labelled with the sets it comes from.
+ */
+export function fillFromSets(set, sets) {
+  const base = handMadeBase(set);
+  const held = new Set((set.members ?? []).map((m) => m.sha256));
+  const found = new Map();
+  for (const other of sets ?? []) {
+    if (other.id === set.id) continue;
+    if (base && handMadeBase(other) !== base) continue;
+    for (const member of other.members ?? []) {
+      if (!member.on_shelf || held.has(member.sha256)) continue;
+      // One checkpoint per set: another set's checkpoint is not offered, since
+      // adding it would either fail or replace nothing.
+      if (member.slot === "checkpoint") continue;
+      const seen = found.get(member.sha256) ?? {
+        id: member.id,
+        name: member.name,
+        kindLabel: memberKindLabel(member),
+        slot: member.slot,
+        from: [],
+      };
+      seen.from.push(handMadeName(other));
+      found.set(member.sha256, seen);
+    }
+  }
+  return [...found.values()].map((entry) => ({
+    ...entry,
+    detail: `${entry.kindLabel || "Model"} · ${entry.from.join(", ")}`,
+  }));
+}
+
+/**
+ * A hand-made set's tray, slot by slot, in the order it is drawn and walked.
+ *
+ * Every member tile, then the slot's ＋ tile - which the Checkpoint slot drops
+ * once it holds its one. The keys are what the tray and the grid's cursor agree
+ * on: `m:<sha256>` for a member, `add:<slot>` for a ＋ tile.
+ *
+ * @returns {Array<{slot: Object, items: Array<{key, member: Object|null}>}>}
+ */
+export function setSlots(set) {
+  const members = set?.members ?? [];
+  return SET_SLOTS.map((slot) => {
+    const held = members.filter((m) => m.slot === slot.id);
+    const items = held.map((member) => ({ key: `m:${member.sha256}`, member }));
+    if (slot.id !== "checkpoint" || !held.length) {
+      items.push({ key: `add:${slot.id}`, member: null });
+    }
+    return { slot, items };
+  });
+}

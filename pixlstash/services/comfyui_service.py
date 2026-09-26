@@ -1335,3 +1335,36 @@ def _comfyui_abort(base_url: str) -> dict:
         logger.warning("ComfyUI /queue clear request failed: %s", exc)
 
     return result
+
+
+def comfyui_can_open_workflows(base_url: str) -> bool | None:
+    """Whether ComfyUI can open a ``?pixlstash_workflow=<key>`` link.
+
+    Only the ComfyUI-PixlStash node's ``open_workflow.js`` reads that
+    parameter; without it ComfyUI opens on whatever it had last. ComfyUI's
+    ``GET /extensions`` lists every script it hands the browser. ``None`` when
+    ComfyUI cannot be asked.
+
+    ponytail: matches the pack by a "pixlstash" folder name, which holds for the
+    registry and git installs; ask the node for its version if that ever breaks.
+    """
+    try:
+        response = requests.get(f"{base_url}/extensions", timeout=5)
+        response.raise_for_status()
+        scripts = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        logger.info("Could not list ComfyUI extensions at %s: %s", base_url, exc)
+        return None
+    if not isinstance(scripts, list):
+        logger.warning(
+            "ComfyUI /extensions at %s returned %s, not a list",
+            base_url,
+            type(scripts).__name__,
+        )
+        return None
+    return any(
+        isinstance(script, str)
+        and "pixlstash" in script.lower()
+        and script.endswith("/open_workflow.js")
+        for script in scripts
+    )

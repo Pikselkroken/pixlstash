@@ -500,7 +500,8 @@ half was moved onto `/recipe` and deleted here.
 
 ### 2.2c The `/models/workflow-sets` contract (#1438)
 
-One route behind the model shelf's `Workflow set` axis, and the split of work
+One read behind the model shelf's `Workflow set` axis (plus the hand-made set
+writes of rule 8), and the split of work
 across the seam is the whole of the contract: **the server resolves the evidence
 and groups nothing; the client folds.**
 
@@ -548,6 +549,20 @@ Rules neither side may drift from:
    names a picture per cover, so it is on the shelf's owner tier with no
    per-object scope to narrow it to. The client fetches it when something needs
    it and again after a scan, never on a filter tick.
+8. **Hand-made sets ride on the same payload (#1520).** Each combination carries
+   `covered_by` (ids of the owner's sets holding all its models on the shelf),
+   `no_set` omits on-shelf set members, and `hand_made` lists the sets, newest
+   first: `{id, name, created_at, updated_at, incomplete, checkpoint_id,
+   picture_count, recipes, covers, members}`, each member `{sha256, slot, label,
+   on_shelf, id, name, filename, kind, base_model, file_size}`. They are written
+   by `POST /models/workflow-sets` (201, the set), `PATCH` and `DELETE
+   /models/workflow-sets/{set_id}` (the set; `{deleted: set}`),
+   `POST .../{set_id}/members` (`{set, added: [sha256]}`) and
+   `POST .../{set_id}/members/remove` (`{set, removed: [{sha256, slot,
+   label}]}`), all owner-only. **Undo is the client re-posting what a write
+   returned**: a deleted set's members as `{sha256, slot, label}`, removed
+   members the same way, added ones through `members/remove`. No server-side
+   undo exists. A refusal is a 409 whose `detail` is the sentence to show.
 
 ### 2.3 The `/workflows` contract (v1.11)
 
@@ -755,8 +770,8 @@ knows from its pictures exports and duplicates like any other:
 | `GET /api/v1/workflows/{workflow_key}/graph` | The workflow as Run… would submit it (resolved against ComfyUI's own model list, #1439 swaps applied, credential widgets blanked), for *Open in ComfyUI*: the Workflow tab opens the configured ComfyUI at `?pixlstash_workflow=<key>`; the ComfyUI-PixlStash node (`web/js/open_workflow.js`) strips the param so a reload does not refetch, fetches this through `/pixlstash/workflow_graph` with its configured API token, which must be an owner token (a scoped or READ token gets 403), loads it with `app.loadApiJson`, and warns on `seedless`/`forgotten` | `{name, workflow, source, seedless, forgotten}` |
 | `POST /api/v1/workflows/{workflow_key}/duplicate` | A second copy in the user's workflow folder | `201 {name, workflow_key}` |
 | `POST /api/v1/workflows/{workflow_key}/insert-lora-loader` | A copy with a LoRA loader spliced in | `201 {name, workflow_key, node_id, class_type}` |
-| `GET /api/v1/workflows/{workflow_key}/lora-chain` | The LoRA chain in apply order, for the editor (#1478) | `{workflow_key, editable, refusal, source, clip_source, sink: {summary, consumers}, loaders: [{node_id, class_type, field, filename, name, strength, strength_clip, sha256, on_shelf}], added_loader_class, branch_note}`; ComfyUI down is still a 200 with `editable: false`; `branch_note` is the sentence saying why the chain stops at a branch, null for a straight chain |
-| `PUT /api/v1/workflows/{workflow_key}/lora-chain` | A copy with the chain as the owner left it: `{entries: [{node_id?, sha256?, strength?}], name?, dry_run}` | `201 {dry_run, name, workflow_key, changes: [{kind, node_id, text}]}`; a dry run is `200` with `name` and `workflow_key` null |
+| `GET /api/v1/workflows/{workflow_key}/lora-chain` | The LoRA chain in apply order, for the editor (#1478) | `{workflow_key, editable, refusal, source, clip_source, sink: {summary, consumers}, loaders: [{node_id, class_type, field, filename, name, strength, strength_clip, sha256, on_shelf}], added_loader_class, lanes: [{source, sampler: {node_id, class_type, title}, sink, loaders, added_loader_class}], branch_note}`; ComfyUI down is still a 200 with `editable: false`; where the model forks `loaders` is the trunk and `lanes` one entry per pass (empty for a straight chain; `source` null on the chain and set per lane when each pass loads its own model); `branch_note` says why loaders past a further branch are left as they are |
+| `PUT /api/v1/workflows/{workflow_key}/lora-chain` | A copy with the chain as the owner left it: `{entries: [{node_id?, sha256?, strength?}], lanes?: [[entry…]…], name?, dry_run}`, `lanes` one list per lane of the read, in its order | `201 {dry_run, name, workflow_key, changes: [{kind, node_id, text}]}`; a dry run is `200` with `name` and `workflow_key` null |
 | `GET /api/v1/workflows/{workflow_key}/model-swap[?checkpoint_id=]` | What the Clone with new models dialog draws: the graph's model files (each resolved to one shelf row or `null`), the shelf's checkpoints, VAEs and text encoders; with `checkpoint_id`, the companions recipes, and ComfyUI runs read at the last workflow pull, have run beside it (or, when none has, the files whose layout its family declares, `via: "declared"`) and the LoRAs/ControlNets trained on another family | `{slots: [{filename, kind, model}], checkpoints, vaes, text_encoders, checkpoint_family, checkpoint_modality, proposals: {vae, text_encoder: [{id, filename, display_name, family, via, recipes, history_runs}]}, flags: [{filename, kind, base_model, family, modality}]}`. `modality` is `image`, `video` or null (the base model does not fold to a known one); a LoRA or ControlNet is flagged when its family OR its modality differs from the checkpoint's, the dialog names both modalities when they differ, and the `family` proposal step never crosses modalities. `checkpoints` is filled on the call without `checkpoint_id` only, narrowed to what the workflow's first base loader could load |
 | `POST /api/v1/workflows/{workflow_key}/clone-with-models` | A copy with model files replaced, a card of its own, named as asked when nobody has named that card; the original's pins and defaults are carried where the card has none (a default on a swapped loader field is not), its notes never. Body `{name, swaps: {graph filename: new filename}}`. All or nothing: 409, and no file, when any swap could not be written (`not_in_graph`, `not_on_comfyui`, `several_on_comfyui`) or when every swap names the file already loaded. `verified` is false when any name went in unchecked | `201 {name, workflow_key, swapped, unswapped: [{was, now, reason}], verified}` |
 | `DELETE /api/v1/workflows/{workflow_key}` | Send the imported file to the trash | `{deleted, workflow_key}` |
@@ -965,7 +980,8 @@ the two sides have agreed:
    workflow with nothing to show would outrank every workflow made before 1970.
 4. **The grid draws one card per stack.** `stack_size` ≥ 2 makes a card a
    stack; the card drawn is the cover, `member_keys` names the rest, and the
-   cover's `differs_by` is the union over the members. The order is a manual
+   cover's `differs_by` is empty: the chips say how a member differs from the
+   cover, so they have nothing to say on the cover itself. The order is a manual
    assignment, then an unstacking, then the automatic group by `core_hash`; a
    stored member row is filed under the core hash it was written against, so a
    card that has since left its group simply is not found in it and takes
@@ -1806,6 +1822,9 @@ A focused list — read before changing anything that crosses the boundary.
 12. **WebSocket reconnect is silent.** If the backend changes the filter schema, old clients will keep sending stale filters until they reload — version the filter message if you change it incompatibly.
 13. **Delete-forever is a two-call flow and cannot be short-circuited.** `POST /pictures/scrapheap/delete-preview` returns a single-use `confirm_token` bound to that exact selection; `DELETE /pictures/scrapheap` refuses without it (400 missing, 409 spent/expired/wrong-selection) and destroys nothing on a refusal. A type-to-confirm dialog is a client control and proves nothing to the server — CORS admits any `localhost`/LAN-IP *port* with credentials (§6), so a page on another local port could otherwise drive the one irreversible endpoint. Clear the token after every attempt and re-run the preview to retry; never cache one.
 14. **`X-Client-Id` / `origin_client_id` is for echo-matching only — never authorization.** It is attacker-controllable; any access decision based on it is a vulnerability. Every mutating in-request emit must carry `source`/`origin_client_id` in the event `data` dict, or the originating tab will full-reload on its own change.
+15. **`PUT /picture_sets/{id}/members` replaces; `POST` on the same path appends.** Same path, same body, opposite effect. The PUT refuses (400) a replacement that would leave a non-empty set empty unless the body carries `allow_empty: true`, and reports `removed` beside `members`. Removing one picture is `DELETE /picture_sets/{id}/members/{picture_id}`; its `picture_id` is an integer, so a non-numeric segment is a 422, never a 500 (#1580).
+16. **`original_file_name` is not unique.** It is the basename the file arrived with, and generators reuse names (`image_00008.png`) freely; many pictures can share one. Never join on it; join on `id`.
+17. **`Picture.source_picture_id` is not provenance.** It is a work marker: set on a generated or plugin output so `SourceFaceLikenessTask` can copy character assignments from the source's faces, then cleared once that task has run. A NULL says nothing about whether the picture was derived from another.
 
 ---
 

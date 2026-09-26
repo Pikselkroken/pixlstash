@@ -7,7 +7,11 @@
     <div v-else-if="loadError" class="edit-note">{{ loadError }}</div>
 
     <div v-else-if="!cards.length" class="edit-empty">
-      <p class="edit-empty-lead">
+      <p v-if="unrunnable" class="edit-empty-lead">
+        None of your edit workflows can run as they stand. Open one in
+        Workflows and press Run… to see why.
+      </p>
+      <p v-else class="edit-empty-lead">
         None of your workflows takes a single picture as its input, so there is
         nothing to run this picture through.
       </p>
@@ -24,9 +28,26 @@
       <div class="edit-scroll">
         <div class="section-label section-label--on-dark edit-sec">
           <span :id="workflowLabelId">Workflow</span>
-          <span v-if="workflowKey === rememberedKey" class="edit-aside"
-            >last used</span
-          >
+          <span class="edit-sec-end">
+            <span v-if="workflowKey === rememberedKey" class="edit-aside"
+              >last used</span
+            >
+            <!-- The Recipe tab's "Open", on the card this tab would run. -->
+            <button
+              v-if="workflowKey"
+              class="edit-sec-act"
+              type="button"
+              @click="openInWorkflows"
+            >
+              <Tooltip
+                text="Show this workflow in the Workflows view"
+                activator="parent"
+                :describe="false"
+              />
+              Open
+              <v-icon size="14">mdi-chevron-right</v-icon>
+            </button>
+          </span>
         </div>
         <!-- The app's one menu in its on-dark skin, not a native <select>:
              an OS-drawn popup ignores the theme (PluginSelect was a <select>
@@ -201,10 +222,15 @@
  * **Which cards count.** Image to Image, Inpaint and Outpaint only - the card
  * types whose graph starts from a picture and takes an instruction. Upscalers
  * are left out (a form with a dead text box) and stay on *Use as input for…*.
- * `GET /workflows` does not say how many picture inputs a card leaves open, so
- * the list filters on type and the run's own answer is the check: a card with
- * two open inputs queues nothing and comes back with `picture_input_unfilled`,
- * which is shown under the button.
+ * Hidden cards stay out because the grid's default list leaves them out.
+ *
+ * **Only cards that would run.** Each edit card is pre-flighted against the
+ * open picture, the same question Run asks, and one that answers with a reason
+ * is dropped: a missing node or model, two open picture inputs, a UI-format
+ * file. A node the server replaces (a seed node) or a LoRA it bypasses is not
+ * a reason, so those cards stay. A ComfyUI that cannot be asked (not set up,
+ * not running) is no verdict on any one card, so every card stays and the run
+ * says why; so does a card whose pre-flight itself failed.
  *
  * **After a run the lightbox stays put.** The run is handed to the grid's
  * progress runner WITHOUT a source picture, because a source picture is what
@@ -218,13 +244,18 @@
 import { computed, onBeforeUnmount, ref, useId, watch } from "vue";
 import { useRouter } from "vue-router";
 import AppButton from "../widgets/AppButton.vue";
-import { listWorkflowCards, runWorkflowCard } from "../../api/workflows";
+import Tooltip from "../widgets/Tooltip.vue";
+import {
+  listWorkflowCards,
+  preflightWorkflowRun,
+  runWorkflowCard,
+} from "../../api/workflows";
 import { getPictureMetadata, pictureThumbnailUrl } from "../../api/pictures";
 import { listStackPictures } from "../../api/stacks";
 import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
-import { readReason } from "../../utils/runReasons";
+import { UNCHECKED_CODES, readReason } from "../../utils/runReasons";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
 import { withRef } from "../../utils/withRef";
 import { selectNewestStackMember } from "../../utils/stack";
@@ -256,6 +287,8 @@ const runDialog = useRunDialogStore();
 const libraries = useLibrariesStore();
 
 const cards = ref([]);
+// Edit cards the pre-flight turned away, so the empty state can say so.
+const unrunnable = ref(0);
 const loaded = ref(false);
 const loading = ref(false);
 const loadError = ref("");
@@ -353,7 +386,10 @@ async function loadCards() {
     // one-offs. Every variant and every pulled experiment made the picker too
     // long to be any use.
     const { cards: all } = await listWorkflowCards();
-    cards.value = all.filter((card) => EDIT_TYPES.has(card.type));
+    const edits = all.filter((card) => EDIT_TYPES.has(card.type));
+    const runs = await Promise.all(edits.map(wouldRun));
+    cards.value = edits.filter((_, index) => runs[index]);
+    unrunnable.value = edits.length - cards.value.length;
     rememberedKey.value = readRemembered();
     const known = cards.value.some((card) => card.key === rememberedKey.value);
     // The last one used from this tab, else the first Image to Image card in
@@ -367,6 +403,24 @@ async function loadCards() {
     loadError.value = errorMessage(err, "Could not read your workflows.");
   } finally {
     loading.value = false;
+  }
+}
+
+/** False only when the pre-flight names a reason this card cannot run. */
+async function wouldRun(card) {
+  const id = Number(props.pictureId);
+  if (!Number.isFinite(id) || id <= 0) return true;
+  try {
+    const answer = await preflightWorkflowRun({
+      picture_ids: [id],
+      target: card.key,
+    });
+    return (answer?.groups || [])
+      .flatMap((group) => group.reasons || [])
+      .every((reason) => UNCHECKED_CODES.includes(reason.code));
+  } catch (err) {
+    console.warn(`Could not pre-flight ${card.key} for the Edit tab:`, err);
+    return true;
   }
 }
 
@@ -483,6 +537,11 @@ function onInstructionKeydown(event) {
   }
 }
 
+function openInWorkflows() {
+  if (!workflowKey.value) return;
+  router.push({ name: "workflows", query: { card: workflowKey.value } });
+}
+
 function onMoreOptions() {
   const id = Number(props.pictureId);
   if (!Number.isFinite(id) || id <= 0) return;
@@ -588,6 +647,31 @@ defineExpose({ submit });
 
 .edit-scroll > .edit-sec:first-child {
   padding-top: 0;
+}
+
+.edit-sec-end {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* The Recipe tab's `.recipe-sec-act`, in this tab's label row. */
+.edit-sec-act {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: var(--weight-medium);
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-dark-surface), 0.75);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.edit-sec-act:hover {
+  background: rgba(var(--v-theme-on-dark-surface), 0.16);
+  color: rgb(var(--v-theme-on-dark-surface));
 }
 
 .edit-aside {

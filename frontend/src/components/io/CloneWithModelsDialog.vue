@@ -225,12 +225,26 @@ const checkpointOptions = computed(() => {
   return list;
 });
 
+/**
+ * The shelf model IDS the owner's own sets offer for each row kind (#1520), so
+ * the choice list can lead with them, labelled. By id, never by filename: two
+ * shelf rows can share a basename, and only one of them is in the set. Empty
+ * until a checkpoint is chosen.
+ */
+const groupedByKind = ref({});
+
 function optionsFor(row) {
   const shelf =
     options.value?.[row.kind === "vae" ? "vaes" : "text_encoders"] || [];
-  const list = shelf.map((model) => ({
+  const grouped = new Set(groupedByKind.value[row.kind] ?? []);
+  const list = [
+    ...shelf.filter((model) => grouped.has(model.id)),
+    ...shelf.filter((model) => !grouped.has(model.id)),
+  ].map((model) => ({
     value: model.filename,
-    label: modelLabel(model),
+    label: grouped.has(model.id)
+      ? `${modelLabel(model)} · Grouped by you`
+      : modelLabel(model),
   }));
   if (!list.some((option) => option.value === row.own)) {
     list.unshift({
@@ -257,6 +271,12 @@ function onlyComfyUI(proposal) {
 function provenance(row) {
   const chosen = chosenCheckpoint.value;
   if (!chosen || isOriginal(chosen) || row.touched) return "";
+  // The owner's own set outranks every recipe (#1520), and says whose word it is.
+  if (row.via === "grouped") {
+    return row.setName
+      ? `Grouped by you in "${row.setName}"`
+      : "Grouped by you";
+  }
   const where = row.onlyComfyUI ? " in ComfyUI" : "";
   if (row.via === "checkpoint") return `Used with this checkpoint${where}`;
   if (row.via === "base_model") {
@@ -385,6 +405,7 @@ watch(
             value: own,
             via: null,
             onlyComfyUI: false,
+            setName: null,
             touched: false,
             leftover: null,
           };
@@ -453,6 +474,14 @@ watch(checkpointId, async () => {
   // checkpoint is not evidence about this one. The row selects are disabled
   // while the read was in flight, so nothing the owner picked is lost here.
   resetRows();
+  groupedByKind.value = Object.fromEntries(
+    rows.value.map((row) => [
+      row.kind,
+      (body.proposals?.[PROPOSAL_KIND[row.kind]] || [])
+        .filter((p) => p.via === "grouped")
+        .map((p) => p.id),
+    ]),
+  );
   for (const row of rows.value) {
     const proposals = body.proposals?.[PROPOSAL_KIND[row.kind]] || [];
     byKind[row.kind] = proposals;
@@ -463,6 +492,7 @@ watch(checkpointId, async () => {
       taken.add(own.id);
       row.via = own.via;
       row.onlyComfyUI = onlyComfyUI(own);
+      row.setName = own.set_name ?? null;
     }
   }
   for (const row of rows.value) {
@@ -470,9 +500,13 @@ watch(checkpointId, async () => {
     // A slot whose file has a known layout (clip_l, t5_xxl) takes only a
     // proposal of that layout, or of none recorded: recipe counts alone would
     // put a CLIP-L into a T5 slot.
+    // `prepick: false` is a hand-made set whose slot holds several models:
+    // it offers them, but choosing among them is the owner's call, so the row
+    // falls through to the recipe evidence instead of taking one at random.
     const next = byKind[row.kind].find(
       (p) =>
         !taken.has(p.id) &&
+        p.prepick !== false &&
         (!row.family || !p.family || p.family === row.family),
     );
     if (next) {
@@ -481,6 +515,7 @@ watch(checkpointId, async () => {
         value: next.filename,
         via: next.via,
         onlyComfyUI: onlyComfyUI(next),
+        setName: next.set_name ?? null,
       });
     }
   }
@@ -497,11 +532,13 @@ watch(checkpointId, async () => {
 });
 
 function resetRows() {
+  groupedByKind.value = {};
   for (const row of rows.value) {
     Object.assign(row, {
       value: row.own,
       via: null,
       onlyComfyUI: false,
+      setName: null,
       touched: false,
       leftover: null,
     });

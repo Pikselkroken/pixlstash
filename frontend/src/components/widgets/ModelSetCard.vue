@@ -1,7 +1,11 @@
 <template>
   <article
     class="msc"
-    :class="{ 'msc--open': expanded, 'msc--on': selected }"
+    :class="{
+      'msc--open': expanded,
+      'msc--on': selected,
+      'msc--hand': card.handMade,
+    }"
     role="group"
     :aria-label="accessibleName"
     data-testid="model-set-card"
@@ -18,13 +22,48 @@
       >
         <img :src="coverSrc(cover)" alt="" loading="lazy" />
       </span>
-      <span class="msc__badge msc__badge--start" aria-hidden="true">
+      <!-- A hand-made card never states a recipe count as its own: the set is
+           the owner's claim, and the recipes are only what happens to fit it. -->
+      <span
+        v-if="card.handMade"
+        class="msc__badge msc__badge--start msc__badge--hand"
+        aria-hidden="true"
+        >Grouped by you</span
+      >
+      <span v-else class="msc__badge msc__badge--start" aria-hidden="true">
         <v-icon size="12">mdi-layers</v-icon>{{ card.recipes }} recipes
       </span>
       <span class="msc__badge msc__badge--end" aria-hidden="true">
         <v-icon size="12">mdi-image-multiple</v-icon
         >{{ card.pictures.toLocaleString() }}
       </span>
+    </div>
+    <!-- A hand-made set with no picture yet: its checkpoint's own mark, or a
+         dashed empty cover while it has none. -->
+    <div
+      v-else-if="card.handMade"
+      class="msc__cover msc__cover--empty msc__cover--hand"
+      aria-hidden="true"
+    >
+      <span class="msc__badge msc__badge--start msc__badge--hand"
+        >Grouped by you</span
+      >
+      <ModelMark
+        v-if="card.markModel"
+        class="msc__mark"
+        :row="{
+          display_name: card.markModel.name,
+          filename: card.markModel.filename,
+          base_model: card.markModel.base_model,
+          icon_sha256: card.markIcon || null,
+        }"
+      />
+      <!-- Only a set with NO checkpoint says so. One whose checkpoint file has
+           left the shelf still has it, kept by hash: say that instead. -->
+      <span v-else-if="card.incomplete" class="msc__empty-line"
+        >No checkpoint yet</span
+      >
+      <span v-else class="msc__empty-line">Checkpoint not on shelf</span>
     </div>
     <div v-else class="msc__cover msc__cover--empty" aria-hidden="true">
       <span class="msc__empty-line">No picture to show</span>
@@ -64,12 +103,23 @@
           :items="kindChips"
           aria-hidden="true"
         />
-        <span v-else class="msc__none" aria-hidden="true"
-          >Nothing else has run with it</span
-        >
+        <span v-else class="msc__none" aria-hidden="true">{{
+          card.handMade
+            ? "Nothing else in it yet"
+            : "Nothing else has run with it"
+        }}</span>
       </div>
       <div class="msc__row msc__row--facts">
-        <span class="msc__facts" aria-hidden="true">{{
+        <!-- The one thing an incomplete set must say, in place of its facts:
+             what is missing, so the owner knows what to add. -->
+        <span
+          v-if="card.handMade && card.incomplete"
+          class="msc__warn"
+          aria-hidden="true"
+          ><v-icon size="14">mdi-alert-outline</v-icon>Incomplete: no
+          checkpoint</span
+        >
+        <span v-else class="msc__facts" aria-hidden="true">{{
           card.facts.join(" · ")
         }}</span>
       </div>
@@ -97,10 +147,17 @@
 // There is no ⓘ here either: everything the card knows is already on it, and the
 // detail a reader wants next is the file list, which is one ▸ away.
 //
-// **Selected means the card's BASE MODEL is selected**, never the set: the shelf's
-// verbs write one file each and two of them destroy bytes, so a card standing for
-// its whole tray would put a shared VAE behind a Delete aimed at a checkpoint. The
-// other members are selected in the tray, one row each.
+// **On an evidence card, selected means its BASE MODEL is selected**, never the
+// set: the shelf's verbs write one file each and two of them destroy bytes, so a
+// card standing for its whole tray would put a shared VAE behind a Delete aimed
+// at a checkpoint. The other members are selected in the tray, one row each. One
+// exception to the drawing: while the open tray shows the base model picked from
+// its own row, the grid leaves the card unlit, so a tray pick does not read as
+// the whole set picked (`trayPicked` in `ModelSetGrid.vue`).
+//
+// A HAND-MADE card (`card.handMade`, #1520) is the owner's set rather than the
+// evidence for one: dashed, badged "Grouped by you", no recipe count, and
+// selected means the SET is selected - its verbs touch no file.
 
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
@@ -108,6 +165,7 @@ import { VIcon } from "vuetify/components";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import AppButton from "./AppButton.vue";
 import ChipRow from "./ChipRow.vue";
+import ModelMark from "./ModelMark.vue";
 
 const props = defineProps({
   /** One card from `setCard` (see `utils/workflowSets.js`). */
@@ -149,7 +207,24 @@ const kindChips = computed(() =>
 // "+N" is not a control, so this is the only place a screen reader hears the
 // chips a narrow card clipped - and the only place it hears the whole set.
 const accessibleName = computed(() => {
-  const { name, kindLabel, kinds, facts } = props.card;
+  const { name, kindLabel, kinds, facts, handMade, incomplete } = props.card;
+  if (handMade) {
+    return [
+      name,
+      "grouped by you",
+      kindLabel,
+      incomplete
+        ? "incomplete: no checkpoint"
+        : props.card.checkpointOffShelf
+          ? "checkpoint not on shelf"
+          : null,
+      kinds.length ? `with ${kinds.join(", ")}` : "nothing else in it yet",
+      // What is drawn: an incomplete card shows its warning in place of facts.
+      incomplete ? null : facts.join(", "),
+    ]
+      .filter(Boolean)
+      .join(", ");
+  }
   return [
     name,
     kindLabel,
@@ -274,6 +349,40 @@ const accessibleName = computed(() => {
   justify-content: center;
   padding: var(--space-4) var(--space-5);
   background: rgb(var(--v-theme-input-background));
+}
+
+/* The owner's own set: a dashed edge, the design's "hand-made" mark, so it is
+   told from an evidence card before a word is read. Dashed rather than a
+   colour, because the difference is provenance, not state. */
+.msc--hand {
+  border-style: dashed;
+}
+
+.msc__cover--hand {
+  position: relative;
+  border-bottom: 1px dashed rgb(var(--v-theme-border));
+}
+
+/* The checkpoint's mark, drawn large as the cover. `ModelMark` sizes itself
+   from `--entity-thumb`, which the sidebar already overrides the same way; the
+   size is three of the largest spacing step rather than a new number. */
+.msc__mark {
+  --entity-thumb: calc(var(--space-6) * 3);
+}
+
+.msc__badge--hand {
+  border: 1px dashed currentColor;
+}
+
+.msc__warn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  overflow: hidden;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-surface-warning));
+  text-overflow: ellipsis;
 }
 
 .msc__empty-line {
