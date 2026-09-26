@@ -92,7 +92,9 @@ jobs:
           # Without a cap a looping generation runs until the job timeout: OpenRouter
           # keeps the connection alive, so ai_timeout never fires. Reasoning tokens count
           # against it, and PR-Agent subtracts it from MAX_MODEL_TOKENS for the diff.
-          OPENROUTER.MAX_TOKENS: "20000"
+          # 20000 was too low: on a ~76k-token diff /improve spent it all reasoning and
+          # returned empty content (finish_reason: length), failing the suggestions.
+          OPENROUTER.MAX_TOKENS: "40000"
           OPENROUTER.REASONING_EFFORT: "medium"
           CONFIG.MODEL: openrouter/${{ vars.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash' }}
           # The upstream default fallback is an OpenAI model we hold no key for.
