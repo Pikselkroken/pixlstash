@@ -33,6 +33,9 @@ const CARDS = [
   { key: "i2i", name: "Relight", type: "img2img", type_label: "Image to Image" },
 ];
 
+const checkedRow = (wrapper) =>
+  wrapper.find("[role=menuitemradio][aria-checked=true]").text();
+
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 async function mountPanel() {
@@ -42,6 +45,12 @@ async function mountPanel() {
       stubs: {
         AppButton: { template: "<button class='run' @click=\"$emit('click')\"><slot /></button>" },
         "v-icon": true,
+        // Renders the field and the menu side by side, so the rows can be
+        // read and clicked without Vuetify's overlay.
+        "v-menu": {
+          template:
+            "<div><slot name='activator' :props='{}' /><slot /></div>",
+        },
       },
     },
   });
@@ -62,16 +71,16 @@ beforeEach(() => {
 describe("the Edit tab", () => {
   it("lists only the edit card types, an Image to Image card first", async () => {
     const wrapper = await mountPanel();
-    const options = wrapper.findAll("option").map((o) => o.element.value);
-    expect(options).toEqual(["out", "i2i"]);
+    const rows = wrapper.findAll("[role=menuitemradio]").map((row) => row.text());
+    expect(rows).toEqual(["Widen, Outpaint", "Relight, Image to Image"]);
     expect(listWorkflowCards).toHaveBeenCalledWith({ includeOneOffs: true });
-    expect(wrapper.find("select").element.value).toBe("i2i");
+    expect(checkedRow(wrapper)).toBe("Relight, Image to Image");
   });
 
   it("says why when there is nothing to run the picture through", async () => {
     listWorkflowCards.mockResolvedValue({ cards: CARDS.slice(0, 2) });
     const wrapper = await mountPanel();
-    expect(wrapper.find("select").exists()).toBe(false);
+    expect(wrapper.find("[role=menu]").exists()).toBe(false);
     expect(wrapper.text()).toContain("Open Workflows");
   });
 
@@ -116,12 +125,12 @@ describe("the Edit tab", () => {
 
   it("remembers the card it ran, and defaults to it next time", async () => {
     const first = await mountPanel();
-    await first.find("select").setValue("out");
+    await first.findAll("[role=menuitemradio]")[0].trigger("click");
     await first.find("button.run").trigger("click");
     await flush();
     first.unmount();
     const second = await mountPanel();
-    expect(second.find("select").element.value).toBe("out");
+    expect(checkedRow(second)).toBe("Widen, Outpaint");
   });
 
   it("says why nothing was queued", async () => {

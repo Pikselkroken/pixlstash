@@ -22,23 +22,68 @@
 
     <template v-else>
       <div class="edit-scroll">
-        <label
-          :for="workflowFieldId"
-          class="section-label section-label--on-dark edit-sec"
-        >
-          <span>Workflow</span>
+        <div class="section-label section-label--on-dark edit-sec">
+          <span :id="workflowLabelId">Workflow</span>
           <span v-if="workflowKey === rememberedKey" class="edit-aside"
             >last used</span
           >
-        </label>
-        <!-- A native <select>: the picker is a short list of names, and the
-             pane is dark in both themes, which `color-scheme` hands the OS
-             popup too. -->
-        <select :id="workflowFieldId" v-model="workflowKey" class="edit-select">
-          <option v-for="card in cards" :key="card.key" :value="card.key">
-            {{ card.name || "Untitled workflow" }} · {{ card.type_label }}
-          </option>
-        </select>
+        </div>
+        <!-- The app's one menu in its on-dark skin, not a native <select>:
+             an OS-drawn popup ignores the theme (PluginSelect was a <select>
+             briefly for the same reason). A below-opening menu's min-width is
+             capped at its activator's, so the oversized floor makes the menu
+             exactly as wide as the field. -->
+        <v-menu
+          v-model="pickerOpen"
+          location="bottom start"
+          :offset="4"
+          :min-width="10000"
+          @after-leave="onPickerAfterLeave"
+        >
+          <template #activator="{ props: menuProps }">
+            <button
+              v-bind="withRef(menuProps, (el) => (pickerTriggerRef = el))"
+              class="edit-select"
+              type="button"
+              :aria-labelledby="`${workflowLabelId} ${pickerValueId}`"
+            >
+              <span :id="pickerValueId" class="edit-select-name">{{
+                chosenCard?.name || "Untitled workflow"
+              }}</span>
+              <span class="edit-kind">{{ chosenCard?.type_label }}</span>
+              <v-icon class="edit-select-chevron" aria-hidden="true"
+                >mdi-chevron-down</v-icon
+              >
+            </button>
+          </template>
+          <div
+            class="ctx-menu ctx-menu--on-dark"
+            role="menu"
+            aria-label="Workflow"
+            tabindex="-1"
+            @keydown="onMenuKeydown"
+          >
+            <button
+              v-for="card in cards"
+              :key="card.key"
+              class="ctx-item edit-option"
+              type="button"
+              role="menuitemradio"
+              :aria-checked="card.key === workflowKey ? 'true' : 'false'"
+              @click="choose(card.key)"
+            >
+              <span class="ctx-label-text">{{
+                card.name || "Untitled workflow"
+              }}</span>
+              <span class="visually-hidden">, </span>
+              <span class="edit-kind">{{ card.type_label }}</span>
+            </button>
+            <div class="ctx-sep" role="separator"></div>
+            <p class="edit-menu-note">
+              Upscalers are not listed here. Use More options… for those.
+            </p>
+          </div>
+        </v-menu>
 
         <label
           :for="instructionFieldId"
@@ -180,6 +225,8 @@ import { useLibrariesStore } from "../../stores/useLibrariesStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
 import { readReason } from "../../utils/runReasons";
+import { onMenuKeydown } from "../../utils/menuKeyboard";
+import { withRef } from "../../utils/withRef";
 import { selectNewestStackMember } from "../../utils/stack";
 
 const props = defineProps({
@@ -200,7 +247,8 @@ const EDIT_TYPES = new Set(["img2img", "inpaint", "outpaint"]);
 
 const LAST_KEY_PREFIX = "pixlstash:editTabWorkflow:";
 
-const workflowFieldId = useId();
+const workflowLabelId = useId();
+const pickerValueId = useId();
 const instructionFieldId = useId();
 const shortcutHintId = useId();
 
@@ -225,6 +273,28 @@ const submitError = ref("");
  * resultId}` - `status` is running | done | failed.
  */
 const run = ref(null);
+
+const pickerOpen = ref(false);
+const pickerTriggerRef = ref(null);
+// The chosen row leaves with the menu and takes focus to <body>; the field is
+// refocused once the close transition ends, as PluginSelect does.
+let refocusPicker = false;
+
+const chosenCard = computed(
+  () => cards.value.find((card) => card.key === workflowKey.value) || null,
+);
+
+function choose(key) {
+  workflowKey.value = key;
+  pickerOpen.value = false;
+  refocusPicker = true;
+}
+
+function onPickerAfterLeave() {
+  if (!refocusPicker) return;
+  refocusPicker = false;
+  pickerTriggerRef.value?.focus?.();
+}
 
 const storageKey = computed(
   () => `${LAST_KEY_PREFIX}${libraries.activeLibrary?.uuid || ""}`,
@@ -507,12 +577,59 @@ defineExpose({ submit });
   color: rgb(var(--v-theme-on-dark-surface));
   font-family: inherit;
   font-size: var(--text-sm);
-  color-scheme: dark;
 }
 
+/* The field box, as a button so it opens the app's menu. */
 .edit-select {
-  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: var(--control-h);
   padding: 0 var(--space-3);
+  text-align: left;
+  cursor: pointer;
+}
+
+.edit-select:focus-visible {
+  outline-color: rgb(var(--v-theme-on-dark-surface));
+}
+
+.edit-select-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.edit-select-chevron {
+  flex-shrink: 0;
+  font-size: var(--gutter-glyph);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+}
+
+/* The workflow's type, as the design's small chip on the field and each row. */
+.edit-kind {
+  flex-shrink: 0;
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--v-theme-on-dark-surface), 0.1);
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+  white-space: nowrap;
+}
+
+.edit-option[aria-checked="true"] {
+  background: rgba(var(--v-theme-on-dark-surface), 0.1);
+}
+
+.edit-menu-note {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  color: rgba(var(--v-theme-on-dark-surface), var(--opacity-text-secondary));
+  white-space: normal;
 }
 
 .edit-textarea {
