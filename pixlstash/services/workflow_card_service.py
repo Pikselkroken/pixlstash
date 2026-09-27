@@ -1705,6 +1705,10 @@ class DefaultRecipe:
     base_topology: Optional[str]
     base_card: Optional[str] = None
     sampled: int = 0
+    # Whether the sample says which LoRAs the workflow runs: some LoRA has a
+    # majority, most instances loaded none, or the owner edited them. A split
+    # with no majority is NOT "none", and a run then keeps the graph's LoRAs.
+    loras_decided: bool = False
     values: list[Default] = field(default_factory=list)
     models: list[DefaultModel] = field(default_factory=list)
     loras: list[DefaultLora] = field(default_factory=list)
@@ -1767,6 +1771,7 @@ def workflow_defaults(
     models: dict[str, Counter] = {}
     model_kinds: dict[str, str] = {}
     lora_seen: Counter = Counter()
+    bare = 0
     lora_strengths: dict[str, Counter] = {}
     lora_widgets: dict[str, str] = {}
     base_stages = workflow.specials.get(workflow.base_topology or "") or ()
@@ -1820,6 +1825,7 @@ def workflow_defaults(
                 models.setdefault(address, Counter())[slot.asset] += 1
                 model_kinds[address] = kind
         lora_seen.update(loaded)
+        bare += not loaded
         ran = workflow.specials.get(workflow.variant_topology.get(structural_hash, ""))
         # A topology the specials pass has not read yet says nothing either way.
         if ran is not None:
@@ -1925,6 +1931,11 @@ def workflow_defaults(
             recipe.loras.append(
                 DefaultLora("", None, sha256, _float_or_none(value), EDITED)
             )
+    recipe.loras_decided = (
+        bool(majority)
+        or bare * 2 > sampled
+        or any(address.startswith(LORA_ADDRESS_PREFIX) for address in overrides)
+    )
     return recipe
 
 

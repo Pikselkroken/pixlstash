@@ -3730,7 +3730,8 @@ def create_router(server) -> APIRouter:
                 node_id
                 for node_id in node_ids
                 if isinstance(graph[node_id], dict)
-                and isinstance(graph[node_id].get("inputs", {}).get(widget), str)
+                and isinstance(graph[node_id].get("inputs"), dict)
+                and isinstance(graph[node_id]["inputs"].get(widget), str)
             ]
             if not loaders:
                 logger.info(
@@ -4616,7 +4617,7 @@ def create_router(server) -> APIRouter:
             if (
                 recipe is not None
                 and not body.loras
-                and recipe.sampled
+                and recipe.loras_decided
                 and all(saved.get("sha256") for saved in recipe_loras)
             ):
                 # The recipe decides a workflow's LoRAs, so a loader it leaves

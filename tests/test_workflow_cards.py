@@ -1609,3 +1609,23 @@ def test_a_file_only_card_does_not_blank_its_topology_s_stages(hub):
     (entry,) = [w for w in workflow_index(hub) if w.workflow_id == "a" * 32]
     assert len(entry.cards) == 2, entry.cards
     assert entry.specials[detailed.topology_hash] == ("face_detailer",)
+
+
+def test_a_lora_split_with_no_majority_decides_nothing(hub, monkeypatch):
+    """50/50 between two LoRAs is no consensus, not "run without LoRAs"."""
+    split = [
+        _file_run(hub, loras=("x.safetensors",)),
+        _file_run(hub, loras=("y.safetensors",)),
+    ]
+    _, recipe = _defaults(hub, monkeypatch, split)
+    assert (recipe.loras, recipe.loras_decided) == ([], False)
+
+
+def test_most_runs_without_a_lora_decide_none(hub, monkeypatch):
+    runs = [
+        _file_run(hub, loras=("x.safetensors",)),
+        _file_run(hub, steps=21),
+        _file_run(hub, steps=22),
+    ]
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    assert (recipe.loras, recipe.loras_decided) == ([], True)
