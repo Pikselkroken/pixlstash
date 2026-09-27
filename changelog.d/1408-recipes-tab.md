@@ -10,9 +10,8 @@
   its prompt, its LoRAs with their strengths, and how many of your pictures it
   accounts for. Run… on a card opens the Run popup already filled in with that
   recipe. Drag a card by its handle to reorder, or hold Alt and use the arrow
-  keys; ⋯ renames, exports or deletes one. A recipe runs on any workflow in
-  the stack it was saved from, so picking a member of a stack shows the
-  stack's recipes.
+  keys; ⋯ renames, exports or deletes one. A recipe runs on the workflow it
+  was saved from, with the checkpoint it was saved with.
 - *Save as recipe* now opens a window listing what the recipe will keep —
   prompt, LoRAs, and each setting you changed with the workflow's own value
   beside it — and each line can be unticked. **The seed is off unless you tick

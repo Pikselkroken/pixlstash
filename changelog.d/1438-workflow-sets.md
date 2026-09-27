@@ -2,8 +2,7 @@
   your pictures were made with, and opening one shows every model that has run
   alongside it — its VAEs, its text encoders, its LoRAs — with how many of your
   pictures back each one. So you can see what to pair with what instead of
-  guessing. Read a set as cards or as a comparison list, the same switch the
-  Workflows screen's stacks use.
+  guessing. Read a set as cards or as a comparison list.
 - Each model in a set says whether it is shared. `Also in 3 other sets` on a VAE
   three checkpoints have used; `Only in this set` on one that has served just the
   one. What a set does **not** claim is that its files all ran together at once —
