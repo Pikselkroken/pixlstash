@@ -25,6 +25,8 @@ from pixlstash.db_models import (
     User,
 )
 from pixlstash.hub import workflow_cards, workflow_origin
+from pixlstash.hub.workflow_card_reads import workflow_of_topology
+from pixlstash.services.workflow_identity import WORKFLOW_KEY_VERSION
 from pixlstash.hub.workflows import (
     forget_input_modes,
     input_modes_by_workflow,
@@ -335,16 +337,16 @@ def _store_workflow(
         return {
             "status": "success",
             "name": existing,
-            # Which folder matched: not on the wire, like `workflow_key`
-            # below; the pull reads it to name a workflow PixlStash ships.
+            # Which folder matched; the pull reads it to name a workflow
+            # PixlStash ships.
             "source": source,
             "workflow_dir": workflow_dir,
             "matched": True,
             "topology_hash": topology_hash,
-            # Not in ``ComfyUIWorkflowImportResponse`` and therefore not on the
-            # wire: it is here so the caller can name the card in its
-            # ``CHANGED_WORKFLOWS`` event without filing the graph twice.
-            "workflow_key": card_key,
+            # The workflow the file is in, so the caller can name it in its
+            # ``CHANGED_WORKFLOWS`` event without filing the graph twice. The
+            # card key stays internal (#1623).
+            "workflow_id": _workflow_of(hub, topology_hash) if card_key else None,
         }
     if os.path.exists(path) and not overwrite:
         if not keep_both:
@@ -364,7 +366,7 @@ def _store_workflow(
         "workflow_dir": workflow_dir,
         "matched": False,
         "topology_hash": topology_hash,
-        "workflow_key": card_key,
+        "workflow_id": _workflow_of(hub, topology_hash) if card_key else None,
     }
 
 
@@ -707,6 +709,23 @@ def _card_the_file(
             exc,
         )
     return None
+
+
+def _workflow_of(hub, topology_hash: str | None) -> str | None:
+    """The workflow a filed topology is in, or ``None``; never raises.
+
+    ``None`` too for a topology the core pass has not reached (an editor file
+    filed as a topology only), which is in no workflow yet.
+    """
+    if hub is None or not topology_hash:
+        return None
+    try:
+        return workflow_of_topology(hub, topology_hash)
+    except sqlite3.Error as exc:
+        logger.warning(
+            "Could not read the workflow of topology %s: %s", topology_hash, exc
+        )
+        return None
 
 
 # ponytail: one request submits its runs one after another, uploads included;
@@ -1222,6 +1241,45 @@ def _picture_workflow_key(server, pic_id: int) -> str | None:
         return None
 
 
+def _picture_workflow_id(server, pic_id: int) -> str | None:
+    """The workflow this picture's variant is in, or ``None``; never raises.
+
+    The variant's topology as the hub files it, then the workflow that
+    topology is in (``workflow_of_topology``): the same resolution
+    ``GET /pictures?workflow=`` makes the other way, so a link built from this
+    id lists this picture. ``None`` for a variant not filed at the current key
+    version, or a topology in no workflow yet.
+    """
+    hub = getattr(server, "hub", None)
+    if hub is None:
+        return None
+    try:
+        pics = server.vault.db.run_immediate_read_task(
+            Picture.find,
+            id=pic_id,
+            select_fields=["id", "workflow_structural_hash"],
+        )
+        structural_hash = (
+            getattr(pics[0], "workflow_structural_hash", None) if pics else None
+        )
+        if not structural_hash:
+            return None
+        row = hub.fetchone(
+            "SELECT topology_hash FROM workflow_variant "
+            "WHERE structural_hash = ? AND key_version = ?",
+            (structural_hash, WORKFLOW_KEY_VERSION),
+        )
+        return workflow_of_topology(hub, row["topology_hash"]) if row else None
+    except Exception as exc:
+        logger.warning(
+            "[comfyui] Could not read the workflow for picture id=%s: %s; "
+            "reporting the recipe without a workflow_id.",
+            pic_id,
+            exc,
+        )
+        return None
+
+
 def _a1111_strengths(value) -> dict:
     """An A1111 LoRA weight as ``{"model": float}``, or ``{}`` if it is not one.
 
@@ -1581,10 +1639,10 @@ class ComfyUIWorkflowLoraInsertionResponse(ComfyUILoraInsertionResponse):
 
 
 class ComfyUIWorkflowCardResponse(BaseModel):
-    """The Workflows card a stored workflow runs as."""
+    """The workflow a stored workflow file runs as."""
 
     name: str
-    workflow_key: str
+    workflow_id: str
 
 
 class ComfyUIWorkflowListResponse(BaseModel):
@@ -1638,6 +1696,8 @@ class ComfyUIWorkflowImportResponse(BaseModel):
     matched: bool = False
     # The Workflows view row it is filed under; None when it could not be.
     topology_hash: Optional[str] = None
+    # The workflow it is in; None when it could not be filed or is in none.
+    workflow_id: Optional[str] = None
 
 
 class ComfyUIWorkflowConvertResponse(BaseModel):
@@ -1647,8 +1707,8 @@ class ComfyUIWorkflowConvertResponse(BaseModel):
     name: str
     # True when that file was already stored; False when this stored it.
     matched: bool
-    # The card the file is on now; None when it could not be filed.
-    workflow_key: Optional[str] = None
+    # The workflow the file is in now; None when it could not be filed.
+    workflow_id: Optional[str] = None
 
 
 class ComfyUIWorkflowPullStartResponse(BaseModel):
@@ -1702,8 +1762,8 @@ class ComfyUIWorkflowPullSummary(BaseModel):
     models_unchecked: int = 0
     # The absent model files, by name.
     missing_model_files: list[str] = []
-    # The cards the pull filed a file on.
-    workflow_keys: list[str] = []
+    # The workflows the pull filed a file in.
+    workflow_ids: list[str] = []
     # Finished runs in ComfyUI's /history that named a shelf model, filed as
     # companion evidence (#1518); None when the history could not be read.
     history_runs: int | None = None
@@ -1882,10 +1942,10 @@ class ComfyUIPictureRecipeResponse(BaseModel):
     topology_hash: Optional[str] = None
     model_slots: list[ComfyUIRecipeModelSlot] = []
     inputs: list[ComfyUIRecipeInput] = []
-    # The workflow card this picture's variant is on, None when the hub has
-    # not filed or keyed it. An opaque digest of the graph's topology and
-    # model slots; what it GROUPS is an owner-only question, asked elsewhere.
-    workflow_key: Optional[str] = None
+    # The workflow this picture's variant is in, None when the hub has not
+    # filed or grouped it. `auto:<core hash>` or a manual group's uuid; what it
+    # GROUPS is an owner-only question, asked elsewhere.
+    workflow_id: Optional[str] = None
     models: list[str] = []
     loras: list[str] = []
     node_count: int = 0
@@ -2250,18 +2310,18 @@ def create_router(server) -> APIRouter:
 
     @router.post(
         "/comfyui/workflows/{workflow_name}/card",
-        summary="Put a stored workflow on its Workflows card",
+        summary="Put a stored workflow file in its workflow",
         description=(
-            "Files a stored workflow, user or built-in, on its Workflows card "
-            "the way an import files it, and returns the card's key so the Run "
-            "popup can open on it. A built-in has no card until something asks: "
-            "Edit with ComfyUI asks for the built-in image edit workflow. "
-            "Idempotent: a workflow already filed answers its existing card."
+            "Files a stored workflow file, user or built-in, the way an import "
+            "files it, and returns the id of the workflow it is in so the Run "
+            "popup can open on it. A built-in is filed only when something "
+            "asks: Edit with ComfyUI asks for the built-in image edit workflow. "
+            "Idempotent: a file already filed answers its existing workflow."
         ),
         response_model=ComfyUIWorkflowCardResponse,
         responses={
             404: {"description": "No stored workflow has this name."},
-            409: {"description": "The workflow's graph could not be put on a card."},
+            409: {"description": "The file's graph could not be put in a workflow."},
         },
     )
     def card_for_comfyui_workflow(request: Request, workflow_name: str):
@@ -2270,22 +2330,29 @@ def create_router(server) -> APIRouter:
         # between the read and the filing and leave a card naming it.
         with workflow_inbox.INBOX_LOCK:
             name, _path, document = _load_stored_workflow(workflow_name)
-            _topology_hash, card_key = _file_in_hub(
-                getattr(server, "hub", None), name, document
+            hub = getattr(server, "hub", None)
+            topology_hash, card_key = _file_in_hub(hub, name, document)
+            workflow_id = _workflow_of(hub, topology_hash) if card_key else None
+        if not workflow_id:
+            # `_file_in_hub` has logged a filing failure; a topology with no
+            # core (an editor file) is in no workflow to open.
+            logger.warning(
+                "Stored workflow %s is in no workflow (card %s, topology %s).",
+                name,
+                card_key,
+                topology_hash,
             )
-        if not card_key:
-            # `_file_in_hub` has logged why.
             raise HTTPException(
                 status_code=409,
-                detail=f"PixlStash could not put the workflow {name} on a card.",
+                detail=f"PixlStash could not put the workflow {name} in a workflow.",
             )
         announce_changed_workflows(
             server,
-            [card_key],
+            [workflow_id],
             "imported",
             origin_client_id=getattr(request.state, "origin_client_id", None),
         )
-        return {"name": name, "workflow_key": card_key}
+        return {"name": name, "workflow_id": workflow_id}
 
     @router.post(
         "/comfyui/abort",
@@ -2347,7 +2414,7 @@ def create_router(server) -> APIRouter:
             # about it is carried here.
             announce_changed_workflows(
                 server,
-                [key for key in (result.get("workflow_key"),) if key],
+                [key for key in (result.get("workflow_id"),) if key],
                 "imported",
                 origin_client_id=getattr(request.state, "origin_client_id", None),
             )
@@ -2424,9 +2491,10 @@ def create_router(server) -> APIRouter:
                 store_converted_graph(path, _load_workflow_json(path), output)
                 # Filed again now the graph is there: the store above filed
                 # the editor file as a topology only.
-                _topology_hash, card_key = _file_in_hub(
+                topology_hash, card_key = _file_in_hub(
                     hub, stored_name, _load_workflow_json(path)
                 )
+                workflow_id = _workflow_of(hub, topology_hash) if card_key else None
         except NotAWorkflowError as exc:
             logger.warning("Refused converting %s: %s", name, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2446,14 +2514,14 @@ def create_router(server) -> APIRouter:
         logger.info("Stored ComfyUI's conversion of %s.", stored_name)
         announce_changed_workflows(
             server,
-            sorted({key for key in (result.get("workflow_key"), card_key) if key}),
+            sorted({key for key in (result.get("workflow_id"), workflow_id) if key}),
             "imported",
             origin_client_id=getattr(request.state, "origin_client_id", None),
         )
         return {
             "name": stored_name,
             "matched": bool(result.get("matched")),
-            "workflow_key": card_key,
+            "workflow_id": workflow_id,
         }
 
     @router.post(
@@ -2696,7 +2764,7 @@ def create_router(server) -> APIRouter:
                     **_editor_graph_recipe_payload(editor_graph, conversion_problems),
                     "source_is_imported": source_is_imported,
                     "source_label": source_label,
-                    "workflow_key": _picture_workflow_key(server, pic_id),
+                    "workflow_id": _picture_workflow_id(server, pic_id),
                     **_recipe_extras(server, request, pic_id, None),
                     # After the extras on purpose: it replaces the stored
                     # column, which describes a different reading of this file.
@@ -2712,7 +2780,7 @@ def create_router(server) -> APIRouter:
                 **_a1111_recipe_payload(a1111),
                 "source_is_imported": source_is_imported,
                 "source_label": source_label,
-                "workflow_key": _picture_workflow_key(server, pic_id),
+                "workflow_id": _picture_workflow_id(server, pic_id),
                 **_recipe_extras(server, request, pic_id, None),
             }
 
@@ -2787,35 +2855,14 @@ def create_router(server) -> APIRouter:
             "positive_prompt": gen_info["positive_prompt"],
             "negative_prompt": extras["negative_prompt"],
             "settings": extras["settings"],
-            # The card this picture's variant is on, in a form the owner-only
-            # card routes can be asked about. An opaque digest: no filename, no
-            # prompt, no pixels, and the graph it digests is one this same token
-            # can already read whole from the `/workflow` sibling.
-            #
-            # **It is NOT purely a function of this file.** `workflow_key` folds
-            # in which LoRA slots this topology marks structural, and that mark
-            # was frozen from the filename of whichever picture of that topology
-            # was filed FIRST in this library (`hub/schema.py`,
-            # `workflow_slot_mark`, `INSERT OR IGNORE`).
-            #
-            # **And the mark set is recoverable, not merely hinted at.** A
-            # holder has the graph, so they can compute the key for every
-            # assignment of marks to its LoRA slots and match the one they were
-            # given; the slot set is tiny, so 2^n over it recovers the whole
-            # set exactly. What that discloses is one bit PER LORA SLOT of this
-            # topology - whether the first-filed picture's file in that slot
-            # looked like a speed LoRA under a published regex - and that
-            # picture may be one the token cannot otherwise see. A
-            # filename-derived classification, never a filename, a prompt or a
-            # picture; low severity, and the honest bound rather than the
-            # flattering one. Returning this owner-only would close it.
-            #
-            # **The key also folds in the owner's LoRA promotions**
-            # (`workflow_lora_promotion`), recoverable the same way: whether
-            # the owner promoted THIS picture's LoRA in a slot to a workflow of
-            # its own. One more bit per LoRA slot, an owner's decision rather
-            # than a regex result, about a file the graph already names.
-            "workflow_key": _picture_workflow_key(server, pic_id),
+            # The workflow this picture's variant is in, in a form the
+            # owner-only workflow routes can be asked about: `auto:<core
+            # hash>` or a manual group's uuid. No filename, no prompt, no
+            # pixels. The core hash is a digest of this graph's own shape,
+            # which this same token can already read whole from the
+            # `/workflow` sibling; a manual id is a random uuid and says only
+            # that the owner grouped it with others.
+            "workflow_id": _picture_workflow_id(server, pic_id),
             **_recipe_extras(server, request, pic_id, graph),
             # A rebuilt graph is keyed from the rebuild, not from the column
             # the extraction pass wrote about a chunk this picture does not

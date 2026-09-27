@@ -41,27 +41,26 @@ import pytest
 import requests
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlmodel import delete, select
+from sqlmodel import delete, select, update
 
 from pixlstash import auth, mcp_server
 from pixlstash.authz.policy import AccessPolicy
 from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.database import DBPriority
-from pixlstash.db_models import Picture, Project, ReferenceFolder
+from pixlstash.db_models import Picture, Project, ReferenceFolder, UserToken
 from pixlstash.db_models.saved_recipe import SavedRecipe
 from pixlstash.event_types import EventType
 from pixlstash.hub.workflow_card_reads import (
     AUTO_STACK_PREFIX,
     Card,
-    default_overrides,
-    find_card,
+    Workflow,
+    group_picture_inputs,
     instance_documents,
-    picture_inputs,
     variant_documents,
+    workflow_of_topology,
 )
-from pixlstash.hub.workflow_card_writes import set_stack_order
 from pixlstash.hub import workflow_cards
-from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, effective_stack_keys
+from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, STRIP_LORAS_FOR_STACKS
 from pixlstash.hub.workflows import (
     PictureGhost,
     get_document,
@@ -90,21 +89,19 @@ from pixlstash.services.workflow_run_service import (
 from pixlstash.utils.known_base_models import fold
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
-from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD, _stack_members
+from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.services.workflow_run_service import FORGOTTEN_MODEL
 from pixlstash.services import workflow_run_service as run_service
-from pixlstash.services.model_shelf_service import replace_attachments
 from pixlstash.services.workflow_card_service import (
-    CardFigures,
     SlotModel,
-    by_key,
+    WorkflowFigures,
     model_marks,
 )
 from pixlstash.services.workflow_identity import (
+    CORE_ADDRESS_PREFIX,
     FACE_DETAILER,
-    RECIPE,
-    STRUCTURAL,
+    core_hash,
     UPSCALE,
     WORKFLOW_KEY_VERSION,
     core_node_labels,
@@ -142,8 +139,8 @@ pytestmark = pytest.mark.usefixtures("no_spa_fallback")
 
 _WORKFLOW_ROUTES = (
     ("GET", "/api/v1/workflows"),
-    ("GET", "/api/v1/workflows/{workflow_key}"),
-    ("GET", "/api/v1/workflows/{workflow_key}/pictures"),
+    ("GET", "/api/v1/workflows/{workflow_id}"),
+    ("GET", "/api/v1/workflows/{workflow_id}/pictures"),
     ("GET", "/api/v1/workflows/recipes/{structural_hash}/graph"),
     # The ghost routes. Pinned here as well as refused in the authz test below:
     # every token that test can mint is READ, which the middleware refuses on a
@@ -158,34 +155,30 @@ _WORKFLOW_ROUTES = (
     ("GET", "/api/v1/comfyui/workflows/{workflow_name}/lora-insertion"),
     # Export (v1.12 B8): the sharpest read here, because it hands back a whole
     # graph rather than a count of one.
-    ("GET", "/api/v1/workflows/{workflow_key}/export"),
+    ("GET", "/api/v1/workflows/{workflow_id}/export"),
     # The LoRA chain editor's read (#1478): the whole-library graph, the shelf
     # LoRA each loader loads, and the owner's ComfyUI behind it.
-    ("GET", "/api/v1/workflows/{workflow_key}/lora-chain"),
-    ("GET", "/api/v1/workflows/{workflow_key}/lora-summary"),
+    ("GET", "/api/v1/workflows/{workflow_id}/lora-chain"),
+    ("GET", "/api/v1/workflows/{workflow_id}/lora-summary"),
     # Open in ComfyUI: the same graph unscrubbed, so owner-only for the same
     # reason and with even more to lose.
-    ("GET", "/api/v1/workflows/{workflow_key}/graph"),
+    ("GET", "/api/v1/workflows/{workflow_id}/graph"),
     # Clone with new models: the card's files, the whole shelf and the recipes.
-    ("GET", "/api/v1/workflows/{workflow_key}/model-swap"),
+    ("GET", "/api/v1/workflows/{workflow_id}/model-swap"),
 )
 
-# The card and stack writes (v1.12 B4), pinned in their own tuple: the reads
-# above are owner-only over a disclosure judgement, these are owner-only
-# because they are the owner rearranging their own library and no narrower
-# scope could describe one.
+# The workflow writes (#1623), pinned in their own tuple: the reads above are
+# owner-only over a disclosure judgement, these are owner-only because they
+# are the owner rearranging their own library and no narrower scope could
+# describe one.
 _WORKFLOW_WRITE_ROUTES = (
-    ("PATCH", "/api/v1/workflows/{workflow_key}"),
-    ("PUT", "/api/v1/workflows/{workflow_key}/slots"),
-    ("PUT", "/api/v1/workflows/{workflow_key}/lora-promotion"),
-    ("PUT", "/api/v1/workflows/{workflow_key}/model-fix"),
-    ("PUT", "/api/v1/workflows/{workflow_key}/defaults"),
-    ("PUT", "/api/v1/workflows/{workflow_key}/pins"),
-    ("PUT", "/api/v1/workflows/{workflow_key}/inputs"),
-    ("POST", "/api/v1/workflows/{workflow_key}/unstack"),
-    ("POST", "/api/v1/workflows/stacks"),
-    ("PUT", "/api/v1/workflows/stacks/{stack_id}/order"),
-    ("POST", "/api/v1/workflows/stacks/{stack_id}/unstack"),
+    ("PATCH", "/api/v1/workflows/{workflow_id}"),
+    ("POST", "/api/v1/workflows/merge"),
+    ("POST", "/api/v1/workflows/{workflow_id}/split"),
+    ("PUT", "/api/v1/workflows/{workflow_id}/model-fix"),
+    ("PUT", "/api/v1/workflows/{workflow_id}/defaults"),
+    ("PUT", "/api/v1/workflows/{workflow_id}/pins"),
+    ("PUT", "/api/v1/workflows/{workflow_id}/inputs"),
     # The run route and its dry run (v1.12 B7). OWNER_ONLY: it resolves a card
     # from the whole library rather than replaying one named picture's own
     # graph, which is what the picture-scoped run routes #1410 retired did.
@@ -193,11 +186,11 @@ _WORKFLOW_WRITE_ROUTES = (
     ("POST", "/api/v1/workflows/run/preflight"),
     # The file gestures (v1.12 B8). Each resolves the card's graph out of the
     # whole library the way the run route does, and two of them write a file.
-    ("POST", "/api/v1/workflows/{workflow_key}/duplicate"),
-    ("POST", "/api/v1/workflows/{workflow_key}/insert-lora-loader"),
-    ("PUT", "/api/v1/workflows/{workflow_key}/lora-chain"),
-    ("POST", "/api/v1/workflows/{workflow_key}/clone-with-models"),
-    ("DELETE", "/api/v1/workflows/{workflow_key}"),
+    ("POST", "/api/v1/workflows/{workflow_id}/duplicate"),
+    ("POST", "/api/v1/workflows/{workflow_id}/insert-lora-loader"),
+    ("PUT", "/api/v1/workflows/{workflow_id}/lora-chain"),
+    ("POST", "/api/v1/workflows/{workflow_id}/clone-with-models"),
+    ("DELETE", "/api/v1/workflows/{workflow_id}"),
     # ComfyUI's conversion of an editor file (#1530): writes stored files.
     ("POST", "/api/v1/comfyui/workflows/convert"),
     # Edit with ComfyUI: files a stored workflow on its card in the hub.
@@ -234,8 +227,17 @@ FORGOTTEN_CARD = _h("forgottencard")
 BINNED_CARD = _h("binnedcard")
 HIDDEN_CARD = _h("hiddencard")
 SHARED_CORE = _h("sharedcore")
+FORGOTTEN_CORE = _h("forgottencore")
 LONE_CORE = _h("lonecore")
 HIDDEN_CORE = _h("hiddencore")
+
+# The workflows (#1623): one per core hash here, so each card above is the one
+# card of its own workflow and the base card every one-graph route acts on.
+# The tests that need a workflow of several topologies put one together.
+BUSY_WF = AUTO_STACK_PREFIX + SHARED_CORE
+FORGOTTEN_WF = AUTO_STACK_PREFIX + FORGOTTEN_CORE
+BINNED_WF = AUTO_STACK_PREFIX + LONE_CORE
+HIDDEN_WF = AUTO_STACK_PREFIX + HIDDEN_CORE
 
 # (structural_hash, topology_hash, workflow_key)
 _SEED_VARIANTS = (
@@ -252,7 +254,7 @@ _SEED_VARIANTS = (
 # the code reads the new one.
 _SEED_CORES = (
     (BUSY_TOPOLOGY, SHARED_CORE, "txt2img", BUSY_RECIPE_A),
-    (FORGOTTEN_TOPOLOGY, SHARED_CORE, "img2img", FORGOTTEN_RECIPE),
+    (FORGOTTEN_TOPOLOGY, FORGOTTEN_CORE, "img2img", FORGOTTEN_RECIPE),
     (BINNED_TOPOLOGY, LONE_CORE, None, BINNED_RECIPE),
     (HIDDEN_TOPOLOGY, HIDDEN_CORE, "upscale", HIDDEN_RECIPE),
 )
@@ -614,6 +616,9 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_recipe_instance")
         conn.execute("DELETE FROM workflow_model_fix")
         conn.execute("DELETE FROM workflow_group_default")
+        conn.execute("DELETE FROM workflow_group_attr")
+        conn.execute("DELETE FROM workflow_group_pins")
+        conn.execute("DELETE FROM workflow_group_picture_input")
         conn.execute("DELETE FROM workflow_group_member")
         conn.execute("DELETE FROM workflow_group")
         conn.execute(
@@ -699,12 +704,12 @@ def _seed_hub(server) -> None:
                 if slot.is_lora and slot.asset in _ASSET_NAMES
             ],
         )
-        # The one card the owner has hidden. Written as a row rather than
+        # The one workflow the owner has hidden. Written as a row rather than
         # inferred, because "hidden" is a decision and nothing derives it.
         conn.execute(
-            "INSERT INTO workflow_attr (workflow_key, name, hidden) "
+            "INSERT INTO workflow_group_attr (workflow_id, name, hidden) "
             "VALUES (?, 'A workflow I hid', 1)",
-            (HIDDEN_CARD,),
+            (HIDDEN_WF,),
         )
         # It also has a workflow file, and that is load-bearing rather than
         # decoration: with no file and no pictures it would be a one-off too,
@@ -964,30 +969,30 @@ def test_no_scoped_token_can_read_the_workflow_library(workflow_env):
     # handler being renamed away - which is the vacuity it exists to refuse.
     paths = (
         (f"{API}/workflows", f"{API}/workflows"),
-        (f"{API}/workflows/{BUSY_CARD}", API + "/workflows/{workflow_key}"),
+        (f"{API}/workflows/{BUSY_WF}", API + "/workflows/{workflow_id}"),
         (
-            f"{API}/workflows/{BUSY_CARD}/pictures",
-            API + "/workflows/{workflow_key}/pictures",
+            f"{API}/workflows/{BUSY_WF}/pictures",
+            API + "/workflows/{workflow_id}/pictures",
         ),
         (
             f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
             API + "/workflows/recipes/{structural_hash}/graph",
         ),
         (
-            f"{API}/workflows/{BUSY_CARD}/export",
-            API + "/workflows/{workflow_key}/export",
+            f"{API}/workflows/{BUSY_WF}/export",
+            API + "/workflows/{workflow_id}/export",
         ),
         (
-            f"{API}/workflows/{BUSY_CARD}/lora-chain",
-            API + "/workflows/{workflow_key}/lora-chain",
+            f"{API}/workflows/{BUSY_WF}/lora-chain",
+            API + "/workflows/{workflow_id}/lora-chain",
         ),
         (
-            f"{API}/workflows/{BUSY_CARD}/graph",
-            API + "/workflows/{workflow_key}/graph",
+            f"{API}/workflows/{BUSY_WF}/graph",
+            API + "/workflows/{workflow_id}/graph",
         ),
         (
-            f"{API}/workflows/{BUSY_CARD}/model-swap",
-            API + "/workflows/{workflow_key}/model-swap",
+            f"{API}/workflows/{BUSY_WF}/model-swap",
+            API + "/workflows/{workflow_id}/model-swap",
         ),
     )
     for path, template in paths:
@@ -1026,10 +1031,10 @@ def test_an_unknown_recipe_is_a_404(workflow_env):
 # `test_no_scoped_token_can_read_the_workflow_library` for why the template is
 # named rather than left to "some route matched".
 _TEMPLATED_PATHS = (
-    (f"{API}/workflows/{BUSY_CARD}", API + "/workflows/{workflow_key}"),
+    (f"{API}/workflows/{BUSY_WF}", API + "/workflows/{workflow_id}"),
     (
-        f"{API}/workflows/{BUSY_CARD}/pictures",
-        API + "/workflows/{workflow_key}/pictures",
+        f"{API}/workflows/{BUSY_WF}/pictures",
+        API + "/workflows/{workflow_id}/pictures",
     ),
     (
         f"{API}/workflows/recipes/{BUSY_RECIPE_A}/graph",
@@ -1037,8 +1042,8 @@ _TEMPLATED_PATHS = (
     ),
     # The export (v1.12 B8) hands back a whole graph, so it is the one here
     # with most to lose from the rollback.
-    (f"{API}/workflows/{BUSY_CARD}/export", API + "/workflows/{workflow_key}/export"),
-    (f"{API}/workflows/{BUSY_CARD}/graph", API + "/workflows/{workflow_key}/graph"),
+    (f"{API}/workflows/{BUSY_WF}/export", API + "/workflows/{workflow_id}/export"),
+    (f"{API}/workflows/{BUSY_WF}/graph", API + "/workflows/{workflow_id}/graph"),
 )
 
 
@@ -1605,27 +1610,37 @@ _FORGOTTEN_RANK = (5 * _LIBRARY_MEAN + 2) / (5 + 1)
 # quietly stops being served fails one named assertion rather than whichever
 # test happened to touch it.
 _CONTRACT_FIELDS = {
-    "key",
+    "id",
     "name",
     "type",
     "imported",
     "models",
     "loras",
-    "differs_by",
     "picture_count",
     "rating",
     "covers",
-    "stack_size",
-    # The grid opens a stack from this and, since #1402's selection fix, selects
-    # one from it too, so it is as load-bearing as `stack_size` and belongs in
-    # the same named assertion.
-    "member_keys",
     "saved_recipe_count",
     "defaults",
-    # Not in the shared shape document, and here anyway: without it a client
-    # can draw a stack and address no write to it, and the null is a decision
-    # it has to be able to read (F2, #1405).
+    # #1623: what `split` takes, and the graph a run starts from.
+    "base_topology",
+    "topologies",
+    "recipe_values",
+    "default_recipe",
+}
+
+# What the cut-over (#1623) took off the card: the stack a card sat in, the
+# per-slot mark, and the recipe-LoRA pile that `recipe_values` replaces. Named
+# so that one of them quietly coming back fails an assertion.
+_REMOVED_FIELDS = {
+    "key",
+    "member_keys",
+    "members",
     "stack_id",
+    "stack_size",
+    "differs_by",
+    "differs_by_detail",
+    "recipe_loras",
+    "topology_hash",
 }
 
 
@@ -1636,11 +1651,11 @@ def _cards(owner, query: str = "") -> dict:
 
 
 def _by_key(payload) -> dict:
-    return {card["key"]: card for card in payload["cards"]}
+    return {card["id"]: card for card in payload["cards"]}
 
 
-def _detail(owner, workflow_key) -> dict:
-    r = owner.get(f"{API}/workflows/{workflow_key}")
+def _detail(owner, workflow_id) -> dict:
+    r = owner.get(f"{API}/workflows/{workflow_id}")
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -1679,13 +1694,18 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
 
     `utils/workflowCard.js` is shipped and `frontend_architecture.md` promises
     it needs no mapping layer, so a renamed field here is a broken screen
-    rather than a caller to update. `models` and `loras` carry B1's own
-    vocabulary (`structural` | `recipe`) for the same reason: translating it is
-    how the solid/dashed meaning gets inverted.
+    rather than a caller to update. One entry per workflow (#1623): the stack,
+    the per-slot mark and the recipe-LoRA pile are gone, and a client reading
+    one of them would be reading something no longer true.
     """
-    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    card = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     assert _CONTRACT_FIELDS <= set(card), _CONTRACT_FIELDS - set(card)
-    assert card["key"] == BUSY_CARD
+    assert not _REMOVED_FIELDS & set(card), _REMOVED_FIELDS & set(card)
+    assert card["id"] == BUSY_WF
+    assert card["base_topology"] == BUSY_TOPOLOGY
+    assert card["topologies"] == [BUSY_TOPOLOGY]
+    # Too dear per grid entry, so it is served on the detail route only.
+    assert card["default_recipe"] is None
     assert card["type"] == "txt2img"
     assert card["saved_recipe_count"] == 0
     assert [model["kind"] for model in card["models"]] == ["checkpoint"]
@@ -1693,11 +1713,8 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
     # quant postfix are off it, and `quant` carries the precision instead.
     assert card["models"][0]["name"] == _SHELF_DERIVED
     assert card["models"][0]["quant"] is None
-    # One LoRA slot, guessed `recipe` from its filename, so it is an anonymous
-    # slot rather than a named file: a character LoRA is the recipe's business.
-    # `slot_label` is the address `PUT /workflows/{key}/slots` marks, and it
-    # travels with the slot because the Workflow tab's Workflow/Recipe switch
-    # (F3) has nothing else to name the slot it just flipped.
+    # One LoRA slot, an anonymous slot rather than a named file: which LoRA
+    # fills it is the recipe's business, and `recipe_values` says which did.
     lora_label = next(
         slot.label for slot in slots(_DOCUMENTS[BUSY_RECIPE_A]) if slot.is_lora
     )
@@ -1721,7 +1738,6 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
             # A recipe slot names no file at all, so there is nothing to read a
             # precision off either - and nothing is what it serves.
             "quant": None,
-            "mark": "recipe",
             "slot_label": lora_label,
         }
     ]
@@ -1740,10 +1756,10 @@ def test_a_card_says_when_it_was_last_used_so_the_grid_can_sort_by_it(
     with nothing to date.
     """
     cards = _by_key(_cards(workflow_env.owner))
-    assert cards[BUSY_CARD]["last_used"].startswith("2026-08-13")
+    assert cards[BUSY_WF]["last_used"].startswith("2026-08-13")
     # BINNED is dropped from the grid (its pictures are all in the scrapheap),
     # so its null is asserted where it is still served: its own detail route.
-    assert _detail(workflow_env.owner, BINNED_CARD)["card"]["last_used"] is None
+    assert _detail(workflow_env.owner, BINNED_WF)["card"]["last_used"] is None
 
 
 def test_a_card_is_never_nameless(workflow_env):
@@ -1768,17 +1784,17 @@ def test_a_card_is_never_nameless(workflow_env):
     # the name the SHELF has for that model rather than by the file's spelling
     # (#1454). The stem would read `realvisxl`; the row says `Krea 2`, and the
     # two are in the same database, so this is a join and not a derivation.
-    assert cards[BUSY_CARD]["name"] == f"{_SHELF_TITLE}: Text to Image"
+    assert cards[BUSY_WF]["name"] == f"{_SHELF_TITLE}: Text to Image"
     assert _SHELF_FILENAME.startswith("realvisxl")  # ... and the file is not it
     # The seeded documents carry no post-processing, and `[]` says so. It is
     # not `null`, which would mean nothing had looked.
-    assert cards[BUSY_CARD]["specials"] == []
+    assert cards[BUSY_WF]["specials"] == []
 
     # **`type_label` is SERVED, not mirrored.** The card shows its type twice -
     # in a generated name and in its own chip - and a second copy of these
     # labels on the client is the drift `CHECKPOINT_WIDGETS` was written to
     # end. One map, on the wire, so the two strings are equal by construction.
-    busy = cards[BUSY_CARD]
+    busy = cards[BUSY_WF]
     assert busy["type"] == "txt2img"
     assert busy["type_label"] == "Text to Image"
     assert busy["type_label"] in busy["name"]
@@ -1923,7 +1939,7 @@ def test_a_card_is_never_nameless(workflow_env):
     )
     assert workflows_routes._display_name(filed, titled) == "Flux2 portrait"
     # The hidden card has both a name and a file, and the owner's name wins.
-    assert _detail(workflow_env.owner, HIDDEN_CARD)["card"]["name"] == (
+    assert _detail(workflow_env.owner, HIDDEN_WF)["card"]["name"] == (
         "A workflow I hid"
     )
     with workflow_env.server.hub.transaction() as conn:
@@ -1933,7 +1949,7 @@ def test_a_card_is_never_nameless(workflow_env):
             "VALUES ('Flux2 portrait.json', ?, ?, ?)",
             (BUSY_TOPOLOGY, BUSY_RECIPE_A, BUSY_CARD),
         )
-    named = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    named = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     assert named["name"] == "Flux2 portrait"
 
 
@@ -1947,7 +1963,7 @@ def test_a_card_never_calls_one_model_two_different_things(workflow_env):
     the pair that drifted in #1416, which is why the shelf's name is SERVED on
     the slot rather than left for a client to look up.
     """
-    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    card = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     checkpoint = next(slot for slot in card["models"] if slot["kind"] == "checkpoint")
     assert checkpoint["name"] == _SHELF_DERIVED
     assert checkpoint["title"] == _SHELF_TITLE
@@ -1963,7 +1979,7 @@ def test_a_card_never_calls_one_model_two_different_things(workflow_env):
             "UPDATE model SET display_name = NULL WHERE filename = ?",
             (_SHELF_FILENAME,),
         )
-    plain = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    plain = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     plain_ckpt = next(s for s in plain["models"] if s["kind"] == "checkpoint")
     assert plain_ckpt["title"] is None
     assert plain["name"] == "realvisxl: Text to Image"
@@ -1990,7 +2006,7 @@ def test_a_card_names_itself_without_the_precision(workflow_env):
             (_SHELF_FILENAME,),
         )
 
-    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    card = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     # The postfix is gone from both the chip and the row built out of it.
     assert card["models"][0]["name"] == _SHELF_DERIVED
     assert card["models"][0]["quant"] == "fp8_e4m3"
@@ -2014,7 +2030,7 @@ def test_a_card_says_the_post_processing_it_carries_and_when_it_cannot(
             "UPDATE workflow_topology_core SET specials = ? WHERE topology_hash = ?",
             (FACE_DETAILER, BUSY_TOPOLOGY),
         )
-    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    card = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     assert card["specials"] == [FACE_DETAILER]
     assert card["name"] == f"{_SHELF_TITLE}: Text to Image + FaceDetailer"
 
@@ -2023,7 +2039,7 @@ def test_a_card_says_the_post_processing_it_carries_and_when_it_cannot(
             "UPDATE workflow_topology_core SET specials = NULL WHERE topology_hash = ?",
             (BUSY_TOPOLOGY,),
         )
-    unknown = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    unknown = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     assert unknown["specials"] is None
     # No suffix, because a name has nowhere to say "not known yet" - but the
     # payload does, and it did.
@@ -2135,69 +2151,20 @@ def test_the_shelf_is_asked_for_a_model_s_name_by_all_three_things_a_card_holds(
             )
 
 
-def test_a_stack_member_opened_alone_still_says_it_is_in_a_stack(workflow_env):
-    """Its difference chips only mean something beside the size that explains them.
-
-    `factChips` branches on `stack_size`: at 1 it drops the "differs by" label
-    and renders the chips as plain facts, so "other checkpoint" arrives as a
-    statement about a cover the payload never names. The member therefore
-    carries the stack it is in, not the stack it covers.
-    """
-    member = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]
-    assert member["differs_by"], "the member has nothing to explain"
-    assert member["stack_size"] == 2
-    assert member["member_keys"] == [BUSY_CARD]
-    # And the cover names it back, so the two agree about the same stack.
-    cover = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
-    assert cover["stack_size"] == 2
-    assert cover["member_keys"] == [FORGOTTEN_CARD]
-
-
-def test_a_stack_names_its_members_and_what_sets_each_apart(workflow_env):
-    """`members` is the whole stack in order, so a picker needs no card reads.
-
-    Members of one stack often share a generated name, so each carries what it
-    loads that the others do not; what every member loads is left out.
-    """
-    cover = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
-    member = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]
-    assert [m["key"] for m in cover["members"]] == [BUSY_CARD, FORGOTTEN_CARD]
-    # The detail route of a member lists the same stack, in the same order.
-    assert member["members"] == cover["members"]
-    by_key = {m["key"]: m for m in cover["members"]}
-    assert by_key[BUSY_CARD]["name"] == cover["name"]
-    assert by_key[FORGOTTEN_CARD]["name"] == member["name"]
-    # BUSY's checkpoint is "Krea 2", which its generated name already opens
-    # with; FORGOTTEN's models are unnamed. Neither has anything to add.
-    assert by_key[BUSY_CARD]["name"].startswith("Krea 2")
-    assert by_key[BUSY_CARD]["sets_apart"] == []
-    assert by_key[FORGOTTEN_CARD]["sets_apart"] == []
-    # Chips are against the cover, so the cover has none of its own.
-    assert by_key[BUSY_CARD]["differs_by"] == []
-    assert by_key[FORGOTTEN_CARD]["differs_by"] == member["differs_by"]
-    # What each chip stands for (#1597): the shelf's name for the cover's
-    # checkpoint against the member's forgotten one, and the node classes.
-    assert member["differs_by_detail"] == {
-        "other checkpoint": "Krea 2 → unnamed model",
-        "2 nodes differ": "+ LoraLoader · − KSamplerAdvanced",
-    }
-    assert by_key[FORGOTTEN_CARD]["differs_by_detail"] == member["differs_by_detail"]
-    assert by_key[BUSY_CARD]["differs_by_detail"] == {}
-
-
 def test_generated_names_that_collide_are_numbered():
-    """No two cards print one generated name; an owner's or a file's is theirs.
+    """No two workflows print one generated name; an owner's or a file's is theirs.
 
-    Numbered in key order, so a card keeps its number from one read to the
+    Numbered in id order, so a workflow keeps its number from one read to the
     next whatever order the grid ranks them in.
     """
     plain = SlotModel(name="realvisxl", kind="checkpoint")
 
     def figure(key, **card):
-        return CardFigures(
+        return WorkflowFigures(
             card=Card(
                 workflow_key=key, topology_hash=key, workflow_type="txt2img", **card
             ),
+            workflow=Workflow(key, topologies=[key], base_topology=key),
             models=[plain],
         )
 
@@ -2218,127 +2185,24 @@ def test_generated_names_that_collide_are_numbered():
         "c" * 64: "Portrait",
         "e" * 64: "realvisxl: Text to Image",
     }
-    # The card and its stack listing read the name from the same map.
-    for member in (figures[0], figures[1]):
-        member.stack_size = 2
-        member.member_keys = ["a" * 64, "d" * 64]
-    card = workflows_routes._card(
-        figures[0], figures_by_key=by_key(figures), names=names
-    )
+    # The entry reads its name from the same map.
+    card = workflows_routes._entry(figures[0], names=names)
     assert card.name == "realvisxl: Text to Image (2)"
-    assert [m.name for m in card.members] == [
-        "realvisxl: Text to Image",
-        "realvisxl: Text to Image (2)",
-    ]
 
 
-def test_stack_members_are_told_apart_by_what_not_every_member_loads():
-    """What all members load says nothing; a recipe LoRA varies inside a card.
+def test_the_grid_is_one_entry_per_workflow_not_one_per_variant(workflow_env):
+    """A workflow is the unit, and BUSY's two variants are one entry, not two.
 
-    Two quant builds of one model share a slot name, so the quant is what
-    tells them apart.
-    """
-    base = SlotModel(name="realvisxl", kind="checkpoint", title="Krea 2")
-    figures = [
-        CardFigures(
-            card=Card(workflow_key=key, topology_hash=key, name="Portrait"),
-            models=[base, *extra],
-            loras=[
-                SlotModel(name=f"mira_{key[:4]}", kind="lora", mark=RECIPE),
-                SlotModel(name=lora, kind="lora", mark=STRUCTURAL),
-            ],
-            stack_size=2,
-            member_keys=[BUSY_CARD, FORGOTTEN_CARD],
-            differs_by=chips,
-        )
-        for key, extra, lora, chips in (
-            (BUSY_CARD, [], "film-grain", ["other models"]),
-            (
-                FORGOTTEN_CARD,
-                [SlotModel(name="t5xxl", kind="clip", quant="fp8_e4m3")],
-                "detail-tweaker",
-                ["other models"],
-            ),
-        )
-    ]
-    members = _stack_members(figures[1], {f.card.workflow_key: f for f in figures})
-    assert [(m.key, m.name, m.sets_apart, m.differs_by) for m in members] == [
-        (BUSY_CARD, "Portrait", ["film-grain"], []),
-        (
-            FORGOTTEN_CARD,
-            "Portrait",
-            ["t5xxl fp8_e4m3", "detail-tweaker"],
-            ["other models"],
-        ),
-    ]
-
-
-def test_stack_members_do_not_repeat_what_their_name_says():
-    """Three members, two on one checkpoint: the checkpoint tells only the
-    third apart, and a generated name that already starts with it is not
-    followed by it again."""
-    third = "c" * 64
-
-    def figure(key, checkpoint, name=None):
-        return CardFigures(
-            card=Card(workflow_key=key, topology_hash=key, name=name),
-            models=[SlotModel(name=checkpoint, kind="checkpoint")],
-            stack_size=3,
-            member_keys=[BUSY_CARD, FORGOTTEN_CARD, third],
-        )
-
-    figures = [
-        figure(BUSY_CARD, "realvisxl", "Portrait"),
-        figure(FORGOTTEN_CARD, "realvisxl", "Portrait"),
-        figure(third, "juggernaut"),
-    ]
-    members = _stack_members(figures[0], {f.card.workflow_key: f for f in figures})
-    assert [(m.name, m.sets_apart) for m in members] == [
-        ("Portrait", ["realvisxl"]),
-        ("Portrait", ["realvisxl"]),
-        # Generated from its checkpoint, so the name already says it.
-        ("juggernaut", []),
-    ]
-
-
-def test_a_card_outside_a_stack_lists_no_members(workflow_env):
-    cards = _by_key(_cards(workflow_env.owner, "?include_hidden=true"))
-    assert cards[HIDDEN_CARD]["stack_size"] == 1
-    assert cards[HIDDEN_CARD]["members"] == []
-
-
-def test_a_card_outside_a_stack_carries_no_difference_chips(workflow_env):
-    """The other direction: chips and size never disagree.
-
-    Unstacking FORGOTTEN leaves both cards standing alone, and a lone card has
-    nothing to differ from -- so neither may keep chips earned against a cover
-    that is no longer beside it.
-    """
-    with workflow_env.server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_unstacked (workflow_key) VALUES (?)",
-            (FORGOTTEN_CARD,),
-        )
-    for key in (BUSY_CARD, FORGOTTEN_CARD):
-        card = _detail(workflow_env.owner, key)["card"]
-        assert card["stack_size"] == 1, key
-        assert card["differs_by"] == [], key
-
-
-def test_the_grid_is_one_card_per_key_not_one_per_variant(workflow_env):
-    """A card is the unit, and BUSY's two variants are one card, not two.
-
-    The hidden card and the one-off are the grid's two exclusions and are
+    The hidden workflow and the one-off are the grid's two exclusions and are
     asserted by name rather than by a count, so the test cannot pass because
-    something else went missing. FORGOTTEN is absent because it is stacked
-    under BUSY, not because it was dropped -- the next test holds that.
+    something else went missing.
     """
     payload = _cards(workflow_env.owner)
     cards = _by_key(payload)
-    assert set(cards) == {BUSY_CARD}
-    assert cards[BUSY_CARD]["variant_count"] == 2
-    assert cards[BUSY_CARD]["topology_hash"] == BUSY_TOPOLOGY
-    assert _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]["variant_count"] == 1
+    assert set(cards) == {BUSY_WF, FORGOTTEN_WF}
+    assert cards[BUSY_WF]["variant_count"] == 2
+    assert cards[BUSY_WF]["base_topology"] == BUSY_TOPOLOGY
+    assert cards[FORGOTTEN_WF]["variant_count"] == 1
 
 
 # An **editor-format** workflow (#1466): the format ComfyUI saves by default,
@@ -2382,11 +2246,12 @@ _EDITOR_BASE_MODEL_FOLDED = fold(_EDITOR_BASE_MODEL)
 
 
 def _file_a_workflow(server, tmp_path, monkeypatch, name, workflow, keys=None) -> str:
-    """Store *workflow* as a user file and file it. Returns its card key.
+    """Store *workflow* as a user file and file it. Returns its workflow's id.
 
     Filed the way the import route files one: an editor-format document goes
     through `record_ui_graph`, which writes a topology and nothing else, and
-    `record_file` keys the file on it.
+    `record_file` keys the file on it. Such a file is a workflow of its own,
+    `auto:<topology hash>` (#1623).
     """
     (tmp_path / name).write_text(json.dumps(workflow), encoding="utf-8")
     monkeypatch.setattr(
@@ -2395,9 +2260,11 @@ def _file_a_workflow(server, tmp_path, monkeypatch, name, workflow, keys=None) -
     comfyui_module._describe_workflow.cache_clear()
     workflows_routes._file_model_widgets.cache_clear()
     if keys is not None:
-        return workflow_cards.record_file(server.hub, name, *keys)
+        workflow_cards.record_file(server.hub, name, *keys)
+        return workflow_of_topology(server.hub, keys[0])
     topology = record_ui_graph(server.hub, workflow)
-    return workflow_cards.record_file(server.hub, name, topology)
+    workflow_cards.record_file(server.hub, name, topology)
+    return workflow_of_topology(server.hub, topology)
 
 
 def _give_the_shelf_model_a_picture(server) -> None:
@@ -2430,15 +2297,15 @@ def test_an_editor_format_file_is_a_card_of_its_own(
     )
 
     cards = _by_key(_cards(workflow_env.owner))
-    assert set(cards) == {BUSY_CARD, key}
+    assert set(cards) == {BUSY_WF, FORGOTTEN_WF, key}
     card = cards[key]
-    # Topology and file name only: no recipe, no pictures, and so no automatic
-    # group to fall into.
+    # Topology and file name only: no recipe, no pictures, and so no core
+    # hash - it is a workflow of its own, named by its topology.
+    assert key == AUTO_STACK_PREFIX + card["base_topology"]
     assert (card["variant_count"], card["picture_count"]) == (0, 0)
-    assert (card["stack_size"], card["stack_id"]) == (1, None)
     assert (card["imported"], card["name"]) == (True, "editor")
     # And it opens on its own route, which is what every write answers with.
-    assert _detail(workflow_env.owner, key)["card"]["key"] == key
+    assert _detail(workflow_env.owner, key)["card"]["id"] == key
 
 
 def test_an_editor_format_cards_models_are_read_off_its_own_file(
@@ -2475,15 +2342,14 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             # Null and not an empty string: neither the shelf's column nor the
             # filename records a precision for this file.
             "quant": None,
-            "mark": None,
             # No label: a slot label is an address inside a stored topology,
             # and this card has none to address.
             "slot_label": None,
         }
     ]
-    # STRUCTURAL, because a LoRA named in the file is one the workflow loads -
-    # `recipe` is a slot some recipe fills, and this card has no recipe. Null
-    # title and null icon are the state: the shelf does not hold this file.
+    # Named, because a LoRA named in the file is one the workflow loads and
+    # there is no recipe to fill it. Null title and null icon are the state:
+    # the shelf does not hold this file.
     assert card["loras"] == [
         {
             "name": "add detail",
@@ -2493,7 +2359,6 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             "base_model_folded": None,
             "kind": "lora",
             "quant": None,
-            "mark": "structural",
             "slot_label": None,
         }
     ]
@@ -2630,8 +2495,8 @@ def test_a_converted_editor_file_runs_from_the_graph_stored_beside_it(
     assert r.status_code == 200, r.text
     body = r.json()
     assert (body["name"], body["matched"]) == ("editor.json", True)
-    # Filed as its API graph: a recipe's card, no longer a topology's.
-    assert body["workflow_key"] != converting.topology_only
+    # Filed as its API graph: a recipe's workflow, no longer a file's.
+    assert body["workflow_id"] != converting.topology_only
 
     # Beside the file, never over it, and never listed as a workflow of its own.
     assert (converting.folder / "editor.json").read_bytes() == before
@@ -2641,7 +2506,7 @@ def test_a_converted_editor_file_runs_from_the_graph_stored_beside_it(
     ]
     assert _listed(owner)["editor.json"]["runnable"] is True
     # The card is the recipe's now, and runs the converted graph from the file.
-    r = owner.get(f"{API}/workflows/{body['workflow_key']}/graph")
+    r = owner.get(f"{API}/workflows/{body['workflow_id']}/graph")
     assert r.status_code == 200, r.text
     assert r.json()["source"] == "file"
     assert r.json()["workflow"]["2"]["inputs"]["lora_name"] == _EDITOR_UNRESOLVED
@@ -2662,11 +2527,9 @@ def test_a_conversion_of_another_version_of_the_file_is_not_run(
     assert r.status_code == 200, r.text
 
     assert _listed(owner)["editor.json"]["runnable"] is False
-    key = workflow_cards.record_file(
-        workflow_env.server.hub,
-        "editor.json",
-        record_ui_graph(workflow_env.server.hub, changed),
-    )
+    topology = record_ui_graph(workflow_env.server.hub, changed)
+    workflow_cards.record_file(workflow_env.server.hub, "editor.json", topology)
+    key = workflow_of_topology(workflow_env.server.hub, topology)
     assert owner.get(f"{API}/workflows/{key}/graph").status_code == 409
 
 
@@ -2726,10 +2589,10 @@ def test_a_built_in_workflow_is_put_on_a_card_that_runs_its_file(
 
     r = owner.post(path)
     assert r.status_code == 200, r.text
-    key = r.json()["workflow_key"]
+    key = r.json()["workflow_id"]
     assert r.json()["name"] == "Flux2-Klein-Image-Edit.json"
-    # Idempotent: the second ask answers the same card.
-    assert owner.post(path).json()["workflow_key"] == key
+    # Idempotent: the second ask answers the same workflow.
+    assert owner.post(path).json()["workflow_id"] == key
 
     r = owner.get(f"{API}/workflows/{key}/graph")
     assert r.status_code == 200, r.text
@@ -2743,7 +2606,7 @@ def test_deleting_a_converted_file_takes_its_conversion_with_it(
     workflow_env, converting
 ):
     owner = workflow_env.owner
-    key = _convert(owner).json()["workflow_key"]
+    key = _convert(owner).json()["workflow_id"]
     assert (converting.folder / "editor.json.api").is_file()
     r = owner.delete(f"{API}/workflows/{key}")
     assert r.status_code == 200, r.text
@@ -2801,7 +2664,7 @@ def test_two_files_of_one_topology_make_one_card(workflow_env, tmp_path, monkeyp
     )
 
     cards = _by_key(_cards(workflow_env.owner))
-    assert set(cards) == {BUSY_CARD, key}
+    assert set(cards) == {BUSY_WF, FORGOTTEN_WF, key}
     # `MIN(workflow_name)`, the same rule the variant half of `card_index`
     # uses, so a card names itself the same way on two reads of one hub. That
     # is SQLite's byte order, where `editor-copy.json` sorts under
@@ -2856,9 +2719,10 @@ def test_a_card_with_a_recipe_never_reads_its_models_off_the_file(
         keys=(BUSY_TOPOLOGY, BUSY_RECIPE_A),
     )
 
-    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    card = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     assert [model["name"] for model in card["models"]] == [_SHELF_DERIVED]
-    assert [lora["mark"] for lora in card["loras"]] == ["recipe"]
+    # The LoRA slot stays anonymous rather than taking the file's name.
+    assert [lora["name"] for lora in card["loras"]] == [None]
 
 
 def test_a_file_that_says_nothing_about_its_models_leaves_them_unread(
@@ -2934,129 +2798,69 @@ def test_two_names_for_one_shelf_model_both_keep_its_picture(workflow_env):
     assert [mark.icon for mark in marks.values()] == [_EDITOR_ICON, _EDITOR_ICON]
 
 
-def _recipe_loras(owner) -> list[dict]:
-    return _by_key(_cards(owner))[BUSY_CARD]["recipe_loras"]
+def _set_picture_models(server, values: dict[str, tuple[list, list]]) -> None:
+    """Give seeded pictures the `comfyui_models` / `comfyui_loras` they ran.
 
-
-def test_a_card_lists_the_loras_its_recipe_slot_was_filled_with(workflow_env):
-    """BUSY's one recipe slot held `add_detail` in one of its two variants.
-
-    Counted per variant, so filing it into the second one as well makes it 2.
-    Not on the shelf, so it is named after its file and has no character.
+    The extraction pass writes these columns; the module's finders are
+    detached, so a test writes them itself, raw widget values and all.
     """
-    owner, hub = workflow_env.owner, workflow_env.server.hub
-    assert _recipe_loras(owner) == [
-        {
-            "name": "add detail",
-            "recipes": 1,
-            "character_id": None,
-            "character_name": None,
-        }
-    ]
-    with hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_recipe_asset "
-            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
-            (BUSY_RECIPE_B, "lora_name", "add_detail.safetensors"),
-        )
-    assert [lora["recipes"] for lora in _recipe_loras(owner)] == [2]
+
+    def write(session):
+        for picture in session.exec(select(Picture)).all():
+            if picture.file_path in values:
+                models, loras = values[picture.file_path]
+                picture.comfyui_models = json.dumps(models)
+                picture.comfyui_loras = json.dumps(loras)
+                session.add(picture)
+        session.commit()
+
+    server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
 
 
-def test_a_recipe_lora_attached_to_a_character_carries_that_character(
-    workflow_env,
-):
-    """The shelf row the value names, then this library's attachment of it."""
+def test_a_workflow_lists_the_values_its_kept_pictures_used(workflow_env):
+    """`recipe_values`: each checkpoint and LoRA, with how many kept pictures.
+
+    Spelled as the picture filters take them - the raw widget value, folder
+    and all - so a value filters to the pictures it counted. The soft-deleted
+    picture is given a value nothing kept used: counting it would list it.
+    """
     server, owner = workflow_env.server, workflow_env.owner
-    digest = _h("add-detail-digest")
-    with server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO model (file_kind, kind, filename, sha256, display_name, "
-            "provenance) VALUES ('adapter', 'lora', ?, ?, 'Detail', 'scanned')",
-            ("add_detail.safetensors", digest),
-        )
-    replace_attachments(
-        server.vault, digest, [("character", workflow_env.character_id)]
-    )
-    try:
-        assert _recipe_loras(owner) == [
-            {
-                "name": "Detail",
-                "recipes": 1,
-                "character_id": workflow_env.character_id,
-                "character_name": "Workflow Character",
-            }
-        ]
-        # Attached to two characters, it is nobody's face: that would be a guess.
-        r = owner.post(f"{API}/characters", json={"name": "Second Character"})
-        assert r.status_code in {200, 201}, r.text
-        second = r.json().get("id") or r.json()["character"]["id"]
-        replace_attachments(
-            server.vault,
-            digest,
-            [("character", workflow_env.character_id), ("character", second)],
-        )
-        assert [lora["character_id"] for lora in _recipe_loras(owner)] == [None]
-    finally:
-        replace_attachments(server.vault, digest, [])
-
-
-def test_a_cards_own_lora_is_not_listed_as_a_recipe_lora(workflow_env):
-    """A structural LoRA beside the recipe slot is the workflow's, not a look.
-
-    BUSY's first variant gains a speed LoRA whose slot is marked structural;
-    only the recipe slot's `add_detail` may reach the list.
-    """
-    hub, owner = workflow_env.server.hub, workflow_env.owner
-    document = json.loads(json.dumps(_DOCUMENTS[BUSY_RECIPE_A]))
-    speed = "sdxl_lightning_4step.safetensors"
-    document["5"] = {
-        "class_type": "LoraLoader",
-        "inputs": {"lora_name": asset_reference(speed), "model": ["2", 0]},
-    }
-    names = {**_ASSET_NAMES, asset_reference(speed): speed}
-    found = slots(document)
-    with hub.transaction() as conn:
-        conn.execute(
-            "UPDATE workflow_recipe_graph SET document = ? WHERE structural_hash = ?",
-            (json.dumps(document), BUSY_RECIPE_A),
-        )
-        conn.execute(
-            "UPDATE workflow_topology_core SET slots = ? WHERE topology_hash = ?",
-            (
-                json.dumps(
-                    [
-                        {
-                            "label": slot.label,
-                            "class_type": slot.class_type,
-                            "widget": slot.widget,
-                            "is_lora": slot.is_lora,
-                        }
-                        for slot in found
-                    ]
-                ),
-                BUSY_TOPOLOGY,
+    _set_picture_models(
+        server,
+        {
+            "busy_one.png": (
+                ["SDXL/RealVisXL.safetensors"],
+                ["add_detail.safetensors"],
             ),
-        )
-        conn.execute(
-            "DELETE FROM workflow_slot_mark WHERE topology_hash = ?", (BUSY_TOPOLOGY,)
-        )
-        conn.executemany(
-            "INSERT INTO workflow_slot_mark (topology_hash, slot_label, mark) "
-            "VALUES (?, ?, ?)",
-            [
-                (BUSY_TOPOLOGY, slot.label, guess_mark(names[slot.asset]))
-                for slot in found
-                if slot.is_lora
-            ],
-        )
-        conn.execute(
-            "INSERT INTO workflow_recipe_asset "
-            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
-            (BUSY_RECIPE_A, "lora_name", speed),
-        )
-    card = _by_key(_cards(owner))[BUSY_CARD]
-    assert sorted(lora["mark"] for lora in card["loras"]) == [RECIPE, STRUCTURAL]
-    assert [lora["name"] for lora in card["recipe_loras"]] == ["add detail"]
+            "busy_two.png": (["SDXL/RealVisXL.safetensors"], []),
+            "busy_three.png": (["other.safetensors"], ["add_detail.safetensors"]),
+            "busy_binned.png": (["binned-only.safetensors"], ["binned-only-lora.st"]),
+        },
+    )
+    values = _by_key(_cards(owner))[BUSY_WF]["recipe_values"]
+    assert values == {
+        "checkpoints": [
+            {"name": "SDXL/RealVisXL.safetensors", "pictures": 2},
+            {"name": "other.safetensors", "pictures": 1},
+        ],
+        "loras": [{"name": "add_detail.safetensors", "pictures": 2}],
+    }
+    # Another workflow's pictures are its own.
+    assert _by_key(_cards(owner))[FORGOTTEN_WF]["recipe_values"] == {
+        "checkpoints": [],
+        "loras": [],
+    }
+    # ...and the value filters to exactly the pictures it counted.
+    ids = _picture_ids_by_path(server)
+    r = owner.get(
+        f"{API}/pictures",
+        params={"workflow": BUSY_WF, "comfyui_model": "SDXL/RealVisXL.safetensors"},
+    )
+    assert r.status_code == 200, r.text
+    assert {picture["id"] for picture in r.json()} == {
+        ids["busy_one.png"],
+        ids["busy_two.png"],
+    }
 
 
 def test_a_card_adds_up_every_variants_kept_pictures_and_ratings(workflow_env):
@@ -3067,10 +2871,10 @@ def test_a_card_adds_up_every_variants_kept_pictures_and_ratings(workflow_env):
     soft-deleted pictures belong to these cards and are rated 5; counting them
     would move every figure on this line.
     """
-    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    card = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     assert card["picture_count"] == 5
     assert card["rating"] == pytest.approx(4.5)
-    forgotten = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]
+    forgotten = _detail(workflow_env.owner, FORGOTTEN_WF)["card"]
     assert forgotten["picture_count"] == 4
     assert forgotten["rating"] == pytest.approx(2.0)
 
@@ -3089,7 +2893,7 @@ def test_an_unrated_card_reports_no_rating_rather_than_the_prior(workflow_env):
             "VALUES ('binned.json', ?, ?, ?)",
             (BINNED_TOPOLOGY, BINNED_RECIPE, BINNED_CARD),
         )
-    card = _by_key(_cards(workflow_env.owner))[BINNED_CARD]
+    card = _by_key(_cards(workflow_env.owner))[BINNED_WF]
     assert card["picture_count"] == 0
     assert card["rating"] is None
 
@@ -3103,8 +2907,8 @@ def test_the_cover_rank_orders_the_grid_by_the_bayesian_mean(workflow_env):
     mean, so a constant cannot stand in for it.
     """
     payload = _cards(workflow_env.owner)
-    assert _by_key(payload)[BUSY_CARD]["rank"] == pytest.approx(_BUSY_RANK)
-    detail = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]
+    assert _by_key(payload)[BUSY_WF]["rank"] == pytest.approx(_BUSY_RANK)
+    detail = _detail(workflow_env.owner, FORGOTTEN_WF)["card"]
     assert detail["rank"] == pytest.approx(_FORGOTTEN_RANK)
 
 
@@ -3124,7 +2928,7 @@ def test_the_cover_strip_is_the_cards_best_three_across_its_variants(workflow_en
     The soft-deleted 5 would head this list, and the strip stops at three
     however many the card has.
     """
-    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
+    card = _by_key(_cards(workflow_env.owner))[BUSY_WF]
     ids = _picture_ids_by_path(workflow_env.server)
     assert _cover_urls(card) == [
         f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
@@ -3154,7 +2958,7 @@ def test_a_cover_names_the_picture_it_draws(workflow_env):
     for card in cards:
         for cover in card["covers"]:
             in_url = int(cover["url"].split("/")[-1].split(".webp")[0])
-            assert cover["picture_id"] == in_url, card["key"]
+            assert cover["picture_id"] == in_url, card["id"]
             drawn += 1
     assert drawn, "no card in the fixture has a cover - nothing was compared"
 
@@ -3193,7 +2997,7 @@ def test_a_cover_carries_the_stored_crop_rectangle_or_nothing(workflow_env):
         lambda session: write(session, rectangle), priority=DBPriority.IMMEDIATE
     )
     try:
-        covers = _by_key(_cards(workflow_env.owner))[BUSY_CARD]["covers"]
+        covers = _by_key(_cards(workflow_env.owner))[BUSY_WF]["covers"]
         assert covers[0] == {
             "url": (
                 f"/pictures/thumbnails/{ids['busy_one.png']}.webp"
@@ -3217,182 +3021,6 @@ def test_a_cover_carries_the_stored_crop_rectangle_or_nothing(workflow_env):
         )
 
 
-def test_an_owner_chosen_cover_leads_the_strip(workflow_env):
-    """The cover the owner picked, which is stored by content and not by id.
-
-    A picture id is reused by SQLite the moment the next import lands, so the
-    row names a ``pixel_sha``; resolving it is the one extra query this feature
-    costs, and only on a library where somebody has actually chosen one.
-    """
-    ids = _picture_ids_by_path(workflow_env.server)
-    chosen = _h("chosen-cover-pixels")
-
-    def stamp(session):
-        picture = session.get(Picture, ids["busy_four.png"])
-        picture.pixel_sha = chosen
-        session.add(picture)
-        session.commit()
-
-    workflow_env.server.vault.db.run_task(stamp, priority=DBPriority.IMMEDIATE)
-    with workflow_env.server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_cover (library_uuid, workflow_key, pixel_sha) "
-            "VALUES (?, ?, ?)",
-            (workflow_env.server.vault.library_uuid, BUSY_CARD, chosen),
-        )
-    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
-    assert _cover_urls(card)[0] == (
-        f"/pictures/thumbnails/{ids['busy_four.png']}.webp?v=0"
-    )
-    # Still three, and the rest keep their order behind it.
-    assert _cover_urls(card)[1:] == [
-        f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
-        f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
-    ]
-    # And each cover's `picture_id` follows the REBUILT strip, not the computed
-    # one (#1455). This is the one card in the fixture whose strip is
-    # deliberately not in id order - busy_four was imported last and now leads
-    # - so it is the only place an id taken before the owner's choice was
-    # applied shows up as wrong rather than as coincidentally right.
-    assert [cover["picture_id"] for cover in card["covers"]] == [
-        ids["busy_four.png"],
-        ids["busy_one.png"],
-        ids["busy_two.png"],
-    ]
-
-    # Bin the chosen cover and the card falls back to its computed strip rather
-    # than showing a hole or pointing at a picture in the Scrapheap. The
-    # `workflow_cover` row is deliberately left alone: it is the owner's
-    # choice, and a restore has to bring it back.
-    def bin_it(session):
-        picture = session.get(Picture, ids["busy_four.png"])
-        picture.deleted = True
-        session.add(picture)
-        session.commit()
-
-    workflow_env.server.vault.db.run_task(bin_it, priority=DBPriority.IMMEDIATE)
-    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
-    assert _cover_urls(card) == [
-        f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
-        f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
-        f"/pictures/thumbnails/{ids['busy_three.png']}.webp?v=0",
-    ]
-
-
-def test_an_empty_chosen_cover_covers_nothing_rather_than_everything(
-    workflow_env,
-):
-    """A blank ``pixel_sha`` must name no picture, not every card's picture.
-
-    ``workflow_cover.pixel_sha`` is ``NOT NULL`` but an empty string satisfies
-    that, and looking a card up with ``chosen.get(key, "")`` would give every
-    card WITHOUT a chosen cover the same empty key -- so one blank row plus one
-    picture stored with a blank sha would hand that picture to the whole grid
-    as its cover. Nothing writes these rows yet, which is exactly why it is
-    worth pinning before something does.
-    """
-    ids = _picture_ids_by_path(workflow_env.server)
-
-    def stamp(session):
-        picture = session.get(Picture, ids["forgotten.png"])
-        picture.pixel_sha = ""
-        session.add(picture)
-        session.commit()
-
-    workflow_env.server.vault.db.run_task(stamp, priority=DBPriority.IMMEDIATE)
-    with workflow_env.server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_cover (library_uuid, workflow_key, pixel_sha) "
-            "VALUES (?, ?, '')",
-            (workflow_env.server.vault.library_uuid, HIDDEN_CARD),
-        )
-    card = _by_key(_cards(workflow_env.owner))[BUSY_CARD]
-    assert _cover_urls(card) == [
-        f"/pictures/thumbnails/{ids['busy_one.png']}.webp?v=0",
-        f"/pictures/thumbnails/{ids['busy_two.png']}.webp?v=0",
-        f"/pictures/thumbnails/{ids['busy_three.png']}.webp?v=0",
-    ]
-
-
-def test_an_owner_chosen_cover_carries_its_crop_rectangle_too(workflow_env):
-    """The SECOND query that builds a cover, which the strip's test cannot see.
-
-    A chosen cover is resolved by ``pixel_sha`` through
-    ``cover_pictures_by_pixel_sha``, a different ``SELECT`` from the ranked
-    window -- and it unpacks positionally into ``CoverCandidate("", *row[1:])``,
-    so a column added in the wrong place lands in the wrong field silently.
-    Scrambling that select left the strip's own tests green, because they
-    assert URLs and the picture they pick has no rectangle at all.
-
-    The rectangle is deliberately ASYMMETRIC (x != y, side != either), so any
-    permutation of the three shows up rather than cancelling out.
-    """
-    ids = _picture_ids_by_path(workflow_env.server)
-    chosen = _h("chosen-cover-with-a-crop")
-    rectangle = {
-        "thumbnail_width": 512,
-        "thumbnail_height": 384,
-        "square_crop_x": 96,
-        "square_crop_y": 12,
-        "square_crop_side": 384,
-    }
-    library = workflow_env.server.vault.library_uuid
-
-    def write(session, values):
-        picture = session.get(Picture, ids["forgotten.png"])
-        for field, value in values.items():
-            setattr(picture, field, value)
-        session.add(picture)
-        session.commit()
-
-    def read_pixel_sha(session):
-        return session.get(Picture, ids["forgotten.png"]).pixel_sha
-
-    was = workflow_env.server.vault.db.run_task(
-        read_pixel_sha, priority=DBPriority.IMMEDIATE
-    )
-    workflow_env.server.vault.db.run_task(
-        lambda session: write(session, {**rectangle, "pixel_sha": chosen}),
-        priority=DBPriority.IMMEDIATE,
-    )
-    with workflow_env.server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_cover (library_uuid, workflow_key, pixel_sha) "
-            "VALUES (?, ?, ?)",
-            (library, FORGOTTEN_CARD, chosen),
-        )
-    try:
-        # Opened rather than listed: FORGOTTEN_CARD is a one-off and the grid
-        # leaves it out. The chosen cover is applied over every figure, which
-        # is the same reason a hidden card opens with the right one.
-        cover = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]["covers"][0]
-        assert cover == {
-            "url": (
-                f"/pictures/thumbnails/{ids['forgotten.png']}.webp"
-                f"?v={ImageUtils.thumbnail_cache_version(512, 384, None)}"
-            ),
-            # The picture the cover draws, so a client can open it (#1455).
-            "picture_id": ids["forgotten.png"],
-            **rectangle,
-            "superseded": False,
-        }
-    finally:
-        # The module shares one vault: put the picture back, and take the
-        # owner's choice away again so no later card inherits it.
-        workflow_env.server.vault.db.run_task(
-            lambda session: write(
-                session, {**dict.fromkeys(rectangle, None), "pixel_sha": was}
-            ),
-            priority=DBPriority.IMMEDIATE,
-        )
-        with workflow_env.server.hub.transaction() as conn:
-            conn.execute(
-                "DELETE FROM workflow_cover "
-                "WHERE library_uuid = ? AND workflow_key = ?",
-                (library, FORGOTTEN_CARD),
-            )
-
-
 def test_a_hidden_card_is_counted_never_listed_and_still_opens(workflow_env):
     """Hiding is a decision about the grid, not a deletion.
 
@@ -3403,8 +3031,8 @@ def test_a_hidden_card_is_counted_never_listed_and_still_opens(workflow_env):
     """
     payload = _cards(workflow_env.owner)
     assert payload["hidden"] == 1
-    assert HIDDEN_CARD not in _by_key(payload)
-    body = _detail(workflow_env.owner, HIDDEN_CARD)
+    assert HIDDEN_WF not in _by_key(payload)
+    body = _detail(workflow_env.owner, HIDDEN_WF)
     assert body["hidden"] is True
     assert body["card"]["name"] == "A workflow I hid"
     # And the card's own `hidden` is its state here, with NO flag involved:
@@ -3434,7 +3062,7 @@ def test_a_one_off_is_counted_and_an_imported_file_takes_it_out_of_the_count(
         )
     payload = _cards(workflow_env.owner)
     assert payload["one_offs"] == 0
-    assert _by_key(payload)[BINNED_CARD]["imported"] is True
+    assert _by_key(payload)[BINNED_WF]["imported"] is True
 
 
 @pytest.mark.parametrize(
@@ -3466,7 +3094,7 @@ def test_a_pulled_file_does_not_take_a_card_out_of_the_one_offs(
             )
     payload = _cards(workflow_env.owner, "?include_one_offs=true")
     assert payload["one_offs"] == one_offs
-    assert _by_key(payload)[BINNED_CARD]["imported"] is True
+    assert _by_key(payload)[BINNED_WF]["imported"] is True
 
 
 def test_the_filters_panel_can_ask_for_the_one_offs_and_for_the_hidden(
@@ -3481,12 +3109,12 @@ def test_the_filters_panel_can_ask_for_the_one_offs_and_for_the_hidden(
     """
     owner = workflow_env.owner
     drawn = _cards(owner)
-    assert BINNED_CARD not in _by_key(drawn)
-    assert HIDDEN_CARD not in _by_key(drawn)
+    assert BINNED_WF not in _by_key(drawn)
+    assert HIDDEN_WF not in _by_key(drawn)
 
     with_one_offs = _cards(owner, "?include_one_offs=true")
-    assert BINNED_CARD in _by_key(with_one_offs)
-    assert HIDDEN_CARD not in _by_key(with_one_offs)
+    assert BINNED_WF in _by_key(with_one_offs)
+    assert HIDDEN_WF not in _by_key(with_one_offs)
     assert (with_one_offs["one_offs"], with_one_offs["hidden"]) == (1, 1)
 
     with_hidden = _cards(owner, "?include_hidden=true")
@@ -3494,14 +3122,14 @@ def test_the_filters_panel_can_ask_for_the_one_offs_and_for_the_hidden(
     # indistinguishable from one that was never hidden, in the one grid it was
     # deliberately kept out of; `frontend/src/utils/workflowCard.js` draws the
     # chip off this field.
-    assert _by_key(with_hidden)[HIDDEN_CARD]["hidden"] is True
-    assert _by_key(with_hidden)[BUSY_CARD]["hidden"] is False
-    assert HIDDEN_CARD in _by_key(with_hidden)
-    assert BINNED_CARD not in _by_key(with_hidden)
+    assert _by_key(with_hidden)[HIDDEN_WF]["hidden"] is True
+    assert _by_key(with_hidden)[BUSY_WF]["hidden"] is False
+    assert HIDDEN_WF in _by_key(with_hidden)
+    assert BINNED_WF not in _by_key(with_hidden)
     assert (with_hidden["one_offs"], with_hidden["hidden"]) == (1, 1)
 
     both = _cards(owner, "?include_hidden=true&include_one_offs=true")
-    assert {BINNED_CARD, HIDDEN_CARD} <= set(_by_key(both))
+    assert {BINNED_WF, HIDDEN_WF} <= set(_by_key(both))
     assert (both["one_offs"], both["hidden"]) == (1, 1)
 
     # The overlap, which is where a count taken over the widened set gives
@@ -3516,54 +3144,12 @@ def test_the_filters_panel_can_ask_for_the_one_offs_and_for_the_hidden(
     assert _cards(owner, "?include_hidden=true")["one_offs"] == 1
 
 
-def test_a_hidden_card_let_back_in_rejoins_its_stack(workflow_env):
-    """The reason the two flags are the server's and not the client's.
+def test_a_workflow_counts_the_ghosts_its_own_variants_keep(workflow_env):
+    """The Filters panel's Ghosts row: "keeps something deleted", per WORKFLOW.
 
-    HIDDEN is put in BUSY's group, so hiding it leaves BUSY a lone card. Asked
-    for the hidden ones, the grouping has to run over the widened set: a
-    client-side filter would draw HIDDEN beside a BUSY still calling itself a
-    stack of one, and the stack's cover would be whichever of them the client
-    happened to list first.
-    """
-    with workflow_env.server.hub.transaction() as conn:
-        conn.execute(
-            "UPDATE workflow_topology_core SET core_hash = ? WHERE topology_hash = ?",
-            (SHARED_CORE, HIDDEN_TOPOLOGY),
-        )
-    cards = _by_key(_cards(workflow_env.owner))
-    assert cards[BUSY_CARD]["stack_size"] == 2
-    assert HIDDEN_CARD not in cards
-
-    cards = _by_key(_cards(workflow_env.owner, "?include_hidden=true"))
-    assert cards[BUSY_CARD]["stack_size"] == 3
-    assert set(cards[BUSY_CARD]["member_keys"]) == {FORGOTTEN_CARD, HIDDEN_CARD}
-    assert HIDDEN_CARD not in cards
-
-
-def test_a_card_counts_the_ghosts_its_own_variants_keep(workflow_env):
-    """The Filters panel's Ghosts row: "keeps something deleted", per CARD.
-
-    A SECOND CARD IS PUT ON BUSY'S TOPOLOGY for this, because that is the only
-    shape that can tell the two readings apart: counting per topology - what
-    the retired shelf's row did, the topology being its row - hands the ghost
-    to every card of that topology, and a fixture where each topology carries
-    one card reads identically either way.
+    Over every variant of every card of the workflow, and no other workflow's.
     """
     server = workflow_env.server
-    sibling_variant, sibling_card = _h("siblingrecipe"), _h("siblingcard")
-    with server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_recipe "
-            "(structural_hash, topology_hash, hash_version, node_count, first_seen_at) "
-            "VALUES (?, ?, 'v1', 47, '2026-08-06T00:00:00Z')",
-            (sibling_variant, BUSY_TOPOLOGY),
-        )
-        conn.execute(
-            "INSERT INTO workflow_variant "
-            "(structural_hash, topology_hash, workflow_key, key_version) "
-            "VALUES (?, ?, ?, ?)",
-            (sibling_variant, BUSY_TOPOLOGY, sibling_card, WORKFLOW_KEY_VERSION),
-        )
     record_picture_ghosts(
         server.hub,
         [
@@ -3584,11 +3170,11 @@ def test_a_card_counts_the_ghosts_its_own_variants_keep(workflow_env):
             ),
         ],
     )
-    # A second missing model, on the card's OTHER variant. This is what makes
-    # the count a card-wide answer: `_describe_slots` resolves names for the
-    # first variant alone (and leaves a recipe LoRA anonymous), so an
-    # implementation reading the ghosts off `models`/`loras` sees exactly one
-    # of these two whatever the variant order is.
+    # A second missing model, on the OTHER variant. This is what makes the
+    # count a workflow-wide answer: `_describe_slots` resolves names for the
+    # base card's first variant alone (and leaves a LoRA slot anonymous), so
+    # an implementation reading the ghosts off `models`/`loras` sees exactly
+    # one of these two whatever the variant order is.
     with server.hub.transaction() as conn:
         conn.execute(
             "INSERT INTO workflow_recipe_asset "
@@ -3598,23 +3184,37 @@ def test_a_card_counts_the_ghosts_its_own_variants_keep(workflow_env):
         )
 
     cards = _by_key(_cards(workflow_env.owner))
-    assert cards[BUSY_CARD]["ghosts"] == 1
+    assert cards[BUSY_WF]["ghosts"] == 1
     # One missing LoRA per variant: the fixture's own, and the one just filed.
-    assert cards[BUSY_CARD]["model_ghosts"] == 2
+    assert cards[BUSY_WF]["model_ghosts"] == 2
 
-    # Same topology, no variant of its own that anything was filed against.
-    sibling = _detail(workflow_env.owner, sibling_card)["card"]
-    assert (sibling["ghosts"], sibling["model_ghosts"]) == (0, 0)
     # And another library's ghost is nobody's here.
-    other = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]
+    other = _detail(workflow_env.owner, FORGOTTEN_WF)["card"]
     assert (other["ghosts"], other["model_ghosts"]) == (0, 0)
 
 
-def _save_recipe(server, workflow_key, name="A look I kept"):
-    """Put one saved recipe on a card, the way `POST /recipes` would."""
+# The card a saved recipe written by `_save_recipe` is filed under: internal
+# storage, NOT NULL, and nothing these tests read.
+_RECIPE_CARD = {
+    BUSY_WF: BUSY_CARD,
+    FORGOTTEN_WF: FORGOTTEN_CARD,
+    BINNED_WF: BINNED_CARD,
+    HIDDEN_WF: HIDDEN_CARD,
+}
+
+
+def _save_recipe(server, workflow_id, name="A look I kept"):
+    """Put one saved recipe on a workflow, the way `POST /recipes` would."""
 
     def write(session):
-        session.add(SavedRecipe(name=name, workflow_key=workflow_key, prompt="a cat"))
+        session.add(
+            SavedRecipe(
+                name=name,
+                workflow_key=_RECIPE_CARD.get(workflow_id, "0" * 64),
+                workflow_id=workflow_id,
+                prompt="a cat",
+            )
+        )
         session.commit()
 
     server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
@@ -3627,15 +3227,13 @@ def test_a_card_counts_the_recipes_saved_on_it(workflow_env):
     as "not implemented yet" -- it reads as "you have saved none", which is a
     different and wrong statement once B6's table exists.
     """
-    assert _by_key(_cards(workflow_env.owner))[BUSY_CARD]["saved_recipe_count"] == 0
-    _save_recipe(workflow_env.server, BUSY_CARD)
-    _save_recipe(workflow_env.server, BUSY_CARD, name="And another")
+    assert _by_key(_cards(workflow_env.owner))[BUSY_WF]["saved_recipe_count"] == 0
+    _save_recipe(workflow_env.server, BUSY_WF)
+    _save_recipe(workflow_env.server, BUSY_WF, name="And another")
     cards = _by_key(_cards(workflow_env.owner))
-    assert cards[BUSY_CARD]["saved_recipe_count"] == 2
-    # Keyed by card, so a recipe on one does not leak onto its stack partner.
-    assert (
-        _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]["saved_recipe_count"] == 0
-    )
+    assert cards[BUSY_WF]["saved_recipe_count"] == 2
+    # Keyed by workflow, so a recipe on one does not leak onto another.
+    assert cards[FORGOTTEN_WF]["saved_recipe_count"] == 0
 
 
 def test_a_saved_recipe_takes_a_card_out_of_the_one_off_count(workflow_env):
@@ -3647,212 +3245,49 @@ def test_a_saved_recipe_takes_a_card_out_of_the_one_off_count(workflow_env):
     the owner's own recipe sits on a card they can no longer see.
     """
     assert _cards(workflow_env.owner)["one_offs"] == 1
-    _save_recipe(workflow_env.server, BINNED_CARD)
+    _save_recipe(workflow_env.server, BINNED_WF)
     payload = _cards(workflow_env.owner)
     assert payload["one_offs"] == 0
-    assert _by_key(payload)[BINNED_CARD]["saved_recipe_count"] == 1
+    assert _by_key(payload)[BINNED_WF]["saved_recipe_count"] == 1
 
 
-def _stack_row(server, stack_id, kind, core_hash, members):
-    with server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_stack (stack_id, kind, core_hash) VALUES (?, ?, ?)",
-            (stack_id, kind, core_hash),
-        )
-        conn.executemany(
-            "INSERT INTO workflow_stack_member (stack_id, workflow_key, position) "
-            "VALUES (?, ?, ?)",
-            [(stack_id, key, position) for position, key in enumerate(members)],
-        )
-
-
-def test_cards_sharing_a_core_hash_stack_behind_the_higher_ranked(workflow_env):
-    """The automatic group exists with no stack row behind it at all.
-
-    The grid draws ONE card per stack -- the cover -- so the member is absent
-    from `cards` and named on the cover instead. `stack_size` of 2 is what
-    makes it a stack to its reader.
-    """
-    cards = _by_key(_cards(workflow_env.owner))
-    assert cards[BUSY_CARD]["stack_size"] == 2
-    assert cards[BUSY_CARD]["member_keys"] == [FORGOTTEN_CARD]
-    assert FORGOTTEN_CARD not in cards
-
-
-def test_a_card_carries_the_stack_id_its_reorder_is_addressed_by(workflow_env):
-    """Without it a client can draw a stack and not write to one (F2, #1405).
-
-    `PUT /workflows/stacks/{stack_id}/order` and its `unstack` sibling are the
-    only way to reorder or dissolve a stack, and the id they take is either a
-    stored stack's or `auto:<core hash>` -- neither of which is derivable from
-    anything else the card carries. `topology_hash` is not it: a core hash is
-    the topology with the recipe LoRAs taken out.
-    """
-    owner, server = workflow_env.owner, workflow_env.server
-    cards = _by_key(_cards(owner))
-    # BUSY and FORGOTTEN share a core hash with no stack row behind them, so
-    # this is the automatic half: the id names the group rather than a row.
-    auto_id = cards[BUSY_CARD]["stack_id"]
-    assert auto_id and auto_id.startswith(AUTO_STACK_PREFIX)
-    # A card in no stack carries none. Read on the detail route because this
-    # library's grid is one stack and nothing else, so the listing has no
-    # unstacked card to read it off.
-    alone = _detail(owner, BINNED_CARD)["card"]
-    assert alone["stack_size"] == 1
-    assert alone["stack_id"] is None
-
-    # The id the payload gives is the id the route ACCEPTS, which is the whole
-    # point of carrying it and is not provable from the string's shape. The
-    # write is left standing: `fresh_library` re-seeds the hub before every
-    # test in this module, `workflow_stack` and `workflow_stack_member`
-    # included, so nothing this writes reaches the next one.
-    r = owner.put(
-        f"{API}/workflows/stacks/{auto_id}/order",
-        json={"keys": [FORGOTTEN_CARD, BUSY_CARD]},
-    )
-    assert r.status_code == 200, r.text
-    assert effective_stack_keys(server.hub, BUSY_CARD)[0] == FORGOTTEN_CARD
-    # Ordering an automatic group materialises its row and the id stands: a
-    # panel that re-read the grid must still be able to address it.
-    assert _by_key(_cards(owner))[FORGOTTEN_CARD]["stack_id"] == auto_id
-
-
-def test_a_partly_drawn_stack_carries_no_stack_id_to_reorder_it_by(workflow_env):
-    """The grid drops hidden cards and one-offs; the order route does not.
-
-    `PUT /workflows/stacks/{id}/order` validates the caller's list against the
-    hub's membership, which still counts what the listing left out -- so a
-    panel ordering the members it was given is refused with a sentence about
-    keys it was never told existed. Serving no id at all is the honest answer
-    while the panel can show only part of the stack, and it is what makes the
-    Workflows panel offer no reorder rather than one that always fails.
-    """
-    owner, server = workflow_env.owner, workflow_env.server
-    stack_id = _by_key(_cards(owner))[BUSY_CARD]["stack_id"]
-    assert stack_id, "the drawn stack should start out addressable"
-
-    # HIDDEN joins the group BUSY and FORGOTTEN share. It is hidden, so the
-    # grid keeps drawing a stack of two -- and the hub now holds three.
+def _share_busy_core(server, topology=FORGOTTEN_TOPOLOGY) -> None:
+    """Put *topology* in BUSY's automatic workflow, as a shared core hash does."""
     with server.hub.transaction() as conn:
         conn.execute(
             "UPDATE workflow_topology_core SET core_hash = ? WHERE topology_hash = ?",
-            (SHARED_CORE, HIDDEN_TOPOLOGY),
+            (SHARED_CORE, topology),
         )
-    drawn = _by_key(_cards(owner))[BUSY_CARD]
-    assert drawn["stack_size"] == 2
-    assert drawn["stack_id"] is None
-
-    # And the refusal this prevents is real: ordering what the grid drew is
-    # exactly the 400 the null exists to keep a client away from.
-    r = owner.put(
-        f"{API}/workflows/stacks/{stack_id}/order",
-        json={"keys": [drawn["key"], *drawn["member_keys"]]},
-    )
-    assert r.status_code == 400, r.text
 
 
-def test_a_stack_that_collapses_to_one_drawn_card_carries_no_stack_id(workflow_env):
-    """`stack_size: 1` and a non-null id is the one state the field forbids.
+def test_topologies_sharing_a_core_hash_are_one_workflow(workflow_env):
+    """One entry for the group, with every figure summed over its topologies.
 
-    Deriving which stacks the grid drew whole means grouping the WHOLE card
-    set as well as the drawn one, and that grouping writes an id onto every
-    figure it touches. A card whose group falls below two once the hidden
-    cards and one-offs are taken is then in no drawn stack at all, so nothing
-    downstream revisits it -- and it would be served standing alone while
-    carrying the id of a group it is the only visible member of. A client
-    reads a non-null id as "this card is in a stack"; here it is not.
+    FORGOTTEN joins BUSY's core hash, so the grid has one entry where it had
+    two: its pictures, ratings, variants and covers are both cards', and its
+    base topology is FORGOTTEN's, which has two LoRA loaders to BUSY's one
+    (#1620 D3). Its models are therefore the base card's.
     """
-    owner, server = workflow_env.owner, workflow_env.server
-    assert _by_key(_cards(owner))[BUSY_CARD]["stack_id"], "expected a drawn stack"
-
-    # BUSY and FORGOTTEN are the shared-core pair. Hide one and the other is
-    # a lone card whose group still holds two.
-    with server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_attr (workflow_key, hidden) VALUES (?, 1) "
-            "ON CONFLICT(workflow_key) DO UPDATE SET hidden = 1",
-            (FORGOTTEN_CARD,),
-        )
-    drawn = _by_key(_cards(owner))[BUSY_CARD]
-    assert drawn["stack_size"] == 1
-    assert drawn["stack_id"] is None
-    # The hidden card is served the same way on its own route: it is in no
-    # stack anybody can see, so it names none either.
-    hidden = _detail(owner, FORGOTTEN_CARD)["card"]
-    assert hidden["stack_size"] == 1
-    assert hidden["stack_id"] is None
+    owner = workflow_env.owner
+    _share_busy_core(workflow_env.server)
+    cards = _by_key(_cards(owner))
+    assert set(cards) == {BUSY_WF}
+    merged = cards[BUSY_WF]
+    assert merged["topologies"] == sorted([BUSY_TOPOLOGY, FORGOTTEN_TOPOLOGY])
+    assert merged["base_topology"] == FORGOTTEN_TOPOLOGY
+    assert merged["variant_count"] == 3
+    # BUSY's five kept pictures and FORGOTTEN's four; the stars 5, 4 and 2.
+    assert merged["picture_count"] == 9
+    assert merged["rating"] == pytest.approx(11 / 3)
+    # The base card's models: FORGOTTEN's, whose names were forgotten.
+    assert [model["name"] for model in merged["models"]] == [None]
+    assert len(merged["loras"]) == 2
+    # The workflow's own id opens it; the one FORGOTTEN had is gone.
+    assert owner.get(f"{API}/workflows/{FORGOTTEN_WF}").status_code == 404
 
 
-def test_a_stack_cover_carries_no_difference_chips(workflow_env):
-    """The chips say how a member differs from the cover, so the cover has none.
-
-    The grid draws the cover as the collapsed stack; the members' union printed
-    under it read as "the cover differs by" what only its members do.
-    """
-    cards = _by_key(_cards(workflow_env.owner))
-    assert cards[BUSY_CARD]["stack_size"] == 2
-    assert cards[BUSY_CARD]["differs_by"] == []
-    assert _detail(workflow_env.owner, BUSY_CARD)["card"]["differs_by"] == []
-    member = _detail(workflow_env.owner, FORGOTTEN_CARD)["card"]
-    assert member["differs_by"], "the member has nothing to explain"
-
-
-def test_unstacking_a_card_takes_it_out_of_the_automatic_group(workflow_env):
-    """And a group of one is not a stack, so both cards are drawn on their own."""
-    with workflow_env.server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_unstacked (workflow_key) VALUES (?)",
-            (FORGOTTEN_CARD,),
-        )
-    cards = _by_key(_cards(workflow_env.owner))
-    assert set(cards) == {BUSY_CARD, FORGOTTEN_CARD}
-    assert cards[BUSY_CARD]["stack_size"] == 1
-    assert cards[BUSY_CARD]["member_keys"] == []
-
-
-def test_a_member_row_for_a_card_that_left_the_group_is_ignored(workflow_env):
-    """A stored position must never re-admit a card whose core hash moved.
-
-    The row is written against LONE_CORE while both cards carry SHARED_CORE, so
-    both of its positions describe a group neither card is in any more.
-    Honouring them would hand the cover to FORGOTTEN, which ranks second -- so
-    the grid falling back to cover rank is the whole assertion.
-    """
-    _stack_row(
-        workflow_env.server, "s-left", "auto", LONE_CORE, [FORGOTTEN_CARD, BUSY_CARD]
-    )
-    cards = _by_key(_cards(workflow_env.owner))
-    assert set(cards) == {BUSY_CARD}
-    assert cards[BUSY_CARD]["member_keys"] == [FORGOTTEN_CARD]
-
-
-def test_a_card_that_joined_a_group_since_is_appended_not_prepended(workflow_env):
-    """FORGOTTEN has a stored position and BUSY does not.
-
-    BUSY ranks higher, so ordering by rank alone would make it the cover; the
-    owner's order has to win for the cards it names, and the newcomer goes
-    after them rather than in front. The cover is therefore FORGOTTEN, which is
-    the card the grid draws.
-    """
-    _stack_row(workflow_env.server, "s-auto", "auto", SHARED_CORE, [FORGOTTEN_CARD])
-    cards = _by_key(_cards(workflow_env.owner))
-    assert set(cards) == {FORGOTTEN_CARD}
-    assert cards[FORGOTTEN_CARD]["member_keys"] == [BUSY_CARD]
-
-
-def test_a_manual_assignment_beats_the_automatic_group(workflow_env):
-    """A manual stack is the owner's, so it wins over the core hash."""
-    _stack_row(
-        workflow_env.server, "s-manual", "manual", None, [FORGOTTEN_CARD, BUSY_CARD]
-    )
-    cards = _by_key(_cards(workflow_env.owner))
-    assert set(cards) == {FORGOTTEN_CARD}
-    assert cards[FORGOTTEN_CARD]["stack_size"] == 2
-    assert cards[FORGOTTEN_CARD]["member_keys"] == [BUSY_CARD]
-
-
-def _defaults(owner, workflow_key) -> dict:
-    """The card's defaults keyed by their address, which is what names a slot.
+def _defaults(owner, workflow_id) -> dict:
+    """The workflow's defaults keyed by their address, which is what names a slot.
 
     By address and not by input name, because the busy card has two samplers:
     keying on the name alone would silently assert against whichever of them
@@ -3860,23 +3295,31 @@ def _defaults(owner, workflow_key) -> dict:
     """
     return {
         (row["slot_label"], row["input_name"]): row
-        for row in _detail(owner, workflow_key)["card"]["defaults"]
+        for row in _detail(owner, workflow_id)["card"]["defaults"]
     }
+
+
+def _core(structural_hash: str, node_id: str) -> str:
+    """One node's core address label (#1622), as the default recipe names it."""
+    return (
+        CORE_ADDRESS_PREFIX
+        + core_node_labels(_DOCUMENTS[structural_hash], strip_loras=True)[node_id]
+    )
 
 
 def test_defaults_are_the_mode_over_the_cards_best_pictures(workflow_env):
     """30 steps twice beats nothing else; the two cfg values tie and resolve
     the same way on every read, which is what stops a card's defaults moving
     when nothing has changed. The binned 5-star run used 44 of each."""
-    defaults = _defaults(workflow_env.owner, BUSY_CARD)
-    sampler = _slot_label(BUSY_RECIPE_A, "3")
+    defaults = _defaults(workflow_env.owner, BUSY_WF)
+    sampler = _core(BUSY_RECIPE_A, "3")
     assert defaults[(sampler, "steps")]["value"] == 30
     assert defaults[(sampler, "steps")]["provenance"] == "best"
     assert defaults[(sampler, "cfg")]["value"] == 8.0
     # Two slots offer `steps` and two offer `cfg`, and ⓘ keys its list on the
     # label: two rows called "steps" is a duplicate `v-for` key, and one of
     # them silently replaces the other on screen.
-    rows = _detail(workflow_env.owner, BUSY_CARD)["card"]["defaults"]
+    rows = _detail(workflow_env.owner, BUSY_WF)["card"]["defaults"]
     labels = [row["label"] for row in rows]
     assert len(labels) == 4, labels
     assert sorted(labels) == ["cfg", "cfg 2", "steps", "steps 2"]
@@ -3891,8 +3334,8 @@ def test_defaults_fall_back_to_every_picture_when_none_is_rated_four(
     Its one 5-star picture is in the Scrapheap, so reading "best pictures"
     without excluding the Scrapheap would answer 99 and call it ``best``.
     """
-    defaults = _defaults(workflow_env.owner, FORGOTTEN_CARD)
-    address = (_slot_label(FORGOTTEN_RECIPE, "4"), "steps")
+    defaults = _defaults(workflow_env.owner, FORGOTTEN_WF)
+    address = (_core(FORGOTTEN_RECIPE, "4"), "steps")
     assert defaults[address]["value"] == 20
     assert defaults[address]["provenance"] == "all"
 
@@ -3913,8 +3356,8 @@ def test_defaults_read_the_newest_runs_and_stop_at_the_cap(workflow_env, monkeyp
     test above, which reads the same card uncapped, asserts the 20.
     """
     monkeypatch.setattr(workflow_card_service, "DEFAULT_SAMPLE", 1)
-    defaults = _defaults(workflow_env.owner, FORGOTTEN_CARD)
-    address = (_slot_label(FORGOTTEN_RECIPE, "4"), "steps")
+    defaults = _defaults(workflow_env.owner, FORGOTTEN_WF)
+    address = (_core(FORGOTTEN_RECIPE, "4"), "steps")
     assert defaults[address]["value"] == 77
     assert defaults[address]["provenance"] == "all"
 
@@ -3922,20 +3365,21 @@ def test_defaults_read_the_newest_runs_and_stop_at_the_cap(workflow_env, monkeyp
 def test_an_owner_override_replaces_a_default_and_says_it_was_edited(
     workflow_env,
 ):
-    """And it is addressed by slot label, never by node id."""
+    """And it is addressed by core address, never by node id."""
+    sampler = _core(BUSY_RECIPE_A, "3")
     with workflow_env.server.hub.transaction() as conn:
         conn.execute(
-            "INSERT INTO workflow_default_override "
-            "(workflow_key, slot_label, input_name, value) VALUES (?, ?, 'steps', '8')",
-            (BUSY_CARD, _slot_label(BUSY_RECIPE_A, "3")),
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, '8')",
+            (BUSY_WF, f"{sampler}/steps"),
         )
-    defaults = _defaults(workflow_env.owner, BUSY_CARD)
-    sampler = _slot_label(BUSY_RECIPE_A, "3")
-    assert defaults[(sampler, "steps")]["value"] == "8"
+    defaults = _defaults(workflow_env.owner, BUSY_WF)
+    # The column is TEXT; a graph takes the number.
+    assert defaults[(sampler, "steps")]["value"] == 8
     assert defaults[(sampler, "steps")]["provenance"] == "edited"
     # Only that one slot: the refiner's own `steps` and every other parameter
     # are still read off the pictures.
-    refiner = _slot_label(BUSY_RECIPE_A, "4")
+    refiner = _core(BUSY_RECIPE_A, "4")
     assert defaults[(refiner, "steps")]["value"] == 30
     assert defaults[(refiner, "steps")]["provenance"] == "best"
     assert defaults[(sampler, "cfg")]["provenance"] == "best"
@@ -3944,9 +3388,8 @@ def test_an_owner_override_replaces_a_default_and_says_it_was_edited(
 def test_the_card_detail_lists_its_own_variants_and_not_its_topologys(
     workflow_env,
 ):
-    """A topology can carry several cards, so the variant list is filtered by
-    the card and not by the graph it is a binding of."""
-    body = _detail(workflow_env.owner, BUSY_CARD)
+    """The variants filed under the workflow's topologies, with what each made."""
+    body = _detail(workflow_env.owner, BUSY_WF)
     by_hash = {variant["structural_hash"]: variant for variant in body["variants"]}
     assert set(by_hash) == {BUSY_RECIPE_A, BUSY_RECIPE_B}
     assert by_hash[BUSY_RECIPE_A]["pictures"] == 3
@@ -3960,7 +3403,7 @@ def test_card_pictures_are_every_variants_newest_kept_pictures(workflow_env):
     """Newest first, both variants, and never the soft-deleted one -- which is
     the newest picture on this card and would otherwise head the list."""
     ids = _picture_ids_by_path(workflow_env.server)
-    r = workflow_env.owner.get(f"{API}/workflows/{BUSY_CARD}/pictures")
+    r = workflow_env.owner.get(f"{API}/workflows/{BUSY_WF}/pictures")
     assert r.status_code == 200, r.text
     assert r.json() == [
         ids["busy_four.png"],
@@ -3969,20 +3412,21 @@ def test_card_pictures_are_every_variants_newest_kept_pictures(workflow_env):
         ids["busy_one.png"],
         ids["busy_unrated.png"],
     ]
-    limited = workflow_env.owner.get(f"{API}/workflows/{BUSY_CARD}/pictures?limit=1")
+    limited = workflow_env.owner.get(f"{API}/workflows/{BUSY_WF}/pictures?limit=1")
     assert limited.json() == [ids["busy_four.png"]]
 
 
-def test_an_unknown_card_is_a_404_and_a_malformed_key_a_422(workflow_env):
-    """Both card routes, because a key is a content address: an empty 200 would
-    read as "this card has nothing" rather than "this machine has no such card".
+def test_an_unknown_workflow_is_a_404_and_a_malformed_id_a_422(workflow_env):
+    """Both read routes: an empty 200 would read as "this workflow has nothing"
+    rather than "this machine has no such workflow". A card key is no longer
+    an id at all, so it is malformed rather than unknown.
     """
-    unknown = _h("nosuchcard")
+    unknown = AUTO_STACK_PREFIX + _h("nosuchcore")
     for path, template in (
-        (f"{API}/workflows/{unknown}", API + "/workflows/{workflow_key}"),
+        (f"{API}/workflows/{unknown}", API + "/workflows/{workflow_id}"),
         (
             f"{API}/workflows/{unknown}/pictures",
-            API + "/workflows/{workflow_key}/pictures",
+            API + "/workflows/{workflow_id}/pictures",
         ),
     ):
         assert_real_route(workflow_env.server.api, "GET", path, template)
@@ -3990,6 +3434,7 @@ def test_an_unknown_card_is_a_404_and_a_malformed_key_a_422(workflow_env):
     for path in (
         f"{API}/workflows/not-a-digest",
         f"{API}/workflows/not-a-digest/pictures",
+        f"{API}/workflows/{BUSY_CARD}",
     ):
         assert workflow_env.owner.get(path).status_code == 422, path
 
@@ -4036,6 +3481,7 @@ FLIP_TOPOLOGY = _h("fliptopology")
 FLIP_RECIPE_A = _h("fliprecipea")
 FLIP_RECIPE_B = _h("fliprecipeb")
 FLIP_CORE = _h("flipcore")
+FLIP_WF = AUTO_STACK_PREFIX + FLIP_CORE
 
 # Two variants of ONE graph that differ in nothing but which character LoRA
 # sits in the slot. That is the whole point of the fixture: with the slot
@@ -4220,9 +3666,10 @@ def _add_flip_pictures(server, structural_hash: str, count: int) -> None:
     server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
 
 
-def _attr_row(server, key: str):
+def _attr_row(server, workflow_id: str):
     return server.hub.fetchone(
-        "SELECT name, notes, hidden FROM workflow_attr WHERE workflow_key = ?", (key,)
+        "SELECT name, notes, hidden FROM workflow_group_attr WHERE workflow_id = ?",
+        (workflow_id,),
     )
 
 
@@ -4277,30 +3724,34 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
     assert client.get(f"{API}/pictures").status_code == 200, (
         "the scoped token is dead; the refusals below would prove nothing"
     )
-    stack_id = f"{AUTO_STACK_PREFIX}{SHARED_CORE}"
     for method, path, body in (
-        ("PATCH", f"{API}/workflows/{BUSY_CARD}", {"name": "nope"}),
-        ("PUT", f"{API}/workflows/{BUSY_CARD}/slots", {"marks": {}}),
-        ("PUT", f"{API}/workflows/{BUSY_CARD}/defaults", {"defaults": []}),
-        ("PUT", f"{API}/workflows/{BUSY_CARD}/pins", {"pins": []}),
-        ("PUT", f"{API}/workflows/{BUSY_CARD}/inputs", {"inputs": []}),
-        ("POST", f"{API}/workflows/{BUSY_CARD}/unstack", None),
-        ("POST", f"{API}/workflows/stacks", {"keys": [BUSY_CARD, FORGOTTEN_CARD]}),
-        ("PUT", f"{API}/workflows/stacks/{stack_id}/order", {"keys": [BUSY_CARD]}),
-        ("POST", f"{API}/workflows/stacks/{stack_id}/unstack", None),
-        ("POST", f"{API}/workflows/run", {"workflow_key": BUSY_CARD}),
-        ("POST", f"{API}/workflows/run/preflight", {"workflow_key": BUSY_CARD}),
-        ("POST", f"{API}/workflows/run", {"workflow_id": stack_id}),
-        ("POST", f"{API}/workflows/run/preflight", {"workflow_id": stack_id}),
-        ("POST", f"{API}/workflows/{BUSY_CARD}/duplicate", None),
-        ("POST", f"{API}/workflows/{BUSY_CARD}/insert-lora-loader", None),
-        ("PUT", f"{API}/workflows/{BUSY_CARD}/lora-chain", {"entries": []}),
+        ("PATCH", f"{API}/workflows/{BUSY_WF}", {"name": "nope"}),
+        ("POST", f"{API}/workflows/merge", {"ids": [BUSY_WF, FORGOTTEN_WF]}),
+        ("POST", f"{API}/workflows/{BUSY_WF}/split", {"topology": BUSY_TOPOLOGY}),
+        (
+            "PUT",
+            f"{API}/workflows/{BUSY_WF}/model-fix",
+            {"was": _SHELF_FILENAME, "now": None},
+        ),
+        ("PUT", f"{API}/workflows/{BUSY_WF}/defaults", {"defaults": []}),
+        ("PUT", f"{API}/workflows/{BUSY_WF}/pins", {"pins": []}),
+        ("PUT", f"{API}/workflows/{BUSY_WF}/inputs", {"inputs": []}),
+        ("POST", f"{API}/workflows/run", {"workflow_id": BUSY_WF}),
+        ("POST", f"{API}/workflows/run/preflight", {"workflow_id": BUSY_WF}),
         (
             "POST",
-            f"{API}/workflows/{BUSY_CARD}/clone-with-models",
+            f"{API}/workflows/run",
+            {"picture_ids": [1], "target": BUSY_WF},
+        ),
+        ("POST", f"{API}/workflows/{BUSY_WF}/duplicate", None),
+        ("POST", f"{API}/workflows/{BUSY_WF}/insert-lora-loader", None),
+        ("PUT", f"{API}/workflows/{BUSY_WF}/lora-chain", {"entries": []}),
+        (
+            "POST",
+            f"{API}/workflows/{BUSY_WF}/clone-with-models",
             {"name": "nope", "swaps": {"a.safetensors": "b.safetensors"}},
         ),
-        ("DELETE", f"{API}/workflows/{BUSY_CARD}", None),
+        ("DELETE", f"{API}/workflows/{BUSY_WF}", None),
         (
             "POST",
             f"{API}/comfyui/workflows/convert",
@@ -4314,17 +3765,211 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
     # something: the same gesture from the owner lands.
     assert (
         workflow_env.owner.patch(
-            f"{API}/workflows/{BUSY_CARD}", json={"name": "Owner can"}
+            f"{API}/workflows/{BUSY_WF}", json={"name": "Owner can"}
         ).status_code
         == 200
     )
+
+
+# Every route `routes/workflows.py` serves, with a request that reaches its
+# handler: `(method, template, path, body)`. The completeness check in the
+# test below compares this against ROUTE_POLICIES, so a route added without a
+# row here fails rather than going unmeasured.
+_EVERY_WORKFLOW_ROUTE = (
+    ("GET", "/workflows", "/workflows", None),
+    (
+        "GET",
+        "/workflows/recipes/{structural_hash}/graph",
+        f"/workflows/recipes/{BUSY_RECIPE_A}/graph",
+        None,
+    ),
+    ("GET", "/workflows/{workflow_id}", f"/workflows/{BUSY_WF}", None),
+    (
+        "GET",
+        "/workflows/{workflow_id}/pictures",
+        f"/workflows/{BUSY_WF}/pictures",
+        None,
+    ),
+    ("GET", "/workflows/{workflow_id}/export", f"/workflows/{BUSY_WF}/export", None),
+    ("GET", "/workflows/{workflow_id}/graph", f"/workflows/{BUSY_WF}/graph", None),
+    (
+        "GET",
+        "/workflows/{workflow_id}/lora-chain",
+        f"/workflows/{BUSY_WF}/lora-chain",
+        None,
+    ),
+    (
+        "GET",
+        "/workflows/{workflow_id}/lora-summary",
+        f"/workflows/{BUSY_WF}/lora-summary",
+        None,
+    ),
+    (
+        "GET",
+        "/workflows/{workflow_id}/model-swap",
+        f"/workflows/{BUSY_WF}/model-swap",
+        None,
+    ),
+    ("PATCH", "/workflows/{workflow_id}", f"/workflows/{BUSY_WF}", {"notes": "n"}),
+    (
+        "PUT",
+        "/workflows/{workflow_id}/defaults",
+        f"/workflows/{BUSY_WF}/defaults",
+        {"defaults": []},
+    ),
+    (
+        "PUT",
+        "/workflows/{workflow_id}/pins",
+        f"/workflows/{BUSY_WF}/pins",
+        {"pins": []},
+    ),
+    (
+        "PUT",
+        "/workflows/{workflow_id}/inputs",
+        f"/workflows/{BUSY_WF}/inputs",
+        {"inputs": []},
+    ),
+    (
+        "PUT",
+        "/workflows/{workflow_id}/model-fix",
+        f"/workflows/{BUSY_WF}/model-fix",
+        {"was": _SHELF_FILENAME, "now": None},
+    ),
+    (
+        "PUT",
+        "/workflows/{workflow_id}/lora-chain",
+        f"/workflows/{BUSY_WF}/lora-chain",
+        {"entries": []},
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/duplicate",
+        f"/workflows/{BUSY_WF}/duplicate",
+        None,
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/insert-lora-loader",
+        f"/workflows/{BUSY_WF}/insert-lora-loader",
+        None,
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/clone-with-models",
+        f"/workflows/{BUSY_WF}/clone-with-models",
+        {"name": "c", "swaps": {"a.safetensors": "b.safetensors"}},
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/split",
+        f"/workflows/{BUSY_WF}/split",
+        {"topology": BUSY_TOPOLOGY},
+    ),
+    (
+        "POST",
+        "/workflows/run/preflight",
+        "/workflows/run/preflight",
+        {"workflow_id": BUSY_WF},
+    ),
+    ("POST", "/workflows/run", "/workflows/run", {"workflow_id": BUSY_WF}),
+    ("DELETE", "/workflows/{workflow_id}", f"/workflows/{BUSY_WF}", None),
+    # Last: it folds BUSY away, and every row above is about BUSY.
+    (
+        "POST",
+        "/workflows/merge",
+        "/workflows/merge",
+        {"ids": [BUSY_WF, FORGOTTEN_WF]},
+    ),
+)
+
+
+def _write_enable(server, token: str) -> str:
+    """Rescope a minted share token to ``WRITE``, and prove the row took it.
+
+    `create_token` mints only READ for a scoped token, and the READ-token
+    middleware refuses every non-GET before the gate reads a declaration - so
+    a READ token measures the verb belt, never the declaration. A WRITE grant
+    passes the belt and is refused by the gate alone.
+    """
+
+    def rescope(session):
+        session.exec(
+            update(UserToken)
+            .where(UserToken.token_prefix == token[:8])
+            .values(scope="WRITE")
+        )
+        session.commit()
+        return [
+            row.scope
+            for row in session.exec(
+                select(UserToken).where(UserToken.token_prefix == token[:8])
+            ).all()
+        ]
+
+    assert server.hub_engine.run_task(rescope) == ["WRITE"], "the rescope missed"
+    server.auth._flush_token_cache()
+    return token
+
+
+def test_every_workflow_route_refuses_a_scoped_grant_at_the_gate_and_answers_the_owner(
+    workflow_env, tmp_path, monkeypatch
+):
+    """Both directions on every route of the module, measured at the gate (#1623).
+
+    The GET belts are emptied and the grant is write-enabled, so a 403 here is
+    the gate's OWNER_ONLY declaration and nothing in front of it; the owner
+    reaching every handler (anything but 401/403) is the positive control that
+    keeps the refusal from being a dead path.
+    """
+    server = workflow_env.server
+    _isolate_workflow_folders(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url, **_: (None, "refused")
+    )
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PATHS", frozenset())
+    monkeypatch.setattr(auth, "READ_BLOCKED_GET_PREFIXES", ())
+    declared = {
+        (method, path[len("/api/v1") :])
+        for method, path in ROUTE_POLICIES
+        if path.startswith("/api/v1/workflows")
+    }
+    assert declared == {(m, t) for m, t, _p, _b in _EVERY_WORKFLOW_ROUTE}, (
+        "a workflow route has no row in _EVERY_WORKFLOW_ROUTE (or a row names a "
+        "route that is gone)"
+    )
+    token = _write_enable(
+        server,
+        _mint(
+            workflow_env.owner,
+            "workflow gate probe",
+            resource_type="character",
+            resource_id=workflow_env.character_id,
+        ),
+    )
+    scoped = _bearer(server, token)
+    assert scoped.get(f"{API}/pictures").status_code == 200, "the grant is dead"
+    previously_enforcing = server.authz._enforcing
+    server.authz._enforcing = True
+    try:
+        for method, template, path, body in _EVERY_WORKFLOW_ROUTE:
+            assert_real_route(server.api, method, API + path, API + template)
+            r = scoped.request(method, API + path, json=body)
+            assert r.status_code == 403, f"{method} {path}: {r.status_code} {r.text}"
+            assert "Owner-level" in r.text, f"{method} {path} not refused by the gate"
+        for method, _template, path, body in _EVERY_WORKFLOW_ROUTE:
+            r = workflow_env.owner.request(method, API + path, json=body)
+            assert r.status_code not in (401, 403), (
+                f"owner {method} {path}: {r.status_code} {r.text}"
+            )
+    finally:
+        server.authz._enforcing = previously_enforcing
 
 
 def test_naming_a_card_shows_on_the_grid_and_clearing_it_goes_back(workflow_env):
     """PATCH writes the fields sent and leaves the rest; null clears."""
     owner = workflow_env.owner
     r = owner.patch(
-        f"{API}/workflows/{BUSY_CARD}",
+        f"{API}/workflows/{BUSY_WF}",
         json={"name": "My portrait workflow", "notes": "cfg 7, always"},
     )
     assert r.status_code == 200, r.text
@@ -4332,15 +3977,23 @@ def test_naming_a_card_shows_on_the_grid_and_clearing_it_goes_back(workflow_env)
     assert r.json()["notes"] == "cfg 7, always"
 
     grid = owner.get(f"{API}/workflows").json()
-    named = {card["key"]: card["name"] for card in grid["cards"]}
-    assert named[BUSY_CARD] == "My portrait workflow"
+    named = {card["id"]: card["name"] for card in grid["cards"]}
+    assert named[BUSY_WF] == "My portrait workflow"
+    # Written on the workflow, never on the card it happens to be made of.
+    assert _attr_row(workflow_env.server, BUSY_WF)["name"] == "My portrait workflow"
+    assert (
+        workflow_env.server.hub.fetchone(
+            "SELECT 1 FROM workflow_attr WHERE workflow_key = ?", (BUSY_CARD,)
+        )
+        is None
+    )
 
     # Notes alone: the name must stand rather than be cleared by omission.
-    r = owner.patch(f"{API}/workflows/{BUSY_CARD}", json={"notes": "cfg 8 now"})
+    r = owner.patch(f"{API}/workflows/{BUSY_WF}", json={"notes": "cfg 8 now"})
     assert r.json()["card"]["name"] == "My portrait workflow"
     assert r.json()["notes"] == "cfg 8 now"
 
-    r = owner.patch(f"{API}/workflows/{BUSY_CARD}", json={"name": None})
+    r = owner.patch(f"{API}/workflows/{BUSY_WF}", json={"name": None})
     assert r.status_code == 200, r.text
     # Back to the fallback - whatever it is - rather than to null or to the
     # name that was just cleared. What the fallback SAYS is pinned by
@@ -4348,54 +4001,62 @@ def test_naming_a_card_shows_on_the_grid_and_clearing_it_goes_back(workflow_env)
     cleared = r.json()["card"]["name"]
     assert cleared and cleared != "My portrait workflow"
     grid = _by_key(_cards(owner))
-    assert grid[BUSY_CARD]["name"] == cleared
+    assert grid[BUSY_WF]["name"] == cleared
 
 
 def test_hiding_a_card_takes_it_off_the_grid_and_it_still_opens(workflow_env):
     """Hiding is a decision about the grid, never a deletion."""
     owner = workflow_env.owner
     before = owner.get(f"{API}/workflows").json()
-    assert BUSY_CARD in {card["key"] for card in before["cards"]}
+    assert BUSY_WF in {card["id"] for card in before["cards"]}
 
     assert (
-        owner.patch(f"{API}/workflows/{BUSY_CARD}", json={"hidden": True}).status_code
+        owner.patch(f"{API}/workflows/{BUSY_WF}", json={"hidden": True}).status_code
         == 200
     )
     after = owner.get(f"{API}/workflows").json()
-    assert BUSY_CARD not in {card["key"] for card in after["cards"]}
+    assert BUSY_WF not in {card["id"] for card in after["cards"]}
     assert after["hidden"] == before["hidden"] + 1
 
-    detail = owner.get(f"{API}/workflows/{BUSY_CARD}")
+    detail = owner.get(f"{API}/workflows/{BUSY_WF}")
     assert detail.status_code == 200
     assert detail.json()["hidden"] is True
 
 
-def test_a_stack_whose_members_are_all_hidden_is_hidden(workflow_env):
-    """BUSY and FORGOTTEN share a core hash, so they are one stack.
-
-    Hiding both must leave the grid drawing neither, and counting both: a
-    stack is hidden when its members are, because the grid draws the cover and
-    a hidden cover is not drawn.
-    """
-    owner = workflow_env.owner
-    cover = owner.get(f"{API}/workflows").json()["cards"]
-    assert any(card["stack_size"] == 2 for card in cover), (
-        "the fixture's stack is gone; this test would pass on nothing"
-    )
-    for key in (BUSY_CARD, FORGOTTEN_CARD):
-        assert (
-            owner.patch(f"{API}/workflows/{key}", json={"hidden": True}).status_code
-            == 200
+def _group_defaults(hub, workflow_id) -> dict[str, str]:
+    return {
+        row["address"]: row["value"]
+        for row in hub.fetchall(
+            "SELECT address, value FROM workflow_group_default WHERE workflow_id = ?",
+            (workflow_id,),
         )
-    grid = owner.get(f"{API}/workflows").json()
-    assert not {BUSY_CARD, FORGOTTEN_CARD} & {card["key"] for card in grid["cards"]}
+    }
 
 
-def test_a_cards_overrides_pins_and_inputs_are_written_whole(workflow_env):
-    """The three whole-set writes, each read back where something reads it."""
+def _group_pins(hub, workflow_id):
+    row = hub.fetchone(
+        "SELECT pins FROM workflow_group_pins WHERE workflow_id = ?", (workflow_id,)
+    )
+    return None if row is None else json.loads(row["pins"])
+
+
+def test_a_workflows_defaults_pins_and_inputs_are_written_whole(workflow_env):
+    """The three whole-set writes, on the workflow tables, each read back."""
     owner, hub = workflow_env.owner, workflow_env.server.hub
+    # The default recipe's model and LoRA rows are the conversion's, and a
+    # parameter write must leave them standing.
+    model_address = f"{_core(BUSY_RECIPE_A, '1')}/ckpt_name"
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, ?)",
+            [
+                (BUSY_WF, model_address, _SHELF_FILENAME),
+                (BUSY_WF, "lora:" + _h("speed-lora"), "0.8"),
+            ],
+        )
     r = owner.put(
-        f"{API}/workflows/{BUSY_CARD}/defaults",
+        f"{API}/workflows/{BUSY_WF}/defaults",
         json={
             "defaults": [
                 {"slot_label": "slot-a", "input_name": "steps", "value": 42},
@@ -4408,87 +4069,91 @@ def test_a_cards_overrides_pins_and_inputs_are_written_whole(workflow_env):
         (default["slot_label"], default["input_name"]): default
         for default in r.json()["card"]["defaults"]
     }
-    assert edited[("slot-a", "steps")]["value"] == "42"
+    # TEXT in the table, the number and the boolean a graph takes on the wire.
+    assert edited[("slot-a", "steps")]["value"] == 42
     assert edited[("slot-a", "steps")]["provenance"] == "edited"
+    assert edited[("slot-a", "keep")]["value"] is True
     # A bool is stored the way a graph writes one, not as Python's `True`.
-    assert edited[("slot-a", "keep")]["value"] == "true"
-    assert default_overrides(hub, BUSY_CARD)[("slot-a", "keep")] == "true"
+    assert _group_defaults(hub, BUSY_WF)["slot-a/keep"] == "true"
+    # And the write answers with the default recipe, which a grid entry never
+    # carries.
+    assert r.json()["card"]["default_recipe"]["values"]
+    # Nothing on the card tables.
+    assert hub.fetchone("SELECT 1 FROM workflow_default_override") is None
 
-    # Whole, so a second write with one entry leaves one entry.
+    # Whole, so a second write with one entry leaves one parameter entry - and
+    # the model and LoRA rows beside them.
     owner.put(
-        f"{API}/workflows/{BUSY_CARD}/defaults",
+        f"{API}/workflows/{BUSY_WF}/defaults",
         json={
             "defaults": [{"slot_label": "slot-a", "input_name": "cfg", "value": 7.5}]
         },
     )
-    assert set(default_overrides(hub, BUSY_CARD)) == {("slot-a", "cfg")}
+    assert _group_defaults(hub, BUSY_WF) == {
+        "slot-a/cfg": "7.5",
+        model_address: _SHELF_FILENAME,
+        "lora:" + _h("speed-lora"): "0.8",
+    }
+    # An address naming a model or a LoRA is not a parameter, and is refused
+    # rather than written over the default recipe's own rows.
+    core_ckpt = _core(BUSY_RECIPE_A, "1")
+    for slot_label, input_name in ((core_ckpt, "ckpt_name"), ("lora:abc", "x")):
+        r = owner.put(
+            f"{API}/workflows/{BUSY_WF}/defaults",
+            json={
+                "defaults": [
+                    {"slot_label": slot_label, "input_name": input_name, "value": 1}
+                ]
+            },
+        )
+        assert r.status_code == 422, (slot_label, r.text)
+    assert model_address in _group_defaults(hub, BUSY_WF)
 
     assert (
         owner.put(
-            f"{API}/workflows/{BUSY_CARD}/pins",
+            f"{API}/workflows/{BUSY_WF}/pins",
             json={"pins": [{"slot_label": "slot-a", "input_name": "steps"}]},
         ).status_code
         == 200
     )
-    assert json.loads(
-        hub.fetchone(
-            "SELECT pins FROM workflow_key_pins WHERE workflow_key = ?", (BUSY_CARD,)
-        )["pins"]
-    ) == [["slot-a", "steps"]]
+    assert _group_pins(hub, BUSY_WF) == ["slot-a/steps"]
     # And READ BACK on the detail route, which is the only thing that makes
-    # the pin a control rather than a write into the dark: the Workflow tab
-    # draws the pin it sets from here (v1.12 F3).
-    assert owner.get(f"{API}/workflows/{BUSY_CARD}").json()["pins"] == [
+    # the pin a control rather than a write into the dark.
+    assert owner.get(f"{API}/workflows/{BUSY_WF}").json()["pins"] == [
         {"slot_label": "slot-a", "input_name": "steps"}
     ]
     # `[]` is somebody who unpinned everything; null forgets the choice.
-    owner.put(f"{API}/workflows/{BUSY_CARD}/pins", json={"pins": []})
-    # The same two answers survive the round trip, because a client renders
-    # them differently: `[]` shows nothing above "All N", `null` applies its
-    # own default pins.
-    assert owner.get(f"{API}/workflows/{BUSY_CARD}").json()["pins"] == []
-    assert (
-        json.loads(
-            hub.fetchone(
-                "SELECT pins FROM workflow_key_pins WHERE workflow_key = ?",
-                (BUSY_CARD,),
-            )["pins"]
-        )
-        == []
-    )
-    owner.put(f"{API}/workflows/{BUSY_CARD}/pins", json={"pins": None})
-    assert (
-        hub.fetchone(
-            "SELECT pins FROM workflow_key_pins WHERE workflow_key = ?", (BUSY_CARD,)
-        )
-        is None
-    )
-    assert owner.get(f"{API}/workflows/{BUSY_CARD}").json()["pins"] is None
+    owner.put(f"{API}/workflows/{BUSY_WF}/pins", json={"pins": []})
+    assert owner.get(f"{API}/workflows/{BUSY_WF}").json()["pins"] == []
+    assert _group_pins(hub, BUSY_WF) == []
+    owner.put(f"{API}/workflows/{BUSY_WF}/pins", json={"pins": None})
+    assert _group_pins(hub, BUSY_WF) is None
+    assert owner.get(f"{API}/workflows/{BUSY_WF}").json()["pins"] is None
 
-    # A row that is not a pin list reads as NO CHOICE, never as `[]`. Both
-    # halves matter: iterating a stored scalar used to raise out of the
-    # handler, which is a 500 on the panel the pins are drawn in; and
-    # answering `[]` would say "the owner unpinned everything" about a
-    # corrupt row, which puts a card's whole parameter list behind a
-    # collapsed disclosure and looks deliberate.
-    for corrupt in ("null", "5", '{"a": 1}', "not json"):
+    # A row that is not a pin list reads as NO CHOICE, never as `[]`: a
+    # corrupt row saying "the owner unpinned everything" would look
+    # deliberate. A `[slot label, input name]` pair, the card tables' shape,
+    # still reads.
+    for corrupt, expected in (
+        ("null", None),
+        ("5", None),
+        ('{"a": 1}', None),
+        ("not json", None),
+        ('[["slot-a", "steps"]]', [{"slot_label": "slot-a", "input_name": "steps"}]),
+    ):
         with hub.transaction() as conn:
             conn.execute(
-                "INSERT INTO workflow_key_pins (workflow_key, pins) VALUES (?, ?) "
-                "ON CONFLICT(workflow_key) DO UPDATE SET pins = excluded.pins",
-                (BUSY_CARD, corrupt),
+                "INSERT INTO workflow_group_pins (workflow_id, pins) VALUES (?, ?) "
+                "ON CONFLICT(workflow_id) DO UPDATE SET pins = excluded.pins",
+                (BUSY_WF, corrupt),
             )
-        r = owner.get(f"{API}/workflows/{BUSY_CARD}")
+        r = owner.get(f"{API}/workflows/{BUSY_WF}")
         assert r.status_code == 200, f"{corrupt!r}: {r.text}"
-        assert r.json()["pins"] is None, corrupt
-    with hub.transaction() as conn:
-        conn.execute(
-            "DELETE FROM workflow_key_pins WHERE workflow_key = ?", (BUSY_CARD,)
-        )
+        assert r.json()["pins"] == expected, corrupt
 
     assert (
         owner.put(
-            f"{API}/workflows/{BUSY_CARD}/inputs",
+            f"{API}/workflows/{BUSY_WF}/inputs",
             json={
                 "inputs": [
                     {
@@ -4502,19 +4167,21 @@ def test_a_cards_overrides_pins_and_inputs_are_written_whole(workflow_env):
         ).status_code
         == 200
     )
-    row = hub.fetchone(
-        "SELECT library_uuid, mode, pixel_sha FROM workflow_key_picture_input "
-        "WHERE workflow_key = ?",
-        (BUSY_CARD,),
-    )
-    assert row["mode"] == "fixed"
-    assert row["library_uuid"] == workflow_env.server.vault.library_uuid
+    library = workflow_env.server.vault.library_uuid
+    assert group_picture_inputs(hub, library, BUSY_WF) == [
+        {
+            "slot_label": "slot-a",
+            "input_name": "image",
+            "mode": "fixed",
+            "pixel_sha": _h("apicture"),
+        }
+    ]
+    assert hub.fetchone("SELECT 1 FROM workflow_key_picture_input") is None
     # A fixed input with no picture is refused rather than stored as a row no
-    # run could satisfy -- the CHECK constraint says the same thing, and a 500
-    # out of the database is not how a bad request is answered.
+    # run could satisfy.
     assert (
         owner.put(
-            f"{API}/workflows/{BUSY_CARD}/inputs",
+            f"{API}/workflows/{BUSY_WF}/inputs",
             json={
                 "inputs": [
                     {
@@ -4530,114 +4197,146 @@ def test_a_cards_overrides_pins_and_inputs_are_written_whole(workflow_env):
     )
 
 
-def test_marking_a_lora_slot_structural_splits_the_card_and_carries_it_over(
-    workflow_env,
-):
-    """The split half of the acceptance.
+def test_merging_workflows_keeps_the_covers_state_and_names_the_rest(workflow_env):
+    """#1620 D4: the cover's name wins and every other name goes to the notes.
 
-    Two variants of one graph differing only in which character LoRA they
-    load: marked `recipe` they are one card, and marking the slot `structural`
-    pulls the LoRA into the key and makes two. **Every new key inherits the
-    owner's attributes** -- name, notes, pins, overrides -- because the
-    alternative is a correction that silently empties a card somebody named.
+    The cover is automatic, so the merge is a new manual group holding every
+    topology of both, with the cover's name, notes, defaults, pins and inputs
+    and nothing else of the other's. The other's recipes move with it.
     """
     owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
-    label = _flip_slot_label(FLIP_RECIPE_A)
-
-    assert (
-        owner.patch(
-            f"{API}/workflows/{merged}",
-            json={"name": "Character sheet", "notes": "two characters"},
-        ).status_code
-        == 200
+    hub = server.hub
+    owner.patch(
+        f"{API}/workflows/{BUSY_WF}", json={"name": "Portraits", "notes": "cfg 7"}
+    )
+    owner.patch(
+        f"{API}/workflows/{FORGOTTEN_WF}",
+        json={"name": "Old portraits", "hidden": True},
     )
     owner.put(
-        f"{API}/workflows/{merged}/defaults",
-        json={"defaults": [{"slot_label": "s", "input_name": "steps", "value": 28}]},
+        f"{API}/workflows/{BUSY_WF}/defaults",
+        json={"defaults": [{"slot_label": "s", "input_name": "steps", "value": 9}]},
     )
     owner.put(
-        f"{API}/workflows/{merged}/pins",
+        f"{API}/workflows/{FORGOTTEN_WF}/defaults",
+        json={"defaults": [{"slot_label": "s", "input_name": "cfg", "value": 3}]},
+    )
+    owner.put(
+        f"{API}/workflows/{BUSY_WF}/pins",
         json={"pins": [{"slot_label": "s", "input_name": "steps"}]},
     )
+    _save_recipe(server, FORGOTTEN_WF, name="Kept on the other one")
 
-    r = owner.put(
-        f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
-    )
-    assert r.status_code == 200, r.text
-    split = {_flip_key(FLIP_RECIPE_A, [label]), _flip_key(FLIP_RECIPE_B, [label])}
-    assert len(split) == 2, "the marks did not separate the two variants"
-    assert r.json()["key"] in split
-    assert set(r.json()["moved"][merged]) == split
+    seen, stop = _events(server)
+    try:
+        r = owner.post(f"{API}/workflows/merge", json={"ids": [BUSY_WF, FORGOTTEN_WF]})
+    finally:
+        stop()
+    assert r.status_code == 201, r.text
+    merged = r.json()["id"]
+    assert r.json()["ids"] == [BUSY_WF, FORGOTTEN_WF]
+    assert len(merged) == 32 and not merged.startswith(AUTO_STACK_PREFIX)
+    assert set(seen[0]["keys"]) == {BUSY_WF, FORGOTTEN_WF, merged}
 
-    for key in split:
-        assert owner.get(f"{API}/workflows/{key}").status_code == 200
-        row = _attr_row(server, key)
-        assert row is not None, f"{key} lost the owner's attributes in the split"
-        assert row["name"] == "Character sheet"
-        assert row["notes"] == "two characters"
-        assert default_overrides(server.hub, key) == {("s", "steps"): "28"}
-        assert (
-            server.hub.fetchone(
-                "SELECT pins FROM workflow_key_pins WHERE workflow_key = ?", (key,)
-            )
-            is not None
+    assert sorted(
+        row[0]
+        for row in hub.fetchall(
+            "SELECT topology_hash FROM workflow_group_member WHERE workflow_id = ?",
+            (merged,),
         )
-    # And the card they came from is gone rather than left behind empty.
-    assert owner.get(f"{API}/workflows/{merged}").status_code == 404
+    ) == sorted([BUSY_TOPOLOGY, FORGOTTEN_TOPOLOGY])
+    row = _attr_row(server, merged)
+    assert row["name"] == "Portraits"
+    assert row["notes"] == "cfg 7\n\nAlso named: Old portraits"
+    # The cover's hidden flag, not the other's.
+    assert row["hidden"] == 0
+    assert _group_defaults(hub, merged) == {"s/steps": "9"}
+    assert _group_pins(hub, merged) == ["s/steps"]
+    # The folded-away workflows keep nothing a later topology could inherit.
+    for gone in (BUSY_WF, FORGOTTEN_WF):
+        assert _attr_row(server, gone) is None
+        assert _group_defaults(hub, gone) == {}
+        assert owner.get(f"{API}/workflows/{gone}").status_code == 404
+
+    cards = _by_key(_cards(owner))
+    assert cards[merged]["name"] == "Portraits"
+    assert cards[merged]["picture_count"] == 9
+    assert cards[merged]["saved_recipe_count"] == 1
+    listed = owner.get(f"{API}/recipes", params={"workflow_id": merged}).json()
+    assert [recipe["name"] for recipe in listed] == ["Kept on the other one"]
+
+    # A manual cover keeps its id, and another merge folds into it.
+    r = owner.post(f"{API}/workflows/merge", json={"ids": [merged, BINNED_WF]})
+    assert r.status_code == 201, r.text
+    assert r.json()["id"] == merged
+    assert (
+        BINNED_TOPOLOGY
+        in _by_key(_cards(owner, "?include_one_offs=true"))[merged]["topologies"]
+    )
 
 
-def test_merging_two_cards_keeps_the_name_of_the_one_with_most_pictures(workflow_env):
-    """The merge half: flipping back folds the two cards into one again.
+def test_a_merge_is_refused_whole_rather_than_half_applied(workflow_env):
+    owner = workflow_env.owner
+    unknown = AUTO_STACK_PREFIX + _h("nosuchcore")
+    for body, status in (
+        ({"ids": [BUSY_WF]}, 422),
+        ({"ids": [BUSY_WF, BUSY_WF]}, 400),
+        ({"ids": [BUSY_WF, unknown]}, 404),
+        ({"ids": [BUSY_WF, BUSY_CARD]}, 422),
+    ):
+        r = owner.post(f"{API}/workflows/merge", json=body)
+        assert r.status_code == status, (body, r.text)
+    # Nothing was written by any of them.
+    assert workflow_env.server.hub.fetchone("SELECT 1 FROM workflow_group") is None
+    assert set(_by_key(_cards(owner))) == {BUSY_WF, FORGOTTEN_WF}
 
-    Three pictures on one and one on the other, so the winner is decided by
-    the count and not by which key happens to sort first -- the assertion
-    names the loser's name as the one that must NOT survive.
+
+def test_splitting_a_topology_out_makes_a_workflow_of_it(workflow_env):
+    """The one owner correction left: a graph the core rule put with others.
+
+    BUSY and FORGOTTEN share a core hash here, so they are one workflow; the
+    split takes FORGOTTEN's topology into a manual group of its own, and the
+    workflow it leaves keeps its name.
     """
     owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
-    label = _flip_slot_label(FLIP_RECIPE_A)
-    assert (
-        owner.put(
-            f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
-        ).status_code
-        == 200
-    )
+    _share_busy_core(server)
+    owner.patch(f"{API}/workflows/{BUSY_WF}", json={"name": "Both"})
+    route = f"{API}/workflows/{BUSY_WF}/split"
+    # A topology the workflow does not hold is refused.
+    assert owner.post(route, json={"topology": BINNED_TOPOLOGY}).status_code == 400
+    assert owner.post(route, json={"topology": "not-a-digest"}).status_code == 422
 
-    busy_key = _flip_key(FLIP_RECIPE_A, [label])
-    quiet_key = _flip_key(FLIP_RECIPE_B, [label])
-    owner.patch(f"{API}/workflows/{busy_key}", json={"name": "The busy one"})
-    owner.patch(f"{API}/workflows/{quiet_key}", json={"name": "The quiet one"})
-    assert owner.get(f"{API}/workflows/{busy_key}").json()["card"]["picture_count"] == 3
-
-    r = owner.put(
-        f"{API}/workflows/{busy_key}/slots", json={"marks": {label: "recipe"}}
+    seen, stop = _events(server)
+    try:
+        r = owner.post(route, json={"topology": FORGOTTEN_TOPOLOGY})
+    finally:
+        stop()
+    assert r.status_code == 201, r.text
+    split = r.json()["id"]
+    assert set(seen[0]["keys"]) == {BUSY_WF, split}
+    cards = _by_key(_cards(owner))
+    assert set(cards) == {BUSY_WF, split}
+    assert cards[BUSY_WF]["topologies"] == [BUSY_TOPOLOGY]
+    assert cards[BUSY_WF]["name"] == "Both"
+    assert cards[split]["topologies"] == [FORGOTTEN_TOPOLOGY]
+    assert cards[split]["picture_count"] == 4
+    # A workflow of one topology has nothing to split.
+    r = owner.post(
+        f"{API}/workflows/{split}/split", json={"topology": FORGOTTEN_TOPOLOGY}
     )
-    assert r.status_code == 200, r.text
-    assert r.json()["key"] == merged
-    assert r.json()["moved"][busy_key] == [merged]
-    row = _attr_row(server, merged)
-    assert row["name"] == "The busy one", (
-        "the merged card took the name of the card with fewer pictures"
-    )
-    assert _attr_row(server, quiet_key) is None
+    assert r.status_code == 400, r.text
+    # And the unknown one is a 404.
+    unknown = AUTO_STACK_PREFIX + _h("nosuchcore")
+    r = owner.post(f"{API}/workflows/{unknown}/split", json={"topology": BUSY_TOPOLOGY})
+    assert r.status_code == 404, r.text
 
 
 _ADA = asset_reference("character_ada.safetensors")
 _BO = asset_reference("character_bo.safetensors")
 
 
-def _promoted_key(structural_hash: str, promoted) -> str:
-    """The card one flip variant lands on with these files promoted."""
-    return workflow_key(
-        FLIP_TOPOLOGY,
-        slots(_FLIP_DOCUMENTS[structural_hash]),
-        [],
-        {(_flip_slot_label(structural_hash), asset) for asset in promoted},
-    )
-
-
-def _variant_key(server, structural_hash: str) -> str:
+def _variant_card(server, structural_hash: str) -> str:
+    """The card a variant is on - internal storage, read to see it did not move."""
     return server.hub.fetchone(
         "SELECT workflow_key FROM workflow_variant WHERE structural_hash = ?",
         (structural_hash,),
@@ -4657,19 +4356,19 @@ def _flip_picture_ids(server, structural_hash: str) -> set[int]:
     return server.vault.db.run_immediate_read_task(read)
 
 
-def test_a_stack_summary_says_which_loras_change_and_how_often(workflow_env):
+def test_a_lora_summary_says_which_loras_change_and_how_often(workflow_env):
     """Both character LoRAs change, most pictures first, with their pictures.
 
     Nothing is shared: no LoRA is in all four pictures. Each row names the
-    file, its count, the card it is on and a strip of that file's own
-    pictures, never the other file's.
+    file, its count and a strip of that file's own pictures, never the other
+    file's.
     """
     owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
+    _seed_flip_fixture(server)
     a_ids = _flip_picture_ids(server, FLIP_RECIPE_A)
 
     r = owner.get(
-        f"{API}/workflows/{merged}/lora-summary", params={"cover": min(a_ids)}
+        f"{API}/workflows/{FLIP_WF}/lora-summary", params={"cover": min(a_ids)}
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -4683,8 +4382,8 @@ def test_a_stack_summary_says_which_loras_change_and_how_often(workflow_env):
     ada = body["varying"][0]
     assert ada["filename"] == "character_ada.safetensors"
     assert ada["name"] == "character ada"
-    assert ada["members"] == [merged]
-    assert ada["promoted"] is False
+    # A card key and a promotion are gone from the pile with the stack (#1623).
+    assert "members" not in ada and "promoted" not in ada
     assert set(ada["picture_ids"]) == a_ids
     assert set(body["varying"][1]["picture_ids"]) == _flip_picture_ids(
         server, FLIP_RECIPE_B
@@ -4694,7 +4393,7 @@ def test_a_stack_summary_says_which_loras_change_and_how_often(workflow_env):
     b_cover = min(_flip_picture_ids(server, FLIP_RECIPE_B))
     assert (
         owner.get(
-            f"{API}/workflows/{merged}/lora-summary", params={"cover": b_cover}
+            f"{API}/workflows/{FLIP_WF}/lora-summary", params={"cover": b_cover}
         ).json()["cover_asset"]
         == _BO
     )
@@ -4704,7 +4403,7 @@ def test_a_lora_in_every_picture_is_shared_not_piled(workflow_env):
     """The positive control for "shared": one variant only, so its LoRA is in
     every picture and nothing changes."""
     owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
+    _seed_flip_fixture(server)
 
     def bin_b(session):
         for picture in session.exec(
@@ -4714,322 +4413,17 @@ def test_a_lora_in_every_picture_is_shared_not_piled(workflow_env):
         session.commit()
 
     server.vault.db.run_task(bin_b, priority=DBPriority.IMMEDIATE)
-    body = owner.get(f"{API}/workflows/{merged}/lora-summary").json()
+    body = owner.get(f"{API}/workflows/{FLIP_WF}/lora-summary").json()
     assert body["pictures"] == 3
     assert [use["asset"] for use in body["shared"]] == [_ADA]
     assert body["varying"] == []
     assert body["without"] is None
 
 
-def test_promoting_one_lora_splits_off_its_pictures_and_nothing_else(workflow_env):
-    """The per-file split: A's pictures leave, B's stay on the card.
-
-    The card being looked at keeps its key, its name and B's picture. The
-    split-off card gets NO copy of the owner's typed name - two cards reading
-    "Character sheet" is the confusion this ends - and is named for the LoRA.
-    """
+def test_the_picture_grid_narrows_a_workflow_to_one_lora(workflow_env):
+    """*Show N*: the workflow's pictures that loaded one file, and no others."""
     owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
-    owner.patch(f"{API}/workflows/{merged}", json={"name": "Character sheet"})
-    ada_key = _promoted_key(FLIP_RECIPE_A, [_ADA])
-    assert ada_key != merged
-
-    r = owner.put(
-        f"{API}/workflows/{merged}/lora-promotion",
-        json={"asset": _ADA, "promoted": True},
-    )
-    assert r.status_code == 200, r.text
-    assert r.json()["key"] == merged, "the rail must stay on the card it showed"
-    assert set(r.json()["moved"][merged]) == {merged, ada_key}
-    assert _variant_key(server, FLIP_RECIPE_A) == ada_key
-    assert _variant_key(server, FLIP_RECIPE_B) == merged
-    assert _attr_row(server, merged)["name"] == "Character sheet"
-    # The split copies the card's attributes, and then clears the name.
-    split_off = _attr_row(server, ada_key)
-    assert split_off is not None and split_off["name"] is None
-    card = owner.get(f"{API}/workflows/{ada_key}").json()["card"]
-    assert card["name"].endswith(" + character ada"), card["name"]
-    assert card["picture_count"] == 3
-
-    # Promoted on the summary, and the two halves are one stack.
-    body = owner.get(f"{API}/workflows/{merged}/lora-summary").json()
-    assert set(body["keys"]) == {merged, ada_key}
-    by_asset = {use["asset"]: use for use in body["varying"]}
-    assert by_asset[_ADA]["promoted"] is True
-    assert by_asset[_ADA]["members"] == [ada_key]
-    assert by_asset[_BO]["promoted"] is False
-
-    # Promoting twice changes nothing.
-    again = owner.put(
-        f"{API}/workflows/{merged}/lora-promotion",
-        json={"asset": _ADA, "promoted": True},
-    )
-    assert again.status_code == 200
-    assert again.json()["moved"] == {}
-
-
-def test_a_promoted_lora_is_never_filed_away_as_a_one_off(workflow_env):
-    """B's one unrated picture would be a one-off; promoted, it is on the grid.
-
-    The owner asked for that card by name, so the grid must show it: a
-    promotion whose result vanishes reads as one that did nothing.
-    """
-    owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
-    bo_key = _promoted_key(FLIP_RECIPE_B, [_BO])
-
-    def drawn():
-        cards = owner.get(f"{API}/workflows").json()["cards"]
-        return {card["key"] for card in cards} | {
-            key for card in cards for key in card.get("member_keys") or ()
-        }
-
-    owner.put(
-        f"{API}/workflows/{merged}/lora-promotion",
-        json={"asset": _BO, "promoted": True},
-    )
-    assert _variant_key(server, FLIP_RECIPE_B) == bo_key
-    assert bo_key in drawn()
-
-
-TWO_SLOT_TOPOLOGY = _h("twoslottopology")
-TWO_SLOT_X = _h("twoslotx")
-TWO_SLOT_Y = _h("twosloty")
-TWO_SLOT_CORE = _h("twoslotcore")
-
-
-def _chain(first: str, second: str) -> dict:
-    """A checkpoint, two chained LoRA loaders and a sampler."""
-    return {
-        "1": {
-            "class_type": "CheckpointLoaderSimple",
-            "inputs": {"ckpt_name": asset_reference("realvisxl.safetensors")},
-        },
-        "2": {
-            "class_type": "LoraLoader",
-            "inputs": {"lora_name": asset_reference(first), "model": ["1", 0]},
-        },
-        "3": {
-            "class_type": "LoraLoader",
-            "inputs": {"lora_name": asset_reference(second), "model": ["2", 0]},
-        },
-        "4": {"class_type": "KSampler", "inputs": {"steps": None, "model": ["3", 0]}},
-    }
-
-
-# Ada is in the FIRST loader of X and the SECOND loader of Y, so promoting
-# her writes a row at both slots, and each card holds her at one of them.
-_TWO_SLOT_DOCUMENTS = {
-    TWO_SLOT_X: _chain("character_ada.safetensors", "character_bo.safetensors"),
-    TWO_SLOT_Y: _chain("character_cid.safetensors", "character_ada.safetensors"),
-}
-
-
-def _seed_two_slot_fixture(server) -> str:
-    """X and Y on one card (both slots recipe), three pictures each."""
-    documents = _TWO_SLOT_DOCUMENTS
-    key = workflow_key(TWO_SLOT_TOPOLOGY, slots(documents[TWO_SLOT_X]), [])
-    assert key == workflow_key(TWO_SLOT_TOPOLOGY, slots(documents[TWO_SLOT_Y]), [])
-    labels = [slot.label for slot in slots(documents[TWO_SLOT_X]) if slot.is_lora]
-    assert len(set(labels)) == 2, "the two loaders must be two slots"
-    with server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_topology "
-            "(topology_hash, hash_version, node_count, first_seen_at) "
-            "VALUES (?, 'v1', 4, '2026-08-06T00:00:00Z')",
-            (TWO_SLOT_TOPOLOGY,),
-        )
-        for structural_hash, document in documents.items():
-            conn.execute(
-                "INSERT INTO workflow_recipe (structural_hash, topology_hash, "
-                "hash_version, node_count, first_seen_at) "
-                "VALUES (?, ?, 'v1', 4, '2026-08-06T00:00:00Z')",
-                (structural_hash, TWO_SLOT_TOPOLOGY),
-            )
-            conn.execute(
-                "INSERT INTO workflow_recipe_graph "
-                "(structural_hash, document_sha256, document, created_at) "
-                "VALUES (?, 'x', ?, '2026-08-06T00:00:00Z')",
-                (structural_hash, json.dumps(document)),
-            )
-            conn.execute(
-                "INSERT INTO workflow_variant (structural_hash, topology_hash, "
-                "workflow_key, key_version) VALUES (?, ?, ?, ?)",
-                (structural_hash, TWO_SLOT_TOPOLOGY, key, WORKFLOW_KEY_VERSION),
-            )
-        conn.executemany(
-            "INSERT INTO workflow_recipe_asset "
-            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
-            [
-                (TWO_SLOT_X, "ckpt_name", "realvisxl.safetensors"),
-                (TWO_SLOT_X, "lora_name", "character_ada.safetensors"),
-                (TWO_SLOT_X, "lora_name", "character_bo.safetensors"),
-                (TWO_SLOT_Y, "ckpt_name", "realvisxl.safetensors"),
-                (TWO_SLOT_Y, "lora_name", "character_cid.safetensors"),
-                (TWO_SLOT_Y, "lora_name", "character_ada.safetensors"),
-            ],
-        )
-        conn.execute(
-            "INSERT INTO workflow_topology_core (topology_hash, core_hash, "
-            "core_version, workflow_type, slots, specials) "
-            "VALUES (?, ?, ?, 'txt2img', ?, '')",
-            (
-                TWO_SLOT_TOPOLOGY,
-                TWO_SLOT_CORE,
-                CORE_RULE_VERSION,
-                json.dumps(
-                    [
-                        {
-                            "label": slot.label,
-                            "class_type": slot.class_type,
-                            "widget": slot.widget,
-                            "is_lora": slot.is_lora,
-                        }
-                        for slot in slots(documents[TWO_SLOT_X])
-                    ]
-                ),
-            ),
-        )
-        conn.executemany(
-            "INSERT INTO workflow_slot_mark (topology_hash, slot_label, mark) "
-            "VALUES (?, ?, 'recipe')",
-            [(TWO_SLOT_TOPOLOGY, label) for label in labels],
-        )
-
-    def write(session):
-        for structural_hash in documents:
-            for n in range(3):
-                session.add(
-                    Picture(
-                        file_path=f"two_slot_{structural_hash[:6]}_{n}.png",
-                        deleted=False,
-                        created_at=_stamp("2026-08-18T00:00:00Z"),
-                        workflow_topology_hash=TWO_SLOT_TOPOLOGY,
-                        workflow_structural_hash=structural_hash,
-                        workflow_hash_version="v1",
-                    )
-                )
-        session.commit()
-
-    server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
-    return key
-
-
-def test_a_lora_promoted_at_two_slots_names_only_the_slot_it_is_in(workflow_env):
-    """Each card names the promoted file at the slot it holds it in, and the
-    other slot stays the recipe slot it is, with its own LoRA counted."""
-    owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_two_slot_fixture(server)
-    r = owner.put(
-        f"{API}/workflows/{merged}/lora-promotion",
-        json={"asset": _ADA, "promoted": True},
-    )
-    assert r.status_code == 200, r.text
-    x_key = _variant_key(server, TWO_SLOT_X)
-    y_key = _variant_key(server, TWO_SLOT_Y)
-    assert len({x_key, y_key, merged}) == 3, "both variants split off, apart"
-
-    card = owner.get(f"{API}/workflows/{x_key}").json()["card"]
-    named = [(lora["mark"], lora["name"]) for lora in card["loras"]]
-    assert sorted(named, key=str) == sorted(
-        [("structural", "character ada"), ("recipe", None)], key=str
-    )
-    assert card["name"].count("character ada") == 1, card["name"]
-    # Bo is still X's recipe LoRA, not subtracted as if he were Ada.
-    assert [lora["name"] for lora in card["recipe_loras"]] == ["character bo"]
-
-
-def test_putting_a_promoted_lora_back_merges_its_pictures_home(workflow_env):
-    owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
-    ada_key = _promoted_key(FLIP_RECIPE_A, [_ADA])
-    owner.put(
-        f"{API}/workflows/{merged}/lora-promotion",
-        json={"asset": _ADA, "promoted": True},
-    )
-
-    r = owner.put(
-        f"{API}/workflows/{ada_key}/lora-promotion",
-        json={"asset": _ADA, "promoted": False},
-    )
-    assert r.status_code == 200, r.text
-    assert r.json()["key"] == merged
-    assert r.json()["moved"] == {ada_key: [merged]}
-    assert _variant_key(server, FLIP_RECIPE_A) == merged
-    assert (
-        server.hub.fetchone("SELECT COUNT(*) AS n FROM workflow_lora_promotion")["n"]
-        == 0
-    )
-
-
-def test_putting_back_a_file_of_a_structural_slot_moves_that_file_alone(
-    workflow_env,
-):
-    """A slot marked structural splits out EVERY file; putting one back must
-    not merge the others. The slot becomes a recipe slot with the other files
-    promoted, which keys B exactly where the structural mark keyed it."""
-    owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
-    label = _flip_slot_label(FLIP_RECIPE_A)
-    owner.put(f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}})
-    a_split, b_split = (
-        _flip_key(FLIP_RECIPE_A, [label]),
-        _flip_key(FLIP_RECIPE_B, [label]),
-    )
-    assert _variant_key(server, FLIP_RECIPE_B) == b_split
-    assert (
-        owner.get(f"{API}/workflows/{b_split}/lora-summary").json()["varying"][0][
-            "promoted"
-        ]
-        is True
-    ), "a file in a structural slot is already a workflow of its own"
-
-    r = owner.put(
-        f"{API}/workflows/{b_split}/lora-promotion",
-        json={"asset": _ADA, "promoted": False},
-    )
-    assert r.status_code == 200, r.text
-    assert r.json()["key"] == b_split
-    assert r.json()["moved"] == {a_split: [merged]}
-    assert _variant_key(server, FLIP_RECIPE_A) == merged
-    assert _variant_key(server, FLIP_RECIPE_B) == b_split
-    assert (
-        server.hub.fetchone(
-            "SELECT mark FROM workflow_slot_mark WHERE topology_hash = ?",
-            (FLIP_TOPOLOGY,),
-        )["mark"]
-        == RECIPE
-    )
-
-
-def test_a_promotion_names_a_file_the_stack_loaded(workflow_env):
-    owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
-    route = f"{API}/workflows/{merged}/lora-promotion"
-    nobody = asset_reference("nobody_loads_this.safetensors")
-    r = owner.put(route, json={"asset": nobody, "promoted": True})
-    assert r.status_code == 409, r.text
-    assert (
-        owner.put(
-            route, json={"asset": "character_ada.safetensors", "promoted": True}
-        ).status_code
-        == 422
-    )
-    # Nothing moved on either refusal.
-    assert _variant_key(server, FLIP_RECIPE_A) == merged
-
-
-def test_the_picture_grid_narrows_a_stack_to_one_lora(workflow_env):
-    """*Show N*: the stack's pictures that loaded one file, and no others."""
-    owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
-    owner.put(
-        f"{API}/workflows/{merged}/lora-promotion",
-        json={"asset": _ADA, "promoted": True},
-    )
-    # How a card names its automatic stack (`stack_id`), which is what the
-    # inspector's *Show N* sends.
-    stack_id = f"auto:{FLIP_CORE}"
+    _seed_flip_fixture(server)
 
     def ids(**params):
         r = owner.get(f"{API}/pictures", params=params)
@@ -5038,19 +4432,18 @@ def test_the_picture_grid_narrows_a_stack_to_one_lora(workflow_env):
 
     a_ids = _flip_picture_ids(server, FLIP_RECIPE_A)
     b_ids = _flip_picture_ids(server, FLIP_RECIPE_B)
-    # The control: the stack alone is both halves.
-    assert ids(workflow_stack=stack_id) == a_ids | b_ids
-    assert ids(workflow_stack=stack_id, workflow_lora=_ADA) == a_ids
-    assert ids(workflow_stack=stack_id, workflow_lora=_BO) == b_ids
-    assert ids(workflow_key=merged, workflow_lora=_ADA) == set()
+    # The control: the workflow alone is both halves.
+    assert ids(workflow=FLIP_WF) == a_ids | b_ids
+    assert ids(workflow=FLIP_WF, workflow_lora=_ADA) == a_ids
+    assert ids(workflow=FLIP_WF, workflow_lora=_BO) == b_ids
     # Only ever a narrowing: alone, or malformed, it matches nothing rather
     # than parsing every stored graph for whoever asked.
     assert ids(workflow_lora=_ADA) == set()
-    assert ids(workflow_stack=stack_id, workflow_lora="character_ada") == set()
-    # And the summary names the stack it counted, which is what Show N sends.
+    assert ids(workflow=FLIP_WF, workflow_lora="character_ada") == set()
+    # And the summary names the workflow it counted, which is what Show N sends.
     assert (
-        owner.get(f"{API}/workflows/{merged}/lora-summary").json()["stack_id"]
-        == stack_id
+        owner.get(f"{API}/workflows/{FLIP_WF}/lora-summary").json()["workflow_id"]
+        == FLIP_WF
     )
 
 
@@ -5075,7 +4468,7 @@ def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
             "VALUES ('vae', 'test-vae-bf16.safetensors', ?, 'scanned')",
             (_h("vae-digest"),),
         )
-    route = f"{API}/workflows/{merged}/model-fix"
+    route = f"{API}/workflows/{FLIP_WF}/model-fix"
 
     assert (
         owner.put(
@@ -5168,7 +4561,9 @@ def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
     r = owner.put(route, json={"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME})
     assert r.status_code == 200, r.text
     detail = r.json()
-    assert detail["card"]["key"] == merged
+    # The workflow keeps its id: the fix re-keys cards, which are internal.
+    assert detail["card"]["id"] == FLIP_WF
+    assert _variant_card(server, FLIP_RECIPE_A) == merged
     (fix,) = detail["model_fixes"]
     assert (fix["was"], fix["now"], fix["slot_kind"]) == (
         _SHELF_FILENAME,
@@ -5252,7 +4647,7 @@ def test_a_missing_replacement_is_replaced_from_the_original_whatever_the_shelf(
     pick replaces the ORIGINAL rather than being refused.
     """
     owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
+    _seed_flip_fixture(server)
     with server.hub.transaction() as conn:
         conn.executemany(
             "INSERT INTO model (file_kind, filename, sha256, provenance) "
@@ -5263,15 +4658,15 @@ def test_a_missing_replacement_is_replaced_from_the_original_whatever_the_shelf(
                 ("vae", "test-chain-pair.safetensors", _h("chain-vae")),
             ],
         )
-    route = f"{API}/workflows/{merged}/model-fix"
+    route = f"{API}/workflows/{FLIP_WF}/model-fix"
     try:
         r = owner.put(
             route, json={"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME}
         )
         assert r.status_code == 200, r.text
-        key = r.json()["card"]["key"]
+        assert r.json()["card"]["id"] == FLIP_WF
         r = owner.put(
-            f"{API}/workflows/{key}/model-fix",
+            route,
             json={"was": _REPLACEMENT_FILENAME, "now": "test-chain-pair.safetensors"},
         )
         assert r.status_code == 200, r.text
@@ -5287,485 +4682,85 @@ def test_a_missing_replacement_is_replaced_from_the_original_whatever_the_shelf(
             )
 
 
-def test_a_variant_that_will_not_reduce_keeps_its_card_and_its_attributes(
-    workflow_env,
-):
-    """The one way the flip can destroy work, pinned.
-
-    A variant whose stored document will not parse keeps the key it is on -
-    both branches log and carry on rather than taking the flip down. Its
-    SIBLING moves, so the card they shared is no longer among the new keys,
-    and a carry-over that cleared "every key no new key replaced" would empty
-    a card a variant is still sitting on.
-    """
-    owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
-    with server.hub.transaction() as conn:
-        conn.execute(
-            "UPDATE workflow_recipe_graph SET document = '{oops' "
-            "WHERE structural_hash = ?",
-            (FLIP_RECIPE_B,),
-        )
-    assert (
-        owner.patch(
-            f"{API}/workflows/{merged}", json={"name": "Half of me stays"}
-        ).status_code
-        == 200
-    )
-
-    label = _flip_slot_label(FLIP_RECIPE_A)
-    r = owner.put(
-        f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
-    )
-    assert r.status_code == 200, r.text
-    # B could not be re-keyed, so it is still on the card they shared - and
-    # that card must still know its name.
-    assert (
-        server.hub.fetchone(
-            "SELECT workflow_key FROM workflow_variant WHERE structural_hash = ?",
-            (FLIP_RECIPE_B,),
-        )["workflow_key"]
-        == merged
-    )
-    row = _attr_row(server, merged)
-    assert row is not None and row["name"] == "Half of me stays", (
-        "the flip emptied a card a variant is still on"
-    )
-    assert _attr_row(server, _flip_key(FLIP_RECIPE_A, [label]))["name"] == (
-        "Half of me stays"
-    )
-
-
-def test_a_mark_flip_refuses_a_slot_the_workflow_does_not_have(workflow_env):
-    """Named rather than ignored: a mark on a label no reader will ever look
-    up would answer 200 to a flip that cannot have happened."""
-    owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
-    r = owner.put(
-        f"{API}/workflows/{merged}/slots", json={"marks": {"not-a-slot": "structural"}}
-    )
-    assert r.status_code == 422, r.text
-    r = owner.put(
-        f"{API}/workflows/{merged}/slots",
-        json={"marks": {_flip_slot_label(FLIP_RECIPE_A): "maybe"}},
-    )
-    assert r.status_code == 422, r.text
-
-
-def test_stacking_two_stacks_merges_them_and_keeps_the_first_ones_cover(workflow_env):
-    """Selection order is the stack's order, so the first selection covers it."""
-    owner, server = workflow_env.owner, workflow_env.server
-    # BUSY and FORGOTTEN already share a core hash. Stacking BINNED onto the
-    # first of them must bring the whole automatic group with it.
-    r = owner.post(f"{API}/workflows/stacks", json={"keys": [BINNED_CARD, BUSY_CARD]})
-    assert r.status_code == 201, r.text
-    assert r.json()["keys"][0] == BINNED_CARD
-    assert set(r.json()["keys"]) == {BINNED_CARD, BUSY_CARD, FORGOTTEN_CARD}
-    stack_id = r.json()["stack_id"]
-    assert effective_stack_keys(server.hub, BUSY_CARD)[0] == BINNED_CARD
-
-    r = owner.put(
-        f"{API}/workflows/stacks/{stack_id}/order",
-        json={"keys": [BUSY_CARD, FORGOTTEN_CARD, BINNED_CARD]},
-    )
-    assert r.status_code == 200, r.text
-    assert effective_stack_keys(server.hub, BINNED_CARD) == [
-        BUSY_CARD,
-        FORGOTTEN_CARD,
-        BINNED_CARD,
-    ]
-
-
-def test_unstacking_one_card_leaves_the_rest_and_dissolves_a_stack_of_one(
-    workflow_env,
-):
-    """A stack left with one member is not a stack, and the row goes with it."""
-    owner, server = workflow_env.owner, workflow_env.server
-    assert set(effective_stack_keys(server.hub, BUSY_CARD)) == {
-        BUSY_CARD,
-        FORGOTTEN_CARD,
-    }
-    r = owner.post(f"{API}/workflows/{BUSY_CARD}/unstack")
-    assert r.status_code == 200, r.text
-    assert effective_stack_keys(server.hub, BUSY_CARD) == [BUSY_CARD]
-    assert effective_stack_keys(server.hub, FORGOTTEN_CARD) == [FORGOTTEN_CARD]
-
-    # A manual stack of three, one taken out, leaves a stack of two standing.
-    stack_id = owner.post(
-        f"{API}/workflows/stacks",
-        json={"keys": [BUSY_CARD, FORGOTTEN_CARD, BINNED_CARD]},
-    ).json()["stack_id"]
-    owner.post(f"{API}/workflows/{BINNED_CARD}/unstack")
-    assert effective_stack_keys(server.hub, BUSY_CARD) == [BUSY_CARD, FORGOTTEN_CARD]
-    # Down to one, and the row is gone rather than left naming a lone card.
-    owner.post(f"{API}/workflows/{FORGOTTEN_CARD}/unstack")
-    assert effective_stack_keys(server.hub, BUSY_CARD) == [BUSY_CARD]
-    assert (
-        server.hub.fetchone(
-            "SELECT 1 FROM workflow_stack WHERE stack_id = ?", (stack_id,)
-        )
-        is None
-    )
-
-
-def test_dissolving_a_whole_stack_keeps_its_members_apart(workflow_env):
-    """The automatic grouping must not re-form on the next read.
-
-    An `auto:` id names a grouping that is not a row, so taking it apart is
-    only visible if every member is recorded as having left it.
-    """
-    owner, server = workflow_env.owner, workflow_env.server
-    stack_id = f"{AUTO_STACK_PREFIX}{SHARED_CORE}"
-    r = owner.post(f"{API}/workflows/stacks/{stack_id}/unstack")
-    assert r.status_code == 200, r.text
-    assert set(r.json()["keys"]) == {BUSY_CARD, FORGOTTEN_CARD}
-    assert effective_stack_keys(server.hub, BUSY_CARD) == [BUSY_CARD]
-    assert effective_stack_keys(server.hub, FORGOTTEN_CARD) == [FORGOTTEN_CARD]
-    # A stack this hub does not hold is a 404, never a silent success.
-    assert (
-        owner.post(
-            f"{API}/workflows/stacks/{AUTO_STACK_PREFIX}{_h('nosuchcore')}/unstack"
-        ).status_code
-        == 404
-    )
-    assert owner.post(f"{API}/workflows/stacks/not-a-stack/unstack").status_code == 422
-
-
-def test_stack_decisions_and_attributes_survive_a_regrouping(workflow_env):
-    """The acceptance: a `CORE_VERSION` bump must not undo what the owner did.
-
-    A bump re-derives every `core_hash`, which is what the automatic grouping
-    IS -- so the test regroups the fixture by rewriting those hashes. Both
-    kinds of decision are keyed on the CARD and must come through: the name,
-    and the two stack decisions (a card taken out of its group, and a manual
-    stack of cards that never shared one).
-    """
-    owner, server = workflow_env.owner, workflow_env.server
-    assert (
-        owner.patch(
-            f"{API}/workflows/{BUSY_CARD}", json={"name": "Survivor"}
-        ).status_code
-        == 200
-    )
-    assert owner.post(f"{API}/workflows/{BUSY_CARD}/unstack").status_code == 200
-    manual = owner.post(
-        f"{API}/workflows/stacks", json={"keys": [BINNED_CARD, HIDDEN_CARD]}
-    ).json()["stack_id"]
-
-    # The regrouping. Every topology lands on a new core hash, so nothing the
-    # grid would group by is what it was before this line.
-    with server.hub.transaction() as conn:
-        conn.execute(
-            "UPDATE workflow_topology_core SET core_hash = ? || core_hash",
-            (_h("bumped")[:8],),
-        )
-
-    assert _attr_row(server, BUSY_CARD)["name"] == "Survivor"
-    assert effective_stack_keys(server.hub, BUSY_CARD) == [BUSY_CARD], (
-        "the regrouping put a card back in a group it was taken out of"
-    )
-    assert set(effective_stack_keys(server.hub, BINNED_CARD)) == {
-        BINNED_CARD,
-        HIDDEN_CARD,
-    }
-    assert (
-        server.hub.fetchone(
-            "SELECT 1 FROM workflow_stack WHERE stack_id = ?", (manual,)
-        )
-        is not None
-    )
-
-
-def test_every_write_says_which_cards_to_look_at_again(workflow_env):
-    """`CHANGED_WORKFLOWS` on each write, with its keys and its reason.
+def test_every_write_says_which_workflows_to_look_at_again(workflow_env):
+    """`CHANGED_WORKFLOWS` on each write, naming WORKFLOW ids (#1623).
 
     A "look again" signal, so what is asserted is that it is raised at all,
-    that it names the card the gesture was about, and that the reason
-    separates an edit from a restack -- which is what a client uses to decide
-    whether to re-read one card or the whole grid.
+    that it names the workflow the gesture was about - never a card key, which
+    a client can no longer address - and where it came from.
     """
     owner, server = workflow_env.owner, workflow_env.server
     seen, stop = _events(server)
     try:
         owner.patch(
-            f"{API}/workflows/{BUSY_CARD}",
+            f"{API}/workflows/{BUSY_WF}",
             json={"name": "Announced"},
             headers={"X-Client-Id": "example-tab"},
         )
-        owner.put(f"{API}/workflows/{BUSY_CARD}/pins", json={"pins": []})
-        owner.post(f"{API}/workflows/{BUSY_CARD}/unstack")
+        owner.put(f"{API}/workflows/{BUSY_WF}/pins", json={"pins": []})
+        owner.put(f"{API}/workflows/{BUSY_WF}/defaults", json={"defaults": []})
     finally:
         stop()
-    assert [event["reason"] for event in seen] == ["changed", "changed", "stacks"]
-    assert seen[0]["keys"] == [BUSY_CARD]
+    assert [event["reason"] for event in seen] == ["changed", "changed", "changed"]
+    assert [event["keys"] for event in seen] == [[BUSY_WF]] * 3
     assert seen[0]["origin_client_id"] == "example-tab"
     assert seen[0]["source"] == "ui"
-    # The unstack names the stack it took the card out of, not the card alone:
-    # every member's tile changes when one leaves.
-    assert set(seen[2]["keys"]) == {BUSY_CARD, FORGOTTEN_CARD}
 
 
-def test_an_unknown_card_cannot_be_written_to(workflow_env):
-    """A 404 rather than an attribute row against a card this hub never had."""
+def test_an_unknown_workflow_cannot_be_written_to(workflow_env):
+    """A 404 rather than a row against a workflow this hub never had."""
     owner = workflow_env.owner
-    unknown = _h("nosuchcard")
+    unknown = AUTO_STACK_PREFIX + _h("nosuchcore")
     for method, path, body in (
         ("PATCH", f"{API}/workflows/{unknown}", {"name": "x"}),
-        ("PUT", f"{API}/workflows/{unknown}/slots", {"marks": {}}),
         ("PUT", f"{API}/workflows/{unknown}/defaults", {"defaults": []}),
         ("PUT", f"{API}/workflows/{unknown}/pins", {"pins": []}),
         ("PUT", f"{API}/workflows/{unknown}/inputs", {"inputs": []}),
-        ("POST", f"{API}/workflows/{unknown}/unstack", None),
-        ("POST", f"{API}/workflows/stacks", {"keys": [BUSY_CARD, unknown]}),
+        (
+            "PUT",
+            f"{API}/workflows/{unknown}/model-fix",
+            {"was": _SHELF_FILENAME, "now": None},
+        ),
+        ("POST", f"{API}/workflows/{unknown}/split", {"topology": BUSY_TOPOLOGY}),
     ):
         assert_real_route(workflow_env.server.api, method, path)
         r = owner.request(method, path, json=body)
         assert r.status_code == 404, f"{method} {path}: {r.status_code} {r.text}"
-    assert (
-        owner.patch(f"{API}/workflows/not-a-digest", json={"name": "x"}).status_code
-        == 422
-    )
-    assert (
-        owner.post(f"{API}/workflows/stacks", json={"keys": [BUSY_CARD]}).status_code
-        == 400
-    )
+    assert _attr_row(workflow_env.server, unknown) is None
+    for path in (f"{API}/workflows/not-a-digest", f"{API}/workflows/{BUSY_CARD}"):
+        assert owner.patch(path, json={"name": "x"}).status_code == 422, path
 
 
-def test_a_split_carries_everything_the_owner_said_and_the_file_with_it(workflow_env):
-    """Every table in `_KEYED_TABLES`, not just the ones with a route.
+def test_the_card_routes_the_cut_over_removed_are_gone(workflow_env):
+    """#1623: the mark flip, the stacks and the promotion have no route left.
 
-    The cover and the "keep this out of its group" row have no write of their
-    own in this step, so nothing else would notice them being dropped from the
-    carry-over -- and the coverage matrix claims the cover comes across. The
-    workflow FILE is here for the same reason: its key is derived rather than
-    the owner's, but a file left on a dead key is a card that stops saying a
-    workflow on this machine runs it.
+    Each answers as a path nothing serves - never a 200 that writes a card
+    table no reader looks at any more.
     """
-    owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
-    label = _flip_slot_label(FLIP_RECIPE_A)
-    pixel_sha = _h("acover")
-    with server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_cover (library_uuid, workflow_key, pixel_sha) "
-            "VALUES (?, ?, ?)",
-            (server.vault.library_uuid, merged, pixel_sha),
-        )
-        conn.execute(
-            "INSERT INTO workflow_unstacked (workflow_key) VALUES (?)", (merged,)
-        )
-        conn.execute(
-            "INSERT INTO workflow_file "
-            "(workflow_name, topology_hash, structural_hash, workflow_key) "
-            "VALUES ('flip_a.json', ?, ?, ?)",
-            (FLIP_TOPOLOGY, FLIP_RECIPE_A, merged),
-        )
-
-    assert (
-        owner.put(
-            f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
-        ).status_code
-        == 200
-    )
-    split = {_flip_key(FLIP_RECIPE_A, [label]), _flip_key(FLIP_RECIPE_B, [label])}
-    for key in split:
-        assert (
-            server.hub.fetchone(
-                "SELECT pixel_sha FROM workflow_cover WHERE workflow_key = ?", (key,)
-            )["pixel_sha"]
-            == pixel_sha
-        ), f"{key} lost the cover the owner chose"
-        assert (
-            server.hub.fetchone(
-                "SELECT 1 FROM workflow_unstacked WHERE workflow_key = ?", (key,)
-            )
-            is not None
-        ), f"{key} lost the decision to keep it out of its group"
-    # The file follows the variant it holds, not the card it used to be on.
-    assert server.hub.fetchone(
-        "SELECT workflow_key FROM workflow_file WHERE workflow_name = 'flip_a.json'"
-    )["workflow_key"] == _flip_key(FLIP_RECIPE_A, [label])
-    assert (
-        owner.get(f"{API}/workflows/{_flip_key(FLIP_RECIPE_A, [label])}").json()[
-            "card"
-        ]["imported"]
-        is True
-    )
-
-
-def test_a_split_sends_the_caller_to_the_half_with_the_pictures(workflow_env):
-    """`SlotMarkResult.key` is the BIGGEST successor, and `moved` says so first.
-
-    The card the caller was looking at has no single successor after a split,
-    so the route promises the one holding most of its pictures -- three
-    against one in this fixture. Asserted by name rather than by membership:
-    `in split` passes for either half and is what makes the promise unpinned.
-    """
-    owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
-    label = _flip_slot_label(FLIP_RECIPE_A)
-    r = owner.put(
-        f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
-    )
-    assert r.status_code == 200, r.text
-    biggest = _flip_key(FLIP_RECIPE_A, [label])
-    smallest = _flip_key(FLIP_RECIPE_B, [label])
-    assert owner.get(f"{API}/workflows/{biggest}").json()["card"]["picture_count"] == 3
-    assert owner.get(f"{API}/workflows/{smallest}").json()["card"]["picture_count"] == 1
-    assert r.json()["key"] == biggest
-    assert r.json()["moved"][merged] == [biggest, smallest]
-
-
-def test_a_split_of_a_stacked_card_keeps_the_stacks_cover(workflow_env):
-    """`workflow_stack_member.position` is not part of the primary key.
-
-    Copied verbatim, both halves land on the position the card had, and
-    `effective_stack_keys` then breaks the tie on the KEY -- handing the cover
-    to whichever digest sorts first. The fixture is built so that is the
-    WRONG half: the small one's key sorts first.
-    """
-    owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
-    label = _flip_slot_label(FLIP_RECIPE_A)
-    # B is given the pictures here, because the tie-break is only WRONG when
-    # the small half's key sorts first, and with the module's counts (A big)
-    # A's key happens to sort first anyway -- which would make this pass
-    # against the very bug it is for.
-    _add_flip_pictures(server, FLIP_RECIPE_B, 4)
-    biggest = _flip_key(FLIP_RECIPE_B, [label])
-    smallest = _flip_key(FLIP_RECIPE_A, [label])
-    assert smallest < biggest, (
-        "this fixture only tests the tie-break while the small half's key "
-        "sorts first; the flip fixture's documents decide that"
-    )
-    # BINNED rather than BUSY: BUSY shares a core hash with FORGOTTEN, so
-    # stacking it would pull that card in too and the stack under test would
-    # not be the pair this is about.
-    stack_id = owner.post(
-        f"{API}/workflows/stacks", json={"keys": [merged, BINNED_CARD]}
-    ).json()["stack_id"]
-
-    assert (
-        owner.put(
-            f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
-        ).status_code
-        == 200
-    )
-    assert effective_stack_keys(server.hub, BINNED_CARD) == [
-        biggest,
-        smallest,
-        BINNED_CARD,
-    ], "the split moved the stack's cover to the half with fewer pictures"
-    assert [
-        row["position"]
-        for row in server.hub.fetchall(
-            "SELECT position FROM workflow_stack_member WHERE stack_id = ? "
-            "ORDER BY position",
-            (stack_id,),
-        )
-    ] == [0, 1, 2], "two members share a position"
-
-
-def test_a_re_keying_takes_the_saved_recipes_with_it(workflow_env):
-    """The migration `db_models/saved_recipe.py` says this change owes it.
-
-    A saved recipe is a VAULT row keyed on the card key, and it is authored:
-    unlike a hub row it cannot be rebuilt from anything. Left on the old key
-    it is addressed by a key no variant carries, its workflow's tab stops
-    listing it, and nothing says where it went.
-    """
-    owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
-    label = _flip_slot_label(FLIP_RECIPE_A)
-    r = owner.post(
-        f"{API}/recipes",
-        json={"workflow_key": merged, "name": "Kept look", "prompt": "a portrait"},
-    )
-    assert r.status_code == 201, r.text
-    recipe_id = r.json()["id"]
-
-    assert (
-        owner.put(
-            f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
-        ).status_code
-        == 200
-    )
-    biggest = _flip_key(FLIP_RECIPE_A, [label])
-    listed = owner.get(f"{API}/recipes?workflow_key={biggest}").json()
-    assert [row["id"] for row in listed] == [recipe_id], (
-        "the saved recipe was orphaned on a key no variant carries"
-    )
-    assert listed[0]["workflow_key"] == biggest
-    # And it is not left behind on a card that no longer exists.
-    assert owner.get(f"{API}/recipes?workflow_key={merged}").json() == []
-
-
-def test_reordering_a_stack_cannot_leave_a_card_in_two_of_them(workflow_env):
-    """A complete ordered member list, checked against what the stack holds.
-
-    `effective_stack_keys` orders by `stack_id` to make a double membership
-    *reproducible*, never correct, so this route must not be able to create
-    one -- and a key left out of the list would be deleted from the stack with
-    nothing recording that it left.
-    """
-    owner, server = workflow_env.owner, workflow_env.server
-    stack_id = owner.post(
-        f"{API}/workflows/stacks", json={"keys": [BUSY_CARD, FORGOTTEN_CARD]}
-    ).json()["stack_id"]
-
-    # A stack this hub does not hold is a 404, not a stack minted out of thin
-    # air -- the same answer its `unstack` sibling gives.
-    assert (
-        owner.put(
-            f"{API}/workflows/stacks/{'f' * 32}/order",
-            json={"keys": [BUSY_CARD, BINNED_CARD]},
-        ).status_code
-        == 404
-    )
-    assert (
-        owner.put(
-            f"{API}/workflows/stacks/{AUTO_STACK_PREFIX}{_h('nosuchcore')}/order",
-            json={"keys": [BUSY_CARD, BINNED_CARD]},
-        ).status_code
-        == 404
-    )
-    # A list that is not this stack's membership is refused whole.
-    assert (
-        owner.put(
-            f"{API}/workflows/stacks/{stack_id}/order",
-            json={"keys": [BUSY_CARD, BINNED_CARD]},
-        ).status_code
-        == 400
-    )
-    assert [
-        row["stack_id"]
-        for row in server.hub.fetchall(
-            "SELECT stack_id FROM workflow_stack_member WHERE workflow_key = ?",
-            (BUSY_CARD,),
-        )
-    ] == [stack_id], "a card ended up in two stacks at once"
-    # The gesture it does take.
-    assert (
-        owner.put(
-            f"{API}/workflows/stacks/{stack_id}/order",
-            json={"keys": [FORGOTTEN_CARD, BUSY_CARD]},
-        ).status_code
-        == 200
-    )
-    assert effective_stack_keys(server.hub, BUSY_CARD) == [FORGOTTEN_CARD, BUSY_CARD]
-
-    # And the hub function keeps the guarantee on its own. The route refuses
-    # the shape above before the hub ever sees it, so without this the hub
-    # would be correct only because of its one caller -- and it is the
-    # module's public entry point, which the next caller will reach for.
-    set_stack_order(server.hub, "e" * 32, [BUSY_CARD, BINNED_CARD])
-    assert [
-        row["stack_id"]
-        for row in server.hub.fetchall(
-            "SELECT stack_id FROM workflow_stack_member WHERE workflow_key = ?",
-            (BUSY_CARD,),
-        )
-    ] == ["e" * 32], "the card kept its old membership as well as the new one"
+    owner = workflow_env.owner
+    stack_id = f"{AUTO_STACK_PREFIX}{SHARED_CORE}"
+    for method, path, body in (
+        ("PUT", f"{API}/workflows/{BUSY_WF}/slots", {"marks": {}}),
+        ("POST", f"{API}/workflows/{BUSY_WF}/unstack", None),
+        (
+            "PUT",
+            f"{API}/workflows/{BUSY_WF}/lora-promotion",
+            {"asset": "asset:" + "a" * 64, "promoted": True},
+        ),
+        ("POST", f"{API}/workflows/stacks", {"keys": [BUSY_CARD, FORGOTTEN_CARD]}),
+        ("PUT", f"{API}/workflows/stacks/{stack_id}/order", {"keys": [BUSY_CARD]}),
+        ("POST", f"{API}/workflows/stacks/{stack_id}/unstack", None),
+    ):
+        r = owner.request(method, path, json=body)
+        assert r.status_code in (404, 405), f"{method} {path}: {r.status_code}"
+        assert (method, "/api/v1" + path[len(API) :]) not in ROUTE_POLICIES
+    for method, template in (
+        ("PUT", "/api/v1/workflows/{workflow_key}/slots"),
+        ("POST", "/api/v1/workflows/stacks"),
+        ("PUT", "/api/v1/workflows/{workflow_key}/lora-promotion"),
+    ):
+        assert (method, template) not in ROUTE_POLICIES
+    assert workflow_env.server.hub.fetchone("SELECT 1 FROM workflow_stack") is None
 
 
 def test_naming_one_parameter_twice_is_refused_rather_than_a_500(workflow_env):
@@ -5778,7 +4773,7 @@ def test_naming_one_parameter_twice_is_refused_rather_than_a_500(workflow_env):
     owner = workflow_env.owner
     assert (
         owner.put(
-            f"{API}/workflows/{BUSY_CARD}/defaults",
+            f"{API}/workflows/{BUSY_WF}/defaults",
             json={
                 "defaults": [
                     {"slot_label": "s", "input_name": "steps", "value": 1},
@@ -5790,7 +4785,7 @@ def test_naming_one_parameter_twice_is_refused_rather_than_a_500(workflow_env):
     )
     assert (
         owner.put(
-            f"{API}/workflows/{BUSY_CARD}/inputs",
+            f"{API}/workflows/{BUSY_WF}/inputs",
             json={
                 "inputs": [
                     {"slot_label": "s", "input_name": "image", "mode": "picker"},
@@ -5803,7 +4798,7 @@ def test_naming_one_parameter_twice_is_refused_rather_than_a_500(workflow_env):
     # The same address on two different slots is not a duplicate.
     assert (
         owner.put(
-            f"{API}/workflows/{BUSY_CARD}/defaults",
+            f"{API}/workflows/{BUSY_WF}/defaults",
             json={
                 "defaults": [
                     {"slot_label": "a", "input_name": "steps", "value": 1},
@@ -5815,127 +4810,63 @@ def test_naming_one_parameter_twice_is_refused_rather_than_a_500(workflow_env):
     )
 
 
-def test_a_surviving_card_keeps_its_saved_recipes(workflow_env):
-    """A card a variant is still on must not have its recipes taken off it.
-
-    The sibling of `..._takes_the_saved_recipes_with_it`, and the direction
-    that was wrong. `rekey_in_session` skipped on `successors[0] == old_key`,
-    which is not the question "did this card go away": a variant whose
-    document will not parse keeps the key it is on, so when a sibling moves,
-    that key is in `moved` with a successor that is not itself - while the
-    card is still open at its own URL and still holds its name (the test above
-    asserts that half). Every recipe on it was moved to the sibling's new key.
-
-    The Unstack is what makes it visible rather than what causes it: stacked,
-    the two halves share a core hash and `GET /recipes` expands across the
-    stack, so the recipe answers on both keys and nothing looks wrong. One
-    Unstack - a gesture this step ships the route for - and the tab is empty.
-    """
-    owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
+def _shelve_replacement(server) -> None:
     with server.hub.transaction() as conn:
         conn.execute(
-            "UPDATE workflow_recipe_graph SET document = '{oops' "
-            "WHERE structural_hash = ?",
-            (FLIP_RECIPE_B,),
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('checkpoint', ?, ?, 'scanned')",
+            (_REPLACEMENT_FILENAME, _h("bf16-digest")),
         )
-    assert owner.post(f"{API}/workflows/{merged}/unstack").status_code == 200
-    r = owner.post(
-        f"{API}/recipes",
-        json={"workflow_key": merged, "name": "Stays put", "prompt": "a portrait"},
-    )
-    assert r.status_code == 201, r.text
-    recipe_id = r.json()["id"]
-
-    label = _flip_slot_label(FLIP_RECIPE_A)
-    r = owner.put(
-        f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
-    )
-    assert r.status_code == 200, r.text
-    # The card is still there: B could not be re-keyed onto anything.
-    assert owner.get(f"{API}/workflows/{merged}").status_code == 200
-    listed = owner.get(f"{API}/recipes?workflow_key={merged}").json()
-    assert [row["id"] for row in listed] == [recipe_id], (
-        "the saved recipe left a card that is still there"
-    )
-    assert listed[0]["workflow_key"] == merged
-    # And it did not follow the half that moved.
-    moved_to = _flip_key(FLIP_RECIPE_A, [label])
-    assert owner.get(f"{API}/recipes?workflow_key={moved_to}").json() == []
-    # The response says so too: a card that both moved and did not is listed
-    # among its own successors rather than only among the keys it went to.
-    assert merged in r.json()["moved"][merged]
 
 
-def test_a_re_keying_that_cannot_move_the_recipes_says_which_keys_to_repair(
+def test_a_model_fix_that_cannot_move_the_recipes_says_which_keys_to_repair(
     workflow_env, monkeypatch, caplog
 ):
     """The hub commits first, so the second write's failure needs a record.
 
-    Re-running the flip cannot repair it - the marks asked for are now the
-    marks in force, so a second PUT re-keys nothing and answers an empty
-    `moved` - which is why the log has to carry the map and not just a count.
-    Without it the only trace is recipes on keys no variant carries, with
-    nothing saying where they belong.
+    A model fix re-keys the cards of its topology internally and then moves
+    the vault's saved recipes after them; the log has to carry the map, not
+    just a count, or the only trace is recipes on keys no variant carries.
     """
     owner, server = workflow_env.owner, workflow_env.server
-    merged = _seed_flip_fixture(server)
+    _seed_flip_fixture(server)
+    _shelve_replacement(server)
 
     def _fails(vault, moved):
-        raise RuntimeError("the vault went away mid-flip")
+        raise RuntimeError("the vault went away mid-fix")
 
     monkeypatch.setattr(saved_recipe_service, "rekey_recipes", _fails)
-    label = _flip_slot_label(FLIP_RECIPE_A)
     with caplog.at_level(logging.ERROR):
         with pytest.raises(RuntimeError):
             owner.put(
-                f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
+                f"{API}/workflows/{FLIP_WF}/model-fix",
+                json={"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME},
             )
 
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert "could not move the saved recipes" in logged
-    assert merged in logged, "the log has to name the keys a repair would need"
+    assert FLIP_TOPOLOGY in logged, "the log has to name what a repair would need"
     # And the hub half did land, which is what makes the record necessary.
-    assert (
-        server.hub.fetchone(
-            "SELECT workflow_key FROM workflow_variant WHERE structural_hash = ?",
-            (FLIP_RECIPE_A,),
-        )["workflow_key"]
-        != merged
+    assert server.hub.fetchone(
+        "SELECT 1 FROM workflow_model_fix WHERE topology_hash = ?", (FLIP_TOPOLOGY,)
     )
 
 
-def test_a_re_key_needs_an_open_library_and_says_so(workflow_env, monkeypatch):
-    """503 rather than an arbitrary merge winner and orphaned recipes.
-
-    The order matters as much as the code: a mark this workflow has no slot
-    for is a 422 whether or not a library is open, so the label check stays
-    ahead of this one. A caller who got told "no library" about a typo would
-    go looking in the wrong place.
-    """
+def test_a_model_fix_needs_an_open_library_and_says_so(workflow_env, monkeypatch):
+    """503 rather than an arbitrary merge winner and orphaned recipes."""
     owner, server = workflow_env.owner, workflow_env.server
-    label = _flip_slot_label(FLIP_RECIPE_A)
-    merged = _seed_flip_fixture(server)
+    _seed_flip_fixture(server)
+    _shelve_replacement(server)
     # The property's own backing attribute, because that is what "no library
-    # open" is: `Vault.library_uuid` reads `_library_uuid` and has no setter,
-    # so patching the name would only prove that a fake can be attached.
+    # open" is: `Vault.library_uuid` reads `_library_uuid` and has no setter.
     monkeypatch.setattr(server.vault, "_library_uuid", None)
-
-    assert (
-        owner.put(
-            f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}}
-        ).status_code
-        == 503
+    r = owner.put(
+        f"{API}/workflows/{FLIP_WF}/model-fix",
+        json={"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME},
     )
-    assert (
-        owner.put(
-            f"{API}/workflows/{merged}/slots",
-            json={"marks": {"no such slot": "recipe"}},
-        ).status_code
-        == 422
-    ), "a bad slot label must be named even when no library is open"
-    # Nothing was written: the card is still on the key it was on.
-    assert owner.get(f"{API}/workflows/{merged}").status_code == 200
+    assert r.status_code == 503, r.text
+    # Nothing was written.
+    assert server.hub.fetchone("SELECT 1 FROM workflow_model_fix") is None
 
 
 def test_a_picture_input_needs_an_open_library_and_says_so(workflow_env, monkeypatch):
@@ -5953,7 +4884,7 @@ def test_a_picture_input_needs_an_open_library_and_says_so(workflow_env, monkeyp
 
     assert (
         owner.put(
-            f"{API}/workflows/{BUSY_CARD}/inputs",
+            f"{API}/workflows/{BUSY_WF}/inputs",
             json={
                 "inputs": [
                     {"slot_label": "s", "input_name": "image", "mode": "selection"}
@@ -5976,6 +4907,7 @@ RUN_TOPOLOGY = _h("runtopology")
 RUN_RECIPE = _h("runrecipe")
 RUN_CARD = _h("runcard")
 RUN_CORE = _h("runcore")
+RUN_WF = AUTO_STACK_PREFIX + RUN_CORE
 RUN_INSTANCE = _h("runinstance")
 
 RUN_DOCUMENT = {
@@ -6313,7 +5245,11 @@ def test_the_linked_imported_file_is_the_first_source_tried(runnable, monkeypatc
             "VALUES (?, ?, ?, ?)",
             ("authored.json", RUN_CARD, RUN_TOPOLOGY, RUN_RECIPE),
         )
-    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    # Run by its picture, which applies no default recipe over the graph, so
+    # the values that arrive are the source's own.
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={"picture_ids": [runnable.picture_id]}
+    )
     assert r.status_code == 200, r.text
     assert r.json()["groups"][0]["source"] == "file", r.json()
     # The file's own values, not the instance document's 24/6.5.
@@ -6333,7 +5269,9 @@ def test_a_kept_pictures_embedded_graph_is_the_second_source(runnable, monkeypat
         return embedded, []
 
     monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", fake_embedded)
-    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={"picture_ids": [runnable.picture_id]}
+    )
     assert r.status_code == 200, r.text
     assert r.json()["groups"][0]["source"] == "picture", r.json()
     # It names WHICH picture answered, and that is the card's best.
@@ -6354,7 +5292,7 @@ def test_a_picture_whose_file_has_gone_falls_through_instead_of_erroring(
         raise HTTPException(status_code=404, detail="Picture file missing")
 
     monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", gone)
-    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
     assert payload["groups"][0]["source"] == "instance", payload
     assert payload["groups"][0]["reasons"] == [], payload
 
@@ -6368,20 +5306,20 @@ def test_a_card_runs_from_any_of_its_three_sources(runnable, source):
     on tier 3 here because this fixture's card has no file and its picture has
     none on disk.
     """
-    body = {"workflow_key": RUN_CARD}
+    body = {"workflow_id": RUN_WF}
     if source == "picture":
         body = {"picture_ids": [runnable.picture_id]}
     elif source == "saved_recipe":
         r = runnable.owner.post(
             f"{API}/recipes",
-            json={"name": "cold light", "workflow_key": RUN_CARD, "prompt": "a cat"},
+            json={"name": "cold light", "workflow_id": RUN_WF, "prompt": "a cat"},
         )
         assert r.status_code in {200, 201}, r.text
         body = {"saved_recipe_id": r.json()["id"]}
 
     payload = _preflight(runnable.owner, **body)
     assert payload["groups"], payload
-    assert payload["groups"][0]["workflow_key"] == RUN_CARD
+    assert payload["groups"][0]["workflow_id"] == RUN_WF
     assert payload["groups"][0]["reasons"] == [], payload
     assert payload["ok"] is True
     # Tier 3: the card has no imported file and its picture has no file on
@@ -6392,8 +5330,10 @@ def test_a_card_runs_from_any_of_its_three_sources(runnable, source):
 def test_exactly_one_source_may_be_named(runnable):
     for body in (
         {},
-        {"workflow_key": RUN_CARD, "picture_ids": [runnable.picture_id]},
-        {"workflow_key": RUN_CARD, "saved_recipe_id": 1},
+        {"workflow_id": RUN_WF, "picture_ids": [runnable.picture_id]},
+        {"workflow_id": RUN_WF, "saved_recipe_id": 1},
+        # A card key is no longer a source (#1623): named alone it names none.
+        {"workflow_key": RUN_CARD},
     ):
         r = runnable.owner.post(f"{API}/workflows/run/preflight", json=body)
         assert r.status_code == 400, f"{body}: {r.status_code} {r.text}"
@@ -6411,12 +5351,12 @@ def test_several_pictures_with_no_target_group_by_their_recipe(runnable):
         ]
     )
     payload = _preflight(runnable.owner, picture_ids=[runnable.picture_id, *busy[:2]])
-    keys = {group["workflow_key"] for group in payload["groups"]}
-    assert keys == {RUN_CARD, BUSY_CARD}, payload
+    keys = {group["workflow_id"] for group in payload["groups"]}
+    assert keys == {RUN_WF, BUSY_WF}, payload
     # Each group carries the pictures that chose it and nobody else's.
-    by_key = {group["workflow_key"]: group for group in payload["groups"]}
-    assert by_key[RUN_CARD]["picture_ids"] == [runnable.picture_id]
-    assert sorted(by_key[BUSY_CARD]["picture_ids"]) == sorted(busy[:2])
+    by_key = {group["workflow_id"]: group for group in payload["groups"]}
+    assert by_key[RUN_WF]["picture_ids"] == [runnable.picture_id]
+    assert sorted(by_key[BUSY_WF]["picture_ids"]) == sorted(busy[:2])
 
 
 def test_a_picture_selected_twice_is_run_once(runnable):
@@ -6440,12 +5380,12 @@ def test_a_picture_selected_twice_is_run_once(runnable):
     assert len(runnable.submitted) == 1, "the repeat submitted a second run"
 
 
-def test_a_target_runs_that_card_instead_of_the_ones_selected(runnable):
-    """`target` is how a stack's other member is chosen."""
+def test_a_target_runs_that_workflow_instead_of_the_ones_selected(runnable):
+    """`target` names the workflow that runs over the pictures selected."""
     payload = _preflight(
-        runnable.owner, picture_ids=[runnable.picture_id], target=BUSY_CARD
+        runnable.owner, picture_ids=[runnable.picture_id], target=BUSY_WF
     )
-    assert [group["workflow_key"] for group in payload["groups"]] == [BUSY_CARD]
+    assert [group["workflow_id"] for group in payload["groups"]] == [BUSY_WF]
 
 
 # --- every reason code -----------------------------------------------------
@@ -6453,7 +5393,7 @@ def test_a_target_runs_that_card_instead_of_the_ones_selected(runnable):
 
 def test_a_workflow_source_reports_no_save_node(runnable):
     """BUSY's stored graph has nothing that writes an image."""
-    payload = _preflight(runnable.owner, workflow_key=BUSY_CARD)
+    payload = _preflight(runnable.owner, workflow_id=BUSY_WF)
     assert "no_save_node" in _reasons(payload), payload
 
 
@@ -6464,7 +5404,7 @@ def test_a_forgotten_model_name_surfaces_as_a_missing_model(runnable):
     still says a model went there and the hub can no longer say which, so the
     run reports a missing model rather than pretending the slot is empty.
     """
-    payload = _preflight(runnable.owner, workflow_key=FORGOTTEN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=FORGOTTEN_WF)
     assert "missing_models" in _reasons(payload), payload
     missing = [
         model
@@ -6478,9 +5418,21 @@ def test_a_forgotten_model_name_surfaces_as_a_missing_model(runnable):
     assert {"loras", "checkpoints"} <= {model["folder"] for model in missing}, missing
 
 
-def test_a_card_this_hub_does_not_hold_has_no_runnable_source(runnable):
-    payload = _preflight(runnable.owner, workflow_key=_h("nosuchcard"))
-    assert _reasons(payload) == {"no_runnable_source"}, payload
+def test_a_workflow_this_hub_does_not_hold_is_a_404_not_a_reason(runnable):
+    """A request naming nothing is a request error, not a group that refuses."""
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"workflow_id": AUTO_STACK_PREFIX + _h("nosuchcore")},
+    )
+    assert r.status_code == 404, r.text
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={
+            "picture_ids": [runnable.picture_id],
+            "target": AUTO_STACK_PREFIX + _h("nosuchcore"),
+        },
+    )
+    assert r.status_code == 404, r.text
 
 
 def test_a_picture_on_no_card_reports_a1111_or_nothing_to_run(runnable, monkeypatch):
@@ -6565,7 +5517,9 @@ def test_a_picture_whose_only_graph_is_the_editors_is_still_a_source(runnable):
     in the run route's own file so the coverage does not go either.
     """
     _only_an_editor_graph(runnable.monkeypatch)
-    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={"picture_ids": [runnable.picture_id]}
+    )
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["groups"][0]["source"] == "picture", body
@@ -6593,7 +5547,7 @@ def test_an_editor_graph_that_will_not_rebuild_is_not_a_source(runnable):
     broken = json.loads(json.dumps(RUN_EDITOR_GRAPH))
     broken["nodes"][1]["widgets_values"] = [123, 20, 7.0, "one too many"]
     _only_an_editor_graph(runnable.monkeypatch, broken)
-    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
     # The instance tier answers instead, and nothing raised on the way past.
     assert payload["groups"][0]["source"] != "picture", payload
 
@@ -6615,7 +5569,7 @@ def test_the_run_reads_object_info_itself_rather_than_a_cached_map(runnable):
 
     runnable.monkeypatch.setattr(workflows_routes, "_read_object_info", spy)
     _only_an_editor_graph(runnable.monkeypatch)
-    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
     assert r.status_code == 200, r.text
     assert asked, "the run must read /object_info"
     assert all(not call.get("cached") for call in asked), asked
@@ -6627,7 +5581,7 @@ def test_a_missing_node_pack_is_reported_by_name(runnable):
     runnable.monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (info, None)
     )
-    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
     nodes = [
         node
         for group in payload["groups"]
@@ -6647,7 +5601,7 @@ def test_a_model_this_comfyui_does_not_have_names_the_file_and_the_folder(runnab
     runnable.monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (info, None)
     )
-    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
     models = [
         model
         for group in payload["groups"]
@@ -6739,7 +5693,7 @@ def test_a_run_loads_the_copy_that_is_left_and_says_it_did(runnable, merged_chec
         workflows_routes, "_read_object_info", lambda url: (info, None)
     )
 
-    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
     assert _reasons(payload) == set(), payload
     assert payload["groups"][0]["substitutions"] == [
         {
@@ -6751,7 +5705,7 @@ def test_a_run_loads_the_copy_that_is_left_and_says_it_did(runnable, merged_chec
         }
     ], payload
 
-    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "success", r.json()
     assert len(runnable.submitted) == 1, "the run was refused over a copy that is there"
@@ -6777,26 +5731,25 @@ def test_a_run_loads_the_model_the_owner_replaced_the_missing_one_with(runnable)
     runnable.monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (info, None)
     )
-    assert "missing_models" in _reasons(
-        _preflight(runnable.owner, workflow_key=RUN_CARD)
-    )
+    assert "missing_models" in _reasons(_preflight(runnable.owner, workflow_id=RUN_WF))
 
     r = runnable.owner.put(
-        f"{API}/workflows/{RUN_CARD}/model-fix",
+        f"{API}/workflows/{RUN_WF}/model-fix",
         json={"was": _SHELF_FILENAME, "now": _REPLACEMENT_FILENAME},
     )
     assert r.status_code == 200, r.text
-    # The fixture's key is hand-written, so the re-key moves it to the real one.
-    card = r.json()["card"]["key"]
+    # The fixture's card key is hand-written, so the re-key moves the base
+    # card to the real one; the workflow keeps its id.
+    assert r.json()["card"]["id"] == RUN_WF
 
-    payload = _preflight(runnable.owner, workflow_key=card)
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
     assert _reasons(payload) == set(), payload
     (swap,) = payload["groups"][0]["substitutions"]
     assert (swap["was"], swap["now"]) == (
         _SHELF_FILENAME,
         f"sdxl/{_REPLACEMENT_FILENAME}",
     )
-    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": card})
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
     assert r.json()["status"] == "success", r.json()
     assert runnable.submitted[0]["graph"]["1"]["inputs"]["ckpt_name"] == (
         f"sdxl/{_REPLACEMENT_FILENAME}"
@@ -6832,7 +5785,7 @@ def test_a_vae_fix_never_rewrites_a_checkpoint_of_the_same_name(runnable):
         workflows_routes, "_read_object_info", lambda url: (info, None)
     )
     try:
-        payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+        payload = _preflight(runnable.owner, workflow_id=RUN_WF)
         assert payload["groups"][0]["substitutions"] == [], payload
     finally:
         with runnable.server.hub.transaction() as conn:
@@ -6920,14 +5873,14 @@ def test_a_fix_the_loader_cannot_load_runs_through_a_pixlstash_loader(
         runnable.monkeypatch.setattr(
             workflows_routes, "_read_object_info", lambda url: (info, None)
         )
-        payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+        payload = _preflight(runnable.owner, workflow_id=RUN_WF)
         assert payload["groups"][0]["substitutions"] == [], payload
         assert "missing_models" in _reasons(payload), payload
 
         info["PixlStashVAELoader"] = {
             "input": {"required": {"vae_sha256": ["STRING", {}]}}
         }
-        payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+        payload = _preflight(runnable.owner, workflow_id=RUN_WF)
         assert _reasons(payload) == set(), payload
         assert payload["groups"][0]["substitutions"] == [
             {
@@ -6941,7 +5894,7 @@ def test_a_fix_the_loader_cannot_load_runs_through_a_pixlstash_loader(
         ], payload
         # A preflight submits nothing, so it records nothing.
         assert not runnable.server.hub.fetchall("SELECT 1 FROM workflow_loader_swap")
-        r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+        r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
         assert r.json()["status"] == "success", r.json()
         submitted = runnable.submitted[0]["graph"]
         assert submitted["8"] == {
@@ -7023,7 +5976,7 @@ def test_a_loader_left_unswapped_keeps_its_file_missing(runnable, monkeypatch, c
         )
     try:
         with caplog.at_level(logging.WARNING, logger="pixlstash.routes.workflows"):
-            payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+            payload = _preflight(runnable.owner, workflow_id=RUN_WF)
         assert "missing_models" in _reasons(payload), payload
         assert [
             (sub["node_id"], sub["class_type"])
@@ -7088,7 +6041,7 @@ def test_a_rename_on_a_loader_swapped_afterwards_is_still_reported(
             ],
         )
     try:
-        payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+        payload = _preflight(runnable.owner, workflow_id=RUN_WF)
         assert _reasons(payload) == set(), payload
         reported = {
             (sub["class_type"], sub["field"], sub["was"], sub["now"])
@@ -7192,11 +6145,11 @@ def test_a_model_no_copy_of_which_is_left_is_still_a_missing_model(
         workflows_routes, "_read_object_info", lambda url: (info, None)
     )
 
-    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
     assert "missing_models" in _reasons(payload), payload
     assert payload["groups"][0]["substitutions"] == []
 
-    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
     assert r.json()["status"] == "refused", r.json()
     assert runnable.submitted == []
 
@@ -7213,7 +6166,7 @@ def test_an_unreachable_comfyui_is_reported_and_a_configured_one_says_so(runnabl
         workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
     )
     assert "comfyui_not_configured" in _reasons(
-        _preflight(runnable.owner, workflow_key=RUN_CARD)
+        _preflight(runnable.owner, workflow_id=RUN_WF)
     )
 
     # `.test` is RFC 2606's reserved name; nothing resolves it and the fetch is
@@ -7224,12 +6177,12 @@ def test_an_unreachable_comfyui_is_reported_and_a_configured_one_says_so(runnabl
     assert r.status_code == 200, r.text
     try:
         assert "comfyui_unreachable" in _reasons(
-            _preflight(runnable.owner, workflow_key=RUN_CARD)
+            _preflight(runnable.owner, workflow_id=RUN_WF)
         )
         # ...and it is the ONLY one of the two: reporting both would leave a
         # panel deciding which sentence to show.
         assert "comfyui_not_configured" not in _reasons(
-            _preflight(runnable.owner, workflow_key=RUN_CARD)
+            _preflight(runnable.owner, workflow_id=RUN_WF)
         )
     finally:
         # The user row outlives the test; `fresh_library` re-seeds the hub and
@@ -7248,14 +6201,14 @@ def test_an_uninspectable_comfyui_runs_only_on_the_owners_acknowledgement(runnab
     runnable.monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
     )
-    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "refused", r.json()
     assert runnable.submitted == [], "an uninspected graph ran without consent"
 
     r = runnable.owner.post(
         f"{API}/workflows/run",
-        json={"workflow_key": RUN_CARD, "allow_unchecked": True},
+        json={"workflow_id": RUN_WF, "allow_unchecked": True},
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "success", r.json()
@@ -7283,7 +6236,7 @@ def test_only_the_literal_true_is_consent(runnable):
     for value in ("false", "true", 1, "yes", "on", [True], {"v": True}):
         r = runnable.owner.post(
             f"{API}/workflows/run",
-            json={"workflow_key": RUN_CARD, "allow_unchecked": value},
+            json={"workflow_id": RUN_WF, "allow_unchecked": value},
         )
         assert r.status_code == 422, f"{value!r} was accepted: {r.status_code} {r.text}"
     assert runnable.submitted == [], "an uninspected graph ran on a cast consent"
@@ -7320,7 +6273,7 @@ def test_consent_does_not_reach_a_missing_model(runnable):
     assert runnable.submitted == []
     # The healthy card has no reason of its own and still does not run: that is
     # the batch rule, and consent did not switch it off.
-    healthy = {g["workflow_key"]: g for g in r.json()["groups"]}[RUN_CARD]
+    healthy = {g["workflow_id"]: g for g in r.json()["groups"]}[RUN_WF]
     assert healthy["reasons"] == [], healthy
     assert healthy["runs"] == 0, healthy
 
@@ -7362,7 +6315,7 @@ def test_a_pack_checkpoint_loader_is_refused_outside_a_stored_file(runnable):
             "UPDATE workflow_recipe_instance SET document = ? WHERE instance_hash = ?",
             (json.dumps(instance), RUN_INSTANCE),
         )
-    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
     assert _pack_refusals(payload) == {
         "5": "per_hub_checkpoint",
         "6": "no_policy",
@@ -7418,7 +6371,7 @@ def test_a_pack_graph_runs_from_a_file_with_the_picture_fed_by_id(pack):
     pack.graph = _pack_graph()
     subject = _add_picture(pack.server, pack.tmp_path, "pack-subject.png")
     r = pack.owner.post(
-        f"{API}/workflows/run", json={"picture_ids": [subject], "target": RUN_CARD}
+        f"{API}/workflows/run", json={"picture_ids": [subject], "target": RUN_WF}
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "success", r.json()
@@ -7435,13 +6388,13 @@ def test_a_pack_graph_runs_from_a_file_with_the_picture_fed_by_id(pack):
 def test_a_pack_picture_loader_nothing_feeds_does_not_run(pack):
     """No selection: its baked ids are never used, and it says so."""
     pack.graph = _pack_graph()
-    payload = _preflight(pack.owner, workflow_key=RUN_CARD)
+    payload = _preflight(pack.owner, workflow_id=RUN_WF)
     assert "picture_input_unfilled" in _reasons(payload), payload
     assert _pack_refusals(payload) == {}, payload
 
     # Opted out of by the file's bindings, so no input can fill it either.
     pack.graph["pixlstash_bindings"] = []
-    payload = _preflight(pack.owner, workflow_key=RUN_CARD)
+    payload = _preflight(pack.owner, workflow_id=RUN_WF)
     assert _pack_refusals(payload) == {"5": "picks_its_own_picture"}, payload
 
 
@@ -7455,7 +6408,7 @@ def test_a_pack_project_loader_runs_only_on_a_project_this_library_has(pack):
         return project.id
 
     project_id = pack.server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
-    body = {"picture_ids": [subject], "target": RUN_CARD}
+    body = {"picture_ids": [subject], "target": RUN_WF}
 
     pack.graph = _pack_graph(f"Pack project 1521 #{project_id}")
     payload = _preflight(pack.owner, **body)
@@ -7489,7 +6442,7 @@ def test_a_lora_asked_for_where_there_is_no_loader_says_so(runnable):
     """
     # The card as it stands HAS a slot, so the code must not appear.
     assert "no_lora_loader" not in _reasons(
-        _preflight(runnable.owner, workflow_key=RUN_CARD)
+        _preflight(runnable.owner, workflow_id=RUN_WF)
     )
 
     runnable.monkeypatch.setattr(
@@ -7497,7 +6450,7 @@ def test_a_lora_asked_for_where_there_is_no_loader_says_so(runnable):
     )
     payload = _preflight(
         runnable.owner,
-        workflow_key=RUN_CARD,
+        workflow_id=RUN_WF,
         loras=[{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
     )
     assert "no_lora_loader" in _reasons(payload), payload
@@ -7512,7 +6465,7 @@ def test_a_lora_addressed_to_a_slot_the_graph_does_not_have_is_refused(runnable)
     r = runnable.owner.post(
         f"{API}/workflows/run/preflight",
         json={
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "loras": [{"node_id": "99", "sha256": RUN_ADAPTER_DIGEST}],
         },
     )
@@ -7525,7 +6478,7 @@ def test_a_lora_is_placed_in_its_own_slot_with_its_own_strengths(runnable):
     r = runnable.owner.post(
         f"{API}/workflows/run",
         json={
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "loras": [
                 {
                     "node_id": "2",
@@ -7697,7 +6650,7 @@ def _uploaded_id(name: str) -> str:
 
 
 def _set_inputs(owner, inputs: list[dict]):
-    r = owner.put(f"{API}/workflows/{RUN_CARD}/inputs", json={"inputs": inputs})
+    r = owner.put(f"{API}/workflows/{RUN_WF}/inputs", json={"inputs": inputs})
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -7714,7 +6667,7 @@ def test_a_card_nobody_set_up_still_lists_its_picture_inputs(i2i):
     alone would hand the popup nothing to draw for the commonest case.
     """
     i2i.graph = _i2i_graph(references=1)
-    payload = _preflight(i2i.owner, workflow_key=RUN_CARD)
+    payload = _preflight(i2i.owner, workflow_id=RUN_WF)
     inputs = payload["groups"][0]["picture_inputs"]
     assert len(inputs) == 2, inputs
     assert {item["input_name"] for item in inputs} == {"image"}
@@ -7740,11 +6693,40 @@ def test_a_pin_by_picture_id_is_stored_as_its_content(i2i):
         ],
     )
     assert stored["inputs"][0]["pixel_sha"] == _h("pixels-pinned.png"), stored
-    payload = _preflight(i2i.owner, workflow_key=RUN_CARD)
+    payload = _preflight(i2i.owner, workflow_id=RUN_WF)
     pinned = _inputs_of(payload)[label]
     assert pinned["picture_id"] == picture, pinned
     assert pinned["picture_missing"] is False
     assert pinned["fill"] == "fixed"
+    assert payload["groups"][0]["reasons"] == [], payload
+
+
+def test_a_pin_stored_by_core_address_fills_the_run_graphs_own_input(i2i):
+    """The conversion writes picture inputs by CORE address (#1623).
+
+    Every topology of a workflow shares its core labels, and the run graph
+    reads slot labels, so a `core:` row has to be put on the graph's own
+    label before the fill reads it - or the owner's pinned picture would read
+    as an input the graph has lost.
+    """
+    picture = _add_picture(i2i.server, i2i.tmp_path, "pinned.png")
+    core = core_node_labels(structural_document(i2i.graph), strip_loras=True)["5"]
+    with i2i.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group_picture_input "
+            "(library_uuid, workflow_id, address, mode, pixel_sha) "
+            "VALUES (?, ?, ?, 'fixed', ?)",
+            (
+                i2i.server.vault.library_uuid,
+                RUN_WF,
+                f"{CORE_ADDRESS_PREFIX}{core}/image",
+                _h("pixels-pinned.png"),
+            ),
+        )
+    payload = _preflight(i2i.owner, workflow_id=RUN_WF)
+    pinned = _inputs_of(payload)[_label_of(i2i.graph, "5")]
+    assert (pinned["mode"], pinned["fill"]) == ("fixed", "fixed"), pinned
+    assert pinned["picture_id"] == picture, pinned
     assert payload["groups"][0]["reasons"] == [], payload
 
 
@@ -7754,7 +6736,7 @@ def test_a_pin_naming_a_picture_this_library_does_not_keep_is_refused(i2i):
     _bin_picture(i2i.server, binned)
     for picture_id in (binned, 987654):
         r = i2i.owner.put(
-            f"{API}/workflows/{RUN_CARD}/inputs",
+            f"{API}/workflows/{RUN_WF}/inputs",
             json={
                 "inputs": [
                     {
@@ -7767,7 +6749,10 @@ def test_a_pin_naming_a_picture_this_library_does_not_keep_is_refused(i2i):
             },
         )
         assert r.status_code == 400, r.text
-    assert picture_inputs(i2i.server.hub, i2i.server.vault.library_uuid, RUN_CARD) == []
+    assert (
+        group_picture_inputs(i2i.server.hub, i2i.server.vault.library_uuid, RUN_WF)
+        == []
+    )
 
 
 def test_a_pin_whose_picture_has_gone_is_an_empty_slot_that_refuses(i2i):
@@ -7792,7 +6777,7 @@ def test_a_pin_whose_picture_has_gone_is_an_empty_slot_that_refuses(i2i):
     # answers the input.
     i2i.graph["6"]["inputs"]["image"] = "long-gone.png"
     subject = _add_picture(i2i.server, i2i.tmp_path, "subject-1.png")
-    payload = _preflight(i2i.owner, picture_ids=[subject], target=RUN_CARD)
+    payload = _preflight(i2i.owner, picture_ids=[subject], target=RUN_WF)
     gone = _inputs_of(payload)[reference]
     assert gone["picture_missing"] is True, gone
     assert gone["picture_id"] is None
@@ -7827,7 +6812,7 @@ def test_a_dead_pin_is_empty_even_when_the_graphs_own_file_is_live(i2i):
     )
     subject = _add_picture(i2i.server, i2i.tmp_path, "subject-1.png")
     r = i2i.owner.post(
-        f"{API}/workflows/run", json={"picture_ids": [subject], "target": RUN_CARD}
+        f"{API}/workflows/run", json={"picture_ids": [subject], "target": RUN_WF}
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "refused", r.json()
@@ -7852,9 +6837,9 @@ def test_a_duplicate_import_does_not_move_what_a_pin_resolves_to(i2i):
             }
         ],
     )
-    before = _inputs_of(_preflight(i2i.owner, workflow_key=RUN_CARD))[label]
+    before = _inputs_of(_preflight(i2i.owner, workflow_id=RUN_WF))[label]
     second = _add_picture(i2i.server, i2i.tmp_path, "b.png", _h("shared pixels"))
-    after = _inputs_of(_preflight(i2i.owner, workflow_key=RUN_CARD))[label]
+    after = _inputs_of(_preflight(i2i.owner, workflow_id=RUN_WF))[label]
     assert second > first
     assert before["picture_id"] == after["picture_id"] == first, (before, after)
 
@@ -7867,13 +6852,12 @@ def test_a_graph_that_will_not_reduce_is_a_400_only_when_an_input_is_named(
 
     monkeypatch.setattr(workflows_routes, "card_input_modes", broken)
     assert (
-        _preflight(i2i.owner, workflow_key=RUN_CARD)["groups"][0]["picture_inputs"]
-        == []
+        _preflight(i2i.owner, workflow_id=RUN_WF)["groups"][0]["picture_inputs"] == []
     )
     r = i2i.owner.post(
         f"{API}/workflows/run/preflight",
         json={
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "inputs": [{"slot_label": "x", "input_name": "image", "picture_id": 1}],
         },
     )
@@ -7885,7 +6869,7 @@ def test_a_lone_picture_input_takes_the_selection_with_nothing_in_the_body(i2i):
     """The zero-click case: one input, a selection, no `inputs` at all."""
     subject = _add_picture(i2i.server, i2i.tmp_path, "cat.png")
     r = i2i.owner.post(
-        f"{API}/workflows/run", json={"picture_ids": [subject], "target": RUN_CARD}
+        f"{API}/workflows/run", json={"picture_ids": [subject], "target": RUN_WF}
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "success", r.json()
@@ -7927,7 +6911,7 @@ def test_a_pinned_reference_leaves_one_input_for_the_selection(i2i):
         ],
     )
     r = i2i.owner.post(
-        f"{API}/workflows/run", json={"picture_ids": subjects, "target": RUN_CARD}
+        f"{API}/workflows/run", json={"picture_ids": subjects, "target": RUN_WF}
     )
     assert r.status_code == 200, r.text
     assert r.json()["runs"] == 3, r.json()
@@ -7955,7 +6939,7 @@ def test_two_open_inputs_are_not_guessed_between(i2i):
         i2i.graph[node_id]["inputs"]["image"] = f"gone-{node_id}.png"
     subject = _add_picture(i2i.server, i2i.tmp_path, "s.png")
     r = i2i.owner.post(
-        f"{API}/workflows/run", json={"picture_ids": [subject], "target": RUN_CARD}
+        f"{API}/workflows/run", json={"picture_ids": [subject], "target": RUN_WF}
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "refused", r.json()
@@ -7988,7 +6972,7 @@ def test_a_dead_pin_does_not_count_as_resolving_its_input(i2i):
     _bin_picture(i2i.server, reference)
     i2i.graph["6"]["inputs"]["image"] = "gone.png"
     subject = _add_picture(i2i.server, i2i.tmp_path, "s.png")
-    payload = _preflight(i2i.owner, picture_ids=[subject], target=RUN_CARD)
+    payload = _preflight(i2i.owner, picture_ids=[subject], target=RUN_WF)
     assert "picture_input_unfilled" in _reasons(payload), payload
     assert payload["ok"] is False
 
@@ -8011,7 +6995,7 @@ def test_the_request_beats_the_pin_and_names_the_picture_it_sends(i2i):
     r = i2i.owner.post(
         f"{API}/workflows/run",
         json={
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "inputs": [
                 {"slot_label": label, "input_name": "image", "picture_id": picked}
             ],
@@ -8040,7 +7024,7 @@ def test_an_open_input_whose_file_is_on_this_comfyui_still_runs(i2i):
     )
     picture = _add_picture(i2i.server, i2i.tmp_path, "s.png")
     r = i2i.owner.post(
-        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_CARD}
+        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_WF}
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "success", r.json()
@@ -8061,7 +7045,7 @@ def test_nothing_is_uploaded_when_anything_refuses(i2i):
         workflows_routes, "_read_object_info", lambda url: (info, None)
     )
     r = i2i.owner.post(
-        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_CARD}
+        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_WF}
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "refused", r.json()
@@ -8070,7 +7054,7 @@ def test_nothing_is_uploaded_when_anything_refuses(i2i):
 
 def test_the_pre_flight_uploads_nothing(i2i):
     picture = _add_picture(i2i.server, i2i.tmp_path, "s.png")
-    payload = _preflight(i2i.owner, picture_ids=[picture], target=RUN_CARD)
+    payload = _preflight(i2i.owner, picture_ids=[picture], target=RUN_WF)
     assert payload["ok"] is True, payload
     assert i2i.uploads == [] and i2i.submitted == []
 
@@ -8078,7 +7062,7 @@ def test_the_pre_flight_uploads_nothing(i2i):
 def test_every_upload_happens_before_the_first_submission(i2i):
     pictures = [_add_picture(i2i.server, i2i.tmp_path, f"{n}.png") for n in range(3)]
     r = i2i.owner.post(
-        f"{API}/workflows/run", json={"picture_ids": pictures, "target": RUN_CARD}
+        f"{API}/workflows/run", json={"picture_ids": pictures, "target": RUN_WF}
     )
     assert r.status_code == 200, r.text
     assert len(i2i.uploads) == 3
@@ -8093,7 +7077,7 @@ def test_two_pictures_with_one_file_name_upload_under_two_names(i2i, tmp_path):
     second = _add_picture(i2i.server, tmp_path / "two", "image.png", _h("second"))
     r = i2i.owner.post(
         f"{API}/workflows/run",
-        json={"picture_ids": [first, second], "target": RUN_CARD},
+        json={"picture_ids": [first, second], "target": RUN_WF},
     )
     assert r.status_code == 200, r.text
     names = [upload["name"] for upload in i2i.uploads]
@@ -8117,7 +7101,7 @@ def test_a_pinned_picture_is_uploaded_once_for_a_whole_selection(i2i):
     )
     subjects = [_add_picture(i2i.server, i2i.tmp_path, f"s{n}.png") for n in range(40)]
     r = i2i.owner.post(
-        f"{API}/workflows/run", json={"picture_ids": subjects, "target": RUN_CARD}
+        f"{API}/workflows/run", json={"picture_ids": subjects, "target": RUN_WF}
     )
     assert r.status_code == 200, r.text
     assert r.json()["runs"] == 40
@@ -8129,11 +7113,11 @@ def test_a_pinned_picture_is_uploaded_once_for_a_whole_selection(i2i):
 def test_a_selection_times_count_is_what_the_run_cap_counts(i2i):
     """40 pictures at count 5 is 200 runs, not 5; one more picture is refused."""
     pictures = [_add_picture(i2i.server, i2i.tmp_path, f"p{n}.png") for n in range(41)]
-    payload = _preflight(i2i.owner, picture_ids=pictures[:40], target=RUN_CARD, count=5)
+    payload = _preflight(i2i.owner, picture_ids=pictures[:40], target=RUN_WF, count=5)
     assert payload["runs"] == MAX_RUNS_PER_REQUEST == 200, payload["runs"]
     r = i2i.owner.post(
         f"{API}/workflows/run/preflight",
-        json={"picture_ids": pictures, "target": RUN_CARD, "count": 5},
+        json={"picture_ids": pictures, "target": RUN_WF, "count": 5},
     )
     assert r.status_code == 400, r.text
     assert i2i.uploads == []
@@ -8144,7 +7128,7 @@ def test_a_selection_run_with_stack_makes_one_stack_per_picture(i2i):
     pictures = [_add_picture(i2i.server, i2i.tmp_path, f"{n}.png") for n in range(3)]
     r = i2i.owner.post(
         f"{API}/workflows/run",
-        json={"picture_ids": pictures, "target": RUN_CARD, "stack": True},
+        json={"picture_ids": pictures, "target": RUN_WF, "stack": True},
     )
     assert r.status_code == 200, r.text
     # args: server, url, prompt id, output nodes, stack id, source picture id
@@ -8162,7 +7146,7 @@ def test_a_selection_run_with_stack_makes_one_stack_per_picture(i2i):
 def test_without_stack_no_output_is_stacked_with_its_source(i2i):
     picture = _add_picture(i2i.server, i2i.tmp_path, "s.png")
     r = i2i.owner.post(
-        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_CARD}
+        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_WF}
     )
     assert r.status_code == 200, r.text
     assert [(args[4], args[5]) for args in i2i.outputs] == [(None, None)]
@@ -8174,7 +7158,7 @@ def test_a_picture_input_the_card_does_not_have_is_a_400(i2i):
     r = i2i.owner.post(
         f"{API}/workflows/run/preflight",
         json={
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "inputs": [
                 {"slot_label": "nope", "input_name": "image", "picture_id": picture}
             ],
@@ -8190,7 +7174,7 @@ def test_a_binned_picture_cannot_fill_an_input(i2i):
     r = i2i.owner.post(
         f"{API}/workflows/run",
         json={
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "inputs": [
                 {
                     "slot_label": _label_of(i2i.graph, "5"),
@@ -8213,7 +7197,7 @@ def test_the_selection_can_be_sent_to_one_input_by_name(i2i):
         f"{API}/workflows/run",
         json={
             "picture_ids": [picture],
-            "target": RUN_CARD,
+            "target": RUN_WF,
             "inputs": [
                 {"slot_label": reference, "input_name": "image", "picture_id": None}
             ],
@@ -8227,7 +7211,7 @@ def test_the_selection_can_be_sent_to_one_input_by_name(i2i):
         f"{API}/workflows/run/preflight",
         json={
             "picture_ids": [picture],
-            "target": RUN_CARD,
+            "target": RUN_WF,
             "inputs": [
                 {"slot_label": label, "input_name": "image", "picture_id": None}
                 for label in (reference, _label_of(i2i.graph, "5"))
@@ -8254,7 +7238,7 @@ def test_a_picture_not_yet_hashed_uploads_under_its_file_not_its_id(i2i):
     i2i.server.vault.db.run_task(unhash, priority=DBPriority.IMMEDIATE)
     stat = os.stat(i2i.tmp_path / "fresh.png")
     r = i2i.owner.post(
-        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_CARD}
+        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_WF}
     )
     assert r.status_code == 200, r.text
     [upload] = i2i.uploads
@@ -8271,7 +7255,7 @@ def test_each_save_node_keeps_its_own_prefix_under_the_stack_tag(i2i):
     picture = _add_picture(i2i.server, i2i.tmp_path, "s.png")
     r = i2i.owner.post(
         f"{API}/workflows/run",
-        json={"picture_ids": [picture], "target": RUN_CARD, "stack": True},
+        json={"picture_ids": [picture], "target": RUN_WF, "stack": True},
     )
     assert r.status_code == 200, r.text
     graph = i2i.submitted[0]["graph"]
@@ -8288,7 +7272,7 @@ def test_the_selection_sent_to_an_input_of_a_run_without_one_is_a_400(i2i):
     r = i2i.owner.post(
         f"{API}/workflows/run/preflight",
         json={
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "inputs": [
                 {
                     "slot_label": _label_of(i2i.graph, "5"),
@@ -8308,7 +7292,7 @@ def test_an_id_no_sqlite_row_could_hold_is_a_422_not_a_500(i2i):
     r = i2i.owner.post(
         f"{API}/workflows/run/preflight",
         json={
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "inputs": [
                 {"slot_label": label, "input_name": "image", "picture_id": too_big}
             ],
@@ -8317,11 +7301,11 @@ def test_an_id_no_sqlite_row_could_hold_is_a_422_not_a_500(i2i):
     assert r.status_code == 422, r.text
     r = i2i.owner.post(
         f"{API}/workflows/run/preflight",
-        json={"picture_ids": [too_big], "target": RUN_CARD},
+        json={"picture_ids": [too_big], "target": RUN_WF},
     )
     assert r.status_code == 422, r.text
     r = i2i.owner.put(
-        f"{API}/workflows/{RUN_CARD}/inputs",
+        f"{API}/workflows/{RUN_WF}/inputs",
         json={
             "inputs": [
                 {
@@ -8345,7 +7329,7 @@ def test_a_file_whose_bindings_opted_out_of_its_picture_is_not_filled(i2i):
     i2i.graph["pixlstash_bindings"] = []
     picture = _add_picture(i2i.server, i2i.tmp_path, "s.png")
     r = i2i.owner.post(
-        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_CARD}
+        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_WF}
     )
     assert r.status_code == 200, r.text
     assert r.json()["groups"][0]["picture_inputs"] == []
@@ -8356,7 +7340,7 @@ def test_a_file_whose_bindings_opted_out_of_its_picture_is_not_filled(i2i):
         {"role": "image", "path": ["5", "inputs", "image"], "recovered": True}
     ]
     r = i2i.owner.post(
-        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_CARD}
+        f"{API}/workflows/run", json={"picture_ids": [picture], "target": RUN_WF}
     )
     assert r.status_code == 200, r.text
     assert _uploaded_id(i2i.submitted[-1]["graph"]["5"]["inputs"]["image"]) == str(
@@ -8384,7 +7368,7 @@ def test_a_ui_format_file_is_not_a_runnable_source(runnable, monkeypatch):
             ("ui_only.json", HIDDEN_CARD, HIDDEN_TOPOLOGY, HIDDEN_RECIPE),
         )
     # HIDDEN has no instances in this library, so the file is its only tier.
-    payload = _preflight(runnable.owner, workflow_key=HIDDEN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=HIDDEN_WF)
     assert "ui_format" in _reasons(payload), payload
 
 
@@ -8393,7 +7377,7 @@ def test_a_ui_format_file_is_not_a_runnable_source(runnable, monkeypatch):
 
 def test_count_produces_that_many_submissions(runnable):
     r = runnable.owner.post(
-        f"{API}/workflows/run", json={"workflow_key": RUN_CARD, "count": 3}
+        f"{API}/workflows/run", json={"workflow_id": RUN_WF, "count": 3}
     )
     assert r.status_code == 200, r.text
     assert r.json()["runs"] == 3, r.json()
@@ -8453,9 +7437,9 @@ def test_a_missing_model_blocks_the_whole_mixed_batch(runnable):
     assert runnable.submitted == [], "a run was queued behind a missing model"
     # The runnable card is reported as run-able-but-blocked rather than silently
     # dropped: its own reasons are empty and its run count is zero.
-    by_key = {group["workflow_key"]: group for group in r.json()["groups"]}
-    assert by_key[RUN_CARD]["reasons"] == []
-    assert by_key[RUN_CARD]["runs"] == 0
+    by_key = {group["workflow_id"]: group for group in r.json()["groups"]}
+    assert by_key[RUN_WF]["reasons"] == []
+    assert by_key[RUN_WF]["runs"] == 0
 
 
 def test_values_are_applied_at_run_time_and_never_written_back(runnable):
@@ -8464,7 +7448,7 @@ def test_values_are_applied_at_run_time_and_never_written_back(runnable):
     r = runnable.owner.post(
         f"{API}/workflows/run",
         json={
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "values": [{"slot_label": "steps", "input_name": "steps", "value": 99}],
         },
     )
@@ -8497,7 +7481,8 @@ def test_a_workflow_run_applies_its_default_recipe_on_the_server(runnable):
     r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WORKFLOW})
     assert r.status_code == 200, r.text
     (group,) = r.json()["groups"]
-    assert (group["workflow_id"], group["workflow_key"]) == (RUN_WORKFLOW, RUN_CARD)
+    assert group["workflow_id"] == RUN_WORKFLOW
+    assert "workflow_key" not in group
     submitted = runnable.submitted[0]["graph"]["3"]["inputs"]
     assert (submitted["steps"], submitted["cfg"]) == (31, 6.5)
     # The default LoRA is off the shelf (no digest) but named: its loader keeps
@@ -8522,8 +7507,10 @@ def test_a_workflow_run_applies_its_default_recipe_on_the_server(runnable):
     )
     assert r.status_code == 200, r.text
     assert runnable.submitted[1]["graph"]["3"]["inputs"]["steps"] == 12
-    # The control: a card run reads no workflow default.
-    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    # The control: a run of a picture's own graph reads no workflow default.
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={"picture_ids": [runnable.picture_id]}
+    )
     assert r.status_code == 200, r.text
     assert runnable.submitted[2]["graph"]["3"]["inputs"]["steps"] == 24
 
@@ -8558,7 +7545,7 @@ def test_one_input_named_two_ways_takes_the_later_value(runnable):
         r = runnable.owner.post(
             f"{API}/workflows/run",
             json={
-                "workflow_key": RUN_CARD,
+                "workflow_id": RUN_WF,
                 "values": [
                     {
                         **first,
@@ -8721,7 +7708,7 @@ def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
         )
     r = runnable.owner.post(
         f"{API}/workflows/run",
-        json={"workflow_key": RUN_CARD, "prompt": "a lighthouse at dusk"},
+        json={"workflow_id": RUN_WF, "prompt": "a lighthouse at dusk"},
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "success", r.json()
@@ -8734,7 +7721,7 @@ def test_more_runs_than_one_request_starts_are_refused(runnable):
     """`count` alone is Pydantic's; count TIMES groups is the route's."""
     r = runnable.owner.post(
         f"{API}/workflows/run",
-        json={"workflow_key": RUN_CARD, "count": MAX_RUNS_PER_REQUEST + 1},
+        json={"workflow_id": RUN_WF, "count": MAX_RUNS_PER_REQUEST + 1},
     )
     assert r.status_code == 422, r.text
 
@@ -8771,7 +7758,7 @@ def test_an_unchecked_graph_needs_the_owners_acknowledgement(runnable):
     runnable.monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
     )
-    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
     # An unreachable ComfyUI blocks the batch before the acknowledgement is
     # even reached, which is the stronger of the two refusals.
     assert r.json()["status"] == "refused", r.json()
@@ -8788,7 +7775,7 @@ def test_keeping_a_seed_a_stored_recipe_does_not_have_is_refused(runnable):
     """
     r = runnable.owner.post(
         f"{API}/workflows/run",
-        json={"workflow_key": RUN_CARD, "seed_mode": "keep", "count": 3},
+        json={"workflow_id": RUN_WF, "seed_mode": "keep", "count": 3},
     )
     assert r.status_code == 400, r.text
     assert "keeps no seed" in r.json()["detail"]
@@ -8807,7 +7794,7 @@ def test_keeping_a_seed_a_stored_recipe_does_not_have_is_refused(runnable):
     )
     r = runnable.owner.post(
         f"{API}/workflows/run",
-        json={"workflow_key": RUN_CARD, "seed_mode": "keep", "count": 2},
+        json={"workflow_id": RUN_WF, "seed_mode": "keep", "count": 2},
     )
     assert r.status_code == 200, r.text
     assert [e["graph"]["3"]["inputs"]["seed"] for e in runnable.submitted] == [
@@ -8823,7 +7810,7 @@ def test_the_dry_run_and_the_run_agree_about_a_missing_seed(runnable):
     validation living inside the submission loop would let the panel say "this
     will run" about a body that then 400s.
     """
-    body = {"workflow_key": RUN_CARD, "seed_mode": "fixed"}
+    body = {"workflow_id": RUN_WF, "seed_mode": "fixed"}
     dry = runnable.owner.post(f"{API}/workflows/run/preflight", json=body)
     wet = runnable.owner.post(f"{API}/workflows/run", json=body)
     assert dry.status_code == 400, dry.text
@@ -8849,7 +7836,7 @@ def test_a_lora_not_on_this_comfyui_is_a_reason_not_a_hard_error(runnable):
     )
     payload = _preflight(
         runnable.owner,
-        workflow_key=RUN_CARD,
+        workflow_id=RUN_WF,
         loras=[{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
     )
     models = [
@@ -8881,7 +7868,7 @@ def test_a_missing_lora_is_bypassed_and_the_run_still_happens(runnable):
         "_read_object_info",
         lambda url: (_without_lora(["something-else.safetensors"]), None),
     )
-    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
     assert _reasons(payload) == set(), payload
     group = payload["groups"][0]
     assert group["runs"] == 1, payload
@@ -8891,7 +7878,7 @@ def test_a_missing_lora_is_bypassed_and_the_run_still_happens(runnable):
         ("add_detail.safetensors", "loras")
     ], payload
 
-    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
     assert r.status_code == 200, r.text
     assert r.json()["groups"][0]["bypassed_loras"], r.json()
     graph = runnable.submitted[0]["graph"]
@@ -8917,7 +7904,7 @@ def test_a_missing_checkpoint_still_refuses_and_nothing_is_bypassed(runnable):
     runnable.monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (info, None)
     )
-    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
     assert "missing_models" in _reasons(payload), payload
     models = [
         model
@@ -8938,7 +7925,7 @@ def test_a_missing_checkpoint_still_refuses_and_nothing_is_bypassed(runnable):
     # nobody made.
     assert payload["groups"][0]["bypassed_loras"] == [], payload
 
-    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
     assert r.json()["status"] == "refused", r.json()
     assert runnable.submitted == []
 
@@ -8961,7 +7948,7 @@ def test_a_lora_the_request_asked_for_is_a_refusal_and_not_a_bypass(runnable):
     )
     payload = _preflight(
         runnable.owner,
-        workflow_key=RUN_CARD,
+        workflow_id=RUN_WF,
         loras=[{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
     )
     group = payload["groups"][0]
@@ -9047,7 +8034,7 @@ def test_a_group_refused_for_any_other_reason_claims_no_bypass(runnable):
     runnable.monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (info, None)
     )
-    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
     group = payload["groups"][0]
 
     assert "missing_nodes" in _reasons(payload), payload
@@ -9090,9 +8077,9 @@ def test_another_cards_missing_model_unclaims_this_ones_bypass(runnable):
 
     mixed = _preflight(runnable.owner, picture_ids=[runnable.picture_id, forgotten[0]])
     assert mixed["runs"] == 0, mixed
-    assert {group["workflow_key"] for group in mixed["groups"]} == {
-        RUN_CARD,
-        FORGOTTEN_CARD,
+    assert {group["workflow_id"] for group in mixed["groups"]} == {
+        RUN_WF,
+        FORGOTTEN_WF,
     }, mixed
     assert all(group["bypassed_loras"] == [] for group in mixed["groups"]), mixed
 
@@ -9254,7 +8241,7 @@ def test_a_missing_seed_node_is_replaced_and_the_run_still_happens(runnable):
     seed pass writes. Said before the run, exactly as a bypassed LoRA is.
     """
     _embed(runnable.monkeypatch, _with_seed_node())
-    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
     assert _reasons(payload) == set(), payload
     group = payload["groups"][0]
     assert group["runs"] == 1, payload
@@ -9267,7 +8254,7 @@ def test_a_missing_seed_node_is_replaced_and_the_run_still_happens(runnable):
 
     r = runnable.owner.post(
         f"{API}/workflows/run",
-        json={"workflow_key": RUN_CARD, "seed_mode": "fixed", "seed": 77},
+        json={"workflow_id": RUN_WF, "seed_mode": "fixed", "seed": 77},
     )
     assert r.status_code == 200, r.text
     assert r.json()["groups"][0]["replaced_nodes"], r.json()
@@ -9286,7 +8273,7 @@ def test_keeping_the_seed_keeps_the_one_the_seed_node_handed_on(runnable):
     """
     _embed(runnable.monkeypatch, _with_seed_node(seed_value=4242))
     r = runnable.owner.post(
-        f"{API}/workflows/run", json={"workflow_key": RUN_CARD, "seed_mode": "keep"}
+        f"{API}/workflows/run", json={"workflow_id": RUN_WF, "seed_mode": "keep"}
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "success", r.json()
@@ -9301,7 +8288,7 @@ def test_a_seed_node_feeding_something_else_keeps_its_refusal(runnable):
     that changes the picture - so the run is refused as before.
     """
     _embed(runnable.monkeypatch, _with_seed_node(field="steps"))
-    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
     assert "missing_nodes" in _reasons(payload), payload
     group = payload["groups"][0]
     assert group["runs"] == 0, payload
@@ -9313,7 +8300,7 @@ def test_a_group_refused_for_another_reason_claims_no_replacement(runnable):
     graph = _with_seed_node()
     graph["4"]["class_type"] = "PreviewImage"
     _embed(runnable.monkeypatch, graph)
-    payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+    payload = _preflight(runnable.owner, workflow_id=RUN_WF)
     assert "missing_nodes" in _reasons(payload), payload
     assert all(
         reason.get("nodes") == ["PreviewImage"]
@@ -9606,7 +8593,7 @@ def test_a_saved_recipes_own_loras_are_placed_in_the_graphs_slots(runnable):
         f"{API}/recipes",
         json={
             "name": "with its lora",
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "prompt": "a cat",
             "loras": [
                 {
@@ -9638,7 +8625,7 @@ def test_a_saved_recipes_pinned_model_is_loaded(runnable):
     )
     r = runnable.owner.post(
         f"{API}/recipes",
-        json={"name": "pinned model", "workflow_key": RUN_CARD, "prompt": "a cat"},
+        json={"name": "pinned model", "workflow_id": RUN_WF, "prompt": "a cat"},
     )
     assert r.status_code in {200, 201}, r.text
     recipe_id = r.json()["id"]
@@ -9669,7 +8656,7 @@ def test_a_saved_seed_never_overrides_a_seed_mode_the_caller_sent(runnable):
         f"{API}/recipes",
         json={
             "name": "pinned seed",
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "prompt": "a cat",
             "seed": "4242",
             "keep_seed": True,
@@ -9713,7 +8700,7 @@ def test_a_failure_part_way_through_still_reports_what_was_queued(runnable):
 
     runnable.monkeypatch.setattr(workflows_routes, "_submit_comfyui_prompt", flaky)
     r = runnable.owner.post(
-        f"{API}/workflows/run", json={"workflow_key": RUN_CARD, "count": 5}
+        f"{API}/workflows/run", json={"workflow_id": RUN_WF, "count": 5}
     )
     assert r.status_code == 200, r.text
     assert r.json()["status"] == "partial", r.json()
@@ -9746,7 +8733,7 @@ def test_consent_never_silently_swaps_the_lora_that_was_asked_for(runnable):
     r = runnable.owner.post(
         f"{API}/workflows/run",
         json={
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "allow_unchecked": True,
             "loras": [{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
         },
@@ -9759,7 +8746,7 @@ def test_consent_never_silently_swaps_the_lora_that_was_asked_for(runnable):
     # refusal above is about the LoRA and not about the consent.
     r = runnable.owner.post(
         f"{API}/workflows/run",
-        json={"workflow_key": RUN_CARD, "allow_unchecked": True},
+        json={"workflow_id": RUN_WF, "allow_unchecked": True},
     )
     assert r.status_code == 200 and r.json()["status"] == "success", r.text
     assert len(runnable.submitted) == 1
@@ -9772,12 +8759,19 @@ def test_consent_never_silently_swaps_the_lora_that_was_asked_for(runnable):
 
 def test_a_saved_recipe_on_a_card_this_hub_lacks_carries_a_reason(runnable):
     """`runs: 0` with an empty `reasons` would contradict the one response rule."""
-    r = runnable.owner.post(
-        f"{API}/recipes",
-        json={"name": "orphan", "workflow_key": _h("nosuchcard"), "prompt": "a cat"},
-    )
-    assert r.status_code in {200, 201}, r.text
-    payload = _preflight(runnable.owner, saved_recipe_id=r.json()["id"])
+
+    # Written as a row: `POST /recipes` refuses a workflow this hub lacks, and
+    # a recipe the vault conversion has not reached yet is still on a card.
+    def write(session):
+        recipe = SavedRecipe(
+            name="orphan", workflow_key=_h("nosuchcard"), prompt="a cat"
+        )
+        session.add(recipe)
+        session.commit()
+        return recipe.id
+
+    recipe_id = runnable.server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+    payload = _preflight(runnable.owner, saved_recipe_id=recipe_id)
     assert _reasons(payload) == {"no_runnable_source"}, payload
     assert payload["ok"] is False
 
@@ -9792,7 +8786,7 @@ def test_a_stored_value_a_run_cannot_take_is_named_rather_than_assigned(runnable
         f"{API}/recipes",
         json={
             "name": "impossible seed",
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "prompt": "a cat",
             "seed": str(2**64),
             "keep_seed": True,
@@ -9868,21 +8862,6 @@ def _embedded_export_graph(lora: str = FORGOTTEN_LORA) -> dict:
     return graph
 
 
-def _lora_slot_label(graph: dict) -> str:
-    """The `<node label>/<widget>` a slot mark is keyed by, for this graph."""
-    labels = topology_node_labels(structural_document(graph))
-    return f"{labels['2']}/lora_name"
-
-
-def _mark_slot(server, label: str, mark: str) -> None:
-    with server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO workflow_slot_mark "
-            "(topology_hash, slot_label, mark) VALUES (?, ?, ?)",
-            (RUN_TOPOLOGY, label, mark),
-        )
-
-
 @pytest.fixture
 def exportable(runnable):
     """RUN_CARD whose only source is a picture's embedded graph, as a real run.
@@ -9902,7 +8881,7 @@ def exportable(runnable):
 
 def test_an_export_carries_no_prompt_no_seed_no_title_and_no_picture_name(exportable):
     """§5.7: everything that is about a RUN rather than about the workflow goes."""
-    r = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/export")
+    r = exportable.owner.get(f"{API}/workflows/{RUN_WF}/export")
     assert r.status_code == 200, r.text
     payload = r.json()
     graph = payload["workflow"]
@@ -9915,105 +8894,141 @@ def test_an_export_carries_no_prompt_no_seed_no_title_and_no_picture_name(export
     # Where the run landed on the owner's disk: a folder a person names after
     # what is in it, so it is reset rather than carried out of the house.
     assert graph["4"]["inputs"]["filename_prefix"] == "PixlStash"
-    # The workflow itself survives: the checkpoint is on the shelf, the wiring
-    # and the parameters are untouched. Over-blanking is its own regression —
-    # an export nobody can run is not a safer export.
+    # The workflow itself survives: the checkpoint is on the shelf and the
+    # parameters are the DEFAULT RECIPE's (#1623), not this one run's.
+    # Over-blanking is its own regression - an export nobody can run is not a
+    # safer export.
     assert graph["1"]["inputs"]["ckpt_name"] == _SHELF_FILENAME
-    assert graph["3"]["inputs"]["steps"] == 33
-    assert graph["3"]["inputs"]["model"] == ["2", 0]
+    assert (graph["3"]["inputs"]["steps"], graph["3"]["inputs"]["cfg"]) == (24, 6.5)
+    # The run's LoRA is not the recipe's, so its loader is taken out and the
+    # sampler reads the checkpoint directly.
+    assert "2" not in graph
+    assert graph["3"]["inputs"]["model"] == ["1", 0]
     # Whatever is in the source, no exported string may be the prompt.
     assert EXPORT_PROMPT not in json.dumps(payload)
 
 
 def test_an_export_leaves_out_a_forgotten_lora_a_picture_still_names(exportable):
     """The acceptance case: the name is in the picture and not in the file."""
-    payload = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/export").json()
+    payload = exportable.owner.get(f"{API}/workflows/{RUN_WF}/export").json()
     assert exportable.graph["2"]["inputs"]["lora_name"] == FORGOTTEN_LORA
-    assert payload["workflow"]["2"]["inputs"]["lora_name"] == ""
+    assert "2" not in payload["workflow"]
     assert FORGOTTEN_LORA not in json.dumps(payload)
 
 
-def test_a_structural_lora_the_shelf_does_not_hold_is_still_left_out(exportable):
-    """Marking the slot structural keeps the slot, never an unknown name.
-
-    This is the assertion the LoRA rule alone cannot make. A structural mark
-    says "this LoRA is part of the workflow", so the slot is not emptied for
-    being a look — and the name still goes, because the shelf cannot vouch for
-    it. Without `unvouched_model_values` this test goes red and the one above
-    stays green, which is why both exist.
-    """
-    _mark_slot(exportable.server, _lora_slot_label(exportable.graph), "structural")
-    payload = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/export").json()
-    assert payload["workflow"]["2"]["inputs"]["lora_name"] == ""
-    assert FORGOTTEN_LORA not in json.dumps(payload)
-
-
-def test_a_structural_lora_that_is_on_the_shelf_travels_with_the_workflow(
-    runnable, monkeypatch
+def test_without_comfyui_a_lora_outside_the_recipe_is_emptied_not_kept(
+    exportable, monkeypatch
 ):
-    """The positive control: a lightning LoRA IS the workflow, so it is kept."""
-    graph = _embedded_export_graph(lora=RUN_ADAPTER_FILENAME)
+    """No `object_info`, no bypass: the scrub is the fallback, and it empties.
+
+    The forgotten name is then reported as a MODEL NAME, not as "a LoRA that
+    is part of the look" - the shelf check runs first, so the category says
+    what actually happened.
+    """
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+    )
+    payload = exportable.owner.get(f"{API}/workflows/{RUN_WF}/export").json()
+    assert payload["workflow"]["2"]["inputs"]["lora_name"] == ""
+    assert FORGOTTEN_LORA not in json.dumps(payload)
+    assert "model names this machine does not hold" in payload["removed"]
+    assert "LoRA slots that are part of the look" not in payload["removed"]
+
+
+def _export_with_lora(runnable, monkeypatch, lora: str) -> dict:
+    graph = _embedded_export_graph(lora=lora)
     monkeypatch.setattr(
         workflows_routes,
         "_load_embedded_api_prompt",
         lambda server, pid, object_info=None: (graph, []),
     )
-    _mark_slot(runnable.server, _lora_slot_label(graph), "structural")
-    payload = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/export").json()
+    r = runnable.owner.get(f"{API}/workflows/{RUN_WF}/export")
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_a_default_recipe_lora_the_shelf_does_not_hold_keeps_its_slot_not_its_name(
+    runnable, monkeypatch
+):
+    """The default recipe keeps the slot; the shelf still decides the name.
+
+    `add_detail` is in every run of the workflow, so it is its default recipe's
+    LoRA and its loader stays - but the shelf does not hold it, so the name
+    goes. Without `unvouched_model_values` this goes red and the test above
+    stays green, which is why both exist.
+    """
+    payload = _export_with_lora(runnable, monkeypatch, "add_detail.safetensors")
+    assert payload["workflow"]["2"]["inputs"]["lora_name"] == ""
+    assert "add_detail" not in json.dumps(payload["workflow"])
+
+
+def test_a_default_recipe_lora_on_the_shelf_travels_with_the_workflow(
+    runnable, monkeypatch
+):
+    """The positive control, and its negative: only the recipe's LoRA travels.
+
+    `other.safetensors` is on the shelf. While the default recipe does not
+    name it, its loader is taken out as the look it is; once the owner puts
+    it in the default recipe (`lora:<sha256>`), it is kept, name and all.
+    """
+    payload = _export_with_lora(runnable, monkeypatch, RUN_ADAPTER_FILENAME)
+    assert "2" not in payload["workflow"]
+    assert "LoRA slots that are part of the look" in payload["removed"]
+
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, '0.9')",
+            (RUN_WF, "lora:" + RUN_ADAPTER_DIGEST),
+        )
+    payload = _export_with_lora(runnable, monkeypatch, RUN_ADAPTER_FILENAME)
     assert payload["workflow"]["2"]["inputs"]["lora_name"] == RUN_ADAPTER_FILENAME
     assert "LoRA slots that are part of the look" not in payload["removed"]
 
 
-def test_a_promoted_lora_travels_with_the_workflow_and_no_other_file_does(
-    runnable, monkeypatch
+def test_an_export_switches_off_the_stages_its_default_recipe_runs_without(
+    exportable, monkeypatch
 ):
-    """A promotion is of one FILE: the slot is kept only while it holds it.
+    """A stage most of the workflow's pictures ran without is off in the file.
 
-    The negative first: a different file promoted at the same slot leaves this
-    graph's LoRA emptied as the look it is. Then the file itself, kept.
+    The bypass itself is `bypass_stage`'s and tested there; this pins that the
+    export asks for exactly the recipe's off stages, and nothing when there
+    are none.
     """
-    graph = _embedded_export_graph(lora=RUN_ADAPTER_FILENAME)
-    monkeypatch.setattr(
-        workflows_routes,
-        "_load_embedded_api_prompt",
-        lambda server, pid, object_info=None: (graph, []),
-    )
-    slot = next(slot for slot in slots(structural_document(graph)) if slot.is_lora)
-    route = f"{API}/workflows/{RUN_CARD}/export"
+    asked: list[list[str]] = []
 
-    def promote(asset):
-        with runnable.server.hub.transaction() as conn:
-            conn.execute(
-                "INSERT INTO workflow_lora_promotion "
-                "(topology_hash, slot_label, asset) VALUES (?, ?, ?)",
-                (RUN_TOPOLOGY, slot.label, asset),
-            )
+    def record(graph, stages, object_info):
+        asked.append(list(stages))
+        return []
 
-    promote(asset_reference("somebody_else.safetensors"))
-    payload = runnable.owner.get(route).json()
-    assert payload["workflow"]["2"]["inputs"]["lora_name"] == ""
+    monkeypatch.setattr(run_service, "skip_requested_stages", record)
+    assert exportable.owner.get(f"{API}/workflows/{RUN_WF}/export").status_code == 200
+    assert asked == [[]]
 
-    promote(slot.asset)
-    payload = runnable.owner.get(route).json()
-    assert payload["workflow"]["2"]["inputs"]["lora_name"] == RUN_ADAPTER_FILENAME
+    real = workflow_card_service.workflow_defaults
+
+    def with_upscale_off(hub, vault, workflow_id):
+        recipe = real(hub, vault, workflow_id)
+        recipe.stages = {"upscale": False, "face_detailer": True}
+        return recipe
+
+    monkeypatch.setattr(workflows_routes, "workflow_defaults", with_upscale_off)
+    assert exportable.owner.get(f"{API}/workflows/{RUN_WF}/export").status_code == 200
+    assert asked[-1] == ["upscale"]
 
 
 def test_an_export_names_the_categories_it_removed_and_never_the_values(exportable):
     """`removed` is what a client renders; a value in it would be the leak itself."""
-    payload = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/export").json()
+    payload = exportable.owner.get(f"{API}/workflows/{RUN_WF}/export").json()
     assert set(payload["removed"]) == {
-        "model names this machine does not hold",
+        # The run's LoRA, taken out: it is not the default recipe's.
+        "LoRA slots that are part of the look",
         "node titles",
         "picture file names",
         "prompts",
         "seeds",
         "where the pictures were saved",
     }, payload["removed"]
-    # The forgotten LoRA is reported as a MODEL NAME and not as "a LoRA that is
-    # part of the look", which is the opposite fact. Both blank it; only one of
-    # them tells the owner what actually happened in the case this feature
-    # leads with.
-    assert "LoRA slots that are part of the look" not in payload["removed"]
 
 
 def test_an_export_refuses_a_graph_it_cannot_read_rather_than_publishing_it(
@@ -10030,7 +9045,7 @@ def test_an_export_refuses_a_graph_it_cannot_read_rather_than_publishing_it(
             [],
         ),
     )
-    r = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/export")
+    r = runnable.owner.get(f"{API}/workflows/{RUN_WF}/export")
     assert r.status_code == 409, r.text
 
 
@@ -10040,21 +9055,23 @@ def test_exporting_a_card_with_no_graph_at_all_says_so(workflow_env):
     BINNED_CARD is the one: no file, its only picture soft-deleted (so no
     embedded graph is reachable) and no instance document of its own.
     """
-    r = workflow_env.owner.get(f"{API}/workflows/{BINNED_CARD}/export")
+    r = workflow_env.owner.get(f"{API}/workflows/{BINNED_WF}/export")
     assert r.status_code == 409, r.text
     assert "no graph" in r.json()["detail"].lower()
 
 
 def test_exporting_an_unknown_card_is_a_404(workflow_env):
     assert (
-        workflow_env.owner.get(f"{API}/workflows/{_h('nope')}/export").status_code
+        workflow_env.owner.get(
+            f"{API}/workflows/{AUTO_STACK_PREFIX}{_h('nope')}/export"
+        ).status_code
         == 404
     )
 
 
 def test_the_runnable_graph_is_the_run_unscrubbed(exportable):
     """Open in ComfyUI hands the owner's own ComfyUI what ran, not the export."""
-    r = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/graph")
+    r = exportable.owner.get(f"{API}/workflows/{RUN_WF}/graph")
     assert r.status_code == 200, r.text
     payload = r.json()
     assert payload["source"] == "picture"
@@ -10071,11 +9088,13 @@ def test_the_runnable_graph_of_a_card_without_one_is_a_409_and_unknown_a_404(
         workflows_routes, "_read_object_info", lambda url: (None, "refused")
     )
     assert (
-        workflow_env.owner.get(f"{API}/workflows/{BINNED_CARD}/graph").status_code
-        == 409
+        workflow_env.owner.get(f"{API}/workflows/{BINNED_WF}/graph").status_code == 409
     )
     assert (
-        workflow_env.owner.get(f"{API}/workflows/{_h('nope')}/graph").status_code == 404
+        workflow_env.owner.get(
+            f"{API}/workflows/{AUTO_STACK_PREFIX}{_h('nope')}/graph"
+        ).status_code
+        == 404
     )
 
 
@@ -10085,7 +9104,7 @@ def test_the_runnable_graph_blanks_a_credential_widget(exportable):
         "class_type": "SomeApiNode",
         "inputs": {"api_key": "example-key", "model": "keep-me"},
     }
-    graph = exportable.owner.get(f"{API}/workflows/{RUN_CARD}/graph").json()["workflow"]
+    graph = exportable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()["workflow"]
     assert graph["8"]["inputs"] == {"api_key": "", "model": "keep-me"}
 
 
@@ -10100,7 +9119,7 @@ def test_the_runnable_graph_loads_the_copy_run_would(runnable, merged_checkpoint
     runnable.monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (info, None)
     )
-    graph = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/graph").json()["workflow"]
+    graph = runnable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()["workflow"]
     assert graph["1"]["inputs"]["ckpt_name"] == "kept.safetensors"
 
 
@@ -10113,7 +9132,7 @@ def test_a_runnable_graph_from_a_stored_recipe_says_it_has_no_seed(
         raise HTTPException(status_code=404, detail="Picture file missing")
 
     monkeypatch.setattr(workflows_routes, "_load_embedded_api_prompt", gone)
-    payload = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/graph").json()
+    payload = runnable.owner.get(f"{API}/workflows/{RUN_WF}/graph").json()
     assert payload["source"] == "instance", payload
     assert payload["seedless"] is True
 
@@ -10127,7 +9146,7 @@ def test_duplicating_writes_a_runnable_file_the_original_does_not_lose(
     in ComfyUI is the entire reason the gesture exists.
     """
     _isolate_workflow_folders(tmp_path, exportable.monkeypatch)
-    r = exportable.owner.post(f"{API}/workflows/{RUN_CARD}/duplicate")
+    r = exportable.owner.post(f"{API}/workflows/{RUN_WF}/duplicate")
     assert r.status_code == 201, r.text
     name = r.json()["name"]
     written = json.loads((tmp_path / name).read_text())
@@ -10139,12 +9158,8 @@ def test_duplicating_writes_a_runnable_file_the_original_does_not_lose(
 def test_duplicating_twice_puts_a_second_file_beside_the_first(exportable, tmp_path):
     """The `(2)` counter, so a duplicate never overwrites the one before it."""
     _isolate_workflow_folders(tmp_path, exportable.monkeypatch)
-    first = exportable.owner.post(f"{API}/workflows/{RUN_CARD}/duplicate").json()[
-        "name"
-    ]
-    second = exportable.owner.post(f"{API}/workflows/{RUN_CARD}/duplicate").json()[
-        "name"
-    ]
+    first = exportable.owner.post(f"{API}/workflows/{RUN_WF}/duplicate").json()["name"]
+    second = exportable.owner.post(f"{API}/workflows/{RUN_WF}/duplicate").json()["name"]
     assert first != second, "the second duplicate overwrote the first"
     assert (tmp_path / first).is_file() and (tmp_path / second).is_file()
 
@@ -10177,7 +9192,7 @@ def test_the_mcp_round_trip_stores_an_edit_as_a_new_card_once(exportable, tmp_pa
     out = tmp_path / "agent" / "graph.json"
 
     exported = _mcp_json(
-        fetch, "export_workflow_graph", workflow_key=RUN_CARD, out_path=str(out)
+        fetch, "export_workflow_graph", workflow_id=RUN_WF, out_path=str(out)
     )
     assert exported["path"] == str(out)
     graph = json.loads(out.read_text())
@@ -10192,8 +9207,8 @@ def test_the_mcp_round_trip_stores_an_edit_as_a_new_card_once(exportable, tmp_pa
         fetch, "import_workflow_graph", name="mcp-edited.json", path=str(out)
     )
     assert stored["matched"] is False, stored
-    new_key = stored["workflow_key"]
-    assert new_key and new_key != RUN_CARD
+    new_key = stored["workflow_id"]
+    assert new_key
     assert exportable.owner.get(f"{API}/workflows/{new_key}").status_code == 200
 
     # The same file again, under another name, is matched rather than stored:
@@ -10207,9 +9222,9 @@ def test_the_mcp_round_trip_stores_an_edit_as_a_new_card_once(exportable, tmp_pa
 
     # Preflight reads the stored file: this ComfyUI lacks two of its nodes, and
     # saying so is the agent's feedback. Nothing is submitted.
-    preflight = _mcp_json(fetch, "preflight_workflow", workflow_key=new_key)
+    preflight = _mcp_json(fetch, "preflight_workflow", workflow_id=new_key)
     assert preflight["ok"] is False
-    assert [g["workflow_key"] for g in preflight["groups"]] == [new_key]
+    assert [g["workflow_id"] for g in preflight["groups"]] == [new_key]
     assert _reasons(preflight) == {"missing_nodes"}
     assert exportable.submitted == []
 
@@ -10248,12 +9263,12 @@ def cloneable(exportable, tmp_path):
 
 def _clone(env, swaps, name="Portrait on Krea"):
     return env.owner.post(
-        f"{API}/workflows/{RUN_CARD}/clone-with-models",
+        f"{API}/workflows/{RUN_WF}/clone-with-models",
         json={"name": name, "swaps": swaps},
     )
 
 
-def test_cloning_writes_a_new_card_in_comfyuis_spelling_and_names_it(cloneable):
+def test_cloning_writes_a_file_in_comfyuis_spelling_in_the_same_workflow(cloneable):
     r = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT})
     assert r.status_code == 201, r.text
     body = r.json()
@@ -10263,10 +9278,13 @@ def test_cloning_writes_a_new_card_in_comfyuis_spelling_and_names_it(cloneable):
     assert written["1"]["inputs"]["ckpt_name"] == f"flux/{CLONE_CHECKPOINT}"
     # The rest of the run travels, as a Duplicate's does.
     assert written["5"]["inputs"]["text"] == EXPORT_PROMPT
-    assert body["workflow_key"] and body["workflow_key"] != RUN_CARD
-    card = cloneable.owner.get(f"{API}/workflows/{body['workflow_key']}").json()
-    assert card["card"]["name"] == "Portrait on Krea"
-    # The original card is untouched.
+    # Only a filename changed, so the clone is the same graph and the same
+    # workflow as the one it was cloned from (#1623): its checkpoint is a
+    # recipe value, not an identity.
+    source = workflow_of_topology(cloneable.server.hub, topology_hash(cloneable.graph))
+    assert body["workflow_id"] == source
+    assert "workflow_key" not in body
+    # The original file is untouched.
     assert cloneable.graph["1"]["inputs"]["ckpt_name"] == _SHELF_FILENAME
 
 
@@ -10286,88 +9304,6 @@ def test_a_clone_where_nothing_could_be_swapped_is_refused(cloneable):
     assert r.status_code == 409, r.text
     assert "not_on_comfyui" in r.json()["detail"]
     assert list(cloneable.folder.glob("*.json")) == []
-
-
-def test_a_second_clone_onto_the_same_models_keeps_the_first_ones_name(cloneable):
-    """The same swap re-keys to the same card, whose owner's name stands."""
-    first = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT}, name="First")
-    second = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT}, name="Second")
-    assert first.status_code == second.status_code == 201
-    key = first.json()["workflow_key"]
-    assert second.json()["workflow_key"] == key
-    card = cloneable.owner.get(f"{API}/workflows/{key}").json()
-    assert card["card"]["name"] == "First"
-
-
-def _labels(hub, key):
-    """Each node's slot label on one card, from its stored document."""
-    (document,) = variant_documents(hub, find_card(hub, key).variants).values()
-    return topology_node_labels(document)
-
-
-def test_a_clone_carries_the_originals_pins_and_defaults_but_not_its_notes(
-    cloneable,
-):
-    """A model swap leaves every slot label where it was, so both fit as set.
-
-    Measured against a Duplicate of the same graph rather than RUN_CARD's
-    seeded document, which is a smaller fixture than the picture's graph.
-    """
-    owner, hub = cloneable.owner, cloneable.server.hub
-    copy = owner.post(f"{API}/workflows/{RUN_CARD}/duplicate").json()
-    labels = _labels(hub, copy["workflow_key"])
-    sampler, loader = labels["3"], labels["1"]
-    owner.put(
-        f"{API}/workflows/{RUN_CARD}/pins",
-        json={"pins": [{"slot_label": sampler, "input_name": "steps"}]},
-    )
-    owner.put(
-        f"{API}/workflows/{RUN_CARD}/defaults",
-        json={
-            "defaults": [
-                {"slot_label": sampler, "input_name": "steps", "value": 28},
-                # The old model as a default would undo the swap on first run.
-                {
-                    "slot_label": loader,
-                    "input_name": "ckpt_name",
-                    # Not the graph's own file: dropped by address, not value.
-                    "value": "some-other.safetensors",
-                },
-            ]
-        },
-    )
-    owner.patch(f"{API}/workflows/{RUN_CARD}", json={"notes": "Tuned on RealVis"})
-
-    r = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT})
-    assert r.status_code == 201, r.text
-    key = r.json()["workflow_key"]
-    assert _labels(hub, key) == labels
-    detail = owner.get(f"{API}/workflows/{key}").json()
-    assert detail["pins"] == [{"slot_label": sampler, "input_name": "steps"}]
-    assert default_overrides(hub, key) == {(sampler, "steps"): "28"}
-    assert detail["notes"] is None
-
-
-def test_a_clone_landing_on_a_card_with_its_own_pins_keeps_them(cloneable):
-    owner, hub = cloneable.owner, cloneable.server.hub
-    first = _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT}).json()
-    key = first["workflow_key"]
-    owner.put(f"{API}/workflows/{key}/pins", json={"pins": []})
-    owner.put(
-        f"{API}/workflows/{key}/defaults",
-        json={"defaults": [{"slot_label": "mine", "input_name": "cfg", "value": 3}]},
-    )
-    owner.put(
-        f"{API}/workflows/{RUN_CARD}/pins",
-        json={"pins": [{"slot_label": "theirs", "input_name": "steps"}]},
-    )
-    owner.put(
-        f"{API}/workflows/{RUN_CARD}/defaults",
-        json={"defaults": [{"slot_label": "theirs", "input_name": "cfg", "value": 9}]},
-    )
-    assert _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT}).status_code == 201
-    assert owner.get(f"{API}/workflows/{key}").json()["pins"] == []
-    assert default_overrides(hub, key) == {("mine", "cfg"): "3"}
 
 
 def test_a_clone_that_cannot_take_every_model_is_not_written(cloneable):
@@ -10403,7 +9339,7 @@ def test_a_copy_keeps_the_picture_inputs_its_file_opted_out_of(cloneable, verb):
     r = (
         _clone(cloneable, {_SHELF_FILENAME: CLONE_CHECKPOINT})
         if verb == "clone-with-models"
-        else cloneable.owner.post(f"{API}/workflows/{RUN_CARD}/duplicate")
+        else cloneable.owner.post(f"{API}/workflows/{RUN_WF}/duplicate")
     )
     assert r.status_code == 201, r.text
     written = json.loads((cloneable.folder / r.json()["name"]).read_text())
@@ -10422,7 +9358,7 @@ def test_the_base_slot_is_offered_only_what_its_loader_could_load(cloneable):
             for filename in ("krea2-q8.gguf", "unlisted.safetensors")
         ]
     try:
-        body = cloneable.owner.get(f"{API}/workflows/{RUN_CARD}/model-swap").json()
+        body = cloneable.owner.get(f"{API}/workflows/{RUN_WF}/model-swap").json()
         offered = {m["filename"] for m in body["checkpoints"]}
         # Listed by the CheckpointLoaderSimple ComfyUI answers for.
         assert CLONE_CHECKPOINT in offered
@@ -10433,7 +9369,7 @@ def test_the_base_slot_is_offered_only_what_its_loader_could_load(cloneable):
         cloneable.monkeypatch.setattr(
             workflows_routes, "_read_object_info", lambda url: (None, "down")
         )
-        down = cloneable.owner.get(f"{API}/workflows/{RUN_CARD}/model-swap").json()
+        down = cloneable.owner.get(f"{API}/workflows/{RUN_WF}/model-swap").json()
         offered = {m["filename"] for m in down["checkpoints"]}
         # Unchecked, so every file of the loader's type; never the GGUF one.
         assert "unlisted.safetensors" in offered
@@ -10445,7 +9381,7 @@ def test_the_base_slot_is_offered_only_what_its_loader_could_load(cloneable):
 
 def test_cloning_a_card_with_no_graph_is_a_409(workflow_env):
     r = workflow_env.owner.post(
-        f"{API}/workflows/{BINNED_CARD}/clone-with-models",
+        f"{API}/workflows/{BINNED_WF}/clone-with-models",
         json={"name": "x", "swaps": {"a.safetensors": "b.safetensors"}},
     )
     assert r.status_code == 409, r.text
@@ -10456,7 +9392,7 @@ def test_a_replacement_that_is_not_a_model_file_is_a_422(cloneable):
 
 
 def test_the_swap_options_name_the_graphs_files_and_the_shelf(cloneable):
-    r = cloneable.owner.get(f"{API}/workflows/{RUN_CARD}/model-swap")
+    r = cloneable.owner.get(f"{API}/workflows/{RUN_WF}/model-swap")
     assert r.status_code == 200, r.text
     body = r.json()
     slots = {slot["filename"]: slot for slot in body["slots"]}
@@ -10471,7 +9407,7 @@ def test_the_swap_options_name_the_graphs_files_and_the_shelf(cloneable):
     assert body["proposals"] == {}
 
     chosen = cloneable.owner.get(
-        f"{API}/workflows/{RUN_CARD}/model-swap",
+        f"{API}/workflows/{RUN_WF}/model-swap",
         params={"checkpoint_id": cloneable.checkpoint_id},
     ).json()
     assert chosen["checkpoint_family"] == "flux1"
@@ -10498,7 +9434,7 @@ def test_the_swap_options_carry_the_companion_proposals(cloneable):
 
     cloneable.monkeypatch.setattr(workflows_routes, "propose_companions", proposals)
     body = cloneable.owner.get(
-        f"{API}/workflows/{RUN_CARD}/model-swap",
+        f"{API}/workflows/{RUN_WF}/model-swap",
         params={"checkpoint_id": cloneable.checkpoint_id},
     ).json()
     assert asked == [cloneable.checkpoint_id]
@@ -10520,7 +9456,7 @@ def test_a_lora_trained_on_another_family_is_flagged_never_dropped(cloneable):
             (RUN_ADAPTER_DIGEST,),
         )
     body = cloneable.owner.get(
-        f"{API}/workflows/{RUN_CARD}/model-swap",
+        f"{API}/workflows/{RUN_WF}/model-swap",
         params={"checkpoint_id": cloneable.checkpoint_id},
     ).json()
     assert body["flags"] == [
@@ -10539,7 +9475,7 @@ def test_a_lora_trained_on_another_family_is_flagged_never_dropped(cloneable):
             (RUN_ADAPTER_DIGEST,),
         )
     video = cloneable.owner.get(
-        f"{API}/workflows/{RUN_CARD}/model-swap",
+        f"{API}/workflows/{RUN_WF}/model-swap",
         params={"checkpoint_id": cloneable.checkpoint_id},
     ).json()
     assert [(f["family"], f["modality"]) for f in video["flags"]] == [("wan", "video")]
@@ -10549,7 +9485,7 @@ def test_a_lora_trained_on_another_family_is_flagged_never_dropped(cloneable):
             (RUN_ADAPTER_DIGEST,),
         )
     same_family = cloneable.owner.get(
-        f"{API}/workflows/{RUN_CARD}/model-swap",
+        f"{API}/workflows/{RUN_WF}/model-swap",
         params={"checkpoint_id": cloneable.checkpoint_id},
     ).json()
     assert same_family["flags"] == []
@@ -10639,7 +9575,7 @@ def test_the_replacements_go_with_the_checkpoint_and_load_in_the_loader(cloneabl
 
     def offered(replacing, **params):
         r = cloneable.owner.get(
-            f"{API}/workflows/{RUN_CARD}/model-swap",
+            f"{API}/workflows/{RUN_WF}/model-swap",
             params={"replacing": replacing, **params},
         )
         assert r.status_code == 200, r.text
@@ -10683,7 +9619,7 @@ def test_the_replacements_go_with_the_checkpoint_and_load_in_the_loader(cloneabl
     # One file in slots of two kinds: which to replace is the caller's to say.
     graph["22"]["inputs"]["clip_name"] = "test-vae-fp8.pt"
     r = cloneable.owner.get(
-        f"{API}/workflows/{RUN_CARD}/model-swap",
+        f"{API}/workflows/{RUN_WF}/model-swap",
         params={"replacing": "test-vae-fp8.pt"},
     )
     assert r.status_code == 409, r.text
@@ -10692,7 +9628,7 @@ def test_the_replacements_go_with_the_checkpoint_and_load_in_the_loader(cloneabl
     graph["22"]["inputs"]["clip_name"] = "test-umt5-q8.gguf"
     # A kind the graph does not load the file as, or a file it does not load.
     r = cloneable.owner.get(
-        f"{API}/workflows/{RUN_CARD}/model-swap",
+        f"{API}/workflows/{RUN_WF}/model-swap",
         params={"replacing": "test-vae-fp8.pt", "slot_kind": "text_encoder"},
     )
     assert r.status_code == 409, r.text
@@ -10700,7 +9636,7 @@ def test_the_replacements_go_with_the_checkpoint_and_load_in_the_loader(cloneabl
         "This workflow loads that model as a VAE, not a text encoder."
     ), r.text
     r = cloneable.owner.get(
-        f"{API}/workflows/{RUN_CARD}/model-swap",
+        f"{API}/workflows/{RUN_WF}/model-swap",
         params={"replacing": "test-not-in-graph.safetensors"},
     )
     assert r.status_code == 409, r.text
@@ -10765,7 +9701,7 @@ def test_a_replacement_the_loader_cannot_load_is_offered_through_our_loader(
 
     def offered(replacing):
         r = cloneable.owner.get(
-            f"{API}/workflows/{RUN_CARD}/model-swap",
+            f"{API}/workflows/{RUN_WF}/model-swap",
             params={"replacing": replacing},
         )
         assert r.status_code == 200, r.text
@@ -10835,7 +9771,7 @@ def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
 
     def offered():
         body = cloneable.owner.get(
-            f"{API}/workflows/{RUN_CARD}/model-swap",
+            f"{API}/workflows/{RUN_WF}/model-swap",
             params={"replacing": _SHELF_FILENAME},
         ).json()
         return [c["filename"] for c in body["replacements"]], body[
@@ -10893,7 +9829,7 @@ def test_an_empty_checkpoints_folder_says_the_checkpoint_is_missing(cloneable):
     cloneable.monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (info, None)
     )
-    plan = _preflight(cloneable.owner, workflow_key=RUN_CARD, values=[])
+    plan = _preflight(cloneable.owner, workflow_id=RUN_WF, values=[])
     missing = [
         model
         for group in plan["groups"]
@@ -10903,7 +9839,7 @@ def test_an_empty_checkpoints_folder_says_the_checkpoint_is_missing(cloneable):
     ]
     assert {"file": _SHELF_FILENAME, "folder": "checkpoints"} in missing, plan
     body = cloneable.owner.get(
-        f"{API}/workflows/{RUN_CARD}/model-swap",
+        f"{API}/workflows/{RUN_WF}/model-swap",
         params={"replacing": _SHELF_FILENAME},
     ).json()
     assert (body["replacements"], body["replacements_reason"]) == (
@@ -10921,7 +9857,7 @@ def test_no_replacement_is_offered_without_a_checkpoint_to_go_with(cloneable):
         lambda server, pid, object_info=None: (graph, []),
     )
     body = cloneable.owner.get(
-        f"{API}/workflows/{RUN_CARD}/model-swap",
+        f"{API}/workflows/{RUN_WF}/model-swap",
         params={"replacing": "test-vae-fp8.safetensors"},
     ).json()
     assert (body["replacements"], body["replacements_reason"]) == (
@@ -10935,18 +9871,18 @@ def test_the_swap_options_refuse_a_checkpoint_id_that_is_not_one(cloneable):
         "SELECT id FROM model WHERE file_kind = 'adapter' LIMIT 1"
     )[0]["id"]
     r = cloneable.owner.get(
-        f"{API}/workflows/{RUN_CARD}/model-swap", params={"checkpoint_id": lora_id}
+        f"{API}/workflows/{RUN_WF}/model-swap", params={"checkpoint_id": lora_id}
     )
     assert r.status_code == 404, r.text
 
 
 def test_deleting_a_card_the_library_knows_from_its_pictures_is_refused(workflow_env):
     """Found workflows are hide-only, and the refusal says which gesture to use."""
-    r = workflow_env.owner.delete(f"{API}/workflows/{BUSY_CARD}")
+    r = workflow_env.owner.delete(f"{API}/workflows/{BUSY_WF}")
     assert r.status_code == 409, r.text
     assert "hide" in r.json()["detail"].lower()
     # Nothing went: the card is still on the grid.
-    assert workflow_env.owner.get(f"{API}/workflows/{BUSY_CARD}").status_code == 200
+    assert workflow_env.owner.get(f"{API}/workflows/{BUSY_WF}").status_code == 200
 
 
 def test_deleting_an_imported_workflow_trashes_it_and_takes_it_off_the_card(
@@ -10962,9 +9898,9 @@ def test_deleting_an_imported_workflow_trashes_it_and_takes_it_off_the_card(
             "VALUES ('imported.json', ?, ?, ?)",
             (RUN_CARD, RUN_TOPOLOGY, RUN_RECIPE),
         )
-    r = runnable.owner.delete(f"{API}/workflows/{RUN_CARD}")
+    r = runnable.owner.delete(f"{API}/workflows/{RUN_WF}")
     assert r.status_code == 200, r.text
-    assert r.json() == {"deleted": "imported.json", "workflow_key": RUN_CARD}
+    assert r.json() == {"deleted": "imported.json", "workflow_id": RUN_WF}
     assert not (tmp_path / "imported.json").exists()
     assert (
         runnable.server.hub.fetchall(
@@ -10972,7 +9908,7 @@ def test_deleting_an_imported_workflow_trashes_it_and_takes_it_off_the_card(
         )
         == []
     )
-    assert runnable.owner.get(f"{API}/workflows/{RUN_CARD}").status_code == 200
+    assert runnable.owner.get(f"{API}/workflows/{RUN_WF}").status_code == 200
 
 
 # A graph with no LoRA loader at all: the state `no_lora_loader` names and the
@@ -11041,7 +9977,7 @@ def loaderless(runnable, tmp_path):
 
 def test_inserting_a_lora_loader_writes_a_copy_with_a_slot_to_swap_into(loaderless):
     """The #1376 splice, kept: a new file whose LoRA slot is there to be filled."""
-    r = loaderless.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
+    r = loaderless.owner.post(f"{API}/workflows/{RUN_WF}/insert-lora-loader")
     assert r.status_code == 201, r.text
     body = r.json()
     assert body["class_type"] == "LoraLoaderModelOnly"
@@ -11070,9 +10006,7 @@ def test_inserting_a_loader_leaves_the_original_workflow_alone(loaderless):
     """
     original = loaderless.tmp_path / "original.json"
     original.write_text(json.dumps(LOADERLESS_DOCUMENT))
-    body = loaderless.owner.post(
-        f"{API}/workflows/{RUN_CARD}/insert-lora-loader"
-    ).json()
+    body = loaderless.owner.post(f"{API}/workflows/{RUN_WF}/insert-lora-loader").json()
     assert json.loads(original.read_text()) == LOADERLESS_DOCUMENT
     written = json.loads((loaderless.tmp_path / body["name"]).read_text())
     assert written != LOADERLESS_DOCUMENT
@@ -11088,7 +10022,7 @@ def test_inserting_a_loader_into_a_workflow_that_has_one_adds_it_after_the_sourc
     refused this; the owner's rule since is that the MODEL path from the
     model source to the sampler always takes another LoRA.
     """
-    r = chained.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
+    r = chained.owner.post(f"{API}/workflows/{RUN_WF}/insert-lora-loader")
     assert r.status_code == 201, r.text
     body = r.json()
     written = json.loads((chained.tmp_path / body["name"]).read_text())
@@ -11111,7 +10045,7 @@ def test_inserting_a_loader_without_comfyui_is_a_503_not_a_guess(runnable, tmp_p
     runnable.monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (None, "connection refused")
     )
-    r = runnable.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
+    r = runnable.owner.post(f"{API}/workflows/{RUN_WF}/insert-lora-loader")
     assert r.status_code == 503, r.text
     assert list(tmp_path.glob("*.json")) == [], "a file was written anyway"
 
@@ -11224,7 +10158,7 @@ def chained(runnable, tmp_path):
 
 def _chain_edit(client, *entries, **extra):
     return client.put(
-        f"{API}/workflows/{RUN_CARD}/lora-chain",
+        f"{API}/workflows/{RUN_WF}/lora-chain",
         json={"entries": list(entries), **extra},
     )
 
@@ -11235,7 +10169,7 @@ def test_the_chain_is_read_in_apply_order_with_the_unknown_loader_flagged(chaine
     Wrong if node 5 is missing (hidden) or listed before node 2 (the order a
     run applies them is the order the editor edits).
     """
-    r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
+    r = chained.owner.get(f"{API}/workflows/{RUN_WF}/lora-chain")
     assert r.status_code == 200, r.text
     chain = r.json()
     assert chain["editable"] is True, chain
@@ -11257,7 +10191,7 @@ def test_the_chain_is_still_shown_when_comfyui_is_down(chained):
         "_read_object_info",
         lambda url, **_: (None, "connection refused"),
     )
-    r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
+    r = chained.owner.get(f"{API}/workflows/{RUN_WF}/lora-chain")
     assert r.status_code == 200, r.text
     chain = r.json()
     assert chain["editable"] is False
@@ -11313,7 +10247,7 @@ def test_a_chain_refused_for_its_shape_still_names_both_ends(chained):
             }
         ),
     )
-    r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
+    r = chained.owner.get(f"{API}/workflows/{RUN_WF}/lora-chain")
     assert r.status_code == 200, r.text
     chain = r.json()
     assert chain["editable"] is False
@@ -11347,7 +10281,7 @@ def test_a_fork_is_read_as_a_trunk_and_one_lane_per_pass(chained):
     leave #5 to ComfyUI), or a lane is missing its sampler.
     """
     _two_pass_chain(chained)
-    r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
+    r = chained.owner.get(f"{API}/workflows/{RUN_WF}/lora-chain")
     assert r.status_code == 200, r.text
     chain = r.json()
     assert chain["editable"] is True, chain["refusal"]
@@ -11422,7 +10356,7 @@ def test_a_character_prompt_builder_does_not_stop_a_lora_being_added(chained):
         ),
         info,
     )
-    r = chained.owner.get(f"{API}/workflows/{RUN_CARD}/lora-chain")
+    r = chained.owner.get(f"{API}/workflows/{RUN_WF}/lora-chain")
     assert r.status_code == 200, r.text
     chain = r.json()
     assert chain["editable"] is True, chain["refusal"]
@@ -11453,12 +10387,12 @@ def test_a_dry_run_lists_the_changes_and_writes_nothing(chained):
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["dry_run"] is True
-    assert body["workflow_key"] is None
+    assert body["workflow_id"] is None
     assert ("deleted", "5") in {(c["kind"], c["node_id"]) for c in body["changes"]}
     assert list(chained.tmp_path.glob("*.json")) == [], "a dry run wrote a file"
 
 
-def test_deleting_a_loader_writes_a_new_card_whose_readers_skip_it(chained):
+def test_deleting_a_loader_writes_a_new_file_whose_readers_skip_it(chained):
     """The whole point of the write: every MODEL and CLIP reader closes over the gap.
 
     The original is written to disk first so its bytes can be compared after.
@@ -11468,7 +10402,12 @@ def test_deleting_a_loader_writes_a_new_card_whose_readers_skip_it(chained):
     r = _chain_edit(chained.owner, {"node_id": "2", "strength": 0.8})
     assert r.status_code == 201, r.text
     body = r.json()
-    assert body["workflow_key"] and body["workflow_key"] != RUN_CARD
+    # The new file's workflow: a LoRA loader is not part of the core, so the
+    # edited graph is in the same workflow as the chain it was edited from.
+    assert body["workflow_id"] == AUTO_STACK_PREFIX + core_hash(
+        structural_document(CHAIN_DOCUMENT), strip_loras=STRIP_LORAS_FOR_STACKS
+    )
+    assert "workflow_key" not in body
     written = json.loads((chained.tmp_path / body["name"]).read_text())
     assert "5" not in written, written
     assert written["3"]["inputs"]["model"] == ["2", 0]
@@ -11566,7 +10505,7 @@ def test_a_skipped_lora_leaves_this_runs_graph_and_nothing_else(runnable):
     The LoRA IS on this ComfyUI, so nothing but the request takes it out.
     """
     body = {
-        "workflow_key": RUN_CARD,
+        "workflow_id": RUN_WF,
         "skip_loras": [{"node_id": "2", "field": "lora_name"}],
     }
     payload = _preflight(runnable.owner, **body)
@@ -11583,7 +10522,7 @@ def test_a_skipped_lora_leaves_this_runs_graph_and_nothing_else(runnable):
 
 def test_the_same_run_without_a_skip_keeps_the_loader(runnable):
     """The positive control for the skip above: the loader is there by default."""
-    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
     assert r.status_code == 200, r.text
     assert "2" in runnable.submitted[0]["graph"]
     assert r.json()["groups"][0]["bypassed_loras"] == []
@@ -11592,7 +10531,7 @@ def test_the_same_run_without_a_skip_keeps_the_loader(runnable):
 def test_skipping_a_slot_no_graph_has_is_a_400(runnable):
     r = runnable.owner.post(
         f"{API}/workflows/run/preflight",
-        json={"workflow_key": RUN_CARD, "skip_loras": [{"node_id": "99"}]},
+        json={"workflow_id": RUN_WF, "skip_loras": [{"node_id": "99"}]},
     )
     assert r.status_code == 400, r.text
     assert "99" in r.json()["detail"]
@@ -11602,7 +10541,7 @@ def test_a_slot_both_filled_and_skipped_is_refused(runnable):
     r = runnable.owner.post(
         f"{API}/workflows/run/preflight",
         json={
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "loras": [{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
             "skip_loras": [{"node_id": "2"}],
         },
@@ -11645,7 +10584,7 @@ def _upscaled_run(runnable, monkeypatch, object_info) -> None:
 
 def test_a_skipped_upscale_leaves_this_runs_graph(runnable, monkeypatch):
     _upscaled_run(runnable, monkeypatch, object_info=True)
-    body = {"workflow_key": RUN_CARD, "skip_stages": ["upscale"]}
+    body = {"workflow_id": RUN_WF, "skip_stages": ["upscale"]}
     r = runnable.owner.post(f"{API}/workflows/run", json=body)
     assert r.status_code == 200, r.text
     graph = runnable.submitted[0]["graph"]
@@ -11655,7 +10594,7 @@ def test_a_skipped_upscale_leaves_this_runs_graph(runnable, monkeypatch):
 
 def test_the_same_run_without_skip_stages_keeps_the_upscale(runnable, monkeypatch):
     _upscaled_run(runnable, monkeypatch, object_info=True)
-    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
     assert r.status_code == 200, r.text
     assert runnable.submitted[0]["graph"]["4"]["inputs"]["images"] == ["5", 0]
 
@@ -11664,7 +10603,7 @@ def test_a_stage_that_cannot_be_skipped_never_runs_whole(runnable, monkeypatch):
     """Consent to an unchecked ComfyUI does not reach a refused stage."""
     _upscaled_run(runnable, monkeypatch, object_info=False)
     body = {
-        "workflow_key": RUN_CARD,
+        "workflow_id": RUN_WF,
         "skip_stages": ["upscale"],
         "allow_unchecked": True,
     }
@@ -11677,7 +10616,7 @@ def test_a_stage_that_cannot_be_skipped_never_runs_whole(runnable, monkeypatch):
 def test_an_unknown_stage_is_a_422(runnable):
     r = runnable.owner.post(
         f"{API}/workflows/run/preflight",
-        json={"workflow_key": RUN_CARD, "skip_stages": ["lora"]},
+        json={"workflow_id": RUN_WF, "skip_stages": ["lora"]},
     )
     assert r.status_code == 422, r.text
 
@@ -11735,7 +10674,7 @@ def test_a_skip_is_not_undone_by_the_saved_recipes_loras(chained):
         f"{API}/recipes",
         json={
             "name": "skip keeps its word",
-            "workflow_key": RUN_CARD,
+            "workflow_id": RUN_WF,
             "prompt": "a cat",
             "loras": [
                 {
@@ -11754,7 +10693,12 @@ def test_a_skip_is_not_undone_by_the_saved_recipes_loras(chained):
     assert run.status_code == 200, run.text
     graph = chained.submitted[0]["graph"]
     assert "2" not in graph, graph
-    assert graph["5"]["inputs"]["lora_name"] == "Mystery_Style.safetensors", graph
+    # The recipe's own LoRA went with the skipped loader and nowhere else: no
+    # loader the owner did not name picked it up.
+    assert all(
+        node.get("inputs", {}).get("lora_name") != RUN_ADAPTER_FILENAME
+        for node in graph.values()
+    ), graph
 
 
 def test_a_skip_on_a_run_of_several_workflows_is_refused(runnable):
@@ -12171,7 +11115,7 @@ def test_a_graph_too_deeply_nested_to_walk_is_refused_not_a_500(runnable, monkey
             [],
         ),
     )
-    r = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/export")
+    r = runnable.owner.get(f"{API}/workflows/{RUN_WF}/export")
     assert r.status_code == 409, r.text
 
 
@@ -12190,7 +11134,7 @@ def test_a_comfyui_with_no_lora_files_refuses_the_insert_rather_than_writing_one
     loaderless.monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (empty, None)
     )
-    r = loaderless.owner.post(f"{API}/workflows/{RUN_CARD}/insert-lora-loader")
+    r = loaderless.owner.post(f"{API}/workflows/{RUN_WF}/insert-lora-loader")
     assert r.status_code == 409, r.text
     assert "which LoRA files" in r.json()["detail"]
     assert list(loaderless.tmp_path.glob("*.json")) == [], "a file was written anyway"

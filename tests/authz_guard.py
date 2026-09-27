@@ -47,7 +47,7 @@ def matched_route_paths(app, method: str, path: str) -> list:
     """Every real route template that fully matches ``method path``.
 
     The templates, not a boolean, because a single-segment template such as
-    ``/api/v1/workflows/{workflow_key}`` matches *any* string in that segment:
+    ``/api/v1/workflows/{workflow_id}`` matches *any* string in that segment:
     "some route answered" stops distinguishing the handler under test from a
     renamed one, which is the vacuity :func:`assert_real_route` exists to
     refuse. See ``template`` there.
@@ -69,8 +69,8 @@ def matched_route_paths(app, method: str, path: str) -> list:
             continue
         # Matched against the RESOLVED template rather than by asking the route
         # object: `iter_api_route_contexts` yields the route as it was declared
-        # inside its module (`/workflows/{workflow_key}`) beside the effective,
-        # prefix-resolved path (`/api/v1/workflows/{workflow_key}`), so
+        # inside its module (`/workflows/{workflow_id}`) beside the effective,
+        # prefix-resolved path (`/api/v1/workflows/{workflow_id}`), so
         # `route.matches()` would be testing the concrete path against the
         # unprefixed pattern and never match.
         pattern, _fmt, _conv = compile_path(template)
@@ -127,7 +127,8 @@ def assert_real_route(app, method: str, path: str, template: str = "") -> None:
     200 from the frontend fallback.
 
     **Pass ``template`` whenever the path's last segment is a free variable.**
-    Since #1410 moved the cards onto ``/workflows/{workflow_key}``, every string
+    Since #1410 moved the cards onto ``/workflows/{workflow_key}`` (now
+    ``{workflow_id}``, #1623), every string
     in that position matches something - ``/api/v1/workflows/anything-at-all``
     included - so the bare form no longer proves the handler under test is the
     one that answered, and a renamed handler would leave the assertion green.
@@ -139,7 +140,7 @@ def assert_real_route(app, method: str, path: str, template: str = "") -> None:
         method: HTTP method, e.g. ``"GET"``.
         path: A concrete request path.
         template: Optional route template the match must be, e.g.
-            ``"/api/v1/workflows/{workflow_key}"``.
+            ``"/api/v1/workflows/{workflow_id}"``.
 
     Raises:
         AssertionError: If no real route matches, or none matches ``template``.

@@ -405,12 +405,10 @@ def resolve_source(
     # an answer to "can this run" while a picture or an instance could answer -
     # but when nothing else did, ``no_runnable_source`` would send the owner
     # looking for a workflow they are in fact holding, in the wrong format.
+    # The card key is internal (#1623); the caller names the workflow.
     return None, Reason(
         UI_FORMAT if ui_only else NO_RUNNABLE_SOURCE,
-        {
-            "workflow_key": getattr(card, "workflow_key", None),
-            **({"file_name": getattr(card, "file_name", None)} if ui_only else {}),
-        },
+        {"file_name": getattr(card, "file_name", None)} if ui_only else {},
     )
 
 

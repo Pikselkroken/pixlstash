@@ -1,9 +1,9 @@
 """Saved recipes: the vault side, and the credit that is computed rather than stored.
 
-The rows are :class:`~pixlstash.db_models.saved_recipe.SavedRecipe`; which
-workflows a recipe runs on is a hub question, answered by
-``hub/workflow_cards.py`` (``effective_stack_keys`` and
-``variant_hashes_for_keys``), which the route asks first and hands here as
+The rows are :class:`~pixlstash.db_models.saved_recipe.SavedRecipe`, each on
+one workflow (``workflow_id``). Which variants that workflow holds is a hub
+question, answered by ``hub/workflow_card_reads.py``
+(``variants_in_workflow``), which the route asks first and hands here as
 structural hashes. Nothing in this module crosses the database boundary.
 
 **Credit is a match, not a link** (implementation plan §5.5). A recipe accounts
@@ -139,7 +139,9 @@ def serialize(recipe: SavedRecipe) -> dict:
         "id": recipe.id,
         "name": recipe.name,
         "position": recipe.position,
-        "workflow_key": recipe.workflow_key,
+        # The workflow it runs on. ``workflow_key`` (the card it was saved
+        # from) is internal storage and never leaves this module (#1623).
+        "workflow_id": recipe.workflow_id,
         "prompt": recipe.prompt or "",
         "negative": recipe.negative,
         "loras": _decode(
@@ -151,12 +153,23 @@ def serialize(recipe: SavedRecipe) -> dict:
             field="overrides",
             where=f"saved recipe {recipe.id}",
         ),
+        # NULL pins nothing, so the default recipe's models load.
+        "models": (
+            None
+            if recipe.models is None
+            else _decode(
+                recipe.models,
+                None,
+                field="models",
+                where=f"saved recipe {recipe.id}",
+            )
+        ),
         "seed": recipe.seed,
         "keep_seed": bool(recipe.keep_seed),
         "source_picture_id": recipe.source_picture_id,
         "created_at": recipe.created_at.isoformat() if recipe.created_at else None,
         # Filled in by the route once the hub has said which variants the
-        # recipe's stack covers; 0 when the caller asked for no credit.
+        # recipe's workflow covers; 0 when the caller asked for no credit.
         "pictures": 0,
     }
 
@@ -167,30 +180,31 @@ def serialize(recipe: SavedRecipe) -> dict:
 
 
 def list_in_session(
-    session: Session, workflow_keys: Optional[list[str]] = None
+    session: Session, workflow_ids: Optional[list[str]] = None
 ) -> list[dict]:
     """The recipes of these workflows, or every recipe when none are named.
+
+    A recipe the vault conversion has not reached yet (``workflow_id`` NULL)
+    is on no workflow, so it lists only in the unfiltered read.
 
     Ordered by ``position`` then ``id``: the tab lists several workflows'
     recipes together and their positions are only unique within the list the
     owner last ordered, so the id is what keeps the order total and stable.
     """
-    if workflow_keys is None:
+    if workflow_ids is None:
         rows = session.exec(
             select(SavedRecipe).order_by(SavedRecipe.position, SavedRecipe.id)
         ).all()
         return [serialize(row) for row in rows]
-    if not workflow_keys:
+    if not workflow_ids:
         return []
-    # Chunked: a multiple selection expands every selected card to its whole
-    # stack, so this list is the caller's gesture times the stacks behind it
-    # and can cross SQLite's bound-parameter floor. Re-sorted after the merge
-    # because the order is the tab's, not any one chunk's.
+    # Chunked, as every IN here is. Re-sorted after the merge because the
+    # order is the tab's, not any one chunk's.
     rows = []
-    for chunk in chunked(list(workflow_keys)):
+    for chunk in chunked(list(workflow_ids)):
         rows.extend(
             session.exec(
-                select(SavedRecipe).where(SavedRecipe.workflow_key.in_(chunk))
+                select(SavedRecipe).where(SavedRecipe.workflow_id.in_(chunk))
             ).all()
         )
     rows.sort(key=lambda row: (row.position, row.id))
@@ -203,14 +217,14 @@ def rekey_in_session(session: Session, moved: dict[str, list[str]]) -> int:
     **This is the migration ``db_models/saved_recipe.py`` says the change that
     makes a re-keying reachable owes this table** (v1.12 B4). A card key is
     content, so it survives a regrouping, an Unstack and a ``CORE_VERSION``
-    bump - but not a slot-mark flip, which recomputes it. A recipe left on the
+    bump - but not a model fix, which recomputes it. A recipe left on the
     old key is addressed by a key no variant carries: its workflow's tab stops
     listing it and nothing says where it went, and unlike a hub row it is
     **authored** and cannot be rebuilt from anything.
 
     Args:
         moved: ``{old key: [new key, ...]}`` from
-            :func:`pixlstash.hub.workflow_card_writes.flip_slot_marks`,
+            :func:`pixlstash.hub.workflow_card_writes.set_model_fix`,
             biggest successor first.
 
     Returns:
@@ -267,6 +281,42 @@ def counts_by_workflow_key(session: Session) -> dict[str, int]:
         )
     ).all()
     return {workflow_key: count for workflow_key, count in rows}
+
+
+def counts_by_workflow_id(session: Session) -> dict[str, int]:
+    """How many saved recipes each workflow holds, for the whole library.
+
+    The workflow grid's number (#1623), one ``GROUP BY`` like
+    :func:`counts_by_workflow_key`. Recipes the vault conversion has not
+    reached yet are on no workflow and are not counted.
+    """
+    rows = session.exec(
+        select(SavedRecipe.workflow_id, func.count(SavedRecipe.id))
+        .where(SavedRecipe.workflow_id.is_not(None))
+        .group_by(SavedRecipe.workflow_id)
+    ).all()
+    return {workflow_id: count for workflow_id, count in rows}
+
+
+def rehome_in_session(session: Session, old_ids: list[str], new_id: str) -> int:
+    """Move every recipe of these workflows onto *new_id*; how many moved.
+
+    For a merge (#1623): the workflows it folds away stop existing, and a
+    recipe left naming one would list nowhere and run nowhere. Authored rows,
+    so they follow rather than go.
+    """
+    moved = 0
+    for chunk in chunked([old for old in old_ids if old != new_id]):
+        rows = session.exec(
+            select(SavedRecipe).where(SavedRecipe.workflow_id.in_(chunk))
+        ).all()
+        for row in rows:
+            row.workflow_id = new_id
+            session.add(row)
+        moved += len(rows)
+    if moved:
+        session.commit()
+    return moved
 
 
 def credit_groups_in_session(
@@ -346,8 +396,11 @@ def create_in_session(session: Session, fields: dict) -> dict:
     """
     _require_source_picture(session, fields.get("source_picture_id"))
     highest = session.exec(select(func.max(SavedRecipe.position))).one()
+    models = fields.get("models")
     recipe = SavedRecipe(
         workflow_key=fields["workflow_key"],
+        workflow_id=fields["workflow_id"],
+        models=None if models is None else json.dumps(models),
         name=fields.get("name") or "",
         position=0 if highest is None else highest + 1,
         prompt=fields.get("prompt") or "",
@@ -371,7 +424,7 @@ def update_in_session(
     """Write the named fields of one recipe. ``None`` when there is no such row.
 
     Only fields the caller actually sent are written, so a PATCH carrying a name
-    does not blank a prompt; ``workflow_key`` and ``position`` are not writable
+    does not blank a prompt; the workflow and ``position`` are not writable
     here, the first because a recipe does not move between workflows and the
     second because ordering is ``PUT /recipes/order``'s whole job.
 
@@ -578,9 +631,9 @@ def used_looks(
 # ---------------------------------------------------------------------------
 
 
-def read_recipes(vault, workflow_keys: Optional[list[str]] = None) -> list[dict]:
+def read_recipes(vault, workflow_ids: Optional[list[str]] = None) -> list[dict]:
     """Every saved recipe of these workflows, ordered for the tab."""
-    return vault.db.run_immediate_read_task(list_in_session, workflow_keys)
+    return vault.db.run_immediate_read_task(list_in_session, workflow_ids)
 
 
 def read_credit_groups(
@@ -622,6 +675,15 @@ def rekey_recipes(vault, moved: dict[str, list[str]]) -> int:
     if not moved:
         return 0
     return vault.db.run_task(rekey_in_session, moved)
+
+
+def rehome_recipes(vault, old_ids: list[str], new_id: str) -> int:
+    """Follow a merge: recipes of *old_ids* move to *new_id*.
+
+    A vault write after the hub's, like :func:`rekey_recipes`, and for the
+    same reason not in its transaction.
+    """
+    return vault.db.run_task(rehome_in_session, old_ids, new_id)
 
 
 def read_in_session(session: Session, recipe_id: int) -> Optional[SavedRecipe]:

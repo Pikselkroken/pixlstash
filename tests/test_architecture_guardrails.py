@@ -3107,12 +3107,13 @@ def _hub_tables_keyed_on_a_workflow_key() -> set[str]:
 def test_a_mark_flip_carries_every_table_a_card_key_appears_in():
     """``_KEYED_TABLES`` is derivable, so it is derived rather than remembered.
 
-    A slot-mark flip re-keys every card of a topology and carries the owner's
-    decisions across (``hub/workflow_card_writes.flip_slot_marks``). The
-    carry-over loops over ``_KEYED_TABLES``, so a card table added to the
-    schema and not to that tuple is a name, a set of pins or a stack
-    membership silently dropped by the next flip - a loss with no error and no
-    log, on rows that cannot be rebuilt.
+    A model fix re-keys every card of a topology and carries the card tables
+    across (``hub/workflow_card_writes.set_model_fix``), which the cut-over's
+    conversion reads once (#1623). The carry-over loops over
+    ``_KEYED_TABLES``, so a card table added to the schema and not to that
+    tuple is a name, a set of pins or a stack membership silently dropped by
+    the next re-key - a loss with no error and no log, on rows that cannot be
+    rebuilt.
 
     The module says the tuple is "the one place a new card table has to be
     listed", which makes it easy to find and does nothing to make it fail.

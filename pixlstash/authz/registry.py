@@ -1740,11 +1740,11 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     # ── workflows.py (workflow implementation plan §F1/§F2, the library view) ─
     # OWNER_ONLY throughout, and it is a decision rather than a default. The
-    # grid (v1.12 B3, on `GET /workflows` since B9 retired the topology list)
-    # is `variant_activity` and a `ROW_NUMBER()` window over every non-deleted
+    # grid (`GET /workflows`, one entry per workflow since #1623) is
+    # `variant_activity` and a `ROW_NUMBER()` window over every non-deleted
     # picture in the vault, so it hands out whole-library counts AND the
-    # picture ids of every card's cover strip; the detail adds the parameter
-    # values the owner's best pictures were made with, read out of stored
+    # picture ids of every workflow's cover strip; the detail adds the default
+    # recipe the owner's best pictures were made with, read out of stored
     # instance documents; and the hub read beside them returns the model
     # filenames a graph names, which on a real shelf name people. A picture-,
     # set- or project-scoped token holding any of it would learn the size of
@@ -1752,146 +1752,127 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # disclosure class §16 exists for. Nothing here is a host path or a host
     # capability, so none of it climbs to the §16.3 tier; nothing here mutates.
     ("GET", "/api/v1/workflows"): RoutePolicy(_OWNER),
-    ("GET", "/api/v1/workflows/{workflow_key}"): RoutePolicy(_OWNER),
-    ("GET", "/api/v1/workflows/{workflow_key}/pictures"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/workflows/{workflow_id}"): RoutePolicy(_OWNER),
+    ("GET", "/api/v1/workflows/{workflow_id}/pictures"): RoutePolicy(_OWNER),
     ("GET", "/api/v1/workflows/recipes/{structural_hash}/graph"): RoutePolicy(_OWNER),
-    # The card writes (v1.12 B4). OWNER_ONLY throughout and, unlike the reads
+    # The workflow writes (#1623). OWNER_ONLY throughout and, unlike the reads
     # above it, this tier is not even a judgement about disclosure: every one
     # of them is the owner editing their own library - what a workflow is
-    # called, which of its LoRA slots are part of it, which cards share a
-    # stack - and none of it is scoped to a picture, a set, a character or a
-    # project, so there is no narrower policy that could describe it. The
-    # verbs carry their own belt as well: the READ-token middleware refuses
-    # PATCH, PUT and POST before the gate reads a declaration.
+    # called, what its default recipe is, which topologies belong together -
+    # and none of it is scoped to a picture, a set, a character or a project,
+    # so there is no narrower policy that could describe it. The verbs carry
+    # their own belt as well: the READ-token middleware refuses PATCH, PUT and
+    # POST before the gate reads a declaration.
     #
-    # Two of them answer with the card they changed, which is the same
-    # whole-library disclosure `GET /workflows/{workflow_key}` is owner
-    # only for, and `PUT .../slots` is the one that mutates identity: it
-    # re-keys every card of a topology and carries the owner's attributes
-    # across. Nothing here is a host path or a host capability.
-    ("PATCH", "/api/v1/workflows/{workflow_key}"): RoutePolicy(
+    # Several answer with the workflow they changed, which is the same
+    # whole-library disclosure `GET /workflows/{workflow_id}` is owner only
+    # for. Nothing here is a host path or a host capability.
+    ("PATCH", "/api/v1/workflows/{workflow_id}"): RoutePolicy(
         _OWNER,
-        justification="Name, notes and hidden on one card; PATCH blocked for READ tokens; owner only",
+        justification="Name, notes and hidden on one workflow; PATCH blocked for READ tokens; owner only",
     ),
-    ("PUT", "/api/v1/workflows/{workflow_key}/slots"): RoutePolicy(
+    ("POST", "/api/v1/workflows/merge"): RoutePolicy(
         _OWNER,
-        justification="Mark a card's LoRA slots, which re-keys every card of the topology; PUT blocked for READ tokens; owner only",
+        justification="Fold workflows into one, moving their topologies and saved recipes; POST blocked for READ tokens; owner only",
     ),
-    # The per-file counterpart of `.../slots` and its read: the stack's LoRAs
-    # counted over the whole vault, and a write that re-keys the cards of every
-    # topology in the stack.
-    ("GET", "/api/v1/workflows/{workflow_key}/lora-summary"): RoutePolicy(
+    ("POST", "/api/v1/workflows/{workflow_id}/split"): RoutePolicy(
         _OWNER,
-        justification="Which LoRAs a card's stack shares and which change, counted over the whole library; owner only",
+        justification="Take one topology out of a workflow into one of its own; POST blocked for READ tokens; owner only",
     ),
-    ("PUT", "/api/v1/workflows/{workflow_key}/lora-promotion"): RoutePolicy(
+    # The workflow's LoRAs counted over the whole vault.
+    ("GET", "/api/v1/workflows/{workflow_id}/lora-summary"): RoutePolicy(
         _OWNER,
-        justification="Promote one LoRA file to a workflow of its own, which re-keys the cards of its stack; PUT blocked for READ tokens; owner only",
+        justification="Which LoRAs a workflow's pictures share and which change, counted over the whole library; owner only",
     ),
-    ("PUT", "/api/v1/workflows/{workflow_key}/model-fix"): RoutePolicy(
+    ("PUT", "/api/v1/workflows/{workflow_id}/model-fix"): RoutePolicy(
         _OWNER,
-        justification="Replace a missing model in a card's workflow, which re-keys the cards of its topology; PUT blocked for READ tokens; owner only",
+        justification="Replace a missing model in a workflow's base graph, which re-keys the cards of its topology; PUT blocked for READ tokens; owner only",
     ),
-    ("PUT", "/api/v1/workflows/{workflow_key}/defaults"): RoutePolicy(
+    ("PUT", "/api/v1/workflows/{workflow_id}/defaults"): RoutePolicy(
         _OWNER,
-        justification="A card's parameter overrides; PUT blocked for READ tokens; owner only",
+        justification="A workflow's default-recipe parameters; PUT blocked for READ tokens; owner only",
     ),
-    ("PUT", "/api/v1/workflows/{workflow_key}/pins"): RoutePolicy(
+    ("PUT", "/api/v1/workflows/{workflow_id}/pins"): RoutePolicy(
         _OWNER,
-        justification="A card's pinned parameters; PUT blocked for READ tokens; owner only",
+        justification="A workflow's pinned parameters; PUT blocked for READ tokens; owner only",
     ),
-    ("PUT", "/api/v1/workflows/{workflow_key}/inputs"): RoutePolicy(
+    ("PUT", "/api/v1/workflows/{workflow_id}/inputs"): RoutePolicy(
         _OWNER,
-        justification="A card's picture-input setup, which names a Fixed picture by content; PUT blocked for READ tokens; owner only",
+        justification="A workflow's picture-input setup, which names a Fixed picture by content; PUT blocked for READ tokens; owner only",
     ),
-    ("POST", "/api/v1/workflows/{workflow_key}/unstack"): RoutePolicy(
-        _OWNER,
-        justification="Take one card out of its stack; POST blocked for READ tokens; owner only",
-    ),
-    # The file gestures (v1.12 B8). Every one of them resolves the card's
-    # graph the way the run route does - from the linked file, from the whole
+    # The file gestures (v1.12 B8). Every one of them resolves the base graph
+    # the way the run route does - from the linked file, from the whole
     # library's best picture, or from a stored instance document - so each one
     # discloses a workflow assembled out of the library rather than out of any
     # one object a scoped token could hold. The export is the sharpest of them:
     # it hands back a graph in full, and the scrub that keeps the prompt and
     # the forgotten model names out of it is a privacy measure for the file's
     # READER, never a reason a scoped token could be allowed to ask.
-    ("GET", "/api/v1/workflows/{workflow_key}/export"): RoutePolicy(
+    ("GET", "/api/v1/workflows/{workflow_id}/export"): RoutePolicy(
         _OWNER,
-        justification="Export a card's graph, resolved from the whole library; owner only",
+        justification="Export a workflow's graph with its default recipe, resolved from the whole library; owner only",
     ),
-    ("GET", "/api/v1/workflows/{workflow_key}/graph"): RoutePolicy(
+    ("GET", "/api/v1/workflows/{workflow_id}/graph"): RoutePolicy(
         _OWNER,
-        justification="A card's graph unscrubbed, for the owner's own ComfyUI; owner only",
+        justification="A workflow's graph unscrubbed, for the owner's own ComfyUI; owner only",
     ),
-    ("POST", "/api/v1/workflows/{workflow_key}/duplicate"): RoutePolicy(
+    ("POST", "/api/v1/workflows/{workflow_id}/duplicate"): RoutePolicy(
         _OWNER,
-        justification="Write a copy of a card's workflow to disk; POST blocked for READ tokens; owner only",
+        justification="Write a copy of a workflow's graph to disk; POST blocked for READ tokens; owner only",
     ),
-    ("POST", "/api/v1/workflows/{workflow_key}/insert-lora-loader"): RoutePolicy(
+    ("POST", "/api/v1/workflows/{workflow_id}/insert-lora-loader"): RoutePolicy(
         _OWNER,
-        justification="Write a copy of a card's workflow with a LoRA loader added; POST blocked for READ tokens; owner only",
+        justification="Write a copy of a workflow's graph with a LoRA loader added; POST blocked for READ tokens; owner only",
     ),
-    # The LoRA chain editor (#1478). The read resolves the card's graph out of
+    # The LoRA chain editor (#1478). The read resolves the base graph out of
     # the whole library like its siblings, names the shelf LoRA each loader
     # loads, and reaches the owner's ComfyUI for object_info; the write is the
-    # insertion above generalised to the whole chain, and files a new card.
-    ("GET", "/api/v1/workflows/{workflow_key}/lora-chain"): RoutePolicy(
+    # insertion above generalised to the whole chain, and files a new file.
+    ("GET", "/api/v1/workflows/{workflow_id}/lora-chain"): RoutePolicy(
         _OWNER,
-        justification="A card's LoRA loaders and the shelf LoRAs they load, resolved from the whole library; owner only",
+        justification="A workflow's LoRA loaders and the shelf LoRAs they load, resolved from the whole library; owner only",
     ),
-    ("PUT", "/api/v1/workflows/{workflow_key}/lora-chain"): RoutePolicy(
+    ("PUT", "/api/v1/workflows/{workflow_id}/lora-chain"): RoutePolicy(
         _OWNER,
-        justification="Write a copy of a card's workflow with its LoRA chain edited; PUT blocked for READ tokens; owner only",
+        justification="Write a copy of a workflow's graph with its LoRA chain edited; PUT blocked for READ tokens; owner only",
     ),
     # Clone with new models: the read names the shelf's checkpoints, VAEs and
     # text encoders and what recipes have run together, which is the whole
     # shelf and the whole hub; the write is a Duplicate with filenames replaced.
-    ("GET", "/api/v1/workflows/{workflow_key}/model-swap"): RoutePolicy(
+    ("GET", "/api/v1/workflows/{workflow_id}/model-swap"): RoutePolicy(
         _OWNER,
-        justification="A card's model files, the shelf's models and the recipes' co-occurrence, all whole-library; owner only",
+        justification="A workflow's model files, the shelf's models and the recipes' co-occurrence, all whole-library; owner only",
     ),
-    ("POST", "/api/v1/workflows/{workflow_key}/clone-with-models"): RoutePolicy(
+    ("POST", "/api/v1/workflows/{workflow_id}/clone-with-models"): RoutePolicy(
         _OWNER,
-        justification="Write a copy of a card's workflow with model files replaced; POST blocked for READ tokens; owner only",
+        justification="Write a copy of a workflow's graph with model files replaced; POST blocked for READ tokens; owner only",
     ),
-    ("DELETE", "/api/v1/workflows/{workflow_key}"): RoutePolicy(
+    ("DELETE", "/api/v1/workflows/{workflow_id}"): RoutePolicy(
         _OWNER,
-        justification="Send a card's imported workflow file to the trash; DELETE blocked for READ tokens; owner only",
+        justification="Send a workflow's imported file to the trash; DELETE blocked for READ tokens; owner only",
     ),
     # The run route and its dry run (v1.12 B7). OWNER_ONLY, which is NARROWER
     # than the PICTURE_SCOPED run routes in comfyui.py it will eventually
     # replace, and deliberately so: those replay one named picture's own
     # embedded graph, so a picture-scoped token asking to re-run a picture it
-    # holds is asking about its own object. This one runs a CARD, and a card is
-    # a whole-library identity - the graph it submits is resolved from the
+    # holds is asking about its own object. This one runs a WORKFLOW, a
+    # whole-library identity - the graph it submits is resolved from the
     # library's best picture or its stored instances whatever the caller was
-    # scoped to, the body names LoRAs by shelf digest, and the answer reports
-    # every card a selection groups into along with the model filenames it is
-    # missing. There is no per-object check that could describe any of that, so
-    # it is the owner's route or nobody's. The pre-flight carries exactly the
-    # same disclosure as the run and is declared identically rather than one
-    # tier down: a dry run that told a scoped token which models the library
-    # has would be the whole leak with none of the generation.
+    # scoped to, with a default recipe read off the whole library, the body
+    # names LoRAs by shelf digest, and the answer reports every workflow a
+    # selection groups into along with the model filenames it is missing.
+    # There is no per-object check that could describe any of that, so it is
+    # the owner's route or nobody's. The pre-flight carries exactly the same
+    # disclosure as the run and is declared identically rather than one tier
+    # down: a dry run that told a scoped token which models the library has
+    # would be the whole leak with none of the generation.
     ("POST", "/api/v1/workflows/run"): RoutePolicy(
         _OWNER,
-        justification="Run a workflow card; resolves a graph from the whole library; owner only",
+        justification="Run a workflow; resolves a graph from the whole library; owner only",
     ),
     ("POST", "/api/v1/workflows/run/preflight"): RoutePolicy(
         _OWNER,
         justification="Dry run of the above; same disclosure, submits nothing; owner only",
-    ),
-    ("POST", "/api/v1/workflows/stacks"): RoutePolicy(
-        _OWNER,
-        justification="Stack cards together; POST blocked for READ tokens; owner only",
-    ),
-    ("PUT", "/api/v1/workflows/stacks/{stack_id}/order"): RoutePolicy(
-        _OWNER,
-        justification="Reorder a stack; PUT blocked for READ tokens; owner only",
-    ),
-    ("POST", "/api/v1/workflows/stacks/{stack_id}/unstack"): RoutePolicy(
-        _OWNER,
-        justification="Dissolve a whole stack; POST blocked for READ tokens; owner only",
     ),
     # ── recipes.py (saved recipes, plan §5.5 / step B6) ─────────────────────
     # OWNER_ONLY throughout, and a decision rather than a default. A saved
