@@ -1676,6 +1676,66 @@ describe("hand-made sets (#1520)", () => {
     );
   });
 
+  it("keeps the base-model offer up when the write fails, to try again", async () => {
+    const bare = slotMember(1, "realvisXL_v5", "checkpoint", {
+      base_model: null,
+    });
+    const { wrapper, store } = await mountGrid({
+      rows: [row(1, "realvisXL_v5", "checkpoint")],
+      handMade: [handSet(10, [bare])],
+    });
+    store.toggleSet("hand:10");
+    store.checkpointAdded = { setId: 10, modelId: 1 };
+    await wrapper.vm.$nextTick();
+    const offer = () => wrapper.find('[data-testid="base-model-offer"]');
+    const press = () =>
+      offer()
+        .findAll("button")
+        .find((b) => b.text().startsWith("Set"))
+        .trigger("click");
+    const settle = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await wrapper.vm.$nextTick();
+    };
+    await offer().find("input").setValue("Pony");
+    const { editModels } = await import("../../api/modelShelf");
+    editModels.mockReset().mockRejectedValueOnce(new Error("hub busy"));
+
+    await press();
+    await settle();
+    expect(editModels).toHaveBeenCalledWith([1], { base_model: "Pony" });
+    expect(offer().exists()).toBe(true);
+    // The typed value survives the failure, ready to press again.
+    expect(offer().find("input").element.value).toBe("Pony");
+
+    // A second press while the retry is in flight sends nothing more.
+    let finish;
+    editModels.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    await press();
+    await press();
+    expect(editModels).toHaveBeenCalledTimes(2);
+    // An offer that replaced this one during the write is left alone.
+    const next = { setId: 10, modelId: 2 };
+    store.checkpointAdded = next;
+    finish({ updated: [1] });
+    await settle();
+    expect(store.checkpointAdded).toEqual(next);
+
+    // A stored answer ends its own offer.
+    store.checkpointAdded = { setId: 10, modelId: 1 };
+    await wrapper.vm.$nextTick();
+    await offer().find("input").setValue("Pony");
+    editModels.mockResolvedValueOnce({ updated: [1] });
+    await press();
+    await settle();
+    expect(editModels).toHaveBeenCalledTimes(3);
+    expect(store.checkpointAdded).toBe(null);
+  });
+
   it("calls a set and its members what the shelf calls them, never the filename", async () => {
     const onShelf = slotMember(1, "RealVisXL_V5.safetensors", "checkpoint", {
       filename: "RealVisXL_V5.safetensors",

@@ -1110,13 +1110,23 @@ watch(
 );
 
 /** Set base model, from the offer: the shelf's own write, then the sets again. */
+let settingBase = false;
 async function setCheckpointBase(value) {
-  const modelId = store.checkpointAdded?.modelId;
-  store.checkpointAdded = null;
-  if (modelId == null) return;
-  if (await store.editModelIds([modelId], { base_model: value })) {
-    await store.loadWorkflowSets({ force: true });
+  const offered = store.checkpointAdded;
+  // The offer stays up while the write is in flight: a second press waits.
+  if (offered?.modelId == null || settingBase) return;
+  settingBase = true;
+  let stored;
+  try {
+    stored = await store.editModelIds([offered.modelId], { base_model: value });
+  } finally {
+    settingBase = false;
   }
+  // Only a stored answer ends the offer: a failed write keeps it up, with the
+  // typed value, to try again. An offer that changed meanwhile is not ours.
+  if (!stored) return;
+  if (store.checkpointAdded === offered) store.checkpointAdded = null;
+  await store.loadWorkflowSets({ force: true });
 }
 
 // ── The merge offer (#1523) ───────────────────────────────────────────────
