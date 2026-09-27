@@ -459,10 +459,7 @@ def test_a_workflow_key_filters_the_listing_and_the_count_but_not_search():
     key = "k" * 64
     _call(fetch, "list_pictures", workflow_key=key)
     _call(fetch, "count_pictures", workflow_key=key)
-    assert seen == [
-        ("/pictures", {**seen[0][1], "workflow_key": key}),
-        ("/pictures/count", {**seen[1][1], "workflow_key": key}),
-    ]
+    assert [path for path, _ in seen] == ["/pictures", "/pictures/count"]
     assert all(params["workflow_key"] == key for _, params in seen)
 
     # The search route has no such filter; ignoring it would widen the answer.

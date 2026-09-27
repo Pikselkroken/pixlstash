@@ -2839,7 +2839,9 @@ def create_router(server) -> APIRouter:
                         if isinstance(node, dict)
                         and isinstance(node.get("class_type"), str)
                         and node["class_type"]
-                    ).items()
+                    ).items(),
+                    # The order `node_classes` uses.
+                    key=lambda item: item[0].lower(),
                 )
             ),
             "source_is_imported": source_is_imported,
@@ -2849,7 +2851,9 @@ def create_router(server) -> APIRouter:
             "lora_insertion": _describe_lora_insertion(
                 graph, object_info, object_info_error
             ),
-            "lora_chain": _describe_lora_chain(graph, object_info, object_info_error),
+            # Judged, like the pre-flight, only when it was asked for: the
+            # editor branch's cached map must not answer a preflight=false read.
+            "lora_chain": _describe_lora_chain(graph, judged_against, judged_error),
             "preflight": preflight,
         }
 

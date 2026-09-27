@@ -703,10 +703,10 @@ def _checked(status: int, content_type: str, body: bytes) -> tuple[str, bytes]:
             # The token is read once, at start-up: a client that changed
             # PIXLSTASH_TOKEN is still talking through the old one.
             raise ToolError(
-                f"PixlStash rejected the API token (401: {detail}). It may have "
-                "been revoked or replaced. This server reads PIXLSTASH_TOKEN "
-                "only when it starts, so after changing the token, restart or "
-                "reconnect this MCP server in the client."
+                f"PixlStash rejected the API token (401: {detail}): it is "
+                "mistyped, revoked, or for another PixlStash. This server reads "
+                "PIXLSTASH_TOKEN only when it starts, so after changing the "
+                "token, restart or reconnect this MCP server in the client."
             )
         raise ToolError(f"PixlStash answered {status}: {detail}")
     return content_type, body
