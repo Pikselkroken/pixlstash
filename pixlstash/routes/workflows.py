@@ -2582,6 +2582,9 @@ def create_router(server) -> APIRouter:
         file by digest. Each swapped node is added to *swapped*; returns the
         misses that are still missed.
         """
+        if kind not in run_service.PIXLSTASH_SWAP_LOADERS:
+            # Checkpoints keep the rename only: nothing to try, nothing to say.
+            return missed
         unlisted = {m["was"] for m in missed if m["reason"] == "not_on_comfyui"}
         nodes = {
             node_id
