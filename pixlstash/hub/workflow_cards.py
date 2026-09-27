@@ -41,12 +41,14 @@ from pixlstash.services.workflow_identity import (
     RECIPE,
     STRUCTURAL,
     WORKFLOW_KEY_VERSION,
+    LoaderSwap,
     Slot,
     core_hash,
     guess_mark,
     lora_assets,
     slots,
     special_groups,
+    unswapped,
     workflow_key,
     workflow_type,
 )
@@ -82,7 +84,11 @@ _VARIANT_JOIN = (
     "JOIN workflow_recipe_graph g ON g.structural_hash = r.structural_hash "
     "LEFT JOIN workflow_variant v ON v.structural_hash = r.structural_hash "
     "AND v.key_version = ? "
-    "LEFT JOIN workflow_topology_core c ON c.topology_hash = r.topology_hash "
+    # The variant's own topology once it has a card: a graph with a swapped-in
+    # loader is carded under the topology it was swapped from (#1605), and that
+    # is the one whose cache its card reads.
+    "LEFT JOIN workflow_topology_core c "
+    "ON c.topology_hash = COALESCE(v.topology_hash, r.topology_hash) "
     "AND c.core_version = ? "
 )
 _VARIANT_VERSIONS = (WORKFLOW_KEY_VERSION, CORE_RULE_VERSION)
@@ -160,7 +166,16 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
         )
         return None
 
-    topology_hash = row["topology_hash"]
+    # A graph a model fix swapped a loader in (#1605) is carded as the graph it
+    # was swapped from: that topology, its marks, its cache and its key.
+    swapped_from, document = unswapped(
+        document, loader_swaps_of(hub.fetchall, row["topology_hash"])
+    )
+    topology_hash = swapped_from or row["topology_hash"]
+    if swapped_from:
+        # The cache the join read was the swapped topology's; the card reads
+        # the original's, which a card made from a workflow file alone lacks.
+        core_missing = True
     document_slots = slots(document)
     # Computed before the transaction opens: this is the CPU of the pass (a
     # Weisfeiler-Leman refinement and a strip), and the write lock is shared
@@ -207,6 +222,28 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
             (structural_hash, topology_hash, key, WORKFLOW_KEY_VERSION),
         )
     return key
+
+
+def loader_swaps_of(fetchall, swapped_topology_hash: str) -> list[LoaderSwap]:
+    """The loader swaps recorded for graphs of this topology (#1605).
+
+    *fetchall* is ``hub.fetchall`` or a connection's equivalent, so the read
+    can sit inside a caller's transaction.
+    """
+    return [
+        LoaderSwap(
+            topology_hash=row[0],
+            node_label=row[1],
+            class_type=row[2],
+            swap_class=row[3],
+            fields=tuple(tuple(field) for field in json.loads(row[4])),
+        )
+        for row in fetchall(
+            "SELECT topology_hash, node_label, class_type, swap_class, fields "
+            "FROM workflow_loader_swap WHERE swapped_topology_hash = ?",
+            (swapped_topology_hash,),
+        )
+    ]
 
 
 def fixed_slots(

@@ -26,7 +26,11 @@ from pixlstash.hub.workflow_card_reads import (
     model_fix_labels,
     model_fixes,
 )
-from pixlstash.hub.workflow_card_writes import set_attributes, set_model_fix
+from pixlstash.hub.workflow_card_writes import (
+    record_loader_swaps,
+    set_attributes,
+    set_model_fix,
+)
 from pixlstash.services.workflow_card_service import _figures, _superseded_variants
 from pixlstash.services.workflow_library_service import CoverCandidate
 from pixlstash.services.workflow_identity import (
@@ -36,6 +40,7 @@ from pixlstash.services.workflow_identity import (
     STRUCTURAL,
     UPSCALE,
     WORKFLOW_KEY_VERSION,
+    loader_swaps,
 )
 from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tasks.workflow_card_backfill_finder import WorkflowCardBackfillFinder
@@ -56,6 +61,7 @@ CARD_TABLES = (
     "workflow_stack_member",
     "workflow_unstacked",
     "workflow_model_fix",
+    "workflow_loader_swap",
 )
 
 SPEED_LORA = "test-lightning-8step.safetensors"
@@ -1032,6 +1038,70 @@ def test_a_replaced_vae_keeps_the_card_and_leaves_a_checkpoint_of_that_name(hub)
         for keys in (old, new, as_checkpoint)
     ]
     assert _superseded_variants(hub, cards) == {old.structural_hash}
+
+
+def test_a_swapped_in_pixlstash_loader_keeps_the_card(hub):
+    """#1605: a fix run through a PixlStash loader files on the original card.
+
+    The swapped node changes the topology, and with it every slot label: the
+    speed LoRA's structural slot included, which is in the key. The recorded
+    swap reads the graph back as the original, so the key comes out the same;
+    undoing the fix sends it to the replacement's card, as a renamed file's
+    pictures go, and a PixlStash loader holding any other file stays apart.
+    """
+    missing, now = "test-vae-fp8.safetensors", "test-vae-bf16.safetensors"
+    digest = "ab" * 32
+
+    def with_vae(vae_node):
+        return _graph(
+            loras=(SPEED_LORA,),
+            extra={
+                "8": vae_node,
+                "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+            },
+        )
+
+    original = with_vae(_node("VAELoader", vae_name=missing))
+    old = record_api_graph(hub, original)
+    plain = record_api_graph(hub, with_vae(_node("VAELoader", vae_name=now)))
+    card = card_of(hub, old.structural_hash)
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        model_fix_labels(hub, old.topology_hash, missing, "vae"),
+        missing,
+        now,
+        {},
+        kind="vae",
+    )
+    assert card_of(hub, plain.structural_hash) == card
+
+    swapped = with_vae(_node("PixlStashVAELoader", vae_sha256=digest))
+    swapped_topology, swaps = loader_swaps(
+        original, swapped, {"8": {"vae_sha256": ("vae_name", now)}}
+    )
+    assert swapped_topology != old.topology_hash
+    record_loader_swaps(hub, swapped_topology, swaps)
+    ran = record_api_graph(hub, swapped)
+    by_hand = record_api_graph(
+        hub, with_vae(_node("PixlStashVAELoader", vae_sha256="cd" * 32))
+    )
+
+    assert card_of(hub, ran.structural_hash) == card
+    assert card_of(hub, by_hand.structural_hash) != card
+
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        model_fix_labels(hub, old.topology_hash, missing, "vae"),
+        missing,
+        None,
+        {},
+        kind="vae",
+    )
+    assert card_of(hub, old.structural_hash) == card
+    assert card_of(hub, ran.structural_hash) == card_of(hub, plain.structural_hash)
+    assert card_of(hub, ran.structural_hash) != card
 
 
 def test_a_text_encoder_fix_names_encoder_slots_and_never_a_vision_one(hub):

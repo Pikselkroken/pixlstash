@@ -82,6 +82,7 @@ from pixlstash.hub.workflow_card_writes import (
     replace_picture_inputs,
     replace_pins,
     set_attributes,
+    record_loader_swaps,
     set_lora_promotion,
     set_model_fix,
     set_stack_order,
@@ -168,6 +169,7 @@ from pixlstash.services.workflow_identity import (
     CHECKPOINT_WIDGETS,
     RECIPE,
     STRUCTURAL,
+    loader_swaps,
     model_fix_kind,
 )
 from pixlstash.services.workflow_hash import (
@@ -1665,6 +1667,15 @@ class ModelFixCandidate(BaseModel):
             "untested). Null for a checkpoint."
         ),
     )
+    loader: str | None = Field(
+        None,
+        description=(
+            "Set when the workflow's own loader cannot load this file and a "
+            "run loads it through this ComfyUI-PixlStash node instead "
+            "(`PixlStashVAELoader`, `PixlStashCLIPLoader`), swapped in for "
+            "the original. Null when the original loader loads it."
+        ),
+    )
 
 
 class ModelSwapOptions(BaseModel):
@@ -1694,13 +1705,20 @@ class ModelSwapOptions(BaseModel):
         ),
     )
     replacements_reason: (
-        Literal["no_checkpoint", "none_go_with_it", "none_loadable"] | None
+        Literal[
+            "no_checkpoint",
+            "none_go_with_it",
+            "none_loadable",
+            "needs_pixlstash_nodes",
+        ]
+        | None
     ) = Field(
         None,
         description=(
             "Why `replacements` is empty: the checkpoint is not on the shelf, "
-            "so nothing says what goes with it; nothing does; or nothing that "
-            "does can be loaded by this loader."
+            "so nothing says what goes with it; nothing does; nothing that "
+            "does can be loaded by this loader; or something could, through a "
+            "PixlStash loader, and ComfyUI-PixlStash is not installed."
         ),
     )
 
@@ -1790,6 +1808,24 @@ class Plan:
     object_info: dict | None
     object_info_error: str | None
     files: dict[int, tuple[str, str]] = dataclass_field(default_factory=dict)
+
+
+def _shelf_digest(hub, kind: str):
+    """A filename -> its shelf SHA-256 among models of *kind*, or ``None``.
+
+    ``None`` too for a name the shelf holds under two digests: which one the
+    graph meant is a guess.
+    """
+
+    def digest_of(filename: str) -> str | None:
+        rows = hub.fetchall(
+            "SELECT DISTINCT sha256 FROM model WHERE lower(filename) = ? "
+            "AND file_kind = ? AND sha256 IS NOT NULL",
+            (normalized_filename(filename), kind),
+        )
+        return rows[0][0] if len(rows) == 1 else None
+
+    return digest_of
 
 
 def _stored_value(value: bool | int | float | str) -> str:
@@ -2432,6 +2468,8 @@ def create_router(server) -> APIRouter:
         # a VAE holding a file of the same name as a replaced checkpoint
         # keeps it.
         done, missed = [], []
+        # {node_id: (graph before, {digest widget: (widget, file)})}
+        swapped: dict[str, tuple[dict, dict]] = {}
         for kind in sorted({kind for kind, _was in fixes}):
             swaps = {
                 value: fixes[(kind, normalized_filename(value))]
@@ -2450,7 +2488,25 @@ def create_router(server) -> APIRouter:
                 ),
             )
             done += kind_done
-            missed += kind_missed
+            missed += _swap_in_pixlstash_loaders(
+                card, graph, kind, swaps, kind_missed, object_info, swapped
+            )
+        if swapped:
+            _record_loader_swaps(card, graph, swapped)
+            done += [
+                {
+                    "node_id": node_id,
+                    "class_type": graph[node_id]["class_type"],
+                    "field": digest_widget,
+                    "was": before[node_id]["inputs"][widget],
+                    "now": file,
+                    "verified": True,
+                }
+                for node_id, (before, files) in swapped.items()
+                for digest_widget, (widget, file) in files.items()
+                if normalized_filename(file)
+                != normalized_filename(before[node_id]["inputs"][widget])
+            ]
         for swap in done:
             logger.info(
                 "[workflows] Card %s loads %s in place of %s on node %s: the "
@@ -2470,6 +2526,86 @@ def create_router(server) -> APIRouter:
                 miss["reason"],
             )
         return done
+
+    def _swap_in_pixlstash_loaders(
+        card,
+        graph: dict,
+        kind: str,
+        swaps: dict[str, str],
+        missed: list[dict],
+        object_info: dict | None,
+        swapped: dict[str, tuple[dict, dict]],
+    ) -> list[dict]:
+        """Load what the rename could not through a PixlStash loader (#1605).
+
+        A fix whose replacement ComfyUI does not list for the workflow's own
+        loader (not in its model folders, or a file type that loader cannot
+        read) swaps the loader node for ComfyUI-PixlStash's, which fetches the
+        file by digest. Each swapped node is added to *swapped*; returns the
+        misses that are still missed.
+        """
+        unlisted = {m["was"] for m in missed if m["reason"] == "not_on_comfyui"}
+        nodes = {
+            node_id
+            for node_id, cls, widget, value in iter_model_fields_api(graph)
+            if model_fix_kind(cls, widget) == kind and value in unlisted
+        }
+        loaded = set()
+        for node_id in sorted(nodes):
+            plan, refusal = run_service.plan_pixlstash_swap(
+                graph, node_id, kind, swaps, object_info, _shelf_digest(_hub(), kind)
+            )
+            if plan is None:
+                logger.warning(
+                    "[workflows] Card %s: node %s (%s) cannot load the owner's "
+                    "replacement, and a PixlStash loader cannot stand in for it "
+                    "(%s).",
+                    card.workflow_key,
+                    node_id,
+                    graph[node_id].get("class_type"),
+                    refusal,
+                )
+                continue
+            before = deepcopy(graph)
+            run_service.apply_pixlstash_swap(graph, node_id, plan)
+            swapped[node_id] = (
+                before,
+                {
+                    digest_widget: (widget, file)
+                    for digest_widget, widget, file, _d in plan["fields"]
+                },
+            )
+            loaded.update(
+                before[node_id]["inputs"][w] for _dw, w, _f, _d in plan["fields"]
+            )
+        return [m for m in missed if m["was"] not in loaded]
+
+    def _record_loader_swaps(card, graph: dict, swapped: dict) -> None:
+        """Card the swapped graph's pictures as the original's (#1605)."""
+        # Every node is swapped back at once: the topology to card as is the
+        # graph with none of them swapped.
+        original = deepcopy(graph)
+        for node_id, (before, _files) in swapped.items():
+            original[node_id] = before[node_id]
+        try:
+            swapped_topology, swaps = loader_swaps(
+                original,
+                graph,
+                {node_id: files for node_id, (_before, files) in swapped.items()},
+            )
+        except WorkflowGraphError as exc:
+            logger.warning(
+                "[workflows] Card %s runs with a PixlStash loader swapped in, "
+                "but its graph will not reduce, so its pictures will not card "
+                "as this workflow's: %s",
+                card.workflow_key,
+                exc,
+            )
+            return
+        # ponytail: keyed on the graph as swapped here. A repair after this
+        # (a bypassed LoRA) changes the topology again, and those pictures
+        # card apart, as a repaired graph's already do.
+        record_loader_swaps(_hub(), swapped_topology, swaps)
 
     def _graph_base_models(card) -> list[str] | None:
         """The base-model files the card's runnable graph names, in order.
@@ -5401,8 +5537,8 @@ def create_router(server) -> APIRouter:
         _apply_model_fixes(card, graph, None)
         wanted = normalized_filename(replacing)
         every_loader = [
-            (cls, widget, value, fix_kind)
-            for _node, cls, widget, value in iter_model_fields_api(graph)
+            (cls, widget, value, fix_kind, node_id)
+            for node_id, cls, widget, value in iter_model_fields_api(graph)
             if normalized_filename(value) == wanted
             and (fix_kind := model_fix_kind(cls, widget)) is not None
         ]
@@ -5478,10 +5614,30 @@ def create_router(server) -> APIRouter:
         if not candidates:
             return [], "none_go_with_it"
         object_info, error = _read_object_info(_comfyui_url(_user(request)))
-        for cls, widget, value, _kind in loaders:
+        needs_pixlstash_nodes = False
+        for cls, widget, value, _kind, node_id in loaders:
             options = listed_options(object_info, cls, widget)
             if options:
-                candidates = [c for c in candidates if listed_as(c.filename, options)]
+                # Listed by this loader, or loadable through a PixlStash one
+                # swapped in for it (#1605), by the run's own rule.
+                kept = []
+                for c in candidates:
+                    if listed_as(c.filename, options):
+                        kept.append(c)
+                        continue
+                    plan, refusal = run_service.plan_pixlstash_swap(
+                        graph,
+                        node_id,
+                        kind,
+                        {value: c.filename},
+                        object_info,
+                        _shelf_digest(_hub(), kind),
+                    )
+                    if plan is not None:
+                        kept.append(c.model_copy(update={"loader": plan["class_type"]}))
+                    elif refusal == run_service.SWAP_NO_PIXLSTASH_NODES:
+                        needs_pixlstash_nodes = True
+                candidates = kept
             else:
                 logger.info(
                     "Offering %s replacements for %s by file type, ComfyUI "
@@ -5496,7 +5652,11 @@ def create_router(server) -> APIRouter:
                     for c in candidates
                     if os.path.splitext(c.filename)[1].lower() == extension
                 ]
-        return candidates, None if candidates else "none_loadable"
+        if candidates:
+            return candidates, None
+        return [], (
+            "needs_pixlstash_nodes" if needs_pixlstash_nodes else "none_loadable"
+        )
 
     @router.get(
         "/workflows/{workflow_key}/model-swap",

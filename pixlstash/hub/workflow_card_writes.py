@@ -31,14 +31,20 @@ from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_card_reads import AUTO_STACK_PREFIX
-from pixlstash.hub.workflow_cards import fixed_slots, promoted_pairs
+from pixlstash.hub.workflow_cards import (
+    fixed_slots,
+    loader_swaps_of,
+    promoted_pairs,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import WorkflowGraphError, normalized_filename
 from pixlstash.services.workflow_identity import (
     RECIPE,
     STRUCTURAL,
     WORKFLOW_KEY_VERSION,
+    LoaderSwap,
     slots,
+    unswapped,
     workflow_key,
 )
 from pixlstash.utils.adapter_header import FILE_CHECKPOINT
@@ -422,17 +428,30 @@ def set_model_fix(
 
 
 def _topology_documents(hub: HubDatabase, topology_hash: str) -> dict[str, dict]:
-    """Every stored document of one topology, by variant, that parses."""
+    """Every stored document of one topology, by variant, that parses.
+
+    A variant carded under this topology through a swapped-in loader (#1605)
+    is one of them, its document read with the original loader put back.
+    """
     documents = {}
-    for structural_hash, raw in hub.fetchall(
-        "SELECT r.structural_hash, g.document FROM workflow_recipe r "
+    for structural_hash, recipe_topology, raw in hub.fetchall(
+        "SELECT r.structural_hash, r.topology_hash, g.document "
+        "FROM workflow_recipe r "
         "JOIN workflow_recipe_graph g ON g.structural_hash = r.structural_hash "
-        "WHERE r.topology_hash = ?",
-        (topology_hash,),
+        "WHERE r.topology_hash = ? OR r.structural_hash IN "
+        "(SELECT structural_hash FROM workflow_variant WHERE topology_hash = ?)",
+        (topology_hash, topology_hash),
     ):
         try:
-            documents[structural_hash] = json.loads(raw)
-        except json.JSONDecodeError as exc:
+            document = json.loads(raw)
+            if recipe_topology != topology_hash:
+                swapped_from, document = unswapped(
+                    document, loader_swaps_of(hub.fetchall, recipe_topology)
+                )
+                if swapped_from != topology_hash:
+                    continue
+            documents[structural_hash] = document
+        except (json.JSONDecodeError, WorkflowGraphError) as exc:
             logger.error(
                 "Stored document of variant %s will not parse, so a re-key "
                 "leaves it on the card it is on: %s",
@@ -440,6 +459,36 @@ def _topology_documents(hub: HubDatabase, topology_hash: str) -> dict[str, dict]
                 exc,
             )
     return documents
+
+
+def record_loader_swaps(
+    hub: HubDatabase, swapped_topology_hash: str, swaps: list[LoaderSwap]
+) -> None:
+    """Remember that graphs of this topology are another's with loaders swapped.
+
+    What a run that swapped a PixlStash loader in for a workflow's own (#1605)
+    writes, so the pictures it makes are carded as the original graph's
+    (``workflow_cards.record_identity``). A fact about two graphs, not about a
+    fix: it is kept when the fix is undone, and those pictures then card as the
+    replacement's, as a rewritten name's do.
+    """
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO workflow_loader_swap (swapped_topology_hash, "
+            "node_label, fields, topology_hash, class_type, swap_class) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    swapped_topology_hash,
+                    swap.node_label,
+                    json.dumps(swap.fields, separators=(",", ":")),
+                    swap.topology_hash,
+                    swap.class_type,
+                    swap.swap_class,
+                )
+                for swap in swaps
+            ],
+        )
 
 
 def _rekey_variants(

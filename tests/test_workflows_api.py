@@ -72,6 +72,7 @@ from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
     asset_reference,
     structural_document,
+    topology_hash,
 )
 from pixlstash.services import workflow_card_service
 from pixlstash.services.workflow_run_service import (
@@ -6832,6 +6833,158 @@ def test_a_vae_fix_never_rewrites_a_checkpoint_of_the_same_name(runnable):
             conn.execute("DELETE FROM workflow_model_fix")
 
 
+def test_a_fix_the_loader_cannot_load_runs_through_a_pixlstash_loader(
+    runnable, monkeypatch
+):
+    """#1605: ComfyUI does not list the replacement, so our node loads it.
+
+    The rename cannot work (the VAE is on the shelf, not in ComfyUI's folders),
+    so the run swaps the loader node for ``PixlStashVAELoader`` with the
+    replacement's digest, keeps every link, and records the swap so the
+    pictures card as this workflow's. Without the pack the fix stays missed.
+    """
+    missing, replacement = "test-vae-fp8.safetensors", "test-vae-swap-bf16.safetensors"
+    digest = _h("vae-bf16-digest")
+    embedded = json.loads(json.dumps(RUN_DOCUMENT))
+    embedded["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    embedded["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    embedded["3"]["inputs"].update({"steps": 20, "cfg": 7.0, "seed": 1})
+    embedded["8"] = {"class_type": "VAELoader", "inputs": {"vae_name": missing}}
+    embedded["6"] = {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["3", 0], "vae": ["8", 0]},
+    }
+    embedded["4"]["inputs"]["images"] = ["6", 0]
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (
+            json.loads(json.dumps(embedded)),
+            [],
+        ),
+    )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["VAELoader"] = {"input": {"required": {"vae_name": [[missing + "x"], {}]}}}
+    info["VAEDecode"] = {"input": {"required": {}}}
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES ('vae', ?, ?, 'scanned')",
+            (replacement, digest),
+        )
+        conn.execute(
+            "INSERT INTO workflow_model_fix (topology_hash, slot_label, was_norm, "
+            "now_norm, was_name, now_name, slot_kind) VALUES (?, ?, ?, ?, ?, ?, 'vae')",
+            (RUN_TOPOLOGY, "l", missing, replacement, missing, replacement),
+        )
+    try:
+        runnable.monkeypatch.setattr(
+            workflows_routes, "_read_object_info", lambda url: (info, None)
+        )
+        payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+        assert payload["groups"][0]["substitutions"] == [], payload
+        assert "missing_models" in _reasons(payload), payload
+
+        info["PixlStashVAELoader"] = {
+            "input": {"required": {"vae_sha256": ["STRING", {}]}}
+        }
+        payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+        assert _reasons(payload) == set(), payload
+        assert payload["groups"][0]["substitutions"] == [
+            {
+                "node_id": "8",
+                "class_type": "PixlStashVAELoader",
+                "field": "vae_sha256",
+                "was": missing,
+                "now": replacement,
+                "verified": True,
+            }
+        ], payload
+        r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+        assert r.json()["status"] == "success", r.json()
+        submitted = runnable.submitted[0]["graph"]
+        assert submitted["8"] == {
+            "class_type": "PixlStashVAELoader",
+            "inputs": {"vae_sha256": digest},
+        }
+        assert submitted["6"]["inputs"]["vae"] == ["8", 0]
+        (swap,) = runnable.server.hub.fetchall(
+            "SELECT swapped_topology_hash, topology_hash, class_type, swap_class "
+            "FROM workflow_loader_swap"
+        )
+        assert tuple(swap) == (
+            topology_hash(submitted),
+            topology_hash(embedded),
+            "VAELoader",
+            "PixlStashVAELoader",
+        )
+    finally:
+        with runnable.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM workflow_model_fix")
+            conn.execute("DELETE FROM workflow_loader_swap")
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (digest,))
+
+
+def test_a_pixlstash_loader_stands_in_only_where_it_does_what_the_original_did():
+    """#1605's refusals, pure: the swapped node must be the original's equal."""
+    digests = {"test-l.safetensors": "11" * 32, "test-t5.safetensors": "22" * 32}
+    info = {
+        "PixlStashCLIPLoader": {"input": {"required": {"type": [["flux", "sd3"], {}]}}}
+    }
+
+    def plan(node, *consumers, swaps=None):
+        graph = {"9": node}
+        graph.update({f"c{i}": c for i, c in enumerate(consumers)})
+        return run_service.plan_pixlstash_swap(
+            graph,
+            "9",
+            "text_encoder",
+            swaps or {"test-t5-fp8.safetensors": "test-t5.safetensors"},
+            info,
+            digests.get,
+        )
+
+    dual = {
+        "class_type": "DualCLIPLoader",
+        "inputs": {
+            "clip_name1": "test-l.safetensors",
+            "clip_name2": "test-t5-fp8.safetensors",
+            "type": "flux",
+        },
+    }
+    made, refusal = plan(dual, {"class_type": "X", "inputs": {"clip": ["9", 0]}})
+    assert refusal is None
+    graph = {"9": json.loads(json.dumps(dual))}
+    run_service.apply_pixlstash_swap(graph, "9", made)
+    assert graph["9"] == {
+        "class_type": "PixlStashCLIPLoader",
+        "inputs": {
+            "clip_sha256": "11" * 32,
+            "clip_sha256_2": "22" * 32,
+            "type": "flux",
+        },
+    }
+    assert plan(dual, {"class_type": "X", "inputs": {"a": ["9", 1]}}) == (
+        None,
+        run_service.SWAP_OUTPUTS_DIFFER,
+    )
+    triple = json.loads(json.dumps(dual))
+    triple["class_type"] = "TripleCLIPLoader"
+    triple["inputs"]["clip_name3"] = "test-g.safetensors"
+    assert plan(triple) == (None, run_service.SWAP_TOO_MANY_FILES)
+    kept_device = json.loads(json.dumps(dual))
+    kept_device["inputs"]["device"] = "default"
+    assert plan(kept_device)[1] is None
+    kept_device["inputs"]["device"] = "cpu"
+    assert plan(kept_device) == (None, run_service.SWAP_UNSUPPORTED)
+    assert plan(
+        dual, swaps={"test-t5-fp8.safetensors": "test-unknown.safetensors"}
+    ) == (
+        None,
+        run_service.SWAP_NOT_HASHED,
+    )
+
+
 def test_a_model_no_copy_of_which_is_left_is_still_a_missing_model(
     runnable, merged_checkpoint
 ):
@@ -10073,6 +10226,106 @@ def test_the_replacements_go_with_the_checkpoint_and_load_in_the_loader(cloneabl
         params={"replacing": "test-not-in-graph.safetensors"},
     )
     assert r.status_code == 409, r.text
+
+
+def test_a_replacement_the_loader_cannot_load_is_offered_through_our_loader(
+    cloneable,
+):
+    """#1605: what the loader does not list is offered through a PixlStash one.
+
+    Only a file the shelf has a digest for, never a GGUF (our loaders read
+    through core ComfyUI), and only with ComfyUI-PixlStash installed: without
+    it the row says that is what is missing.
+    """
+    graph = _with_support_loaders(cloneable.graph)
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+
+    def entry(model_id, filename):
+        return {"id": model_id, "filename": filename, "display_name": None}
+
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "propose_companions",
+        lambda hub, checkpoint_id, index=None: {
+            "vae": [
+                {**entry(1, "test-vae-unlisted.safetensors"), "via": "grouped"},
+                {**entry(2, "test-vae-unhashed.safetensors"), "via": "grouped"},
+            ],
+            "text_encoder": [
+                {**entry(3, "test-t5-unlisted.safetensors"), "via": "checkpoint"},
+                {**entry(4, "test-t5-q8.gguf"), "via": "family"},
+            ],
+        },
+    )
+    digests = {
+        "test-vae-unlisted.safetensors": ("vae", _h("vae-unlisted")),
+        "test-t5-unlisted.safetensors": ("text_encoder", _h("t5-unlisted")),
+        "test-t5-q8.gguf": ("text_encoder", _h("t5-q8")),
+        "test-clip-l.safetensors": ("text_encoder", _h("clip-l")),
+    }
+    with cloneable.server.hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO model (file_kind, filename, sha256, provenance) "
+            "VALUES (?, ?, ?, 'scanned')",
+            [(kind, name, digest) for name, (kind, digest) in digests.items()],
+        )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["VAELoader"] = {
+        "input": {"required": {"vae_name": [["test-vae-other.safetensors"], {}]}}
+    }
+    listed = [["test-clip-l.safetensors"], {}]
+    info["DualCLIPLoader"] = {
+        "input": {"required": {"clip_name1": listed, "clip_name2": listed}}
+    }
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+    def offered(replacing):
+        r = cloneable.owner.get(
+            f"{API}/workflows/{RUN_CARD}/model-swap",
+            params={"replacing": replacing},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        return [(c["filename"], c["loader"]) for c in body["replacements"]], body[
+            "replacements_reason"
+        ]
+
+    try:
+        assert offered("test-vae-fp8.safetensors") == ([], "needs_pixlstash_nodes")
+        info["PixlStashVAELoader"] = {
+            "input": {"required": {"vae_sha256": ["STRING", {}]}}
+        }
+        info["PixlStashCLIPLoader"] = {
+            "input": {
+                "required": {
+                    "clip_sha256": ["STRING", {}],
+                    "type": [["stable_diffusion", "flux"], {}],
+                }
+            }
+        }
+        assert offered("test-vae-fp8.safetensors") == (
+            [("test-vae-unlisted.safetensors", "PixlStashVAELoader")],
+            None,
+        )
+        assert offered("test-t5-fp16.safetensors") == (
+            [("test-t5-unlisted.safetensors", "PixlStashCLIPLoader")],
+            None,
+        )
+        # A CLIP family our loader does not list is not one it can stand in for.
+        info["PixlStashCLIPLoader"]["input"]["required"]["type"] = [["sd3"], {}]
+        assert offered("test-t5-fp16.safetensors") == ([], "none_loadable")
+    finally:
+        with cloneable.server.hub.transaction() as conn:
+            conn.executemany(
+                "DELETE FROM model WHERE sha256 = ?",
+                [(digest,) for _kind, digest in digests.values()],
+            )
 
 
 def test_no_replacement_is_offered_without_a_checkpoint_to_go_with(cloneable):
