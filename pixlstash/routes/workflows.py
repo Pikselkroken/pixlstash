@@ -3739,6 +3739,15 @@ def create_router(server) -> APIRouter:
                     model.address,
                     now,
                 )
+                flags.append(
+                    {
+                        "code": "model_not_applied",
+                        "address": model.address,
+                        "was": None,
+                        "now": now,
+                        "reason": "no_loader",
+                    }
+                )
             for node_id in loaders:
                 was = graph[node_id]["inputs"][widget]
                 if normalized_filename(was) == normalized_filename(now):
@@ -4292,7 +4301,8 @@ def create_router(server) -> APIRouter:
                 ]
                 + [v.model_dump() for v in body.values],
                 # A recipe's own models (#1622), unless the request names some.
-                # NULL inherits the workflow's default recipe, which is applied
+                # Pins over the workflow's default recipe, address by address,
+                # which is applied under this body later: NULL and [] pin nothing.
                 # under this body later.
                 "models": [m.model_dump() for m in body.models]
                 or stored["models"]
@@ -4350,6 +4360,15 @@ def create_router(server) -> APIRouter:
         The LoRAs and stages are applied after the graph resolves.
         """
         asked = {m.address for m in body.models}
+        for model in recipe.models:
+            if not model.filename and model.address not in asked:
+                # A forgotten name: the loader keeps the base graph's own file.
+                logger.info(
+                    "[workflows] Workflow %s's default model at %s has no "
+                    "readable name, so the loader keeps its file.",
+                    recipe.workflow_id,
+                    model.address,
+                )
         return body.model_copy(
             update={
                 "models": [

@@ -1590,3 +1590,22 @@ def test_a_saved_recipe_with_malformed_models_inherits_the_default():
     ):
         body = saved_recipe_body(SimpleNamespace(**vars(recipe), models=stored))
         assert body["models"] == expected, stored
+
+
+def test_a_file_only_card_does_not_blank_its_topology_s_stages(hub):
+    """A manual workflow's topology can carry a file-only card (#1466) too."""
+    detailed = record_api_graph(hub, _graph(face_detailer=True))
+    workflow_cards.record_file(hub, "test-detailer.json", detailed.topology_hash)
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group (workflow_id, kind) VALUES (?, 'manual')",
+            ("a" * 32,),
+        )
+        conn.execute(
+            "INSERT INTO workflow_group_member (topology_hash, workflow_id) "
+            "VALUES (?, ?)",
+            (detailed.topology_hash, "a" * 32),
+        )
+    (entry,) = [w for w in workflow_index(hub) if w.workflow_id == "a" * 32]
+    assert len(entry.cards) == 2, entry.cards
+    assert entry.specials[detailed.topology_hash] == ("face_detailer",)

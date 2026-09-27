@@ -4077,7 +4077,8 @@ it replaces is **flagged, never blocked** (`RunGroup.flags`, `family_mismatch`;
 too). A run by `workflow_key` applies no workflow default and is unchanged.
 
 **Saved recipes** gain `workflow_id` and `models` (migration 0124, both
-nullable). NULL `models` inherits the workflow's default; a recipe with a
+nullable). `models` pins over the workflow's default recipe address by address,
+as a recipe's overrides do, so NULL and `[]` both leave the defaults; a recipe with a
 `workflow_id` runs as that workflow.
 
 #### The workflow scan rides the ComfyUI extraction (v1.11)

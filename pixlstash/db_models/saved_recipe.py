@@ -86,8 +86,9 @@ class SavedRecipe(SQLModel, table=True):
             ``workflow_key_successor``; a run with it applies that
             workflow's default recipe under this one.
         models: JSON ``[{"address", "filename"}]``, the models this look pins
-            by loader address. NULL inherits the workflow's default recipe,
-            which is not the same as ``[]``.
+            by loader address, over the workflow's default recipe address by
+            address as its overrides are. NULL and ``[]`` both pin nothing,
+            so the default recipe's models load.
     """
 
     __tablename__ = "saved_recipe"

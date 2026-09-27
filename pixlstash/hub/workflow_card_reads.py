@@ -742,8 +742,16 @@ def workflow_index(
         entry.cards.append(card.workflow_key)
         if card.topology_hash not in entry.topologies:
             entry.topologies.append(card.topology_hash)
-        entry.specials[card.topology_hash] = card.specials
-        loras[card.topology_hash] = sum(1 for s in card.slots if s.get("is_lora"))
+        # Per topology, so every card on it agrees - except a file-only card
+        # (#1466), which carries neither. The fullest answer wins, never the
+        # last card read.
+        known = entry.specials.get(card.topology_hash)
+        if known is None or len(card.specials or ()) > len(known):
+            entry.specials[card.topology_hash] = card.specials
+        loras[card.topology_hash] = max(
+            loras.get(card.topology_hash, 0),
+            sum(1 for s in card.slots if s.get("is_lora")),
+        )
         for structural_hash in card.variants:
             entry.variants.append(structural_hash)
             entry.variant_topology[structural_hash] = card.topology_hash

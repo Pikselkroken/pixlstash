@@ -1334,7 +1334,7 @@ def saved_recipe_body(recipe) -> dict:
     return {
         "workflow_key": recipe.workflow_key,
         # The workflow it runs on (#1622), once the cut-over has filled it in,
-        # and its models: NULL inherits the workflow's default recipe.
+        # and its models, pinned over the default recipe (NULL pins nothing).
         "workflow_id": recipe.workflow_id,
         "models": models,
         "prompt": recipe.prompt,

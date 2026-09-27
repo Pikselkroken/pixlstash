@@ -8571,6 +8571,19 @@ def test_a_model_pinned_by_a_digest_the_shelf_lost_is_flagged_not_refused(runnab
     assert loaded == "realvisxl.safetensors"
 
 
+def test_a_model_address_no_loader_has_is_flagged(runnable):
+    body = {
+        "workflow_id": RUN_WORKFLOW,
+        "models": [
+            {"address": "core:no-such-label/ckpt_name", "filename": "x.safetensors"}
+        ],
+    }
+    (group,) = _preflight(runnable.owner, **body)["groups"]
+    assert [(f["code"], f["reason"]) for f in group["flags"]] == [
+        ("model_not_applied", "no_loader")
+    ]
+
+
 def test_an_unknown_workflow_is_a_404_and_a_malformed_one_a_422(runnable):
     r = runnable.owner.post(
         f"{API}/workflows/run/preflight",
