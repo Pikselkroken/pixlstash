@@ -303,6 +303,30 @@ def slot_marks(
     return marks
 
 
+def lora_promotions(
+    hub: HubDatabase, topology_hashes: list[str]
+) -> set[tuple[str, str, str]]:
+    """``{(topology_hash, slot_label, asset)}``: every LoRA file promoted there.
+
+    The per-file companion of :func:`slot_marks`
+    (``workflow_lora_promotion``). A promoted file reaches its card's key at
+    that slot, so its pictures are a workflow of their own.
+    """
+    found = set()
+    for batch in chunked(sorted(set(topology_hashes))):
+        placeholders = ",".join("?" * len(batch))
+        found.update(
+            (topology_hash, slot_label, asset)
+            for topology_hash, slot_label, asset in hub.fetchall(
+                "SELECT topology_hash, slot_label, asset "
+                "FROM workflow_lora_promotion "
+                f"WHERE topology_hash IN ({placeholders})",
+                tuple(batch),
+            )
+        )
+    return found
+
+
 def asset_names(
     hub: HubDatabase, structural_hashes: list[str]
 ) -> dict[str, list[tuple[str, str]]]:

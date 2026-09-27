@@ -4,9 +4,9 @@
 // * A default's provenance and its reset. Reset is a WHOLE-SET write, so the
 //   request has to carry every other edited value; a reset that sends only
 //   the row it was fired on resets all of them and reads as working.
-// * The LoRA slot's Workflow/Recipe switch. It re-keys the card, so the rail
-//   has to follow the key the answer names — staying put leaves it reading a
-//   card the hub no longer has.
+// * The LoRA pile's Promote. It re-keys cards, so the rail has to follow the
+//   key the answer names — staying put leaves it reading a card the hub no
+//   longer has — and it must write nothing before it is confirmed.
 // * Run… with several workflows selected. It must stay on screen and refuse,
 //   which is `aria-disabled` plus the reason; a button that disappears
 //   teaches nobody why.
@@ -21,7 +21,8 @@ const patchWorkflowCard = vi.fn();
 const preflightWorkflowRun = vi.fn();
 const setWorkflowDefaults = vi.fn();
 const setWorkflowPins = vi.fn();
-const setWorkflowSlots = vi.fn();
+const getLoraSummary = vi.fn();
+const setLoraPromotion = vi.fn();
 const stackWorkflows = vi.fn();
 const getLoraChain = vi.fn();
 const readModelSwap = vi.fn();
@@ -34,7 +35,8 @@ vi.mock("../../api/workflows", () => ({
   preflightWorkflowRun: (...args) => preflightWorkflowRun(...args),
   setWorkflowDefaults: (...args) => setWorkflowDefaults(...args),
   setWorkflowPins: (...args) => setWorkflowPins(...args),
-  setWorkflowSlots: (...args) => setWorkflowSlots(...args),
+  getLoraSummary: (...args) => getLoraSummary(...args),
+  setLoraPromotion: (...args) => setLoraPromotion(...args),
   // `WorkflowCard` renders its covers through this, so a mock without it
   // throws in the render and every assertion in the file goes with it.
   workflowCoverUrl: (cover) => cover?.url ?? "",
@@ -120,6 +122,54 @@ function card(overrides = {}) {
     rank: 4.5,
     ...overrides,
   };
+}
+
+const ADA = `asset:${"1".repeat(64)}`;
+const BO = `asset:${"2".repeat(64)}`;
+
+/** `GET /workflows/{key}/lora-summary`: two LoRAs that change, Ada on the cover. */
+function loraSummary(overrides = {}) {
+  return {
+    keys: [KEY],
+    pictures: 5,
+    shared: [],
+    varying: [
+      {
+        asset: BO,
+        filename: "bo.safetensors",
+        name: "Bo",
+        on_shelf: true,
+        pictures: 3,
+        members: [KEY],
+        picture_ids: [31, 32, 33],
+        promoted: false,
+      },
+      {
+        asset: ADA,
+        filename: "ada.safetensors",
+        name: "Ada",
+        on_shelf: true,
+        pictures: 2,
+        members: [KEY],
+        picture_ids: [21, 22],
+        promoted: false,
+      },
+    ],
+    without: null,
+    cover_asset: ADA,
+    ...overrides,
+  };
+}
+
+/** Promote the pile's top LoRA (Ada, the cover's) and confirm it. */
+async function promote(wrapper) {
+  await wrapper
+    .find(`[data-testid='wftab-fan-row-${ADA}']`)
+    .findAll("button")
+    .find((button) => button.text().includes("Promote"))
+    .trigger("click");
+  await wrapper.find("[data-testid='wftab-fan-confirm']").trigger("click");
+  await flush(wrapper);
 }
 
 /** `GET /workflows/{key}/lora-chain`, as the route serves it (#1478). */
@@ -251,7 +301,8 @@ beforeEach(() => {
   patchWorkflowCard.mockReset().mockResolvedValue(detail());
   setWorkflowDefaults.mockReset().mockResolvedValue(detail());
   setWorkflowPins.mockReset().mockResolvedValue({ pins: [] });
-  setWorkflowSlots.mockReset().mockResolvedValue({ key: MOVED, moved: {} });
+  getLoraSummary.mockReset().mockResolvedValue(loraSummary());
+  setLoraPromotion.mockReset().mockResolvedValue({ key: MOVED, moved: {} });
   stackWorkflows.mockReset().mockResolvedValue({ stack_id: "s", keys: [] });
   getLoraChain.mockReset().mockResolvedValue(loraChain());
   replace.mockReset();
@@ -322,8 +373,7 @@ describe("the models the panel names", () => {
     getWorkflowCard.mockResolvedValue(detail({ card: quantised }));
     const { wrapper } = await mountWith([KEY], [quantised]);
     const values = wrapper.findAll(".wftab-value").map((el) => el.text());
-    expect(values).toEqual(["t5xxl · FP8 E4M3", "ae"]);
-    expect(wrapper.find(".wftab-chip").text()).toContain("detail · Q4_K_M");
+    expect(values.slice(0, 2)).toEqual(["t5xxl · FP8 E4M3", "ae"]);
   });
 
   it("falls back to the filename where the shelf has no name", async () => {
@@ -1035,60 +1085,158 @@ describe("an editor file ComfyUI has not converted (#1530)", () => {
   });
 });
 
-describe("marking a LoRA slot", () => {
-  it("calls the slots route with the slot's own label", async () => {
+describe("the LoRA pile", () => {
+  it("lists what every picture shares and piles what changes", async () => {
+    // Shared means the whole stack: the chain says in what order and how
+    // strong, the summary says which. A chain loader that changes between
+    // pictures is in the pile and never in the list.
+    getLoraSummary.mockResolvedValue(
+      loraSummary({
+        shared: [
+          {
+            asset: `asset:${"9".repeat(64)}`,
+            filename: "lightning-8step.safetensors",
+            name: "Lightning 8-step",
+            on_shelf: true,
+            pictures: 5,
+            members: [KEY],
+          },
+        ],
+      }),
+    );
     const { wrapper } = await mountWith([KEY]);
-    const recipe = wrapper
-      .findAll("button")
-      .find((button) => button.text() === "Recipe");
-    await recipe.trigger("click");
-    await flush(wrapper);
-    expect(setWorkflowSlots).toHaveBeenCalledWith(KEY, { l1: "recipe" });
+    const shared = wrapper.findAll("[data-testid='wftab-shared-lora']");
+    expect(shared.map((row) => row.text())).toEqual([
+      expect.stringContaining("Lightning 8-step"),
+    ]);
+    expect(textOf(wrapper)).toContain("In every picture of this workflow.");
+    expect(textOf(wrapper)).not.toContain("LoRA slots");
+    // The cover's LoRA is on top, though Bo has more pictures.
+    const pile = wrapper.find("[data-testid='wftab-pile']");
+    expect(pile.text()).toContain("Ada");
+    expect(pile.text()).toContain("+1");
+    expect(textOf(wrapper)).toContain("On top: the cover picture's LoRA.");
+    expect(getLoraSummary).toHaveBeenCalledWith(KEY, { cover: undefined });
   });
 
-  it("follows the key the flip moved the card to", async () => {
-    const { wrapper, store } = await mountWith([KEY]);
-    const recipe = wrapper
+  it("shows no pile when nothing changes between pictures", async () => {
+    getLoraSummary.mockResolvedValue(loraSummary({ varying: [] }));
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.find("[data-testid='wftab-changes']").exists()).toBe(false);
+  });
+
+  it("offers no confirmation on the No LoRA row, which cannot be promoted", async () => {
+    // Its `asset` is empty, which equals the "nothing being confirmed" state.
+    getLoraSummary.mockResolvedValue(
+      loraSummary({
+        without: { asset: "", pictures: 2, members: [KEY], picture_ids: [41] },
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    const row = wrapper.find("[data-testid='wftab-fan-row-none']");
+    expect(row.text()).toContain("No LoRA");
+    expect(row.find(".wfpile-confirm").exists()).toBe(false);
+    expect(wrapper.find("[data-testid='wftab-fan-confirm']").exists()).toBe(false);
+  });
+
+  it("writes nothing until the promotion is confirmed, then names the file", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    const row = wrapper.find(`[data-testid='wftab-fan-row-${ADA}']`);
+    await row
       .findAll("button")
-      .find((button) => button.text() === "Recipe");
-    await recipe.trigger("click");
+      .find((button) => button.text().includes("Promote"))
+      .trigger("click");
     await flush(wrapper);
-    // The card was re-keyed, so the rail has to be reading the new key —
-    // otherwise it sits on a card the hub no longer has.
+    expect(setLoraPromotion).not.toHaveBeenCalled();
+    // The confirmation says what moves and what stays.
+    expect(row.text()).toContain("Its 2 pictures become");
+    expect(row.text()).toContain("The other 3 pictures stay");
+
+    await wrapper.find("[data-testid='wftab-fan-confirm']").trigger("click");
+    await flush(wrapper);
+    expect(setLoraPromotion).toHaveBeenCalledWith(KEY, ADA, true);
+  });
+
+  it("puts a promoted LoRA back from the same row", async () => {
+    getLoraSummary.mockResolvedValue(
+      loraSummary({
+        varying: loraSummary().varying.map((use) =>
+          use.asset === ADA ? { ...use, promoted: true } : use,
+        ),
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    const row = wrapper.find(`[data-testid='wftab-fan-row-${ADA}']`);
+    expect(row.text()).toContain("Promoted");
+    expect(
+      row.findAll("button").some((button) => button.text().includes("Promote")),
+    ).toBe(false);
+    await row
+      .findAll("button")
+      .find((button) => button.text() === "Put back")
+      .trigger("click");
+    await wrapper.find("[data-testid='wftab-fan-confirm']").trigger("click");
+    await flush(wrapper);
+    expect(setLoraPromotion).toHaveBeenCalledWith(KEY, ADA, false);
+  });
+
+  it("follows the key the promotion answers with", async () => {
+    const { wrapper, store } = await mountWith([KEY]);
+    await promote(wrapper);
+    // Putting a LoRA back takes its card away, so the rail has to read the
+    // card the answer names, not the one it sent.
     expect(store.selectedKeys).toEqual([MOVED]);
     expect(getWorkflowCard).toHaveBeenLastCalledWith(MOVED);
   });
 
-  it("writes nothing when the mark it was given is the mark it has", async () => {
+  it("reads the pile again when the card stays where it is", async () => {
+    setLoraPromotion.mockResolvedValue({ key: KEY, moved: {} });
     const { wrapper } = await mountWith([KEY]);
-    // Through the component's own handler, not through `Segmented`: that
-    // widget already refuses to emit for the active option, so a click on
-    // "Workflow" is silent whether or not this guard exists.
-    await wrapper.vm.flipMark(
-      { label: "l1", name: "lightning-8step", mark: "structural" },
-      "structural",
-    );
-    await flush(wrapper);
-    expect(setWorkflowSlots).not.toHaveBeenCalled();
+    getLoraSummary.mockClear();
+    await promote(wrapper);
+    expect(getLoraSummary).toHaveBeenCalledWith(KEY, expect.anything());
   });
 
-  it("refuses a slot the payload gave no address for", async () => {
-    // `slot_label` is nullable, and the mark is written BY label, so an
-    // enabled switch on a slot without one is a control that answers a
-    // click with nothing at all.
-    getWorkflowCard.mockResolvedValue(detail());
-    const { wrapper } = await mountWith(
-      [KEY],
-      [
-        card({
-          loras: [{ name: "mystery", kind: "lora", mark: "structural" }],
-        }),
-      ],
-    );
-    expect(wrapper.findComponent({ name: "Segmented" }).props("disabled")).toBe(
-      true,
-    );
-    expect(textOf(wrapper)).toContain("no recorded address");
+  it("keeps the pile on screen while it is read again after a promotion", async () => {
+    // Blanking it would unmount the open fan and drop focus to the page.
+    setLoraPromotion.mockResolvedValue({ key: KEY, moved: {} });
+    const { wrapper } = await mountWith([KEY]);
+    getLoraSummary.mockImplementation(() => new Promise(() => {}));
+    await promote(wrapper);
+    expect(wrapper.find("[data-testid='wftab-pile']").exists()).toBe(true);
+  });
+
+  it("narrows Show N to the stack the summary counted", async () => {
+    // The grid's card has no stack id when it left a member out; the
+    // summary still names the stack it counted over.
+    getLoraSummary.mockResolvedValue(loraSummary({ stack_id: "auto:whole" }));
+    const { wrapper } = await mountWith([KEY], [card({ stack_id: null })]);
+    await wrapper
+      .find(`[data-testid='wftab-fan-row-${BO}']`)
+      .findAll("button")
+      .find((button) => button.text() === "Show 3")
+      .trigger("click");
+    expect(useFilterStore().workflowFilter).toMatchObject({
+      stack: "auto:whole",
+      lora: BO,
+    });
+  });
+
+  it("shows the stack's pictures of one LoRA, as a removable chip", async () => {
+    const { wrapper } = await mountWith([
+      KEY,
+    ], [card({ stack_id: "auto:core" })]);
+    await wrapper
+      .find(`[data-testid='wftab-fan-row-${BO}']`)
+      .findAll("button")
+      .find((button) => button.text() === "Show 3")
+      .trigger("click");
+    expect(useFilterStore().workflowFilter).toEqual({
+      stack: "auto:core",
+      lora: BO,
+      name: "Bo in Cinematic portrait",
+    });
+    expect(push).toHaveBeenCalledWith("/");
   });
 });
 
@@ -1376,7 +1524,7 @@ describe("with several workflows selected", () => {
     expect(textOf(wrapper)).not.toContain("Could not read");
   });
 
-  it("follows a picked member that a LoRA flip takes out of its stack", async () => {
+  it("follows a picked member that a promotion takes out of its stack", async () => {
     getWorkflowCard.mockImplementation(async (key) =>
       detail({
         card: card({ key, name: key === OTHER ? "Flux portrait" : "Cover" }),
@@ -1392,16 +1540,12 @@ describe("with several workflows selected", () => {
       one_offs: 0,
       hidden: 0,
     });
-    await wrapper
-      .findAll("button")
-      .find((button) => button.text() === "Recipe")
-      .trigger("click");
-    await flush(wrapper);
-    expect(setWorkflowSlots).toHaveBeenCalledWith(OTHER, { l1: "recipe" });
+    await promote(wrapper);
+    expect(setLoraPromotion).toHaveBeenCalledWith(OTHER, ADA, true);
     expect(store.selectedKeys).toEqual([MOVED]);
   });
 
-  it("leaves a reader who picked another member during a flip where they are", async () => {
+  it("leaves a reader who picked another member during a promotion where they are", async () => {
     const stack = card({
       stack_size: 3,
       member_keys: [OTHER, MOVED],
@@ -1415,7 +1559,7 @@ describe("with several workflows selected", () => {
       detail({ card: card({ key, name: key }) }),
     );
     let answer;
-    setWorkflowSlots.mockImplementation(
+    setLoraPromotion.mockImplementation(
       () =>
         new Promise((resolve) => {
           answer = resolve;
@@ -1432,11 +1576,7 @@ describe("with several workflows selected", () => {
     const pick = () => wrapper.find("[data-testid='wftab-stack-pick'] select");
     await pick().setValue(OTHER);
     await flush(wrapper);
-    await wrapper
-      .findAll("button")
-      .find((button) => button.text() === "Recipe")
-      .trigger("click");
-    await flush(wrapper);
+    await promote(wrapper);
     // Mid-write, the reader moves on to another member of the same stack.
     await pick().setValue(MOVED);
     await flush(wrapper);
@@ -1842,7 +1982,7 @@ describe("the more menu and hiding", () => {
 });
 
 describe("which card the rail shows", () => {
-  it("keeps showing a card the flip moved out of the grid", async () => {
+  it("keeps showing a card a promotion moved out of the grid", async () => {
     // A flip can merge this card into somebody else's stack, and the grid
     // lists one card per stack — so the successor key is not in `cards` and
     // the detail read is the only thing that still has it.
@@ -1855,23 +1995,15 @@ describe("which card the rail shows", () => {
       hidden: 0,
     });
     const { wrapper } = await mountWith([KEY]);
-    const recipe = wrapper
-      .findAll("button")
-      .find((button) => button.text() === "Recipe");
-    await recipe.trigger("click");
-    await flush(wrapper);
+    await promote(wrapper);
     expect(textOf(wrapper)).toContain("Merged into a stack");
     expect(textOf(wrapper)).not.toContain("Pick a workflow");
   });
 
-  it("forgets the cached stack members a flip may have re-keyed", async () => {
+  it("forgets the cached stack members a promotion may have re-keyed", async () => {
     const { wrapper, store } = await mountWith([KEY]);
     store.members = { [KEY]: [card()] };
-    const recipe = wrapper
-      .findAll("button")
-      .find((button) => button.text() === "Recipe");
-    await recipe.trigger("click");
-    await flush(wrapper);
+    await promote(wrapper);
     expect(store.members).toEqual({});
   });
 
@@ -2026,6 +2158,11 @@ describe("the LoRA chain (#1478)", () => {
     },
   };
 
+  // No picture unless a test says so, so the chain is the whole list.
+  beforeEach(() => {
+    getLoraSummary.mockResolvedValue(loraSummary({ pictures: 0, varying: [] }));
+  });
+
   async function mountChain(keys = [KEY]) {
     const store = useWorkflowsStore();
     store.cards = [card()];
@@ -2039,10 +2176,12 @@ describe("the LoRA chain (#1478)", () => {
     return wrapper.find("[data-testid='wftab-edit-loras']");
   }
 
-  it("lists the loaders in apply order, with strengths and the shelf count", async () => {
+  it("lists a picture-less workflow's loaders in apply order, with the shelf count", async () => {
+    // Nothing to count, so nothing is shared and nothing changes: the rows
+    // are the workflow's own chain.
     const { wrapper } = await mountChain();
     expect(getLoraChain).toHaveBeenCalledWith(KEY);
-    const rows = wrapper.findAll(".wftab-chain-row");
+    const rows = wrapper.findAll("[data-testid='wftab-shared-lora']");
     expect(
       rows.map((row) => [
         row.find(".wftab-chain-name").text(),
@@ -2056,10 +2195,51 @@ describe("the LoRA chain (#1478)", () => {
       ["hairstyle-v3.safetensors", "0.60"],
     ]);
     expect(
-      wrapper.find("[data-testid='wftab-shelf-line']").text().replace(/\s+/g, " "),
+      wrapper.find("[data-testid='wftab-shared-note']").text().replace(/\s+/g, " "),
     ).toBe("In the order the chain applies them. 3 of 4 are on your model shelf.");
-    // B1's workflow/look mark stays beside it.
-    expect(wrapper.findComponent({ name: "Segmented" }).exists()).toBe(true);
+    // The Workflow | Recipe switches are gone.
+    expect(wrapper.findComponent({ name: "Segmented" }).exists()).toBe(false);
+  });
+
+  it("lists only what every picture shares, in the chain's order", async () => {
+    // Given out of order, and neon-rain changes between pictures, so it is in
+    // the pile rather than here.
+    const shared = (filename, name) => ({
+      asset: `asset:${filename}`,
+      filename,
+      name,
+      on_shelf: true,
+      pictures: 5,
+      members: [KEY, OTHER],
+    });
+    getLoraSummary.mockResolvedValue(
+      loraSummary({
+        keys: [KEY, OTHER],
+        shared: [
+          shared("hairstyle-v3.safetensors", "Hairstyle v3"),
+          shared("lightning-8step.safetensors", "Lightning"),
+          shared("film-grain-35mm.safetensors", "Film grain"),
+        ],
+      }),
+    );
+    const { wrapper } = await mountChain();
+    const rows = wrapper.findAll("[data-testid='wftab-shared-lora']");
+    expect(
+      rows.map((row) => [
+        row.find(".wftab-chain-name").text(),
+        row.find(".wftab-chain-strength").text(),
+      ]),
+    ).toEqual([
+      ["Lightning", "1.00"],
+      ["Film grain", "0.40"],
+      ["Hairstyle v3", "0.60"],
+    ]);
+    // Off the shelf by the chain's own answer, and said so in words.
+    expect(
+      wrapper.find("[data-testid='wftab-shared-note']").text().replace(/\s+/g, " "),
+    ).toBe(
+      "Shared by both workflows in this stack. Hairstyle v3 is not on your shelf.",
+    );
   });
 
   it("lists a forked chain's lane loaders after its trunk", async () => {

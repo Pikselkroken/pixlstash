@@ -31,10 +31,11 @@ from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_card_reads import AUTO_STACK_PREFIX
-from pixlstash.hub.workflow_cards import fixed_slots
+from pixlstash.hub.workflow_cards import fixed_slots, promoted_pairs
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import WorkflowGraphError, normalized_filename
 from pixlstash.services.workflow_identity import (
+    RECIPE,
     STRUCTURAL,
     WORKFLOW_KEY_VERSION,
     slots,
@@ -234,6 +235,127 @@ def flip_slot_marks(
     return moved
 
 
+def set_lora_promotion(
+    hub: HubDatabase,
+    topology_hash: str,
+    asset: str,
+    promoted: bool,
+    variant_pictures: dict[str, int],
+) -> Optional[dict[str, list[str]]]:
+    """Promote one LoRA file to a workflow of its own, or put it back.
+
+    The per-file counterpart of :func:`flip_slot_marks`: promoting reaches the
+    card key with *asset* at every LoRA slot of this topology that has held it,
+    and with no other file at those slots, so only the pictures that loaded
+    this file move to a new card. The re-key and the carry-over are one
+    transaction, as a flip's are.
+
+    **Putting back a file whose whole slot is marked structural** turns the
+    slot into a recipe slot and promotes every OTHER file it has held, so they
+    stay on the cards they are on and only this one folds back. That is what
+    lets the per-file control undo a split a per-slot mark made.
+
+    A promoted card is split off an existing one and would inherit its
+    attributes, owner's name included; two cards reading the same typed name
+    is the confusion this control exists to end, so the split-off card's name
+    is cleared and it reads as its generated one. A card ALL of whose pictures
+    loaded the file is re-keyed rather than split, and keeps its name.
+
+    Args:
+        topology_hash: The topology the file is (un)promoted in.
+        asset: The file's reference in the stored documents (``asset:…``).
+        promoted: ``True`` to promote, ``False`` to put back.
+        variant_pictures: ``{structural_hash: kept pictures}``, as for a flip.
+
+    Returns:
+        :func:`flip_slot_marks`' ``moved`` mapping, or ``None`` when no stored
+        document of this topology loads *asset* in a LoRA slot, which the
+        caller reports rather than answering with a change that did nothing.
+    """
+    documents = _topology_documents(hub, topology_hash)
+    held: dict[str, set[str]] = {}
+    for structural_hash, document in documents.items():
+        try:
+            document_slots = slots(document)
+        except WorkflowGraphError as exc:
+            logger.error(
+                "Variant %s will not reduce, so a LoRA promotion cannot see "
+                "which files its slots hold: %s",
+                structural_hash,
+                exc,
+            )
+            continue
+        for slot in document_slots:
+            if slot.is_lora:
+                held.setdefault(slot.label, set()).add(slot.asset)
+    labels = sorted(label for label, assets in held.items() if asset in assets)
+    if not labels:
+        return None
+    with hub.transaction() as conn:
+        marks = dict(
+            conn.execute(
+                "SELECT slot_label, mark FROM workflow_slot_mark "
+                "WHERE topology_hash = ?",
+                (topology_hash,),
+            ).fetchall()
+        )
+        if promoted:
+            conn.executemany(
+                "INSERT OR IGNORE INTO workflow_lora_promotion "
+                "(topology_hash, slot_label, asset) VALUES (?, ?, ?)",
+                [
+                    (topology_hash, label, asset)
+                    for label in labels
+                    if marks.get(label) != STRUCTURAL
+                ],
+            )
+        else:
+            conn.execute(
+                "DELETE FROM workflow_lora_promotion "
+                "WHERE topology_hash = ? AND asset = ?",
+                (topology_hash, asset),
+            )
+            for label in labels:
+                if marks.get(label) != STRUCTURAL:
+                    continue
+                conn.execute(
+                    "UPDATE workflow_slot_mark SET mark = ? "
+                    "WHERE topology_hash = ? AND slot_label = ?",
+                    (RECIPE, topology_hash, label),
+                )
+                conn.executemany(
+                    "INSERT OR IGNORE INTO workflow_lora_promotion "
+                    "(topology_hash, slot_label, asset) VALUES (?, ?, ?)",
+                    [
+                        (topology_hash, label, other)
+                        for other in sorted(held[label] - {asset})
+                    ],
+                )
+        moved = _rekey_variants(conn, topology_hash, documents, variant_pictures)
+        if promoted:
+            split_off = sorted(
+                {
+                    key
+                    for old_key, keys in moved.items()
+                    if old_key in keys
+                    for key in keys
+                    if key != old_key
+                }
+            )
+            conn.executemany(
+                "UPDATE workflow_attr SET name = NULL WHERE workflow_key = ?",
+                [(key,) for key in split_off],
+            )
+    logger.info(
+        "LoRA %s %s on topology %s; %d card(s) moved.",
+        asset,
+        "promoted" if promoted else "put back",
+        topology_hash,
+        len(moved),
+    )
+    return moved
+
+
 def set_model_fix(
     hub: HubDatabase,
     topology_hash: str,
@@ -340,6 +462,7 @@ def _rekey_variants(
         ).fetchall()
         if mark == STRUCTURAL
     }
+    promoted = promoted_pairs(conn, topology_hash)
     old_keys = {
         structural_hash: key
         for structural_hash, key in conn.execute(
@@ -357,6 +480,7 @@ def _rekey_variants(
                 topology_hash,
                 fixed_slots(conn, topology_hash, slots(document)),
                 structural_labels,
+                promoted,
             )
         except WorkflowGraphError as exc:
             logger.error(

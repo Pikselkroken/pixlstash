@@ -248,6 +248,29 @@ describe("useGridFetch streaming path", () => {
     expect(getPictureCount.mock.calls[0][0]).toContain("workflow_key=abc123");
   });
 
+  it("sends the stack and the LoRA for the Workflow tab's *Show N*", async () => {
+    getPictureCount.mockResolvedValue({ count: 1 });
+    streamPictures.mockResolvedValue({ pictures: [{ id: 51 }] });
+
+    const { grid } = makeHarness();
+    useFilterStore().workflowFilter = {
+      stack: "auto:core",
+      lora: "asset:feed",
+      name: "Ada in Cinematic",
+    };
+
+    await grid.fetchAllGridImages({ force: true });
+
+    for (const url of [
+      streamPictures.mock.calls[0][0],
+      getPictureCount.mock.calls[0][0],
+    ]) {
+      expect(url).toContain("workflow_stack=auto%3Acore");
+      expect(url).toContain("workflow_lora=asset%3Afeed");
+      expect(url).not.toContain("workflow_key");
+    }
+  });
+
   it("omits workflow_key once the chip is removed", async () => {
     getPictureCount.mockResolvedValue({ count: 1 });
     streamPictures.mockResolvedValue({ pictures: [{ id: 61 }] });

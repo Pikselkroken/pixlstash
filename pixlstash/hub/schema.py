@@ -1129,6 +1129,26 @@ CREATE TABLE IF NOT EXISTS workflow_model_fix (
 )
 """
 
+# One LoRA FILE promoted into the card key at one slot: the pictures
+# that loaded ``asset`` at ``slot_label`` become a workflow of their own, and
+# every other file at that slot stays with the recipes. The per-file
+# counterpart of ``workflow_slot_mark``, which splits out every file a slot
+# ever held.
+#
+# ``asset`` is the stored document's reference (``asset:<digest>``), never the
+# filename, for the reason ``workflow_slot_mark`` gives: forgetting a name
+# deletes ``workflow_recipe_asset`` rows, and a row here that named the file
+# would be a second copy of it. What survives a forget is that a card was
+# split on some file, which keys the card and cannot be taken back silently.
+_V2_WORKFLOW_LORA_PROMOTION = """
+CREATE TABLE IF NOT EXISTS workflow_lora_promotion (
+    topology_hash  TEXT NOT NULL,
+    slot_label     TEXT NOT NULL,
+    asset          TEXT NOT NULL,
+    PRIMARY KEY (topology_hash, slot_label, asset)
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1185,6 +1205,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_PULLED_FILE,
     _V2_COMFYUI_HISTORY_MODEL,
     _V2_WORKFLOW_MODEL_FIX,
+    _V2_WORKFLOW_LORA_PROMOTION,
     *_V2_WORKFLOW_INDEXES,
 )
 

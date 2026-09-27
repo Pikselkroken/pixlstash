@@ -101,21 +101,45 @@ export async function patchWorkflowCard(workflowKey, changes) {
 }
 
 /**
- * Mark a card's LoRA slots structural or recipe.
+ * The LoRAs of a card's whole stack: the ones in every picture (`shared`),
+ * the ones that change (`varying`, most pictures first) and the pictures that
+ * loaded none of those (`without`).
  *
- * **This re-keys the card**, and may split it into several or merge it into
- * another: `key` in the answer is where the card addressed here now lives,
- * and the caller has to follow it rather than keep the key it sent.
+ * Each LoRA is named by `asset`, the stored graphs' reference, which is what
+ * `setLoraPromotion` and the picture grid's `workflow_lora` filter take.
+ * `cover` is the picture on top of the stack; `cover_asset` then says which
+ * changing LoRA it loaded, for the top of the pile.
  *
  * @param {string} workflowKey
- * @param {Object<string, string>} marks `{slot_label: "structural"|"recipe"}`
+ * @param {{cover?: number}} [options]
+ * @returns {Promise<{keys: string[], pictures: number, shared: Object[],
+ *   varying: Object[], without: ?Object, cover_asset: ?string}>}
+ */
+export async function getLoraSummary(workflowKey, { cover } = {}) {
+  return unwrap(
+    apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}/lora-summary`, {
+      params: cover ? { cover } : {},
+    }),
+  );
+}
+
+/**
+ * Promote one LoRA to a workflow of its own inside the stack, or put it back.
+ *
+ * **This re-keys cards**: the pictures that loaded it move to a new card (or
+ * back). `key` in the answer is where the card addressed here now lives.
+ *
+ * @param {string} workflowKey
+ * @param {string} asset the LoRA as `getLoraSummary` names it
+ * @param {boolean} promoted
  * @returns {Promise<{key: string, moved: Object}>}
  */
-export async function setWorkflowSlots(workflowKey, marks) {
+export async function setLoraPromotion(workflowKey, asset, promoted) {
   return unwrap(
-    apiClient.put(`/workflows/${encodeURIComponent(workflowKey)}/slots`, {
-      marks,
-    }),
+    apiClient.put(
+      `/workflows/${encodeURIComponent(workflowKey)}/lora-promotion`,
+      { asset, promoted },
+    ),
   );
 }
 

@@ -553,6 +553,25 @@ def read_best_picture_ids(vault, structural_hashes: list[str], limit: int) -> li
     return vault.db.run_immediate_read_task(best_picture_ids, structural_hashes, limit)
 
 
+def picture_variant(session: Session, picture_id: int) -> Optional[str]:
+    """The variant a kept picture was made by, or ``None``.
+
+    ``None`` for a binned or unknown picture and for one no workflow was read
+    off, so a caller asking about a cover it was handed cannot be told about a
+    picture the owner threw away.
+    """
+    return session.exec(
+        select(Picture.workflow_structural_hash)
+        .where(Picture.id == picture_id)
+        .where(Picture.deleted.is_(False))
+    ).first()
+
+
+def read_picture_variant(vault, picture_id: int) -> Optional[str]:
+    """:func:`picture_variant` in its own read task."""
+    return vault.db.run_immediate_read_task(picture_variant, picture_id)
+
+
 def oldest_kept_by_pixel_sha(session: Session, pixel_shas: list[str]) -> dict[str, int]:
     """``{pixel_sha: picture_id}``: the picture a pinned input resolves to (#1457).
 

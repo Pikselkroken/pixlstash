@@ -2331,14 +2331,25 @@ can no longer see.
 - **Whole-set writes are built when they run, and only on their own card.**
   `resetDefault` and `togglePin` each PUT the complete set, read from
   `defaults` after any earlier write they queued behind. If the selection
-  moved in between (the owner's click, or a LoRA flip re-keying the
+  moved in between (the owner's click, or a LoRA promotion re-keying the
   card), `defaultsFor` refuses the write with a notice rather than sending one
   card's set to another.
-- **The LoRA slot's `Segmented` re-keys the card.** `PUT /workflows/{key}/slots`
-  answers with the key the card moved to, and the rail follows it: staying on
-  the key it sent leaves the panel reading a card the hub no longer has. The
-  slot is addressed by `slot_label`, which the card payload carries for this.
-  A flip also **forgets the store's cached stack members** — every card of the
+- **The LoRA section speaks for the whole stack, and has no switch.** The
+  per-slot Workflow | Recipe `Segmented` and the nameless "LoRA slots" list are
+  gone. *In every picture* lists the models and the LoRAs every picture of every
+  member loaded (`GET /workflows/{key}/lora-summary`'s `shared`, ordered and
+  given strengths by matching the chain's loaders on the file; a card with no
+  picture falls back to the chain itself). *Changes per picture* is one pile
+  (`WorkflowLoraPile.vue`): the cover's LoRA on top, "+N", and a `v-menu`
+  that fans out over the grid with each LoRA's picture strip, count, where in
+  the stack it occurs, *Show N* (the library narrowed by `workflow_stack` +
+  `workflow_lora`, `useWorkflowPictures.showLoraPictures`) and **Promote /
+  Put back**, confirmed in place before anything is written.
+- **Promote re-keys cards.** `PUT /workflows/{key}/lora-promotion` answers with
+  the key the card now lives at (the same card, when pictures were split off
+  it), and the rail follows it: staying on a key that went away leaves the
+  panel reading a card the hub no longer has. A promotion also **forgets the
+  store's cached stack members** — every card of the
   topology may have moved — and the rail falls back to the card the detail
   read brought back when the successor key is not in the grid at all, which
   is what a merge into somebody else's stack looks like.

@@ -1777,6 +1777,17 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Mark a card's LoRA slots, which re-keys every card of the topology; PUT blocked for READ tokens; owner only",
     ),
+    # The per-file counterpart of `.../slots` and its read: the stack's LoRAs
+    # counted over the whole vault, and a write that re-keys the cards of every
+    # topology in the stack.
+    ("GET", "/api/v1/workflows/{workflow_key}/lora-summary"): RoutePolicy(
+        _OWNER,
+        justification="Which LoRAs a card's stack shares and which change, counted over the whole library; owner only",
+    ),
+    ("PUT", "/api/v1/workflows/{workflow_key}/lora-promotion"): RoutePolicy(
+        _OWNER,
+        justification="Promote one LoRA file to a workflow of its own, which re-keys the cards of its stack; PUT blocked for READ tokens; owner only",
+    ),
     ("PUT", "/api/v1/workflows/{workflow_key}/model-fix"): RoutePolicy(
         _OWNER,
         justification="Replace a missing model in a card's workflow, which re-keys the cards of its topology; PUT blocked for READ tokens; owner only",
