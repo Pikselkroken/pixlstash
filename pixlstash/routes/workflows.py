@@ -5757,7 +5757,7 @@ def create_router(server) -> APIRouter:
             """The candidates every loader naming the file can load, given *info*."""
             for cls, widget, value, fix_kind, node_id in loaders:
                 options = listed_options(info, cls, widget)
-                if options:
+                if options is not None:
                     # Listed by this loader, or loadable through a PixlStash
                     # one swapped in for it (#1605), by the run's own rule.
                     kept = []

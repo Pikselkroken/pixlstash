@@ -10620,6 +10620,36 @@ def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
             conn.execute("DELETE FROM model WHERE id = ?", (sdxl_id,))
 
 
+def test_an_empty_checkpoints_folder_says_the_checkpoint_is_missing(cloneable):
+    """ComfyUI listing no checkpoints at all is not "cannot tell".
+
+    The pre-flight flags the file, and nothing on the shelf is offered in its
+    place, since that loader can load none of it.
+    """
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [[], {}]
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    plan = _preflight(cloneable.owner, workflow_key=RUN_CARD, values=[])
+    missing = [
+        model
+        for group in plan["groups"]
+        for reason in group["reasons"]
+        if reason["code"] == "missing_models"
+        for model in reason["models"]
+    ]
+    assert {"file": _SHELF_FILENAME, "folder": "checkpoints"} in missing, plan
+    body = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"replacing": _SHELF_FILENAME},
+    ).json()
+    assert (body["replacements"], body["replacements_reason"]) == (
+        [],
+        "none_loadable",
+    )
+
+
 def test_no_replacement_is_offered_without_a_checkpoint_to_go_with(cloneable):
     graph = _with_support_loaders(cloneable.graph)
     graph["1"]["inputs"]["ckpt_name"] = "test-not-on-shelf.safetensors"
