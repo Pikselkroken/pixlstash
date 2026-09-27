@@ -156,6 +156,20 @@ const hostEl = ref(null);
           aria-label="Dismiss notification"
           @click="store.dismiss(card.id)"
         />
+        <!-- Countdown: drains over the auto-dismiss window and stops whenever
+             the store's timer does (hover, focus, hidden tab). Re-mounted from
+             the banked time on every timer start, so it cannot drift. -->
+        <span
+          v-if="card.timeout > 0"
+          :key="card.countdown?.run ?? 0"
+          class="notice-countdown"
+          aria-hidden="true"
+          :style="{
+            '--notice-countdown-from': card.countdown?.from ?? 1,
+            animationDuration: `${card.countdown?.ms ?? card.timeout}ms`,
+            animationPlayState: card.running ? 'running' : 'paused',
+          }"
+        ></span>
       </div>
     </TransitionGroup>
   </div>
@@ -230,6 +244,31 @@ const hostEl = ref(null);
   inset-inline-start: 0;
   width: var(--space-2);
   background: var(--notice-status, transparent);
+}
+
+/* Countdown bar along the bottom edge, in the status hue. */
+.notice-countdown {
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 0;
+  height: var(--space-1);
+  background: var(--notice-status, transparent);
+  transform-origin: left center;
+  animation-name: notice-countdown;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+[dir="rtl"] .notice-countdown {
+  transform-origin: right center;
+}
+
+@keyframes notice-countdown {
+  from {
+    transform: scaleX(var(--notice-countdown-from, 1));
+  }
+  to {
+    transform: scaleX(0);
+  }
 }
 
 /* Per-variant: ONLY the tint, border and rail carry the hue. The glyph and the
@@ -412,6 +451,11 @@ const hostEl = ref(null);
   .notice-move,
   .notice-host {
     transition: none;
+  }
+  /* The global token collapse would empty the bar instantly; a bar that is
+     always empty says nothing, so drop it. */
+  .notice-countdown {
+    display: none;
   }
 }
 </style>
