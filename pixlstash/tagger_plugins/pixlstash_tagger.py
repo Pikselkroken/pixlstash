@@ -50,6 +50,7 @@ QUALITY_CROP_TAG_WHITELIST = frozenset(
     {
         "blocky",
         "malformed teeth",
+        "malformed eyes",
         "flux chin",
     }
 )
@@ -59,6 +60,7 @@ QUALITY_CROP_TAG_WHITELIST = frozenset(
 FACE_QUALITY_CROP_TAGS = frozenset(
     {
         "malformed teeth",
+        "malformed eyes",
         "flux chin",
     }
 )
