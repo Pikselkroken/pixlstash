@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  evidenceLine,
   fillFromPictures,
   fillFromSets,
   handMadeCard,
@@ -260,6 +261,20 @@ describe("kindCounts", () => {
   });
 });
 
+describe("evidenceLine", () => {
+  it("prints a run-only entry's runs alone, and runs only when there are some", () => {
+    expect(evidenceLine({ recipes: 0, pictures: 0, historyRuns: 2 })).toBe(
+      "2 ComfyUI runs",
+    );
+    expect(evidenceLine({ recipes: 1, pictures: 0, historyRuns: 0 })).toBe(
+      "1 recipe · 0 pictures",
+    );
+    expect(evidenceLine({ recipes: 1, pictures: 3, historyRuns: 1 })).toBe(
+      "1 recipe · 3 pictures · 1 ComfyUI run",
+    );
+  });
+});
+
 describe("sharingLabel", () => {
   it("names the count, because a list of seventeen is not readable", () => {
     expect(sharingLabel(0)).toBe("Only in this set");
@@ -319,8 +334,9 @@ describe("worksWith", () => {
     });
   });
 
-  it("ranks a companion only ComfyUI ran after the recipe ones, with a bar", () => {
-    // #1565: a run is a witness too, so the bar must not be empty.
+  it("ranks by recipes plus ComfyUI runs, so the bar is the order", () => {
+    // #1565: a run is a witness too, so the bar must not be empty, and it must
+    // never be longer than the bar of a companion ranked above it.
     const ran = combination("1,6", [CKPT, OTHER_CKPT], {
       recipes: 0,
       pictures: 0,
@@ -335,6 +351,16 @@ describe("worksWith", () => {
       2,
     ]);
     expect(last.share).toBeGreaterThan(0);
+
+    const busy = combination("1,6", [CKPT, OTHER_CKPT], {
+      recipes: 0,
+      pictures: 0,
+      runs: 40,
+    });
+    const ranked = worksWith([...ALL, busy], CKPT.id).companions;
+    expect(ranked[0].name).toBe("juggernautXL_v9");
+    const shares = ranked.map((c) => c.share);
+    expect(shares).toEqual([...shares].sort((a, b) => b - a));
   });
 });
 

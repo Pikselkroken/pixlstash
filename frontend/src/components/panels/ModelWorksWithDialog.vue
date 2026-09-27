@@ -47,7 +47,7 @@
             </Tooltip>
           </span>
           <!-- The bar is the ranking and the number is the evidence: sorted by
-               recipe count, which is the only thing co-occurrence measures.
+               recipes plus ComfyUI runs, the witnesses co-occurrence counts.
                `aria-hidden` on the bar because the figures beside it say the
                same thing in words. -->
           <span class="ww__evidence">
@@ -55,12 +55,7 @@
               <span :style="{ width: `${companion.share}%` }"></span>
             </span>
             <span class="ww__figures num"
-              >{{ recipeCount(companion.recipes) }} ·
-              {{ companion.pictures.toLocaleString() }}
-              {{ companion.pictures === 1 ? "picture" : "pictures"
-              }}<template v-if="companion.historyRuns > 0">
-                · {{ runCount(companion.historyRuns) }}</template
-              ></span
+              >{{ evidenceLine(companion) }}</span
             >
           </span>
         </li>
@@ -120,6 +115,7 @@ import {
 } from "../../utils/modelShelf";
 import {
   memberKindLabel,
+  evidenceLine,
   recipeCount,
   runCount,
   setName,
@@ -230,8 +226,11 @@ const setsLabel = computed(() => {
 });
 
 const recipeLabel = computed(() =>
+  // A model only ComfyUI ran has no recipe to count: "0 recipes" says nothing.
   [
-    recipeCount(answer.value.recipes),
+    answer.value.recipes || !answer.value.historyRuns
+      ? recipeCount(answer.value.recipes)
+      : null,
     answer.value.historyRuns > 0 ? runCount(answer.value.historyRuns) : null,
   ]
     .filter(Boolean)

@@ -211,6 +211,23 @@ export function runCount(runs) {
   return n === 1 ? "1 ComfyUI run" : `${n} ComfyUI runs`;
 }
 
+/**
+ * One entry's evidence in words: "2 recipes · 5 pictures · 1 ComfyUI run".
+ *
+ * An entry only ComfyUI ran prints its runs alone rather than "0 recipes ·
+ * 0 pictures" beside them; otherwise runs are added only when there are some.
+ */
+export function evidenceLine({ recipes = 0, pictures = 0, historyRuns = 0 }) {
+  const onlyRuns = !recipes && !pictures && historyRuns > 0;
+  return [
+    onlyRuns ? null : recipeCount(recipes),
+    onlyRuns ? null : pictureCount(pictures),
+    historyRuns > 0 ? runCount(historyRuns) : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 /** "3 pictures", "1 picture". */
 export function pictureCount(pictures) {
   const n = Number(pictures) || 0;
@@ -306,11 +323,12 @@ export function memberKindLabel(model) {
  * reason this module keeps them: a union puts every model a checkpoint has ever
  * loaded into one bag, so answering from it would report two VAEs as companions
  * of each other on the strength of sharing a checkpoint. Ranked by how many
- * recipes back each pairing, which is the only thing co-occurrence can measure;
- * the caller draws the bar from `share` and the number from `recipes`.
+ * witnesses back each pairing - recipes plus ComfyUI runs (#1565), which is the
+ * only thing co-occurrence can measure - so the bar the caller draws from
+ * `share` IS the ranking; recipes, then pictures, break ties.
  *
  * **A model missing from this list has not been ruled out.** It has simply never
- * been in the same picture's recipe, which is a fact about what has been tried
+ * been in the same picture's recipe or ComfyUI run, which is a fact about what has been tried
  * here and not about what works - so every caller says so beside the list.
  *
  * @param {Array<Object>} combinations
@@ -350,17 +368,18 @@ export function worksWith(combinations, modelId) {
       found.set(model.id, seen);
     }
   }
+  // Recipes and runs are both witnesses of a pairing, so the rank and the bar
+  // both count them: a companion only ComfyUI ran must not draw an empty bar,
+  // and the bar must never disagree with the order it is drawn in.
+  const witnesses = (companion) => companion.recipes + companion.historyRuns;
   const companions = [...found.values()].sort(
     (a, b) =>
+      witnesses(b) - witnesses(a) ||
       b.recipes - a.recipes ||
-      b.historyRuns - a.historyRuns ||
       b.pictures - a.pictures ||
       a.name.localeCompare(b.name),
   );
-  // Recipes and runs are both witnesses of a pairing, so the bar measures
-  // both: a companion only ComfyUI ran must not draw an empty bar.
-  const witnesses = (companion) => companion.recipes + companion.historyRuns;
-  const top = Math.max(0, ...companions.map(witnesses)) || 1;
+  const top = witnesses(companions[0] ?? { recipes: 0, historyRuns: 0 }) || 1;
   return {
     companions: companions.map((companion) => ({
       ...companion,
@@ -705,8 +724,8 @@ export function slotSuggestions({
 }
 
 /**
- * What "Fill from pictures" offers: every model recipes have run with this
- * set's checkpoint that the set does not hold, strongest evidence first.
+ * What "Fill from pictures" offers: every model recipes or ComfyUI runs have
+ * used with this set's checkpoint that the set does not hold, strongest evidence first.
  *
  * @returns {Array<{id, name, kindLabel, recipes, historyRuns, slot, sha256}>}
  */

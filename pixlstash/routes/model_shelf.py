@@ -1906,7 +1906,7 @@ def create_router(server) -> APIRouter:
             "rather than being dropped. A member the evidence could only reach "
             "by a basename two shelf rows share is flagged `ambiguous` and "
             "still listed.\n\n"
-            "Scoped to the pictures of the active library, unlike "
+            "Pictures are scoped to the active library, unlike "
             "`POST /models/companions`, which counts every recipe the hub "
             "holds: that one keeps a file some other library needs, this one "
             "draws what the library in front of the reader has made - or has "

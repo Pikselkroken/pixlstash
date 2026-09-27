@@ -1261,7 +1261,7 @@ def _history_runs(hub) -> dict[str, set[int]]:
 
 
 def fetch_workflow_sets(hub, vault) -> dict:
-    """Every set of shelf models a picture in this library proves ran together.
+    """Every set of shelf models a picture here or a ComfyUI run proves ran together.
 
     One entry per distinct *combination* - the model ids one recipe resolves to.
     Several recipes that name the same files are one combination, with their
@@ -1275,12 +1275,12 @@ def fetch_workflow_sets(hub, vault) -> dict:
     dropped, so the caller can say it cannot tell rather than implying nobody
     has tried them.
 
-    Scoped to the pictures of the ACTIVE library, unlike
+    Pictures are scoped to the ACTIVE library, unlike
     :func:`fetch_companions`, which counts every recipe the hub holds. The two
     differ because they answer different questions: a delete warning must keep
     a file some other library needs, and this grid is a picture of what the
     library in front of the reader has actually made. A recipe the hub holds
-    with no kept picture here is therefore not a set.
+    with no kept picture here is therefore not a set, unless ComfyUI ran it.
 
     **ComfyUI's own runs are witnesses too** (#1565): every finished run the
     workflow pull stored in ``comfyui_history_model`` counts one
