@@ -157,6 +157,13 @@
               data-testid="wftab-replace-model"
               @update:model-value="replaceCheckpoint"
             />
+            <p
+              v-else-if="checkpointNoReplacement"
+              class="wftab-note wftab-quiet"
+              data-testid="wftab-no-replacement-checkpoint"
+            >
+              {{ checkpointNoReplacement }}
+            </p>
             <!-- The replacement has gone missing too: say what it was, and
                  keep the way back reachable. Choosing another above replaces
                  the original, never the replacement. -->
@@ -1098,6 +1105,8 @@ const NO_REPLACEMENT_TEXT = {
   no_checkpoint:
     "Nothing to offer: the checkpoint is not on your shelf, so nothing says what goes with it.",
   none_go_with_it: "Nothing on your shelf is known to work with this checkpoint.",
+  none_same_base_model:
+    "Nothing on your shelf has this checkpoint's base model, so its LoRAs would not match.",
   none_loadable:
     "What works with this checkpoint is not something this loader can load.",
   needs_pixlstash_nodes:
@@ -1128,6 +1137,19 @@ const replaceOptions = computed(() =>
     ? replaceOptionsFor("checkpoint", missingCheckpointFile.value)
     : [],
 );
+
+/**
+ * Why the missing checkpoint has no "Replace with…", or "". Only the reasons
+ * worded for it: the rest speak of a file that goes WITH a checkpoint.
+ */
+const checkpointNoReplacement = computed(() => {
+  const reason =
+    replacementsByFile.value[`checkpoint:${missingCheckpointFile.value}`]
+      ?.replacements_reason;
+  return ["none_same_base_model", "unread"].includes(reason)
+    ? NO_REPLACEMENT_TEXT[reason]
+    : "";
+});
 
 /** Whether two recorded values name one file, whatever their folders. */
 function sameFile(a, b) {

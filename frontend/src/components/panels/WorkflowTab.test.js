@@ -495,6 +495,26 @@ describe("a checkpoint that will not load", () => {
     });
   });
 
+  it("says why no checkpoint of the same base model is offered", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap
+      .mockReset()
+      .mockImplementation(
+        replacementsByKind({}, { checkpoint: "none_same_base_model" }),
+      );
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-replace-model"]').exists()).toBe(
+      false,
+    );
+    expect(
+      wrapper.find('[data-testid="wftab-no-replacement-checkpoint"]').text(),
+    ).toContain("has this checkpoint's base model");
+  });
+
   it("says the replacement is missing only when it is the file missing", async () => {
     const fix = {
       slot_label: "n1/ckpt_name",
