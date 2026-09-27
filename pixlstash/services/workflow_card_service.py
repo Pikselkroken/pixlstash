@@ -66,7 +66,7 @@ from pixlstash.hub.workflow_card_reads import (
     variant_documents,
     workflow_group_defaults,
 )
-from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS
+from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS, loader_swaps_of
 from pixlstash.hub.workflows import model_ghost_names, picture_ghosts_by_variant
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import LORA_DIGEST_FIELD_RE
@@ -91,6 +91,7 @@ from pixlstash.services.workflow_identity import (
     base_model_kind,
     core_node_labels,
     differences_reduced,
+    unswapped,
     is_lora_widget,
     model_fix_kind,
     reduce_stored_document,
@@ -1947,12 +1948,32 @@ def _variant_reads(
     Base labels only for a variant ON the base topology: a slot label means
     nothing outside its topology, which is the whole reason the core address
     exists.
+
+    A variant a model fix swapped a PixlStash loader into (#1605) is carded
+    under the topology it was swapped from, and is read as that graph too,
+    the original loader put back, or its model would vote at an address the
+    workflow's other runs do not have.
     """
+    filed_as: dict[str, str] = {}
+    for batch in chunked(sorted(structural_hashes)):
+        placeholders = ",".join("?" * len(batch))
+        filed_as.update(
+            hub.fetchall(
+                "SELECT structural_hash, topology_hash FROM workflow_recipe "
+                f"WHERE structural_hash IN ({placeholders})",
+                tuple(batch),
+            )
+        )
     reads = {}
     for structural_hash, document in variant_documents(
         hub, sorted(structural_hashes)
     ).items():
         try:
+            swapped = filed_as.get(structural_hash)
+            if swapped and swapped != workflow.variant_topology.get(structural_hash):
+                _, document = unswapped(
+                    document, loader_swaps_of(hub.fetchall, swapped)
+                )
             on_base = (
                 workflow.variant_topology.get(structural_hash) == workflow.base_topology
             )

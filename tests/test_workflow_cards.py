@@ -1629,3 +1629,43 @@ def test_most_runs_without_a_lora_decide_none(hub, monkeypatch):
     ]
     _, recipe = _defaults(hub, monkeypatch, runs)
     assert (recipe.loras, recipe.loras_decided) == ([], True)
+
+
+def test_a_swapped_run_votes_for_its_original_loader_s_file(hub, monkeypatch):
+    """#1605 meets #1622: a run through a PixlStash loader is read unswapped."""
+    missing, now = "test-vae-fp8.safetensors", "test-vae-bf16.safetensors"
+
+    def with_vae(vae_node, steps=20):
+        graph = _graph(
+            extra={
+                "8": vae_node,
+                "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+            },
+        )
+        graph["5"]["inputs"]["steps"] = steps
+        return graph
+
+    original = with_vae(_node("VAELoader", vae_name=missing))
+    old = record_api_graph(hub, original, library_uuid="test-library")
+    plain = record_api_graph(
+        hub, with_vae(_node("VAELoader", vae_name=now)), library_uuid="test-library"
+    )
+    swapped_topology, swaps = loader_swaps(
+        original,
+        with_vae(_node("PixlStashVAELoader", vae_sha256="ab" * 32)),
+        {"8": {"vae_sha256": ("vae_name", now)}},
+    )
+    record_loader_swaps(hub, swapped_topology, swaps)
+    ran = [
+        record_api_graph(
+            hub,
+            with_vae(_node("PixlStashVAELoader", vae_sha256="ab" * 32), steps),
+            library_uuid="test-library",
+        )
+        for steps in (21, 22)
+    ]
+    runs = [old, plain, *ran]
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    (vae,) = [m for m in recipe.models if m.address.endswith("/vae_name")]
+    # Three runs loaded the bf16 file, two of them through the swapped loader.
+    assert vae.filename == now
