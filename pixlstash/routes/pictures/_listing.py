@@ -17,6 +17,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.hub import workflow_cards
+from pixlstash.hub.workflow_card_reads import keys_in_stack
 from pixlstash.db_models import (
     Face,
     Picture,
@@ -360,6 +361,15 @@ class PictureListFilters:
                 "stack id, or the core hash of an automatic stack."
             ),
         ),
+        workflow_lora: str | None = Query(
+            None,
+            description=(
+                "Only pictures whose workflow loaded this LoRA file, named by "
+                "its stored reference (`asset:<sha256>`, as "
+                "`GET /workflows/{key}/lora-summary` serves it). Narrows "
+                "`workflow_key` / `workflow_stack` when given with them."
+            ),
+        ),
         reference_folder_id: str | None = Query(
             None, description="Filter by reference-folder id."
         ),
@@ -377,7 +387,7 @@ class PictureListFilters:
 
 
 def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
-    """``workflow_key`` / ``workflow_stack`` as the variants to match, or ``None``.
+    """``workflow_key`` / ``workflow_stack`` / ``workflow_lora`` as variants, or ``None``.
 
     The cards are in the hub and the pictures are in the vault, so there is no
     join to write: the card is resolved to its variants here and the listing
@@ -413,7 +423,8 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
     query_params.pop("workflow_structural_hashes", None)
     key = query_params.pop("workflow_key", None)
     stack_id = query_params.pop("workflow_stack", None)
-    if key is None and stack_id is None:
+    lora = query_params.pop("workflow_lora", None)
+    if key is None and stack_id is None and lora is None:
         return None
     hub = getattr(server, "hub", None)
     matched: list[set[str]] = []
@@ -423,17 +434,29 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
         if key is not None:
             matched.append(set(workflow_cards.variants_on_key(hub, key)))
         if stack_id is not None:
-            matched.append(set(workflow_cards.variants_in_stack(hub, stack_id)))
+            # `auto:<core hash>` is how a card names its stack (`stack_id`),
+            # and only `keys_in_stack` reads that spelling; a bare core hash
+            # or an unknown id falls through to the older reading.
+            stacked = keys_in_stack(hub, stack_id)
+            matched.append(
+                set(workflow_cards.variant_hashes_for_keys(hub, stacked))
+                if stacked
+                else set(workflow_cards.variants_in_stack(hub, stack_id))
+            )
+        if lora is not None:
+            among = sorted(set.intersection(*matched)) if matched else None
+            matched.append(set(workflow_cards.variants_loading(hub, lora, among)))
     except Exception as exc:
         # Fail closed, both for a hub that is absent and for one that will not
         # answer: a filter that cannot be resolved must not silently widen the
         # grid to every picture in the library, and it must not 500 a listing
         # the rest of which is perfectly answerable from the vault.
         logger.warning(
-            "Could not resolve the workflow filter (key=%r, stack=%r): %s; "
-            "listing no pictures rather than every picture.",
+            "Could not resolve the workflow filter (key=%r, stack=%r, "
+            "lora=%r): %s; listing no pictures rather than every picture.",
             key,
             stack_id,
+            lora,
             exc,
         )
         return []

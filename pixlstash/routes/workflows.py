@@ -48,7 +48,7 @@ import os
 import re
 import threading
 from copy import deepcopy
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import asdict, dataclass, field as dataclass_field
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
@@ -71,6 +71,7 @@ from pixlstash.hub.workflow_card_reads import (
     keys_in_stack,
     model_fix_labels,
     model_fixes,
+    lora_promotions,
     picture_inputs,
     slot_marks,
 )
@@ -81,6 +82,7 @@ from pixlstash.hub.workflow_card_writes import (
     replace_picture_inputs,
     replace_pins,
     set_attributes,
+    set_lora_promotion,
     set_model_fix,
     set_stack_order,
     stack_together,
@@ -136,6 +138,7 @@ from pixlstash.services.workflow_card_service import (
     card_defaults,
     read_grid,
     slot_kind,
+    stack_lora_summary,
 )
 from pixlstash.services import saved_recipe_service
 from pixlstash.services.model_shelf_service import (
@@ -175,7 +178,7 @@ from pixlstash.services.workflow_hash import (
     normalized_filename,
     structural_document,
 )
-from pixlstash.services.workflow_identity import topology_node_labels
+from pixlstash.services.workflow_identity import slots, topology_node_labels
 from pixlstash.services.workflow_inputs import (
     CardInput,
     card_input_modes,
@@ -968,6 +971,82 @@ class SlotMarkResult(BaseModel):
 
     key: str
     moved: dict[str, list[str]] = Field(default_factory=dict)
+
+
+class LoraPromotion(BaseModel):
+    """``PUT /workflows/{key}/lora-promotion``: one LoRA file in or out of the key.
+
+    ``asset`` is the file as ``GET /workflows/{key}/lora-summary`` names it,
+    the stored documents' reference rather than a filename, so a file whose
+    name was forgotten can still be promoted and put back.
+    """
+
+    asset: str = Field(pattern=r"^asset:[0-9a-f]{64}$")
+    promoted: bool
+
+
+class WorkflowLoraUse(BaseModel):
+    """One LoRA file across a stack, as the inspector's pile lists it."""
+
+    asset: str = Field(
+        description=(
+            "The file's reference in the stored graphs (`asset:<sha256>`): "
+            "what `PUT …/lora-promotion` and the picture listing's "
+            "`workflow_lora` take. Empty on the row for pictures that loaded "
+            "none of the LoRAs that change."
+        )
+    )
+    filename: str | None = Field(
+        None, description="The file, or null where its name was forgotten."
+    )
+    name: str | None = Field(
+        None,
+        description=(
+            "What to call it: the model shelf's title where exactly one shelf "
+            "model answers to the file, else the filename without folders, "
+            "extension or quant. Null where the name was forgotten."
+        ),
+    )
+    on_shelf: bool = False
+    pictures: int = 0
+    members: list[str] = Field(
+        default_factory=list,
+        description="The stack's cards whose pictures loaded it, in stack order.",
+    )
+    picture_ids: list[int] = Field(
+        default_factory=list,
+        description="Its best kept pictures, best first, for a strip. At most 3.",
+    )
+    promoted: bool = Field(
+        False,
+        description=(
+            "Its pictures are a workflow of their own: promoted, or in a slot "
+            "marked structural. Only ever set on a LoRA that changes."
+        ),
+    )
+
+
+class WorkflowLoraSummary(BaseModel):
+    """``GET /workflows/{key}/lora-summary``: the stack's LoRAs in two parts.
+
+    ``shared`` is the LoRAs every kept picture of every card in the stack
+    loaded; ``varying`` is the rest, most pictures first; ``without`` is the
+    pictures that loaded none of ``varying``. ``pictures`` is what both are
+    counted against, and leaves out pictures whose graph could not be read.
+    """
+
+    keys: list[str]
+    pictures: int = 0
+    shared: list[WorkflowLoraUse] = Field(default_factory=list)
+    varying: list[WorkflowLoraUse] = Field(default_factory=list)
+    without: WorkflowLoraUse | None = None
+    cover_asset: str | None = Field(
+        None,
+        description=(
+            "Which of `varying` the `cover` picture loaded, for the top of "
+            "the pile. Null without `cover`, or when it loaded none of them."
+        ),
+    )
 
 
 class RunLora(BaseModel):
@@ -1844,7 +1923,7 @@ def _specials_suffix(card) -> str:
     )
 
 
-def _display_name(card, models=()) -> str:
+def _display_name(card, models=(), loras=()) -> str:
     """What a card is called: the owner's name, else its file, else its models.
 
     That order is how much the name is *theirs*: one they typed, then the file
@@ -1864,7 +1943,10 @@ def _display_name(card, models=()) -> str:
 
     The suffix is on the generated name only. A card named after its workflow
     FILE keeps the owner's spelling untouched: appending to a name somebody
-    chose is inventing, not describing.
+    chose is inventing, not describing. A LoRA promoted to a workflow of its
+    own (*loras*) is appended too, ``Krea 2: Text to Image + Watercolor``,
+    because it is the one thing telling that card from the one it was split
+    off, which is otherwise generated the same name.
     """
     if card.name:
         return card.name
@@ -1883,9 +1965,20 @@ def _display_name(card, models=()) -> str:
         # the whole name can be an extension or end in a separator). Named for
         # what it does rather than after its VAE; the grid numbers the
         # duplicates this makes.
-        return (label or UNNAMED_CARD) + _specials_suffix(card)
+        return (
+            (label or UNNAMED_CARD) + _specials_suffix(card) + _promoted_suffix(loras)
+        )
     named = f"{stem}: {label}" if label else stem
-    return named + _specials_suffix(card)
+    return named + _specials_suffix(card) + _promoted_suffix(loras)
+
+
+def _promoted_suffix(loras) -> str:
+    """`` + Watercolor`` for each LoRA promoted to this card, or nothing."""
+    return "".join(
+        f" + {(lora.title or '').strip() or lora.name}"
+        for lora in loras
+        if lora.promoted and lora.name
+    )
 
 
 def _display_names(figures) -> dict[str, str]:
@@ -1902,7 +1995,7 @@ def _display_names(figures) -> dict[str, str]:
     generated = {}
     for figure in sorted(figures, key=lambda f: f.card.workflow_key):
         card = figure.card
-        name = _display_name(card, figure.models)
+        name = _display_name(card, figure.models, figure.loras)
         names[card.workflow_key] = name
         if not card.name and not card.file_name:
             generated.setdefault(name, []).append(card.workflow_key)
@@ -2034,7 +2127,7 @@ def _stack_members(
     members = []
     for position, (member, names) in enumerate(zip(figures, loads)):
         name = (card_names or {}).get(member.card.workflow_key) or _display_name(
-            member.card, member.models
+            member.card, member.models, member.loras
         )
         members.append(
             WorkflowStackMember(
@@ -2061,7 +2154,7 @@ def _card(figure, defaults=(), figures_by_key=None, names=None) -> WorkflowCard:
     return WorkflowCard(
         key=figure.card.workflow_key,
         name=(names or {}).get(figure.card.workflow_key)
-        or _display_name(figure.card, figure.models),
+        or _display_name(figure.card, figure.models, figure.loras),
         type=figure.card.workflow_type,
         type_label=_TYPE_LABELS.get(figure.card.workflow_type),
         imported=figure.card.imported,
@@ -2628,56 +2721,167 @@ def create_router(server) -> APIRouter:
                 status_code=422,
                 detail=f"This workflow has no LoRA slot called {unknown[0]!r}.",
             )
-        if getattr(server.vault, "library_uuid", None) is None:
-            # The flip decides its merge winner on the vault's picture counts
-            # and has to move the vault's saved recipes afterwards. With no
-            # library open it could do neither, and a re-key that skipped both
-            # would pick an arbitrary winner and orphan the recipes.
-            raise HTTPException(
-                status_code=503,
-                detail="No library is open, so a workflow cannot be re-keyed.",
-            )
+        _require_library()
         moved = flip_slot_marks(
             hub,
             card.topology_hash,
             payload.marks,
             read_variant_picture_counts(server.vault),
         )
-        # The migration `db_models/saved_recipe.py` says a re-keying owes this
-        # table. A second database, so it cannot be in the hub's transaction;
-        # it is the first thing after it, and it is logged.
+        _carry_saved_recipes(card.topology_hash, moved, "A slot-mark flip")
+        return _rekeyed(request, workflow_key, moved)
+
+    def _require_library() -> None:
+        """503 unless a library is open, for a write that re-keys cards.
+
+        A re-key decides its merge winner on the vault's picture counts and has
+        to move the vault's saved recipes afterwards. With no library open it
+        could do neither, and a re-key that skipped both would pick an
+        arbitrary winner and orphan the recipes.
+        """
+        if getattr(server.vault, "library_uuid", None) is None:
+            raise HTTPException(
+                status_code=503,
+                detail="No library is open, so a workflow cannot be re-keyed.",
+            )
+
+    def _carry_saved_recipes(topology_hash: str, moved: dict, what: str) -> None:
+        """Move the saved recipes onto the cards a re-key sent their pictures to.
+
+        The migration `db_models/saved_recipe.py` says a re-keying owes this
+        table. A second database, so it cannot be in the hub's transaction; it
+        is the first thing after it, and it is logged.
+        """
         try:
             rekeyed = saved_recipe_service.rekey_recipes(server.vault, moved)
         except Exception:
             # The hub transaction has already committed, so the cards have
-            # moved and the recipes have not. Re-running the flip will not
-            # repair it - the marks are now the marks in force, so a second
-            # PUT re-keys nothing and returns an empty `moved` - which is
-            # exactly why the map goes in the log rather than only the count:
-            # it is the only record of which key each recipe set belongs on.
-            # Raised rather than answered 200, because a saved recipe is
-            # authored and silently stranding one is the failure
+            # moved and the recipes have not. Re-running the write will not
+            # repair it - what it asked for is now what is in force, so a
+            # second PUT re-keys nothing and returns an empty `moved` - which
+            # is exactly why the map goes in the log rather than only the
+            # count: it is the only record of which key each recipe set
+            # belongs on. Raised rather than answered 200, because a saved
+            # recipe is authored and silently stranding one is the failure
             # `rekey_in_session` exists to close.
             logger.exception(
-                "A slot-mark flip on topology %s re-keyed its cards but could "
-                "not move the saved recipes with them. The recipes are still "
-                "on their old keys; the cards moved as %r.",
-                card.topology_hash,
+                "%s on topology %s re-keyed its cards but could not move the "
+                "saved recipes with them. The recipes are still on their old "
+                "keys; the cards moved as %r.",
+                what,
+                topology_hash,
                 moved,
             )
             raise
         if rekeyed:
             logger.info(
-                "A slot-mark flip on topology %s moved %d saved recipe(s) onto "
-                "the cards their workflows were re-keyed to.",
-                card.topology_hash,
+                "%s on topology %s moved %d saved recipe(s) onto the cards "
+                "their workflows were re-keyed to.",
+                what,
+                topology_hash,
                 rekeyed,
             )
+
+    def _rekeyed(
+        request: Request, workflow_key: str, moved: dict, stay: bool = False
+    ) -> SlotMarkResult:
+        """Announce a re-key and say where the addressed card went.
+
+        *stay* answers with the addressed key whenever a variant is still on
+        it, rather than with the biggest successor: promoting a LoRA splits
+        pictures OFF the card being looked at, which is still there.
+        """
         successors = moved.get(workflow_key) or [workflow_key]
+        if stay and workflow_key in successors:
+            successors = [workflow_key]
         touched = {workflow_key, *moved}
         touched.update(key for keys in moved.values() for key in keys)
         _announce(request, sorted(touched), "changed")
         return SlotMarkResult(key=successors[0], moved=moved)
+
+    @router.get(
+        "/workflows/{workflow_key}/lora-summary",
+        summary="The LoRAs of a workflow's stack",
+        description=(
+            "Which LoRAs every picture of every workflow in this card's stack "
+            "loaded, and which change between them: for each, how many "
+            "pictures, which workflows, its best pictures, and whether it has "
+            "been promoted to a workflow of its own. `cover` names the picture "
+            "on top of the stack, to say which changing LoRA it loaded."
+        ),
+        response_model=WorkflowLoraSummary,
+        responses={404: {"description": "This machine has no such card."}},
+    )
+    def lora_summary(
+        request: Request,
+        workflow_key: str,
+        cover: int | None = Query(
+            None, ge=1, description="The picture on top of the stack's cover."
+        ),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        _require_card(hub, workflow_key)
+        keys = effective_stack_keys(hub, workflow_key)
+        if getattr(server.vault, "library_uuid", None) is None:
+            # No pictures to count, so nothing is shared and nothing changes.
+            return WorkflowLoraSummary(keys=keys)
+        summary = stack_lora_summary(hub, server.vault, keys, cover)
+        return WorkflowLoraSummary(**asdict(summary))
+
+    @router.put(
+        "/workflows/{workflow_key}/lora-promotion",
+        summary="Promote one LoRA to a workflow of its own",
+        description=(
+            "Give the pictures that loaded one LoRA file a workflow of their "
+            "own inside this card's stack, which always loads it and exports "
+            "with it, or with `promoted: false` put them back with the rest. "
+            "Applies to every workflow in the stack that loaded the file, and "
+            "moves no picture that loaded any other file. Answers like "
+            "`PUT …/slots`: `key` is where this card now lives."
+        ),
+        response_model=SlotMarkResult,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "No workflow in the stack loaded that LoRA."},
+            503: {"description": "No library is open."},
+        },
+    )
+    def promote_lora(
+        request: Request, workflow_key: str, payload: LoraPromotion = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        _require_card(hub, workflow_key)
+        _require_library()
+        counts = read_variant_picture_counts(server.vault)
+        topologies = sorted(
+            {
+                card.topology_hash
+                for card in (
+                    find_card(hub, key)
+                    for key in effective_stack_keys(hub, workflow_key)
+                )
+                if card is not None and card.topology_hash
+            }
+        )
+        moved: dict[str, list[str]] = {}
+        loaded = False
+        for topology_hash in topologies:
+            result = set_lora_promotion(
+                hub, topology_hash, payload.asset, payload.promoted, counts
+            )
+            if result is None:
+                continue
+            loaded = True
+            _carry_saved_recipes(topology_hash, result, "A LoRA promotion")
+            moved.update(result)
+        if not loaded:
+            raise HTTPException(
+                status_code=409,
+                detail="No workflow in this stack loaded that LoRA.",
+            )
+        return _rekeyed(request, workflow_key, moved, stay=True)
 
     @router.put(
         "/workflows/{workflow_key}/model-fix",
@@ -4504,18 +4708,34 @@ def create_router(server) -> APIRouter:
         A mark is keyed by ``<node label>/<widget>`` (``workflow_identity``'s
         own slot label), so the widget is carried through rather than the node
         alone — a stacker's three slots are three marks on one node.
+
+        A LoRA file promoted to a workflow of its own
+        (``workflow_lora_promotion``) is kept too, but only where the graph
+        still loads THAT file in the slot: the promotion is of a file, and any
+        other file in the same slot is still the look.
         """
+        hub = _hub()
         keep = {
             label
             for (topology_hash, label), mark in slot_marks(
-                _hub(), [card.topology_hash]
+                hub, [card.topology_hash]
             ).items()
             if topology_hash == card.topology_hash and mark == STRUCTURAL
         }
-        if not keep:
+        promoted = {
+            (label, asset)
+            for _, label, asset in lora_promotions(hub, [card.topology_hash])
+        }
+        if not keep and not promoted:
             return set()
         try:
-            labels = topology_node_labels(structural_document(graph))
+            document = structural_document(graph)
+            labels = topology_node_labels(document)
+            keep |= {
+                slot.label
+                for slot in slots(document)
+                if slot.is_lora and (slot.label, slot.asset) in promoted
+            }
         except WorkflowGraphError as exc:
             # No labels means no node is known to be structural, so every LoRA
             # slot is emptied. Logged rather than raised: a less useful export

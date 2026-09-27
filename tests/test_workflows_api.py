@@ -160,6 +160,7 @@ _WORKFLOW_ROUTES = (
     # The LoRA chain editor's read (#1478): the whole-library graph, the shelf
     # LoRA each loader loads, and the owner's ComfyUI behind it.
     ("GET", "/api/v1/workflows/{workflow_key}/lora-chain"),
+    ("GET", "/api/v1/workflows/{workflow_key}/lora-summary"),
     # Open in ComfyUI: the same graph unscrubbed, so owner-only for the same
     # reason and with even more to lose.
     ("GET", "/api/v1/workflows/{workflow_key}/graph"),
@@ -174,6 +175,7 @@ _WORKFLOW_ROUTES = (
 _WORKFLOW_WRITE_ROUTES = (
     ("PATCH", "/api/v1/workflows/{workflow_key}"),
     ("PUT", "/api/v1/workflows/{workflow_key}/slots"),
+    ("PUT", "/api/v1/workflows/{workflow_key}/lora-promotion"),
     ("PUT", "/api/v1/workflows/{workflow_key}/model-fix"),
     ("PUT", "/api/v1/workflows/{workflow_key}/defaults"),
     ("PUT", "/api/v1/workflows/{workflow_key}/pins"),
@@ -589,6 +591,7 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_recipe_graph")
         conn.execute("DELETE FROM workflow_variant")
         conn.execute("DELETE FROM workflow_slot_mark")
+        conn.execute("DELETE FROM workflow_lora_promotion")
         conn.execute("DELETE FROM workflow_file")
         conn.execute("DELETE FROM workflow_origin")
         conn.execute("DELETE FROM workflow_pulled_file")
@@ -4611,6 +4614,280 @@ def test_merging_two_cards_keeps_the_name_of_the_one_with_most_pictures(workflow
         "the merged card took the name of the card with fewer pictures"
     )
     assert _attr_row(server, quiet_key) is None
+
+
+_ADA = asset_reference("character_ada.safetensors")
+_BO = asset_reference("character_bo.safetensors")
+
+
+def _promoted_key(structural_hash: str, promoted) -> str:
+    """The card one flip variant lands on with these files promoted."""
+    return workflow_key(
+        FLIP_TOPOLOGY,
+        slots(_FLIP_DOCUMENTS[structural_hash]),
+        [],
+        {(_flip_slot_label(structural_hash), asset) for asset in promoted},
+    )
+
+
+def _variant_key(server, structural_hash: str) -> str:
+    return server.hub.fetchone(
+        "SELECT workflow_key FROM workflow_variant WHERE structural_hash = ?",
+        (structural_hash,),
+    )["workflow_key"]
+
+
+def _flip_picture_ids(server, structural_hash: str) -> set[int]:
+    def read(session):
+        return set(
+            session.exec(
+                select(Picture.id).where(
+                    Picture.workflow_structural_hash == structural_hash
+                )
+            ).all()
+        )
+
+    return server.vault.db.run_immediate_read_task(read)
+
+
+def test_a_stack_summary_says_which_loras_change_and_how_often(workflow_env):
+    """Both character LoRAs change, most pictures first, with their pictures.
+
+    Nothing is shared: no LoRA is in all four pictures. Each row names the
+    file, its count, the card it is on and a strip of that file's own
+    pictures, never the other file's.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    a_ids = _flip_picture_ids(server, FLIP_RECIPE_A)
+
+    r = owner.get(
+        f"{API}/workflows/{merged}/lora-summary", params={"cover": min(a_ids)}
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["pictures"] == 4
+    assert body["shared"] == []
+    assert body["without"] is None
+    assert [(use["asset"], use["pictures"]) for use in body["varying"]] == [
+        (_ADA, 3),
+        (_BO, 1),
+    ]
+    ada = body["varying"][0]
+    assert ada["filename"] == "character_ada.safetensors"
+    assert ada["name"] == "character ada"
+    assert ada["members"] == [merged]
+    assert ada["promoted"] is False
+    assert set(ada["picture_ids"]) == a_ids
+    assert set(body["varying"][1]["picture_ids"]) == _flip_picture_ids(
+        server, FLIP_RECIPE_B
+    )
+    assert body["cover_asset"] == _ADA
+    # The other direction: the cover names B's file when it is B's picture.
+    b_cover = min(_flip_picture_ids(server, FLIP_RECIPE_B))
+    assert (
+        owner.get(
+            f"{API}/workflows/{merged}/lora-summary", params={"cover": b_cover}
+        ).json()["cover_asset"]
+        == _BO
+    )
+
+
+def test_a_lora_in_every_picture_is_shared_not_piled(workflow_env):
+    """The positive control for "shared": one variant only, so its LoRA is in
+    every picture and nothing changes."""
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+
+    def bin_b(session):
+        for picture in session.exec(
+            select(Picture).where(Picture.workflow_structural_hash == FLIP_RECIPE_B)
+        ).all():
+            picture.deleted = True
+        session.commit()
+
+    server.vault.db.run_task(bin_b, priority=DBPriority.IMMEDIATE)
+    body = owner.get(f"{API}/workflows/{merged}/lora-summary").json()
+    assert body["pictures"] == 3
+    assert [use["asset"] for use in body["shared"]] == [_ADA]
+    assert body["varying"] == []
+    assert body["without"] is None
+
+
+def test_promoting_one_lora_splits_off_its_pictures_and_nothing_else(workflow_env):
+    """The per-file split: A's pictures leave, B's stay on the card.
+
+    The card being looked at keeps its key, its name and B's picture. The
+    split-off card gets NO copy of the owner's typed name - two cards reading
+    "Character sheet" is the confusion this ends - and is named for the LoRA.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    owner.patch(f"{API}/workflows/{merged}", json={"name": "Character sheet"})
+    ada_key = _promoted_key(FLIP_RECIPE_A, [_ADA])
+    assert ada_key != merged
+
+    r = owner.put(
+        f"{API}/workflows/{merged}/lora-promotion",
+        json={"asset": _ADA, "promoted": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["key"] == merged, "the rail must stay on the card it showed"
+    assert set(r.json()["moved"][merged]) == {merged, ada_key}
+    assert _variant_key(server, FLIP_RECIPE_A) == ada_key
+    assert _variant_key(server, FLIP_RECIPE_B) == merged
+    assert _attr_row(server, merged)["name"] == "Character sheet"
+    split_off = _attr_row(server, ada_key)
+    assert split_off is None or split_off["name"] is None
+    card = owner.get(f"{API}/workflows/{ada_key}").json()["card"]
+    assert card["name"].endswith(" + character ada"), card["name"]
+    assert card["picture_count"] == 3
+
+    # Promoted on the summary, and the two halves are one stack.
+    body = owner.get(f"{API}/workflows/{merged}/lora-summary").json()
+    assert set(body["keys"]) == {merged, ada_key}
+    by_asset = {use["asset"]: use for use in body["varying"]}
+    assert by_asset[_ADA]["promoted"] is True
+    assert by_asset[_ADA]["members"] == [ada_key]
+    assert by_asset[_BO]["promoted"] is False
+
+    # Promoting twice changes nothing.
+    again = owner.put(
+        f"{API}/workflows/{merged}/lora-promotion",
+        json={"asset": _ADA, "promoted": True},
+    )
+    assert again.status_code == 200
+    assert again.json()["moved"] == {}
+
+
+def test_a_promoted_lora_is_never_filed_away_as_a_one_off(workflow_env):
+    """B's one unrated picture would be a one-off; promoted, it is on the grid.
+
+    The owner asked for that card by name, so the grid must show it: a
+    promotion whose result vanishes reads as one that did nothing.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    bo_key = _promoted_key(FLIP_RECIPE_B, [_BO])
+
+    def drawn():
+        cards = owner.get(f"{API}/workflows").json()["cards"]
+        return {card["key"] for card in cards} | {
+            key for card in cards for key in card.get("member_keys") or ()
+        }
+
+    owner.put(
+        f"{API}/workflows/{merged}/lora-promotion",
+        json={"asset": _BO, "promoted": True},
+    )
+    assert _variant_key(server, FLIP_RECIPE_B) == bo_key
+    assert bo_key in drawn()
+
+
+def test_putting_a_promoted_lora_back_merges_its_pictures_home(workflow_env):
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    ada_key = _promoted_key(FLIP_RECIPE_A, [_ADA])
+    owner.put(
+        f"{API}/workflows/{merged}/lora-promotion",
+        json={"asset": _ADA, "promoted": True},
+    )
+
+    r = owner.put(
+        f"{API}/workflows/{ada_key}/lora-promotion",
+        json={"asset": _ADA, "promoted": False},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["key"] == merged
+    assert r.json()["moved"] == {ada_key: [merged]}
+    assert _variant_key(server, FLIP_RECIPE_A) == merged
+    assert (
+        server.hub.fetchone("SELECT COUNT(*) AS n FROM workflow_lora_promotion")["n"]
+        == 0
+    )
+
+
+def test_putting_back_a_file_of_a_structural_slot_moves_that_file_alone(
+    workflow_env,
+):
+    """A slot marked structural splits out EVERY file; putting one back must
+    not merge the others. The slot becomes a recipe slot with the other files
+    promoted, which keys B exactly where the structural mark keyed it."""
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    label = _flip_slot_label(FLIP_RECIPE_A)
+    owner.put(f"{API}/workflows/{merged}/slots", json={"marks": {label: "structural"}})
+    a_split, b_split = (
+        _flip_key(FLIP_RECIPE_A, [label]),
+        _flip_key(FLIP_RECIPE_B, [label]),
+    )
+    assert _variant_key(server, FLIP_RECIPE_B) == b_split
+    assert (
+        owner.get(f"{API}/workflows/{b_split}/lora-summary").json()["varying"][0][
+            "promoted"
+        ]
+        is True
+    ), "a file in a structural slot is already a workflow of its own"
+
+    r = owner.put(
+        f"{API}/workflows/{b_split}/lora-promotion",
+        json={"asset": _ADA, "promoted": False},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["key"] == b_split
+    assert r.json()["moved"] == {a_split: [merged]}
+    assert _variant_key(server, FLIP_RECIPE_A) == merged
+    assert _variant_key(server, FLIP_RECIPE_B) == b_split
+    assert (
+        server.hub.fetchone(
+            "SELECT mark FROM workflow_slot_mark WHERE topology_hash = ?",
+            (FLIP_TOPOLOGY,),
+        )["mark"]
+        == RECIPE
+    )
+
+
+def test_a_promotion_names_a_file_the_stack_loaded(workflow_env):
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    route = f"{API}/workflows/{merged}/lora-promotion"
+    nobody = asset_reference("nobody_loads_this.safetensors")
+    r = owner.put(route, json={"asset": nobody, "promoted": True})
+    assert r.status_code == 409, r.text
+    assert (
+        owner.put(
+            route, json={"asset": "character_ada.safetensors", "promoted": True}
+        ).status_code
+        == 422
+    )
+    # Nothing moved on either refusal.
+    assert _variant_key(server, FLIP_RECIPE_A) == merged
+
+
+def test_the_picture_grid_narrows_a_stack_to_one_lora(workflow_env):
+    """*Show N*: the stack's pictures that loaded one file, and no others."""
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_flip_fixture(server)
+    owner.put(
+        f"{API}/workflows/{merged}/lora-promotion",
+        json={"asset": _ADA, "promoted": True},
+    )
+    # How a card names its automatic stack (`stack_id`), which is what the
+    # inspector's *Show N* sends.
+    stack_id = f"auto:{FLIP_CORE}"
+
+    def ids(**params):
+        r = owner.get(f"{API}/pictures", params=params)
+        assert r.status_code == 200, r.text
+        return {picture["id"] for picture in r.json()}
+
+    a_ids = _flip_picture_ids(server, FLIP_RECIPE_A)
+    b_ids = _flip_picture_ids(server, FLIP_RECIPE_B)
+    # The control: the stack alone is both halves.
+    assert ids(workflow_stack=stack_id) == a_ids | b_ids
+    assert ids(workflow_stack=stack_id, workflow_lora=_ADA) == a_ids
+    assert ids(workflow_stack=stack_id, workflow_lora=_BO) == b_ids
+    assert ids(workflow_key=merged, workflow_lora=_ADA) == set()
 
 
 def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(
@@ -8897,6 +9174,40 @@ def test_a_structural_lora_that_is_on_the_shelf_travels_with_the_workflow(
     payload = runnable.owner.get(f"{API}/workflows/{RUN_CARD}/export").json()
     assert payload["workflow"]["2"]["inputs"]["lora_name"] == RUN_ADAPTER_FILENAME
     assert "LoRA slots that are part of the look" not in payload["removed"]
+
+
+def test_a_promoted_lora_travels_with_the_workflow_and_no_other_file_does(
+    runnable, monkeypatch
+):
+    """A promotion is of one FILE: the slot is kept only while it holds it.
+
+    The negative first: a different file promoted at the same slot leaves this
+    graph's LoRA emptied as the look it is. Then the file itself, kept.
+    """
+    graph = _embedded_export_graph(lora=RUN_ADAPTER_FILENAME)
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    slot = next(slot for slot in slots(structural_document(graph)) if slot.is_lora)
+    route = f"{API}/workflows/{RUN_CARD}/export"
+
+    def promote(asset):
+        with runnable.server.hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO workflow_lora_promotion "
+                "(topology_hash, slot_label, asset) VALUES (?, ?, ?)",
+                (RUN_TOPOLOGY, slot.label, asset),
+            )
+
+    promote(asset_reference("somebody_else.safetensors"))
+    payload = runnable.owner.get(route).json()
+    assert payload["workflow"]["2"]["inputs"]["lora_name"] == ""
+
+    promote(slot.asset)
+    payload = runnable.owner.get(route).json()
+    assert payload["workflow"]["2"]["inputs"]["lora_name"] == RUN_ADAPTER_FILENAME
 
 
 def test_an_export_names_the_categories_it_removed_and_never_the_values(exportable):

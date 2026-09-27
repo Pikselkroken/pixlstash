@@ -100,8 +100,26 @@
         </p>
       </div>
 
-      <div class="inspector-section">
-        <span class="section-label">Models</span>
+      <!-- What every picture here was made with: the models and the LoRAs
+           the whole stack shares, as one list of label-and-value rows, so a
+           LoRA reads like the checkpoint above it. "Edit LoRAs…" is here even
+           with no loader at all: an entry point that only exists for
+           workflows that already have LoRAs is how adding the first one
+           stays unreachable (#1478). -->
+      <div class="inspector-section" data-testid="wftab-every-picture">
+        <div class="wftab-sec-head">
+          <span class="section-label">In every picture</span>
+          <AppButton
+            size="sm"
+            variant="ghost"
+            data-testid="wftab-edit-loras"
+            :disabled="chainNoGraph"
+            :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
+            @click="openEditLoras(selectedKey)"
+          >
+            Edit LoRAs…
+          </AppButton>
+        </div>
         <div class="wftab-field">
           <span class="wftab-label">Checkpoint</span>
           <!-- Missing: ComfyUI does not have the file (the run pre-flight's
@@ -314,23 +332,34 @@
           </div>
         </div>
 
-        <!-- The chain, in the order it applies (#1478). "Edit LoRAs…" is
-             here even with no loader at all: an entry point that only exists
-             for workflows that already have LoRAs is how adding the first one
-             stays unreachable. -->
-        <div class="wftab-loras-head">
-          <span class="wftab-label">LoRAs</span>
-          <AppButton
-            size="sm"
-            data-testid="wftab-edit-loras"
-            :disabled="chainNoGraph"
-            :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
-            @click="openEditLoras(selectedKey)"
-          >
-            Edit LoRAs…
-          </AppButton>
+        <!-- The LoRAs every picture of every workflow in the stack loaded,
+             in the order the chain applies them. The ones that change are
+             the pile in the next section, never here. -->
+        <div
+          v-for="lora in sharedLoras"
+          :key="lora.id"
+          class="wftab-field"
+          data-testid="wftab-shared-lora"
+        >
+          <span class="wftab-label">LoRA</span>
+          <span class="wftab-value wftab-lora-value">
+            <v-icon
+              v-if="!lora.on_shelf"
+              size="16"
+              class="wftab-chain-flag"
+              aria-hidden="true"
+              >mdi-alert-outline</v-icon
+            >
+            <span class="wftab-chain-name">{{ lora.label }}</span>
+            <span v-if="!lora.on_shelf" class="visually-hidden"
+              >, not on your model shelf</span
+            >
+            <span v-if="lora.strengthText" class="wftab-chain-strength">{{
+              lora.strengthText
+            }}</span>
+          </span>
         </div>
-        <p v-if="chainPending" class="wftab-note wftab-quiet">
+        <p v-if="chainPending || summaryPending" class="wftab-note wftab-quiet">
           Reading its LoRAs…
         </p>
         <p
@@ -344,91 +373,47 @@
         <p v-else-if="chainFailed" class="wftab-note wftab-quiet">
           Could not read its LoRAs just now.
         </p>
-        <template v-else-if="chain">
-          <ol
-            v-if="chainLoaders.length"
-            class="wftab-chain"
-            aria-label="LoRAs, in the order the chain applies them"
-          >
-            <li
-              v-for="loader in chainLoaders"
-              :key="loader.node_id"
-              class="wftab-chain-row"
-            >
-              <v-icon
-                v-if="!loader.on_shelf"
-                size="16"
-                class="wftab-chain-flag"
-                aria-hidden="true"
-                >mdi-alert-outline</v-icon
-              >
-              <span class="wftab-chain-name">{{ loader.label }}</span>
-              <span v-if="!loader.on_shelf" class="visually-hidden"
-                >, not on your model shelf</span
-              >
-              <span class="wftab-chain-strength">{{ loader.strengthText }}</span>
-            </li>
-          </ol>
-          <p
-            v-if="chainLoaders.length"
-            class="wftab-note wftab-quiet"
-            data-testid="wftab-shelf-line"
-          >
-            In the order the chain applies them. {{ shelfLine }}
-          </p>
-          <p v-else class="wftab-note wftab-quiet">
-            No LoRA loader. Editing adds the first one.
-          </p>
-        </template>
-
-        <!-- Two lines per slot, as drawn: what is in it and how strong, then
-             the switch that decides whether the slot is part of the workflow
-             or part of the look. The switch re-keys the card, so it is a
-             full-width control of its own and not a chip in the first line. -->
-        <template v-if="loraSlots.length">
-          <span class="wftab-label wftab-label--group">LoRA slots</span>
-          <div v-for="slot in loraSlots" :key="slot.id" class="wftab-slot">
-            <div class="wftab-slot-line">
-              <span
-                class="wftab-chip"
-                :class="{ 'wftab-chip--empty': !slot.name }"
-              >
-                <Tooltip
-                  v-if="slot.name"
-                  :text="slot.name"
-                  activator="parent"
-                />
-                <v-icon size="16">mdi-layers-outline</v-icon>
-                {{ slot.chipText || "recipe LoRA" }}
-              </span>
-              <!-- No strength field. The card payload carries no strength
-                   (`_describe_slots` reads filenames, and `FEATURED_NAMES`
-                   has no `strength_model`), and an empty bordered box reads
-                   as a control that is broken rather than as "not recorded".
-                   It arrives with the data. -->
-            </div>
-            <!-- Disabled without a `slot_label`: the field is nullable
-                 (`WorkflowSlotModel`), and the mark is written by label, so
-                 an enabled switch here would be a control that answers a
-                 click with nothing at all. -->
-            <Segmented
-              :options="MARK_OPTIONS"
-              :model-value="slot.mark"
-              full
-              :disabled="!slot.label || Boolean(busy)"
-              :aria-label="`Is ${slot.name || 'this recipe LoRA slot'} part of the workflow?`"
-              @update:model-value="(mark) => flipMark(slot, mark)"
-            />
-            <p v-if="!slot.label" class="wftab-note wftab-quiet">
-              This slot has no recorded address, so it cannot be marked.
-            </p>
-          </div>
-        </template>
-        <!-- Only while the chain has nothing to say: once it is read, "No LoRA
-             loader" above is the same fact in the words that lead to Edit. -->
-        <p v-else-if="!chain" class="wftab-note wftab-quiet">
-          This workflow has no LoRA slot.
+        <p
+          v-else-if="sharedLoras.length"
+          class="wftab-note wftab-quiet"
+          data-testid="wftab-shared-note"
+        >
+          {{ sharedNote }}
         </p>
+        <p
+          v-else-if="chain && !chainLoaders.length"
+          class="wftab-note wftab-quiet"
+        >
+          No LoRA loader. Editing adds the first one.
+        </p>
+        <p v-if="summaryFailed" class="wftab-note wftab-quiet">
+          Could not read which LoRAs change between pictures just now.
+        </p>
+      </div>
+
+      <!-- Everything that changes, as one pile. It speaks for the whole
+           stack, like the list above, and it is where a LoRA is promoted to
+           a workflow of its own. -->
+      <div
+        v-if="summary?.varying?.length"
+        class="inspector-section"
+        data-testid="wftab-changes"
+      >
+        <span class="section-label">
+          Changes per picture
+          <span class="wftab-legend">{{ changingLabel }}</span>
+        </span>
+        <div class="wftab-field">
+          <span class="wftab-label">LoRA</span>
+          <WorkflowLoraPile
+            :summary="summary"
+            :member-names="memberNames"
+            :busy="Boolean(busy)"
+            @promote="promoteLora"
+            @show="showLora"
+          />
+        </div>
+        <p class="wftab-note wftab-quiet">{{ pileNote }}</p>
       </div>
 
       <div class="inspector-section">
@@ -641,14 +626,15 @@ import { VIcon, VMenu } from "vuetify/components";
 
 import {
   getLoraChain,
+  getLoraSummary,
   getWorkflowCard,
   patchWorkflowCard,
   preflightWorkflowRun,
   readModelSwap,
   setWorkflowDefaults,
   setWorkflowModelFix,
+  setLoraPromotion,
   setWorkflowPins,
-  setWorkflowSlots,
   workflowCoverUrl,
 } from "../../api/workflows";
 import { getPixlstashNode } from "../../api/comfyui";
@@ -674,17 +660,11 @@ import AppInspector from "../widgets/AppInspector.vue";
 import AppSelect from "../widgets/AppSelect.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import EditLorasDialog from "../io/EditLorasDialog.vue";
-import Segmented from "../widgets/Segmented.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import WorkflowDefaultRow from "./WorkflowDefaultRow.vue";
+import WorkflowLoraPile from "./WorkflowLoraPile.vue";
 import WorkflowRecipesTab from "./WorkflowRecipesTab.vue";
-
-/** B1's vocabulary, in the design's words. */
-const MARK_OPTIONS = [
-  { id: "structural", label: "Workflow" },
-  { id: "recipe", label: "Recipe" },
-];
 
 /**
  * What a card shows before "All N parameters" when nobody has pinned on it.
@@ -696,7 +676,7 @@ const MARK_OPTIONS = [
 const DEFAULT_PINS = ["steps", "cfg", "guidance", "width", "height"];
 
 const store = useWorkflowsStore();
-const { showPictures } = useWorkflowPictures();
+const { showPictures, showLoraPictures } = useWorkflowPictures();
 const sidebarStore = useSidebarStore();
 const notices = useNoticeStore();
 const filterStore = useFilterStore();
@@ -1247,18 +1227,6 @@ function fileName(value) {
   return String(value).split(/[\\/]/).pop();
 }
 
-const loraSlots = computed(() =>
-  (card.value?.loras ?? []).map((lora, index) => ({
-    id: lora.slot_label || `lora-${index}`,
-    label: lora.slot_label,
-    name: lora.name,
-    // The chip shows this and its tooltip shows `name`, so the precision goes
-    // on the chip: the tooltip is the raw-ish string a reader copies.
-    chipText: lora.name ? withQuant(lora.name, lora) : null,
-    mark: lora.mark,
-  })),
-);
-
 // ── The LoRA chain (#1478) ─────────────────────────────────────────────────
 
 /** `GET …/lora-chain` for the selected card, and the state of that read. */
@@ -1286,7 +1254,9 @@ const chainLoaders = computed(() =>
   ].map((loader) => {
     const strength = Number(loader.strength);
     return {
+      id: String(loader.node_id),
       node_id: String(loader.node_id),
+      filename: loader.filename,
       label: loader.on_shelf
         ? loader.name || loraStem(loader.filename)
         : String(loader.filename || loader.name || "").split(/[\\/]/).pop(),
@@ -1340,6 +1310,133 @@ async function loadChain(key) {
   } finally {
     if (selectedKey.value === key) chainPending.value = false;
   }
+}
+
+// ── The stack's LoRAs: shared, and the pile ────────────────────────────────
+
+/** `GET …/lora-summary` for the selected card's stack, and its read state. */
+const summary = ref(null);
+const summaryPending = ref(false);
+const summaryFailed = ref(false);
+
+/** The card the rail's header speaks for: the stack, when there is one. */
+const headCard = computed(
+  () => stackCover.value || parentStack.value || card.value,
+);
+
+/** The picture on top of the stack, which decides the top of the pile. */
+const coverPictureId = computed(
+  () => headCard.value?.covers?.[0]?.picture_id ?? null,
+);
+
+/** `{key: name}` over the stack, for the fan's "only in …". */
+const memberNames = computed(() =>
+  Object.fromEntries(
+    (headCard.value?.members ?? []).map((member) => [member.key, member.name]),
+  ),
+);
+
+async function loadSummary(key) {
+  summary.value = null;
+  summaryFailed.value = false;
+  if (!key) {
+    summaryPending.value = false;
+    return;
+  }
+  summaryPending.value = true;
+  try {
+    const body = await getLoraSummary(key, {
+      cover: coverPictureId.value ?? undefined,
+    });
+    if (selectedKey.value !== key) return;
+    summary.value = body;
+  } catch (err) {
+    if (selectedKey.value !== key) return;
+    console.warn(`[workflows] could not read the LoRAs of ${key}'s stack`, err);
+    summaryFailed.value = true;
+  } finally {
+    if (selectedKey.value === key) summaryPending.value = false;
+  }
+}
+
+/** A LoRA's file as the chain and the summary both name it: lowercased, no folders. */
+function loraFileKey(value) {
+  return String(value || "")
+    .split(/[\\/]/)
+    .pop()
+    .toLowerCase();
+}
+
+/**
+ * The LoRAs in every picture of every workflow in the stack, in chain order.
+ *
+ * The summary says WHICH (it counts pictures); the chain says in what order
+ * and how strong, for the selected card. A shared LoRA the chain does not
+ * name follows the chain's, by name. A workflow with no picture to count has
+ * nothing to share and nothing that changes, so its chain is the list.
+ */
+const sharedLoras = computed(() => {
+  const shared = summary.value?.shared ?? [];
+  if (!summary.value?.pictures) return chainLoaders.value;
+  const byFile = new Map(
+    chainLoaders.value.map((loader) => [loraFileKey(loader.filename), loader]),
+  );
+  const rows = shared.map((use) => {
+    const loader = byFile.get(loraFileKey(use.filename));
+    return {
+      id: use.asset,
+      label: use.name || loader?.label || "A LoRA whose name was forgotten",
+      on_shelf: loader ? loader.on_shelf : Boolean(use.on_shelf),
+      strengthText: loader?.strengthText ?? "",
+      order: loader ? chainLoaders.value.indexOf(loader) : Infinity,
+    };
+  });
+  return rows.sort((a, b) => a.order - b.order);
+});
+
+/** "Shared by both workflows in this stack. X is not on your shelf." */
+const sharedNote = computed(() => {
+  // No picture to count: the rows are the workflow's own chain.
+  if (!summary.value?.pictures) {
+    return `In the order the chain applies them. ${shelfLine.value}`;
+  }
+  const size = summary.value?.keys?.length ?? 1;
+  const scope =
+    size > 2
+      ? `Shared by all ${size} workflows in this stack.`
+      : size === 2
+        ? "Shared by both workflows in this stack."
+        : "In every picture of this workflow.";
+  const missing = sharedLoras.value.filter((lora) => !lora.on_shelf);
+  if (!missing.length) return scope;
+  const names = missing.map((lora) => lora.label).join(", ");
+  return `${scope} ${names} ${missing.length === 1 ? "is" : "are"} not on your shelf.`;
+});
+
+const changingLabel = computed(() => {
+  const count = summary.value?.varying?.length ?? 0;
+  return `${count} ${count === 1 ? "LoRA" : "LoRAs"}`;
+});
+
+const pileNote = computed(() => {
+  const rest = (summary.value?.varying?.length ?? 1) - 1;
+  const top = summary.value?.cover_asset
+    ? "On top: the cover picture's LoRA."
+    : "On top: the LoRA most pictures used.";
+  if (!rest) return `${top} Open it to see its pictures or promote it.`;
+  return `${top} Open the pile to see the other ${rest === 1 ? "one" : rest} or promote one.`;
+});
+
+/** *Show N*: the grid, narrowed to this stack's pictures of one LoRA. */
+function showLora(row) {
+  const head = headCard.value;
+  const name = row.name || "A forgotten LoRA";
+  showLoraPictures({
+    stack: head?.stack_id ?? null,
+    key: selectedKey.value,
+    lora: row.asset,
+    name: `${name} in ${head?.name || "this workflow"}`,
+  });
 }
 
 /** Open Edit LoRAs… on `key`, with `drop` already struck through if given. */
@@ -1539,34 +1636,35 @@ function selectionMark() {
 }
 
 /**
- * Flip a LoRA slot between the workflow and the look.
+ * Promote one LoRA to a workflow of its own, or put it back (the pile's one
+ * verb, confirmed in the fan before it gets here).
  *
- * **This re-keys the card**, and can split it into several or merge it into
- * another, so the answer's `key` is followed rather than the key that was
- * sent: staying on the old one leaves the rail reading a card that no longer
- * exists. The grid is re-read for the same reason.
+ * **This re-keys cards**: the LoRA's pictures move to a new card or back. The
+ * answer's `key` is followed, since putting a LoRA back from the card made
+ * for it takes that card away; the grid, the stack's members and the pile
+ * are all read again because every one of them has changed.
  */
-function flipMark(slot, mark) {
+function promoteLora(row, promoted) {
   const key = selectedKey.value;
-  if (!key || !slot.label || slot.mark === mark) return;
+  if (!key || !row?.asset) return;
   const unmoved = selectionMark();
-  return queueWrite(`slot:${slot.label}`, async () => {
+  return queueWrite(`lora:${row.asset}`, async () => {
     try {
-      const moved = await setWorkflowSlots(key, { [slot.label]: mark });
-      // Every card of the topology may have been re-keyed, so the cached
-      // stack members are about workflows the hub no longer has.
+      const moved = await setLoraPromotion(key, row.asset, promoted);
       store.forgetMembers();
       await store.fetchCards();
       if (!unmoved()) return;
-      // `select` moves `selectedKey`, which the watcher below turns into the
-      // detail read. Calling `loadDetail` here as well fetched the same card
-      // twice; when the flip did not move it the watcher does not fire, so
-      // that case reads explicitly. A stack member the flip took out of its
-      // stack is selected on its own, the card the reader was looking at.
-      if (selectedKey.value === moved.key) await loadDetail(moved.key);
-      else store.select(moved.key);
+      // `select` moves `selectedKey`, which the watchers turn into every
+      // read below; when the card did not move they do not fire, so that
+      // case reads explicitly.
+      if (selectedKey.value === moved.key) {
+        await Promise.all([loadDetail(moved.key), loadSummary(moved.key)]);
+      } else store.select(moved.key);
     } catch (err) {
-      fail(err, "Could not change that LoRA slot.");
+      fail(
+        err,
+        promoted ? "Could not promote that LoRA." : "Could not put that LoRA back.",
+      );
     }
   });
 }
@@ -1582,8 +1680,8 @@ function flipMark(slot, mark) {
 function defaultsFor(key) {
   if (stillOn(key) && detail.value) return defaults.value;
   console.warn(`[workflows] a write to ${key} dropped: the selection moved`);
-  // Not "you selected another": a LoRA flip re-keys the card and moves the
-  // selection itself.
+  // Not "you selected another": a LoRA promotion re-keys the card and moves
+  // the selection itself.
   notices.push({
     level: "error",
     text: "That change was not saved: the workflow changed before it could be.",
@@ -1824,6 +1922,16 @@ watch(
   { immediate: true },
 );
 
+// The pile's top is the cover's LoRA, so the summary is asked again when the
+// cover arrives after the key does.
+watch(
+  () => [selectedKey.value, coverPictureId.value],
+  ([key]) => {
+    void loadSummary(key);
+  },
+  { immediate: true },
+);
+
 /**
  * Ask the run pre-flight whether the base model loads, once per card./**
  * Ask the run pre-flight whether the base model loads, once per card.
@@ -1991,10 +2099,6 @@ async function checkInstalled(key) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.wftab-label--group {
-  margin-top: var(--space-2);
-}
-
 .wftab-value {
   display: flex;
   align-items: center;
@@ -2009,35 +2113,17 @@ async function checkInstalled(key) {
   white-space: nowrap;
 }
 
-.wftab-loras-head {
+/* A section label with one quiet job on its right, as the design heads each
+   section: Edit LoRAs…, a count, the pin legend. */
+.wftab-sec-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  margin-top: var(--space-2);
 }
 
-/* The chain as read: one line per loader, name then strength, in the order
-   it applies. Plain rows, not chips: the chips below are the slot marks, and
-   a second set of chips would read as a second set of controls. */
-.wftab-chain {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.wftab-chain-row {
-  display: flex;
-  align-items: center;
+.wftab-lora-value {
   gap: var(--space-2);
-  min-height: var(--control-h-sm);
-  font-size: var(--text-sm);
-}
-
-.wftab-chain-row + .wftab-chain-row {
-  border-top: 1px solid rgb(var(--v-theme-divider));
 }
 
 .wftab-chain-flag {
@@ -2095,47 +2181,6 @@ async function checkInstalled(key) {
   margin: 0;
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-surface-warning));
-}
-
-.wftab-slot {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.wftab-slot + .wftab-slot {
-  padding-top: var(--space-3);
-  border-top: 1px solid rgb(var(--v-theme-divider));
-}
-
-.wftab-slot-line {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.wftab-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: 1;
-  min-width: 0;
-  height: var(--control-h);
-  padding: 0 var(--space-3);
-  border: 1px solid rgb(var(--v-theme-divider));
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  font-size: var(--text-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wftab-chip--empty {
-  border-style: dashed;
-  background: transparent;
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .wftab-legend {

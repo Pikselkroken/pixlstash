@@ -48,6 +48,22 @@ export function useWorkflowPictures() {
   /** @param {{key: string, name: string}} card */
   function showPictures(card) {
     if (!card?.key) return;
+    showFiltered({ key: card.key, name: card.name });
+  }
+
+  /**
+   * *Show N* on the Workflow tab's LoRA pile: the pictures of one stack that
+   * loaded one LoRA. By stack and not by key, because the pile counts over
+   * the whole stack and the link says that count.
+   *
+   * @param {{stack: ?string, key: string, lora: string, name: string}} target
+   */
+  function showLoraPictures({ stack, key, lora, name }) {
+    if (!lora || (!stack && !key)) return;
+    showFiltered(stack ? { stack, lora, name } : { key, lora, name });
+  }
+
+  function showFiltered(filter) {
     selectionStore.selectedCharacter = ALL_PICTURES_ID;
     selectionStore.selectedSet = null;
     selectionStore.selectedSetIds = [];
@@ -60,10 +76,10 @@ export function useWorkflowPictures() {
     // `workflowFilter` too, so the order is what decides whether this
     // navigates to one workflow's pictures or to the whole library.
     filterStore.resetFilters();
-    filterStore.workflowFilter = { key: card.key, name: card.name };
+    filterStore.workflowFilter = filter;
     gridStore.refreshGridVersion();
     router.push("/");
   }
 
-  return { showPictures };
+  return { showPictures, showLoraPictures };
 }

@@ -764,6 +764,8 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/workflows/{workflow_key}/insert-lora-loader                           | workflows       | Add a LoRA loader to a workflow                             |
 | GET    | /api/v1/workflows/{workflow_key}/lora-chain                                   | workflows       | A workflow's LoRA chain                                     |
 | PUT    | /api/v1/workflows/{workflow_key}/lora-chain                                   | workflows       | Edit a workflow's LoRA chain                                |
+| PUT    | /api/v1/workflows/{workflow_key}/lora-promotion                               | workflows       | Promote one LoRA to a workflow of its own                   |
+| GET    | /api/v1/workflows/{workflow_key}/lora-summary                                 | workflows       | The LoRAs of a workflow's stack                             |
 | PUT    | /api/v1/workflows/{workflow_key}/model-fix                                    | workflows       | Replace a missing model in a workflow                       |
 | GET    | /api/v1/workflows/{workflow_key}/model-swap                                   | workflows       | What a workflow could be cloned onto                        |
 | GET    | /api/v1/workflows/{workflow_key}/pictures                                     | workflows       | Pictures made with a card                                   |
@@ -3877,6 +3879,7 @@ with `HubSchemaTooNewError`, locking the owner out of a downgrade.
 | `workflow_variant` | Which card each stored variant belongs to, with the `key_version` that keyed it. **No timestamp column**, here or on the cache below: deriving the same hub twice has to write byte-identical rows, or "the backfill runs twice with identical rows" is a claim no test can make |
 | `workflow_topology_core` | Per topology: the automatic stack key (`core_hash` + `core_version`), the workflow type, the slot list every mark and override addresses, and `specials` — the post-processing the graph carries (`upscale`, `face_detailer`), comma-joined, for the card's generated name. **No filename and no asset reference.** `specials` is NULL only for a row written before the column existed, which is exactly what `_VARIANT_PENDING` re-queues on; the empty string is the real answer "this graph has none", and only that one lets a name claim the workflow is plain. The stamped version is `CORE_RULE_VERSION`, which is `CORE_VERSION` *plus the strip flag*: `core_hash` does not carry that flag inside its digest the way `workflow_key` carries `WORKFLOW_KEY_VERSION` inside its own, so a flip would otherwise change every core hash while the stamp still read current, and the hub would hold two rules' stacks at once |
 | `workflow_slot_mark` | `structural` or `recipe` per LoRA slot, **frozen the first time the slot is seen** |
+| `workflow_lora_promotion` | One LoRA **file** promoted into the card key at one slot, per **(topology, slot label, asset reference)** (`PUT /workflows/{key}/lora-promotion`). The per-file counterpart of the slot mark: `workflow_key(..., promoted=)` keys a recipe slot only while it holds exactly that file, so only that file's pictures split off. Read by every writer of `workflow_variant.workflow_key` (`workflow_cards.promoted_pairs`, in `record_identity` and `_rekey_variants`), by the export (a promoted file is kept where the graph still loads it) and by the card description (the slot reads `structural`, named, and a generated card name gets `+ <LoRA>`). Names the file by its `asset:` reference, never the filename, so a forget leaves the split standing and nameless, as it does a mark. A card a promotion made is never a one-off |
 | `workflow_file` | A stored workflow file on its card, keyed by `workflow_name` as the older file-keyed tables are. `structural_hash` NULL for a UI-format file, which has only a topology and so becomes a card with no assets — unless ComfyUI has converted it (#1530): `POST /comfyui/workflows/convert` stores the API graph beside the file as `<name>.json.api` (`{converted_from, prompt}`, the digest of the editor file it was made from), and `_file_in_hub` files that graph instead, so the row gets a structural hash. `runnable_document` is what every run, list and parameter read goes through to see it; a conversion of another version of the file is ignored, and delete removes it. Deleting the file drops the row and leaves the card, which its pictures made |
 | `workflow_model_fix` | A model the owner replaced in a workflow because the original is gone (`PUT /workflows/{key}/model-fix`), per **(topology, slot label, original file)** rather than per card. Both files are kept normalized (what the card key and asset rows match on) and as spelled (what a run rewrites and the Workflow tab shows), with `slot_kind`, the shelf `file_kind` the slot takes (`checkpoint`, `vae`, `text_encoder`; `workflow_identity.model_fix_kind`), which is what a run rewrite and the superseded-cover flag filter on. `workflow_cards.fixed_slots` reads a slot holding the replacement as holding the original, and **every writer of `workflow_variant.workflow_key` computes the key through it** (`record_identity`, `_rekey_variants`), so pictures made with the replacement file on the original card and a slot flip does not move them off it. Not in `_KEYED_TABLES`: it is keyed by topology, so a re-key never has to carry it. Forgetting either file's name (`forget_asset_names`, and the Privacy purge `forget_model_ghosts`) deletes the row; the variants already folded stay where they are until something re-keys them |
 | `workflow_attr`, `workflow_default_override`, `workflow_key_pins` | The owner's name, notes, hidden flag, parameter overrides and pins, keyed by `workflow_key`, with parameters addressed by **(slot label, input name)** rather than by node id — a node id is whatever the last serialisation called it |
@@ -4191,6 +4194,23 @@ project, so no narrower policy could describe one. Rows go through
 still a later step, and forgetting ghosts is a privacy purge beside the
 retention setting (`/server-config/ghost-retention/*`, see *Picture ghosts*
 below).
+
+**`PUT /workflows/{key}/lora-promotion` is its per-file sibling**, and what the
+Workflow inspector's LoRA pile calls: it promotes one LoRA file, named by its
+`asset:` reference, in every topology of the card's stack that loaded it
+(`workflow_card_writes.set_lora_promotion`), through the same re-key and
+carry-over. Two things it does that a flip does not: the card it splits off
+**does not keep the owner's typed name** (it is cleared, so the generated
+`… + <LoRA>` shows), and putting back a file whose whole slot is marked
+`structural` turns the slot into a recipe slot and promotes every *other* file
+it has held, so only that one file folds back. It answers with the card
+addressed whenever a variant is still on it. `GET /workflows/{key}/lora-summary`
+(`workflow_card_service.stack_lora_summary`) is the read beside it: the stack's
+LoRAs counted over kept pictures, `shared` (in every one) and `varying` (the
+pile), each with its members, best picture ids and whether it is promoted. The
+picture listing's `workflow_lora` narrows a workflow filter to the variants whose
+stored graph loads that file (`workflow_cards.variants_loading`), and
+`workflow_stack` now also reads a card's own `auto:<core hash>` spelling.
 
 **`PUT /workflows/{key}/slots` is the one write that changes identity.** A LoRA
 slot's mark decides whether that LoRA reaches the card key, so flipping one

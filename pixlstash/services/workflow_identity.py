@@ -192,6 +192,29 @@ def is_lora_widget(widget: str) -> bool:
     )
 
 
+def lora_assets(document: dict) -> set[str]:
+    """Every LoRA file a stored document loads, as its ``asset:`` reference.
+
+    A read of the document as stored, with no reduction: which files, not
+    which slot each sat in, which is all a picture filter asks. A widget that
+    :func:`is_lora_widget` names and whose value is a reference counts;
+    anything else in a LoRA widget (a nulled or unfilled one) names no file.
+    """
+    found = set()
+    for node in document.values():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(inputs, dict):
+            continue
+        for widget, value in inputs.items():
+            if (
+                is_lora_widget(str(widget))
+                and isinstance(value, str)
+                and value.startswith(ASSET_REFERENCE_PREFIX)
+            ):
+                found.add(value)
+    return found
+
+
 def slots(document: dict) -> list[Slot]:
     """Every model slot a stored document names, pictures excluded.
 
@@ -303,7 +326,10 @@ def guess_mark(normalized_filename: str) -> str:
 
 
 def workflow_key(
-    topology_hash: str, workflow_slots: list[Slot], structural_labels: Collection[str]
+    topology_hash: str,
+    workflow_slots: list[Slot],
+    structural_labels: Collection[str],
+    promoted: Collection[tuple[str, str]] = (),
 ) -> str:
     """The card key: topology, non-LoRA models and structural LoRA slots.
 
@@ -312,11 +338,18 @@ def workflow_key(
         workflow_slots: :func:`slots` of the document.
         structural_labels: Labels of the LoRA slots marked structural. A LoRA
             slot not named here is a recipe slot and does not reach the key.
+        promoted: ``(label, asset)`` of the LoRA files promoted one at a time
+            (``workflow_lora_promotion``). A recipe slot holding exactly that
+            file reaches the key; the same slot holding any other file does
+            not. Empty by default, so a topology with no promotion keys the
+            way it always has.
     """
     pairs = sorted(
         [slot.label, slot.asset]
         for slot in workflow_slots
-        if not slot.is_lora or slot.label in structural_labels
+        if not slot.is_lora
+        or slot.label in structural_labels
+        or (slot.label, slot.asset) in promoted
     )
     return _digest([WORKFLOW_KEY_VERSION, topology_hash, pairs])
 

@@ -27,7 +27,10 @@ import {
   VIDEO_EXTENSIONS,
 } from "../utils/media.js";
 import { debounce } from "../utils/utils";
-import { useFilterStore } from "../stores/useFilterStore";
+import {
+  useFilterStore,
+  workflowFilterParams,
+} from "../stores/useFilterStore";
 import { useGridStore } from "../stores/useGridStore";
 import { useSelectionStore } from "../stores/useSelectionStore";
 import { useUserPrefsStore } from "../stores/useUserPrefsStore";
@@ -215,7 +218,9 @@ export function useGridFetch(
       comfyuiLoraFilter: filterStore.comfyuiLoraFilter ?? [],
       // Changes which pictures the grid shows, so an unforced fetch must not
       // early-return as a no-op against the previous state's key.
-      workflowFilter: filterStore.workflowFilter?.key ?? null,
+      workflowFilter: workflowFilterParams(filterStore.workflowFilter)
+        .map(([name, value]) => `${name}=${value}`)
+        .join("&"),
       referenceFolderIdFilter: referenceFolderIdFilter.value ?? null,
       filePathPrefixFilter: filePathPrefixFilter.value ?? null,
       importSourceFolderFilter: importSourceFolderFilter.value ?? null,
@@ -426,8 +431,10 @@ export function useGridFetch(
     (filterStore.comfyuiLoraFilter || []).forEach((l) =>
       params.append("comfyui_lora", l),
     );
-    if (filterStore.workflowFilter) {
-      params.append("workflow_key", filterStore.workflowFilter.key);
+    for (const [name, value] of workflowFilterParams(
+      filterStore.workflowFilter,
+    )) {
+      params.append(name, value);
     }
     if (filterStore.minScoreFilter != null) {
       params.append("min_score", filterStore.minScoreFilter);
@@ -550,8 +557,10 @@ export function useGridFetch(
     (filterStore.comfyuiLoraFilter || []).forEach((l) =>
       params.append("comfyui_lora", l),
     );
-    if (filterStore.workflowFilter) {
-      params.append("workflow_key", filterStore.workflowFilter.key);
+    for (const [name, value] of workflowFilterParams(
+      filterStore.workflowFilter,
+    )) {
+      params.append(name, value);
     }
     if (filterStore.minScoreFilter != null) {
       params.append("min_score", filterStore.minScoreFilter);
@@ -1160,8 +1169,10 @@ export function useGridFetch(
           _filterP.append("comfyui_lora", l),
         );
         // Filter params: one workflow card's pictures (F7)
-        if (filterStore.workflowFilter) {
-          _filterP.set("workflow_key", filterStore.workflowFilter.key);
+        for (const [name, value] of workflowFilterParams(
+          filterStore.workflowFilter,
+        )) {
+          _filterP.set(name, value);
         }
         // Filter params: tag filters
         (filterStore.tagFilter || []).forEach((t) => _filterP.append("tag", t));

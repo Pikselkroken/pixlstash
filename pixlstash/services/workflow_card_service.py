@@ -57,6 +57,7 @@ from pixlstash.hub.workflow_card_reads import (
     chosen_covers,
     default_overrides,
     instance_documents,
+    lora_promotions,
     slot_marks,
     stack_rows,
     variant_documents,
@@ -73,6 +74,7 @@ from pixlstash.services.workflow_identity import (
     CHECKPOINT_WIDGETS,
     RECIPE,
     STRUCTURAL,
+    WORKFLOW_KEY_VERSION,
     Difference,
     differences_reduced,
     is_lora_widget,
@@ -87,7 +89,10 @@ from pixlstash.services.workflow_library_service import (
     cover_order,
     read_card_grid,
     read_chosen_covers,
+    read_best_picture_ids,
     read_instance_hashes,
+    read_picture_variant,
+    read_variant_picture_counts,
 )
 from pixlstash.services.workflow_parameters import FEATURED_NAMES
 from pixlstash.utils.adapter_header import FILE_TEXT_ENCODER
@@ -234,6 +239,11 @@ class SlotModel:
     icon: Optional[str] = None
     base_model: Optional[str] = None
     base_model_folded: Optional[str] = None
+    # A LoRA file promoted on its own (``workflow_lora_promotion``): its slot
+    # is a recipe slot, but this card is the one file in it that keys a
+    # workflow, so it is named and marked structural here. What a generated
+    # card name appends, since it is the only thing telling this card apart.
+    promoted: bool = False
 
 
 @dataclass(frozen=True)
@@ -278,6 +288,9 @@ class CardFigures:
     recipe_loras: list[RecipeLora] = field(default_factory=list)
     ghosts: int = 0
     model_ghosts: int = 0
+    # A LoRA file was promoted to make this card (``workflow_lora_promotion``).
+    # The owner asked for it, so it is never a one-off however few pictures.
+    promoted: bool = False
 
     @property
     def rating(self) -> Optional[float]:
@@ -304,6 +317,7 @@ class CardFigures:
             and self.rated == 0
             and not self.card.hand_imported
             and not self.saved_recipes
+            and not self.promoted
         )
 
 
@@ -736,6 +750,16 @@ def read_grid(
         cards, activity, candidates, saved_recipes, _superseded_variants(hub, cards)
     )
     _rank(figures)
+    # One read of `workflow_recipe_asset` for every pass below. Every variant,
+    # which is what the ghost pass needs and a superset of the first variants
+    # the slot and difference passes read - the passes called it separately
+    # when the ghost pass arrived, which was the same table twice for no
+    # answer the first read could not give. Before the one-off filter, which
+    # asks it which cards a promoted LoRA made.
+    names = asset_names(
+        hub, [variant for figure in figures for variant in figure.card.variants]
+    )
+    _mark_promoted(hub, figures, names)
 
     # Hidden cards and one-offs come out BEFORE the grouping, so a stack is
     # counted as the owner sees it: hiding one member of a pair leaves the
@@ -794,14 +818,6 @@ def read_grid(
     for figure in figures:
         if figure.card.workflow_key in partial:
             figure.stack_id = None
-    # One read of `workflow_recipe_asset` for every pass below. Every variant,
-    # which is what the ghost pass needs and a superset of the first variants
-    # the slot and difference passes read - the passes called it separately
-    # when the ghost pass arrived, which was the same table twice for no
-    # answer the first read could not give.
-    names = asset_names(
-        hub, [variant for figure in figures for variant in figure.card.variants]
-    )
     describe_differences(hub, visible, stacks, names)
     # Every member, not only the cover. The grid draws the cover alone, so this
     # costs it nothing - but a member opened on its own carries the difference
@@ -963,6 +979,32 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
     return marks
 
 
+def _mark_promoted(
+    hub: HubDatabase, figures: list[CardFigures], names: dict[str, list[tuple]]
+) -> None:
+    """Set :attr:`CardFigures.promoted` on each card a promoted LoRA keys.
+
+    Every variant of such a card loads the promoted file (the key includes
+    it), so the first variant's filenames answer. A file whose name was
+    forgotten cannot be matched here and its card is judged like any other.
+    """
+    promotions = lora_promotions(hub, [figure.card.topology_hash for figure in figures])
+    if not promotions:
+        return
+    promoted_in: dict[str, set[str]] = {}
+    for topology_hash, _label, asset in promotions:
+        promoted_in.setdefault(topology_hash, set()).add(asset)
+    for figure in figures:
+        wanted = promoted_in.get(figure.card.topology_hash)
+        if not wanted or not figure.card.variants:
+            continue
+        figure.promoted = any(
+            asset_reference(filename) in wanted
+            for widget, filename in names.get(figure.card.variants[0], ())
+            if is_lora_widget(widget)
+        )
+
+
 def _recovered_slots(figures: list[CardFigures], file_models) -> dict[str, list]:
     """``{workflow_key: [(widget name, filename)]}`` for the cards with no recipe.
 
@@ -1022,6 +1064,7 @@ def _describe_slots(
     card, and a card is in exactly one of the two branches below.
     """
     marks = slot_marks(hub, [figure.card.topology_hash for figure in figures])
+    promotions = lora_promotions(hub, [figure.card.topology_hash for figure in figures])
     # Off `read_grid`'s shared `names` rather than a read of its own: that one
     # covers EVERY variant where this pass only draws the first, so it is a
     # superset and resolving a few filenames no chip shows is cheaper than a
@@ -1040,6 +1083,19 @@ def _describe_slots(
         ):
             by_widget.setdefault(widget, []).append(filename)
         taken: Counter = Counter()
+        # The promoted file of each promoted slot on THIS card. Every variant
+        # of the card holds it there (the key includes the pair), so the first
+        # variant's filenames are enough to name it.
+        variant_files = {
+            asset_reference(filename): filename
+            for pairs in by_widget.values()
+            for filename in pairs
+        }
+        promoted_here = {
+            label: variant_files[asset]
+            for topology_hash, label, asset in promotions
+            if topology_hash == card.topology_hash and asset in variant_files
+        }
 
         def next_name(widget: str) -> Optional[str]:
             found = by_widget.get(widget, ())
@@ -1056,6 +1112,10 @@ def _describe_slots(
                 # The name is consumed either way, so a structural LoRA and the
                 # recipe slot beside it do not both claim the first filename.
                 name = next_name(widget)
+                promoted = mark == RECIPE and slot.get("label") in promoted_here
+                if promoted:
+                    mark = STRUCTURAL
+                    name = promoted_here[slot.get("label")]
                 figure.loras.append(
                     SlotModel(
                         # Derived, not raw: a LoRA chip reads `Foxglove`
@@ -1064,6 +1124,7 @@ def _describe_slots(
                         name=_derived(None if mark == RECIPE else name),
                         kind="lora",
                         mark=mark,
+                        promoted=promoted,
                         label=str(slot.get("label") or "") or None,
                         **(
                             {}
@@ -1569,3 +1630,203 @@ def _overrides_only(overrides: dict[tuple[str, str], str]) -> list[Default]:
         Default(labels[address], *address, overrides[address], EDITED)
         for address in addresses
     ]
+
+
+# ---------------------------------------------------------------------------
+# The stack's LoRAs, as the Workflow inspector shows them.
+#
+# The inspector describes the whole stack: the LoRAs every picture of every
+# member loaded are one list, and everything that changes is one pile. Read on
+# demand for one stack rather than on the grid, because it reduces every
+# variant's document to find which slot a file sat in, and a grid read cannot
+# afford that per card.
+# ---------------------------------------------------------------------------
+
+# How many pictures a pile row's strip shows.
+LORA_STRIP_DEPTH = 3
+
+
+@dataclass
+class LoraUse:
+    """One LoRA file across a stack: how many pictures loaded it, and where.
+
+    ``asset`` is the stored documents' reference (``asset:…``), the one handle
+    that survives a forgotten name, and what a promotion and a picture filter
+    are addressed by. ``filename`` is ``None`` for a file whose name was
+    forgotten. ``name`` is the shelf's title where exactly one shelf model
+    answers to the file, its derived filename otherwise, ``None`` when there
+    is no filename to derive from.
+
+    ``promoted`` is true when some member's card key includes this file:
+    promoted on its own, or sitting in a slot marked structural. Either way
+    its pictures are a workflow of their own, which is what the pile says.
+    """
+
+    asset: str
+    filename: Optional[str] = None
+    name: Optional[str] = None
+    on_shelf: bool = False
+    pictures: int = 0
+    members: list[str] = field(default_factory=list)
+    picture_ids: list[int] = field(default_factory=list)
+    promoted: bool = False
+
+
+@dataclass
+class LoraSummary:
+    """A stack's LoRAs: the ones in every picture, and the ones that change.
+
+    ``pictures`` counts only the pictures whose variant could be read, which
+    is the total both lists are measured against. ``without`` is the pictures
+    that loaded none of the changing LoRAs, ``None`` when there are none.
+    ``cover_asset`` is the changing LoRA the given cover picture loaded, for
+    the top of the pile.
+    """
+
+    keys: list[str]
+    pictures: int = 0
+    shared: list[LoraUse] = field(default_factory=list)
+    varying: list[LoraUse] = field(default_factory=list)
+    without: Optional[LoraUse] = None
+    cover_asset: Optional[str] = None
+
+
+def stack_lora_summary(
+    hub: HubDatabase,
+    vault,
+    keys: list[str],
+    cover_picture_id: Optional[int] = None,
+) -> LoraSummary:
+    """Which LoRAs a stack's pictures share, and which change between them.
+
+    **Shared means in every kept picture of every member.** A file only one
+    member loads changes across the stack, so it is in the pile even when that
+    member loads it every time. A variant with no kept picture says nothing
+    about what the pictures used and is left out, and a variant whose document
+    will not reduce is left out of the total as well as the lists, so a "No
+    LoRA" row never counts pictures nobody could read.
+
+    Args:
+        hub: The hub the cards live in.
+        vault: The open library, for picture counts and strips.
+        keys: The stack's cards, cover first (``effective_stack_keys``).
+        cover_picture_id: The picture on top of the stack's cover, if any.
+    """
+    summary = LoraSummary(keys=list(keys))
+    variant_rows = []
+    for batch in chunked(list(keys)):
+        placeholders = ",".join("?" * len(batch))
+        variant_rows += hub.fetchall(
+            "SELECT structural_hash, topology_hash, workflow_key "
+            "FROM workflow_variant "
+            f"WHERE key_version = ? AND workflow_key IN ({placeholders}) "
+            "ORDER BY structural_hash",
+            (WORKFLOW_KEY_VERSION, *batch),
+        )
+    counts = read_variant_picture_counts(vault)
+    live = [row for row in variant_rows if counts.get(row["structural_hash"], 0) > 0]
+    if not live:
+        return summary
+    documents = variant_documents(hub, [row["structural_hash"] for row in live])
+    topologies = sorted({row["topology_hash"] for row in live})
+    marks = slot_marks(hub, topologies)
+    promotions = lora_promotions(hub, topologies)
+
+    # {structural_hash: {asset: promoted}} for every variant that reduced.
+    loaded: dict[str, dict[str, bool]] = {}
+    for row in live:
+        structural_hash = row["structural_hash"]
+        document = documents.get(structural_hash)
+        if document is None:
+            logger.info(
+                "Variant %s has no stored document, so its pictures are left "
+                "out of its stack's LoRA summary.",
+                structural_hash,
+            )
+            continue
+        try:
+            document_slots = slots(document)
+        except WorkflowGraphError as exc:
+            logger.info(
+                "Variant %s will not reduce, so its pictures are left out of "
+                "its stack's LoRA summary: %s",
+                structural_hash,
+                exc,
+            )
+            continue
+        topology_hash = row["topology_hash"]
+        found: dict[str, bool] = {}
+        for slot in document_slots:
+            if not slot.is_lora:
+                continue
+            promoted = (topology_hash, slot.label, slot.asset) in promotions or (
+                marks.get((topology_hash, slot.label)) == STRUCTURAL
+            )
+            found[slot.asset] = found.get(slot.asset, False) or promoted
+        loaded[structural_hash] = found
+
+    key_of = {row["structural_hash"]: row["workflow_key"] for row in live}
+    order = {key: index for index, key in enumerate(keys)}
+    uses: dict[str, LoraUse] = {}
+    variants_of: dict[str, list[str]] = {}
+    for structural_hash, found in loaded.items():
+        pictures = counts[structural_hash]
+        summary.pictures += pictures
+        for asset, promoted in found.items():
+            use = uses.setdefault(asset, LoraUse(asset=asset))
+            use.pictures += pictures
+            use.promoted = use.promoted or promoted
+            if key_of[structural_hash] not in use.members:
+                use.members.append(key_of[structural_hash])
+            variants_of.setdefault(asset, []).append(structural_hash)
+    for use in uses.values():
+        use.members.sort(key=lambda key: order.get(key, len(order)))
+
+    filenames = {
+        asset_reference(filename): filename
+        for pairs in asset_names(hub, list(loaded)).values()
+        for widget, filename in pairs
+        if is_lora_widget(widget)
+    }
+    candidates, titles = _shelf_candidates(hub, sorted(set(filenames.values())))
+    for use in uses.values():
+        use.filename = filenames.get(use.asset)
+        models = candidates.get(use.filename or "", set())
+        use.on_shelf = bool(models)
+        title = titles.get(next(iter(models))) if len(models) == 1 else None
+        use.name = title or _derived(use.filename)
+
+    summary.shared = sorted(
+        (use for use in uses.values() if use.pictures == summary.pictures),
+        key=lambda use: ((use.name or "").lower(), use.asset),
+    )
+    summary.varying = sorted(
+        (use for use in uses.values() if use.pictures < summary.pictures),
+        key=lambda use: (-use.pictures, (use.name or "").lower(), use.asset),
+    )
+    changing = {use.asset for use in summary.varying}
+    for use in summary.varying:
+        use.picture_ids = read_best_picture_ids(
+            vault, variants_of[use.asset], LORA_STRIP_DEPTH
+        )
+    bare = [
+        structural_hash
+        for structural_hash, found in loaded.items()
+        if changing and not changing & set(found)
+    ]
+    if bare:
+        summary.without = LoraUse(
+            asset="",
+            pictures=sum(counts[structural_hash] for structural_hash in bare),
+            members=sorted(
+                {key_of[structural_hash] for structural_hash in bare},
+                key=lambda key: order.get(key, len(order)),
+            ),
+            picture_ids=read_best_picture_ids(vault, bare, LORA_STRIP_DEPTH),
+        )
+    if cover_picture_id is not None and changing:
+        on_cover = loaded.get(read_picture_variant(vault, cover_picture_id) or "", {})
+        summary.cover_asset = next(
+            (use.asset for use in summary.varying if use.asset in on_cover), None
+        )
+    return summary

@@ -44,11 +44,13 @@ from pixlstash.services.workflow_identity import (
     Slot,
     core_hash,
     guess_mark,
+    lora_assets,
     slots,
     special_groups,
     workflow_key,
     workflow_type,
 )
+from pixlstash.utils.sql_chunking import chunked
 
 logger = get_logger(__name__)
 
@@ -193,6 +195,7 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
             topology_hash,
             fixed_slots(conn, topology_hash, document_slots),
             [label for label, mark in marks.items() if mark == STRUCTURAL],
+            promoted_pairs(conn, topology_hash),
         )
         # REPLACE and not IGNORE: a re-keyed variant (a flipped mark, a new
         # WORKFLOW_KEY_VERSION) has to land on its new card, and this row is the
@@ -231,6 +234,26 @@ def fixed_slots(
         replace(slot, asset=fixes.get((slot.label, slot.asset), slot.asset))
         for slot in document_slots
     ]
+
+
+def promoted_pairs(
+    conn: sqlite3.Connection, topology_hash: str
+) -> set[tuple[str, str]]:
+    """``(slot label, asset)`` of every LoRA file promoted in this topology.
+
+    What :func:`~pixlstash.services.workflow_identity.workflow_key` takes as
+    ``promoted``. Every writer of ``workflow_variant.workflow_key`` passes it,
+    or a re-key would fold a promoted LoRA's pictures back onto the card they
+    were split from.
+    """
+    return {
+        (label, asset)
+        for label, asset in conn.execute(
+            "SELECT slot_label, asset FROM workflow_lora_promotion "
+            "WHERE topology_hash = ?",
+            (topology_hash,),
+        ).fetchall()
+    }
 
 
 def _freeze_marks(
@@ -454,6 +477,47 @@ def variants_in_stack(hub: HubDatabase, stack_id: str) -> list[str]:
             (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION, stack_id, stack_id),
         )
     ]
+
+
+def variants_loading(
+    hub: HubDatabase, asset: str, among: Optional[list[str]] = None
+) -> list[str]:
+    """The variants whose stored graph loads the LoRA *asset*, sorted.
+
+    For the picture filter's ``workflow_lora``: *among* is what the other
+    workflow filters already resolved to, and ``None`` means every filed
+    variant. A document that will not parse is logged and matches nothing,
+    so an unreadable row narrows the grid rather than widening it.
+    """
+    if among is None:
+        rows = hub.fetchall(
+            "SELECT structural_hash, document FROM workflow_recipe_graph "
+            "ORDER BY structural_hash"
+        )
+    else:
+        rows = []
+        for batch in chunked(sorted(set(among))):
+            placeholders = ",".join("?" * len(batch))
+            rows += hub.fetchall(
+                "SELECT structural_hash, document FROM workflow_recipe_graph "
+                f"WHERE structural_hash IN ({placeholders})",
+                tuple(batch),
+            )
+    found = []
+    for structural_hash, raw in rows:
+        try:
+            document = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "Stored document of variant %s will not parse, so the LoRA "
+                "filter leaves its pictures out: %s",
+                structural_hash,
+                exc,
+            )
+            continue
+        if isinstance(document, dict) and asset in lora_assets(document):
+            found.append(structural_hash)
+    return sorted(found)
 
 
 def unidentified_variants(hub: HubDatabase, limit: int) -> list[str]:
