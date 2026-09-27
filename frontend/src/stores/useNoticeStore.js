@@ -101,6 +101,17 @@ export const useNoticeStore = defineStore("notice", () => {
     const entry = timers.get(id);
     if (entry?.handle != null) clearTimeout(entry.handle);
     timers.delete(id);
+    setRunning(id, false);
+  }
+
+  /**
+   * Mirror whether a notice's countdown is ticking onto the notice itself. The
+   * `timers` map is deliberately not reactive; this flag is what the host's
+   * countdown bar reads to pause in step with the timer.
+   */
+  function setRunning(id, running) {
+    const notice = notices.value.find((n) => n.id === id);
+    if (notice) notice.running = running;
   }
 
   function isVisible(id) {
@@ -130,6 +141,7 @@ export const useNoticeStore = defineStore("notice", () => {
     entry.startedAt = Date.now();
     entry.handle = setTimeout(() => dismiss(id), entry.remaining);
     timers.set(id, entry);
+    setRunning(id, true);
   }
 
   /** Bank the time a running countdown has left and stop it. */
@@ -141,6 +153,7 @@ export const useNoticeStore = defineStore("notice", () => {
     entry.remaining = Math.max(0, entry.remaining - elapsed);
     entry.handle = null;
     timers.set(id, entry);
+    setRunning(id, false);
     return entry;
   }
 
@@ -224,6 +237,7 @@ export const useNoticeStore = defineStore("notice", () => {
       entry.startedAt = 0;
       entry.remaining = notice.timeout;
       timers.set(notice.id, entry);
+      notice.running = false;
     }
   }
 
@@ -352,6 +366,8 @@ export const useNoticeStore = defineStore("notice", () => {
       action: hasAction ? action : null,
       key: key ?? null,
       count: 1,
+      // True while the auto-dismiss countdown is ticking (see `setRunning`).
+      running: false,
     };
 
     // An error takes a visible slot rather than queueing behind a success.

@@ -429,6 +429,7 @@ should become the host's own variants.
 | **Dismiss** | icon button, `mdi-close` at 16px, 24×24 visual box, `border-radius: var(--radius-sm)`, `color: rgba(var(--v-theme-on-surface), 0.7)` → `1` on hover, hover `background: var(--hover-wash)`, focus `box-shadow: var(--focus-ring)`, `aria-label="Dismiss notification"` |
 | **Dismiss hit area** | expanded to 40×40 with a transparent `::before` inset expansion — clears WCAG 2.5.8 (24×24) with room, without a 40px hole in the layout |
 | **Gap action→dismiss** | `var(--space-2)` |
+| **Countdown** (timed notices only) | bottom edge, full width, `var(--space-1)` (2px) tall, `background: rgb(var(--v-theme-<status>))`; drains linearly (`scaleX` 1 → 0) over the effective timeout and pauses whenever the timer does (§6 rule 3). Keyed on the ×N count so a coalesced repeat refills it. Sticky notices have none. Hidden under `prefers-reduced-motion`. `aria-hidden` |
 
 **Action labels name the destination, not the question.** The label is a button, so it
 reads as the thing the user gets: `Undo`, `Retry`, `Help`, `Open set`. A label phrased as

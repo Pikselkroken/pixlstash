@@ -29,7 +29,7 @@ import { useReviewSessionsStore } from "./stores/useReviewSessionsStore";
 import { useSnapshotsStore } from "./stores/useSnapshotsStore";
 import { useTasksStore } from "./stores/useTasksStore";
 import { useOperationStore } from "./stores/useOperationStore";
-import { useNoticeStore } from "./stores/useNoticeStore";
+import { DEFAULT_TIMEOUTS, useNoticeStore } from "./stores/useNoticeStore";
 import {
   useLibrariesStore,
   useLibrarySwitchStore,
@@ -400,6 +400,10 @@ function onRunStarted({ prompts = [], pictureIds = [] } = {}) {
         ? "Started 1 run in ComfyUI."
         : `Started ${prompts.length} runs in ComfyUI.`,
     action: { label: "Show", handler: () => sidebarStore.showTasksTab() },
+    // A confirmation, not an Undo: it expires rather than piling up, and
+    // repeats collapse into one card with a ×N count.
+    timeout: DEFAULT_TIMEOUTS.success,
+    key: "comfyui-run-started",
   });
 }
 
