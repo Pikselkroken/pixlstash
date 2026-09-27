@@ -5684,49 +5684,60 @@ def create_router(server) -> APIRouter:
         if not candidates:
             return [], "none_go_with_it"
         object_info, error = _read_object_info(_comfyui_url(_user(request)))
-        needs_pixlstash_nodes = False
-        for cls, widget, value, fix_kind, node_id in loaders:
-            options = listed_options(object_info, cls, widget)
-            if options:
-                # Listed by this loader, or loadable through a PixlStash one
-                # swapped in for it (#1605), by the run's own rule.
-                kept = []
-                for c in candidates:
-                    if listed_as(c.filename, options):
-                        kept.append(c)
-                        continue
-                    plan, refusal = run_service.plan_pixlstash_swap(
-                        graph,
-                        node_id,
-                        fix_kind,
-                        {value: c.filename},
-                        object_info,
-                        _shelf_digest(_hub(), fix_kind),
-                    )
-                    if plan is not None:
-                        kept.append(c.model_copy(update={"loader": plan["class_type"]}))
-                    elif refusal == run_service.SWAP_NO_PIXLSTASH_NODES:
-                        needs_pixlstash_nodes = True
-                candidates = kept
-            else:
-                logger.info(
-                    "Offering %s replacements for %s by file type, ComfyUI "
-                    "could not say what it lists: %s",
-                    cls,
-                    value,
-                    error or "the field is not enumerated",
-                )
-                extension = os.path.splitext(value)[1].lower()
-                candidates = [
-                    c
-                    for c in candidates
-                    if os.path.splitext(c.filename)[1].lower() == extension
-                ]
-        if candidates:
-            return candidates, None
-        return [], (
-            "needs_pixlstash_nodes" if needs_pixlstash_nodes else "none_loadable"
-        )
+
+        def loadable(candidates, info, log=True):
+            """The candidates every loader naming the file can load, given *info*."""
+            for cls, widget, value, fix_kind, node_id in loaders:
+                options = listed_options(info, cls, widget)
+                if options:
+                    # Listed by this loader, or loadable through a PixlStash
+                    # one swapped in for it (#1605), by the run's own rule.
+                    kept = []
+                    for c in candidates:
+                        if listed_as(c.filename, options):
+                            kept.append(c)
+                            continue
+                        plan, _refusal = run_service.plan_pixlstash_swap(
+                            graph,
+                            node_id,
+                            fix_kind,
+                            {value: c.filename},
+                            info,
+                            _shelf_digest(_hub(), fix_kind),
+                        )
+                        if plan is not None:
+                            kept.append(
+                                c.model_copy(update={"loader": plan["class_type"]})
+                            )
+                    candidates = kept
+                else:
+                    if log:
+                        logger.info(
+                            "Offering %s replacements for %s by file type, "
+                            "ComfyUI could not say what it lists: %s",
+                            cls,
+                            value,
+                            error or "the field is not enumerated",
+                        )
+                    extension = os.path.splitext(value)[1].lower()
+                    candidates = [
+                        c
+                        for c in candidates
+                        if os.path.splitext(c.filename)[1].lower() == extension
+                    ]
+            return candidates
+
+        found = loadable(candidates, object_info)
+        if found:
+            return found, None
+        pack = [cls for cls, _widgets in run_service.PIXLSTASH_SWAP_LOADERS.values()]
+        if object_info is not None and any(cls not in object_info for cls in pack):
+            # Would installing ComfyUI-PixlStash make one loadable in EVERY
+            # loader naming the file? Asked by the same filter, pack declared.
+            with_pack = {**{cls: {} for cls in pack}, **object_info}
+            if loadable(candidates, with_pack, log=False):
+                return [], "needs_pixlstash_nodes"
+        return [], "none_loadable"
 
     @router.get(
         "/workflows/{workflow_key}/model-swap",

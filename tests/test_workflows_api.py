@@ -10476,6 +10476,14 @@ def test_a_replacement_the_loader_cannot_load_is_offered_through_our_loader(
 
     try:
         assert offered("test-vae-fp8.safetensors") == ([], "needs_pixlstash_nodes")
+        # A second loader of the file that our loader could never stand in
+        # for: installing the pack would not help, so it is not what is said.
+        graph["24"] = {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": "test-vae-fp8.safetensors", "device": "cpu"},
+        }
+        assert offered("test-vae-fp8.safetensors") == ([], "none_loadable")
+        del graph["24"]
         info["PixlStashVAELoader"] = {
             "input": {"required": {"vae_sha256": ["STRING", {}]}}
         }
