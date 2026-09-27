@@ -2809,8 +2809,13 @@ def _set_picture_models(server, values: dict[str, tuple[list, list]]) -> None:
         for picture in session.exec(select(Picture)).all():
             if picture.file_path in values:
                 models, loras = values[picture.file_path]
-                picture.comfyui_models = json.dumps(models)
-                picture.comfyui_loras = json.dumps(loras)
+                # A str is stored as it is: a malformed value, as a test wants.
+                picture.comfyui_models = (
+                    models if isinstance(models, str) else json.dumps(models)
+                )
+                picture.comfyui_loras = (
+                    loras if isinstance(loras, str) else json.dumps(loras)
+                )
                 session.add(picture)
         session.commit()
 
@@ -2861,6 +2866,32 @@ def test_a_workflow_lists_the_values_its_kept_pictures_used(workflow_env):
         ids["busy_one.png"],
         ids["busy_two.png"],
     }
+
+
+def test_one_malformed_value_does_not_fail_the_grid(workflow_env):
+    """A picture whose stored LoRA list is not JSON counts nothing, and the
+    grid still reads: ``json_each`` is handed ``[]`` in its place."""
+    server, owner = workflow_env.server, workflow_env.owner
+    _set_picture_models(
+        server,
+        {
+            "busy_one.png": (["SDXL/RealVisXL.safetensors"], "[not json"),
+            "busy_two.png": (
+                ["SDXL/RealVisXL.safetensors"],
+                ["add_detail.safetensors"],
+            ),
+        },
+    )
+    try:
+        r = owner.get(f"{API}/workflows")
+        assert r.status_code == 200, r.text
+        values = _by_key(r.json())[BUSY_WF]["recipe_values"]
+        assert {"name": "add_detail.safetensors", "pictures": 1} in values["loras"]
+    finally:
+        # The module shares its vault: leave no malformed row to later tests.
+        _set_picture_models(
+            server, {"busy_one.png": ([], []), "busy_two.png": ([], [])}
+        )
 
 
 def test_a_card_adds_up_every_variants_kept_pictures_and_ratings(workflow_env):

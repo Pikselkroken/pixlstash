@@ -351,8 +351,8 @@ describe("switching to another workflow", () => {
     getWorkflowCard.mockImplementationOnce(
       () => new Promise((resolve) => (release = () => resolve({ card: card() }))),
     );
-    const wrapper = await mountRun({ kind: "workflow", workflowId: KEY });
-    await wrapper.setProps({ source: { kind: "workflow", workflowId: OTHER } });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await wrapper.setProps({ source: { kind: "card", workflowId: OTHER } });
     await flushPromises();
     release();
     await flushPromises();

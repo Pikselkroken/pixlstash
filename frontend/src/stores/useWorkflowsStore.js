@@ -317,9 +317,12 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * who has never opened Workflows fires no request.
    */
   function invalidate() {
+    // Only a store that has been read: bumping the epoch under a first read
+    // still on the wire would discard it with nothing to replace it.
+    if (!loaded.value) return;
     epoch += 1;
     loading.value = false;
-    if (loaded.value) fetchCards();
+    fetchCards();
   }
 
   // ── The selection's own verbs (v1.12 F3, #1455) ───────────────────────

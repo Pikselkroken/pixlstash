@@ -285,4 +285,21 @@ describe("invalidate", () => {
 
     expect(listWorkflowCards).not.toHaveBeenCalled();
   });
+
+  it("leaves a first read still on the wire to land", async () => {
+    // Bumping the epoch under it would discard its answer, and an unread
+    // store issues no replacement, so the grid would stay empty.
+    let release;
+    listWorkflowCards.mockImplementationOnce(
+      () => new Promise((resolve) => (release = resolve)),
+    );
+    const store = useWorkflowsStore();
+    const first = store.fetchCards();
+
+    store.invalidate();
+    release({ cards: [{ id: "auto:" + "a".repeat(64) }], one_offs: 0, hidden: 0 });
+    await first;
+
+    expect(store.cards).toHaveLength(1);
+  });
 });

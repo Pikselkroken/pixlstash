@@ -462,9 +462,12 @@ def variant_model_values(session: Session) -> dict[str, dict[str, Counter]]:
         rows = session.execute(
             text(
                 "SELECT p.workflow_structural_hash, j.value, COUNT(*) "
-                f"FROM picture p, json_each(p.{column}) j "
+                # json_each reads its argument before any WHERE can guard it,
+                # so a malformed value is swapped for an empty array in place:
+                # one bad row must not fail the whole grid.
+                f"FROM picture p, json_each(CASE WHEN json_valid(p.{column}) "
+                f"THEN p.{column} ELSE '[]' END) j "
                 "WHERE p.deleted = 0 AND p.workflow_structural_hash IS NOT NULL "
-                f"AND json_valid(p.{column}) "
                 "GROUP BY p.workflow_structural_hash, j.value"
             )
         ).all()
