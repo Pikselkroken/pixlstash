@@ -1164,7 +1164,7 @@ CREATE TABLE IF NOT EXISTS workflow_loader_swap (
     topology_hash          TEXT NOT NULL,
     class_type             TEXT NOT NULL,
     swap_class             TEXT NOT NULL,
-    PRIMARY KEY (swapped_topology_hash, node_label, fields)
+    PRIMARY KEY (swapped_topology_hash, node_label, fields, topology_hash, class_type)
 )
 """
 

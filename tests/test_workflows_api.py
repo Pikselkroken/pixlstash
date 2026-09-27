@@ -6833,6 +6833,43 @@ def test_a_vae_fix_never_rewrites_a_checkpoint_of_the_same_name(runnable):
             conn.execute("DELETE FROM workflow_model_fix")
 
 
+def _shelve_with_copy(conn, kind, filename, digest, state="present"):
+    """A shelf model with one copy in *state*: a PixlStash loader fetches it."""
+    conn.execute(
+        "INSERT INTO model (file_kind, filename, sha256, provenance) "
+        "VALUES (?, ?, ?, 'scanned')",
+        (kind, filename, digest),
+    )
+    model_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.execute(
+        "INSERT OR IGNORE INTO model_folder (path, kind, movable) "
+        "VALUES ('/models/test-swap', 'user', 'per_item')"
+    )
+    folder_id = conn.execute(
+        "SELECT id FROM model_folder WHERE path = '/models/test-swap'"
+    ).fetchone()[0]
+    conn.execute(
+        "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+        "VALUES (?, ?, ?, ?)",
+        (model_id, folder_id, filename, state),
+    )
+
+
+def _unshelve(conn, digests):
+    conn.executemany(
+        "DELETE FROM model_file WHERE model_id IN "
+        "(SELECT id FROM model WHERE sha256 = ?)",
+        [(digest,) for digest in digests],
+    )
+    conn.executemany(
+        "DELETE FROM model WHERE sha256 = ?", [(digest,) for digest in digests]
+    )
+    conn.execute(
+        "DELETE FROM model_folder WHERE path = '/models/test-swap' "
+        "AND id NOT IN (SELECT model_folder_id FROM model_file)"
+    )
+
+
 def test_a_fix_the_loader_cannot_load_runs_through_a_pixlstash_loader(
     runnable, monkeypatch
 ):
@@ -6867,11 +6904,7 @@ def test_a_fix_the_loader_cannot_load_runs_through_a_pixlstash_loader(
     info["VAELoader"] = {"input": {"required": {"vae_name": [[missing + "x"], {}]}}}
     info["VAEDecode"] = {"input": {"required": {}}}
     with runnable.server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO model (file_kind, filename, sha256, provenance) "
-            "VALUES ('vae', ?, ?, 'scanned')",
-            (replacement, digest),
-        )
+        _shelve_with_copy(conn, "vae", replacement, digest)
         conn.execute(
             "INSERT INTO workflow_model_fix (topology_hash, slot_label, was_norm, "
             "now_norm, was_name, now_name, slot_kind) VALUES (?, ?, ?, ?, ?, ?, 'vae')",
@@ -6900,6 +6933,8 @@ def test_a_fix_the_loader_cannot_load_runs_through_a_pixlstash_loader(
                 "verified": True,
             }
         ], payload
+        # A preflight submits nothing, so it records nothing.
+        assert not runnable.server.hub.fetchall("SELECT 1 FROM workflow_loader_swap")
         r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
         assert r.json()["status"] == "success", r.json()
         submitted = runnable.submitted[0]["graph"]
@@ -6922,7 +6957,7 @@ def test_a_fix_the_loader_cannot_load_runs_through_a_pixlstash_loader(
         with runnable.server.hub.transaction() as conn:
             conn.execute("DELETE FROM workflow_model_fix")
             conn.execute("DELETE FROM workflow_loader_swap")
-            conn.execute("DELETE FROM model WHERE sha256 = ?", (digest,))
+            _unshelve(conn, [digest])
 
 
 def test_a_pixlstash_loader_stands_in_only_where_it_does_what_the_original_did():
@@ -6981,8 +7016,13 @@ def test_a_pixlstash_loader_stands_in_only_where_it_does_what_the_original_did()
         dual, swaps={"test-t5-fp8.safetensors": "test-unknown.safetensors"}
     ) == (
         None,
-        run_service.SWAP_NOT_HASHED,
+        run_service.SWAP_NO_SHELF_COPY,
     )
+    # A loader returning something other than a CLIP is not ours to stand in.
+    info["DualCLIPLoader"] = {"output": ["TEST_VIDEO_CLIP"]}
+    assert plan(dual) == (None, run_service.SWAP_OUTPUTS_DIFFER)
+    info["DualCLIPLoader"] = {"output": ["CLIP"]}
+    assert plan(dual)[1] is None
 
 
 def test_a_model_no_copy_of_which_is_left_is_still_a_missing_model(
@@ -10263,16 +10303,16 @@ def test_a_replacement_the_loader_cannot_load_is_offered_through_our_loader(
     )
     digests = {
         "test-vae-unlisted.safetensors": ("vae", _h("vae-unlisted")),
+        "test-vae-unhashed.safetensors": ("vae", _h("vae-copy-removed")),
         "test-t5-unlisted.safetensors": ("text_encoder", _h("t5-unlisted")),
         "test-t5-q8.gguf": ("text_encoder", _h("t5-q8")),
         "test-clip-l.safetensors": ("text_encoder", _h("clip-l")),
     }
     with cloneable.server.hub.transaction() as conn:
-        conn.executemany(
-            "INSERT INTO model (file_kind, filename, sha256, provenance) "
-            "VALUES (?, ?, ?, 'scanned')",
-            [(kind, name, digest) for name, (kind, digest) in digests.items()],
-        )
+        for name, (kind, digest) in digests.items():
+            # Its only copy merged away: nothing left for our loader to fetch.
+            state = "removed" if name == "test-vae-unhashed.safetensors" else "present"
+            _shelve_with_copy(conn, kind, name, digest, state)
     info = json.loads(json.dumps(RUN_OBJECT_INFO))
     info["VAELoader"] = {
         "input": {"required": {"vae_name": [["test-vae-other.safetensors"], {}]}}
@@ -10322,10 +10362,7 @@ def test_a_replacement_the_loader_cannot_load_is_offered_through_our_loader(
         assert offered("test-t5-fp16.safetensors") == ([], "none_loadable")
     finally:
         with cloneable.server.hub.transaction() as conn:
-            conn.executemany(
-                "DELETE FROM model WHERE sha256 = ?",
-                [(digest,) for _kind, digest in digests.values()],
-            )
+            _unshelve(conn, [digest for _kind, digest in digests.values()])
 
 
 def test_no_replacement_is_offered_without_a_checkpoint_to_go_with(cloneable):

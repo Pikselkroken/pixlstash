@@ -429,9 +429,11 @@ def unswapped(
     """*document* with each swapped-in loader put back, and the topology it is then.
 
     ``(None, document)`` when no node of *document* is one of *swaps*: a node
-    matches on its label, its class and every reference it holds, so a
-    PixlStash loader someone placed by hand, or holding another file, stays
-    what it is. *swaps* are those of the document's own topology.
+    matches on its label, its class and exactly the references the swap
+    recorded, so a PixlStash loader holding another file, or a second one,
+    stays what it is. One placed by hand with the very files a swap recorded
+    is the same graph, and so the same variant: it cards as the original too.
+    *swaps* are those of the document's own topology.
 
     Raises:
         WorkflowGraphError: The document will not reduce.
@@ -446,26 +448,31 @@ def unswapped(
     for node_id, label in topology_node_labels(document).items():
         node = document[node_id]
         inputs = node.get("inputs") or {}
-        swap = next(
-            (
-                s
-                for s in by_label.get(label, ())
-                if s.swap_class == node.get("class_type")
-                and all(inputs.get(w) == ref for w, ref, _, _ in s.fields)
-            ),
-            None,
-        )
-        if swap is None:
+        held = {
+            name: value
+            for name, value in inputs.items()
+            if isinstance(value, str) and value.startswith(ASSET_REFERENCE_PREFIX)
+        }
+        matching = [
+            s
+            for s in by_label.get(label, ())
+            if s.swap_class == node.get("class_type")
+            and held == {w: ref for w, ref, _, _ in s.fields}
+        ]
+        if not matching:
             continue
+        # Two originals swapped to this one graph (a core and a GGUF loader
+        # holding the same file) leave which it was a guess.
+        topologies.update(s.topology_hash for s in matching)
+        swap = matching[0]
         # Links only: the original's other widgets are parameters, nulled in a
         # stored document, and widget names never reach the topology.
         put_back = {name: value for name, value in inputs.items() if is_link(value)}
         put_back.update({widget: ref for _, _, widget, ref in swap.fields})
         restored[node_id] = {"class_type": swap.class_type, "inputs": put_back}
-        topologies.add(swap.topology_hash)
     if len(topologies) != 1:
-        # None matched, or two swaps disagree about the graph this was: a
-        # guess either way, so the document keys as itself.
+        # None matched, or two swaps disagree about the graph this was (or
+        # which loader a node was): a guess, so the document keys as itself.
         return None, document
     return topologies.pop(), restored
 

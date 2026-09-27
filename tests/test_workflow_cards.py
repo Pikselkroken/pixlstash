@@ -8,10 +8,12 @@ asserted there cannot drift apart.
 import json
 import logging
 import sqlite3
+from dataclasses import replace
 
 import pytest
 
 from pixlstash.hub import workflow_cards
+from pixlstash.services.workflow_hash import structural_document, topology_hash
 from pixlstash.hub.workflow_cards import record_identity
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflows import (
@@ -41,6 +43,7 @@ from pixlstash.services.workflow_identity import (
     UPSCALE,
     WORKFLOW_KEY_VERSION,
     loader_swaps,
+    unswapped,
 )
 from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tasks.workflow_card_backfill_finder import WorkflowCardBackfillFinder
@@ -1083,6 +1086,10 @@ def test_a_swapped_in_pixlstash_loader_keeps_the_card(hub):
     assert swapped_topology != old.topology_hash
     record_loader_swaps(hub, swapped_topology, swaps)
     ran = record_api_graph(hub, swapped)
+    # Carded under the original topology, whose cache it then reads, so the
+    # backfill counts it done. Asked before anything else of the swapped
+    # topology is filed, whose cache would hide a lookup there.
+    assert ran.structural_hash not in workflow_cards.unidentified_variants(hub, 100)
     by_hand = record_api_graph(
         hub, with_vae(_node("PixlStashVAELoader", vae_sha256="cd" * 32))
     )
@@ -1102,6 +1109,34 @@ def test_a_swapped_in_pixlstash_loader_keeps_the_card(hub):
     assert card_of(hub, old.structural_hash) == card
     assert card_of(hub, ran.structural_hash) == card_of(hub, plain.structural_hash)
     assert card_of(hub, ran.structural_hash) != card
+
+
+def test_an_unswap_matches_exactly_the_files_the_swap_recorded():
+    """#1605: a second encoder, or a second original, keys the graph as itself."""
+    x, z = "11" * 32, "22" * 32
+
+    def with_clip(node):
+        return _graph(extra={"8": node, "9": _node("CLIPTextEncode", clip=["8", 0])})
+
+    original = with_clip(
+        _node("CLIPLoader", clip_name="test-t5-fp8.safetensors", type="flux")
+    )
+    one = with_clip(_node("PixlStashCLIPLoader", clip_sha256=x, type="flux"))
+    topology, swaps = loader_swaps(
+        original, one, {"8": {"clip_sha256": ("clip_name", "test-t5.safetensors")}}
+    )
+    swapped_from, restored = unswapped(structural_document(one), swaps)
+    assert swapped_from == topology_hash(original)
+    assert restored["8"]["class_type"] == "CLIPLoader"
+
+    two = with_clip(
+        _node("PixlStashCLIPLoader", clip_sha256=x, clip_sha256_2=z, type="flux")
+    )
+    assert unswapped(structural_document(two), swaps)[0] is None
+    # The same swap recorded from another loader class: which one it was is a
+    # guess.
+    other = replace(swaps[0], topology_hash="0" * 64, class_type="CLIPLoaderGGUF")
+    assert unswapped(structural_document(one), [*swaps, other])[0] is None
 
 
 def test_a_text_encoder_fix_names_encoder_slots_and_never_a_vision_one(hub):

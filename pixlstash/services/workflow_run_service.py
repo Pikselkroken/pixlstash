@@ -895,6 +895,8 @@ PIXLSTASH_SWAP_LOADERS: dict[str, tuple[str, tuple[str, ...]]] = {
     FILE_VAE: ("PixlStashVAELoader", ("vae_sha256",)),
     FILE_TEXT_ENCODER: ("PixlStashCLIPLoader", ("clip_sha256", "clip_sha256_2")),
 }
+# The one output each of them has, which the original's first must be.
+_SWAP_OUTPUT_TYPES = {FILE_VAE: "VAE", FILE_TEXT_ENCODER: "CLIP"}
 # A widget the swapped-in loader has no place for, and the value at which
 # dropping it changes nothing (core `CLIPLoader`'s advanced `device`).
 _SWAP_DROPPABLE = {"device": "default"}
@@ -907,7 +909,7 @@ SWAP_TOO_MANY_FILES = "too_many_files"
 SWAP_OUTPUTS_DIFFER = "outputs_differ"
 SWAP_CLIP_TYPE = "clip_type"
 SWAP_GGUF = "gguf"
-SWAP_NOT_HASHED = "not_hashed"
+SWAP_NO_SHELF_COPY = "no_shelf_copy"
 SWAP_NO_PIXLSTASH_NODES = "no_pixlstash_nodes"
 
 
@@ -924,16 +926,18 @@ def plan_pixlstash_swap(
     Pure: :func:`apply_pixlstash_swap` writes the plan. Refused where the
     swapped node would not do what the original did: another kind of file on
     the node, more files than the PixlStash loader takes (a triple CLIP
-    loader), an output past the first in use, a CLIP ``type`` it does not list,
-    a widget it has no place for. Refused too for a GGUF file (the PixlStash
-    loaders load through core ComfyUI, Pikselkroken/ComfyUI-PixlStash#27) and a
-    file the shelf holds no single digest for (the hasher has not read it).
+    loader), an output past the first in use or a first output of another type
+    (when ComfyUI declares it), a CLIP ``type`` it does not list, a widget it
+    has no place for. Refused too for a GGUF file (the PixlStash loaders load
+    through core ComfyUI, Pikselkroken/ComfyUI-PixlStash#27) and a file the
+    shelf holds no single digest with a present copy for (the hasher has not
+    read it, or its copies are gone).
 
     Args:
         swaps: The graph's filename -> the file to load instead; a file not
             named here is loaded as it is.
-        digest_of: A filename -> its shelf SHA-256 in this slot kind, or
-            ``None``.
+        digest_of: A filename -> its shelf SHA-256 in this slot kind, with a
+            copy present, or ``None``.
 
     Returns:
         ``(plan, None)`` or ``(None, reason)``, *reason* a ``SWAP_*`` code.
@@ -969,6 +973,9 @@ def plan_pixlstash_swap(
         types = listed_options(object_info, swap_class, "type")
         if not isinstance(clip_type, str) or (types and clip_type not in types):
             return None, SWAP_CLIP_TYPE
+    declared = ((object_info or {}).get(node.get("class_type")) or {}).get("output")
+    if declared and declared[0] != _SWAP_OUTPUT_TYPES[kind]:
+        return None, SWAP_OUTPUTS_DIFFER
     for consumer in graph.values():
         consumer_inputs = consumer.get("inputs") if isinstance(consumer, dict) else {}
         for value in (consumer_inputs or {}).values():
@@ -981,7 +988,7 @@ def plan_pixlstash_swap(
             return None, SWAP_GGUF
         digest = digest_of(file)
         if not digest:
-            return None, SWAP_NOT_HASHED
+            return None, SWAP_NO_SHELF_COPY
         planned.append((digest_widget, widget, file, digest))
     if object_info is None or swap_class not in object_info:
         return None, SWAP_NO_PIXLSTASH_NODES
