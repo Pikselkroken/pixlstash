@@ -110,7 +110,7 @@
           <!-- Nothing is written before this is answered: promoting moves
                pictures to another workflow, and saying which is the point. -->
           <div
-            v-if="confirming === row.asset"
+            v-if="row.asset && confirming === row.asset"
             class="wfpile-confirm"
             role="group"
             :aria-label="row.promoted ? 'Put back' : 'Promote'"

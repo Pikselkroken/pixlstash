@@ -1125,6 +1125,20 @@ describe("the LoRA pile", () => {
     expect(wrapper.find("[data-testid='wftab-changes']").exists()).toBe(false);
   });
 
+  it("offers no confirmation on the No LoRA row, which cannot be promoted", async () => {
+    // Its `asset` is empty, which equals the "nothing being confirmed" state.
+    getLoraSummary.mockResolvedValue(
+      loraSummary({
+        without: { asset: "", pictures: 2, members: [KEY], picture_ids: [41] },
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    const row = wrapper.find("[data-testid='wftab-fan-row-none']");
+    expect(row.text()).toContain("No LoRA");
+    expect(row.find(".wfpile-confirm").exists()).toBe(false);
+    expect(wrapper.find("[data-testid='wftab-fan-confirm']").exists()).toBe(false);
+  });
+
   it("writes nothing until the promotion is confirmed, then names the file", async () => {
     const { wrapper } = await mountWith([KEY]);
     const row = wrapper.find(`[data-testid='wftab-fan-row-${ADA}']`);
