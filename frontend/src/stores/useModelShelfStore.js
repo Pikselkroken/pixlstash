@@ -1823,11 +1823,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
 
   // ── Hand-made sets: selection and verbs (#1520) ───────────────────────────
   //
-  // **Sets are selected as sets, and never together with files.** A hand-made
+  // **Sets are selected as sets, in a selection of their own.** A hand-made
   // card stands for the SET, whose verbs (Rename, Delete set) touch no file; a
-  // tray member stands for one file, whose verbs are the shelf's. Holding both
-  // at once would put a file Delete and a set Delete behind one pill, so taking
-  // either kind drops the other.
+  // model card or tray member stands for one file, whose verbs are the shelf's.
+  // The two kinds can be held together - Ctrl+click adds either kind, and
+  // select-all takes both - and each keeps its own pill, so a file Delete and
+  // a set Delete are never behind one button. A replacing gesture (a plain
+  // click, a Shift-range) drops the other kind, as it drops everything else.
 
   /** Selected hand-made set ids. */
   const selectedSetIds = ref(new Set());
@@ -1872,7 +1874,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * @param {Array<number>} ordered - the set ids in drawn order, for a range.
    */
   function selectSet(id, { ctrl = false, shift = false } = {}, ordered = []) {
-    clearSelection();
+    if (!ctrl) clearSelection();
     if (shift && setAnchor != null) {
       const from = ordered.indexOf(setAnchor);
       const to = ordered.indexOf(id);
@@ -2640,6 +2642,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       anchorOccurrence.value = occurrence;
       return;
     }
+    // A plain click or a range REPLACES the selection, selected sets included;
+    // only Ctrl adds a model beside them.
+    clearSetSelection();
     const sequence = Array.isArray(order) ? order : [];
     const idOf = (item) => (typeof item === "object" ? item.id : item);
     const occurrenceOf = (item) =>
@@ -2680,16 +2685,25 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }
 
   /**
-   * Select every model the screen shows, ungrouped duplicates and all.
+   * Select everything the screen shows: every model, ungrouped duplicates and
+   * all, and on the set grid every hand-made ("Grouped by you") set as well.
    *
    * Two screens, two answers to "shown", one expression: `screenRows` is the
    * list the reader is looking at, runs taken whole either way. On the set grid
    * that differs from the row list in both directions - it leaves out a model no
    * recipe names, and it takes in one the `Show` narrowing hides from the list
    * while a card still lists it.
+   *
+   * Select-all means all of it, so both kinds are taken and both pills come up
+   * together. Hand-made sets are never narrowed by `Show`, so all of them are
+   * drawn.
    */
   function selectVisible() {
     const drawn = screenRows.value;
+    if (view.groupBy === GRID_GROUP_BY && handMadeSets.value.length) {
+      selectedSetIds.value = new Set(handMadeSets.value.map((set) => set.id));
+      setAnchor = handMadeSets.value[0].id;
+    }
     // **With nothing drawn the selection is left alone, and this is where that
     // is decided.** It used to be a guard at one caller, reading `visibleRows`;
     // on the set grid that is the wrong list, so the key said "select" and
@@ -2710,13 +2724,6 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     anchorId.value = null;
     anchorOccurrence.value = null;
   }
-
-  // Taking files drops any selected hand-made sets (#1520): the pill has one
-  // vocabulary at a time. Here rather than beside `selectSet` because a watch on
-  // `selectedIds` cannot run before the ref is declared.
-  watch(selectedIds, (ids) => {
-    if (ids.size) clearSetSelection();
-  });
 
   // Sets are selected on the set grid only; leaving it must not leave a
   // selection behind that Delete could act on unseen.

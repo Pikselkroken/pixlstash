@@ -1617,6 +1617,15 @@ proves ran together, with a model free to appear in more than one.
   Ctrl+A passed the guard and then replaced a live selection with an empty one —
   a silent clear from a key that says *select*, with no undo. The pill's *Select
   all shown* never had the guard at all. One refusal in the store answers both.
+- **Hand-made sets and models can be selected together.** A "Grouped by you"
+  card selects its SET (`selectedSetIds`), a model card or tray row its FILE
+  (`selectedIds`), and each kind keeps its own pill, so a set Delete and a file
+  Delete are never one button. Ctrl+click adds either kind beside the other and
+  `selectVisible` (Ctrl+A, *Select all shown*) takes all models and every
+  hand-made set; a plain click or a Shift-range replaces both. Escape clears
+  both. With both held, the Delete KEY opens the file confirmation and leaves
+  the sets to their own pill, so one press never deletes sets unprompted while
+  arming a file delete.
 - **Rename has no inline field on the grid**, because a name lives on a card and
   the dashed rule under a row is what makes an inline field honest. The verb
   falls through to `ShelfEditDialog`'s `rename`, which already exists for the
@@ -1709,15 +1718,16 @@ the shelf's workflow sets section) and served as `hand_made` on
   of a set; `visibleCombinations` drops those, so they appear on the set's card
   (its `picture_count` and covers) and not again as evidence. `worksWith` still
   reads the whole payload.
-- **A hand-made card selects the SET; a tray tile selects a FILE; never both.**
-  `store.selectSet` / `selectedSetIds` is a second selection that clears the
-  model selection, and a watch on `selectedIds` clears it back. Sets get
+- **A hand-made card selects the SET; a tray tile selects a FILE.**
+  `store.selectSet` / `selectedSetIds` is a second selection. A plain click on
+  either kind clears the other; Ctrl+click and select-all hold both (see the
+  set-grid notes above), with both pills up side by side. Sets get
   `WorkflowSetSelectionBar` (Rename, Delete set, and the card's context menu);
   files keep `ShelfSelectionBar`, which gains **Remove from set** while every
   selected file is a member of the open hand-made tray, and **New workflow set
   with this checkpoint** for one hashed checkpoint (from an evidence card it
-  opens the new set with Fill from pictures ready). Delete with sets selected
-  deletes the sets (grid only: leaving the grid clears the set selection, and
+  opens the new set with Fill from pictures ready). Delete with only sets
+  selected deletes the sets (grid only: leaving the grid clears the set selection, and
   the set pill is drawn only there). The cursor entering a tray tile clears the
   set selection, so Delete with a selected member is the shelf's file delete,
   whose prompt now names the sets that keep the file as "Not on shelf".
