@@ -1106,9 +1106,7 @@ def propose_companions(
 
     # ComfyUI's own runs (#1518), already resolved to unambiguous model ids by
     # `record_comfyui_history`, so nothing is subtracted from them.
-    runs: dict[str, set[int]] = {}
-    for row in hub.fetchall("SELECT prompt_id, model_id FROM comfyui_history_model"):
-        runs.setdefault(row["prompt_id"], set()).add(int(row["model_id"]))
+    runs = _history_runs(hub)
 
     def tally(witnesses, kind, anchors, skip) -> dict[int, int]:
         counts: dict[int, int] = {}
@@ -1249,6 +1247,19 @@ def propose_companions(
 SET_COVER_DEPTH = 3
 
 
+def _history_runs(hub) -> dict[str, set[int]]:
+    """Return each stored ComfyUI run's model ids, keyed on its ``prompt_id``.
+
+    The one reader of ``comfyui_history_model`` (#1518). The rows were resolved
+    to unambiguous model ids when the workflow pull stored them, so a caller
+    has no doubt to add; ComfyUI itself is never contacted.
+    """
+    runs: dict[str, set[int]] = {}
+    for row in hub.fetchall("SELECT prompt_id, model_id FROM comfyui_history_model"):
+        runs.setdefault(row["prompt_id"], set()).add(int(row["model_id"]))
+    return runs
+
+
 def fetch_workflow_sets(hub, vault) -> dict:
     """Every set of shelf models a picture in this library proves ran together.
 
@@ -1271,16 +1282,28 @@ def fetch_workflow_sets(hub, vault) -> dict:
     library in front of the reader has actually made. A recipe the hub holds
     with no kept picture here is therefore not a set.
 
+    **ComfyUI's own runs are witnesses too** (#1565): every finished run the
+    workflow pull stored in ``comfyui_history_model`` counts one
+    ``history_runs`` against the combination its models resolve to exactly,
+    kept apart from ``recipes`` and ``picture_count``. A combination survives
+    the cut with a kept picture here OR a stored run, so one that has only ever
+    run in ComfyUI is a set with no cover. Runs are hub-wide, like
+    ``recipes``: ComfyUI's history is a fact about the machine, not about a
+    library. They were resolved unambiguously when stored, so they never mark
+    a member ``ambiguous``.
+
     Returns:
         ``{"combinations": [...], "no_set": [model_id, ...]}``. Each
         combination carries ``key`` (its sorted member ids, joined), ``models``
         (``id``, ``name``, ``filename``, ``kind``, ``file_size``,
-        ``ambiguous``), ``recipes``, ``picture_count`` and ``covers`` (up to
-        :data:`SET_COVER_DEPTH` cover candidates, best first).
-        ``hub_combinations`` is the same list before the "a picture here" cut,
-        so it holds every library's recipes; only the merge offer reads it.
+        ``ambiguous``), ``recipes``, ``history_runs``, ``picture_count`` and
+        ``covers`` (up to :data:`SET_COVER_DEPTH` cover candidates, best
+        first). ``hub_combinations`` is every combination some recipe names,
+        before the "a picture here" cut, so it holds every library's recipes
+        and no run-only combination; only the merge offer reads it.
     """
     recipe_models, ambiguous, unresolved = resolve_recipe_models(hub)
+    runs = _history_runs(hub)
     pictures = vault.db.run_immediate_read_task(
         lambda session: (
             recipe_picture_counts(session),
@@ -1305,22 +1328,38 @@ def fetch_workflow_sets(hub, vault) -> dict:
     # recipe that could only match a basename is enough to make the membership
     # a guess, and a second, cleaner witness does not unmake the first.
     grouped: dict[frozenset[int], dict] = {}
+
+    def empty() -> dict:
+        return {
+            "recipes": 0,
+            "history_runs": 0,
+            "picture_count": 0,
+            "covers": [],
+            "unsure": set(),
+        }
+
     for recipe, members in recipe_models.items():
         # Models the shelf no longer holds - a Forget between the recipe read
         # and now - are dropped rather than drawn as an id with no name.
         present = frozenset(member for member in members if member in models)
         if not present:
             continue
-        entry = grouped.setdefault(
-            present,
-            {"recipes": 0, "picture_count": 0, "covers": [], "unsure": set()},
-        )
+        entry = grouped.setdefault(present, empty())
         entry["recipes"] += 1
         entry["picture_count"] += counts.get(recipe, 0)
         entry["covers"].extend(covers_by_recipe.get(recipe, ()))
         if recipe in unresolved:
             entry["unsure"].update(present)
         entry["unsure"].update(ambiguous.get(recipe, set()) & present)
+
+    # One witness per exact set, like a recipe: a run counts against the
+    # combination its models ARE, never against every subset of it. `unsure`
+    # is left alone - a run cannot add doubt, and cannot remove a recipe's.
+    for members in runs.values():
+        present = frozenset(member for member in members if member in models)
+        if not present:
+            continue
+        grouped.setdefault(present, empty())["history_runs"] += 1
 
     def name(model_id: int) -> str:
         row = models[model_id]
@@ -1346,6 +1385,7 @@ def fetch_workflow_sets(hub, vault) -> dict:
                     for model_id in ordered
                 ],
                 "recipes": entry["recipes"],
+                "history_runs": entry["history_runs"],
                 "picture_count": entry["picture_count"],
                 "covers": sorted(entry["covers"], key=cover_order, reverse=True)[
                     :SET_COVER_DEPTH
@@ -1354,11 +1394,18 @@ def fetch_workflow_sets(hub, vault) -> dict:
         )
     # Biggest evidence first, so the grid opens on the combinations the library
     # actually leans on; the key breaks ties so a refetch draws the same order.
-    every.sort(key=lambda c: (-c["picture_count"], -c["recipes"], c["key"]))
-    # A combination with no kept picture in this library is not a set here:
-    # the grid draws what the library has made, and a recipe that made nothing
-    # in it has no cover, no count and nothing to show.
-    combinations = [c for c in every if c["picture_count"]]
+    every.sort(
+        key=lambda c: (
+            -c["picture_count"],
+            -c["recipes"],
+            -c["history_runs"],
+            c["key"],
+        )
+    )
+    # A combination with no kept picture in this library and no stored
+    # ComfyUI run is not a set here: a recipe that made nothing in it has no
+    # cover, no count and nothing to show. A run is its own proof, cover or no.
+    combinations = [c for c in every if c["picture_count"] or c["history_runs"]]
 
     # Read off the combinations that SURVIVED, not off `grouped`: a model whose
     # only recipes made no kept picture here would otherwise be in no
@@ -1371,7 +1418,9 @@ def fetch_workflow_sets(hub, vault) -> dict:
         "combinations": combinations,
         # Every library's recipes, pictures here or not: the hand-made sets'
         # merge offer is a hub fact, like the sets (#1523). Not served.
-        "hub_combinations": every,
+        # Recipe combinations only: the offer is worded in pictures and
+        # recipes, and a run-only one would read "0 recipes need N more".
+        "hub_combinations": [c for c in every if c["recipes"]],
         # Engines are left out, and that is the honesty rule rather than an
         # exception to it. `no_set` means "nothing here has been made with
         # these", which is a statement a reader can act on for a checkpoint and

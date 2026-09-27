@@ -34,12 +34,13 @@ function model(id, name, kind = "checkpoint", extra = {}) {
 function combination(
   key,
   models,
-  { recipes = 1, pictures = 1, covers = [] } = {},
+  { recipes = 1, pictures = 1, covers = [], runs = 0 } = {},
 ) {
   return {
     key,
     models,
     recipes,
+    history_runs: runs,
     picture_count: pictures,
     // `{picture_id, version}`, which is what the route serves. NOT a URL: an
     // `<img src>` never reaches the Axios interceptor, so the card builds the src
@@ -219,6 +220,32 @@ describe("setCard", () => {
   });
 });
 
+describe("setCard from ComfyUI runs (#1565)", () => {
+  const ran = combination("1,2,4", [CKPT, VAE, CLIP], {
+    recipes: 0,
+    pictures: 0,
+    runs: 1,
+  });
+
+  it("marks a card only ComfyUI ran, and prints no zero counts", () => {
+    const card = setCard(setGroups([ran])[0]);
+    expect(card.fromComfyUI).toBe(true);
+    expect(card.facts).toEqual(["3 models", "1 ComfyUI run"]);
+  });
+
+  it("does not mark a card any picture backs", () => {
+    const pictured = combination("1,2", [CKPT, VAE], { pictures: 1 });
+    const card = setCard(setGroups([ran, pictured])[0]);
+    expect(card.fromComfyUI).toBe(false);
+    expect(card.facts).toEqual([
+      "3 models",
+      "1 recipe",
+      "1 picture",
+      "1 ComfyUI run",
+    ]);
+  });
+});
+
 describe("kindCounts", () => {
   it("writes a count of one out, so a tally does not read as a label", () => {
     expect(kindCounts([VAE])).toEqual(["VAE 1"]);
@@ -287,8 +314,27 @@ describe("worksWith", () => {
     expect(worksWith(ALL, 999)).toEqual({
       companions: [],
       recipes: 0,
+      historyRuns: 0,
       sets: [],
     });
+  });
+
+  it("ranks a companion only ComfyUI ran after the recipe ones, with a bar", () => {
+    // #1565: a run is a witness too, so the bar must not be empty.
+    const ran = combination("1,6", [CKPT, OTHER_CKPT], {
+      recipes: 0,
+      pictures: 0,
+      runs: 2,
+    });
+    const { companions, historyRuns } = worksWith([...ALL, ran], CKPT.id);
+    expect(historyRuns).toBe(2);
+    const last = companions.at(-1);
+    expect([last.name, last.recipes, last.historyRuns]).toEqual([
+      "juggernautXL_v9",
+      0,
+      2,
+    ]);
+    expect(last.share).toBeGreaterThan(0);
   });
 });
 

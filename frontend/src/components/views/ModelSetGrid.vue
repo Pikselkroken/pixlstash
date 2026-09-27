@@ -302,6 +302,7 @@ import {
   fillFromSets,
   handMadeName,
   recipeCount,
+  runCount,
   rowMatches,
   SET_SLOTS,
   setCheckpoint,
@@ -941,7 +942,7 @@ const chooserSections = computed(() => {
   if (!mode || !set) return [];
   if (mode === "pictures") {
     return fillSections(fillPictureItems.value, (item) =>
-      recipeCount(item.recipes),
+      item.recipes > 0 ? recipeCount(item.recipes) : runCount(item.historyRuns),
     );
   }
   if (mode === "set") {

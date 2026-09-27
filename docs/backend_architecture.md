@@ -3278,6 +3278,16 @@ band can only put a row in one place.
   and its members then appear under `no_set` — read off the combinations that
   *survived*, never off the pre-filter grouping, or a model would be in neither
   list and so on no screen at all.
+- **ComfyUI's own runs are witnesses too (#1565).** `fetch_workflow_sets` reads
+  `comfyui_history_model` through `_history_runs`, the one reader of that table
+  (`propose_companions` calls it too). Each run counts one `history_runs`
+  against the combination its models resolve to *exactly*, never against every
+  subset, and is kept apart from `recipes` and `picture_count`. A combination
+  survives the cut with a kept picture here OR a stored run, so a set that has
+  only run in ComfyUI is served with no cover. Runs are hub-wide, like
+  `recipes`. They never touch `ambiguous`, and they stay out of
+  `hub_combinations`, which feeds only the hand-made sets' merge offer.
+  ComfyUI is never contacted on this path.
 - **A member the evidence cannot pin down is flagged, never hidden.** `ambiguous`
   is OR-ed across a combination's witnesses: one recipe that could only match a
   basename is enough to make the membership a guess, and a cleaner second
@@ -3490,7 +3500,8 @@ at the `checkpoint` step answers before recipes at `base_model`, for the same
 reason the ladder exists: direct evidence beats an inference. ComfyUI forgets
 its history on restart; the rows do not, and nothing on the read path asks
 ComfyUI. A failed history read never fails the pull (`history_runs: null` in
-its summary). "Same base model" and "same family"
+its summary). The shelf's Workflow sets read the same rows through the same
+`_history_runs` reader (see "Workflow sets" above). "Same base model" and "same family"
 read `known_base_model`: the shelf's identified label (`base_model_canonical`)
 unless its source is a fuzzy guess, else the stored `base_model` folded; the
 LoRA flag reads the same. A checkpoint from a family nothing has run with

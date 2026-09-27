@@ -60,6 +60,8 @@ function byEvidence(entries) {
       (b.picture_count ?? b.pictures ?? 0) -
         (a.picture_count ?? a.pictures ?? 0) ||
       (b.recipes ?? 0) - (a.recipes ?? 0) ||
+      (b.history_runs ?? b.historyRuns ?? 0) -
+        (a.history_runs ?? a.historyRuns ?? 0) ||
       String(a.key).localeCompare(String(b.key)),
   );
 }
@@ -90,11 +92,19 @@ export function setGroups(combinations) {
     const key = `model:${head.id}`;
     let group = byHead.get(key);
     if (!group) {
-      group = { key, head, combinations: [], recipes: 0, pictures: 0 };
+      group = {
+        key,
+        head,
+        combinations: [],
+        recipes: 0,
+        historyRuns: 0,
+        pictures: 0,
+      };
       byHead.set(key, group);
     }
     group.combinations.push(combination);
     group.recipes += combination.recipes ?? 0;
+    group.historyRuns += combination.history_runs ?? 0;
     group.pictures += combination.picture_count ?? 0;
   }
 
@@ -140,11 +150,13 @@ function members(group, groupsPerModel) {
         ...model,
         kindLabel: memberKindLabel(model),
         recipes: 0,
+        historyRuns: 0,
         pictures: 0,
         ambiguous: false,
         position,
       };
       seen.recipes += combination.recipes ?? 0;
+      seen.historyRuns += combination.history_runs ?? 0;
       seen.pictures += combination.picture_count ?? 0;
       // One witness that could not pin the file down is enough to say so; a
       // cleaner second witness does not unmake the first.
@@ -190,6 +202,15 @@ export function recipeCount(recipes) {
   return n === 1 ? "1 recipe" : `${n} recipes`;
 }
 
+/**
+ * "3 ComfyUI runs", "1 ComfyUI run" - finished runs the workflow pull read off
+ * ComfyUI's history (#1565), counted apart from recipes.
+ */
+export function runCount(runs) {
+  const n = Number(runs) || 0;
+  return n === 1 ? "1 ComfyUI run" : `${n} ComfyUI runs`;
+}
+
 /** "3 pictures", "1 picture". */
 export function pictureCount(pictures) {
   const n = Number(pictures) || 0;
@@ -222,6 +243,10 @@ export function sharingLabel(otherSets) {
  */
 export function setCard(group) {
   const models = group.models ?? [];
+  const historyRuns = group.historyRuns ?? 0;
+  // On the grid only because ComfyUI ran it: no picture here to show, so the
+  // cover says where the evidence came from instead of "0 pictures".
+  const fromComfyUI = group.pictures === 0 && historyRuns > 0;
   return {
     key: group.key,
     // The head names the card, so a Flux or Wan group with no checkpoint row is
@@ -231,11 +256,14 @@ export function setCard(group) {
     kinds: kindCounts(models.filter((model) => model.id !== group.head?.id)),
     facts: [
       models.length === 1 ? "1 model" : `${models.length} models`,
-      recipeCount(group.recipes),
-      pictureCount(group.pictures),
-    ],
+      fromComfyUI && !group.recipes ? null : recipeCount(group.recipes),
+      fromComfyUI ? null : pictureCount(group.pictures),
+      historyRuns > 0 ? runCount(historyRuns) : null,
+    ].filter(Boolean),
     pictures: group.pictures,
     recipes: group.recipes,
+    historyRuns,
+    fromComfyUI,
     covers: group.covers ?? [],
     size: models.length,
   };
@@ -287,7 +315,8 @@ export function memberKindLabel(model) {
  *
  * @param {Array<Object>} combinations
  * @param {number} modelId
- * @returns {{companions: Array<Object>, recipes: number, sets: Array<Object>}}
+ * @returns {{companions: Array<Object>, recipes: number, historyRuns: number,
+ *   sets: Array<Object>}}
  *   `sets` is the combinations the model is in, strongest first.
  */
 export function worksWith(combinations, modelId) {
@@ -298,8 +327,10 @@ export function worksWith(combinations, modelId) {
   );
   const found = new Map();
   let recipes = 0;
+  let historyRuns = 0;
   for (const combination of sets) {
     recipes += combination.recipes ?? 0;
+    historyRuns += combination.history_runs ?? 0;
     for (const model of combination.models ?? []) {
       if (model.id === modelId) continue;
       const seen = found.get(model.id) ?? {
@@ -308,10 +339,12 @@ export function worksWith(combinations, modelId) {
         kind: model.kind,
         kindLabel: memberKindLabel(model),
         recipes: 0,
+        historyRuns: 0,
         pictures: 0,
         ambiguous: false,
       };
       seen.recipes += combination.recipes ?? 0;
+      seen.historyRuns += combination.history_runs ?? 0;
       seen.pictures += combination.picture_count ?? 0;
       seen.ambiguous = seen.ambiguous || Boolean(model.ambiguous);
       found.set(model.id, seen);
@@ -320,16 +353,21 @@ export function worksWith(combinations, modelId) {
   const companions = [...found.values()].sort(
     (a, b) =>
       b.recipes - a.recipes ||
+      b.historyRuns - a.historyRuns ||
       b.pictures - a.pictures ||
       a.name.localeCompare(b.name),
   );
-  const top = companions[0]?.recipes || 1;
+  // Recipes and runs are both witnesses of a pairing, so the bar measures
+  // both: a companion only ComfyUI ran must not draw an empty bar.
+  const witnesses = (companion) => companion.recipes + companion.historyRuns;
+  const top = Math.max(0, ...companions.map(witnesses)) || 1;
   return {
     companions: companions.map((companion) => ({
       ...companion,
-      share: Math.round((companion.recipes / top) * 100),
+      share: Math.round((witnesses(companion) / top) * 100),
     })),
     recipes,
+    historyRuns,
     sets,
   };
 }
@@ -670,7 +708,7 @@ export function slotSuggestions({
  * What "Fill from pictures" offers: every model recipes have run with this
  * set's checkpoint that the set does not hold, strongest evidence first.
  *
- * @returns {Array<{id, name, kindLabel, recipes, slot, sha256}>}
+ * @returns {Array<{id, name, kindLabel, recipes, historyRuns, slot, sha256}>}
  */
 export function fillFromPictures(set, combinations, rows) {
   const checkpoint = setCheckpoint(set);
@@ -694,7 +732,10 @@ export function fillFromPictures(set, combinations, rows) {
         name: c.name,
         kindLabel: c.kindLabel,
         recipes: c.recipes,
-        detail: `${c.kindLabel || "Model"} · ${recipeCount(c.recipes)}`,
+        historyRuns: c.historyRuns,
+        detail: `${c.kindLabel || "Model"} · ${
+          c.recipes > 0 ? recipeCount(c.recipes) : runCount(c.historyRuns)
+        }`,
         slot: defaultSlot(c.kind),
       }))
   );

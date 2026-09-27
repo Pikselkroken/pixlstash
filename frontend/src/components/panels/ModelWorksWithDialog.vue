@@ -57,13 +57,16 @@
             <span class="ww__figures num"
               >{{ recipeCount(companion.recipes) }} ·
               {{ companion.pictures.toLocaleString() }}
-              {{ companion.pictures === 1 ? "picture" : "pictures" }}</span
+              {{ companion.pictures === 1 ? "picture" : "pictures"
+              }}<template v-if="companion.historyRuns > 0">
+                · {{ runCount(companion.historyRuns) }}</template
+              ></span
             >
           </span>
         </li>
       </ul>
       <p v-else class="ww__state">
-        No recipe in this library names this file beside another one. That is
+        No recipe or ComfyUI run names this file beside another one. That is
         not a verdict on what it works with — only a record of what has been
         tried here.
       </p>
@@ -118,6 +121,7 @@ import {
 import {
   memberKindLabel,
   recipeCount,
+  runCount,
   setName,
 } from "../../utils/workflowSets";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -225,7 +229,14 @@ const setsLabel = computed(() => {
   return n === 1 ? "In 1 set" : `In ${n} sets`;
 });
 
-const recipeLabel = computed(() => recipeCount(answer.value.recipes));
+const recipeLabel = computed(() =>
+  [
+    recipeCount(answer.value.recipes),
+    answer.value.historyRuns > 0 ? runCount(answer.value.historyRuns) : null,
+  ]
+    .filter(Boolean)
+    .join(" · "),
+);
 
 const setChips = computed(() =>
   answer.value.sets.slice(0, SET_CHIPS).map((combination) => ({

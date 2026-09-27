@@ -115,12 +115,13 @@ function member(id, name, kind, extra = {}) {
 function combination(
   key,
   models,
-  { recipes = 1, pictures = 1, covers = [7] } = {},
+  { recipes = 1, pictures = 1, covers = [7], runs = 0 } = {},
 ) {
   return {
     key,
     models,
     recipes,
+    history_runs: runs,
     picture_count: pictures,
     // What the route serves: a picture and its cache key, never a path. An
     // `<img src>` bypasses the Axios interceptor, so the card is what turns
@@ -237,6 +238,29 @@ describe("the cards", () => {
     store.toggleSet("model:1");
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-testid="model-set-panel"]').exists()).toBe(true);
+  });
+
+  it("says a card only ComfyUI ran came from ComfyUI (#1565)", async () => {
+    const { wrapper } = await mountGrid({
+      rows: [row(1, "realvisXL_v5")],
+      support: [row(2, "sdxl_vae", "vae")],
+      combinations: [
+        combination("1,2", [CKPT, VAE], {
+          recipes: 0,
+          pictures: 0,
+          covers: [],
+          runs: 3,
+        }),
+      ],
+    });
+
+    const card = wrapper.find('[data-testid="model-set-card"]');
+    expect(card.text()).toContain("Ran in ComfyUI");
+    expect(card.text()).toContain("3 runs");
+    expect(card.text()).toContain("3 ComfyUI runs");
+    expect(card.text()).not.toContain("0 pictures");
+    expect(card.findAll("img")).toHaveLength(0);
+    expect(card.attributes("aria-label")).toContain("ran in ComfyUI");
   });
 
   it("says so on a card nothing else has ever run with", async () => {
