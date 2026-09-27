@@ -134,9 +134,8 @@
                   row.members.length > 1
                     ? `a workflow of their own beside each of the ${row.members.length} they were made with`
                     : "a workflow of their own in this stack"
-                }},
-                <i>{{ workflowName }} + {{ label(row) }}</i>. That workflow always
-                loads it, and exports with it. The other
+                }}. That workflow always loads it, and exports with it. The
+                other
                 {{ pictures(summary.pictures - row.pictures) }} stay where they
                 are.
               </p>
@@ -182,8 +181,6 @@ const props = defineProps({
   summary: { type: Object, required: true },
   /** `{key: name}` for the stack's members, for "only in …". */
   memberNames: { type: Object, default: () => ({}) },
-  /** The workflow a promotion is named after. */
-  workflowName: { type: String, default: "" },
   /** A write is out, so neither verb may start another. */
   busy: { type: Boolean, default: false },
 });

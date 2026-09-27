@@ -4737,8 +4737,9 @@ def test_promoting_one_lora_splits_off_its_pictures_and_nothing_else(workflow_en
     assert _variant_key(server, FLIP_RECIPE_A) == ada_key
     assert _variant_key(server, FLIP_RECIPE_B) == merged
     assert _attr_row(server, merged)["name"] == "Character sheet"
+    # The split copies the card's attributes, and then clears the name.
     split_off = _attr_row(server, ada_key)
-    assert split_off is None or split_off["name"] is None
+    assert split_off is not None and split_off["name"] is None
     card = owner.get(f"{API}/workflows/{ada_key}").json()["card"]
     assert card["name"].endswith(" + character ada"), card["name"]
     assert card["picture_count"] == 3
@@ -4782,6 +4783,153 @@ def test_a_promoted_lora_is_never_filed_away_as_a_one_off(workflow_env):
     )
     assert _variant_key(server, FLIP_RECIPE_B) == bo_key
     assert bo_key in drawn()
+
+
+TWO_SLOT_TOPOLOGY = _h("twoslottopology")
+TWO_SLOT_X = _h("twoslotx")
+TWO_SLOT_Y = _h("twosloty")
+TWO_SLOT_CORE = _h("twoslotcore")
+
+
+def _chain(first: str, second: str) -> dict:
+    """A checkpoint, two chained LoRA loaders and a sampler."""
+    return {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": asset_reference("realvisxl.safetensors")},
+        },
+        "2": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": asset_reference(first), "model": ["1", 0]},
+        },
+        "3": {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": asset_reference(second), "model": ["2", 0]},
+        },
+        "4": {"class_type": "KSampler", "inputs": {"steps": None, "model": ["3", 0]}},
+    }
+
+
+# Ada is in the FIRST loader of X and the SECOND loader of Y, so promoting
+# her writes a row at both slots, and each card holds her at one of them.
+_TWO_SLOT_DOCUMENTS = {
+    TWO_SLOT_X: _chain("character_ada.safetensors", "character_bo.safetensors"),
+    TWO_SLOT_Y: _chain("character_cid.safetensors", "character_ada.safetensors"),
+}
+
+
+def _seed_two_slot_fixture(server) -> str:
+    """X and Y on one card (both slots recipe), three pictures each."""
+    documents = _TWO_SLOT_DOCUMENTS
+    key = workflow_key(TWO_SLOT_TOPOLOGY, slots(documents[TWO_SLOT_X]), [])
+    assert key == workflow_key(TWO_SLOT_TOPOLOGY, slots(documents[TWO_SLOT_Y]), [])
+    labels = [slot.label for slot in slots(documents[TWO_SLOT_X]) if slot.is_lora]
+    assert len(set(labels)) == 2, "the two loaders must be two slots"
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_topology "
+            "(topology_hash, hash_version, node_count, first_seen_at) "
+            "VALUES (?, 'v1', 4, '2026-08-06T00:00:00Z')",
+            (TWO_SLOT_TOPOLOGY,),
+        )
+        for structural_hash, document in documents.items():
+            conn.execute(
+                "INSERT INTO workflow_recipe (structural_hash, topology_hash, "
+                "hash_version, node_count, first_seen_at) "
+                "VALUES (?, ?, 'v1', 4, '2026-08-06T00:00:00Z')",
+                (structural_hash, TWO_SLOT_TOPOLOGY),
+            )
+            conn.execute(
+                "INSERT INTO workflow_recipe_graph "
+                "(structural_hash, document_sha256, document, created_at) "
+                "VALUES (?, 'x', ?, '2026-08-06T00:00:00Z')",
+                (structural_hash, json.dumps(document)),
+            )
+            conn.execute(
+                "INSERT INTO workflow_variant (structural_hash, topology_hash, "
+                "workflow_key, key_version) VALUES (?, ?, ?, ?)",
+                (structural_hash, TWO_SLOT_TOPOLOGY, key, WORKFLOW_KEY_VERSION),
+            )
+        conn.executemany(
+            "INSERT INTO workflow_recipe_asset "
+            "(structural_hash, widget_name, normalized_filename) VALUES (?, ?, ?)",
+            [
+                (TWO_SLOT_X, "ckpt_name", "realvisxl.safetensors"),
+                (TWO_SLOT_X, "lora_name", "character_ada.safetensors"),
+                (TWO_SLOT_X, "lora_name", "character_bo.safetensors"),
+                (TWO_SLOT_Y, "ckpt_name", "realvisxl.safetensors"),
+                (TWO_SLOT_Y, "lora_name", "character_cid.safetensors"),
+                (TWO_SLOT_Y, "lora_name", "character_ada.safetensors"),
+            ],
+        )
+        conn.execute(
+            "INSERT INTO workflow_topology_core (topology_hash, core_hash, "
+            "core_version, workflow_type, slots, specials) "
+            "VALUES (?, ?, ?, 'txt2img', ?, '')",
+            (
+                TWO_SLOT_TOPOLOGY,
+                TWO_SLOT_CORE,
+                CORE_RULE_VERSION,
+                json.dumps(
+                    [
+                        {
+                            "label": slot.label,
+                            "class_type": slot.class_type,
+                            "widget": slot.widget,
+                            "is_lora": slot.is_lora,
+                        }
+                        for slot in slots(documents[TWO_SLOT_X])
+                    ]
+                ),
+            ),
+        )
+        conn.executemany(
+            "INSERT INTO workflow_slot_mark (topology_hash, slot_label, mark) "
+            "VALUES (?, ?, 'recipe')",
+            [(TWO_SLOT_TOPOLOGY, label) for label in labels],
+        )
+
+    def write(session):
+        for structural_hash in documents:
+            for n in range(3):
+                session.add(
+                    Picture(
+                        file_path=f"two_slot_{structural_hash[:6]}_{n}.png",
+                        deleted=False,
+                        created_at=_stamp("2026-08-18T00:00:00Z"),
+                        workflow_topology_hash=TWO_SLOT_TOPOLOGY,
+                        workflow_structural_hash=structural_hash,
+                        workflow_hash_version="v1",
+                    )
+                )
+        session.commit()
+
+    server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+    return key
+
+
+def test_a_lora_promoted_at_two_slots_names_only_the_slot_it_is_in(workflow_env):
+    """Each card names the promoted file at the slot it holds it in, and the
+    other slot stays the recipe slot it is, with its own LoRA counted."""
+    owner, server = workflow_env.owner, workflow_env.server
+    merged = _seed_two_slot_fixture(server)
+    r = owner.put(
+        f"{API}/workflows/{merged}/lora-promotion",
+        json={"asset": _ADA, "promoted": True},
+    )
+    assert r.status_code == 200, r.text
+    x_key = _variant_key(server, TWO_SLOT_X)
+    y_key = _variant_key(server, TWO_SLOT_Y)
+    assert len({x_key, y_key, merged}) == 3, "both variants split off, apart"
+
+    card = owner.get(f"{API}/workflows/{x_key}").json()["card"]
+    named = [(lora["mark"], lora["name"]) for lora in card["loras"]]
+    assert sorted(named, key=str) == sorted(
+        [("structural", "character ada"), ("recipe", None)], key=str
+    )
+    assert card["name"].count("character ada") == 1, card["name"]
+    # Bo is still X's recipe LoRA, not subtracted as if he were Ada.
+    assert [lora["name"] for lora in card["recipe_loras"]] == ["character bo"]
 
 
 def test_putting_a_promoted_lora_back_merges_its_pictures_home(workflow_env):
@@ -4888,6 +5036,15 @@ def test_the_picture_grid_narrows_a_stack_to_one_lora(workflow_env):
     assert ids(workflow_stack=stack_id, workflow_lora=_ADA) == a_ids
     assert ids(workflow_stack=stack_id, workflow_lora=_BO) == b_ids
     assert ids(workflow_key=merged, workflow_lora=_ADA) == set()
+    # Only ever a narrowing: alone, or malformed, it matches nothing rather
+    # than parsing every stored graph for whoever asked.
+    assert ids(workflow_lora=_ADA) == set()
+    assert ids(workflow_stack=stack_id, workflow_lora="character_ada") == set()
+    # And the summary names the stack it counted, which is what Show N sends.
+    assert (
+        owner.get(f"{API}/workflows/{merged}/lora-summary").json()["stack_id"]
+        == stack_id
+    )
 
 
 def test_replacing_a_missing_model_keeps_the_card_and_flags_its_old_pictures(

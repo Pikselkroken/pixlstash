@@ -486,7 +486,8 @@ def variants_loading(
 
     For the picture filter's ``workflow_lora``: *among* is what the other
     workflow filters already resolved to, and ``None`` means every filed
-    variant. A document that will not parse is logged and matches nothing,
+    variant (the picture listing never passes ``None``: it is open to scoped
+    tokens, and that would parse every stored graph per request). A document that will not parse is logged and matches nothing,
     so an unreadable row narrows the grid rather than widening it.
     """
     if among is None:
@@ -680,6 +681,34 @@ def effective_stack_keys(hub: HubDatabase, key: str) -> list[str]:
     )
     keys = [row["workflow_key"] for row in rows]
     return keys if key in keys else [key, *keys]
+
+
+def stack_id_of(hub: HubDatabase, key: str) -> Optional[str]:
+    """The id that names the stack :func:`effective_stack_keys` resolves for *key*.
+
+    A stored membership's own id, else ``auto:<core hash>`` for the automatic
+    group, the spelling ``workflow_card_reads.keys_in_stack`` reads back to the
+    same members. ``None`` for a card standing alone, taken out of its group,
+    or with no current core hash.
+    """
+    member = hub.fetchone(
+        "SELECT stack_id FROM workflow_stack_member WHERE workflow_key = ? "
+        "ORDER BY stack_id",
+        (key,),
+    )
+    if member is not None:
+        return member["stack_id"]
+    if hub.fetchone("SELECT 1 FROM workflow_unstacked WHERE workflow_key = ?", (key,)):
+        return None
+    row = hub.fetchone(
+        "SELECT c.core_hash AS core_hash FROM workflow_variant v "
+        "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
+        "AND c.core_version = ? WHERE v.workflow_key = ? AND v.key_version = ?",
+        (CORE_RULE_VERSION, key, WORKFLOW_KEY_VERSION),
+    )
+    # The prefix is `workflow_card_reads.AUTO_STACK_PREFIX`, which imports
+    # this module, so it is spelled here rather than imported back.
+    return f"auto:{row['core_hash']}" if row else None
 
 
 def variant_hashes_for_keys(hub: HubDatabase, keys: list[str]) -> list[str]:

@@ -367,7 +367,8 @@ class PictureListFilters:
                 "Only pictures whose workflow loaded this LoRA file, named by "
                 "its stored reference (`asset:<sha256>`, as "
                 "`GET /workflows/{key}/lora-summary` serves it). Narrows "
-                "`workflow_key` / `workflow_stack` when given with them."
+                "`workflow_key` / `workflow_stack`; alone, or malformed, it "
+                "matches nothing."
             ),
         ),
         reference_folder_id: str | None = Query(
@@ -384,6 +385,9 @@ class PictureListFilters:
         # request.query_params. This dependency exists purely to document and
         # validate the query surface in OpenAPI.
         pass
+
+
+_ASSET_RE = re.compile(r"^asset:[0-9a-f]{64}$")
 
 
 def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
@@ -444,8 +448,14 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
                 else set(workflow_cards.variants_in_stack(hub, stack_id))
             )
         if lora is not None:
-            among = sorted(set.intersection(*matched)) if matched else None
-            matched.append(set(workflow_cards.variants_loading(hub, lora, among)))
+            # Only ever a narrowing, and only of a well-formed reference:
+            # alone it would parse every stored graph on the hub per request,
+            # and this route is open to scoped tokens.
+            if matched and _ASSET_RE.match(lora):
+                among = sorted(set.intersection(*matched))
+                matched.append(set(workflow_cards.variants_loading(hub, lora, among)))
+            else:
+                matched.append(set())
     except Exception as exc:
         # Fail closed, both for a hub that is absent and for one that will not
         # answer: a filter that cannot be resolved must not silently widen the

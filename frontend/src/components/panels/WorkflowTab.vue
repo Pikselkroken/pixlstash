@@ -1344,26 +1344,39 @@ const memberNames = computed(() =>
   ),
 );
 
+/** Which read is the latest, so an older answer never overwrites a newer one. */
+let summaryRead = 0;
+
+/**
+ * Read the stack's LoRAs for `key`.
+ *
+ * A re-read of the SAME card (after a promotion, or when the cover arrives)
+ * keeps the pile on screen until the answer lands: blanking it unmounts the
+ * open fan and drops focus to the page.
+ */
 async function loadSummary(key) {
-  summary.value = null;
+  const read = ++summaryRead;
+  if (summary.value && !summary.value.keys?.includes(key)) summary.value = null;
   summaryFailed.value = false;
   if (!key) {
+    summary.value = null;
     summaryPending.value = false;
     return;
   }
-  summaryPending.value = true;
+  summaryPending.value = !summary.value;
   try {
     const body = await getLoraSummary(key, {
       cover: coverPictureId.value ?? undefined,
     });
-    if (selectedKey.value !== key) return;
+    if (read !== summaryRead) return;
     summary.value = body;
   } catch (err) {
-    if (selectedKey.value !== key) return;
+    if (read !== summaryRead) return;
     console.warn(`[workflows] could not read the LoRAs of ${key}'s stack`, err);
+    summary.value = null;
     summaryFailed.value = true;
   } finally {
-    if (selectedKey.value === key) summaryPending.value = false;
+    if (read === summaryRead) summaryPending.value = false;
   }
 }
 
@@ -1440,7 +1453,9 @@ function showLora(row) {
   const head = headCard.value;
   const name = row.name || "A forgotten LoRA";
   showLoraPictures({
-    stack: head?.stack_id ?? null,
+    // The summary's, which names exactly the stack it counted; the grid's
+    // card leaves it null when it had to leave a member out.
+    stack: summary.value?.stack_id ?? head?.stack_id ?? null,
     key: selectedKey.value,
     lora: row.asset,
     name: `${name} in ${head?.name || "this workflow"}`,

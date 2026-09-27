@@ -291,6 +291,7 @@ class CardFigures:
     # A LoRA file was promoted to make this card (``workflow_lora_promotion``).
     # The owner asked for it, so it is never a one-off however few pictures.
     promoted: bool = False
+    promoted_labels: dict[str, str] = field(default_factory=dict)
 
     @property
     def rating(self) -> Optional[float]:
@@ -982,27 +983,55 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
 def _mark_promoted(
     hub: HubDatabase, figures: list[CardFigures], names: dict[str, list[tuple]]
 ) -> None:
-    """Set :attr:`CardFigures.promoted` on each card a promoted LoRA keys.
+    """Fill :attr:`CardFigures.promoted_labels` and ``promoted`` per card.
 
-    Every variant of such a card loads the promoted file (the key includes
-    it), so the first variant's filenames answer. A file whose name was
-    forgotten cannot be matched here and its card is judged like any other.
+    ``{slot label: filename}`` of each slot whose promoted file this card
+    loads THERE. By label and not merely by file, because a file promoted at
+    two slots may sit in only one of them on a given card; the first variant's
+    stored document is reduced to say which, and only for a card whose
+    topology has a promotion at all. Every variant of the card holds the same
+    file at a promoted slot (the key includes the pair), so one answers. A
+    file whose name was forgotten keys the card but cannot be named, so it
+    marks the card promoted and leaves its slot unnamed.
     """
     promotions = lora_promotions(hub, [figure.card.topology_hash for figure in figures])
     if not promotions:
         return
-    promoted_in: dict[str, set[str]] = {}
-    for topology_hash, _label, asset in promotions:
-        promoted_in.setdefault(topology_hash, set()).add(asset)
-    for figure in figures:
-        wanted = promoted_in.get(figure.card.topology_hash)
-        if not wanted or not figure.card.variants:
+    topologies = {topology_hash for topology_hash, _, _ in promotions}
+    wanted = [
+        figure
+        for figure in figures
+        if figure.card.variants and figure.card.topology_hash in topologies
+    ]
+    documents = variant_documents(hub, [figure.card.variants[0] for figure in wanted])
+    for figure in wanted:
+        document = documents.get(figure.card.variants[0])
+        if document is None:
             continue
-        figure.promoted = any(
-            asset_reference(filename) in wanted
+        try:
+            document_slots = slots(document)
+        except WorkflowGraphError as exc:
+            logger.info(
+                "Card %s will not reduce, so its promoted LoRA is not named: %s",
+                figure.card.workflow_key,
+                exc,
+            )
+            continue
+        files = {
+            asset_reference(filename): filename
             for widget, filename in names.get(figure.card.variants[0], ())
             if is_lora_widget(widget)
-        )
+        }
+        promoted = [
+            slot
+            for slot in document_slots
+            if slot.is_lora
+            and (figure.card.topology_hash, slot.label, slot.asset) in promotions
+        ]
+        figure.promoted = bool(promoted)
+        figure.promoted_labels = {
+            slot.label: files[slot.asset] for slot in promoted if slot.asset in files
+        }
 
 
 def _recovered_slots(figures: list[CardFigures], file_models) -> dict[str, list]:
@@ -1064,7 +1093,6 @@ def _describe_slots(
     card, and a card is in exactly one of the two branches below.
     """
     marks = slot_marks(hub, [figure.card.topology_hash for figure in figures])
-    promotions = lora_promotions(hub, [figure.card.topology_hash for figure in figures])
     # Off `read_grid`'s shared `names` rather than a read of its own: that one
     # covers EVERY variant where this pass only draws the first, so it is a
     # superset and resolving a few filenames no chip shows is cheaper than a
@@ -1083,19 +1111,9 @@ def _describe_slots(
         ):
             by_widget.setdefault(widget, []).append(filename)
         taken: Counter = Counter()
-        # The promoted file of each promoted slot on THIS card. Every variant
-        # of the card holds it there (the key includes the pair), so the first
-        # variant's filenames are enough to name it.
-        variant_files = {
-            asset_reference(filename): filename
-            for pairs in by_widget.values()
-            for filename in pairs
-        }
-        promoted_here = {
-            label: variant_files[asset]
-            for topology_hash, label, asset in promotions
-            if topology_hash == card.topology_hash and asset in variant_files
-        }
+        # The promoted file of each promoted slot on THIS card
+        # (`_mark_promoted`), by label.
+        promoted_here = figure.promoted_labels
 
         def next_name(widget: str) -> Optional[str]:
             found = by_widget.get(widget, ())

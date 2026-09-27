@@ -89,7 +89,7 @@ from pixlstash.hub.workflow_card_writes import (
     unstack_card,
     unstack_stack,
 )
-from pixlstash.hub.workflow_cards import effective_stack_keys
+from pixlstash.hub.workflow_cards import effective_stack_keys, stack_id_of
 from pixlstash.hub.workflows import (
     assets_for_topology_recipes,
     forgotten_asset_counts,
@@ -1021,7 +1021,8 @@ class WorkflowLoraUse(BaseModel):
         False,
         description=(
             "Its pictures are a workflow of their own: promoted, or in a slot "
-            "marked structural. Only ever set on a LoRA that changes."
+            "marked structural. A shared LoRA can carry it too (a speed LoRA "
+            "guessed structural), where it changes nothing a reader sees."
         ),
     )
 
@@ -1036,6 +1037,14 @@ class WorkflowLoraSummary(BaseModel):
     """
 
     keys: list[str]
+    stack_id: str | None = Field(
+        None,
+        description=(
+            "The id naming the stack `keys` is, for the picture listing's "
+            "`workflow_stack`, so a *Show N* counts what the summary counted "
+            "even where the grid leaves a member out. Null for a lone card."
+        ),
+    )
     pictures: int = 0
     shared: list[WorkflowLoraUse] = Field(default_factory=list)
     varying: list[WorkflowLoraUse] = Field(default_factory=list)
@@ -2823,11 +2832,12 @@ def create_router(server) -> APIRouter:
         hub = _hub()
         _require_card(hub, workflow_key)
         keys = effective_stack_keys(hub, workflow_key)
+        stack_id = stack_id_of(hub, workflow_key) if len(keys) > 1 else None
         if getattr(server.vault, "library_uuid", None) is None:
             # No pictures to count, so nothing is shared and nothing changes.
-            return WorkflowLoraSummary(keys=keys)
+            return WorkflowLoraSummary(keys=keys, stack_id=stack_id)
         summary = stack_lora_summary(hub, server.vault, keys, cover)
-        return WorkflowLoraSummary(**asdict(summary))
+        return WorkflowLoraSummary(**asdict(summary), stack_id=stack_id)
 
     @router.put(
         "/workflows/{workflow_key}/lora-promotion",
@@ -4731,8 +4741,10 @@ def create_router(server) -> APIRouter:
         try:
             document = structural_document(graph)
             labels = topology_node_labels(document)
-            keep |= {
-                slot.label
+            # By loader and widget, not by label: twin loaders share a label,
+            # and a twin holding another file is still the look.
+            kept_files = {
+                (slot.node_id, slot.widget)
                 for slot in slots(document)
                 if slot.is_lora and (slot.label, slot.asset) in promoted
             }
@@ -4748,7 +4760,7 @@ def create_router(server) -> APIRouter:
                 exc,
             )
             return set()
-        return {
+        return kept_files | {
             (node_id, widget)
             for node_id, label in labels.items()
             for widget in ((graph.get(node_id) or {}).get("inputs") or {})

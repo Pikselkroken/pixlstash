@@ -1183,6 +1183,31 @@ describe("the LoRA pile", () => {
     expect(getLoraSummary).toHaveBeenCalledWith(KEY, expect.anything());
   });
 
+  it("keeps the pile on screen while it is read again after a promotion", async () => {
+    // Blanking it would unmount the open fan and drop focus to the page.
+    setLoraPromotion.mockResolvedValue({ key: KEY, moved: {} });
+    const { wrapper } = await mountWith([KEY]);
+    getLoraSummary.mockImplementation(() => new Promise(() => {}));
+    await promote(wrapper);
+    expect(wrapper.find("[data-testid='wftab-pile']").exists()).toBe(true);
+  });
+
+  it("narrows Show N to the stack the summary counted", async () => {
+    // The grid's card has no stack id when it left a member out; the
+    // summary still names the stack it counted over.
+    getLoraSummary.mockResolvedValue(loraSummary({ stack_id: "auto:whole" }));
+    const { wrapper } = await mountWith([KEY], [card({ stack_id: null })]);
+    await wrapper
+      .find(`[data-testid='wftab-fan-row-${BO}']`)
+      .findAll("button")
+      .find((button) => button.text() === "Show 3")
+      .trigger("click");
+    expect(useFilterStore().workflowFilter).toMatchObject({
+      stack: "auto:whole",
+      lora: BO,
+    });
+  });
+
   it("shows the stack's pictures of one LoRA, as a removable chip", async () => {
     const { wrapper } = await mountWith([
       KEY,

@@ -2809,6 +2809,12 @@ def create_router(server) -> APIRouter:
             # filename-derived classification, never a filename, a prompt or a
             # picture; low severity, and the honest bound rather than the
             # flattering one. Returning this owner-only would close it.
+            #
+            # **The key also folds in the owner's LoRA promotions**
+            # (`workflow_lora_promotion`), recoverable the same way: whether
+            # the owner promoted THIS picture's LoRA in a slot to a workflow of
+            # its own. One more bit per LoRA slot, an owner's decision rather
+            # than a regex result, about a file the graph already names.
             "workflow_key": _picture_workflow_key(server, pic_id),
             **_recipe_extras(server, request, pic_id, graph),
             # A rebuilt graph is keyed from the rebuild, not from the column
