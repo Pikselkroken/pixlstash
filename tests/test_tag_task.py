@@ -30,7 +30,7 @@ def test_centre_crop_whitelist_excludes_face_tags():
     assert (
         CENTRE_CROP_TAG_WHITELIST == QUALITY_CROP_TAG_WHITELIST - FACE_QUALITY_CROP_TAGS
     )
-    assert {"malformed teeth", "flux chin"} <= FACE_QUALITY_CROP_TAGS
+    assert {"malformed teeth", "malformed eyes", "flux chin"} <= FACE_QUALITY_CROP_TAGS
     assert not (FACE_QUALITY_CROP_TAGS & CENTRE_CROP_TAG_WHITELIST)
     # The general image-quality tags survive in the centre whitelist.
     assert "blocky" in CENTRE_CROP_TAG_WHITELIST
