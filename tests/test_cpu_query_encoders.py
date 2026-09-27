@@ -1,8 +1,8 @@
 """Where a search encodes its query, when the copies load, and what it costs.
 
-A search encodes on the thread handling it - the text path inside the database
-task, likeness search inline in its async handler - while the GPU worker runs
-the embedding and tagging batches. Torch's Metal backend cannot take two
+A search encodes on a request thread - text search before its database task,
+likeness search on a threadpool worker - while the GPU worker runs the
+embedding and tagging batches. Torch's Metal backend cannot take two
 threads, and it does not raise when it gets them: the process dies or hangs, so
 nothing downstream can recover. ``InferenceEngine.create`` therefore builds CPU
 copies of the query encoders when, and only when, its device is Metal, and the

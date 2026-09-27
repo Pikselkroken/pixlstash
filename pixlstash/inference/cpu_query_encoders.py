@@ -1,9 +1,9 @@
 """CPU copies of the query encoders, for Metal hosts.
 
-A search encodes its query on whatever thread is handling the request: the text
-routes through ``Vault.generate_text_embedding`` inside the database task, and
-likeness search calls ``_encode_query_image`` inline in an async handler. The
-GPU worker is meanwhile running the embedding and tagging batches. On CUDA that
+A search encodes its query on a request thread: text search and export by
+query call ``Vault.generate_text_embedding`` before their database task, and
+likeness search runs ``_encode_query_image`` on a threadpool worker. The GPU
+worker is meanwhile running the embedding and tagging batches. On CUDA that
 is fine - two threads may use one context - but torch's Metal backend fills its
 kernel-name set without a lock, and every dtype cast routes through that lookup,
 so two threads casting at once corrupt it. The process then dies or hangs

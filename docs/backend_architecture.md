@@ -1604,15 +1604,12 @@ Metal is **present**, not only when it is the inference device: accelerate's
 value already in the environment is the owner's and is kept, with a warning
 when transformers would read it as false.
 
-**Searching.** A query is encoded on the thread handling the request — the text
-path inside the database task, likeness search inline in its async handler —
+**Searching.** A query is encoded on a request thread — text search and export
+by query before their database task, likeness search on a threadpool worker —
 while the GPU worker runs the embedding and tagging batches. So on Metal, and
 only on Metal, `InferenceEngine.create` also builds
 `inference/cpu_query_encoders.CpuQueryEncoders`: the same classes, weights and
-preprocessing on the `cpu` device, about 0.65 GB and 1.8–2.8 s. They are loaded
-during `create`, while the process is still single-threaded — `Vault.start` has
-not run — because loading them later, on a request thread beside the worker's
-own loads, races transformers' and accelerate's *imports* instead.
+preprocessing on the `cpu` device, about 0.65 GB and 1.8–2.8 s to load.
 `TextEmbeddingWorkflow.encode_query`/`encode_clip_query` and
 `ClipEmbeddingWorkflow.encode_query_image` route to them; `engine.query_encoders
 is None` on every other host, which is what those three branch on. The worker's
@@ -1644,6 +1641,21 @@ crash needs two threads on Metal, and a runner that is not running has no
 worker doing Metal work. The pair serves
 only when **both** copies loaded: the services call `ensure_ready()` outside
 their own `try`, so a half-loaded pair would raise out of every search instead.
+
+That wait is why the encode must never run inside a database task or on the
+event loop. The load task can sit behind a running batch, and that batch
+commits through the DB writer: an encode waiting *inside* a database task holds
+the writer, so the batch cannot finish and the load never starts (see
+*Database*). An `async` handler waiting inline blocks every request the server
+is handling, which is why likeness search encodes via `run_in_threadpool`.
+
+The idle sweep (`Vault._maybe_aggressive_unload`, through `engine.close()`)
+releases the copies too, and its idle check cannot see a search. So
+`CpuQueryEncoders.unload` waits for encodes already running, and an encode that
+starts after the flag cleared refuses (503) rather than reaching a service with
+no model, which would reload it lazily on the search thread — the import race
+the load task avoids. `load` sets the flag under the same lock `unload` releases
+the models under, so neither can leave it set over an empty pair.
 
 #### "VRAM" on unified memory
 

@@ -255,9 +255,9 @@ a warning when transformers would read it as false.
 
 ### Searching: the query encoders are held a second time, on the CPU
 
-A query is encoded on the thread handling the request — text search inside the
-database task, likeness search inline in its async handler — while the GPU
-worker runs the embedding and tagging batches. So on Metal, and only on Metal,
+A query is encoded on a request thread — text search and export by query
+before their database task, likeness search on a threadpool worker — while the
+GPU worker runs the embedding and tagging batches. So on Metal, and only on Metal,
 `InferenceEngine.create` also builds `inference/cpu_query_encoders.py`: the same
 classes, weights and preprocessing on the `cpu` device.
 
@@ -291,7 +291,11 @@ over 86 s — long enough for a search to time out.
 
 A search that arrives while the load is still running waits (60 s) and then
 answers 503; it never falls back to the Metal services, because with the worker
-running that fallback is the crash.
+running that fallback is the crash. The wait is also why no encode runs inside
+a database task or on the event loop: the load can sit behind a running batch
+that commits through the single DB writer, so a wait holding that writer stalls
+every write until it times out, and a wait on the event loop stalls every
+request.
 
 **With no GPU worker at all it does fall back, and that is correct.** The crash
 needs two threads on Metal; a task runner that is not running has no worker
@@ -304,13 +308,19 @@ The pair serves only when **both** copies loaded — the services call
 `ensure_ready()` outside their own `try`, so a half-loaded pair would raise out
 of every search instead.
 
-`engine.close()` and `engine.safe_idle_unload()` release the copies, *before*
-handing the device services to `ModelLifecycleManager`, so the
-`trim_process_memory()` that ends that call returns their memory too. Including
-them in the **idle** sweep is deliberate: it runs only when the owner chose
-memory over speed, and on unified memory these sit in the very pool it is
-freeing. `unload()` clears the loaded flag, so the next search queues a reload
-and waits rather than encoding against models that are no longer there.
+`engine.close()` releases the copies *before* handing the device services to
+`ModelLifecycleManager`, so the `trim_process_memory()` that ends that call
+returns their memory too. The **idle** sweep (`Vault._maybe_aggressive_unload`)
+reaches them through `engine.close()`, and that is deliberate: it runs only
+when the owner chose memory over speed, and on unified memory these sit in the
+very pool it is freeing. `unload()` clears the loaded flag, so the next search
+queues a reload and waits rather than encoding against models that are no
+longer there.
+
+The sweep's idle check sees the task queues, not searches, so `unload()` waits
+for encodes already running, and an encode that starts after the flag cleared
+refuses (503) instead of reaching a service with no model — which would reload
+it lazily on the search thread, the import race above.
 
 ### Not covered
 
