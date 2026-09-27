@@ -14,10 +14,11 @@
 6. [Utility Modules](#6-utility-modules)
 7. [Theming and Styling](#7-theming-and-styling)
 8. [API Client and Authentication](#8-api-client-and-authentication)
-9. [Real-time Updates (WebSocket)](#9-real-time-updates-websocket) — incl. [9.1 Overlay-open deferral contract](#91-overlay-open-deferral-contract), [9.1a The model shelf destination](#91a-the-model-shelf-destination), [9.1b The workflow library destination](#91b-the-workflow-library-destination), [9.2 The Duplicates destination](#92-the-duplicates-destination), [9.3 The "About your library" destination](#93-the-about-your-library-destination), [9.4 The "Moves" destination](#94-the-moves-destination)
+9. [Real-time Updates (WebSocket)](#9-real-time-updates-websocket) — incl. [9.1 Overlay-open deferral contract](#91-overlay-open-deferral-contract)
 10. [Naming and Coding Conventions](#10-naming-and-coding-conventions)
 11. [Build Configuration](#11-build-configuration)
 12. [Mermaid Diagrams](#12-mermaid-diagrams)
+13. [Destinations (whole screens)](#13-destinations-whole-screens) — [13.1 The model shelf](#131-the-model-shelf), [13.2 The workflow library](#132-the-workflow-library), [13.3 Duplicates](#133-duplicates), [13.4 About your library](#134-about-your-library), [13.5 Moves](#135-moves)
 
 ---
 
@@ -228,10 +229,10 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useSidebarStore` | `useSidebarStore.js` | `sidebarDocked` (width pref), `sidebarPinned` (visibility pref), `statsOpen` (the Library's stats rail, default closed), `workflowInspectorOpen` (the Workflows inspector's own flag, default **open**, key `pixlstash:workflowInspectorOpen`; `toggleWorkflowInspector()` persists, `openWorkflowInspector()` is for deep links and does not), `inspectorNudge` (a counter a selection-describing inspector's screen bumps on each new selection, see "Closed inspector" under Shared shell pieces), `sidebarForcedHidden`, `statsForcedHidden`, `characterMultiMode`, `setMultiMode`, `setDifferenceBaseId`; computeds `effectivePinned`, `effectiveDocked`, `sidebarVisible`, `sidebarOverlay` model the pin / dock / auto-hide behaviour (mobile `*ForcedHidden` overrides win). All localStorage access is try/caught. |
 | `useSearchStore` | `useSearchStore.js` | `searchQuery`, `searchInput`, `searchHistory`, `isSearchActive`, `searchOverlayVisible` |
 | `useSnapshotsStore` | `useSnapshotsStore.js` | `snapshots`, `loading`, `activeJob`, `error`, `dailySnapshotsEnabled`; drives the shared `RestoreConfirmDialog` hoisted in `App.vue` (`restoreDialogOpen`, `restoreDialogSnapshotId`, `restoreDialogResources`). Owns snapshot list load / create / restore and the snapshot WebSocket event handlers (called from `App.vue`). |
-| `useMovesStore` | `useMovesStore.js` | v1.11 Phase 5, the reconciliation queue for moves made outside PixlStash. `unambiguous` / `ambiguous` / `offLayout`, `loading`, `error`, `loaded`; `hasPending`/`pendingCount` deliberately **exclude `offLayout`** — that bucket carries no decision (backend_architecture.md §24.5), so a sidebar badge counting it would nag about nothing. `fetchPending` never invents or corrects a verdict; it re-fetches `GET /moves/pending`, which the backend reclassifies live on every call. `applyAllUnambiguous`/`applyReview`/`dismissReviews`/`dismissAll` all re-fetch afterward rather than mutating the local lists — see §9.4. |
+| `useMovesStore` | `useMovesStore.js` | v1.11 Phase 5, the reconciliation queue for moves made outside PixlStash. `unambiguous` / `ambiguous` / `offLayout`, `loading`, `error`, `loaded`; `hasPending`/`pendingCount` deliberately **exclude `offLayout`** — that bucket carries no decision (backend_architecture.md §24.5), so a sidebar badge counting it would nag about nothing. `fetchPending` never invents or corrects a verdict; it re-fetches `GET /moves/pending`, which the backend reclassifies live on every call. `applyAllUnambiguous`/`applyReview`/`dismissReviews`/`dismissAll` all re-fetch afterward rather than mutating the local lists — see §13.5. |
 | `useReviewSessionsStore` | `useReviewSessionsStore.js` | Tag-review state: the tag-health board, the rail of open review sessions (each = one tag + frozen scope + one scan's results), and the per-session binary/pair card queues. Per-item decisions write through `/tag_suggestions`; session bookkeeping talks to `/reviews`, the board to `/tag_health`. Also owns the opt-in gamification — variable-ratio sticker awards with monotonic XP / level / streak counters; the sticker vocabulary is imported from `setAppearance.js` so sets and stickers never drift. |
 | `useLockedSetsStore` | `useLockedSetsStore.js` | Which pictures are frozen by a locked picture set. Fed by `GET /picture_sets/locked-members`; refreshed on app start and on the same sidebar-refresh / `pictures_changed` ws triggers the sidebar uses. Single source of the lock-tooltip copy reused by the grid badge, overlay chip, and context-menu gating. |
-| `useModelShelfStore` | `useModelShelfStore.js` | The model shelf's rows and its `Show` selection. `rows` are the raw `/adapters` + `/checkpoints` payload, **every block fetched so far rather than the shown set**: a fetch replaces the blocks it asked for and leaves the rest standing, because the option vocabularies (`adapterKindOptions`, `capabilityOptions`, `baseModelOptions`) are derived from `rows`, so an overwriting narrowed fetch deleted the kind checkboxes that unticking Adapters is documented to *grey*, and dropped base models that stayed selected and persisted with no box left to untick them. `visibleRows` layers the resolved name, the reduced location state and `copies` (how many of the row's registered copies are `present`) on top and applies the kind, capability and base-model narrowing **client-side**, so a multi-select base-model filter is not one request per option. The capability filter matches **has this capability**, not *is this kind*: a model serving two features survives a tick of either, and like the kind boxes it narrows only the block it hangs under (engines), never the whole shelf. `groups` sorts `visibleRows` client-side on the five ruled `SortKey` values and cuts them into one level of groups (`none` / `base_model` / `folder` / `feature`), always returning at least one group so the flat and grouped lists are one piece of markup; the fifth axis, `workflow_set`, is deliberately NOT in that list and is the shelf's DEFAULT (#1438) — its groups overlap, so it swaps the row list for `ModelSetGrid.vue` and is served instead by `workflowSets` / `visibleCombinations` / `setStacks` / `setFoldCounts` / `noSetRows`, read once from `GET /models/workflow-sets` by `loadWorkflowSets()` and refetched only after a scan (`fetchRows({markNew: true})`), never on a filter tick, because it is a window over every kept picture in the vault and every stored ComfyUI run; `worksWithModel(id)` answers off the WHOLE payload rather than the narrowed one, since hiding a companion because its kind is unticked would turn a view setting into a claim about the evidence; sorting never refetches, because every field the keys read is already on the payload and three server-sorted blocks would be destroyed by the merge above. **Two axes fan a row out across several groups** — `folder` (a file copied into two folders occupies both) and `feature` (a multi-capability model is listed under each feature it serves, which is the design rule) — so `rowKey` carries the group on every grouped axis, not just the ones that need it: one key across several draws put `tabindex="0"` on all of them at once. **Under `folder` the key carries the COPY, not the folder**, because the hub is content-addressed and the same bytes can be registered twice *inside one folder* under two names — the exact collision the previous sentence describes, reached on the axis it was written for. `relpath` is half the `model_file` key and so unique within a folder by construction. A row that cannot answer the key sorts last in BOTH directions, and the unset group sorts last whatever the direction; an adapter declares no capability and groups under **its algorithm** (`LoRA`, `LoKr`, …) rather than under one "No feature recorded" bucket that held most of the shelf. One vocabulary spells it and one fold keys it, both in `utils/modelShelf.js`: `adapterKindKey` trims and lower-cases the free-text column, `adapterKindLabel` names the folded value, and the group key, the group header, the row's Kind cell, the nested `Show` checkboxes AND the `adapterKinds` filter behind them all read those two rather than `row.kind`. **The fold has to reach the filter, not just the label.** `LoRA` is reachable from the edit dialog, which trims but does not case-fold, so faceting on the raw column offered two checkboxes drawn with the same label that each ticked half the rows — while the axis folded them into one visible group. **And the fold has to reach the remembered selection too**, which `storedFilters` does on read: a shipped build persisted the raw column, so a blob holding `LoRA` would match nothing and appear in no checkbox — an empty shelf with the Adapters box reading fully on and nothing on screen naming the filter doing it. Folded rather than discarded by a `FILTERS_SCHEMA_VERSION` bump, which throws the whole blob away when the selection is still exactly what the user chose. The key is the folded value and never the label, because the key is what `modelShelfView.collapsed.feature` remembers a collapse by; it is prefixed `kind:` to keep an algorithm out of the capability keyspace. Group headers are uppercased by `.shelf-group-label` like every other header on the axis, so the header reads `LORA` where the cell reads `LoRA`: one vocabulary stops a *second spelling* existing, it does not exempt the axis from the shelf-wide case rule. Everything that is not an adapter with an algorithm still falls through to "No feature recorded", which is the whole of the rest: a checkpoint, an unclassified file, an engine declaring no capability and any `file_kind` this build does not know have no algorithm at all; an adapter whose `kind` folds to the empty string has none either (the hub CHECK makes it NOT NULL, not non-empty, so a whitespace-only one is reachable over the raw API); and an adapter whose `kind` is the literal `unknown` has the classifier's refusal rather than an algorithm (`KIND_UNKNOWN`, `utils/adapter_header.py`) — heading that `UNKNOWN` would stand a second shrug beside the real one and call it a feature. The `Show` facet still offers `Unknown` as a box, because "which of these could we not identify" is a real selection even where it is not a real feature. `view` (`groupBy`, `sortKey`, `sortDirection`) and the per-axis collapsed sets persist under `pixlstash:modelShelfView`, a SECOND key so `resetFilters` cannot take the sort order with it. `filters` (`adapters`, `adapterKinds`, `checkpoints`, `unclassified`, `engines`, `capabilities`, `baseModels`, `duplicatesOnly`) persists to `localStorage` under `pixlstash:modelShelfFilters` — not to `/users/me/config`, which is a fixed `User` model and would need a backend column. **`duplicatesOnly` is the one field `storedFilters` deliberately does not read back**: "only the files written twice" is a question somebody asks once while reclaiming disk, and remembered across a restart it is a shelf that opens showing four rows of an eighteen-hundred-row library with nothing on screen saying why. An empty `adapterKinds` / `capabilities` / `baseModels` array means **unconstrained**, the standard multi-select convention and the only reading under which a fresh install shows anything. `activeCount` counts filter SECTIONS that deviate from their default, not ticked boxes, or a mild narrowing would read as `9`. Only the four top-level type toggles refetch, and they narrow client-side too; the rest only narrow what is already loaded. Each fetch takes the next `epoch` and only the newest may write `rows` or clear `loading`, so a slower earlier flight cannot land last and show adapters only while Checkpoints is ticked; `resetForSession` bumps the same counter, so a read on the wire when the credential changed is discarded. `ModelShelf.vue` watches `loaded` and refetches when a session reset clears it, which the store cannot do itself because session-reset handlers run *before* the new credential is installed. **Session reset drops `rows` but keeps `filters`:** the models are hub-side facts about this machine, but every row carries the characters and sets in the ACTIVE LIBRARY that use it, while the selection and the view axes are the user's own preferences and hold no ids. `offlineMounts` and the `New` badge's `newIds` are both derived here and both documented under §9.1a, "The three kinds of absence": `offlineMounts` reads `rows` rather than `visibleRows` on purpose, and `newIds` is a per-fetch id diff that only `fetchRows({ markNew: true })` fills and every other fetch clears. |
+| `useModelShelfStore` | `useModelShelfStore.js` | The model shelf's rows and its `Show` selection. `rows` are the raw `/adapters` + `/checkpoints` payload, **every block fetched so far rather than the shown set**: a fetch replaces the blocks it asked for and leaves the rest standing, because the option vocabularies (`adapterKindOptions`, `capabilityOptions`, `baseModelOptions`) are derived from `rows`, so an overwriting narrowed fetch deleted the kind checkboxes that unticking Adapters is documented to *grey*, and dropped base models that stayed selected and persisted with no box left to untick them. `visibleRows` layers the resolved name, the reduced location state and `copies` (how many of the row's registered copies are `present`) on top and applies the kind, capability and base-model narrowing **client-side**, so a multi-select base-model filter is not one request per option. The capability filter matches **has this capability**, not *is this kind*: a model serving two features survives a tick of either, and like the kind boxes it narrows only the block it hangs under (engines), never the whole shelf. `groups` sorts `visibleRows` client-side on the five ruled `SortKey` values and cuts them into one level of groups (`none` / `base_model` / `folder` / `feature`), always returning at least one group so the flat and grouped lists are one piece of markup; the fifth axis, `workflow_set`, is deliberately NOT in that list and is the shelf's DEFAULT (#1438) — its groups overlap, so it swaps the row list for `ModelSetGrid.vue` and is served instead by `workflowSets` / `visibleCombinations` / `setStacks` / `setFoldCounts` / `noSetRows`, read once from `GET /models/workflow-sets` by `loadWorkflowSets()` and refetched only after a scan (`fetchRows({markNew: true})`), never on a filter tick, because it is a window over every kept picture in the vault and every stored ComfyUI run; `worksWithModel(id)` answers off the WHOLE payload rather than the narrowed one, since hiding a companion because its kind is unticked would turn a view setting into a claim about the evidence; sorting never refetches, because every field the keys read is already on the payload and three server-sorted blocks would be destroyed by the merge above. **Two axes fan a row out across several groups** — `folder` (a file copied into two folders occupies both) and `feature` (a multi-capability model is listed under each feature it serves, which is the design rule) — so `rowKey` carries the group on every grouped axis, not just the ones that need it: one key across several draws put `tabindex="0"` on all of them at once. **Under `folder` the key carries the COPY, not the folder**, because the hub is content-addressed and the same bytes can be registered twice *inside one folder* under two names — the exact collision the previous sentence describes, reached on the axis it was written for. `relpath` is half the `model_file` key and so unique within a folder by construction. A row that cannot answer the key sorts last in BOTH directions, and the unset group sorts last whatever the direction; an adapter declares no capability and groups under **its algorithm** (`LoRA`, `LoKr`, …) rather than under one "No feature recorded" bucket that held most of the shelf. One vocabulary spells it and one fold keys it, both in `utils/modelShelf.js`: `adapterKindKey` trims and lower-cases the free-text column, `adapterKindLabel` names the folded value, and the group key, the group header, the row's Kind cell, the nested `Show` checkboxes AND the `adapterKinds` filter behind them all read those two rather than `row.kind`. **The fold has to reach the filter, not just the label.** `LoRA` is reachable from the edit dialog, which trims but does not case-fold, so faceting on the raw column offered two checkboxes drawn with the same label that each ticked half the rows — while the axis folded them into one visible group. **And the fold has to reach the remembered selection too**, which `storedFilters` does on read: a shipped build persisted the raw column, so a blob holding `LoRA` would match nothing and appear in no checkbox — an empty shelf with the Adapters box reading fully on and nothing on screen naming the filter doing it. Folded rather than discarded by a `FILTERS_SCHEMA_VERSION` bump, which throws the whole blob away when the selection is still exactly what the user chose. The key is the folded value and never the label, because the key is what `modelShelfView.collapsed.feature` remembers a collapse by; it is prefixed `kind:` to keep an algorithm out of the capability keyspace. Group headers are uppercased by `.shelf-group-label` like every other header on the axis, so the header reads `LORA` where the cell reads `LoRA`: one vocabulary stops a *second spelling* existing, it does not exempt the axis from the shelf-wide case rule. Everything that is not an adapter with an algorithm still falls through to "No feature recorded", which is the whole of the rest: a checkpoint, an unclassified file, an engine declaring no capability and any `file_kind` this build does not know have no algorithm at all; an adapter whose `kind` folds to the empty string has none either (the hub CHECK makes it NOT NULL, not non-empty, so a whitespace-only one is reachable over the raw API); and an adapter whose `kind` is the literal `unknown` has the classifier's refusal rather than an algorithm (`KIND_UNKNOWN`, `utils/adapter_header.py`) — heading that `UNKNOWN` would stand a second shrug beside the real one and call it a feature. The `Show` facet still offers `Unknown` as a box, because "which of these could we not identify" is a real selection even where it is not a real feature. `view` (`groupBy`, `sortKey`, `sortDirection`) and the per-axis collapsed sets persist under `pixlstash:modelShelfView`, a SECOND key so `resetFilters` cannot take the sort order with it. `filters` (`adapters`, `adapterKinds`, `checkpoints`, `unclassified`, `engines`, `capabilities`, `baseModels`, `duplicatesOnly`) persists to `localStorage` under `pixlstash:modelShelfFilters` — not to `/users/me/config`, which is a fixed `User` model and would need a backend column. **`duplicatesOnly` is the one field `storedFilters` deliberately does not read back**: "only the files written twice" is a question somebody asks once while reclaiming disk, and remembered across a restart it is a shelf that opens showing four rows of an eighteen-hundred-row library with nothing on screen saying why. An empty `adapterKinds` / `capabilities` / `baseModels` array means **unconstrained**, the standard multi-select convention and the only reading under which a fresh install shows anything. `activeCount` counts filter SECTIONS that deviate from their default, not ticked boxes, or a mild narrowing would read as `9`. Only the four top-level type toggles refetch, and they narrow client-side too; the rest only narrow what is already loaded. Each fetch takes the next `epoch` and only the newest may write `rows` or clear `loading`, so a slower earlier flight cannot land last and show adapters only while Checkpoints is ticked; `resetForSession` bumps the same counter, so a read on the wire when the credential changed is discarded. `ModelShelf.vue` watches `loaded` and refetches when a session reset clears it, which the store cannot do itself because session-reset handlers run *before* the new credential is installed. **Session reset drops `rows` but keeps `filters`:** the models are hub-side facts about this machine, but every row carries the characters and sets in the ACTIVE LIBRARY that use it, while the selection and the view axes are the user's own preferences and hold no ids. `offlineMounts` and the `New` badge's `newIds` are both derived here and both documented under §13.1, "The three kinds of absence": `offlineMounts` reads `rows` rather than `visibleRows` on purpose, and `newIds` is a per-fetch id diff that only `fetchRows({ markNew: true })` fills and every other fetch clears. |
 | `useWorkflowsStore` | `useWorkflowsStore.js` | The Workflows grid's cards (v1.12 F1a) — `GET /workflows`, one card per stack; B9 (#1410) moved the grid onto that route when it deleted the shelf's topology list. `sortKey` is one of `rating` / `used` / `pictures` / `name` (the one ascending key, A to Z); *Your ratings* orders by **`rank`**, the Bayesian cover rank, not by the `rating` the card displays, or a 5.0 from one picture would lead a 4.8 from ninety. **`openStackKey` is a single key, so at most one stack is ever open** — deliberately unlike the picture grid, where any number expand at once: a workflow panel is a full-width band that pushes every later row down, and a second one puts itself a screen and a half below the card that opened it. `members[coverKey]` is the stack's cards, cover first, fetched one detail request per member (the grid lists the cover alone) and then KEPT, so reopening after a resize re-requests nothing. `selectedKeys` mixes top-level cards and members freely. **Once the reader is browsing stacks, the panel follows the selection** (`browsingStacks` + `syncPanelToSelection`, called from `select` and `selectRange`). A click is never the way IN: until ▸, Enter or a double-click has opened one, `browsingStacks` is false and the rule returns at once. What it settles afterwards is the state a gesture-only panel used to contradict — a band standing open under one stack while the reader has gone and selected another, or several. **The mode outlives the band**: selecting a workflow with nothing under it takes the panel off the screen without ending it, so the next stack picked opens with no second double-click; only ▸, Escape, the panel's Close (`collapseStack()`, which clears it) or a session reset says done. That is what `collapseStack`'s `keepBrowsing` is for, and its one caller is this rule. A selection that is exactly one STACK, taken whole (what `whole` makes a click on a stack card mean), moves the band there; anything else reaching OUTSIDE the open stack closes it — a lone workflow with nothing under it as much as five cards, because the band belongs to a stack the reader has stopped looking at either way. **Outside, not "more than one"**: what is left alone is a selection that stays INSIDE the open stack — its member rows, its cover, any mix — because a count would make Ctrl-click and Shift-click inside an open panel impossible, the second pick destroying the rows being picked from, and the grid declares `aria-multiselectable`. That is also what keeps the `?topology=` deep link, which selects a cover key ALONE, from shutting the very panel it pointed somebody at. The `covered.length > 1` test in the move branch is what stops a lone card matching it and falling out of the close. It is a rule about the selection MOVING and not an invariant over `selectedKeys`, so ▸ may leave a stack selected with no panel and nothing re-opens it. **`closeStack` is immediate and `collapseStack` animates**: the immediate one is for wherever the panel's content has stopped being true (`forgetMembers`, a filter taking the cover off the grid), where there is nothing left worth watching shrink; a gesture takes the other, which holds `openStackKey` with `panelClosing` set until the panel reports `collapsed`, because the member rows the grid splices in are what the animation is drawn on. That report is the panel's own `animationend`; `PANEL_COLLAPSE_MS` is a backstop behind it and **must sit clear of `--dur-2`** — the class reaches the DOM a flush after the timer is armed and the animation starts a frame after that, so a backstop set to the duration itself wins every race and the event path only ever runs under `prefers-reduced-motion`. It is three times the duration, and `useWorkflowsStore.test.js` reads `--dur-2` out of the sheet and fails if the two meet. The event is what matters because reduced motion zeroes the duration rather than switching the animation off, so it fires at once and Escape and the caret come straight back rather than being gated for a fifth of a second. `openStack` cancels a collapse to switch stacks but deliberately does NOT cancel one of the SAME stack: ▸ does not stop its click, so closing from the caret also selects that card and the rule then asks for the same stack. `invalidate()` is the one door in from outside the view — a ghost purge in Settings › Privacy — and forgets the members, then re-reads the grid **only if it had been read**, so a purge made by somebody who never opened Workflows fires no request. The file verbs `duplicateCard` and `cloneCardWithModels` (Clone with new models) both re-read the grid after writing rather than patching it, and return the server's answer or `null` with the reason in `error`. Session reset drops all of it: every count on a card is read across the active library's pictures. **`filters` (F7) is split across the wire on purpose**: the One-offs and Hidden flags are sent as `include_one_offs` / `include_hidden` and re-read the grid, because widening the set re-runs the stacking server-side, and a card let back in by the browser would sit beside a cover still claiming a `stack_size` of one; Ghosts, Type, Checkpoint, Source and Rating only ever remove a card, so `filteredCards` applies them here. `filterChips` is the one answer to "which filters are on" — the panel's *Clear all*, the strip and the toolbar badge all count it — and its WORDS come from `workflowFilterChips` in `utils/filterChips.js`, the module that exists so one filter cannot be spelled two ways; the store owns the state and the refetch decision and nothing else. A filter that removes a card also **prunes `selectedKeys`** and closes the open stack if it was that stack's cover, because the selection bar and the rail's bulk verbs act on the selection and would otherwise offer Hide or Stack together on cards nobody can see. and `filterOptions` counts each pick-one option over `cards` rather than `filteredCards`, so a count cannot go to zero on the row being read. **Those lists describe COVERS**, because `cards` is one card per stack: a checkpoint only a stacked member carries is not offered, and a stack of six on one checkpoint counts 1. Building them from opened stacks would grow the lists as the reader browsed; making them library-wide needs the members in the payload or a facet count beside it, neither of which F7 adds. The same seam is why `filteredCards` filters top-level cards only — filtering inside an open panel would have the stack card say "6 workflows" over a panel drawing two. |
 | `useWorkflowPullStore` | `useWorkflowPullStore.js` | A pull of ComfyUI's saved workflows (#1440): `phase` (`idle` / `pulling` / `done` / `failed`), `summary`, `comfyuiUrl`, `error`. `start()` posts `POST /comfyui/workflows/pull` and polls `GET /comfyui/workflows/pull` every `PULL_POLL_MS` until the task ends, then calls `useWorkflowsStore().fetchCards()` once; it gives up with a reason after `PULL_POLL_MAX_MISSES` unanswered asks, and reports only the task it started (another tab's, or one a restart forgot, is a stated failure, never somebody else's summary). A store rather than view state because the pull outlives the screen. Reset on session change (`sessionReset.test.js`) |
 | `useModelFoldersStore` | `useModelFoldersStore.js` | The registered model folders and the scans running against them. Fetched by the shelf (folder headers, drive bands) and re-read when `ModelFoldersDialog` opens. It is a **store rather than dialog state** because a scan outlives the panel that started it, and because `POST .../rescan` answers 202 as soon as the thread starts, so completion has to be waited for: the store polls `GET /model-folders` every 3s and treats `last_checked` advancing as done, then refreshes `useModelShelfStore` and says what landed. It **gives up after 10 minutes**, because the scanner logs an exception without stamping `last_checked` and a crashed scan is otherwise indistinguishable from a slow one. `forget` captures the row's fields BEFORE the request, which is what makes the notice's `Add it back` possible and therefore what lets removal skip a confirmation prompt. **Session reset drops it whole:** absolute host paths are owner-only, and a session that lost its credential has no standing to keep polling. |
@@ -240,7 +241,7 @@ All state consumed by more than one component lives in a Pinia store. The stores
 | `useEntityNamesStore` | `useEntityNamesStore.js` | `characterNames`, `setNames`, `projectNames`, `refFolderLabels`, `importFolderLabels` (id→name maps). One-directional id→name only (names aren't unique). `SideBar` publishes via `merge*` setters after each fetch; `ImageGrid`'s breadcrumb consumes them to label the route's IDs. |
 | `useOperationStore` | `useOperationStore.js` | The undo/redo stack, mirrored from the backend's append-only operation log (`backend_architecture.md` §21): `operations` (newest 50, newest first), `canUndo`/`canRedo`/`nextUndo`/`nextRedo` from `GET /operations/undo-state`, and the single live `receipt` that narrates what just happened. Computeds `past` (applied steps), `future` (undone, redoable), `historyCount`, `nextUndoIsExternal`. Owns the receipt's dwell timer (5s, 8s destructive, paused on hover/focus/hidden tab) and the multi-step `undoTo` walk. Refreshed on a debounced WS picture/tag/character/description event; the receipt narrates THIS client's operations only (origin read from the event `data`), so another tab's work updates the stack silently. |
 | `useLibrariesStore` / `useLibrarySwitchStore` | `useLibrariesStore.js` | Owner-only app-level library identity and the switch state machine. `App.vue` fetches the registry on owner startup; Settings refreshes the same store whenever its Libraries pane opens. `activeLibrary` therefore drives the Active row, the shared browser/Electron `TitleBar` entry point, and the document title from one response. Share/read-only sessions never make this request and receive no library name in chrome. A confirmed switch moves the second store to `switching`, lets Vue render the persistent alert dialog and apply `inert` to the entire `VApp`, then posts the UUID. Since Vuetify dialogs teleport beside the app root, `inertSiblingOverlays` also inerts every already-open overlay except the switch modal. Success reloads the document; failure keeps the old library, names both target and retained library, and the sole Stay action restores focus to the invoking row. |
-| `useDedupStore` | `useDedupStore.js` | The duplicate triage queue. `openCount` (the sidebar badge), `byTier` (the per-tier split, including tiers that are switched off), `scopeCounts` (the per-object counts the context menus read, cached and de-duplicated while in flight), `scan` (normalised from the server's picture and bucket counters; the percentage is derived here because the server publishes none), `groups` + `windowStart` + `total` + `hasMore` (a contiguous WINDOW of the confidence-descending queue, absolute indices, never loaded whole), `focusIndex` (+ `focusStart`/`focusEnd`/`loadPrevious`/`cancelEndChase`/`endChaseActive`, the one-press random-access End jump onto the tail page and its upward backfill — see §9.2), the per-group `coverChoices` / `exclusions` keyed on signature, and the tier gate (`nearEnabled`, `embeddingEnabled`, `threshold`) whose bounds all come from `GET /dedup/policy`. Owns the verdicts and the auto-advance: resolving a group removes its row and the focus lands on the next open group. Every verdict is recorded server-side (`dedup.stack`; `dedup.keep_separate` since the owner's 2026-07-30 override of #644), so receipts and `Ctrl+Z` come from `useOperationStore` — triggered from the verdict response, gated on its always-populated `batch_id` (see §9.2); against an older backend whose keep-separate returns no `batch_id`, the narration degrades to the transient notice pointing at the **Decided page** (owner call, 2026-07-29 — this replaced the sticky Reopen notice). `showingDecided` / `toggleDecided` flip the queue to `GET /dedup/groups?decided=true`: resolved groups with their live verdict, each row swapping its verdict buttons for a verdict label and a **Clear decision** action (`POST /dedup/verdicts/reopen` — never touches pictures; a reopened stacked group stays stacked until unstacked from the Stacks view). Verdicts and multi-select are inert on the decided page, and its empty state carries its own way back since the header toggle unmounts with the list. **Multi-select (owner request, 2026-07-29):** Ctrl/Cmd+click toggles a group in and out of a selection, Shift+click ranges from the anchor, plain click clears — the grid's own conventions. A verdict on any selected group applies to the whole selection (`verdictTargets`); a bulk stack shares ONE `cli-` batch id so a single Ctrl+Z reverses the gesture, and a bulk keep-separate narrates once for the whole gesture. The bulk scope is stated twice — a header chip ("N groups selected — Stack and Keep separate apply to all") and the verdict buttons themselves rename ("Stack N groups" / "Keep N separate") — because a bulk action must never look like a single one. Escape clears the selection without costing the focus; a reload (scope, tier, rescan) clears it too, since it would silently point at different rows. **`openQueue` is the scan trigger**: the group cache only fills when a scan runs, so opening the queue queues one (`POST /dedup/scan`) and the queue opens over whatever exists while the banner streams — without this the queue reads an empty cache forever, whatever the tier gate says. Loosening the policy (enabling a tier, lowering the threshold) rescans too; narrowing only re-queries. While a scan is `pending`/`running` the store polls counts every 2s and reloads the group list **only while it is empty**, so the first finds surface on their own and a triage in progress is never yanked to the top. |
+| `useDedupStore` | `useDedupStore.js` | The duplicate triage queue. `openCount` (the sidebar badge), `byTier` (the per-tier split, including tiers that are switched off), `scopeCounts` (the per-object counts the context menus read, cached and de-duplicated while in flight), `scan` (normalised from the server's picture and bucket counters; the percentage is derived here because the server publishes none), `groups` + `windowStart` + `total` + `hasMore` (a contiguous WINDOW of the confidence-descending queue, absolute indices, never loaded whole), `focusIndex` (+ `focusStart`/`focusEnd`/`loadPrevious`/`cancelEndChase`/`endChaseActive`, the one-press random-access End jump onto the tail page and its upward backfill — see §13.3), the per-group `coverChoices` / `exclusions` keyed on signature, and the tier gate (`nearEnabled`, `embeddingEnabled`, `threshold`) whose bounds all come from `GET /dedup/policy`. Owns the verdicts and the auto-advance: resolving a group removes its row and the focus lands on the next open group. Every verdict is recorded server-side (`dedup.stack`; `dedup.keep_separate` since the owner's 2026-07-30 override of #644), so receipts and `Ctrl+Z` come from `useOperationStore` — triggered from the verdict response, gated on its always-populated `batch_id` (see §13.3); against an older backend whose keep-separate returns no `batch_id`, the narration degrades to the transient notice pointing at the **Decided page** (owner call, 2026-07-29 — this replaced the sticky Reopen notice). `showingDecided` / `toggleDecided` flip the queue to `GET /dedup/groups?decided=true`: resolved groups with their live verdict, each row swapping its verdict buttons for a verdict label and a **Clear decision** action (`POST /dedup/verdicts/reopen` — never touches pictures; a reopened stacked group stays stacked until unstacked from the Stacks view). Verdicts and multi-select are inert on the decided page, and its empty state carries its own way back since the header toggle unmounts with the list. **Multi-select (owner request, 2026-07-29):** Ctrl/Cmd+click toggles a group in and out of a selection, Shift+click ranges from the anchor, plain click clears — the grid's own conventions. A verdict on any selected group applies to the whole selection (`verdictTargets`); a bulk stack shares ONE `cli-` batch id so a single Ctrl+Z reverses the gesture, and a bulk keep-separate narrates once for the whole gesture. The bulk scope is stated twice — a header chip ("N groups selected — Stack and Keep separate apply to all") and the verdict buttons themselves rename ("Stack N groups" / "Keep N separate") — because a bulk action must never look like a single one. Escape clears the selection without costing the focus; a reload (scope, tier, rescan) clears it too, since it would silently point at different rows. **`openQueue` is the scan trigger**: the group cache only fills when a scan runs, so opening the queue queues one (`POST /dedup/scan`) and the queue opens over whatever exists while the banner streams — without this the queue reads an empty cache forever, whatever the tier gate says. Loosening the policy (enabling a tier, lowering the threshold) rescans too; narrowing only re-queries. While a scan is `pending`/`running` the store polls counts every 2s and reloads the group list **only while it is empty**, so the first finds surface on their own and a triage in progress is never yanked to the top. |
 | `useTasksStore` | `useTasksStore.js` | `workerSnapshots`, `series` (per-worker throughput history), `systemUsage` (CPU/RAM/VRAM), `comfyuiRuns` (frontend-driven run progress keyed by run id); computeds `activeEntries` (backend workers + ComfyUI runs, merged), `hasActiveTasks`, `activeCount`. The **single poller** of `GET /workers/progress` (adaptive cadence — see §4.4) and the single source of truth for the app-wide "is the app working" indicators. |
 
 Components import stores directly (`import { useFilterStore } from '../../stores/useFilterStore'`) — no prop drilling required.
@@ -294,7 +295,7 @@ reference folder and an import folder each have a route (`/ref-folder/:id`,
 `/import-folder/:id`) and the sidebar owns their payload — which is why those
 two routes do not clear `selectedFolderFilter`, and why `applyView` refuses to
 apply `?path=` on them (it guards on `folderKey`). The folder an "About your
-library" finding points at (§9.3) has no id of any kind, which is what this
+library" finding points at (§13.4) has no id of any kind, which is what this
 param is for. **It also carries the sidebar's subfolder selection.**
 `FolderTreeNode.vue` requires `rfId`, so a subfolder click takes
 `pushRouteForCurrentSelection`'s ref-folder branch; the branch pushes `?path=`
@@ -1142,7 +1143,7 @@ Actual file upload engine. Props: `backendUrl`, `selectedCharacterId`, `allPictu
 ### Shared / Primitive Components
 
 #### `AdapterTray.vue` (421 lines, `widgets/`)
-The other end of the shelf's `Assigned to` marks (§9.1a): which adapters *this*
+The other end of the shelf's `Assigned to` marks (§13.1): which adapters *this*
 person or set uses, as a read-only grid of small cards inside `CharacterEditor`
 and `PictureSetEditor`. Props: `entityType` (`character` | `set`), `entityId`.
 **`api/modelShelf.test.js` asserts the query string, not the arguments**, and it
@@ -1331,7 +1332,7 @@ puts the footer verbs out of reach — and Enter on a tile accepts, since
 `AppDialog` exempts `<button>` from its Enter contract and the ↵ badge on
 `Use this picture` would otherwise promise what the keyboard cannot do.
 
-First caller: the model shelf's thumbnail verb (§9.1). The workflow Fixed and
+First caller: the model shelf's thumbnail verb (§13.1). The workflow Fixed and
 run-time Picker modes are its second and third.
 
 #### `ActionReceipt.vue` (465 lines, `widgets/`)
@@ -1378,7 +1379,7 @@ Both people modes take the opt-in `allowCreate` prop (default false; set by `Ima
 5-star score widget. Props: `score`, `readonly`. Emits: `set-score`. Used in `ImageOverlay` and `ImageGrid` cells.
 
 #### `ProgressOverlay.vue`
-Task progress overlay, shared by export, plugin runs and smart-score sorts (all three mounted in `ImageGrid`) and by the model shelf's move (§9.1a). Props: `visible`, `status`, `message`, `percent`, `count`, `total`, `abortLabel`, `anchor`, `indeterminate`. Emits: `abort`. Terminal statuses: `completed`, `failed`, `cancelled`.
+Task progress overlay, shared by export, plugin runs and smart-score sorts (all three mounted in `ImageGrid`) and by the model shelf's move (§13.1). Props: `visible`, `status`, `message`, `percent`, `count`, `total`, `abortLabel`, `anchor`, `indeterminate`. Emits: `abort`. Terminal statuses: `completed`, `failed`, `cancelled`.
 
 **The button is gated on the label alone**, terminal status included (#900), so a card *held up* to report a failure can carry its own dismissal rather than needing a second prop for a second word. A caller that wants no button at the end nulls the label, which is what the export already does; the plugin and smart-score callers pass none at all.
 
@@ -1816,7 +1817,7 @@ the shelf's workflow sets section) and served as `hand_made` on
 The Workflows grid, **on `/workflows`** (`WORKFLOW_ROUTES`,
 `router/routeNames.js`) since F1b (#1404) retired the shelf and its temporary
 `/workflows-next` route. Owner-only, and bounced for a READ session by the same
-watcher the model shelf uses. See §9.1b for the destination itself.
+watcher the model shelf uses. See §13.2 for the destination itself.
 
 - **Toolbar**: Sort (Your ratings / Recently used / Picture count / Name) in the
   shipped `.tbm` popover, *Add…*, which is today's workflow import
@@ -3309,9 +3310,331 @@ While the lightbox overlay is open, the user's own in-overlay edits (and any oth
 
 `grid.isOverlayOpen` / `grid.markOverlayDeferredRefresh` are exposed by `ImageGrid` (Tier-3 imperative API) and forwarded to `useGridRealtimeSync` through `App.vue`'s `gridApi`. Tested in `useGridRealtimeSync.test.js` (both directions: deferred while open, pill still raised when closed).
 
+## 10. Naming and Coding Conventions
+
+### Component naming
+- **PascalCase** filenames and registration: `ImageGrid.vue`, `UserSettingsDialog.vue`.
+- **Descriptive + domain-noun**: components are named after the UI element they represent, not a generic role (`FolderEditor`, not `Editor`).
+
+### Props
+- camelCase in `defineProps`, kebab-case in templates (Vue 3 convention).
+- Boolean props default to `false` unless stated otherwise.
+- Array/Object props always have default factories (`default: () => []`).
+- `open: Boolean` is the standard prop name for dialog/panel visibility.
+
+### Emits
+- kebab-case event names: `update:public-url`, `select-character`.
+- `update:*` pattern for v-model-compatible bindings.
+- Descriptive action names for commands: `added-to-set`, `comfyui-run`, `clear-selection`.
+
+### Utility functions
+- camelCase: `getTagLabel`, `formatUserDate`, `buildDockerVolumeFlag`.
+- Factory/constructor-style helpers capitalised: `TagItem(tag)`, `SelectionPayload(payload)`.
+
+### Reactive state
+- `ref()` for all scalar values, arrays, and nullables.
+- `reactive()` only for tightly coupled multi-property objects (`pan`, `config`).
+- `computed()` for derived values — never computed values that have side effects.
+
+### Data loading in sub-components
+- Sub-components that open as dialogs/panels use `watch(() => props.open, (isOpen) => { if (isOpen) fetchData() })`.
+- This is necessary because Vuetify `v-dialog` keeps content mounted after first open; `onMounted` only fires once.
+
+### localStorage / sessionStorage keys
+All persisted keys are prefixed `pixlstash:` to avoid collisions:
+- `pixlstash:statsSidebarOpen`, `pixlstash:sidebarDocked`
+- `pixlstash:characterMultiMode`, `pixlstash:setMultiMode`, `pixlstash:setDifferenceBaseId`
+- `pixlstash:sidebar:expansion` (one JSON blob — see §10.1)
+- `pixlstash:clientId` (per-tab, `sessionStorage` — the `X-Client-Id` / WS `origin_client_id` echo key; in-memory fallback if `sessionStorage` is unavailable)
+
+### 10.1 Sidebar expansion state (`composables/useSidebarExpansion.js`)
+
+Which sidebar sections are open is a per-browser view preference, so it stays on the client: one versioned JSON blob under `pixlstash:sidebar:expansion`, read once when `SideBar` sets up and rewritten by a single watcher on change. Nothing is sent to the server, and a blob whose `v` does not match the current schema is discarded rather than half-applied.
+
+Two rules keep the restored state honest:
+
+- **Store the non-default choice.** Sections and project nodes are expanded by default, so what is persisted is the *collapsed* set (`collapsedProjectIds`, `projectPeopleCollapsed`, `projectSetsCollapsed`). `expandedProjectIds` stays derived: `syncProjectExpansion(ids)` expands each project the first time it is seen *unless* it is in the persisted collapsed set, so a project created after the preference was written still opens by default and a remembered collapse is not undone on every fetch. Ids for projects that no longer exist are pruned — but never on an empty list, which on boot means "not fetched yet" as often as "none exist". The folder tree defaults to collapsed, so there the *expanded* keys are stored (mixed: reference-folder id numbers and subfolder path strings), capped at 200 entries.
+- **Re-browse what was restored.** `folderBrowseCache` is per-session, so a restored subfolder would render with no children. `fetchReferenceFolders()` calls `browseExpandedFolderPaths()` to fetch a listing for each persisted path, and `browseExpandedFolders()` does the same after the cache is dropped (folder relocate, drag-drop move).
+
+localStorage failures (private mode, disabled storage, quota) warn once per sidebar and fall back to defaults; the sections still toggle for the session.
+
+### 10.2 Submitting a form (`composables/useSubmitGuard.js`)
+
+**Any handler that creates something server-side goes through `useSubmitGuard`.** Issue #647: a create form's button stayed live while its POST was in flight, so a double-click — or an impatient second click while the server was busy captioning an import — sent the request twice and the library gained two identical people, sets, or folders. The window is invisible to the user and widest exactly when the server is slowest, which is when they are most likely to click again.
+
+```js
+const { pending: saving, run: save } = useSubmitGuard(submitCharacter);
+```
+
+Bind `pending` to the submit button (`AppButton :loading`, or `:disabled` on a hand-rolled one) and call `run` wherever the handler used to be called. Three rules:
+
+- **Guard the handler, not just the button.** The button is not the only door in: every one of these forms also submits on Enter (an `@enter` on the name field, a `@keydown.enter`, a Ctrl+Enter document listener), and key auto-repeat fires those faster than a `disabled` attribute can be painted. `run` refusing a re-entrant call is what covers the keyboard; `pending` on the button is what makes the state visible. A component that already had a `saveLoading` ref bound to `:loading` was **not** safe — `FolderEditor` had six Enter-bound fields behind one guarded button.
+- **The handler must await its own work.** `useSubmitGuard` clears `pending` when the handler settles, so a wrapper that fires an async call without awaiting it clears the flag immediately and guards nothing.
+- **Do not catch inside the guard.** It deliberately re-raises, so the form's existing `useNoticeStore` toast or inline error line still fires; `pending` clears in `finally`, which is what re-enables the button for a retry.
+
+Guarded today: `CharacterEditor`, `PictureSetEditor`, `FolderEditor`, `FolderBrowser`, `ProjectFiles` (add-URL), `LoginScreen`. `ProjectEditor` and `NewReviewDialog` predate the composable and hand-roll the same shape; converge them when next touched.
+
 ---
 
-### 9.1a The model shelf destination
+## 11. Build Configuration
+
+`frontend/vite.config.js`:
+
+| Setting | Value |
+|---------|-------|
+| Plugin | `@vitejs/plugin-vue` |
+| Output directory | `../pixlstash/frontend/dist` (served by FastAPI static mount) |
+| `__APP_VERSION__` | Read from root `pyproject.toml` at build time |
+| Chunk size warning | 1 024 KB |
+| Dev server port | 5173, `host: true` (all interfaces) |
+| HMR | WebSocket on `ws://localhost:5173` |
+| Test environment | Vitest + jsdom, globals enabled, `src/**/*.test.{js,ts}` |
+
+**Build command:** `npm run build` (in `frontend/`)
+**Dev command:** `npm run dev` (in `frontend/`)
+**Test command:** `npm test` (in `frontend/`)
+
+---
+
+## 12. Mermaid Diagrams
+
+### 12.1 Component Hierarchy
+
+```mermaid
+graph TD
+    Root["Root.vue<br/>(auth gate)"]
+    Login["LoginScreen.vue"]
+    App["App.vue<br/>(shell + global state)"]
+    SideBar["SideBar.vue"]
+    ImageGrid["ImageGrid.vue"]
+    StatsSidebar["StatsSidebar.vue"]
+    PhotosDialog["PhotosImportDialog.vue"]
+
+    Root --> Login
+    Root --> App
+    App --> SideBar
+    App --> ImageGrid
+    App --> StatsSidebar
+    App --> PhotosDialog
+
+    SideBar --> CharEd["CharacterEditor.vue"]
+    SideBar --> SetEd["PictureSetEditor.vue"]
+    SideBar --> ProjEd["ProjectEditor.vue"]
+    SideBar --> FolderEd["FolderEditor.vue"]
+    SideBar --> Importer["ImageImporter.vue"]
+    SideBar --> SettingsDlg["UserSettingsDialog.vue"]
+
+    SettingsDlg --> AppSec["AppearanceSection.vue"]
+    SettingsDlg --> BehSec["BehaviourSection.vue"]
+    SettingsDlg --> SmartSec["SmartScoreSection.vue"]
+    SettingsDlg --> SnapSec["SnapshotsSection.vue"]
+    SettingsDlg --> CompSec["ComputeSection.vue (desktop)"]
+    SettingsDlg --> ComfySec["ComfyuiHostSection.vue"]
+    SettingsDlg --> AccSec["AccountSection.vue"]
+
+    FolderEd --> FolderBrowser["FolderBrowser.vue"]
+
+    App --> TitleBar["TitleBar.vue (desktop)"]
+    TitleBar --> Wordmark["WordmarkLogo.vue"]
+
+    ImageGrid --> ImageOverlay["ImageOverlay.vue"]
+    ImageGrid --> Toolbar["Toolbar.vue"]
+    ImageGrid --> SelectionBar["SelectionBar.vue"]
+    ImageGrid --> CtxMenu["ImageGridContextMenu.vue"]
+    ImageGrid --> Importer
+    ImageGrid --> ComfyUI["ComfyUiRunner.vue"]
+    ImageGrid --> EmptyScrap["EmptyScrapHeap.vue"]
+
+    SelectionBar --> SelectionMenu["SelectionMenu.vue"]
+    SelectionBar --> AddToEnt["AddToEntityControl.vue"]
+    SelectionBar --> PluginUI["PluginParametersUI.vue"]
+    SelectionMenu --> AddToEnt
+
+    ImageOverlay --> AddToEnt
+    ImageOverlay --> StarRating["StarRatingOverlay.vue"]
+    ImageOverlay --> Progress["ProgressOverlay.vue"]
+    ImageOverlay --> ComfyUI
+
+    CtxMenu --> AddToEnt
+```
+
+---
+
+### 12.2 Data Flow
+
+```mermaid
+flowchart LR
+    User["User interaction"]
+    Comp["Child component<br/>(emits event)"]
+    App["App.vue<br/>(updates state ref)"]
+    Provide["provide()<br/>context objects"]
+    Props["Props passed<br/>to children"]
+    API["apiClient.js<br/>(Axios → /api/v1/*)"]
+    Backend["FastAPI Backend"]
+    WS["WebSocket<br/>/api/v1/ws/updates"]
+    Reactive["Vue reactivity<br/>triggers re-render"]
+
+    User --> Comp
+    Comp -- "emit(event, value)" --> App
+    App -- "state.value = value" --> Reactive
+    Reactive --> Props
+    Props --> Comp
+    App --> Provide
+    Provide -- "inject(key)" --> Toolbar["Toolbar.vue"]
+    App --> API
+    API --> Backend
+    Backend -- "HTTP response" --> API
+    API -- "response.data" --> App
+    Backend -- "WS push message" --> WS
+    WS -- "onmessage" --> App
+```
+
+---
+
+### 12.3 Authentication and Session Flow
+
+```mermaid
+sequenceDiagram
+    participant Browser
+    participant Root.vue
+    participant apiClient.js
+    participant Backend
+
+    Browser->>Root.vue: mount()
+    Root.vue->>Root.vue: read ?token= param
+    alt Share token present
+        Root.vue->>apiClient.js: activateShareToken(token)
+        Root.vue->>apiClient.js: GET /session/context
+        apiClient.js->>Backend: GET /api/v1/session/context?token=xxx
+        Backend-->>apiClient.js: 200 {scope: "READ", ...}
+        apiClient.js-->>Root.vue: sessionContext set, isReadOnly = true
+        Root.vue->>Root.vue: isAuthenticated = true → render App
+    else No token
+        Root.vue->>apiClient.js: checkSession()
+        apiClient.js->>Backend: GET /api/v1/check-session
+        Backend-->>apiClient.js: 200 ok / 401 invalid
+        alt Session valid
+            Root.vue->>Root.vue: isAuthenticated = true → render App
+        else No session
+            Root.vue->>Root.vue: isAuthenticated = false → render LoginScreen
+            Browser->>LoginScreen.vue: submit credentials
+            LoginScreen.vue->>apiClient.js: login(username, password)
+            apiClient.js->>Backend: POST /api/v1/login
+            Backend-->>apiClient.js: 200 + Set-Cookie session
+            apiClient.js-->>LoginScreen.vue: isAuthenticated = true
+            LoginScreen.vue->>Root.vue: re-render → App
+        end
+    end
+```
+
+---
+
+### 12.4 Module Relationships
+
+```mermaid
+graph LR
+    subgraph Entry
+        main["main.js"]
+        Root["Root.vue"]
+        App["App.vue"]
+    end
+
+    subgraph Utils
+        apiClient["apiClient.js<br/>(auth, HTTP)"]
+        tags["tags.js"]
+        utils["utils.js"]
+        stack["stack.js"]
+        media["media.js"]
+        clipboard["clipboard.js"]
+        setApp["setAppearance.js"]
+        docker["dockerHelpers.js"]
+    end
+
+    subgraph Components
+        SideBar
+        ImageGrid
+        Toolbar
+        ImageOverlay
+        StatsSidebar
+        Settings["UserSettingsDialog + sections"]
+        Editors["CharacterEditor / PictureSetEditor<br/>/ ProjectEditor / FolderEditor"]
+        Import["PhotosImportDialog / ImageImporter"]
+        Shared["StarRatingOverlay / ProgressOverlay<br/>/ AddToEntityControl / PluginParametersUI<br/>/ ShareDialog / etc."]
+    end
+
+    main --> Root
+    Root --> App
+    App --> SideBar
+    App --> ImageGrid
+    App --> StatsSidebar
+
+    SideBar --> apiClient
+    SideBar --> Settings
+    SideBar --> Editors
+    SideBar --> Import
+
+    ImageGrid --> apiClient
+    ImageGrid --> tags
+    ImageGrid --> stack
+    ImageGrid --> utils
+    ImageGrid --> Toolbar
+    ImageGrid --> ImageOverlay
+
+    ImageOverlay --> apiClient
+    ImageOverlay --> tags
+    ImageOverlay --> clipboard
+    ImageOverlay --> Shared
+
+    Toolbar --> apiClient
+    Toolbar --> Shared
+
+    Settings --> apiClient
+    Settings --> clipboard
+
+    Editors --> apiClient
+    Editors --> setApp
+    Editors --> docker
+
+    StatsSidebar --> apiClient
+
+    Import --> apiClient
+    Import --> media
+```
+
+---
+
+### 12.5 Toolbar / SelectionBar store-direct state
+
+`Toolbar`, `SelectionBar` and `SelectionMenu` import the Pinia stores directly
+(`useGridStore`, `useSortStore`, `useFilterStore`, `useSearchStore`,
+`useExportStore`, `useSidebarStore`); the older `provide('gridBarState')` /
+`provide('toolbarState')` / `inject` wiring has been removed. `App.vue` no longer
+calls `provide()` for the toolbar.
+
+```mermaid
+flowchart TD
+    Stores["Pinia stores<br/>useGridStore / useSortStore / useFilterStore<br/>useSearchStore / useExportStore / useSidebarStore"]
+    ImageGrid["ImageGrid.vue<br/>(renders Toolbar + SelectionBar)"]
+    Toolbar["Toolbar.vue<br/>imports stores directly"]
+    SelectionBar["SelectionBar.vue<br/>imports stores directly"]
+    SelectionMenu["SelectionMenu.vue"]
+
+    Stores -- "import { useXStore }" --> Toolbar
+    Stores -- "import { useXStore }" --> SelectionBar
+    ImageGrid -- "renders + props" --> Toolbar
+    ImageGrid -- "renders + props (selectionBarRef)" --> SelectionBar
+    SelectionBar -- "renders" --> SelectionMenu
+    Toolbar -- "emits: open-import, open-settings,<br/>confirm-export-zip, …" --> ImageGrid
+    SelectionBar -- "emits: delete-selected, added-to-set,<br/>add-to-character, comfyui-run, …" --> ImageGrid
+```
+
+---
+
+## 13. Destinations (whole screens)
+
+A destination is a route that replaces `ImageGrid` with a screen of its own. Each subsection below is one screen; how the grid follows live events is §9.
+
+### 13.1 The model shelf
 
 `/models` mounts `ModelShelf.vue` in place of `ImageGrid` (`App.vue`,
 `isModelsView`), on exactly the `/duplicates` pattern: a route rather than a
@@ -4890,7 +5213,7 @@ before anything starts. There is no undo behind a move, so a 438 GB copy across
 a USB drive must never be one slip of the pointer away. A drop seeds the
 destination it was aimed at; the select still lets it be corrected — which is
 also what makes a band drop safe, since a band is a disk and the folder on it
-has to be picked for the user (§9.1a, the meter as drop target).
+has to be picked for the user (§13.1, the meter as drop target).
 
 **`movableCopies` is the single gate**, per COPY rather than per model, because
 `model_file`'s key is `(folder_id, relpath)` and a model catalogued in three
@@ -5181,7 +5504,7 @@ a single root — so it is registered from the model-folders dialog (its
 `Set ai-toolkit folder` button) or from the shelf's `Add` menu, and both offers
 disappear once `useModelFoldersStore.sourceFolder` exists. The runs *inside* it
 are not a setting and change without PixlStash doing anything, so they are the
-shelf's second view (§9.1a). This split is the reason the list can stay current
+shelf's second view (§13.1). This split is the reason the list can stay current
 at all — a dialog is opened, read once and dismissed, so a run that finished
 while it was open used to be invisible until it was closed and reopened. Do not
 move the run grid back behind a dialog.
@@ -5493,7 +5816,7 @@ underneath its own dialog) that the fallback exists to catch.
 
 ---
 
-### 9.1b The workflow library destination
+### 13.2 The workflow library
 
 `/workflows` mounts `WorkflowsView.vue` in place of `ImageGrid` (`App.vue`,
 `isWorkflowsView`), on exactly the `/models` pattern above and for the same
@@ -5784,7 +6107,7 @@ answer the same question inside the surface that raised it.
 
 ---
 
-### 9.2 The Duplicates destination
+### 13.3 Duplicates
 
 Duplicate detection is a **destination with a to-do count**, not a sort order or
 a filter. `/duplicates` mounts `DuplicateQueue.vue` in place of `ImageGrid`
@@ -6325,7 +6648,7 @@ Back returns to the queue. Covered in `DuplicateQueue.test.js`.
 preference naming it keeps working; the menu simply shows a one-time migration
 notice in its place, persisted through `useOneTimeNotice`.
 
-### 9.3 The "About your library" destination
+### 13.4 About your library
 
 `/insights` mounts `LibraryInsights.vue` in place of `ImageGrid` (`App.vue`,
 `isInsightsView`), for the same reason `/duplicates` and `/models` do: it reads
@@ -6368,7 +6691,7 @@ whose entire body is headed sections needs an outline to move through. The
 contract is in `docs/integration_architecture.md` §21, including why the
 counts are in grid ROWS rather than pictures.
 
-### 9.4 The "Moves" destination
+### 13.5 Moves
 
 `/moves` mounts `MovesReview.vue` in place of `ImageGrid`, the same
 replaces-the-grid shape as Insights/Duplicates/the shelf (`App.vue`,
@@ -6437,321 +6760,3 @@ view renders one row per picture. Every fact the grouped view would show
 simplification, not a data gap — and it keeps the backend contract simple: no
 second, pattern-keyed shape to keep in sync with the per-picture one apply
 and dismiss actually operate on.
-
-## 10. Naming and Coding Conventions
-
-### Component naming
-- **PascalCase** filenames and registration: `ImageGrid.vue`, `UserSettingsDialog.vue`.
-- **Descriptive + domain-noun**: components are named after the UI element they represent, not a generic role (`FolderEditor`, not `Editor`).
-
-### Props
-- camelCase in `defineProps`, kebab-case in templates (Vue 3 convention).
-- Boolean props default to `false` unless stated otherwise.
-- Array/Object props always have default factories (`default: () => []`).
-- `open: Boolean` is the standard prop name for dialog/panel visibility.
-
-### Emits
-- kebab-case event names: `update:public-url`, `select-character`.
-- `update:*` pattern for v-model-compatible bindings.
-- Descriptive action names for commands: `added-to-set`, `comfyui-run`, `clear-selection`.
-
-### Utility functions
-- camelCase: `getTagLabel`, `formatUserDate`, `buildDockerVolumeFlag`.
-- Factory/constructor-style helpers capitalised: `TagItem(tag)`, `SelectionPayload(payload)`.
-
-### Reactive state
-- `ref()` for all scalar values, arrays, and nullables.
-- `reactive()` only for tightly coupled multi-property objects (`pan`, `config`).
-- `computed()` for derived values — never computed values that have side effects.
-
-### Data loading in sub-components
-- Sub-components that open as dialogs/panels use `watch(() => props.open, (isOpen) => { if (isOpen) fetchData() })`.
-- This is necessary because Vuetify `v-dialog` keeps content mounted after first open; `onMounted` only fires once.
-
-### localStorage / sessionStorage keys
-All persisted keys are prefixed `pixlstash:` to avoid collisions:
-- `pixlstash:statsSidebarOpen`, `pixlstash:sidebarDocked`
-- `pixlstash:characterMultiMode`, `pixlstash:setMultiMode`, `pixlstash:setDifferenceBaseId`
-- `pixlstash:sidebar:expansion` (one JSON blob — see §10.1)
-- `pixlstash:clientId` (per-tab, `sessionStorage` — the `X-Client-Id` / WS `origin_client_id` echo key; in-memory fallback if `sessionStorage` is unavailable)
-
-### 10.1 Sidebar expansion state (`composables/useSidebarExpansion.js`)
-
-Which sidebar sections are open is a per-browser view preference, so it stays on the client: one versioned JSON blob under `pixlstash:sidebar:expansion`, read once when `SideBar` sets up and rewritten by a single watcher on change. Nothing is sent to the server, and a blob whose `v` does not match the current schema is discarded rather than half-applied.
-
-Two rules keep the restored state honest:
-
-- **Store the non-default choice.** Sections and project nodes are expanded by default, so what is persisted is the *collapsed* set (`collapsedProjectIds`, `projectPeopleCollapsed`, `projectSetsCollapsed`). `expandedProjectIds` stays derived: `syncProjectExpansion(ids)` expands each project the first time it is seen *unless* it is in the persisted collapsed set, so a project created after the preference was written still opens by default and a remembered collapse is not undone on every fetch. Ids for projects that no longer exist are pruned — but never on an empty list, which on boot means "not fetched yet" as often as "none exist". The folder tree defaults to collapsed, so there the *expanded* keys are stored (mixed: reference-folder id numbers and subfolder path strings), capped at 200 entries.
-- **Re-browse what was restored.** `folderBrowseCache` is per-session, so a restored subfolder would render with no children. `fetchReferenceFolders()` calls `browseExpandedFolderPaths()` to fetch a listing for each persisted path, and `browseExpandedFolders()` does the same after the cache is dropped (folder relocate, drag-drop move).
-
-localStorage failures (private mode, disabled storage, quota) warn once per sidebar and fall back to defaults; the sections still toggle for the session.
-
-### 10.2 Submitting a form (`composables/useSubmitGuard.js`)
-
-**Any handler that creates something server-side goes through `useSubmitGuard`.** Issue #647: a create form's button stayed live while its POST was in flight, so a double-click — or an impatient second click while the server was busy captioning an import — sent the request twice and the library gained two identical people, sets, or folders. The window is invisible to the user and widest exactly when the server is slowest, which is when they are most likely to click again.
-
-```js
-const { pending: saving, run: save } = useSubmitGuard(submitCharacter);
-```
-
-Bind `pending` to the submit button (`AppButton :loading`, or `:disabled` on a hand-rolled one) and call `run` wherever the handler used to be called. Three rules:
-
-- **Guard the handler, not just the button.** The button is not the only door in: every one of these forms also submits on Enter (an `@enter` on the name field, a `@keydown.enter`, a Ctrl+Enter document listener), and key auto-repeat fires those faster than a `disabled` attribute can be painted. `run` refusing a re-entrant call is what covers the keyboard; `pending` on the button is what makes the state visible. A component that already had a `saveLoading` ref bound to `:loading` was **not** safe — `FolderEditor` had six Enter-bound fields behind one guarded button.
-- **The handler must await its own work.** `useSubmitGuard` clears `pending` when the handler settles, so a wrapper that fires an async call without awaiting it clears the flag immediately and guards nothing.
-- **Do not catch inside the guard.** It deliberately re-raises, so the form's existing `useNoticeStore` toast or inline error line still fires; `pending` clears in `finally`, which is what re-enables the button for a retry.
-
-Guarded today: `CharacterEditor`, `PictureSetEditor`, `FolderEditor`, `FolderBrowser`, `ProjectFiles` (add-URL), `LoginScreen`. `ProjectEditor` and `NewReviewDialog` predate the composable and hand-roll the same shape; converge them when next touched.
-
----
-
-## 11. Build Configuration
-
-`frontend/vite.config.js`:
-
-| Setting | Value |
-|---------|-------|
-| Plugin | `@vitejs/plugin-vue` |
-| Output directory | `../pixlstash/frontend/dist` (served by FastAPI static mount) |
-| `__APP_VERSION__` | Read from root `pyproject.toml` at build time |
-| Chunk size warning | 1 024 KB |
-| Dev server port | 5173, `host: true` (all interfaces) |
-| HMR | WebSocket on `ws://localhost:5173` |
-| Test environment | Vitest + jsdom, globals enabled, `src/**/*.test.{js,ts}` |
-
-**Build command:** `npm run build` (in `frontend/`)
-**Dev command:** `npm run dev` (in `frontend/`)
-**Test command:** `npm test` (in `frontend/`)
-
----
-
-## 12. Mermaid Diagrams
-
-### 12.1 Component Hierarchy
-
-```mermaid
-graph TD
-    Root["Root.vue<br/>(auth gate)"]
-    Login["LoginScreen.vue"]
-    App["App.vue<br/>(shell + global state)"]
-    SideBar["SideBar.vue"]
-    ImageGrid["ImageGrid.vue"]
-    StatsSidebar["StatsSidebar.vue"]
-    PhotosDialog["PhotosImportDialog.vue"]
-
-    Root --> Login
-    Root --> App
-    App --> SideBar
-    App --> ImageGrid
-    App --> StatsSidebar
-    App --> PhotosDialog
-
-    SideBar --> CharEd["CharacterEditor.vue"]
-    SideBar --> SetEd["PictureSetEditor.vue"]
-    SideBar --> ProjEd["ProjectEditor.vue"]
-    SideBar --> FolderEd["FolderEditor.vue"]
-    SideBar --> Importer["ImageImporter.vue"]
-    SideBar --> SettingsDlg["UserSettingsDialog.vue"]
-
-    SettingsDlg --> AppSec["AppearanceSection.vue"]
-    SettingsDlg --> BehSec["BehaviourSection.vue"]
-    SettingsDlg --> SmartSec["SmartScoreSection.vue"]
-    SettingsDlg --> SnapSec["SnapshotsSection.vue"]
-    SettingsDlg --> CompSec["ComputeSection.vue (desktop)"]
-    SettingsDlg --> ComfySec["ComfyuiHostSection.vue"]
-    SettingsDlg --> AccSec["AccountSection.vue"]
-
-    FolderEd --> FolderBrowser["FolderBrowser.vue"]
-
-    App --> TitleBar["TitleBar.vue (desktop)"]
-    TitleBar --> Wordmark["WordmarkLogo.vue"]
-
-    ImageGrid --> ImageOverlay["ImageOverlay.vue"]
-    ImageGrid --> Toolbar["Toolbar.vue"]
-    ImageGrid --> SelectionBar["SelectionBar.vue"]
-    ImageGrid --> CtxMenu["ImageGridContextMenu.vue"]
-    ImageGrid --> Importer
-    ImageGrid --> ComfyUI["ComfyUiRunner.vue"]
-    ImageGrid --> EmptyScrap["EmptyScrapHeap.vue"]
-
-    SelectionBar --> SelectionMenu["SelectionMenu.vue"]
-    SelectionBar --> AddToEnt["AddToEntityControl.vue"]
-    SelectionBar --> PluginUI["PluginParametersUI.vue"]
-    SelectionMenu --> AddToEnt
-
-    ImageOverlay --> AddToEnt
-    ImageOverlay --> StarRating["StarRatingOverlay.vue"]
-    ImageOverlay --> Progress["ProgressOverlay.vue"]
-    ImageOverlay --> ComfyUI
-
-    CtxMenu --> AddToEnt
-```
-
----
-
-### 12.2 Data Flow
-
-```mermaid
-flowchart LR
-    User["User interaction"]
-    Comp["Child component<br/>(emits event)"]
-    App["App.vue<br/>(updates state ref)"]
-    Provide["provide()<br/>context objects"]
-    Props["Props passed<br/>to children"]
-    API["apiClient.js<br/>(Axios → /api/v1/*)"]
-    Backend["FastAPI Backend"]
-    WS["WebSocket<br/>/api/v1/ws/updates"]
-    Reactive["Vue reactivity<br/>triggers re-render"]
-
-    User --> Comp
-    Comp -- "emit(event, value)" --> App
-    App -- "state.value = value" --> Reactive
-    Reactive --> Props
-    Props --> Comp
-    App --> Provide
-    Provide -- "inject(key)" --> Toolbar["Toolbar.vue"]
-    App --> API
-    API --> Backend
-    Backend -- "HTTP response" --> API
-    API -- "response.data" --> App
-    Backend -- "WS push message" --> WS
-    WS -- "onmessage" --> App
-```
-
----
-
-### 12.3 Authentication and Session Flow
-
-```mermaid
-sequenceDiagram
-    participant Browser
-    participant Root.vue
-    participant apiClient.js
-    participant Backend
-
-    Browser->>Root.vue: mount()
-    Root.vue->>Root.vue: read ?token= param
-    alt Share token present
-        Root.vue->>apiClient.js: activateShareToken(token)
-        Root.vue->>apiClient.js: GET /session/context
-        apiClient.js->>Backend: GET /api/v1/session/context?token=xxx
-        Backend-->>apiClient.js: 200 {scope: "READ", ...}
-        apiClient.js-->>Root.vue: sessionContext set, isReadOnly = true
-        Root.vue->>Root.vue: isAuthenticated = true → render App
-    else No token
-        Root.vue->>apiClient.js: checkSession()
-        apiClient.js->>Backend: GET /api/v1/check-session
-        Backend-->>apiClient.js: 200 ok / 401 invalid
-        alt Session valid
-            Root.vue->>Root.vue: isAuthenticated = true → render App
-        else No session
-            Root.vue->>Root.vue: isAuthenticated = false → render LoginScreen
-            Browser->>LoginScreen.vue: submit credentials
-            LoginScreen.vue->>apiClient.js: login(username, password)
-            apiClient.js->>Backend: POST /api/v1/login
-            Backend-->>apiClient.js: 200 + Set-Cookie session
-            apiClient.js-->>LoginScreen.vue: isAuthenticated = true
-            LoginScreen.vue->>Root.vue: re-render → App
-        end
-    end
-```
-
----
-
-### 12.4 Module Relationships
-
-```mermaid
-graph LR
-    subgraph Entry
-        main["main.js"]
-        Root["Root.vue"]
-        App["App.vue"]
-    end
-
-    subgraph Utils
-        apiClient["apiClient.js<br/>(auth, HTTP)"]
-        tags["tags.js"]
-        utils["utils.js"]
-        stack["stack.js"]
-        media["media.js"]
-        clipboard["clipboard.js"]
-        setApp["setAppearance.js"]
-        docker["dockerHelpers.js"]
-    end
-
-    subgraph Components
-        SideBar
-        ImageGrid
-        Toolbar
-        ImageOverlay
-        StatsSidebar
-        Settings["UserSettingsDialog + sections"]
-        Editors["CharacterEditor / PictureSetEditor<br/>/ ProjectEditor / FolderEditor"]
-        Import["PhotosImportDialog / ImageImporter"]
-        Shared["StarRatingOverlay / ProgressOverlay<br/>/ AddToEntityControl / PluginParametersUI<br/>/ ShareDialog / etc."]
-    end
-
-    main --> Root
-    Root --> App
-    App --> SideBar
-    App --> ImageGrid
-    App --> StatsSidebar
-
-    SideBar --> apiClient
-    SideBar --> Settings
-    SideBar --> Editors
-    SideBar --> Import
-
-    ImageGrid --> apiClient
-    ImageGrid --> tags
-    ImageGrid --> stack
-    ImageGrid --> utils
-    ImageGrid --> Toolbar
-    ImageGrid --> ImageOverlay
-
-    ImageOverlay --> apiClient
-    ImageOverlay --> tags
-    ImageOverlay --> clipboard
-    ImageOverlay --> Shared
-
-    Toolbar --> apiClient
-    Toolbar --> Shared
-
-    Settings --> apiClient
-    Settings --> clipboard
-
-    Editors --> apiClient
-    Editors --> setApp
-    Editors --> docker
-
-    StatsSidebar --> apiClient
-
-    Import --> apiClient
-    Import --> media
-```
-
----
-
-### 12.5 Toolbar / SelectionBar store-direct state
-
-`Toolbar`, `SelectionBar` and `SelectionMenu` import the Pinia stores directly
-(`useGridStore`, `useSortStore`, `useFilterStore`, `useSearchStore`,
-`useExportStore`, `useSidebarStore`); the older `provide('gridBarState')` /
-`provide('toolbarState')` / `inject` wiring has been removed. `App.vue` no longer
-calls `provide()` for the toolbar.
-
-```mermaid
-flowchart TD
-    Stores["Pinia stores<br/>useGridStore / useSortStore / useFilterStore<br/>useSearchStore / useExportStore / useSidebarStore"]
-    ImageGrid["ImageGrid.vue<br/>(renders Toolbar + SelectionBar)"]
-    Toolbar["Toolbar.vue<br/>imports stores directly"]
-    SelectionBar["SelectionBar.vue<br/>imports stores directly"]
-    SelectionMenu["SelectionMenu.vue"]
-
-    Stores -- "import { useXStore }" --> Toolbar
-    Stores -- "import { useXStore }" --> SelectionBar
-    ImageGrid -- "renders + props" --> Toolbar
-    ImageGrid -- "renders + props (selectionBarRef)" --> SelectionBar
-    SelectionBar -- "renders" --> SelectionMenu
-    Toolbar -- "emits: open-import, open-settings,<br/>confirm-export-zip, …" --> ImageGrid
-    SelectionBar -- "emits: delete-selected, added-to-set,<br/>add-to-character, comfyui-run, …" --> ImageGrid
-```
