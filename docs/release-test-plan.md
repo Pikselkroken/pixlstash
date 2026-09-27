@@ -44,6 +44,9 @@ plan; legacy § numbers are still cited in spec titles):
 
 ## How to Use
 
+For v1.12.0, also run [the v1.12 feature plan](release-test-plan-v1.12.md)
+after this one: it covers what changed since v1.11.3.
+
 1. Work through each section below in order.
 2. Mark each item ✅ Pass / ❌ Fail / ⏭ Skip (with reason).
 3. A release is only signed off when all non-skipped items pass.
