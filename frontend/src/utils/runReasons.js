@@ -74,6 +74,20 @@ export const PICTURE_INPUT_UNFILLED = "picture_input_unfilled";
  */
 export const NODES_REPLACED = "nodes_replaced";
 
+/**
+ * Where the ComfyUI-PixlStash node pack lives, and how to get it.
+ *
+ * The backend says the same in `PIXLSTASH_PACK_INSTALL_HINT`
+ * (`comfyui_recipe_service.py`). Its classes all start with `PixlStash`, the
+ * same rule the server's `PIXLSTASH_NODE_PREFIX` follows.
+ */
+export const PIXLSTASH_PACK_URL =
+  "https://github.com/Pikselkroken/ComfyUI-PixlStash";
+export const PIXLSTASH_PACK_INSTALL =
+  'Install ComfyUI-PixlStash from ComfyUI Manager (search "PixlStash") or ' +
+  "from github.com/Pikselkroken/ComfyUI-PixlStash, then restart ComfyUI.";
+const PIXLSTASH_NODE_PREFIX = "PixlStash";
+
 /** One value per `fix`, so a caller switches on a constant and not on prose. */
 export const FIX_SETTINGS = "settings";
 export const FIX_RETRY = "retry";
@@ -233,9 +247,20 @@ export function readReason(reason) {
     }
     case "missing_nodes": {
       const nodes = names(reason.nodes, "name");
-      return read(
-        `This ComfyUI does not have ${nodes.length === 1 ? "the node" : "the nodes"} ${nodes.join(", ")}.`,
-      );
+      const ours = nodes.filter((n) => n.startsWith(PIXLSTASH_NODE_PREFIX));
+      const others = nodes.filter((n) => !ours.includes(n));
+      const sentences = [];
+      if (others.length) {
+        sentences.push(
+          `This ComfyUI does not have ${others.length === 1 ? "the node" : "the nodes"} ${others.join(", ")}.`,
+        );
+      }
+      if (ours.length) {
+        sentences.push(
+          `${ours.join(", ")} ${ours.length === 1 ? "comes" : "come"} from the ComfyUI-PixlStash node pack, which this ComfyUI does not have. ${PIXLSTASH_PACK_INSTALL}`,
+        );
+      }
+      return read(sentences.join(" "));
     }
     case "no_lora_loader":
       // The reason only ever fires because the run is PUTTING a LoRA in, so

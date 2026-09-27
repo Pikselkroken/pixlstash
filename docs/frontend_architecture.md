@@ -1069,6 +1069,8 @@ minimum is its min-content, so a long plugin name would otherwise widen its own
 #### `ComfyuiHostSection.vue`
 The ComfyUI host and port (`comfyui_url` in the user config), on the Compute tab. Props: `open`, `first`. Emits `update:comfyui-configured`. There is no workflow import or list in Settings: a workflow is added through *Add…* on the Workflows view or into the watched `workflows/` folder. Deleting an imported workflow file has no UI between F1b and F5 — the shelf's inspector was the only one and went with the shelf; `DELETE /comfyui/workflows/{name}` is still there.
 
+Under the readout, while a ComfyUI is configured, one line says whether it has the ComfyUI-PixlStash node pack, from `GET /comfyui/pixlstash-node` asked on open and after every save: "installed", or "not found, or too old" with the install sentence (`PIXLSTASH_PACK_INSTALL`) and `ComfyUI-PixlStash` linked to the pack's repo (`PIXLSTASH_PACK_URL`, both in `utils/runReasons.js`). "Too old" because the check looks for the pack's `open_workflow.js`, which older versions lack. `null` or a failed request shows nothing.
+
 #### `SnapshotsSection.vue`
 Snapshots tab content. Props: `open: Boolean`. Lists and manages snapshots (reuses `utils/snapshots.js` helpers).
 
@@ -2256,7 +2258,9 @@ can no longer see.
   opens on whatever it had last, so the tab asks `GET /comfyui/pixlstash-node`
   once per address (the server reads ComfyUI's `/extensions` for the node's
   `open_workflow.js`) and refuses the button with a reason on a definite no;
-  an unreachable ComfyUI leaves it to try. In a browser it is a synchronous `window.open`
+  an unreachable ComfyUI leaves it to try. The reason links `ComfyUI-PixlStash`
+  to the pack's repo (`PIXLSTASH_PACK_URL`), an `https:` `target="_blank"` link
+  the desktop shell hands to the OS browser. In a browser it is a synchronous `window.open`
   (one after an await is a blocked popup). **On the desktop it goes through
   `pixlstashDesktop.openComfyui`** (`desktop:openComfyui`), because the shell's
   `openExternalSafely` refuses `http:` and ComfyUI is plain `http:`: the channel

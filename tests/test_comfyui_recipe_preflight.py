@@ -12,6 +12,7 @@ import pytest
 from pixlstash.services.comfyui_recipe_service import (
     MAX_SEED_64,
     MODEL_FILENAME_FIELDS,
+    PIXLSTASH_PACK_INSTALL_HINT,
     advertised_model_names,
     apply_adapter,
     apply_filename_swap,
@@ -35,6 +36,7 @@ from pixlstash.services.comfyui_recipe_service import (
     sanitize_prompt_graph,
     unchecked_preflight,
 )
+from pixlstash.routes.comfyui import _describe_preflight_failure
 from pixlstash.services.workflow_identity import model_fix_kind
 from pixlstash.utils.adapter_header import FILE_CHECKPOINT, FILE_TEXT_ENCODER, FILE_VAE
 from pixlstash.utils.comfyui_utilities import extract_recipe_extras
@@ -1054,8 +1056,12 @@ class TestLoraInsertion:
 
         # Neither: refused, saying why the core loader could not.
         graph = self._checkpoint_graph()
-        with pytest.raises(LookupError, match="not on this ComfyUI.*ComfyUI-PixlStash"):
+        with pytest.raises(
+            LookupError, match="not on this ComfyUI.*ComfyUI-PixlStash"
+        ) as refused:
             insert_adapter(graph, plan, elsewhere, self.INFO)
+        assert str(refused.value).endswith(PIXLSTASH_PACK_INSTALL_HINT)
+        assert "github.com/Pikselkroken/ComfyUI-PixlStash" in str(refused.value)
         assert "9" not in graph
 
     def test_a_graph_that_no_longer_reads_the_plan_is_refused_whole(self):
@@ -2659,3 +2665,20 @@ class TestWrappedLoaders:
             "wan/wan_2.1_vae.safetensors",
             "wan_2.1_vae.safetensors",
         }
+
+
+def test_a_missing_pack_node_names_the_pack_and_how_to_install_it():
+    sentence = _describe_preflight_failure(
+        {"missing_node_classes": ["PixlStashAdapterLoader", "rgthreeSeed"]}
+    )
+    assert "missing ComfyUI-PixlStash nodes: PixlStashAdapterLoader" in sentence
+    assert "missing node types: rgthreeSeed" in sentence
+    assert sentence.endswith(PIXLSTASH_PACK_INSTALL_HINT)
+    assert "github.com/Pikselkroken/ComfyUI-PixlStash" in sentence
+
+
+def test_a_missing_third_party_node_does_not_mention_the_pack():
+    sentence = _describe_preflight_failure({"missing_node_classes": ["rgthreeSeed"]})
+    assert sentence == (
+        "Your ComfyUI cannot run this recipe - missing node types: rgthreeSeed."
+    )

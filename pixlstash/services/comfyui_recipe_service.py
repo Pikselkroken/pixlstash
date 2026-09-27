@@ -97,6 +97,14 @@ _LORA_STRENGTH_FIELDS = (("model", "strength_model"), ("clip", "strength_clip"))
 # digest, so it can go where ComfyUI does not have the file by name (#1376).
 PIXLSTASH_ADAPTER_LOADER = "PixlStashAdapterLoader"
 
+# How to get the ComfyUI-PixlStash node pack, ending every sentence that
+# refuses for want of it. The frontend's copy is PIXLSTASH_PACK_INSTALL in
+# frontend/src/utils/runReasons.js.
+PIXLSTASH_PACK_INSTALL_HINT = (
+    'Install ComfyUI-PixlStash from ComfyUI Manager (search "PixlStash") or '
+    "from github.com/Pikselkroken/ComfyUI-PixlStash, then restart ComfyUI."
+)
+
 # Loader input fields that hold a model FILE NAME, keyed by the node's own
 # `class_type`. Checks are filename-level only: we compare the graph's value
 # against the combo list ComfyUI advertises for that field. Anything not listed
@@ -1432,7 +1440,7 @@ def _inserted_loader(
         return PIXLSTASH_ADAPTER_LOADER, "adapter_sha256", adapter["sha256"]
     raise LookupError(
         f"{reason}, and ComfyUI-PixlStash, which could fetch it by its hash, is "
-        "not installed there."
+        f"not installed there. {PIXLSTASH_PACK_INSTALL_HINT}"
     )
 
 
