@@ -1096,6 +1096,15 @@ def test_a_swapped_in_pixlstash_loader_keeps_the_card(hub):
 
     assert card_of(hub, ran.structural_hash) == card
     assert card_of(hub, by_hand.structural_hash) != card
+    # Carded under the topology it was swapped from, which is what a re-key of
+    # that topology selects its variants by.
+    assert (
+        hub.fetchone(
+            "SELECT topology_hash FROM workflow_variant WHERE structural_hash = ?",
+            (ran.structural_hash,),
+        )["topology_hash"]
+        == old.topology_hash
+    )
 
     set_model_fix(
         hub,
