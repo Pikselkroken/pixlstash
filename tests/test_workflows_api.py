@@ -8990,6 +8990,15 @@ def test_an_untouched_run_keeps_the_prompt_builder_wired():
     }
     assert prompt_text_target(graph, "91", " You are a photographer.\n") is None
     assert prompt_text_target(graph, "91", "a red bicycle") == ("91", "text")
+    # Only the string the recipe read, not any other input of the builder.
+    graph["68"]["inputs"]["name"] = "clem"
+    assert prompt_text_target(graph, "91", "clem") == ("91", "text")
+    graph["68"]["inputs"]["value"] = "a builder prompt"
+    assert prompt_text_target(graph, "91", "a builder prompt") is None
+    assert prompt_text_target(graph, "91", "You are a photographer.") == (
+        "91",
+        "text",
+    )
 
 
 def test_a_primitive_string_multiline_is_replaced_from_its_value():

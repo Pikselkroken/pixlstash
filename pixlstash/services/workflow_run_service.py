@@ -153,7 +153,7 @@ def prompt_text_target(
 
     Any other wired ``text`` (a prompt builder, a shared or overridden text
     node) is the encoder's own field, and the literal replaces the link.
-    Except when *prompt* is one of the wired node's own strings: that is the
+    Except when *prompt* is the string a recipe reads from the wired node: the
     picture's recipe echoed back by an untouched Run popup (a builder's recipe
     prompt is read from its widgets), and cutting the wire would generate from
     the builder's template instead of what it builds. ``None`` also when the
@@ -187,9 +187,16 @@ def prompt_text_target(
         return None
     source = graph.get(str(text[0]))
     source_inputs = (source or {}).get("inputs") or {}
-    if prompt and prompt.strip() in {
-        value.strip() for value in source_inputs.values() if isinstance(value, str)
-    }:
+    # The string a recipe reads from this node (comfyui_utilities: a named
+    # text/value/string field, else its longest string), and no other input.
+    strings = [v.strip() for v in source_inputs.values() if isinstance(v, str)]
+    named = [
+        source_inputs[key].strip()
+        for key in ("text", "value", "string")
+        if isinstance(source_inputs.get(key), str) and source_inputs[key].strip()
+    ]
+    recipe_text = named[0] if named else max(strings, key=len, default="")
+    if prompt and prompt.strip() == recipe_text:
         logger.info(
             "Encoder %s keeps its wire from node %s: the run prompt is that "
             "node's own text, so the node builds the prompt as it did.",
