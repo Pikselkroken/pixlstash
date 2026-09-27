@@ -1576,14 +1576,17 @@ def test_a_saved_recipe_with_malformed_models_inherits_the_default():
         seed=None,
         keep_seed=False,
     )
+    valid = [{"address": "core:a/ckpt_name", "filename": "x.safetensors"}]
     for stored, expected in (
-        ('[{"address": "core:a/ckpt_name", "filename": "x.safetensors"}]', None),
+        (json.dumps(valid), valid),
         ("[1, 2]", None),
         ('["x"]', None),
+        ('[{"address": "core:a/ckpt_name"}]', None),
+        (
+            '[{"address": "core:a/ckpt_name", "filename": "x", "sha256": "y"}]',
+            None,
+        ),
         (None, None),
     ):
         body = saved_recipe_body(SimpleNamespace(**vars(recipe), models=stored))
-        if stored and stored.startswith('[{"'):
-            assert body["models"] == json.loads(stored)
-        else:
-            assert body["models"] is expected
+        assert body["models"] == expected, stored

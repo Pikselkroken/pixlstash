@@ -9573,6 +9573,42 @@ def test_a_saved_recipes_own_loras_are_placed_in_the_graphs_slots(runnable):
     assert inputs["strength_model"] == 0.6, inputs
 
 
+def test_a_saved_recipes_pinned_model_is_loaded(runnable):
+    """``saved_recipe.models`` reaches the run as typed models (#1622)."""
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].append(
+        _OTHER_FAMILY_CHECKPOINT
+    )
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    r = runnable.owner.post(
+        f"{API}/recipes",
+        json={"name": "pinned model", "workflow_key": RUN_CARD, "prompt": "a cat"},
+    )
+    assert r.status_code in {200, 201}, r.text
+    recipe_id = r.json()["id"]
+    models = [
+        {
+            "address": _core_address("1", "ckpt_name"),
+            "filename": _OTHER_FAMILY_CHECKPOINT,
+        }
+    ]
+
+    def pin(session):
+        recipe = session.get(SavedRecipe, recipe_id)
+        recipe.models = json.dumps(models)
+        session.commit()
+
+    runnable.server.vault.db.run_task(pin, priority=DBPriority.IMMEDIATE)
+    run = runnable.owner.post(
+        f"{API}/workflows/run", json={"saved_recipe_id": recipe_id}
+    )
+    assert run.status_code == 200, run.text
+    loaded = runnable.submitted[0]["graph"]["1"]["inputs"]["ckpt_name"]
+    assert loaded == _OTHER_FAMILY_CHECKPOINT
+
+
 def test_a_saved_seed_never_overrides_a_seed_mode_the_caller_sent(runnable):
     """The request wins over the row, which is what the merge promises."""
     r = runnable.owner.post(

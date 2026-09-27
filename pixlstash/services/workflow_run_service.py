@@ -1316,7 +1316,13 @@ def saved_recipe_body(recipe) -> dict:
             )
         if models is not None and not (
             isinstance(models, list)
-            and all(isinstance(m, dict) and m.get("address") for m in models)
+            and all(
+                isinstance(m, dict)
+                and m.get("address")
+                # Exactly one way to name the model, as `RunModel` requires.
+                and bool(m.get("filename")) != bool(m.get("sha256"))
+                for m in models
+            )
         ):
             logger.error(
                 "Saved recipe %s has malformed models %r, so the run loads the "
