@@ -1678,7 +1678,7 @@ proves ran together, with a model free to appear in more than one.
   The approved design draws *Works with* inside a model inspector with `Model`
   and `Copies` tabs, and this shelf has no inspector: it is a row list with a
   floating selection bar. The content is the design's — the sets above, the
-  companions ranked by recipe count with a bar and a number, the closing notice
+  companions ranked by recipes plus ComfyUI runs with a bar and a number, the closing notice
   that a missing companion is untested rather than incompatible — in the
   container the screen actually has. It is reached from the context menu on
   either screen (*Works with…*, single selection only) and from a tray row's own

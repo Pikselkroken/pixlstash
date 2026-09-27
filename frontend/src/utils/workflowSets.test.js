@@ -234,6 +234,31 @@ describe("setCard from ComfyUI runs (#1565)", () => {
     expect(card.facts).toEqual(["3 models", "1 ComfyUI run"]);
   });
 
+  it("marks a card with recipes elsewhere but no picture here (open question a)", () => {
+    const elsewhere = combination("1,2,4", [CKPT, VAE, CLIP], {
+      recipes: 2,
+      pictures: 0,
+      runs: 3,
+    });
+    const card = setCard(setGroups([elsewhere])[0]);
+    expect(card.fromComfyUI).toBe(true);
+    expect(card.facts).toEqual(["3 models", "2 recipes", "3 ComfyUI runs"]);
+  });
+
+  it("orders run-only groups by their runs", () => {
+    // The key would put model:1 first; the runs must win.
+    const once = combination("1", [CKPT], { recipes: 0, pictures: 0, runs: 1 });
+    const often = combination("6", [OTHER_CKPT], {
+      recipes: 0,
+      pictures: 0,
+      runs: 5,
+    });
+    expect(setGroups([once, often]).map((g) => g.key)).toEqual([
+      "model:6",
+      "model:1",
+    ]);
+  });
+
   it("does not mark a card any picture backs", () => {
     const pictured = combination("1,2", [CKPT, VAE], { pictures: 1 });
     const card = setCard(setGroups([ran, pictured])[0]);
@@ -539,6 +564,24 @@ describe("hand-made sets (#1520)", () => {
     expect(
       fillFromPictures({ id: 5, members: [] }, combinations, rows),
     ).toEqual([]);
+  });
+
+  it("labels a fill item with both witnesses it is ranked by (#1565)", () => {
+    const both = [
+      {
+        key: "1,4",
+        models: [
+          { id: 1, name: "ckpt", kind: "checkpoint" },
+          { id: 4, name: "lora", kind: "adapter" },
+        ],
+        recipes: 1,
+        history_runs: 30,
+        picture_count: 1,
+      },
+    ];
+    expect(fillFromPictures(mine, both, rows)[0].detail).toBe(
+      "LoRA · 1 recipe · 30 ComfyUI runs",
+    );
   });
 
   it("never offers a second checkpoint from pictures, since the add is all or nothing", () => {

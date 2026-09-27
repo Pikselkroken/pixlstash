@@ -1353,7 +1353,9 @@ def fetch_workflow_sets(hub, vault) -> dict:
         entry["unsure"].update(ambiguous.get(recipe, set()) & present)
 
     # One witness per exact set, like a recipe: a run counts against the
-    # combination its models ARE, never against every subset of it. `unsure`
+    # combination its STORED models are, never against every subset of it.
+    # Those are the names the pull could pin to one shelf row; a name it could
+    # not (#1518) is not stored, so a run proves at least this set ran. `unsure`
     # is left alone - a run cannot add doubt, and cannot remove a recipe's.
     for members in runs.values():
         present = frozenset(member for member in members if member in models)

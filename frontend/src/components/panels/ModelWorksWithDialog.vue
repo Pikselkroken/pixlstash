@@ -6,7 +6,7 @@
     size="md"
     @close="emit('close')"
   >
-    <p v-if="store.setsLoading" class="ww__state">Reading the recipes…</p>
+    <p v-if="store.setsLoading" class="ww__state">Reading the recipes and runs…</p>
     <p v-else-if="store.setsError" class="ww__state" role="alert">
       {{ store.setsError }}
     </p>
@@ -61,7 +61,8 @@
         </li>
       </ul>
       <p v-else class="ww__state">
-        No recipe or ComfyUI run names this file beside another one. That is
+        No picture in this library and no recorded ComfyUI run used this file
+        beside another one. That is
         not a verdict on what it works with — only a record of what has been
         tried here.
       </p>
@@ -82,7 +83,8 @@
         <v-icon size="16">mdi-information-outline</v-icon>
         <span
           >Nothing is ruled out here. A model missing from this list has simply
-          never been in the same picture’s recipe — it may work perfectly.</span
+          never been in the same picture’s recipe or ComfyUI run — it may work
+          perfectly.</span
         >
       </p>
     </template>
@@ -91,7 +93,7 @@
 
 <script setup>
 // "Works with" for one model (#1438): the companions it has been seen beside,
-// ranked by how many recipes back each one.
+// ranked by how many recipes and ComfyUI runs back each one.
 //
 // **A dialog rather than an inspector section.** The approved design draws this
 // inside a model inspector with `Model` and `Copies` tabs, and the shelf has no

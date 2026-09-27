@@ -3281,13 +3281,15 @@ band can only put a row in one place.
 - **ComfyUI's own runs are witnesses too (#1565).** `fetch_workflow_sets` reads
   `comfyui_history_model` through `_history_runs`, the one reader of that table
   (`propose_companions` calls it too). Each run counts one `history_runs`
-  against the combination its models resolve to *exactly*, never against every
+  against the combination its stored models form *exactly*, never against every
   subset, and is kept apart from `recipes` and `picture_count`. A combination
   survives the cut with a kept picture here OR a stored run, so a set that has
   only run in ComfyUI is served with no cover. Runs are hub-wide, like
   `recipes`. They never touch `ambiguous`, and they stay out of
   `hub_combinations`, which feeds only the hand-made sets' merge offer.
-  ComfyUI is never contacted on this path.
+  ComfyUI is never contacted on this path. The stored models are the names the
+  pull could pin to one shelf row; a name it could not is not stored, so a run
+  proves at least its combination ran, not that nothing else did.
 - **A member the evidence cannot pin down is flagged, never hidden.** `ambiguous`
   is OR-ed across a combination's witnesses: one recipe that could only match a
   basename is enough to make the membership a guess, and a cleaner second

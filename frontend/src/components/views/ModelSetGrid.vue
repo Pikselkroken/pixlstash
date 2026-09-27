@@ -301,13 +301,12 @@ import {
   fillFromPictures,
   fillFromSets,
   handMadeName,
-  recipeCount,
-  runCount,
   rowMatches,
   SET_SLOTS,
   setCheckpoint,
   setSlots,
   slotSuggestions,
+  witnessCount,
 } from "../../utils/workflowSets";
 
 import ModelSetPanel from "../panels/ModelSetPanel.vue";
@@ -941,9 +940,7 @@ const chooserSections = computed(() => {
   const set = openHand.value?.set;
   if (!mode || !set) return [];
   if (mode === "pictures") {
-    return fillSections(fillPictureItems.value, (item) =>
-      item.recipes > 0 ? recipeCount(item.recipes) : runCount(item.historyRuns),
-    );
+    return fillSections(fillPictureItems.value, witnessCount);
   }
   if (mode === "set") {
     return fillSections(fillSetItems.value, (item) => item.from.join(", "));

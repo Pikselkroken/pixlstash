@@ -228,6 +228,21 @@ export function evidenceLine({ recipes = 0, pictures = 0, historyRuns = 0 }) {
     .join(" · ");
 }
 
+/**
+ * The witnesses a companion is ranked by, in words: "1 recipe · 30 ComfyUI
+ * runs". Both halves, so a list sorted by their sum never reads mis-sorted.
+ */
+export function witnessCount({ recipes = 0, historyRuns = 0 }) {
+  return (
+    [
+      recipes > 0 ? recipeCount(recipes) : null,
+      historyRuns > 0 ? runCount(historyRuns) : null,
+    ]
+      .filter(Boolean)
+      .join(" · ") || recipeCount(0)
+  );
+}
+
 /** "3 pictures", "1 picture". */
 export function pictureCount(pictures) {
   const n = Number(pictures) || 0;
@@ -325,7 +340,10 @@ export function memberKindLabel(model) {
  * of each other on the strength of sharing a checkpoint. Ranked by how many
  * witnesses back each pairing - recipes plus ComfyUI runs (#1565), which is the
  * only thing co-occurrence can measure - so the bar the caller draws from
- * `share` IS the ranking; recipes, then pictures, break ties.
+ * `share` IS the ranking; recipes, then pictures, break ties. A run is one
+ * queued prompt and a recipe one distinct graph, so a seed queued many times
+ * weighs more than it would as recipes; the counts are shown apart so the
+ * reader can see which kind of witness a bar is made of.
  *
  * **A model missing from this list has not been ruled out.** It has simply never
  * been in the same picture's recipe or ComfyUI run, which is a fact about what has been tried
@@ -752,9 +770,7 @@ export function fillFromPictures(set, combinations, rows) {
         kindLabel: c.kindLabel,
         recipes: c.recipes,
         historyRuns: c.historyRuns,
-        detail: `${c.kindLabel || "Model"} · ${
-          c.recipes > 0 ? recipeCount(c.recipes) : runCount(c.historyRuns)
-        }`,
+        detail: `${c.kindLabel || "Model"} · ${witnessCount(c)}`,
         slot: defaultSlot(c.kind),
       }))
   );

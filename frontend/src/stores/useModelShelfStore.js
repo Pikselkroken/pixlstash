@@ -2297,7 +2297,8 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }
 
   /**
-   * What one model has been seen beside, ranked by the recipes backing each.
+   * What one model has been seen beside, ranked by the recipes and ComfyUI
+   * runs backing each.
    *
    * Read from the whole payload rather than from `visibleCombinations`: the
    * question is what this file has run with, and a `Show` checkbox is about what

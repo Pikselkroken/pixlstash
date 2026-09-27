@@ -1127,6 +1127,20 @@ def test_workflow_sets_skip_a_run_member_the_shelf_forgot(shelf_env):
     assert all(gone not in {m["id"] for m in c["models"]} for c in body["combinations"])
 
 
+def test_workflow_sets_order_run_only_sets_by_their_runs(shelf_env):
+    ids = shelf_env.model_ids
+    _seed_run(shelf_env.server, "run-once", [ids["dana.safetensors"]])
+    for n in range(2):
+        _seed_run(shelf_env.server, f"run-often-{n}", [ids["bob.safetensors"]])
+
+    body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+    keys = [c["key"] for c in body["combinations"]]
+    assert keys.index(_key(ids["bob.safetensors"])) < keys.index(
+        _key(ids["dana.safetensors"])
+    )
+
+
 def test_workflow_sets_order_a_run_only_set_after_every_pictured_one(shelf_env):
     ids = shelf_env.model_ids
     try:
