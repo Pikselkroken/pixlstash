@@ -409,7 +409,6 @@ function answer(row) {
 .wfpile-row-wrap--none {
   margin-top: var(--space-4);
   border-top-color: rgb(var(--v-theme-border));
-  background: rgba(var(--v-theme-on-surface), 0.06);
 }
 
 .wfpile-row {
