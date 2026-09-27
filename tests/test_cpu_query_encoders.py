@@ -651,6 +651,164 @@ def test_a_broken_unload_does_not_stop_the_other_copy(caplog):
     assert any(record.levelno >= logging.ERROR for record in caplog.records)
 
 
+def test_unload_waits_for_an_encode_that_is_already_running():
+    """The idle unload runs from the worker-progress poll, and its idle check
+    cannot see a search. Releasing the models under a running encode makes the
+    real service reload itself lazily on the search thread - the
+    transformers/accelerate import race this module exists to avoid."""
+    pair = _loaded_pair()
+    sbert = pair._sbert_service
+    started, release = threading.Event(), threading.Event()
+    loaded_while_encoding = []
+    real_encode = sbert.encode
+
+    def slow_encode(texts):
+        started.set()
+        release.wait(5)
+        loaded_while_encoding.append(sbert.loaded)
+        return real_encode(texts)
+
+    sbert.encode = slow_encode
+    search = threading.Thread(target=pair.encode_query, args=("a cat",))
+    search.start()
+    assert started.wait(5), "the encode never started"
+    sweep = threading.Thread(target=pair.unload)
+    sweep.start()
+    sweep.join(0.2)
+    try:
+        assert sweep.is_alive(), "unload did not wait for the running encode"
+        assert sbert.unloads == 0, "the model was released under a running encode"
+    finally:
+        release.set()
+        search.join(5)
+        sweep.join(5)
+
+    assert loaded_while_encoding == [True]
+    # And once the encode finished, the unload did happen.
+    assert (pair._clip_service.unloads, sbert.unloads) == (1, 1)
+    assert not pair.is_loaded()
+
+
+@pytest.mark.parametrize(
+    "method, argument, service",
+    [
+        ("encode_query", "a cat", "_sbert_service"),
+        ("encode_clip_query", "a cat", "_clip_service"),
+        ("encode_query_image", object(), "_clip_service"),
+    ],
+)
+def test_an_encode_that_lost_the_race_to_an_unload_refuses(method, argument, service):
+    """A search can pass ``ensure_serving`` a moment before the sweep unloads.
+    Encoding then would reach a service with no model, which reloads it on the
+    search thread; refusing lets the next search queue the reload instead."""
+    pair = _loaded_pair()
+    assert pair.ensure_serving() is True
+    pair.unload()
+    calls_before = list(getattr(pair, service).calls)
+
+    with pytest.raises(CpuQueryEncodersNotReadyError) as excinfo:
+        getattr(pair, method)(argument)
+
+    assert excinfo.value.worker_running
+    assert getattr(pair, service).calls == calls_before, (
+        "the encode reached the service"
+    )
+    # Positive control: the same call serves once the pair is loaded again.
+    pair.load()
+    assert getattr(pair, method)(argument) is not None
+
+
+def test_an_unload_during_a_load_never_leaves_the_pair_flagged_over_nothing():
+    """``load`` checks both copies and then sets the flag. An unload landing
+    between the two left the flag set over released models, so every later
+    search skipped the reload and encoded on nothing."""
+    pair = _pair()
+    sweep = threading.Thread(target=pair.unload)
+    real_is_loaded = pair.is_loaded
+    first_call = []
+
+    def is_loaded_then_unload():
+        loaded = real_is_loaded()
+        if not first_call:
+            first_call.append(loaded)
+            # The sweep arrives between the check and the flag.
+            sweep.start()
+            sweep.join(0.2)
+        return loaded
+
+    pair.is_loaded = is_loaded_then_unload
+    pair.load()
+    sweep.join(5)
+
+    assert first_call == [True], "the load never reached its check"
+    assert pair._clip_service.unloads == 1, "the sweep never ran"
+    assert not real_is_loaded()
+    assert not pair._loaded.is_set(), (
+        "the pair is flagged as serving while its models are released"
+    )
+
+
+def test_a_load_that_finishes_while_unload_waits_does_not_outlive_it():
+    """``unload`` releases its lock while it waits for a running encode, and a
+    queued load can finish in that gap and set the flag again. The models go
+    regardless, so the flag has to go with them."""
+    pair = _loaded_pair()
+    sbert = pair._sbert_service
+    started, release = threading.Event(), threading.Event()
+    real_encode = sbert.encode
+
+    def slow_encode(texts):
+        started.set()
+        release.wait(5)
+        return real_encode(texts)
+
+    sbert.encode = slow_encode
+    search = threading.Thread(target=pair.encode_query, args=("a cat",))
+    search.start()
+    assert started.wait(5), "the encode never started"
+    sweep = threading.Thread(target=pair.unload)
+    sweep.start()
+    sweep.join(0.2)
+    try:
+        assert sweep.is_alive(), "unload did not wait for the running encode"
+        pair.load()
+        assert pair._loaded.is_set(), "the load did not land inside the wait"
+    finally:
+        release.set()
+        search.join(5)
+        sweep.join(5)
+
+    assert not pair.is_loaded()
+    assert not pair._loaded.is_set(), (
+        "the pair is flagged as serving while its models are released"
+    )
+
+
+def test_a_load_cannot_flag_the_pair_while_unload_is_releasing_it():
+    """The models are released under the same lock ``load`` flags the pair
+    under. Released outside it, a load could check both copies after the flag
+    cleared but before they went, and flag a pair that was about to be empty."""
+    pair = _loaded_pair()
+    clip = pair._clip_service
+    real_unload = clip.unload
+    loader = threading.Thread(target=pair.load)
+
+    def unload_after_a_load_tries_to_flag():
+        loader.start()
+        loader.join(0.2)
+        real_unload()
+
+    clip.unload = unload_after_a_load_tries_to_flag
+    pair.unload()
+    loader.join(5)
+
+    assert not loader.is_alive(), "the load never finished"
+    assert not pair.is_loaded()
+    assert not pair._loaded.is_set(), (
+        "the pair is flagged as serving while its models are released"
+    )
+
+
 # ---------------------------------------------------------------------------
 # No GPU worker: the accelerator has no other user, so it is safe
 # ---------------------------------------------------------------------------

@@ -52,7 +52,8 @@ switch, and the multi-project authz suite, which is what caught it.
 from __future__ import annotations
 
 import threading
-from typing import TYPE_CHECKING, Optional
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Iterator, Optional
 
 import numpy as np
 
@@ -70,6 +71,12 @@ logger = get_logger(__name__)
 NO_GPU_WORKER_DETAIL = (
     "Search cannot run because the background worker is not running. "
     "Restart PixlStash if this persists."
+)
+
+#: What a route says when the copies are loading, or were unloaded a moment
+#: ago: the next search queues the reload, so trying again is the answer.
+STILL_LOADING_DETAIL = (
+    "Search is still loading its models; try the search again shortly."
 )
 
 
@@ -127,6 +134,9 @@ class CpuQueryEncoders:
         self._sbert_service = sbert_service
         self._loaded = threading.Event()
         self._lock = threading.Lock()
+        # Signalled when the last running encode finishes, for ``unload``.
+        self._idle = threading.Condition(self._lock)
+        self._encodes_running = 0
         self._loader = None
         self._pending = None
 
@@ -194,8 +204,13 @@ class CpuQueryEncoders:
                     "crash the process (docs/apple-metal-thread-safety.md)",
                     label,
                 )
-        if self.is_loaded():
-            self._loaded.set()
+        # Checked and flagged under the lock ``unload`` holds, so an unload
+        # cannot land between the two and leave the flag over released models.
+        with self._lock:
+            loaded = self.is_loaded()
+            if loaded:
+                self._loaded.set()
+        if loaded:
             logger.info(
                 "Search queries will be encoded on CPU copies of CLIP and "
                 "SBERT, so they never touch the inference device while the "
@@ -215,21 +230,33 @@ class CpuQueryEncoders:
         On Apple Silicon this is the same memory pool the accelerator uses, so
         leaving ~630 MB here would quietly defeat a reclaim the owner asked
         for. The cost is that the next search waits for a reload.
+
+        **Waits for encodes already running**, because the idle sweep that
+        calls this cannot see a search: releasing a model under one makes the
+        service reload it lazily on the search thread, which is the import race
+        the load task exists to avoid. Clearing the flag first stops new
+        encodes from starting while it waits.
         """
         with self._lock:
             self._loaded.clear()
-        for label, service in (
-            ("CLIP", self._clip_service),
-            ("SBERT", self._sbert_service),
-        ):
-            try:
-                service.unload()
-            except Exception:
-                logger.exception(
-                    "Could not unload the CPU %s copy; its memory stays held "
-                    "until the process exits",
-                    label,
-                )
+            while self._encodes_running:
+                self._idle.wait()
+            # A load that finished during the wait may have set it again.
+            self._loaded.clear()
+            # Still under the lock, so ``load`` cannot flag the pair between
+            # the flag clearing and the models going.
+            for label, service in (
+                ("CLIP", self._clip_service),
+                ("SBERT", self._sbert_service),
+            ):
+                try:
+                    service.unload()
+                except Exception:
+                    logger.exception(
+                        "Could not unload the CPU %s copy; its memory stays "
+                        "held until the process exits",
+                        label,
+                    )
 
     def start_loading(self) -> bool:
         """Queue a load if one is not already in flight, without waiting.
@@ -293,10 +320,70 @@ class CpuQueryEncoders:
         wait = self.DEFAULT_WAIT_S if timeout_s is None else timeout_s
         if not self._loaded.wait(timeout=wait):
             raise CpuQueryEncodersNotReadyError(
-                "Search is still loading its models; try the search again shortly.",
-                worker_running=True,
+                STILL_LOADING_DETAIL, worker_running=True
             )
         return True
+
+    def encode_query(self, query: str) -> list:
+        """Encode *query* into an SBERT embedding on the CPU.
+
+        The caller must have had :meth:`ensure_serving` return ``True`` first.
+
+        Args:
+            query: Search query. Lower-cased before encoding, as
+                ``TextEmbeddingWorkflow.encode_query`` does.
+
+        Returns:
+            A one-element list holding the embedding, or an empty list when
+            *query* is blank.
+
+        Raises:
+            CpuQueryEncodersNotReadyError: The pair was unloaded after that
+                check; see :meth:`_encoding`.
+        """
+        if not query:
+            return []
+        with self._encoding():
+            return self._sbert_service.encode([query.lower()])
+
+    def encode_clip_query(self, query: str) -> Optional[np.ndarray]:
+        """Encode *query* into a normalised CLIP text embedding on the CPU.
+
+        The caller must have had :meth:`ensure_serving` return ``True`` first.
+
+        Args:
+            query: Search query.
+
+        Returns:
+            A 1-D array, or ``None`` on failure.
+
+        Raises:
+            CpuQueryEncodersNotReadyError: The pair was unloaded after that
+                check; see :meth:`_encoding`.
+        """
+        with self._encoding():
+            return self._clip_service.encode_text(query)
+
+    def encode_query_image(self, image: "Image") -> Optional[np.ndarray]:
+        """Encode an uploaded likeness-search image on the CPU.
+
+        The picture embeddings this is compared against are written by the GPU
+        worker; only the *query* image comes through here, so the cost is one
+        image per search rather than per library picture. The caller must have
+        had :meth:`ensure_serving` return ``True`` first.
+
+        Args:
+            image: The uploaded query image.
+
+        Returns:
+            A float32 array of shape ``(1, D)``, or ``None`` on failure.
+
+        Raises:
+            CpuQueryEncodersNotReadyError: The pair was unloaded after that
+                check; see :meth:`_encoding`.
+        """
+        with self._encoding():
+            return self._clip_service.encode_image_batch([image])
 
     def _request_load(self) -> None:
         """Queue a load unless one is in flight or has already succeeded.
@@ -331,52 +418,29 @@ class CpuQueryEncoders:
                     NO_GPU_WORKER_DETAIL, worker_running=False
                 ) from exc
 
-    def encode_query(self, query: str) -> list:
-        """Encode *query* into an SBERT embedding on the CPU.
+    @contextmanager
+    def _encoding(self) -> Iterator[None]:
+        """Hold the models in place for one encode, so ``unload`` waits for it.
 
-        Args:
-            query: Search query. Lower-cased before encoding, as
-                ``TextEmbeddingWorkflow.encode_query`` does.
+        Refuses when the pair is not flagged as loaded rather than encoding
+        anyway: that happens when the idle sweep unloads between a search's
+        :meth:`ensure_serving` and its encode, and a service with no model
+        reloads it lazily on the search thread - the import race the load task
+        exists to avoid. The next search queues the reload instead.
 
-        Returns:
-            A one-element list holding the embedding, or an empty list when
-            *query* is blank.
-
-        The caller must have had :meth:`ensure_serving` return ``True``
-        first; this does not check.
+        Raises:
+            CpuQueryEncodersNotReadyError: The pair is not loaded.
         """
-        if not query:
-            return []
-        return self._sbert_service.encode([query.lower()])
-
-    def encode_clip_query(self, query: str) -> Optional[np.ndarray]:
-        """Encode *query* into a normalised CLIP text embedding on the CPU.
-
-        Args:
-            query: Search query.
-
-        Returns:
-            A 1-D array, or ``None`` on failure.
-
-        The caller must have had :meth:`ensure_serving` return ``True``
-        first; this does not check.
-        """
-        return self._clip_service.encode_text(query)
-
-    def encode_query_image(self, image: "Image") -> Optional[np.ndarray]:
-        """Encode an uploaded likeness-search image on the CPU.
-
-        The picture embeddings this is compared against are written by the GPU
-        worker; only the *query* image comes through here, so the cost is one
-        image per search rather than per library picture.
-
-        Args:
-            image: The uploaded query image.
-
-        Returns:
-            A float32 array of shape ``(1, D)``, or ``None`` on failure.
-
-        The caller must have had :meth:`ensure_serving` return ``True``
-        first; this does not check.
-        """
-        return self._clip_service.encode_image_batch([image])
+        with self._lock:
+            if not self._loaded.is_set():
+                raise CpuQueryEncodersNotReadyError(
+                    STILL_LOADING_DETAIL, worker_running=True
+                )
+            self._encodes_running += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._encodes_running -= 1
+                if not self._encodes_running:
+                    self._idle.notify_all()
