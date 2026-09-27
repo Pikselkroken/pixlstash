@@ -66,6 +66,9 @@ from pixlstash.services.restore import RestoreService
 from pixlstash.hub.registry import VAULT_FILENAME
 from pixlstash.trusted_sqlite import TrustedSQLiteLocation
 from pixlstash.utils.path_utils import LibraryRootsUnavailable
+from pixlstash.tasks.missing_saved_recipe_workflow_finder import (
+    MissingSavedRecipeWorkflowFinder,
+)
 
 
 logger = get_logger(__name__)
@@ -354,10 +357,6 @@ class Vault:
             )
             # The cut-over (#1623): saved recipes naming a card are put on the
             # workflow it became. Needs the hub's `workflow_key_successor`.
-            from pixlstash.tasks.missing_saved_recipe_workflow_finder import (
-                MissingSavedRecipeWorkflowFinder,
-            )
-
             self._planner_work_finders[TaskType.SAVED_RECIPE_CONVERT] = (
                 MissingSavedRecipeWorkflowFinder(vault=self)
             )

@@ -312,6 +312,26 @@ def test_every_card_state_lands_on_its_workflow_and_a_rerun_changes_nothing(
     assert _rows(world.hub) == first
 
 
+def test_an_unnamed_cover_takes_the_next_name_it_holds(world):
+    """A cover with no name has nothing to win with: the workflow keeps the
+    first name in cover order, and it is not repeated as "Also named"."""
+    hub = world.hub
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_attr SET name = NULL WHERE workflow_key = ?",
+            (world.s_key,),
+        )
+
+    _convert(hub)
+
+    row = hub.fetchone(
+        "SELECT name, notes FROM workflow_group_attr WHERE workflow_id = ?",
+        (world.auto,),
+    )
+    assert row["name"] == "Detailer"
+    assert "Also named" not in row["notes"]
+
+
 def test_a_file_only_card_keeps_what_the_owner_typed(tmp_path):
     """A workflow file with no recipe (#1466) is its own workflow, and converts.
 

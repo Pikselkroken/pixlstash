@@ -2196,7 +2196,8 @@ def _workflow_variants(hub, vault, workflow: Workflow) -> list[WorkflowVariant]:
     """
     wanted = set(workflow.variants)
     # A variant a model fix swapped a PixlStash loader into is filed under the
-    # swapped topology and carded under the original one (#1605).
+    # swapped topology and carded under the original one (#1605). Two
+    # originals can swap to one graph, so each topology is read once.
     topologies = list(workflow.topologies)
     for topology_hash in workflow.topologies:
         topologies += [
@@ -2206,6 +2207,7 @@ def _workflow_variants(hub, vault, workflow: Workflow) -> list[WorkflowVariant]:
                 "WHERE topology_hash = ?",
                 (topology_hash,),
             )
+            if row[0] not in topologies
         ]
     recipes, assets, forgotten = [], {}, {}
     for topology in topologies:

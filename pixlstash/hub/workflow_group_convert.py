@@ -474,7 +474,11 @@ def _convert_workflow(
         row = attrs.get(card.workflow_key)
         return row[column] if row is not None else None
 
-    name = attr(cover, "name")
+    # The cover's name, else the first name in cover order: an unnamed cover
+    # has nothing to win with, and the owner did name this workflow.
+    name = attr(cover, "name") or next(
+        (attr(card, "name") for card in group[1:] if attr(card, "name")), None
+    )
     also = [
         other
         for other in dict.fromkeys(attr(card, "name") for card in group[1:])
@@ -482,8 +486,10 @@ def _convert_workflow(
     ]
     blocks = [(attr(card, "name"), attr(card, "notes")) for card in group]
     blocks = [(heading, text) for heading, text in blocks if text]
-    # The cover's notes alone stand as written; any other card's are headed
-    # with its name, so nobody reads them as the workflow's own.
+    # Only the cover's notes, when they are the only notes, stand as written.
+    # Once blocks are put together every one is headed with its card's name,
+    # the cover's included (the issue's rule), so nobody has to guess whose
+    # is whose; a lone non-cover block is headed too.
     notes = "\n\n".join(
         text
         if len(blocks) == 1 and attr(cover, "notes") == text
