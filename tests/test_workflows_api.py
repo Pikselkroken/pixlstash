@@ -6960,6 +6960,71 @@ def test_a_fix_the_loader_cannot_load_runs_through_a_pixlstash_loader(
             _unshelve(conn, [digest])
 
 
+def test_a_rename_on_a_loader_swapped_afterwards_is_still_reported(
+    runnable, monkeypatch
+):
+    """A Dual loader: one file renamed, the other swapped. Both are reported."""
+    old_l, new_l = "test-l-fp8.safetensors", "test-l-bf16.safetensors"
+    old_t5, new_t5 = "test-t5-fp8.safetensors", "test-t5-swap.safetensors"
+    digests = [_h("dual-l"), _h("dual-t5")]
+    embedded = json.loads(json.dumps(RUN_DOCUMENT))
+    embedded["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    embedded["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    embedded["3"]["inputs"].update({"steps": 20, "cfg": 7.0, "seed": 1})
+    embedded["8"] = {
+        "class_type": "DualCLIPLoader",
+        "inputs": {"clip_name1": old_l, "clip_name2": old_t5, "type": "flux"},
+    }
+    embedded["9"] = {"class_type": "CLIPTextEncode", "inputs": {"clip": ["8", 0]}}
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (
+            json.loads(json.dumps(embedded)),
+            [],
+        ),
+    )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    listed = [[new_l], {}]
+    info["DualCLIPLoader"] = {
+        "input": {"required": {"clip_name1": listed, "clip_name2": listed}}
+    }
+    info["CLIPTextEncode"] = {"input": {"required": {}}}
+    info["PixlStashCLIPLoader"] = {
+        "input": {"required": {"clip_sha256": ["STRING", {}], "type": [["flux"], {}]}}
+    }
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    with runnable.server.hub.transaction() as conn:
+        _shelve_with_copy(conn, "text_encoder", new_l, digests[0])
+        _shelve_with_copy(conn, "text_encoder", new_t5, digests[1])
+        conn.executemany(
+            "INSERT INTO workflow_model_fix (topology_hash, slot_label, was_norm, "
+            "now_norm, was_name, now_name, slot_kind) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'text_encoder')",
+            [
+                (RUN_TOPOLOGY, "l1", old_l, new_l, old_l, new_l),
+                (RUN_TOPOLOGY, "l2", old_t5, new_t5, old_t5, new_t5),
+            ],
+        )
+    try:
+        payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+        assert _reasons(payload) == set(), payload
+        reported = {
+            (sub["class_type"], sub["field"], sub["was"], sub["now"])
+            for sub in payload["groups"][0]["substitutions"]
+        }
+        assert reported == {
+            ("PixlStashCLIPLoader", "clip_sha256", old_l, new_l),
+            ("PixlStashCLIPLoader", "clip_sha256_2", old_t5, new_t5),
+        }, payload
+    finally:
+        with runnable.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM workflow_model_fix")
+            _unshelve(conn, digests)
+
+
 def test_a_pixlstash_loader_stands_in_only_where_it_does_what_the_original_did():
     """#1605's refusals, pure: the swapped node must be the original's equal."""
     digests = {"test-l.safetensors": "11" * 32, "test-t5.safetensors": "22" * 32}

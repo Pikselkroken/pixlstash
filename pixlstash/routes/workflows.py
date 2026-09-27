@@ -2521,22 +2521,30 @@ def create_router(server) -> APIRouter:
             )
         if swapped:
             # A rename on a node swapped afterwards (a Dual loader's other
-            # file) names a node and field the graph no longer has.
+            # file) names a node and field the graph no longer has: it is
+            # reported as the swapped node's, from the name it renamed.
+            renamed = {
+                (swap["node_id"], swap["field"]): swap["was"]
+                for swap in done
+                if swap["node_id"] in swapped
+            }
             done = [swap for swap in done if swap["node_id"] not in swapped]
-            done += [
-                {
-                    "node_id": node_id,
-                    "class_type": graph[node_id]["class_type"],
-                    "field": digest_widget,
-                    "was": before[node_id]["inputs"][widget],
-                    "now": file,
-                    "verified": True,
-                }
-                for node_id, (before, files) in swapped.items()
-                for digest_widget, (widget, file) in files.items()
-                if normalized_filename(file)
-                != normalized_filename(before[node_id]["inputs"][widget])
-            ]
+            for node_id, (before, files) in swapped.items():
+                for digest_widget, (widget, file) in files.items():
+                    was = renamed.get(
+                        (node_id, widget), before[node_id]["inputs"][widget]
+                    )
+                    if normalized_filename(file) != normalized_filename(was):
+                        done.append(
+                            {
+                                "node_id": node_id,
+                                "class_type": graph[node_id]["class_type"],
+                                "field": digest_widget,
+                                "was": was,
+                                "now": file,
+                                "verified": True,
+                            }
+                        )
         for swap in done:
             logger.info(
                 "[workflows] Card %s loads %s in place of %s on node %s: the "
