@@ -389,6 +389,7 @@ button:focus:not(:focus-visible) {
   bottom: var(--space-5);
   display: flex;
   justify-content: center;
+  gap: var(--space-3);
   pointer-events: none;
   z-index: var(--z-floating);
 }

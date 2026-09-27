@@ -1400,8 +1400,9 @@
          aimed at on that screen is exactly one model, which is what its verbs
          write. One bar for both views, so the refusals cannot drift.
          A hand-made set card (#1520) selects its SET instead, which takes the
-         second pill below: its verbs touch no file, and the two selections
-         clear each other so only one pill is ever up. -->
+         second pill below: its verbs touch no file. The two selections can be
+         held together (Ctrl+click, Ctrl+A), and then both pills are up side by
+         side, each with its own verbs. -->
     <div v-if="isShelfTab" ref="selFloatEl" class="selbar-float">
       <ShelfSelectionBar
         ref="selBarRef"
@@ -2376,11 +2377,10 @@ function shelfOwnsTheKey(event) {
  * `user-select: none` (#932) while the app around it is not, so the one thing
  * a select-all aimed at the rows could highlight was whatever text the app
  * still leaves selectable everywhere else - which is what the reporter saw.
- * For models it runs the store action the selection pill's "Select all shown"
- * already runs, so the key and the button say the same thing: everything the
- * current `Show` selection DRAWS, runs taken whole. On the set grid, with a
- * hand-made set selected (or no model drawn), it takes every hand-made set
- * instead - see the note at the call. Cmd counts as Ctrl (`metaKey`),
+ * It runs the store action the selection pill's "Select all shown" already
+ * runs, so the key and the button say the same thing: everything the current
+ * `Show` selection DRAWS, runs taken whole - and on the set grid every
+ * hand-made set too. Cmd counts as Ctrl (`metaKey`),
  * Shift and Alt do not - those are chords this list does not define and are
  * left to the browser, AltGr+A among them.
  *
@@ -2425,34 +2425,29 @@ function onShelfKeydown(event) {
     // would have passed the guard and then cleared the selection to nothing. The
     // pill's *Select all shown* never had the guard at all, so moving it into
     // the store fixed a second caller as well. The press is still claimed either
-    // way, or declining would hand it to the native select-all.
-    //
-    // On the set grid the "Grouped by you" cards are SETS, which cannot share a
-    // selection with models, so the key follows the kind already selected: with
-    // a set selected it takes every hand-made set. With nothing selected it
-    // takes the models, unless the grid draws none, when the sets are all
-    // there is to take.
-    if (
-      isSetGrid.value &&
-      (store.selectedSets.length || !store.screenRows.length)
-    ) {
-      store.selectAllSets();
-    } else {
-      store.selectVisible();
-    }
+    // way, or declining would hand it to the native select-all. On the set grid
+    // it takes the hand-made "Grouped by you" sets as well as the models.
+    store.selectVisible();
     return;
   }
   // Selected hand-made SETS (#1520) answer the same two keys with the set
   // vocabulary: Escape clears, Delete deletes the sets - never a file. The
   // early return above already admits only these two keys here; the check is
   // restated so this block is correct read on its own.
+  //
+  // Sets and models can be held together (Ctrl+click, Ctrl+A). Escape clears
+  // both. Delete deletes the sets only when no model is selected: with both,
+  // it falls through to the FILE confirmation below, so one key never deletes
+  // sets unprompted while also arming a file delete. The sets' own pill still
+  // deletes them.
   if (store.selectedSets.length && isSetGrid.value) {
     if (event.key === "Escape") {
       event.preventDefault();
       store.clearSetSelection();
+      store.clearSelection();
       return;
     }
-    if (event.key === "Delete") {
+    if (event.key === "Delete" && !store.selectedRows.length) {
       event.preventDefault();
       store.deleteHandMadeSets(store.selectedSets);
       return;

@@ -5561,10 +5561,8 @@ describe("the set grid is what the shelf opens on", () => {
     expect(store.visibleRows).toHaveLength(2);
   });
 
-  it("takes every hand-made set on Ctrl+A once a set is selected", async () => {
-    // "Grouped by you" cards are sets, and sets never share a selection with
-    // models - so with one selected the key extends the SET selection rather
-    // than swapping it for the model cards.
+  /** The grid with two hand-made ("Grouped by you") sets beside card 1. */
+  async function gridWithHandMade() {
     const { wrapper, store } = await shelfOnTheGrid();
     document.body.appendChild(wrapper.element);
     store.workflowSets = {
@@ -5574,15 +5572,71 @@ describe("the set grid is what the shelf opens on", () => {
         { id: 11, name: "Other", members: [] },
       ],
     };
-    store.selectSet(10);
     await wrapper.vm.$nextTick();
+    return { wrapper, store };
+  }
+
+  it("takes the models AND every hand-made set on Ctrl+A", async () => {
+    const { wrapper, store } = await gridWithHandMade();
 
     window.dispatchEvent(
       new KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
     );
     await wrapper.vm.$nextTick();
+    expect(store.selectedRows.map((row) => row.id)).toEqual([1]);
     expect(store.selectedSets.map((set) => set.id)).toEqual([10, 11]);
+    wrapper.unmount();
+  });
+
+  it("holds sets and models together on Ctrl+click, and a plain click replaces both", async () => {
+    const { wrapper, store } = await gridWithHandMade();
+
+    store.selectSet(10);
+    store.selectFromClick(1, { ctrl: true });
+    store.selectSet(11, { ctrl: true });
+    await wrapper.vm.$nextTick();
+    expect(store.selectedRows.map((row) => row.id)).toEqual([1]);
+    expect(store.selectedSets.map((set) => set.id)).toEqual([10, 11]);
+
+    store.selectFromClick(1);
+    await wrapper.vm.$nextTick();
+    expect(store.selectedSets).toHaveLength(0);
+    expect(store.selectedRows.map((row) => row.id)).toEqual([1]);
+
+    store.selectSet(10, { ctrl: true });
+    store.selectSet(11);
+    await wrapper.vm.$nextTick();
     expect(store.selectedRows).toHaveLength(0);
+    expect(store.selectedSets.map((set) => set.id)).toEqual([11]);
+    wrapper.unmount();
+  });
+
+  it("clears both kinds on Escape, and never deletes sets from a mixed Delete", async () => {
+    // With models selected too, Delete is the FILE confirmation - a prompt -
+    // and the sets are left for their own pill.
+    deleteWorkflowSet.mockReset().mockResolvedValue({
+      deleted: { id: 10, name: "Kit", members: [] },
+    });
+    const { wrapper, store } = await gridWithHandMade();
+    const mixed = async () => {
+      store.selectSet(10);
+      store.selectFromClick(1, { ctrl: true });
+      await wrapper.vm.$nextTick();
+      expect(store.selectedSets).toHaveLength(1);
+      expect(store.selectedRows).toHaveLength(1);
+    };
+
+    await mixed();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    await wrapper.vm.$nextTick();
+    expect(store.selectedSets).toHaveLength(0);
+    expect(store.selectedRows).toHaveLength(0);
+
+    await mixed();
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(deleteWorkflowSet).not.toHaveBeenCalled();
+    expect(deleteModels).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
