@@ -9,6 +9,7 @@ class TaskType(str, Enum):
     DETECTION = "DetectionTask"
     TAGGER = "TagTask"
     TAG_PREDICTION_BACKFILL = "TagPredictionBackfillTask"
+    QUALITY_CROP_RECHECK = "QualityCropRecheckTask"
     QUALITY = "QualityTask"
     LIKENESS = "LikenessTask"
     LIKENESS_PARAMETERS = "LikenessParametersTask"

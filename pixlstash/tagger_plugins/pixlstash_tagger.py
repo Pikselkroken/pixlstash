@@ -108,6 +108,33 @@ def quality_crop_size(value) -> int | None:
     return QUALITY_CROP_SIZES[PIXLSTASH_TAGGER_QUALITY_CROP_DEFAULT]
 
 
+def configured_quality_crop_size(tagger_settings: dict | None) -> int | None:
+    """Resolve a whole ``tagger_settings`` blob to its quality-crop size.
+
+    The one reading of ``plugins.pixlstash_tagger.params.quality_crop``, shared
+    by ``TaggingWorkflow`` (what the tagger does) and the crop re-check route
+    (whether there is anything to re-check), so the two cannot disagree about
+    whether the pass is off.
+
+    Args:
+        tagger_settings: The user's tagger settings, or None.
+
+    Returns:
+        The crop size, or ``None`` when the quality crop is off. Settings that
+        predate the param carry none and get the default size.
+    """
+    plugins = (tagger_settings or {}).get("plugins") or {}
+    params = (plugins.get("pixlstash_tagger") or {}).get("params") or {}
+    return quality_crop_size(
+        params.get("quality_crop", PIXLSTASH_TAGGER_QUALITY_CROP_DEFAULT)
+    )
+
+
+def quality_crop_whitelist(is_centre_crop: bool) -> frozenset:
+    """The tags a quality crop owns: the reduced set for a faceless centre crop."""
+    return CENTRE_CROP_TAG_WHITELIST if is_centre_crop else QUALITY_CROP_TAG_WHITELIST
+
+
 # ------------------------------------------------------------------------- #
 # Grad-CAM anomaly-localisation tuning
 #

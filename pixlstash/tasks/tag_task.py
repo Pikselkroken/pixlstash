@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from sqlalchemy import func
 from sqlmodel import Session, select, delete
+from sqlmodel import update as update_rows
 import os
 import threading
 import time
@@ -39,9 +40,8 @@ from pixlstash.utils.service.tag_prediction_utils import PENALISED_TAG_SET
 from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.inference.engine import InferenceEngine
 from pixlstash.tagger_plugins.pixlstash_tagger import (
-    CENTRE_CROP_TAG_WHITELIST,
     FACE_QUALITY_CROP_SCALE,
-    QUALITY_CROP_TAG_WHITELIST,
+    quality_crop_whitelist,
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.set_lock_service import locked_picture_ids
@@ -114,122 +114,16 @@ def taggable_picture_clauses() -> tuple:
     return (Picture.deleted.is_(False), Picture.file_path.is_not(None))
 
 
-class TagTask(BaseTask):
-    """Task that tags a batch of pictures and persists tag updates."""
+class QualityCropSource:
+    """Loads a picture for tagging and builds its quality crop.
 
-    CPU_SPILLOVER_REUSE_GRACE_S = 8.0
-    _cpu_spillover_engine: InferenceEngine | None = None
-    _cpu_spillover_last_used_at: float = 0.0
-    _cpu_spillover_lock = threading.Lock()
-
-    # Tagging is low-priority relative to face extraction.  Uses the shared
-    # GPU queue: serialised by the single GPU worker.
-    # Face extraction (HIGH) always precedes tagging in the queue.
-
-    def __init__(
-        self,
-        database,
-        tagging_workflow: TaggingWorkflow,
-        pictures: list,
-        interactive: bool = False,
-        engine_override: str | None = None,
-        reset_generation: int | None = None,
-    ):
-        picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
-        super().__init__(
-            task_type="TagTask",
-            params={
-                "picture_ids": picture_ids,
-                "batch_size": len(picture_ids),
-            },
-        )
-        self._db = database
-        self._tagging_workflow = tagging_workflow
-        self._pictures = pictures or []
-        self._interactive = interactive
-        self._engine_override = engine_override
-        # `reset_generation` is `database.tag_resets.current()` read BEFORE the
-        # pictures were: a picture reset after it gets no write from this task
-        # (#1361). The default, "now", is only right when they were read just
-        # before. The registry is optional on the database object, like
-        # `unprocessable_images`.
-        self._tag_resets = getattr(database, "tag_resets", None)
-        if reset_generation is None and self._tag_resets is not None:
-            reset_generation = self._tag_resets.current()
-        self._reset_generation = reset_generation
-        self._preloaded_images: dict[str, PILImage.Image] = {}
-        self._preload_lock = threading.Lock()
-        self._preload_thread: threading.Thread | None = None
-        self._preload_cancel = threading.Event()
-        self._preload_started_at: float | None = None
-        self._preload_finished_at: float | None = None
-        self._cpu_spillover_enabled = False
-        self._model_preload_thread: threading.Thread | None = None
-        self._model_preload_done: threading.Event = threading.Event()
-        self._model_preload_error: Exception | None = None
-
-    def on_queued(self) -> None:
-        # Start image preloading immediately so it overlaps with model loading.
-        if self._preload_thread is None or not self._preload_thread.is_alive():
-            self._preload_cancel.clear()
-            self._preload_started_at = time.perf_counter()
-            self._preload_finished_at = None
-            self._preload_thread = threading.Thread(
-                target=self._preload_images,
-                name=f"TagTaskPreload-{self.id[:8]}",
-                daemon=True,
-            )
-            self._preload_thread.start()
-
-        # Start model loading in a background thread and wait for it to finish
-        # before returning.  submit() puts the task in the GPU queue only after
-        # on_queued() returns, so the GPU worker will never block on model load.
-        if self._model_preload_thread is None:
-            self._model_preload_thread = threading.Thread(
-                target=self._preload_model,
-                name=f"TagModelPreload-{self.id[:8]}",
-                daemon=True,
-            )
-            self._model_preload_thread.start()
-        self._model_preload_done.wait()
-
-    def _preload_model(self) -> None:
-        t_start = time.perf_counter()
-        try:
-            self._tagging_workflow.ensure_active_plugin_ready(
-                engine_override=self._engine_override,
-            )
-            logger.debug(
-                "[TAG_MODEL_PRELOAD] task_id=%s done in %.1fs",
-                self.id,
-                time.perf_counter() - t_start,
-            )
-        except Exception as exc:
-            logger.warning(
-                "[TAG_MODEL_PRELOAD] task_id=%s failed after %.1fs: %s",
-                self.id,
-                time.perf_counter() - t_start,
-                exc,
-            )
-            self._model_preload_error = exc
-        finally:
-            self._model_preload_done.set()
-
-    def on_cancel(self) -> None:
-        self._preload_cancel.set()
-        if self._preload_thread is not None:
-            self._preload_thread.join(timeout=10)
-            if self._preload_thread.is_alive():
-                logger.warning(
-                    "TagTask preload thread did not stop in time for task %s",
-                    self.id,
-                )
-        # Model loading cannot be interrupted; just wait briefly so the event
-        # is set and any subsequent wait() calls return promptly.
-        if self._model_preload_thread is not None:
-            self._model_preload_thread.join(timeout=5)
-
-    _PRELOAD_WORKERS = 4
+    Shared by :class:`TagTask`, whose quality crop pass this is, and
+    ``QualityCropRecheckTask``, which re-runs only that pass over pictures that
+    are already tagged. One implementation, so the re-check crops exactly what
+    a fresh tag would: the same face, the same window, the same centre-crop
+    fallback, and the same unprocessable / unreachable handling of a file that
+    will not load. The host class provides ``self._db``.
+    """
 
     def _load_pic(self, pic) -> "tuple[str | None, PILImage.Image | None, bool]":
         """Load *pic*'s image for tagging.
@@ -253,7 +147,8 @@ class TagTask(BaseTask):
         file_path = ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
         if not file_path:
             logger.warning(
-                "TagTask: picture %s has no resolvable file path",
+                "%s: picture %s has no resolvable file path",
+                type(self).__name__,
                 getattr(pic, "id", None),
             )
             return None, None, False
@@ -267,7 +162,8 @@ class TagTask(BaseTask):
                 if frames:
                     return file_path, frames[0].convert("RGB"), False
                 logger.debug(
-                    "TagTask: no frames extracted from %s; trying the shared loader",
+                    "%s: no frames extracted from %s; trying the shared loader",
+                    type(self).__name__,
                     file_path,
                 )
             else:
@@ -294,13 +190,15 @@ class TagTask(BaseTask):
         except Exception as exc:
             if _is_transient_load_error(exc):
                 logger.warning(
-                    "TagTask: transient failure loading %s (%s); leaving it to retry",
+                    "%s: transient failure loading %s (%s); leaving it to retry",
+                    type(self).__name__,
                     file_path,
                     exc,
                 )
                 return file_path, None, False
             logger.debug(
-                "TagTask: %s did not decode by extension (%s); trying the shared loader",
+                "%s: %s did not decode by extension (%s); trying the shared loader",
+                type(self).__name__,
                 file_path,
                 exc,
             )
@@ -427,8 +325,9 @@ class TagTask(BaseTask):
         registry = getattr(self._db, "unprocessable_images", None)
         if registry is None:
             logger.warning(
-                "TagTask: picture %s (%s) is unreachable and there is no "
+                "%s: picture %s (%s) is unreachable and there is no "
                 "registry to hold it; it will be re-selected every sweep.",
+                type(self).__name__,
                 getattr(pic, "id", None),
                 str(file_path),
             )
@@ -456,10 +355,137 @@ class TagTask(BaseTask):
             )
         else:
             logger.warning(
-                "TagTask: failed to load source for picture %s (%s)",
+                "%s: failed to load source for picture %s (%s)",
+                type(self).__name__,
                 getattr(pic, "id", None),
                 str(file_path),
             )
+
+    @staticmethod
+    def _fetch_faces_for_pictures(session: Session, picture_ids: list) -> dict:
+        faces = session.exec(select(Face).where(Face.picture_id.in_(picture_ids))).all()
+        result = {}
+        for face in faces:
+            result.setdefault(face.picture_id, []).append(face)
+        return result
+
+
+class TagTask(QualityCropSource, BaseTask):
+    """Task that tags a batch of pictures and persists tag updates."""
+
+    CPU_SPILLOVER_REUSE_GRACE_S = 8.0
+    _cpu_spillover_engine: InferenceEngine | None = None
+    _cpu_spillover_last_used_at: float = 0.0
+    _cpu_spillover_lock = threading.Lock()
+
+    # Tagging is low-priority relative to face extraction.  Uses the shared
+    # GPU queue: serialised by the single GPU worker.
+    # Face extraction (HIGH) always precedes tagging in the queue.
+
+    def __init__(
+        self,
+        database,
+        tagging_workflow: TaggingWorkflow,
+        pictures: list,
+        interactive: bool = False,
+        engine_override: str | None = None,
+        reset_generation: int | None = None,
+    ):
+        picture_ids = [pic.id for pic in (pictures or []) if getattr(pic, "id", None)]
+        super().__init__(
+            task_type="TagTask",
+            params={
+                "picture_ids": picture_ids,
+                "batch_size": len(picture_ids),
+            },
+        )
+        self._db = database
+        self._tagging_workflow = tagging_workflow
+        self._pictures = pictures or []
+        self._interactive = interactive
+        self._engine_override = engine_override
+        # `reset_generation` is `database.tag_resets.current()` read BEFORE the
+        # pictures were: a picture reset after it gets no write from this task
+        # (#1361). The default, "now", is only right when they were read just
+        # before. The registry is optional on the database object, like
+        # `unprocessable_images`.
+        self._tag_resets = getattr(database, "tag_resets", None)
+        if reset_generation is None and self._tag_resets is not None:
+            reset_generation = self._tag_resets.current()
+        self._reset_generation = reset_generation
+        self._preloaded_images: dict[str, PILImage.Image] = {}
+        self._preload_lock = threading.Lock()
+        self._preload_thread: threading.Thread | None = None
+        self._preload_cancel = threading.Event()
+        self._preload_started_at: float | None = None
+        self._preload_finished_at: float | None = None
+        self._cpu_spillover_enabled = False
+        self._model_preload_thread: threading.Thread | None = None
+        self._model_preload_done: threading.Event = threading.Event()
+        self._model_preload_error: Exception | None = None
+
+    def on_queued(self) -> None:
+        # Start image preloading immediately so it overlaps with model loading.
+        if self._preload_thread is None or not self._preload_thread.is_alive():
+            self._preload_cancel.clear()
+            self._preload_started_at = time.perf_counter()
+            self._preload_finished_at = None
+            self._preload_thread = threading.Thread(
+                target=self._preload_images,
+                name=f"TagTaskPreload-{self.id[:8]}",
+                daemon=True,
+            )
+            self._preload_thread.start()
+
+        # Start model loading in a background thread and wait for it to finish
+        # before returning.  submit() puts the task in the GPU queue only after
+        # on_queued() returns, so the GPU worker will never block on model load.
+        if self._model_preload_thread is None:
+            self._model_preload_thread = threading.Thread(
+                target=self._preload_model,
+                name=f"TagModelPreload-{self.id[:8]}",
+                daemon=True,
+            )
+            self._model_preload_thread.start()
+        self._model_preload_done.wait()
+
+    def _preload_model(self) -> None:
+        t_start = time.perf_counter()
+        try:
+            self._tagging_workflow.ensure_active_plugin_ready(
+                engine_override=self._engine_override,
+            )
+            logger.debug(
+                "[TAG_MODEL_PRELOAD] task_id=%s done in %.1fs",
+                self.id,
+                time.perf_counter() - t_start,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[TAG_MODEL_PRELOAD] task_id=%s failed after %.1fs: %s",
+                self.id,
+                time.perf_counter() - t_start,
+                exc,
+            )
+            self._model_preload_error = exc
+        finally:
+            self._model_preload_done.set()
+
+    def on_cancel(self) -> None:
+        self._preload_cancel.set()
+        if self._preload_thread is not None:
+            self._preload_thread.join(timeout=10)
+            if self._preload_thread.is_alive():
+                logger.warning(
+                    "TagTask preload thread did not stop in time for task %s",
+                    self.id,
+                )
+        # Model loading cannot be interrupted; just wait briefly so the event
+        # is set and any subsequent wait() calls return promptly.
+        if self._model_preload_thread is not None:
+            self._model_preload_thread.join(timeout=5)
+
+    _PRELOAD_WORKERS = 4
 
     def _preload_images(self) -> None:
         preloaded = {}
@@ -710,6 +736,15 @@ class TagTask(BaseTask):
         # nothing observing it and the cached value would stay stale. update_pic_ids is
         # already lock-filtered above, so frozen pictures are never invalidated.
         update_pic_ids = [pid for pid, _ in pics_to_update]
+        # Pictures whose quality crop ran in this pass at the configured size:
+        # a pending crop re-check (`Picture.quality_crop_pending`) is answered by
+        # this write, so it is cleared in the same transaction rather than left
+        # for `QualityCropRecheckTask` to repeat the pass.
+        crop_done_ids = {
+            int(update["pic_id"])
+            for update in updates
+            if update.get("quality_crop_done") and update.get("pic_id") is not None
+        }
 
         def _write(batch: list[tuple[int, set]]) -> None:
             session.exec(
@@ -723,6 +758,16 @@ class TagTask(BaseTask):
             for pic_id, tags_to_add in batch:
                 for tag_value in tags_to_add:
                     session.add(Tag(picture_id=pic_id, tag=tag_value))
+            answered = [pid for pid, _ in batch if pid in crop_done_ids]
+            if answered:
+                session.exec(
+                    update_rows(Picture)
+                    .where(
+                        Picture.id.in_(answered),
+                        Picture.quality_crop_pending.is_(True),
+                    )
+                    .values(quality_crop_pending=False)
+                )
 
         try:
             with invalidate_on_anomaly_change(
@@ -797,14 +842,6 @@ class TagTask(BaseTask):
             tags_by_pic_id,
             model_version,
         )
-
-    @staticmethod
-    def _fetch_faces_for_pictures(session: Session, picture_ids: list) -> dict:
-        faces = session.exec(select(Face).where(Face.picture_id.in_(picture_ids))).all()
-        result = {}
-        for face in faces:
-            result.setdefault(face.picture_id, []).append(face)
-        return result
 
     @staticmethod
     def _resolve_pending_predictions(session: Session, picture_ids: list) -> None:
@@ -961,6 +998,10 @@ class TagTask(BaseTask):
                 crop_inference_s = 0.0
                 crop_fetch_s = 0.0
                 crop_build_s = 0.0
+                # Paths whose crop the tagger actually judged, filled only once
+                # the whole pass has succeeded: these are the pictures whose
+                # pending crop re-check this write answers.
+                crop_judged_paths: set = set()
                 # From the task's own workflow, not `active_workflow`: the CPU
                 # spillover engine is built without the user's tagger settings
                 # and would always report the default. None: the user switched
@@ -1020,11 +1061,7 @@ class TagTask(BaseTask):
                             # crop owns the full whitelist; the faceless centre-crop fallback
                             # owns only the non-face quality tags.
                             whitelist_by_path = {
-                                path: (
-                                    CENTRE_CROP_TAG_WHITELIST
-                                    if path in centre_crop_paths
-                                    else QUALITY_CROP_TAG_WHITELIST
-                                )
+                                path: quality_crop_whitelist(path in centre_crop_paths)
                                 for path in key_to_path.values()
                             }
                             # Accumulate quality tags found across all crops per picture path,
@@ -1091,6 +1128,11 @@ class TagTask(BaseTask):
                                             continue
                                         if conf > merged.get(tag, 0.0):
                                             merged[tag] = conf
+                            # `tag_quality_crops` answers {} when the model is
+                            # not loaded, which reads the same as "no crop tag
+                            # found"; only a loaded model has judged the crops.
+                            if active_workflow.is_quality_crop_model_loaded():
+                                crop_judged_paths = set(key_to_path.values())
                     except Exception as exc:
                         logger.warning("Quality crop pass failed: %s", exc)
                 # --- end quality crop pass ---
@@ -1107,6 +1149,10 @@ class TagTask(BaseTask):
                         {
                             "pic_id": pic.id,
                             "tags": tags or [],
+                            # The crop pass ran at the current size, so a
+                            # pending crop re-check on this picture is answered
+                            # by this write (see `_add_tags_bulk`).
+                            "quality_crop_done": path in crop_judged_paths,
                         }
                     )
 

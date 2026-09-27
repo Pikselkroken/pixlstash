@@ -735,3 +735,54 @@ def test_a_zero_extent_face_box_takes_the_centre_crop(tmp_path):
     )
 
     assert is_centre_crop is True
+
+
+# --- The quality-crop re-check flag (#1648) ----------------------------------
+
+
+def test_a_tag_write_that_ran_the_crop_answers_a_pending_recheck(tmp_path):
+    """TagTask's write clears `quality_crop_pending` only where the crop was judged."""
+    engine = _make_engine(tmp_path)
+    with Session(engine) as session:
+        judged = Picture(file_path="judged.jpg", quality_crop_pending=True)
+        unjudged = Picture(file_path="unjudged.jpg", quality_crop_pending=True)
+        session.add_all([judged, unjudged])
+        session.commit()
+        for pic in (judged, unjudged):
+            session.add(Tag(picture_id=pic.id, tag="__tag"))
+        session.commit()
+        judged_id, unjudged_id = judged.id, unjudged.id
+
+        TagTask._add_tags_bulk(
+            session,
+            [
+                {"pic_id": judged_id, "tags": ["woman"], "quality_crop_done": True},
+                {"pic_id": unjudged_id, "tags": ["woman"], "quality_crop_done": False},
+            ],
+        )
+
+        session.expire_all()
+        assert session.get(Picture, judged_id).quality_crop_pending is False
+        assert session.get(Picture, unjudged_id).quality_crop_pending is True, (
+            "a picture whose crop did not run still owes its re-check"
+        )
+
+
+class _JudgingWorkflow(_CropSizeWorkflow):
+    def __init__(self, loaded):
+        super().__init__(512)
+        self.loaded = loaded
+
+    def is_quality_crop_model_loaded(self):
+        return self.loaded
+
+
+@pytest.mark.parametrize("loaded", [True, False])
+def test_the_crop_is_recorded_done_only_when_the_model_judged_it(tmp_path, loaded):
+    """`tag_quality_crops` answers {} unloaded, which must not read as done."""
+    picture = Picture(id=1, file_path=str(_png(tmp_path, "judged.png")))
+    db = _PredictionDb(str(tmp_path), [1])
+
+    _prediction_task(db, _JudgingWorkflow(loaded), [picture])._tag_pictures_batch()
+
+    assert [p["quality_crop_done"] for p in db.tag_payloads] == [loaded]

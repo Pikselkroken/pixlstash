@@ -207,6 +207,11 @@ class Picture(SQLModel, table=True):
     # ``GET /pictures/{id}/{field}`` reader still returns the raw columns, under
     # the same picture scope.
     OCR_FIELDS: ClassVar[frozenset] = frozenset({"ocr_text", "ocr_words"})
+    # Background-work bookkeeping, not picture metadata: left out of
+    # ``metadata_fields()`` so the serialised payloads do not grow a scheduler
+    # flag, and out of ``metadata_hash`` (``database._HASH_SKIP_COLS``) so
+    # marking or clearing it never reads as a change to a snapshot.
+    WORK_FLAG_FIELDS: ClassVar[frozenset] = frozenset({"quality_crop_pending"})
     id: int = Field(default=None, primary_key=True)
     file_path: Optional[str] = None
     description: Optional[str] = None
@@ -461,6 +466,23 @@ class Picture(SQLModel, table=True):
         ),
     )
 
+    # Marked by the quality-crop re-check (``POST /taggers/pixlstash_tagger/
+    # quality-crop/recheck``) and cleared by ``QualityCropRecheckTask`` once it
+    # has re-run the crop pass, or by ``TagTask`` when a full tag write ran the
+    # crop itself. A flag rather than a NULL-reset on purpose: freshly imported
+    # and freshly tagged pictures are False, so only the pictures the owner
+    # asked to re-check are ever selected. NOT NULL for the partial index below.
+    quality_crop_pending: bool = Field(
+        default=False,
+        sa_column=Column(
+            "quality_crop_pending",
+            Boolean,
+            nullable=False,
+            server_default="0",
+            index=False,
+        ),
+    )
+
     # Relationships
     quality: Optional["Quality"] = Relationship(
         back_populates="picture",
@@ -624,6 +646,17 @@ class Picture(SQLModel, table=True):
             "deleted",
             "text_score",
             sqlite_where=text("ocr_text IS NULL"),
+        ),
+        # QualityCropRecheckFinder: quality_crop_pending = 1 AND deleted IS 0.
+        # Same idle-probe shape; the flag is True only between a re-check
+        # request and the crop pass that answers it, so the index is empty on
+        # an idle library.
+        Index(
+            "ix_picture_quality_crop_pending",
+            "quality_crop_pending",
+            "deleted",
+            "id",
+            sqlite_where=text("quality_crop_pending = 1"),
         ),
     )
 
@@ -1234,7 +1267,12 @@ class Picture(SQLModel, table=True):
         """
         Return a list of simple scalar fields
         """
-        return cls.scalar_fields() - cls.large_binary_fields() - cls.OCR_FIELDS
+        return (
+            cls.scalar_fields()
+            - cls.large_binary_fields()
+            - cls.OCR_FIELDS
+            - cls.WORK_FLAG_FIELDS
+        )
 
     @classmethod
     def grid_fields(cls):

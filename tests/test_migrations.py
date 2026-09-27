@@ -1691,3 +1691,39 @@ def test_the_standalone_engine_refuses_a_broken_foreign_key_too():
             f"the broken migration was accepted:\nstdout: {result.stdout}"
         )
         assert "introduced dangling foreign keys" in result.stderr, result.stderr
+
+
+def test_0125_adds_the_quality_crop_flag_false_and_its_partial_index():
+    """Fresh or populated, every picture starts not pending, and the index exists.
+
+    A NULL-reset would have selected every picture; the flag starts False so
+    nothing is re-checked until the owner asks.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        down = _run_alembic(
+            ["downgrade", "0124_saved_recipe_models_and_workflow_id"],
+            db_url,
+            _MIGRATIONS_DIR,
+        )
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(picture)")}
+            assert "quality_crop_pending" not in columns
+            conn.execute(
+                "INSERT INTO picture (file_path, deleted, is_video) VALUES ('a.png', 0, 0)"
+            )
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert conn.execute(
+                "SELECT quality_crop_pending FROM picture"
+            ).fetchall() == [(0,)]
+            indexes = {row[1] for row in conn.execute("PRAGMA index_list(picture)")}
+            assert "ix_picture_quality_crop_pending" in indexes

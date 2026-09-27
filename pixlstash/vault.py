@@ -54,6 +54,11 @@ from pixlstash.tagger_plugins.registry import (
     get_tagger_plugin_manager,
     unload_loaded_tagger_plugins,
 )
+from pixlstash.tagger_plugins.pixlstash_tagger import configured_quality_crop_size
+from pixlstash.services.quality_crop_recheck_service import (
+    count_pending_quality_crop_rechecks,
+    mark_quality_crop_recheck_in_session,
+)
 from pixlstash.services.set_lock_service import (
     enforce_pictures_not_locked,
     locked_picture_id_subquery,
@@ -1085,6 +1090,30 @@ class Vault:
         )
         return len(reset_ids)
 
+    def quality_crop_size(self) -> Optional[int]:
+        """The configured PixlStash-tagger quality-crop size, or None when off.
+
+        Read from the same ``tagger_settings`` the engine's tagging workflow is
+        built from, through the same resolver, so the re-check route and the
+        re-check finder agree about whether the pass is off.
+        """
+        return configured_quality_crop_size(self._tagger_settings)
+
+    def request_quality_crop_recheck(self) -> int:
+        """Mark every tagged picture for a quality-crop re-check and wake the planner.
+
+        Marks the pictures that are not scrapheaped, carry no retag sentinel and
+        are not frozen by a locked set; ``QualityCropRecheckFinder`` then re-runs
+        only the crop pass over them, adding the crop's tags and removing none.
+        The caller checks :meth:`quality_crop_size` first.
+
+        Returns:
+            How many pictures are now pending.
+        """
+        queued = self.db.run_task(mark_quality_crop_recheck_in_session)
+        self.wake()
+        return queued
+
     def generate_text_embedding(self, query: str) -> Optional[np.ndarray]:
         """
         Generate a text embedding using InferenceEngine.
@@ -1281,6 +1310,12 @@ class Vault:
                         "origin_client_id": task.params.get("origin_client_id"),
                     },
                 )
+            return
+
+        if task.type == "QualityCropRecheckTask":
+            picture_ids = result.get("tagged_picture_ids") or []
+            if picture_ids:
+                self._queue_changed_tags_notification(picture_ids)
             return
 
         changed = result.get("changed") if isinstance(result, dict) else None
@@ -1573,6 +1608,14 @@ class Vault:
                     or 0
                 )
                 label = "tag_prediction_backfill"
+            elif worker_type == TaskType.QUALITY_CROP_RECHECK:
+                # Counted in pictures still flagged, not the library: nothing is
+                # pending until the owner asks for a re-check.
+                missing = int(
+                    self.db.run_immediate_read_task(count_pending_quality_crop_rechecks)
+                    or 0
+                )
+                label = "quality_crop_rechecks"
             elif worker_type == TaskType.QUALITY:
                 missing = int(
                     self.db.run_immediate_read_task(self._count_missing_quality) or 0

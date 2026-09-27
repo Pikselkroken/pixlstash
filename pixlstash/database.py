@@ -71,6 +71,10 @@ _HASH_SKIP_COLS: frozenset = frozenset(
         # every hash computed before the columns existed.
         "ocr_text",
         "ocr_words",
+        # Background-work flag set by the quality-crop re-check and cleared by
+        # the task that answers it; says nothing a restore would revert, and
+        # absent from every hash computed before the column existed.
+        "quality_crop_pending",
     }
 )
 

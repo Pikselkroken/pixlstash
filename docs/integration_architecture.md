@@ -56,6 +56,8 @@ PixlStash is designed to be served from **one origin**: the FastAPI server hosts
 
 **Contract rule**: every new backend router must be mounted with `prefix=API_V1_PREFIX`. Every new frontend call must use a relative URL (the client adds the prefix).
 
+**Quality-crop re-check** (#1648): `POST /api/v1/taggers/pixlstash_tagger/quality-crop/recheck`, owner-only, no body. Marks every already-tagged picture (not scrapheaped, no retag sentinel, not in a locked set) for a re-run of the PixlStash tagger's quality crop at the configured `quality_crop` size and returns `200 {"queued": <pictures marked>}`; calling it again re-marks. While the setting is `"off"` it answers `409 {"detail": "The quality crop is off. ..."}` and marks nothing. The work runs in the background (`QUALITY_CROP_RECHECK`, worker progress label `quality_crop_rechecks`); a picture that gained tags is announced through the ordinary debounced `CHANGED_TAGS` event. It only **adds** crop tags (never one the owner rejected) and **never removes a tag**, so it is safe on hand-curated tags, unlike `POST /pictures/reset_tags`.
+
 ---
 
 ### 2.1 The `/dedup` contract (v1.9)

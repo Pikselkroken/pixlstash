@@ -15,10 +15,7 @@ from pixlstash.inference.vram_budget import (
     WD14_PER_ITEM_MB,
 )
 from pixlstash.pixl_logging import get_logger
-from pixlstash.tagger_plugins.pixlstash_tagger import (
-    PIXLSTASH_TAGGER_QUALITY_CROP_DEFAULT,
-    quality_crop_size,
-)
+from pixlstash.tagger_plugins.pixlstash_tagger import configured_quality_crop_size
 from pixlstash.utils.accelerator import (
     MPS,
     is_accelerated,
@@ -83,11 +80,7 @@ class TaggingWorkflow:
         Read from the PixlStash tagger's ``quality_crop`` param. Settings that
         predate the param carry none and get the default size.
         """
-        plugins = self._tagger_settings.get("plugins") or {}
-        params = (plugins.get("pixlstash_tagger") or {}).get("params") or {}
-        return quality_crop_size(
-            params.get("quality_crop", PIXLSTASH_TAGGER_QUALITY_CROP_DEFAULT)
-        )
+        return configured_quality_crop_size(self._tagger_settings)
 
     def active_plugin_name(self, engine_override: str | None = None) -> str:
         """The plugin :meth:`tag_images` runs for the full-image pass.
@@ -251,6 +244,15 @@ class TaggingWorkflow:
             stop_event=stop_event,
             out_raw_scores=out_raw_scores,
         )
+
+    def is_quality_crop_model_loaded(self) -> bool:
+        """Whether the PixlStash tagger, which judges every quality crop, is loaded.
+
+        :meth:`tag_quality_crops` answers ``{}`` when it is not, which is
+        indistinguishable from "no crop tag found"; a caller that records the
+        crop as done must ask this first.
+        """
+        return bool(self._engine.pixlstash_tagger_service.is_loaded())
 
     def tag_quality_crops(
         self,

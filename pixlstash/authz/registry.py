@@ -1738,6 +1738,13 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Delete tagger artifact; DELETE blocked for READ tokens; owner only",
     ),
+    # Marks every tagged picture in the library and queues tagger inference over
+    # them (#1648): a whole-library write, so the owner's alone. Takes no id and
+    # returns only a count.
+    ("POST", "/api/v1/taggers/pixlstash_tagger/quality-crop/recheck"): RoutePolicy(
+        _OWNER,
+        justification="Whole-library quality-crop re-check (marks every tagged picture, runs the tagger); POST blocked for READ tokens; owner only",
+    ),
     # ── workflows.py (workflow implementation plan §F1/§F2, the library view) ─
     # OWNER_ONLY throughout, and it is a decision rather than a default. The
     # grid (v1.12 B3, on `GET /workflows` since B9 retired the topology list)

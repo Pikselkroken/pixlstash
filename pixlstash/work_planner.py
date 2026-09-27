@@ -74,6 +74,9 @@ class WorkPlanner:
         from pixlstash.tasks.missing_tag_prediction_finder import (
             MissingTagPredictionFinder,
         )
+        from pixlstash.tasks.quality_crop_recheck_finder import (
+            QualityCropRecheckFinder,
+        )
         from pixlstash.tasks.missing_watch_folder_import_finder import (
             MissingWatchFolderImportFinder,
         )
@@ -127,6 +130,10 @@ class WorkPlanner:
                 engine_getter=engine_getter,
             ),
             TaskType.TAG_PREDICTION_BACKFILL: MissingTagPredictionFinder(
+                database=database,
+                engine_getter=engine_getter,
+            ),
+            TaskType.QUALITY_CROP_RECHECK: QualityCropRecheckFinder(
                 database=database,
                 engine_getter=engine_getter,
             ),

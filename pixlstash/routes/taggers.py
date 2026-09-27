@@ -5,6 +5,9 @@ Provides:
     GET  /taggers/plugin-diagnostics       - scanned folders + load failures (local owner)
     POST /taggers/{name}/download          - kick off an artifact download for a plugin
     DELETE /taggers/{name}/artifacts/{id}  - remove a downloaded artifact
+    POST /taggers/pixlstash_tagger/quality-crop/recheck
+                                           - re-run only the quality crop over
+                                             already-tagged pictures
 """
 
 from __future__ import annotations
@@ -79,6 +82,12 @@ class TaggerArtifactDeleteResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     status: str
+
+
+class QualityCropRecheckResponse(BaseModel):
+    """How many pictures were marked for a quality-crop re-check."""
+
+    queued: int
 
 
 def create_router(server) -> APIRouter:
@@ -251,5 +260,38 @@ def create_router(server) -> APIRouter:
 
         plugin.delete_artifact(artifact_id)
         return {"status": "deleted"}
+
+    @router.post(
+        "/taggers/pixlstash_tagger/quality-crop/recheck",
+        summary="Re-check the quality crop on already-tagged pictures",
+        response_model=QualityCropRecheckResponse,
+        responses={409: {"description": "The quality crop is switched off."}},
+    )
+    def recheck_quality_crop(request: Request):
+        """Re-run the PixlStash tagger's quality crop over tagged pictures.
+
+        A change to the ``quality_crop`` setting applies to pictures tagged
+        afterwards; this lets the owner re-check the rest without a retag, which
+        would delete every tag, hand-added ones included. Marks every tagged
+        picture that is not scrapheaped and not in a locked set, and the
+        background re-check then runs only the crop pass at the configured size,
+        **adding** the crop's tags a picture is missing (never one the owner
+        rejected) and removing none. Calling it again re-marks.
+
+        Returns ``{"queued": <pictures marked>}``; 409 while the quality crop is
+        off, since there would be nothing to run.
+
+        OWNER_ONLY: it writes to, and runs the tagger over, the whole library.
+        """
+        server.auth.ensure_secure_when_required(request)
+        if server.vault.quality_crop_size() is None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "The quality crop is off. Choose a quality crop size in the "
+                    "PixlStash tagger settings, then re-check."
+                ),
+            )
+        return {"queued": server.vault.request_quality_crop_recheck()}
 
     return router
