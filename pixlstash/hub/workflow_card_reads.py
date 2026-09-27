@@ -645,7 +645,8 @@ class Workflow:
     cards: list[str] = field(default_factory=list)
     variant_topology: dict[str, str] = field(default_factory=dict)
     variant_card: dict[str, str] = field(default_factory=dict)
-    specials: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # None where the specials pass has not read the topology yet.
+    specials: dict[str, Optional[tuple[str, ...]]] = field(default_factory=dict)
     base_topology: Optional[str] = None
     base_card: Optional[str] = None
     name: Optional[str] = None
@@ -741,7 +742,7 @@ def workflow_index(
         entry.cards.append(card.workflow_key)
         if card.topology_hash not in entry.topologies:
             entry.topologies.append(card.topology_hash)
-        entry.specials[card.topology_hash] = card.specials or ()
+        entry.specials[card.topology_hash] = card.specials
         loras[card.topology_hash] = sum(1 for s in card.slots if s.get("is_lora"))
         for structural_hash in card.variants:
             entry.variants.append(structural_hash)
@@ -768,7 +769,7 @@ def workflow_index(
         entry.base_topology = min(
             entry.topologies,
             key=lambda t: (
-                -len(entry.specials.get(t, ())),
+                -len(entry.specials.get(t) or ()),
                 -loras.get(t, 0),
                 -pictures.get(t, 0),
                 t,
@@ -778,7 +779,11 @@ def workflow_index(
         for structural_hash, key in entry.variant_card.items():
             if entry.variant_topology[structural_hash] == entry.base_topology:
                 on_base[key] = on_base.get(key, 0) + counts.get(structural_hash, 0)
-        entry.base_card = min(on_base, key=lambda key: (-on_base[key], key))
+        # None for a base topology no variant is filed on (a file-only card
+        # placed by hand): nothing to run from, and a run says so (404).
+        entry.base_card = (
+            min(on_base, key=lambda key: (-on_base[key], key)) if on_base else None
+        )
         attr = attrs.get(entry.workflow_id)
         if attr is not None:
             entry.name, entry.notes = attr["name"], attr["notes"]

@@ -4062,11 +4062,15 @@ ran without it. Prompt, negative and seed are not part of it.
 edit holding `off` takes a LoRA out.
 
 **A run by `workflow_id`** starts from the base card's source and has the
-server apply the default recipe **under** the request: its `values`, `models`
-and `loras` win address by address, and a stage the recipe runs without joins
-`skip_stages`. A LoRA loader the recipe leaves empty is bypassed, best effort: a
-loader that cannot be taken out keeps its LoRA and is logged rather than
-refusing the run. `models: [{address, filename | sha256}]` goes through
+server apply the default recipe **under** the request: the recipe's values
+are written in a pass of their own before the request's, so a request value
+wins however either addresses the input (slot label or core address), and
+`models` and `loras` win address by address. A stage the recipe runs without
+is skipped best effort: one that cannot be taken out runs whole and is logged,
+never refused. A LoRA loader the recipe leaves empty is bypassed, best effort
+too, and only when the recipe was read off at least one picture and the shelf
+names every one of its LoRAs; otherwise every loader keeps its LoRA. The
+request cannot switch a recipe-off stage back on yet (#1623 owns that control). `models: [{address, filename | sha256}]` goes through
 `apply_filename_swap`; a model made for another family or modality than the one
 it replaces is **flagged, never blocked** (`RunGroup.flags`, `family_mismatch`;
 `model_shelf_service.families_clash`, which the clone dialog's LoRA flags use

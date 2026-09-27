@@ -8522,6 +8522,40 @@ def test_a_workflow_run_applies_its_default_recipe_on_the_server(runnable):
     assert runnable.submitted[2]["graph"]["3"]["inputs"]["steps"] == 24
 
 
+def test_a_request_value_by_slot_label_wins_over_a_default_by_core_address(
+    runnable,
+):
+    """One input, two addresses: the request's still lands last."""
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, '31')",
+            (RUN_WORKFLOW, _core_address("3", "steps")),
+        )
+    slot_label = topology_node_labels(RUN_DOCUMENT)["3"]
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WORKFLOW,
+            "values": [{"slot_label": slot_label, "input_name": "steps", "value": 12}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 12
+
+
+def test_a_recipe_read_off_no_picture_bypasses_no_lora(runnable):
+    """No sample is no evidence: the base graph's LoRA stays, unreported."""
+    runnable.monkeypatch.setattr(
+        workflow_card_service, "read_instance_hashes", lambda *args: []
+    )
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WORKFLOW})
+    assert r.status_code == 200, r.text
+    (group,) = r.json()["groups"]
+    assert group["bypassed_loras"] == [] and group["unplaced_loras"] == []
+    assert "2" in runnable.submitted[0]["graph"]
+
+
 def test_an_unknown_workflow_is_a_404_and_a_malformed_one_a_422(runnable):
     r = runnable.owner.post(
         f"{API}/workflows/run/preflight",

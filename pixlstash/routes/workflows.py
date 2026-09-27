@@ -3728,8 +3728,10 @@ def create_router(server) -> APIRouter:
                 was = graph[node_id]["inputs"][widget]
                 if normalized_filename(was) == normalized_filename(now):
                     continue
+                # Only this loader: another naming the same file (a refiner, a
+                # stage's) is another address.
                 done, missed = apply_filename_swap(
-                    graph,
+                    {node_id: graph[node_id]},
                     {was: now},
                     object_info,
                     fields=lambda _cls, field, widget=widget: field == widget,
@@ -4326,36 +4328,29 @@ def create_router(server) -> APIRouter:
     def _under_defaults(body: RunRequest, recipe: DefaultRecipe) -> RunRequest:
         """*body* with the default recipe filled in underneath it (#1622).
 
-        The request wins over the recipe, value by value and model by model;
-        a stage the recipe runs without is skipped whatever the request says.
-        The LoRAs are the caller's: they are placed after the graph resolves.
+        Models only: the request wins address by address. Values are written
+        in a pass of their own BEFORE the request's (``_recipe_values``),
+        because one input can be addressed two ways - by slot label and by
+        core address - and merging the two lists could let the recipe's win.
+        The LoRAs and stages are applied after the graph resolves.
         """
-        given = {(v.slot_label, v.input_name) for v in body.values}
         asked = {m.address for m in body.models}
         return body.model_copy(
             update={
-                "values": [
-                    RunValue(
-                        slot_label=d.slot_label, input_name=d.input_name, value=d.value
-                    )
-                    for d in recipe.values
-                    if (d.slot_label, d.input_name) not in given
-                ]
-                + list(body.values),
                 "models": [
                     RunModel(address=m.address, filename=m.filename)
                     for m in recipe.models
                     if m.filename and m.address not in asked
                 ]
                 + list(body.models),
-                "skip_stages": list(body.skip_stages)
-                + [
-                    stage
-                    for stage, on in sorted(recipe.stages.items())
-                    if not on and stage not in body.skip_stages
-                ],
             }
         )
+
+    def _recipe_values(recipe: DefaultRecipe) -> list[RunValue]:
+        return [
+            RunValue(slot_label=d.slot_label, input_name=d.input_name, value=d.value)
+            for d in recipe.values
+        ]
 
     def _is_a1111(picture_id: int) -> bool:
         """Whether this picture's recipe is A1111 infotext rather than a graph.
@@ -4561,6 +4556,10 @@ def create_router(server) -> APIRouter:
             )
             reached_inputs = True
             addressed.update(item.address for item in card_inputs)
+            if recipe is not None:
+                # The default recipe first, so every request value lands on top
+                # of it however either addresses the input.
+                _apply_addressed(graph, _recipe_values(recipe))
             _apply_addressed(graph, body.values)
             group.flags = _apply_models(hub, graph, body.models, object_info)
             _apply_prompts(graph, body.prompt, body.negative)
@@ -4580,7 +4579,12 @@ def create_router(server) -> APIRouter:
             )
             skips_found |= skip_seen
             skips_checked = True
-            if recipe is not None and not body.loras:
+            if (
+                recipe is not None
+                and not body.loras
+                and recipe.sampled
+                and all(saved.get("sha256") for saved in recipe_loras)
+            ):
                 # The recipe decides a workflow's LoRAs, so a loader it leaves
                 # empty is bypassed (#1622). Best effort, unlike an owner's
                 # skip: a loader that cannot be taken out keeps its LoRA and
@@ -4659,6 +4663,12 @@ def create_router(server) -> APIRouter:
                     if (str(target["node_id"]), str(target["field"]))
                     not in skipped_slots
                 ]
+                if recipe is not None and recipe_loras == recipe.recipe_loras():
+                    # A default LoRA the shelf cannot name, which the loader
+                    # still loads, is the graph as it was: nothing to report.
+                    group.unplaced_loras = [
+                        u for u in group.unplaced_loras if u["node_id"] is None
+                    ]
                 for unplaced in group.unplaced_loras:
                     logger.info(
                         "[workflows] Card %s runs without saved LoRA %s: %s",
@@ -4687,6 +4697,24 @@ def create_router(server) -> APIRouter:
             found += run_service.skip_requested_stages(
                 graph, body.skip_stages, object_info
             )
+            off = [
+                stage
+                for stage, on in sorted(recipe.stages.items() if recipe else ())
+                if not on and stage not in body.skip_stages
+            ]
+            if off:
+                # The recipe's own off-stages, best effort like its LoRAs: one
+                # that cannot be taken out runs whole rather than refusing a
+                # run over a choice nobody made by hand.
+                for reason in run_service.skip_requested_stages(
+                    graph, off, object_info
+                ):
+                    logger.info(
+                        "[workflows] Workflow %s keeps a stage its recipe runs "
+                        "without: %s",
+                        workflow_id,
+                        reason.as_dict(),
+                    )
             if body.seed_mode == "keep" and source.seedless:
                 # There is nothing to keep: a stored instance document nulls its
                 # seeds by design, so every one of `count` runs would submit

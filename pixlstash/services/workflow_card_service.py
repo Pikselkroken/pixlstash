@@ -1704,6 +1704,7 @@ class DefaultRecipe:
     workflow_id: str
     base_topology: Optional[str]
     base_card: Optional[str] = None
+    sampled: int = 0
     values: list[Default] = field(default_factory=list)
     models: list[DefaultModel] = field(default_factory=list)
     loras: list[DefaultLora] = field(default_factory=list)
@@ -1768,7 +1769,7 @@ def workflow_defaults(
     lora_seen: Counter = Counter()
     lora_strengths: dict[str, Counter] = {}
     lora_widgets: dict[str, str] = {}
-    base_stages = workflow.specials.get(workflow.base_topology or "", ())
+    base_stages = workflow.specials.get(workflow.base_topology or "") or ()
     without: Counter = Counter()
     sampled = 0
     for structural_hash, document in documents:
@@ -1817,10 +1818,10 @@ def workflow_defaults(
                 models.setdefault(address, Counter())[slot.asset] += 1
                 model_kinds[address] = kind
         lora_seen.update(loaded)
-        ran = workflow.specials.get(
-            workflow.variant_topology.get(structural_hash, ""), ()
-        )
-        without.update(stage for stage in base_stages if stage not in ran)
+        ran = workflow.specials.get(workflow.variant_topology.get(structural_hash, ""))
+        # A topology the specials pass has not read yet says nothing either way.
+        if ran is not None:
+            without.update(stage for stage in base_stages if stage not in ran)
 
     names = {
         asset_reference(filename): filename
@@ -1832,6 +1833,7 @@ def workflow_defaults(
         workflow_id=workflow_id,
         base_topology=workflow.base_topology,
         base_card=workflow.base_card,
+        sampled=sampled,
         stages={stage: without[stage] * 2 <= sampled for stage in base_stages},
     )
 
@@ -1890,7 +1892,12 @@ def workflow_defaults(
     majority = sorted(asset for asset, seen in lora_seen.items() if seen * 2 > sampled)
     for asset in majority:
         filename = names.get(asset)
-        if filename is not None and LORA_DIGEST_FIELD_RE.match(lora_widgets[asset]):
+        if (
+            filename is not None
+            and LORA_DIGEST_FIELD_RE.match(lora_widgets[asset])
+            and len(filename) == 64
+        ):
+            # A whole digest only: an A1111 short hash names no one file.
             sha256 = filename.lower()
         else:
             shelf = by_name.get(normalized_filename(filename or ""), set())

@@ -1384,9 +1384,10 @@ def test_covers_made_with_the_replaced_model_are_flagged_and_go_last(hub):
 # ── workflows and their default recipe (#1622) ─────────────────────────────
 
 
-def _file_run(hub, *, strength=None, **graph_options):
+def _file_run(hub, *, strength=None, steps=20, **graph_options):
     """File one run of ``_graph(...)`` into a library; return its keys."""
     graph = _graph(**graph_options)
+    graph["5"]["inputs"]["steps"] = steps
     if strength is not None:
         graph["L0"]["inputs"]["strength_model"] = strength
     return record_api_graph(hub, graph, library_uuid="test-library")
@@ -1426,6 +1427,7 @@ def _four_runs(hub):
             ckpt="b.safetensors",
             loras=("x.safetensors", "y.safetensors"),
             strength=0.6,
+            steps=30,
         ),
         _file_run(hub, ckpt="a.safetensors"),
     ]
@@ -1482,8 +1484,10 @@ def test_the_default_recipe_is_the_modal_checkpoint_and_the_majority_loras(
     assert [(lora.filename, lora.strength) for lora in recipe.loras] == [
         ("x.safetensors", 0.8)
     ]
+    # Three runs at 20 steps, one at 30.
     steps = {d.input_name: d.value for d in recipe.values}
     assert steps["steps"] == 20
+    assert recipe.sampled == 4
     # The base graph has a face detailer, and three runs of four went without.
     assert recipe.stages == {"face_detailer": False}
 
