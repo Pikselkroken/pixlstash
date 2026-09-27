@@ -243,4 +243,18 @@ describe("a LoRA the owner skipped, and one that cannot be skipped", () => {
     );
     expect(rail(wrapper)).not.toContain("rrn--notice");
   });
+
+  it("refuses a stage that cannot be switched off, in the server's words", () => {
+    const wrapper = mountNotice({
+      code: "stage_not_skippable",
+      stage: "face_detailer",
+      message: "Node 9 reads output 3 of FaceDetailer (node 7).",
+    });
+    const said = wrapper.text().replace(/\s+/g, " ");
+    expect(said).toContain("Cinematic portrait can't run.");
+    expect(said).toContain(
+      "The FaceDetailer pass cannot be switched off for this run. Node 9 reads output 3 of FaceDetailer (node 7).",
+    );
+    expect(rail(wrapper)).not.toContain("rrn--notice");
+  });
 });

@@ -10305,6 +10305,78 @@ def test_a_slot_both_filled_and_skipped_is_refused(runnable):
     assert r.status_code == 422, r.text
 
 
+# --- switching a stage off for one run (#1621) ------------------------------
+
+
+def _upscaled_run(runnable, monkeypatch, object_info) -> None:
+    """RUN_CARD's graph with an ImageScaleBy between the sampler and the save."""
+    embedded = json.loads(json.dumps(RUN_DOCUMENT))
+    embedded["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    embedded["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    embedded["5"] = {
+        "class_type": "ImageScaleBy",
+        "inputs": {"image": ["3", 0], "scale_by": 2},
+    }
+    embedded["4"]["inputs"]["images"] = ["5", 0]
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (
+            json.loads(json.dumps(embedded)),
+            [],
+        ),
+    )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["ImageScaleBy"] = {
+        "input": {"required": {"image": ["IMAGE"], "scale_by": ["FLOAT", {}]}},
+        "output": ["IMAGE"],
+    }
+    monkeypatch.setattr(
+        workflows_routes,
+        "_read_object_info",
+        lambda url: (info, None) if object_info else (None, "unreachable"),
+    )
+
+
+def test_a_skipped_upscale_leaves_this_runs_graph(runnable, monkeypatch):
+    _upscaled_run(runnable, monkeypatch, object_info=True)
+    body = {"workflow_key": RUN_CARD, "skip_stages": ["upscale"]}
+    r = runnable.owner.post(f"{API}/workflows/run", json=body)
+    assert r.status_code == 200, r.text
+    graph = runnable.submitted[0]["graph"]
+    assert "5" not in graph, graph
+    assert graph["4"]["inputs"]["images"] == ["3", 0]
+
+
+def test_the_same_run_without_skip_stages_keeps_the_upscale(runnable, monkeypatch):
+    _upscaled_run(runnable, monkeypatch, object_info=True)
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.status_code == 200, r.text
+    assert runnable.submitted[0]["graph"]["4"]["inputs"]["images"] == ["5", 0]
+
+
+def test_a_stage_that_cannot_be_skipped_never_runs_whole(runnable, monkeypatch):
+    """Consent to an unchecked ComfyUI does not reach a refused stage."""
+    _upscaled_run(runnable, monkeypatch, object_info=False)
+    body = {
+        "workflow_key": RUN_CARD,
+        "skip_stages": ["upscale"],
+        "allow_unchecked": True,
+    }
+    r = runnable.owner.post(f"{API}/workflows/run", json=body)
+    assert r.status_code == 200, r.text
+    assert "stage_not_skippable" in _reasons(r.json()), r.json()
+    assert runnable.submitted == []
+
+
+def test_an_unknown_stage_is_a_422(runnable):
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"workflow_key": RUN_CARD, "skip_stages": ["lora"]},
+    )
+    assert r.status_code == 422, r.text
+
+
 def test_a_forgotten_loras_loader_is_skipped_when_asked():
     """The owner's request is the consent the automatic bypass does without."""
     graph = {

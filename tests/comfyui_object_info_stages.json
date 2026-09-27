@@ -1,0 +1,536 @@
+{
+ "CheckpointLoaderSimple": {
+  "input": {
+   "required": {
+    "ckpt_name": [
+     []
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "MODEL",
+   "CLIP",
+   "VAE"
+  ],
+  "output_node": false
+ },
+ "CLIPTextEncode": {
+  "input": {
+   "required": {
+    "text": [
+     "STRING"
+    ],
+    "clip": [
+     "CLIP"
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "CONDITIONING"
+  ],
+  "output_node": false
+ },
+ "EmptyLatentImage": {
+  "input": {
+   "required": {
+    "width": [
+     "INT"
+    ],
+    "height": [
+     "INT"
+    ],
+    "batch_size": [
+     "INT"
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "LATENT"
+  ],
+  "output_node": false
+ },
+ "KSampler": {
+  "input": {
+   "required": {
+    "model": [
+     "MODEL"
+    ],
+    "seed": [
+     "INT"
+    ],
+    "steps": [
+     "INT"
+    ],
+    "cfg": [
+     "FLOAT"
+    ],
+    "sampler_name": [
+     []
+    ],
+    "scheduler": [
+     []
+    ],
+    "positive": [
+     "CONDITIONING"
+    ],
+    "negative": [
+     "CONDITIONING"
+    ],
+    "latent_image": [
+     "LATENT"
+    ],
+    "denoise": [
+     "FLOAT"
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "LATENT"
+  ],
+  "output_node": false
+ },
+ "VAEDecode": {
+  "input": {
+   "required": {
+    "samples": [
+     "LATENT"
+    ],
+    "vae": [
+     "VAE"
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_node": false
+ },
+ "SaveImage": {
+  "input": {
+   "required": {
+    "images": [
+     "IMAGE"
+    ],
+    "filename_prefix": [
+     "STRING"
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_node": true
+ },
+ "PreviewImage": {
+  "input": {
+   "required": {
+    "images": [
+     "IMAGE"
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_node": true
+ },
+ "LatentUpscale": {
+  "input": {
+   "required": {
+    "samples": [
+     "LATENT"
+    ],
+    "upscale_method": [
+     []
+    ],
+    "width": [
+     "INT"
+    ],
+    "height": [
+     "INT"
+    ],
+    "crop": [
+     []
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "LATENT"
+  ],
+  "output_node": false
+ },
+ "LatentUpscaleBy": {
+  "input": {
+   "required": {
+    "samples": [
+     "LATENT"
+    ],
+    "upscale_method": [
+     []
+    ],
+    "scale_by": [
+     "FLOAT"
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "LATENT"
+  ],
+  "output_node": false
+ },
+ "UpscaleModelLoader": {
+  "input": {
+   "required": {
+    "model_name": [
+     "COMBO"
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "UPSCALE_MODEL"
+  ],
+  "output_node": false
+ },
+ "ImageUpscaleWithModel": {
+  "input": {
+   "required": {
+    "upscale_model": [
+     "UPSCALE_MODEL"
+    ],
+    "image": [
+     "IMAGE"
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_node": false
+ },
+ "ImageScale": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE"
+    ],
+    "upscale_method": [
+     []
+    ],
+    "width": [
+     "INT"
+    ],
+    "height": [
+     "INT"
+    ],
+    "crop": [
+     []
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_node": false
+ },
+ "ImageScaleBy": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE"
+    ],
+    "upscale_method": [
+     []
+    ],
+    "scale_by": [
+     "FLOAT"
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_node": false
+ },
+ "UltimateSDUpscale": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE"
+    ],
+    "model": [
+     "MODEL"
+    ],
+    "positive": [
+     "CONDITIONING"
+    ],
+    "negative": [
+     "CONDITIONING"
+    ],
+    "vae": [
+     "VAE"
+    ],
+    "upscale_by": [
+     "FLOAT"
+    ],
+    "seed": [
+     "INT"
+    ],
+    "steps": [
+     "INT"
+    ],
+    "cfg": [
+     "FLOAT"
+    ],
+    "sampler_name": [
+     []
+    ],
+    "scheduler": [
+     []
+    ],
+    "denoise": [
+     "FLOAT"
+    ],
+    "upscale_model": [
+     "UPSCALE_MODEL"
+    ],
+    "mode_type": [
+     []
+    ],
+    "tile_width": [
+     "INT"
+    ],
+    "tile_height": [
+     "INT"
+    ],
+    "mask_blur": [
+     "INT"
+    ],
+    "tile_padding": [
+     "INT"
+    ],
+    "seam_fix_mode": [
+     []
+    ],
+    "seam_fix_denoise": [
+     "FLOAT"
+    ],
+    "seam_fix_width": [
+     "INT"
+    ],
+    "seam_fix_mask_blur": [
+     "INT"
+    ],
+    "seam_fix_padding": [
+     "INT"
+    ],
+    "force_uniform_tiles": [
+     "BOOLEAN"
+    ],
+    "tiled_decode": [
+     "BOOLEAN"
+    ],
+    "batch_size": [
+     "INT"
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_node": false
+ },
+ "FaceDetailer": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE"
+    ],
+    "model": [
+     "MODEL"
+    ],
+    "clip": [
+     "CLIP"
+    ],
+    "vae": [
+     "VAE"
+    ],
+    "guide_size": [
+     "FLOAT"
+    ],
+    "guide_size_for": [
+     "BOOLEAN"
+    ],
+    "max_size": [
+     "FLOAT"
+    ],
+    "seed": [
+     "INT"
+    ],
+    "steps": [
+     "INT"
+    ],
+    "cfg": [
+     "FLOAT"
+    ],
+    "sampler_name": [
+     []
+    ],
+    "scheduler": [
+     []
+    ],
+    "positive": [
+     "CONDITIONING"
+    ],
+    "negative": [
+     "CONDITIONING"
+    ],
+    "denoise": [
+     "FLOAT"
+    ],
+    "feather": [
+     "INT"
+    ],
+    "noise_mask": [
+     "BOOLEAN"
+    ],
+    "force_inpaint": [
+     "BOOLEAN"
+    ],
+    "bbox_threshold": [
+     "FLOAT"
+    ],
+    "bbox_dilation": [
+     "INT"
+    ],
+    "bbox_crop_factor": [
+     "FLOAT"
+    ],
+    "sam_detection_hint": [
+     []
+    ],
+    "sam_dilation": [
+     "INT"
+    ],
+    "sam_threshold": [
+     "FLOAT"
+    ],
+    "sam_bbox_expansion": [
+     "INT"
+    ],
+    "sam_mask_hint_threshold": [
+     "FLOAT"
+    ],
+    "sam_mask_hint_use_negative": [
+     []
+    ],
+    "drop_size": [
+     "INT"
+    ],
+    "bbox_detector": [
+     "BBOX_DETECTOR"
+    ],
+    "wildcard": [
+     "STRING"
+    ],
+    "cycle": [
+     "INT"
+    ]
+   },
+   "optional": {
+    "sam_model_opt": [
+     "SAM_MODEL"
+    ],
+    "segm_detector_opt": [
+     "SEGM_DETECTOR"
+    ],
+    "detailer_hook": [
+     "DETAILER_HOOK"
+    ],
+    "inpaint_model": [
+     "BOOLEAN"
+    ],
+    "noise_mask_feather": [
+     "INT"
+    ],
+    "scheduler_func_opt": [
+     "SCHEDULER_FUNC"
+    ],
+    "tiled_encode": [
+     "BOOLEAN"
+    ],
+    "tiled_decode": [
+     "BOOLEAN"
+    ]
+   }
+  },
+  "output": [
+   "IMAGE",
+   "IMAGE",
+   "IMAGE",
+   "MASK",
+   "DETAILER_PIPE",
+   "IMAGE"
+  ],
+  "output_node": false
+ },
+ "SAMLoader": {
+  "input": {
+   "required": {
+    "model_name": [
+     []
+    ],
+    "device_mode": [
+     []
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "SAM_MODEL"
+  ],
+  "output_node": false
+ },
+ "UltralyticsDetectorProvider": {
+  "input": {
+   "required": {
+    "model_name": [
+     []
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "BBOX_DETECTOR",
+   "SEGM_DETECTOR"
+  ],
+  "output_node": false
+ },
+ "MaskToImage": {
+  "input": {
+   "required": {
+    "mask": [
+     "MASK"
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "IMAGE"
+  ],
+  "output_node": false
+ }
+}
