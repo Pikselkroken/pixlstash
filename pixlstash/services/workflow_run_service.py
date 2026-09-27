@@ -197,6 +197,7 @@ def prompt_text_target(
         if isinstance(source_inputs.get(key), str) and source_inputs[key].strip()
     }
     recipe_texts.add(max(strings, key=len, default=""))
+    recipe_texts.discard("")
     if prompt and prompt.strip() in recipe_texts:
         logger.info(
             "Encoder %s keeps its wire from node %s: the run prompt is that "

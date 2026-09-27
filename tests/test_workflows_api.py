@@ -8975,6 +8975,7 @@ def test_a_run_prompt_replaces_a_prompt_builder_wired_into_the_encoder():
     }
     assert prompt_text_target(graph, "91", "a red bicycle") == ("91", "text")
     assert prompt_text_target(graph, "91", "") == ("91", "text")
+    assert prompt_text_target(graph, "91", "   ") == ("91", "text")
     del graph["91"]["inputs"]["text"]
     assert prompt_text_target(graph, "91", "a red bicycle") is None
 
