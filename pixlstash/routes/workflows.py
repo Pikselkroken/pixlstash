@@ -3617,6 +3617,12 @@ def create_router(server) -> APIRouter:
             return
         labels, core = _graph_labels(graph, "parameters")
         wanted = {(item.slot_label, item.input_name): item.value for item in values}
+        # One input can be named two ways (slot label, core address); the entry
+        # later in *values* wins, as a later one of the same address does.
+        order = {
+            (item.slot_label, item.input_name): index
+            for index, item in enumerate(values)
+        }
         found = set()
         for node_id, node in graph.items():
             inputs = node.get("inputs") if isinstance(node, dict) else None
@@ -3625,14 +3631,17 @@ def create_router(server) -> APIRouter:
             addressed_as = [labels.get(node_id)]
             if node_id in core:
                 addressed_as.append(CORE_ADDRESS_PREFIX + core[node_id])
-            for label in addressed_as:
-                for name in list(inputs):
-                    # A wired input is left alone - overwriting drops the link -
-                    # so it counts as not applied and is logged below.
-                    if (label, name) not in wanted or isinstance(inputs[name], list):
-                        continue
-                    found.add((label, name))
-                    inputs[name] = wanted[(label, name)]
+            for name in list(inputs):
+                # A wired input is left alone - overwriting drops the link -
+                # so it counts as not applied and is logged below.
+                if isinstance(inputs[name], list):
+                    continue
+                matches = [
+                    (label, name) for label in addressed_as if (label, name) in wanted
+                ]
+                if matches:
+                    found.update(matches)
+                    inputs[name] = wanted[max(matches, key=order.__getitem__)]
         for slot_label, input_name in sorted(set(wanted) - found):
             # Not an error: a card's defaults are read off every variant, and a
             # stage-node address goes stale when the base topology changes

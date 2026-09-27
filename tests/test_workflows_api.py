@@ -8550,6 +8550,29 @@ def test_a_request_value_by_slot_label_wins_over_a_default_by_core_address(
     assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 12
 
 
+def test_one_input_named_two_ways_takes_the_later_value(runnable):
+    """A saved recipe's core-addressed override must not beat a request's slot label."""
+    core = {"slot_label": _core_address("3", "steps").rpartition("/")[0]}
+    slot = {"slot_label": topology_node_labels(RUN_DOCUMENT)["3"]}
+    for first, second, expected in ((core, slot, 12), (slot, core, 12)):
+        r = runnable.owner.post(
+            f"{API}/workflows/run",
+            json={
+                "workflow_key": RUN_CARD,
+                "values": [
+                    {
+                        **first,
+                        "input_name": "steps",
+                        "value": 31 if first is not second else 0,
+                    },
+                    {**second, "input_name": "steps", "value": expected},
+                ],
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert runnable.submitted[-1]["graph"]["3"]["inputs"]["steps"] == expected
+
+
 def test_a_recipe_read_off_no_picture_bypasses_no_lora(runnable):
     """No sample is no evidence: the base graph's LoRA stays, unreported."""
     runnable.monkeypatch.setattr(
