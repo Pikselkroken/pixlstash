@@ -2710,8 +2710,9 @@ def create_router(server) -> APIRouter:
         description=(
             "Put every topology of the named workflows in one. The first id "
             "is the cover: its name, notes, defaults, pins and picture inputs "
-            "are the merged workflow's, and every other distinct name is "
-            "appended to its notes as `Also named: …`. A manual cover keeps "
+            "are the merged workflow's; every other workflow's notes follow, "
+            "headed by its name, then every other distinct name as `Also "
+            "named: …`. A manual cover keeps "
             "its id; otherwise the merge is a new workflow. Saved recipes of "
             "the merged workflows move with them."
         ),

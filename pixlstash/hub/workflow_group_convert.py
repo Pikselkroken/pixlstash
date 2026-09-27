@@ -120,9 +120,14 @@ def convert_card_state(conn: sqlite3.Connection) -> int:
     stacks = stack_rows(hub)
     placement, stack_of_group = _placements(cards, stacks)
 
+    # A file-only card has no core hash of its own and joins its topology's
+    # workflow, as ``workflow_index`` reads it.
+    core_of = {card.topology_hash: card.core_hash for card in cards if card.core_hash}
     workflow_of: dict[str, str] = {}
     for card in cards:
-        workflow_id = placement.get(card.topology_hash) or _auto_id(hub, card)
+        workflow_id = placement.get(card.topology_hash) or _auto_id(
+            hub, card, core_of.get(card.topology_hash)
+        )
         if workflow_id is None:
             logger.warning(
                 "Card %s (%s) has no core hash and no stored graph to compute "
@@ -175,8 +180,51 @@ def convert_card_state(conn: sqlite3.Connection) -> int:
             )
         )
         base = bases.get(workflow_id) or min(card.topology_hash for card in group)
-        _convert_workflow(conn, hub, workflow_id, group, base, labels)
+        try:
+            _convert_workflow(conn, hub, workflow_id, group, base, labels)
+        except Exception as exc:
+            # This runs at hub open inside the data-version transaction: an
+            # uncaught error would roll it back and refuse the hub on every
+            # start. The card tables are left as they were, so what this
+            # workflow's cards held is still on disk to recover by hand.
+            logger.error(
+                "Workflow %s: converting cards %s failed, so their names, notes, "
+                "defaults, pins and inputs are not carried over: %s",
+                workflow_id,
+                [card.workflow_key for card in group],
+                exc,
+                exc_info=True,
+            )
+    _log_dropped_promotions(hub)
     return len(workflow_of)
+
+
+def _run_strength(run, node_id: str):
+    """A stored run's ``strength_model`` on *node_id*, or ``None``."""
+    node = run.get(node_id) if isinstance(run, dict) else None
+    inputs = node.get("inputs") if isinstance(node, dict) else None
+    return inputs.get("strength_model") if isinstance(inputs, dict) else None
+
+
+def _log_dropped_promotions(hub) -> None:
+    """Name every LoRA promotion, which the default recipe has no place for.
+
+    A promotion keyed one LoRA file into a card; with LoRAs recipe values now,
+    the rule "a LoRA in most of the best pictures is a default" (#1620 D2)
+    takes its place. The rows stay in the hub; this says which they were.
+    """
+    for topology_hash, slot_label, asset in hub.fetchall(
+        "SELECT topology_hash, slot_label, asset FROM workflow_lora_promotion "
+        "ORDER BY topology_hash, slot_label, asset"
+    ):
+        logger.warning(
+            "The LoRA promotion of %s at slot %s of topology %s is not carried "
+            "over: a workflow's default LoRAs are those in most of its best "
+            "pictures.",
+            asset,
+            slot_label,
+            topology_hash,
+        )
 
 
 def _placements(cards: list[Card], stacks) -> tuple[dict[str, str], dict[str, str]]:
@@ -245,10 +293,17 @@ def _placements(cards: list[Card], stacks) -> tuple[dict[str, str], dict[str, st
     return placement, stack_of_group
 
 
-def _auto_id(hub, card: Card) -> Optional[str]:
-    """``auto:<core hash>``, computed from a stored graph when the cache lacks it."""
-    if card.core_hash:
-        return f"{AUTO_STACK_PREFIX}{card.core_hash}"
+def _auto_id(hub, card: Card, topology_core: Optional[str]) -> Optional[str]:
+    """``auto:<core hash>``, computed from a stored graph when the cache lacks it.
+
+    A file-only card (#1466: a workflow file with no recipe) is its own
+    workflow, ``auto:<topology hash>``, unless another card of its topology
+    has a core hash, exactly as ``workflow_index`` files it.
+    """
+    if topology_core:
+        return f"{AUTO_STACK_PREFIX}{topology_core}"
+    if not card.variants:
+        return f"{AUTO_STACK_PREFIX}{card.topology_hash}"
     found = card_document(hub, card)
     if found is None:
         return None
@@ -427,9 +482,12 @@ def _convert_workflow(
     ]
     blocks = [(attr(card, "name"), attr(card, "notes")) for card in group]
     blocks = [(heading, text) for heading, text in blocks if text]
-    # One card's notes stand as written; only a merge needs to say whose is whose.
+    # The cover's notes alone stand as written; any other card's are headed
+    # with its name, so nobody reads them as the workflow's own.
     notes = "\n\n".join(
-        text if len(blocks) == 1 else f"{heading or _UNNAMED}:\n{text}"
+        text
+        if len(blocks) == 1 and attr(cover, "notes") == text
+        else f"{heading or _UNNAMED}:\n{text}"
         for heading, text in blocks
     )
     if also:
@@ -568,6 +626,33 @@ def _structural_loras(hub, workflow_id: str, cover: Card) -> dict[str, str]:
     strength is its modal one over the stored runs of that variant, else
     :data:`_GRAPH_STRENGTH`.
     """
+    others = sorted(
+        (topology_hash, label)
+        for (topology_hash, label), mark in slot_marks(
+            hub,
+            sorted(
+                {
+                    row["topology_hash"]
+                    for row in hub.fetchall(
+                        "SELECT DISTINCT topology_hash FROM workflow_variant "
+                        "WHERE workflow_key IN (SELECT workflow_key FROM "
+                        "workflow_key_successor WHERE workflow_id = ?)",
+                        (workflow_id,),
+                    )
+                }
+                - {cover.topology_hash}
+            ),
+        ).items()
+        if mark == STRUCTURAL
+    )
+    for topology_hash, label in others:
+        logger.warning(
+            "Workflow %s: the structural LoRA slot %s of topology %s is not on "
+            "the cover card, so it is not made a default-recipe LoRA.",
+            workflow_id,
+            label,
+            topology_hash,
+        )
     marks = slot_marks(hub, [cover.topology_hash])
     if STRUCTURAL not in marks.values():
         return {}
@@ -626,11 +711,7 @@ def _structural_loras(hub, workflow_id: str, cover: Card) -> dict[str, str]:
         strengths = Counter(
             float(value)
             for run in runs
-            for value in [
-                ((run.get(slot.node_id) or {}).get("inputs") or {}).get(
-                    "strength_model"
-                )
-            ]
+            for value in [_run_strength(run, slot.node_id)]
             if isinstance(value, (int, float)) and not isinstance(value, bool)
         )
         loras[f"{LORA_ADDRESS_PREFIX}{sha256}"] = (

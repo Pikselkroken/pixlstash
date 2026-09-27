@@ -611,7 +611,7 @@ The writes, every one of them `OWNER_ONLY` and every one of them raising a
 | Route | Purpose | Body → Response |
 |---|---|---|
 | `PATCH /api/v1/workflows/{workflow_id}` | Name, notes, hidden (`workflow_group_attr`) | `{name?, notes?, hidden?}` → the opened workflow. Fields **not sent** stand; an explicit `null` name or notes clears it |
-| `POST /api/v1/workflows/merge` | Fold workflows into one (#1623) | `{ids: [workflow_id, …]}` (≥2, unique, each known: 422 / 400 / 404, nothing written) → `201 {id, ids}`. Every topology of every named workflow joins one manual group; `ids[0]` is the cover, whose name, notes, hidden flag, defaults, pins and inputs are kept, every other distinct name appended to its notes as `Also named: …`, and nothing else of the others kept. A manual cover keeps its id; an automatic one gives way to a new 32-hex group. The folded-away workflows lose their rows and their saved recipes move to `id` |
+| `POST /api/v1/workflows/merge` | Fold workflows into one (#1623) | `{ids: [workflow_id, …]}` (≥2, unique, each known: 422 / 400 / 404, nothing written) → `201 {id, ids}`. Every topology of every named workflow joins one manual group; `ids[0]` is the cover, whose name, notes, hidden flag, defaults, pins and inputs are kept, every other workflow's notes appended headed by its name, then every other distinct name as `Also named: …`; the others' defaults, pins and inputs are not kept (they address their own graphs). A manual cover keeps its id; an automatic one gives way to a new 32-hex group. The folded-away workflows lose their rows and their saved recipes move to `id` |
 | `POST /api/v1/workflows/{workflow_id}/split` | Take one topology out into a workflow of its own | `{topology: <64 hex>}` → `201 {id}`, a new manual group holding just that topology; the workflow it leaves keeps its name and settings. 400 when the workflow has one topology or does not hold it |
 | `GET /api/v1/workflows/{workflow_id}/lora-summary` | The workflow's LoRAs (the inspector's pile) | `?cover=<picture id>` → `{workflow_id, pictures, shared: [LoraUse], varying: [LoraUse], without: LoraUse \| null, cover_asset}`, a `LoraUse` being `{asset, filename, name, on_shelf, pictures, picture_ids}`. `shared` is in every kept picture of the workflow; `varying` is the rest, most pictures first; `without` the pictures that loaded none of `varying` (its `asset` is empty). `asset` is the stored graphs' `asset:<sha256>` reference, which the picture listing's `workflow_lora` takes; `filename`/`name` are null for a forgotten name. `workflow_lora` on the listing only narrows `workflow`: alone, or not an `asset:` reference, it matches nothing |
 | `PUT /api/v1/workflows/{workflow_id}/model-fix` | Replace a model the workflow's base graph loads (a missing checkpoint, VAE or text encoder), or undo that | `{was, now, slot_kind?}` → the opened workflow; `now: null` undoes. `was` is the file as the graph names it, `now` a **checkpoint, VAE or text encoder** on the shelf, stored in the shelf's spelling (404 otherwise). **The shelf kind of `now` is the kind of slot it fixes** (`workflow_identity.model_fix_kind`: a base-model widget, `vae_name`, or a `clip_name*` on anything but a CLIP vision loader), so a same-named file in a slot of another kind is never rewritten. The cover flag reads the widget-keyed asset rows, and confirms a `clip_name` match against the variant's stored slots, so a CLIP vision loader holding a replaced text encoder's file name is not flagged. `slot_kind` (`checkpoint` \| `vae` \| `text_encoder`) may say it too: 422 when `now` is not of that kind, and an undo carrying it undoes only that kind. 409 when no variant of the workflow's graph loads `was` in a slot of that kind, or when another original is already replaced by `now` in that slot; 422 when both name one file. A `was` that is itself a replacement is resolved to the original it replaced, so fixes never chain. Where cards merge onto the fixed one, **its** name, pins and defaults win; undoing does not bring back the attributes of a card that merged into it. **The card keeps its pictures**: the fix is keyed per topology and slot, so a sibling card of the same graph with the replacement in that slot folds onto the original's key too, and a digest (`ckpt_sha256`) or shelf-id slot cannot be fixed this way (`workflow_model_fix`), and `workflow_cards.fixed_slots` reads the replacement as the original in the card key, so pictures made with `now` are filed on this card and the topology's cards are re-keyed in one transaction, as a slot flip does. A run and `GET …/graph` load `now` wherever the graph names `was` (matched by file, not folder), reported in `substitutions`. **Where ComfyUI does not list `now` for that loader** (not in its model folders, or a file type it cannot read), a VAE or text encoder fix swaps the loader node for `PixlStashVAELoader` / `PixlStashCLIPLoader`, node id and links kept, addressing the files by shelf SHA-256 (a Dual loader's two onto `clip_sha256` / `clip_sha256_2`, its `type` carried over; #1605). Refused, leaving the file missing, for a GGUF file, a file the hasher has not read, a Triple loader, an output past the first in use, a `type` our node does not list, or a ComfyUI without ComfyUI-PixlStash; checkpoints are rename-only. The swap is recorded (`workflow_loader_swap`) when the graph is submitted or opened in ComfyUI, never by a preflight, on the graph as sent (after the saver swap and any repair), so the swapped graph's pictures card here too. The shelf file must have a digest and a present copy. The detail carries `model_fixes: [{slot_label, was, now, slot_kind}]`, `slot_kind` naming the Workflow tab row (Checkpoint, VAE, CLIP) the fix belongs to; each cover carries `superseded: true` when its picture was made with `was`, and such covers sort after every other. The fix acts on the base topology and re-keys its cards internally; the workflow keeps its id |
@@ -1017,62 +1017,32 @@ the two sides have agreed:
    `rank` is a rating and `covers` is an order, not a date. A client sorting by
    it puts `null` BELOW every dated card — reading "never" as a date is how a
    workflow with nothing to show would outrank every workflow made before 1970.
-4. **The grid draws one card per stack.** `stack_size` ≥ 2 makes a card a
-   stack; the card drawn is the cover, `member_keys` names the rest, and the
-   cover's `differs_by` is empty: the chips say how a member differs from the
-   cover, so they have nothing to say on the cover itself. The order is a manual
-   assignment, then an unstacking, then the automatic group by `core_hash`; a
-   stored member row is filed under the core hash it was written against, so a
-   card that has since left its group simply is not found in it and takes
-   cover-rank order like a newcomer.
-
-   **Every member carries the stack, not only the cover.** A member opened on
-   its own reports the same `stack_size` and `member_keys`, because it also
-   carries the `differs_by` it earned against that cover — and `factChips`
-   branches on `stack_size`, dropping the "differs by" label at 1 and rendering
-   those chips as plain facts about a cover the payload would never name.
-   Chips and size are therefore always consistent: a card outside a stack has
-   `stack_size: 1` and no chips at all.
-
-   **`members` names the stack without a read per member.** Every stacked
-   card, on the grid and on the detail route, carries the whole stack in its
-   order, itself included, as `{key, name, sets_apart, differs_by}`. Members
-   of one stack usually get the same generated `name`, so `sets_apart` lists
-   the models and structural LoRAs a member loads that some other member does
-   not (shelf title, plus its quant), minus any its own `name` already says,
-   and `differs_by` is its own chips against the cover. Recipe LoRAs are left
-   out, since they vary inside one card.
-
-   **`differs_by_detail` says what a chip stands for** (#1597), on the card
-   and on each member, keyed by the chip so `differs_by` stays a plain list of
-   strings: `+ ImageScaleBy · − LoraLoaderModelOnly` for an "N nodes differ"
-   chip (only the classes it counted), or `Krea 2 → Flux Dev fp8` for "other
-   checkpoint" / "other models" (shelf title, plus its quant; a forgotten name
-   reads "unnamed model"). A chip with nothing more to say is absent. **No
-   settings**: a stored document nulls every parameter and a card spans many
-   recipes, so there is no single "steps 20 → 28" to state. Clients show it as
-   a hover `title` on the chip and speak it in the accessible name, since the
-   chips themselves are `aria-hidden`.
-
-   **`stack_id` is gone (#1623)**, with the stack routes it addressed: a
-   workflow is written to by its own `id`, and merge and split are the only
-   gestures that move topologies between workflows.
+4. **The grid draws one card per workflow (#1623).** A workflow is a group of
+   topologies (`auto:<core_hash>`, or a uuid hex for one the owner merged or
+   split); its card is the base card's (`base_topology`), with counts, covers
+   and rank over every card of every topology in it, and `topologies` lists
+   them all — which is what `POST /workflows/{id}/split` takes. There are no
+   stacks on the wire any more: `stack_size`, `stack_id`, `member_keys`,
+   `members`, `differs_by` and `differs_by_detail` are gone, with the stack
+   routes that addressed them. What used to tell stack members apart — a
+   checkpoint, a LoRA — is a recipe value now: `recipe_values` counts the
+   checkpoints and LoRAs the workflow's kept pictures used, and each name is a
+   value `GET /pictures?workflow=<id>&comfyui_model=…` (or `comfyui_lora`)
+   filters on.
 5. **Nothing is precomputed, and `cards` is not everything.** The grid is three
    vault queries in one session — one `GROUP BY workflow_structural_hash`, one
-   `ROW_NUMBER()` window and one `GROUP BY workflow_key` over the saved recipes,
-   plus a fourth only when the owner has chosen a cover — joined in memory to
+   `ROW_NUMBER()` window and one `GROUP BY workflow_id` over the saved recipes,
+   plus the model and LoRA values behind `recipe_values` — joined in memory to
    the hub's card rows, with no aggregate table, so no client may assume a
    figure is stable across a rating or an import. Hidden cards and one-offs are
    excluded and returned as the counts `hidden` and `one_offs`; both still open
    by key on the detail route, because hiding is a decision about the grid
    rather than a deletion.
 
-   **A one-off is all five of**: fewer than three pictures, never rated, never
-   imported as a file, with no saved recipe on it, and not made by promoting a
-   LoRA. The fourth clause is B6's: saving a look is the plainest statement
-   that somebody means to run a workflow again, so a card carrying one is never
-   folded into the count. The fifth is the same argument for a card the owner
-   asked for by name from the LoRA pile.
+   **A one-off is all four of**: fewer than three pictures, never rated, never
+   imported as a file, and with no saved recipe on it. The fourth clause is
+   B6's: saving a look is the plainest statement that somebody means to run a
+   workflow again, so a card carrying one is never folded into the count.
 
    **"Imported" means imported by hand** (#1440): a file a pull from ComfyUI
    wrote (`workflow_pulled_file`) does not count, because a pull
@@ -1087,7 +1057,8 @@ the two sides have agreed:
    values by position: filing it writes a topology and no recipe, so its card
    key is the topology's alone and no `workflow_variant` row carries it. Such a
    card is a stored workflow file and nothing else — no pictures, no cached
-   slot list, and a null `core_hash`, so it stacks with nothing.
+   slot list, and a null `core_hash`, so it is a workflow of its own,
+   `auto:<topology_hash>`, unless another card of its topology has a core.
 
    **Its `models` and `loras` are recovered from the file, not read off a
    recipe**, and they carry the same fields as any other card's: `name` is the

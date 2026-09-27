@@ -4211,8 +4211,15 @@ def test_merging_workflows_keeps_the_covers_state_and_names_the_rest(workflow_en
     )
     owner.patch(
         f"{API}/workflows/{FORGOTTEN_WF}",
-        json={"name": "Old portraits", "hidden": True},
+        json={"name": "Old portraits", "notes": "loose light", "hidden": True},
     )
+    # A card the vault has not converted yet names the folded-away workflow.
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_key_successor (workflow_key, workflow_id) "
+            "VALUES (?, ?)",
+            ("f" * 64, FORGOTTEN_WF),
+        )
     owner.put(
         f"{API}/workflows/{BUSY_WF}/defaults",
         json={"defaults": [{"slot_label": "s", "input_name": "steps", "value": 9}]},
@@ -4247,7 +4254,17 @@ def test_merging_workflows_keeps_the_covers_state_and_names_the_rest(workflow_en
     ) == sorted([BUSY_TOPOLOGY, FORGOTTEN_TOPOLOGY])
     row = _attr_row(server, merged)
     assert row["name"] == "Portraits"
-    assert row["notes"] == "cfg 7\n\nAlso named: Old portraits"
+    # The other's notes are kept too, headed by its name.
+    assert row["notes"] == (
+        "cfg 7\n\nOld portraits:\nloose light\n\nAlso named: Old portraits"
+    )
+    assert (
+        hub.fetchone(
+            "SELECT workflow_id FROM workflow_key_successor WHERE workflow_key = ?",
+            ("f" * 64,),
+        )[0]
+        == merged
+    )
     # The cover's hidden flag, not the other's.
     assert row["hidden"] == 0
     assert _group_defaults(hub, merged) == {"s/steps": "9"}

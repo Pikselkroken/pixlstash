@@ -26,7 +26,8 @@ from pixlstash.hub.workflow_group_convert import (
     _GROUP_NAMESPACE,
     convert_card_state,
 )
-from pixlstash.hub.workflows import get_document, record_api_graph
+from pixlstash.hub import workflow_cards
+from pixlstash.hub.workflows import get_document, record_api_graph, record_ui_graph
 from pixlstash.server import Server
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.services.workflow_identity import (
@@ -251,7 +252,12 @@ def _expected(w) -> dict:
                     0,
                 ),
                 (w.split, "Preview", None, 1),
-                (MANUAL, "Img2img cover", "Character runs.\n\nAlso named: Img2img", 0),
+                (
+                    MANUAL,
+                    "Img2img cover",
+                    "Img2img:\nCharacter runs.\n\nAlso named: Img2img",
+                    0,
+                ),
             ]
         ),
         "workflow_group_default": sorted(
@@ -304,6 +310,51 @@ def test_every_card_state_lands_on_its_workflow_and_a_rerun_changes_nothing(
 
     _convert(world.hub)
     assert _rows(world.hub) == first
+
+
+def test_a_file_only_card_keeps_what_the_owner_typed(tmp_path):
+    """A workflow file with no recipe (#1466) is its own workflow, and converts.
+
+    It has no core hash and no stored graph, so it is ``auto:<topology hash>``
+    as ``workflow_index`` files it; its name, notes, hidden flag and successor
+    row must not be dropped for want of a core.
+    """
+    hub = HubDatabase(str(tmp_path / "hub.db"))
+    ui = {
+        "nodes": [
+            {
+                "id": 1,
+                "type": "LoadImage",
+                "inputs": [],
+                "outputs": [{"name": "IMAGE", "links": [1]}],
+                "widgets_values": ["in.png", "image"],
+            },
+            {
+                "id": 2,
+                "type": "SaveImage",
+                "inputs": [{"name": "images", "link": 1}],
+                "outputs": [],
+                "widgets_values": ["out"],
+            },
+        ],
+        "links": [[1, 1, 0, 2, 0, "*"]],
+    }
+    topology = record_ui_graph(hub, ui)
+    key = workflow_cards.record_file(hub, "ui.json", topology)
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_attr (workflow_key, name, notes, hidden) "
+            "VALUES (?, ?, ?, 1)",
+            (key, "Upscale only", "Run at night."),
+        )
+
+    _convert(hub)
+
+    workflow_id = f"auto:{topology}"
+    assert _rows(hub)["workflow_key_successor"] == [(key, workflow_id)]
+    assert _rows(hub)["workflow_group_attr"] == [
+        (workflow_id, "Upscale only", "Run at night.", 1)
+    ]
 
 
 def test_the_hub_open_runs_the_conversion_once(world, tmp_path):

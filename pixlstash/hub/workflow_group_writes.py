@@ -168,8 +168,9 @@ def merge_workflows(
 
     ``ids[0]`` is the cover: its name, notes, hidden flag, defaults, pins and
     picture inputs are what the merged workflow has. Every other distinct name
-    is appended to the notes as ``Also named: …`` (#1620 D4) and nothing else
-    of the others is kept. A manual cover keeps its id; an automatic one is
+    is appended to the notes as ``Also named: …`` (#1620 D4), and every other
+    workflow's notes follow, headed by its name, so nothing typed is lost. Its
+    defaults, pins and inputs are not kept: they address its own graph. A manual cover keeps its id; an automatic one is
     replaced by a new manual group, since ``auto:<core hash>`` names only the
     topologies sharing that hash.
 
@@ -215,6 +216,18 @@ def merge_workflows(
                 for topology_hash in topologies.get(workflow_id, ())
             ],
         )
+        # A card the vault has not converted yet still names its old workflow
+        # through its successor row; it follows the merge, or its saved
+        # recipes would land on an id that no longer resolves.
+        conn.executemany(
+            "UPDATE workflow_key_successor SET workflow_id = ? WHERE workflow_id = ?",
+            [(target, emptied) for emptied in ids if emptied != target],
+        )
+        carried = [
+            f"{attrs[other][1] or 'Unnamed workflow'}:\n{attrs[other][2]}"
+            for other in ids[1:]
+            if other in attrs and attrs[other][2]
+        ]
         for emptied in ids:
             if emptied == target:
                 continue
@@ -225,13 +238,13 @@ def merge_workflows(
                 "(SELECT 1 FROM workflow_group_member WHERE workflow_id = ?)",
                 (emptied, emptied),
             )
-        if others:
+        if others or carried:
             notes = cover_attr[2] if cover_attr else None
-            addition = ALSO_NAMED + ", ".join(others)
+            additions = carried + ([ALSO_NAMED + ", ".join(others)] if others else [])
             conn.execute(
                 "INSERT INTO workflow_group_attr (workflow_id, notes) VALUES (?, ?) "
                 "ON CONFLICT(workflow_id) DO UPDATE SET notes = excluded.notes",
-                (target, f"{notes}\n\n{addition}" if notes else addition),
+                (target, "\n\n".join(filter(None, [notes, *additions]))),
             )
     logger.info(
         "Merged workflows %s into %s (%d topologies).",
