@@ -350,6 +350,21 @@ def register_routes(router, server):
         if candidate_ids is not None and not candidate_ids:
             return []
 
+        # Encoded here, never inside the database task: the DB writer is one
+        # thread, and on Metal an encode can wait for the CPU encoders to load
+        # on the GPU worker, which commits its own batches through that writer.
+        try:
+            query_embedding = server.vault.generate_text_embedding(query)
+            clip_query_embedding = server.vault.generate_clip_text_embedding(query)
+        except CpuQueryEncodersNotReadyError as exc:
+            # 503 rather than a 500: nothing is wrong with the request, the
+            # encoders are still loading (or need a worker that is not running).
+            logger.warning("Text search cannot encode its query yet: %s", exc)
+            raise HTTPException(
+                status_code=503,
+                detail=str(exc) if exc.worker_running else NO_GPU_WORKER_DETAIL,
+            ) from exc
+
         def find_by_text(session, query, offset, limit):
             words = re.findall(r"\b\w+\b", query.lower())
             semantic_offset = 0 if sort_mech else offset
@@ -395,8 +410,8 @@ def register_routes(router, server):
                 session,
                 query,
                 words,
-                text_to_embedding=server.vault.generate_text_embedding,
-                clip_text_to_embedding=server.vault.generate_clip_text_embedding,
+                query_embedding=query_embedding,
+                clip_query_embedding=clip_query_embedding,
                 text_match_weight=OCR_TEXT_MATCH_WEIGHT,
                 offset=semantic_offset,
                 limit=semantic_limit,
@@ -451,19 +466,7 @@ def register_routes(router, server):
             log_semantic_results(f"sorted_{sort_mech.key.name}", sorted_results)
             return sorted_results
 
-        try:
-            results = server.vault.db.run_task(find_by_text, query, offset, limit)
-        except CpuQueryEncodersNotReadyError as exc:
-            # Raised from inside the database task, where the query is encoded.
-            # 503 rather than a 500: nothing is wrong with the request, the
-            # encoders are still loading (or need a worker that is not running).
-            logger.warning(
-                "Text search cannot encode its query yet (query=%r): %s", query, exc
-            )
-            raise HTTPException(
-                status_code=503,
-                detail=str(exc) if exc.worker_running else NO_GPU_WORKER_DETAIL,
-            ) from exc
+        results = server.vault.db.run_task(find_by_text, query, offset, limit)
         if results:
             hidden_ids = _fetch_hidden_picture_ids(
                 server,

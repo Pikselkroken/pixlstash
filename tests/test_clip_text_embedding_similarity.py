@@ -434,7 +434,9 @@ def test_picture_semantic_search_returns_relevant_result(test_server):
             session,
             query="Clementine holding a black assault rifle",
             query_words=["Clementine", "holding", "black", "assault", "rifle"],
-            text_to_embedding=dummy_text_to_embedding,
+            query_embedding=dummy_text_to_embedding(
+                "Clementine holding a black assault rifle"
+            ),
             fuzzy_weight=0.0,  # Only embedding similarity
             embedding_weight=1.0,
             threshold=0.0,
@@ -509,7 +511,7 @@ def test_picture_semantic_search_with_tags_and_weights(
             session,
             query="assault rifle",
             query_words=["assault", "rifle"],
-            text_to_embedding=dummy_text_to_embedding,
+            query_embedding=dummy_text_to_embedding("assault rifle"),
             fuzzy_weight=fuzzy_weight,
             embedding_weight=embedding_weight,
             threshold=threshold,
@@ -585,7 +587,7 @@ def test_picture_semantic_search_without_embeddings(
             session,
             query="assault rifle",
             query_words=["assault", "rifle"],
-            text_to_embedding=dummy_text_to_embedding,
+            query_embedding=dummy_text_to_embedding("assault rifle"),
             fuzzy_weight=fuzzy_weight,
             embedding_weight=embedding_weight,
             threshold=threshold,
@@ -658,7 +660,7 @@ def test_picture_semantic_search_without_tags(
             session,
             query="assault rifle",
             query_words=preprocessed_query_words,
-            text_to_embedding=dummy_text_to_embedding,
+            query_embedding=dummy_text_to_embedding("assault rifle"),
             fuzzy_weight=fuzzy_weight,
             embedding_weight=embedding_weight,
             threshold=threshold,
