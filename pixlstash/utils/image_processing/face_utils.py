@@ -258,3 +258,38 @@ def expand_bbox_to_square(
     nx2 = min(img_width, int(round(cx + half)))
     ny2 = min(img_height, int(round(cy + half)))
     return [nx1, ny1, nx2, ny2]
+
+
+def square_window_around_bbox(
+    bbox, img_width: int, img_height: int, scale: float
+) -> list:
+    """Square window of ``scale`` times the bbox's long side, centred on it.
+
+    The window scales with the box rather than being a fixed pixel size, so a
+    large face is not cut into and a small one is not lost in background. Near an
+    edge the window is **shifted** inside the image instead of clipped, so it
+    stays square and a later square resize does not distort it; only a window
+    larger than the image itself shrinks, to the image's short side.
+
+    Args:
+        bbox: [x1, y1, x2, y2] bounding box with positive width and height.
+        img_width: Image width in pixels.
+        img_height: Image height in pixels.
+        scale: Window side as a multiple of the bbox's long side.
+
+    Returns:
+        [x1, y1, x2, y2] square region inside the image bounds.
+
+    Raises:
+        ValueError: If the bbox has no positive long side.
+    """
+    x1, y1, x2, y2 = (float(v) for v in bbox)
+    long_side = max(x2 - x1, y2 - y1)
+    if long_side <= 0:
+        raise ValueError(f"bbox {bbox!r} has no positive extent")
+    side = min(int(round(long_side * scale)), img_width, img_height)
+    cx = (x1 + x2) / 2.0
+    cy = (y1 + y2) / 2.0
+    nx1 = min(max(0, int(round(cx - side / 2.0))), img_width - side)
+    ny1 = min(max(0, int(round(cy - side / 2.0))), img_height - side)
+    return [nx1, ny1, nx1 + side, ny1 + side]

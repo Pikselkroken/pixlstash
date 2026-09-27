@@ -68,7 +68,14 @@ FACE_QUALITY_CROP_TAGS = frozenset(
 # to a face (e.g. blockiness).
 CENTRE_CROP_TAG_WHITELIST = QUALITY_CROP_TAG_WHITELIST - FACE_QUALITY_CROP_TAGS
 PIXLSTASH_TAGGER_IMAGE_SIZE_FULL = 576
-PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
+# Every quality crop is resized to this square before inference. 512 rather than 320
+# (#1648): each crop tag's AUC rises monotonically from 320 to 512 (malformed eyes
+# +0.07) and flattens after it, for about +38% crop-pass GPU. Crops natively smaller
+# than this are still upscaled; the model expects features at its training scale.
+PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP = 512
+# A face quality crop is a square of this multiple of the face box's long side, so
+# the window follows the face instead of cutting a fixed pixel square out of it.
+FACE_QUALITY_CROP_SCALE = 1.4
 
 # ------------------------------------------------------------------------- #
 # Grad-CAM anomaly-localisation tuning

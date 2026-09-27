@@ -15,6 +15,7 @@ from pixlstash.tagger_plugins.pixlstash_tagger import (
     QUALITY_CROP_TAG_WHITELIST,
 )
 from pixlstash.tasks.tag_task import TagTask
+from pixlstash.utils.image_processing.face_utils import square_window_around_bbox
 
 
 def test_centre_crop_whitelist_excludes_face_tags():
@@ -552,8 +553,8 @@ def test_a_face_low_in_a_rotated_photo_still_yields_a_crop(tmp_path):
 
     Picture 4401: orientation 6, 4608x2592 stored, face bbox
     [432, 1971, 1584, 3699]. Against the untransposed frame the box's centre
-    sits below the image, `expand_bbox_to_square` clamps the bottom edge and
-    not the top, and PIL refuses: "Coordinate 'lower' is less than 'upper'".
+    sits below the image, the window clamped the bottom edge and not the top,
+    and PIL refused: "Coordinate 'lower' is less than 'upper'".
     """
     path = _rotated_jpeg(tmp_path, "low-face.jpg")
     task = _task_for(_FakeDb(str(tmp_path)))
@@ -566,4 +567,74 @@ def test_a_face_low_in_a_rotated_photo_still_yields_a_crop(tmp_path):
     key, crop, _source, is_centre = built
     assert key.endswith("#face1"), "and it must be the FACE crop, not the fallback"
     assert is_centre is False
-    assert crop.size == (448, 448), f"a square target-sized crop; got {crop.size}"
+    # 1.4 x the 1728px long side; the window runs off the left edge and is
+    # shifted back inside rather than clipped, so it stays square.
+    assert crop.size == (2419, 2419), f"a square face-sized crop; got {crop.size}"
+
+
+def test_the_face_window_scales_with_the_face_not_the_target(tmp_path):
+    """#1648: a fixed target-sized window cut into every face larger than it.
+
+    The window is 1.4 x the face's long side whatever the target, so a face
+    bigger than the target is contained whole, and a small face is not buried in
+    background.
+    """
+    task = _task_for(_FakeDb(str(tmp_path)))
+    pic = Picture(id=8, file_path=str(_png(tmp_path, "big.png", size=(2000, 1500))))
+
+    # A 600x800 face in the middle of the picture, against a 512 target.
+    _key, big, _path, _centre = task._build_quality_crop(
+        pic, [_FakeFace(81, [700, 350, 1300, 1150])], 512, {}
+    )
+    # A 50x40 face, against the same target.
+    _key, small, _path, _centre = task._build_quality_crop(
+        pic, [_FakeFace(82, [900, 700, 950, 740])], 512, {}
+    )
+
+    assert big.size == (1120, 1120), f"1.4 x the 800px long side; got {big.size}"
+    assert small.size == (70, 70), f"1.4 x the 50px long side; got {small.size}"
+
+
+def test_a_face_window_larger_than_the_picture_shrinks_to_its_short_side(tmp_path):
+    """The only case a face window stops being 1.4 x the face: no room for it."""
+    task = _task_for(_FakeDb(str(tmp_path)))
+    pic = Picture(id=9, file_path=str(_png(tmp_path, "tight.png", size=(64, 48))))
+
+    _key, crop, _path, is_centre = task._build_quality_crop(
+        pic, [_FakeFace(91, [2, 2, 62, 46])], 512, {}
+    )
+
+    assert is_centre is False
+    assert crop.size == (48, 48)
+
+
+@pytest.mark.parametrize(
+    "bbox, expected",
+    [
+        # Room all round: centred on the face.
+        ([900, 700, 1000, 800], [880, 680, 1020, 820]),
+        # Past the right and bottom edges: shifted in, still 140 square.
+        ([1900, 1400, 2000, 1500], [1860, 1360, 2000, 1500]),
+        # Past the left and top edges.
+        ([0, 0, 100, 100], [0, 0, 140, 140]),
+    ],
+)
+def test_the_face_window_is_shifted_inside_the_image_not_clipped(bbox, expected):
+    """A clipped window is not square, and the tagger's square resize stretches it.
+
+    PIL pads a crop that runs off the image, so a crop's size cannot show this;
+    the window itself has to.
+    """
+    assert square_window_around_bbox(bbox, 2000, 1500, 1.4) == expected
+
+
+def test_a_zero_extent_face_box_takes_the_centre_crop(tmp_path):
+    """A box with no size has nothing to scale a window from; it is not a face."""
+    task = _task_for(_FakeDb(str(tmp_path)))
+    pic = Picture(id=10, file_path=str(_png(tmp_path, "zero-box.png")))
+
+    _key, _crop, _path, is_centre_crop = task._build_quality_crop(
+        pic, [_FakeFace(101, [10, 10, 10, 30])], 32, {}
+    )
+
+    assert is_centre_crop is True

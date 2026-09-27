@@ -26,7 +26,10 @@ from pixlstash.db_models.tag_prediction import (
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.video_utils import VideoUtils
-from pixlstash.utils.image_processing.face_utils import expand_bbox_to_square
+from pixlstash.utils.image_processing.face_utils import (
+    expand_bbox_to_square,
+    square_window_around_bbox,
+)
 from pixlstash.utils.service.smart_score_invalidation import (
     anomaly_state_signature,
     invalidate_changed_anomaly_scores,
@@ -37,6 +40,7 @@ from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.inference.engine import InferenceEngine
 from pixlstash.tagger_plugins.pixlstash_tagger import (
     CENTRE_CROP_TAG_WHITELIST,
+    FACE_QUALITY_CROP_SCALE,
     QUALITY_CROP_TAG_WHITELIST,
 )
 from pixlstash.pixl_logging import get_logger
@@ -315,7 +319,9 @@ class TagTask(BaseTask):
         Args:
             pic: The picture to crop.
             faces: That picture's `Face` rows, unfiltered.
-            target: Square side length the crop is expanded to.
+            target: Square side length of the faceless centre crop. A face crop
+                is sized by the face instead (`FACE_QUALITY_CROP_SCALE`); the
+                tagger resizes every crop to its quality-crop size either way.
             preloaded_images: The task's path -> image cache; populated on a miss.
 
         Returns:
@@ -342,6 +348,9 @@ class TagTask(BaseTask):
                 and getattr(face, "face_index", 0) >= 0
                 # The crop is taken from frame 0; a later frame's box is not in it.
                 and getattr(face, "frame_index", 0) == 0
+                # A zero-extent box has no size to scale the window from.
+                and float(face.bbox[2]) > float(face.bbox[0])
+                and float(face.bbox[3]) > float(face.bbox[1])
             ]
             img = preloaded_images.get(file_path)
             if img is None:
@@ -367,7 +376,12 @@ class TagTask(BaseTask):
                         * (float(face.bbox[3]) - float(face.bbox[1])),
                     ),
                 )
-                expanded = expand_bbox_to_square(largest_face.bbox, w, h, target)
+                # Proportional to the face, not a fixed pixel window (#1648): a
+                # fixed 320 window cut into 54% of faces, and could miss the chin
+                # `flux chin` is judged on.
+                expanded = square_window_around_bbox(
+                    largest_face.bbox, w, h, FACE_QUALITY_CROP_SCALE
+                )
                 return (
                     f"{file_path}#face{largest_face.id}",
                     img.crop(expanded),
@@ -377,8 +391,9 @@ class TagTask(BaseTask):
             # No face detected: fall back to a centre crop so whole-image quality
             # defects (blockiness, blur, jpeg artifacts) still get a high-
             # resolution pass instead of relying only on the downscaled full-image
-            # pass. A zero-size box at the image centre expands to the same
-            # target-sized square the face path uses.
+            # pass. A zero-size box at the image centre expands to a
+            # target-sized square: at native resolution, since the tagger's
+            # resize to the same target is then a no-op.
             centre_bbox = [w / 2.0, h / 2.0, w / 2.0, h / 2.0]
             expanded = expand_bbox_to_square(centre_bbox, w, h, target)
             return f"{file_path}#centre", img.crop(expanded), file_path, True
