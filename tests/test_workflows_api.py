@@ -107,6 +107,7 @@ from pixlstash.services.workflow_identity import (
     STRUCTURAL,
     UPSCALE,
     WORKFLOW_KEY_VERSION,
+    core_node_labels,
     guess_mark,
     slots,
     special_groups,
@@ -612,6 +613,9 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_unstacked")
         conn.execute("DELETE FROM workflow_recipe_instance")
         conn.execute("DELETE FROM workflow_model_fix")
+        conn.execute("DELETE FROM workflow_group_default")
+        conn.execute("DELETE FROM workflow_group_member")
+        conn.execute("DELETE FROM workflow_group")
         conn.execute(
             "DELETE FROM model WHERE filename IN (?, ?, ?, ?)",
             (
@@ -4286,6 +4290,8 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
         ("POST", f"{API}/workflows/stacks/{stack_id}/unstack", None),
         ("POST", f"{API}/workflows/run", {"workflow_key": BUSY_CARD}),
         ("POST", f"{API}/workflows/run/preflight", {"workflow_key": BUSY_CARD}),
+        ("POST", f"{API}/workflows/run", {"workflow_id": stack_id}),
+        ("POST", f"{API}/workflows/run/preflight", {"workflow_id": stack_id}),
         ("POST", f"{API}/workflows/{BUSY_CARD}/duplicate", None),
         ("POST", f"{API}/workflows/{BUSY_CARD}/insert-lora-loader", None),
         ("PUT", f"{API}/workflows/{BUSY_CARD}/lora-chain", {"entries": []}),
@@ -8466,6 +8472,123 @@ def test_values_are_applied_at_run_time_and_never_written_back(runnable):
     # The stored graph is content-addressed: rewriting it would change the very
     # identity of the card being run.
     assert get_document(runnable.server.hub, RUN_RECIPE) == stored
+
+
+RUN_WORKFLOW = f"{AUTO_STACK_PREFIX}{RUN_CORE}"
+
+
+def _core_address(node_id: str, input_name: str) -> str:
+    return f"core:{core_node_labels(RUN_DOCUMENT)[node_id]}/{input_name}"
+
+
+def test_a_workflow_run_applies_its_default_recipe_on_the_server(runnable):
+    """The request sends no values, and the default recipe still lands (#1622).
+
+    The owner's edit to the default recipe is the one value nothing else could
+    have put there: the card's stored instance says 24 steps, and a card run
+    (the control) keeps it.
+    """
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, '31')",
+            (RUN_WORKFLOW, _core_address("3", "steps")),
+        )
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WORKFLOW})
+    assert r.status_code == 200, r.text
+    (group,) = r.json()["groups"]
+    assert (group["workflow_id"], group["workflow_key"]) == (RUN_WORKFLOW, RUN_CARD)
+    submitted = runnable.submitted[0]["graph"]["3"]["inputs"]
+    assert (submitted["steps"], submitted["cfg"]) == (31, 6.5)
+    # A request value still wins over the default recipe.
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WORKFLOW,
+            "values": [
+                {
+                    "slot_label": _core_address("3", "steps").rpartition("/")[0],
+                    "input_name": "steps",
+                    "value": 12,
+                }
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert runnable.submitted[1]["graph"]["3"]["inputs"]["steps"] == 12
+    # The control: a card run reads no workflow default.
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.status_code == 200, r.text
+    assert runnable.submitted[2]["graph"]["3"]["inputs"]["steps"] == 24
+
+
+def test_an_unknown_workflow_is_a_404_and_a_malformed_one_a_422(runnable):
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"workflow_id": f"{AUTO_STACK_PREFIX}{_h('no-such-core')}"},
+    )
+    assert r.status_code == 404, r.text
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight", json={"workflow_id": "auto:nope"}
+    )
+    assert r.status_code == 422, r.text
+
+
+_OTHER_FAMILY_CHECKPOINT = "test-flux-dev.safetensors"
+
+
+def test_a_pinned_checkpoint_of_another_family_is_flagged_and_still_runs(runnable):
+    """Flagged, never blocked (#1620 Q3), and the pinned file is what loads."""
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].append(
+        _OTHER_FAMILY_CHECKPOINT
+    )
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    hub = runnable.server.hub
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'SDXL 1.0' WHERE filename = ?",
+            (_SHELF_FILENAME,),
+        )
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, base_model, "
+            "provenance) VALUES ('checkpoint', ?, ?, 'Flux.1 D', 'scanned')",
+            (_OTHER_FAMILY_CHECKPOINT, _h("other-family-digest")),
+        )
+    try:
+        body = {
+            "workflow_id": RUN_WORKFLOW,
+            "models": [
+                {
+                    "address": _core_address("1", "ckpt_name"),
+                    "filename": _OTHER_FAMILY_CHECKPOINT,
+                }
+            ],
+        }
+        payload = _preflight(runnable.owner, **body)
+        (group,) = payload["groups"]
+        assert group["reasons"] == [], group
+        assert [flag["code"] for flag in group["flags"]] == ["family_mismatch"]
+        assert group["flags"][0]["now"] == _OTHER_FAMILY_CHECKPOINT
+        r = runnable.owner.post(f"{API}/workflows/run", json=body)
+        assert r.status_code == 200, r.text
+        loaded = runnable.submitted[0]["graph"]["1"]["inputs"]["ckpt_name"]
+        assert loaded == _OTHER_FAMILY_CHECKPOINT
+        # The control: the same family is no flag.
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET base_model = 'SDXL 1.0' WHERE filename = ?",
+                (_OTHER_FAMILY_CHECKPOINT,),
+            )
+        (group,) = _preflight(runnable.owner, **body)["groups"]
+        assert group["flags"] == []
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM model WHERE filename = ?", (_OTHER_FAMILY_CHECKPOINT,)
+            )
 
 
 def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):

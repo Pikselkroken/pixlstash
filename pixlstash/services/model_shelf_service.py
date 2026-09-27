@@ -696,6 +696,21 @@ def models_for_digest(
     return {by_digest[digest] for digest in digests_with_prefix(value, sorted_digests)}
 
 
+def families_clash(base_model: Optional[str], other_base_model: Optional[str]) -> bool:
+    """Whether two models were made for different families or modalities.
+
+    Only where both fold to a known family (:func:`family_of`): an unknown
+    family is never a clash, because "we cannot tell" is not "they differ".
+    What the clone dialog flags a LoRA with against its new checkpoint, and
+    what a run flags a pinned model with (#1620 Q3). **A flag, never a block**:
+    a base model a family table does not know about is still the owner's call.
+    """
+    family, other = family_of(base_model), family_of(other_base_model)
+    if not family or not other:
+        return False
+    return family != other or modality_of(base_model) != modality_of(other_base_model)
+
+
 # What a generation graph loads BESIDE a model rather than as one: the files a
 # delete can leave with nothing to serve.
 SUPPORT_FILE_KINDS = (FILE_VAE, FILE_TEXT_ENCODER)

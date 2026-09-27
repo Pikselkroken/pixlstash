@@ -9,6 +9,7 @@ import json
 import logging
 import sqlite3
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -27,7 +28,13 @@ from pixlstash.hub.workflow_card_reads import (
     card_index,
     model_fix_labels,
     model_fixes,
+    topologies_in_workflow,
+    variants_in_stack,
+    variants_in_workflow,
+    workflow_index,
+    workflow_of_topology,
 )
+from pixlstash.services import workflow_card_service
 from pixlstash.hub.workflow_card_writes import (
     record_loader_swaps,
     set_attributes,
@@ -1372,3 +1379,163 @@ def test_covers_made_with_the_replaced_model_are_flagged_and_go_last(hub):
         (2, False),
         (1, True),
     ]
+
+
+# ── workflows and their default recipe (#1622) ─────────────────────────────
+
+
+def _file_run(hub, *, strength=None, **graph_options):
+    """File one run of ``_graph(...)`` into a library; return its keys."""
+    graph = _graph(**graph_options)
+    if strength is not None:
+        graph["L0"]["inputs"]["strength_model"] = strength
+    return record_api_graph(hub, graph, library_uuid="test-library")
+
+
+def _defaults(hub, monkeypatch, runs):
+    """``workflow_defaults`` with the vault's two reads answered by *runs*."""
+    monkeypatch.setattr(
+        workflow_card_service,
+        "read_instance_hashes",
+        lambda vault, variants, score, limit: sorted(
+            {keys.instance_hash for keys in runs if keys.structural_hash in variants}
+        ),
+    )
+    monkeypatch.setattr(
+        workflow_card_service,
+        "read_variant_picture_counts",
+        lambda vault: {keys.structural_hash: 1 for keys in runs},
+    )
+    workflow_id = workflow_of_topology(hub, runs[0].topology_hash)
+    vault = SimpleNamespace(library_uuid="test-library")
+    return workflow_id, workflow_card_service.workflow_defaults(hub, vault, workflow_id)
+
+
+def _four_runs(hub):
+    return [
+        _file_run(hub, ckpt="a.safetensors", loras=("x.safetensors",), strength=0.8),
+        _file_run(
+            hub,
+            ckpt="a.safetensors",
+            loras=("x.safetensors",),
+            strength=0.8,
+            face_detailer=True,
+        ),
+        _file_run(
+            hub,
+            ckpt="b.safetensors",
+            loras=("x.safetensors", "y.safetensors"),
+            strength=0.6,
+        ),
+        _file_run(hub, ckpt="a.safetensors"),
+    ]
+
+
+def test_one_workflow_spans_the_topologies_its_core_hash_groups(hub):
+    runs = _four_runs(hub)
+    ids = {workflow_of_topology(hub, keys.topology_hash) for keys in runs}
+    assert len(ids) == 1
+    (workflow_id,) = ids
+    assert workflow_id.startswith("auto:")
+    assert set(topologies_in_workflow(hub, workflow_id)) == {
+        keys.topology_hash for keys in runs
+    }
+    assert set(variants_in_workflow(hub, workflow_id)) == {
+        keys.structural_hash for keys in runs
+    }
+    (entry,) = workflow_index(hub)
+    # The base graph has the most stage groups: the detailer run's.
+    assert entry.base_topology == runs[1].topology_hash
+    assert entry.base_card == card_of(hub, runs[1].structural_hash)
+
+
+def test_a_topology_placed_by_hand_leaves_its_automatic_workflow(hub):
+    runs = _four_runs(hub)
+    workflow_id = workflow_of_topology(hub, runs[0].topology_hash)
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group (workflow_id, kind) VALUES ('0' || ?, 'manual')",
+            ("1" * 31,),
+        )
+        conn.execute(
+            "INSERT INTO workflow_group_member (topology_hash, workflow_id) "
+            "VALUES (?, ?)",
+            (runs[3].topology_hash, "0" + "1" * 31),
+        )
+    assert workflow_of_topology(hub, runs[3].topology_hash) == "0" + "1" * 31
+    assert runs[3].topology_hash not in topologies_in_workflow(hub, workflow_id)
+    assert topologies_in_workflow(hub, "0" + "1" * 31) == [runs[3].topology_hash]
+
+
+def test_the_default_recipe_is_the_modal_checkpoint_and_the_majority_loras(
+    hub, monkeypatch
+):
+    runs = _four_runs(hub)
+    workflow_id, recipe = _defaults(hub, monkeypatch, runs)
+
+    assert recipe.workflow_id == workflow_id
+    # a.safetensors in three runs of four, b in one.
+    (checkpoint,) = [m for m in recipe.models if m.address.endswith("/ckpt_name")]
+    assert checkpoint.address.startswith("core:")
+    assert (checkpoint.filename, checkpoint.kind) == ("a.safetensors", "checkpoint")
+    # x in three runs of four (more than half) at its modal strength; y in one.
+    assert [(lora.filename, lora.strength) for lora in recipe.loras] == [
+        ("x.safetensors", 0.8)
+    ]
+    steps = {d.input_name: d.value for d in recipe.values}
+    assert steps["steps"] == 20
+    # The base graph has a face detailer, and three runs of four went without.
+    assert recipe.stages == {"face_detailer": False}
+
+
+def test_exactly_half_is_not_a_majority(hub, monkeypatch):
+    runs = [
+        _file_run(hub, loras=("x.safetensors",)),
+        _file_run(hub),
+    ]
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    assert recipe.loras == []
+
+
+def test_the_owner_s_edits_replace_what_they_name(hub, monkeypatch):
+    runs = _four_runs(hub)
+    workflow_id = workflow_of_topology(hub, runs[0].topology_hash)
+    _, computed = _defaults(hub, monkeypatch, runs)
+    steps = next(d for d in computed.values if d.input_name == "steps")
+    checkpoint = next(m for m in computed.models if m.address.endswith("/ckpt_name"))
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, ?)",
+            [
+                (workflow_id, f"{steps.slot_label}/steps", "25"),
+                (workflow_id, checkpoint.address, "c.safetensors"),
+                (workflow_id, "lora:" + "d" * 64, "0.5"),
+            ],
+        )
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    edited = next(d for d in recipe.values if d.input_name == "steps")
+    assert (edited.value, edited.provenance) == (25, "edited")
+    model = next(m for m in recipe.models if m.address == checkpoint.address)
+    assert (model.filename, model.provenance) == ("c.safetensors", "edited")
+    assert ("d" * 64, 0.5) in [(lora.sha256, lora.strength) for lora in recipe.loras]
+
+
+def test_the_stack_filter_leaves_out_a_card_taken_out_of_its_group(hub):
+    first = record_api_graph(hub, _graph(ckpt="a.safetensors"))
+    second = record_api_graph(hub, _graph(ckpt="b.safetensors"))
+    core = hub.fetchone(
+        "SELECT core_hash FROM workflow_topology_core WHERE topology_hash = ?",
+        (first.topology_hash,),
+    )["core_hash"]
+    both = {first.structural_hash, second.structural_hash}
+    assert set(variants_in_stack(hub, f"auto:{core}")) == both
+    # The bare hash is the same stack, not a different reading of it.
+    assert set(variants_in_stack(hub, core)) == both
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_unstacked (workflow_key) VALUES (?)",
+            (card_of(hub, second.structural_hash),),
+        )
+    assert variants_in_stack(hub, core) == [first.structural_hash]
+    assert variants_in_stack(hub, "no-such-stack") == []

@@ -704,6 +704,17 @@ Seven rules the client must not re-derive:
    hires fix in pixel space, or ComfyUI is unreachable) is
    `stage_not_skippable`, never a full run. A resize that prepares an img2img
    input is not the upscale stage and stays.
+   `workflow_id` (#1622) is a fourth source beside `picture_ids`,
+   `saved_recipe_id` and `workflow_key`: `auto:<core hash>` or an owner's group
+   id (422 when malformed, 404 when unknown). The server applies the
+   workflow's **default recipe** under the body, so a client need not send
+   defaults back; `values`, `models` and `loras` win over it address by
+   address. `models: [{address, filename | sha256}]` loads a model at a loader
+   address (`core:<label>/<widget>`). Each group carries `workflow_id` and
+   `flags: [{code, address, was, now, ...}]`, facts rather than reasons:
+   `family_mismatch` (a model for another family or modality than the one it
+   replaced, still run) and `model_not_applied` (ComfyUI cannot load it; the
+   loader keeps its file).
 3. **A missing model blocks the whole batch**, mixed or not, and so does an
    unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
    submitted — including the groups whose own `reasons` are empty.

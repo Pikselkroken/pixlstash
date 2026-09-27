@@ -1168,6 +1168,101 @@ CREATE TABLE IF NOT EXISTS workflow_loader_swap (
 )
 """
 
+# --------------------------------------------------------------------------
+# Workflows as the owner sees them (#1620, #1622): a WORKFLOW is a group of
+# topologies, and its defaults are its default recipe. Created beside the card
+# tables, which stay the source of truth until the cut-over (#1623) converts
+# them; nothing here is read by a card route.
+#
+# A workflow id is ``auto:<core_hash>`` for an automatic group, the same
+# spelling an automatic stack already has, or a uuid hex for one the owner
+# split or merged. **Merge and split move topologies, never cards**: what told
+# two cards of one topology apart is a checkpoint or a LoRA, and those are
+# recipe values now.
+#
+# **Addresses, not node ids and not slot labels.** A slot label is refined over
+# the whole topology, so it means nothing in a workflow spanning several. An
+# ``address`` here is ``core:<label>/<input>`` (the label on the stripped core
+# graph, ``workflow_identity.core_node_labels``, shared by every topology of
+# the group), ``<slot label>/<input>`` on the base topology for a node inside a
+# stage group, or ``lora:<sha256>`` for a LoRA of the default recipe.
+# --------------------------------------------------------------------------
+
+# One row per workflow somebody has decided about. ``auto`` rows exist only
+# once something is stored against the group, so an automatic workflow nobody
+# has touched is not a row: it IS the topologies sharing ``core_hash``.
+_V2_WORKFLOW_GROUP = """
+CREATE TABLE IF NOT EXISTS workflow_group (
+    workflow_id  TEXT PRIMARY KEY,
+    kind         TEXT NOT NULL CHECK (kind IN ('manual', 'auto')),
+    core_hash    TEXT,
+    CHECK (kind <> 'auto' OR core_hash IS NOT NULL)
+)
+"""
+
+# A topology the owner placed by hand. One workflow per topology, hence the
+# primary key: a topology in two workflows would be two answers to what a
+# picture belongs to.
+_V2_WORKFLOW_GROUP_MEMBER = """
+CREATE TABLE IF NOT EXISTS workflow_group_member (
+    topology_hash  TEXT PRIMARY KEY,
+    workflow_id    TEXT NOT NULL REFERENCES workflow_group(workflow_id)
+)
+"""
+
+# What the owner says about a workflow, as ``workflow_attr`` says it of a card.
+_V2_WORKFLOW_GROUP_ATTR = """
+CREATE TABLE IF NOT EXISTS workflow_group_attr (
+    workflow_id  TEXT PRIMARY KEY,
+    name         TEXT,
+    notes        TEXT,
+    hidden       INTEGER NOT NULL DEFAULT 0
+)
+"""
+
+# The owner's edits to the default recipe: parameters, models (``value`` the
+# filename as the graph spells it) and LoRAs (``lora:<sha256>``, ``value`` the
+# strength). No row is the computed default.
+_V2_WORKFLOW_GROUP_DEFAULT = """
+CREATE TABLE IF NOT EXISTS workflow_group_default (
+    workflow_id  TEXT NOT NULL,
+    address      TEXT NOT NULL,
+    value        TEXT NOT NULL,
+    PRIMARY KEY (workflow_id, address)
+)
+"""
+
+# Pins, as ``workflow_key_pins``: ``[]`` is somebody who unpinned everything.
+_V2_WORKFLOW_GROUP_PINS = """
+CREATE TABLE IF NOT EXISTS workflow_group_pins (
+    workflow_id  TEXT PRIMARY KEY,
+    pins         TEXT NOT NULL
+)
+"""
+
+# How each picture input is filled, keyed by library for the reason
+# ``workflow_key_picture_input`` is: a picture is a ``pixel_sha`` in ONE vault.
+_V2_WORKFLOW_GROUP_PICTURE_INPUT = """
+CREATE TABLE IF NOT EXISTS workflow_group_picture_input (
+    library_uuid  TEXT NOT NULL,
+    workflow_id   TEXT NOT NULL,
+    address       TEXT NOT NULL,
+    mode          TEXT NOT NULL CHECK (mode IN ('selection', 'picker', 'fixed')),
+    pixel_sha     TEXT,
+    CHECK (mode <> 'fixed' OR pixel_sha IS NOT NULL),
+    PRIMARY KEY (library_uuid, workflow_id, address)
+)
+"""
+
+# Which workflow each card became, written once by the cut-over (#1623) and
+# read by the vault's saved-recipe conversion, which holds card keys.
+_V2_WORKFLOW_KEY_SUCCESSOR = """
+CREATE TABLE IF NOT EXISTS workflow_key_successor (
+    workflow_key  TEXT PRIMARY KEY,
+    workflow_id   TEXT NOT NULL
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1193,6 +1288,10 @@ _V2_WORKFLOW_INDEXES = (
     # key is by path, so without this it is a scan.
     "CREATE INDEX IF NOT EXISTS ix_workflow_origin_name "
     "ON workflow_origin(workflow_name)",
+    # "Which topologies did the owner put in this workflow" - every read of a
+    # manual workflow.
+    "CREATE INDEX IF NOT EXISTS ix_workflow_group_member_workflow "
+    "ON workflow_group_member(workflow_id)",
 )
 
 _V2_WORKFLOW_TABLES = (
@@ -1226,6 +1325,14 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_MODEL_FIX,
     _V2_WORKFLOW_LORA_PROMOTION,
     _V2_WORKFLOW_LOADER_SWAP,
+    # The owner-facing workflow (#1622), in v2 for the same reason again.
+    _V2_WORKFLOW_GROUP,
+    _V2_WORKFLOW_GROUP_MEMBER,
+    _V2_WORKFLOW_GROUP_ATTR,
+    _V2_WORKFLOW_GROUP_DEFAULT,
+    _V2_WORKFLOW_GROUP_PINS,
+    _V2_WORKFLOW_GROUP_PICTURE_INPUT,
+    _V2_WORKFLOW_KEY_SUCCESSOR,
     *_V2_WORKFLOW_INDEXES,
 )
 

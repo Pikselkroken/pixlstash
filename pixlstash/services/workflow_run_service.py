@@ -1303,8 +1303,25 @@ def saved_recipe_body(recipe) -> dict:
             exc,
         )
         overrides = {}
+    models = None
+    if recipe.models is not None:
+        try:
+            models = json.loads(recipe.models)
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "Saved recipe %s has unreadable models, so the run loads the "
+                "workflow's default ones: %s",
+                recipe.id,
+                exc,
+            )
+        if not isinstance(models, list):
+            models = None
     return {
         "workflow_key": recipe.workflow_key,
+        # The workflow it runs on (#1622), once the cut-over has filled it in,
+        # and its models: NULL inherits the workflow's default recipe.
+        "workflow_id": recipe.workflow_id,
+        "models": models,
         "prompt": recipe.prompt,
         "negative": recipe.negative,
         "loras": loras if isinstance(loras, list) else [],

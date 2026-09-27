@@ -17,7 +17,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.hub import workflow_cards
-from pixlstash.hub.workflow_card_reads import keys_in_stack
+from pixlstash.hub.workflow_card_reads import variants_in_stack
 from pixlstash.db_models import (
     Face,
     Picture,
@@ -438,15 +438,7 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
         if key is not None:
             matched.append(set(workflow_cards.variants_on_key(hub, key)))
         if stack_id is not None:
-            # `auto:<core hash>` is how a card names its stack (`stack_id`),
-            # and only `keys_in_stack` reads that spelling; a bare core hash
-            # or an unknown id falls through to the older reading.
-            stacked = keys_in_stack(hub, stack_id)
-            matched.append(
-                set(workflow_cards.variant_hashes_for_keys(hub, stacked))
-                if stacked
-                else set(workflow_cards.variants_in_stack(hub, stack_id))
-            )
+            matched.append(set(variants_in_stack(hub, stack_id)))
         if lora is not None:
             # Only ever a narrowing, and only of a well-formed reference:
             # alone it would parse every stored graph on the hub per request,
