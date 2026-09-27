@@ -352,6 +352,15 @@ class Vault:
             self._planner_work_finders[TaskType.WORKFLOW_CARD_BACKFILL] = (
                 WorkflowCardBackfillFinder(hub=registered_hub)
             )
+            # The cut-over (#1623): saved recipes naming a card are put on the
+            # workflow it became. Needs the hub's `workflow_key_successor`.
+            from pixlstash.tasks.missing_saved_recipe_workflow_finder import (
+                MissingSavedRecipeWorkflowFinder,
+            )
+
+            self._planner_work_finders[TaskType.SAVED_RECIPE_CONVERT] = (
+                MissingSavedRecipeWorkflowFinder(vault=self)
+            )
             # And the workflow library's store is the hub too, so the ComfyUI
             # extraction can file a picture's graph where it outlives the
             # picture (§B3). Replaces the hubless finder work_finders() built:
