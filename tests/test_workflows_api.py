@@ -8556,6 +8556,21 @@ def test_a_recipe_read_off_no_picture_bypasses_no_lora(runnable):
     assert "2" in runnable.submitted[0]["graph"]
 
 
+def test_a_model_pinned_by_a_digest_the_shelf_lost_is_flagged_not_refused(runnable):
+    body = {
+        "workflow_id": RUN_WORKFLOW,
+        "models": [{"address": _core_address("1", "ckpt_name"), "sha256": "0" * 64}],
+    }
+    r = runnable.owner.post(f"{API}/workflows/run", json=body)
+    assert r.status_code == 200, r.text
+    (group,) = r.json()["groups"]
+    assert [(f["code"], f["reason"]) for f in group["flags"]] == [
+        ("model_not_applied", "not_on_shelf")
+    ]
+    loaded = runnable.submitted[0]["graph"]["1"]["inputs"]["ckpt_name"]
+    assert loaded == "realvisxl.safetensors"
+
+
 def test_an_unknown_workflow_is_a_404_and_a_malformed_one_a_422(runnable):
     r = runnable.owner.post(
         f"{API}/workflows/run/preflight",

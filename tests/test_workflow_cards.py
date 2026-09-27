@@ -35,6 +35,7 @@ from pixlstash.hub.workflow_card_reads import (
     workflow_of_topology,
 )
 from pixlstash.services import workflow_card_service
+from pixlstash.services.workflow_run_service import saved_recipe_body
 from pixlstash.hub.workflow_card_writes import (
     record_loader_swaps,
     set_attributes,
@@ -1543,3 +1544,46 @@ def test_the_stack_filter_leaves_out_a_card_taken_out_of_its_group(hub):
         )
     assert variants_in_stack(hub, core) == [first.structural_hash]
     assert variants_in_stack(hub, "no-such-stack") == []
+
+
+def test_the_stage_vote_counts_only_topologies_whose_stages_are_known(hub, monkeypatch):
+    """An unread topology neither votes for a stage nor pads the electorate."""
+    runs = [
+        _file_run(hub, face_detailer=True),
+        _file_run(hub, steps=21),
+        _file_run(hub, steps=22),
+        *(_file_run(hub, preview=True, steps=s) for s in (23, 24, 25)),
+    ]
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET specials = NULL WHERE topology_hash = ?",
+            (runs[3].topology_hash,),
+        )
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    # Two of the three runs whose stages are known went without the detailer.
+    assert recipe.stages == {"face_detailer": False}
+
+
+def test_a_saved_recipe_with_malformed_models_inherits_the_default():
+    recipe = SimpleNamespace(
+        id=7,
+        workflow_key="k",
+        workflow_id=None,
+        prompt="",
+        negative=None,
+        loras="[]",
+        overrides="{}",
+        seed=None,
+        keep_seed=False,
+    )
+    for stored, expected in (
+        ('[{"address": "core:a/ckpt_name", "filename": "x.safetensors"}]', None),
+        ("[1, 2]", None),
+        ('["x"]', None),
+        (None, None),
+    ):
+        body = saved_recipe_body(SimpleNamespace(**vars(recipe), models=stored))
+        if stored and stored.startswith('[{"'):
+            assert body["models"] == json.loads(stored)
+        else:
+            assert body["models"] is expected

@@ -3627,18 +3627,19 @@ def create_router(server) -> APIRouter:
                 addressed_as.append(CORE_ADDRESS_PREFIX + core[node_id])
             for label in addressed_as:
                 for name in list(inputs):
-                    if (label, name) not in wanted:
+                    # A wired input is left alone - overwriting drops the link -
+                    # so it counts as not applied and is logged below.
+                    if (label, name) not in wanted or isinstance(inputs[name], list):
                         continue
                     found.add((label, name))
-                    if not isinstance(inputs[name], list):
-                        inputs[name] = wanted[(label, name)]
+                    inputs[name] = wanted[(label, name)]
         for slot_label, input_name in sorted(set(wanted) - found):
             # Not an error: a card's defaults are read off every variant, and a
             # stage-node address goes stale when the base topology changes
             # (#1622). Logged, because it used to vanish without a word.
             logger.info(
-                "[workflows] Parameter %s/%s matches no node on the run graph, "
-                "so it is not applied.",
+                "[workflows] Parameter %s/%s matches no settable input on the "
+                "run graph, so it is not applied.",
                 slot_label,
                 input_name,
             )
@@ -3702,10 +3703,23 @@ def create_router(server) -> APIRouter:
             slot_label, _, widget = model.address.rpartition(OVERRIDE_ADDRESS_SEPARATOR)
             now = model.filename or by_digest.get(str(model.sha256).lower())
             if now is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"No model on the shelf has sha256 {model.sha256}.",
+                # A saved recipe can outlive the model it pinned: the loader
+                # keeps its file and the run goes ahead, as for any other miss.
+                logger.warning(
+                    "[workflows] No shelf model has sha256 %s, so %s keeps its file.",
+                    model.sha256,
+                    model.address,
                 )
+                flags.append(
+                    {
+                        "code": "model_not_applied",
+                        "address": model.address,
+                        "was": None,
+                        "now": model.sha256,
+                        "reason": "not_on_shelf",
+                    }
+                )
+                continue
             node_ids = [
                 node_id
                 for node_id in graph
@@ -3715,7 +3729,8 @@ def create_router(server) -> APIRouter:
             loaders = [
                 node_id
                 for node_id in node_ids
-                if isinstance(graph[node_id].get("inputs", {}).get(widget), str)
+                if isinstance(graph[node_id], dict)
+                and isinstance(graph[node_id].get("inputs", {}).get(widget), str)
             ]
             if not loaders:
                 logger.info(

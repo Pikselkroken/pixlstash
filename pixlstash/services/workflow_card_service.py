@@ -1771,6 +1771,8 @@ def workflow_defaults(
     lora_widgets: dict[str, str] = {}
     base_stages = workflow.specials.get(workflow.base_topology or "") or ()
     without: Counter = Counter()
+    # Instances whose topology's stages are known: the stage vote's electorate.
+    staged = 0
     sampled = 0
     for structural_hash, document in documents:
         read = reads.get(structural_hash)
@@ -1821,6 +1823,7 @@ def workflow_defaults(
         ran = workflow.specials.get(workflow.variant_topology.get(structural_hash, ""))
         # A topology the specials pass has not read yet says nothing either way.
         if ran is not None:
+            staged += 1
             without.update(stage for stage in base_stages if stage not in ran)
 
     names = {
@@ -1834,7 +1837,7 @@ def workflow_defaults(
         base_topology=workflow.base_topology,
         base_card=workflow.base_card,
         sampled=sampled,
-        stages={stage: without[stage] * 2 <= sampled for stage in base_stages},
+        stages={stage: without[stage] * 2 <= staged for stage in base_stages},
     )
 
     value_overrides, model_overrides, lora_overrides = {}, {}, {}

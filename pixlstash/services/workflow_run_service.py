@@ -1314,7 +1314,16 @@ def saved_recipe_body(recipe) -> dict:
                 recipe.id,
                 exc,
             )
-        if not isinstance(models, list):
+        if models is not None and not (
+            isinstance(models, list)
+            and all(isinstance(m, dict) and m.get("address") for m in models)
+        ):
+            logger.error(
+                "Saved recipe %s has malformed models %r, so the run loads the "
+                "workflow's default ones.",
+                recipe.id,
+                models,
+            )
             models = None
     return {
         "workflow_key": recipe.workflow_key,
