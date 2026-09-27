@@ -8563,7 +8563,7 @@ def test_one_input_named_two_ways_takes_the_later_value(runnable):
                     {
                         **first,
                         "input_name": "steps",
-                        "value": 31 if first is not second else 0,
+                        "value": 31,
                     },
                     {**second, "input_name": "steps", "value": expected},
                 ],
