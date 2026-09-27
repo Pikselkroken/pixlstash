@@ -424,8 +424,12 @@ class ComfyUIWorkflowPullTask(BaseTask):
                     "SELECT 1 FROM workflow_recipe r "
                     "JOIN workflow_recipe_instance i "
                     "ON i.structural_hash = r.structural_hash "
-                    "WHERE r.topology_hash = ? LIMIT 1",
-                    (topology_hash,),
+                    # Or one a model fix swapped a PixlStash loader into,
+                    # whose pictures card as this shape's (#1605).
+                    "WHERE r.topology_hash = ? OR r.topology_hash IN "
+                    "(SELECT swapped_topology_hash FROM workflow_loader_swap "
+                    "WHERE topology_hash = ?) LIMIT 1",
+                    (topology_hash, topology_hash),
                 )
                 is not None
             )

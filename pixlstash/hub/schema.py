@@ -1149,6 +1149,25 @@ CREATE TABLE IF NOT EXISTS workflow_lora_promotion (
 )
 """
 
+# A PixlStash loader a model fix swapped in for the workflow's own, because the
+# original loader cannot load the replacement (#1605). Swapping the node changes
+# the topology, so this is what files the swapped graph's pictures on the
+# original card: ``workflow_identity.unswapped`` puts the original loader back
+# before the card key is computed. Keyed by the swapped topology and the node's
+# label in it; ``fields`` is JSON, asset references only (never a filename), so
+# forgetting a model's name has nothing to reach here.
+_V2_WORKFLOW_LOADER_SWAP = """
+CREATE TABLE IF NOT EXISTS workflow_loader_swap (
+    swapped_topology_hash  TEXT NOT NULL,
+    node_label             TEXT NOT NULL,
+    fields                 TEXT NOT NULL,
+    topology_hash          TEXT NOT NULL,
+    class_type             TEXT NOT NULL,
+    swap_class             TEXT NOT NULL,
+    PRIMARY KEY (swapped_topology_hash, node_label, fields, topology_hash, class_type)
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1206,6 +1225,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_COMFYUI_HISTORY_MODEL,
     _V2_WORKFLOW_MODEL_FIX,
     _V2_WORKFLOW_LORA_PROMOTION,
+    _V2_WORKFLOW_LOADER_SWAP,
     *_V2_WORKFLOW_INDEXES,
 )
 

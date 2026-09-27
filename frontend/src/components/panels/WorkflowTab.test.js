@@ -771,6 +771,7 @@ describe("a VAE or text encoder that will not load (#1596)", () => {
         vae: [
           { id: 7, filename: "sdxl_vae_bf16.safetensors", display_name: "SDXL VAE", via: "grouped" },
           { id: 9, filename: "sdxl_vae_alt.safetensors", via: "declared" },
+          { id: 10, filename: "sdxl_vae_shelf.safetensors", loader: "PixlStashVAELoader" },
         ],
         text_encoder: [{ id: 8, filename: "t5xxl_bf16.safetensors" }],
       }),
@@ -803,6 +804,10 @@ describe("a VAE or text encoder that will not load (#1596)", () => {
     expect(picker.text()).toContain("SDXL VAE");
     // Only the file layout fits: said, not hidden.
     expect(picker.text()).toContain("sdxl_vae_alt.safetensors (untested)");
+    // The loader cannot load it; a run swaps in ours, and the option says so.
+    expect(picker.text()).toContain(
+      "sdxl_vae_shelf.safetensors (through a PixlStash loader)",
+    );
     expect(picker.text()).not.toContain("other-ckpt");
     preflightWorkflowRun.mockResolvedValue({ groups: [] });
     await picker.setValue("sdxl_vae_bf16.safetensors");

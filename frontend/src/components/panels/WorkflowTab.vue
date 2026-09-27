@@ -1100,6 +1100,8 @@ const NO_REPLACEMENT_TEXT = {
   none_go_with_it: "Nothing on your shelf is known to work with this checkpoint.",
   none_loadable:
     "What works with this checkpoint is not something this loader can load.",
+  needs_pixlstash_nodes:
+    "What works with this checkpoint needs a PixlStash loader, and ComfyUI-PixlStash is not installed in ComfyUI.",
   unread: "Could not read what could replace it just now.",
 };
 
@@ -1112,9 +1114,10 @@ function replaceOptionsFor(kind, file) {
         ...models.map((model) => ({
           value: model.filename,
           // `declared`: only the file layout fits; nothing has run with it.
+          // `loader`: this loader cannot load it, so a run swaps in ours.
           label: `${model.display_name || model.filename}${
             model.via === "declared" ? " (untested)" : ""
-          }`,
+          }${model.loader ? " (through a PixlStash loader)" : ""}`,
         })),
       ]
     : [];

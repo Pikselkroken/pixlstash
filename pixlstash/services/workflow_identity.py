@@ -40,9 +40,12 @@ from pixlstash.services.workflow_hash import (
     ReducedNode,
     WorkflowGraphError,
     _digest,
+    asset_reference,
     drop_widgets,
     graph_key,
+    is_link,
     node_labels,
+    normalized_filename,
     reduce_api_graph,
 )
 from pixlstash.services.workflow_io import is_picture_loader
@@ -352,6 +355,134 @@ def workflow_key(
         or (slot.label, slot.asset) in promoted
     )
     return _digest([WORKFLOW_KEY_VERSION, topology_hash, pairs])
+
+
+@dataclass(frozen=True)
+class LoaderSwap:
+    """A PixlStash loader a model fix put in place of the workflow's own (#1605).
+
+    Swapping the node changes the topology, so a picture made with the swapped
+    graph would file on a card of its own. This is what reads it back as the
+    original: :func:`unswapped` puts the original loader back in a stored
+    document before the card key is computed. Keyed by the swapped topology
+    and the node's label in it, as a slot is.
+
+    ``fields`` is ``(swapped widget, the reference it holds, original widget,
+    the reference to read it as)`` per file, the original reference naming the
+    file the node loads (a model fix's replacement then reads as its original
+    through ``workflow_cards.fixed_slots``, as a rewritten name does).
+    """
+
+    topology_hash: str
+    node_label: str
+    class_type: str
+    swap_class: str
+    fields: tuple[tuple[str, str, str, str], ...]
+
+
+def loader_swaps(
+    original: dict, swapped: dict, files: dict[str, dict[str, tuple[str, str]]]
+) -> tuple[str, list[LoaderSwap]]:
+    """The swapped topology and a :class:`LoaderSwap` per swapped node.
+
+    Args:
+        original: The API graph before the swap.
+        swapped: The same graph, node ids kept, with loaders swapped.
+        files: ``{node_id: {swapped widget: (original widget, filename)}}``
+            for each swapped node; the swapped widget holds the file's digest.
+
+    Raises:
+        WorkflowGraphError: Either graph will not reduce.
+    """
+    before = reduce_api_graph(original)
+    after = reduce_api_graph(swapped)
+    topology = graph_key(drop_widgets(before))
+    labels = node_labels(drop_widgets(after), rounds=None)
+    swaps = [
+        LoaderSwap(
+            topology_hash=topology,
+            node_label=labels[node_id],
+            class_type=before[node_id].class_type,
+            swap_class=after[node_id].class_type,
+            fields=tuple(
+                sorted(
+                    (
+                        widget,
+                        asset_reference(
+                            str(swapped[node_id]["inputs"][widget]).lower()
+                        ),
+                        original_widget,
+                        asset_reference(normalized_filename(filename)),
+                    )
+                    for widget, (original_widget, filename) in by_widget.items()
+                )
+            ),
+        )
+        for node_id, by_widget in files.items()
+    ]
+    return graph_key(drop_widgets(after)), swaps
+
+
+def unswapped(
+    document: dict, swaps: Collection[LoaderSwap]
+) -> tuple[Optional[str], dict]:
+    """*document* with each swapped-in loader put back, and the topology it is then.
+
+    ``(None, document)`` when no node of *document* is one of *swaps*: a node
+    matches on its label, its class and exactly the references the swap
+    recorded, so a PixlStash loader holding another file, or a second one,
+    stays what it is. The document put back must then BE the recorded
+    topology, so a graph where only some of a run's swapped loaders match
+    keys as itself. One placed by hand with the very files a swap recorded is
+    the same graph, and so the same variant: it cards as the original too.
+    *swaps* are those of the document's own topology.
+
+    Raises:
+        WorkflowGraphError: The document will not reduce.
+    """
+    if not swaps:
+        return None, document
+    by_label: dict[str, list[LoaderSwap]] = {}
+    for swap in swaps:
+        by_label.setdefault(swap.node_label, []).append(swap)
+    restored = dict(document)
+    topologies = set()
+    for node_id, label in topology_node_labels(document).items():
+        node = document[node_id]
+        inputs = node.get("inputs") or {}
+        held = {
+            name: value
+            for name, value in inputs.items()
+            if isinstance(value, str) and value.startswith(ASSET_REFERENCE_PREFIX)
+        }
+        matching = [
+            s
+            for s in by_label.get(label, ())
+            if s.swap_class == node.get("class_type")
+            and held == {w: ref for w, ref, _, _ in s.fields}
+        ]
+        if not matching:
+            continue
+        # Two originals swapped to this one graph (a core and a GGUF loader
+        # holding the same file) leave which it was a guess.
+        topologies.update(s.topology_hash for s in matching)
+        swap = matching[0]
+        # Links only: the original's other widgets are parameters, nulled in a
+        # stored document, and widget names never reach the topology.
+        put_back = {name: value for name, value in inputs.items() if is_link(value)}
+        put_back.update({widget: ref for _, _, widget, ref in swap.fields})
+        restored[node_id] = {"class_type": swap.class_type, "inputs": put_back}
+    if len(topologies) != 1:
+        # None matched, or two swaps disagree about the graph this was (or
+        # which loader a node was): a guess, so the document keys as itself.
+        return None, document
+    topology = topologies.pop()
+    if graph_key(drop_widgets(reduce_api_graph(restored))) != topology:
+        # Only some of a run's swapped loaders matched (another holds other
+        # files), so what was put back is not the graph they were swapped
+        # from, and keying it there would cache the wrong slots on it.
+        return None, document
+    return topology, restored
 
 
 # The post-processing groups a card says it has, in the order a name lists

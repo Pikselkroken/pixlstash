@@ -34,6 +34,7 @@ from pixlstash.services.comfyui_recipe_service import (
     bypass_node,
     bypass_stage,
     detect_seed_targets,
+    listed_options,
     preflight_prompt,
     sanitize_prompt_graph,
     unchecked_preflight,
@@ -45,8 +46,10 @@ from pixlstash.services.workflow_hash import (
     is_link,
     normalized_filename,
 )
+from pixlstash.services.workflow_identity import model_fix_kind
 from pixlstash.services.workflow_io import api_graph
-from pixlstash.utils.comfyui_utilities import collect_seed_inputs
+from pixlstash.utils.adapter_header import FILE_TEXT_ENCODER, FILE_VAE
+from pixlstash.utils.comfyui_utilities import collect_seed_inputs, iter_model_fields_api
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
@@ -881,6 +884,140 @@ def repair(
             entry.apply(graph, object_info) if entry.code in codes else []
         )
     return done
+
+
+# The ComfyUI-PixlStash loader a model fix swaps in where the workflow's own
+# loader cannot load the replacement (#1605), per slot kind, with the digest
+# widgets it takes in order. Checkpoints keep the rename only:
+# `PixlStashCheckpointLoader` names a per-hub shelf id and cannot fetch the
+# file, and there is no PixlStash UNET loader.
+PIXLSTASH_SWAP_LOADERS: dict[str, tuple[str, tuple[str, ...]]] = {
+    FILE_VAE: ("PixlStashVAELoader", ("vae_sha256",)),
+    FILE_TEXT_ENCODER: ("PixlStashCLIPLoader", ("clip_sha256", "clip_sha256_2")),
+}
+# The one output each of them has, which the original's first must be.
+_SWAP_OUTPUT_TYPES = {FILE_VAE: "VAE", FILE_TEXT_ENCODER: "CLIP"}
+# A widget the swapped-in loader has no place for, and the value at which
+# dropping it changes nothing (core `CLIPLoader`'s advanced `device`).
+_SWAP_DROPPABLE = {"device": "default"}
+
+# Why a loader was not swapped. Only NO_PIXLSTASH_NODES is the owner's to
+# fix, so it is checked last: when it is the answer, nothing else stood in
+# the way.
+SWAP_UNSUPPORTED = "unsupported_loader"
+SWAP_TOO_MANY_FILES = "too_many_files"
+SWAP_OUTPUTS_DIFFER = "outputs_differ"
+SWAP_CLIP_TYPE = "clip_type"
+SWAP_GGUF = "gguf"
+SWAP_NO_SHELF_COPY = "no_shelf_copy"
+SWAP_NO_PIXLSTASH_NODES = "no_pixlstash_nodes"
+
+
+def plan_pixlstash_swap(
+    graph: dict,
+    node_id: str,
+    kind: str,
+    swaps: dict[str, str],
+    object_info: Optional[dict],
+    digest_of: Callable[[str], Optional[str]],
+) -> tuple[Optional[dict], Optional[str]]:
+    """How to load *node_id*'s files, *swaps* applied, through a PixlStash loader.
+
+    Pure: :func:`apply_pixlstash_swap` writes the plan. Refused where the
+    swapped node would not do what the original did: another kind of file on
+    the node, more files than the PixlStash loader takes (a triple CLIP
+    loader), an output past the first in use or a first output of another type
+    (when ComfyUI declares it), a CLIP ``type`` it does not list, a widget it
+    has no place for. Refused too for a GGUF file (the PixlStash loaders load
+    through core ComfyUI, Pikselkroken/ComfyUI-PixlStash#27) and a file the
+    shelf holds no single digest with a present copy for (the hasher has not
+    read it, or its copies are gone).
+
+    Args:
+        swaps: The graph's filename -> the file to load instead; a file not
+            named here is loaded as it is.
+        digest_of: A filename -> its shelf SHA-256 in this slot kind, with a
+            copy present, or ``None``.
+
+    Returns:
+        ``(plan, None)`` or ``(None, reason)``, *reason* a ``SWAP_*`` code.
+        The plan is ``{class_type, type, fields: [(widget, original widget,
+        file, digest)]}``.
+    """
+    if kind not in PIXLSTASH_SWAP_LOADERS:
+        return None, SWAP_UNSUPPORTED
+    swap_class, digest_widgets = PIXLSTASH_SWAP_LOADERS[kind]
+    node = graph.get(node_id)
+    inputs = node.get("inputs") if isinstance(node, dict) else None
+    if not isinstance(inputs, dict):
+        return None, SWAP_UNSUPPORTED
+    # In the loader's declared file order (`MODEL_FILENAME_FIELDS`), which is
+    # the order its paths load in and so the order of our digest widgets.
+    fields = [
+        (widget, value)
+        for _node, cls, widget, value in iter_model_fields_api({node_id: node})
+    ]
+    if not fields or any(
+        model_fix_kind(node.get("class_type", ""), widget) != kind
+        for widget, _value in fields
+    ):
+        return None, SWAP_UNSUPPORTED
+    if len(fields) > len(digest_widgets):
+        return None, SWAP_TOO_MANY_FILES
+    named = {widget for widget, _value in fields}
+    clip_type = inputs.get("type") if kind == FILE_TEXT_ENCODER else None
+    for name, value in inputs.items():
+        if name in named or (name == "type" and kind == FILE_TEXT_ENCODER):
+            continue
+        if is_link(value) or _SWAP_DROPPABLE.get(name, object()) != value:
+            return None, SWAP_UNSUPPORTED
+    if kind == FILE_TEXT_ENCODER:
+        types = listed_options(object_info, swap_class, "type")
+        if not isinstance(clip_type, str) or (types and clip_type not in types):
+            return None, SWAP_CLIP_TYPE
+    declared = ((object_info or {}).get(node.get("class_type")) or {}).get("output")
+    # Only a list says anything: another shape is not ComfyUI's, and is read
+    # as undeclared rather than indexed.
+    if (
+        isinstance(declared, list)
+        and declared
+        and declared[0] != _SWAP_OUTPUT_TYPES[kind]
+    ):
+        return None, SWAP_OUTPUTS_DIFFER
+    for consumer in graph.values():
+        consumer_inputs = consumer.get("inputs") if isinstance(consumer, dict) else {}
+        for value in (consumer_inputs or {}).values():
+            if is_link(value) and value[0] == str(node_id) and value[1] != 0:
+                return None, SWAP_OUTPUTS_DIFFER
+    planned = []
+    for digest_widget, (widget, value) in zip(digest_widgets, fields):
+        file = swaps.get(value, value)
+        if file.lower().endswith(".gguf"):
+            return None, SWAP_GGUF
+        digest = digest_of(file)
+        if not digest:
+            return None, SWAP_NO_SHELF_COPY
+        planned.append((digest_widget, widget, file, digest))
+    if object_info is None or swap_class not in object_info:
+        return None, SWAP_NO_PIXLSTASH_NODES
+    return {"class_type": swap_class, "type": clip_type, "fields": planned}, None
+
+
+def apply_pixlstash_swap(graph: dict, node_id: str, plan: dict) -> None:
+    """Put the PixlStash loader *plan* names in place of *node_id*, id kept.
+
+    The id is kept, so every consumer's link still reads the node's first
+    output, which is the one :func:`plan_pixlstash_swap` checked is all they
+    read.
+    """
+    inputs = {widget: digest for widget, _was, _file, digest in plan["fields"]}
+    if plan["type"] is not None:
+        inputs["type"] = plan["type"]
+    graph[node_id] = {
+        **graph[node_id],
+        "class_type": plan["class_type"],
+        "inputs": inputs,
+    }
 
 
 def lora_slot_fields(inputs: dict) -> list[str]:
