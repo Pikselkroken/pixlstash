@@ -1144,6 +1144,20 @@ describe("the LoRA pile", () => {
     expect(wrapper.find("[data-testid='wftab-fan-confirm']").exists()).toBe(false);
   });
 
+  it("explains Promote only while a LoRA can still be promoted", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.find("[data-testid='wftab-fan-explain']").text()).toContain(
+      "makes it part of the workflow",
+    );
+    const summary = loraSummary();
+    summary.varying.forEach((row) => (row.promoted = true));
+    getLoraSummary.mockResolvedValue(summary);
+    const { wrapper: allPromoted } = await mountWith([KEY]);
+    expect(
+      allPromoted.find("[data-testid='wftab-fan-explain']").exists(),
+    ).toBe(false);
+  });
+
   it("writes nothing until the promotion is confirmed, then names the file", async () => {
     const { wrapper } = await mountWith([KEY]);
     const row = wrapper.find(`[data-testid='wftab-fan-row-${ADA}']`);

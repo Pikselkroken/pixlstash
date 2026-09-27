@@ -43,11 +43,20 @@
           {{ summary.pictures === 1 ? "picture" : "pictures" }}</span
         >
       </div>
+      <p
+        v-if="canPromote"
+        class="wfpile-quiet wfpile-explain"
+        data-testid="wftab-fan-explain"
+      >
+        Promoting a LoRA makes it part of the workflow: its pictures move to a
+        workflow that always loads it and exports with it.
+      </p>
       <ul class="wfpile-rows">
         <li
           v-for="row in rows"
           :key="row.asset || 'none'"
           class="wfpile-row-wrap"
+          :class="{ 'wfpile-row-wrap--none': !row.asset }"
           :data-testid="`wftab-fan-row-${row.asset || 'none'}`"
         >
           <div class="wfpile-row">
@@ -213,6 +222,8 @@ const top = computed(
     null,
 );
 const rest = computed(() => Math.max(count.value - 1, 0));
+/** Whether any row still offers Promote, so the fan explains it. */
+const canPromote = computed(() => varying.value.some((row) => !row.promoted));
 
 /** The fan's rows: the top of the pile first, then the rest, then "No LoRA". */
 const rows = computed(() => [
@@ -371,7 +382,13 @@ function answer(row) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
+.wfpile-explain {
+  margin: 0;
+  padding: 0 var(--space-5) var(--space-3);
+}
+
 .wfpile-head .wfpile-quiet,
+.wfpile-explain,
 .wfpile-meta {
   font-size: var(--text-xs);
 }
@@ -385,6 +402,13 @@ function answer(row) {
 .wfpile-row-wrap {
   padding: var(--space-3) var(--space-5);
   border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+/* "No LoRA" is not one of the LoRAs, so it stands apart below them rather
+   than reading as the next row of a list that ran out of room. */
+.wfpile-row-wrap--none {
+  margin-top: var(--space-4);
+  border-top-color: rgb(var(--v-theme-border));
 }
 
 .wfpile-row {
