@@ -3602,7 +3602,7 @@ def create_router(server) -> APIRouter:
             if text is None:
                 continue
             for node_id in node_ids:
-                target = run_service.prompt_text_target(graph, node_id)
+                target = run_service.prompt_text_target(graph, node_id, text)
                 if target is not None:
                     graph[target[0]]["inputs"][target[1]] = text
 
