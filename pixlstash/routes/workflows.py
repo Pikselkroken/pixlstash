@@ -3910,9 +3910,6 @@ def create_router(server) -> APIRouter:
             )
             skips_found |= skip_seen
             skips_checked = True
-            skip_reasons += run_service.skip_requested_stages(
-                graph, body.skip_stages, object_info
-            )
             slots_in_graph = detect_lora_targets(graph)
             # Applied only when it CAN be, and after the two questions that
             # would otherwise be answered as the wrong failure: a graph with no
@@ -3975,6 +3972,13 @@ def create_router(server) -> APIRouter:
                         ],
                         object_info,
                     )
+            # The stages the owner switched off, after the LoRAs are placed:
+            # the prune can take out a loader only the stage read, and a LoRA
+            # addressed to it before then would be a 400 for a slot the graph
+            # had when the request was made. Still before `judge`.
+            found += run_service.skip_requested_stages(
+                graph, body.skip_stages, object_info
+            )
             if body.seed_mode == "keep" and source.seedless:
                 # There is nothing to keep: a stored instance document nulls its
                 # seeds by design, so every one of `count` runs would submit

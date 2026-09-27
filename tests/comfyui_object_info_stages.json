@@ -532,5 +532,147 @@
    "IMAGE"
   ],
   "output_node": false
+ },
+ "FaceDetailerPipe": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE"
+    ],
+    "detailer_pipe": [
+     "DETAILER_PIPE"
+    ],
+    "guide_size": [
+     "FLOAT"
+    ],
+    "guide_size_for": [
+     "BOOLEAN"
+    ],
+    "max_size": [
+     "FLOAT"
+    ],
+    "seed": [
+     "INT"
+    ],
+    "steps": [
+     "INT"
+    ],
+    "cfg": [
+     "FLOAT"
+    ],
+    "sampler_name": [
+     []
+    ],
+    "scheduler": [
+     []
+    ],
+    "denoise": [
+     "FLOAT"
+    ],
+    "feather": [
+     "INT"
+    ],
+    "noise_mask": [
+     "BOOLEAN"
+    ],
+    "force_inpaint": [
+     "BOOLEAN"
+    ],
+    "bbox_threshold": [
+     "FLOAT"
+    ],
+    "bbox_dilation": [
+     "INT"
+    ],
+    "bbox_crop_factor": [
+     "FLOAT"
+    ],
+    "sam_detection_hint": [
+     []
+    ],
+    "sam_dilation": [
+     "INT"
+    ],
+    "sam_threshold": [
+     "FLOAT"
+    ],
+    "sam_bbox_expansion": [
+     "INT"
+    ],
+    "sam_mask_hint_threshold": [
+     "FLOAT"
+    ],
+    "sam_mask_hint_use_negative": [
+     []
+    ],
+    "drop_size": [
+     "INT"
+    ],
+    "refiner_ratio": [
+     "FLOAT"
+    ],
+    "cycle": [
+     "INT"
+    ]
+   },
+   "optional": {
+    "inpaint_model": [
+     "BOOLEAN"
+    ],
+    "noise_mask_feather": [
+     "INT"
+    ],
+    "scheduler_func_opt": [
+     "SCHEDULER_FUNC"
+    ],
+    "tiled_encode": [
+     "BOOLEAN"
+    ],
+    "tiled_decode": [
+     "BOOLEAN"
+    ]
+   }
+  },
+  "output": [
+   "IMAGE",
+   "IMAGE",
+   "IMAGE",
+   "MASK",
+   "DETAILER_PIPE",
+   "IMAGE"
+  ],
+  "output_node": false
+ },
+ "VAEEncode": {
+  "input": {
+   "required": {
+    "pixels": [
+     "IMAGE"
+    ],
+    "vae": [
+     "VAE"
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "LATENT"
+  ],
+  "output_node": false
+ },
+ "LoadImage": {
+  "input": {
+   "required": {
+    "image": [
+     []
+    ]
+   },
+   "optional": {}
+  },
+  "output": [
+   "IMAGE",
+   "MASK"
+  ],
+  "output_node": false
  }
 }

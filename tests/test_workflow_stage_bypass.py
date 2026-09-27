@@ -256,6 +256,111 @@ def test_saves_that_were_already_alike_are_not_the_bypasses_to_drop():
     assert "9" in graph and "50" in graph
 
 
+def test_a_face_detailer_chained_by_its_pipe_goes_consumer_first():
+    """The pipe reader goes first; the other way round the pipe has no stand-in."""
+    graph = _face_detailer(_base())
+    graph["45"] = {
+        "class_type": "FaceDetailerPipe",
+        "inputs": {"image": ["40", 0], "detailer_pipe": ["40", 4]},
+    }
+    graph["9"]["inputs"]["images"] = ["45", 0]
+
+    changes = bypass_stage(graph, FACE_DETAILER, OBJECT_INFO)
+
+    assert [c["node_id"] for c in changes if c["action"] == "bypassed"] == ["45", "40"]
+    assert graph == _base()
+
+
+def test_a_dead_face_detailer_does_not_refuse_the_run():
+    """Only what an output reads is the stage; a dead branch is not asked about."""
+    graph = _base()
+    graph["40"] = {
+        "class_type": "FaceDetailer",
+        "inputs": {"image": ["8", 0], "model": ["4", 0]},
+    }
+    graph["43"] = {"class_type": "MaskToImage", "inputs": {"mask": ["40", 3]}}
+
+    assert bypass_stage(graph, FACE_DETAILER, OBJECT_INFO) == []
+    assert "40" in graph
+
+
+def _img2img(graph: dict) -> dict:
+    graph["60"] = {"class_type": "LoadImage", "inputs": {"image": "in.png"}}
+    graph["61"] = {
+        "class_type": "ImageScale",
+        "inputs": {"image": ["60", 0], "width": 1024, "height": 1024},
+    }
+    graph["62"] = {
+        "class_type": "VAEEncode",
+        "inputs": {"pixels": ["61", 0], "vae": ["4", 2]},
+    }
+    graph["3"]["inputs"]["latent_image"] = ["62", 0]
+    del graph["5"]
+    return graph
+
+
+def test_an_input_resize_is_not_the_upscale_stage():
+    graph = _img2img(_base())
+    graph["21"] = {
+        "class_type": "ImageScaleBy",
+        "inputs": {"image": ["8", 0], "scale_by": 2},
+    }
+    graph["9"]["inputs"]["images"] = ["21", 0]
+
+    changes = bypass_stage(graph, UPSCALE, OBJECT_INFO)
+
+    assert _actions(changes) == {"21": "bypassed"}
+    assert graph == _img2img(_base())
+
+
+def test_a_hires_fix_in_pixel_space_refuses():
+    """Its re-encode and second sampler are not the group's; half off is refused."""
+    graph = _base()
+    graph["20"] = {"class_type": "UpscaleModelLoader", "inputs": {"model_name": "x"}}
+    graph["21"] = {
+        "class_type": "ImageUpscaleWithModel",
+        "inputs": {"upscale_model": ["20", 0], "image": ["8", 0]},
+    }
+    graph["22"] = {
+        "class_type": "VAEEncode",
+        "inputs": {"pixels": ["21", 0], "vae": ["4", 2]},
+    }
+    graph["23"] = {
+        "class_type": "KSampler",
+        "inputs": {
+            "model": ["4", 0],
+            "positive": ["6", 0],
+            "negative": ["7", 0],
+            "latent_image": ["22", 0],
+        },
+    }
+    graph["24"] = {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["23", 0], "vae": ["4", 2]},
+    }
+    graph["9"]["inputs"]["images"] = ["24", 0]
+    before = copy.deepcopy(graph)
+
+    with pytest.raises(LookupError, match=r"node 21 .*node 23"):
+        bypass_stage(graph, UPSCALE, OBJECT_INFO)
+    assert graph == before
+
+
+def test_a_graph_that_loops_is_refused_not_crashed():
+    graph = _base()
+    graph["21"] = {
+        "class_type": "ImageScaleBy",
+        "inputs": {"image": ["22", 0], "scale_by": 2},
+    }
+    graph["22"] = {"class_type": "ImageScaleBy", "inputs": {"image": ["21", 0]}}
+    graph["9"]["inputs"]["images"] = ["21", 0]
+
+    reasons = skip_requested_stages(graph, [UPSCALE], OBJECT_INFO)
+
+    assert [r.code for r in reasons] == [STAGE_NOT_SKIPPABLE]
+    assert "loops back" in reasons[0].detail["message"]
+
+
 def test_a_graph_without_the_stage_is_untouched():
     graph = _base()
     assert bypass_stage(graph, FACE_DETAILER, OBJECT_INFO) == []

@@ -1052,7 +1052,7 @@ def skip_requested_stages(
                 str(exc)
                 if object_info is not None
                 else "PixlStash could not reach ComfyUI, so it cannot tell what "
-                "to wire in place of the stage."
+                f"to wire in place of the {stage.replace('_', ' ')} stage."
             )
         logger.info("Stage %s cannot be switched off as asked: %s", stage, message)
         reasons.append(

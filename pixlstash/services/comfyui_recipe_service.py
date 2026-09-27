@@ -24,7 +24,7 @@ import math
 import random
 import re
 from copy import deepcopy
-from graphlib import TopologicalSorter
+from graphlib import CycleError, TopologicalSorter
 from typing import Any, Callable, Optional
 
 import requests
@@ -1687,24 +1687,70 @@ def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict
         for node_id, node_group in node_groups(reduce_api_graph(graph)).items()
         if node_group == group and (live_before is None or node_id in live_before)
     }
+    reads = {
+        str(node_id): {
+            str(value[0])
+            for value in (node.get("inputs") or {}).values()
+            if is_link(value) and isinstance(graph.get(str(value[0])), dict)
+        }
+        for node_id, node in graph.items()
+        if isinstance(node, dict)
+    }
+    try:
+        order = list(TopologicalSorter(reads).static_order())
+    except CycleError as exc:
+        raise LookupError(
+            f"This graph loops back on itself ({exc.args[1]}), so PixlStash "
+            f"cannot tell what the {group.replace('_', ' ')} stage feeds."
+        ) from exc
+    read_by: dict[str, set[str]] = {node_id: set() for node_id in reads}
+    for node_id, sources in reads.items():
+        for source in sources:
+            read_by[source].add(node_id)
+
+    def reach(start: str, edges: dict[str, set[str]]) -> set[str]:
+        seen: set[str] = set()
+        pending = list(edges[start])
+        while pending:
+            node_id = pending.pop()
+            if node_id not in seen:
+                seen.add(node_id)
+                pending.extend(edges[node_id])
+        return seen
+
+    def samplers(nodes: set[str]) -> set[str]:
+        return {
+            n
+            for n in nodes
+            if n not in in_stage and _samples(graph[n].get("class_type"))
+        }
+
+    # A stage runs after the picture is made. A node of the group that feeds a
+    # sampler outside it is not one: with no sampler before it, it prepares an
+    # input (img2img's resize) and stays; with one, it is a hires fix in pixel
+    # space whose re-encode and second sampler `node_groups` does not claim,
+    # so taking only the upscale out would leave a pass nobody asked for.
+    for node_id in sorted(in_stage, key=_node_order_key):
+        feeds = samplers(reach(node_id, read_by))
+        if not feeds:
+            continue
+        if not samplers(reach(node_id, reads)):
+            in_stage.discard(node_id)
+            continue
+        raise LookupError(
+            f"The {group.replace('_', ' ')} stage cannot be switched off: node "
+            f"{node_id} ({graph[node_id].get('class_type')}) feeds another "
+            f"sampling pass (node {min(feeds, key=_node_order_key)}), which "
+            "would still run."
+        )
     if not in_stage:
         return []
-    order = TopologicalSorter(
-        {
-            node_id: {
-                str(value[0])
-                for value in (graph[node_id].get("inputs") or {}).values()
-                if is_link(value)
-            }
-            for node_id in in_stage
-        }
-    ).static_order()
     changes: list[dict] = []
     outputs_before = {
         node_id: deepcopy(graph[node_id].get("inputs"))
         for node_id in _output_ids(graph, object_info)
     }
-    for node_id in reversed(list(order)):
+    for node_id in reversed(order):
         if node_id not in in_stage:
             continue
         inputs = graph[node_id].get("inputs") or {}

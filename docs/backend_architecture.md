@@ -3135,8 +3135,9 @@ An upscale or FaceDetailer pass is an optional **stage** of a workflow, on or
 off per run, which is why `core_hash` strips both groups and graphs with and
 without them stack. `RunRequest.skip_stages` (`upscale`, `face_detailer`) names
 the stages a run goes without; `_plan` applies them through
-`skip_requested_stages` right after `skip_requested_loras`, on the run's copy,
-before `judge`, so the graph judged is the graph submitted.
+`skip_requested_stages` on the run's copy, after the LoRAs are placed (the prune
+can remove a loader only the stage read, and a LoRA addressed to it must not
+become a 400) and before `judge`, so the graph judged is the graph submitted.
 
 `bypass_stage` in
 [`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py)
@@ -3148,7 +3149,12 @@ is answered by the node's first linked input of the same type: IMAGE by
 `FaceDetailer`), LATENT by `samples` (`LatentUpscale*`) or `latent_image` (the
 hires sampler `node_groups` puts with its latent upscale). A node with no
 linked input (`UpscaleModelLoader`, `SAMLoader`, a detector provider) is not
-bypassed; it goes in the prune. Then:
+bypassed; it goes in the prune. **A stage runs after the picture is made**, so
+a node of the group that feeds a sampler outside it is not one: with no sampler
+before it, it prepares an input (img2img's `ImageScale`) and is left alone;
+with one, it is a hires fix in pixel space (upscale, re-encode, second
+sampler), whose re-encode and sampler `node_groups` does not claim, and the
+stage is refused rather than half taken out. Then:
 
 - **Prune**: a node some output read before and none reads now is deleted, or
   `judge` would report an orphaned upscaler or detector model as missing and
@@ -3161,7 +3167,8 @@ bypassed; it goes in the prune. Then:
 
 All or nothing: the work is done on a copy and written back only when every
 node of the stage went. A node that cannot go (a FaceDetailer whose MASK or
-DETAILER_PIPE is read, a class this ComfyUI does not know) raises `LookupError`
+DETAILER_PIPE is read, a class this ComfyUI does not know, a pixel-space hires
+fix, a graph that loops) raises `LookupError`
 naming it, which the run reports as `stage_not_skippable: {stage, message}`.
 It blocks the card, `allow_unchecked` included, and **never falls back to a
 full run**: the owner asked for a run without the stage. With ComfyUI

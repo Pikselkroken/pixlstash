@@ -698,8 +698,10 @@ Seven rules the client must not re-derive:
    `skip_stages: ["upscale" | "face_detailer"]` (#1621) switches an optional
    stage off for the run: its nodes are bypassed on the run's copy and what
    only they read is pruned. A card that has no such stage runs unchanged; one
-   whose stage cannot be taken out (a FaceDetailer's mask or pipe is read, or
-   ComfyUI is unreachable) is `stage_not_skippable`, never a full run.
+   whose stage cannot be taken out (a FaceDetailer's mask or pipe is read, a
+   hires fix in pixel space, or ComfyUI is unreachable) is
+   `stage_not_skippable`, never a full run. A resize that prepares an img2img
+   input is not the upscale stage and stays.
 3. **A missing model blocks the whole batch**, mixed or not, and so does an
    unreachable ComfyUI. Every group's `runs` goes to zero and nothing is
    submitted — including the groups whose own `reasons` are empty.
