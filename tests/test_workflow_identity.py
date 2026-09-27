@@ -23,6 +23,7 @@ from pixlstash.services.workflow_identity import (
     UPSCALE,
     Difference,
     core_hash,
+    core_node_labels,
     differences_reduced,
     differs_by,
     guess_mark,
@@ -290,6 +291,44 @@ def test_plumbing_and_post_processing_stack_with_the_plain_workflow(variant):
     plain, member = _graph(), _graph(**variant)
     assert topology_hash(plain) != topology_hash(member)
     assert core_hash(_doc(plain)) == core_hash(_doc(member))
+
+
+def _core_label(graph: dict, node_id: str) -> str:
+    return core_node_labels(_doc(graph))[node_id]
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        {"face_detailer": True},
+        {"loras": ("a.safetensors",)},
+        {"loras": ("a.safetensors", "b.safetensors", "c.safetensors")},
+        {"loras": ("a.safetensors",), "face_detailer": True, "upscale": True},
+    ],
+    ids=["detailer", "one-lora", "three-loras", "all-of-it"],
+)
+def test_core_labels_agree_across_the_members_of_one_workflow(variant):
+    """The core address (#1622): one label per node across every member.
+
+    A slot label changes the moment a node is added anywhere, so it cannot
+    address "the sampler" across a workflow's topologies; the label on the
+    stripped core graph can. Asserted against a one-LoRA member as well as the
+    plain graph, because 1 vs 3 LoRA loaders is the case the issue names.
+    """
+    one_lora, member = _graph(loras=("a.safetensors",)), _graph(**variant)
+    assert core_hash(_doc(one_lora)) == core_hash(_doc(member))
+    for node_id in ("1", "4", "5"):  # checkpoint loader, latent, sampler
+        assert _core_label(one_lora, node_id) == _core_label(member, node_id)
+        assert _core_label(_graph(), node_id) == _core_label(member, node_id)
+
+
+def test_core_labels_tell_the_nodes_of_one_graph_apart_and_skip_stripped_ones():
+    """A shared label that named every node would pass the test above."""
+    graph = _graph(loras=("a.safetensors",), face_detailer=True)
+    labels = core_node_labels(_doc(graph))
+    assert len({labels["1"], labels["4"], labels["5"]}) == 3
+    # Stripped: LoRA loader, detailer and its detector have no core address.
+    assert not {"L0", "30", "31"} & set(labels)
 
 
 def test_an_extra_lora_loader_splits_when_loras_are_not_stripped():

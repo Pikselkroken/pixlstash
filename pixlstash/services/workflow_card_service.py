@@ -42,6 +42,8 @@ Three orderings are decided here and nowhere else:
 
 from __future__ import annotations
 
+import json
+import re
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -52,31 +54,45 @@ from pixlstash.hub.workflow_card_reads import (
     AUTO_STACK_PREFIX,
     Card,
     StackRows,
+    Workflow,
     asset_names,
     card_index,
     chosen_covers,
     default_overrides,
+    find_workflow,
     instance_documents,
     lora_promotions,
     slot_marks,
     stack_rows,
     variant_documents,
+    workflow_group_defaults,
 )
+from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS, loader_swaps_of
 from pixlstash.hub.workflows import model_ghost_names, picture_ghosts_by_variant
 from pixlstash.pixl_logging import get_logger
+from pixlstash.services.comfyui_recipe_service import LORA_DIGEST_FIELD_RE
 from pixlstash.services.model_shelf_service import (
+    adapter_digest_index,
     attached_characters,
     models_for_digest,
     recipe_asset_index,
 )
-from pixlstash.services.workflow_hash import WorkflowGraphError, asset_reference
+from pixlstash.services.workflow_hash import (
+    WorkflowGraphError,
+    asset_reference,
+    normalized_filename,
+)
 from pixlstash.services.workflow_identity import (
-    CHECKPOINT_WIDGETS,
+    CORE_ADDRESS_PREFIX,
     RECIPE,
     STRUCTURAL,
     WORKFLOW_KEY_VERSION,
     Difference,
+    Slot,
+    base_model_kind,
+    core_node_labels,
     differences_reduced,
+    unswapped,
     is_lora_widget,
     model_fix_kind,
     reduce_stored_document,
@@ -140,15 +156,12 @@ DEFAULT_SAMPLE = 200
 # What a model slot's widget makes it, in the vocabulary `workflowCard.js`
 # reads (`kind === "checkpoint"` names the card's one headline model). A widget
 # this does not know keeps its own name rather than being called a checkpoint.
+#
+# **No base-model widget here.** Which spellings name the base model, and
+# whether each is a checkpoint or a UNET, is
+# `workflow_identity.base_model_kind`, derived from `CHECKPOINT_WIDGETS`; a
+# copy here drifted from that set once already (#1404, #1622).
 _SLOT_KINDS = {
-    "ckpt_name": "checkpoint",
-    "unet_name": "unet",
-    # The other three spellings of a base model: Diffusers' folder, ComfyUI's
-    # newer UNETLoader widget, and PixlStash's own node naming a shelf row.
-    # Mapped rather than left to fall through, because `kind` is spoken aloud.
-    "model_path": "checkpoint",
-    "diffusion_model": "unet",
-    "checkpoint_id": "checkpoint",
     "vae_name": "vae",
     "clip_name": "clip",
     "clip_name1": "clip",
@@ -162,37 +175,15 @@ _SLOT_KINDS = {
     "photomaker_model_name": "photomaker",
 }
 
-# The slot kinds that name the BASE MODEL, most preferred first.
-#
-# **Derived from `CHECKPOINT_WIDGETS`, never hand-copied.** That set, in
-# `workflow_identity`, is where "what counts as a base model" is actually
-# decided - it is what makes `differs_by` say *other checkpoint* - and a second
-# copy of the answer is the exact drift `CHECKPOINT_WIDGETS` itself was written
-# to end (#1416). A sixth widget added there is a base model here the same day,
-# with no edit and nothing to remember.
-#
-# `checkpoint` then `unet` by hand because those two have a real order: a graph
-# carrying both is led by its checkpoint. Every widget in `CHECKPOINT_WIDGETS`
-# now maps to one of those two - they ARE the two kinds a base model comes in,
-# and the other three widget names are spellings of them - so the derived tail
-# is empty today. It is kept, and deduplicated, because the set is the thing
-# that decides: a sixth widget naming a genuinely new kind appears here on its
-# own, and a sixth that is another spelling correctly adds nothing.
-BASE_MODEL_KINDS = ("checkpoint", "unet") + tuple(
-    kind
-    for kind in dict.fromkeys(
-        sorted(
-            _SLOT_KINDS.get(widget, widget)
-            for widget in CHECKPOINT_WIDGETS - {"ckpt_name", "unet_name"}
-        )
-    )
-    if kind not in {"checkpoint", "unet"}
-)
+# The slot kinds that name the BASE MODEL, most preferred first: a graph
+# carrying both a checkpoint and a UNET is led by its checkpoint. Every widget
+# in `CHECKPOINT_WIDGETS` maps to one of the two (`base_model_kind`).
+BASE_MODEL_KINDS = ("checkpoint", "unet")
 
 
 def slot_kind(widget: str) -> str:
     """What a model slot's widget makes it, or the widget's own name."""
-    return _SLOT_KINDS.get(widget, widget)
+    return base_model_kind(widget) or _SLOT_KINDS.get(widget, widget)
 
 
 @dataclass(frozen=True)
@@ -1158,7 +1149,7 @@ def _describe_slots(
                 figure.models.append(
                     SlotModel(
                         name=_derived(name),
-                        kind=_SLOT_KINDS.get(widget, widget or "model"),
+                        kind=slot_kind(widget) if widget else "model",
                         label=str(slot.get("label") or "") or None,
                         **_mark_fields(marks_by_name.get((name or "").lower()), name),
                     )
@@ -1184,7 +1175,7 @@ def _describe_slots(
                 figure.models.append(
                     SlotModel(
                         name=name,
-                        kind=_SLOT_KINDS.get(widget, widget or "model"),
+                        kind=slot_kind(widget) if widget else "model",
                         **fields,
                     )
                 )
@@ -1648,6 +1639,391 @@ def _overrides_only(overrides: dict[tuple[str, str], str]) -> list[Default]:
         Default(labels[address], *address, overrides[address], EDITED)
         for address in addresses
     ]
+
+
+# ---------------------------------------------------------------------------
+# A workflow's default recipe (#1622).
+#
+# ``card_defaults`` widened from one card to a whole workflow: the same sample
+# (the newest ``DEFAULT_SAMPLE`` distinct instances of the pictures rated
+# ``BEST_SCORE`` and up, else of every picture), read across every variant of
+# every topology in the workflow. Parameters and models are addressed on the
+# CORE graph (``core:<label>/<input>``), which every topology of an automatic
+# workflow shares; a parameter of a node inside a stage group has no core label
+# and is addressed by its slot label on the base topology instead, read only off
+# instances of that topology. Prompt, negative and seed are not part of it.
+# ---------------------------------------------------------------------------
+
+# How a LoRA of the default recipe is addressed in ``workflow_group_default``:
+# by the file's SHA-256, the one handle that survives a rename.
+LORA_ADDRESS_PREFIX = "lora:"
+
+# The value a ``lora:`` override holds to take a LoRA out of the default recipe.
+LORA_OFF = "off"
+
+
+@dataclass(frozen=True)
+class DefaultModel:
+    """One model the default recipe loads, at a loader's core address.
+
+    ``kind`` is the shelf ``file_kind`` the loader takes (``model_fix_kind``).
+    ``filename`` is the normalized name the hub holds (``None`` for one whose
+    name was forgotten); a run writes it in ComfyUI's spelling.
+    """
+
+    address: str
+    kind: str
+    filename: Optional[str]
+    provenance: str
+
+
+@dataclass(frozen=True)
+class DefaultLora:
+    """One LoRA of the default recipe (#1620 D2).
+
+    In the recipe because it is in **more than half** of the sampled instances,
+    at its modal strength, or because the owner put it there. ``sha256`` is the
+    shelf's, ``None`` where the shelf cannot name the file; a run then cannot
+    load it and reports it unplaced, as it does a saved recipe's.
+    """
+
+    asset: str
+    filename: Optional[str]
+    sha256: Optional[str]
+    strength: Optional[float]
+    provenance: str
+
+
+@dataclass
+class DefaultRecipe:
+    """What a workflow runs with when nobody says otherwise.
+
+    ``stages`` maps each stage group the base topology has to whether the
+    default recipe runs it: on, unless most of the sampled pictures ran
+    without it. ``base_card`` is the card whose source a run resolves.
+    """
+
+    workflow_id: str
+    base_topology: Optional[str]
+    base_card: Optional[str] = None
+    sampled: int = 0
+    # Whether the sample says which LoRAs the workflow runs: some LoRA has a
+    # majority, most instances loaded none, or the owner edited them. A split
+    # with no majority is NOT "none", and a run then keeps the graph's LoRAs.
+    loras_decided: bool = False
+    values: list[Default] = field(default_factory=list)
+    models: list[DefaultModel] = field(default_factory=list)
+    loras: list[DefaultLora] = field(default_factory=list)
+    stages: dict[str, bool] = field(default_factory=dict)
+
+    def recipe_loras(self) -> list[dict]:
+        """The LoRAs as a saved recipe holds them, for ``place_recipe_loras``."""
+        return [
+            {
+                "filename": lora.filename,
+                "sha256": lora.sha256,
+                "strength": lora.strength,
+            }
+            for lora in self.loras
+        ]
+
+
+@dataclass(frozen=True)
+class _VariantRead:
+    core: dict[str, str]
+    base: dict[str, str]
+    slots: list[Slot]
+
+
+def workflow_defaults(
+    hub: HubDatabase, vault, workflow_id: str
+) -> Optional[DefaultRecipe]:
+    """The default recipe of one workflow, or ``None`` for an unknown id.
+
+    Featured parameters and models are the mode per address; a LoRA is in when
+    more than half the sampled instances loaded it, at its modal strength;
+    a stage the base topology has is on unless most instances ran without it.
+    The owner's edits (``workflow_group_default``) replace what they name and
+    say so (``EDITED``). Counted per distinct instance, as ``card_defaults``
+    counts, and with its tie-break.
+    """
+    library_uuid = getattr(vault, "library_uuid", None)
+    counts = read_variant_picture_counts(vault) if library_uuid else None
+    workflow = find_workflow(hub, workflow_id, counts)
+    if workflow is None:
+        return None
+
+    provenance = FROM_BEST
+    documents: list[tuple[str, dict]] = []
+    if library_uuid:
+        hashes = read_instance_hashes(
+            vault, workflow.variants, BEST_SCORE, DEFAULT_SAMPLE
+        )
+        if not hashes:
+            provenance = FROM_ALL
+            hashes = read_instance_hashes(
+                vault, workflow.variants, None, DEFAULT_SAMPLE
+            )
+        documents = instance_documents(hub, library_uuid, hashes)
+    reads = _variant_reads(
+        hub, workflow, {structural_hash for structural_hash, _ in documents}
+    )
+
+    values: dict[tuple[str, str], Counter] = {}
+    models: dict[str, Counter] = {}
+    model_kinds: dict[str, str] = {}
+    lora_seen: Counter = Counter()
+    bare = 0
+    lora_strengths: dict[str, Counter] = {}
+    lora_widgets: dict[str, str] = {}
+    base_stages = workflow.specials.get(workflow.base_topology or "") or ()
+    without: Counter = Counter()
+    # Instances whose topology's stages are known: the stage vote's electorate.
+    staged = 0
+    sampled = 0
+    for structural_hash, document in documents:
+        read = reads.get(structural_hash)
+        if read is None:
+            continue
+        sampled += 1
+        for node_id, node in document.items():
+            inputs = node.get("inputs") if isinstance(node, dict) else None
+            if not isinstance(inputs, dict):
+                continue
+            node_id = str(node_id)
+            if node_id in read.core:
+                slot_label = CORE_ADDRESS_PREFIX + read.core[node_id]
+            elif node_id in read.base:
+                slot_label = read.base[node_id]
+            else:
+                continue
+            for name, value in inputs.items():
+                # The scalar check also rejects a wired input (a link list).
+                if name in FEATURED_NAMES and isinstance(
+                    value, (bool, int, float, str)
+                ):
+                    values.setdefault((slot_label, name), Counter())[value] += 1
+        loaded = set()
+        for slot in read.slots:
+            if slot.is_lora:
+                loaded.add(slot.asset)
+                lora_widgets[slot.asset] = slot.widget
+                strength = (
+                    (document.get(slot.node_id) or {})
+                    .get("inputs", {})
+                    .get("strength_model")
+                )
+                if isinstance(strength, (int, float)) and not isinstance(
+                    strength, bool
+                ):
+                    lora_strengths.setdefault(slot.asset, Counter())[
+                        float(strength)
+                    ] += 1
+                continue
+            kind = model_fix_kind(slot.class_type, slot.widget)
+            label = read.core.get(slot.node_id)
+            if kind and label:
+                address = f"{CORE_ADDRESS_PREFIX}{label}/{slot.widget}"
+                models.setdefault(address, Counter())[slot.asset] += 1
+                model_kinds[address] = kind
+        lora_seen.update(loaded)
+        bare += not loaded
+        ran = workflow.specials.get(workflow.variant_topology.get(structural_hash, ""))
+        # A topology the specials pass has not read yet says nothing either way.
+        if ran is not None:
+            staged += 1
+            without.update(stage for stage in base_stages if stage not in ran)
+
+    names = {
+        asset_reference(filename): filename
+        for pairs in asset_names(hub, list(reads)).values()
+        for _widget, filename in pairs
+    }
+    overrides = workflow_group_defaults(hub, workflow_id)
+    recipe = DefaultRecipe(
+        workflow_id=workflow_id,
+        base_topology=workflow.base_topology,
+        base_card=workflow.base_card,
+        sampled=sampled,
+        stages={stage: without[stage] * 2 <= staged for stage in base_stages},
+    )
+
+    value_overrides, model_overrides, lora_overrides = {}, {}, {}
+    for address, value in overrides.items():
+        if address.startswith(LORA_ADDRESS_PREFIX):
+            lora_overrides[address[len(LORA_ADDRESS_PREFIX) :].lower()] = value
+            continue
+        slot_label, _, input_name = address.rpartition("/")
+        if not slot_label or not input_name:
+            logger.warning(
+                "Workflow %s holds default address %r, which names no input, so "
+                "it is not part of the default recipe.",
+                workflow_id,
+                address,
+            )
+        elif model_fix_kind("", input_name):
+            model_overrides[address] = value
+        else:
+            value_overrides[(slot_label, input_name)] = _stored_value(value)
+
+    addresses = sorted(set(values) | set(value_overrides))
+    labels = _labels(addresses)
+    for address in addresses:
+        if address in value_overrides:
+            recipe.values.append(
+                Default(labels[address], *address, value_overrides[address], EDITED)
+            )
+        else:
+            recipe.values.append(
+                Default(labels[address], *address, _mode(values[address]), provenance)
+            )
+
+    for address in sorted(set(models) | set(model_overrides)):
+        widget = address.rpartition("/")[2]
+        if address in model_overrides:
+            recipe.models.append(
+                DefaultModel(
+                    address,
+                    model_kinds.get(address) or model_fix_kind("", widget) or "",
+                    model_overrides[address],
+                    EDITED,
+                )
+            )
+        else:
+            recipe.models.append(
+                DefaultModel(
+                    address,
+                    model_kinds[address],
+                    names.get(_mode(models[address])),
+                    provenance,
+                )
+            )
+
+    by_name, _digests = adapter_digest_index(hub)
+    majority = sorted(asset for asset, seen in lora_seen.items() if seen * 2 > sampled)
+    for asset in majority:
+        filename = names.get(asset)
+        if (
+            filename is not None
+            and LORA_DIGEST_FIELD_RE.match(lora_widgets[asset])
+            and re.fullmatch(r"[0-9a-f]{64}", filename.lower())
+        ):
+            # A whole digest only: an A1111 short hash names no one file.
+            sha256 = filename.lower()
+        else:
+            shelf = by_name.get(normalized_filename(filename or ""), set())
+            sha256 = next(iter(shelf)) if len(shelf) == 1 else None
+        strengths = lora_strengths.get(asset)
+        lora = DefaultLora(
+            asset,
+            filename,
+            sha256,
+            _mode(strengths) if strengths else None,
+            provenance,
+        )
+        edited = lora_overrides.pop(sha256, None) if sha256 else None
+        if edited is None:
+            recipe.loras.append(lora)
+        elif edited != LORA_OFF:
+            recipe.loras.append(
+                replace(lora, strength=_float_or_none(edited), provenance=EDITED)
+            )
+    for sha256, value in sorted(lora_overrides.items()):
+        if value != LORA_OFF:
+            recipe.loras.append(
+                DefaultLora("", None, sha256, _float_or_none(value), EDITED)
+            )
+    recipe.loras_decided = (
+        bool(majority)
+        or bare * 2 > sampled
+        or any(address.startswith(LORA_ADDRESS_PREFIX) for address in overrides)
+    )
+    return recipe
+
+
+def _variant_reads(
+    hub: HubDatabase, workflow: Workflow, structural_hashes: set[str]
+) -> dict[str, _VariantRead]:
+    """Each sampled variant's core labels, base labels and slots.
+
+    Base labels only for a variant ON the base topology: a slot label means
+    nothing outside its topology, which is the whole reason the core address
+    exists.
+
+    A variant a model fix swapped a PixlStash loader into (#1605) is carded
+    under the topology it was swapped from, and is read as that graph too,
+    the original loader put back, or its model would vote at an address the
+    workflow's other runs do not have.
+    """
+    filed_as: dict[str, str] = {}
+    for batch in chunked(sorted(structural_hashes)):
+        placeholders = ",".join("?" * len(batch))
+        filed_as.update(
+            hub.fetchall(
+                "SELECT structural_hash, topology_hash FROM workflow_recipe "
+                f"WHERE structural_hash IN ({placeholders})",
+                tuple(batch),
+            )
+        )
+    reads = {}
+    for structural_hash, document in variant_documents(
+        hub, sorted(structural_hashes)
+    ).items():
+        try:
+            swapped = filed_as.get(structural_hash)
+            if swapped and swapped != workflow.variant_topology.get(structural_hash):
+                _, document = unswapped(
+                    document, loader_swaps_of(hub.fetchall, swapped)
+                )
+            on_base = (
+                workflow.variant_topology.get(structural_hash) == workflow.base_topology
+            )
+            reads[structural_hash] = _VariantRead(
+                core=core_node_labels(document, strip_loras=STRIP_LORAS_FOR_STACKS),
+                base=topology_node_labels(document) if on_base else {},
+                slots=slots(document),
+            )
+        except WorkflowGraphError as exc:
+            logger.info(
+                "Variant %s of workflow %s will not reduce, so its instances "
+                "contribute nothing to the default recipe: %s",
+                structural_hash,
+                workflow.workflow_id,
+                exc,
+            )
+    return reads
+
+
+def _stored_value(text: str) -> bool | int | float | str:
+    """An override as a graph takes it: the column is TEXT, a graph is not.
+
+    ``"30"`` is the number 30 and ``"true"`` the boolean, the way the card
+    routes write them (``routes/workflows._stored_value``); anything else is
+    the string it is, a sampler name say.
+    """
+    try:
+        value = json.loads(text)
+    except (TypeError, ValueError):
+        return text
+    return value if isinstance(value, (bool, int, float)) else text
+
+
+def _mode(counter: Counter):
+    """Most often, and on a tie the value whose text sorts last (``card_defaults``)."""
+    return max(counter.items(), key=lambda item: (item[1], str(item[0])))[0]
+
+
+def _float_or_none(value) -> Optional[float]:
+    """A stored strength as a number, or ``None`` (the graph's own) when it is not."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            "LoRA strength %r in a default recipe is not a number; the graph's "
+            "own strength is kept.",
+            value,
+        )
+        return None
 
 
 # ---------------------------------------------------------------------------

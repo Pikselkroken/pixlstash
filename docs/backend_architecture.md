@@ -4014,6 +4014,73 @@ and on the import route the card write has a handler of its own so a failed card
 cannot retract the `topology_hash` of a graph that *was* filed. The picture's
 ingest and the file's import do not depend on a card, and the backfill retries.
 
+#### Workflows: identity, core addresses and the default recipe (#1622)
+
+The owner-facing **workflow** is a group of topologies, beside the cards
+rather than instead of them until the cut-over (#1623); no card route reads
+anything here. `variant (structural_hash) -> topology -> workflow (workflow_id)`,
+where the id is `auto:<core_hash>` for an automatic group (the spelling an
+automatic stack already has) or a uuid hex for an owner's split or merge.
+Pictures stay filed by `structural_hash`, so nothing in the vault moves.
+
+| Table | Holds |
+|---|---|
+| `workflow_group`, `workflow_group_member` | A workflow somebody decided about, and a topology placed in one by hand (one workflow per topology: the member row's primary key). Merge and split move **topologies**, never cards: what told two cards of one topology apart is a checkpoint or a LoRA, which are recipe values now |
+| `workflow_group_attr`, `workflow_group_default`, `workflow_group_pins`, `workflow_group_picture_input` | The owner's name, notes and hidden flag; edits to the default recipe; pins; picture inputs (library-keyed, pictures by `pixel_sha`). All keyed by `workflow_id` and addressed by **address**, never slot label |
+| `workflow_key_successor` | Which workflow each card became; written by the cut-over, read by the vault's saved-recipe conversion |
+
+Reads (`hub/workflow_card_reads.py`): `workflow_of_topology` (a member row, else
+`auto:<core_hash>` under this build's `CORE_RULE_VERSION`, else none),
+`topologies_in_workflow` (an automatic workflow minus topologies placed
+elsewhere), `variants_in_workflow`, and `workflow_index`, one `Workflow` per
+group built from `card_index`. The **base topology** is the one with the most
+stage groups, then the most LoRA loaders, then the most kept pictures (#1620
+D3, automatic); its busiest card is `base_card`, whose source a run resolves.
+
+**Addresses.** A slot label is refined over the whole topology, so it means
+nothing in a workflow spanning several. `workflow_identity.core_node_labels`
+refines on the graph `core_hash` strips (plumbing, stages, LoRA loaders
+stepped through), from the same `_strip`, so the hash and the address cannot
+disagree; equal core hashes mean isomorphic stripped graphs, so a sampler,
+latent or checkpoint loader has the same **core address**
+`core:<label>/<input>` in every topology of the group. A node inside a stage
+group has no core label and is addressed by its slot label on the base
+topology, which goes stale if the base topology changes: an accepted limit, and
+`_apply_addressed` now logs every address that matches no node on the run graph
+rather than dropping it silently. LoRAs are not addressed by label:
+`lora:<sha256>`, placed by `place_recipe_loras`.
+
+**The default recipe** (`workflow_card_service.workflow_defaults`) is
+`card_defaults`' sample (the newest `DEFAULT_SAMPLE` distinct instances of the
+4★+ pictures, else of every picture) read across every variant of the
+workflow: each featured parameter's mode by address; each checkpoint, VAE and
+text-encoder loader's modal file (`model_fix_kind` says which loaders those
+are); every LoRA present in **more than half** the instances, at its modal
+strength (D2); and each stage the base topology has, on unless most instances
+ran without it. Prompt, negative and seed are not part of it.
+`workflow_group_default` edits replace what they name (`EDITED`); a `lora:`
+edit holding `off` takes a LoRA out.
+
+**A run by `workflow_id`** starts from the base card's source and has the
+server apply the default recipe **under** the request: the recipe's values
+are written in a pass of their own before the request's, so a request value
+wins however either addresses the input (slot label or core address), and
+`models` and `loras` win address by address. A stage the recipe runs without
+is skipped best effort: one that cannot be taken out runs whole and is logged,
+never refused. A LoRA loader the recipe leaves empty is bypassed, best effort
+too, and only when the recipe was read off at least one picture and the shelf
+names every one of its LoRAs; otherwise every loader keeps its LoRA. The
+request cannot switch a recipe-off stage back on yet (#1623 owns that control). `models: [{address, filename | sha256}]` goes through
+`apply_filename_swap`; a model made for another family or modality than the one
+it replaces is **flagged, never blocked** (`RunGroup.flags`, `family_mismatch`;
+`model_shelf_service.families_clash`, which the clone dialog's LoRA flags use
+too). A run by `workflow_key` applies no workflow default and is unchanged.
+
+**Saved recipes** gain `workflow_id` and `models` (migration 0124, both
+nullable). `models` pins over the workflow's default recipe address by address,
+as a recipe's overrides do, so NULL and `[]` both leave the defaults; a recipe with a
+`workflow_id` runs as that workflow.
+
 #### The workflow scan rides the ComfyUI extraction (v1.11)
 
 **There is no second backfill, and that is a decision rather than an economy**

@@ -107,6 +107,7 @@ from pixlstash.services.workflow_identity import (
     STRUCTURAL,
     UPSCALE,
     WORKFLOW_KEY_VERSION,
+    core_node_labels,
     guess_mark,
     slots,
     special_groups,
@@ -612,6 +613,9 @@ def _seed_hub(server) -> None:
         conn.execute("DELETE FROM workflow_unstacked")
         conn.execute("DELETE FROM workflow_recipe_instance")
         conn.execute("DELETE FROM workflow_model_fix")
+        conn.execute("DELETE FROM workflow_group_default")
+        conn.execute("DELETE FROM workflow_group_member")
+        conn.execute("DELETE FROM workflow_group")
         conn.execute(
             "DELETE FROM model WHERE filename IN (?, ?, ?, ?)",
             (
@@ -4286,6 +4290,8 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
         ("POST", f"{API}/workflows/stacks/{stack_id}/unstack", None),
         ("POST", f"{API}/workflows/run", {"workflow_key": BUSY_CARD}),
         ("POST", f"{API}/workflows/run/preflight", {"workflow_key": BUSY_CARD}),
+        ("POST", f"{API}/workflows/run", {"workflow_id": stack_id}),
+        ("POST", f"{API}/workflows/run/preflight", {"workflow_id": stack_id}),
         ("POST", f"{API}/workflows/{BUSY_CARD}/duplicate", None),
         ("POST", f"{API}/workflows/{BUSY_CARD}/insert-lora-loader", None),
         ("PUT", f"{API}/workflows/{BUSY_CARD}/lora-chain", {"entries": []}),
@@ -8468,6 +8474,226 @@ def test_values_are_applied_at_run_time_and_never_written_back(runnable):
     assert get_document(runnable.server.hub, RUN_RECIPE) == stored
 
 
+RUN_WORKFLOW = f"{AUTO_STACK_PREFIX}{RUN_CORE}"
+
+
+def _core_address(node_id: str, input_name: str) -> str:
+    return f"core:{core_node_labels(RUN_DOCUMENT)[node_id]}/{input_name}"
+
+
+def test_a_workflow_run_applies_its_default_recipe_on_the_server(runnable):
+    """The request sends no values, and the default recipe still lands (#1622).
+
+    The owner's edit to the default recipe is the one value nothing else could
+    have put there: the card's stored instance says 24 steps, and a card run
+    (the control) keeps it.
+    """
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, '31')",
+            (RUN_WORKFLOW, _core_address("3", "steps")),
+        )
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WORKFLOW})
+    assert r.status_code == 200, r.text
+    (group,) = r.json()["groups"]
+    assert (group["workflow_id"], group["workflow_key"]) == (RUN_WORKFLOW, RUN_CARD)
+    submitted = runnable.submitted[0]["graph"]["3"]["inputs"]
+    assert (submitted["steps"], submitted["cfg"]) == (31, 6.5)
+    # The default LoRA is off the shelf (no digest) but named: its loader keeps
+    # it rather than being bypassed as a slot the recipe left empty.
+    assert runnable.submitted[0]["graph"]["2"]["inputs"]["lora_name"] == (
+        "add_detail.safetensors"
+    )
+    assert group["bypassed_loras"] == [] and group["unplaced_loras"] == []
+    # A request value still wins over the default recipe.
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WORKFLOW,
+            "values": [
+                {
+                    "slot_label": _core_address("3", "steps").rpartition("/")[0],
+                    "input_name": "steps",
+                    "value": 12,
+                }
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert runnable.submitted[1]["graph"]["3"]["inputs"]["steps"] == 12
+    # The control: a card run reads no workflow default.
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_key": RUN_CARD})
+    assert r.status_code == 200, r.text
+    assert runnable.submitted[2]["graph"]["3"]["inputs"]["steps"] == 24
+
+
+def test_a_request_value_by_slot_label_wins_over_a_default_by_core_address(
+    runnable,
+):
+    """One input, two addresses: the request's still lands last."""
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, '31')",
+            (RUN_WORKFLOW, _core_address("3", "steps")),
+        )
+    slot_label = topology_node_labels(RUN_DOCUMENT)["3"]
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WORKFLOW,
+            "values": [{"slot_label": slot_label, "input_name": "steps", "value": 12}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 12
+
+
+def test_one_input_named_two_ways_takes_the_later_value(runnable):
+    """A saved recipe's core-addressed override must not beat a request's slot label."""
+    core = {"slot_label": _core_address("3", "steps").rpartition("/")[0]}
+    slot = {"slot_label": topology_node_labels(RUN_DOCUMENT)["3"]}
+    for first, second, expected in ((core, slot, 12), (slot, core, 12)):
+        r = runnable.owner.post(
+            f"{API}/workflows/run",
+            json={
+                "workflow_key": RUN_CARD,
+                "values": [
+                    {
+                        **first,
+                        "input_name": "steps",
+                        "value": 31,
+                    },
+                    {**second, "input_name": "steps", "value": expected},
+                ],
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert runnable.submitted[-1]["graph"]["3"]["inputs"]["steps"] == expected
+
+
+def test_a_recipe_read_off_no_picture_bypasses_no_lora(runnable):
+    """No sample is no evidence: the base graph's LoRA stays, unreported."""
+    runnable.monkeypatch.setattr(
+        workflow_card_service, "read_instance_hashes", lambda *args: []
+    )
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WORKFLOW})
+    assert r.status_code == 200, r.text
+    (group,) = r.json()["groups"]
+    assert group["bypassed_loras"] == [] and group["unplaced_loras"] == []
+    assert "2" in runnable.submitted[0]["graph"]
+
+
+def test_a_model_pinned_by_a_digest_the_shelf_lost_is_flagged_not_refused(runnable):
+    body = {
+        "workflow_id": RUN_WORKFLOW,
+        "models": [{"address": _core_address("1", "ckpt_name"), "sha256": "0" * 64}],
+    }
+    r = runnable.owner.post(f"{API}/workflows/run", json=body)
+    assert r.status_code == 200, r.text
+    (group,) = r.json()["groups"]
+    assert [(f["code"], f["reason"]) for f in group["flags"]] == [
+        ("model_not_applied", "not_on_shelf")
+    ]
+    loaded = runnable.submitted[0]["graph"]["1"]["inputs"]["ckpt_name"]
+    assert loaded == "realvisxl.safetensors"
+
+
+def test_an_empty_core_label_names_no_loader(runnable):
+    """``core:`` with no label must not match every node the core stripped."""
+    (group,) = _preflight(
+        runnable.owner,
+        workflow_id=RUN_WORKFLOW,
+        models=[{"address": "core:/lora_name", "filename": "other.safetensors"}],
+    )["groups"]
+    assert [(f["code"], f["reason"]) for f in group["flags"]] == [
+        ("model_not_applied", "no_loader")
+    ]
+
+
+def test_a_model_address_no_loader_has_is_flagged(runnable):
+    body = {
+        "workflow_id": RUN_WORKFLOW,
+        "models": [
+            {"address": "core:no-such-label/ckpt_name", "filename": "x.safetensors"}
+        ],
+    }
+    (group,) = _preflight(runnable.owner, **body)["groups"]
+    assert [(f["code"], f["reason"]) for f in group["flags"]] == [
+        ("model_not_applied", "no_loader")
+    ]
+
+
+def test_an_unknown_workflow_is_a_404_and_a_malformed_one_a_422(runnable):
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight",
+        json={"workflow_id": f"{AUTO_STACK_PREFIX}{_h('no-such-core')}"},
+    )
+    assert r.status_code == 404, r.text
+    r = runnable.owner.post(
+        f"{API}/workflows/run/preflight", json={"workflow_id": "auto:nope"}
+    )
+    assert r.status_code == 422, r.text
+
+
+_OTHER_FAMILY_CHECKPOINT = "test-flux-dev.safetensors"
+
+
+def test_a_pinned_checkpoint_of_another_family_is_flagged_and_still_runs(runnable):
+    """Flagged, never blocked (#1620 Q3), and the pinned file is what loads."""
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].append(
+        _OTHER_FAMILY_CHECKPOINT
+    )
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    hub = runnable.server.hub
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'SDXL 1.0' WHERE filename = ?",
+            (_SHELF_FILENAME,),
+        )
+        conn.execute(
+            "INSERT INTO model (file_kind, filename, sha256, base_model, "
+            "provenance) VALUES ('checkpoint', ?, ?, 'Flux.1 D', 'scanned')",
+            (_OTHER_FAMILY_CHECKPOINT, _h("other-family-digest")),
+        )
+    try:
+        body = {
+            "workflow_id": RUN_WORKFLOW,
+            "models": [
+                {
+                    "address": _core_address("1", "ckpt_name"),
+                    "filename": _OTHER_FAMILY_CHECKPOINT,
+                }
+            ],
+        }
+        payload = _preflight(runnable.owner, **body)
+        (group,) = payload["groups"]
+        assert group["reasons"] == [], group
+        assert [flag["code"] for flag in group["flags"]] == ["family_mismatch"]
+        assert group["flags"][0]["now"] == _OTHER_FAMILY_CHECKPOINT
+        r = runnable.owner.post(f"{API}/workflows/run", json=body)
+        assert r.status_code == 200, r.text
+        loaded = runnable.submitted[0]["graph"]["1"]["inputs"]["ckpt_name"]
+        assert loaded == _OTHER_FAMILY_CHECKPOINT
+        # The control: the same family is no flag.
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET base_model = 'SDXL 1.0' WHERE filename = ?",
+                (_OTHER_FAMILY_CHECKPOINT,),
+            )
+        (group,) = _preflight(runnable.owner, **body)["groups"]
+        assert group["flags"] == []
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM model WHERE filename = ?", (_OTHER_FAMILY_CHECKPOINT,)
+            )
+
+
 def test_the_prompt_lands_in_the_graph_and_not_in_the_stored_document(runnable):
     document = json.loads(json.dumps(RUN_DOCUMENT))
     document["5"] = {
@@ -9399,6 +9625,42 @@ def test_a_saved_recipes_own_loras_are_placed_in_the_graphs_slots(runnable):
     inputs = runnable.submitted[0]["graph"]["2"]["inputs"]
     assert inputs["lora_name"] == RUN_ADAPTER_FILENAME, inputs
     assert inputs["strength_model"] == 0.6, inputs
+
+
+def test_a_saved_recipes_pinned_model_is_loaded(runnable):
+    """``saved_recipe.models`` reaches the run as typed models (#1622)."""
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].append(
+        _OTHER_FAMILY_CHECKPOINT
+    )
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    r = runnable.owner.post(
+        f"{API}/recipes",
+        json={"name": "pinned model", "workflow_key": RUN_CARD, "prompt": "a cat"},
+    )
+    assert r.status_code in {200, 201}, r.text
+    recipe_id = r.json()["id"]
+    models = [
+        {
+            "address": _core_address("1", "ckpt_name"),
+            "filename": _OTHER_FAMILY_CHECKPOINT,
+        }
+    ]
+
+    def pin(session):
+        recipe = session.get(SavedRecipe, recipe_id)
+        recipe.models = json.dumps(models)
+        session.commit()
+
+    runnable.server.vault.db.run_task(pin, priority=DBPriority.IMMEDIATE)
+    run = runnable.owner.post(
+        f"{API}/workflows/run", json={"saved_recipe_id": recipe_id}
+    )
+    assert run.status_code == 200, run.text
+    loaded = runnable.submitted[0]["graph"]["1"]["inputs"]["ckpt_name"]
+    assert loaded == _OTHER_FAMILY_CHECKPOINT
 
 
 def test_a_saved_seed_never_overrides_a_seed_mode_the_caller_sent(runnable):

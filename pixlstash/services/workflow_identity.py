@@ -59,6 +59,10 @@ CORE_VERSION = "v1"
 
 ASSET_REFERENCE_PREFIX = "asset:"
 
+# What an address on the core graph is spelled with, so a core address and a
+# base slot label (a bare digest) can never be read as each other.
+CORE_ADDRESS_PREFIX = "core:"
+
 STRUCTURAL = "structural"
 RECIPE = "recipe"
 
@@ -87,21 +91,11 @@ _PICTURE_WIDGET_RE = re.compile(r"(^|_)(image|images|video|mask)(_|$)")
 # changed rather than falling back to "other models". The shelf loader names
 # its checkpoint by id, not by filename (#1416).
 #
-# **The client's copy is gone; a server one is not.** The retired workflow
-# shelf kept a `BASE_WIDGETS` of its own for the Models column, and the two
-# drifted in both directions - `diffusion_model` and `model_path` only there,
-# `checkpoint_id` only here - so a workflow read as having a base model on one
-# side and a changed one on the other (#1416). A guardrail held them equal
-# until F1b (#1404) deleted the shelf.
-#
-# **`_SLOT_KINDS` in `workflow_card_service.py` still answers the same
-# question and already disagrees**, and it is the one a card is labelled from:
-# `unet_name` is `"unet"` there, never `"checkpoint"`, and `diffusion_model`,
-# `model_path` and `checkpoint_id` are absent altogether. So a Flux/SD3/Wan
-# graph is a base-model change to `differs_by` here and is NOT the card's
-# headline model there, which falls back to the first slot. Same drift, moved
-# from client-vs-server to server-vs-server, and nothing asserts it: the two
-# want reconciling behind one helper rather than a comment (#1404 review).
+# **The one answer to "is this the base model".** The retired workflow shelf
+# kept a `BASE_WIDGETS` of its own and it drifted from this set (#1416), and
+# `workflow_card_service._SLOT_KINDS` later drifted the same way. Which KIND of
+# base model a spelling is lives beside it in :func:`base_model_kind`, and the
+# card service asks that rather than keeping a copy (#1622).
 CHECKPOINT_WIDGETS = frozenset(
     {
         "ckpt_name",
@@ -111,6 +105,22 @@ CHECKPOINT_WIDGETS = frozenset(
         "checkpoint_id",
     }
 )
+
+
+# The base-model spellings that are a diffusion model on its own (a UNET) rather
+# than a whole checkpoint. A graph carrying both is led by its checkpoint.
+_UNET_WIDGETS = frozenset({"unet_name", "diffusion_model"})
+
+
+def base_model_kind(widget: str) -> Optional[str]:
+    """``checkpoint`` or ``unet`` for a widget naming the base model, else ``None``.
+
+    Derived from :data:`CHECKPOINT_WIDGETS`, so a widget added there is a base
+    model everywhere the same day.
+    """
+    if widget not in CHECKPOINT_WIDGETS:
+        return None
+    return "unet" if widget in _UNET_WIDGETS else "checkpoint"
 
 
 def model_fix_kind(class_type: str, widget: str) -> Optional[str]:
@@ -583,8 +593,31 @@ def core_hash(document: dict, *, strip_loras: bool = True) -> str:
     Raises:
         WorkflowGraphError: Nothing is left once the strip groups are removed.
     """
-    strip = {PLUMBING, UPSCALE, FACE_DETAILER} | ({LORA} if strip_loras else set())
-    return _stripped_key(_reduce(document), strip)
+    return _stripped_key(_reduce(document), _core_strip(strip_loras))
+
+
+def core_node_labels(document: dict, *, strip_loras: bool = True) -> dict[str, str]:
+    """Each surviving node's label on the core graph: ``{node_id: label}``.
+
+    The **core address** (#1622). A slot label is refined over the whole
+    topology, so it means nothing outside one topology, and a workflow spans
+    several. Every topology of one automatic workflow shares a
+    :func:`core_hash`, so their stripped graphs are isomorphic and these
+    labels agree across all of them: the sampler of the graph with a detailer
+    and the sampler of the one without get the same label.
+
+    The same strip as :func:`core_hash`, so the hash and the address cannot
+    disagree about what the core is. Nodes the strip removes (plumbing, stages,
+    LoRA loaders) have no core label and are left out.
+
+    Raises:
+        WorkflowGraphError: The document is a raw graph, or nothing survives.
+    """
+    return node_labels(_strip(_reduce(document), _core_strip(strip_loras)), rounds=None)
+
+
+def _core_strip(strip_loras: bool) -> set[str]:
+    return {PLUMBING, UPSCALE, FACE_DETAILER} | ({LORA} if strip_loras else set())
 
 
 def _stripped_key(
@@ -593,6 +626,16 @@ def _stripped_key(
     *,
     keep_widgets: bool = False,
 ) -> str:
+    return graph_key(_strip(nodes, strip, keep_widgets=keep_widgets))
+
+
+def _strip(
+    nodes: dict[str, ReducedNode],
+    strip: Collection[str],
+    *,
+    keep_widgets: bool = False,
+) -> dict[str, ReducedNode]:
+    """*nodes* without the *strip* groups, edges re-wired through them."""
     groups = node_groups(nodes)
     removed = {node_id for node_id, group in groups.items() if group in strip}
 
@@ -626,7 +669,7 @@ def _stripped_key(
         )
     if not kept:
         raise WorkflowGraphError("nothing is left of the graph once stripped")
-    return graph_key(kept)
+    return kept
 
 
 def workflow_type(document: dict) -> Optional[str]:

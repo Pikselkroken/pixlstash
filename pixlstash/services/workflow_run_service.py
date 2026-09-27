@@ -1278,6 +1278,11 @@ def blocks_group(reasons: list[Reason], *, allow_unchecked: bool = False) -> boo
     return bool(reasons)
 
 
+def _named(value) -> bool:
+    """Whether a stored model pin names its model this way: non-empty text."""
+    return isinstance(value, str) and bool(value)
+
+
 def saved_recipe_body(recipe) -> dict:
     """A saved recipe as the run body fields it stands in for.
 
@@ -1303,8 +1308,41 @@ def saved_recipe_body(recipe) -> dict:
             exc,
         )
         overrides = {}
+    models = None
+    if recipe.models is not None:
+        try:
+            models = json.loads(recipe.models)
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "Saved recipe %s has unreadable models, so the run loads the "
+                "workflow's default ones: %s",
+                recipe.id,
+                exc,
+            )
+        if models is not None and not (
+            isinstance(models, list)
+            and all(
+                isinstance(m, dict)
+                and isinstance(m.get("address"), str)
+                and m.get("address")
+                # Exactly one way to name the model, as `RunModel` requires.
+                and _named(m.get("filename")) != _named(m.get("sha256"))
+                for m in models
+            )
+        ):
+            logger.error(
+                "Saved recipe %s has malformed models %r, so the run loads the "
+                "workflow's default ones.",
+                recipe.id,
+                models,
+            )
+            models = None
     return {
         "workflow_key": recipe.workflow_key,
+        # The workflow it runs on (#1622), once the cut-over has filled it in,
+        # and its models, pinned over the default recipe (NULL pins nothing).
+        "workflow_id": recipe.workflow_id,
+        "models": models,
         "prompt": recipe.prompt,
         "negative": recipe.negative,
         "loras": loras if isinstance(loras, list) else [],

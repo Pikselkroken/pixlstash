@@ -477,45 +477,6 @@ def variants_on_key(hub: HubDatabase, key: str) -> list[str]:
     ]
 
 
-def variants_in_stack(hub: HubDatabase, stack_id: str) -> list[str]:
-    """Every variant on every card in one stack.
-
-    *stack_id* is read two ways, in one query rather than one-then-the-other,
-    because a stack can be named either way:
-
-    - a **stored** stack (``workflow_stack``, manual or auto) has a row per
-      card in ``workflow_stack_member``;
-    - an automatic grouping that **has not been stored** is not a row at all -
-      it IS the set of cards sharing a ``core_hash`` (:func:`card_grouping`
-      computes it and writes nothing), so until it is materialised the only
-      thing that names it is that hash.
-
-    Nothing writes the stack tables yet, so today every answer comes from the
-    ``core_hash`` half; the membership half is here because the schema already
-    says a stack has its own id, and a filter that ignored it would answer a
-    stored stack with an empty grid the day one is written.
-
-    **Not consulted: ``workflow_unstacked``**, the owner taking a card out of
-    its automatic grouping. Nothing writes that table either, and the step that
-    does owns making every reader agree with it.
-
-    A value that names neither matches nothing.
-    """
-    return [
-        row["structural_hash"]
-        for row in hub.fetchall(
-            "SELECT DISTINCT v.structural_hash AS structural_hash "
-            "FROM workflow_variant v "
-            "LEFT JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
-            "AND c.core_version = ? "
-            "WHERE v.key_version = ? AND (c.core_hash = ? OR v.workflow_key IN ("
-            "SELECT workflow_key FROM workflow_stack_member WHERE stack_id = ?)) "
-            "ORDER BY v.structural_hash",
-            (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION, stack_id, stack_id),
-        )
-    ]
-
-
 def variants_loading(
     hub: HubDatabase, asset: str, among: Optional[list[str]] = None
 ) -> list[str]:

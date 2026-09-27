@@ -81,6 +81,14 @@ class SavedRecipe(SQLModel, table=True):
             in this library. Nulled rather than cascaded when that picture
             goes: deleting the picture does not unmake the look it taught.
         created_at: When it was saved.
+        workflow_id: The workflow it runs on (#1622): ``auto:<core hash>`` or an
+            owner's group. NULL until the cut-over (#1623) fills it in from
+            ``workflow_key_successor``; a run with it applies that
+            workflow's default recipe under this one.
+        models: JSON ``[{"address", "filename"}]``, the models this look pins
+            by loader address, over the workflow's default recipe address by
+            address as its overrides are. NULL and ``[]`` both pin nothing,
+            so the default recipe's models load.
     """
 
     __tablename__ = "saved_recipe"
@@ -115,4 +123,9 @@ class SavedRecipe(SQLModel, table=True):
 
     created_at: Optional[datetime] = Field(
         default_factory=lambda: datetime.now(timezone.utc)
+    )
+
+    workflow_id: Optional[str] = Field(default=None)
+    models: Optional[str] = Field(
+        default=None, sa_column=sa.Column(sa.Text(), nullable=True)
     )
