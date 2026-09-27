@@ -1615,6 +1615,11 @@ proves ran together, with a model free to appear in more than one.
   Ctrl+A passed the guard and then replaced a live selection with an empty one —
   a silent clear from a key that says *select*, with no undo. The pill's *Select
   all shown* never had the guard at all. One refusal in the store answers both.
+- **Ctrl+A on the grid follows the kind already selected.** The "Grouped by
+  you" cards are hand-made SETS, which never share a selection with models, so
+  one key cannot take both. With a set selected it runs `selectAllSets` (every
+  hand-made set, all of which are always drawn); with nothing selected it takes
+  the models, or the sets when the grid draws no model at all.
 - **Rename has no inline field on the grid**, because a name lives on a card and
   the dashed rule under a row is what makes an inline field honest. The verb
   falls through to `ShelfEditDialog`'s `rename`, which already exists for the
@@ -4551,8 +4556,9 @@ had been clicked, while the selection was still on screen. A window listener
 then has to know what else owns the key, and hand it back rather than clear
 underneath. All three keys are bound there, and all three ask `shelfOwnsTheKey`
 first — which does **not** test the selection: Escape and Delete need one and
-check for it themselves, while Ctrl+A is pressed precisely because nothing is
-selected yet. A declined key is handed back *intact*, so Ctrl+A behind a dialog
+check for it themselves, while Ctrl+A is usually pressed precisely because
+nothing is selected yet (on the set grid it also extends a hand-made SET
+selection; see the set-grid notes). A declined key is handed back *intact*, so Ctrl+A behind a dialog
 or a menu reaches the browser's own select-all — deliberately, since those
 surfaces teleport out of `.shelf` and their text is selectable. Five checks, in
 this order, each for its own reason:

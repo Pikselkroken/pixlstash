@@ -1889,6 +1889,19 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setAnchor = id;
   }
 
+  /**
+   * Ctrl+A in the set vocabulary: every hand-made set, all of which the grid
+   * always draws (they are not narrowed by `Show`). Drops the file selection,
+   * as any set selection does.
+   */
+  function selectAllSets() {
+    const sets = handMadeSets.value;
+    if (!sets.length) return;
+    clearSelection();
+    selectedSetIds.value = new Set(sets.map((set) => set.id));
+    setAnchor = sets[0].id;
+  }
+
   function clearSetSelection() {
     if (selectedSetIds.value.size) selectedSetIds.value = new Set();
   }
@@ -3227,6 +3240,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     selectedSetIds,
     selectedSets,
     selectSet,
+    selectAllSets,
     clearSetSelection,
     createHandMadeSet,
     renameHandMadeSet,

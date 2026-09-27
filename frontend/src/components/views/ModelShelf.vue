@@ -2376,9 +2376,11 @@ function shelfOwnsTheKey(event) {
  * `user-select: none` (#932) while the app around it is not, so the one thing
  * a select-all aimed at the rows could highlight was whatever text the app
  * still leaves selectable everywhere else - which is what the reporter saw.
- * It runs the store action the selection pill's "Select all shown" already
- * runs, so the key and the button say the same thing: everything the current
- * `Show` selection DRAWS, runs taken whole. Cmd counts as Ctrl (`metaKey`),
+ * For models it runs the store action the selection pill's "Select all shown"
+ * already runs, so the key and the button say the same thing: everything the
+ * current `Show` selection DRAWS, runs taken whole. On the set grid, with a
+ * hand-made set selected (or no model drawn), it takes every hand-made set
+ * instead - see the note at the call. Cmd counts as Ctrl (`metaKey`),
  * Shift and Alt do not - those are chords this list does not define and are
  * left to the browser, AltGr+A among them.
  *
@@ -2424,7 +2426,20 @@ function onShelfKeydown(event) {
     // pill's *Select all shown* never had the guard at all, so moving it into
     // the store fixed a second caller as well. The press is still claimed either
     // way, or declining would hand it to the native select-all.
-    store.selectVisible();
+    //
+    // On the set grid the "Grouped by you" cards are SETS, which cannot share a
+    // selection with models, so the key follows the kind already selected: with
+    // a set selected it takes every hand-made set. With nothing selected it
+    // takes the models, unless the grid draws none, when the sets are all
+    // there is to take.
+    if (
+      isSetGrid.value &&
+      (store.selectedSets.length || !store.screenRows.length)
+    ) {
+      store.selectAllSets();
+    } else {
+      store.selectVisible();
+    }
     return;
   }
   // Selected hand-made SETS (#1520) answer the same two keys with the set

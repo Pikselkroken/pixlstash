@@ -1736,6 +1736,12 @@ describe("selecting rows", () => {
     await rowAt(wrapper, 0).trigger("click");
     await rowAt(wrapper, 1).trigger("click", { ctrlKey: true });
     store.setFilters({ adapters: false });
+    // Hand-made sets exist, but this is the ROW LIST: the set branch of Ctrl+A
+    // belongs to the grid and must not take them (and clear the models) here.
+    store.workflowSets = {
+      ...store.workflowSets,
+      handMade: [{ id: 10, name: "Kit", members: [] }],
+    };
     await wrapper.vm.$nextTick();
     expect(store.visibleRows).toHaveLength(0);
 
@@ -5553,6 +5559,50 @@ describe("the set grid is what the shelf opens on", () => {
     await wrapper.vm.$nextTick();
     expect(store.selectedRows.map((row) => row.id)).toEqual([1]);
     expect(store.visibleRows).toHaveLength(2);
+  });
+
+  it("takes every hand-made set on Ctrl+A once a set is selected", async () => {
+    // "Grouped by you" cards are sets, and sets never share a selection with
+    // models - so with one selected the key extends the SET selection rather
+    // than swapping it for the model cards.
+    const { wrapper, store } = await shelfOnTheGrid();
+    document.body.appendChild(wrapper.element);
+    store.workflowSets = {
+      ...store.workflowSets,
+      handMade: [
+        { id: 10, name: "Kit", members: [] },
+        { id: 11, name: "Other", members: [] },
+      ],
+    };
+    store.selectSet(10);
+    await wrapper.vm.$nextTick();
+
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
+    );
+    await wrapper.vm.$nextTick();
+    expect(store.selectedSets.map((set) => set.id)).toEqual([10, 11]);
+    expect(store.selectedRows).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it("takes the hand-made sets on Ctrl+A when the grid draws no model", async () => {
+    const { wrapper, store } = await shelfOnTheGrid();
+    document.body.appendChild(wrapper.element);
+    store.workflowSets = {
+      ...store.workflowSets,
+      combinations: [],
+      handMade: [{ id: 10, name: "Kit", members: [] }],
+    };
+    await wrapper.vm.$nextTick();
+    expect(store.screenRows).toHaveLength(0);
+
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "a", ctrlKey: true }),
+    );
+    await wrapper.vm.$nextTick();
+    expect(store.selectedSets.map((set) => set.id)).toEqual([10]);
+    wrapper.unmount();
   });
 
   it("clears on Escape from the grid, and refuses Delete once it has", async () => {
