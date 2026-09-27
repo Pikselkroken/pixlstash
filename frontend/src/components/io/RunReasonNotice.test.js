@@ -243,4 +243,27 @@ describe("a LoRA the owner skipped, and one that cannot be skipped", () => {
     );
     expect(rail(wrapper)).not.toContain("rrn--notice");
   });
+
+  it("names the stage itself when the server gave no sentence", () => {
+    const said = mountNotice({ code: "stage_not_skippable", stage: "upscale" })
+      .text()
+      .replace(/\s+/g, " ");
+    expect(said).toContain("The upscale pass cannot be switched off for this run.");
+  });
+
+  it("refuses a stage that cannot be switched off, in the server's words", () => {
+    const wrapper = mountNotice({
+      code: "stage_not_skippable",
+      stage: "face_detailer",
+      message:
+        "The face detailer stage cannot be switched off: node 40 (FaceDetailer) cannot be bypassed.",
+    });
+    const said = wrapper.text().replace(/\s+/g, " ");
+    expect(said).toContain("Cinematic portrait can't run.");
+    expect(said).toContain(
+      "The face detailer stage cannot be switched off: node 40 (FaceDetailer) cannot be bypassed.",
+    );
+    expect(said.match(/cannot be switched off/g)).toHaveLength(1);
+    expect(rail(wrapper)).not.toContain("rrn--notice");
+  });
 });

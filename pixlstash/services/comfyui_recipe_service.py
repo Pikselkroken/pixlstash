@@ -24,12 +24,17 @@ import math
 import random
 import re
 from copy import deepcopy
+from graphlib import CycleError, TopologicalSorter
 from typing import Any, Callable, Optional
 
 import requests
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.workflow_hash import MODEL_EXTENSIONS, is_link
+from pixlstash.services.workflow_hash import (
+    MODEL_EXTENSIONS,
+    is_link,
+    reduce_api_graph,
+)
 
 logger = get_logger(__name__)
 
@@ -1128,16 +1133,36 @@ def _live_graph(graph: dict, object_info: dict) -> dict:
     read as a second model or a second chain. A graph whose ``object_info``
     names no output node is returned whole: nothing says what is dead.
     """
-    outputs = [
-        node_id
+    live = _live_ids(graph, object_info)
+    if live is None:
+        return graph
+    dead = sorted(set(map(str, graph)) - live)
+    if dead:
+        logger.info("Nodes %s feed no output, so the LoRA chain ignores them.", dead)
+    return {node_id: node for node_id, node in graph.items() if str(node_id) in live}
+
+
+def _output_ids(graph: dict, object_info: dict) -> list[str]:
+    """The ids of *graph*'s output nodes, as ``object_info`` marks them."""
+    return [
+        str(node_id)
         for node_id, node in graph.items()
         if isinstance(node, dict)
         and (object_info.get(node.get("class_type")) or {}).get("output_node")
     ]
+
+
+def _live_ids(graph: dict, object_info: dict) -> set[str] | None:
+    """The ids of the nodes some output reads, or ``None`` when none is known.
+
+    ``None`` rather than every id: a graph whose ``object_info`` names no
+    output node says nothing about which of its nodes are dead.
+    """
+    outputs = _output_ids(graph, object_info)
     if not outputs:
-        return graph
+        return None
     live: set[str] = set()
-    pending = [str(node_id) for node_id in outputs]
+    pending = list(outputs)
     while pending:
         node_id = pending.pop()
         if node_id in live or not isinstance(graph.get(node_id), dict):
@@ -1148,10 +1173,7 @@ def _live_graph(graph: dict, object_info: dict) -> dict:
             for value in (graph[node_id].get("inputs") or {}).values()
             if is_link(value)
         )
-    dead = sorted(set(map(str, graph)) - live)
-    if dead:
-        logger.info("Nodes %s feed no output, so the LoRA chain ignores them.", dead)
-    return {node_id: node for node_id, node in graph.items() if str(node_id) in live}
+    return live
 
 
 def _model_links(graph: dict, object_info: dict) -> list[dict]:
@@ -1616,6 +1638,186 @@ def bypass_node(prompt_graph: dict, node_id: str, object_info: dict) -> None:
     for other_inputs, field, link in rewires:
         other_inputs[field] = list(link)
     del prompt_graph[node_id]
+
+
+def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict]:
+    """Switch one optional stage (an upscale, a FaceDetailer pass) off (#1621).
+
+    Every node :func:`~pixlstash.services.workflow_identity.node_groups` puts in
+    *group* goes through :func:`bypass_node`, consumers before what they read,
+    so a FaceDetailer reading another's pipe is taken out first. A node with no
+    linked input (``UpscaleModelLoader``, ``SAMLoader``, a detector provider)
+    is not bypassed: it has nothing to stand in for it, and once what read it
+    is gone it is pruned with everything else the stage alone kept alive.
+
+    **Pruned** is only a node some output read before and none reads now: a
+    left-over model loader would otherwise be judged as a missing model and
+    refuse a run that does not need it. Nodes that were already dead are left
+    as they were. **A duplicate save is dropped**: an output node rewired onto
+    exactly the links another output node of its class reads, which is what a
+    graph saving before and after the upscale becomes. Widgets are not
+    compared - the two saves differ by ``filename_prefix`` and still save one
+    image twice - and the untouched save is the one kept.
+
+    All or nothing: the stage is taken out of a copy, and *prompt_graph* is
+    rewritten only once every node of it has been.
+
+    Args:
+        prompt_graph: The API-format graph, mutated in place.
+        group: ``workflow_identity.UPSCALE`` or ``workflow_identity.FACE_DETAILER``.
+        object_info: The map from :func:`fetch_object_info`.
+
+    Returns:
+        ``[{"node_id", "class_type", "action"}, …]``, ``action`` being
+        ``bypassed``, ``pruned`` or ``duplicate_save``; empty when the graph has
+        no such stage.
+
+    Raises:
+        LookupError: A node of the stage cannot be bypassed - something reads an
+            output (a FaceDetailer's MASK or DETAILER_PIPE) that no input of the
+            same type can stand in for, or this ComfyUI does not know the class.
+    """
+    # Local: workflow_identity imports this module.
+    from pixlstash.services.workflow_identity import node_groups
+
+    graph = deepcopy(prompt_graph)
+    live_before = _live_ids(graph, object_info)
+    in_stage = {
+        node_id
+        for node_id, node_group in node_groups(reduce_api_graph(graph)).items()
+        if node_group == group and (live_before is None or node_id in live_before)
+    }
+    reads = {
+        str(node_id): {
+            str(value[0])
+            for value in (node.get("inputs") or {}).values()
+            if is_link(value) and isinstance(graph.get(str(value[0])), dict)
+        }
+        for node_id, node in graph.items()
+        if isinstance(node, dict)
+    }
+    try:
+        order = list(TopologicalSorter(reads).static_order())
+    except CycleError as exc:
+        raise LookupError(
+            f"This graph loops back on itself ({exc.args[1]}), so PixlStash "
+            f"cannot tell what the {group.replace('_', ' ')} stage feeds."
+        ) from exc
+    read_by: dict[str, set[str]] = {node_id: set() for node_id in reads}
+    for node_id, sources in reads.items():
+        for source in sources:
+            read_by[source].add(node_id)
+
+    def reach(start: str, edges: dict[str, set[str]]) -> set[str]:
+        seen: set[str] = set()
+        pending = list(edges[start])
+        while pending:
+            node_id = pending.pop()
+            if node_id not in seen:
+                seen.add(node_id)
+                pending.extend(edges[node_id])
+        return seen
+
+    def samplers(nodes: set[str]) -> set[str]:
+        return {
+            n
+            for n in nodes
+            if n not in in_stage and _samples(graph[n].get("class_type"))
+        }
+
+    # A stage runs after the picture is made. A node of the group that feeds a
+    # sampler outside it is not one: with no sampler before it, it prepares an
+    # input (img2img's resize) and stays; with one, it is a hires fix in pixel
+    # space whose re-encode and second sampler `node_groups` does not claim,
+    # so taking only the upscale out would leave a pass nobody asked for.
+    for node_id in sorted(in_stage, key=_node_order_key):
+        feeds = samplers(reach(node_id, read_by))
+        if not feeds:
+            continue
+        if not samplers(reach(node_id, reads)):
+            in_stage.discard(node_id)
+            continue
+        raise LookupError(
+            f"The {group.replace('_', ' ')} stage cannot be switched off: node "
+            f"{node_id} ({graph[node_id].get('class_type')}) feeds another "
+            f"sampling pass (node {min(feeds, key=_node_order_key)}), which "
+            "would still run."
+        )
+    if not in_stage:
+        return []
+    changes: list[dict] = []
+    outputs_before = {
+        node_id: deepcopy(graph[node_id].get("inputs"))
+        for node_id in _output_ids(graph, object_info)
+    }
+    for node_id in reversed(order):
+        if node_id not in in_stage:
+            continue
+        inputs = graph[node_id].get("inputs") or {}
+        if not any(is_link(value) for value in inputs.values()):
+            continue
+        class_type = graph[node_id].get("class_type")
+        try:
+            bypass_node(graph, node_id, object_info)
+        except LookupError as exc:
+            raise LookupError(
+                f"The {group.replace('_', ' ')} stage cannot be switched off: "
+                f"node {node_id} ({class_type}) cannot be bypassed. {exc}"
+            ) from exc
+        changes.append(
+            {"node_id": node_id, "class_type": class_type, "action": "bypassed"}
+        )
+    live_after = _live_ids(graph, object_info)
+    if live_before is not None and live_after is not None:
+        for node_id in sorted(live_before - live_after, key=_node_order_key):
+            if node_id in graph:
+                changes.append(
+                    {
+                        "node_id": node_id,
+                        "class_type": graph[node_id].get("class_type"),
+                        "action": "pruned",
+                    }
+                )
+                del graph[node_id]
+    rewired = {
+        node_id
+        for node_id, inputs in outputs_before.items()
+        if node_id in graph and graph[node_id].get("inputs") != inputs
+    }
+    kept: set[tuple] = set()
+    for node_id in sorted(
+        outputs_before, key=lambda n: (n in rewired, _node_order_key(n))
+    ):
+        if node_id not in graph:
+            continue
+        node = graph[node_id]
+        links = tuple(
+            sorted(
+                (str(field), str(value[0]), int(value[1]))
+                for field, value in (node.get("inputs") or {}).items()
+                if is_link(value)
+            )
+        )
+        key = (node.get("class_type"), links)
+        if links and key in kept and node_id in rewired:
+            changes.append(
+                {
+                    "node_id": node_id,
+                    "class_type": node.get("class_type"),
+                    "action": "duplicate_save",
+                }
+            )
+            del graph[node_id]
+            continue
+        kept.add(key)
+    logger.info(
+        "The %s stage is switched off for this run: %s",
+        group,
+        ", ".join(f"{c['action']} #{c['node_id']} {c['class_type']}" for c in changes),
+    )
+    prompt_graph.clear()
+    prompt_graph.update(graph)
+    return changes
 
 
 # ── The LoRA chain (#1478) ──────────────────────────────────────────────────

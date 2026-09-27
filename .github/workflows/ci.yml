@@ -624,6 +624,7 @@ jobs:
           tests/test_workflow_io.py
           tests/test_workflow_library.py
           tests/test_workflow_parameters.py
+          tests/test_workflow_stage_bypass.py
           tests/test_workflows_api.py
           tests/test_ws_broadcaster.py
 

@@ -3129,6 +3129,52 @@ save is one new card and the original file never changes. `dry_run` answers the
 change list (`deleted`, `added`, `moved`, `strength`, `rewired`) and writes
 nothing. `insert-lora-loader` is the empty-chain case and still stands on its own.
 
+#### Switching a stage off (#1621)
+
+An upscale or FaceDetailer pass is an optional **stage** of a workflow, on or
+off per run, which is why `core_hash` strips both groups and graphs with and
+without them stack. `RunRequest.skip_stages` (`upscale`, `face_detailer`) names
+the stages a run goes without; `_plan` applies them through
+`skip_requested_stages` on the run's copy, after the LoRAs are placed (the prune
+can remove a loader only the stage read, and a LoRA addressed to it must not
+become a 400) and before `judge`, so the graph judged is the graph submitted.
+
+`bypass_stage` in
+[`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py)
+finds the stage with `workflow_identity.node_groups` over `reduce_api_graph`
+(node ids survive the reduction), limited to nodes an output reads, and takes
+each out through `bypass_node`, consumers before what they read. Each output
+is answered by the node's first linked input of the same type: IMAGE by
+`image` (`ImageUpscaleWithModel`, `ImageScale*`, `UltimateSDUpscale`,
+`FaceDetailer`), LATENT by `samples` (`LatentUpscale*`) or `latent_image` (the
+hires sampler `node_groups` puts with its latent upscale). A node with no
+linked input (`UpscaleModelLoader`, `SAMLoader`, a detector provider) is not
+bypassed; it goes in the prune. **A stage runs after the picture is made**, so
+a node of the group that feeds a sampler outside it is not one: with no sampler
+before it, it prepares an input (img2img's `ImageScale`) and is left alone;
+with one, it is a hires fix in pixel space (upscale, re-encode, second
+sampler), whose re-encode and sampler `node_groups` does not claim, and the
+stage is refused rather than half taken out. Then:
+
+- **Prune**: a node some output read before and none reads now is deleted, or
+  `judge` would report an orphaned upscaler or detector model as missing and
+  refuse a run that does not need it. A node that was already dead is left.
+- **Duplicate save**: an output node the bypass rewired onto exactly the links
+  another output node of its class reads is dropped, the untouched one kept.
+  Widgets are not compared: a graph saving before and after the upscale differs
+  by `filename_prefix` and would still save one image twice. Saves that were
+  alike before the bypass are the owner's and stay.
+
+All or nothing: the work is done on a copy and written back only when every
+node of the stage went. A node that cannot go (a FaceDetailer whose MASK or
+DETAILER_PIPE is read, a class this ComfyUI does not know, a pixel-space hires
+fix, a graph that loops) raises `LookupError`
+naming it, which the run reports as `stage_not_skippable: {stage, message}`.
+It blocks the card, `allow_unchecked` included, and **never falls back to a
+full run**: the owner asked for a run without the stage. With ComfyUI
+unreachable a graph holding the stage is refused the same way; one without it
+has nothing to skip.
+
 #### The repair registry: judge, repair, judge again (#1463)
 
 Some refusals PixlStash can answer by changing the graph before it submits.

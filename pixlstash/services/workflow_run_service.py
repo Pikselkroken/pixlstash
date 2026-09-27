@@ -32,6 +32,7 @@ from pixlstash.services.comfyui_recipe_service import (
     LORA_DIGEST_FIELD_RE,
     LORA_FILENAME_FIELD_RE,
     bypass_node,
+    bypass_stage,
     detect_seed_targets,
     preflight_prompt,
     sanitize_prompt_graph,
@@ -65,6 +66,7 @@ PIXLSTASH_NODES = "pixlstash_nodes"
 NO_SAVE_NODE = "no_save_node"
 NO_RUNNABLE_SOURCE = "no_runnable_source"
 LORA_NOT_SKIPPABLE = "lora_not_skippable"
+STAGE_NOT_SKIPPABLE = "stage_not_skippable"
 
 # A reference whose ``workflow_recipe_asset`` row is gone: the owner forgot the
 # model's name, and the stored graph still says a model went there without
@@ -1021,6 +1023,42 @@ def skip_requested_loras(
             for field in asked
         )
     return skipped, reasons, found
+
+
+def skip_requested_stages(
+    graph: dict, stages: list[str], object_info: Optional[dict]
+) -> list[Reason]:
+    """Switch the optional stages the owner asked this run to go without (#1621).
+
+    Each goes through :func:`bypass_stage` on the run's own copy. One that
+    cannot be switched off is a :data:`STAGE_NOT_SKIPPABLE` reason, which
+    blocks the card: the owner asked for a run without that stage, and running
+    it with the stage would be answering a different request. So is every
+    stage when ComfyUI cannot be asked what to wire in its place. A stage the
+    graph does not have is nothing to do.
+
+    Returns:
+        The refusals, ``{stage, message}`` each.
+    """
+    reasons: list[Reason] = []
+    for stage in dict.fromkeys(stages):
+        try:
+            # With no map every node of the stage is untyped and refuses, so a
+            # graph without the stage still runs and one with it is refused.
+            bypass_stage(graph, stage, object_info or {})
+            continue
+        except LookupError as exc:
+            message = (
+                str(exc)
+                if object_info is not None
+                else "PixlStash could not reach ComfyUI, so it cannot tell what "
+                f"to wire in place of the {stage.replace('_', ' ')} stage."
+            )
+        logger.info("Stage %s cannot be switched off as asked: %s", stage, message)
+        reasons.append(
+            Reason(STAGE_NOT_SKIPPABLE, {"stage": stage, "message": message})
+        )
+    return reasons
 
 
 def blocks_batch(reasons: list[Reason], *, allow_unchecked: bool = False) -> bool:

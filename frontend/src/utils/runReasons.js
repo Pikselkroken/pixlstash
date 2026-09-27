@@ -203,6 +203,16 @@ export function readReason(reason) {
         `${file || "This LoRA"} cannot be skipped for this run. ${said || "Its loader cannot be taken out of this graph."} Use it, or edit the workflow's LoRAs.`,
       );
     }
+    case "stage_not_skippable": {
+      // Blocking, never a full run instead: the owner asked for this run
+      // without the stage (#1621). The server's sentence already says which
+      // stage and which node, so it is the whole notice when there is one.
+      const stage = reason.stage === "face_detailer" ? "FaceDetailer" : "upscale";
+      const said = String(reason.message || "").trim();
+      return read(
+        said || `The ${stage} pass cannot be switched off for this run.`,
+      );
+    }
     case LORAS_UNPLACED: {
       // Shaped like the bypass's `models` so the notice's file list draws
       // them: the file, then the server's own reason for it.

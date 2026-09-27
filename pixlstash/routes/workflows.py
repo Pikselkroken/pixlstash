@@ -1052,6 +1052,12 @@ class RunRequest(BaseModel):
     skip_loras: list[RunLoraSlot] = Field(
         default_factory=list, max_length=MAX_RUN_LORAS
     )
+    # Optional stages this run goes without (#1621): each is bypassed on the
+    # run's copy, what the stage alone read is pruned, and a card whose stage
+    # cannot be taken out is refused with `stage_not_skippable`, never run whole.
+    skip_stages: list[Literal["upscale", "face_detailer"]] = Field(
+        default_factory=list, max_length=2
+    )
     values: list[RunValue] = Field(default_factory=list, max_length=MAX_DEFAULTS)
 
     count: int = Field(1, ge=1, le=MAX_RUNS_PER_REQUEST)
@@ -3966,6 +3972,13 @@ def create_router(server) -> APIRouter:
                         ],
                         object_info,
                     )
+            # The stages the owner switched off, after the LoRAs are placed:
+            # the prune can take out a loader only the stage read, and a LoRA
+            # addressed to it before then would be a 400 for a slot the graph
+            # had when the request was made. Still before `judge`.
+            found += run_service.skip_requested_stages(
+                graph, body.skip_stages, object_info
+            )
             if body.seed_mode == "keep" and source.seedless:
                 # There is nothing to keep: a stored instance document nulls its
                 # seeds by design, so every one of `count` runs would submit
@@ -4189,7 +4202,7 @@ def create_router(server) -> APIRouter:
             "not run: comfyui_not_configured, comfyui_unreachable, ui_format, "
             "missing_nodes, missing_models, a1111, picture_input_unfilled, "
             "no_lora_loader, pixlstash_nodes, no_save_node, no_runnable_source, "
-            "lora_not_skippable. "
+            "lora_not_skippable, stage_not_skippable. "
             "A group runs when its reasons are empty - or when the only ones "
             "left are an uninspectable ComfyUI the body said allow_unchecked "
             "to. A LoRA this ComfyUI does not have is NOT among them: its "
@@ -4200,7 +4213,9 @@ def create_router(server) -> APIRouter:
             "this run goes without: each loader is bypassed on the run's copy "
             "and reported in bypassed_loras with requested true, and one that "
             "cannot be skipped without dropping another LoRA is "
-            "lora_not_skippable. Likewise a custom seed node this ComfyUI "
+            "lora_not_skippable. skip_stages names optional stages (upscale, "
+            "face_detailer) this run goes without; a card whose stage cannot "
+            "be taken out is stage_not_skippable. Likewise a custom seed node this ComfyUI "
             "lacks (rgthree's Seed and its kin) is replaced by the run's own "
             "seed and named in replaced_nodes, where every input it fed is one "
             "the seed pass writes; so is a plain text node (Text Multiline, "
