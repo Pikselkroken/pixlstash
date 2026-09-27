@@ -11,11 +11,19 @@ import { useConfirm } from "./useConfirm";
 
 const PLUGIN = "pixlstash_tagger";
 const PARAM = "quality_crop";
-const CROP_SIZES = new Set(["320", "512"]);
+// Crop settings from least to most thorough. Unknown values rank as off.
+const CROP_RANK = { off: 0, 320: 1, 512: 2 };
+
+function rank(value) {
+  return CROP_RANK[value] ?? 0;
+}
 
 /**
  * Whether a tagger-settings save should offer the crop re-check: the PixlStash
- * tagger's quality crop changed, and changed to a size rather than to off.
+ * tagger's quality crop went UP (off -> 320/512, 320 -> 512). Going down is
+ * never offered: the re-check only adds tags, and a smaller crop is the less
+ * accurate judge, so what it adds over the larger crop's pass would mostly be
+ * false positives.
  * @param {string} name - the plugin whose params were saved.
  * @param {Object} before - its effective params before the save.
  * @param {Object} after - the params the save wrote.
@@ -23,8 +31,7 @@ const CROP_SIZES = new Set(["320", "512"]);
  */
 export function shouldOfferQualityCropRecheck(name, before, after) {
   if (name !== PLUGIN) return false;
-  const next = after?.[PARAM];
-  return CROP_SIZES.has(next) && next !== before?.[PARAM];
+  return rank(after?.[PARAM]) > rank(before?.[PARAM]);
 }
 
 /**

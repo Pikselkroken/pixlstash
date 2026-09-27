@@ -360,9 +360,9 @@ describe("PluginSelect quality crop re-check offer", () => {
   }
 
   it.each([
+    ["off", "320"],
     ["off", "512"],
     ["320", "512"],
-    ["512", "320"],
   ])("offers the re-check when the crop goes %s -> %s", async (from, to) => {
     const w = mountWithParams({ threshold_offset: 0, quality_crop: from });
     await save(w, "pixlstash_tagger", { threshold_offset: 0, quality_crop: to });
@@ -408,6 +408,8 @@ describe("PluginSelect quality crop re-check offer", () => {
 
   it.each([
     ["the crop is turned off", "512", { quality_crop: "off" }],
+    // A smaller crop only adds what the larger one judged against.
+    ["the crop goes down", "512", { quality_crop: "320" }],
     ["nothing changed", "512", { quality_crop: "512" }],
     ["only the offset changed", "320", { threshold_offset: 0.1, quality_crop: "320" }],
   ])("does not offer it when %s", async (_why, from, to) => {
