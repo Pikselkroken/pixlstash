@@ -8500,6 +8500,12 @@ def test_a_workflow_run_applies_its_default_recipe_on_the_server(runnable):
     assert (group["workflow_id"], group["workflow_key"]) == (RUN_WORKFLOW, RUN_CARD)
     submitted = runnable.submitted[0]["graph"]["3"]["inputs"]
     assert (submitted["steps"], submitted["cfg"]) == (31, 6.5)
+    # The default LoRA is off the shelf (no digest) but named: its loader keeps
+    # it rather than being bypassed as a slot the recipe left empty.
+    assert runnable.submitted[0]["graph"]["2"]["inputs"]["lora_name"] == (
+        "add_detail.safetensors"
+    )
+    assert group["bypassed_loras"] == [] and group["unplaced_loras"] == []
     # A request value still wins over the default recipe.
     r = runnable.owner.post(
         f"{API}/workflows/run",

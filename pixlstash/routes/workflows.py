@@ -4618,7 +4618,13 @@ def create_router(server) -> APIRouter:
                 recipe is not None
                 and not body.loras
                 and recipe.loras_decided
-                and all(saved.get("sha256") for saved in recipe_loras)
+                # A LoRA with a digest is placed; one with only a filename
+                # keeps the loader of that name. One with neither cannot be
+                # told from the rest, so nothing is bypassed.
+                and all(
+                    saved.get("sha256") or saved.get("filename")
+                    for saved in recipe_loras
+                )
             ):
                 # The recipe decides a workflow's LoRAs, so a loader it leaves
                 # empty is bypassed (#1622). Best effort, unlike an owner's
