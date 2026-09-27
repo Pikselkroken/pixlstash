@@ -8600,6 +8600,18 @@ def test_a_model_pinned_by_a_digest_the_shelf_lost_is_flagged_not_refused(runnab
     assert loaded == "realvisxl.safetensors"
 
 
+def test_an_empty_core_label_names_no_loader(runnable):
+    """``core:`` with no label must not match every node the core stripped."""
+    (group,) = _preflight(
+        runnable.owner,
+        workflow_id=RUN_WORKFLOW,
+        models=[{"address": "core:/lora_name", "filename": "other.safetensors"}],
+    )["groups"]
+    assert [(f["code"], f["reason"]) for f in group["flags"]] == [
+        ("model_not_applied", "no_loader")
+    ]
+
+
 def test_a_model_address_no_loader_has_is_flagged(runnable):
     body = {
         "workflow_id": RUN_WORKFLOW,

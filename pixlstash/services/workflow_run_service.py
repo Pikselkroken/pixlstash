@@ -1278,6 +1278,11 @@ def blocks_group(reasons: list[Reason], *, allow_unchecked: bool = False) -> boo
     return bool(reasons)
 
 
+def _named(value) -> bool:
+    """Whether a stored model pin names its model this way: non-empty text."""
+    return isinstance(value, str) and bool(value)
+
+
 def saved_recipe_body(recipe) -> dict:
     """A saved recipe as the run body fields it stands in for.
 
@@ -1321,7 +1326,7 @@ def saved_recipe_body(recipe) -> dict:
                 and isinstance(m.get("address"), str)
                 and m.get("address")
                 # Exactly one way to name the model, as `RunModel` requires.
-                and bool(m.get("filename")) != bool(m.get("sha256"))
+                and _named(m.get("filename")) != _named(m.get("sha256"))
                 for m in models
             )
         ):

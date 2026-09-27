@@ -43,6 +43,7 @@ Three orderings are decided here and nowhere else:
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -1905,7 +1906,7 @@ def workflow_defaults(
         if (
             filename is not None
             and LORA_DIGEST_FIELD_RE.match(lora_widgets[asset])
-            and len(filename) == 64
+            and re.fullmatch(r"[0-9a-f]{64}", filename.lower())
         ):
             # A whole digest only: an A1111 short hash names no one file.
             sha256 = filename.lower()

@@ -3733,7 +3733,12 @@ def create_router(server) -> APIRouter:
                 node_id
                 for node_id in graph
                 if labels.get(node_id) == slot_label
-                or CORE_ADDRESS_PREFIX + core.get(node_id, "") == slot_label
+                # Only a node the core kept has a core address: spelled with
+                # an empty label, the prefix alone would name every other one.
+                or (
+                    node_id in core
+                    and CORE_ADDRESS_PREFIX + core[node_id] == slot_label
+                )
             ]
             loaders = [
                 node_id

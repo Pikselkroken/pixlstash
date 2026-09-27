@@ -1447,6 +1447,8 @@ def test_one_workflow_spans_the_topologies_its_core_hash_groups(hub):
         keys.structural_hash for keys in runs
     }
     (entry,) = workflow_index(hub)
+    # A variant is on one card (it keys workflow_variant), so none repeats.
+    assert sorted(entry.variants) == sorted({keys.structural_hash for keys in runs})
     # The base graph has the most stage groups: the detailer run's.
     assert entry.base_topology == runs[1].topology_hash
     assert entry.base_card == card_of(hub, runs[1].structural_hash)
@@ -1583,6 +1585,7 @@ def test_a_saved_recipe_with_malformed_models_inherits_the_default():
         ('["x"]', None),
         ('[{"address": "core:a/ckpt_name"}]', None),
         ('[{"address": 5, "filename": "x.safetensors"}]', None),
+        ('[{"address": "core:a/ckpt_name", "filename": 123}]', None),
         (
             '[{"address": "core:a/ckpt_name", "filename": "x", "sha256": "y"}]',
             None,
