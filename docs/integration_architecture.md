@@ -507,15 +507,16 @@ and groups nothing; the client folds.**
 
 | Route | Answers | Costs |
 |---|---|---|
-| `GET /models/workflow-sets` | **Which shelf models a kept picture proves ran together** — one entry per *combination* (the exact model ids one or more recipes bound), with its recipe count, its picture count and up to three cover thumbnails as `{picture_id, version}`, plus `no_set`: the ids in none of those combinations, i.e. the models **no kept
-picture in this library was made with** (engines excluded - see rule 1). | one pass over `workflow_recipe_asset`, plus the `GROUP BY workflow_structural_hash` and the `ROW_NUMBER()` cover window the shelf's `used by` counts and the workflows grid already run |
+| `GET /models/workflow-sets` | **Which shelf models a kept picture or a stored ComfyUI run proves ran together** — one entry per *combination* (the exact model ids one or more recipes or runs bound), with its recipe count, its `history_runs` (finished ComfyUI runs, #1565, counted apart), its picture count and up to three cover thumbnails as `{picture_id, version}`, plus `no_set`: the ids in none of those combinations, i.e. the models **no kept
+picture in this library was made with and no stored ComfyUI run used** (engines excluded - see rule 1). | one pass over `workflow_recipe_asset` and one over `comfyui_history_model`, plus the `GROUP BY workflow_structural_hash` and the `ROW_NUMBER()` cover window the shelf's `used by` counts and the workflows grid already run |
 
 Rules neither side may drift from:
 
 1. **Co-occurrence is evidence; its absence is not.** No combination is withheld
    for lacking a pairing, `no_set` is returned rather than dropped, and a member
    the evidence could only reach through a basename several shelf rows answer to
-   carries `ambiguous: true` and is still listed. A client may not render a
+   carries `ambiguous: true` and is still listed. A ComfyUI run never sets
+   `ambiguous`: the pull stored only unambiguous matches. A client may not render a
    missing companion as incompatible, which is why the grid and the *Works with*
    dialog both close with that sentence in as many words.
 2. **Membership is not stored and overlaps.** A model appears in every
@@ -538,6 +539,11 @@ Rules neither side may drift from:
    counts every recipe the hub holds. A delete warning must keep a file some
    other library needs; this grid is a picture of what the library in front of
    the reader has made, so a recipe with no kept picture here is not a set.
+   **A stored ComfyUI run is the exception (#1565):** a combination with no
+   kept picture here and no stored run is not a set, but one with a run is,
+   drawn with no cover. `history_runs` is hub-wide because ComfyUI's history
+   is a fact about the machine, not about a library; the client marks a card
+   "Ran in ComfyUI" when its pictures are 0 and its runs are not.
 6. **A cover is two facts, not a path.** `{picture_id, version}`, and the client
    builds the URL with `pictureThumbnailUrl` (`api/pictures.js`). An `<img src>`
    never reaches the Axios interceptor, so a path served from here arrives with
@@ -571,6 +577,9 @@ Rules neither side may drift from:
    `members` with their `slot`. `PUT .../{set_id}/declines` (`{sha256: [...]}`,
    the whole list) answers `{set, previous}`, and putting `previous` back is
    the undo. `picture_count` counts this library; `recipes` counts every one.
+   The offer reads recipe combinations only: one only ComfyUI ran is covered
+   by a set like any other but never offered, since the offer is worded in
+   pictures and recipes.
 
 ### 2.3 The `/workflows` contract (v1.11)
 

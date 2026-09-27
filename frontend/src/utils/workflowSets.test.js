@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  evidenceLine,
   fillFromPictures,
   fillFromSets,
   handMadeCard,
@@ -34,12 +35,13 @@ function model(id, name, kind = "checkpoint", extra = {}) {
 function combination(
   key,
   models,
-  { recipes = 1, pictures = 1, covers = [] } = {},
+  { recipes = 1, pictures = 1, covers = [], runs = 0 } = {},
 ) {
   return {
     key,
     models,
     recipes,
+    history_runs: runs,
     picture_count: pictures,
     // `{picture_id, version}`, which is what the route serves. NOT a URL: an
     // `<img src>` never reaches the Axios interceptor, so the card builds the src
@@ -219,6 +221,57 @@ describe("setCard", () => {
   });
 });
 
+describe("setCard from ComfyUI runs (#1565)", () => {
+  const ran = combination("1,2,4", [CKPT, VAE, CLIP], {
+    recipes: 0,
+    pictures: 0,
+    runs: 1,
+  });
+
+  it("marks a card only ComfyUI ran, and prints no zero counts", () => {
+    const card = setCard(setGroups([ran])[0]);
+    expect(card.fromComfyUI).toBe(true);
+    expect(card.facts).toEqual(["3 models", "1 ComfyUI run"]);
+  });
+
+  it("marks a card with recipes elsewhere but no picture here (open question a)", () => {
+    const elsewhere = combination("1,2,4", [CKPT, VAE, CLIP], {
+      recipes: 2,
+      pictures: 0,
+      runs: 3,
+    });
+    const card = setCard(setGroups([elsewhere])[0]);
+    expect(card.fromComfyUI).toBe(true);
+    expect(card.facts).toEqual(["3 models", "2 recipes", "3 ComfyUI runs"]);
+  });
+
+  it("orders run-only groups by their runs", () => {
+    // The key would put model:1 first; the runs must win.
+    const once = combination("1", [CKPT], { recipes: 0, pictures: 0, runs: 1 });
+    const often = combination("6", [OTHER_CKPT], {
+      recipes: 0,
+      pictures: 0,
+      runs: 5,
+    });
+    expect(setGroups([once, often]).map((g) => g.key)).toEqual([
+      "model:6",
+      "model:1",
+    ]);
+  });
+
+  it("does not mark a card any picture backs", () => {
+    const pictured = combination("1,2", [CKPT, VAE], { pictures: 1 });
+    const card = setCard(setGroups([ran, pictured])[0]);
+    expect(card.fromComfyUI).toBe(false);
+    expect(card.facts).toEqual([
+      "3 models",
+      "1 recipe",
+      "1 picture",
+      "1 ComfyUI run",
+    ]);
+  });
+});
+
 describe("kindCounts", () => {
   it("writes a count of one out, so a tally does not read as a label", () => {
     expect(kindCounts([VAE])).toEqual(["VAE 1"]);
@@ -230,6 +283,20 @@ describe("kindCounts", () => {
       "Text encoder 1",
       "LoRA 1",
     ]);
+  });
+});
+
+describe("evidenceLine", () => {
+  it("prints a run-only entry's runs alone, and runs only when there are some", () => {
+    expect(evidenceLine({ recipes: 0, pictures: 0, historyRuns: 2 })).toBe(
+      "2 ComfyUI runs",
+    );
+    expect(evidenceLine({ recipes: 1, pictures: 0, historyRuns: 0 })).toBe(
+      "1 recipe · 0 pictures",
+    );
+    expect(evidenceLine({ recipes: 1, pictures: 3, historyRuns: 1 })).toBe(
+      "1 recipe · 3 pictures · 1 ComfyUI run",
+    );
   });
 });
 
@@ -287,8 +354,38 @@ describe("worksWith", () => {
     expect(worksWith(ALL, 999)).toEqual({
       companions: [],
       recipes: 0,
+      historyRuns: 0,
       sets: [],
     });
+  });
+
+  it("ranks by recipes plus ComfyUI runs, so the bar is the order", () => {
+    // #1565: a run is a witness too, so the bar must not be empty, and it must
+    // never be longer than the bar of a companion ranked above it.
+    const ran = combination("1,6", [CKPT, OTHER_CKPT], {
+      recipes: 0,
+      pictures: 0,
+      runs: 2,
+    });
+    const { companions, historyRuns } = worksWith([...ALL, ran], CKPT.id);
+    expect(historyRuns).toBe(2);
+    const last = companions.at(-1);
+    expect([last.name, last.recipes, last.historyRuns]).toEqual([
+      "juggernautXL_v9",
+      0,
+      2,
+    ]);
+    expect(last.share).toBeGreaterThan(0);
+
+    const busy = combination("1,6", [CKPT, OTHER_CKPT], {
+      recipes: 0,
+      pictures: 0,
+      runs: 40,
+    });
+    const ranked = worksWith([...ALL, busy], CKPT.id).companions;
+    expect(ranked[0].name).toBe("juggernautXL_v9");
+    const shares = ranked.map((c) => c.share);
+    expect(shares).toEqual([...shares].sort((a, b) => b - a));
   });
 });
 
@@ -467,6 +564,24 @@ describe("hand-made sets (#1520)", () => {
     expect(
       fillFromPictures({ id: 5, members: [] }, combinations, rows),
     ).toEqual([]);
+  });
+
+  it("labels a fill item with both witnesses it is ranked by (#1565)", () => {
+    const both = [
+      {
+        key: "1,4",
+        models: [
+          { id: 1, name: "ckpt", kind: "checkpoint" },
+          { id: 4, name: "lora", kind: "adapter" },
+        ],
+        recipes: 1,
+        history_runs: 30,
+        picture_count: 1,
+      },
+    ];
+    expect(fillFromPictures(mine, both, rows)[0].detail).toBe(
+      "LoRA · 1 recipe · 30 ComfyUI runs",
+    );
   });
 
   it("never offers a second checkpoint from pictures, since the add is all or nothing", () => {

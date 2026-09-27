@@ -168,7 +168,7 @@ describe("a model no recipe names", () => {
     ]);
 
     expect(wrapper.text()).toContain(
-      "No recipe in this library names this file",
+      "No picture in this library and no recorded ComfyUI run used this file",
     );
     expect(wrapper.text()).toContain("only a record of what has been tried");
     // And no notice: there is no list for it to qualify, and the sentence above

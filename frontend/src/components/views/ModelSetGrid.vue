@@ -37,8 +37,8 @@
           No picture in this library records the models it used.
         </p>
         <p>
-          A set is read off a recipe, and a recipe arrives with a picture that
-          carries its workflow. Until one does, there is nothing here to group —
+          A set is read off a recipe, which arrives with a picture that carries
+          its workflow, or off a ComfyUI run the workflow pull recorded. Until one does, there is nothing here to group —
           which says nothing about the models on the shelf. You can still make a
           set by hand.
         </p>
@@ -198,8 +198,8 @@
              or from pictures since deleted. What is true is the narrower thing,
              and it is worded so it cannot be read as a verdict. -->
         <p class="msg__ghost-note">
-          No kept picture in this library was made with them, so there is no set
-          to draw. That is all it means — nothing here rules out what they work
+          No kept picture in this library was made with them and no recorded
+          ComfyUI run used them, so there is no set to draw. That is all it means — nothing here rules out what they work
           with, and a model may well have been used somewhere this library
           cannot see.
         </p>
@@ -301,12 +301,12 @@ import {
   fillFromPictures,
   fillFromSets,
   handMadeName,
-  recipeCount,
   rowMatches,
   SET_SLOTS,
   setCheckpoint,
   setSlots,
   slotSuggestions,
+  witnessCount,
 } from "../../utils/workflowSets";
 
 import ModelSetPanel from "../panels/ModelSetPanel.vue";
@@ -940,9 +940,7 @@ const chooserSections = computed(() => {
   const set = openHand.value?.set;
   if (!mode || !set) return [];
   if (mode === "pictures") {
-    return fillSections(fillPictureItems.value, (item) =>
-      recipeCount(item.recipes),
-    );
+    return fillSections(fillPictureItems.value, witnessCount);
   }
   if (mode === "set") {
     return fillSections(fillSetItems.value, (item) => item.from.join(", "));

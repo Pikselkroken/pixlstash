@@ -176,15 +176,16 @@ export async function fetchModelCompanions(ids) {
 }
 
 /**
- * Which shelf models a kept picture proves ran together.
+ * Which shelf models a kept picture or a stored ComfyUI run proves ran together.
  *
  * One entry per **combination**: the exact set of files one or more recipes
- * bound together, with the pictures they made. A model appears in every
+ * bound together, with the pictures they made and the ComfyUI runs that used
+ * exactly those files (`history_runs`, counted apart, #1565). A model appears in every
  * combination it has run in, so membership overlaps and is stored nowhere - the
  * grouping is derived per request from the recipes the hub has read.
  *
- * **Co-occurrence is evidence; its absence is not.** The ids no recipe in this
- * library names come back under `no_set` rather than being dropped, and a
+ * **Co-occurrence is evidence; its absence is not.** The ids no picture in this
+ * library and no stored ComfyUI run used come back under `no_set` rather than being dropped, and a
  * member the evidence could only reach through a basename two shelf rows share
  * is flagged `ambiguous` and still listed. Folding combinations into stacks is
  * the CLIENT's (see `utils/workflowSets.js`): the server groups nothing, so the

@@ -171,6 +171,8 @@ def attach_hand_made(hub, found: dict) -> dict:
     the on-shelf members of any set, and ``hand_made`` is added, newest first.
     Each set's ``covers`` are cover candidates, like a combination's, and each
     set carries its merge ``offer`` (see :func:`_attach_offers`).
+    Combinations witnessed only by ComfyUI runs are covered like any other,
+    but the offer reads ``hub_combinations``, which holds recipe ones only.
     """
     hand_made = []
     for entry in fetch_sets(hub):
