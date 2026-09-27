@@ -354,9 +354,10 @@ export async function duplicateWorkflow(workflowKey) {
  * server reads the whole shelf and every recipe to answer.
  *
  * With `replacing` (the Workflow tab's "Replace with…", #1596): also
- * `replacements`, the shelf models that go with the workflow's checkpoint and
- * that the loader naming that file can load, and `replacements_reason` when
- * there are none.
+ * `replacements`, the shelf models that go with the workflow's checkpoint (for
+ * a checkpoint: that share the missing one's base model, where anything says
+ * which) and that the loader naming that file can load, and
+ * `replacements_reason` when there are none.
  *
  * @param {string} workflowKey
  * @param {{checkpointId?: number, replacing?: string, slotKind?: string}} [options]

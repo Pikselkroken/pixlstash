@@ -512,7 +512,7 @@ describe("a checkpoint that will not load", () => {
     );
     expect(
       wrapper.find('[data-testid="wftab-no-replacement-checkpoint"]').text(),
-    ).toContain("has this checkpoint's base model");
+    ).toContain("is known to have this checkpoint's base model");
   });
 
   it("says the replacement is missing only when it is the file missing", async () => {

@@ -1721,9 +1721,10 @@ class ModelSwapOptions(BaseModel):
         description=(
             "Why `replacements` is empty: the checkpoint is not on the shelf, "
             "so nothing says what goes with it; nothing does; no shelf "
-            "checkpoint has the missing one's base model; nothing that does "
-            "can be loaded by this loader; or something could, through a "
-            "PixlStash loader, and ComfyUI-PixlStash is not installed."
+            "checkpoint is known to have the missing one's base model; "
+            "nothing that does can be loaded by this loader; or something "
+            "could, through a PixlStash loader, and ComfyUI-PixlStash is not "
+            "installed."
         ),
     )
 
@@ -5587,8 +5588,11 @@ def create_router(server) -> APIRouter:
 
         The shelf's own for the file, where the shelf still holds it; else the
         one base model the graph's LoRAs and ControlNets agree on, since they
-        are what a replacement of another base model would not match. None when
-        neither says, or they disagree: the offer is then not narrowed.
+        are what a replacement of another base model would not match, when the
+        graph loads only this one base model. None when neither says, or they
+        disagree: the offer is then not narrowed. A shelf checkpoint of no
+        known base model is not offered once it is narrowed: nothing says it
+        matches.
         """
         slots = [slot for _cls, _widget, slot in _swap_slots(graph, models, index)]
         own = next(
@@ -5602,6 +5606,10 @@ def create_router(server) -> APIRouter:
         )
         if _base_key(own):
             return _base_key(own)
+        if sum(slot.kind in BASE_MODEL_KINDS for slot in slots) > 1:
+            # ponytail: which LoRAs feed which base model is the lane walk's
+            # (`lora-chain`); a graph with two says nothing here instead.
+            return None
         adapters = {
             _base_key(slot.model.base_model)
             for slot in slots

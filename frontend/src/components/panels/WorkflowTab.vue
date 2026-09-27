@@ -1106,7 +1106,7 @@ const NO_REPLACEMENT_TEXT = {
     "Nothing to offer: the checkpoint is not on your shelf, so nothing says what goes with it.",
   none_go_with_it: "Nothing on your shelf is known to work with this checkpoint.",
   none_same_base_model:
-    "Nothing on your shelf has this checkpoint's base model, so its LoRAs would not match.",
+    "Nothing on your shelf is known to have this checkpoint's base model, which its LoRAs need.",
   none_loadable:
     "What works with this checkpoint is not something this loader can load.",
   needs_pixlstash_nodes:

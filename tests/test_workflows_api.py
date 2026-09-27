@@ -10588,8 +10588,8 @@ def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
 
     try:
         # Nothing says what the missing one was: every checkpoint.
-        names, _ = offered()
-        assert {CLONE_CHECKPOINT, _REPLACEMENT_FILENAME} <= set(names)
+        every = offered()
+        assert {CLONE_CHECKPOINT, _REPLACEMENT_FILENAME} <= set(every[0])
         # Its shelf row does, spelled differently from the candidate's.
         set_base("filename = ?", "SDXL 1.0", _SHELF_FILENAME)
         assert offered() == ([_REPLACEMENT_FILENAME], None)
@@ -10601,6 +10601,18 @@ def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
         # A base model nothing on the shelf has is said as such.
         set_base("sha256 = ?", "SD 1.5", RUN_ADAPTER_DIGEST)
         assert offered() == ([], "none_same_base_model")
+        # LoRAs that disagree say nothing.
+        cloneable.graph["8"] = {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": _REPLACEMENT_FILENAME},
+        }
+        assert offered() == every
+        # Nor do they beside a second base model they may not feed.
+        cloneable.graph["8"] = {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": CLONE_CHECKPOINT},
+        }
+        assert offered() == every
     finally:
         set_base("sha256 = ?", None, RUN_ADAPTER_DIGEST)
         set_base("filename = ?", None, _SHELF_FILENAME)
