@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   PICTURE_INPUT_UNFILLED,
+  PIXLSTASH_PACK_INSTALL,
   readReason,
   reasonsBlock,
 } from "./runReasons";
@@ -65,5 +66,44 @@ describe("pixlstash_nodes (#1521)", () => {
     expect(readReason({ code: "pixlstash_nodes" }).text).toBe(
       "This graph calls back into PixlStash, so PixlStash will not run it.",
     );
+  });
+});
+
+describe("missing_nodes names our own pack", () => {
+  it("says a PixlStash node comes from the pack, and how to install it", () => {
+    const read = readReason({
+      code: "missing_nodes",
+      nodes: [{ name: "PixlStashCheckpointLoader" }],
+    });
+    expect(read.text).toBe(
+      "PixlStashCheckpointLoader comes from the ComfyUI-PixlStash node pack, " +
+        "which this ComfyUI does not have. " +
+        PIXLSTASH_PACK_INSTALL,
+    );
+    expect(read.text).toContain("github.com/Pikselkroken/ComfyUI-PixlStash");
+  });
+
+  it("says both sentences for a mixed list", () => {
+    const read = readReason({
+      code: "missing_nodes",
+      nodes: [{ name: "rgthreeSeed" }, { name: "PixlStashAdapterLoader" }],
+    });
+    expect(read.text).toBe(
+      "This ComfyUI does not have the node rgthreeSeed. " +
+        "PixlStashAdapterLoader comes from the ComfyUI-PixlStash node pack, " +
+        "which this ComfyUI does not have. " +
+        PIXLSTASH_PACK_INSTALL,
+    );
+  });
+
+  it("leaves a third-party node's sentence as it was", () => {
+    const read = readReason({
+      code: "missing_nodes",
+      nodes: [{ name: "rgthreeSeed" }, { name: "KSamplerAdvanced" }],
+    });
+    expect(read.text).toBe(
+      "This ComfyUI does not have the nodes rgthreeSeed, KSamplerAdvanced.",
+    );
+    expect(read.text).not.toContain("PixlStash");
   });
 });

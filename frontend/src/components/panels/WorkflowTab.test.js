@@ -1622,9 +1622,13 @@ describe("Open in ComfyUI", () => {
     const button = openButton(wrapper);
     expect(button.attributes("aria-disabled")).toBe("true");
     const described = button.attributes("aria-describedby");
-    expect(wrapper.find(`#${described}`).text()).toContain(
-      "needs the ComfyUI-PixlStash node",
+    const reason = wrapper.find(`#${described}`);
+    expect(reason.text()).toContain("needs the ComfyUI-PixlStash node");
+    const link = reason.find("a");
+    expect(link.attributes("href")).toBe(
+      "https://github.com/Pikselkroken/ComfyUI-PixlStash",
     );
+    expect(link.attributes("target")).toBe("_blank");
     await button.trigger("click");
     expect(open).not.toHaveBeenCalled();
   });

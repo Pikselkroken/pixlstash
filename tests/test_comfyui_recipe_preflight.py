@@ -12,6 +12,7 @@ import pytest
 from pixlstash.services.comfyui_recipe_service import (
     MAX_SEED_64,
     MODEL_FILENAME_FIELDS,
+    PIXLSTASH_PACK_INSTALL_HINT,
     advertised_model_names,
     apply_adapter,
     apply_filename_swap,
@@ -1054,8 +1055,12 @@ class TestLoraInsertion:
 
         # Neither: refused, saying why the core loader could not.
         graph = self._checkpoint_graph()
-        with pytest.raises(LookupError, match="not on this ComfyUI.*ComfyUI-PixlStash"):
+        with pytest.raises(
+            LookupError, match="not on this ComfyUI.*ComfyUI-PixlStash"
+        ) as refused:
             insert_adapter(graph, plan, elsewhere, self.INFO)
+        assert str(refused.value).endswith(PIXLSTASH_PACK_INSTALL_HINT)
+        assert "github.com/Pikselkroken/ComfyUI-PixlStash" in str(refused.value)
         assert "9" not in graph
 
     def test_a_graph_that_no_longer_reads_the_plan_is_refused_whole(self):
