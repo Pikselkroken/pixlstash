@@ -43,6 +43,14 @@
           {{ summary.pictures === 1 ? "picture" : "pictures" }}</span
         >
       </div>
+      <p
+        v-if="canPromote"
+        class="wfpile-quiet wfpile-explain"
+        data-testid="wftab-fan-explain"
+      >
+        Promoting a LoRA makes it part of the workflow: its pictures move to a
+        workflow that always loads it and exports with it.
+      </p>
       <ul class="wfpile-rows">
         <li
           v-for="row in rows"
@@ -213,6 +221,8 @@ const top = computed(
     null,
 );
 const rest = computed(() => Math.max(count.value - 1, 0));
+/** Whether any row still offers Promote, so the fan explains it. */
+const canPromote = computed(() => varying.value.some((row) => !row.promoted));
 
 /** The fan's rows: the top of the pile first, then the rest, then "No LoRA". */
 const rows = computed(() => [
@@ -371,7 +381,13 @@ function answer(row) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
+.wfpile-explain {
+  margin: 0;
+  padding: 0 var(--space-5) var(--space-3);
+}
+
 .wfpile-head .wfpile-quiet,
+.wfpile-explain,
 .wfpile-meta {
   font-size: var(--text-xs);
 }
