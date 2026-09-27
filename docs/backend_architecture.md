@@ -3231,7 +3231,11 @@ repair is a registry entry plus its `RunGroup` field. Three ship:
   inputs it fed. It runs after `_apply_prompts`, which writes a Run popup
   prompt through `prompt_text_target`: past a linked encoder into the text
   node itself, when that node feeds only that encoder, so the typed prompt is
-  what gets inlined. `Text Multiline` drops its `#` comment lines as the node
+  what gets inlined. Any other wired `text` (a prompt-builder node, a shared
+  or overridden text node) is replaced by the typed prompt as a literal,
+  cutting the link, unless the prompt equals one of that node's own strings:
+  an untouched Run popup echoes a builder's recipe prompt, which was read from
+  its widgets, and the wire stays. `Text Multiline` drops its `#` comment lines as the node
   does; one holding anything in square brackets (a WAS token) keeps its
   refusal, as do a wired text, another input set that may override it
   (`Textbox`'s `passthrough`), and a consumer reading any output but the first.

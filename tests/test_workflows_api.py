@@ -8951,18 +8951,45 @@ def test_the_run_prompt_lands_in_the_text_node_an_encoder_reads():
     assert prompt_text_target(graph, "6") == ("6", "text")
 
 
-def test_a_textbox_with_passthrough_set_takes_no_run_prompt():
+def test_a_textbox_with_passthrough_set_hands_the_run_prompt_to_the_encoder():
     """The node would ignore a prompt written into its `text`."""
     graph = _text_graph(class_type="Textbox")
     del graph["7"]
     assert prompt_text_target(graph, "6") == ("103", "text")
     graph["103"]["inputs"]["passthrough"] = "overrides the text"
-    assert prompt_text_target(graph, "6") is None
+    assert prompt_text_target(graph, "6") == ("6", "text")
 
 
-def test_a_text_node_shared_by_two_encoders_takes_no_run_prompt():
+def test_a_text_node_shared_by_two_encoders_hands_each_its_own_prompt():
     """Positive then negative written into one node would leave both negative."""
-    assert prompt_text_target(_text_graph(), "6") is None
+    graph = _text_graph()
+    assert prompt_text_target(graph, "6") == ("6", "text")
+    assert prompt_text_target(graph, "7") == ("7", "text")
+
+
+def test_a_run_prompt_replaces_a_prompt_builder_wired_into_the_encoder():
+    """A generated prompt on the wire silently won over the typed one."""
+    graph = {
+        "68": {"class_type": "LoRACharacterPromptBuilder", "inputs": {"seed": 1}},
+        "91": {"class_type": "CLIPTextEncode", "inputs": {"text": ["68", 0]}},
+    }
+    assert prompt_text_target(graph, "91", "a red bicycle") == ("91", "text")
+    assert prompt_text_target(graph, "91", "") == ("91", "text")
+    del graph["91"]["inputs"]["text"]
+    assert prompt_text_target(graph, "91", "a red bicycle") is None
+
+
+def test_an_untouched_run_keeps_the_prompt_builder_wired():
+    """The recipe read the builder's template, which is no prompt to run."""
+    graph = {
+        "68": {
+            "class_type": "LoRACharacterPromptBuilder",
+            "inputs": {"seed": 1, "template": "You are a photographer."},
+        },
+        "91": {"class_type": "CLIPTextEncode", "inputs": {"text": ["68", 0]}},
+    }
+    assert prompt_text_target(graph, "91", " You are a photographer.\n") is None
+    assert prompt_text_target(graph, "91", "a red bicycle") == ("91", "text")
 
 
 def test_a_primitive_string_multiline_is_replaced_from_its_value():

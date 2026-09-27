@@ -137,7 +137,9 @@ def overriding_text_inputs(class_type: str, inputs: dict) -> list[str]:
     ]
 
 
-def prompt_text_target(graph: dict, node_id: str) -> Optional[tuple[str, str]]:
+def prompt_text_target(
+    graph: dict, node_id: str, prompt: Optional[str] = None
+) -> Optional[tuple[str, str]]:
     """Where a detected prompt node's text literally lives, as ``(node, field)``.
 
     The encoder's own ``text`` when it holds a string; otherwise, when that
@@ -148,6 +150,14 @@ def prompt_text_target(graph: dict, node_id: str) -> Optional[tuple[str, str]]:
     positive prompt and then the negative into it would leave both negative.
     Nor is one with another input overriding its text (Textbox's
     ``passthrough``): the node would ignore the prompt written into it.
+
+    Any other wired ``text`` (a prompt builder, a shared or overridden text
+    node) is the encoder's own field, and the literal replaces the link.
+    Except when *prompt* is one of the wired node's own strings: that is the
+    picture's recipe echoed back by an untouched Run popup (a builder's recipe
+    prompt is read from its widgets), and cutting the wire would generate from
+    the builder's template instead of what it builds. ``None`` also when the
+    encoder has no string or linked ``text``.
     """
     inputs = (graph.get(node_id) or {}).get("inputs")
     if not isinstance(inputs, dict):
@@ -173,7 +183,28 @@ def prompt_text_target(graph: dict, node_id: str) -> Optional[tuple[str, str]]:
             and not overriding_text_inputs(source["class_type"], source_inputs)
         ):
             return str(text[0]), field
-    return None
+    if not is_link(text):
+        return None
+    source = graph.get(str(text[0]))
+    source_inputs = (source or {}).get("inputs") or {}
+    if prompt and prompt.strip() in {
+        value.strip() for value in source_inputs.values() if isinstance(value, str)
+    }:
+        logger.info(
+            "Encoder %s keeps its wire from node %s: the run prompt is that "
+            "node's own text, so the node builds the prompt as it did.",
+            node_id,
+            text[0],
+        )
+        return None
+    logger.info(
+        "Encoder %s's text was wired from node %s (%s); the run prompt "
+        "replaces that link.",
+        node_id,
+        text[0],
+        (source or {}).get("class_type"),
+    )
+    return node_id, "text"
 
 
 # Where the source of a runnable graph came from, in the order tried.
