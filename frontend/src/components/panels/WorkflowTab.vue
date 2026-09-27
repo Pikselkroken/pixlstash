@@ -157,6 +157,13 @@
               data-testid="wftab-replace-model"
               @update:model-value="replaceCheckpoint"
             />
+            <p
+              v-else-if="checkpointNoReplacement"
+              class="wftab-note wftab-quiet"
+              data-testid="wftab-no-replacement-checkpoint"
+            >
+              {{ checkpointNoReplacement }}
+            </p>
             <!-- The replacement has gone missing too: say what it was, and
                  keep the way back reachable. Choosing another above replaces
                  the original, never the replacement. -->
@@ -1098,6 +1105,8 @@ const NO_REPLACEMENT_TEXT = {
   no_checkpoint:
     "Nothing to offer: the checkpoint is not on your shelf, so nothing says what goes with it.",
   none_go_with_it: "Nothing on your shelf is known to work with this checkpoint.",
+  none_same_base_model:
+    "Nothing on your shelf is known to have this checkpoint's base model, which its LoRAs need.",
   none_loadable:
     "What works with this checkpoint is not something this loader can load.",
   needs_pixlstash_nodes:
@@ -1128,6 +1137,23 @@ const replaceOptions = computed(() =>
     ? replaceOptionsFor("checkpoint", missingCheckpointFile.value)
     : [],
 );
+
+/**
+ * Why the missing checkpoint has no "Replace with…", or "" while it has one or
+ * has not been asked. Every answer without one says so: a missing checkpoint
+ * with no picker and no word on why reads as nothing to be done.
+ */
+const checkpointNoReplacement = computed(() => {
+  const answer =
+    replacementsByFile.value[`checkpoint:${missingCheckpointFile.value}`];
+  if (!answer || answer.replacements?.length) return "";
+  const reason = answer.replacements_reason;
+  if (reason === "none_loadable")
+    return "No checkpoint on your shelf that could replace it is one this loader can load.";
+  return ["none_same_base_model", "none_go_with_it", "unread"].includes(reason)
+    ? NO_REPLACEMENT_TEXT[reason]
+    : "Nothing on your shelf can replace it.";
+});
 
 /** Whether two recorded values name one file, whatever their folders. */
 function sameFile(a, b) {

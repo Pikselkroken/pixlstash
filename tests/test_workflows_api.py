@@ -10549,6 +10549,107 @@ def test_a_replacement_the_loader_cannot_load_is_offered_through_our_loader(
             _unshelve(conn, [digest for _kind, digest in digests.values()])
 
 
+def test_a_missing_checkpoint_is_offered_only_its_own_base_model(cloneable):
+    """A replacement of another base model would not match the LoRAs around it.
+
+    The missing file's shelf base model decides; without one, the one base
+    model the graph's LoRAs agree on; with neither, nothing is narrowed.
+    """
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        sdxl_id = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance, base_model) "
+            "VALUES ('checkpoint', ?, 'scanned', 'sdxl')",
+            (_REPLACEMENT_FILENAME,),
+        ).lastrowid
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0] += [
+        CLONE_CHECKPOINT,
+        _REPLACEMENT_FILENAME,
+    ]
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+    def offered():
+        body = cloneable.owner.get(
+            f"{API}/workflows/{RUN_CARD}/model-swap",
+            params={"replacing": _SHELF_FILENAME},
+        ).json()
+        return [c["filename"] for c in body["replacements"]], body[
+            "replacements_reason"
+        ]
+
+    def set_base(where, value, *args):
+        with hub.transaction() as conn:
+            conn.execute(
+                f"UPDATE model SET base_model = ? WHERE {where}", (value, *args)
+            )
+
+    try:
+        # Nothing says what the missing one was: every checkpoint.
+        every = offered()
+        assert {CLONE_CHECKPOINT, _REPLACEMENT_FILENAME} <= set(every[0])
+        # Its shelf row does, spelled differently from the candidate's.
+        set_base("filename = ?", "SDXL 1.0", _SHELF_FILENAME)
+        assert offered() == ([_REPLACEMENT_FILENAME], None)
+        # Without it, the graph's LoRA does.
+        set_base("filename = ?", None, _SHELF_FILENAME)
+        cloneable.graph["2"]["inputs"]["lora_name"] = RUN_ADAPTER_FILENAME
+        set_base("sha256 = ?", "FLUX.1 dev", RUN_ADAPTER_DIGEST)
+        assert offered() == ([CLONE_CHECKPOINT], None)
+        # A base model nothing on the shelf has is said as such.
+        set_base("sha256 = ?", "SD 1.5", RUN_ADAPTER_DIGEST)
+        assert offered() == ([], "none_same_base_model")
+        # LoRAs that disagree say nothing.
+        cloneable.graph["8"] = {
+            "class_type": "LoraLoader",
+            "inputs": {"lora_name": _REPLACEMENT_FILENAME},
+        }
+        assert offered() == every
+        # Nor do they beside a second base model they may not feed.
+        cloneable.graph["8"] = {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": CLONE_CHECKPOINT},
+        }
+        assert offered() == every
+    finally:
+        set_base("sha256 = ?", None, RUN_ADAPTER_DIGEST)
+        set_base("filename = ?", None, _SHELF_FILENAME)
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE id = ?", (sdxl_id,))
+
+
+def test_an_empty_checkpoints_folder_says_the_checkpoint_is_missing(cloneable):
+    """ComfyUI listing no checkpoints at all is not "cannot tell".
+
+    The pre-flight flags the file, and nothing on the shelf is offered in its
+    place, since that loader can load none of it.
+    """
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"] = [[], {}]
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    plan = _preflight(cloneable.owner, workflow_key=RUN_CARD, values=[])
+    missing = [
+        model
+        for group in plan["groups"]
+        for reason in group["reasons"]
+        if reason["code"] == "missing_models"
+        for model in reason["models"]
+    ]
+    assert {"file": _SHELF_FILENAME, "folder": "checkpoints"} in missing, plan
+    body = cloneable.owner.get(
+        f"{API}/workflows/{RUN_CARD}/model-swap",
+        params={"replacing": _SHELF_FILENAME},
+    ).json()
+    assert (body["replacements"], body["replacements_reason"]) == (
+        [],
+        "none_loadable",
+    )
+
+
 def test_no_replacement_is_offered_without_a_checkpoint_to_go_with(cloneable):
     graph = _with_support_loaders(cloneable.graph)
     graph["1"]["inputs"]["ckpt_name"] = "test-not-on-shelf.safetensors"

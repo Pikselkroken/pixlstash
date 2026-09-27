@@ -163,10 +163,26 @@ class TestPreflightDoesNotGuess:
         assert result["missing_models"] == []
         assert result["unchecked_fields"] == 1
 
-    def test_an_empty_combo_list_is_unchecked_not_everything_missing(self):
-        info = {
-            "CheckpointLoaderSimple": {"input": {"required": {"ckpt_name": [[], {}]}}}
+    def test_an_empty_list_from_a_custom_loader_is_unchecked(self):
+        """A pack's list may be filled lazily, so empty proves nothing."""
+        info = {"UnetLoaderGGUF": {"input": {"required": {"unet_name": [[], {}]}}}}
+        graph = {
+            "4": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": "x.gguf"}}
         }
+        result = preflight_prompt(graph, info)
+        assert result["ok"] is True
+        assert result["unchecked_fields"] == 1
+
+    @pytest.mark.parametrize(
+        "spec", [[[], {}], ["COMBO", {"options": []}]], ids=["v1", "v3"]
+    )
+    def test_an_empty_list_from_a_core_loader_means_nothing_is_installed(self, spec):
+        """ComfyUI reads its own loaders' folders on every object_info.
+
+        An empty checkpoints folder once let a missing checkpoint pass the
+        pre-flight with no warning anywhere.
+        """
+        info = {"CheckpointLoaderSimple": {"input": {"required": {"ckpt_name": spec}}}}
         graph = {
             "4": {
                 "class_type": "CheckpointLoaderSimple",
@@ -174,8 +190,23 @@ class TestPreflightDoesNotGuess:
             }
         }
         result = preflight_prompt(graph, info)
-        assert result["ok"] is True
-        assert result["unchecked_fields"] == 1
+        assert result["ok"] is False
+        assert [m["value"] for m in result["missing_models"]] == ["x.safetensors"]
+        assert result["unchecked_fields"] == 0
+
+    def test_a_remote_combo_is_unchecked_even_on_a_core_loader(self):
+        info = {
+            "CheckpointLoaderSimple": {
+                "input": {"required": {"ckpt_name": [[], {"remote": {"route": "/x"}}]}}
+            }
+        }
+        graph = {
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "x.safetensors"},
+            }
+        }
+        assert preflight_prompt(graph, info)["unchecked_fields"] == 1
 
     def test_a_node_class_not_in_the_loader_map_is_never_filename_checked(self):
         assert "SaveImage" not in MODEL_FILENAME_FIELDS

@@ -1700,7 +1700,9 @@ class ModelSwapOptions(BaseModel):
             "offer in place of that file (`PUT …/model-fix`). A VAE or text "
             "encoder must go with the workflow's checkpoint (a workflow set "
             "grouping them, or recipes and ComfyUI runs that loaded them "
-            "together), and every kind must be one the loader naming the file "
+            "together), a checkpoint must have the missing one's base model "
+            "(the shelf's, else the one the graph's LoRAs and ControlNets "
+            "agree on), and every kind must be one the loader naming the file "
             "can load: listed by it when ComfyUI answers, of the same file "
             "type when it does not."
         ),
@@ -1709,6 +1711,7 @@ class ModelSwapOptions(BaseModel):
         Literal[
             "no_checkpoint",
             "none_go_with_it",
+            "none_same_base_model",
             "none_loadable",
             "needs_pixlstash_nodes",
         ]
@@ -1717,9 +1720,11 @@ class ModelSwapOptions(BaseModel):
         None,
         description=(
             "Why `replacements` is empty: the checkpoint is not on the shelf, "
-            "so nothing says what goes with it; nothing does; nothing that "
-            "does can be loaded by this loader; or something could, through a "
-            "PixlStash loader, and ComfyUI-PixlStash is not installed."
+            "so nothing says what goes with it; nothing does; no shelf "
+            "checkpoint is known to have the missing one's base model; "
+            "nothing that does can be loaded by this loader; or something "
+            "could, through a PixlStash loader, and ComfyUI-PixlStash is not "
+            "installed."
         ),
     )
 
@@ -5572,6 +5577,55 @@ def create_router(server) -> APIRouter:
         listed = {normalized_filename(option) for option in options}
         return [m for m in kept if normalized_filename(m.filename) in listed]
 
+    def _base_key(base_model: str | None) -> str | None:
+        """*base_model* as two spellings of one base model compare, or None."""
+        return (base_model or "").strip().casefold() or None
+
+    def _replaced_base_model(
+        graph: dict, models: dict[int, SwapModel], index: tuple, wanted: str
+    ) -> str | None:
+        """The base model a checkpoint replacing *wanted* must share (``_base_key``).
+
+        The shelf's own for the file, where the shelf still holds it; else the
+        one base model the graph's LoRAs and ControlNets agree on, since they
+        are what a replacement of another base model would not match, when the
+        graph loads only this one base model. None when neither says, or they
+        disagree: the offer is then not narrowed. A shelf checkpoint of no
+        known base model is not offered once it is narrowed: nothing says it
+        matches.
+        """
+        slots = [slot for _cls, _widget, slot in _swap_slots(graph, models, index)]
+        own = next(
+            (
+                slot.model.base_model
+                for slot in slots
+                if slot.model is not None
+                and normalized_filename(slot.filename) == wanted
+            ),
+            None,
+        )
+        if _base_key(own):
+            return _base_key(own)
+        if sum(slot.kind in BASE_MODEL_KINDS for slot in slots) > 1:
+            # ponytail: which LoRAs feed which base model is the lane walk's
+            # (`lora-chain`); a graph with two says nothing here instead.
+            return None
+        adapters = {
+            _base_key(slot.model.base_model)
+            for slot in slots
+            if slot.kind in ("lora", "controlnet") and slot.model is not None
+        } - {None}
+        if len(adapters) == 1:
+            return adapters.pop()
+        if adapters:
+            logger.info(
+                "Offering every checkpoint in place of %s: its LoRAs and "
+                "ControlNets name several base models (%s)",
+                wanted,
+                ", ".join(sorted(adapters)),
+            )
+        return None
+
     def _fix_replacements(
         request: Request,
         card,
@@ -5585,13 +5639,15 @@ def create_router(server) -> APIRouter:
 
         Read off the graph a run submits, with the owner's fixes applied, so a
         replacement that has gone missing too is answered for the loader it
-        sits in. Two filters, both required:
+        sits in. Every filter below is required:
 
         * **It goes with the checkpoint** (VAEs and text encoders):
           :func:`propose_companions` for the graph's base model, which is the
           owner's workflow sets first, then the recipes and ComfyUI runs that
           loaded the two together. ``declared`` entries are the cold case and
           are marked by their ``via``.
+        * **It has the missing one's base model** (checkpoints):
+          :func:`_replaced_base_model`, so it matches the LoRAs around it.
         * **The loader can load it**: listed by every loader naming the file,
           by the rule the rewrite writes it with (:func:`listed_as`), when
           ComfyUI answers; of the same file type when it cannot be asked. A
@@ -5644,13 +5700,22 @@ def create_router(server) -> APIRouter:
                 ),
             )
         kind = kinds.pop()
+        base_model = None
         if kind == FILE_CHECKPOINT:
+            base_model = _replaced_base_model(graph, models, index, wanted)
             candidates = [
                 ModelFixCandidate(
                     id=m.id, filename=m.filename, display_name=m.display_name
                 )
                 for m in sorted(
-                    (m for m in models.values() if m.file_kind == FILE_CHECKPOINT),
+                    (
+                        m
+                        for m in models.values()
+                        if m.file_kind == FILE_CHECKPOINT
+                        and (
+                            base_model is None or _base_key(m.base_model) == base_model
+                        )
+                    ),
                     key=lambda m: (m.display_name or m.filename).lower(),
                 )
             ]
@@ -5685,14 +5750,14 @@ def create_router(server) -> APIRouter:
             c for c in candidates if normalized_filename(c.filename) != wanted
         ]
         if not candidates:
-            return [], "none_go_with_it"
+            return [], "none_same_base_model" if base_model else "none_go_with_it"
         object_info, error = _read_object_info(_comfyui_url(_user(request)))
 
         def loadable(candidates, info, log=True):
             """The candidates every loader naming the file can load, given *info*."""
             for cls, widget, value, fix_kind, node_id in loaders:
                 options = listed_options(info, cls, widget)
-                if options:
+                if options is not None:
                     # Listed by this loader, or loadable through a PixlStash
                     # one swapped in for it (#1605), by the run's own rule.
                     kept = []

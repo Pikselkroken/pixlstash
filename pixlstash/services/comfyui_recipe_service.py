@@ -282,18 +282,71 @@ def _combo_options(node_spec: Any, field: str) -> list[str] | None:
     return values or None
 
 
+# ComfyUI's own loaders, which read their model folder on every
+# ``object_info``: an empty list from one of these means the folder holds
+# nothing, never "filled in later". Custom packs are left out because their
+# lists may be lazy (see :func:`_combo_options`).
+CORE_FOLDER_LOADERS = frozenset(
+    {
+        "CheckpointLoaderSimple",
+        "CheckpointLoader",
+        "UNETLoader",
+        "LoraLoader",
+        "LoraLoaderModelOnly",
+        "VAELoader",
+        "CLIPLoader",
+        "DualCLIPLoader",
+        "TripleCLIPLoader",
+        "CLIPVisionLoader",
+        "ControlNetLoader",
+        "DiffControlNetLoader",
+        "StyleModelLoader",
+        "GLIGENLoader",
+        "UpscaleModelLoader",
+        "HypernetworkLoader",
+        "PhotoMakerLoader",
+    }
+)
+
+
+def _lists_nothing(node_spec: Any, field: str) -> bool:
+    """Whether *field* is a combo whose embedded option list is empty."""
+    found = find_input_spec(node_spec, field)
+    if found is None:
+        return False
+    type_field, opts = found
+    if opts.get("remote"):
+        return False
+    if type_field == "COMBO":
+        type_field = opts.get("options")
+    return isinstance(type_field, (list, tuple)) and not any(
+        isinstance(opt, str) for opt in type_field
+    )
+
+
 def listed_options(
     object_info: dict | None, class_type: str, field: str
 ) -> list[str] | None:
     """What ComfyUI lists for one loader field, or ``None`` when it cannot say.
 
     ``None`` for no ``object_info``, a class it does not declare, or a field it
-    does not enumerate (see :func:`_combo_options`): each means "unchecked",
-    never "empty".
+    does not enumerate (see :func:`_combo_options`): each means "unchecked".
+    ``[]`` only for a model field of a :data:`CORE_FOLDER_LOADERS` loader that
+    lists nothing: that folder is empty, so every file it is asked for is
+    missing.
     """
     if object_info is None:
         return None
-    return _combo_options(object_info.get(class_type), field)
+    spec = object_info.get(class_type)
+    options = _combo_options(spec, field)
+    if (
+        options is None
+        and class_type in CORE_FOLDER_LOADERS
+        and field in MODEL_FILENAME_FIELDS.get(class_type, ())
+        and _lists_nothing(spec, field)
+    ):
+        return []
+    return options
 
 
 def _normalize_filename(value: str) -> str:
@@ -474,7 +527,7 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
             if not isinstance(value, str) or not value:
                 # Missing, or wired from another node - not a literal filename.
                 continue
-            options = _combo_options(object_info.get(class_type), field)
+            options = listed_options(object_info, class_type, field)
             if options is None:
                 unchecked_fields += 1
                 continue
