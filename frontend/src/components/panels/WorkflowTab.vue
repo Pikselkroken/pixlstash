@@ -1146,7 +1146,7 @@ const checkpointNoReplacement = computed(() => {
   const reason =
     replacementsByFile.value[`checkpoint:${missingCheckpointFile.value}`]
       ?.replacements_reason;
-  return ["none_same_base_model", "unread"].includes(reason)
+  return ["none_same_base_model", "none_go_with_it", "unread"].includes(reason)
     ? NO_REPLACEMENT_TEXT[reason]
     : "";
 });

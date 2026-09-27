@@ -495,16 +495,17 @@ describe("a checkpoint that will not load", () => {
     });
   });
 
-  it("says why no checkpoint of the same base model is offered", async () => {
+  it.each([
+    ["none_same_base_model", "is known to have this checkpoint's base model"],
+    ["none_go_with_it", "is known to work with this checkpoint"],
+  ])("says why no checkpoint is offered (%s)", async (reason, text) => {
     preflightWorkflowRun.mockResolvedValue(
       missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
     );
     getWorkflowCard.mockResolvedValue(detail({ card: named }));
     readModelSwap
       .mockReset()
-      .mockImplementation(
-        replacementsByKind({}, { checkpoint: "none_same_base_model" }),
-      );
+      .mockImplementation(replacementsByKind({}, { checkpoint: reason }));
     const { wrapper } = await mountWith([KEY], [named]);
     await settle(wrapper);
     expect(wrapper.find('[data-testid="wftab-replace-model"]').exists()).toBe(
@@ -512,7 +513,7 @@ describe("a checkpoint that will not load", () => {
     );
     expect(
       wrapper.find('[data-testid="wftab-no-replacement-checkpoint"]').text(),
-    ).toContain("is known to have this checkpoint's base model");
+    ).toContain(text);
   });
 
   it("says the replacement is missing only when it is the file missing", async () => {
