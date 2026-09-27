@@ -1139,6 +1139,47 @@ def test_an_unswap_matches_exactly_the_files_the_swap_recorded():
     assert unswapped(structural_document(one), [*swaps, other])[0] is None
 
 
+def test_an_unswap_puts_back_all_of_a_runs_swapped_loaders_or_none():
+    """Two loaders swapped in one run: a graph matching only one keys as itself."""
+    x, y = "11" * 32, "22" * 32
+
+    def graph(vae, clip):
+        return _graph(
+            extra={
+                "7": clip,
+                "9": _node("CLIPTextEncode", clip=["7", 0]),
+                "8": vae,
+                "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+            }
+        )
+
+    original = graph(
+        _node("VAELoader", vae_name="test-vae-fp8.safetensors"),
+        _node("CLIPLoader", clip_name="test-t5-fp8.safetensors", type="flux"),
+    )
+    both = graph(
+        _node("PixlStashVAELoader", vae_sha256=x),
+        _node("PixlStashCLIPLoader", clip_sha256=y, type="flux"),
+    )
+    _topology, swaps = loader_swaps(
+        original,
+        both,
+        {
+            "8": {"vae_sha256": ("vae_name", "test-vae.safetensors")},
+            "7": {"clip_sha256": ("clip_name", "test-t5.safetensors")},
+        },
+    )
+    assert unswapped(structural_document(both), swaps)[0] == topology_hash(original)
+    one = graph(
+        _node("PixlStashVAELoader", vae_sha256=x),
+        _node("PixlStashCLIPLoader", clip_sha256="33" * 32, type="flux"),
+    )
+    assert unswapped(structural_document(one), swaps) == (
+        None,
+        structural_document(one),
+    )
+
+
 def test_a_text_encoder_fix_names_encoder_slots_and_never_a_vision_one(hub):
     """``clip_name`` on a CLIP vision loader is an image encoder, not a text one."""
     missing = "test-t5-fp8.safetensors"

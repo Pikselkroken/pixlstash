@@ -431,8 +431,10 @@ def unswapped(
     ``(None, document)`` when no node of *document* is one of *swaps*: a node
     matches on its label, its class and exactly the references the swap
     recorded, so a PixlStash loader holding another file, or a second one,
-    stays what it is. One placed by hand with the very files a swap recorded
-    is the same graph, and so the same variant: it cards as the original too.
+    stays what it is. The document put back must then BE the recorded
+    topology, so a graph where only some of a run's swapped loaders match
+    keys as itself. One placed by hand with the very files a swap recorded is
+    the same graph, and so the same variant: it cards as the original too.
     *swaps* are those of the document's own topology.
 
     Raises:
@@ -474,7 +476,13 @@ def unswapped(
         # None matched, or two swaps disagree about the graph this was (or
         # which loader a node was): a guess, so the document keys as itself.
         return None, document
-    return topologies.pop(), restored
+    topology = topologies.pop()
+    if graph_key(drop_widgets(reduce_api_graph(restored))) != topology:
+        # Only some of a run's swapped loaders matched (another holds other
+        # files), so what was put back is not the graph they were swapped
+        # from, and keying it there would cache the wrong slots on it.
+        return None, document
+    return topology, restored
 
 
 # The post-processing groups a card says it has, in the order a name lists
