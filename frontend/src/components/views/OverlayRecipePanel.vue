@@ -331,7 +331,7 @@
   <SaveRecipeDialog
     v-if="saveOpen"
     :open="saveOpen"
-    :workflow-key="recipe?.workflowKey || ''"
+    :workflow-id="recipe?.workflowId || ''"
     :prompt="recipe?.positive_prompt || ''"
     :negative="recipe?.negativePrompt || ''"
     :loras="saveLoras"
@@ -575,12 +575,12 @@ const savedRecipes = ref([]);
 /**
  * Whether keeping this look is even offered.
  *
- * A recipe is filed under a card, so a picture the hub has not keyed has
+ * A recipe is filed under a workflow, so a picture the hub has not keyed has
  * nowhere to put one; a read-only reader is refused for the reason every other
  * action here refuses them.
  */
 const canSave = computed(
-  () => Boolean(props.recipe?.workflowKey) && !isReadOnly.value,
+  () => Boolean(props.recipe?.workflowId) && !isReadOnly.value,
 );
 
 /**
@@ -603,7 +603,7 @@ const thisLook = computed(() => ({
 const matched = computed(() => {
   if (!props.recipe) return null;
   // Only against the card these rows were read for.
-  if (props.recipe.workflowKey !== loadedKey.value) return null;
+  if (props.recipe.workflowId !== loadedKey.value) return null;
   return (
     savedRecipes.value.find((row) => keepsTheSameLook(row, thisLook.value)) ||
     null
@@ -660,7 +660,7 @@ async function openSave() {
 }
 
 async function loadSavedRecipes() {
-  const key = props.recipe?.workflowKey;
+  const key = props.recipe?.workflowId;
   // **Not for a read-only reader.** Every route under `/recipes` is
   // OWNER_ONLY by decision, so this would be a guaranteed 403 - and the
   // filmstrip would fire it on every step.
@@ -672,17 +672,17 @@ async function loadSavedRecipes() {
   // No card on this picture: nothing to read, and `matched` already refuses
   // because the key it gates on is not this one.
   if (!key) return;
-  // Already read for this card. The whole stack's recipes do not change
-  // because the reader stepped to the next picture on the same workflow, and
-  // this read is not cheap: it resolves the stack and groups every kept
-  // picture of every variant in it to work out the credit.
+  // Already read for this workflow. Its recipes do not change because the
+  // reader stepped to the next picture on the same workflow, and this read is
+  // not cheap: it groups every kept picture of every variant in it to work
+  // out the credit.
   if (key === loadedKey.value) return;
   loadedKey.value = key;
   try {
     const rows = await listSavedRecipes(key);
     // The key may have moved on while the read was out - the filmstrip steps
     // through pictures faster than a round trip.
-    if (key === props.recipe?.workflowKey) savedRecipes.value = rows;
+    if (key === props.recipe?.workflowId) savedRecipes.value = rows;
   } catch (err) {
     // A banner that cannot be drawn is not a failure of the tab: the reading
     // above it is what the reader came for, so this is logged and dropped.
@@ -692,7 +692,7 @@ async function loadSavedRecipes() {
   }
 }
 
-watch(() => props.recipe?.workflowKey, loadSavedRecipes, { immediate: true });
+watch(() => props.recipe?.workflowId, loadSavedRecipes, { immediate: true });
 
 function onSaved(row) {
   // Straight into the list, so the footer says Saved without another read.

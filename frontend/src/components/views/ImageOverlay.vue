@@ -3570,11 +3570,11 @@ async function fetchComfyWorkflow(imageId) {
             // Why the editor graph could not be rebuilt into something
             // runnable. Empty for every other answer.
             conversionProblems: data.conversion_problems || [],
-            // The workflow card this picture's variant is on. The Recipe tab
-            // needs it to read the card's saved recipes and to file a new one
-            // under the right card (v1.12 F6); null when the hub has not
-            // keyed this picture.
-            workflowKey: data.workflow_key || null,
+            // The workflow this picture's variant is in. The Recipe tab
+            // needs it to read the workflow's saved recipes and to file a new
+            // one under it (v1.12 F6); null when the hub has not keyed this
+            // picture.
+            workflowId: data.workflow_id || null,
             // The plain file names, which is the form saved-recipe credit
             // matches on - `model_slots` carries strengths the match ignores.
             loraNames: data.loras || [],

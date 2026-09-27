@@ -156,7 +156,7 @@ describe("a replaced text node", () => {
 describe("a recipe LoRA with no loader, which is not a refusal (#1478)", () => {
   const reason = {
     code: "loras_unplaced",
-    workflowKey: "k".repeat(64),
+    workflowId: `auto:${"k".repeat(64)}`,
     loras: [
       {
         filename: "loras/skin-detail-xl.safetensors",
@@ -212,7 +212,7 @@ describe("a recipe LoRA with no loader, which is not a refusal (#1478)", () => {
     const edit = wrapper.findAll("button").find((b) => b.text() === "Edit LoRAs…");
     expect(edit).toBeTruthy();
     await edit.trigger("click");
-    expect(wrapper.emitted("edit-loras")?.[0]).toEqual(["k".repeat(64)]);
+    expect(wrapper.emitted("edit-loras")?.[0]).toEqual([`auto:${"k".repeat(64)}`]);
   });
 });
 

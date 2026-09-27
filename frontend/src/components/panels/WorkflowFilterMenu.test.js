@@ -2,10 +2,10 @@
 // rows. Every filter, the three flags included, is a pick-one submenu.
 //
 // The thing that can silently invert here is WHICH SIDE applies a filter.
-// *One-offs* and *Hidden* are the server's, because widening the set re-runs
-// the stacking; the other five are the client's, because they only ever
+// *One-offs* and *Hidden* are the server's, because it decides them per
+// workflow; the other five are the client's, because they only ever
 // remove a card. A menu that applied the first two in the browser would look
-// identical on screen and be wrong about every stack, so each of the two is
+// identical on screen and be wrong, so each of the two is
 // asserted as a REQUEST and the rest as a filtered list.
 //
 // The counts are the second: they label the rows, and a count computed over
@@ -27,23 +27,21 @@ import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 
 function card(overrides = {}) {
   return {
-    key: "a".repeat(64),
+    id: "auto:" + "a".repeat(64),
     name: "Cinematic portrait",
     type: "txt2img",
     type_label: "Text to Image",
     imported: false,
     models: [{ name: "realvisXL_v5.safetensors", kind: "checkpoint" }],
     loras: [],
-    differs_by: [],
     picture_count: 184,
     rating: 4.8,
     covers: [],
-    stack_size: 1,
     saved_recipe_count: 0,
     defaults: [],
-    topology_hash: "d".repeat(64),
+    base_topology: "d".repeat(64),
+    topologies: ["d".repeat(64)],
     variant_count: 1,
-    member_keys: [],
     last_used: null,
     rank: 4.5,
     ghosts: 0,
@@ -55,7 +53,7 @@ function card(overrides = {}) {
 const CARDS = [
   card(),
   card({
-    key: "b".repeat(64),
+    id: "auto:" + "b".repeat(64),
     name: "Upscale 2×",
     type: "upscale",
     type_label: "Upscale",
@@ -65,7 +63,7 @@ const CARDS = [
     ghosts: 3,
   }),
   card({
-    key: "c".repeat(64),
+    id: "auto:" + "c".repeat(64),
     name: "Sketch to image",
     type: "img2img",
     type_label: "Image to Image",
@@ -364,7 +362,7 @@ describe("the Workflows filter menu", () => {
     const cards = [
       ...CARDS,
       card({
-        key: "e".repeat(64),
+        id: "auto:" + "e".repeat(64),
         models: [{ name: "juggernaut.safetensors", kind: "checkpoint" }],
       }),
     ];
@@ -481,62 +479,17 @@ describe("the Workflows filter menu", () => {
   });
 });
 
-// A filter that removes the open stack's cover. The panel is drawn inside the
-// cover's row, so it leaves the screen either way — what must not survive is
-// the store going on saying a stack is open, with members nothing filtered.
-describe("the open stack and the filters", () => {
-  const STACKED = [
-    { ...CARDS[0], stack_size: 2, member_keys: ["b".repeat(64)] },
-    ...CARDS.slice(1),
-  ];
-
-  it("closes a stack whose cover the filter takes away", async () => {
-    const { store } = await mountMenu({ cards: STACKED });
-    store.openStackKey = STACKED[0].key;
-    store.members = { [STACKED[0].key]: [STACKED[0], CARDS[1]] };
-
-    // "Cinematic portrait" is the only Text to Image card, so Upscale drops it.
-    store.setFilters({ type: "upscale" });
-
-    expect(store.openStackKey).toBeNull();
-    expect(store.openMembers).toEqual([]);
-  });
-
-  it("leaves a stack open when the filter keeps its cover", async () => {
-    const { store } = await mountMenu({ cards: STACKED });
-    store.openStackKey = STACKED[0].key;
-    store.members = { [STACKED[0].key]: [STACKED[0], CARDS[1]] };
-
-    store.setFilters({ type: "txt2img" });
-
-    expect(store.openStackKey).toBe(STACKED[0].key);
-    expect(store.openMembers).toHaveLength(2);
-  });
-});
-
 // The selection survives a filter only for the cards still on screen. The
 // selection bar and the rail's bulk verbs read `selectedKeys`, so a stale one
-// offers Hide and Stack together on cards nobody can see — which #1460's
+// offers Hide and Merge on cards nobody can see — which #1460's
 // selection bar has no way to notice on its own.
 describe("the selection and the filters", () => {
   it("drops selected cards the filter took off the screen", async () => {
     const { store } = await mountMenu();
-    store.selectedKeys = [CARDS[0].key, CARDS[1].key, CARDS[2].key];
+    store.selectedKeys = [CARDS[0].id, CARDS[1].id, CARDS[2].id];
 
     store.setFilters({ type: "upscale" });
 
-    expect(store.selectedKeys).toEqual([CARDS[1].key]);
-  });
-
-  it("keeps a selected member of a stack that is still drawn", async () => {
-    const cover = { ...CARDS[0], stack_size: 2, member_keys: [CARDS[1].key] };
-    const { store } = await mountMenu({ cards: [cover, ...CARDS.slice(1)] });
-    store.members = { [cover.key]: [cover, CARDS[1]] };
-    store.selectedKeys = [CARDS[1].key, CARDS[2].key];
-
-    // Keeps the cover, drops "Sketch to image".
-    store.setFilters({ type: "txt2img" });
-
-    expect(store.selectedKeys).toEqual([CARDS[1].key]);
+    expect(store.selectedKeys).toEqual([CARDS[1].id]);
   });
 });

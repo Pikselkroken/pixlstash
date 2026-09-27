@@ -124,7 +124,7 @@ import AppSelect from "../widgets/AppSelect.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
-  workflowKey: { type: String, default: "" },
+  workflowId: { type: String, default: "" },
   /** The card's own name, which the clone's is built from. */
   cardName: { type: String, default: "" },
 });
@@ -358,7 +358,7 @@ const canClone = computed(
 );
 
 watch(
-  () => [props.open, props.workflowKey],
+  () => [props.open, props.workflowId],
   async ([isOpen]) => {
     options.value = null;
     rows.value = [];
@@ -368,11 +368,11 @@ watch(
     loadError.value = "";
     nameTouched.value = false;
     name.value = props.cardName ? `${props.cardName} (new models)` : "";
-    if (!isOpen || !props.workflowKey) return;
+    if (!isOpen || !props.workflowId) return;
     const seq = ++openSeq;
     loading.value = true;
     try {
-      const body = await readModelSwap(props.workflowKey);
+      const body = await readModelSwap(props.workflowId);
       if (seq !== openSeq) return;
       options.value = body;
       checkpointId.value =
@@ -451,7 +451,7 @@ watch(checkpointId, async () => {
   let body;
   proposing.value = true;
   try {
-    body = await readModelSwap(props.workflowKey, { checkpointId: chosen.id });
+    body = await readModelSwap(props.workflowId, { checkpointId: chosen.id });
   } catch (err) {
     if (seq === readSeq) {
       proposing.value = false;
@@ -550,7 +550,7 @@ async function clone() {
   cloneError.value = "";
   cloning.value = true;
   try {
-    const answer = await store.cloneCardWithModels(props.workflowKey, {
+    const answer = await store.cloneCardWithModels(props.workflowId, {
       name: name.value.trim(),
       swaps: swaps.value,
     });

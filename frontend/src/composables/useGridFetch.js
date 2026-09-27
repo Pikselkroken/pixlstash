@@ -1168,7 +1168,7 @@ export function useGridFetch(
         (filterStore.comfyuiLoraFilter || []).forEach((l) =>
           _filterP.append("comfyui_lora", l),
         );
-        // Filter params: one workflow card's pictures (F7)
+        // Filter params: one workflow's pictures (F7)
         for (const [name, value] of workflowFilterParams(
           filterStore.workflowFilter,
         )) {

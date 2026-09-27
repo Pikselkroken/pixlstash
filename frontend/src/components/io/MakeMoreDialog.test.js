@@ -31,8 +31,8 @@ vi.mock("vuetify/components", async () => {
 
 import MakeMoreDialog from "./MakeMoreDialog.vue";
 
-const GOOD = "a".repeat(64);
-const BAD = "b".repeat(64);
+const GOOD = `auto:${"a".repeat(64)}`;
+const BAD = `auto:${"b".repeat(64)}`;
 
 const AppDialogStub = {
   name: "AppDialog",
@@ -71,8 +71,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   listWorkflowCards.mockResolvedValue({
     cards: [
-      { key: GOOD, name: "Cinematic portrait" },
-      { key: BAD, name: "Z-Image turbo" },
+      { id: GOOD, name: "Cinematic portrait" },
+      { id: BAD, name: "Z-Image turbo" },
     ],
   });
   runWorkflowCard.mockResolvedValue({ status: "success", prompts: [{ prompt_id: "p" }] });
@@ -84,9 +84,9 @@ describe("a selection that spans several recipes", () => {
       ok: false,
       runs: 0,
       groups: [
-        { workflow_key: GOOD, picture_ids: [1, 2], runs: 1, reasons: [] },
+        { workflow_id: GOOD, picture_ids: [1, 2], runs: 1, reasons: [] },
         {
-          workflow_key: BAD,
+          workflow_id: BAD,
           picture_ids: [3],
           runs: 0,
           reasons: [
@@ -168,8 +168,8 @@ describe("a selection every picture of which can run", () => {
       ok: true,
       runs: 3,
       groups: [
-        { workflow_key: GOOD, picture_ids: [1, 2], runs: 1, reasons: [] },
-        { workflow_key: BAD, picture_ids: [3], runs: 1, reasons: [] },
+        { workflow_id: GOOD, picture_ids: [1, 2], runs: 1, reasons: [] },
+        { workflow_id: BAD, picture_ids: [3], runs: 1, reasons: [] },
       ],
     });
   });
@@ -205,13 +205,13 @@ describe("a selection every picture of which can run", () => {
       runs: 3,
       groups: [
         {
-          workflow_key: GOOD,
+          workflow_id: GOOD,
           picture_ids: [1, 2],
           runs: 2,
           reasons: [],
           picture_inputs: [{ slot_label: "s", input_name: "image", fill: "selection" }],
         },
-        { workflow_key: BAD, picture_ids: [3], runs: 1, reasons: [] },
+        { workflow_id: BAD, picture_ids: [3], runs: 1, reasons: [] },
       ],
     });
     const wrapper = await mountMakeMore();
@@ -244,8 +244,8 @@ describe("a selection every picture of which can run", () => {
       ok: true,
       runs: 2,
       groups: [
-        { workflow_key: GOOD, picture_ids: [1, 2], runs: 1, reasons: [] },
-        { workflow_key: BAD, picture_ids: [3], runs: 1, reasons: [] },
+        { workflow_id: GOOD, picture_ids: [1, 2], runs: 1, reasons: [] },
+        { workflow_id: BAD, picture_ids: [3], runs: 1, reasons: [] },
       ],
     };
     const wrapper = mount(MakeMoreDialog, {
@@ -291,7 +291,7 @@ describe("a selection every picture of which can run", () => {
       runs: 0,
       groups: [
         {
-          workflow_key: BAD,
+          workflow_id: BAD,
           picture_ids: [3],
           runs: 0,
           reasons: [{ code: "missing_models", models: [{ file: "x", folder: "y" }] }],
@@ -310,9 +310,9 @@ describe("a selection every picture of which can run", () => {
       ok: true,
       runs: 2,
       groups: [
-        { workflow_key: GOOD, picture_ids: [1, 2], runs: 1, reasons: [] },
+        { workflow_id: GOOD, picture_ids: [1, 2], runs: 1, reasons: [] },
         {
-          workflow_key: BAD,
+          workflow_id: BAD,
           picture_ids: [3],
           runs: 1,
           reasons: [],
@@ -338,9 +338,9 @@ describe("a selection every picture of which can run", () => {
       ok: true,
       runs: 2,
       groups: [
-        { workflow_key: GOOD, picture_ids: [1, 2], runs: 1, reasons: [] },
+        { workflow_id: GOOD, picture_ids: [1, 2], runs: 1, reasons: [] },
         {
-          workflow_key: BAD,
+          workflow_id: BAD,
           picture_ids: [3],
           runs: 1,
           reasons: [],

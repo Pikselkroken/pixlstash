@@ -16,8 +16,7 @@ vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
   const stubs = vuetifyComponentStubs();
   // Gated on `modelValue`: an always-open stub makes "the menu is not open
-  // yet" unassertable, and the member menu's whole keyboard route is about
-  // when it opens.
+  // yet" unassertable.
   const VMenu = {
     name: "VMenu",
     props: ["modelValue"],
@@ -44,11 +43,9 @@ vi.mock("vue-router", () => ({
 
 const listWorkflowCards = vi.fn();
 const getWorkflowCard = vi.fn();
-const reorderStack = vi.fn();
-const unstackWorkflow = vi.fn();
 const patchWorkflowCard = vi.fn();
-const stackWorkflows = vi.fn();
-const dissolveStack = vi.fn();
+const mergeWorkflows = vi.fn();
+const splitWorkflow = vi.fn();
 const duplicateWorkflow = vi.fn();
 const deleteWorkflowFile = vi.fn();
 const exportWorkflow = vi.fn();
@@ -60,15 +57,13 @@ vi.mock("../../api/workflows", () => ({
   // `WorkflowCard` renders its covers through this, so a mock without it
   // throws in the render and every assertion in the file goes with it.
   workflowCoverUrl: (cover) => cover?.url ?? "",
-  reorderStack: (...args) => reorderStack(...args),
-  unstackWorkflow: (...args) => unstackWorkflow(...args),
   patchWorkflowCard: (...args) => patchWorkflowCard(...args),
   // The selection bar's verbs. Named here even where nothing in this file
   // calls them: `vi.mock` replaces the WHOLE module, so a name the store
   // imports and this factory omits is `undefined` at the call - which fails
   // as "not a function" inside a handler rather than as a missing mock.
-  stackWorkflows: (...args) => stackWorkflows(...args),
-  dissolveStack: (...args) => dissolveStack(...args),
+  mergeWorkflows: (...args) => mergeWorkflows(...args),
+  splitWorkflow: (...args) => splitWorkflow(...args),
   duplicateWorkflow: (...args) => duplicateWorkflow(...args),
   deleteWorkflowFile: (...args) => deleteWorkflowFile(...args),
   exportWorkflow: (...args) => exportWorkflow(...args),
@@ -87,33 +82,30 @@ vi.mock("../../api/comfyui", () => ({
   getWorkflowPull: (...args) => getWorkflowPull(...args),
 }));
 
-import WorkflowCard from "../widgets/WorkflowCard.vue";
 import WorkflowsView from "./WorkflowsView.vue";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
-import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useWorkflowPullStore } from "../../stores/useWorkflowPullStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 
+// `key` is the workflow's `id`; the grid row carries it as `data-key`.
 const card = (key, extra = {}) => ({
-  key,
+  id: key,
   name: key,
-  topology_hash: `topology-${key}`,
+  base_topology: `topology-${key}`,
+  topologies: [`topology-${key}`],
   models: [],
   loras: [],
-  differs_by: [],
   picture_count: 1,
   rating: 3,
   rank: 1,
   covers: [],
-  stack_size: 1,
-  member_keys: [],
   ...extra,
 });
 
-// Six cards, the second and fifth being stacks of three. `last_used` runs
+// Six cards; "b" holds two topologies. `last_used` runs
 // OPPOSITE to `rank` on purpose, so switching the sort genuinely reverses the
 // grid: a test that asserts the cursor stayed on its card proves nothing
 // against an order that did not move.
@@ -123,17 +115,11 @@ const CARDS = [
   card("b", {
     rank: 8,
     last_used: `2026-03-${DAYS[1]}T00:00:00Z`,
-    stack_size: 3,
-    member_keys: ["b1", "b2"],
+    topologies: ["topology-b", "topology-b2"],
   }),
   card("c", { rank: 7, last_used: `2026-03-${DAYS[2]}T00:00:00Z` }),
   card("d", { rank: 6, last_used: `2026-03-${DAYS[3]}T00:00:00Z` }),
-  card("e", {
-    rank: 5,
-    last_used: `2026-03-${DAYS[4]}T00:00:00Z`,
-    stack_size: 3,
-    member_keys: ["e1", "e2"],
-  }),
+  card("e", { rank: 5, last_used: `2026-03-${DAYS[4]}T00:00:00Z` }),
   card("f", { rank: 4, last_used: `2026-03-${DAYS[5]}T00:00:00Z` }),
 ];
 
@@ -173,32 +159,8 @@ const flush = async () => {
   await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
-const keys = (wrapper) =>
-  wrapper
-    .findAll(".wfv-grid [data-key]")
-    .map((el) => el.attributes("data-key"));
-
-/**
- * Let a collapsing panel finish.
- *
- * A gesture close holds the stack open until the panel reports its animation
- * done, so jsdom — which runs no animations — has to say so itself. Firing the
- * real event rather than reaching for `finishCollapse` keeps the wiring under
- * test: a panel that stopped reporting would leave these red.
- */
-const settleClose = async (wrapper) => {
-  const panel = wrapper.find('[data-testid="stack-panel"]');
-  if (panel.exists()) panel.element.dispatchEvent(new Event("animationend"));
-  await flush();
-};
-
 const cardKeys = (wrapper) =>
   wrapper.findAll(".wfv-row").map((el) => el.attributes("data-key"));
-
-const memberKeys = (wrapper) =>
-  wrapper
-    .findAll(".stack-panel__member")
-    .map((el) => el.attributes("data-key"));
 
 const cursorKey = (wrapper) =>
   wrapper
@@ -225,12 +187,10 @@ beforeEach(() => {
     },
   );
   listImportFolders.mockResolvedValue({ folders: [] });
-  reorderStack.mockReset();
-  reorderStack.mockResolvedValue({ stack_id: "stack-b", keys: [] });
-  unstackWorkflow.mockReset();
-  unstackWorkflow.mockResolvedValue({ stack_id: null, keys: [] });
+  mergeWorkflows.mockReset();
+  splitWorkflow.mockReset();
   patchWorkflowCard.mockReset();
-  patchWorkflowCard.mockResolvedValue({ card: card("b1") });
+  patchWorkflowCard.mockResolvedValue({ card: card("b") });
   // A FRESH array per call, as a real response is: the store assigns it to
   // `cards`, and handing back the same object would make a refetch a no-op
   // that no watcher on the list could see.
@@ -238,7 +198,7 @@ beforeEach(() => {
     Promise.resolve({ cards: [...CARDS], one_offs: 0, hidden: 0 }),
   );
   getWorkflowCard.mockImplementation((key) =>
-    Promise.resolve({ card: card(key, { stack_size: 3 }) }),
+    Promise.resolve({ card: card(key) }),
   );
 });
 
@@ -246,369 +206,28 @@ afterEach(() => {
   while (mounted.length) mounted.pop().unmount();
 });
 
-describe("one stack open at a time", () => {
-  it("opening a second stack closes the first", async () => {
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-
-    await store.openStack("b");
-    await flush();
-    expect(wrapper.findAll('[data-testid="stack-panel"]')).toHaveLength(1);
-    expect(keys(wrapper)).toContain("b1");
-
-    await store.openStack("e");
-    await flush();
-    expect(wrapper.findAll('[data-testid="stack-panel"]')).toHaveLength(1);
-    // The first stack's members are gone, the second's are drawn: the panel
-    // moved rather than a second one opening below it.
-    expect(keys(wrapper)).not.toContain("b1");
-    expect(keys(wrapper)).toContain("e1");
-  });
-
-  it("marks the open card with ▸ and aria-expanded, and does not select it", async () => {
-    const wrapper = await grid();
-    await useWorkflowsStore().openStack("b");
-    await flush();
-    const open = wrapper
-      .findAll(".wfv-row")
-      .find((row) => row.attributes("data-key") === "b");
-    expect(open.attributes("aria-expanded")).toBe("true");
-    expect(open.attributes("aria-controls")).toBe("wfv-stack-panel");
-    // Opening is not selecting. The wash is `[aria-selected="true"]`'s in
-    // both stylesheets, so this is also what keeps the olive off the card and
-    // off the band: nothing here is selected, and the panel is not a row that
-    // could be. The colours themselves are CSS and are not asserted.
-    expect(open.attributes("aria-selected")).toBe("false");
-    const panel = wrapper.find('[data-testid="stack-panel"]');
-    expect(panel.attributes("aria-selected")).toBeUndefined();
-    expect(panel.attributes("role")).toBe("rowgroup");
-  });
-});
-
-describe("the panel re-anchors on resize", () => {
-  it("the notch follows the stack card's column, not a stored offset", async () => {
-    // 1008px ÷ (240 + 12) = 4 columns. "b" is index 1, so its centre is
-    // (1 + 0.5) / 4 = 37.5% across the panel.
-    const wrapper = await grid(1008);
-    await useWorkflowsStore().openStack("b");
-    await flush();
-    const panel = () => wrapper.find('[data-testid="stack-panel"]').element;
-    expect(panel().style.getPropertyValue("--notch")).toBe("37.5%");
-    expect(panel().style.getPropertyValue("--wf-columns")).toBe("4");
-
-    // Narrow to 3 columns: "b" keeps index 1 and is now (1 + 0.5) / 3 across.
-    setWidth(wrapper, 756);
-    await flush();
-    expect(panel().style.getPropertyValue("--notch")).toBe("50%");
-    expect(panel().style.getPropertyValue("--wf-columns")).toBe("3");
-
-    // One column: no centre worth pointing at, so the caret falls back to the
-    // shipped `--start` class rather than to a copy of its inset.
-    setWidth(wrapper, 300);
-    await flush();
-    expect(panel().style.getPropertyValue("--notch")).toBe("");
-    expect(wrapper.find(".tbm-caret").classes()).toContain("tbm-caret--start");
-  });
-
-  it("the member block is padded to whole rows so later cards keep their column", async () => {
-    const wrapper = await grid(1008);
-    await useWorkflowsStore().openStack("b");
-    await flush();
-    // Four columns, so the panel opens after "d" — the end of "b"'s row — and
-    // its three members plus one padding hole fill exactly one row:
-    //   a b c d | b b1 b2 · | e f
-    // "b" is in the grid AND, flagged, as the panel's first member.
-    expect(cardKeys(wrapper)).toEqual(["a", "b", "c", "d", "e", "f"]);
-    expect(memberKeys(wrapper)).toEqual(["b", "b1", "b2"]);
-    expect(wrapper.find(".stack-cover-flag").text()).toBe("Cover");
-
-    const gridEl = wrapper.find(".wfv-grid");
-    // Down from "b1" (the member in column 1) reaches "f", which the browser
-    // also draws in column 1 of the row after the panel. Drop the padding and
-    // this is out of range: the block would be three long, not four.
-    await wrapper.findAll(".stack-panel__member")[1].trigger("click");
-    expect(cursorKey(wrapper)).toBe("b1");
-    await gridEl.trigger("keydown", { key: "ArrowDown" });
-    expect(cursorKey(wrapper)).toBe("f");
-
-    // And the hole itself is not a stop: Down from "d" (column 3) skips it.
-    await wrapper.findAll(".wfv-row")[3].trigger("click");
-    await gridEl.trigger("keydown", { key: "ArrowDown" });
-    expect(cursorKey(wrapper)).toBe("e");
-  });
-
-  it("a stack in the last, incomplete row keeps the panel reachable", async () => {
-    // Six cards over four columns leaves the second row holding two, and "e"
-    // is a stack drawn in column 1 of it:
-    //   a b c d | e f
-    // Splicing the member block in at `cards.length` — 6, not a multiple of
-    // 4 — puts it at column 2, so from there `index % columns` names the
-    // wrong column for every row: Down from "e" landed on a padding hole
-    // with nothing below it and the cursor did not move at all, and Up from
-    // a member crossed a column on the way. The stack's own row is padded to
-    // whole first, which is what keeps the arithmetic true.
-    //   a b c d | e f · · | e e1 e2 ·
-    const wrapper = await grid(1008);
-    await useWorkflowsStore().openStack("e");
-    await flush();
-    expect(memberKeys(wrapper)).toEqual(["e", "e1", "e2"]);
-
-    const gridEl = wrapper.find(".wfv-grid");
-    // "e" is flat index 4, column 0; the panel's cover row is index 8.
-    await wrapper.findAll(".wfv-row")[4].trigger("click");
-    expect(cursorKey(wrapper)).toBe("e");
-    await gridEl.trigger("keydown", { key: "ArrowDown" });
-    expect(cursorKey(wrapper)).toBe("e");
-    expect(document.activeElement.className).toContain("stack-panel__member");
-
-    // Up from "e1" (the member in column 1) is "f", which the browser draws
-    // in column 1 of the row above the panel — not "b", three columns over.
-    await wrapper.findAll(".stack-panel__member")[1].trigger("click");
-    await gridEl.trigger("keydown", { key: "ArrowUp" });
-    expect(cursorKey(wrapper)).toBe("f");
-  });
-});
-
-describe("the keyboard crosses the panel boundary", () => {
-  it("Down from the stack's row lands in the panel at the same column", async () => {
+describe("Escape", () => {
+  it("clears the selection", async () => {
     const wrapper = await grid(1008);
     const store = useWorkflowsStore();
-    await store.openStack("b");
-    await flush();
-
-    // Put the cursor on "b" (flat index 1, column 1), then go down.
-    await wrapper.findAll(".wfv-row")[1].trigger("click");
-    expect(cursorKey(wrapper)).toBe("b");
-    const gridEl = wrapper.find(".wfv-grid");
-    await gridEl.trigger("keydown", { key: "ArrowDown" });
-    // Flat index 1 + 4 = 5, which is the member drawn in column 1 of the
-    // panel's row: the cover is column 0, b1 column 1.
-    expect(cursorKey(wrapper)).toBe("b1");
-
-    // And back up to the card that opened it.
-    await gridEl.trigger("keydown", { key: "ArrowUp" });
-    expect(cursorKey(wrapper)).toBe("b");
-  });
-
-  it("Space selects, and a member's key mixes with a top-level one", async () => {
-    const wrapper = await grid(1008);
-    const store = useWorkflowsStore();
-    await store.openStack("b");
-    await flush();
-    const gridEl = wrapper.find(".wfv-grid");
-
-    await wrapper.findAll(".wfv-row")[0].trigger("click");
-    await gridEl.trigger("keydown", { key: "ArrowRight" });
-    // Space on the stack card takes the whole stack.
-    await gridEl.trigger("keydown", { key: " " });
-    expect(store.selectedKeys).toEqual(["a", "b", "b1", "b2"]);
-
-    // And Space on one of its members takes that member back out, which is
-    // the only way the panel's rows ever mark themselves.
-    await gridEl.trigger("keydown", { key: "ArrowDown" });
-    await gridEl.trigger("keydown", { key: " " });
-    expect(store.selectedKeys).toEqual(["a", "b", "b2"]);
-  });
-});
-
-describe("a stack wears one mark, not one per row", () => {
-  // jsdom applies no SFC `<style>`, so what these pin is the hook each rule is
-  // keyed on — `.stack-panel--selected` on the band, and the `selected` prop
-  // the member cards no longer get while it is there. The colours themselves
-  // are not assertable here and are not asserted.
-  it("the band takes the hook while the whole stack is in, and gives it up when part comes out", async () => {
-    const wrapper = await grid(1008);
-    const store = useWorkflowsStore();
-    await store.openStack("b");
-    await flush();
-
-    const panel = () => wrapper.find('[data-testid="stack-panel"]');
-    // What a member card is TOLD, which is what draws its own mark
-    // (`WorkflowCard.vue`, `.wf-card--selected`): the band's mark replaces it.
-    const markedCards = () =>
-      wrapper
-        .findAll(".stack-panel__member")
-        .filter((row) => row.findComponent(WorkflowCard).props("selected"))
-        .map((row) => row.attributes("data-key"));
-    const selectedRows = () =>
-      wrapper
-        .findAll(".stack-panel__member")
-        .filter((row) => row.attributes("aria-selected") === "true")
-        .map((row) => row.attributes("data-key"));
-
-    expect(panel().classes()).not.toContain("stack-panel--selected");
-
-    // Clicking the stack card selects all three, so the band takes the mark and
-    // the rows give theirs up: the cards stop being told they are selected, and
-    // in List the row rule is switched off by its `:not(.stack-panel--selected)`
-    // scope.
-    await wrapper.findAll(".wfv-row")[1].trigger("click");
-    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
-    expect(panel().classes()).toContain("stack-panel--selected");
-    expect(markedCards()).toEqual([]);
-    // The rows still SAY they are selected: they are, and a screen reader is
-    // owed that whichever box the olive is painted on.
-    expect(selectedRows()).toEqual(["b", "b1", "b2"]);
-
-    // Take one member back out and the band gives the mark up: two of three
-    // is not "this stack", and only the rows can say which two.
-    await wrapper
-      .findAll(".stack-panel__member")[1]
-      .trigger("click", { ctrlKey: true });
-    expect(store.selectedKeys).toEqual(["b", "b2"]);
-    expect(selectedRows()).toEqual(["b", "b2"]);
-    expect(panel().classes()).not.toContain("stack-panel--selected");
-    // And the two that are still in go back to marking themselves, which is
-    // the only way to see WHICH two.
-    expect(markedCards()).toEqual(["b", "b2"]);
-  });
-
-  it("a stack that is merely open, or partly selected, does not take the hook", async () => {
-    const wrapper = await grid(1008);
-    const store = useWorkflowsStore();
-    const panel = () => wrapper.find('[data-testid="stack-panel"]');
-
-    // A different card selected, then this stack opened: opening is not
-    // selecting, and the wash must not follow the panel around.
-    store.select("a");
-    await store.openStack("b");
-    await flush();
-    expect(panel().classes()).not.toContain("stack-panel--selected");
-
-    // The cover alone is not the stack — this is what separates "every member
-    // is in" from "any member is in", and it is the state a click on the
-    // panel's Cover row leaves behind.
-    await wrapper.findAll(".stack-panel__member")[0].trigger("click");
-    expect(store.selectedKeys).toEqual(["b"]);
-    expect(panel().classes()).not.toContain("stack-panel--selected");
-  });
-
-  it("the cover row inside the panel is separable from the stack it heads", async () => {
-    const wrapper = await grid(1008);
-    const store = useWorkflowsStore();
-    await store.openStack("b");
-    await flush();
-
-    // Same key, two rows: the grid's stack card and the panel's first member.
-    // Clicking the card means the stack; clicking the row means that one
-    // workflow, or the cover is the one card in a stack you cannot single out.
-    await wrapper.findAll(".wfv-row")[1].trigger("click");
-    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
-    await wrapper.findAll(".stack-panel__member")[0].trigger("click");
-    expect(store.selectedKeys).toEqual(["b"]);
-  });
-
-  it("a Shift range into an open panel does not drag the rest of the stack back in", async () => {
-    const wrapper = await grid(1008);
-    const store = useWorkflowsStore();
-    await store.openStack("b");
-    await flush();
-
-    // Flat order is `a b c d | b b1 b2 · | e f`. Click "c" (index 2), then
-    // Shift-click the panel's `b1` (index 5): the range is c, d, the panel's
-    // COVER row and b1. The stack's CARD row is index 1 and outside it, so
-    // nothing expands and `b2` — which the range never reaches — stays out.
-    // Expanding every key in the store put `b2` back, so Shift undid what a
-    // Ctrl-click had just done.
-    await wrapper.findAll(".wfv-row")[2].trigger("click");
-    await wrapper
-      .findAll(".stack-panel__member")[1]
-      .trigger("click", { shiftKey: true });
-    expect(store.selectedKeys).toEqual(["c", "d", "b", "b1"]);
-
-    // And a range that stays inside the panel takes only the rows it covers.
-    await wrapper.findAll(".stack-panel__member")[1].trigger("click");
-    expect(store.selectedKeys).toEqual(["b1"]);
-    await wrapper
-      .findAll(".stack-panel__member")[2]
-      .trigger("click", { shiftKey: true });
-    expect(store.selectedKeys).toEqual(["b1", "b2"]);
-
-    // A range that DOES cross the stack card takes its whole stack, the same
-    // way it would with the panel shut: "a" is index 0, so the range reaches
-    // the card at index 1 and `b2` comes in through it.
-    await wrapper.findAll(".wfv-row")[0].trigger("click");
-    await wrapper
-      .findAll(".stack-panel__member")[1]
-      .trigger("click", { shiftKey: true });
-    expect(store.selectedKeys).toEqual(["a", "b", "b1", "b2", "c", "d"]);
-  });
-});
-
-describe("Esc closes the innermost thing first", () => {
-  it("the panel before the selection, and never both at once", async () => {
-    const wrapper = await grid(1008);
-    const store = useWorkflowsStore();
-    await store.openStack("b");
-    await flush();
-    const gridEl = wrapper.find(".wfv-grid");
-    await wrapper.findAll(".wfv-row")[1].trigger("click");
-    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
-
-    await gridEl.trigger("keydown", { key: "Escape" });
-    await settleClose(wrapper);
-    expect(store.openStackKey).toBe(null);
-    // The selection survives the first Escape: it is the outer thing.
-    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
-    // And the cursor comes back to the card that had the panel.
-    expect(cursorKey(wrapper)).toBe("b");
-
-    await gridEl.trigger("keydown", { key: "Escape" });
+    store.select("b");
+    await wrapper.find(".wfv-grid").trigger("keydown", { key: "Escape" });
     expect(store.selectedKeys).toEqual([]);
   });
 
   it("the sort popover owns its own Escape", async () => {
     const wrapper = await grid(1008);
     const store = useWorkflowsStore();
-    await store.openStack("b");
-    await flush();
+    store.select("b");
     wrapper.vm.sortMenuOpen = true;
     await wrapper.vm.$nextTick();
     await wrapper.find(".wfv-grid").trigger("keydown", { key: "Escape" });
-    // The popover is what Escape was for; the panel stays open behind it.
-    expect(store.openStackKey).toBe("b");
+    // The popover is what Escape was for; the selection stays behind it.
+    expect(store.selectedKeys).toEqual(["b"]);
   });
 });
 
-// Five cards and a stack of FIVE members, so the member block is 5 over 4
-// columns: one full row plus a ragged one with three holes in it. That is the
-// arrangement in which a linear scan over the holes walks out of its column,
-// and it is exactly what the block-of-three fixture above cannot show.
-const RAGGED = [
-  card("a", { rank: 9 }),
-  card("b", {
-    rank: 8,
-    stack_size: 5,
-    member_keys: ["b1", "b2", "b3", "b4"],
-  }),
-  card("c", { rank: 7 }),
-  card("d", { rank: 6 }),
-  card("e", { rank: 5 }),
-  card("f", { rank: 4 }),
-];
-
 describe("the cursor survives the list being rebuilt", () => {
-  it("a ragged member row still moves down by whole rows", async () => {
-    listWorkflowCards.mockResolvedValue({
-      cards: RAGGED,
-      one_offs: 0,
-      hidden: 0,
-    });
-    const wrapper = await grid(1008);
-    await useWorkflowsStore().openStack("b");
-    await flush();
-    // a b c d | b b1 b2 b3 | b4 · · · | e f
-    const gridEl = wrapper.find(".wfv-grid");
-    await wrapper.findAll(".stack-panel__member")[1].trigger("click");
-    expect(cursorKey(wrapper)).toBe("b1");
-
-    // b1 is at flat index 5, column 1. One row down is index 9, a hole; the
-    // next row down is 13, which is "f" — also column 1, and what the browser
-    // draws directly beneath it. A linear scan over the hole would hand back
-    // "e", in column 0.
-    await gridEl.trigger("keydown", { key: "ArrowDown" });
-    expect(cursorKey(wrapper)).toBe("f");
-  });
 
   it("keeps its card when the sort reorders the grid under it", async () => {
     const wrapper = await grid(1008);
@@ -625,304 +244,6 @@ describe("the cursor survives the list being rebuilt", () => {
     expect(cursorKey(wrapper)).toBe("a");
   });
 
-  it("closing a stack from the card's own caret leaves the grid reachable", async () => {
-    const wrapper = await grid(1008);
-    const store = useWorkflowsStore();
-    await store.openStack("b");
-    await flush();
-
-    // Cursor on a card AFTER the panel, so closing shrinks the list past it.
-    await wrapper
-      .findAll(".wfv-row")
-      .find((row) => row.attributes("data-key") === "f")
-      .trigger("click");
-    expect(cursorKey(wrapper)).toBe("f");
-
-    // ▸ on the open card, which is not the panel's Close: the list loses its
-    // member block and every index after it shifts.
-    store.toggleStack("b");
-    await wrapper.vm.$nextTick();
-    await settleClose(wrapper);
-    expect(store.openStackKey).toBe(null);
-    // The grid must still have exactly one tab stop, and it must still be "f".
-    const stops = wrapper
-      .findAll(".wfv-grid [data-key]")
-      .filter((el) => el.attributes("tabindex") === "0");
-    expect(stops).toHaveLength(1);
-    expect(stops[0].attributes("data-key")).toBe("f");
-  });
-});
-
-describe("the panel while its members are still arriving", () => {
-  it("draws the cover and the stack's real size, not what has landed", async () => {
-    const release = [];
-    getWorkflowCard.mockImplementation(
-      (key) =>
-        new Promise((resolve) => {
-          release.push(() => resolve({ card: card(key, { stack_size: 3 }) }));
-        }),
-    );
-    const wrapper = await grid(1008);
-    useWorkflowsStore().openStack("b");
-    await wrapper.vm.$nextTick();
-
-    // The panel is on screen at once, holding the card the grid already had.
-    expect(wrapper.find('[data-testid="stack-panel"]').exists()).toBe(true);
-    expect(memberKeys(wrapper)).toEqual(["b"]);
-    // And it says three, because that is how many the stack HAS.
-    expect(wrapper.find(".stack-panel__count").text()).toBe("3 workflows");
-    expect(wrapper.find(".stack-panel__pending").text()).toBe(
-      "reading the rest…",
-    );
-
-    release.forEach((resolve) => resolve());
-    await flush();
-    expect(memberKeys(wrapper)).toEqual(["b", "b1", "b2"]);
-    expect(wrapper.find(".stack-panel__pending").exists()).toBe(false);
-  });
-
-  it("says so when a member could not be read, instead of counting it out", async () => {
-    getWorkflowCard.mockRejectedValue(new Error("nope"));
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const wrapper = await grid(1008);
-    await useWorkflowsStore().openStack("b");
-    await flush();
-
-    expect(memberKeys(wrapper)).toEqual(["b"]);
-    // Wrong if this reads "1 workflow": the stack still has three, and a
-    // header that counts what arrived turns a failed request into a lie.
-    expect(wrapper.find(".stack-panel__count").text()).toBe("3 workflows");
-    expect(wrapper.find(".stack-panel__pending").text()).toBe(
-      "2 could not be read",
-    );
-    warn.mockRestore();
-  });
-});
-
-describe("what a screen reader is told", () => {
-  it("owns the panel's rows from the expanded card, which they do not follow", async () => {
-    const wrapper = await grid(1008);
-    await useWorkflowsStore().openStack("b");
-    await flush();
-    const open = wrapper
-      .findAll(".wfv-row")
-      .find((row) => row.attributes("data-key") === "b");
-
-    // In DOM order the member rows follow "d", the last card of "b"'s row, so
-    // without `aria-owns` a reader on "b" pressing Down is handed "c".
-    const owned = open.attributes("aria-owns").split(" ");
-    expect(owned).toEqual([
-      "wfv-stack-panel-row-b",
-      "wfv-stack-panel-row-b1",
-      "wfv-stack-panel-row-b2",
-    ]);
-    for (const id of owned) {
-      expect(wrapper.find(`#${id}`).attributes("role")).toBe("row");
-    }
-    expect(wrapper.find(".wfv-grid").attributes("aria-multiselectable")).toBe(
-      "true",
-    );
-  });
-
-  it("announces the open once, with the real count, and announces the close", async () => {
-    const release = [];
-    getWorkflowCard.mockImplementation(
-      (key) =>
-        new Promise((resolve) => {
-          release.push(() => resolve({ card: card(key, { stack_size: 3 }) }));
-        }),
-    );
-    const wrapper = await grid(1008);
-    const live = () => wrapper.find('[role="status"]').text();
-    const store = useWorkflowsStore();
-
-    store.openStack("b");
-    await wrapper.vm.$nextTick();
-    // Wrong if this says "0 workflows": counting what has arrived announces
-    // twice, and the first of the two is false.
-    expect(live()).toBe("b opened, 3 workflows");
-    release.forEach((resolve) => resolve());
-    await flush();
-    expect(live()).toBe("b opened, 3 workflows");
-
-    store.closeStack();
-    await wrapper.vm.$nextTick();
-    // Every row below the panel moves on the way back too.
-    expect(live()).toBe("b closed");
-  });
-});
-
-describe("the panel follows a change of selection", () => {
-  const row = (wrapper, key) =>
-    wrapper.findAll(".wfv-row").find((el) => el.attributes("data-key") === key);
-
-  const panel = (wrapper) => wrapper.find('[data-testid="stack-panel"]');
-
-  /**
-   * Open a stack the way a reader does: the double-click, and the click that
-   * comes with it. `trigger("dblclick")` alone fires no `click`, so a test
-   * that skips it opens the panel with the stack NOT selected — a state no
-   * gesture produces, and one that makes the rules below vacuous.
-   */
-  const openByGesture = async (wrapper, key) => {
-    await row(wrapper, key).trigger("click");
-    await row(wrapper, key).trigger("dblclick");
-    await flush();
-  };
-
-  it("a plain click selects a stack without opening it", async () => {
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-
-    await row(wrapper, "b").trigger("click");
-    await flush();
-    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
-    // Wrong if a panel appears: a click is a selection, and ▸, Enter and a
-    // double-click are the ways in. Every click down the grid would otherwise
-    // throw a band open under it.
-    expect(panel(wrapper).exists()).toBe(false);
-  });
-
-  it("moves an open panel to the next stack that is clicked", async () => {
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-
-    // Opened the way a reader opens one.
-    await openByGesture(wrapper, "b");
-    expect(store.openStackKey).toBe("b");
-    expect(memberKeys(wrapper)).toEqual(["b", "b1", "b2"]);
-
-    // And now a PLAIN click on the other stack moves the band there.
-    await row(wrapper, "e").trigger("click");
-    await flush();
-    expect(store.openStackKey).toBe("e");
-    expect(wrapper.findAll('[data-testid="stack-panel"]')).toHaveLength(1);
-    expect(memberKeys(wrapper)).toEqual(["e", "e1", "e2"]);
-  });
-
-  it("holds the panel on screen, shrinking, while it closes", async () => {
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-    await openByGesture(wrapper, "b");
-
-    await row(wrapper, "f").trigger("click", { ctrlKey: true });
-    // Wrong if the panel has already gone: the rows the collapse is drawn on
-    // go with the open key, so dropping it first leaves nothing to animate.
-    expect(panel(wrapper).exists()).toBe(true);
-    expect(panel(wrapper).classes()).toContain("stack-panel--closing");
-    expect(memberKeys(wrapper)).toEqual(["b", "b1", "b2"]);
-
-    await settleClose(wrapper);
-    expect(store.openStackKey).toBe(null);
-    expect(panel(wrapper).exists()).toBe(false);
-  });
-
-  it("keeps the panel open while the picking stays inside it", async () => {
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-    await openByGesture(wrapper, "b");
-
-    const member = (key) =>
-      wrapper
-        .findAll(".stack-panel__member")
-        .find((el) => el.attributes("data-key") === key);
-    await member("b1").trigger("click");
-    await member("b2").trigger("click", { ctrlKey: true });
-    expect(store.selectedKeys).toEqual(["b1", "b2"]);
-    expect(store.openStackKey).toBe("b");
-    expect(panel(wrapper).classes()).not.toContain("stack-panel--closing");
-  });
-
-  it("closes an open panel when a plain card is clicked", async () => {
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-    await openByGesture(wrapper, "b");
-
-    // "a" is an ordinary workflow, not a stack. Clicking it is a selection
-    // that has left the open stack, so the band goes — wrong if it sits there
-    // over a card nobody is looking at any more.
-    await row(wrapper, "a").trigger("click");
-    expect(panel(wrapper).classes()).toContain("stack-panel--closing");
-
-    await settleClose(wrapper);
-    expect(store.openStackKey).toBe(null);
-    expect(panel(wrapper).exists()).toBe(false);
-  });
-
-  it("opens the next stack without a second double-click", async () => {
-    // The mode outlives the band: "a" takes the panel off the screen, and the
-    // stack picked after it opens on a plain click. Wrong if it needs another
-    // double-click — that is the reader being put back where they started.
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-    await openByGesture(wrapper, "b");
-
-    await row(wrapper, "a").trigger("click");
-    await settleClose(wrapper);
-    expect(store.openStackKey).toBe(null);
-    expect(store.browsingStacks).toBe(true);
-
-    await row(wrapper, "e").trigger("click");
-    await flush();
-    expect(store.openStackKey).toBe("e");
-    expect(memberKeys(wrapper)).toEqual(["e", "e1", "e2"]);
-  });
-
-  it("stops following once Escape has shut the panel", async () => {
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-    await openByGesture(wrapper, "b");
-
-    await wrapper.find(".wfv-grid").trigger("keydown", { key: "Escape" });
-    await settleClose(wrapper);
-    expect(store.browsingStacks).toBe(false);
-
-    // A plain click is a click again.
-    await row(wrapper, "e").trigger("click");
-    await flush();
-    expect(store.openStackKey).toBe(null);
-  });
-
-  it("brings the cursor back out of a panel it closes", async () => {
-    // The grid has ONE tab stop. Ctrl-clicking a member while a card outside
-    // the stack is selected shuts the panel from under a cursor standing on a
-    // member row, and without this the stop, and the focus with it, leaves the
-    // screen entirely.
-    const wrapper = await grid();
-    await row(wrapper, "f").trigger("click");
-    await flush();
-    const store = useWorkflowsStore();
-    await store.openStack("b");
-    await flush();
-
-    await wrapper
-      .findAll(".stack-panel__member")
-      .find((el) => el.attributes("data-key") === "b1")
-      .trigger("click", { ctrlKey: true });
-    expect(store.selectedKeys).toEqual(["f", "b1"]);
-    expect(cursorKey(wrapper)).toBe("b1");
-
-    await settleClose(wrapper);
-    const stops = wrapper
-      .findAll(".wfv-grid [data-key]")
-      .filter((el) => el.attributes("tabindex") === "0");
-    expect(stops).toHaveLength(1);
-    expect(stops[0].attributes("data-key")).toBe("b");
-  });
-
-  it("gives the second Escape to the selection while the panel shuts", async () => {
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-    const gridEl = wrapper.find(".wfv-grid");
-    await openByGesture(wrapper, "b");
-
-    await gridEl.trigger("keydown", { key: "Escape" });
-    expect(store.panelClosing).toBe(true);
-    // Wrong if this is swallowed by the panel a second time: the collapse is
-    // already running, so the innermost thing left is the selection.
-    await gridEl.trigger("keydown", { key: "Escape" });
-    expect(store.selectedKeys).toEqual([]);
-  });
 });
 
 describe("the empty state", () => {
@@ -975,14 +296,14 @@ describe("the empty state", () => {
   });
 });
 
-// ── Arriving by card key ──────────────────────────────────────────────────
+// ── Arriving by workflow id ───────────────────────────────────────────────
 //
-// `/workflows?card=<key>` is what the Run popup's Open in Workflows and the
+// `/workflows?workflow=<id>` is what the Run popup's Open in Workflows and the
 // lightbox Edit tab's Open push. WorkflowTab selects the card; the grid has to
 // show it, which means the cursor (and so focus, and so the scroll) on its row.
-describe("arriving on ?card=", () => {
-  it("puts the cursor and focus on that card's row", async () => {
-    route.query = { card: "f" };
+describe("arriving on ?workflow=", () => {
+  it("puts the cursor and focus on that workflow's row", async () => {
+    route.query = { workflow: "f" };
     const wrapper = await grid();
     await flush();
 
@@ -990,23 +311,11 @@ describe("arriving on ?card=", () => {
     expect(document.activeElement?.dataset?.key).toBe("f");
   });
 
-  it("opens the stack a member sits in and lands on the member's row", async () => {
-    route.query = { card: "e2" };
-    const wrapper = await grid();
-    await flush();
-    await flush();
-
-    expect(useWorkflowsStore().openStackKey).toBe("e");
-    expect(cursorKey(wrapper)).toBe("e2");
-    expect(document.activeElement?.dataset?.key).toBe("e2");
-  });
-
-  it("moves nothing for a key the grid does not list", async () => {
-    route.query = { card: "nothing" };
+  it("moves nothing for an id the grid does not list", async () => {
+    route.query = { workflow: "nothing" };
     const wrapper = await grid();
     await flush();
 
-    expect(useWorkflowsStore().openStackKey).toBeFalsy();
     expect(cursorKey(wrapper)).toBe("a");
   });
 });
@@ -1023,19 +332,6 @@ describe("arriving on ?topology=", () => {
 
     expect(useWorkflowsStore().selectedKeys).toEqual(["d"]);
     expect(cursorKey(wrapper)).toBe("d");
-  });
-
-  // The link names ONE workflow — it is pushed by one picture's Recipe panel —
-  // so it selects one card even when that card heads a stack. Whole-stack
-  // selection is a GESTURE on the stack card, which is why `select`'s `whole`
-  // is opt-in: defaulting it to true made this link select "b", "b1" and "b2"
-  // for a picture made by "b" alone.
-  it("selects one workflow, not its stack, when the link lands on a cover", async () => {
-    route.query = { topology: "topology-b" };
-    const wrapper = await grid();
-
-    expect(useWorkflowsStore().selectedKeys).toEqual(["b"]);
-    expect(cursorKey(wrapper)).toBe("b");
   });
 
   // The grid is not every card: `GET /workflows` leaves out the hidden
@@ -1163,45 +459,6 @@ describe("arriving on ?topology=", () => {
     await flush();
 
     expect(wrapper.find(".wfv-note").exists()).toBe(false);
-  });
-
-  // `flatRows` is rebuilt when `columns` lands, and `measure()` runs as a
-  // pre-flush job — so a row looked up BEFORE the tick names a different seat
-  // by the time `moveCursor` reads it.
-  //
-  // The window needs `columns` to move between the watcher's synchronous part
-  // and its `nextTick`, which means the grid must measure a real width on its
-  // FIRST `measure()` — jsdom reports 0, so the prototype is stubbed for this
-  // test alone. With a stack open (which survives unmount) the two disagree by
-  // a whole row: `f` is index 8 at one column, and index 8 at four columns is
-  // `e`.
-  it("lands on the right card when the columns change under it", async () => {
-    await grid();
-    const store = useWorkflowsStore();
-    await store.openStack("b");
-    await flush();
-    mounted.pop().unmount();
-    expect(store.openStackKey).toBe("b");
-
-    const owned = Object.getOwnPropertyDescriptor(
-      HTMLElement.prototype,
-      "clientWidth",
-    );
-    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
-      configurable: true,
-      get: () => 1008,
-    });
-    try {
-      route.query = { topology: "topology-f" };
-      const second = mountView();
-      await flush();
-
-      expect(cursorKey(second)).toBe("f");
-    } finally {
-      if (owned)
-        Object.defineProperty(HTMLElement.prototype, "clientWidth", owned);
-      else delete HTMLElement.prototype.clientWidth;
-    }
   });
 
   it("does not yank focus out of the open Sort popover", async () => {
@@ -1353,24 +610,6 @@ describe("the closed inspector", () => {
     await wrapper.findAll(".wfv-row")[2].trigger("click", { ctrlKey: true });
     await flush();
     expect(tabLabel(wrapper)).toBe("2 workflows");
-  });
-
-  // A stack card clicked is the whole stack selected: several keys, one card.
-  it("names a stack selected whole by its cover", async () => {
-    const wrapper = await closedGrid();
-    await wrapper.findAll(".wfv-row")[1].trigger("click");
-    await flush();
-    expect(useWorkflowsStore().selectedKeys.length).toBeGreaterThan(1);
-    expect(tabLabel(wrapper)).toBe("b");
-
-    // A member picked in the inspector is what it (and Run) now describe.
-    const store = useWorkflowsStore();
-    store.cards.find((entry) => entry.key === "b").members = [
-      { key: "b1", name: "b one" },
-    ];
-    store.pickStackMember("b1");
-    await flush();
-    expect(tabLabel(wrapper)).toBe("b one");
   });
 
   it("opens the inspector on a click, and keeps it open", async () => {
@@ -1595,413 +834,9 @@ describe("the selection mark", () => {
     expect(markedKeys(wrapper)).toEqual(["c"]);
   });
 
-  it("marks selected members inside an open stack", async () => {
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-    await store.openStack("b");
-    await flush();
-
-    await wrapper.find('.stack-panel__member[data-key="b1"]').trigger("click");
-    await flush();
-
-    expect(store.selectedKeys).toEqual(["b1"]);
-    expect(markedKeys(wrapper)).toEqual(["b1"]);
-  });
-
-  it("picks the top workflow out of its own stack", async () => {
-    // The cover key names TWO rows — the grid's stack card and the panel's
-    // first member — so marking the card on the key alone made the one gesture
-    // that reaches the cover as an individual light the stack up as well. The
-    // top workflow was the one card in an open panel that could not be picked
-    // out of it.
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-    await store.openStack("b");
-    await flush();
-
-    await wrapper.find('.stack-panel__member[data-key="b"]').trigger("click");
-    await flush();
-
-    expect(store.selectedKeys).toEqual(["b"]);
-    // The panel's cover row, and NOT the stack card above it.
-    const marked = wrapper
-      .findAll(".wf-card--selected")
-      .map(
-        (el) => el.element.closest("[class*='__member'], .wfv-row")?.className,
-      );
-    expect(marked).toHaveLength(1);
-    expect(marked[0]).toContain("stack-panel__member");
-    expect(
-      wrapper
-        .findAll(".wfv-row")
-        .find((el) => el.attributes("data-key") === "b")
-        .attributes("aria-selected"),
-    ).toBe("false");
-  });
-
-  it("marks the stack card once the whole stack is in", async () => {
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-    await store.openStack("b");
-    await flush();
-
-    // A click on the grid's stack card takes the stack whole, which is when
-    // that card genuinely stands for what is selected.
-    await wrapper
-      .findAll(".wfv-row")
-      .find((el) => el.attributes("data-key") === "b")
-      .trigger("click");
-    await flush();
-
-    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
-    expect(
-      wrapper
-        .findAll(".wfv-row")
-        .find((el) => el.attributes("data-key") === "b")
-        .attributes("aria-selected"),
-    ).toBe("true");
-  });
-
-  it("marks a closed stack on its cover key, as the deep link leaves it", async () => {
-    // Closed, the card is the cover's only row, so the key is the whole
-    // answer — and `?topology=` selects exactly that one key.
-    const wrapper = await grid();
-    const store = useWorkflowsStore();
-    store.select("b");
-    await flush();
-
-    expect(store.openStackKey).toBe(null);
-    expect(markedKeys(wrapper)).toEqual(["b"]);
-  });
-
   it("marks nothing when nothing is selected", async () => {
     const wrapper = await grid();
     expect(wrapper.findAll(".wf-card--selected")).toHaveLength(0);
-  });
-});
-
-describe("reordering a stack from the keyboard", () => {
-  // `b` is a stack of three: cover `b`, then `b1` and `b2`. Its `stack_id` is
-  // what `PUT /workflows/stacks/{id}/order` is addressed by, and the grid is
-  // the only thing that carries it.
-  const STACKED = CARDS.map((entry) =>
-    entry.key === "b" ? { ...entry, stack_id: "stack-b" } : entry,
-  );
-
-  /** A grid whose stack `b` is open, with its members drawn. */
-  async function openStackB() {
-    listWorkflowCards.mockResolvedValue({
-      cards: STACKED,
-      one_offs: 0,
-      hidden: 0,
-    });
-    const wrapper = await grid();
-    await useWorkflowsStore().openStack("b");
-    await flush();
-    return wrapper;
-  }
-
-  /** Alt+Arrow on whichever row holds the cursor. */
-  async function altArrow(wrapper, key) {
-    await wrapper.find(".wfv-grid").trigger("keydown", { key, altKey: true });
-    await flush();
-  }
-
-  it("sends the WHOLE order, with the moved key in its new place", async () => {
-    const wrapper = await openStackB();
-    // Put the cursor on the second member, which is `b1`.
-    await wrapper.find('.stack-panel__member[data-key="b1"]').trigger("click");
-    await altArrow(wrapper, "ArrowDown");
-
-    // Not `["b1"]` and not a delta: the route refuses anything but a complete
-    // ordered list of what the stack holds, because a key left out would be
-    // dropped from the stack with no record that it had gone.
-    expect(reorderStack).toHaveBeenCalledWith("stack-b", ["b", "b2", "b1"]);
-  });
-
-  it("moves a member up, and makes it the cover at position 0", async () => {
-    const wrapper = await openStackB();
-    await wrapper.find('.stack-panel__member[data-key="b1"]').trigger("click");
-    await altArrow(wrapper, "ArrowUp");
-    expect(reorderStack).toHaveBeenCalledWith("stack-b", ["b1", "b", "b2"]);
-  });
-
-  it("does nothing at either end rather than wrapping round", async () => {
-    const wrapper = await openStackB();
-    // The cover cannot move earlier…
-    await wrapper.find('.stack-panel__member[data-key="b"]').trigger("click");
-    await altArrow(wrapper, "ArrowUp");
-    expect(reorderStack).not.toHaveBeenCalled();
-    // …and the last member cannot move later.
-    await wrapper.find('.stack-panel__member[data-key="b2"]').trigger("click");
-    await altArrow(wrapper, "ArrowDown");
-    expect(reorderStack).not.toHaveBeenCalled();
-  });
-
-  it("swallows a top-level card's Alt+Arrow rather than moving the cursor", async () => {
-    const wrapper = await openStackB();
-    await wrapper.find('.wfv-row[data-key="a"]').trigger("click");
-    await altArrow(wrapper, "ArrowDown");
-    // The grid's order is the sort, so there is nothing to reorder — and Alt
-    // must not fall through to the plain cursor either, or a held Alt+Down
-    // reorders a member twice and then walks off down the grid.
-    expect(reorderStack).not.toHaveBeenCalled();
-    expect(cursorKey(wrapper)).toBe("a");
-  });
-
-  it("says nothing, and announces nothing, with no stack id to address", async () => {
-    // A stack the payload carries no `stack_id` for — which is what the
-    // server serves for a stack the grid drew only part of.
-    const wrapper = await grid();
-    await useWorkflowsStore().openStack("b");
-    await flush();
-    await wrapper.find('.stack-panel__member[data-key="b1"]').trigger("click");
-    await altArrow(wrapper, "ArrowDown");
-    expect(reorderStack).not.toHaveBeenCalled();
-    // The live region must not report a move that did not happen: it is the
-    // only thing a screen-reader user has to tell them the list is unchanged.
-    expect(wrapper.find('[role="status"]').text()).not.toMatch(/position/);
-  });
-
-  it("announces the new position once a move lands", async () => {
-    const wrapper = await openStackB();
-    await wrapper.find('.stack-panel__member[data-key="b1"]').trigger("click");
-    await altArrow(wrapper, "ArrowDown");
-    // The mocked server hands the same cards back, so the ORDER cannot move
-    // here — what is asserted is that a landed move speaks at all, against
-    // the test above proving a dropped one stays silent.
-    expect(wrapper.find('[role="status"]').text()).toMatch(
-      /b1, position \d+ of 3/,
-    );
-  });
-
-  it("opens the member menu from Shift+F10, the only keyboard route to it", async () => {
-    const wrapper = await openStackB();
-    await wrapper.find('.stack-panel__member[data-key="b1"]').trigger("click");
-    expect(wrapper.find('[data-testid="member-menu"]').exists()).toBe(false);
-
-    await wrapper
-      .find(".wfv-grid")
-      .trigger("keydown", { key: "F10", shiftKey: true });
-    await flush();
-    // Both ⋯ buttons are `tabindex="-1"` — the grid owns Tab — so without
-    // this Unstack and Hide are reachable by pointer only.
-    const menu = wrapper.find('[data-testid="member-menu"]');
-    expect(menu.exists()).toBe(true);
-    // By id below, not by position: the member menu is a list somebody adds
-    // to, and an index-based assertion quietly starts testing its neighbour
-    // when they do — which is what happened when *Open picture* joined it.
-    expect(menu.findAll(".ctx-item").length).toBeGreaterThan(0);
-  });
-
-  it("unstacks and hides through the routes those verbs name", async () => {
-    const wrapper = await openStackB();
-    await wrapper.find('.stack-panel__member[data-key="b1"]').trigger("click");
-    await wrapper
-      .find(".wfv-grid")
-      .trigger("keydown", { key: "F10", shiftKey: true });
-    await flush();
-
-    // Index 3 is Unstack, index 4 is Hide. Driven end to end rather than off
-    // the panel's emits: the store reaches for `patchWorkflowCard`, and a
-    // mock naming anything else is swallowed by `hideMember`'s own catch and
-    // reads as the feature working.
-    await wrapper.find('.ctx-item[data-item="unstack"]').trigger("click");
-    await flush();
-    expect(unstackWorkflow).toHaveBeenCalledWith("b1");
-
-    await wrapper.find('.stack-panel__member[data-key="b1"]').trigger("click");
-    await wrapper
-      .find(".wfv-grid")
-      .trigger("keydown", { key: "F10", shiftKey: true });
-    await flush();
-    await wrapper.find('.ctx-item[data-item="hide"]').trigger("click");
-    await flush();
-    expect(patchWorkflowCard).toHaveBeenCalledWith("b1", { hidden: true });
-    expect(useWorkflowsStore().error).toBe("");
-  });
-});
-
-describe("the cursor in List", () => {
-  // The flat index space is the same in both views — the member block is
-  // still padded to whole grid rows so the cards AFTER the panel keep naming
-  // their column. Only the STEP changes, and a step of `columns` over a list
-  // drawn one member per line walks past two of every three.
-  async function listGrid() {
-    const wrapper = await grid();
-    useWorkflowPrefsStore().setStackView("list");
-    await useWorkflowsStore().openStack("b");
-    await flush();
-    return wrapper;
-  }
-
-  const arrow = async (wrapper, key) => {
-    await wrapper.find(".wfv-grid").trigger("keydown", { key });
-    await flush();
-  };
-
-  it("walks the members one at a time", async () => {
-    const wrapper = await listGrid();
-    await wrapper.find('.stack-panel__member[data-key="b"]').trigger("click");
-    expect(cursorKey(wrapper)).toBe("b");
-
-    await arrow(wrapper, "ArrowDown");
-    expect(cursorKey(wrapper)).toBe("b1");
-    await arrow(wrapper, "ArrowDown");
-    expect(cursorKey(wrapper)).toBe("b2");
-    await arrow(wrapper, "ArrowUp");
-    expect(cursorKey(wrapper)).toBe("b1");
-  });
-
-  it("enters the panel on the member nearest the way in", async () => {
-    const wrapper = await listGrid();
-    // Down from a card in the stack's row: every member sits in one column,
-    // so "keep your column" has exactly one answer — the first of them.
-    //
-    // The cursor is placed directly rather than by clicking "a": selecting a
-    // workflow outside the open stack now takes the band off the screen, and
-    // this test is about walking into a panel that is still there.
-    wrapper.vm.cursorId = "card:a";
-    await flush();
-    await arrow(wrapper, "ArrowDown");
-    expect(cursorKey(wrapper)).toBe("b");
-
-    // …and coming back up from the grid below lands on the last.
-    await arrow(wrapper, "ArrowDown");
-    await arrow(wrapper, "ArrowDown");
-    await arrow(wrapper, "ArrowDown");
-    expect(cursorKey(wrapper)).not.toBe("b2");
-    await arrow(wrapper, "ArrowUp");
-    expect(cursorKey(wrapper)).toBe("b2");
-  });
-
-  it("reaches the panel from every column, not only the filled ones", async () => {
-    // A TWO-member block over four columns leaves holes in two of them, and
-    // the whole-row walk steps clean over the panel from those — a panel that
-    // is keyboard-reachable or not depending on the window's width.
-    listWorkflowCards.mockResolvedValue({
-      cards: CARDS.map((entry) =>
-        entry.key === "b"
-          ? { ...entry, stack_size: 2, member_keys: ["b1"] }
-          : entry,
-      ),
-      one_offs: 0,
-      hidden: 0,
-    });
-    const wrapper = await grid();
-    useWorkflowPrefsStore().setStackView("list");
-    await useWorkflowsStore().openStack("b");
-    await flush();
-
-    // `d` is the fourth card, the last of the stack's row: its column holds
-    // no member row at all. Placed rather than clicked, for the reason the
-    // test above gives.
-    wrapper.vm.cursorId = "card:d";
-    await flush();
-    await arrow(wrapper, "ArrowDown");
-    expect(cursorKey(wrapper)).toBe("b");
-
-    // And back up into it from the row below, which is the same jump the
-    // other way.
-    await arrow(wrapper, "ArrowDown");
-    await arrow(wrapper, "ArrowDown");
-    expect(["b", "b1"]).not.toContain(cursorKey(wrapper));
-    await arrow(wrapper, "ArrowUp");
-    expect(cursorKey(wrapper)).toBe("b1");
-  });
-
-  it("still keeps the column in Grid", async () => {
-    const wrapper = await grid();
-    useWorkflowPrefsStore().setStackView("grid");
-    await useWorkflowsStore().openStack("b");
-    await flush();
-    await wrapper.find('.stack-panel__member[data-key="b"]').trigger("click");
-    // Three members over four columns is one row: Down leaves the block.
-    await arrow(wrapper, "ArrowDown");
-    expect(["b", "b1", "b2"]).not.toContain(cursorKey(wrapper));
-  });
-});
-
-describe("the menu's move verbs follow the row too", () => {
-  // The menu reaches the same three writes as Alt+↑/↓, by pointer and by
-  // Shift+F10. Wired straight to the store they skipped the follow-and-
-  // announce step entirely: the write tears every member row down, the
-  // menu's activator is a pair of coordinates with no element to restore
-  // focus to, and the live region said only that the panel closed and
-  // reopened.
-  const STACKED = CARDS.map((entry) =>
-    entry.key === "b" ? { ...entry, stack_id: "stack-b" } : entry,
-  );
-
-  async function menuOn(wrapper, key) {
-    await wrapper
-      .find(`.stack-panel__member[data-key="${key}"]`)
-      .trigger("click");
-    await wrapper
-      .find(".wfv-grid")
-      .trigger("keydown", { key: "F10", shiftKey: true });
-    await flush();
-  }
-
-  /** The grid as it stands, until a reorder re-derives which card it draws. */
-  function serveStack(coverKey, memberKeys) {
-    listWorkflowCards.mockResolvedValue({
-      cards: STACKED.map((entry) =>
-        entry.key === "b"
-          ? {
-              ...entry,
-              key: coverKey,
-              name: coverKey,
-              member_keys: memberKeys,
-            }
-          : entry,
-      ),
-      one_offs: 0,
-      hidden: 0,
-    });
-  }
-
-  async function openStackB() {
-    serveStack("b", ["b1", "b2"]);
-    // The cover is what the grid draws, and the server re-derives it from the
-    // new order — so a mock that keeps serving the old cover would have the
-    // panel close on every *Make it the cover*, and hide the very thing these
-    // two tests are about.
-    reorderStack.mockImplementation(async (stack_id, keys) => {
-      serveStack(keys[0], keys.slice(1));
-      return { stack_id, keys };
-    });
-    const wrapper = await grid();
-    await useWorkflowsStore().openStack("b");
-    await flush();
-    return wrapper;
-  }
-
-  it("announces and re-seats the cursor after Move later", async () => {
-    const wrapper = await openStackB();
-    await menuOn(wrapper, "b1");
-    await wrapper.find('.ctx-item[data-item="later"]').trigger("click");
-    await flush();
-
-    expect(reorderStack).toHaveBeenCalledWith("stack-b", ["b", "b2", "b1"]);
-    expect(wrapper.find('[role="status"]').text()).toMatch(
-      /b1, position \d+ of 3/,
-    );
-    // The row the reader was on is the row they are still on.
-    expect(cursorKey(wrapper)).toBe("b1");
-  });
-
-  it("announces and re-seats the cursor after Make it the cover", async () => {
-    const wrapper = await openStackB();
-    await menuOn(wrapper, "b2");
-    await wrapper.find('.ctx-item[data-item="cover"]').trigger("click");
-    await flush();
-
-    expect(reorderStack).toHaveBeenCalledWith("stack-b", ["b2", "b", "b1"]);
-    expect(wrapper.find('[role="status"]').text()).toMatch(
-      /b2, position \d+ of 3/,
-    );
-    expect(cursorKey(wrapper)).toBe("b2");
   });
 });
 
@@ -2141,14 +976,6 @@ describe("right-clicking a card", () => {
     expect(store.selectedKeys).toEqual(["a", "c", "d"]);
   });
 
-  it("takes the whole stack when the card is a stack", async () => {
-    const wrapper = await grid();
-    await wrapper
-      .find('.wfv-row[data-key="b"]')
-      .trigger("contextmenu", { clientX: 1, clientY: 1 });
-    expect(useWorkflowsStore().selectedKeys).toEqual(["b", "b1", "b2"]);
-  });
-
   it("the ContextMenu key opens the card menu, where it used to open ⓘ", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
@@ -2170,24 +997,43 @@ describe("the verbs the bar fires", () => {
   const bar = (wrapper) =>
     wrapper.findComponent({ name: "WorkflowSelectionBar" });
 
-  it("Run on a stack selected whole opens the popup on its cover", async () => {
-    // `select` with `whole` is what a click on a stack card does: the cover
-    // and both members, three keys for the one card on screen.
+  it("Run opens the popup on the selected workflow, by id", async () => {
     const wrapper = await grid();
     const store = useWorkflowsStore();
-    store.select("b", { whole: true });
-    expect(store.selectedKeys).toEqual(["b", "b1", "b2"]);
-    // With the members fetched (the panel has been open), every key resolves
-    // to a card, so a gate counting cards sees three and runs nothing.
-    store.members = { b: [card("b"), card("b1"), card("b2")] };
-    expect(store.selectedCards).toHaveLength(3);
+    store.select("b");
 
     await bar(wrapper).vm.$emit("run");
     await flush();
     expect(useRunDialogStore().source).toMatchObject({
       kind: "card",
-      workflowKey: "b",
+      workflowId: "b",
     });
+    expect(useRunDialogStore().source.workflowKey).toBeUndefined();
+  });
+
+  it("Merge sends the selection in its order and selects the result", async () => {
+    mergeWorkflows.mockResolvedValue({ id: "merged", ids: ["c", "a"] });
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.selectRange(["c", "a"]);
+
+    await bar(wrapper).vm.$emit("merge");
+    await flush();
+    expect(mergeWorkflows).toHaveBeenCalledWith(["c", "a"]);
+    expect(store.selectedKeys).toEqual(["merged"]);
+    expect(wrapper.find('[role="status"]').text()).toBe("2 workflows merged");
+  });
+
+  it("Split sends the one selected workflow and the topology picked", async () => {
+    splitWorkflow.mockResolvedValue({ id: "split-off" });
+    const wrapper = await grid();
+    const store = useWorkflowsStore();
+    store.select("b");
+
+    await bar(wrapper).vm.$emit("split", "topology-b2");
+    await flush();
+    expect(splitWorkflow).toHaveBeenCalledWith("b", "topology-b2");
+    expect(store.selectedKeys).toEqual(["split-off"]);
   });
 
   it("Delete asks first, and deletes nothing when the answer is no", async () => {
@@ -2273,7 +1119,7 @@ describe("Clone with new models", () => {
     });
     cloneWorkflowWithModels.mockResolvedValue({
       name: "a (new models).json",
-      workflow_key: "c",
+      workflow_id: "c",
       swapped: [],
       unswapped: [],
       verified: false,

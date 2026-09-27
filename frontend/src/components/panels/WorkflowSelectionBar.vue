@@ -78,7 +78,7 @@
       shape="round"
       icon="play"
       data-verb="run"
-      :aria-label="stackWhole ? runTitle : 'Run this workflow'"
+      aria-label="Run this workflow"
       :disabled="!runnable || busy"
       :loading="running('run')"
       :tooltip="runTitle"
@@ -87,24 +87,13 @@
 
     <AppBarButton
       shape="round"
-      icon="layers-outline"
-      data-verb="stack"
-      aria-label="Stack these together"
-      :disabled="!stackable || busy"
-      :loading="running('stack')"
-      :tooltip="stackTitle"
-      @click="emit('stack')"
-    />
-
-    <AppBarButton
-      shape="round"
-      icon="layers-off-outline"
-      data-verb="unstack"
-      aria-label="Unstack all"
-      :disabled="!unstackable || busy"
-      :loading="running('unstack')"
-      :tooltip="unstackTitle"
-      @click="emit('unstack')"
+      icon="call-merge"
+      data-verb="merge"
+      aria-label="Merge into one workflow"
+      :disabled="!mergeable || busy"
+      :loading="running('merge')"
+      :tooltip="mergeTitle"
+      @click="emit('merge')"
     />
 
     <!-- Rename rides along DISABLED rather than disappearing, which is the
@@ -211,7 +200,6 @@ import { VIcon, VMenu } from "vuetify/components";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
-import { isStack } from "../../utils/workflowCard";
 import { formatKeyHint, selectAllKeyHint } from "../../utils/shortcutHints";
 import { onMenuKeydown } from "../../utils/menuKeyboard.js";
 
@@ -220,10 +208,9 @@ const emit = defineEmits([
   "menu-closed",
   "open-cover",
   "run",
-  "stack",
-  "unstack",
+  "merge",
+  "split",
   "rename",
-  "make-cover",
   "hide",
   "export",
   "duplicate",
@@ -261,7 +248,7 @@ const contextAt = ref([0, 0]);
  * open: a right button press fires `contextmenu` but no `click`, and
  * Vuetify's click-outside closes on `click`, so right-clicking a second card
  * would otherwise leave the menu where it was while the selection moved under
- * it. `StackPanel.openMenu` learned this first.
+ * it.
  */
 /**
  * The picture the right-click landed on, or null for a click that missed one.
@@ -294,9 +281,8 @@ async function openContextMenu(x, y, picture = null) {
  * when Vuetify closes it there is nothing for the browser to restore focus
  * to and it lands on `document.body` — outside the grid, with the roving
  * cursor's row still marked and no longer focused, so the next arrow key goes
- * nowhere. `WorkflowsView.followMove` already says exactly this about the
- * member-move path and restores focus there; this is the same debt on every
- * other way out of the menu, Escape included (WCAG 2.4.3).
+ * nowhere. This pays that debt on every way out of the menu, Escape included
+ * (WCAG 2.4.3).
  *
  * Emitted rather than fixed here: only the view knows where the cursor is.
  */
@@ -336,9 +322,6 @@ const running = (verb) => store.verbBusy === verb;
 
 const countTitle = computed(() => {
   const n = store.selectedKeys.length;
-  if (stackWhole.value) {
-    return `A stack of ${n.toLocaleString()} workflows selected`;
-  }
   return `${n.toLocaleString()} ${n === 1 ? "workflow" : "workflows"} selected`;
 });
 
@@ -349,38 +332,15 @@ const countTitle = computed(() => {
 // Stack tooltip named the wrong rule for half of its refusals and sent the
 // reader to fix something that was not the problem.
 
-/**
- * `POST /workflows/run` takes one card, and the Run popup shows one run. A
- * stack selected whole runs the member picked in the inspector, its cover
- * until another is picked (`store.runnableCard`).
- */
+/** `POST /workflows/run` takes one workflow, and the Run popup shows one run. */
 const runnable = computed(() => Boolean(store.runnableCard));
-const runTitle = computed(() => {
-  if (!runnable.value) {
-    return "Select one workflow, or one whole stack, to run it";
-  }
-  if (single.value) return "Run this workflow";
-  if (store.runnableCard.key !== store.stackCover?.key) {
-    return `Run ${store.runnableCard.name}, the member picked in the inspector`;
-  }
-  return (
-    `Run ${store.runnableCard.name}, this stack's cover. ` +
-    "Pick another member in the inspector or the Run popup"
-  );
-});
-
-/**
- * A stack selected whole: several keys, one card on screen. Run takes the
- * member picked in the inspector and Open cover picture the stack's cover; the verbs that would have to pick one of its
- * workflows refuse with that rule rather than "Select one workflow".
- */
-const stackWhole = computed(() => !single.value && runnable.value);
+const runTitle = computed(() =>
+  runnable.value ? "Run this workflow" : "Select one workflow to run it",
+);
 
 /** The refusal of a verb that acts on exactly one workflow. */
 function oneOnly(verb) {
-  return stackWhole.value
-    ? `A stack is several workflows. Open it and pick one to ${verb}`
-    : `Select one workflow to ${verb} it`;
+  return `Select one workflow to ${verb} it`;
 }
 
 /**
@@ -392,8 +352,7 @@ function oneOnly(verb) {
  * be read, so it says which of the two it is.
  */
 const coverPictureId = computed(
-  () =>
-    (store.stackCover ?? store.runnableCard)?.covers?.[0]?.picture_id ?? null,
+  () => store.runnableCard?.covers?.[0]?.picture_id ?? null,
 );
 
 /**
@@ -435,61 +394,26 @@ const renameTitle = computed(() =>
   single.value ? "Give this workflow a name" : oneOnly("rename"),
 );
 
-const stackRefusal = computed(() =>
-  store.selectedKeys.length < 2
-    ? "Select two or more workflows to group them"
-    : "",
+/**
+ * Merge (#1623): two or more workflows become one, the first selected its
+ * cover. One gate, one refusal sentence.
+ */
+const mergeable = computed(() => store.selectedKeys.length >= 2);
+const mergeTitle = computed(() =>
+  mergeable.value
+    ? `Merge these ${store.selectedKeys.length.toLocaleString()} workflows into one. The first selected keeps its name and settings`
+    : "Select two or more workflows to merge them",
 );
-const stackable = computed(() => !stackRefusal.value);
-
-/** Whether pressing Stack would fuse existing stacks rather than build one. */
-const stackFuses = computed(() =>
-  cards.value.some((card) => card.stack_id != null),
-);
-
-const stackTitle = computed(() => {
-  if (stackRefusal.value) return stackRefusal.value;
-  const n = store.selectedKeys.length.toLocaleString();
-  // The verb says which of the two things it is about to do: the route
-  // absorbs a selected card's whole stack, so stacking something already
-  // stacked MERGES runs rather than collapsing loose cards, and the reader is
-  // entitled to know which.
-  return stackFuses.value
-    ? `Fuse these ${n} into one stack`
-    : `Group these ${n} workflows into one stack`;
-});
 
 /**
- * Why this selection cannot be taken apart, or `""` when it can.
- *
- * **`stack_id` null is not "not a stack".** The server withholds it for a
- * stack whose membership the grid drew only PART of — a hidden member, or one
- * counted as a one-off — deliberately, so that `POST /workflows/stacks/{id}/
- * unstack` cannot be attempted and refused (`useWorkflowsStore.reorderMembers`
- * says the same of the reorder route). Such a card still draws as a stack: ▸,
- * the layered count. Gating on the id alone therefore told
- * a reader looking at a stack that nothing in their selection was one, which
- * is a sentence they can see is false — so the two refusals are separated and
- * the second names the way out.
+ * Split (#1623): the topologies one selected workflow could hand out, each
+ * a menu row of its own. Empty unless exactly one workflow holding two or
+ * more is selected: a workflow of one topology has nothing to split.
  */
-const unstackRefusal = computed(() => {
-  if (store.selectedStackIds.length) return "";
-  if (cards.value.some((card) => isStack(card))) {
-    return (
-      "PixlStash has only drawn part of this stack, so it cannot take it " +
-      "apart. Let the hidden workflows or the one-offs in first"
-    );
-  }
-  return "Nothing in this selection is part of a stack";
-});
-const unstackable = computed(() => !unstackRefusal.value);
-
-const unstackTitle = computed(() => {
-  if (unstackRefusal.value) return unstackRefusal.value;
-  const n = store.selectedStackIds.length;
-  return n === 1
-    ? "Break this stack up, leaving its workflows in the grid"
-    : `Break these ${n.toLocaleString()} stacks up, leaving their workflows in the grid`;
+const splitTopologies = computed(() => {
+  if (!single.value) return [];
+  const topologies = cards.value[0]?.topologies ?? [];
+  return topologies.length > 1 ? topologies : [];
 });
 
 /**
@@ -560,7 +484,7 @@ const deleteTitle = computed(() => {
 
 const exportTitle = computed(() =>
   single.value
-    ? "Save a shareable copy: prompts, seeds and recipe LoRAs taken out"
+    ? "Save a shareable copy: prompts and seeds taken out"
     : oneOnly("export"),
 );
 
@@ -577,31 +501,6 @@ const cloneTitle = computed(() =>
 );
 
 /**
- * Why this selection cannot become its stack's cover, or `""` when it can.
- *
- * One card, and one that is a MEMBER of the open stack rather than its cover:
- * the cover is what the grid draws for the whole stack, and this is the owner
- * saying the order chose the wrong one. Listed always and disabled with its
- * reason on anything else — this is where a reader who has never opened a
- * stack finds out that opening one is a gesture, which a hidden item could
- * never tell them.
- */
-const coverRefusal = computed(() => {
-  if (!single.value) return "Open a stack and pick one workflow inside it";
-  const key = store.selectedKeys[0];
-  const members = store.openMembers;
-  const at = members.findIndex((card) => card.key === key);
-  if (at < 0) return "Open a stack and pick one workflow inside it";
-  if (at === 0) return "This workflow already stands for its stack";
-  if (!store.openStackId) return "This stack has no recorded order to change";
-  return "";
-});
-const coverable = computed(() => !coverRefusal.value);
-const coverTitle = computed(
-  () => coverRefusal.value || "Draw the stack from this workflow instead",
-);
-
-/**
  * Everything `VerbMenu` needs, in one object, so the two mounts of it cannot
  * drift apart. Passed with `v-bind` rather than listed twice in the template.
  */
@@ -612,14 +511,10 @@ const verbHandlers = computed(() => ({
   coverOpenTitle: openTarget.value.title,
   runnable: runnable.value,
   runTitle: runTitle.value,
-  stackable: stackable.value,
-  stackTitle: stackTitle.value,
-  stackLabel: stackFuses.value ? "Fuse into one stack" : "Stack together",
-  unstackable: unstackable.value,
-  unstackTitle: unstackTitle.value,
+  mergeable: mergeable.value,
+  mergeTitle: mergeTitle.value,
+  splitTopologies: splitTopologies.value,
   renameTitle: renameTitle.value,
-  coverable: coverable.value,
-  coverTitle: coverTitle.value,
   hideLabel: allHidden.value ? "Unhide" : "Hide",
   hideTitle: hideTitle.value,
   exportTitle: exportTitle.value,
@@ -627,10 +522,11 @@ const verbHandlers = computed(() => ({
   cloneTitle: cloneTitle.value,
   deletable: deletable.value,
   deleteTitle: deleteTitle.value,
-  onVerb: (verb) => {
+  onVerb: (verb, arg) => {
     contextOpen.value = false;
     moreMenuOpen.value = false;
     if (verb === "hide") emit("hide", allHidden.value);
+    else if (arg !== undefined) emit(verb, arg);
     else emit(verb);
   },
 }));
@@ -643,8 +539,8 @@ const verbHandlers = computed(() => ({
  * not in the view: every tooltip here is a refusal sentence, and a second copy
  * of them would drift.
  *
- * The order is the design's: what running the card does, then what grouping
- * does, then what naming does, then the three that make a file, then the one
+ * The order is the design's: what running the card does, then merging and
+ * splitting, then what naming does, then the three that make a file, then the one
  * that destroys one.
  */
 const VerbMenu = (props) => {
@@ -734,24 +630,26 @@ const VerbMenu = (props) => {
         title: props.runTitle,
       }),
       sep(),
-      item("mdi-layers-outline", props.stackLabel, {
-        verb: "stack",
-        on: () => props.onVerb("stack"),
-        disabled: !props.stackable,
-        title: props.stackTitle,
+      item("mdi-call-merge", "Merge", {
+        verb: "merge",
+        on: () => props.onVerb("merge"),
+        disabled: !props.mergeable,
+        title: props.mergeTitle,
       }),
-      item("mdi-layers-off-outline", "Unstack all", {
-        verb: "unstack",
-        on: () => props.onVerb("unstack"),
-        disabled: !props.unstackable,
-        title: props.unstackTitle,
-      }),
-      item("mdi-arrow-collapse-up", "Make it the cover", {
-        verb: "make-cover",
-        on: () => props.onVerb("make-cover"),
-        disabled: !props.coverable,
-        title: props.coverTitle,
-      }),
+      // One row per topology, only on a workflow holding more than one: a
+      // topology is a graph shape and has no name of its own, so the row
+      // counts it and the tooltip names its hash.
+      ...props.splitTopologies.map((topology, i, all) =>
+        item(
+          "mdi-call-split",
+          `Split out graph ${i + 1} of ${all.length}`,
+          {
+            verb: "split",
+            on: () => props.onVerb("split", topology),
+            title: `Make graph ${topology.slice(0, 12)}… a workflow of its own`,
+          },
+        ),
+      ),
       sep(),
       item("mdi-pencil-outline", "Rename", {
         verb: "rename",
@@ -816,10 +714,8 @@ defineExpose({
   openTarget,
   coverOpenable,
   runnable,
-  stackable,
-  stackFuses,
-  unstackable,
-  coverable,
+  mergeable,
+  splitTopologies,
   allHidden,
   deletable,
 });

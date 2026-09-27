@@ -1,6 +1,6 @@
-// The wire form of `workflow_key`. Both reads take a list, and axios' default
-// `workflow_key[]=` is a key FastAPI ignores: the Recipes tab then read 0
-// looks on every card while the server logged a clean 200.
+// The wire form of `workflow_id` (#1623). Both reads take a list, and axios'
+// default `workflow_id[]=` is a key FastAPI ignores: the Recipes tab then read
+// 0 looks on every workflow while the server logged a clean 200.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import axios from "axios";
@@ -24,21 +24,19 @@ describe("recipes api", () => {
     apiClient.get.mockResolvedValue({ data: [] });
   });
 
-  it("sends each workflow key as its own workflow_key", async () => {
+  it("sends each workflow id as its own workflow_id", async () => {
     await listUsedLooks(["a", "b"]);
     await listSavedRecipes(["a", "b"]);
     for (const call of apiClient.get.mock.calls) {
-      expect(wireQuery(call)).toBe("workflow_key=a&workflow_key=b");
+      expect(wireQuery(call)).toBe("workflow_id=a&workflow_id=b");
     }
   });
 
-  it("asks for whole_stack=false only when told to", async () => {
-    await listUsedLooks(["a"], { wholeStack: false });
-    await listSavedRecipes(["a"], { wholeStack: false });
-    await listSavedRecipes(["a"]);
-    const [used, saved, plain] = apiClient.get.mock.calls.map(wireQuery);
-    expect(used).toBe("workflow_key=a&whole_stack=false");
-    expect(saved).toBe("workflow_key=a&whole_stack=false");
-    expect(plain).toBe("workflow_key=a");
+  it("takes one id as well as a list, and never names a stack", async () => {
+    await listSavedRecipes("a");
+    await listUsedLooks("a");
+    for (const call of apiClient.get.mock.calls) {
+      expect(wireQuery(call)).toBe("workflow_id=a");
+    }
   });
 });

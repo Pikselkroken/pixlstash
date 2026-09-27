@@ -42,13 +42,13 @@ vi.mock("vuetify/components", async () => {
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import SaveRecipeDialog from "./SaveRecipeDialog.vue";
 
-const KEY = "a".repeat(64);
+const KEY = `auto:${"a".repeat(64)}`;
 
 function open(props = {}) {
   return mount(SaveRecipeDialog, {
     props: {
       open: true,
-      workflowKey: KEY,
+      workflowId: KEY,
       suggestedName: "Cinematic portrait",
       prompt: "cinematic portrait of a rainy tram platform",
       loras: [{ filename: "mira_v2.safetensors", sha256: "d0", strength: 0.85 }],
@@ -93,11 +93,29 @@ describe("SaveRecipeDialog", () => {
     expect(text).toContain("off: every run varies");
   });
 
-  it("names the stack it is saved to", async () => {
+  it("names the workflow it is saved to", async () => {
+    getWorkflowCard.mockResolvedValue({ card: { id: KEY, name: "Krea 2" } });
     const wrapper = open();
     await flushPromises();
     expect(getWorkflowCard).toHaveBeenCalledWith(KEY);
-    expect(wrapper.text()).toContain("It runs on any workflow in that stack");
+    expect(wrapper.text()).toContain("Saved to Krea 2.");
+    expect(wrapper.text()).not.toContain("stack");
+  });
+
+  it("pins the checkpoint the run chose (#1623)", async () => {
+    const models = [
+      { address: "core:ckpt/ckpt_name", filename: "realvisxl.safetensors" },
+    ];
+    const wrapper = open({ models });
+    await flushPromises();
+    await wrapper
+      .findAll("button")
+      .find((button) => button.text().includes("Save recipe"))
+      .trigger("click");
+    await flushPromises();
+    const body = createSavedRecipe.mock.calls[0][0];
+    expect(body.workflow_id).toBe(KEY);
+    expect(body.models).toEqual(models);
   });
 
   it("saves exactly the rows that are ticked", async () => {
@@ -111,7 +129,10 @@ describe("SaveRecipeDialog", () => {
 
     expect(createSavedRecipe).toHaveBeenCalledTimes(1);
     const body = createSavedRecipe.mock.calls[0][0];
-    expect(body.workflow_key).toBe(KEY);
+    expect(body.workflow_id).toBe(KEY);
+    expect(body).not.toHaveProperty("workflow_key");
+    // No checkpoint was chosen, so no model is pinned.
+    expect(body).not.toHaveProperty("models");
     expect(body.name).toBe("Cinematic portrait");
     expect(body.prompt).toBe("cinematic portrait of a rainy tram platform");
     expect(body.loras).toEqual([
@@ -372,6 +393,7 @@ describe("SaveRecipeDialog", () => {
     expect(body.overrides).toEqual({ "KSampler/steps": 12 });
     // Not settable on a PATCH, and the recipe does not move between cards.
     expect(body).not.toHaveProperty("workflow_key");
+    expect(body).not.toHaveProperty("workflow_id");
     // A caller that HAS a picture still names it, so the strip above is
     // about a caller with none rather than about replaces in general.
     expect(body.source_picture_id).toBe(7);
@@ -502,7 +524,7 @@ describe("SaveRecipeDialog's LoRA rows", () => {
     return mount(SaveRecipeDialog, {
       props: {
         open: true,
-        workflowKey: KEY,
+        workflowId: KEY,
         suggestedName: "Rainy tram platform",
         prompt: "a rainy tram platform",
         loras: LORAS,
@@ -578,7 +600,7 @@ describe("SaveRecipeDialog's LoRA rows", () => {
     const wrapper = mount(SaveRecipeDialog, {
       props: {
         open: true,
-        workflowKey: KEY,
+        workflowId: KEY,
         suggestedName: "Rainy tram platform",
         prompt: "a rainy tram platform",
         loras: [{ filename: "zero.safetensors", sha256: "d0", strength: 0 }],
@@ -664,14 +686,14 @@ describe("SaveRecipeDialog's LoRA rows", () => {
     expect(push).toHaveBeenCalledWith({
       name: "workflows",
       query: {
-        card: KEY,
+        workflow: KEY,
         edit: "loras",
         drop_lora: "loras/Hairstyle-V3.safetensors",
       },
     });
     expect(wrapper.emitted("close")).toBeTruthy();
     expect(wrapper.emitted("handoff")?.[0]?.[0]).toEqual({
-      workflowKey: KEY,
+      workflowId: KEY,
       filename: "loras/Hairstyle-V3.safetensors",
     });
     // Nothing saved here: the edit is saved as a new workflow over there.

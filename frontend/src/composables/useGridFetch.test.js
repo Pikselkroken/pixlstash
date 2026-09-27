@@ -235,26 +235,26 @@ describe("useGridFetch streaming path", () => {
   // *Show all N pictures* on a workflow card (F7). The chip is set on one
   // screen and read on another, so the half that could rot in silence is this
   // one: the strip would go on showing "Workflow: X" over the whole library.
-  it("sends workflow_key on the stream and count requests when a workflow chip is on", async () => {
+  it("sends workflow on the stream and count requests when a workflow chip is on", async () => {
     getPictureCount.mockResolvedValue({ count: 2 });
     streamPictures.mockResolvedValue({ pictures: [{ id: 51 }, { id: 52 }] });
 
     const { grid } = makeHarness();
-    useFilterStore().workflowFilter = { key: "abc123", name: "Cinematic" };
+    useFilterStore().workflowFilter = { id: "auto:abc123", name: "Cinematic" };
 
     await grid.fetchAllGridImages({ force: true });
 
-    expect(streamPictures.mock.calls[0][0]).toContain("workflow_key=abc123");
-    expect(getPictureCount.mock.calls[0][0]).toContain("workflow_key=abc123");
+    expect(streamPictures.mock.calls[0][0]).toContain("workflow=auto%3Aabc123");
+    expect(getPictureCount.mock.calls[0][0]).toContain("workflow=auto%3Aabc123");
   });
 
-  it("sends the stack and the LoRA for the Workflow tab's *Show N*", async () => {
+  it("sends the workflow and the LoRA for the Workflow tab's *Show N*", async () => {
     getPictureCount.mockResolvedValue({ count: 1 });
     streamPictures.mockResolvedValue({ pictures: [{ id: 51 }] });
 
     const { grid } = makeHarness();
     useFilterStore().workflowFilter = {
-      stack: "auto:core",
+      id: "auto:core",
       lora: "asset:feed",
       name: "Ada in Cinematic",
     };
@@ -265,19 +265,20 @@ describe("useGridFetch streaming path", () => {
       streamPictures.mock.calls[0][0],
       getPictureCount.mock.calls[0][0],
     ]) {
-      expect(url).toContain("workflow_stack=auto%3Acore");
+      expect(url).toContain("workflow=auto%3Acore");
       expect(url).toContain("workflow_lora=asset%3Afeed");
       expect(url).not.toContain("workflow_key");
+      expect(url).not.toContain("workflow_stack");
     }
   });
 
-  it("omits workflow_key once the chip is removed", async () => {
+  it("omits workflow once the chip is removed", async () => {
     getPictureCount.mockResolvedValue({ count: 1 });
     streamPictures.mockResolvedValue({ pictures: [{ id: 61 }] });
 
     const { grid } = makeHarness();
     const filterStore = useFilterStore();
-    filterStore.workflowFilter = { key: "abc123", name: "Cinematic" };
+    filterStore.workflowFilter = { id: "auto:abc123", name: "Cinematic" };
     // What the chip's × does, through the same list the strip draws from.
     filterChips(filterStore)
       .find((chip) => chip.key === "workflow")
@@ -286,8 +287,8 @@ describe("useGridFetch streaming path", () => {
     await grid.fetchAllGridImages({ force: true });
 
     expect(filterStore.workflowFilter).toBeNull();
-    expect(streamPictures.mock.calls[0][0]).not.toContain("workflow_key");
-    expect(getPictureCount.mock.calls[0][0]).not.toContain("workflow_key");
+    expect(streamPictures.mock.calls[0][0]).not.toContain("workflow=");
+    expect(getPictureCount.mock.calls[0][0]).not.toContain("workflow=");
   });
 
   // "No character" and "In no set" are independent (#1488): each alone narrows

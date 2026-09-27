@@ -135,27 +135,22 @@ const STORES = [
   {
     // v1.12 F1a, the Workflows grid. The cards are hub-side facts about this
     // machine, but every count on them is read across the ACTIVE library's
-    // pictures, a card's covers are thumbnail URLs of those pictures, and an
-    // open stack's members were read one owner-only detail request at a time.
+    // pictures, and a card's covers are thumbnail URLs of those pictures.
     // None of it may survive a credential change. The sort key is kept - it is
     // the user's own preference and names nothing.
     name: "useWorkflowsStore",
     use: useWorkflowsStore,
     seed: (s) => {
-      s.cards = [{ key: "a".repeat(64), picture_count: 12, member_keys: [] }];
+      s.cards = [{ id: "auto:" + "a".repeat(64), picture_count: 12 }];
       s.hidden = 3;
-      s.members = { ["a".repeat(64)]: [{ key: "a".repeat(64) }] };
-      s.openStackKey = "a".repeat(64);
-      s.selectedKeys = ["a".repeat(64)];
+      s.selectedKeys = ["auto:" + "a".repeat(64)];
       s.loaded = true;
     },
     isEmpty: (s) =>
       s.cards.length === 0 &&
       !s.loaded &&
       s.hidden === 0 &&
-      s.openStackKey === null &&
-      s.selectedKeys.length === 0 &&
-      Object.keys(s.members).length === 0,
+      s.selectedKeys.length === 0,
   },
   {
     // #1440: what a pull from the owner's ComfyUI found - its URL, the node
@@ -474,7 +469,6 @@ describe("the store matrix is complete", () => {
     "useGenStackPrefsStore.js": "localStorage view preference",
     "useGridStore.js": "grid layout and display toggles",
     "useNoticeStore.js": "transient toast queue",
-    "useWorkflowPrefsStore.js": "localStorage Grid | List preference",
     "useScrapheapRetentionStore.js":
       "server-level policy from server-config.json, identical for every " +
       "credential - no scope dimension, so nothing to leak between them",

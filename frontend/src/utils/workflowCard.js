@@ -1,13 +1,17 @@
 // Pure helpers behind WorkflowCard and ChipRow, kept out of the components so
 // the fitting arithmetic and the accessible name are testable without layout.
 //
-// THE CARD SHAPE. One card as `GET /workflows` will serve it (plan §6.4,
-// step B3). It is **snake_case, like every other response this app reads**, and
-// a slot's `mark` uses B1's own vocabulary (#1390: `structural` | `recipe`), so
-// nothing translates between the two and inverts a meaning on the way:
+// THE CARD SHAPE. One card as `GET /workflows` serves it: ONE PER WORKFLOW
+// since #1623, keyed by `id`. It is **snake_case, like every other response
+// this app reads**:
 //
 //   {
-//     key, name, type, type_label, imported, hidden,
+//     id,                               // the workflow: `auto:<core hash>`,
+//                                       // or a manual group's uuid hex. Every
+//                                       // `/workflows/{id}/…` route, the Run
+//                                       // body's `workflow_id` and the picture
+//                                       // grid's `workflow=` filter take it
+//     name, type, type_label, imported, hidden,
 //                                       // `hidden` is only ever true when the
 //                                       // grid asked for the hidden cards
 //                                       // (F7's *Hidden: Show*), and
@@ -19,7 +23,7 @@
 //                                       // name row and the type chip both
 //                                       // read it, so one fact has one voice
 //     models: [{ name, title, icon, base_model, base_model_folded, kind,
-//               quant, mark, slot_label }],
+//               quant, slot_label }],   // the workflow's BASE card's
 //                                       // EVERY key is always present: these
 //                                       // are Pydantic defaults, so an
 //                                       // absent value arrives as null and
@@ -61,26 +65,26 @@
 //                                       // marks are drawn out of these
 //                                       // (#1485). Usually all null
 //     loras:  [{ name, title, icon, base_model, base_model_folded, kind,
-//               quant, mark, slot_label }],
-//                                       // "structural" = in the workflow
-//                                       // (a mark), "recipe" = a slot the
-//                                       // recipe fills (drawn as the pile
-//                                       // of `recipe_loras`).
-//                                       // `slot_label` is the address
-//                                       // `PUT /workflows/{key}/slots` marks
-//     recipe_loras: [{ name, recipes, character_id, character_name }],
-//                                       // every LoRA the card's recipes put
-//                                       // in its recipe slots, most used
-//                                       // first; `recipes` is how many.
-//                                       // `character_id` is null for a LoRA
-//                                       // attached to no one character
-//     differs_by: [string],             // a stack member: its chips against
-//                                       // the cover; empty on the cover
-//     differs_by_detail: {chip: string},// what a chip stands for (#1597):
-//                                       // "+ ImageScaleBy · − LoraLoader"
-//                                       // for "N nodes differ", "Krea 2 →
-//                                       // Flux Dev" for "other checkpoint".
-//                                       // Only chips with more to say
+//               quant, slot_label }],   // the base card's LoRA loaders
+//     recipe_values: { checkpoints: [{ name, pictures }],
+//                      loras: [{ name, pictures }] },
+//                                       // the checkpoint and LoRA filenames
+//                                       // the workflow's kept pictures used,
+//                                       // most used first. `name` is what the
+//                                       // picture grid's `comfyui_model` /
+//                                       // `comfyui_lora` filters take
+//     default_recipe: null | { sampled, models: [{ address, kind, filename,
+//                      provenance }], loras: [{ filename, sha256, strength,
+//                      provenance }], values: [default], stages: { upscale,
+//                      face_detailer } },
+//                                       // NULL ON THE GRID; filled on the
+//                                       // detail read and on write answers.
+//                                       // `models[].address` is what a run's
+//                                       // `models` pin names
+//     base_topology, topologies: [string],
+//                                       // every graph shape the workflow
+//                                       // holds, sorted; one of them is what
+//                                       // `POST /workflows/{id}/split` takes
 //     picture_count, rating,            // rating 1-5; 0 or null is unrated
 //     covers: [{ url, picture_id, thumbnail_width, thumbnail_height,
 //                square_crop_x, square_crop_y, square_crop_side }],
@@ -108,21 +112,6 @@
 //                                       // has read the card's document for
 //                                       // it yet, [] means it has and the
 //                                       // graph carries none
-//     stack_size,                       // 2 or more makes the card a stack
-//     member_keys,                      // the stack's OTHER cards, so it is
-//                                       // `stack_size - 1` long. The service
-//                                       // sets the whole list INCLUDING this
-//                                       // card; `routes/workflows.py` is what
-//                                       // excludes self on the way out, and
-//                                       // fills it for a stack only.
-//     members: [{ key, name, sets_apart, differs_by, differs_by_detail }],
-//                                       // the WHOLE stack in its order, this
-//                                       // card included; [] outside one.
-//                                       // Members often share a generated
-//                                       // `name`, so `sets_apart` is what
-//                                       // each loads that not every member
-//                                       // does, and `differs_by` its chips
-//                                       // against the cover ([] on it)
 //     saved_recipe_count,
 //     defaults: [{ label, slot_label, input_name, value, provenance }],
 //                                       // `provenance` is best | all | edited
@@ -133,11 +122,6 @@
 //                                       // smoothed towards the library mean,
 //                                       // so it orders cards against each
 //                                       // other and means nothing alone.
-//     stack_id,                         // the stack this card sits in, or
-//                                       // null. `PUT /workflows/stacks/{id}/
-//                                       // order` is addressed by it and
-//                                       // nothing else on the card derives
-//                                       // it (F2, #1405).
 //     ghosts, model_ghosts,             // what the card keeps of something
 //                                       // deleted, for F7's Ghosts row.
 //                                       // `ghosts` are this library's picture
@@ -162,13 +146,10 @@
 //   }
 //
 // A card row names the BASE MODEL only (checkpoint, or the unet a Flux or SD3
-// graph carries instead); ⓘ lists every model, so a stack whose difference is
-// "other models" always has the models behind it.
+// graph carries instead); ⓘ lists every model.
 
 import { quantBadge } from "./modelShelf.js";
 import { cropImgStyle } from "./squareCrop.js";
-
-const RECIPE = "recipe";
 
 /**
  * The aspect ratio of one cover cell, by how many pictures the strip holds.
@@ -185,17 +166,14 @@ const RECIPE = "recipe";
  *
  * These are the shapes the tracks would make with NO gap between them. The
  * `--space-1` gap comes out of the cells rather than out of the box, so a real
- * cell is a little narrower than its share: 0.8% on the card's narrowest cell
- * and 2.1% on the stack panel's, whose box is a fixed 96×80 against the same
- * 2px. Not worth a `calc` here — `cropImgStyle` spends the mismatch on a
+ * cell is a little narrower than its share: 0.8% on the card's narrowest
+ * cell. Not worth a `calc` here — `cropImgStyle` spends the mismatch on a
  * couple of cropped pixels rather than on a squeeze, and says so.
  *
- * Both surfaces that draw a strip read this: the card's cover and the stack
- * panel's List row, which draws the same arrangement one size down. It is a
- * hand-copy of arithmetic that lives in two stylesheets, so both are asserted
- * against it - `WorkflowCard.test.js` derives the card's ratios from its own
- * `<style>` block and `StackPanel.test.js` does the same for the row's, and
- * either drifting from this map is a failing test rather than a wrong crop.
+ * It is a hand-copy of arithmetic that lives in the card's stylesheet, so
+ * `WorkflowCard.test.js` derives the card's ratios from its own `<style>`
+ * block, and the two drifting apart is a failing test rather than a wrong
+ * crop.
  *
  * `undefined` for a count that is not 1, 2 or 3, and deliberately no default:
  * both callers cap the strip at three and return early on none, so there is no
@@ -245,10 +223,6 @@ export function fitChipCount(widths, available, gap, moreWidth) {
     fits += 1;
   }
   return Math.min(Math.max(fits, 1), widths.length);
-}
-
-export function isStack(card) {
-  return (card.stack_size ?? 0) > 1;
 }
 
 /**
@@ -365,88 +339,25 @@ export function modelDisplayName(model) {
 const SHORT_TYPE_LABELS = { txt2img: "T2I", img2img: "I2I" };
 
 /**
- * The special-facts row: what a stack member differs by from its cover,
- * otherwise the workflow's type and whether it was imported. `short` spells
- * the type the way the card's chip does (`T2I`).
- *
- * The cover - which is also what the grid draws for a collapsed stack - has no
- * chips of its own, so it falls through to the type like a lone card rather
- * than leaving its row empty.
+ * The special-facts row: the workflow's type and whether it was imported.
+ * `short` spells the type the way the card's chip does (`T2I`).
  */
-export function differsBy(card) {
-  return isStack(card) && Boolean(card.differs_by?.length);
-}
-
-/** A chip as it is spoken: its label, then what it stands for, if known. */
-export function chipSpoken(label, details) {
-  const detail = details?.[label];
-  return detail ? `${label} (${detail})` : label;
-}
-
 export function factChips(card, { short = false } = {}) {
-  const labels = differsBy(card)
-    ? // **First, and on a stack too.** A hidden card is only ever drawn
-      // because somebody chose *Hidden: Show* (F7), and the row
-      // clips to "+N" — a mark that can be clipped away is a card that reads
-      // as an ordinary one in the grid it was deliberately kept out of.
-      [card.hidden ? "hidden" : null, ...(card.differs_by ?? [])].filter(
-        Boolean,
-      )
-    : [
-        card.hidden ? "hidden" : null,
-        ...(card.differs_by ?? []),
-        // The SERVED label, so the chip and a generated name say the type in
-        // one vocabulary rather than reading `Text to Image` on row 1 and
-        // `txt2img` on row 4 - or its abbreviation, which a generated name
-        // already spells out in full. Falls back to the token for a payload
-        // that predates `type_label`.
-        (short && SHORT_TYPE_LABELS[card.type]) || card.type_label || card.type,
-        card.imported ? "imported" : null,
-      ].filter(Boolean);
-  // The detail is a hover `title` only: every chip row is aria-hidden, and
-  // `cardAccessibleName` speaks it through `chipSpoken` instead.
-  return labels.map((label, i) => ({
-    key: `fact-${i}`,
-    label,
-    fact: true,
-    title: card.differs_by_detail?.[label],
-  }));
-}
-
-/**
- * One recipe LoRA as the card names it: its character's, where it has one,
- * because that is who the pile shows. A character with several LoRAs in
- * `all` (two versions, say) draws the same face for each, so there the
- * LoRA's own name - which is where a version lives - follows the character's.
- */
-export function recipeLoraLabel(lora, all = []) {
-  if (!lora.character_name) return lora.name;
-  const shared = all.filter(
-    (other) => other.character_id === lora.character_id,
-  ).length;
-  return shared > 1
-    ? `${lora.character_name} · ${lora.name}`
-    : `${lora.character_name}'s LoRA`;
-}
-
-/**
- * Row 3's count of what the recipe slots have held, people apart from the
- * rest: "3 characters", "1 character + 1 recipe LoRA", "1 recipe LoRA". ""
- * for none, so the caller can fall back to counting the slot itself.
- */
-export function recipeLoraCount(recipeLoras) {
-  const people = new Set(
-    recipeLoras
-      .filter((lora) => lora.character_id != null)
-      .map((lora) => lora.character_id),
-  ).size;
-  const rest = recipeLoras.filter((lora) => lora.character_id == null).length;
-  return [
-    people ? (people === 1 ? "1 character" : `${people} characters`) : "",
-    rest ? (rest === 1 ? "1 recipe LoRA" : `${rest} recipe LoRAs`) : "",
-  ]
-    .filter(Boolean)
-    .join(" + ");
+  const labels = [
+    // **First.** A hidden card is only ever drawn because somebody chose
+    // *Hidden: Show* (F7), and the row clips to "+N" — a mark that can be
+    // clipped away is a card that reads as an ordinary one in the grid it was
+    // deliberately kept out of.
+    card.hidden ? "hidden" : null,
+    // The SERVED label, so the chip and a generated name say the type in
+    // one vocabulary rather than reading `Text to Image` on row 1 and
+    // `txt2img` on row 4 - or its abbreviation, which a generated name
+    // already spells out in full. Falls back to the token for a payload
+    // that predates `type_label`.
+    (short && SHORT_TYPE_LABELS[card.type]) || card.type_label || card.type,
+    card.imported ? "imported" : null,
+  ].filter(Boolean);
+  return labels.map((label, i) => ({ key: `fact-${i}`, label, fact: true }));
 }
 
 /** "4.9 of 5", or null when nothing is rated (0 or missing). */
@@ -456,32 +367,18 @@ export function ratingLabel(rating) {
 
 /**
  * The card's accessible name. "+N" is not a control, so this is the only place
- * a screen reader hears the chips a narrow card clipped, and it says "workflow"
- * or "recipe" because which kind a mark is shows only by where it sits.
- *
- * `member` is a row inside its own stack's panel. It carries the WHOLE stack's
- * `stack_size` — the service sets it on every member deliberately, so a member
- * opened alone still shows what it differs by — so without this every row in
- * the panel announced itself as "stack of N workflows" while sitting inside
- * that very stack. The difference chips stay: they are what the row is for.
+ * a screen reader hears the chips a narrow card clipped.
  */
-export function cardAccessibleName(card, { member = false } = {}) {
+export function cardAccessibleName(card) {
   const count = card.picture_count ?? 0;
   const checkpoint = checkpointModel(card);
-  const cast = (card.recipe_loras ?? []).map((lora, _, all) =>
-    recipeLoraLabel(lora, all),
-  );
   const loras = (card.loras ?? []).map((lora) => {
-    if (lora.mark === RECIPE) return "recipe LoRA slot";
     const quant = quantBadge(lora.quant);
     return `${modelDisplayName(lora)}, ${quant ? `${quant.title}, ` : ""}workflow LoRA`;
   });
-  const facts = factChips(card).map((chip) =>
-    chipSpoken(chip.label, card.differs_by_detail),
-  );
+  const facts = factChips(card).map((chip) => chip.label);
   const parts = [
     card.name,
-    isStack(card) && !member ? `stack of ${card.stack_size} workflows` : null,
     // The precision is SPOKEN, not just drawn. Every chip on the card is
     // `aria-hidden` and this string is the whole of what a screen reader gets,
     // so a badge left out here is a badge that does not exist for that reader -
@@ -506,78 +403,9 @@ export function cardAccessibleName(card, { member = false } = {}) {
       : lorasUnread(card)
         ? "LoRAs not read"
         : "no LoRAs",
-    cast.length ? `recipe LoRAs used: ${cast.join("; ")}` : null,
-    facts.length
-      ? `${differsBy(card) ? "differs by" : "facts"}: ${facts.join(", ")}`
-      : null,
+    facts.length ? `facts: ${facts.join(", ")}` : null,
     count === 1 ? "1 picture" : `${count} pictures`,
     ratingLabel(card.rating) ? `rated ${ratingLabel(card.rating)}` : null,
   ];
   return parts.filter(Boolean).join(", ");
-}
-
-// The chips that only say a model differs, which `sets_apart` already names.
-const MODEL_CHIPS = new Set(["other checkpoint", "other models"]);
-
-/** What sets a member apart: the models only it loads, then its chips. */
-function memberApart(member) {
-  const models = member.sets_apart || [];
-  const chips = (member.differs_by || []).filter(
-    (chip) => !models.length || !MODEL_CHIPS.has(chip),
-  );
-  return [...models, ...chips];
-}
-
-/**
- * Rows that still read alike are numbered, as the Pictures rows are. `field`
- * is numbered wherever `drawn` (what that row shows) ties with another row's.
- */
-function numberAlike(rows, field, drawn) {
-  const total = {};
-  for (const row of rows) total[drawn(row)] = (total[drawn(row)] || 0) + 1;
-  const seen = {};
-  return rows.map((row) => {
-    const key = drawn(row);
-    if (total[key] < 2) return row;
-    seen[key] = (seen[key] || 0) + 1;
-    return { ...row, [field]: `${row[field]} (${seen[key]})` };
-  });
-}
-
-/**
- * A stack's members as picker options, in the stack's order: members often
- * share a generated name, so each says what sets it apart from the others.
- *
- * `label` is the one-line "Name — what sets it apart" a native select shows.
- * `name`, `chips` and `group` are the two-line row (#1525): the name, then
- * what sets it apart as chips, the cover marked "Cover", under one heading
- * for the stack. `AppSelect` draws that row for any option carrying `chips`.
- */
-export function stackMemberOptions(members) {
-  const list = members || [];
-  const group = `This stack · ${list.length} workflows`;
-  const rows = list.map((member, index) => {
-    const apart = memberApart(member);
-    return {
-      value: member.key,
-      label: apart.length
-        ? `${member.name} — ${apart.join(", ")}`
-        : member.name,
-      name: member.name,
-      // Index 0 is the cover: the server lists the stack in its own order.
-      chips: index === 0 ? ["Cover", ...apart] : apart,
-      // What a chip stands for, keyed by the chip: `AppSelect` hovers it and
-      // speaks it in the option's accessible name.
-      chipDetails: member.differs_by_detail || {},
-      group,
-    };
-  });
-  // Each line is numbered on what it shows: the one-line `label` where two
-  // labels tie, the two-line `name` only where the chips under it tie too
-  // (a cover and a member alike but for the "Cover" chip already differ).
-  return numberAlike(
-    numberAlike(rows, "label", (row) => row.label),
-    "name",
-    (row) => `${row.name}\n${row.chips.join("\n")}`,
-  );
 }

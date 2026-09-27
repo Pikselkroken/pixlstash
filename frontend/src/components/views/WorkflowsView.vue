@@ -269,67 +269,22 @@
         @keydown="onKeyDown"
       >
         <template v-for="(entry, index) in flatRows" :key="entry.id">
-          <!-- The panel is drawn once, in the slot its FIRST member holds; the
-             rest of the member entries are index space only, and the rows they
-             name live inside it. -->
-          <StackPanel
-            v-if="entry.kind === 'member' && entry.memberIndex === 0"
-            ref="panelRef"
-            :panel-id="panelId"
-            :name="openStackName"
-            :members="store.openMembers"
-            :size="store.openStackSize"
-            :loading="store.membersLoading"
-            :columns="columns"
-            :column-index="openColumnIndex"
-            :selected-keys="store.selectedKeys"
-            :selected="openStackSelected"
-            :cursor-key="cursorKey"
-            :can-reorder="Boolean(store.openStackId)"
-            :closing="store.panelClosing"
-            @collapsed="store.finishCollapse"
-            @close="closePanel"
-            @select="(key, event) => onRowClick(memberRowIndex(key), event)"
-            @make-cover="(key) => followMove(key, store.makeCover(key))"
-            @move="(key, delta) => moveMember(key, delta)"
-            @unstack="store.unstackMember"
-            @hide="store.hideMember"
-            @open-picture="openPicture"
-          />
           <div
-            v-else-if="entry.kind === 'card'"
             class="wfv-row"
             role="row"
             aria-level="1"
             :aria-selected="cardSelected(entry.key)"
-            :aria-expanded="
-              isStack(entry.card)
-                ? String(store.openStackKey === entry.key)
-                : undefined
-            "
-            :aria-controls="
-              isStack(entry.card) && store.openStackKey === entry.key
-                ? panelId
-                : undefined
-            "
-            :aria-owns="
-              store.openStackKey === entry.key ? memberRowIds : undefined
-            "
             :aria-posinset="entry.cardIndex + 1"
             :aria-setsize="store.sortedCards.length"
             :tabindex="index === cursorIndex ? 0 : -1"
             :data-key="entry.key"
             @click="onRowClick(index, $event)"
-            @dblclick="isStack(entry.card) && store.toggleStack(entry.key)"
             @contextmenu.prevent="openRowMenu(index, $event)"
           >
             <div class="wfv-cell" role="gridcell">
               <WorkflowCard
                 :card="entry.card"
                 :selected="cardSelected(entry.key)"
-                :expanded="store.openStackKey === entry.key"
-                :panel-id="store.openStackKey === entry.key ? panelId : ''"
-                @toggle="store.toggleStack(entry.key)"
                 @run="runCard(entry.card)"
               />
             </div>
@@ -361,10 +316,9 @@
         @menu-closed="focusCursorRow"
         @open-cover="openCoverPicture"
         @run="runSelected"
-        @stack="stackSelected"
-        @unstack="unstackSelected"
+        @merge="mergeSelected"
+        @split="splitSelected"
         @rename="startRename"
-        @make-cover="makeCoverOfSelected"
         @hide="hideSelected"
         @export="exportSelected"
         @duplicate="duplicateSelected"
@@ -375,8 +329,7 @@
 
     <!-- Rename needs somewhere to type, and the card has nowhere: its name row
          is one line of four in a fixed block, and an inline field there would
-         reflow the card it is editing. One small dialog instead — the same
-         shape `StackPanel` said its member menu was missing. -->
+         reflow the card it is editing. One small dialog instead. -->
     <!-- `closeRename`, not `renameOpen = false`: a dialog closing has the same
          debt the context menu has — focus lands wherever the teleported
          surface left it, which is outside the grid. -->
@@ -409,7 +362,7 @@
 
     <CloneWithModelsDialog
       :open="cloneOpen"
-      :workflow-key="cloneKey"
+      :workflow-id="cloneKey"
       :card-name="cloneName"
       @close="closeClone"
       @cloned="clonedWithModels"
@@ -422,23 +375,10 @@
  * The Workflows grid (v1.12 Workflows & Recipes, F1a) — on `/workflows` since
  * F1b retired the shelf. See `docs/frontend_architecture.md` §5.
  *
- * THE PANEL FOLLOWS THE SELECTION ONCE THE READER IS BROWSING STACKS
- * (`useWorkflowsStore.syncPanelToSelection`) — a click is never the way IN. ▸,
- * Enter and a double-click on the card are still the only ones, because a plain
- * click is a selection and not a request to look inside. Afterwards, selecting
- * another stack moves the band there and selecting anything outside the open
- * stack takes it off the screen — and the MODE outlives the band, so the next
- * stack picked opens with no second double-click. Both transitions animate,
- * which is why the store holds the open key until the panel reports its
- * collapse finished.
+ * One card per workflow, keyed by its `id` (#1623). The cards are one flat
+ * index space for the roving cursor: `index ± columns` is the row above or
+ * below.
  *
- * ONE FLAT LIST. The cards, and — while a stack is open — its members, are one
- * index space, so the roving cursor crosses the panel boundary with the same
- * `index ± columns` arithmetic it uses inside the grid. The members are
- * inserted at the END of the open stack's row and padded to a whole number of
- * rows, which is where the panel sits in the DOM: that, and only that, is what
- * makes `index % columns` the column a row is drawn in on both sides of the
- * boundary. The padding entries are holes the cursor skips.
  */
 import {
   computed,
@@ -460,16 +400,13 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useWorkflowPullStore } from "../../stores/useWorkflowPullStore";
-import { useWorkflowPrefsStore } from "../../stores/useWorkflowPrefsStore";
 import {
   SORT_KEYS,
   SORT_LABELS,
   useWorkflowsStore,
 } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
-import { isStack } from "../../utils/workflowCard";
 import FilterStrip from "../panels/FilterStrip.vue";
-import StackPanel from "../panels/StackPanel.vue";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import WorkflowFilterMenu from "../panels/WorkflowFilterMenu.vue";
 import WorkflowPullSummary from "../panels/WorkflowPullSummary.vue";
@@ -507,7 +444,6 @@ const emit = defineEmits(["open-settings"]);
 
 const store = useWorkflowsStore();
 const filterStore = useFilterStore();
-const prefs = useWorkflowPrefsStore();
 const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
 const pull = useWorkflowPullStore();
@@ -517,9 +453,6 @@ const route = useRoute();
 const { confirm } = useConfirm();
 
 const gridEl = ref(null);
-// `v-for`'d, so Vue hands back an array even though only one panel is ever
-// drawn — one stack is open at a time.
-const panelRef = ref(null);
 const fileInput = ref(null);
 const pullButton = ref(null);
 const selBarRef = ref(null);
@@ -530,8 +463,7 @@ const renameOpen = ref(false);
 const renameDraft = ref("");
 const columns = ref(1);
 // **The cursor is an entry id, not an index.** `flatRows` is rebuilt by a
-// resort, by a stack opening and by one closing, and an index held across any
-// of those names a different card — or, when the list shrinks, no card at all,
+// resort and by a refetch, and an index held across either names a different card — or, when the list shrinks, no card at all,
 // which takes the grid's only tab stop with it and strands a keyboard user
 // outside a screen they cannot get back into.
 const cursorId = ref("");
@@ -542,7 +474,6 @@ const linkMissed = ref(false);
 const linkFiltered = ref(false);
 const watchedFolder = ref(null);
 
-const panelId = "wfv-stack-panel";
 const sortOptions = SORT_KEYS.map((key) => ({
   id: key,
   label: SORT_LABELS[key].label,
@@ -588,141 +519,29 @@ const subtitle = computed(() => {
 });
 
 /**
- * The cards, with the open stack's members spliced in at its row's end.
- *
- * `{kind: "card"|"member"|"hole", id, key, card, memberIndex?}`. `id` is unique
- * where `key` is not: a stack's COVER is drawn twice — once as the grid's stack
- * card and once, flagged, as the panel's first member — so the two rows share
- * a card key and must not share a `v-for` key or a lookup. `hole` pads the
- * member block out to whole rows, so every card after the panel keeps naming
- * the column it is drawn in.
+ * The cards as the cursor walks them: `{kind: "card", id, key, card,
+ * cardIndex}`, where `key` is the workflow id and `id` the row's own.
  */
-const flatRows = computed(() => {
-  const cards = store.sortedCards.map((card, cardIndex) => ({
+const flatRows = computed(() =>
+  store.sortedCards.map((card, cardIndex) => ({
     kind: "card",
-    id: `card:${card.key}`,
-    key: card.key,
+    id: `card:${card.id}`,
+    key: card.id,
     card,
     cardIndex,
-  }));
-  const openKey = store.openStackKey;
-  if (!openKey) return cards;
-  const at = cards.findIndex((entry) => entry.key === openKey);
-  if (at < 0) return cards;
-  const cols = Math.max(1, columns.value);
-  const rowEnd = (Math.floor(at / cols) + 1) * cols;
-  // **The stack's own row is padded to whole first**, not just the member
-  // block. A stack in the last, INCOMPLETE row would otherwise splice the
-  // block in at `cards.length`, which is not a multiple of `cols`, and from
-  // there `index % columns` stops naming the column a row is drawn in: six
-  // cards over four columns put the block at index 6, so Down from the stack
-  // card landed on a hole with nothing below it and the panel could not be
-  // reached by keyboard at all.
-  const head = cards.slice(0, rowEnd);
-  while (head.length < rowEnd) {
-    head.push({ kind: "hole", id: `hole:head:${head.length}` });
-  }
-  const members = store.openMembers;
-  const block = members.map((card, memberIndex) => ({
-    kind: "member",
-    id: `member:${card.key}`,
-    key: card.key,
-    card,
-    memberIndex,
-  }));
-  const padded = Math.ceil(Math.max(block.length, 1) / cols) * cols;
-  while (block.length < padded) {
-    block.push({ kind: "hole", id: `hole:block:${block.length}` });
-  }
-  return [...head, ...block, ...cards.slice(rowEnd)];
-});
-
-/** The open stack card's column, for the panel's notch. */
-const openColumnIndex = computed(() => {
-  const at = flatRows.value.findIndex(
-    (entry) => entry.kind === "card" && entry.key === store.openStackKey,
-  );
-  return at < 0 ? 0 : at % Math.max(1, columns.value);
-});
-
-const openStackName = computed(
-  () =>
-    store.cards.find((card) => card.key === store.openStackKey)?.name ||
-    "Stack",
+  })),
 );
 
-/**
- * Whether the open stack is selected WHOLE — every one of its cards.
- *
- * The panel wears the mark then, and its rows wear none: the stack is the thing
- * that was selected. `every`, not `some`: one member of three is not this
- * stack, and only the rows can say which one it is.
- *
- * Computed from the stack's own key set rather than from the rows on screen, so
- * a member request still in flight — or one that failed — cannot make a fully
- * selected stack read as a partly selected one. Both readers of this also
- * require a stack to be open, so the vacuous `true` an empty key set would give
- * reaches nothing and is not guarded against.
- */
-const openStackSelected = computed(() =>
-  store
-    .stackKeys(store.openStackKey)
-    .every((key) => store.selectedKeys.includes(key)),
-);
-
-/**
- * Whether the GRID's card for `key` wears the mark.
- *
- * **A cover key names two rows**, the grid's stack card and the panel's first
- * member row, and only while the panel is open is the second of them on
- * screen. From that moment the grid's card stands for the whole stack and
- * nothing less: marking it on the key alone made selecting the top workflow —
- * the one gesture that reaches the cover as an individual — light the stack
- * card up as well, so the reader could not tell "this workflow" from "this
- * stack" and the stack's own row was the one card in the panel they could not
- * pick out.
- *
- * Closed, the card is the cover's only row, so the key is the whole answer;
- * that is also what keeps the `?topology=` deep link, which selects one cover
- * key, visibly landing somewhere.
- */
+/** Whether the card for workflow `key` wears the selection mark. */
 function cardSelected(key) {
-  if (store.openStackKey !== key) return store.selectedKeys.includes(key);
-  return openStackSelected.value;
+  return store.selectedKeys.includes(key);
 }
 
 /** Where the cursor is now. Always a real row: it falls back to the first. */
 const cursorIndex = computed(() => {
   const at = flatRows.value.findIndex((entry) => entry.id === cursorId.value);
-  return at >= 0 ? at : (firstStop(0, 1) ?? 0);
+  return at >= 0 ? at : 0;
 });
-
-/** The cursor's key when it is inside the panel, else "". */
-const cursorKey = computed(() => {
-  const entry = flatRows.value[cursorIndex.value];
-  return entry?.kind === "member" ? entry.key : "";
-});
-
-/**
- * The member rows' DOM ids, for the stack row's `aria-owns`.
- *
- * **This is what makes the treegrid true.** The panel is a full-width band
- * after the LAST card of the stack's row, so in DOM order the member rows
- * follow whichever card ends that row, not the expanded one — and a reader on
- * the stack card pressing Down would be handed its right-hand neighbour
- * instead of its children. `aria-owns` re-parents them in the accessibility
- * tree without moving a pixel, which is the one thing it is for.
- */
-const memberRowIds = computed(() =>
-  store.openMembers.map((card) => `${panelId}-row-${card.key}`).join(" "),
-);
-
-/** Where one of the panel's member rows sits in the flat list. */
-function memberRowIndex(key) {
-  return flatRows.value.findIndex(
-    (entry) => entry.kind === "member" && entry.key === key,
-  );
-}
 
 // ── Columns from the real container width ─────────────────────────────────
 // The count the grid is TOLD to draw, so `auto-fill` cannot disagree with the
@@ -772,8 +591,8 @@ const parked = store.unpark();
  * than waiting for a change that may never come.
  *
  * By ID, never by index: `flatRows` is rebuilt by the refetch this mount
- * fires, and an index held across it names a different card or a hole. Once
- * applied it stops, so a later refetch — a file added, a LoRA slot flipped —
+ * fires, and an index held across it names a different card. Once
+ * applied it stops, so a later refetch — a file added, a workflow renamed —
  * does not yank the cursor back to where the reader was ten minutes ago.
  */
 let placeRestored = false;
@@ -820,20 +639,15 @@ const watchedPath = computed(
 
 // ── Arriving from a picture's Recipe section (#1313) ──────────────────────
 //
-// `?topology=<hash>` selects the card that topology made and puts the cursor
-// on it, so the link from the lightbox lands on the card rather than at the
-// top of the grid. A topology can hold several cards — a different checkpoint
-// is a different card — so the FIRST in the sorted order is taken: it is the
-// one the reader would have found first anyway.
+// `?topology=<hash>` selects the workflow holding that topology (one of its
+// card's `topologies`) and puts the cursor on it, so the link from the
+// lightbox lands on the card rather than at the top of the grid.
 //
 // **It can only reach the cards the GRID lists, and that is not every card.**
 // `GET /workflows` leaves out the hidden ones and the one-offs (under
 // three pictures, unrated, not imported, no saved recipe) — which is the
 // ordinary state of a workflow used once, and exactly when "what made this?"
-// is worth asking. A stack is one card here too, grouped by `core_hash`, which
-// strips post-processing, so a member can carry a topology its cover does not.
-// The shelf had no such gap, listing every topology as a row of its own, and
-// closing it needs a topology→card read the API does not have.
+// is worth asking.
 //
 // So a miss SAYS SO rather than doing nothing. Dropping the reader at the top
 // of a grid that does not contain what they clicked, with no word about it, is
@@ -842,7 +656,7 @@ const watchedPath = computed(
 // replaces this link with the card's own *Show all N pictures* chip.
 //
 // Honoured once per value rather than on every `cards` change, because the
-// grid is refetched (a file is added, a LoRA slot is flipped) while the query
+// grid is refetched (a file is added, a workflow renamed) while the query
 // string stays put, and a second application would take focus back off
 // whatever the reader had moved to. `immediate` because the store's cards
 // outlive a route change: a second visit on the same link has nothing left to
@@ -876,8 +690,8 @@ watch(
     // Nothing to say until the grid has been read: "not here" is false while
     // the answer is still on the wire.
     if (!store.loaded) return;
-    const card = store.sortedCards.find(
-      (entry) => entry.topology_hash === wanted,
+    const card = store.sortedCards.find((entry) =>
+      (entry.topologies ?? []).includes(wanted),
     );
     // **The verdict is read off the payload, not off what is drawn.** With a
     // client-side filter on, `sortedCards` can be missing a card the answer
@@ -885,8 +699,8 @@ watch(
     // reader looking for a workflow that is one × away. The two are different
     // states with different ways out, so they are said differently.
     if (!card) {
-      const filtered = store.cards.some(
-        (entry) => entry.topology_hash === wanted,
+      const filtered = store.cards.some((entry) =>
+        (entry.topologies ?? []).includes(wanted),
       );
       if (filtered) {
         announcement.value =
@@ -906,9 +720,9 @@ watch(
     honouredTopology = wanted;
     linkMissed.value = false;
     linkFiltered.value = false;
-    store.select(card.key);
+    store.select(card.id);
     // The one deep link that lands on a selection: it opens the inspector,
-    // without persisting it, as `?card=` and `?tab=recipes` do.
+    // without persisting it, as `?workflow=` and `?tab=recipes` do.
     sidebarStore.openWorkflowInspector();
     // Not while the reader is inside a popover or the file dialog: the cards
     // arrive asynchronously, so this can fire a second after the screen went
@@ -917,15 +731,13 @@ watch(
     // same flag.
     //
     // The row is looked up BY ID inside the callback, never as an index
-    // computed out here: `flatRows` is rebuilt by a resort, by a stack opening
-    // and by `columns` landing — which it does between setup and this tick,
-    // since `measure()` runs as a pre-flush job — and an index held across any
-    // of those names a different card, or a `hole`. That is the whole reason
-    // the cursor is an id (see `cursorId`).
+    // computed out here: `flatRows` is rebuilt by a resort and by a refetch,
+    // and an index held across either names a different card. That is the
+    // whole reason the cursor is an id (see `cursorId`).
     if (!sortMenuOpen.value) {
       nextTick(() =>
         moveCursor(
-          flatRows.value.findIndex((entry) => entry.id === `card:${card.key}`),
+          flatRows.value.findIndex((entry) => entry.id === `card:${card.id}`),
         ),
       );
     }
@@ -933,41 +745,33 @@ watch(
   { immediate: true },
 );
 
-// ── Arriving by card key (`?card=<key>`) ─────────────────────────────────
+// ── Arriving by workflow id (`?workflow=<id>`) ───────────────────────────
 //
 // The Run popup's *Open in Workflows* and the lightbox Edit tab's *Open*.
 // `WorkflowTab` selects the card and opens the rail; this half puts the grid's
 // cursor on it, which focuses the row and so scrolls it into view, as
-// `?topology=` does. A stack MEMBER has no grid row of its own, so its stack is
-// opened first and the cursor lands on the member's row in the panel. A key
-// the grid does not list (hidden, a one-off, filtered out) moves nothing: the
-// rail still shows the card, which is the link's answer.
+// `?topology=` does. An id the grid does not list (hidden, a one-off, filtered
+// out) moves nothing: the rail still shows the card, which is the link's
+// answer.
 //
 // Honoured once per value and only on a hit, for the reasons given above.
-let honouredCardKey = null;
+let honouredWorkflowId = null;
 
 watch(
-  [() => route.query?.card, () => store.sortedCards],
-  async ([wanted]) => {
+  [() => route.query?.workflow, () => store.sortedCards],
+  ([wanted]) => {
     if (typeof wanted !== "string" || !wanted) {
-      honouredCardKey = null;
+      honouredWorkflowId = null;
       return;
     }
-    if (honouredCardKey === wanted || !store.loaded) return;
-    let rowId = `card:${wanted}`;
-    if (!store.sortedCards.some((entry) => entry.key === wanted)) {
-      const cover = store.sortedCards.find((entry) =>
-        (entry.member_keys ?? []).includes(wanted),
-      );
-      if (!cover) return;
-      honouredCardKey = wanted;
-      await store.openStack(cover.key);
-      rowId = `member:${wanted}`;
-    }
-    honouredCardKey = wanted;
+    if (honouredWorkflowId === wanted || !store.loaded) return;
+    if (!store.sortedCards.some((entry) => entry.id === wanted)) return;
+    honouredWorkflowId = wanted;
     if (sortMenuOpen.value) return;
     nextTick(() =>
-      moveCursor(flatRows.value.findIndex((entry) => entry.id === rowId)),
+      moveCursor(
+        flatRows.value.findIndex((entry) => entry.id === `card:${wanted}`),
+      ),
     );
   },
   { immediate: true },
@@ -988,8 +792,7 @@ watch(
 
 /** What the closed inspector would describe: a name, `N workflows`, or "". */
 const edgeTabLabel = computed(() => {
-  // `runnableCard` is the one card the inspector describes: the selected
-  // card, or for a stack selected whole the member picked in the inspector.
+  // `runnableCard` is the one card the inspector describes.
   if (store.runnableCard) return store.runnableCard.name ?? "";
   const count = store.selectedKeys.length;
   return count > 1 ? `${count} workflows` : "";
@@ -1012,26 +815,21 @@ function openWatchedFolder() {
   }
 }
 
-// ── Selection and the panel ───────────────────────────────────────────────
+// ── Selection ─────────────────────────────────────────────────────────────
 
 function onRowClick(index, event) {
   const entry = flatRows.value[index];
-  if (!entry || entry.kind === "hole") return;
+  if (!entry) return;
   cursorId.value = entry.id;
   if (event?.shiftKey) selectToCursor(index);
-  else
-    store.select(entry.key, {
-      additive: event?.ctrlKey || event?.metaKey,
-      whole: entry.kind === "card",
-    });
+  else store.select(entry.key, { additive: event?.ctrlKey || event?.metaKey });
 }
 
 /**
- * Every selectable key between the first already-selected row and `index`.
+ * Every card between the first already-selected row and `index`.
  *
  * The anchor is read off the selection rather than remembered, so a Shift-click
- * after a Ctrl-click extends from the topmost of them. Holes are dropped and a
- * cover, which is in the range twice, counts once.
+ * after a Ctrl-click extends from the topmost of them.
  */
 function selectToCursor(index) {
   const anchor = flatRows.value.findIndex((entry) =>
@@ -1039,122 +837,36 @@ function selectToCursor(index) {
   );
   const from = anchor < 0 ? index : anchor;
   const [start, end] = from <= index ? [from, index] : [index, from];
-  // A card row in the range brings its whole stack; a MEMBER row brings only
-  // itself, or a range ending two rows into an open panel would drag the rest
-  // of that stack back in — including members the reader had just Ctrl-clicked
-  // out. Deduplicated because a cover is in the range twice, as the grid's
-  // stack card and as the panel's first member row, and because expanding the
-  // card row already named every member the range then meets.
-  store.selectRange([
-    ...new Set(
-      flatRows.value.slice(start, end + 1).flatMap((entry) => {
-        if (entry.kind === "card") return store.stackKeys(entry.key);
-        return entry.kind === "member" ? [entry.key] : [];
-      }),
-    ),
-  ]);
+  store.selectRange(
+    flatRows.value.slice(start, end + 1).map((entry) => entry.key),
+  );
   // A Shift range can take in a screenful without the cursor passing over
   // most of it, so the count is said the way Ctrl+A's is.
   announceSelection();
 }
 
-/**
- * Close the panel and put the cursor back on the card that opened it.
- *
- * Esc and the panel's own Close come through here. ▸ and the layered count do
- * NOT: those are a click on a card, and the cursor belongs where the reader
- * left it rather than wherever the thing they clicked happened to be.
- */
-function closePanel() {
-  const key = store.openStackKey;
-  store.collapseStack();
-  if (!key) return;
-  const at = flatRows.value.findIndex(
-    (entry) => entry.kind === "card" && entry.key === key,
-  );
-  if (at >= 0) moveCursor(at);
-}
-
-/**
- * A stack opening or closing announces itself: every row below it moves, and a
- * reader who is not on that card hears nothing otherwise.
- *
- * Keyed on `openStackKey` ALONE and counted from `stack_size`, which the cover
- * card already carries. Watching how many members had arrived announced twice
- * — "0 workflows" the moment the panel opened, then the real figure once the
- * detail requests landed — and the first of those was simply wrong.
- *
- * The closing announcement matters as much as the opening one and was missing:
- * the rows move just as far on the way back. The count is part of the string
- * so that reopening the same stack is not a no-op for a reader whose screen
- * reader suppresses an unchanged live region.
- */
-watch(
-  () => store.openStackKey,
-  (key, previous) => {
-    if (key) {
-      const size = store.openStackSize;
-      announcement.value = `${openStackName.value} opened, ${size} workflows`;
-      return;
-    }
-    const closed = store.cards.find((entry) => entry.key === previous);
-    announcement.value = `${closed?.name || "Stack"} closed`;
-    // **The panel can close from under the cursor.** Ctrl-clicking a member
-    // while a card outside the stack is already selected reaches outside the
-    // open stack, which closes it — and the member row the cursor was standing
-    // on goes with it, taking the grid's only tab stop and the focus off the
-    // screen. `closePanel` has already put the cursor back when Esc or Close
-    // did it; this only catches a cursor left naming a row that is gone.
-    if (flatRows.value.some((entry) => entry.id === cursorId.value)) return;
-    const at = flatRows.value.findIndex(
-      (entry) => entry.kind === "card" && entry.key === previous,
-    );
-    if (at >= 0) moveCursor(at);
-  },
-);
-
 // ── The roving cursor ─────────────────────────────────────────────────────
 
-/** First index at or after `index` that is a real row, travelling in `step`. */
-function firstStop(index, step) {
-  for (let i = index; i >= 0 && i < flatRows.value.length; i += step) {
-    const kind = flatRows.value[i]?.kind;
-    if (kind === "card" || kind === "member") return i;
-  }
-  return null;
+/** `index` when it names a row, else null. */
+function rowAt(index) {
+  return index >= 0 && index < flatRows.value.length ? index : null;
 }
 
 /**
- * The row above or below `index`, keeping its column.
- *
- * Steps by WHOLE ROWS over the padding holes, never one index at a time: a
- * stack whose last member row is ragged — five members across four columns —
- * leaves holes in the middle of the index space, and a linear scan walks out
- * of the column the reader is travelling down. Only once the row-wise walk has
- * left the list entirely does it settle for the nearest row in the direction
- * of travel, so the last row stays reachable from every column.
+ * The row above or below the cursor, keeping its column. Past either end it
+ * settles on the first or last card, so the last row stays reachable from
+ * every column.
  */
-function verticalStop(index, cols, direction) {
-  const total = flatRows.value.length;
-  for (let i = index; i >= 0 && i < total; i += direction * cols) {
-    const kind = flatRows.value[i]?.kind;
-    if (kind === "card" || kind === "member") return i;
-  }
-  return firstStop(Math.min(Math.max(index, 0), total - 1), direction);
+function verticalTarget(direction) {
+  const cols = Math.max(1, columns.value);
+  const target = cursorIndex.value + direction * cols;
+  return rowAt(Math.min(Math.max(target, 0), flatRows.value.length - 1));
 }
 
-/**
- * The DOM row for one flat entry.
- *
- * Scoped by kind, not by key: a stack's cover holds the same key twice, once
- * in the grid and once in the panel. A key is arbitrary text, so it is
- * compared rather than spliced into a selector.
- */
+/** The DOM row for one flat entry. Keys are compared, never put in a selector. */
 function rowElement(entry) {
   if (!entry) return undefined;
-  const selector =
-    entry.kind === "member" ? ".stack-panel__member" : ".wfv-row";
-  return Array.from(gridEl.value?.querySelectorAll(selector) ?? []).find(
+  return Array.from(gridEl.value?.querySelectorAll(".wfv-row") ?? []).find(
     (element) => element.dataset.key === entry.key,
   );
 }
@@ -1162,109 +874,15 @@ function rowElement(entry) {
 /** Put the cursor on whichever real row `index` names, if there is one. */
 function moveCursor(index) {
   const entry = flatRows.value[index];
-  if (!entry || entry.kind === "hole") return;
+  if (!entry) return;
   cursorId.value = entry.id;
   nextTick(() => rowElement(entry)?.focus());
-}
-
-/**
- * True while the open panel draws its members one per line.
- *
- * The flat index space does not change with the view — the member block is
- * still padded to whole grid rows, so every card AFTER the panel keeps naming
- * the column it is drawn in. What changes is the STEP: in List a vertical move
- * inside the block is one member, and stepping by `columns` would walk past
- * two of every three.
- */
-const listMembers = computed(
-  () => prefs.stackView === "list" && Boolean(store.openStackKey),
-);
-
-/** Where the first and last member rows sit in the flat list. */
-function memberBounds() {
-  const first = flatRows.value.findIndex((entry) => entry.kind === "member");
-  if (first < 0) return null;
-  let last = first;
-  for (let i = first; i < flatRows.value.length; i += 1) {
-    if (flatRows.value[i].kind === "member") last = i;
-  }
-  return { first, last };
-}
-
-/**
- * The row a vertical arrow should land on.
- *
- * Grid keeps the column, by the whole-row walk `verticalStop` does. List steps
- * one member at a time inside the panel, and **entering** the panel from the
- * grid lands on the member nearest the direction of travel: every member is in
- * the same column there, so "keep your column" has only one answer.
- */
-function verticalTarget(direction) {
-  const cols = Math.max(1, columns.value);
-  const index = cursorIndex.value;
-  const bounds = listMembers.value ? memberBounds() : null;
-  if (!bounds) return verticalStop(index + direction * cols, cols, direction);
-  if (flatRows.value[index]?.kind === "member") {
-    return firstStop(index + direction, direction);
-  }
-  const target = verticalStop(index + direction * cols, cols, direction);
-  // **Crossed, not landed on.** The block is padded to whole grid rows, so a
-  // two-member stack over four columns leaves holes in two of them — and the
-  // whole-row walk steps straight over the panel and out the other side.
-  // Testing where it came to rest reached the panel from the columns the
-  // members happened to fill and jumped it from the rest, which is a panel
-  // that is keyboard-reachable or not depending on the window's width.
-  if (direction === 1 && index < bounds.first && target >= bounds.first) {
-    return bounds.first;
-  }
-  if (direction === -1 && index > bounds.last && target <= bounds.last) {
-    return bounds.last;
-  }
-  return target;
-}
-
-/**
- * Up/Down pressed in the open tray's header bar (the Grid/List switch, Close).
- *
- * The bar sits between the card and its members, so Down enters the tray at its
- * first member and Up returns to the card, wherever the cursor last was: a
- * mouse click on the switch does not move it. Returns true when handled.
- */
-function headerStep(event) {
-  const down = event.key === "ArrowDown";
-  if (!down && event.key !== "ArrowUp") return false;
-  if (!event.target?.closest?.(".stack-panel__header")) return false;
-  event.preventDefault();
-  const rows = flatRows.value;
-  moveCursor(
-    down
-      ? rows.findIndex((e) => e.kind === "member")
-      : rows.findIndex((e) => e.kind === "card" && e.key === store.openStackKey),
-  );
-  return true;
 }
 
 function onKeyDown(event) {
   // The sort popover owns its own keys, Escape included.
   if (sortMenuOpen.value) return;
-  if (headerStep(event)) return;
   const entry = flatRows.value[cursorIndex.value];
-  // Alt+Up / Alt+Down MOVE the row rather than travelling to another, and
-  // only inside the panel: the grid's own order is the sort, which is not
-  // something a card can be dragged around in. Checked before the plain
-  // arrows so the modifier is not swallowed by the cursor.
-  if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
-    event.preventDefault();
-    // Swallowed whether or not it can act. A write re-reads the grid and
-    // rebuilds every member row, so a HELD Alt+Down arrives while the cursor
-    // is briefly not on a member — and falling through would then walk the
-    // cursor down the grid instead, which is a held key that reorders twice
-    // and then leaves the panel.
-    if (entry?.kind === "member") {
-      moveMember(entry.key, event.key === "ArrowDown" ? 1 : -1);
-    }
-    return;
-  }
   // Select all shown, the chord the pill's count menu prints a keycap for.
   // Checked before the switch because it is the only binding here that takes a
   // modifier, and a keycap naming a key nothing listens for is a lie the
@@ -1277,11 +895,11 @@ function onKeyDown(event) {
   switch (event.key) {
     case "ArrowRight":
       event.preventDefault();
-      moveCursor(firstStop(cursorIndex.value + 1, 1));
+      moveCursor(rowAt(cursorIndex.value + 1));
       return;
     case "ArrowLeft":
       event.preventDefault();
-      moveCursor(firstStop(cursorIndex.value - 1, -1));
+      moveCursor(rowAt(cursorIndex.value - 1));
       return;
     case "ArrowDown":
       event.preventDefault();
@@ -1293,116 +911,43 @@ function onKeyDown(event) {
       return;
     case " ":
       event.preventDefault();
-      if (entry && entry.kind !== "hole") {
-        store.select(entry.key, {
-          additive: true,
-          whole: entry.kind === "card",
-        });
-      }
+      if (entry) store.select(entry.key, { additive: true });
       return;
     case "Enter":
       event.preventDefault();
-      // A stack card's Enter opens the panel; anything else opens ⓘ, which is
-      // the card's own button and the only escape hatch every card has —
-      // except a List member row, which draws no card and so has no ⓘ. Its
-      // menu is what the row offers instead.
-      if (entry?.kind === "card" && isStack(entry.card)) {
-        store.toggleStack(entry.key);
-      } else if (
-        !activeCardButton(".wf-card__info") &&
-        entry?.kind === "member"
-      ) {
-        openMemberMenu(entry.key);
-      } else {
-        activeCardButton(".wf-card__info")?.click();
-      }
+      // Enter opens ⓘ, the card's own button.
+      activeCardButton(".wf-card__info")?.click();
       return;
     case "F2":
       // The rename key, everywhere a list has one. Single-selection only,
       // which is the gate the bar's button carries too.
       event.preventDefault();
-      // `entry &&`, not `entry?.kind !== "hole"`: an absent entry passes that
-      // test (undefined is not "hole") and the next line reads `.key` off it.
-      if (entry && entry.kind !== "hole") {
-        if (!store.selectedKeys.includes(entry.key)) {
-          store.select(entry.key, { whole: entry.kind === "card" });
-        }
+      if (entry) {
+        if (!store.selectedKeys.includes(entry.key)) store.select(entry.key);
         startRename();
       }
       return;
     case "F10":
       if (!event.shiftKey) return;
       event.preventDefault();
-      // The context-menu keys reach the MEMBER MENU on a member row — the
-      // same menu right-click opens, and the only route to *Make it the
-      // cover*, *Move* and *Unstack* for somebody not using a pointer. On a
-      // CARD they now reach the card menu, which is what those keys mean
-      // everywhere else in this app and in every file manager; they used to
-      // open ⓘ, which Enter already does and still does (#1455).
-      if (entry?.kind === "member") openMemberMenu(entry.key);
-      else openMenuAtCursor();
+      // The context-menu keys reach the card menu, which is what those keys
+      // mean everywhere else in this app and in every file manager (#1455).
+      openMenuAtCursor();
       return;
     case "ContextMenu":
       event.preventDefault();
-      if (entry?.kind === "member") openMemberMenu(entry.key);
-      else openMenuAtCursor();
+      openMenuAtCursor();
       return;
     case "Escape":
-      // Innermost first. The popover and the card menu are `VMenu`s: they
-      // consume their own Escape and it never reaches here, so what is left is
-      // the panel, then the selection.
-      if (store.openStackKey && !store.panelClosing) {
-        event.preventDefault();
-        closePanel();
-      } else if (store.selectedKeys.length) {
+      // The popover and the card menu are `VMenu`s: they consume their own
+      // Escape and it never reaches here, so what is left is the selection.
+      if (store.selectedKeys.length) {
         event.preventDefault();
         store.clearSelection();
       }
       return;
     default:
   }
-}
-
-/**
- * Follow a member that has just been reordered, and say where it landed.
- *
- * **Every path that moves a member goes through here** — Alt+↑/↓, and the
- * menu's *Move earlier* / *Move later* / *Make it the cover*, which reach the
- * same three writes by pointer or by Shift+F10. The write re-reads the grid,
- * so every member row is torn down and rebuilt and the browser drops the
- * focus it was holding; the menu's own activator is a pair of coordinates, so
- * there is no element for it to fall back to. Without this a keyboard reader
- * choosing *Move later* is left outside the grid, told only that the panel
- * closed and reopened, and never that the row moved at all.
- */
-async function followMove(key, write) {
-  const moved = await write;
-  const at = memberRowIndex(key);
-  if (at < 0) return;
-  moveCursor(at);
-  // **Only a move that happened is announced.** A stack with no `stack_id` —
-  // one the grid drew part of — and a refused write both come back here, and
-  // "position 2 of 6" over either tells a reader the row moved when the list
-  // in front of them is unchanged. `store.error` already carries the refusal.
-  if (!moved) return;
-  const position = store.openMembers.findIndex((card) => card.key === key);
-  const member = store.openMembers[position];
-  announcement.value = `${member?.name || "Workflow"}, position ${
-    position + 1
-  } of ${store.openMembers.length}`;
-}
-
-/** Alt+↑/↓, and the menu's two Move items. */
-function moveMember(key, delta) {
-  return followMove(key, store.moveMember(key, delta));
-}
-
-/** Open the open panel's member menu on `key`, anchored on its row. */
-function openMemberMenu(key) {
-  const panel = Array.isArray(panelRef.value)
-    ? panelRef.value[0]
-    : panelRef.value;
-  panel?.openMenuAt(key);
 }
 
 /** One of the cursor card's own `tabindex="-1"` buttons. */
@@ -1461,7 +1006,7 @@ function runCard(card) {
   if (!card) return;
   runDialog.openRun({
     kind: "card",
-    workflowKey: card.key,
+    workflowId: card.id,
     name: card.name,
     // Through the helper: a raw `covers` entry is API-relative and an
     // `<img src>` would resolve it against the page origin instead.
@@ -1474,52 +1019,20 @@ function runSelected() {
   runCard(store.runnableCard);
 }
 
-async function stackSelected() {
+async function mergeSelected() {
   const count = store.selectedKeys.length;
-  if (await store.stackSelected()) {
-    announcement.value = `${count} workflows stacked together`;
+  if (await store.mergeSelected()) {
+    announcement.value = `${count} workflows merged`;
   }
 }
 
-/**
- * Break up every stack the selection touches.
- *
- * **Confirmed above one**, unlike its neighbour Stack. It is bulk, it is not
- * undoable on a screen with no undo, and what it discards is not the cards —
- * those stay — but the member ORDER and the cover choice somebody arranged by
- * hand. Its glyph is a near-twin of Stack's one button away, so the press is
- * easy to make by accident; one stack is a gesture a reader can see the
- * result of, and six is not.
- */
-async function unstackSelected() {
-  const stacks = store.selectedStackIds.length;
-  if (stacks > 1) {
-    const ok = await confirm({
-      title: `Break up ${stacks} stacks?`,
-      message:
-        `Every workflow in ${stacks} stacks goes back to standing on its own. ` +
-        "The workflows and their pictures stay; what is lost is the order " +
-        "they were in and which one stood for each stack. There is no undo " +
-        "on this screen.",
-      confirmLabel: "Break them up",
-    });
-    if (!ok) return;
+/** Split one topology of the selected workflow out into a workflow of its own. */
+async function splitSelected(topology) {
+  const card = onlyCard.value;
+  if (!card) return;
+  if (await store.splitOut(card.id, topology)) {
+    announcement.value = "Split into a workflow of its own";
   }
-  const { refused } = await store.unstackSelected();
-  if (refused) {
-    notices.push({
-      level: "error",
-      text:
-        refused === stacks
-          ? stacks === 1
-            ? "That stack could not be broken up."
-            : "None of those stacks could be broken up."
-          : `${stacks - refused} of ${stacks} stacks were broken up; the rest could not be.`,
-    });
-    return;
-  }
-  announcement.value =
-    stacks === 1 ? "Stack broken up" : `${stacks} stacks broken up`;
 }
 
 /**
@@ -1546,12 +1059,6 @@ async function hideSelected(unhide) {
   }
   announcement.value =
     count === 1 ? `Workflow ${verb}` : `${count} workflows ${verb}`;
-}
-
-/** *Make it the cover*, for a member picked inside the open stack's panel. */
-function makeCoverOfSelected() {
-  const key = store.selectedKeys[0];
-  if (key) followMove(key, store.makeCover(key));
 }
 
 // ── Rename ────────────────────────────────────────────────────────────────
@@ -1581,12 +1088,11 @@ const renameFallback = computed(() => onlyCard.value?.name ?? "");
  * coordinates, the rename dialog to the end of `<body>` — so none of them has
  * an activator the browser can restore focus to on close, and it lands on
  * `document.body`: outside the grid, with the cursor's row still marked and
- * the next arrow key going nowhere (WCAG 2.4.3). `followMove` proved the
- * pattern for the one path that already had it.
+ * the next arrow key going nowhere (WCAG 2.4.3).
  */
 function focusCursorRow() {
   const entry = flatRows.value[cursorIndex.value];
-  if (!entry || entry.kind === "hole") return;
+  if (!entry) return;
   nextTick(() => rowElement(entry)?.focus());
 }
 
@@ -1633,11 +1139,11 @@ async function saveRename() {
   closeRename();
   if (!card) return;
   const name = renameDraft.value.trim();
-  if (await store.renameCard(card.key, name)) {
+  if (await store.renameCard(card.id, name)) {
     // The cleared case says what the card is called NOW rather than "cleared":
     // the server re-derives a name immediately, so "cleared" would describe a
     // state the grid never shows. It is read back off the re-fetched card.
-    const renamed = store.cards.find((entry) => entry.key === card.key);
+    const renamed = store.cards.find((entry) => entry.id === card.id);
     announcement.value = name
       ? `Renamed to ${name}`
       : `Name cleared, now ${renamed?.name ?? "unnamed"}`;
@@ -1649,8 +1155,8 @@ async function saveRename() {
 /**
  * Save this card as a ComfyUI file somebody else can open.
  *
- * The scrub is the SERVER's (`GET /workflows/{key}/export`): prompts and seeds
- * blanked, recipe LoRA slots emptied, model names this machine does not hold
+ * The scrub is the SERVER's (`GET /workflows/{id}/export`): prompts and seeds
+ * blanked, LoRAs outside the default recipe bypassed, model names this machine does not hold
  * left out. What comes back names what it took out, and the notice says so —
  * a file that quietly differs from the workflow it was exported from is worse
  * than one that says which parts did not travel.
@@ -1660,9 +1166,9 @@ async function exportSelected() {
   if (!card) return;
   let body;
   try {
-    body = await exportWorkflow(card.key);
+    body = await exportWorkflow(card.id);
   } catch (err) {
-    console.warn(`[workflows] could not export ${card.key}`, err);
+    console.warn(`[workflows] could not export ${card.id}`, err);
     notices.push({
       level: "error",
       text: errorMessage(err, "That workflow could not be exported."),
@@ -1695,12 +1201,12 @@ async function exportSelected() {
 async function duplicateSelected() {
   const card = onlyCard.value;
   if (!card) return;
-  const body = await store.duplicateCard(card.key);
+  const body = await store.duplicateCard(card.id);
   if (!body) return;
   notices.push({ level: "success", text: `Copied to ${body.name}.` });
 }
 
-// Clone with new models: one dialog, one new card. Held by key rather than by
+// Clone with new models: one dialog, one new card. Held by id rather than by
 // the selection, so the dialog keeps its card if the selection moves under it.
 const cloneOpen = ref(false);
 const cloneKey = ref("");
@@ -1709,7 +1215,7 @@ const cloneName = ref("");
 function startCloneWithModels() {
   const card = onlyCard.value;
   if (!card) return;
-  cloneKey.value = card.key;
+  cloneKey.value = card.id;
   cloneName.value = card.name || "";
   cloneOpen.value = true;
 }
@@ -1729,7 +1235,7 @@ function clonedWithModels(body) {
           text: `Cloned to ${body.name}. ComfyUI did not confirm every new model name, so run it once to check.`,
         },
   );
-  if (body.workflow_key) store.select(body.workflow_key);
+  if (body.workflow_id) store.select(body.workflow_id);
 }
 
 /**
@@ -1788,18 +1294,12 @@ async function confirmDelete() {
  * any of forty selected cards acts on all forty. Without that, the commonest
  * gesture in a bulk edit — select, then right-click one of them — would
  * silently drop the other thirty-nine.
- *
- * A MEMBER row inside an open stack panel is not reached here: it carries its
- * own `@contextmenu` and `StackPanel`'s member menu (#1405), which holds the
- * verbs that are only about a row inside a run.
  */
 function openRowMenu(index, event) {
   const entry = flatRows.value[index];
-  if (!entry || entry.kind === "hole") return;
+  if (!entry) return;
   cursorId.value = entry.id;
-  if (!store.selectedKeys.includes(entry.key)) {
-    store.select(entry.key, { whole: entry.kind === "card" });
-  }
+  if (!store.selectedKeys.includes(entry.key)) store.select(entry.key);
   selBarRef.value?.openContextMenu(
     event.clientX,
     event.clientY,
@@ -1834,17 +1334,15 @@ function pictureUnder(event) {
 /**
  * Open the card menu over the cursor row's own box, for the keyboard's sake.
  *
- * **Nothing to point at is nothing to open.** On a padding hole, or with the
- * cursor out of range of a list that has just shrunk, there is no card the
+ * **Nothing to point at is nothing to open.** With the cursor out of range
+ * of a list that has just shrunk, there is no card the
  * menu would act on — it opened all-disabled at viewport (0, 0), which is a
  * menu about nothing in the corner of the screen.
  */
 function openMenuAtCursor() {
   const entry = flatRows.value[cursorIndex.value];
-  if (!entry || entry.kind === "hole") return;
-  if (!store.selectedKeys.includes(entry.key)) {
-    store.select(entry.key, { whole: entry.kind === "card" });
-  }
+  if (!entry) return;
+  if (!store.selectedKeys.includes(entry.key)) store.select(entry.key);
   const box = rowElement(entry)?.getBoundingClientRect();
   selBarRef.value?.openContextMenu(
     box ? box.left + 24 : 0,
@@ -1854,15 +1352,9 @@ function openMenuAtCursor() {
 
 /**
  * *Select all shown*, from the pill's count menu and from Ctrl/Cmd+A.
- *
- * Whole stacks: a stack card on screen stands for its members, so "all shown"
- * means the cards the grid is drawing, expanded the way clicking each of them
- * would expand them.
  */
 function selectAllShown() {
-  store.selectRange([
-    ...new Set(store.sortedCards.flatMap((card) => store.stackKeys(card.key))),
-  ]);
+  store.selectRange(store.sortedCards.map((card) => card.id));
   // **Said aloud, because nothing else says it.** Ctrl/Cmd+A can select the
   // whole grid without moving the cursor or changing a single visible row a
   // screen reader is on, and the pill is a `role="toolbar"` rather than a live

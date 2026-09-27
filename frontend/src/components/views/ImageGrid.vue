@@ -2106,11 +2106,11 @@ async function makeMoreLikeSelection() {
   try {
     const answer = await preflightWorkflowRun({ picture_ids: ids, count: 1 });
     const groups = answer?.groups || [];
-    if (groups.length === 1 && groups[0].workflow_key) {
+    if (groups.length === 1 && groups[0].workflow_id) {
       runDialogStore.openRun({
         kind: "selection",
         pictureIds: groups[0].picture_ids?.length ? groups[0].picture_ids : ids,
-        workflowKey: groups[0].workflow_key,
+        workflowId: groups[0].workflow_id,
       });
       return;
     }
@@ -2166,17 +2166,17 @@ const EDIT_WORKFLOW = "Flux2-Klein-Image-Edit.json";
  * edit workflow, each selected picture fed into its one picture input and the
  * prompt box left empty for the instruction.
  *
- * The built-in has no card until it is asked for, so the key is fetched on
- * each gesture; the route is idempotent and answers the card already filed.
+ * The built-in has no card until it is asked for, so its workflow id is
+ * fetched on each gesture; the route is idempotent and answers the one filed.
  */
 async function editSelectionWithComfyui() {
   const ids = selectedImageIds.value
     .map((id) => Number(getPictureId(id)))
     .filter((id) => Number.isFinite(id) && id > 0);
   if (isReadOnly.value || !ids.length) return;
-  let workflowKey;
+  let workflowId;
   try {
-    ({ workflow_key: workflowKey } = await cardForWorkflow(EDIT_WORKFLOW));
+    ({ workflow_id: workflowId } = await cardForWorkflow(EDIT_WORKFLOW));
   } catch (err) {
     console.warn(`Could not open the ${EDIT_WORKFLOW} workflow:`, err);
     noticeStore.warning(
@@ -2188,7 +2188,7 @@ async function editSelectionWithComfyui() {
   runDialogStore.openRun({
     kind: "edit",
     pictureIds: ids,
-    workflowKey,
+    workflowId,
     emptyPrompt: true,
   });
 }
@@ -2215,14 +2215,14 @@ function runWorkflowOnPicture(pictureId) {
  * input for…* does: `emptyPrompt` would send `""` over a recipe prompt, which
  * blanks every positive prompt node in the graph.
  */
-function openRunFromEditTab({ pictureId, workflowKey, prompt } = {}) {
+function openRunFromEditTab({ pictureId, workflowId, prompt } = {}) {
   const id = Number(getPictureId(pictureId));
   if (!Number.isFinite(id) || id <= 0 || isReadOnly.value) return;
   if (overlayOpen.value) closeOverlay(false);
   runDialogStore.openRun({
     kind: "selection",
     pictureIds: [id],
-    workflowKey: workflowKey || undefined,
+    workflowId: workflowId || undefined,
     pickWorkflow: true,
     prompt: prompt || undefined,
   });
