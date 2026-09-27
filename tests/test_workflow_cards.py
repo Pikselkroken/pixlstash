@@ -1582,6 +1582,7 @@ def test_a_saved_recipe_with_malformed_models_inherits_the_default():
         ("[1, 2]", None),
         ('["x"]', None),
         ('[{"address": "core:a/ckpt_name"}]', None),
+        ('[{"address": 5, "filename": "x.safetensors"}]', None),
         (
             '[{"address": "core:a/ckpt_name", "filename": "x", "sha256": "y"}]',
             None,

@@ -1318,6 +1318,7 @@ def saved_recipe_body(recipe) -> dict:
             isinstance(models, list)
             and all(
                 isinstance(m, dict)
+                and isinstance(m.get("address"), str)
                 and m.get("address")
                 # Exactly one way to name the model, as `RunModel` requires.
                 and bool(m.get("filename")) != bool(m.get("sha256"))
