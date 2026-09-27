@@ -3110,7 +3110,7 @@ unreconciled; `docs/backend_architecture.md` §24.5).
    `dismiss` on the same id ("Keep both") changes nothing and only clears the
    queue. The resolve button's own label is derived client-side from `current`
    and `removals`, not sent by the server — see
-   `docs/frontend_architecture.md` §9.4 for why it must name the destination
+   `docs/frontend_architecture.md` §13.5 for why it must name the destination
    rather than a generic verb.
 4. **`applied_picture_ids` and `skipped_review_ids` are disjoint, and neither
    implies the row is still in the queue.** Every `review_id` the caller sent

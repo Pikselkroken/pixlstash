@@ -8764,7 +8764,7 @@ here ever waits on a human for one — so unlike `unambiguous`/`ambiguous` they
 are not kept indefinitely: a row is shown for `PictureMove.RETENTION_S` (the
 same window the move journal keeps a claimed row for) and pruned past it,
 whether or not anyone opened the screen. The frontend's own reachability rule
-follows from this — see `docs/frontend_architecture.md` §9.4.
+follows from this — see `docs/frontend_architecture.md` §13.5.
 
 #### The route surface
 
