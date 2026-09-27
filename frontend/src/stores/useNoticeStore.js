@@ -87,6 +87,8 @@ export const useNoticeStore = defineStore("notice", () => {
   const maxVisible = ref(DEFAULT_MAX_VISIBLE);
 
   let nextId = 1;
+  // Bumped on every countdown start so the host re-mounts its bar in step.
+  let nextRun = 1;
   // id → { handle, remaining, startedAt, paused }
   const timers = new Map();
   // Global pause (document.hidden). Applied on top of per-notice pauses.
@@ -106,12 +108,22 @@ export const useNoticeStore = defineStore("notice", () => {
 
   /**
    * Mirror whether a notice's countdown is ticking onto the notice itself. The
-   * `timers` map is deliberately not reactive; this flag is what the host's
-   * countdown bar reads to pause in step with the timer.
+   * `timers` map is deliberately not reactive; this is what the host's
+   * countdown bar reads. A start also records the fraction left and a fresh
+   * `run`, so the bar re-syncs from the banked time on every (re)start rather
+   * than trusting its own CSS clock, which keeps moving in a hidden tab.
    */
-  function setRunning(id, running) {
+  function setRunning(id, running, remaining = 0) {
     const notice = notices.value.find((n) => n.id === id);
-    if (notice) notice.running = running;
+    if (!notice) return;
+    notice.running = running;
+    if (running) {
+      notice.countdown = {
+        run: nextRun++,
+        ms: remaining,
+        from: notice.timeout > 0 ? remaining / notice.timeout : 1,
+      };
+    }
   }
 
   function isVisible(id) {
@@ -141,7 +153,7 @@ export const useNoticeStore = defineStore("notice", () => {
     entry.startedAt = Date.now();
     entry.handle = setTimeout(() => dismiss(id), entry.remaining);
     timers.set(id, entry);
-    setRunning(id, true);
+    setRunning(id, true, entry.remaining);
   }
 
   /** Bank the time a running countdown has left and stop it. */
@@ -368,6 +380,7 @@ export const useNoticeStore = defineStore("notice", () => {
       count: 1,
       // True while the auto-dismiss countdown is ticking (see `setRunning`).
       running: false,
+      countdown: null,
     };
 
     // An error takes a visible slot rather than queueing behind a success.

@@ -157,15 +157,16 @@ const hostEl = ref(null);
           @click="store.dismiss(card.id)"
         />
         <!-- Countdown: drains over the auto-dismiss window and stops whenever
-             the store's timer does (hover, focus, hidden tab). Keyed on the
-             count so a coalesced repeat, which restarts the timer, refills it. -->
+             the store's timer does (hover, focus, hidden tab). Re-mounted from
+             the banked time on every timer start, so it cannot drift. -->
         <span
           v-if="card.timeout > 0"
-          :key="`${card.id}-${card.count}`"
+          :key="card.countdown?.run ?? 0"
           class="notice-countdown"
           aria-hidden="true"
           :style="{
-            animationDuration: `${card.timeout}ms`,
+            '--notice-countdown-from': card.countdown?.from ?? 1,
+            animationDuration: `${card.countdown?.ms ?? card.timeout}ms`,
             animationPlayState: card.running ? 'running' : 'paused',
           }"
         ></span>
@@ -263,7 +264,7 @@ const hostEl = ref(null);
 
 @keyframes notice-countdown {
   from {
-    transform: scaleX(1);
+    transform: scaleX(var(--notice-countdown-from, 1));
   }
   to {
     transform: scaleX(0);

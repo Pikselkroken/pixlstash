@@ -400,10 +400,11 @@ function onRunStarted({ prompts = [], pictureIds = [] } = {}) {
         ? "Started 1 run in ComfyUI."
         : `Started ${prompts.length} runs in ComfyUI.`,
     action: { label: "Show", handler: () => sidebarStore.showTasksTab() },
-    // A confirmation, not an Undo: it expires rather than piling up, and
-    // repeats collapse into one card with a ×N count.
+    // A confirmation, not an Undo: it expires rather than piling up, and an
+    // identical repeat collapses into one card with a ×N count. "Show" is a
+    // shortcut; the Tasks tab is reachable without it.
     timeout: DEFAULT_TIMEOUTS.success,
-    key: "comfyui-run-started",
+    key: `comfyui-run-started-${prompts.length}`,
   });
 }
 
