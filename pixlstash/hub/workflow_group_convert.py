@@ -180,13 +180,21 @@ def convert_card_state(conn: sqlite3.Connection) -> int:
             )
         )
         base = bases.get(workflow_id) or min(card.topology_hash for card in group)
+        # A savepoint per workflow, so one that fails leaves no half-written
+        # rows behind while the others still convert.
+        conn.execute("SAVEPOINT convert_workflow")
         try:
             _convert_workflow(conn, hub, workflow_id, group, base, labels)
+            conn.execute("RELEASE convert_workflow")
         except Exception as exc:
+            conn.execute("ROLLBACK TO convert_workflow")
+            conn.execute("RELEASE convert_workflow")
             # This runs at hub open inside the data-version transaction: an
             # uncaught error would roll it back and refuse the hub on every
             # start. The card tables are left as they were, so what this
-            # workflow's cards held is still on disk to recover by hand.
+            # workflow's cards held is still on disk to recover by hand. Its
+            # successor rows stay: the workflow exists whether or not its
+            # owner state converted, and its saved recipes still belong there.
             logger.error(
                 "Workflow %s: converting cards %s failed, so their names, notes, "
                 "defaults, pins and inputs are not carried over: %s",

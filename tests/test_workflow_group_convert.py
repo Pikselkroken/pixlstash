@@ -22,6 +22,7 @@ from sqlmodel import delete, select
 from pixlstash.database import DBPriority
 from pixlstash.db_models import Picture, SavedRecipe
 from pixlstash.hub.db import HubDatabase
+import pixlstash.hub.workflow_group_convert as convert
 from pixlstash.hub.workflow_group_convert import (
     _GROUP_NAMESPACE,
     convert_card_state,
@@ -310,6 +311,29 @@ def test_every_card_state_lands_on_its_workflow_and_a_rerun_changes_nothing(
 
     _convert(world.hub)
     assert _rows(world.hub) == first
+
+
+def test_a_workflow_that_fails_to_convert_leaves_no_half_written_rows(
+    world, monkeypatch
+):
+    """One workflow raising part-way leaves none of its rows; the rest convert."""
+    real = convert._structural_loras
+
+    def failing(hub, workflow_id, cover):
+        # Called after the workflow's attributes were written.
+        if workflow_id == world.auto:
+            raise KeyError("malformed stored run")
+        return real(hub, workflow_id, cover)
+
+    monkeypatch.setattr(convert, "_structural_loras", failing)
+    _convert(world.hub)
+
+    rows = _rows(world.hub)
+    assert not [row for row in rows["workflow_group_attr"] if row[0] == world.auto]
+    assert not [row for row in rows["workflow_group_default"] if row[0] == world.auto]
+    assert [row[0] for row in rows["workflow_group_attr"] if row[0] == MANUAL] == [
+        MANUAL
+    ]
 
 
 def test_an_unnamed_cover_takes_the_next_name_it_holds(world):

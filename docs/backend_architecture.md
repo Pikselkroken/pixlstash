@@ -4182,7 +4182,9 @@ files it), else a core hash computed from a stored variant document (with a swap
 `record_identity` reads it); a card with neither is logged and gets no
 successor. An automatic workflow that receives any owner state also gets its
 `workflow_group` row (`kind = 'auto'`). A workflow whose conversion raises
-is logged with its cards and skipped rather than rolled back with the rest:
+is rolled back to its own savepoint, logged with its cards and skipped,
+rather than rolling back the rest (its successor rows stay: its saved
+recipes still belong to it):
 the step runs at hub open, where an uncaught error would refuse the hub on
 every start, and the card tables it read are still on disk.
 
