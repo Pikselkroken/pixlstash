@@ -396,7 +396,7 @@ mechanical migration large enough to want its own eyeball pass. Logged in §10.
 Run popups, several at a time for a mixed batch — and it has always drawn the status
 hue in the **glyph** as well as the rail, against the rule above. Since #1463 it also
 carries a second tone: `--surface-warning` with `mdi-alert-outline` for a statement
-about a run that IS going ahead (a LoRA left out), beside `--surface-error` with
+about a run that IS going ahead (a LoRA left out, a missing seed node replaced), beside `--surface-error` with
 `mdi-alert-circle-outline` for a refusal. Both hues are existing tokens defined in
 both themes, and the glyph shape carries the distinction without colour, as §3 asks.
 The live region around the list follows the tone: `role="alert"` while any refusal is
@@ -429,6 +429,7 @@ should become the host's own variants.
 | **Dismiss** | icon button, `mdi-close` at 16px, 24×24 visual box, `border-radius: var(--radius-sm)`, `color: rgba(var(--v-theme-on-surface), 0.7)` → `1` on hover, hover `background: var(--hover-wash)`, focus `box-shadow: var(--focus-ring)`, `aria-label="Dismiss notification"` |
 | **Dismiss hit area** | expanded to 40×40 with a transparent `::before` inset expansion — clears WCAG 2.5.8 (24×24) with room, without a 40px hole in the layout |
 | **Gap action→dismiss** | `var(--space-2)` |
+| **Countdown** (timed notices only) | bottom edge, full width, `var(--space-1)` (2px) tall, same hue as the rail (`--notice-status`); drains linearly (`scaleX` → 0) and pauses whenever the timer does (§6 rule 3). The store hands it the fraction left and a fresh key on every timer start, so it re-syncs after a hover, a hidden tab, a demotion or a coalesced repeat instead of trusting its own CSS clock. Sticky notices have none. Hidden under `prefers-reduced-motion`. `aria-hidden` |
 
 **Action labels name the destination, not the question.** The label is a button, so it
 reads as the thing the user gets: `Undo`, `Retry`, `Help`, `Open set`. A label phrased as
@@ -570,6 +571,8 @@ place, which is the flicker the setting exists to prevent:
   /* opacity-only cross-fade: no rise, no exit slide, no FLIP reflow */
   .notice-enter-from, .notice-leave-to { transform: none; }
   .notice-move { transition: none; }
+  /* the countdown would empty instantly under the global collapse */
+  .notice-countdown { display: none; }
 }
 ```
 
@@ -610,9 +613,11 @@ only if measured; do not build it speculatively.
   not before it.
 - Both buttons are real `<button>`s in the natural tab order, showing `--focus-ring` on
   `:focus-visible`.
-- Reaching an action by keyboard is guaranteed by the §6 rule that any notice with an
-  action is sticky. Without that rule, a keyboard-only user can be structurally unable to
-  reach an "Undo".
+- Reaching an action by keyboard is guaranteed by the §6 rule that a notice with an
+  action is sticky by default. Without that rule, a keyboard-only user can be structurally
+  unable to reach an "Undo". A caller that overrides it with an explicit timeout must only
+  do so for an action that is a shortcut to something reachable elsewhere (the run-started
+  card's "Show" opens the Tasks tab, which has its own control).
 - `:focus-within` pauses the timer, so tabbing into a notice does not race it.
 
 **Contrast, verified against the shipped themes** (WCAG floors: text 4.5:1, non-text 3:1):

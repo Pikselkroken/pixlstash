@@ -26,6 +26,7 @@ from copy import deepcopy
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import INPUT_IMAGE_FIELDS
+from pixlstash.services.comfyui_service import PIXLSTASH_PICTURE_LOADER
 from pixlstash.services.workflow_hash import WorkflowGraphError
 from pixlstash.services.workflow_io import api_graph, detect_workflow_io
 
@@ -391,7 +392,13 @@ def picture_target(document: dict, node_id: str, class_type: str) -> dict | None
     if isinstance(document.get("prompt"), dict):
         prefix, graph = ["prompt"], document["prompt"]
     inputs = (graph.get(node_id) or {}).get("inputs") or {}
-    for field in INPUT_IMAGE_FIELDS.get(class_type, ("image",)):
+    # A ComfyUI-PixlStash picture loader takes the picture's id, not a file.
+    fields = (
+        ("picture_ids",)
+        if class_type == PIXLSTASH_PICTURE_LOADER
+        else INPUT_IMAGE_FIELDS.get(class_type, ("image",))
+    )
+    for field in fields:
         if isinstance(inputs.get(field), str):
             return {"path": prefix + [node_id, "inputs", field], "template": None}
     return None

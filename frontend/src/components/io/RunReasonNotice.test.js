@@ -99,6 +99,60 @@ describe("a bypassed LoRA, which is not a refusal", () => {
   });
 });
 
+describe("a replaced seed node, which is not a refusal either", () => {
+  const reason = {
+    code: "nodes_replaced",
+    nodes: [
+      { node_id: "9", class_type: "Seed (rgthree)", replacement: "seed" },
+      { node_id: "12", class_type: "Seed (rgthree)", replacement: "seed" },
+    ],
+  };
+
+  it("says PixlStash seeds the run itself, and never that it cannot run", () => {
+    const wrapper = mountNotice(reason);
+    expect(wrapper.text()).toContain("writes the seed straight into the sampler");
+    expect(wrapper.text()).toContain("The run goes ahead without it");
+    expect(wrapper.text()).not.toContain("can't run");
+  });
+
+  it("names the node's class once, in the sentence rather than as a file", () => {
+    const wrapper = mountNotice(reason);
+    expect(wrapper.find(".rrn-files").exists()).toBe(false);
+    expect(wrapper.text().split("Seed (rgthree)")).toHaveLength(2);
+    expect(wrapper.text()).not.toContain("models/");
+  });
+
+  it("takes the notice modifier and offers nothing to press", () => {
+    const wrapper = mountNotice(reason);
+    expect(rail(wrapper)).toContain("rrn--notice");
+    expect(wrapper.find(".rrn-acts").exists()).toBe(false);
+  });
+});
+
+describe("a replaced text node", () => {
+  it("says the text is written into what it fed, and nothing about seeds", () => {
+    const wrapper = mountNotice({
+      code: "nodes_replaced",
+      nodes: [{ node_id: "103", class_type: "Text Multiline", replacement: "text" }],
+    });
+    expect(wrapper.text()).toContain("the text node Text Multiline");
+    expect(wrapper.text()).toContain("writes the text straight into what it fed");
+    expect(wrapper.text()).not.toContain("seed");
+  });
+
+  it("words a seed and a text node each in its own sentence", () => {
+    const wrapper = mountNotice({
+      code: "nodes_replaced",
+      nodes: [
+        { node_id: "9", class_type: "Seed (rgthree)", replacement: "seed" },
+        { node_id: "103", class_type: "Text Multiline", replacement: "text" },
+      ],
+    });
+    expect(wrapper.text()).toContain("the seed node Seed (rgthree)");
+    expect(wrapper.text()).toContain("the text node Text Multiline");
+  });
+});
+
 describe("a recipe LoRA with no loader, which is not a refusal (#1478)", () => {
   const reason = {
     code: "loras_unplaced",
@@ -187,6 +241,29 @@ describe("a LoRA the owner skipped, and one that cannot be skipped", () => {
     expect(said).toContain(
       "stacked-a.safetensors cannot be skipped for this run. It sits in a stacker whose other LoRAs are present.",
     );
+    expect(rail(wrapper)).not.toContain("rrn--notice");
+  });
+
+  it("names the stage itself when the server gave no sentence", () => {
+    const said = mountNotice({ code: "stage_not_skippable", stage: "upscale" })
+      .text()
+      .replace(/\s+/g, " ");
+    expect(said).toContain("The upscale pass cannot be switched off for this run.");
+  });
+
+  it("refuses a stage that cannot be switched off, in the server's words", () => {
+    const wrapper = mountNotice({
+      code: "stage_not_skippable",
+      stage: "face_detailer",
+      message:
+        "The face detailer stage cannot be switched off: node 40 (FaceDetailer) cannot be bypassed.",
+    });
+    const said = wrapper.text().replace(/\s+/g, " ");
+    expect(said).toContain("Cinematic portrait can't run.");
+    expect(said).toContain(
+      "The face detailer stage cannot be switched off: node 40 (FaceDetailer) cannot be bypassed.",
+    );
+    expect(said.match(/cannot be switched off/g)).toHaveLength(1);
     expect(rail(wrapper)).not.toContain("rrn--notice");
   });
 });

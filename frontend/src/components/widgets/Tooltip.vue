@@ -3,7 +3,8 @@
     v-if="armed"
     ref="tipRef"
     v-model="open"
-    :location="location"
+    :location="layerSide() || location"
+    :attach="layer || false"
     :open-delay="openDelay"
     :disabled="disabled || !(text || $slots.default)"
     :activator-props="activatorProps"
@@ -151,6 +152,20 @@ let pendingOpen = 0;
 
 /** The element the tip describes and anchors to, in either form. */
 const host = () => parentEl.value ?? tipRef.value?.activatorEl ?? null;
+
+// A surface that stacks itself at `--z-overlay` outside Vuetify's overlay stack
+// (the grid context menu) ties with a lone tip's own 2000, and wins on DOM
+// order: the tip opened behind it. Such a surface carries `data-tooltip-layer`,
+// and a tip inside it renders inside it, so the two share one stacking context
+// and the tip paints over the rows. The attribute's value, when set, is the
+// side the tip opens on: away from where the surface opens its sub-menus, so
+// the tip covers neither the hovered row nor a sub-menu. The surface must not
+// clip (no `overflow`, no `transform`), or the tip is cut to its box.
+const layer = computed(() => host()?.closest("[data-tooltip-layer]") ?? null);
+// Read at render, not cached: the attribute is not reactive, and the side can
+// change while the tip stays mounted (the menu reopened nearer an edge). The
+// tip re-renders each time it opens.
+const layerSide = () => layer.value?.dataset.tooltipLayer || "";
 
 function arm(e) {
   const el = parentEl.value;

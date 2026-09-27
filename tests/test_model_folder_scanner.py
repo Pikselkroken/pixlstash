@@ -1095,6 +1095,22 @@ class TestFilesWithNoReadableHeader:
         (row,) = models(hub).values()
         assert (row["file_kind"], row["quant"]) == ("vae", "q8_0")
 
+    @pytest.mark.parametrize("name", ["unet", "diffusion_models"])
+    def test_a_gguf_in_a_diffusion_model_folder_is_a_checkpoint(
+        self, hub, scanner, tmp_path, name
+    ):
+        # What `GET /checkpoints` lists, so a quantised Flux or Wan UNet is
+        # offered to a checkpoint loader (#1607).
+        folder = tmp_path / name
+        folder.mkdir()
+        self._gguf(folder / "Wan2.1-T2V-14B-Q5_K_M.gguf")
+        folder_id = register_folder(hub, folder)
+
+        scanner.scan_folder(folder_id, str(folder), "user")
+
+        (row,) = models(hub).values()
+        assert (row["file_kind"], row["quant"]) == ("checkpoint", "q5_k_m")
+
     def test_a_large_gguf_is_left_for_the_hash_finder_like_any_other(
         self, hub, scanner, tmp_path, monkeypatch
     ):
@@ -1103,9 +1119,10 @@ class TestFilesWithNoReadableHeader:
         The size rule is the same one every non-adapter kind already follows,
         so turning the suffix on adds no reading the shelf was not already
         deferring - which is the whole answer to "can a folder of GGUF
-        checkpoints be scanned at all".
+        checkpoints be scanned at all". The folder names no role, so the
+        size rule rather than `checkpoint` is what defers the hash.
         """
-        folder = tmp_path / "unet"
+        folder = tmp_path / "downloads"
         folder.mkdir()
         self._gguf(folder / "huge-Q6_K.gguf")
         folder_id = register_folder(hub, folder)

@@ -9,7 +9,7 @@ GET  /pictures/guest-scores  - retrieve this session's scores (READ tokens)
 
 import re
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -219,7 +219,7 @@ def create_router(server) -> APIRouter:
             server._server_config.get("guest_max_concurrent_sessions", 100)
         )
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         def handle_session(session: Session) -> None:
             existing = session.get(GuestSession, session_id)

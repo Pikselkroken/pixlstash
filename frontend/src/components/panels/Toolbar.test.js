@@ -647,7 +647,7 @@ describe("Toolbar - the funnel is lit by the filter strip's chips", () => {
   // "No character" only applies in All Pictures, where it has a chip. In a set
   // view it has none, so the funnel must not claim a filter nobody can see.
   it("stays dark for a No character flag left over outside All Pictures", async () => {
-    useFilterStore().unassignedOnlyFilter = true;
+    useFilterStore().noCharacterFilter = true;
     const wrapper = mountToolbar({ selectedCharacter: "null" });
     expect(funnel(wrapper).classes()).not.toContain("bar-btn--active");
   });

@@ -31,6 +31,7 @@ the refused token is live.
 
 from __future__ import annotations
 
+import logging
 import hashlib
 import itertools
 import json
@@ -82,6 +83,12 @@ _SHELF_ROUTES = (
     ("GET", "/api/v1/models/base-models"),
     ("POST", "/api/v1/models/companions"),
     ("GET", "/api/v1/models/workflow-sets"),
+    ("POST", "/api/v1/models/workflow-sets"),
+    ("PATCH", "/api/v1/models/workflow-sets/{set_id}"),
+    ("DELETE", "/api/v1/models/workflow-sets/{set_id}"),
+    ("POST", "/api/v1/models/workflow-sets/{set_id}/members"),
+    ("POST", "/api/v1/models/workflow-sets/{set_id}/members/remove"),
+    ("PUT", "/api/v1/models/workflow-sets/{set_id}/declines"),
 )
 
 
@@ -206,6 +213,8 @@ def _seed_hub(server) -> dict[str, int]:
         # the hub, so a leftover row aborts the wipe rather than lingering.
         conn.execute("DELETE FROM model_file")
         conn.execute("DELETE FROM model_capability")
+        # ComfyUI runs name model ids, and the ids are about to be reissued.
+        conn.execute("DELETE FROM comfyui_history_model")
         conn.execute("DELETE FROM model")
         conn.execute("DELETE FROM model_folder")
         conn.execute("DELETE FROM adapter_stack")
@@ -1005,6 +1014,894 @@ def test_workflow_sets_flags_a_member_two_shelf_rows_answer_to(shelf_env):
         assert all(m["ambiguous"] is True for m in card["models"])
     finally:
         _wipe_recipes(shelf_env.server)
+
+
+def _seed_run(server, prompt_id: str, model_ids) -> None:
+    """One finished ComfyUI run, as the workflow pull stores it (#1518)."""
+    with server.hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO comfyui_history_model (prompt_id, model_id) VALUES (?, ?)",
+            [(prompt_id, model_id) for model_id in model_ids],
+        )
+
+
+def _key(*model_ids) -> str:
+    return ",".join(str(m) for m in sorted(model_ids))
+
+
+def _vae_and_encoder(shelf_env) -> tuple[int, int]:
+    """A VAE and a text encoder beside the seeded checkpoint; the next test's
+    seed wipes them with every other model row."""
+    return (
+        _add_model(shelf_env, "vae", "sdxl_vae.safetensors", _h("vaefile")),
+        _add_model(shelf_env, "text_encoder", "clip_l.safetensors", _h("clipfile")),
+    )
+
+
+def test_workflow_sets_serve_a_set_that_only_ran_in_comfyui(shelf_env):
+    """#1565: a checkpoint + VAE + text encoder no picture was made with, but
+    that ComfyUI ran, is a set with no cover - not three files in `no_set`."""
+    ckpt = shelf_env.model_ids["base_xl.safetensors"]
+    vae, encoder = _vae_and_encoder(shelf_env)
+    _seed_run(shelf_env.server, "run-1", [ckpt, vae, encoder])
+
+    body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+    card = {c["key"]: c for c in body["combinations"]}[_key(ckpt, vae, encoder)]
+    assert (card["picture_count"], card["recipes"], card["history_runs"]) == (0, 0, 1)
+    assert card["covers"] == []
+    assert card["models"][0]["id"] == ckpt
+    assert not {ckpt, vae, encoder} & set(body["no_set"])
+
+
+def test_workflow_sets_count_runs_apart_from_recipes(shelf_env):
+    ckpt = shelf_env.model_ids["base_xl.safetensors"]
+    vae, encoder = _vae_and_encoder(shelf_env)
+    try:
+        _seed_recipe(
+            shelf_env.server,
+            "hr-both",
+            [
+                ("ckpt_name", "base_xl.safetensors"),
+                ("vae_name", "sdxl_vae.safetensors"),
+                ("clip_name", "clip_l.safetensors"),
+            ],
+        )
+        _seed_picture(shelf_env.server, "hr-both", score=3)
+        for prompt_id in ("run-a", "run-b"):
+            _seed_run(shelf_env.server, prompt_id, [ckpt, vae, encoder])
+
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+        card = {c["key"]: c for c in body["combinations"]}[_key(ckpt, vae, encoder)]
+        assert (card["recipes"], card["history_runs"], card["picture_count"]) == (
+            1,
+            2,
+            1,
+        )
+    finally:
+        _wipe_recipes(shelf_env.server)
+
+
+def test_workflow_sets_never_mark_a_run_ambiguous(shelf_env):
+    """A run was resolved to exact ids when it was stored, so it carries no
+    doubt - even while a recipe makes one of its members' basenames a guess."""
+    ids = shelf_env.model_ids
+    try:
+        with shelf_env.server.hub.transaction() as conn:
+            conn.executemany(
+                "UPDATE model SET filename = 'twin.safetensors' WHERE id = ?",
+                [(ids["alice.safetensors"],), (ids["dana.safetensors"],)],
+            )
+        _seed_recipe(shelf_env.server, "hr-twin", [("lora_name", "twin.safetensors")])
+        _seed_picture(shelf_env.server, "hr-twin", score=3)
+        _seed_run(
+            shelf_env.server,
+            "run-exact",
+            [ids["base_xl.safetensors"], ids["alice.safetensors"]],
+        )
+
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+        by_key = {c["key"]: c for c in body["combinations"]}
+        twin = by_key[_key(ids["alice.safetensors"], ids["dana.safetensors"])]
+        assert all(m["ambiguous"] for m in twin["models"])
+        run = by_key[_key(ids["base_xl.safetensors"], ids["alice.safetensors"])]
+        assert [m["ambiguous"] for m in run["models"]] == [False, False]
+    finally:
+        _wipe_recipes(shelf_env.server)
+
+
+def test_workflow_sets_skip_a_run_member_the_shelf_forgot(shelf_env):
+    """The history row outlived its model: the run counts for what is left,
+    and a run of nothing left is no set at all."""
+    ckpt = shelf_env.model_ids["base_xl.safetensors"]
+    gone = max(shelf_env.model_ids.values()) + 1000
+    _seed_run(shelf_env.server, "run-partial", [ckpt, gone])
+    _seed_run(shelf_env.server, "run-empty", [gone])
+
+    body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+    by_key = {c["key"]: c for c in body["combinations"]}
+    assert by_key[_key(ckpt)]["history_runs"] == 1
+    assert all(gone not in {m["id"] for m in c["models"]} for c in body["combinations"])
+
+
+def test_workflow_sets_order_run_only_sets_by_their_runs(shelf_env):
+    ids = shelf_env.model_ids
+    _seed_run(shelf_env.server, "run-once", [ids["dana.safetensors"]])
+    for n in range(2):
+        _seed_run(shelf_env.server, f"run-often-{n}", [ids["bob.safetensors"]])
+
+    body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+    keys = [c["key"] for c in body["combinations"]]
+    assert keys.index(_key(ids["bob.safetensors"])) < keys.index(
+        _key(ids["dana.safetensors"])
+    )
+
+
+def test_workflow_sets_order_a_run_only_set_after_every_pictured_one(shelf_env):
+    ids = shelf_env.model_ids
+    try:
+        _seed_recipe(
+            shelf_env.server,
+            "hr-pictured",
+            [("ckpt_name", "base_xl.safetensors"), ("lora_name", "alice.safetensors")],
+        )
+        _seed_picture(shelf_env.server, "hr-pictured", score=3)
+        # More runs than the pictured set has anything: still second.
+        for n in range(3):
+            _seed_run(
+                shelf_env.server,
+                f"run-{n}",
+                [ids["base_xl.safetensors"], ids["dana.safetensors"]],
+            )
+
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+        assert [c["key"] for c in body["combinations"]] == [
+            _key(ids["base_xl.safetensors"], ids["alice.safetensors"]),
+            _key(ids["base_xl.safetensors"], ids["dana.safetensors"]),
+        ]
+    finally:
+        _wipe_recipes(shelf_env.server)
+
+
+# ---------------------------------------------------------------------------
+# Hand-made workflow sets (#1520)
+# ---------------------------------------------------------------------------
+
+
+def _wipe_sets(server) -> None:
+    with server.hub.transaction() as conn:
+        conn.execute("DELETE FROM model_workflow_set_member")
+        conn.execute("DELETE FROM model_workflow_set_decline")
+        conn.execute("DELETE FROM model_workflow_set")
+
+
+def _new_set(shelf_env, **body) -> dict:
+    r = shelf_env.owner.post(f"{API}/models/workflow-sets", json=body)
+    assert r.status_code == 201, r.text
+    return r.json()
+
+
+def _hand_made(shelf_env) -> dict[int, dict]:
+    r = shelf_env.owner.get(f"{API}/models/workflow-sets")
+    assert r.status_code == 200, r.text
+    return {entry["id"]: entry for entry in r.json()["hand_made"]}
+
+
+def _add_model(shelf_env, file_kind, filename, sha256, **columns) -> int:
+    with shelf_env.server.hub.transaction() as conn:
+        return conn.execute(
+            "INSERT INTO model (file_kind, kind, sha256, filename, display_name, "
+            "provenance, created_at) VALUES (?, ?, ?, ?, ?, 'external', "
+            "'2026-08-08T00:00:00Z')",
+            (
+                file_kind,
+                columns.get("kind"),
+                sha256,
+                filename,
+                columns.get("display_name"),
+            ),
+        ).lastrowid
+
+
+def test_hand_made_set_routes_answer_the_owner_and_refuse_tokens(shelf_env):
+    """Both directions on every set mutator, each against a route that exists."""
+    ids = shelf_env.model_ids
+    try:
+        made = _new_set(shelf_env, members=[{"model_id": ids["alice.safetensors"]}])
+        set_id = made["id"]
+        routes = (
+            ("POST", "/api/v1/models/workflow-sets", None, {"json": {}}),
+            (
+                "PATCH",
+                f"/api/v1/models/workflow-sets/{set_id}",
+                "/api/v1/models/workflow-sets/{set_id}",
+                {"json": {"name": "x"}},
+            ),
+            (
+                "POST",
+                f"/api/v1/models/workflow-sets/{set_id}/members",
+                "/api/v1/models/workflow-sets/{set_id}/members",
+                {"json": {"members": [{"model_id": ids["bob.safetensors"]}]}},
+            ),
+            (
+                "POST",
+                f"/api/v1/models/workflow-sets/{set_id}/members/remove",
+                "/api/v1/models/workflow-sets/{set_id}/members/remove",
+                {"json": {"sha256": [ADAPTER_WITH_BASE_2]}},
+            ),
+            (
+                "PUT",
+                f"/api/v1/models/workflow-sets/{set_id}/declines",
+                "/api/v1/models/workflow-sets/{set_id}/declines",
+                {"json": {"sha256": [ADAPTER_WITH_BASE_2]}},
+            ),
+            (
+                "DELETE",
+                f"/api/v1/models/workflow-sets/{set_id}",
+                "/api/v1/models/workflow-sets/{set_id}",
+                {},
+            ),
+        )
+        scoped = _bearer(
+            shelf_env.server,
+            _mint(
+                shelf_env.owner,
+                "hand-made sets character token",
+                resource_type="character",
+                resource_id=shelf_env.character_id,
+            ),
+        )
+        unscoped = _bearer(
+            shelf_env.server, _mint(shelf_env.owner, "hand-made sets read token")
+        )
+        anon = TestClient(shelf_env.server.api)
+        for client in (scoped, unscoped):
+            assert client.get(f"{API}/pictures").status_code == 200
+        for method, path, template, kwargs in routes:
+            assert_real_route(shelf_env.server.api, method, path, template or "")
+            for client in (scoped, unscoped):
+                r = client.request(method, path, **kwargs)
+                assert r.status_code == 403, f"{method} {path}: {r.status_code}"
+            r = anon.request(method, path, **kwargs)
+            assert r.status_code == 401, f"{method} {path}: {r.status_code}"
+            # The positive control, last, so DELETE runs after the refusals.
+            r = shelf_env.owner.request(method, path, **kwargs)
+            assert r.status_code in (200, 201), f"{method} {path}: {r.text}"
+        assert set_id not in _hand_made(shelf_env)
+    finally:
+        _wipe_sets(shelf_env.server)
+
+
+def test_an_empty_unnamed_set_is_a_set(shelf_env):
+    try:
+        made = _new_set(shelf_env, name="   ")
+        assert made["name"] is None
+        assert made["members"] == []
+        assert made["incomplete"] is True
+        assert made["checkpoint_id"] is None
+        assert (made["picture_count"], made["recipes"], made["covers"]) == (0, 0, [])
+        assert _hand_made(shelf_env)[made["id"]] == made
+    finally:
+        _wipe_sets(shelf_env.server)
+
+
+def test_members_take_their_slot_from_their_kind_and_sort_by_name(shelf_env):
+    """Mixed case on purpose: `ALPHA` must sort after `Alice`, not before."""
+    ids = shelf_env.model_ids
+    with shelf_env.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET display_name = 'ALPHA' WHERE id = ?",
+            (ids["dana.safetensors"],),
+        )
+    try:
+        made = _new_set(
+            shelf_env,
+            name="Night shots",
+            members=[
+                {"model_id": ids["dana.safetensors"]},
+                {"model_id": ids["mystery.safetensors"]},
+                {"model_id": ids["alice.safetensors"]},
+                {"model_id": ids["base_xl.safetensors"]},
+            ],
+        )
+        assert [(m["name"], m["slot"]) for m in made["members"]] == [
+            ("Base XL", "checkpoint"),
+            ("Alice", "lora"),
+            ("ALPHA", "lora"),
+            ("mystery.safetensors", "other"),
+        ]
+        assert made["checkpoint_id"] == ids["base_xl.safetensors"]
+        assert made["incomplete"] is False
+        alice = made["members"][1]
+        assert alice == {
+            "sha256": ADAPTER_WITH_BASE,
+            "slot": "lora",
+            "label": "Alice",
+            "on_shelf": True,
+            "id": ids["alice.safetensors"],
+            "name": "Alice",
+            "filename": "alice.safetensors",
+            "kind": "adapter",
+            "base_model": "SDXL 1.0",
+            "file_size": 1000,
+        }
+    finally:
+        _wipe_sets(shelf_env.server)
+
+
+def test_an_unclassified_file_may_be_the_checkpoint_and_a_lora_may_not(shelf_env):
+    ids = shelf_env.model_ids
+    try:
+        made = _new_set(
+            shelf_env,
+            members=[{"model_id": ids["mystery.safetensors"], "slot": "checkpoint"}],
+        )
+        assert made["checkpoint_id"] == ids["mystery.safetensors"]
+        r = shelf_env.owner.post(
+            f"{API}/models/workflow-sets",
+            json={
+                "members": [
+                    {"model_id": ids["alice.safetensors"], "slot": "checkpoint"}
+                ]
+            },
+        )
+        assert r.status_code == 409, r.text
+        assert set(_hand_made(shelf_env)) == {made["id"]}
+    finally:
+        _wipe_sets(shelf_env.server)
+
+
+def test_an_engine_an_unhashed_file_and_an_unknown_id_are_refused(shelf_env):
+    engine = _add_model(
+        shelf_env, "engine", "wd-tagger.onnx", _h("enginetagger"), kind="tagger"
+    )
+    try:
+        refusals = (
+            (engine, 409, "wd-tagger.onnx isn't a model file a workflow loads."),
+            (shelf_env.model_ids["huge_unhashed.safetensors"], 409, None),
+            (999_999, 404, None),
+        )
+        for model_id, status, detail in refusals:
+            r = shelf_env.owner.post(
+                f"{API}/models/workflow-sets",
+                json={"name": "doomed", "members": [{"model_id": model_id}]},
+            )
+            assert r.status_code == status, r.text
+            if detail:
+                assert r.json()["detail"] == detail
+        # All or nothing: no set was left behind by any refusal.
+        assert _hand_made(shelf_env) == {}
+    finally:
+        _wipe_sets(shelf_env.server)
+        with shelf_env.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE id = ?", (engine,))
+
+
+def test_adding_twice_is_a_no_op_and_a_second_checkpoint_is_refused(shelf_env, caplog):
+    ids = shelf_env.model_ids
+    try:
+        set_id = _new_set(
+            shelf_env, members=[{"model_id": ids["base_xl.safetensors"]}]
+        )["id"]
+        url = f"{API}/models/workflow-sets/{set_id}/members"
+        alice = {"members": [{"model_id": ids["alice.safetensors"]}]}
+
+        r = shelf_env.owner.post(url, json=alice)
+        assert r.status_code == 200, r.text
+        assert r.json()["added"] == [ADAPTER_WITH_BASE]
+        r = shelf_env.owner.post(url, json=alice)
+        assert r.status_code == 200, r.text
+        assert r.json()["added"] == []
+        assert len(r.json()["set"]["members"]) == 2
+
+        with caplog.at_level(logging.INFO, logger="pixlstash.routes.model_shelf"):
+            r = shelf_env.owner.post(
+                url,
+                json={
+                    "members": [
+                        {"model_id": ids["bob.safetensors"]},
+                        {"model_id": ids["mystery.safetensors"], "slot": "checkpoint"},
+                    ]
+                },
+            )
+        assert r.status_code == 409, r.text
+        # The refusal is in the server log with its reason, not only the answer.
+        assert "already has a checkpoint" in caplog.text
+        assert r.json()["detail"] == (
+            "This set already has a checkpoint. Remove it first."
+        )
+        # The refusal took bob with it.
+        members = {m["sha256"] for m in _hand_made(shelf_env)[set_id]["members"]}
+        assert members == {CHECKPOINT_HASHED, ADAPTER_WITH_BASE}
+    finally:
+        _wipe_sets(shelf_env.server)
+
+
+def test_removing_members_reports_them_and_keeps_an_emptied_set(shelf_env):
+    ids = shelf_env.model_ids
+    try:
+        set_id = _new_set(
+            shelf_env,
+            members=[
+                {"model_id": ids["base_xl.safetensors"]},
+                {"model_id": ids["alice.safetensors"]},
+            ],
+        )["id"]
+        url = f"{API}/models/workflow-sets/{set_id}/members/remove"
+
+        r = shelf_env.owner.post(url, json={"sha256": [CHECKPOINT_HASHED.upper()]})
+        assert r.status_code == 200, r.text
+        assert r.json()["removed"] == [
+            {"sha256": CHECKPOINT_HASHED, "slot": "checkpoint", "label": "Base XL"}
+        ]
+        assert r.json()["set"]["incomplete"] is True
+
+        r = shelf_env.owner.post(
+            url, json={"sha256": [ADAPTER_WITH_BASE, ADAPTER_NO_BASE]}
+        )
+        assert [m["sha256"] for m in r.json()["removed"]] == [ADAPTER_WITH_BASE]
+        assert r.json()["set"]["members"] == []
+        assert set_id in _hand_made(shelf_env)
+
+        assert (
+            shelf_env.owner.post(
+                f"{API}/models/workflow-sets/999999/members/remove",
+                json={"sha256": [ADAPTER_WITH_BASE]},
+            ).status_code
+            == 404
+        )
+        # A string that cannot be a digest is refused, not silently ignored.
+        assert (
+            shelf_env.owner.post(url, json={"sha256": ["not-a-digest"]}).status_code
+            == 422
+        )
+    finally:
+        _wipe_sets(shelf_env.server)
+
+
+def test_a_set_is_renamed_and_its_name_cleared(shelf_env):
+    try:
+        set_id = _new_set(shelf_env, name="first")["id"]
+        url = f"{API}/models/workflow-sets/{set_id}"
+
+        r = shelf_env.owner.patch(url, json={"name": "  Night shots  "})
+        assert r.status_code == 200, r.text
+        assert r.json()["name"] == "Night shots"
+        r = shelf_env.owner.patch(url, json={"name": None})
+        assert r.status_code == 200, r.text
+        assert r.json()["name"] is None
+        assert _hand_made(shelf_env)[set_id]["name"] is None
+
+        assert (
+            shelf_env.owner.patch(
+                f"{API}/models/workflow-sets/999999", json={"name": "x"}
+            ).status_code
+            == 404
+        )
+    finally:
+        _wipe_sets(shelf_env.server)
+
+
+def test_undo_puts_a_member_back_even_after_its_file_was_re_kinded(shelf_env):
+    """The sha256 form restores a member as it was. Re-applying the kind rules
+    there refused a checkpoint the owner had since re-kinded, rolled back the
+    whole re-post and lost the set (#1520 review)."""
+    ids = shelf_env.model_ids
+    server = shelf_env.server
+    ckpt = ids["base_xl.safetensors"]
+    sha = hashlib.sha256(b"Base XL re-kinded").hexdigest()
+    before = server.hub.fetchone(
+        "SELECT sha256, file_kind, kind FROM model WHERE id = ?", (ckpt,)
+    )
+    with server.hub.transaction() as conn:
+        conn.execute("UPDATE model SET sha256 = ? WHERE id = ?", (sha, ckpt))
+    try:
+        set_id = _new_set(shelf_env, members=[{"model_id": ckpt}])["id"]
+        snapshot = shelf_env.owner.delete(
+            f"{API}/models/workflow-sets/{set_id}"
+        ).json()["deleted"]
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET file_kind = 'adapter', kind = 'lora' WHERE id = ?",
+                (ckpt,),
+            )
+
+        restored = _new_set(
+            shelf_env,
+            members=[
+                {"sha256": m["sha256"], "slot": m["slot"], "label": m["label"]}
+                for m in snapshot["members"]
+            ],
+        )
+
+        assert [(m["sha256"], m["slot"]) for m in restored["members"]] == [
+            (sha, "checkpoint")
+        ]
+    finally:
+        _wipe_sets(server)
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET sha256 = ?, file_kind = ?, kind = ? WHERE id = ?",
+                (before["sha256"], before["file_kind"], before["kind"], ckpt),
+            )
+
+
+def test_a_deleted_set_comes_back_whole_from_its_snapshot(shelf_env):
+    """Undo is a re-post of the snapshot, and a member whose file has left the
+    shelf since is put back as not on shelf, then reconnects by hash."""
+    ids = shelf_env.model_ids
+    server = shelf_env.server
+    # Real digests here: the sha256 member form accepts hex only, and the
+    # module's readable stand-ins are not.
+    ckpt_sha = hashlib.sha256(b"base xl").hexdigest()
+    alice_sha = hashlib.sha256(b"alice").hexdigest()
+    with server.hub.transaction() as conn:
+        conn.executemany(
+            "UPDATE model SET sha256 = ? WHERE id = ?",
+            [
+                (ckpt_sha, ids["base_xl.safetensors"]),
+                (alice_sha, ids["alice.safetensors"]),
+            ],
+        )
+    try:
+        set_id = _new_set(
+            shelf_env,
+            name="Portraits",
+            members=[
+                {"model_id": ids["base_xl.safetensors"]},
+                {"model_id": ids["alice.safetensors"]},
+            ],
+        )["id"]
+
+        r = shelf_env.owner.delete(f"{API}/models/workflow-sets/{set_id}")
+        assert r.status_code == 200, r.text
+        snapshot = r.json()["deleted"]
+        assert snapshot["id"] == set_id and snapshot["name"] == "Portraits"
+        assert set_id not in _hand_made(shelf_env)
+        # The shelf is untouched by a set delete.
+        assert server.hub.fetchone(
+            "SELECT id FROM model WHERE id = ?", (ids["alice.safetensors"],)
+        )
+        assert (
+            shelf_env.owner.delete(f"{API}/models/workflow-sets/{set_id}").status_code
+            == 404
+        )
+
+        # Alice leaves the shelf before the undo.
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM model_file WHERE model_id = ?",
+                (ids["alice.safetensors"],),
+            )
+            conn.execute("DELETE FROM model WHERE id = ?", (ids["alice.safetensors"],))
+
+        restored = _new_set(
+            shelf_env,
+            name=snapshot["name"],
+            members=[
+                {"sha256": m["sha256"], "slot": m["slot"], "label": m["label"]}
+                for m in snapshot["members"]
+            ],
+        )
+        assert restored["id"] != set_id
+        by_sha = {m["sha256"]: m for m in restored["members"]}
+        assert by_sha[ckpt_sha]["on_shelf"] is True
+        assert restored["checkpoint_id"] == ids["base_xl.safetensors"]
+        gone = by_sha[alice_sha]
+        assert (gone["on_shelf"], gone["id"], gone["name"], gone["kind"]) == (
+            False,
+            None,
+            "Alice",
+            None,
+        )
+        assert (gone["slot"], gone["label"]) == ("lora", "Alice")
+
+        back = _add_model(
+            shelf_env, "adapter", "alice.safetensors", alice_sha, kind="lora"
+        )
+        member = next(
+            m
+            for m in _hand_made(shelf_env)[restored["id"]]["members"]
+            if m["sha256"] == alice_sha
+        )
+        assert (member["on_shelf"], member["id"]) == (True, back)
+    finally:
+        _wipe_sets(server)
+
+
+def test_a_set_covers_the_combinations_it_holds_and_leaves_no_set(shelf_env):
+    """Covered means EVERY model of the combination is on the set: one extra
+    model is enough to leave a combination uncovered."""
+    ids = shelf_env.model_ids
+    server = shelf_env.server
+    try:
+        _seed_recipe(
+            server,
+            "hm-held",
+            [("ckpt_name", "base_xl.safetensors"), ("lora_name", "alice.safetensors")],
+        )
+        _seed_recipe(
+            server,
+            "hm-extra",
+            [
+                ("ckpt_name", "base_xl.safetensors"),
+                ("lora_name", "alice.safetensors"),
+                ("lora_name", "dana.safetensors"),
+            ],
+        )
+        held = [
+            _seed_picture(
+                server,
+                "hm-held",
+                score=score,
+                thumbnail_width=64,
+                thumbnail_height=64,
+            )
+            for score in (2, 4)
+        ]
+        _seed_picture(server, "hm-extra", score=5)
+
+        portraits = _new_set(
+            shelf_env,
+            members=[
+                {"model_id": ids["base_xl.safetensors"]},
+                {"model_id": ids["alice.safetensors"]},
+            ],
+        )["id"]
+        loners = _new_set(
+            shelf_env, members=[{"model_id": ids["mystery.safetensors"]}]
+        )["id"]
+
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+        by_key = {c["key"]: c for c in body["combinations"]}
+        held_key = ",".join(
+            str(i)
+            for i in sorted([ids["base_xl.safetensors"], ids["alice.safetensors"]])
+        )
+        assert by_key[held_key]["covered_by"] == [portraits]
+        extra = [c for c in body["combinations"] if c["key"] != held_key]
+        assert [c["covered_by"] for c in extra] == [[]]
+
+        sets = {entry["id"]: entry for entry in body["hand_made"]}
+        assert (sets[portraits]["picture_count"], sets[portraits]["recipes"]) == (2, 1)
+        assert [c["picture_id"] for c in sets[portraits]["covers"]] == held[::-1]
+        assert sets[loners]["picture_count"] == 0
+        # Newest first.
+        assert [entry["id"] for entry in body["hand_made"]] == [loners, portraits]
+
+        assert ids["mystery.safetensors"] not in body["no_set"]
+        assert ids["bob.safetensors"] in body["no_set"]
+    finally:
+        _wipe_sets(server)
+        _wipe_recipes(server)
+
+
+def _declines(shelf_env, set_id, sha256s) -> dict:
+    r = shelf_env.owner.put(
+        f"{API}/models/workflow-sets/{set_id}/declines", json={"sha256": sha256s}
+    )
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _offered(entry) -> list[tuple[str, str, int, int]]:
+    return [
+        (m["name"], m["slot"], m["picture_count"], m["recipes"])
+        for m in entry["offer"]["models"]
+    ]
+
+
+def test_a_near_miss_is_offered_kept_separate_and_merged(shelf_env):
+    """#1523: the pictures of the set's own checkpoint that used models it
+    lacks are offered, not joined. Keep separate is remembered per model and
+    undone by putting the old list back; the merge is the ordinary add."""
+    ids = shelf_env.model_ids
+    server = shelf_env.server
+    try:
+        _seed_recipe(
+            server,
+            "om-held",
+            [("ckpt_name", "base_xl.safetensors"), ("lora_name", "alice.safetensors")],
+        )
+        _seed_recipe(
+            server,
+            "om-near",
+            [
+                ("ckpt_name", "base_xl.safetensors"),
+                ("lora_name", "alice.safetensors"),
+                ("lora_name", "dana.safetensors"),
+            ],
+        )
+        _seed_recipe(
+            server,
+            "om-far",
+            [("ckpt_name", "base_xl.safetensors"), ("lora_name", "bob.safetensors")],
+        )
+        # A recipe with no picture in THIS library: the offer is a hub fact.
+        _seed_recipe(
+            server,
+            "om-elsewhere",
+            [
+                ("ckpt_name", "base_xl.safetensors"),
+                ("model_name", "mystery.safetensors"),
+            ],
+        )
+        for recipe, count in (("om-held", 2), ("om-near", 3), ("om-far", 1)):
+            for _ in range(count):
+                _seed_picture(server, recipe)
+
+        set_id = _new_set(
+            shelf_env,
+            members=[
+                {"model_id": ids["base_xl.safetensors"]},
+                {"model_id": ids["alice.safetensors"]},
+            ],
+        )["id"]
+        entry = _hand_made(shelf_env)[set_id]
+        # Joined: only the pictures every model of which is in the set.
+        assert entry["picture_count"] == 2
+        assert entry["offer"]["head_id"] == ids["base_xl.safetensors"]
+        assert (entry["offer"]["picture_count"], entry["offer"]["recipes"]) == (4, 3)
+        assert _offered(entry) == [
+            ("Dana", "lora", 3, 1),
+            ("Bob", "lora", 1, 1),
+            ("mystery.safetensors", "other", 0, 1),
+        ]
+        assert len(entry["offer"]["covers"]) == 3
+        assert (entry["declined"], entry["kept_separate"]) == ([], 0)
+
+        # Keep separate for Dana alone: the rest of the offer stands.
+        body = _declines(shelf_env, set_id, [ADAPTER_NO_BASE_2])
+        assert body["previous"] == []
+        assert body["set"]["declined"] == [ADAPTER_NO_BASE_2]
+        assert body["set"]["kept_separate"] == 3
+        assert [m[0] for m in _offered(body["set"])] == ["Bob", "mystery.safetensors"]
+        # Survives a fresh read: nothing about it lives in the client.
+        assert _hand_made(shelf_env)[set_id]["declined"] == [ADAPTER_NO_BASE_2]
+
+        # Undo is the previous list put back.
+        body = _declines(shelf_env, set_id, [])
+        assert body["previous"] == [ADAPTER_NO_BASE_2]
+        assert len(body["set"]["offer"]["models"]) == 3
+
+        # Merge: add what was offered, and the pictures join.
+        r = shelf_env.owner.post(
+            f"{API}/models/workflow-sets/{set_id}/members",
+            json={
+                "members": [
+                    {"model_id": m["id"], "slot": m["slot"]}
+                    for m in entry["offer"]["models"]
+                ]
+            },
+        )
+        assert r.status_code == 200, r.text
+        merged = r.json()["set"]
+        assert merged["picture_count"] == 6
+        assert merged["offer"] is None
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+        assert all(c["covered_by"] == [set_id] for c in body["combinations"])
+        # The offer read every library's recipes; the route still serves only
+        # this library's: the pictureless "om-elsewhere" combination and the
+        # hub-wide list stay on the server.
+        assert "hub_combinations" not in body
+        assert len(body["combinations"]) == 3
+    finally:
+        _wipe_sets(server)
+        _wipe_recipes(server)
+
+
+def test_one_pictures_set_is_offered_to_the_set_needing_fewest_models(shelf_env):
+    """A set with no checkpoint is offered a pictures' set holding all of its
+    models, and the checkpoint lands in its Checkpoint slot. Once another set
+    needs fewer models added for the same pictures, the offer moves there."""
+    ids = shelf_env.model_ids
+    server = shelf_env.server
+    try:
+        _seed_recipe(
+            server,
+            "fw-near",
+            [
+                ("ckpt_name", "base_xl.safetensors"),
+                ("lora_name", "alice.safetensors"),
+                ("lora_name", "dana.safetensors"),
+            ],
+        )
+        _seed_picture(server, "fw-near")
+
+        dana_only = _new_set(
+            shelf_env, members=[{"model_id": ids["dana.safetensors"]}]
+        )["id"]
+        # Incomplete, and nothing in any recipe: no offer.
+        stray = _new_set(shelf_env, members=[{"model_id": ids["bob.safetensors"]}])[
+            "id"
+        ]
+        sets = _hand_made(shelf_env)
+        assert sets[dana_only]["offer"]["head_id"] == ids["base_xl.safetensors"]
+        assert _offered(sets[dana_only]) == [
+            ("Base XL", "checkpoint", 1, 1),
+            ("Alice", "lora", 1, 1),
+        ]
+        assert sets[stray]["offer"] is None
+
+        closer = _new_set(
+            shelf_env,
+            members=[
+                {"model_id": ids["base_xl.safetensors"]},
+                {"model_id": ids["alice.safetensors"]},
+            ],
+        )["id"]
+        sets = _hand_made(shelf_env)
+        assert _offered(sets[closer]) == [("Dana", "lora", 1, 1)]
+        assert sets[dana_only]["offer"] is None
+
+        # Kept separate there, it comes back to the other set.
+        _declines(shelf_env, closer, [ADAPTER_NO_BASE_2])
+        sets = _hand_made(shelf_env)
+        assert sets[closer]["offer"] is None
+        assert sets[dana_only]["offer"]["head_id"] == ids["base_xl.safetensors"]
+    finally:
+        _wipe_sets(server)
+        _wipe_recipes(server)
+
+
+def test_a_run_only_near_miss_is_not_offered(shelf_env):
+    """#1565: the offer is worded in pictures and recipes, so a combination
+    only ComfyUI ran is covered like any other but never offered."""
+    ids = shelf_env.model_ids
+    server = shelf_env.server
+    try:
+        _seed_run(
+            server, "run-near", [ids["base_xl.safetensors"], ids["dana.safetensors"]]
+        )
+        _seed_run(server, "run-held", [ids["base_xl.safetensors"]])
+        set_id = _new_set(
+            shelf_env, members=[{"model_id": ids["base_xl.safetensors"]}]
+        )["id"]
+
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+        assert {e["id"]: e for e in body["hand_made"]}[set_id]["offer"] is None
+        by_key = {c["key"]: c for c in body["combinations"]}
+        assert by_key[_key(ids["base_xl.safetensors"])]["covered_by"] == [set_id]
+        assert (
+            by_key[_key(ids["base_xl.safetensors"], ids["dana.safetensors"])][
+                "covered_by"
+            ]
+            == []
+        )
+    finally:
+        _wipe_sets(server)
+
+
+def test_declines_refuse_an_unknown_set_and_a_short_digest(shelf_env):
+    r = shelf_env.owner.put(
+        f"{API}/models/workflow-sets/999999/declines", json={"sha256": []}
+    )
+    assert r.status_code == 404, r.text
+    try:
+        set_id = _new_set(shelf_env)["id"]
+        r = shelf_env.owner.put(
+            f"{API}/models/workflow-sets/{set_id}/declines", json={"sha256": ["ab"]}
+        )
+        assert r.status_code == 422, r.text
+        # A deleted set takes its declines with it (the hub enforces the key).
+        _declines(shelf_env, set_id, [ADAPTER_NO_BASE_2])
+        r = shelf_env.owner.delete(f"{API}/models/workflow-sets/{set_id}")
+        assert r.status_code == 200, r.text
+        assert (
+            shelf_env.server.hub.fetchone(
+                "SELECT COUNT(*) AS n FROM model_workflow_set_decline WHERE set_id = ?",
+                (set_id,),
+            )["n"]
+            == 0
+        )
+    finally:
+        _wipe_sets(shelf_env.server)
 
 
 # ===========================================================================

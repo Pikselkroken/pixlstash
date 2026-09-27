@@ -4,15 +4,22 @@
  * SELECTS as it moves, which is the radiogroup contract, and focus follows.
  * A handled arrow does not propagate.
  *
+ * A `horizontal` group answers Left/Right only and lets Up/Down through, for a
+ * switch sitting in a grid's header: there Down means "into the grid below",
+ * and flipping the switch back is the last thing the reader expects.
+ *
  * @param {KeyboardEvent} event - keydown on the radiogroup element.
  * @param {Array<{id: *, disabled?: boolean}>} options
  * @param {*} value - the current selection.
+ * @param {"both"|"horizontal"} [orientation="both"]
  * @returns {*} the id to select, or undefined when the key is not an arrow.
  */
-export function arrowStep(event, options, value) {
-  const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[
-    event.key
-  ];
+export function arrowStep(event, options, value, orientation = "both") {
+  const step = {
+    ArrowRight: 1,
+    ArrowLeft: -1,
+    ...(orientation === "horizontal" ? {} : { ArrowDown: 1, ArrowUp: -1 }),
+  }[event.key];
   if (!step) return undefined;
   const live = options.filter((o) => !o.disabled);
   if (!live.length) return undefined;

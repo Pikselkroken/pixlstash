@@ -487,9 +487,9 @@ class FolderStructureRead:
             for name in sorted(dirnames):
                 if is_hidden_entry(name):
                     # `.pixlstash` sidecars and a vault's own thumbnail cache.
-                    # Counted, because §24's whole argument against `os.walk`'s
-                    # default is that a silently omitted subtree reads as a
-                    # complete map.
+                    # Counted, because backend §24.1's whole argument against
+                    # `os.walk`'s default is that a silently omitted subtree
+                    # reads as a complete map.
                     self._skipped_hidden += 1
                     continue
                 child = os.path.join(dirpath, name)

@@ -13,7 +13,6 @@
       </button>
     </div>
     <div class="tbm-section">
-      <slot name="top" />
       <div class="tbm-input-wrap fm-list-field">
         <v-icon size="16" class="tbm-input-icon">mdi-magnify</v-icon>
         <input

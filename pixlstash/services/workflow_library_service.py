@@ -14,14 +14,14 @@ scrapheap in would make it read as live.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from math import inf
 from typing import Optional
 
 from sqlalchemy import and_, case, func, nullslast, or_
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Picture
+from pixlstash.db_models import Character, Picture, PictureSet, Project
 from pixlstash.services.saved_recipe_service import counts_by_workflow_key
 from pixlstash.stacking import get_or_create_stack_for_picture
 
@@ -261,10 +261,13 @@ class CoverCandidate:
     square_crop_x: Optional[int] = None
     square_crop_y: Optional[int] = None
     square_crop_side: Optional[int] = None
+    # Made with a model the owner has since replaced in this workflow
+    # (``workflow_model_fix``). Set by the workflows grid, never by the query.
+    superseded: bool = False
 
 
 # What a NULL date sorts as when the ranking above is re-expressed in Python.
-_EPOCH = datetime.min
+_EPOCH = datetime.min.replace(tzinfo=timezone.utc)
 
 
 def cover_order(candidate: CoverCandidate) -> tuple:
@@ -550,6 +553,25 @@ def read_best_picture_ids(vault, structural_hashes: list[str], limit: int) -> li
     return vault.db.run_immediate_read_task(best_picture_ids, structural_hashes, limit)
 
 
+def picture_variant(session: Session, picture_id: int) -> Optional[str]:
+    """The variant a kept picture was made by, or ``None``.
+
+    ``None`` for a binned or unknown picture and for one no workflow was read
+    off, so a caller asking about a cover it was handed cannot be told about a
+    picture the owner threw away.
+    """
+    return session.exec(
+        select(Picture.workflow_structural_hash)
+        .where(Picture.id == picture_id)
+        .where(Picture.deleted.is_(False))
+    ).first()
+
+
+def read_picture_variant(vault, picture_id: int) -> Optional[str]:
+    """:func:`picture_variant` in its own read task."""
+    return vault.db.run_immediate_read_task(picture_variant, picture_id)
+
+
 def oldest_kept_by_pixel_sha(session: Session, pixel_shas: list[str]) -> dict[str, int]:
     """``{pixel_sha: picture_id}``: the picture a pinned input resolves to (#1457).
 
@@ -603,6 +625,33 @@ def read_kept_picture_files(
 ) -> dict[int, tuple[str, Optional[str]]]:
     """Each kept picture's file and content, in its own read task."""
     return vault.db.run_immediate_read_task(kept_picture_files, picture_ids)
+
+
+_LIBRARY_TABLES = {"project": Project, "set": PictureSet, "character": Character}
+
+
+def library_ids_present(
+    session: Session, named: dict[str, set[int]]
+) -> dict[str, dict[int, str]]:
+    """``{kind: {id: name}}`` for the ids in *named* this library has (kinds
+    ``project``, ``set``, ``character``): what a ComfyUI-PixlStash loader's
+    frozen ``"<name> #<id>"`` is checked against before a run (#1521)."""
+    present: dict[str, dict[int, str]] = {}
+    for kind, ids in named.items():
+        table = _LIBRARY_TABLES[kind]
+        present[kind] = dict(
+            session.exec(
+                select(table.id, table.name).where(table.id.in_(sorted(ids)))
+            ).all()
+        )
+    return present
+
+
+def read_library_ids(vault, named: dict[str, set[int]]) -> dict[str, dict[int, str]]:
+    """:func:`library_ids_present` in its own read task; no read when empty."""
+    if not named:
+        return {}
+    return vault.db.run_immediate_read_task(library_ids_present, named)
 
 
 def stack_for_picture(vault, picture_id: int) -> Optional[int]:

@@ -1,7 +1,7 @@
 import os
 import shutil
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Session, select
@@ -284,7 +284,7 @@ class PictureImportTask(BaseTask):
                     pixel_sha=pixel_sha,
                     subfolder=subfolder,
                 )
-                pic.imported_at = datetime.utcnow()
+                pic.imported_at = datetime.now(timezone.utc)
                 if original_file_name:
                     pic.original_file_name = original_file_name
                 new_pictures.append(pic)

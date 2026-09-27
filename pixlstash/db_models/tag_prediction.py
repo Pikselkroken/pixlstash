@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
 import sqlalchemy as sa
@@ -125,7 +125,9 @@ class TagPrediction(SQLModel, table=True):
     confidence: float
     model_version: str = Field(index=True)
     status: str = Field(default="PENDING", index=True)
-    predicted_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    predicted_at: Optional[datetime] = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
 
     # --- Human-label ledger (supervision record; see class docstring) ---
     label_state: str = Field(default="UNKNOWN", index=True)  # UNKNOWN | POS | NEG

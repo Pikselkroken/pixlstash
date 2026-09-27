@@ -3130,7 +3130,14 @@ def test_a_mark_flip_carries_every_table_a_card_key_appears_in():
         "a derived table copied by the carry-over would duplicate a variant "
         "onto both halves of a split"
     )
-    assert _hub_tables_keyed_on_a_workflow_key() == set(_KEYED_TABLES) | derived, (
+    # A record of which workflow each card became at the cut-over (#1622,
+    # written by #1623): keyed by the card key AS IT WAS, so a later flip must
+    # leave it naming the old key rather than copy it onto the new ones.
+    historical = {"workflow_key_successor"}
+    assert set(_KEYED_TABLES).isdisjoint(historical)
+    assert _hub_tables_keyed_on_a_workflow_key() == (
+        set(_KEYED_TABLES) | derived | historical
+    ), (
         "a hub table keyed on workflow_key is neither carried by a mark flip "
         "nor one of the derived tables it re-keys: add it to _KEYED_TABLES, or "
         "to `derived` here with the UPDATE that moves it"
@@ -3155,3 +3162,164 @@ def test_the_keyed_table_guardrail_has_teeth(tmp_path):
         "workflow_variant",
         "workflow_file",
     }
+
+
+# ---------------------------------------------------------------------------
+# Architecture docs are filed by topic, never by release (#1468)
+# ---------------------------------------------------------------------------
+
+ARCHITECTURE_DOCS = sorted((REPO_ROOT / "docs").glob("*_architecture.md"))
+_RELEASE_TAG = re.compile(r"\(v\d+\.\d+|\bPhase \d|\bLane [A-Z]\b|\(DAM \d")
+
+
+def _github_slug(heading: str) -> str:
+    """The anchor GitHub gives a Markdown heading, before de-duplication."""
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", heading)  # a link keeps its text
+    return re.sub(r"[^\w\- ]", "", text.strip().lower()).replace(" ", "-")
+
+
+def _architecture_doc_problems(text: str) -> list[str]:
+    """Release-named ``##`` sections, and Table of Contents drift both ways."""
+    headings = re.findall(r"^#{1,6} (.+)$", text, re.M)
+    anchors: set[str] = set()
+    for heading in headings:
+        slug = _github_slug(heading)
+        n = 0
+        while (slug if n == 0 else f"{slug}-{n}") in anchors:
+            n += 1
+        anchors.add(slug if n == 0 else f"{slug}-{n}")
+    parts = text.split("## Table of Contents", 1)
+    if len(parts) < 2:
+        return ["no '## Table of Contents' section"]
+    toc = parts[1].split("\n---", 1)[0]
+    linked = set(re.findall(r"\]\(#([^)]+)\)", toc))
+    problems = []
+    for section in re.findall(r"^## (\d+\..+)$", text, re.M):
+        if _RELEASE_TAG.search(section):
+            problems.append(f"release-named section: ## {section}")
+        if _github_slug(section) not in linked:
+            problems.append(f"not in the Table of Contents: ## {section}")
+    problems += [f"TOC link to no heading: #{a}" for a in sorted(linked - anchors)]
+    return problems
+
+
+def test_the_architecture_docs_exist():
+    """An empty glob parametrizes to zero tests, which would drop the guardrail."""
+    assert ARCHITECTURE_DOCS, "no docs/*_architecture.md found"
+
+
+@pytest.mark.parametrize("doc", ARCHITECTURE_DOCS, ids=lambda p: p.name)
+def test_architecture_docs_are_filed_by_topic(doc):
+    """A section named for a release is the half a topic-first reader never
+    reads. New material goes in its subsystem's section; see the
+    "Project Architecture" rule in .github/copilot-instructions.md."""
+    problems = _architecture_doc_problems(doc.read_text(encoding="utf-8"))
+    assert not problems, f"{doc.name}:\n" + "\n".join(problems)
+
+
+def test_the_architecture_doc_guardrail_has_teeth():
+    """Put a release tag back on a real section and both halves must fire."""
+    doc = REPO_ROOT / "docs" / "backend_architecture.md"
+    text = doc.read_text(encoding="utf-8")
+    heading = "## 24. Folder structure: read, commit, layout and moves"
+    assert heading in text
+    problems = _architecture_doc_problems(
+        text.replace(heading, heading + " (v1.11 Phase 2)")
+    )
+    assert any(p.startswith("release-named section") for p in problems), problems
+    assert any(p.startswith("not in the Table of Contents") for p in problems), problems
+    assert any(p.startswith("TOC link to no heading") for p in problems), problems
+    assert _architecture_doc_problems(text.replace("## Table of Contents", "")) == [
+        "no '## Table of Contents' section"
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Guardrail: no naive datetime is written (#1503)
+# ---------------------------------------------------------------------------
+
+
+def _naive_datetime_sites(source: str, in_models: bool) -> list[tuple[int, str]]:
+    """Return (lineno, what) for every way a naive datetime gets into a column.
+
+    ``datetime.utcnow`` / ``utcfromtimestamp`` and a bare ``datetime.now()``
+    produce naive values, which sqlmodel's ``UTCDateTime`` refuses on write. In
+    a model file a raw SQLAlchemy ``DateTime`` column also reads back naive, so
+    it would put naive values back into circulation.
+    """
+    hits = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Attribute) and node.attr in (
+            "utcnow",
+            "utcfromtimestamp",
+        ):
+            hits.append((node.lineno, f"datetime.{node.attr}"))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            attr = node.func.attr
+            tz_args = [kw.value for kw in node.keywords if kw.arg == "tz"]
+            tz_args += node.args[1:] if attr == "fromtimestamp" else node.args
+            no_tz = not tz_args or all(
+                isinstance(a, ast.Constant) and a.value is None for a in tz_args
+            )
+            if attr == "today" or (attr in ("now", "fromtimestamp") and no_tz):
+                hits.append((node.lineno, f"datetime.{attr}() without a timezone"))
+        elif in_models and (
+            (isinstance(node, ast.Name) and node.id == "DateTime")
+            or (isinstance(node, ast.Attribute) and node.attr == "DateTime")
+        ):
+            hits.append((node.lineno, "DateTime column type (use UTCDateTime)"))
+    return hits
+
+
+def test_no_naive_datetime_is_written():
+    """Every stored datetime is aware UTC; sqlmodel >= 0.0.45 raises on naive."""
+    models_dir = PIXLSTASH_DIR / "db_models"
+    offenders = []
+    for path in sorted(PIXLSTASH_DIR.rglob("*.py")):
+        if "migrations" in path.parts:
+            continue
+        in_models = models_dir in path.parents
+        for lineno, what in _naive_datetime_sites(path.read_text("utf-8"), in_models):
+            offenders.append(f"  {path.relative_to(REPO_ROOT)}:{lineno}: {what}")
+    assert not offenders, (
+        "Use datetime.now(timezone.utc) (and UTCDateTime for an explicit column); "
+        "a naive value fails on insert:\n" + "\n".join(offenders)
+    )
+
+
+def test_naive_datetime_guardrail_has_teeth():
+    planted = {
+        "default_factory=datetime.utcnow": "f = Field(default_factory=datetime.utcnow)",
+        "utcnow call": "x = datetime.utcnow()",
+        "module-qualified": "x = datetime.datetime.utcnow()",
+        "bare now": "x = datetime.now()",
+        "utcfromtimestamp": "x = datetime.utcfromtimestamp(0)",
+        "now(None)": "x = datetime.now(None)",
+        "now(tz=None)": "x = datetime.now(tz=None)",
+        "fromtimestamp": "x = datetime.fromtimestamp(0)",
+        "today": "x = datetime.today()",
+    }
+    for name, snippet in planted.items():
+        assert _naive_datetime_sites(snippet, in_models=False), name
+    assert _naive_datetime_sites("c = Column(DateTime)", in_models=True)
+    assert not _naive_datetime_sites("c = Column(UTCDateTime())", in_models=True)
+    assert not _naive_datetime_sites("x = datetime.now(timezone.utc)", False)
+    assert not _naive_datetime_sites("x = _utcnow()", in_models=False)
+    assert not _naive_datetime_sites("x = datetime.fromtimestamp(0, tz=UTC)", False)
+    assert not _naive_datetime_sites("x = datetime.fromtimestamp(0, UTC)", False)
+
+
+def test_plugin_check_is_imported_only_by_the_cli():
+    """The `plugins test` audit hook must never be installed in the server.
+
+    `sys.addaudithook` cannot be undone, so a server that imported
+    `plugin_check` and ran a check would carry the hook for its whole life.
+    A plain text search rather than an `ast` walk, so a relative import or an
+    `importlib.import_module` string is caught as well.
+    """
+    mentions = {
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in PIXLSTASH_DIR.rglob("*.py")
+        if "plugin_check" in path.read_text(encoding="utf-8")
+    }
+    assert mentions == {"pixlstash/cli.py", "pixlstash/plugin_check.py"}

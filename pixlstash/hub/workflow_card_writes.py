@@ -31,14 +31,23 @@ from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_card_reads import AUTO_STACK_PREFIX
+from pixlstash.hub.workflow_cards import (
+    fixed_slots,
+    loader_swaps_of,
+    promoted_pairs,
+)
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.workflow_hash import WorkflowGraphError
+from pixlstash.services.workflow_hash import WorkflowGraphError, normalized_filename
 from pixlstash.services.workflow_identity import (
+    RECIPE,
     STRUCTURAL,
     WORKFLOW_KEY_VERSION,
+    LoaderSwap,
     slots,
+    unswapped,
     workflow_key,
 )
+from pixlstash.utils.adapter_header import FILE_CHECKPOINT
 
 logger = get_logger(__name__)
 
@@ -214,23 +223,7 @@ def flip_slot_marks(
         both moved and did not. A reader that treats every key in this mapping
         as a card that went away will act on the half that is not true.
     """
-    documents = {}
-    for structural_hash, raw in hub.fetchall(
-        "SELECT r.structural_hash, g.document FROM workflow_recipe r "
-        "JOIN workflow_recipe_graph g ON g.structural_hash = r.structural_hash "
-        "WHERE r.topology_hash = ?",
-        (topology_hash,),
-    ):
-        try:
-            documents[structural_hash] = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            logger.error(
-                "Stored document of variant %s will not parse, so the mark "
-                "flip leaves it on the card it is on: %s",
-                structural_hash,
-                exc,
-            )
-
+    documents = _topology_documents(hub, topology_hash)
     with hub.transaction() as conn:
         conn.executemany(
             "INSERT INTO workflow_slot_mark (topology_hash, slot_label, mark) "
@@ -238,18 +231,7 @@ def flip_slot_marks(
             "DO UPDATE SET mark = excluded.mark",
             [(topology_hash, label, mark) for label, mark in marks.items()],
         )
-        structural_labels = {
-            label
-            for label, mark in conn.execute(
-                "SELECT slot_label, mark FROM workflow_slot_mark "
-                "WHERE topology_hash = ?",
-                (topology_hash,),
-            ).fetchall()
-            if mark == STRUCTURAL
-        }
-        moved = _rekey_variants(
-            conn, topology_hash, documents, structural_labels, variant_pictures
-        )
+        moved = _rekey_variants(conn, topology_hash, documents, variant_pictures)
     if moved:
         logger.info(
             "A slot-mark flip on topology %s moved %d card(s) to new keys.",
@@ -259,14 +241,277 @@ def flip_slot_marks(
     return moved
 
 
+def set_lora_promotion(
+    hub: HubDatabase,
+    topology_hash: str,
+    asset: str,
+    promoted: bool,
+    variant_pictures: dict[str, int],
+) -> Optional[dict[str, list[str]]]:
+    """Promote one LoRA file to a workflow of its own, or put it back.
+
+    The per-file counterpart of :func:`flip_slot_marks`: promoting reaches the
+    card key with *asset* at every LoRA slot of this topology that has held it,
+    and with no other file at those slots, so only the pictures that loaded
+    this file move to a new card. The re-key and the carry-over are one
+    transaction, as a flip's are.
+
+    **Putting back a file whose whole slot is marked structural** turns the
+    slot into a recipe slot and promotes every OTHER file it has held, so they
+    stay on the cards they are on and only this one folds back. That is what
+    lets the per-file control undo a split a per-slot mark made.
+
+    A promoted card is split off an existing one and would inherit its
+    attributes, owner's name included; two cards reading the same typed name
+    is the confusion this control exists to end, so the split-off card's name
+    is cleared and it reads as its generated one. A card ALL of whose pictures
+    loaded the file is re-keyed rather than split, and keeps its name.
+
+    Args:
+        topology_hash: The topology the file is (un)promoted in.
+        asset: The file's reference in the stored documents (``asset:…``).
+        promoted: ``True`` to promote, ``False`` to put back.
+        variant_pictures: ``{structural_hash: kept pictures}``, as for a flip.
+
+    Returns:
+        :func:`flip_slot_marks`' ``moved`` mapping, or ``None`` when no stored
+        document of this topology loads *asset* in a LoRA slot, which the
+        caller reports rather than answering with a change that did nothing.
+    """
+    documents = _topology_documents(hub, topology_hash)
+    held: dict[str, set[str]] = {}
+    for structural_hash, document in documents.items():
+        try:
+            document_slots = slots(document)
+        except WorkflowGraphError as exc:
+            logger.error(
+                "Variant %s will not reduce, so a LoRA promotion cannot see "
+                "which files its slots hold: %s",
+                structural_hash,
+                exc,
+            )
+            continue
+        for slot in document_slots:
+            if slot.is_lora:
+                held.setdefault(slot.label, set()).add(slot.asset)
+    labels = sorted(label for label, assets in held.items() if asset in assets)
+    if not labels:
+        return None
+    with hub.transaction() as conn:
+        marks = dict(
+            conn.execute(
+                "SELECT slot_label, mark FROM workflow_slot_mark "
+                "WHERE topology_hash = ?",
+                (topology_hash,),
+            ).fetchall()
+        )
+        if promoted:
+            conn.executemany(
+                "INSERT OR IGNORE INTO workflow_lora_promotion "
+                "(topology_hash, slot_label, asset) VALUES (?, ?, ?)",
+                [
+                    (topology_hash, label, asset)
+                    for label in labels
+                    if marks.get(label) != STRUCTURAL
+                ],
+            )
+        else:
+            conn.execute(
+                "DELETE FROM workflow_lora_promotion "
+                "WHERE topology_hash = ? AND asset = ?",
+                (topology_hash, asset),
+            )
+            for label in labels:
+                if marks.get(label) != STRUCTURAL:
+                    continue
+                conn.execute(
+                    "UPDATE workflow_slot_mark SET mark = ? "
+                    "WHERE topology_hash = ? AND slot_label = ?",
+                    (RECIPE, topology_hash, label),
+                )
+                conn.executemany(
+                    "INSERT OR IGNORE INTO workflow_lora_promotion "
+                    "(topology_hash, slot_label, asset) VALUES (?, ?, ?)",
+                    [
+                        (topology_hash, label, other)
+                        for other in sorted(held[label] - {asset})
+                    ],
+                )
+        moved = _rekey_variants(conn, topology_hash, documents, variant_pictures)
+        if promoted:
+            split_off = sorted(
+                {
+                    key
+                    for old_key, keys in moved.items()
+                    if old_key in keys
+                    for key in keys
+                    if key != old_key
+                }
+            )
+            conn.executemany(
+                "UPDATE workflow_attr SET name = NULL WHERE workflow_key = ?",
+                [(key,) for key in split_off],
+            )
+    logger.info(
+        "LoRA %s %s on topology %s; %d card(s) moved.",
+        asset,
+        "promoted" if promoted else "put back",
+        topology_hash,
+        len(moved),
+    )
+    return moved
+
+
+def set_model_fix(
+    hub: HubDatabase,
+    topology_hash: str,
+    slot_labels: list[str],
+    was: str,
+    now: Optional[str],
+    variant_pictures: dict[str, int],
+    keep_key: Optional[str] = None,
+    kind: str = FILE_CHECKPOINT,
+) -> dict[str, list[str]]:
+    """Replace model *was* with *now* in these slots of one topology, or undo it.
+
+    ``now=None`` takes the replacement back out. *kind* is the shelf
+    ``file_kind`` the slots take (``workflow_identity.model_fix_kind``), kept
+    so the Workflow tab can say which row a fix belongs to. Either way every variant of
+    the topology is re-keyed in the same transaction, the way a mark flip is:
+    setting a fix folds the pictures already made with *now* onto the card the
+    original made, and undoing it moves them back onto a card of their own.
+
+    *keep_key* is the card being fixed: where cards merge onto it, its own
+    name, pins and defaults win whatever the picture counts say, because the
+    owner is fixing THIS card rather than folding it into another.
+
+    Returns:
+        :func:`flip_slot_marks`' ``moved`` mapping.
+    """
+    was_norm = normalized_filename(was)
+    documents = _topology_documents(hub, topology_hash)
+    with hub.transaction() as conn:
+        conn.executemany(
+            "DELETE FROM workflow_model_fix "
+            "WHERE topology_hash = ? AND slot_label = ? AND was_norm = ?",
+            [(topology_hash, label, was_norm) for label in slot_labels],
+        )
+        if now is not None:
+            conn.executemany(
+                "INSERT INTO workflow_model_fix (topology_hash, slot_label, "
+                "was_norm, now_norm, was_name, now_name, slot_kind) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        topology_hash,
+                        label,
+                        was_norm,
+                        normalized_filename(now),
+                        was,
+                        now,
+                        kind,
+                    )
+                    for label in slot_labels
+                ],
+            )
+        moved = _rekey_variants(
+            conn, topology_hash, documents, variant_pictures, keep_key
+        )
+    logger.info(
+        "Model %r on topology %s %s; %d card(s) moved.",
+        was,
+        topology_hash,
+        f"replaced by {now!r}" if now is not None else "restored",
+        len(moved),
+    )
+    return moved
+
+
+def _topology_documents(hub: HubDatabase, topology_hash: str) -> dict[str, dict]:
+    """Every stored document of one topology, by variant, that parses.
+
+    A variant carded under this topology through a swapped-in loader (#1605)
+    is one of them, its document read with the original loader put back.
+    """
+    documents = {}
+    for structural_hash, recipe_topology, raw in hub.fetchall(
+        "SELECT r.structural_hash, r.topology_hash, g.document "
+        "FROM workflow_recipe r "
+        "JOIN workflow_recipe_graph g ON g.structural_hash = r.structural_hash "
+        "WHERE r.topology_hash = ? OR r.structural_hash IN "
+        "(SELECT structural_hash FROM workflow_variant WHERE topology_hash = ?)",
+        (topology_hash, topology_hash),
+    ):
+        try:
+            document = json.loads(raw)
+            if recipe_topology != topology_hash:
+                swapped_from, document = unswapped(
+                    document, loader_swaps_of(hub.fetchall, recipe_topology)
+                )
+                if swapped_from != topology_hash:
+                    continue
+            documents[structural_hash] = document
+        except (json.JSONDecodeError, WorkflowGraphError) as exc:
+            logger.error(
+                "Stored document of variant %s will not parse, so a re-key "
+                "leaves it on the card it is on: %s",
+                structural_hash,
+                exc,
+            )
+    return documents
+
+
+def record_loader_swaps(
+    hub: HubDatabase, swapped_topology_hash: str, swaps: list[LoaderSwap]
+) -> None:
+    """Remember that graphs of this topology are another's with loaders swapped.
+
+    What a run that swapped a PixlStash loader in for a workflow's own (#1605)
+    writes, so the pictures it makes are carded as the original graph's
+    (``workflow_cards.record_identity``). A fact about two graphs, not about a
+    fix: it is kept when the fix is undone, and those pictures then card as the
+    replacement's, as a rewritten name's do.
+    """
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO workflow_loader_swap (swapped_topology_hash, "
+            "node_label, fields, topology_hash, class_type, swap_class) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    swapped_topology_hash,
+                    swap.node_label,
+                    json.dumps(swap.fields, separators=(",", ":")),
+                    swap.topology_hash,
+                    swap.class_type,
+                    swap.swap_class,
+                )
+                for swap in swaps
+            ],
+        )
+
+
 def _rekey_variants(
     conn: sqlite3.Connection,
     topology_hash: str,
     documents: dict[str, dict],
-    structural_labels: set[str],
     variant_pictures: dict[str, int],
+    keep_key: Optional[str] = None,
 ) -> dict[str, list[str]]:
-    """Move every variant of one topology onto the key the marks now give it."""
+    """Move every variant of one topology onto the key its marks and fixes give it.
+
+    Where several cards merge, the one with most pictures keeps its attributes,
+    unless *keep_key* is among them.
+    """
+    structural_labels = {
+        label
+        for label, mark in conn.execute(
+            "SELECT slot_label, mark FROM workflow_slot_mark WHERE topology_hash = ?",
+            (topology_hash,),
+        ).fetchall()
+        if mark == STRUCTURAL
+    }
+    promoted = promoted_pairs(conn, topology_hash)
     old_keys = {
         structural_hash: key
         for structural_hash, key in conn.execute(
@@ -281,7 +526,10 @@ def _rekey_variants(
             continue
         try:
             new_keys[structural_hash] = workflow_key(
-                topology_hash, slots(document), structural_labels
+                topology_hash,
+                fixed_slots(conn, topology_hash, slots(document)),
+                structural_labels,
+                promoted,
             )
         except WorkflowGraphError as exc:
             logger.error(
@@ -328,7 +576,11 @@ def _rekey_variants(
         contributors.items(),
         key=lambda item: (pictures_per_new.get(item[0], 0), item[0]),
     ):
-        winner = min(olds, key=lambda key: (-pictures_per_old.get(key, 0), key))
+        winner = (
+            keep_key
+            if keep_key in olds
+            else min(olds, key=lambda key: (-pictures_per_old.get(key, 0), key))
+        )
         if winner == new_key:
             continue
         for table in _KEYED_TABLES:

@@ -10,6 +10,8 @@
 // for "fine". Each kind has its own glyph, so the difference survives without
 // colour.
 
+import { PIXLSTASH_PACK_INSTALL } from "./runReasons";
+
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 /** The host of a ComfyUI URL, which is how the verdicts say which machine. */
@@ -64,10 +66,18 @@ export function pullSummaryLines(summary, url, { hideOneOffs = true } = {}) {
   }
   if (s.missing_nodes) {
     const n = s.missing_nodes;
+    // Our own pack's classes all start with `PixlStash`; name the pack.
+    const ours = (s.missing_node_classes || []).some((c) =>
+      String(c).startsWith("PixlStash"),
+    );
     lines.push({
       kind: "error",
       icon: "puzzle-remove-outline",
-      text: `${plural(n, "workflow", "workflows")} won't run on ${host}: ${n === 1 ? "it uses" : "they use"} nodes that ComfyUI doesn't have.`,
+      text:
+        `${plural(n, "workflow", "workflows")} won't run on ${host}: ${n === 1 ? "it uses" : "they use"} nodes that ComfyUI doesn't have.` +
+        (ours
+          ? ` Some come from the ComfyUI-PixlStash node pack. ${PIXLSTASH_PACK_INSTALL}`
+          : ""),
       names: s.missing_node_classes || [],
       namesLabel: "Nodes it doesn't have",
     });

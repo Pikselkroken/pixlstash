@@ -1,6 +1,7 @@
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import Literal
 
 from fastapi import (
     Depends,
@@ -16,6 +17,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.hub import workflow_cards
+from pixlstash.hub.workflow_card_reads import variants_in_stack
 from pixlstash.db_models import (
     Face,
     Picture,
@@ -252,6 +254,14 @@ class PictureListFilters:
             description="Character filter: a character id, or 'UNASSIGNED'.",
             examples=["42"],
         ),
+        unassigned_by: Literal["character", "set"] | None = Query(
+            None,
+            description=(
+                "With character_id=UNASSIGNED, narrow 'unassigned' to one half: "
+                "'character' (no named face, sets ignored) or 'set' (in no "
+                "set, faces ignored). Omitted keeps both."
+            ),
+        ),
         character_ids: list[str] = Query(
             default=[], description="Multi-character filter (repeatable)."
         ),
@@ -351,6 +361,16 @@ class PictureListFilters:
                 "stack id, or the core hash of an automatic stack."
             ),
         ),
+        workflow_lora: str | None = Query(
+            None,
+            description=(
+                "Only pictures whose workflow loaded this LoRA file, named by "
+                "its stored reference (`asset:<sha256>`, as "
+                "`GET /workflows/{key}/lora-summary` serves it). Narrows "
+                "`workflow_key` / `workflow_stack`; alone, or malformed, it "
+                "matches nothing."
+            ),
+        ),
         reference_folder_id: str | None = Query(
             None, description="Filter by reference-folder id."
         ),
@@ -367,8 +387,11 @@ class PictureListFilters:
         pass
 
 
+_ASSET_RE = re.compile(r"^asset:[0-9a-f]{64}$")
+
+
 def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
-    """``workflow_key`` / ``workflow_stack`` as the variants to match, or ``None``.
+    """``workflow_key`` / ``workflow_stack`` / ``workflow_lora`` as variants, or ``None``.
 
     The cards are in the hub and the pictures are in the vault, so there is no
     join to write: the card is resolved to its variants here and the listing
@@ -404,7 +427,8 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
     query_params.pop("workflow_structural_hashes", None)
     key = query_params.pop("workflow_key", None)
     stack_id = query_params.pop("workflow_stack", None)
-    if key is None and stack_id is None:
+    lora = query_params.pop("workflow_lora", None)
+    if key is None and stack_id is None and lora is None:
         return None
     hub = getattr(server, "hub", None)
     matched: list[set[str]] = []
@@ -414,17 +438,27 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
         if key is not None:
             matched.append(set(workflow_cards.variants_on_key(hub, key)))
         if stack_id is not None:
-            matched.append(set(workflow_cards.variants_in_stack(hub, stack_id)))
+            matched.append(set(variants_in_stack(hub, stack_id)))
+        if lora is not None:
+            # Only ever a narrowing, and only of a well-formed reference:
+            # alone it would parse every stored graph on the hub per request,
+            # and this route is open to scoped tokens.
+            if matched and _ASSET_RE.match(lora):
+                among = sorted(set.intersection(*matched))
+                matched.append(set(workflow_cards.variants_loading(hub, lora, among)))
+            else:
+                matched.append(set())
     except Exception as exc:
         # Fail closed, both for a hub that is absent and for one that will not
         # answer: a filter that cannot be resolved must not silently widen the
         # grid to every picture in the library, and it must not 500 a listing
         # the rest of which is perfectly answerable from the vault.
         logger.warning(
-            "Could not resolve the workflow filter (key=%r, stack=%r): %s; "
-            "listing no pictures rather than every picture.",
+            "Could not resolve the workflow filter (key=%r, stack=%r, "
+            "lora=%r): %s; listing no pictures rather than every picture.",
             key,
             stack_id,
+            lora,
             exc,
         )
         return []
@@ -576,6 +610,7 @@ def select_pictures_for_listing(
     offset = int(query_params.pop("offset", offset))
     limit = int(query_params.pop("limit", limit))
     character_id = _character_id(query_params.pop("character_id", None))
+    unassigned_by = query_params.pop("unassigned_by", None)
     _character_ids_raw = query_params.pop("character_ids", None)
     character_id_list: list[int] = []
     if _character_ids_raw:
@@ -680,7 +715,7 @@ def select_pictures_for_listing(
         if auth_user_id is not None:
 
             def _fetch_shared_ids(session: Session, uid: int) -> list[int]:
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 return list(
                     session.exec(
                         select(UserToken.resource_id).where(
@@ -811,6 +846,7 @@ def select_pictures_for_listing(
                 enforce_stack_assignment=True,
                 assignment_project_id=assignment_project_id,
                 assignment_unassigned_project=assignment_unassigned_project,
+                unassigned_by=unassigned_by,
             )
             query = select(Picture.id).where(
                 *unassigned_conditions,
@@ -1029,6 +1065,7 @@ def select_pictures_for_listing(
                 count_only=True,
                 project_id=unassigned_project_id,
                 only_unassigned_project=unassigned_project_only,
+                unassigned_by=unassigned_by,
                 format=format,
                 min_score=min_score,
                 max_score=max_score,
@@ -1074,6 +1111,7 @@ def select_pictures_for_listing(
             resolution_bucket=resolution_bucket,
             project_id=unassigned_project_id,
             only_unassigned_project=unassigned_project_only,
+            unassigned_by=unassigned_by,
             tags_filter=query_params.get("tags_filter") or None,
             tags_rejected_filter=query_params.get("tags_rejected_filter") or None,
             tags_confidence_above_filter=query_params.get(

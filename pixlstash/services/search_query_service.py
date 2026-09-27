@@ -7,11 +7,20 @@ handlers.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from fastapi import HTTPException
-from sqlmodel import select
+from sqlmodel import func, select
 
-from pixlstash.db_models import Face, Picture
+from pixlstash.db_models import (
+    TAG_SENTINEL_ESCAPE_CHAR,
+    TAG_SENTINEL_LIKE_PATTERN,
+    Face,
+    Picture,
+    PictureSetMember,
+    Tag,
+)
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.likeness.likeness_utils import LikenessUtils
 from pixlstash.utils.service.filter_helpers import (
@@ -103,6 +112,99 @@ def fetch_character_candidate_ids(db, char_id: int) -> set[int]:
         }
 
     return db.run_immediate_read_task(_fetch, char_id)
+
+
+def fetch_set_member_ids(db, set_id: int) -> set[int]:
+    """Return the ids of the non-deleted pictures in set *set_id*.
+
+    Args:
+        db: The ``vault.db`` Database instance.
+        set_id: Picture set id.
+
+    Returns:
+        Set of picture ids.
+    """
+
+    def _fetch(session, sid: int) -> set[int]:
+        return {
+            int(r)
+            for r in session.exec(
+                select(PictureSetMember.picture_id)
+                .join(Picture, Picture.id == PictureSetMember.picture_id)
+                .where(PictureSetMember.set_id == sid)
+                .where(Picture.deleted.is_(False))
+            ).all()
+        }
+
+    return db.run_immediate_read_task(_fetch, set_id)
+
+
+def fetch_signature_tags(
+    db, member_ids: set[int], *, min_share: float = 0.5
+) -> list[str]:
+    """Return the tags carried by at least *min_share* of *member_ids*.
+
+    Tagging sentinels (``__tag``, ``__tag:<engine>``) are bookkeeping, not
+    tags, and never count: a set imported together carries one on every member.
+
+    Args:
+        db: The ``vault.db`` Database instance.
+        member_ids: The set's picture ids.
+        min_share: Fraction of members a tag must be on.
+
+    Returns:
+        The signature tags, sorted.
+    """
+    if not member_ids:
+        return []
+    min_count = max(1, math.ceil(min_share * len(member_ids)))
+
+    def _fetch(session) -> list[str]:
+        rows = session.exec(
+            select(Tag.tag)
+            .where(Tag.picture_id.in_(member_ids))
+            .where(Tag.tag.is_not(None))
+            .where(
+                ~Tag.tag.like(
+                    TAG_SENTINEL_LIKE_PATTERN, escape=TAG_SENTINEL_ESCAPE_CHAR
+                )
+            )
+            .group_by(Tag.tag)
+            .having(func.count(Tag.picture_id) >= min_count)
+        ).all()
+        return sorted(str(r) for r in rows)
+
+    return db.run_immediate_read_task(_fetch)
+
+
+def fetch_tag_counts_for_pictures(
+    db, picture_ids: list[int], tags: list[str]
+) -> dict[int, int]:
+    """Return how many of *tags* each of *picture_ids* carries.
+
+    Pictures carrying none of them are absent from the result.
+
+    Args:
+        db: The ``vault.db`` Database instance.
+        picture_ids: Pictures to count for.
+        tags: Tags to count.
+
+    Returns:
+        Mapping ``picture_id -> count``.
+    """
+    if not picture_ids or not tags:
+        return {}
+
+    def _fetch(session) -> dict[int, int]:
+        rows = session.exec(
+            select(Tag.picture_id, func.count(Tag.tag))
+            .where(Tag.picture_id.in_(picture_ids))
+            .where(Tag.tag.in_(tags))
+            .group_by(Tag.picture_id)
+        ).all()
+        return {int(pid): int(n) for pid, n in rows}
+
+    return db.run_immediate_read_task(_fetch)
 
 
 def fetch_face_candidates(

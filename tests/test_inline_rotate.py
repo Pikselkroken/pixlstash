@@ -35,7 +35,7 @@ import secrets
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -895,7 +895,7 @@ def _forge_write_token(server, set_id):
                 library_uuid=server._active_library_uuid(),
                 token_hash=bcrypt.hash(token_value),
                 token_prefix=token_value[:8],
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
                 description="write-enabled picture-set token (test only)",
                 scope="WRITE",
                 resource_type="picture_set",

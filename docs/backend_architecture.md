@@ -23,7 +23,7 @@
 10. [Services Layer](#10-services-layer)
 11. [Utility Modules](#11-utility-modules)
 12. [Alembic Migrations](#12-alembic-migrations)
-13. [Storage Architecture](#13-storage-architecture)
+13. [Storage Architecture](#13-storage-architecture) — incl. [Image vault](#image-vault), [Database](#database), [Stored path containment (#776)](#stored-path-containment-776), [The shelf's five verbs (shelf plan F3)](#the-shelfs-five-verbs-shelf-plan-f3), [The built-in model folder: declared, never scanned](#the-built-in-model-folder-declared-never-scanned), [The other two roots: InsightFace packs and the HuggingFace cache](#the-other-two-roots-insightface-packs-and-the-huggingface-cache), [What a cached model is FOR: the feature classifier and model_capability](#what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [The managed model store (shelf plan B7)](#the-managed-model-store-shelf-plan-b7), [Add file: one loose model onto the shelf (shelf plan F6)](#add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [A trained model's previews: <stem>_samples/](#a-trained-models-previews-stem_samples), [Delete: models off the shelf and off the disk (#933)](#delete-models-off-the-shelf-and-off-the-disk-933), [Keep one copy: merging duplicate models (#1439)](#keep-one-copy-merging-duplicate-models-1439), [Hub and library identity](#hub-and-library-identity), [Vector storage](#vector-storage), [Caches](#caches), [The library layout](#the-library-layout)
 14. [Server Lifecycle](#14-server-lifecycle)
 15. [Frontend Integration](#15-frontend-integration)
 16. [Authentication & Authorization](#16-authentication--authorization)
@@ -31,13 +31,10 @@
 18. [Snapshots & Restore](#18-snapshots--restore)
 19. [Mermaid Diagrams](#19-mermaid-diagrams)
 20. [Architectural Patterns](#20-architectural-patterns)
-21. [Operation Log](#21-operation-log--undoredo-and-the-audit-trail-dam-12)
-22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection-v19-dedup--stacks)
-23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags-v19-lane-f)
-24. [The folder-structure read](#24-the-folder-structure-read-v111-phase-2)
-25. [The folder-structure commit](#25-the-folder-structure-commit-v111-phase-3)
-26. [The layout and the move engine](#26-the-layout-and-the-move-engine-v111-phase-4b)
-27. [Reconciling moves made outside PixlStash](#27-reconciling-moves-made-outside-pixlstash-v111-phase-5)
+21. [Operation Log](#21-operation-log--undoredo-and-the-audit-trail)
+22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
+23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
+24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
 
 ---
 
@@ -238,7 +235,7 @@ Background processing is **data-driven**: each task type has a *finder* that que
 | Component | Library |
 |-----------|---------|
 | Database | **SQLite** (file-based) |
-| ORM | **SQLModel** ≥ 0.0.37 (Pydantic + SQLAlchemy) |
+| ORM | **SQLModel** ≥ 0.0.45 (Pydantic + SQLAlchemy) |
 | Migrations | **Alembic** ≥ 1.18 |
 
 ### ML Stack
@@ -317,7 +314,7 @@ Modules **off** the server import path (`tagger_plugins/wd14.py`, `tagger_plugin
 | [pixlstash/stacking.py](../pixlstash/stacking.py) | Picture stacking (duplicates / variants). |
 | [pixlstash/image_loading_dataset_prepper.py](../pixlstash/image_loading_dataset_prepper.py) | Dataset preparation utilities for offline training scripts. |
 | [pixlstash/cli.py](../pixlstash/cli.py) | CLI entry point (`pixlstash-cli`). Two verb groups: `libraries` (list/create/attach/detach/relocate/backup/prepare-legacy-identity/rename) and `plugins` (install/test/list/remove). Only the `libraries` group opens the hub — see §8.1. |
-| [pixlstash/mcp_server.py](../pixlstash/mcp_server.py) | Read-only MCP server (`pixlstash-mcp`, stdio). An HTTP client of a running server: every tool is a fixed `GET` on an existing route, sent with the token in `PIXLSTASH_TOKEN`, so token scope is enforced by the auth middleware and the authz gate (§16), not here. No write tools, no routes of its own. |
+| [pixlstash/mcp_server.py](../pixlstash/mcp_server.py) | MCP server (`pixlstash-mcp`, stdio). An HTTP client of a running server: every tool is a fixed request on an existing route, sent with the token in `PIXLSTASH_TOKEN`, so token scope is enforced by the auth middleware and the authz gate (§16), not here. No routes of its own. Read tools are `GET`s; `--allow-write` adds the workflow tools (list, graph export/import, preflight, run), all owner-only routes, so they need an `ALL` token. The export and import tools also write and read a JSON file on this machine: the handoff to ComfyUI's own MCP server, whose tools take workflows by path. |
 | [pixlstash/plugin_install.py](../pixlstash/plugin_install.py) | Backs `pixlstash-cli plugins available/install/list/remove`. Classifies a plugin source with `ast` (never by importing it), resolves the destination, and copies it; also lists what the plugins repository publishes. See §8.1. |
 | [pixlstash/plugin_check.py](../pixlstash/plugin_check.py) | Backs `pixlstash-cli plugins test`. The one plugin verb that *does* import, through the server's own loader, and the only place the parameter schema is checked against what the UI renders. See §8.1. |
 
@@ -379,6 +376,8 @@ Each match reports the **`face_id` that produced its score**, so a caller assign
 
 Authorization is unchanged: the route is already declared `SCOPED_LIST` in `authz/registry.py` and scope-filters its ids through `fetch_scope_allowed_picture_ids`, which still holds for the character source (`tests/test_likeness_and_face_search.py::test_face_search_by_character_still_scope_filters_for_a_share_token` asserts both directions). Note the route is in `READ_SAFE_POST_PATHS`, so share tokens do reach it.
 
+**`POST /pictures/likeness-search` with `source_set_id` — "Suggest more pictures for a set" (#1489).** The set twin of `source_character_id`, on CLIP picture embeddings rather than faces. The query is **one** vector, the set's centroid: the renormalised mean of its non-deleted members' embeddings. For unit vectors the mean of the cosines to every member equals the cosine to their mean, so this is exactly `combine=mean` over the whole set at the cost of a single query; it deliberately does not inherit the `combine=min` the multi-picture `source_picture_ids` path forces, which on a real set scores everything near zero. A set with no embedded member is a **422**, not an empty 200. Each match carries **`cohesion`**, the median similarity of each member to the centroid of the *other* members, which the frontend seats its strength slider on because cosine-to-centroid has no universal "same thing" value. It is leave-one-out because a member's similarity to a centroid it helped build is inflated, worst for the small sets this is most used on (a one-picture set would score 1.0 and seat the cut above every candidate); a one-picture set reports no cohesion at all. Members, and candidates, whose embedding width differs from the majority's (a vault that has been through a CLIP model change) are skipped with a warning. `exclude_set_id` subtracts that set's members from the fetched candidates (same reasoning as `exclude_character_id`). `include_tag_counts` adds `tags_matched` / `tags_total` against the set's **signature tags** (on at least half its members, tagging sentinels excluded), counted on the returned matches only. `source_set_id` is mutually exclusive with the other sources (400). **Both set ids go through `enforce_set_scope` before any membership read**: the route is `_LIST_AWARE`, so the gate checks nothing in its query string, and without the inline check a scoped token could use another set's contents as a query and read its existence off the 422.
+
 **`score_agreement` (stats section, `include=picture`).** Cross-tabulates the user's star rating against the smart score for the stats sidebar's agreement heatmap. Shape: `{cells: [{score, bucket, count}] (dense, all 20), rated, pairs, total, pearson, spearman, tau_b}`.
 
 - **Unrated means both `NULL` and `0`**, matching `score_distribution` (whose "Unscored" bucket counts both), the `unscored=1` grid filter, and the smart-score anchor query's `score > 0`. Clicking the current star again writes a literal `0` that nothing normalises back to `NULL`, so every consumer has to treat the two alike or the counts stop summing to the library. `rated` counts every rated picture; `pairs` counts the plottable subset that also has a smart score, so a rating awaiting its first smart-score computation is still reported as rated rather than silently dropped from the coverage line.
@@ -435,7 +434,7 @@ List and import workflow files; read the workflow a picture carries. Running one
 
 **A LoRA from the shelf, put into a run (#1310).** A run puts one shelf adapter into **one** LoRA slot of the graph. The file-keyed resolver `_resolve_lora_swap` went with the run routes it served (#1410); `POST /workflows/run` addresses LoRAs per slot through its own `loras`, and what follows is the slot vocabulary both generations share. Slots are found by `detect_lora_targets` (`services/comfyui_recipe_service.py`) **by field name, not by class**: a `lora_name` input (and a stacker's numbered `lora_name_2`) is a filename slot whatever loader carries it (`LoraLoaderModelOnly`, `LoraLoaderGGUF`, the `LoRALoader` spelling, the third-party ones that copy the widget), and `adapter_sha256` / `lora_sha256` are the digest slots of the ComfyUI-PixlStash loaders, one per node however the pack spells it. A class allowlist would have to grow for each pack and would quietly refuse the rest; a wired slot (`[node_id, slot]`) is skipped, since overwriting it would drop the link. The known reach is a stacker holding its slots as dicts under its own key (rgthree's Power Lora Loader), which reads as no slot at all; #1376 refuses to insert a loader into such a graph rather than stack a second adapter on it. `apply_adapter` then writes the slot the way its own loader reads it - **the decision on #1310: patch what the graph already has, substitute nothing and add nothing**, so this works on any ComfyUI and needs the node pack only where the graph already uses it. A digest slot takes the shelf's `sha256` and that node resolves or fetches the file itself. A filename slot takes a name *this* ComfyUI lists: the shelf's names for the model (each copy's `relpath`, then its `filename`) are matched against the loader's own combo options from `object_info`, exactly first and then on the basename, because ComfyUI counts from its `loras` folder and the shelf from the folder it scanned. **That last match is by name, not by content, and cannot be anything else** - `object_info` lists no digests - so a different file of the same name on that machine is what gets loaded; the digest slot is the exact one. **One slot, not all of them, and a slot is a node and a field**: a graph chaining a style LoRA and a character LoRA would otherwise come back loading the chosen file twice with the other gone, and a stacker carries several LoRAs on one node, so `lora_node_id` alone would still swap every one of them. A slot is narrowed by node and field and whatever is left must be exactly one slot; a 400 lists the slots otherwise, or names the node or field that matched nothing. The swap runs *after* `apply_values`, so the LoRA chosen for the run wins over a `lora_name` set in the parameter form. A UI-format file is refused as that, before the shelf is even asked - "no LoRA loader" would be false about a file that may have one - and a loader class this ComfyUI lacks is named as the missing node rather than as a file list it does not enumerate. The write goes through `api_graph`, since the import dialog stores `{"prompt": graph}` and detection reads inside it; a slot the submitted instance turns out not to have is a **500**, never a run that quietly keeps the graph's own LoRA. Refusals, all before the first upload (the swap is applied once to a copy of the graph, as the bindings are filled once): **a graph with no LoRA loader at all without `insert_lora_loader: true`** (400; see the insertion below), a basename naming several of ComfyUI's files, a loader that does not enumerate them, and a model on the shelf but not on that ComfyUI (400 each); a ComfyUI that cannot be asked at all is a **502** on every route, a replay included, never a guess. `file_kind` is an **allow-list**: `adapter` and the unclassified `unknown`, which on this shelf is usually an adapter the header reader could not place; a checkpoint, VAE, text encoder or engine is a 400 naming the kind, a hash the shelf does not have a 404, and no hub a 503. **One run route takes the swap now.** `POST /comfyui/workflows/{name}/run`, `run_i2i` and `run_recipe` all did, through one resolver so they refused the same things in the same words; the dialogs that drove them were deleted in v1.12 F5 (#1407) and the routes themselves in B9 (#1410), leaving `POST /workflows/run`. Slots are still reported where a caller already reads: `lora_slots` on each row of `GET /comfyui/workflows` (cached with the rest of the file's description, so a menu needs no request per workflow), on `GET /comfyui/pictures/{id}/recipe`, and on a card's detail read. **The list's rows carry no `value`**: that route is `ANY_TOKEN` and open to share-link tokens, a slot's value is a LoRA filename or digest, and `/models/` and `/adapters/` keep exactly that inventory from those tokens. The owner-only card detail read and the picture-scoped recipe read (whose `/workflow` sibling already returns the whole graph to the same scope) carry the values. **In a replay the swap is applied before the pre-flight judges the graph**, which is the whole point of it there (the replay is `POST /workflows/run` since #1410): a picture made with a LoRA that has since left this ComfyUI is exactly the one worth re-running with another, and pre-flighting the file it no longer uses would refuse it. `_read_object_info` / `_inspect_graph` exist for that ordering, so one `/object_info` read still serves the swap, the pre-flight and seed detection.
 
-**A LoRA loader added to a graph that has none (#1376).** `plan_lora_insertion` (`services/comfyui_recipe_service.py`) finds where it goes and `insert_adapter` carries it out, reached from the run route when a graph has no slot to swap. **The loader is spliced right after the model source**: the node handing out MODEL that takes no MODEL itself (a checkpoint, UNET or GGUF loader), and likewise for CLIP, which may be another node or none. Every input reading that exact output is rewired to the loader, so several readers of one MODEL and a model patch downstream (`ModelSamplingFlux`) all see the LoRA, and the VAE stays where it was. **Links are typed from `object_info`'s `output` lists, never from input names** (`ModelMergeSimple` reads `model1`): a missed reader would run that branch without the LoRA and say nothing, so a linked node this ComfyUI lacks refuses the plan rather than reading as untyped. Refused as a `LookupError` (400 on a run, `reason` on the reads): **a node that already loads a LoRA some way of its own**, decided at the class level rather than on widget spellings - its `class_type` mentions a LoRA, ComfyUI declares a LoRA-ish type on one of its inputs or outputs, or one of its values carries a `<lora:…>` prompt tag - since by then a swappable slot has been ruled out, so any such node is one that cannot be swapped and splicing in front of it would leave two adapters live (the spelling rule covered a wired `lora_name` and rgthree's `lora_N` dicts and missed `lora_1_name`, a prompt-tag loader and `lora_name: null`); a **second model chain of another kind** (`WANVIDEOMODEL` and the packs that mint their own), which a LoRA loader cannot patch and which the >1 refusal would not otherwise see, so a mixed graph is refused whole rather than run half-LoRA'd; a link whose source class **does not say what it hands on** (no `output` list, or one shorter than the link), for the same reason; a CLIP source that itself reads the model, where splicing in front of both would make a cycle; no model source, more than one model or text-encoder source (a refiner, a merge - which one the LoRA is for is the owner's call), and a UI-format file. **The loader** is `LoraLoader`, or `LoraLoaderModelOnly` when nothing reads a CLIP, when this ComfyUI lists the file by the same name match as a swap: it needs no node pack, and a picture made with it stays replayable, because a replay refuses any graph carrying a `PixlStash*` node. Otherwise `PixlStashAdapterLoader` by digest when that pack is installed - **except on a replay** (`digest_loader=False`), whose variant would otherwise be one it refuses to replay - (it fetches the file itself), otherwise a 400 saying why the core loader could not. It gets the next free numeric node id, its widgets' own `object_info` defaults (strength 1.0; a combo's first option), and `_meta.title` "LoRA (added by PixlStash)". Its `model` / `clip` **inputs** are checked against `object_info` as well as its outputs, so a fork spelling them differently is refused here rather than by `POST /prompt` after the run is queued. **Only on `insert_lora_loader: true`**: adding a node is a bigger change than filling a slot, so a bare `adapter_sha256` stays the 400 it was, and naming a slot with it is a 400. The plan is made once on a copy before the first upload, like a swap, and `insert_adapter` checks every planned input still reads the planned source before it touches anything, so a diverged instance is a 500 and never a half-rewired run. The owner sees the splice first: `GET /comfyui/workflows/{workflow_name}/lora-insertion` (`OWNER_ONLY`, since it asks the owner's ComfyUI) answers `{workflow, has_lora_loader, plan, reason}`, and `GET /comfyui/pictures/{id}/recipe` carries `lora_insertion: {plan, reason}` when its `lora_slots` is empty, from the one `object_info` read its pre-flight already makes. `insert_lora_loader` without an `adapter_sha256` is a 400, not a LoRA-less 200. The plan carries `pixlstash_loader`, whether the digest loader *could* be the one inserted, since which it takes depends on an adapter not chosen yet and the owner is owed the worse case; the recipe read reports it `false`, because that route never inserts it. `has_lora_loader` is `null` for a UI-format file, which may have a loader nobody can read. The run recomputes the plan rather than accepting one from the client, so it is not proof the owner saw that exact splice (a file re-imported under the same name between preview and run gets the new one). Known reach: the splice is by type, so a model loader whose MODEL core `LoraLoader` cannot patch (Nunchaku, TensorRT) gets a loader that loads nothing; and insertion is refused by any missing node pack anywhere in the graph, however unrelated to the model. Nothing is written back to the stored file, and stacking a second adapter is not offered.
+**A LoRA loader added to a graph that has none (#1376).** `plan_lora_insertion` (`services/comfyui_recipe_service.py`) finds where it goes and `insert_adapter` carries it out, reached from the run route when a graph has no slot to swap. **The loader is spliced right after the model source**: the node handing out MODEL that takes no MODEL itself (a checkpoint, UNET or GGUF loader), and likewise for CLIP, which may be another node or none. Every input reading that exact output is rewired to the loader, so several readers of one MODEL and a model patch downstream (`ModelSamplingFlux`) all see the LoRA, and the VAE stays where it was. **Links are typed from `object_info`'s `output` lists, never from input names** (`ModelMergeSimple` reads `model1`): a missed reader would run that branch without the LoRA and say nothing. A linked node this ComfyUI lacks is typed by its **reader's** declared input instead (a seed node from an uninstalled pack feeds the sampler's `seed`, an INT, so it is no model and the MODEL path is still there to follow); only a link neither end can type refuses the plan. **A node that already loads a LoRA some way of its own** (a stacker, rgthree's `lora_N` dicts, a prompt-tag encoder, a character prompt builder) **does not stop the splice**: it is an ordinary node, a loader in the MODEL path applies alongside it, and refusing it (as #1376 first did) left almost no real workflow able to take a loader. **Only the MODEL path counts**: another kind of model (an upscaler's `UPSCALE_MODEL`, `WANVIDEOMODEL`) is on a path of its own and is ignored, and the graph is first cut to the nodes an output node reads, so a leftover loader wired into nothing is not a second model. Refused as a `LookupError` (400 on a run, `reason` on the reads): a link **neither end can type** (the source's class missing or silent about its outputs, and the reader's input undeclared or `*`), for the same reason; a CLIP source that itself reads the model, where splicing in front of both would make a cycle; no model source, more than one model or text-encoder source (a refiner, a merge - which one the LoRA is for is the owner's call), and a UI-format file. **The loader** is `LoraLoader`, or `LoraLoaderModelOnly` when nothing reads a CLIP, when this ComfyUI lists the file by the same name match as a swap: it needs no node pack. Otherwise `PixlStashAdapterLoader` by digest when that pack is installed (it fetches the file itself; the per-node policy below lets it run in a variant too), otherwise a 400 saying why the core loader could not. It gets the next free numeric node id, its widgets' own `object_info` defaults (strength 1.0; a combo's first option), and `_meta.title` "LoRA (added by PixlStash)". Its `model` / `clip` **inputs** are checked against `object_info` as well as its outputs, so a fork spelling them differently is refused here rather than by `POST /prompt` after the run is queued. **Only on `insert_lora_loader: true`**: adding a node is a bigger change than filling a slot, so a bare `adapter_sha256` stays the 400 it was, and naming a slot with it is a 400. The plan is made once on a copy before the first upload, like a swap, and `insert_adapter` checks every planned input still reads the planned source before it touches anything, so a diverged instance is a 500 and never a half-rewired run. The owner sees the splice first: `GET /comfyui/workflows/{workflow_name}/lora-insertion` (`OWNER_ONLY`, since it asks the owner's ComfyUI) answers `{workflow, has_lora_loader, plan, reason}`, and `GET /comfyui/pictures/{id}/recipe` carries `lora_insertion: {plan, reason}` when its `lora_slots` is empty, from the one `object_info` read its pre-flight already makes. `insert_lora_loader` without an `adapter_sha256` is a 400, not a LoRA-less 200. The plan carries `pixlstash_loader`, whether the digest loader *could* be the one inserted, since which it takes depends on an adapter not chosen yet and the owner is owed the worse case. `has_lora_loader` is `null` for a UI-format file, which may have a loader nobody can read. The run recomputes the plan rather than accepting one from the client, so it is not proof the owner saw that exact splice (a file re-imported under the same name between preview and run gets the new one). Known reach: the splice is by type, so a model loader whose MODEL core `LoraLoader` cannot patch (Nunchaku, TensorRT) gets a loader that loads nothing; and a missing node pack stops insertion only where nothing in the graph says what the missing node hands on. Nothing is written back to the stored file, and stacking a second adapter is not offered.
 
 **Two chunks, one of them executable.** A ComfyUI-generated PNG embeds *both* a `workflow` chunk (the UI node graph, for reopening in the editor) and a `prompt` chunk (the resolved API-format graph the server actually executed). Only the `prompt` chunk is submittable to `POST /prompt`.
 
@@ -452,7 +451,7 @@ List and import workflow files; read the workflow a picture carries. Running one
 
 **What `workflow_key` tells a share-token holder, stated rather than denied.** It is an opaque digest — no filename, no prompt, no pixels — over a graph that same token can already read whole from the `/workflow` sibling. It is **not** purely a function of that file: `workflow_key` folds in which LoRA slots the topology marks *structural*, and that mark was frozen from the filename of whichever picture of that topology was filed **first in this library** (`hub/schema.py`, `workflow_slot_mark`, `INSERT OR IGNORE`).
 
-**And the mark set is recoverable, not merely hinted at.** An earlier version of this note claimed "one bit per topology"; that bound was too tight and is corrected here, because a bound written more favourably than the code enforces is what a later reader relies on. The holder has the graph, so they can compute the key for every assignment of marks to its LoRA slots and match the one they were handed; the slot set is small, so a 2ⁿ sweep recovers the whole set exactly. The disclosure is therefore **one bit per LoRA slot of that topology** — whether the first-filed picture's file in that slot looked like a speed LoRA under a published regex — and that picture may be one the token cannot otherwise see. It is a filename-derived *classification*, never a filename, a prompt or a picture, so this stays low severity; returning `workflow_key` to the owner only would close it, and is the call to make if that is judged too much. What a key *groups* — the "workflow: 8" comparison, the saved-recipe match banner — is an owner-only question answered by the card routes, not by this one.
+**And the mark set is recoverable, not merely hinted at.** An earlier version of this note claimed "one bit per topology"; that bound was too tight and is corrected here, because a bound written more favourably than the code enforces is what a later reader relies on. The holder has the graph, so they can compute the key for every assignment of marks to its LoRA slots and match the one they were handed; the slot set is small, so a 2ⁿ sweep recovers the whole set exactly. The disclosure is therefore **one bit per LoRA slot of that topology** — whether the first-filed picture's file in that slot looked like a speed LoRA under a published regex — and that picture may be one the token cannot otherwise see. It is a filename-derived *classification*, never a filename, a prompt or a picture, so this stays low severity; returning `workflow_key` to the owner only would close it, and is the call to make if that is judged too much. **The key also folds in the owner's LoRA promotions** (`workflow_lora_promotion`), recoverable by the same sweep: whether the owner promoted this picture's own LoRA in a slot to a workflow of its own. That is one more bit per LoRA slot, and an owner's decision rather than a regex result, about a file the graph already names. What a key *groups* — the "workflow: 8" comparison, the saved-recipe match banner — is an owner-only question answered by the card routes, not by this one.
 
 **A picture with no graph but with A1111 infotext answers from that** (`reduce_a1111`, `services/a1111_recipe.py`), as `source: "a1111"` with `available: false` and `reason: "a1111"`: its recipe is readable but is not a graph any ComfyUI could be handed, so there is nothing to replay and nothing to pre-flight. The fields are read off the reduced nodes rather than by re-parsing the infotext, so this endpoint and the hub agree about what the picture's recipe is. `node_count` and `node_classes` stay at zero and empty on that branch on purpose: they exist for the consent decision — what would execute — and a count of the reduction the hub builds would be a number about PixlStash, not about the picture. A client that does not know the new `reason` falls through to "nothing to replay", which is true.
 
@@ -464,9 +463,9 @@ List and import workflow files; read the workflow a picture carries. Running one
 2. **Fail closed on an uninspected graph.** `preflight_prompt` degrading to `unchecked_preflight` keeps `ok: True` because the only fact known is that the check did not run — so a replay refuses `preflight.checked is False` with a 400 unless the request carries `allow_unchecked: true`, the owner's explicit acknowledgement, which is logged with the node classes. **The refusal is enforced here, not only in the dialog**; a UI-only gate is not a gate. This is the one control that is a hard gate, and it is deliberately reserved for the rare case: gating the common ones is what turns an acknowledgement into a reflex.
 3. **Provenance.** `_picture_source_origin` reports `source_is_imported` / `source_label`, surfaced as the **Source** row inside the dialog's disclosure. It stopped being a banner on 2026-08-06: a watched folder on the owner's own ComfyUI output makes every self-generated image "imported", so warning on it fired on the common case. There is no provenance column; the signal is the three fields only ever written on an *inbound* path (`reference_folder_id`, `import_source_folder`, `original_file_name`), all of which PixlStash's own ComfyUI import leaves NULL. The label names the route in ("Watched folder"), never the filesystem path. It is advisory only and fails toward "not imported" — it informs, it does not gate.
 
-**Recipe replay refuses any graph that carries a ComfyUI-PixlStash node** (`graph_has_pixlstash_nodes`, prefix rule so new pack nodes are covered). Such a graph is a cycle — PixlStash runs ComfyUI, which calls back into PixlStash — and every id in it is frozen: the loaders serialise a choice as `"<name> #<id>"`, so replaying the file re-applies whatever project, set, character or picture id was current when it was written. Three ways that breaks the "variant of *this* picture" contract: the ids can name a deleted project or one that now lives in a **different library** (which surfaced as a raw SQLite `FOREIGN KEY` failure from the saver's own import, *after* the images were imported); `PixlStashPictureLoader` sources its input by baked `picture_ids`, or **auto-selects by its own sort and filters when that field is empty**, so the variant need not be of the selected picture at all; and the saver imports the outputs itself, competing with the import PixlStash is already running for the variant. `GET .../recipe` reports `available: false, reason: "pixlstash_nodes"` so the dialog can offer the workflow for pasting into ComfyUI instead of failing on submit. **Template runs are unaffected** — the owner picks those ids now, and nothing claims the result is a variant.
+**A graph that carries ComfyUI-PixlStash nodes is judged node by node (#1521).** Such a graph is a cycle — PixlStash runs ComfyUI, which calls back into PixlStash — and its ids are frozen: the loaders serialise a choice as `"<name> #<id>"`, so a replay re-applies whatever project, set, character or picture id was current when the file was written. Three ways that went wrong under the old blanket refusal: the ids can name a deleted project or one in a **different library** (which surfaced as a raw SQLite `FOREIGN KEY` failure from the saver's own import, *after* the images were imported); `PixlStashPictureLoader` sources its input by baked `picture_ids`, or **auto-selects by its own sort and filters when that field is empty**, so the output need not be of the chosen picture at all; and the saver imports the outputs itself, competing with the import PixlStash is already running. `pixlstash_node_refusals` (`services/comfyui_service.py`) answers per class, and its defaults refuse: the **project, set and character loaders** run when this library has the id they name **under the same name** (`library_ids_named` → `read_library_ids`; ids start at 1 in every library, so an id alone would run another library's "Portraits #3" against this one's project 3, and a rename refuses until the owner re-picks it; a choice wired from another node cannot be checked and is refused as `unreadable_id`); the **digest-addressed adapter, VAE and CLIP loaders** and the **searches and likeness gates** (they read the library through a loader's ids and write nothing) run everywhere; the **picture loader** runs only where the run writes its ids itself — a card run feeds it the chosen picture's id (`Feed.by_id`, nothing uploaded, since the node fetches it), never runs it on its baked ids, and refuses one it did not feed (`unfed_picture_loaders`); the **checkpoint loader** names a per-hub shelf row id, so it runs only from a stored workflow file (`from_file`); the **saver** is swapped for `SaveImage` on the same images and prefix before the run (`swap_pixlstash_savers`), so the run's own import is the only one and the project, set and character it would have assigned are not applied; a saver whose `picture_ids` output another node reads is left alone and refused, since `SaveImage` has no output. **A pack class with no entry is refused** (`no_policy`), so a node added to the pack later waits for one. The run pre-flight reports `pixlstash_nodes` with `nodes: [{node_id, class_type, title, why, kind?, id?}]`; `GET .../recipe` ("Generate variants") judges the same way with the picture loader and the checkpoint loader refused, and reports `available: false, reason: "pixlstash_nodes"` with the same `pixlstash_nodes` list, so the dialog can say so before the user commits and offer the workflow for pasting into ComfyUI instead. That route serves share links, so it looks library ids up **only for the unscoped owner**; a scoped reader gets every named id as `not_in_library`, and cannot learn which projects exist outside its scope. A pack class that is **missing** from ComfyUI, rather than refused, is reported with install help: `_inserted_loader` ends its refusal with `PIXLSTASH_PACK_INSTALL_HINT` (`services/comfyui_recipe_service.py`) when a LoRA needs `PixlStashAdapterLoader`, and the frontend's `missing_nodes` sentence (`utils/runReasons.js`) and pull summary (`utils/workflowPull.js`) name `PixlStash*` classes as the pack's and say how to install it.
 
-**Graphs saved by the ComfyUI-PixlStash node pack (`PixlStashPictureSaver`) take the other import path** (template runs only, per the refusal above). The node uploads to `POST /pictures/import` itself rather than writing a file for PixlStash to collect, so the collection pipeline has to invert for it, in three places that all key off `SAVE_NODE_CLASSES` / `PIXLSTASH_SAVER_CLASSES` in `services/comfyui_service.py`:
+**Graphs saved by the ComfyUI-PixlStash node pack (`PixlStashPictureSaver`) take the other import path** when one reaches ComfyUI unswapped (a run PixlStash starts swaps it for `SaveImage`, per the policy above). The node uploads to `POST /pictures/import` itself rather than writing a file for PixlStash to collect, so the collection pipeline has to invert for it, in three places that all key off `SAVE_NODE_CLASSES` / `PIXLSTASH_SAVER_CLASSES` in `services/comfyui_service.py`:
 
 1. **It counts as a save node.** `preflight_prompt`'s `has_save_image` and `_extract_output_node_ids` both include it; without that, a replay rejected every workflow built on the pack with "produces nothing PixlStash can import".
 2. **Its history images are not imported.** The node reports `type: "temp"` previews of pictures it has *already* imported. Downloading them re-imports a duplicate, which dedupes to an empty `new_ids` and so silently loses the stack placement, the source lineage and the import event. `_extract_comfyui_output_images` skips any node carrying `picture_ids`; a sibling `SaveImage` in the same graph is still collected normally.
@@ -487,7 +486,7 @@ background job behind it — "Look again" is this same GET. `owner_only` for the
 narrowed answer would either leak that out-of-scope pictures exist or state a
 wrong total. Findings and the reasoning behind each check live in
 [services/library_insights_service.py](../pixlstash/services/library_insights_service.py);
-the contract is in `docs/integration_architecture.md` §20.
+the contract is in `docs/integration_architecture.md` §21.
 
 ### `guest_scores.py`, `share.py`
 Public guest scoring and shared-link endpoints.
@@ -592,6 +591,12 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/models/forget                                                         | model_shelf     | Forget models whose files are gone                          |
 | POST   | /api/v1/models/icons/clear                                                    | model_shelf     | Clear the icon on one or more models                        |
 | GET    | /api/v1/models/workflow-sets                                                  | model_shelf     | Which models have actually run together                     |
+| POST   | /api/v1/models/workflow-sets                                                  | model_shelf     | Make a workflow set by hand                                 |
+| PATCH  | /api/v1/models/workflow-sets/{set_id}                                         | model_shelf     | Rename a workflow set                                       |
+| DELETE | /api/v1/models/workflow-sets/{set_id}                                         | model_shelf     | Delete a workflow set                                       |
+| PUT    | /api/v1/models/workflow-sets/{set_id}/declines                                | model_shelf     | Keep models out of a workflow set's merge offer             |
+| POST   | /api/v1/models/workflow-sets/{set_id}/members                                 | model_shelf     | Add models to a workflow set                                |
+| POST   | /api/v1/models/workflow-sets/{set_id}/members/remove                          | model_shelf     | Take models out of a workflow set                           |
 | POST   | /api/v1/models/{model_id}/icon                                                | model_shelf     | Set a model's icon                                          |
 | POST   | /api/v1/models/{model_id}/open-location                                       | model_shelf     | Open a model's folder in the host file manager              |
 | GET    | /api/v1/models/{model_id}/samples                                             | model_shelf     | The training previews stored beside one imported checkpoint |
@@ -750,6 +755,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/workflows/{workflow_key}                                              | workflows       | One workflow card                                           |
 | PATCH  | /api/v1/workflows/{workflow_key}                                              | workflows       | Edit a workflow card                                        |
 | DELETE | /api/v1/workflows/{workflow_key}                                              | workflows       | Delete an imported workflow                                 |
+| POST   | /api/v1/workflows/{workflow_key}/clone-with-models                            | workflows       | Clone a workflow onto other models                          |
 | PUT    | /api/v1/workflows/{workflow_key}/defaults                                     | workflows       | Set a card's parameter defaults                             |
 | POST   | /api/v1/workflows/{workflow_key}/duplicate                                    | workflows       | Duplicate a workflow                                        |
 | GET    | /api/v1/workflows/{workflow_key}/export                                       | workflows       | Export a workflow                                           |
@@ -758,6 +764,10 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/workflows/{workflow_key}/insert-lora-loader                           | workflows       | Add a LoRA loader to a workflow                             |
 | GET    | /api/v1/workflows/{workflow_key}/lora-chain                                   | workflows       | A workflow's LoRA chain                                     |
 | PUT    | /api/v1/workflows/{workflow_key}/lora-chain                                   | workflows       | Edit a workflow's LoRA chain                                |
+| PUT    | /api/v1/workflows/{workflow_key}/lora-promotion                               | workflows       | Promote one LoRA to a workflow of its own                   |
+| GET    | /api/v1/workflows/{workflow_key}/lora-summary                                 | workflows       | The LoRAs of a workflow's stack                             |
+| PUT    | /api/v1/workflows/{workflow_key}/model-fix                                    | workflows       | Replace a missing model in a workflow                       |
+| GET    | /api/v1/workflows/{workflow_key}/model-swap                                   | workflows       | What a workflow could be cloned onto                        |
 | GET    | /api/v1/workflows/{workflow_key}/pictures                                     | workflows       | Pictures made with a card                                   |
 | PUT    | /api/v1/workflows/{workflow_key}/pins                                         | workflows       | Set a card's pinned parameters                              |
 | PUT    | /api/v1/workflows/{workflow_key}/slots                                        | workflows       | Mark a card's LoRA slots                                    |
@@ -772,6 +782,15 @@ Public guest scoring and shared-link endpoints.
 ## 6. Database Models
 
 All models live in [pixlstash/db_models/](../pixlstash/db_models/).
+
+**Every datetime column is aware UTC.** A plain `datetime` field maps to
+sqlmodel's `UTCDateTime`, and an explicit `sa_column` declares `UTCDateTime()`,
+never SQLAlchemy's `DateTime`. SQLite still stores naive-UTC text, so older rows
+need no migration: the type attaches UTC on read and refuses a naive value on
+write. Write `datetime.now(timezone.utc)`; `datetime.utcnow()`, a bare
+`datetime.now()` and a raw `DateTime` column in a model fail
+`tests/test_architecture_guardrails.py::test_no_naive_datetime_is_written`
+(#1503).
 
 ### Core entities
 
@@ -1019,6 +1038,10 @@ Most finders still fetch the full ORM row; only `MissingThumbnailFinder` and `Mi
 
 **User-triggered tasks** (e.g. `DETECTION`, `PICTURE_IMPORT`, `MODEL_FOLDER_SCAN`, `COMFYUI_WORKFLOW_PULL`) have no finder: they are enqueued directly from a route in response to a user action and replace prior rows on re-run rather than being gated on a `NULL` column. A route that needs background work therefore submits a task (`Vault.submit_task`) — **never a bare thread**. The task runner owns the lifecycle, which is what gives the work a queue position, live progress in the worker-progress snapshot, a real terminal `status`, and a deterministic shutdown (#856).
 
+### Multi-frame sampling: videos and animated GIFs
+
+A video is sampled across frames at every per-picture stage: `IMAGE_EMBEDDING` averages the CLIP embedding and aesthetic score over 3 evenly spaced frames (`VideoUtils.extract_representative_video_frames`) and keeps frame 0's dHash; `FACE_EXTRACTION` and `FACE_MODEL_REFRESH` detect on frame 0 plus every `frame_count // 3`-th frame; the Florence-2 captioner (`DescriptionWorkflow` and the plugin) tries up to 3 frames for a non-empty caption; the taggers read frame 0 through the cv2 sampler. **An animated GIF takes the same path** (#1487), through `VideoUtils.is_animated_gif` (a `.gif` whose Pillow `is_animated` is true) or `is_multiframe_file` (video or animated GIF), and cv2 reads and seeks a GIF like a clip. It is consulted **only at those sampling sites**: `.gif` stays in `SUPPORTED_IMAGE_EXTS`, not `VIDEO_EXTENSIONS`, so thumbnails, export, `picture.is_video` and the player still treat it as a picture, and a one-frame GIF is a still everywhere. `.gif` is an image extension, so in the face tasks the multi-frame test has to run before the image-extension branch. The perceptual hash stays frame 0's, as a video's does, so tier-2 near-duplicates still compare first frames; the averaged embedding is what changes likeness. Faces found on a later frame have boxes measured on that frame, so every site that crops a face from the decoded first frame (face export, the tagger's quality crop, the character thumbnail) takes `frame_index == 0` faces only. Migration `0123` NULLs `image_embedding`, `perceptual_hash`, `aesthetic_score` and `size_bin_index` on every `.gif`, so existing GIFs re-embed and their likeness pairs are rebuilt; their `Face` rows are kept, because deleting them would drop character assignments, so an existing GIF gains later-frame faces only on a manual re-scan or a face-model-pack refresh.
+
 ---
 
 ## 8. Image Plugins
@@ -1171,10 +1194,9 @@ the plugin's contract, never its intent. A report a user reads as a safety
 verdict is worse than no report, and would also be the second time a
 "reassuring" plugin surface got the trust boundary wrong (the `plugins list`
 listing already has to say out loud that it imports nothing and therefore cannot
-see an import-time failure). Observing what a plugin *reaches for* — an audit
-hook over `socket.connect` / `subprocess.Popen` / writes — is tracked separately
-and is disclosure, not containment; real containment is OS-level and out of
-scope here.
+see an import-time failure). What it does report about behaviour is what the
+plugin was *seen reaching for*, which is disclosure, not containment (below);
+real containment is OS-level and out of scope here.
 
 - **The load is `TaggerPluginManager.load_plugin_from_path`, the server's own
   loader** — extracted from the body of `_load_user_plugins`, which now calls
@@ -1233,6 +1255,53 @@ scope here.
   inside `init()` — which is where `from_pretrained_local_first` does it, and so
   where an author copying the shipped captioners will do it — is already past
   that gate.
+- **What it reports it reached for, and what that is not** (issue #979). A
+  `sys.addaudithook` observer, `plugin_check.Recorder`, is switched on only
+  around calls into the plugin — `load_plugin_from_path`, each
+  `plugin_schema()`, and under `--image` `default_params`, `needs_download`,
+  `setup`, `init` and the caption/tag call — and keeps the events in
+  `WATCHED_EVENTS`: host lookups, connections, programs started (`subprocess`,
+  `os.system`/`exec`/`spawn`/`posix_spawn`/`fork`/`startfile`), `ctypes.dlopen`,
+  `open` in a writing mode or with writing flags, `os.truncate`, links, and
+  removes/renames/`rmdir`/`rmtree`. Paths are made absolute inside the hook, so a
+  plugin that changes directory to write is still placed correctly, and a move
+  is reported at both ends (its destination as a write). The window covers
+  attribute reads too, since a property is the plugin's code as well.
+  Reads are dropped inside the hook, since every import reads dozens of `.pyc`
+  files. The CLI prints a grouped summary on **every** outcome, failures
+  included: a plugin that fails to import may have reached for things first.
+  Files and native libraries are **grouped by root**, not listed — the plugin's
+  own folder, the temp directory, a child of `~/.cache` (so a model download is
+  one `~/.cache/huggingface` line), else the parent directory.
+  - **The checker's own work stays outside the window.** Its `ast` reads are
+    before or after it, and `_device()`, which imports torch to pick a device,
+    runs *between* the `needs_download` and `setup` windows so torch's own
+    library loads are not reported as the plugin's.
+  - **Bytecode writes are prevented, not filtered.** `sys.dont_write_bytecode`
+    is set inside the window, so the import system writes no `.pyc` for the
+    plugin or a dependency it imports first. Filtering `__pycache__` out of the
+    report instead would hand a plugin a directory to hide writes in.
+  - **The hook lives for the rest of the process**, since there is no
+    `sys.removeaudithook`. It is installed lazily on the first window, never at
+    import, and `test_plugin_check_is_imported_only_by_the_cli` keeps the
+    module out of everything but `cli.py`, so the server never carries it.
+  - **Ctrl-C prints what had been seen.** A plugin that never returns from its
+    module body hangs this command exactly as it hangs the boot;
+    `KeyboardInterrupt` passes through the loader (which catches `(Exception,
+    SystemExit)`, not `BaseException`), and the CLI names the phase it was in
+    and prints the summary. Running the load in a subprocess with a timeout,
+    which would also survive a segfault or `os._exit()`, is a separate step.
+  - **It can be defeated, and nothing may say otherwise.** The hook cannot be
+    removed, but the recorder's list, the active-recorder global and
+    `sys.stdout` all live in the plugin's own interpreter, so a plugin that
+    imports `pixlstash.plugin_check` can blank the report. Code acting outside
+    the windows (a thread the plugin started), compiled extension modules and
+    other native code, and events not in the list are not seen either. What it
+    catches is the careless and the surprising — telemetry, a `pip install` at
+    import, an unannounced download — not a plugin written to evade it. So
+    every summary, empty or not, says it is what was *seen while this command
+    ran* and carries that blind-spot sentence, and an empty one says "that is
+    not a clean bill" rather than anything like "no network access".
 - **Only captioning plugins.** Image filters have a different base class and a
   different parameter schema (`string` + `enum`, no `select`), so `plugins test`
   says so and stops rather than reporting "No TaggerPlugin subclass found",
@@ -1659,9 +1728,9 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/scrapheap_service.py](../pixlstash/services/scrapheap_service.py) | **The single permanent-destruction path for scrapheap pictures** plus the retention policy maths. Both the manual `DELETE /pictures/scrapheap` handler and the scheduled `ScrapheapRetentionPurgeTask` call `purge_scrapheap_pictures`; there is deliberately no second destruction path. Also owns `compute_purge_at` / the reduction-grace rule, the `scrapheap_retention_*` server-config read/write, the delete-forever `confirm_token` store (`ScrapheapDeleteConfirmations`, §5), and the permanent-deletion ledger's only `True -> False` correction — bounded to the `path_sha`s the same purge wrote, so it can never retract an earlier purge's genuine deletion at a reused path.<br><br>**Selection, planning and deletion run in ONE DB-queue submission (`plan_and_purge_in_session`), and `purge_rows_in_session` re-checks `deleted` where it deletes.** The purge used to be four separate submissions — fetch the scrapheap rows, fetch the protected folder ids, look up the locks, then `DELETE ... WHERE id IN (...)` with no `deleted` predicate. Writes are serialised on a single DB worker thread, so a `POST /pictures/scrapheap/restore` submitted between those steps ran *between* them: the ids went live again and the final delete-by-id destroyed the rescued rows, removed their files from disk, and wrote `file_removed=True` ledger entries so even a snapshot restore dropped them. (The lock lookup was worse — it ran on the caller's thread via `run_immediate_read_task`, so a set locked afterwards was not seen at all.) The single task closes the window; the `deleted` re-check is the half that holds regardless of how the work is scheduled, and it also covers the automatic sweep. Ids that left the scrapheap get no ledger row, are not deleted, have their file removal dropped, and are logged + reported as `skipped_restored` — never silently discarded |
 | [services/import_dedup_service.py](../pixlstash/services/import_dedup_service.py) | **Content-hash matching for every import path, Scrapheap included.** Import dedup used to ask only "is there a LIVE picture with this `pixel_sha`?", `Picture.find` defaults `include_deleted=False` and the one-shot import called it that way, so **a scrapheaped picture was invisible to import dedup** and its file was re-imported as a brand-new second row while the original was still there. Harmless while the Scrapheap held a handful of pictures; predictable the moment a bulk "Keep cover only" cleanup puts hundreds there, all of them copies of files the user still has on disk.<br><br>`partition_by_pixel_sha_in_session` returns two **disjoint** maps, live matches and scrapheaped matches (a live row outranks a soft-deleted one for the same hash, because the content genuinely IS in the library). Both are skipped by the import; only the second is reported as its own outcome and offered for restore. **The widening is scoped to this query:** `Picture.find`'s `include_deleted` default is unchanged, so no listing, search, count, export or dedup query gains deleted rows. A permanently purged file is correctly NOT a match, delete-forever removes the row, so there is nothing to match and nothing to resurrect; the `deleted_file_log` ledger is deliberately not consulted here, since it exists to stop a *snapshot restore* resurrecting destroyed rows (§18.7), not to refuse the owner's own re-import of a file they still have |
 | [services/comfyui_recipe_service.py](../pixlstash/services/comfyui_recipe_service.py) | Remix recipe replay (§5 `comfyui.py`): fetches ComfyUI's `GET /object_info`, pre-flights an embedded API prompt graph against it (missing node classes / model filenames / input images, and whether anything writes an image), detects patchable seed inputs by ComfyUI's own `control_after_generate` flag rather than a class allowlist, and renders `POST /prompt`'s structured `node_errors` as one sentence. **The governing rule is that a check that could not run reports as *unchecked*, never as passing and never as missing** — a spurious "missing model" blocks a run that would have worked |
-| [services/comfyui_ui_graph.py](../pixlstash/services/comfyui_ui_graph.py) | **The editor graph, rebuilt into the API prompt ComfyUI executes.** Reads `/object_info` for each class's declared input order and its extra editor-only widgets, maps the positional `widgets_values` array onto named inputs and the link table onto `[node_id, slot]` references, drops muted and bypassed nodes and chases wires through reroutes and bypasses to whatever feeds them. Refuses rather than approximates: an undeclared class, an unexplained widget value, a subgraph or a `PrimitiveNode` abandons the whole conversion with a sentence naming it, because a near-miss yields a graph that runs and silently generates something else |
+| [services/comfyui_ui_graph.py](../pixlstash/services/comfyui_ui_graph.py) | **The editor graph, rebuilt into the API prompt ComfyUI executes.** Reads `/object_info` for each class's declared input order and its extra editor-only widgets, maps the positional `widgets_values` array onto named inputs and the link table onto `[node_id, slot]` references, drops muted and bypassed nodes and chases wires through reroutes and bypasses to whatever feeds them. **Which input a bypassed node hands on is ComfyUI's own rule** (`workflow_hash.bypass_input_slot`, a port of the frontend's `_getBypassSlotIndex`), shared with the topology key so the graph this builds and the card it files under cannot pick different wires. Refuses rather than approximates: an undeclared class, an unexplained widget value, a subgraph or a `PrimitiveNode` abandons the whole conversion with a sentence naming it, because a near-miss yields a graph that runs and silently generates something else |
 | [services/a1111_recipe.py](../pixlstash/services/a1111_recipe.py) | **A1111 generation data as a recipe** (#1312): parses a PNG's `parameters` chunk or a JPEG's or WebP's EXIF `UserComment` and classifies each field as structure, asset, parameter or volatile into a reduction `workflow_hash.graph_key` keys like a ComfyUI graph. Short model hashes are stored as written and resolved against the shelf when read |
-| [services/workflow_hash.py](../pixlstash/services/workflow_hash.py) | **Content-addressed identity for a ComfyUI graph, in three tiers** (workflow library plan §3, hash spec §Node identity / §Subgraphs). `topology_hash` is node classes and named-input edges and nothing else; `structural_hash` adds the topology assets a node names (model and image filenames, and the way a ComfyUI-PixlStash loader names its model: `*_sha256`, the numbered `*_sha256_N` a second slot on one node takes, and the checkpoint loader's `checkpoint_id`, which is a shelf row id because a checkpoint's digest is NULL until the hasher has read the file) with every parameter and seed nulled. **Each of those two is checked against what such a value can be, not only against the widget's name**: a digest widget keeps a digest (`DIGEST_PREFIX_RE`, the same rule `_model_ghost_names` judges them by) and a shelf id keeps `str.isdigit()` within 12 characters, the loader node's own contract. Both branches return above the newline and 255-byte prose guards and their values are kept forever and shared, so a blank widget — the ordinary state of an unpicked one, and of the CLIP loader's second encoder on every SD/SDXL graph — names no model instead of filing the digest of the empty string as one (#1416); `instance_hash` is that recipe with one set of parameters, the prompt included and the seed excluded, and is stored on the picture rather than in the hub. `document_from_reduction` renders that same reduction back out as the graph that gets stored, so the document and the hash can never disagree about what was kept. **One walk serves all three**, because the backfill is a pass over every picture in every library. A link is `[node_id, slot]` with the id a **string**: a widget can legitimately hold a two-element list of numbers, and reading a resolution pair as a connection puts a bucket-P value into the topology, which the spec calls the unrecoverable direction. Measured, all 501,128 links across the owner's API graphs carry a string node id.<br><br>**No positional node ids are assigned, and that is the correction this module exists for.** The superseded rule relabelled by topological sort and tie-broke on `(class_type, input signature)` — a tie two twin `CLIPTextEncode` nodes do not break, so the "canonical" id fell through to JSON serialisation order and 12 of 40 real workflows re-keyed when nothing but the key order moved. Instead each node gets an order-invariant label by Weisfeiler-Leman refinement over its **sorted** neighbours, and the graph is emitted as a sorted multiset of node descriptors: genuine twins produce identical descriptors, so the automorphism stops mattering. Node ids are never read, which is also why an API-format subgraph needs no handling at all — a colon path (`75:61`) is an id. The accepted residual is that WL can over-group, which the spec calls the recoverable direction: a later `hash_version` splits recipes cleanly, whereas merging shattered ones requires guessing intent.<br><br>**The UI format is where subgraphs do matter**, and `reduce_ui_graph` inlines `definitions.subgraphs` before keying — recursively, because real files nest two deep. A subgraph instance is typed by a per-definition UUID, so keying it as one opaque node both under-counts the graph (17 nodes read as 8) and gives two people who built the same workflow different keys. An instance lists only the inputs it wires while the definition declares all of them, so the boundary is mapped by **name**, never by position (measured: 3 against 7, in a different order). A UUID-typed node with no definition raises rather than keying as a leaf, and a **bypassed** instance takes its whole contents with it — expanding one anyway leaves its inner nodes standing while every edge through it disappears, which is a key for a graph ComfyUI has never run. The two synthetic boundary nodes are installed *after* the definition's own node list, so a definition that serialises its IO nodes cannot overwrite them. Resolution refuses rather than degrades: a cycle or an over-long passthrough chain raises, because dropping the edge and returning a confident key is the silent-failure shape the house rules forbid |
+| [services/workflow_hash.py](../pixlstash/services/workflow_hash.py) | **Content-addressed identity for a ComfyUI graph, in three tiers** (workflow library plan §3, hash spec §Node identity / §Subgraphs). `topology_hash` is node classes and named-input edges and nothing else; `structural_hash` adds the topology assets a node names (model and image filenames, and the way a ComfyUI-PixlStash loader names its model: `*_sha256`, the numbered `*_sha256_N` a second slot on one node takes, and the checkpoint loader's `checkpoint_id`, which is a shelf row id because a checkpoint's digest is NULL until the hasher has read the file) with every parameter and seed nulled. **Each of those two is checked against what such a value can be, not only against the widget's name**: a digest widget keeps a digest (`DIGEST_PREFIX_RE`, the same rule `_model_ghost_names` judges them by) and a shelf id keeps `str.isdigit()` within 12 characters, the loader node's own contract. Both branches return above the newline and 255-byte prose guards and their values are kept forever and shared, so a blank widget — the ordinary state of an unpicked one, and of the CLIP loader's second encoder on every SD/SDXL graph — names no model instead of filing the digest of the empty string as one (#1416); `instance_hash` is that recipe with one set of parameters, the prompt included and the seed excluded, and is stored on the picture rather than in the hub. `document_from_reduction` renders that same reduction back out as the graph that gets stored, so the document and the hash can never disagree about what was kept. **One walk serves all three**, because the backfill is a pass over every picture in every library. A link is `[node_id, slot]` with the id a **string**: a widget can legitimately hold a two-element list of numbers, and reading a resolution pair as a connection puts a bucket-P value into the topology, which the spec calls the unrecoverable direction. Measured, all 501,128 links across the owner's API graphs carry a string node id.<br><br>**No positional node ids are assigned, and that is the correction this module exists for.** The superseded rule relabelled by topological sort and tie-broke on `(class_type, input signature)` — a tie two twin `CLIPTextEncode` nodes do not break, so the "canonical" id fell through to JSON serialisation order and 12 of 40 real workflows re-keyed when nothing but the key order moved. Instead each node gets an order-invariant label by Weisfeiler-Leman refinement over its **sorted** neighbours, and the graph is emitted as a sorted multiset of node descriptors: genuine twins produce identical descriptors, so the automorphism stops mattering. Node ids are never read, which is also why an API-format subgraph needs no handling at all — a colon path (`75:61`) is an id. The accepted residual is that WL can over-group, which the spec calls the recoverable direction: a later `hash_version` splits recipes cleanly, whereas merging shattered ones requires guessing intent.<br><br>**The UI format is where subgraphs do matter**, and `reduce_ui_graph` inlines `definitions.subgraphs` before keying — recursively, because real files nest two deep. A subgraph instance is typed by a per-definition UUID, so keying it as one opaque node both under-counts the graph (17 nodes read as 8) and gives two people who built the same workflow different keys. An instance lists only the inputs it wires while the definition declares all of them, so the boundary is mapped by **name**, never by position (measured: 3 against 7, in a different order). A UUID-typed node with no definition raises rather than keying as a leaf, and a **bypassed** instance takes its whole contents with it — expanding one anyway leaves its inner nodes standing while every edge through it disappears, which is a key for a graph ComfyUI has never run. **Bypassing is not muting**: a muted node's consumers lose the edge, but a bypassed node is spliced out and its consumers read what fed it, by ComfyUI's rule (`bypass_input_slot`: same slot first, then the consumer's exact type, then any LiteGraph-compatible type). Dropping the edge instead keyed a workflow two ways, one per format (#1440). The two synthetic boundary nodes are installed *after* the definition's own node list, so a definition that serialises its IO nodes cannot overwrite them. Resolution refuses rather than degrades: a cycle or an over-long passthrough chain raises, because dropping the edge and returning a confident key is the silent-failure shape the house rules forbid |
 | [services/workflow_identity.py](../pixlstash/services/workflow_identity.py) | **What a workflow card is, and which cards stack** (v1.12 Workflows & Recipes, step B1). **Glossary: the word "recipe" means two things.** In the hub tables `workflow_recipe` / `structural_hash` is the graph bound to model filenames; new code and docs call that tier a **variant** (the routes already say `/variants`). A **saved recipe** is the look a user keeps: prompt, recipe LoRAs with strengths, overrides. The tables are append-only and keep their names.<br><br>Pure functions over the **stored document** (asset references, never filenames), so a backfill needs the hub alone and a forgotten model name stays forgotten. `slots` lists every model slot a document names, each labelled by its loader's Weisfeiler-Leman label at topology tier (refined until a round splits no class, so a long LoRA chain is told apart) plus the widget name, with picture inputs (widgets named `image`, `video`, `mask`) left out. **A label only means something within one topology**: at full refinement it encodes the whole graph, so marks and parameter addresses keyed by label are keyed with the topology too. Every function refuses a raw graph (`WorkflowGraphError`) rather than reading it as having no models. `workflow_key` is the **card**: topology plus every non-LoRA slot plus the LoRA slots marked structural, so a different checkpoint is a different workflow and a character LoRA is not. **A LoRA slot is one by widget name, and both spellings carry the numbered form** (`lora_name_2`, `lora_sha256_2`): a digest slot missed there is not a LoRA slot, so it reaches the card key with no mark check and a character-LoRA swap in a stacker's second slot forks the workflow into a new card (#1416). `CHECKPOINT_WIDGETS` lost the client copy it was held equal to: the retired workflow shelf's `BASE_WIDGETS` had drifted in both directions, and the guardrail asserting the pair went with the shelf in F1b (#1404). **A second server-side list survives and already disagrees** — `_SLOT_KINDS` in `workflow_card_service.py`, which is what actually labels a card's slots (`unet_name` is `unet` there and never `checkpoint`; `diffusion_model`, `model_path` and `checkpoint_id` are absent), so a Flux/SD3/Wan graph is a base-model change to `differs_by` and is not the card's headline model. The two want reconciling behind one helper; nothing asserts them today. `guess_mark` is the first-sight guess for a LoRA slot (whole words lightning/turbo/lcm/lightx2v/causvid/dmd/tcd/pcm, Hyper-SD, SDXL Flash, or a one- or two-digit step count means structural; precision over recall, because a wrong structural guess is frozen into the card key), which the caller freezes and never recomputes. `core_hash` is the **automatic stack**: the topology with plumbing (PreviewImage, Note, Reroute, Primitive*), post-processing (upscale, hires-fix sampler, face detailer and detectors) and, by default, LoRA loaders removed and the edges re-wired through them; the caller stores `CORE_VERSION` beside it. `workflow_type` reads txt2img/img2img/inpaint/outpaint/upscale from the classes. `special_groups` says which post-processing a graph actually DOES (`upscale`, `face_detailer`), for the card's generated name: the same taxonomy `core_hash` strips, but **narrower**, because a group counts only where a node does the work rather than loads the model for it — over-inclusion is free when the answer is which nodes to remove and false when it is printed as the card's only identifying text.  `differs_by` gives a member's chips against the cover; **"plumbing only" is returned only when every differing node is plumbing, the graphs are identical once plumbing is stepped through, with every asset, LoRAs included, on the same loader**. Two documents that are not the same graph never come back with no chip, and anything unclassified reads "N nodes differ" |
 | [services/workflow_export.py](../pixlstash/services/workflow_export.py) | **What a workflow file may still say once it leaves this machine** (v1.12 Workflows & Recipes, step B8). `GET /workflows/{key}/export` resolves the card's graph exactly as the run path does — the linked file, the best kept picture's embedded metadata, or a stored instance document — and the last two are *real runs*: they carry the prompt that was typed, the seed that was rolled, the character LoRA that was loaded and the name of the picture that went in. `scrub_for_export` takes those out: every widget `carries_prose` calls prose blanked, seeds nulled, every LoRA slot **not** marked `structural` emptied by filename **and by digest** (`lora_sha256`, the ComfyUI-PixlStash spelling, which `unvouched` cannot help with because the owner genuinely holds that LoRA), `_meta` titles stripped, picture loader filenames blank, output paths reset (`filename_prefix` is a folder a person names after what is in it), `checkpoint_id` dropped, and any model name the shelf cannot vouch for (`hub/workflows.unvouched_model_values`) blank — plus the *folder* of the ones it can, since that check only ever read the last component.<br><br>**Prose is found by widget name across the whole graph, and `carries_prose` is imported from the reducer rather than restated.** `detect_workflow_io` answers a different question with the opposite failure direction — where a *run* would write its prompt — so it returns nothing for a hires-fix graph whose two samplers read different prompts, and it classifies `CLIPTextEncodeSDXL` as a prompt node whose widgets (`text_g`, `text_l`) no binding names. The first shipped the prompt; the second shipped it while reporting `prompts` in `removed`. Three rules catch prose no widget name announces: `PRIMITIVE_STRING_CLASSES` handing a raw string into an encoder (`carries_prose` cannot be widened to `value`/`string` — it is the reducer's rule too, and a `value` widget feeding a LoadImage its filename is a topology asset there, so calling it prose would re-key every workflow built that way), the reducer's newline/`MAX_FILENAME_LENGTH` backstop, and whitespace, with `_names_a_file` answering first so that the 5,066 real filenames with spaces in them survive. `SECRET_FIELD_RE` is applied ahead of all of it — the reducer drops those widgets from a stored document because it "is kept forever and shared", and a file handed to somebody on purpose is the stronger case, while the two tiers this route resolves from most often are raw ComfyUI output the reducer never touched. Nested lists and dicts are walked with `is_link` telling a wire from a value, a **dict recursing on its key** and a list on its parent's name, the way the reducer's nested-asset walk does.<br><br>**That last check is stricter than `model_ghost_names` and deliberately in the opposite direction.** A ghost is judged in order to destroy a name forever, so an unjudgeable one has to be kept; here a wrong "vouched for" publishes a name the owner asked PixlStash to forget and a wrong "unvouched" only leaves a widget blank in a file they are giving away. Forgetting a name deletes its `workflow_recipe_asset` rows and rewrites no graph, so the ghost list can no longer see it while a picture's embedded metadata still says it in full — checking the shelf is what closes that. A graph that will not reduce is **refused (409) rather than exported**, and a `RecursionError` from a graph too deeply nested to walk gets the same answer (caught in `_card_source`, which all three file gestures resolve through). Nothing in the scrub needs the reduction any more — that is a belt rather than the trousers — but a graph PixlStash cannot read is one it can promise nothing about, and the export is a promise. Keeping the structural-marked slots rather than emptying the recipe-marked ones is the same choice: an unmarked slot, an unfrozen topology and a loader the label map did not reach all then fall on the side that publishes nothing |
 | [services/workflow_inbox.py](../pixlstash/services/workflow_inbox.py) | **The watched `workflows/` folder** (§5 `comfyui.py`): `reconcile` imports each file through the import route's `_store_workflow` and renames it `<stem>.<content hash>.json`; `trash_workflow` writes a deleted workflow back and sends it to the system trash; `WorkflowInboxWatcher` reconciles on file events. |
@@ -1704,7 +1773,7 @@ This rule is enforced by **`tests/test_architecture_guardrails.py::test_services
 | [utils/watermark.py](../pixlstash/utils/watermark.py) | Seeded watermark rendering + cache |
 | [utils/caption_file_utils.py](../pixlstash/utils/caption_file_utils.py) | Sidecar `.txt` caption I/O |
 | [utils/face_tags.py](../pixlstash/utils/face_tags.py) | Face-derived tag helpers |
-| [utils/library_layout.py](../pixlstash/utils/library_layout.py) | The library layout model — `render` / `is_true` (§13) |
+| [utils/library_layout.py](../pixlstash/utils/library_layout.py) | The library layout model — `render` / `is_true` (§24.3) |
 | [utils/library_roots.py](../pixlstash/utils/library_roots.py) | The directories this installation reads or writes as library content, and the two rules that read them: the folder export may write inside none of them (#1206 item 1); a watch or reference folder may not overlap a library's folder **or another watch or reference folder** — `refuse_overlapping_folder`, two-way, `exclude=` for the caller's own row — and `LibraryRegistry.create`/`attach`/`relocate` (so `POST /libraries` and the CLI alike) refuse a library overlapping a watch or reference folder of any registered library, under `FOLDER_OVERLAP_LOCK`, which the watch and reference folder writes also hold from check to commit (#1223) |
 | [utils/path_mapper.py](../pixlstash/utils/path_mapper.py) | Host↔container path translation |
 | [utils/host_path_utils.py](../pixlstash/utils/host_path_utils.py) | Host-aware path resolution |
@@ -2991,7 +3060,8 @@ and `bypass_node`
 ([`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py))
 are the substitution above's neighbour and its last resort: where no copy of the
 file can be found at all, a **LoRA** is simply left out and the run happens
-anyway. Wired into `_plan` at one site, between the swap and `judge`.
+anyway. It is one entry of the **repair registry** described in the next
+section, not a site of its own in `_plan`.
 
 - **Because a LoRA is optional and nothing else in the graph is.** Installing a
   checkpoint is a trip away from the keyboard and the graph cannot run without
@@ -3021,12 +3091,12 @@ anyway. Wired into `_plan` at one site, between the swap and `judge`.
   quietly made without an adapter the owner has — and send them to install a
   file called `(forgotten model)`. All three are logged with the value that
   could not be found.
-- **Before `judge`, so the graph judged is the graph submitted.** The bypassed
-  loader is gone by the time the pre-flight runs again, so it is not reported as
-  a missing model the owner would go looking for; what is left in
+- **Judged again after, so the graph judged is the graph submitted.** The
+  bypassed loader is gone by the time the second `judge` runs, so it is not
+  reported as a missing model the owner would go looking for; what is left in
   `missing_models` is what genuinely blocks.
 - **Reported only on a group that is actually submitted.** The bypass happens
-  before `judge` because the graph needs it, but the *report* is written when
+  before the final verdict because the graph needs it, but the *report* is written when
   `group.runs` is set, and cleared again when a missing model elsewhere zeroes
   the whole batch. What it says is "the run goes ahead without this LoRA", which
   is a lie on a card that is about to be refused for a missing checkpoint — and
@@ -3081,20 +3151,169 @@ anyway. Wired into `_plan` at one site, between the swap and `judge`.
 source, the LoRA loaders in the order a run applies them, and what reads the
 result. `read_lora_chain` types every link from `object_info`, as
 `plan_lora_insertion` does, and refuses (the route answers `editable: false` with
-the sentence) a graph it cannot edit honestly: several model sources, a foreign
-model type, a stacker or prompt-tag LoRA, or a branching chain. With ComfyUI
-unreachable, `read_lora_chain_untyped` follows the `model` links so the chain can
-still be looked at. Each loader carries the shelf digest it loads, when exactly
-one shelf LoRA matches.
+the sentence) a graph it cannot edit honestly: loaders that start from
+different places, a second model that itself goes several ways, or a CLIP chain
+in a different order from the MODEL one. Only the MODEL path counts: the
+graph is first cut to the nodes an output node (`output_node` in `object_info`)
+reads, as ComfyUI runs it, so a leftover UNET loader wired into nothing is not a
+second model; another kind of model (an upscaler's, `WANVIDEOMODEL`) is on a
+path of its own and ignored. Only a plain one-slot loader wired into the MODEL
+path is an editable link; any other node that loads a LoRA (a stacker, a prompt
+tag, a character prompt builder) stays as an ordinary node the chain runs
+around, so a loader can always be added between the model source and what reads
+the model. **Where the model forks, the chain is a tree**: the loaders every
+pass reads are the trunk (`loaders`), and each node reading the fork (a base
+sampler, a hires pass, a detailer) starts a **lane** (`lanes`) with the loaders
+only it reads. Readers that are not loaders are grouped by the sampler they
+reach, so a guider and a scheduler feeding one `SamplerCustomAdvanced` stay one
+straight chain. A lane is named by the nearest sampler downstream of it (its
+ComfyUI title when it has one), and branches that meet again at one node (a
+model merge) are refused, since they are not separate passes. A workflow loading one model per pass (Wan 2.2 high/low noise) has no
+trunk: `model_source` is null and each lane names its own, CLIP included when
+each pass encodes its own prompt (SDXL base and refiner). A lane off a trunk
+must take its CLIP from the trunk's CLIP end. Only a further fork inside a lane, or loaders
+past a node that is not a loader, are left as they are, and `branch_note` tells
+the owner why the list is shorter than the workflow. A refused chain,
+or one read with ComfyUI unreachable, goes through `read_lora_chain_untyped`,
+which follows the `model` links so the chain can still be looked at; when
+ComfyUI did answer it also types the two ends best effort (the model source and
+what reads the chain's end), so the read-only view names what the chain runs
+between. Each loader carries the shelf digest it loads, when exactly one shelf
+LoRA matches.
 
-`PUT` takes the whole chain as the owner left it. An existing loader is kept by
-`node_id` (moved and re-weighted, its id kept), a new one is added by shelf
-`sha256`, and every loader left out is deleted through `bypass_node`.
+`PUT` takes the whole chain as the owner left it: `entries` for the trunk and,
+for a tree, `lanes` with one list per lane (left out, every lane stays as read).
+An existing loader is kept by `node_id` (moved and re-weighted, its id kept)
+and may land in any segment, which is how it crosses the fork; a new one is
+added by shelf `sha256`, carrying a CLIP only where its segment has a CLIP
+reader; and every loader left out is deleted through `bypass_node`. The change
+list says where a lane loader's CLIP half goes, since the text encoders it
+reaches may feed every pass. The cap of 32 loaders counts the whole tree.
 `plan_lora_chain` validates the whole edit before `apply_lora_chain` touches the
 graph, and the result is written as a **new** file through `_store_copy`, so one
 save is one new card and the original file never changes. `dry_run` answers the
 change list (`deleted`, `added`, `moved`, `strength`, `rewired`) and writes
 nothing. `insert-lora-loader` is the empty-chain case and still stands on its own.
+
+#### Switching a stage off (#1621)
+
+An upscale or FaceDetailer pass is an optional **stage** of a workflow, on or
+off per run, which is why `core_hash` strips both groups and graphs with and
+without them stack. `RunRequest.skip_stages` (`upscale`, `face_detailer`) names
+the stages a run goes without; `_plan` applies them through
+`skip_requested_stages` on the run's copy, after the LoRAs are placed (the prune
+can remove a loader only the stage read, and a LoRA addressed to it must not
+become a 400) and before `judge`, so the graph judged is the graph submitted.
+
+`bypass_stage` in
+[`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py)
+finds the stage with `workflow_identity.node_groups` over `reduce_api_graph`
+(node ids survive the reduction), limited to nodes an output reads, and takes
+each out through `bypass_node`, consumers before what they read. Each output
+is answered by the node's first linked input of the same type: IMAGE by
+`image` (`ImageUpscaleWithModel`, `ImageScale*`, `UltimateSDUpscale`,
+`FaceDetailer`), LATENT by `samples` (`LatentUpscale*`) or `latent_image` (the
+hires sampler `node_groups` puts with its latent upscale). A node with no
+linked input (`UpscaleModelLoader`, `SAMLoader`, a detector provider) is not
+bypassed; it goes in the prune. **A stage runs after the picture is made**, so
+a node of the group that feeds a sampler outside it is not one: with no sampler
+before it, it prepares an input (img2img's `ImageScale`) and is left alone;
+with one, it is a hires fix in pixel space (upscale, re-encode, second
+sampler), whose re-encode and sampler `node_groups` does not claim, and the
+stage is refused rather than half taken out. Then:
+
+- **Prune**: a node some output read before and none reads now is deleted, or
+  `judge` would report an orphaned upscaler or detector model as missing and
+  refuse a run that does not need it. A node that was already dead is left.
+- **Duplicate save**: an output node the bypass rewired onto exactly the links
+  another output node of its class reads is dropped, the untouched one kept.
+  Widgets are not compared: a graph saving before and after the upscale differs
+  by `filename_prefix` and would still save one image twice. Saves that were
+  alike before the bypass are the owner's and stay.
+
+All or nothing: the work is done on a copy and written back only when every
+node of the stage went. A node that cannot go (a FaceDetailer whose MASK or
+DETAILER_PIPE is read, a class this ComfyUI does not know, a pixel-space hires
+fix, a graph that loops) raises `LookupError`
+naming it, which the run reports as `stage_not_skippable: {stage, message}`.
+It blocks the card, `allow_unchecked` included, and **never falls back to a
+full run**: the owner asked for a run without the stage. With ComfyUI
+unreachable a graph holding the stage is refused the same way; one without it
+has nothing to skip.
+
+#### The repair registry: judge, repair, judge again (#1463)
+
+Some refusals PixlStash can answer by changing the graph before it submits.
+`REPAIRS` in
+[`services/workflow_run_service.py`](../pixlstash/services/workflow_run_service.py)
+is the one place that decides which: each `Repair` names the reason code it
+answers, the `RunGroup` field that reports it, and the function that mutates the
+graph. `_plan` runs one loop over it, after the model swap:
+
+1. `judge` the graph.
+2. `repair(graph, object_info, reasons)` applies every entry
+   whose code is among the reasons, and returns `{report_field: entries}`.
+3. If anything changed, `judge` **again**. Only the second verdict says whether
+   the graph runs: a repair can leave its refusal standing. Re-judging is pure
+   over the graph and the `object_info` `_plan` already fetched, so it costs no
+   ComfyUI round-trip.
+
+Skipped when ComfyUI could not be inspected (nothing is known to repair) and
+when `_apply_loras` has already refused (that run is not happening). The
+reports go on the group only when it is actually submitted, and every
+registered field is cleared when the batch rule zeroes the request. A new
+repair is a registry entry plus its `RunGroup` field. Three ship:
+
+- **`missing_models` → `bypassed_loras`**: the LoRA bypass above.
+- **`missing_nodes` → `replaced_nodes`**: `replace_missing_seed_nodes`. A custom
+  seed node this ComfyUI lacks (`SEED_NODE_CLASSES`: rgthree's `Seed (rgthree)`,
+  WAS's `Seed`, `SeedGenerator`, `Seed Generator`, Comfyroll's `CR Seed`) only
+  hands a number to a sampler's seed widget, which the run writes itself. So
+  each link from it becomes a literal and the node leaves the graph.
+  **The seed pass overwriting that literal is what makes it safe, so it is
+  checked and not assumed**, against `run_seed_targets`, which is the same
+  finder `_submit_every` writes seeds through (one function, so the check and
+  the write cannot drift). It is checked on the **final** graph: a later
+  replacement can switch that finder from its fallback to `detect_seed_targets`
+  and strand an earlier literal, so if any inlined input is not a target once
+  all are replaced, the graph is put back whole and every node keeps its
+  refusal. A seed node wired into `steps`, or into a pack's own `SEED` dict,
+  keeps it that way. The literal is the node's own `seed` value, which is what
+  `seed_mode: "keep"` then keeps: a picture's embedded graph carries the value
+  the node really handed on. Also refused, each logged: a **placeholder** seed
+  (rgthree's `-1`, "random"), whatever the seed mode, so the pre-flight's answer
+  never depends on a control the popups do not re-ask on; a node feeding **more
+  than one** input, because the seed pass rolls each target separately and a
+  hires-fix or refiner pair built to share one seed would get two; and a node
+  whose own seed is wired from elsewhere. Each entry is `{node_id, class_type,
+  replacement: "seed", consumers: [{node_id, field}]}`.
+- **`missing_nodes` → `replaced_nodes`** (second entry, same report):
+  `replace_missing_text_nodes`. A custom text node this ComfyUI lacks
+  (`TEXT_NODE_CLASSES`: WAS's `Text Multiline`, Comfyroll's `CR Text`,
+  Chibi-Nodes' `Textbox`, core's `PrimitiveStringMultiline` on an older
+  ComfyUI) only hands its string on, so every link from it becomes that string, however many
+  inputs it fed. It runs after `_apply_prompts`, which writes a Run popup
+  prompt through `prompt_text_target`: past a linked encoder into the text
+  node itself, when that node feeds only that encoder, so the typed prompt is
+  what gets inlined. Any other wired `text` (a prompt-builder node, a shared
+  or overridden text node) is replaced by the typed prompt as a literal,
+  cutting the link, unless the prompt equals one of that node's own strings:
+  an untouched Run popup echoes a builder's recipe prompt, which was read from
+  its widgets, and the wire stays. `Text Multiline` drops its `#` comment lines as the node
+  does; one holding anything in square brackets (a WAS token) keeps its
+  refusal, as do a wired text, another input set that may override it
+  (`Textbox`'s `passthrough`), and a consumer reading any output but the first.
+  It runs before the seed repair, whose rollback restores the graph it was
+  handed. Entries carry `replacement: "text"`, which the Run popup reads to
+  word its notice.
+- **An allow-list, not a general rewriter.** A replacement that is *nearly*
+  right silently changes what the picture looks like, which is worse than the
+  refusal. The candidates the issue names for later (custom primitive nodes,
+  reroutes, notes) are each judged on their own when one is added. Anything that
+  samples, conditions or loads is not a candidate: there is no standard
+  equivalent that makes the same picture.
+- **A repaired run lands on its own card**, for the reason a bypassed one does:
+  deleting a node changes the topology.
 
 #### What a delete leaves behind: companions (#1314)
 
@@ -3140,9 +3359,11 @@ models, and nothing on disk says which.
 - **It offers, it never deletes.** The shelf's confirmation lists the answer;
   an orphaned file stays on disk until the owner selects and deletes it. Every
   path still ends at a person choosing a file.
-- **Not yet read:** ComfyUI's own history and saved workflows. Models used only in graphs that never produced a picture
-  PixlStash filed are invisible here, which the `no_evidence` answer says out
-  loud rather than hiding.
+- **Not yet read here:** ComfyUI's own history and saved workflows. Models used
+  only in graphs that never produced a picture PixlStash filed are invisible to
+  the delete warning, which the `no_evidence` answer says out loud rather than
+  hiding. The clone's *proposals* do read ComfyUI's history (see "Clone with
+  new models proposes companions from evidence").
 
 #### Workflow sets: which models have actually run together (#1438)
 
@@ -3173,6 +3394,18 @@ band can only put a row in one place.
   and its members then appear under `no_set` — read off the combinations that
   *survived*, never off the pre-filter grouping, or a model would be in neither
   list and so on no screen at all.
+- **ComfyUI's own runs are witnesses too (#1565).** `fetch_workflow_sets` reads
+  `comfyui_history_model` through `_history_runs`, the one reader of that table
+  (`propose_companions` calls it too). Each run counts one `history_runs`
+  against the combination its stored models form *exactly*, never against every
+  subset, and is kept apart from `recipes` and `picture_count`. A combination
+  survives the cut with a kept picture here OR a stored run, so a set that has
+  only run in ComfyUI is served with no cover. Runs are hub-wide, like
+  `recipes`. They never touch `ambiguous`, and they stay out of
+  `hub_combinations`, which feeds only the hand-made sets' merge offer.
+  ComfyUI is never contacted on this path. The stored models are the names the
+  pull could pin to one shelf row; a name it could not is not stored, so a run
+  proves at least its combination ran, not that nothing else did.
 - **A member the evidence cannot pin down is flagged, never hidden.** `ambiguous`
   is OR-ed across a combination's witnesses: one recipe that could only match a
   basename is enough to make the membership a guess, and a cleaner second
@@ -3222,6 +3455,57 @@ band can only put a row in one place.
   proposes no grouping at all and is not asked to - the per-recipe shape is the
   evidence, and every claim the UI makes about a pair reads it rather than the
   union drawn on top.
+
+#### Hand-made workflow sets (#1520)
+
+The owner can also say which shelf models go together, and that one IS stored:
+`model_workflow_set` and `model_workflow_set_member` in the hub (amended into v2,
+like every shelf table), read and written by
+`pixlstash/services/model_workflow_sets.py`.
+
+- **A menu, not a recipe.** Fixed slots (`checkpoint` at most one - a partial
+  unique index holds it - then `text_encoder`, `vae`, `lora`, `other`), no order,
+  no strengths. A set may be unnamed, empty, or have no checkpoint
+  (`incomplete`). The slot defaults from `file_kind`; `checkpoint` is accepted
+  for a `checkpoint` or an `unknown` file only (a diffusion file is often
+  `unknown`). Engines and files still waiting for their hash are refused (409).
+- **Members are sha256s, with no foreign key to `model`.** Forgetting or
+  deleting a file drops its `model` row; the member stays, is served
+  `on_shelf: false` under the `label` it was added with, and reconnects when a
+  row with the same digest returns. The same property makes undo simple: a
+  delete returns the set's snapshot, and re-posting its members in the
+  `{sha256, slot, label}` form recreates it, off-shelf members included.
+- **Evidence is layered on, not merged.** `attach_hand_made` takes the
+  `fetch_workflow_sets` answer unchanged and adds `covered_by` to each
+  combination (a set covers it when every model of the combination is an
+  on-shelf member; the set may hold more), a `hand_made` list whose counts and
+  covers are pooled from the combinations each set covers, and drops on-shelf
+  members from `no_set`. Covered combinations are still served: the grid hides
+  them, *Works with* reads them all. The mutators answer with the set re-read
+  through that same full evidence pass, which is a per-click cost, not per row.
+- **The merge offer is derived, and only the declines are stored (#1523).**
+  `_attach_offers` groups the combinations no set covers by their head (the
+  grid's own evidence cards, but over `hub_combinations`: every library's
+  recipes, not only those with a picture here). A set is offered its own
+  checkpoint's group; a set with no checkpoint only a group whose models
+  include all of its own. Only combinations whose missing models can all be
+  added count: hashed, not an engine, and not in `model_workflow_set_decline`
+  for that set. One group goes to one set, the one needing fewest models added.
+  The offer is `{head_id, head_name, picture_count, recipes, covers, models}`,
+  each model with the slot it would take (the head fills an empty Checkpoint,
+  a second checkpoint goes to Other). Merging is the ordinary members add;
+  Keep separate is `PUT .../declines`, a whole-list write that returns the old
+  list as its undo. `kept_separate` counts the pictures here the declines hold
+  back. The declines cascade with their set (so a build that predates the
+  table can still delete one); a delete's undo does not restore them.
+- **Clone with new models reads them first.** `propose_companions` lists, ahead
+  of the recipe ladder, the on-shelf VAEs and text encoders of every set whose
+  checkpoint member is the chosen checkpoint (`via: "grouped"`, `recipes: 0`,
+  `set_name` from the newest such set). `prepick` is true only when those sets
+  name exactly one file of that kind between them; ladder entries always carry
+  `prepick: true` and drop any file already grouped (after the ladder step is
+  chosen, so grouping never widens it). Filed by the file's own `file_kind`, not
+  by the slot it was put in.
 
 `model.family`, `model.quant` and `model.weights_id` are what the scanner reads
 off a file rather than off the shelf — `family` and `weights_id` from the
@@ -3305,9 +3589,100 @@ wherever there is one: it is the only thing that knows what a file called
 `nvfp4_awq` is actually stored at. See §*The shelf catalogues more than one
 suffix* below for the file kinds that have no header at all.
 
-Nothing reads them to decide a delete yet: `family` speaks two vocabularies (base-model
-families and tensor layouts), and joining a checkpoint's `flux1` to a
-`vae_16ch` needs a compatibility table this change does not invent.
+Nothing reads them to decide a delete: `family` speaks two vocabularies (base-model
+families and tensor layouts), and the one table joining a checkpoint's `flux1`
+to a `vae_16ch` (`COMPANION_LAYOUTS`, below) is a declaration, which a delete
+warning must not act on.
+
+**Clone with new models proposes companions from evidence first, and from a
+declared table only when there is none.**
+`model_shelf_service.propose_companions` is `fetch_companions` read forwards:
+the VAEs and text encoders that share a `workflow_recipe_asset` recipe with the
+chosen checkpoint, and when there are none, with any base model of the same
+`base_model` label, then of the same `family_of` family and `modality_of`
+modality (image or video, never across). Each proposal carries
+the step that produced it (`via`), and a support file a recipe reached only
+through an ambiguous name is not proposed. **ComfyUI's own runs are evidence
+too (#1518).** The workflow pull (`ComfyUIWorkflowPullTask`) reads
+`GET /history?max_items=500` after the saved workflows, and
+`record_comfyui_history` files each *finished* run as
+`comfyui_history_model(prompt_id, model_id)`. Names resolve to shelf rows the
+way a recipe's do, but only an unambiguous match is stored, and as an id: the
+table adds no place a model filename lives, so forgetting a name has nothing new
+to reach. The ambiguity is judged at pull time, so a same-named row added later
+does not reopen it; the next pull re-reads what ComfyUI still holds. A duplicate
+merge in `checkpoint_hash_task` carries the rows to the survivor. The two kinds
+are counted apart (`recipes`, `history_runs`; recipes rank first within a
+step), and the dialog says "in ComfyUI" when a run is the only evidence. A run
+at the `checkpoint` step answers before recipes at `base_model`, for the same
+reason the ladder exists: direct evidence beats an inference. ComfyUI forgets
+its history on restart; the rows do not, and nothing on the read path asks
+ComfyUI. A failed history read never fails the pull (`history_runs: null` in
+its summary). The shelf's Workflow sets read the same rows through the same
+`_history_runs` reader (see "Workflow sets" above). "Same base model" and "same family"
+read `known_base_model`: the shelf's identified label (`base_model_canonical`)
+unless its source is a fuzzy guess, else the stored `base_model` folded; the
+LoRA flag reads the same. A checkpoint from a family nothing has run with
+falls to a fourth step, `declared`, the one bridge between the two
+vocabularies above: `known_base_models.COMPANION_LAYOUTS` names, per
+architecture family, the tensor layouts (`vae_16ch`, `clip_l`, `t5_xxl`...) its
+VAE and text encoders take, and the shelf's support files of those layouts are
+proposed with `recipes` 0, by filename. It is a declaration, not evidence (SD
+1.5's and SDXL's VAEs share a layout, as do FLUX's and SD 3.5's), so it runs
+only for a kind no recipe or ComfyUI run answered, the dialog labels it untested, and a family
+declares only the kinds the layout vocabulary can name with certainty; anything
+else still proposes nothing. LoRAs and ControlNets are the one legitimate
+family comparison (`family_of` on both sides of one vocabulary), and a mismatch
+is flagged by `GET /workflows/{key}/model-swap`, never dropped. The rewrite is
+`comfyui_recipe_service.apply_filename_swap`, deliberately not
+`apply_model_swap`: that one substitutes the same bytes under another name, this
+one replaces a file that loads with a different file. It matches the graph on
+the whole recorded name only (separators unified, case folded): the dialog
+sends the graph's own values, and a basename match would let a swap of
+`diffusion_pytorch_model.safetensors` rewrite a ControlNet loader's file of the
+same name. It writes the name in ComfyUI's own spelling when `object_info`
+answers (whole option, then the one option with that basename; a name listed
+in two folders is refused as `several_on_comfyui`, since either could be the
+wrong model) and unchecked when it does not. Both it and the dialog's slot list
+walk the graph through `comfyui_utilities.iter_model_fields_api`. The route is
+all or nothing: any swap that did not land refuses the clone (409) rather than
+saving the old model beside the new one's VAE. It names the new card only when
+it is a card nobody has named, because a repeat clone re-keys onto the card the
+first one made. By the same rule it carries the original's pins and parameter
+defaults onto a card that has none of its own (`_carry_to_clone`): both are
+addressed by `(slot label, input name)` and a filename swap moves no label.
+A default on a loader field the swap rewrote is dropped, by address and
+whatever its value, or the first run would load another model again. Notes are not carried; they describe
+the original's history. A `CLIPVisionLoader`'s `clip_name` is reported as
+`clip_vision`, never offered text encoders. The base slot is offered only
+checkpoints of its loader's file type and, when ComfyUI answers, only ones that
+loader lists, because the shelf files a diffusion-only UNET and an all-in-one
+checkpoint under one kind. Duplicate, Insert loader, the LoRA chain edit and
+Clone all write the source file's `pixlstash_bindings` back into the copy
+(`_store_copy`), which the resolved graph has lost.
+
+**The model-swap route does not cache `recipe_asset_index`, on measurement
+(#1515).** It builds the index once per request and hands it to both the slot
+list and `propose_companions` → `resolve_recipe_models`. Synthetic hub (unique
+basenames, one digest widget and the rest filename widgets per recipe), median
+of seven, for index / `resolve_recipe_models` / whole `propose_companions`:
+
+| models / copies / recipe assets | index | resolve | propose |
+|---|---|---|---|
+| 2,000 / 3,000 / 12,000 | 4 ms | 11 ms | 15 ms |
+| 10,000 / 15,000 / 160,000 | 23 ms | 176 ms | 195 ms |
+| 50,000 / 75,000 / 400,000 | 189 ms | 591 ms | 712 ms |
+
+The index is the small part; the `workflow_recipe_asset` scan in
+`resolve_recipe_models` is most of the rest, and a cache of the index alone
+would not touch it. The dialog asks once on open and once per checkpoint
+choice, so a fifth of a second at 10,000 models is acceptable. Revisit if the
+dialog starts recomputing live (per keystroke or hover): the cache then belongs
+on `resolve_recipe_models`, and its key must change on UPDATEs too (a sha256
+backfill or a renamed copy keeps every row count and rowid), so row counts and
+max rowids are not enough. The workflow grid (`read_grid`) still builds the
+index twice per request, once per `_shelf_candidates` call; at these sizes that
+is tens of milliseconds, left as is.
 
 #### The shelf catalogues more than one suffix
 
@@ -3331,9 +3706,11 @@ answer:
   has;
 - the **folder's declared role**, through `classify_model_file((), 0, path)` —
   which already trusts a folder above a parameter count, precisely because a
-  VAE and a text encoder carry no marker to find. A GGUF outside a role folder
-  is `unknown`, which the shelf shows and the owner can correct; it is never
-  guessed into `checkpoint`.
+  VAE and a text encoder carry no marker to find. `unet/` and
+  `diffusion_models/` name `checkpoint`, so a quantised Flux or Wan UNet is
+  listed by `GET /checkpoints`; hub data version 4 re-files the `unknown` rows
+  already shelved there. A GGUF outside a role folder is `unknown`, which the
+  shelf shows and the owner can correct; it is never guessed into `checkpoint`.
 
 Everything else (`family`, `weights_id`, `kind`, `param_count`, the trainer
 metadata) stays NULL, which is what an undescribed `.safetensors` records too.
@@ -3629,12 +4006,15 @@ with `HubSchemaTooNewError`, locking the owner out of a downgrade.
 | `workflow_variant` | Which card each stored variant belongs to, with the `key_version` that keyed it. **No timestamp column**, here or on the cache below: deriving the same hub twice has to write byte-identical rows, or "the backfill runs twice with identical rows" is a claim no test can make |
 | `workflow_topology_core` | Per topology: the automatic stack key (`core_hash` + `core_version`), the workflow type, the slot list every mark and override addresses, and `specials` — the post-processing the graph carries (`upscale`, `face_detailer`), comma-joined, for the card's generated name. **No filename and no asset reference.** `specials` is NULL only for a row written before the column existed, which is exactly what `_VARIANT_PENDING` re-queues on; the empty string is the real answer "this graph has none", and only that one lets a name claim the workflow is plain. The stamped version is `CORE_RULE_VERSION`, which is `CORE_VERSION` *plus the strip flag*: `core_hash` does not carry that flag inside its digest the way `workflow_key` carries `WORKFLOW_KEY_VERSION` inside its own, so a flip would otherwise change every core hash while the stamp still read current, and the hub would hold two rules' stacks at once |
 | `workflow_slot_mark` | `structural` or `recipe` per LoRA slot, **frozen the first time the slot is seen** |
-| `workflow_file` | A stored workflow file on its card, keyed by `workflow_name` as the older file-keyed tables are. `structural_hash` NULL for a UI-format file, which has only a topology and so becomes a card with no assets. Deleting the file drops the row and leaves the card, which its pictures made |
+| `workflow_lora_promotion` | One LoRA **file** promoted into the card key at one slot, per **(topology, slot label, asset reference)** (`PUT /workflows/{key}/lora-promotion`). The per-file counterpart of the slot mark: `workflow_key(..., promoted=)` keys a recipe slot only while it holds exactly that file, so only that file's pictures split off. Read by every writer of `workflow_variant.workflow_key` (`workflow_cards.promoted_pairs`, in `record_identity` and `_rekey_variants`), by the export (a promoted file is kept where the graph still loads it) and by the card description (the slot reads `structural`, named, and a generated card name gets `+ <LoRA>`). Names the file by its `asset:` reference, never the filename, so a forget leaves the split standing and nameless, as it does a mark. A card a promotion made is never a one-off |
+| `workflow_file` | A stored workflow file on its card, keyed by `workflow_name` as the older file-keyed tables are. `structural_hash` NULL for a UI-format file, which has only a topology and so becomes a card with no assets — unless ComfyUI has converted it (#1530): `POST /comfyui/workflows/convert` stores the API graph beside the file as `<name>.json.api` (`{converted_from, prompt}`, the digest of the editor file it was made from), and `_file_in_hub` files that graph instead, so the row gets a structural hash. `runnable_document` is what every run, list and parameter read goes through to see it; a conversion of another version of the file is ignored, and delete removes it. Deleting the file drops the row and leaves the card, which its pictures made |
+| `workflow_model_fix` | A model the owner replaced in a workflow because the original is gone (`PUT /workflows/{key}/model-fix`), per **(topology, slot label, original file)** rather than per card. Both files are kept normalized (what the card key and asset rows match on) and as spelled (what a run rewrites and the Workflow tab shows), with `slot_kind`, the shelf `file_kind` the slot takes (`checkpoint`, `vae`, `text_encoder`; `workflow_identity.model_fix_kind`), which is what a run rewrite and the superseded-cover flag filter on. `workflow_cards.fixed_slots` reads a slot holding the replacement as holding the original, and **every writer of `workflow_variant.workflow_key` computes the key through it** (`record_identity`, `_rekey_variants`), so pictures made with the replacement file on the original card and a slot flip does not move them off it. Not in `_KEYED_TABLES`: it is keyed by topology, so a re-key never has to carry it. Forgetting either file's name (`forget_asset_names`, and the Privacy purge `forget_model_ghosts`) deletes the row; the variants already folded stay where they are until something re-keys them |
+| `workflow_loader_swap` | A ComfyUI-PixlStash loader a model fix swapped in for the workflow's own because that loader cannot load the replacement (#1605), per **(swapped topology, node label, fields)**. Swapping the node changes the topology and every slot label, so `workflow_identity.unswapped` puts the original loader back in a stored document (matched on label, class and exactly the references the swap recorded; two recorded originals for one node is a guess and keys as itself) before the card key is computed: `record_identity` cards the variant under the original topology (its marks, its cache, `workflow_variant.topology_hash`), and `_topology_documents` hands such variants to a re-key of that topology, read back the same way. `fields` holds asset references only, the original's naming the file loaded, so a fix's replacement then reads as its original through `fixed_slots`. Written when a swapped graph is submitted or opened with `GET …/graph` (`record_loader_swaps`), never by a preflight; `_card_variants` and the pull's has-pictures check read the swapped topologies beside the card's own, kept when the fix is undone: those pictures then card as the replacement's, as a rewritten name's do |
 | `workflow_attr`, `workflow_default_override`, `workflow_key_pins` | The owner's name, notes, hidden flag, parameter overrides and pins, keyed by `workflow_key`, with parameters addressed by **(slot label, input name)** rather than by node id — a node id is whatever the last serialisation called it |
 | `workflow_key_picture_input` (written by `PUT /workflows/{key}/inputs`), `workflow_cover` (no writer yet) | Input modes, Fixed pictures and the chosen cover, keyed by `(library_uuid, workflow_key)` and naming pictures by `pixel_sha`, for the ghost table's reason: a picture is a picture in one vault |
 | `workflow_stack`, `workflow_stack_member`, `workflow_unstacked` (written by the stack routes, B4) | Stacks of cards (`position` 0 is the cover) and the owner taking a card out of its automatic one |
 | `workflow_origin` (written by `COMFYUI_WORKFLOW_PULL`, #1440; `hub/workflow_origin.py`) | Where a pulled workflow came from: one row per `(origin, remote_path)`, the origin being the ComfyUI URL, with the `content_hash` last read there. `workflow_name` is **many-to-one** because the pull matches by content. `dismissed` is set by the delete path (`trash_user_workflow`, inside `INBOX_LOCK`) on **every** row naming the deleted file. A later pull skips a dismissed path **and any document with a dismissed content hash, at any path and any origin**, so a rename in ComfyUI, another spelling of its URL or a listing that came back empty cannot restore it; dismissed rows are never pruned, and an empty listing prunes nothing. A path whose content changed is reported `changed` and stored beside the earlier copy. The pull checks a dismissal, stores and records each entry under `INBOX_LOCK`, so a delete made mid-pull is not undone. Only deletes made through PixlStash dismiss: a file removed from the folder by hand comes back on the next pull. Its own table rather than columns on `workflow_file`, which the delete drops |
-| `workflow_pulled_file` (#1440) | The stored files a pull **wrote**, per file rather than per path, so it holds whatever ComfyUI later does to the path. `card_index` reads it as `Card.hand_imported`, the one-off test's "imported" clause, so pulled workflows can be folded into the one-off count. Both hand-over paths, `POST /comfyui/workflows/import` and the watched inbox, remove the name they store or match (`claim_stored_workflow`), and so does a delete |
+| `workflow_pulled_file` (#1440) | The stored files a pull **wrote**, per file rather than per path, so it holds whatever ComfyUI later does to the path. `card_index` reads it as `Card.hand_imported`, the one-off test's "imported" clause, so pulled workflows can be folded into the one-off count. The hand-over paths, `POST /comfyui/workflows/import`, the watched inbox and `POST /comfyui/workflows/convert`, remove the name they store or match (`claim_stored_workflow`), and so does a delete |
 
 **Eight of those tables had no writer in B2**, and were created ahead of the
 steps that fill them on purpose (B4 has since written most of them; the
@@ -3697,6 +4077,73 @@ document and a malformed one raises `KeyError` rather than `WorkflowGraphError`,
 and on the import route the card write has a handler of its own so a failed card
 cannot retract the `topology_hash` of a graph that *was* filed. The picture's
 ingest and the file's import do not depend on a card, and the backfill retries.
+
+#### Workflows: identity, core addresses and the default recipe (#1622)
+
+The owner-facing **workflow** is a group of topologies, beside the cards
+rather than instead of them until the cut-over (#1623); no card route reads
+anything here. `variant (structural_hash) -> topology -> workflow (workflow_id)`,
+where the id is `auto:<core_hash>` for an automatic group (the spelling an
+automatic stack already has) or a uuid hex for an owner's split or merge.
+Pictures stay filed by `structural_hash`, so nothing in the vault moves.
+
+| Table | Holds |
+|---|---|
+| `workflow_group`, `workflow_group_member` | A workflow somebody decided about, and a topology placed in one by hand (one workflow per topology: the member row's primary key). Merge and split move **topologies**, never cards: what told two cards of one topology apart is a checkpoint or a LoRA, which are recipe values now |
+| `workflow_group_attr`, `workflow_group_default`, `workflow_group_pins`, `workflow_group_picture_input` | The owner's name, notes and hidden flag; edits to the default recipe; pins; picture inputs (library-keyed, pictures by `pixel_sha`). All keyed by `workflow_id` and addressed by **address**, never slot label |
+| `workflow_key_successor` | Which workflow each card became; written by the cut-over, read by the vault's saved-recipe conversion |
+
+Reads (`hub/workflow_card_reads.py`): `workflow_of_topology` (a member row, else
+`auto:<core_hash>` under this build's `CORE_RULE_VERSION`, else none),
+`topologies_in_workflow` (an automatic workflow minus topologies placed
+elsewhere), `variants_in_workflow`, and `workflow_index`, one `Workflow` per
+group built from `card_index`. The **base topology** is the one with the most
+stage groups, then the most LoRA loaders, then the most kept pictures (#1620
+D3, automatic); its busiest card is `base_card`, whose source a run resolves.
+
+**Addresses.** A slot label is refined over the whole topology, so it means
+nothing in a workflow spanning several. `workflow_identity.core_node_labels`
+refines on the graph `core_hash` strips (plumbing, stages, LoRA loaders
+stepped through), from the same `_strip`, so the hash and the address cannot
+disagree; equal core hashes mean isomorphic stripped graphs, so a sampler,
+latent or checkpoint loader has the same **core address**
+`core:<label>/<input>` in every topology of the group. A node inside a stage
+group has no core label and is addressed by its slot label on the base
+topology, which goes stale if the base topology changes: an accepted limit, and
+`_apply_addressed` now logs every address that matches no node on the run graph
+rather than dropping it silently. LoRAs are not addressed by label:
+`lora:<sha256>`, placed by `place_recipe_loras`.
+
+**The default recipe** (`workflow_card_service.workflow_defaults`) is
+`card_defaults`' sample (the newest `DEFAULT_SAMPLE` distinct instances of the
+4★+ pictures, else of every picture) read across every variant of the
+workflow: each featured parameter's mode by address; each checkpoint, VAE and
+text-encoder loader's modal file (`model_fix_kind` says which loaders those
+are); every LoRA present in **more than half** the instances, at its modal
+strength (D2); and each stage the base topology has, on unless most instances
+ran without it. Prompt, negative and seed are not part of it.
+`workflow_group_default` edits replace what they name (`EDITED`); a `lora:`
+edit holding `off` takes a LoRA out.
+
+**A run by `workflow_id`** starts from the base card's source and has the
+server apply the default recipe **under** the request: the recipe's values
+are written in a pass of their own before the request's, so a request value
+wins however either addresses the input (slot label or core address), and
+`models` and `loras` win address by address. A stage the recipe runs without
+is skipped best effort: one that cannot be taken out runs whole and is logged,
+never refused. A LoRA loader the recipe leaves empty is bypassed, best effort
+too, and only when the recipe was read off at least one picture and the shelf
+names every one of its LoRAs; otherwise every loader keeps its LoRA. The
+request cannot switch a recipe-off stage back on yet (#1623 owns that control). `models: [{address, filename | sha256}]` goes through
+`apply_filename_swap`; a model made for another family or modality than the one
+it replaces is **flagged, never blocked** (`RunGroup.flags`, `family_mismatch`;
+`model_shelf_service.families_clash`, which the clone dialog's LoRA flags use
+too). A run by `workflow_key` applies no workflow default and is unchanged.
+
+**Saved recipes** gain `workflow_id` and `models` (migration 0124, both
+nullable). `models` pins over the workflow's default recipe address by address,
+as a recipe's overrides do, so NULL and `[]` both leave the defaults; a recipe with a
+`workflow_id` runs as that workflow.
 
 #### The workflow scan rides the ComfyUI extraction (v1.11)
 
@@ -3943,6 +4390,28 @@ still a later step, and forgetting ghosts is a privacy purge beside the
 retention setting (`/server-config/ghost-retention/*`, see *Picture ghosts*
 below).
 
+**`PUT /workflows/{key}/lora-promotion` is its per-file sibling**, and what the
+Workflow inspector's LoRA pile calls: it promotes one LoRA file, named by its
+`asset:` reference, in every topology of the card's stack that loaded it
+(`workflow_card_writes.set_lora_promotion`), through the same re-key and
+carry-over. Two things it does that a flip does not: the card it splits off
+**does not keep the owner's typed name** (it is cleared, so the generated
+`… + <LoRA>` shows), and putting back a file whose whole slot is marked
+`structural` turns the slot into a recipe slot and promotes every *other* file
+it has held, so only that one file folds back. It answers with the card
+addressed whenever a variant is still on it. `GET /workflows/{key}/lora-summary`
+(`workflow_card_service.stack_lora_summary`) is the read beside it: the stack's
+LoRAs counted over kept pictures, `shared` (in every one) and `varying` (the
+pile), each with its members, best picture ids and whether it is promoted. The
+picture listing's `workflow_lora` narrows a workflow filter to the variants whose
+stored graph loads that file (`workflow_cards.variants_loading`); alone it
+matches nothing, because the listing is open to scoped tokens and resolving it
+unnarrowed parses every stored graph on the hub. `set_lora_promotion` writes
+rows for the topologies the stack has *now*; a topology that joins the stack
+later is not promoted until the LoRA is promoted again, and putting back a
+structural slot's file promotes only the other files seen so far. And
+`workflow_stack` now also reads a card's own `auto:<core hash>` spelling.
+
 **`PUT /workflows/{key}/slots` is the one write that changes identity.** A LoRA
 slot's mark decides whether that LoRA reaches the card key, so flipping one
 re-keys **every variant of the topology** — one card can split into several, or
@@ -4016,7 +4485,10 @@ else, so `GET /recipes?workflow_key=…` resolves the effective stack in the hub
 (`hub/workflow_cards.effective_stack_keys`: an explicit `workflow_stack_member`
 row whatever its stack's kind, then `workflow_unstacked`, then the automatic
 `core_hash` group) and lists every member's recipes — and an Unstack leaves each recipe with its own workflow
-because there was never a stack id to break.
+because there was never a stack id to break. `whole_stack=false` skips that resolution and reads
+only the keys named (recipes and credit alike): the Recipes tab sends it when the
+selection is members picked inside an expanded stack, and a collapsed stack card
+still gets the whole stack.
 
 **A re-keying is the one thing a saved recipe does not survive.** It names its
 workflow by `workflow_key`, so a `WORKFLOW_KEY_VERSION` bump or a flipped slot
@@ -4495,71 +4967,10 @@ this record and needs its own independent adversarial sign-off.
 | Anomaly regions | In-memory bounded LRU | Cleared on library switch |
 | Models | `~/.cache/huggingface/` + VRAM | Lazy load, idle unload |
 
-### The library layout (v1.11 Phase 4a)
+### The library layout
 
-`utils/library_layout.py` is the model of **where a picture belongs and whether
-it still belongs there**. Model only: no move engine, no file writes, no UI —
-see Phase 4b for those. The rule it implements, and its case table, are in
-`design/1.11-existing-library/DECISIONS.md`; the module docstring carries the
-detail, so this section is the map rather than a second copy of it.
-
-A `Layout` is an ordered list of segments, one folder level each. A segment
-holds one or more `Facet`s (`PROJECT`, `PERSON`, `SET`, `TAG`) and the first the
-picture has a value for wins. A segment nothing fills becomes `GLOBAL_FOLDER`
-(`Global`) **when a later segment is filled**, and is dropped when none is: under
-`Project` then `Person or Set` a picture with only a person is `Global/Mira` and
-one with only a project is `Nordvik`, never `Nordvik/Global`. That keeps the
-tree two deep instead of five while putting every person folder at one depth,
-and — the reason `Global` is in the layout's *language* rather than being
-decoration — it gives an unprojected picture a folder to move **out of** when a
-project arrives (#1161). A new library starts on `DEFAULT_LAYOUT`, `Project`
-then `Person or Set`.
-
-`_walk` therefore reads `Global` at every segment whatever the picture is, and
-treats it as the picture's own only where nothing fills that segment. Reading it
-only where the picture has nothing would make it unparseable in exactly the case
-that has to move. The cost, stated once: a folder of the owner's own literally
-named `Global` at a layout level is adopted by the layout instead of being the
-permanent override an unreadable name would be. A picture that fills no segment
-at all still answers `layout.unfiled`, not `Global`, which is what keeps the
-migration's unfiled sweep an opt-in rather than something `Global` does anyway.
-
-| Function | Answers |
-|---|---|
-| `render(facets, layout)` | The folder the picture should be in, relative to the library root. An unfilled segment with a filled one after it becomes `Global`; trailing ones are dropped. A picture nothing files goes to `layout.unfiled`, defaulting to `Unassigned` — never the library root, which is where an unmigrated flat library lives. |
-| `is_true(folder, facets, layout, known_names)` | Whether the folder it is *actually* in still describes it. Takes the **folder**, not the file path: guessing which trailing component was a file name would silently flip the answer for a path written with a trailing separator. A path carrying `.` or `..` is refused whole rather than normalised — tidying one would fabricate a level the path does not have. |
-
-The release rests on `is_true`, and on one property of it: **a path that does
-not parse against the layout can never be false.** A file at the library root
-matches no segment, so an existing flat library needs no migration; a file the
-owner dragged into a folder of their own contradicts nothing, so it stays there
-permanently and the override needs no setting.
-
-The three properties a reader is most likely to get wrong:
-
-- **Truth is membership, not equality with `render`.** The folder `Mira/` says
-  "this is a Mira picture" and stays true while Mira is one of the picture's
-  people, whoever `render` would pick today. That is what makes adding a second
-  project or person move nothing.
-- **`known_names` is not optional.** Only the library's whole vocabulary
-  separates *this folder names a project the picture is no longer in* (false, it
-  moves) from *this folder names nothing PixlStash knows* (unparseable, it never
-  moves). Deleting an entity takes its name out of the language and freezes the
-  folders named after it.
-- **Reading stops at the first component the vocabulary cannot read**, and it is
-  not positional. Everything from that component down is the owner's own, so
-  `2024 Shoots/Mira/2026-08` is judged on its first two components while
-  `Holiday/2024 Shoots` is judged on none of them.
-
-Every name reaching a path goes through `folder_name()` — including
-`Layout.unfiled`, which is validated against it on construction because it is
-the one field a settings screen will let a user type and it reaches `render`'s
-output verbatim. It is a many-to-one map (`A/B`, `A:B` and `A_B` all become
-`A_B`), which is the collision the filesystem would force anyway; comparison is
-additionally case-folded and NFC-normalised for Windows and macOS. Every
-ambiguity here resolves towards *not* moving a file.
-
-`tests/test_library_layout.py` covers it, unparseable-path cases first.
+Where a picture belongs on disk, and the engine that moves files to match, is
+§24.3 and §24.4.
 
 ---
 
@@ -4962,7 +5373,7 @@ The one accepted cost is rot in the other direction: if a listed route's module 
 - [`reference_folders.py`](../pixlstash/routes/reference_folders.py) — create / update / delete reference folders (`folder`, `host_path`), `GET /reference-folders/detect-sidecars` (walks a client-supplied path), sidecar write-back, `restart_server`, `open_reference_folder`.
 - [`import_folders.py`](../pixlstash/routes/import_folders.py) — create / update / delete import folders.
 - [`filesystem.py`](../pixlstash/routes/filesystem.py) — `GET /filesystem/browse` (enumerates a client-supplied host path).
-- [`folder_structure.py`](../pixlstash/routes/folder_structure.py) — the v1.11 folder-structure read and commit: `POST /folder-structure/read` walks a client-supplied host path and decodes pictures out of it, `GET /folder-structure/read/status` carries the resulting folder map, `DELETE /folder-structure/read` stops it, and writes nothing (§24); `POST /folder-structure/commit` registers the same root as a reference folder and creates the accepted projects/people/sets/tags, `GET /folder-structure/commit/status` carries its progress — the one place any of it is written, and still zero files moved (§25).
+- [`folder_structure.py`](../pixlstash/routes/folder_structure.py) — the v1.11 folder-structure read and commit: `POST /folder-structure/read` walks a client-supplied host path and decodes pictures out of it, `GET /folder-structure/read/status` carries the resulting folder map, `DELETE /folder-structure/read` stops it, and writes nothing (§24.1); `POST /folder-structure/commit` registers the same root as a reference folder and creates the accepted projects/people/sets/tags, `GET /folder-structure/commit/status` carries its progress — the one place any of it is written, and still zero files moved (§24.2).
 
 **Current gate.** Every one of these is gated with `require_user_id` (authentication only); none uses `require_unscoped_owner`, so they do not themselves verify that the caller is *unscoped*. A plain `ALL` token leaves `token_scope = None` (the middleware builds a `TokenScope` only for non-`ALL` tokens — the `if matched_token.scope != "ALL"` branch in [`auth.py`](../pixlstash/auth.py)) and is treated as owner-equivalent here, which is correct: `ALL == owner` (below). The danger *used* to be that an `ALL`+`resource_type` token **masqueraded** as that plain-owner shape — it also left `token_scope = None` — letting a nominally "restricted" token drive filesystem authority. That vector (the §16.2 item 4 footgun, applied to owner-only operations rather than picture-scoped reads) is now **closed**: `create_token` refuses to mint it and the middleware fail-closed-rejects any already-existing row before these handlers run. The correct *explicit* gate for this class is still `require_unscoped_owner` (it consults `request.state.matched_token.resource_type`), already used by [`snapshots.py`](../pixlstash/routes/snapshots.py) and [`config.py`](../pixlstash/routes/config.py); moving to it (below) is still wanted as defense in depth, but it is no longer closing an open hole.
 
@@ -5246,7 +5657,7 @@ The refusal is **`400`**, deliberately, and the three properties are asserted ra
 | Column, large binary (`image_embedding`, `text_embedding`, `likeness_parameters`), value present | `200` | `{"<field>": "<base64>"}` |
 | Column, large binary, value `NULL` | `500` | *(pre-existing bug, see residuals)* |
 | `project_id` (picture and character) | `200` | `{"project_id": <narrowed id or null>}`, narrowed per #719 / R1b |
-| `thumbnail`, character only | `200` | raw PNG bytes, `Content-Type: image/png` |
+| `thumbnail`, character only | `200` | raw WebP bytes, `Content-Type: image/webp` |
 | **Relationship** (`projects`, `picture_sets`, `characters`, `quality`, `likeness_a`, `likeness_b`, `reference_folder`, `project`, `pictures`, `reference_picture_set`) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
 | **Unknown name** (typo, removed column) | **`400`** | `{"detail": "Field '<field>' is not readable on this endpoint"}` |
 | Object does not exist, servable field | `404` | `{"detail": "Picture not found"}` / `{"detail": "Character not found"}` |
@@ -5804,7 +6215,7 @@ sequenceDiagram
 
 ---
 
-## 21. Operation Log — undo/redo and the audit trail (DAM 1.2)
+## 21. Operation Log — undo/redo and the audit trail
 
 The `operation` table ([db_models/operation.py](../pixlstash/db_models/operation.py)) is the **append-only** record of every user-visible change. It is the undo/redo stack today and the audit log / Studio activity feed later — one mechanism, three features (DAM roadmap §1.2 / §4.3), which is why it is built once and additively.
 
@@ -6098,7 +6509,7 @@ one, so backfilling the mirror does not invalidate every thumbnail at once.
 
 **The event names the field: `fields: ["pixels"]`.** The forward rotate and the
 undo/redo restore both stamp it (`_crud.rotate_pictures` and
-`operation_log_service._emit`), for the reason §23's move does: the thumbnail URL
+`operation_log_service._emit`), for the reason a move does (integration §20.3): the thumbnail URL
 and its cache token come from the batch-thumbnail endpoint, never from
 `GET /pictures/{id}/metadata`, so a client told only `updated` re-reads metadata
 it already has and goes on painting the pre-rotate bitmap. The client that
@@ -6138,7 +6549,7 @@ mirror precisely so the next rotate converges instead of compounding that.
 
 ---
 
-## 22. Tiered Duplicate Detection (v1.9 Dedup → Stacks)
+## 22. Tiered Duplicate Detection
 
 The Duplicates queue is filled by three tiers of increasing cost and decreasing
 certainty. Detection lives in `pixlstash/services/dedup_tier_service.py`; what
@@ -7231,7 +7642,7 @@ Both routes are `OWNER_ONLY` in `ROUTE_POLICIES` with no inline scope check
 
 ---
 
-## 23. Opt-in telemetry: the install ID and the consent flags (v1.9 Lane F)
+## 23. Opt-in telemetry: the install ID and the consent flags
 
 Nothing in this section transmits anything. It is the local half of the
 telemetry mechanism: storage, consent state, and the surface the UI reads.
@@ -7324,11 +7735,20 @@ Both are covered in both directions by
 
 ---
 
-## 24. The folder-structure read (v1.11 Phase 2)
+## 24. Folder structure: read, commit, layout and moves
+
+Everything that maps a folder tree onto the library and keeps the two in step:
+reading an existing tree (§24.1), writing the accepted mapping (§24.2), the
+layout that says where a picture belongs (§24.3), the engine that moves files
+to match it (§24.4), and reconciling moves the owner made outside PixlStash
+(§24.5). The vault and path rules these build on are §13. The wire contract
+for all of it is `docs/integration_architecture.md` §20.
+
+### 24.1 The folder-structure read
 
 `pixlstash/services/folder_structure_service.py`, exposed by
 `pixlstash/routes/folder_structure.py`. The wire contract is
-`docs/integration_architecture.md` §20; the release plan is
+`docs/integration_architecture.md` §20.1; the release plan is
 `docs/plans/v1.11.0-existing-library.md` §4 Phase 2. This section is the part
 that is not on the wire: why the signals are shaped the way they are, and what
 they cost.
@@ -7339,7 +7759,7 @@ renamed. That is not an implementation detail to preserve by care — it is the
 release's headline (*"import moves zero files"*), and Phase 3 is the only thing
 that commits anything.
 
-### The eight signals
+#### The eight signals
 
 | Signal | Scope | Cost | Proposes |
 |---|---|---|---|
@@ -7389,7 +7809,7 @@ hands the workers back on its own, and a read that finishes calls
 the planner and must not wait out the minute. The deadline still matters, since
 an URGENT task that cannot finish starves the queue it jumped.
 
-### The shape signals: what a photo library looks like
+#### The shape signals: what a photo library looks like
 
 The first four signals leave a photo library — no captions, no existing
 entities — reading as Person-or-nothing. The other four read the *shape* of the
@@ -7483,10 +7903,10 @@ unambiguous name decides, a bare `.txt` is decided by content). The majority
 kind is reported, a tie going to description, with an excerpt of a file of
 that kind. Only the first `MAX_CAPTION_PATTERNS` suffixes by file count are
 opened, so a tree of one-off notes costs a bounded number of reads. The result
-carries them as `captions` (§20 of the integration doc); the sidecar signal's
+carries them as `captions` (§20.1 of the integration doc); the sidecar signal's
 `with_sidecar` comes from the same pairing, so the two cannot disagree.
 
-### Why cardinality is level-scoped and nothing else is
+#### Why cardinality is level-scoped and nothing else is
 
 Cardinality is a property of a *level* — "four names under 118 parents" cannot
 be said about one folder — so it speaks in a level's
@@ -7510,7 +7930,7 @@ unreachable: two kinds would need 120% of the level. The exact comparison is
 therefore not pedantry, it is the whole of why there is no tie-break to get
 wrong, and it is asserted in the code.
 
-### Evidence, and the refusal to guess
+#### Evidence, and the refusal to guess
 
 Every proposal carries the evidence that produced it, and **a signal that cannot
 state its reason proposes nothing**. Two consequences fall out rather than being
@@ -7535,7 +7955,7 @@ the layout cannot leave this read proposing a word the layout no longer places.
 fails the build on the drift, which is the only way anyone would notice: the
 symptom otherwise is a picture that quietly fails to move, one release later.
 
-### Folding a name
+#### Folding a name
 
 **There are two name folds in v1.11 and they disagree on purpose.**
 `library_layout._match_key` (Phase 4a) is NFC + casefold: accents and separators
@@ -7557,7 +7977,7 @@ library is confidently proposed as a single Tag level with the evidence
 so `José` and `Jose` are the same name; without that, the accented spelling
 matches nothing and the *unaccented* one matches a person who does not exist.
 
-### The bounds
+#### The bounds
 
 Three bounds, and each one has a way of saying it was hit.
 
@@ -7604,7 +8024,7 @@ A corrupt or unreadable picture decodes to `None` and is sampled as
 *no face*, logged at warning with its basename. A whole folder's detection batch
 failing is logged and costs that folder its face evidence — never the read.
 
-### Authorization
+#### Authorization
 
 All three routes are `LOCAL_OWNER_ONLY` (§16.3), and the `GET` is on that tier
 for the reason `GET /model-moves` is: what it carries **is** the answer — a map
@@ -7632,7 +8052,7 @@ rollback the `POST` and `DELETE` are covered by the gate alone. The gate is the
 live enforcement and ships enforcing; the belt is the extra layer, and it can
 only ever be an extra layer for the reads.
 
-### One read at a time
+#### One read at a time
 
 `Server.folder_structure_read` is a single slot, not a dict. The mapping screen
 only ever shows one read, and a second concurrent one would fight the first for
@@ -7647,14 +8067,14 @@ library would otherwise pin all 28,000 filenames for the process lifetime.
 
 The lock covers the 409 check-and-set and nothing else. The worker writes
 `result` before it writes `status`, and the status handler reads `status` first
-and serves `result` only once the read has settled, which is what keeps §20's
+and serves `result` only once the read has settled, which is what keeps integration §20.1's
 *"`result` is null until the read has settled"* true without taking a lock on
 every poll.
 
-### Ambiguity in `name_match`
+#### Ambiguity in `name_match`
 
 `PictureSet.name` carries no unique constraint and a real vault has duplicates
-immediately. §20 promises that `match.id` is *that row's real primary key*, so
+immediately. Integration §20.1 promises that `match.id` is *that row's real primary key*, so
 when two entities of the same kind share a name the read returns the **kind**
 (which is genuinely known) with `match: null` and evidence saying
 `"matches 2 existing sets"`. Handing back whichever row the query ordered first
@@ -7662,17 +8082,17 @@ would aim Phase 3's attach at an arbitrary set, confidently, with evidence. Two
 different *kinds* sharing a name is the other case and is already a narrowing:
 `candidates`, no `kind`.
 
-## 25. The folder-structure commit (v1.11 Phase 3)
+### 24.2 The folder-structure commit
 
 `pixlstash/services/folder_structure_commit_service.py`, exposed by the
 `/folder-structure/commit` routes added to `pixlstash/routes/folder_structure.py`.
-Wire contract `docs/integration_architecture.md` §22; release plan
-`docs/plans/v1.11.0-existing-library.md` §4 Phase 3. §24's read only ever
+Wire contract `docs/integration_architecture.md` §20.2; release plan
+`docs/plans/v1.11.0-existing-library.md` §4 Phase 3. §24.1's read only ever
 proposes; this is the one module anything from the mapping screen writes.
 
-### Reuse, not a second walker
+#### Reuse, not a second walker
 
-The commit does not walk the filesystem a second time. §24 already measured
+The commit does not walk the filesystem a second time. §24.1 already measured
 that cost and the release plan's whole argument for the two-minute read is that
 it is paid *once*. Instead the accepted root is registered as an ordinary
 `ReferenceFolder`, and the existing, already-shipped `ReferenceFolderScanTask`
@@ -7725,7 +8145,7 @@ organise later" during `Main` or `MapTree` leaves nothing committed and nothing
 registered at all, so there is no row at that point for a resumed commit to
 collide with.
 
-### The newest accepted mapping is the only resumable one
+#### The newest accepted mapping is the only resumable one
 
 `FolderMappingCommit` promises "at most one row is `pending`", and the endpoint's
 in-memory single-slot rule is not enough to keep it: a commit that *fails*
@@ -7737,9 +8157,9 @@ first. `record_pending_commit` therefore marks every older pending row
 the next start-up resumes the newest, and the start-up *after that* resumes the
 older one and re-applies a mapping the owner has already replaced.
 
-### One pruning rule for every walk of a tree
+#### One pruning rule for every walk of a tree
 
-§24's read prunes dot-folders (a vault's own `.pixlstash-thumbnails/`, the older
+§24.1's read prunes dot-folders (a vault's own `.pixlstash-thumbnails/`, the older
 `.ref_thumbs/`, `.pixlstash` sidecar stores, anything the owner hid) and so does
 `local_import_pictures`; `ReferenceFolderScanTask` did not. Since a
 reference-mode commit is precisely the read and that scan looking at one root,
@@ -7756,7 +8176,7 @@ is still there.
 the field the model's own docstring names as "unix timestamp of the last
 **completed** scan pass" — not a picture count, because a count can plateau
 mid-batch for reasons that have nothing to do with completion. It has a
-30-minute bound (`INDEX_TIMEOUT_S`) for the same reason §24's read has a
+30-minute bound (`INDEX_TIMEOUT_S`) for the same reason §24.1's read has a
 deadline: a stuck scan must fail the commit rather than hang the screen
 forever.
 
@@ -7790,7 +8210,7 @@ per chunk (`_BUILD_CHUNK_SIZE` = 128 pictures) has faces, quality and the rest
 running on the first chunk while the walk continues; it is a scheduler poke,
 not an event, so the SPA is still told about the import once, at the end.
 
-### The assigning step costs a bounded number of statements
+#### The assigning step costs a bounded number of statements
 
 `_link_pictures` resolves every folder first and only then links, because with
 the answers in hand the human-label ledger can be written in **one batched
@@ -7805,7 +8225,7 @@ whole import and cross SQLite's bound-parameter cap.
 pins it by counting statements at two import sizes: twenty times the pictures
 must not cost more statements.
 
-### A read commits once, enforced
+#### A read commits once, enforced
 
 `apply_mapping` is not idempotent, and cannot cheaply be made so: it walks
 every picture currently under the reference folder and unconditionally
@@ -7828,7 +8248,7 @@ what the client is told. Checked and set separately from — and nested inside
 that loses to an *unrelated* read's in-flight commit is refused before it
 spends the read's one commit on a 409 it never got to act on.
 
-### Person is `pending_character_id`, not a fabricated Face
+#### Person is `pending_character_id`, not a fabricated Face
 
 A folder accepted as Person has no detected face to attach to — the read's own
 `faces` signal is sampled at 20 pictures and never claims to have looked at the
@@ -7844,7 +8264,7 @@ the immediate one — the existing background pipeline reconciles the assignment
 against a real detected face once extraction runs, on its own schedule, with no
 new code here to do it.
 
-### Nearest-ancestor-wins, tags are not exclusive
+#### Nearest-ancestor-wins, tags are not exclusive
 
 A picture is filed under the **closest** accepted Project, Person or Set above
 it — first-match-wins walking from the picture's folder up to the root,
@@ -7856,10 +8276,10 @@ a shoot folder is two tags, not the nearer one winning). `_resolve_folder`
 computes this once per distinct folder, not once per picture, since the
 `ReferenceFolderScanTask`-created rows already state which folder each is in
 via their own `file_path` — no second read of `FolderStructureRead`'s
-internal `_folders` list, which §24 already documents as dropped once the
+internal `_folders` list, which §24.1 already documents as dropped once the
 proposal document is built.
 
-### Entity identity is (kind, name), not (kind, relative_path)
+#### Entity identity is (kind, name), not (kind, relative_path)
 
 Two folders accepted as the same kind with the same name — `Mira` appearing
 under two different parents, or a folder whose owner picked the same
@@ -7875,7 +8295,7 @@ name that happens to collide with something created by an *earlier* commit is
 not merged, only within-batch repeats are.
 
 `Project.name` carries a real unique constraint; `Character.name` and
-`PictureSet.name` do not (§24's own note on `name_match`'s ambiguity is why —
+`PictureSet.name` do not (§24.1's own note on `name_match`'s ambiguity is why —
 a real vault has duplicate set names on day one). A newly-created Project whose
 name collides with an existing one the owner did not explicitly `match_id`
 would raise on `session.flush()`, surfacing as a failed commit rather than a
@@ -7883,7 +8303,7 @@ silent skip — that is deliberate: **it reads as the owner asking to reuse a
 project name without saying so**, and a `match_id` is exactly how the mapping
 screen already lets them say so on purpose.
 
-### What this does not do
+#### What this does not do
 
 - **No layout write.** The accepted mapping places the pictures this commit
   indexes; it does not set the library's `Layout` for what comes in *next* —
@@ -7894,12 +8314,78 @@ screen already lets them say so on purpose.
   `set_picture_set_projects` are called once, at creation, never for an
   existing entity's membership change.
 
-## 26. The layout and the move engine (v1.11 Phase 4b)
+### 24.3 The library layout
+
+`utils/library_layout.py` is the model of **where a picture belongs and whether
+it still belongs there**. Model only: no move engine, no file writes, no UI —
+see §24.4 for those. The rule it implements, and its case table, are in
+`design/1.11-existing-library/DECISIONS.md`; the module docstring carries the
+detail, so this section is the map rather than a second copy of it.
+
+A `Layout` is an ordered list of segments, one folder level each. A segment
+holds one or more `Facet`s (`PROJECT`, `PERSON`, `SET`, `TAG`) and the first the
+picture has a value for wins. A segment nothing fills becomes `GLOBAL_FOLDER`
+(`Global`) **when a later segment is filled**, and is dropped when none is: under
+`Project` then `Person or Set` a picture with only a person is `Global/Mira` and
+one with only a project is `Nordvik`, never `Nordvik/Global`. That keeps the
+tree two deep instead of five while putting every person folder at one depth,
+and — the reason `Global` is in the layout's *language* rather than being
+decoration — it gives an unprojected picture a folder to move **out of** when a
+project arrives (#1161). A new library starts on `DEFAULT_LAYOUT`, `Project`
+then `Person or Set`.
+
+`_walk` therefore reads `Global` at every segment whatever the picture is, and
+treats it as the picture's own only where nothing fills that segment. Reading it
+only where the picture has nothing would make it unparseable in exactly the case
+that has to move. The cost, stated once: a folder of the owner's own literally
+named `Global` at a layout level is adopted by the layout instead of being the
+permanent override an unreadable name would be. A picture that fills no segment
+at all still answers `layout.unfiled`, not `Global`, which is what keeps the
+migration's unfiled sweep an opt-in rather than something `Global` does anyway.
+
+| Function | Answers |
+|---|---|
+| `render(facets, layout)` | The folder the picture should be in, relative to the library root. An unfilled segment with a filled one after it becomes `Global`; trailing ones are dropped. A picture nothing files goes to `layout.unfiled`, defaulting to `Unassigned` — never the library root, which is where an unmigrated flat library lives. |
+| `is_true(folder, facets, layout, known_names)` | Whether the folder it is *actually* in still describes it. Takes the **folder**, not the file path: guessing which trailing component was a file name would silently flip the answer for a path written with a trailing separator. A path carrying `.` or `..` is refused whole rather than normalised — tidying one would fabricate a level the path does not have. |
+
+The release rests on `is_true`, and on one property of it: **a path that does
+not parse against the layout can never be false.** A file at the library root
+matches no segment, so an existing flat library needs no migration; a file the
+owner dragged into a folder of their own contradicts nothing, so it stays there
+permanently and the override needs no setting.
+
+The three properties a reader is most likely to get wrong:
+
+- **Truth is membership, not equality with `render`.** The folder `Mira/` says
+  "this is a Mira picture" and stays true while Mira is one of the picture's
+  people, whoever `render` would pick today. That is what makes adding a second
+  project or person move nothing.
+- **`known_names` is not optional.** Only the library's whole vocabulary
+  separates *this folder names a project the picture is no longer in* (false, it
+  moves) from *this folder names nothing PixlStash knows* (unparseable, it never
+  moves). Deleting an entity takes its name out of the language and freezes the
+  folders named after it.
+- **Reading stops at the first component the vocabulary cannot read**, and it is
+  not positional. Everything from that component down is the owner's own, so
+  `2024 Shoots/Mira/2026-08` is judged on its first two components while
+  `Holiday/2024 Shoots` is judged on none of them.
+
+Every name reaching a path goes through `folder_name()` — including
+`Layout.unfiled`, which is validated against it on construction because it is
+the one field a settings screen will let a user type and it reaches `render`'s
+output verbatim. It is a many-to-one map (`A/B`, `A:B` and `A_B` all become
+`A_B`), which is the collision the filesystem would force anyway; comparison is
+additionally case-folded and NFC-normalised for Windows and macOS. Every
+ambiguity here resolves towards *not* moving a file.
+
+`tests/test_library_layout.py` covers it, unparseable-path cases first.
+
+### 24.4 The layout and the move engine
 
 `pixlstash/utils/library_layout.py` decides *where* a picture belongs and
 whether it still does; `pixlstash/services/layout_move_service.py` decides
 *whether to act* and then acts. The wire contract is
-`docs/integration_architecture.md` §23; the release plan is
+`docs/integration_architecture.md` §20.3; the release plan is
 `docs/plans/v1.11.0-existing-library.md` §4 Phase 4.
 
 Everything here is downstream of one sentence:
@@ -7917,7 +8403,7 @@ rather than being designed in, and they are what the section is for:
    existing flat library needs no migration and a hand-placed file is a
    permanent override that needs no setting.
 
-### Where a layout lives, and why in two places
+#### Where a layout lives, and why in two places
 
 | Root | Column | Governs |
 |---|---|---|
@@ -7936,7 +8422,7 @@ only thing it has to reconcile is the stored-path convention: absolute for a
 reference picture, relative for a library one, which is the same branch
 `ImageUtils.get_thumbnail_path` already makes.
 
-### The two jobs
+#### The two jobs
 
 **Placement on write.** `resolve_placement` is the one call every creation site
 makes, and it answers `None` — write where you always did — for a root with no
@@ -7969,7 +8455,7 @@ collapse a date tree into one folder and make two files of the same name
 collide — a curated library's structure destroyed by a rule that promised to
 preserve it.
 
-### The trigger, and why it is a flush hook
+#### The trigger, and why it is a flush hook
 
 `database._before_flush_layout_tracker` / `_after_flush_layout_marker` stamp
 `Picture.layout_check_due_at` when a picture's project, set or person membership
@@ -7993,7 +8479,7 @@ is what makes a remove-then-add **one** move: swapping a picture's project is
 two requests a fraction of a second apart, and acting on the first would take
 the file through the unfiled folder on its way to the right one.
 
-### Doing it: order, refusals, and what is never done
+#### Doing it: order, refusals, and what is never done
 
 `LayoutMoveFinder` → `LayoutMoveTask` plans the whole batch, **logs the count
 before executing it**, moves, and records one `pictures.layout.move` operation
@@ -8055,7 +8541,7 @@ stamp when it moved, and nothing re-stamps a picture whose memberships did not
 change. A picture the owner has undone therefore stays where they put it back,
 which is the same override an off-layout folder gets.
 
-### Renaming an entity renames its folder
+#### Renaming an entity renames its folder
 
 `rename_entity_folders` renames the directories named after a project, set or
 person and repoints the rows under them. It moves no files, and that is not a
@@ -8104,7 +8590,7 @@ that commit fails. A half-applied rename would leave every picture under the
 folder naming a path that does not exist, which is the purge sweep's input. That
 is why every caller renames **before** its own `session.commit()`, not after.
 
-### What Phase 6 sees once a layout is on
+#### What Phase 6 sees once a layout is on
 
 `library_insights_service` gates its folder-shaped findings on a picture's path
 having a directory component, on the stated premise that a vault-managed picture
@@ -8120,7 +8606,7 @@ and neither could have tested the combination: a folder-shaped finding in a
 laid-out library may restate a membership the owner can already see, and the
 wording is worth a look on a real library once both are in.
 
-### The move journal, and why it is Phase 4b's job
+#### The move journal, and why it is Phase 4b's job
 
 Every move the engine makes writes a `picture_move` row **before** anything
 walks the tree again, and `ReferenceFolderScanTask` claims the pairs that are
@@ -8140,7 +8626,7 @@ same two folders next month be dismissed as ours.
 `ReferenceFolderScanTask`'s result carries `external_moved_picture_ids` — the
 moves it attributes to the owner — which is exactly Phase 5's input.
 
-### Moving an existing library onto its layout (v1.11 Phase 4c)
+#### Moving an existing library onto its layout (v1.11 Phase 4c)
 
 `pixlstash/services/layout_migration_service.py`, two routes on
 `/server-config/layout/migration`. Offered whenever a layout is set or changed
@@ -8178,7 +8664,7 @@ undo. `2024/2024-08-15/IMG_0001.jpg` therefore lands at `<rendered>/IMG_0001.jpg
 `Unassigned/2026-08` at `<rendered>`, and two files of one name arriving at one
 folder are told apart by the suffix rule below rather than refused.
 
-Everything that touches a file is §26's: the same `_prepare_move` refusals, the
+Everything that touches a file is §24.4's: the same `_prepare_move` refusals, the
 same `apply_moves`, the same `picture_move` journal, the same `FACET_LOCATION`
 undo. What a whole-library move needs and a one-picture move does not is four
 things.
@@ -8285,7 +8771,7 @@ is the check that matters; here the caller names none and the scope is the whole
 library, so there is nothing for the gate to bound and the tier carries it. The
 GET is on `READ_BLOCKED_GET_PATHS` beside `GET /server-config/layout`.
 
-## 27. Reconciling moves made outside PixlStash (v1.11 Phase 5)
+### 24.5 Reconciling moves made outside PixlStash
 
 `pixlstash/utils/library_layout.py::reconcile_move` decides what an owner-made
 move implies; `pixlstash/services/move_reconciliation_service.py` queues the
@@ -8294,11 +8780,11 @@ routes in `pixlstash/routes/moves.py`; the release plan is
 `docs/plans/v1.11.0-existing-library.md` §4 Phase 5; the design reference is
 the Moves artboard in `design/1.11-existing-library/`.
 
-> **The mirror of §26's rule.** PixlStash moves a file when an assignment
+> **The mirror of §24.4's rule.** PixlStash moves a file when an assignment
 > change makes its folder stop being true; when the *owner* moves a file,
 > PixlStash reconsiders an assignment when the move makes it stop being true.
 
-### The queue is a fact, not a verdict
+#### The queue is a fact, not a verdict
 
 `ExternalMoveReview` (migration `0109`) holds exactly `(picture_id, old_path,
 new_path, detected_at)` — the raw fact a move happened, nothing derived.
@@ -8318,7 +8804,7 @@ with no layout.
 
 **The scan is not the only thing that discovers an owner move.**
 `MissingFilePurgeTask` reads the same journal to tell a deletion from a move it
-must not purge (§26), and it reads it in both directions — so a file found back
+must not purge (§24.4), and it reads it in both directions — so a file found back
 at a row's `old_path` is repaired there too. That direction has two causes the
 journal cannot tell apart: an undo whose rename landed and whose transaction did
 not, and the owner dragging the file out of the folder PixlStash filed it in.
@@ -8342,9 +8828,9 @@ the owner and never an applied change.
 cached verdict to invalidate, so a picture whose memberships changed between
 the move and the review is judged on what is true now. `reconcile_move` reuses
 `layout_move_service.layout_roots` / `library_vocabulary` / `picture_facets`,
-the same reads §26's engine uses, rather than a second query surface.
+the same reads §24.4's engine uses, rather than a second query surface.
 
-### `reconcile_move`: the three outcomes, and a fourth
+#### `reconcile_move`: the three outcomes, and a fourth
 
 `reconcile_move(old_folder, new_folder, facets, layout, known_names)` is pure
 — no database, no filesystem, argument shape borrowed from `relocate` — and
@@ -8364,7 +8850,7 @@ returns a `ReconciledMove(outcome, removals, additions)`:
      layout's vocabulary knows (including landing at the root). Touches
      nothing at all, not even a removal on the old side: the path was already
      followed by the scan, and an unreadable destination is a permanent
-     override under §26's rule too.
+     override under §24.4's rule too.
    - **`AMBIGUOUS`** — at least one candidate removal is for a facet the
      picture currently has **more than one** value of. A folder holds a
      picture once; a project (or set, or person) can share it, so leaving one
@@ -8398,7 +8884,7 @@ Measured on the owner's four real libraries (~59,000 pictures, DECISIONS.md):
 is the minority outcome by construction, not by a threshold this module
 chose.
 
-### Applying: three memberships, deliberately not four
+#### Applying: three memberships, deliberately not four
 
 `move_reconciliation_service` turns `removals`/`additions` into writes for
 `Facet.PROJECT`, `Facet.SET` and `Facet.PERSON` only:
@@ -8442,7 +8928,7 @@ chose.
 
 **Both a project and a set/person name are resolved by unique-name lookup, and
 a collision is refused rather than guessed — twice over.** `Project.name` is
-DB-unique; `PictureSet.name` and `Character.name` are not (§26, "Renaming an
+DB-unique; `PictureSet.name` and `Character.name` are not (§24.4, "Renaming an
 entity renames its folder" already declines the equivalent ambiguity for a
 rename). `_resolve_entity_id` refuses a name matching more than one row. That
 alone is not sufficient: two *distinct* names can render to the same folder
@@ -8485,9 +8971,9 @@ here ever waits on a human for one — so unlike `unambiguous`/`ambiguous` they
 are not kept indefinitely: a row is shown for `PictureMove.RETENTION_S` (the
 same window the move journal keeps a claimed row for) and pruned past it,
 whether or not anyone opened the screen. The frontend's own reachability rule
-follows from this — see `docs/frontend_architecture.md` §9.4.
+follows from this — see `docs/frontend_architecture.md` §13.5.
 
-### The route surface
+#### The route surface
 
 Three `OWNER_ONLY` routes (`pixlstash/routes/moves.py`), vault-wide like
 `operations.py` — none of this is boundable to a single resource-scoped grant:
@@ -8508,6 +8994,4 @@ the queue itself keeps no cached verdict.
 
 ---
 
-*Last updated: 2026-08-24. Update this document whenever architectural patterns, module boundaries, or integration contracts change.*
-
-### Known drift / cleanup notes
+*When a change needs documenting, edit the section that covers its subsystem, adding a numbered subsection there, and to the Table of Contents, if it needs one. Never add a new `##` section named for a feature, a release or a phase.*

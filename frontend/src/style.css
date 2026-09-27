@@ -254,10 +254,10 @@ body {
    not a website" signals (à la VS Code / LM Studio).
    =========================================================================== */
 
-/* Thin, subtle overlay scrollbars instead of the OS's fat browser ones. */
+/* Thin amber overlay scrollbars instead of the OS's fat browser ones. */
 .is-desktop {
   scrollbar-width: thin;
-  scrollbar-color: rgba(var(--v-theme-on-surface), 0.22) transparent;
+  scrollbar-color: rgb(var(--v-theme-accent)) transparent;
 }
 .is-desktop ::-webkit-scrollbar {
   width: 10px;
@@ -268,13 +268,9 @@ body {
   background: transparent;
 }
 .is-desktop ::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-surface), 0.18);
+  background: rgb(var(--v-theme-accent));
   border: 2px solid transparent;
   border-radius: var(--radius-md);
-  background-clip: padding-box;
-}
-.is-desktop ::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--v-theme-on-surface), 0.32);
   background-clip: padding-box;
 }
 

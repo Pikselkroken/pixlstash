@@ -41,6 +41,8 @@
     @character-created="emit('refresh-sidebar')"
     @run-recipe="openRunForPicture"
     @use-as-input="runWorkflowOnPicture"
+    @show-picture="moveOverlayTo"
+    @edit-more-options="openRunFromEditTab"
   />
   <ImageImporter
     ref="imageImporterRef"
@@ -149,6 +151,7 @@
       @open-plugin-panel="handleContextMenuOpenPluginPanel"
       @make-more="makeMoreLikeSelection"
       @run-workflow="runWorkflowOnSelection"
+      @edit-with-comfyui="editSelectionWithComfyui"
       @segment="openSegmentDialog"
       @auto-tag="handleAutoTag"
       @generate-description="handleGenerateDescription"
@@ -1057,26 +1060,54 @@
           :is-all-pictures-active="
             reverseImageSearchPictureIds.length ||
             faceLikenessSearchFaceId ||
-            faceSearchCharacter
+            faceSearchCharacter ||
+            setSuggestSet
               ? true
               : selectionStore.isAllPicturesActive
           "
-          :threshold="faceSearchCharacter ? faceSearchThreshold : null"
-          :threshold-min="FACE_SEARCH_FETCH_FLOOR"
-          :threshold-max="FACE_SEARCH_MAX_THRESHOLD"
-          :min-refs="faceSearchMinRefs"
-          :reference-count="faceSearchRefCount"
-          :assign-target="faceSearchCharacter?.name ?? null"
-          :assign-count="faceSearchAssignIds.length"
+          :suggest-kind="setSuggestSet ? 'set' : 'person'"
+          :threshold="
+            faceSearchCharacter
+              ? faceSearchThreshold
+              : setSuggestSet
+                ? setSuggestThreshold
+                : null
+          "
+          :threshold-min="
+            setSuggestSet ? SET_SUGGEST_FETCH_FLOOR : FACE_SEARCH_FETCH_FLOOR
+          "
+          :threshold-max="
+            setSuggestSet ? SET_SUGGEST_MAX_THRESHOLD : FACE_SEARCH_MAX_THRESHOLD
+          "
+          :min-refs="setSuggestSet ? setSuggestMinTags : faceSearchMinRefs"
+          :reference-count="
+            setSuggestSet ? setSuggestTagCount : faceSearchRefCount
+          "
+          :assign-target="faceSearchCharacter?.name ?? setSuggestSet?.name ?? null"
+          :assign-count="
+            setSuggestSet ? setSuggestAddIds.length : faceSearchAssignIds.length
+          "
           :assign-from-selection="faceSearchAssignFromSelection"
-          :assign-busy="faceSearchAssignBusy"
+          :assign-busy="faceSearchAssignBusy || setSuggestAddBusy"
           :owns-escape="!showSelectionBar"
           :text-match-count="textMatchCount"
           :text-matches-only="searchStore.textMatchesOnly"
           @update:text-matches-only="handleTextMatchesOnly"
-          @update:min-refs="handleFaceSearchMinRefs"
-          @update:threshold="handleFaceSearchThreshold"
-          @assign="handleAssignFaceSearchResults"
+          @update:min-refs="
+            setSuggestSet
+              ? handleSetSuggestMinTags($event)
+              : handleFaceSearchMinRefs($event)
+          "
+          @update:threshold="
+            setSuggestSet
+              ? handleSetSuggestThreshold($event)
+              : handleFaceSearchThreshold($event)
+          "
+          @assign="
+            setSuggestSet
+              ? handleAddSetSuggestions()
+              : handleAssignFaceSearchResults()
+          "
           @search-all="emit('search-all')"
           @clear="clearSearchQuery"
         />
@@ -1132,6 +1163,7 @@
           @selection-menu-open="toolbarSelectionMenuOpen = $event"
           @make-more="makeMoreLikeSelection"
           @run-workflow="runWorkflowOnSelection"
+          @edit-with-comfyui="editSelectionWithComfyui"
         />
       </template>
     </GridActionPill>
@@ -1196,6 +1228,10 @@ import {
   cutFaceSuggestions,
   referenceFaceCount,
 } from "../../utils/faceSuggestionCut.js";
+import {
+  cutSetSuggestions,
+  signatureTagCount,
+} from "../../utils/setSuggestionCut.js";
 import {
   squareCropParams,
   squareCropImgStyle,
@@ -1305,11 +1341,13 @@ import CharacterEditor from "../editors/CharacterEditor.vue";
 import {
   getPictureSet,
   addPictureToSet,
+  bulkAddPicturesToSet,
   removePictureFromSet,
 } from "../../api/pictureSets";
 import { getSharedPictureIds, revokeTokensByResource } from "../../api/users";
 import { listTaggers } from "../../api/taggers";
 import { preflightWorkflowRun } from "../../api/workflows";
+import { cardForWorkflow } from "../../api/comfyui";
 import {
   faceBoxColor,
   formatUserDate,
@@ -1562,6 +1600,24 @@ const faceSearchRanked = ref(null);
 // and this is what keeps the arming click itself from counting as one.
 const faceSearchArmedView = ref(null);
 const faceSearchAssignBusy = ref(false);
+// ── "Suggest more pictures for <set>" (#1489) ─────────────────────────────────
+// The same shape as the person search above, over the set's centroid instead
+// of reference faces. Library-wide, like that one, so it is not a set view.
+const setSuggestSet = ref(null); // { id, name }
+// The fetch floor is zero: cosine-to-centroid has no universal "same thing"
+// value, so the useful range is unknown until the set's cohesion comes back.
+const SET_SUGGEST_FETCH_FLOOR = 0;
+const SET_SUGGEST_MAX_THRESHOLD = 1;
+// Null until the ranked list arrives; then seated at the set's cohesion (the
+// median similarity of its own members to their centroid) by the fetch.
+const setSuggestThreshold = ref(null);
+// Signature tags a suggestion must carry. Zero: off until reached for.
+const setSuggestMinTags = ref(0);
+// { setId, matches: [{picture_id, likeness, cohesion, tags_matched,
+// tags_total}], rowsById }
+const setSuggestRanked = ref(null);
+const setSuggestArmedView = ref(null);
+const setSuggestAddBusy = ref(false);
 // The last text search's response, { key, query, rows }: each row carries
 // `text_match`, so the result pill's "In text" switch can narrow the grid
 // without searching again.
@@ -2102,6 +2158,41 @@ function runWorkflowOnSelection() {
   );
 }
 
+/** The built-in workflow "Edit with ComfyUI…" runs: Flux.2 Klein image edit. */
+const EDIT_WORKFLOW = "Flux2-Klein-Image-Edit.json";
+
+/**
+ * "Edit with ComfyUI…", from either grid menu: the Run popup on the built-in
+ * edit workflow, each selected picture fed into its one picture input and the
+ * prompt box left empty for the instruction.
+ *
+ * The built-in has no card until it is asked for, so the key is fetched on
+ * each gesture; the route is idempotent and answers the card already filed.
+ */
+async function editSelectionWithComfyui() {
+  const ids = selectedImageIds.value
+    .map((id) => Number(getPictureId(id)))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (isReadOnly.value || !ids.length) return;
+  let workflowKey;
+  try {
+    ({ workflow_key: workflowKey } = await cardForWorkflow(EDIT_WORKFLOW));
+  } catch (err) {
+    console.warn(`Could not open the ${EDIT_WORKFLOW} workflow:`, err);
+    noticeStore.warning(
+      `Could not open the image edit workflow. ${errorDetail(err)}`,
+      { key: "edit-with-comfyui" },
+    );
+    return;
+  }
+  runDialogStore.openRun({
+    kind: "edit",
+    pictureIds: ids,
+    workflowKey,
+    emptyPrompt: true,
+  });
+}
+
 /**
  * The lightbox's "Use as input for…" — the same popup, over ONE picture.
  *
@@ -2115,6 +2206,26 @@ function runWorkflowOnPicture(pictureId) {
   const id = Number(getPictureId(pictureId));
   if (!Number.isFinite(id) || id <= 0) return;
   openRunWithWorkflowPicker([id]);
+}
+
+/**
+ * The lightbox Edit tab's *More options…* (#1381): the Run popup on this
+ * picture, with the tab's workflow and instruction already filled in. With no
+ * instruction typed the popup starts from the picture's own prompt, as *Use as
+ * input for…* does: `emptyPrompt` would send `""` over a recipe prompt, which
+ * blanks every positive prompt node in the graph.
+ */
+function openRunFromEditTab({ pictureId, workflowKey, prompt } = {}) {
+  const id = Number(getPictureId(pictureId));
+  if (!Number.isFinite(id) || id <= 0 || isReadOnly.value) return;
+  if (overlayOpen.value) closeOverlay(false);
+  runDialogStore.openRun({
+    kind: "selection",
+    pictureIds: [id],
+    workflowKey: workflowKey || undefined,
+    pickWorkflow: true,
+    prompt: prompt || undefined,
+  });
 }
 
 // What a run with no selection files its output into: the set, project and
@@ -4757,7 +4868,8 @@ const searchResultsActive = computed(
     Boolean(searchStore.searchQuery && searchStore.searchQuery.length > 0) ||
     reverseImageSearchPictureIds.value.length > 0 ||
     Boolean(faceLikenessSearchFaceId.value) ||
-    Boolean(faceSearchCharacter.value),
+    Boolean(faceSearchCharacter.value) ||
+    Boolean(setSuggestSet.value),
 );
 
 /**
@@ -4779,6 +4891,10 @@ const searchStatus = computed(() => {
     // sat in front of the two sliders and a bulk-write button in a pill that
     // has to fit them all without wrapping.
     const n = faceSearchMatches.value.length;
+    return { count: n, label: n === 1 ? "match" : "matches" };
+  }
+  if (setSuggestSet.value) {
+    const n = setSuggestMatches.value.length;
     return { count: n, label: n === 1 ? "match" : "matches" };
   }
   if (faceLikenessSearchFaceId.value) {
@@ -6070,6 +6186,10 @@ const {
     faceSearchThreshold,
     faceSearchMinRefs,
     faceSearchRanked,
+    setSuggestSet,
+    setSuggestThreshold,
+    setSuggestMinTags,
+    setSuggestRanked,
     textSearchResults,
   },
   props,
@@ -6774,7 +6894,8 @@ watch(
     () => filterStore.impossibleSources,
     () => filterStore.stackStateFilter,
     () => filterStore.sharedOnlyFilter,
-    () => filterStore.unassignedOnlyFilter,
+    () => filterStore.noCharacterFilter,
+    () => filterStore.noSetFilter,
     // *Show all N pictures* (F7). Without it the chip's × emptied the strip
     // and left the grid on one workflow's pictures until something unrelated
     // moved: arrival only ever worked by accident, because `router.push("/")`
@@ -8004,6 +8125,8 @@ defineExpose({
   // ("Suggest more pictures of <person>", #636). Same Tier-3 route as
   // confirmEmptyScrapheap above: sidebar → App.vue → this grid.
   suggestPicturesForCharacter: handleSuggestPicturesForCharacter,
+  // The set twin, from the sidebar's set context menu (#1489).
+  suggestPicturesForSet: handleSuggestPicturesForSet,
 });
 
 // Queue a deferred in-place grid reconcile to run when the overlay closes.
@@ -8519,6 +8642,16 @@ function resetFaceAndImageSearches() {
   reverseImageSearchPictureIds.value = [];
   faceLikenessSearchFaceId.value = null;
   clearCharacterFaceSearch();
+  clearSetSuggestSearch();
+}
+
+/** Forget the set suggestion search, its cached ranked list and both knobs. */
+function clearSetSuggestSearch() {
+  setSuggestSet.value = null;
+  setSuggestRanked.value = null;
+  setSuggestThreshold.value = null;
+  setSuggestMinTags.value = 0;
+  setSuggestArmedView.value = null;
 }
 
 /** Forget the character search, its cached ranked list and both its knobs. */
@@ -8547,6 +8680,7 @@ function handleReverseImageSearch() {
   }
   faceLikenessSearchFaceId.value = null;
   clearCharacterFaceSearch();
+  clearSetSuggestSearch();
   reverseImageSearchPictureIds.value = ids;
   // Clear any active text search so the two modes don't overlap.
   emit("clear-search", "");
@@ -8556,6 +8690,7 @@ function handleFindSimilarFaces(faceId) {
   if (!faceId) return;
   reverseImageSearchPictureIds.value = [];
   clearCharacterFaceSearch();
+  clearSetSuggestSearch();
   faceLikenessSearchFaceId.value = faceId;
   emit("clear-search", "");
 }
@@ -8612,6 +8747,7 @@ function handleSuggestPicturesForCharacter(character) {
   if (id == null) return;
   reverseImageSearchPictureIds.value = [];
   faceLikenessSearchFaceId.value = null;
+  clearSetSuggestSearch();
   faceSearchRanked.value = null;
   faceSearchThreshold.value = FACE_SEARCH_DEFAULT_THRESHOLD;
   faceSearchMinRefs.value = 1;
@@ -8765,6 +8901,144 @@ async function handleAssignFaceSearchResults() {
   }
 }
 
+/**
+ * Move the set suggestion's strength cut. Same debounce as the person search:
+ * it re-cuts the cached list, so it costs no network call.
+ *
+ * @param {number} value - the new cut, 0-1.
+ */
+function handleSetSuggestThreshold(value) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return;
+  setSuggestThreshold.value = next;
+  debouncedSetSuggestRecut();
+}
+
+/**
+ * Move the tags-in-common floor, clamped to the set's signature-tag count.
+ *
+ * @param {number} value - signature tags a suggestion must carry, 0..N.
+ */
+function handleSetSuggestMinTags(value) {
+  const next = Math.round(Number(value));
+  if (!Number.isFinite(next)) return;
+  setSuggestMinTags.value = Math.min(
+    setSuggestTagCount.value,
+    Math.max(0, next),
+  );
+  debouncedSetSuggestRecut();
+}
+
+const debouncedSetSuggestRecut = debounce(() => {
+  if (!setSuggestSet.value) return;
+  fetchAllGridImages({ force: false }).then(() => updateVisibleThumbnails());
+}, 200);
+
+/**
+ * Arm "Suggest more pictures for <set>" from the sidebar's set menu (#1489).
+ *
+ * @param {{id: number|string, name: string}} pictureSet
+ */
+function handleSuggestPicturesForSet(pictureSet) {
+  const id = pictureSet?.id;
+  if (id == null) return;
+  const name = pictureSet.name ?? "this set";
+  reverseImageSearchPictureIds.value = [];
+  faceLikenessSearchFaceId.value = null;
+  clearCharacterFaceSearch();
+  clearSetSuggestSearch();
+  setSuggestSet.value = { id, name };
+  // Snapshot the view it was armed from; see handleSuggestPicturesForCharacter.
+  setSuggestArmedView.value = {
+    character: selectionStore.selectedCharacter,
+    set: selectionStore.selectedSet,
+  };
+  emit("clear-search", "");
+  nextTick(() => {
+    void (async () => {
+      const outcome = await fetchAllGridImages({ force: true });
+      if (
+        setSuggestSet.value?.id === id &&
+        outcome?.error?.gridFetchPhase === "set-suggest-search-request"
+      ) {
+        const failure = outcome.error;
+        clearSetSuggestSearch();
+        await fetchAllGridImages({ force: true });
+        noticeStore.error(
+          `Couldn't load suggestions for ${name}. ${errorDetail(failure)}`,
+          { key: "set-suggest-search-load" },
+        );
+        return;
+      }
+      updateVisibleThumbnails();
+    })();
+  });
+}
+
+// Every match surviving both knobs, from the cached list so the count in the
+// bar tracks the sliders while the grid rebuild debounces behind it. Shares
+// its cut with the rebuild (`utils/setSuggestionCut.js`).
+const setSuggestMatches = computed(() => {
+  const cached = setSuggestRanked.value;
+  if (!cached || !setSuggestSet.value) return [];
+  if (cached.setId !== setSuggestSet.value.id) return [];
+  return cutSetSuggestions(
+    cached.matches,
+    setSuggestThreshold.value ?? 0,
+    setSuggestMinTags.value,
+  );
+});
+
+const setSuggestTagCount = computed(() => {
+  const cached = setSuggestRanked.value;
+  if (!cached || !setSuggestSet.value) return 0;
+  if (cached.setId !== setSuggestSet.value.id) return 0;
+  return signatureTagCount(cached.matches);
+});
+
+// Selection wins over the cut, as for the person search.
+const setSuggestAddIds = computed(() =>
+  faceSearchAssignFromSelection.value
+    ? selectedImageIds.value.slice()
+    : setSuggestMatches.value.map((m) => m.picture_id),
+);
+
+/**
+ * Add the suggested (or selected) pictures to the set in ONE bulk call, so the
+ * write is one operation-log entry and one Undo rather than one per picture.
+ */
+async function handleAddSetSuggestions() {
+  const pictureSet = setSuggestSet.value;
+  const ids = setSuggestAddIds.value;
+  if (!pictureSet || !ids.length || setSuggestAddBusy.value) return;
+  setSuggestAddBusy.value = true;
+  try {
+    await bulkAddPicturesToSet(pictureSet.id, ids);
+    selectedImageIds.value = [];
+    clearFaceSelection();
+    lastSelectedImageId.value = null;
+    // Re-run the search rather than pruning locally: the add expands stacks,
+    // so it can have added MORE pictures than were named, and those siblings
+    // must drop out of the suggestions too.
+    setSuggestRanked.value = null;
+    await fetchAllGridImages({ force: true });
+    if (setSuggestMatches.value.length === 0) {
+      clearSetSuggestSearch();
+      await fetchAllGridImages({ force: true });
+    }
+    updateVisibleThumbnails();
+    operationStore.refresh();
+    emit("refresh-sidebar");
+  } catch (e) {
+    noticeStore.error(
+      `Couldn't add those pictures to ${pictureSet.name}. ${errorDetail(e)}`,
+      { key: "set-suggest-add" },
+    );
+  } finally {
+    setSuggestAddBusy.value = false;
+  }
+}
+
 // Clear reverse image search / face search when the user starts a text search or navigates.
 watch(
   () => searchStore.searchQuery,
@@ -8809,6 +9083,16 @@ function dropSearchesForViewChange(character, set) {
   // Compared against the armed-from view rather than fired on any change:
   // opening the sidebar's person menu can itself select that person, and that
   // selection lands around the same click that arms the search.
+  if (setSuggestSet.value) {
+    const armedSet = setSuggestArmedView.value;
+    if (
+      !armedSet ||
+      armedSet.character !== character ||
+      armedSet.set !== set
+    ) {
+      clearSetSuggestSearch();
+    }
+  }
   if (!faceSearchCharacter.value) return;
   const armed = faceSearchArmedView.value;
   if (armed && armed.character === character && armed.set === set) return;

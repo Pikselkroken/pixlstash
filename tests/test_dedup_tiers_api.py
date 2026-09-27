@@ -24,7 +24,7 @@ import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -918,14 +918,14 @@ def test_decided_rows_carry_the_display_ready_decision_stamp():
             body = client.get(GROUPS_URL, params={"decided": True}).json()
             return {g["signature"]: g for g in body["groups"]}
 
-        # Both verdict kinds serve the stamp, byte-equal to the verdict row's
-        # isoformat: naive UTC, microseconds, no "Z", no "+00:00".
+        # Both verdict kinds serve the stamp as the verdict row's exact instant:
+        # UTC, microseconds, with an explicit "Z".
         rows = decided_rows()
         for signature in (sig_a, sig_b):
             stamp = rows[signature]["decided_at"]
-            assert stamp == _verdict_row(server, signature).decided_at.isoformat()
-            assert not stamp.endswith("Z") and "+" not in stamp
-            assert datetime.fromisoformat(stamp).tzinfo is None
+            decided_at = _verdict_row(server, signature).decided_at
+            assert stamp == decided_at.isoformat().replace("+00:00", "Z")
+            assert datetime.fromisoformat(stamp).utcoffset() == timedelta(0)
 
         # A redo's fresh stamp is what the listing serves afterwards.
         stamp_before = _verdict_row(server, sig_b).decided_at
@@ -933,7 +933,9 @@ def test_decided_rows_carry_the_display_ready_decision_stamp():
         assert client.post(f"{API}/operations/redo", json={}).status_code == 200
         restamped = _verdict_row(server, sig_b).decided_at
         assert restamped > stamp_before
-        assert decided_rows()[sig_b]["decided_at"] == restamped.isoformat()
+        assert decided_rows()[sig_b]["decided_at"] == restamped.isoformat().replace(
+            "+00:00", "Z"
+        )
 
         # The stale edge: a resolved group whose verdict is no longer live
         # (reopened directly, group left resolved) still lists - in the tail -
@@ -942,7 +944,7 @@ def test_decided_rows_carry_the_display_ready_decision_stamp():
             row = session.exec(
                 select(DedupVerdict).where(DedupVerdict.signature == sig_a)
             ).first()
-            row.reopened_at = datetime.utcnow()
+            row.reopened_at = datetime.now(timezone.utc)
             session.add(row)
             session.commit()
 
@@ -1011,7 +1013,7 @@ def test_decided_page_paging_is_stable_across_seams():
         # writes a same-instant run) and re-page. The id tie-break must carry
         # the seam: nothing skipped, nothing repeated, deterministic order.
         def flatten(session):
-            stamp = datetime.utcnow()
+            stamp = datetime.now(timezone.utc)
             for row in session.exec(select(DedupVerdict)).all():
                 row.decided_at = stamp
                 session.add(row)

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
@@ -40,14 +41,18 @@ from pixlstash.services.workflow_identity import (
     RECIPE,
     STRUCTURAL,
     WORKFLOW_KEY_VERSION,
+    LoaderSwap,
     Slot,
     core_hash,
     guess_mark,
+    lora_assets,
     slots,
     special_groups,
+    unswapped,
     workflow_key,
     workflow_type,
 )
+from pixlstash.utils.sql_chunking import chunked
 
 logger = get_logger(__name__)
 
@@ -79,7 +84,11 @@ _VARIANT_JOIN = (
     "JOIN workflow_recipe_graph g ON g.structural_hash = r.structural_hash "
     "LEFT JOIN workflow_variant v ON v.structural_hash = r.structural_hash "
     "AND v.key_version = ? "
-    "LEFT JOIN workflow_topology_core c ON c.topology_hash = r.topology_hash "
+    # The variant's own topology once it has a card: a graph with a swapped-in
+    # loader is carded under the topology it was swapped from (#1605), and that
+    # is the one whose cache its card reads.
+    "LEFT JOIN workflow_topology_core c "
+    "ON c.topology_hash = COALESCE(v.topology_hash, r.topology_hash) "
     "AND c.core_version = ? "
 )
 _VARIANT_VERSIONS = (WORKFLOW_KEY_VERSION, CORE_RULE_VERSION)
@@ -157,7 +166,16 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
         )
         return None
 
-    topology_hash = row["topology_hash"]
+    # A graph a model fix swapped a loader in (#1605) is carded as the graph it
+    # was swapped from: that topology, its marks, its cache and its key.
+    swapped_from, document = unswapped(
+        document, loader_swaps_of(hub.fetchall, row["topology_hash"])
+    )
+    topology_hash = swapped_from or row["topology_hash"]
+    if swapped_from:
+        # The cache the join read was the swapped topology's; the card reads
+        # the original's, which a card made from a workflow file alone lacks.
+        core_missing = True
     document_slots = slots(document)
     # Computed before the transaction opens: this is the CPU of the pass (a
     # Weisfeiler-Leman refinement and a strip), and the write lock is shared
@@ -190,8 +208,9 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
             )
         key = workflow_key(
             topology_hash,
-            document_slots,
+            fixed_slots(conn, topology_hash, document_slots),
             [label for label, mark in marks.items() if mark == STRUCTURAL],
+            promoted_pairs(conn, topology_hash),
         )
         # REPLACE and not IGNORE: a re-keyed variant (a flipped mark, a new
         # WORKFLOW_KEY_VERSION) has to land on its new card, and this row is the
@@ -203,6 +222,75 @@ def record_identity(hub: HubDatabase, structural_hash: str) -> Optional[str]:
             (structural_hash, topology_hash, key, WORKFLOW_KEY_VERSION),
         )
     return key
+
+
+def loader_swaps_of(fetchall, swapped_topology_hash: str) -> list[LoaderSwap]:
+    """The loader swaps recorded for graphs of this topology (#1605).
+
+    *fetchall* is ``hub.fetchall`` or a connection's equivalent, so the read
+    can sit inside a caller's transaction.
+    """
+    return [
+        LoaderSwap(
+            topology_hash=row[0],
+            node_label=row[1],
+            class_type=row[2],
+            swap_class=row[3],
+            fields=tuple(tuple(field) for field in json.loads(row[4])),
+        )
+        for row in fetchall(
+            "SELECT topology_hash, node_label, class_type, swap_class, fields "
+            "FROM workflow_loader_swap WHERE swapped_topology_hash = ?",
+            (swapped_topology_hash,),
+        )
+    ]
+
+
+def fixed_slots(
+    conn: sqlite3.Connection, topology_hash: str, document_slots: list[Slot]
+) -> list[Slot]:
+    """*document_slots* with each replacement model read as the one it replaced.
+
+    What files a picture made with a fixed workflow (``workflow_model_fix``) on
+    the card the original model made: a slot holding the replacement counts as
+    holding the original, so the card key comes out the same. Every writer of
+    ``workflow_variant.workflow_key`` computes the key over this, or a re-key
+    would move those pictures back off the card.
+    """
+    fixes = {
+        (label, asset_reference(now_norm)): asset_reference(was_norm)
+        for label, was_norm, now_norm in conn.execute(
+            "SELECT slot_label, was_norm, now_norm FROM workflow_model_fix "
+            "WHERE topology_hash = ?",
+            (topology_hash,),
+        ).fetchall()
+    }
+    if not fixes:
+        return document_slots
+    return [
+        replace(slot, asset=fixes.get((slot.label, slot.asset), slot.asset))
+        for slot in document_slots
+    ]
+
+
+def promoted_pairs(
+    conn: sqlite3.Connection, topology_hash: str
+) -> set[tuple[str, str]]:
+    """``(slot label, asset)`` of every LoRA file promoted in this topology.
+
+    What :func:`~pixlstash.services.workflow_identity.workflow_key` takes as
+    ``promoted``. Every writer of ``workflow_variant.workflow_key`` passes it,
+    or a re-key would fold a promoted LoRA's pictures back onto the card they
+    were split from.
+    """
+    return {
+        (label, asset)
+        for label, asset in conn.execute(
+            "SELECT slot_label, asset FROM workflow_lora_promotion "
+            "WHERE topology_hash = ?",
+            (topology_hash,),
+        ).fetchall()
+    }
 
 
 def _freeze_marks(
@@ -389,43 +477,46 @@ def variants_on_key(hub: HubDatabase, key: str) -> list[str]:
     ]
 
 
-def variants_in_stack(hub: HubDatabase, stack_id: str) -> list[str]:
-    """Every variant on every card in one stack.
+def variants_loading(
+    hub: HubDatabase, asset: str, among: Optional[list[str]] = None
+) -> list[str]:
+    """The variants whose stored graph loads the LoRA *asset*, sorted.
 
-    *stack_id* is read two ways, in one query rather than one-then-the-other,
-    because a stack can be named either way:
-
-    - a **stored** stack (``workflow_stack``, manual or auto) has a row per
-      card in ``workflow_stack_member``;
-    - an automatic grouping that **has not been stored** is not a row at all -
-      it IS the set of cards sharing a ``core_hash`` (:func:`card_grouping`
-      computes it and writes nothing), so until it is materialised the only
-      thing that names it is that hash.
-
-    Nothing writes the stack tables yet, so today every answer comes from the
-    ``core_hash`` half; the membership half is here because the schema already
-    says a stack has its own id, and a filter that ignored it would answer a
-    stored stack with an empty grid the day one is written.
-
-    **Not consulted: ``workflow_unstacked``**, the owner taking a card out of
-    its automatic grouping. Nothing writes that table either, and the step that
-    does owns making every reader agree with it.
-
-    A value that names neither matches nothing.
+    For the picture filter's ``workflow_lora``: *among* is what the other
+    workflow filters already resolved to, and ``None`` means every filed
+    variant (the picture listing never passes ``None``: it is open to scoped
+    tokens, and that would parse every stored graph per request). A document that will not parse is logged and matches nothing,
+    so an unreadable row narrows the grid rather than widening it.
     """
-    return [
-        row["structural_hash"]
-        for row in hub.fetchall(
-            "SELECT DISTINCT v.structural_hash AS structural_hash "
-            "FROM workflow_variant v "
-            "LEFT JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
-            "AND c.core_version = ? "
-            "WHERE v.key_version = ? AND (c.core_hash = ? OR v.workflow_key IN ("
-            "SELECT workflow_key FROM workflow_stack_member WHERE stack_id = ?)) "
-            "ORDER BY v.structural_hash",
-            (CORE_RULE_VERSION, WORKFLOW_KEY_VERSION, stack_id, stack_id),
+    if among is None:
+        rows = hub.fetchall(
+            "SELECT structural_hash, document FROM workflow_recipe_graph "
+            "ORDER BY structural_hash"
         )
-    ]
+    else:
+        rows = []
+        for batch in chunked(sorted(set(among))):
+            placeholders = ",".join("?" * len(batch))
+            rows += hub.fetchall(
+                "SELECT structural_hash, document FROM workflow_recipe_graph "
+                f"WHERE structural_hash IN ({placeholders})",
+                tuple(batch),
+            )
+    found = []
+    for structural_hash, raw in rows:
+        try:
+            document = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "Stored document of variant %s will not parse, so the LoRA "
+                "filter leaves its pictures out: %s",
+                structural_hash,
+                exc,
+            )
+            continue
+        if isinstance(document, dict) and asset in lora_assets(document):
+            found.append(structural_hash)
+    return sorted(found)
 
 
 def unidentified_variants(hub: HubDatabase, limit: int) -> list[str]:
@@ -588,6 +679,34 @@ def effective_stack_keys(hub: HubDatabase, key: str) -> list[str]:
     )
     keys = [row["workflow_key"] for row in rows]
     return keys if key in keys else [key, *keys]
+
+
+def stack_id_of(hub: HubDatabase, key: str) -> Optional[str]:
+    """The id that names the stack :func:`effective_stack_keys` resolves for *key*.
+
+    A stored membership's own id, else ``auto:<core hash>`` for the automatic
+    group, the spelling ``workflow_card_reads.keys_in_stack`` reads back to the
+    same members. ``None`` for a card standing alone, taken out of its group,
+    or with no current core hash.
+    """
+    member = hub.fetchone(
+        "SELECT stack_id FROM workflow_stack_member WHERE workflow_key = ? "
+        "ORDER BY stack_id",
+        (key,),
+    )
+    if member is not None:
+        return member["stack_id"]
+    if hub.fetchone("SELECT 1 FROM workflow_unstacked WHERE workflow_key = ?", (key,)):
+        return None
+    row = hub.fetchone(
+        "SELECT c.core_hash AS core_hash FROM workflow_variant v "
+        "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
+        "AND c.core_version = ? WHERE v.workflow_key = ? AND v.key_version = ?",
+        (CORE_RULE_VERSION, key, WORKFLOW_KEY_VERSION),
+    )
+    # The prefix is `workflow_card_reads.AUTO_STACK_PREFIX`, which imports
+    # this module, so it is spelled here rather than imported back.
+    return f"auto:{row['core_hash']}" if row else None
 
 
 def variant_hashes_for_keys(hub: HubDatabase, keys: list[str]) -> list[str]:

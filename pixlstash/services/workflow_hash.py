@@ -211,8 +211,13 @@ UI_ONLY_CLASSES = (
     | UI_PASSTHROUGH_CLASSES
 )
 
-# `mode` 2 is muted and 4 is bypassed. Neither reaches the executed graph.
-_UI_INACTIVE_MODES = (2, 4)
+# `mode` 2 is muted and 4 is bypassed. Neither reaches the executed graph, but
+# they differ in what they leave behind: a muted node's consumers lose the edge,
+# while a bypassed node is spliced out and its consumers read what fed it
+# (`bypass_input_slot`).
+_UI_MUTED_MODE = 2
+_UI_BYPASSED_MODE = 4
+_UI_INACTIVE_MODES = (_UI_MUTED_MODE, _UI_BYPASSED_MODE)
 
 # Internal node types this module invents for a subgraph's two boundary nodes.
 # They are resolved through, never emitted.
@@ -867,16 +872,22 @@ class _UiGraph:
         self.nodes[boundary_out] = {"type": _SUBGRAPH_OUTPUT}
 
     def source_of(
-        self, key: str, slot: int, depth: int = 0
+        self, key: str, slot: int, depth: int = 0, want_type: Any = None
     ) -> Optional[tuple[str, int]]:
-        """Follow the edge into ``(key, slot)`` back to a node a key may see."""
+        """Follow the edge into ``(key, slot)`` back to a node a key may see.
+
+        *want_type* is the slot type of the input the walk started from. It is
+        carried unchanged through every hop, because a bypassed node on the
+        way picks which of its inputs to splice by the type the final
+        consumer wants, not by the type of the hop in front of it.
+        """
         edge = self.edges.get((key, slot))
         if edge is None:
             return None
-        return self.resolve_output(edge[0], edge[1], depth + 1)
+        return self.resolve_output(edge[0], edge[1], depth + 1, want_type)
 
     def resolve_output(
-        self, key: str, slot: int, depth: int = 0
+        self, key: str, slot: int, depth: int = 0, want_type: Any = None
     ) -> Optional[tuple[str, int]]:
         """Resolve an origin to a real node, stepping through everything else."""
         if depth > _MAX_RESOLVE_DEPTH:
@@ -901,8 +912,15 @@ class _UiGraph:
             raise WorkflowGraphError(
                 f"UI graph link names origin node {key}, which the file does not define"
             )
-        if node.get("mode") in _UI_INACTIVE_MODES:
+        if node.get("mode") == _UI_MUTED_MODE:
             return None
+        if node.get("mode") == _UI_BYPASSED_MODE:
+            # Before the subgraph branch, as ComfyUI orders it: a bypassed
+            # instance is spliced out through its own inputs, never entered.
+            through = bypass_input_slot(node, slot, want_type)
+            if through is None:
+                return None
+            return self.source_of(key, through, depth + 1, want_type)
         node_type = str(node.get("type", "?"))
         if node_type == _SUBGRAPH_INPUT:
             outer = node["outer_slot"]
@@ -919,7 +937,7 @@ class _UiGraph:
                 # Normal and common: the instance proxies that input as a
                 # widget rather than wiring it, so there is no edge to follow.
                 return None
-            return self.source_of(node["instance"], outer[slot], depth + 1)
+            return self.source_of(node["instance"], outer[slot], depth + 1, want_type)
         if "_definition" in node:
             outputs = node.get("outputs") or ()
             entry = outputs[slot] if slot < len(outputs) else None
@@ -938,10 +956,12 @@ class _UiGraph:
                     slot,
                 )
                 return None
-            return self.source_of(node["_boundary_out"], inner_slot, depth + 1)
+            return self.source_of(
+                node["_boundary_out"], inner_slot, depth + 1, want_type
+            )
         if node_type in UI_PASSTHROUGH_CLASSES:
             for index in range(len(node.get("inputs") or ())):
-                resolved = self.source_of(key, index, depth + 1)
+                resolved = self.source_of(key, index, depth + 1, want_type)
                 if resolved is not None:
                     return resolved
             return None
@@ -965,7 +985,7 @@ class _UiGraph:
             for index, entry in enumerate(node.get("inputs") or ()):
                 if not isinstance(entry, dict):
                     continue
-                resolved = self.source_of(key, index)
+                resolved = self.source_of(key, index, want_type=entry.get("type"))
                 if resolved is not None:
                     inputs.append(
                         (str(entry.get("name", "?")), resolved[0], resolved[1])
@@ -993,6 +1013,77 @@ def _boundary_slot_map(node: dict, definition: dict) -> list[Optional[int]]:
         outer.get(str(entry.get("name"))) if isinstance(entry, dict) else None
         for entry in (definition.get("inputs") or ())
     ]
+
+
+def bypass_input_slot(node: dict, slot: int, want_type: Any) -> Optional[int]:
+    """Which input a bypassed node splices through to its output *slot*.
+
+    ComfyUI's own rule, ported from the frontend's
+    ``ExecutableNodeDTO._getBypassSlotIndex``, because the API graph a picture
+    carries was made by that rule and the two keys have to meet. A reducer that
+    dropped the edge instead keyed one workflow two ways (#1440: a bypassed
+    ``ShowText`` between a captioner and a text encoder).
+
+    In order: any-type wants the same slot number, else the first input; then
+    the input at the same slot if its type fits both the output and the
+    consumer; then the first input of exactly the consumer's type; then the
+    first input that fits both. ``None`` when nothing fits, which is ComfyUI
+    dropping the edge too.
+
+    Args:
+        node: The bypassed node, as the UI file holds it.
+        slot: The output slot being read.
+        want_type: The type of the input the walk started from.
+    """
+    inputs = [
+        entry if isinstance(entry, dict) else {} for entry in (node.get("inputs") or ())
+    ]
+    if not inputs:
+        return None
+    if want_type in ("", "*"):
+        return slot if len(inputs) > slot else 0
+    outputs = node.get("outputs") or ()
+    output = outputs[slot] if slot < len(outputs) else None
+    output_type = output.get("type") if isinstance(output, dict) else None
+    if slot < len(inputs):
+        same = inputs[slot].get("type")
+        if _types_connect(same, output_type) and _types_connect(same, want_type):
+            return slot
+    for index, entry in enumerate(inputs):
+        if entry.get("type") == want_type:
+            return index
+    for index, entry in enumerate(inputs):
+        candidate = entry.get("type")
+        if _types_connect(candidate, output_type) and _types_connect(
+            candidate, want_type
+        ):
+            return index
+    logger.info(
+        "Bypassed node %s has no input of type %r to splice through output "
+        "slot %d; the wire is dropped, as ComfyUI drops it.",
+        node.get("id"),
+        want_type,
+        slot,
+    )
+    return None
+
+
+def _types_connect(type_a: Any, type_b: Any) -> bool:
+    """LiteGraph's ``isValidConnection``: whether two slot types may connect.
+
+    Blank and ``*`` match anything; otherwise equal, case-insensitively, with a
+    comma-separated type matching when any one of its members does.
+    """
+    if type_a in (None, "", "*", 0) or type_b in (None, "", "*", 0):
+        return True
+    if type_a == type_b:
+        return True
+    type_a, type_b = str(type_a).lower(), str(type_b).lower()
+    if "," not in type_a and "," not in type_b:
+        return type_a == type_b
+    return any(
+        _types_connect(a, b) for a in type_a.split(",") for b in type_b.split(",")
+    )
 
 
 def _subgraph_definitions(workflow: dict) -> dict[str, dict]:

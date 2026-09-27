@@ -546,6 +546,20 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     # narrow it to: a set is a fact about the machine's models, not about a
     # picture a token was granted.
     ("GET", "/api/v1/models/workflow-sets"): RoutePolicy(_OWNER),
+    # Hand-made workflow sets (#1520): the owner's own groupings of shelf
+    # models, stored in the hub. They write hub rows only (never a file or a
+    # model row) and every answer carries the same whole-library evidence as
+    # the read above, so they sit on its tier. Keyed by a hub set id, which no
+    # share token is ever scoped to.
+    ("POST", "/api/v1/models/workflow-sets"): RoutePolicy(_OWNER),
+    ("PATCH", "/api/v1/models/workflow-sets/{set_id}"): RoutePolicy(_OWNER),
+    ("DELETE", "/api/v1/models/workflow-sets/{set_id}"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/models/workflow-sets/{set_id}/members"): RoutePolicy(_OWNER),
+    ("POST", "/api/v1/models/workflow-sets/{set_id}/members/remove"): RoutePolicy(
+        _OWNER
+    ),
+    # The models kept out of a set's merge offer (#1523): same rows, same tier.
+    ("PUT", "/api/v1/models/workflow-sets/{set_id}/declines"): RoutePolicy(_OWNER),
     # The shelf's sixth verb, and the one route on this block that spawns a
     # process on the host's desktop. Same authority - and same red-line tier -
     # as POST /pictures/{id}/open-location: what it can do is bounded by what
@@ -1461,6 +1475,14 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="LoRA loader insertion; reaches the owner's ComfyUI; owner only",
     ),
+    ("POST", "/api/v1/comfyui/workflows/{workflow_name}/card"): RoutePolicy(
+        _OWNER,
+        justification="File a stored workflow on its Workflows card and return the key; writes the hub like the import beside it; owner only",
+    ),
+    ("GET", "/api/v1/comfyui/pixlstash-node"): RoutePolicy(
+        _OWNER,
+        justification="Whether the owner's ComfyUI has the ComfyUI-PixlStash node; reaches the owner's ComfyUI; owner only",
+    ),
     ("POST", "/api/v1/comfyui/abort"): RoutePolicy(
         _OWNER,
         justification="Abort generation; POST blocked for READ tokens; owner only",
@@ -1468,6 +1490,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("POST", "/api/v1/comfyui/workflows/import"): RoutePolicy(
         _OWNER,
         justification="Import workflow; POST blocked for READ tokens; owner only",
+    ),
+    ("POST", "/api/v1/comfyui/workflows/convert"): RoutePolicy(
+        _OWNER,
+        justification="Store ComfyUI's API conversion of an editor workflow beside its stored file, storing the file first as an import would; writes stored workflow files like the import beside it; owner only",
     ),
     ("POST", "/api/v1/comfyui/workflows/pull"): RoutePolicy(
         _OWNER,
@@ -1751,6 +1777,21 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Mark a card's LoRA slots, which re-keys every card of the topology; PUT blocked for READ tokens; owner only",
     ),
+    # The per-file counterpart of `.../slots` and its read: the stack's LoRAs
+    # counted over the whole vault, and a write that re-keys the cards of every
+    # topology in the stack.
+    ("GET", "/api/v1/workflows/{workflow_key}/lora-summary"): RoutePolicy(
+        _OWNER,
+        justification="Which LoRAs a card's stack shares and which change, counted over the whole library; owner only",
+    ),
+    ("PUT", "/api/v1/workflows/{workflow_key}/lora-promotion"): RoutePolicy(
+        _OWNER,
+        justification="Promote one LoRA file to a workflow of its own, which re-keys the cards of its stack; PUT blocked for READ tokens; owner only",
+    ),
+    ("PUT", "/api/v1/workflows/{workflow_key}/model-fix"): RoutePolicy(
+        _OWNER,
+        justification="Replace a missing model in a card's workflow, which re-keys the cards of its topology; PUT blocked for READ tokens; owner only",
+    ),
     ("PUT", "/api/v1/workflows/{workflow_key}/defaults"): RoutePolicy(
         _OWNER,
         justification="A card's parameter overrides; PUT blocked for READ tokens; owner only",
@@ -1767,7 +1808,7 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Take one card out of its stack; POST blocked for READ tokens; owner only",
     ),
-    # The four file gestures (v1.12 B8). Every one of them resolves the card's
+    # The file gestures (v1.12 B8). Every one of them resolves the card's
     # graph the way the run route does - from the linked file, from the whole
     # library's best picture, or from a stored instance document - so each one
     # discloses a workflow assembled out of the library rather than out of any
@@ -1802,6 +1843,17 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ("PUT", "/api/v1/workflows/{workflow_key}/lora-chain"): RoutePolicy(
         _OWNER,
         justification="Write a copy of a card's workflow with its LoRA chain edited; PUT blocked for READ tokens; owner only",
+    ),
+    # Clone with new models: the read names the shelf's checkpoints, VAEs and
+    # text encoders and what recipes have run together, which is the whole
+    # shelf and the whole hub; the write is a Duplicate with filenames replaced.
+    ("GET", "/api/v1/workflows/{workflow_key}/model-swap"): RoutePolicy(
+        _OWNER,
+        justification="A card's model files, the shelf's models and the recipes' co-occurrence, all whole-library; owner only",
+    ),
+    ("POST", "/api/v1/workflows/{workflow_key}/clone-with-models"): RoutePolicy(
+        _OWNER,
+        justification="Write a copy of a card's workflow with model files replaced; POST blocked for READ tokens; owner only",
     ),
     ("DELETE", "/api/v1/workflows/{workflow_key}"): RoutePolicy(
         _OWNER,

@@ -1,8 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import Column, DateTime, String, UniqueConstraint
-from sqlmodel import SQLModel, Field
+from sqlalchemy import Column, String, UniqueConstraint
+from sqlmodel import SQLModel, Field, UTCDateTime
 
 if TYPE_CHECKING:
     pass
@@ -52,12 +52,12 @@ class GuestSession(SQLModel, table=True):
         sa_column=Column(String(64), nullable=False, index=True)
     )
     created_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False),
-        default_factory=datetime.utcnow,
+        sa_column=Column(UTCDateTime(), nullable=False),
+        default_factory=lambda: datetime.now(timezone.utc),
     )
     last_active_at: datetime = Field(
-        sa_column=Column(DateTime, nullable=False),
-        default_factory=datetime.utcnow,
+        sa_column=Column(UTCDateTime(), nullable=False),
+        default_factory=lambda: datetime.now(timezone.utc),
     )
     cookie_token: Optional[str] = Field(
         default=None,

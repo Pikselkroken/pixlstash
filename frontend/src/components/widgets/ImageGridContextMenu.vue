@@ -6,6 +6,7 @@
       class="image-ctx-menu ctx-menu"
       :class="{ 'ctx-flip-sub': submenusFlip, 'ctx-menu--on-dark': onDark }"
       :style="menuStyle"
+      :data-tooltip-layer="tooltipSide"
       role="menu"
       aria-orientation="vertical"
       tabindex="-1"
@@ -495,9 +496,9 @@
           <v-icon class="ctx-icon">mdi-tune-variant</v-icon>
           Filters
         </button>
-        <!-- The two run entries, mirrored word for word in SelectionMenu.vue
-             and asserted by frontend/e2e/specs/menu-parity.spec.js: both act
-             on the SELECTION, so neither is context-only. -->
+        <!-- The three run entries, mirrored word for word in SelectionMenu.vue
+             and asserted by frontend/e2e/specs/menu-parity.spec.js: all three
+             act on the SELECTION, so none is context-only. -->
         <button
           v-if="comfyuiConfigured"
           class="ctx-item"
@@ -519,6 +520,19 @@
         >
           <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
           Run a workflow on these…
+        </button>
+        <button
+          v-if="comfyuiConfigured"
+          class="ctx-item"
+          :disabled="!selectedImageIds.length || isReadOnly"
+          @click="delegate('edit-with-comfyui')"
+        >
+          <Tooltip
+            text="Change these pictures with a written instruction, using the Flux.2 Klein edit workflow"
+            activator="parent"
+          />
+          <v-icon class="ctx-icon">mdi-auto-fix</v-icon>
+          Edit with ComfyUI…
         </button>
         <button
           class="ctx-item"
@@ -885,6 +899,7 @@ const emit = defineEmits([
   "open-plugin-panel",
   "make-more",
   "run-workflow",
+  "edit-with-comfyui",
   "use-as-input",
   "segment",
   "auto-tag",
@@ -904,6 +919,7 @@ const menuRef = ref(null);
 const adjustedX = ref(props.x);
 const adjustedY = ref(props.y);
 const submenusFlip = ref(false);
+const tooltipSide = ref("top");
 const autoTagSubmenuOpen = ref(false);
 const descriptionSubmenuOpen = ref(false);
 const findFacesSubmenuOpen = ref(false);
@@ -1085,6 +1101,17 @@ async function clampPosition() {
   );
   // Flip submenus leftward when there is not enough room to the right for a ~185px submenu
   submenusFlip.value = newX + rect.width + 185 > window.innerWidth - 8;
+  // Row tips open on the left, away from right-opening sub-menus, when a
+  // widest tip fits there. Otherwise above the row: a sub-menu starts level
+  // with its row's top, so a tip above covers neither. The right side never
+  // works: sub-menus flip left exactly when it has no room.
+  const tipWidth = parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue(
+      "--tooltip-max-w",
+    ),
+  );
+  tooltipSide.value =
+    !submenusFlip.value && newX >= tipWidth + 16 ? "start" : "top";
 }
 
 // Element focused before the menu opened, so Escape / an action can return

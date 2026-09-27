@@ -249,7 +249,7 @@ class TagPredictionBackfillTask(BaseTask):
         if not unscored_ids:
             return written
 
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(timezone.utc)
         existing_pairs = {
             (row.picture_id, row.tag)
             for row in session.exec(

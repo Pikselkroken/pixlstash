@@ -98,7 +98,7 @@ import AppButton from "../widgets/AppButton.vue";
 const props = defineProps({
   /**
    * One entry of a pre-flight group's `reasons`, or the notice
-   * `runReasons.bypassNotice` builds: a code plus its payload.
+   * `runReasons.repairNotices` builds: a code plus its payload.
    */
   reason: { type: Object, required: true },
   /** Which card this is about; omitted when there is only the one. */

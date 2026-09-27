@@ -32,7 +32,7 @@ import hashlib
 import json
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -166,7 +166,7 @@ def _seed_pictures(server) -> None:
                 Picture(
                     file_path=path,
                     deleted=deleted,
-                    created_at=datetime(2026, 9, 1),
+                    created_at=datetime(2026, 9, 1, tzinfo=timezone.utc),
                     workflow_structural_hash=structural,
                     workflow_hash_version="v1",
                     comfyui_positive_prompt=prompt,
@@ -448,6 +448,24 @@ def test_the_tab_lists_every_stack_members_recipes_and_no_outsiders(recipe_env):
     assert {row["workflow_key"] for row in listed.json()} == {CARD_A, CARD_B}
 
 
+def test_whole_stack_false_reads_only_the_workflows_named(recipe_env):
+    """Members picked inside an expanded stack: their recipes, not the stack's."""
+    on_a = _save(recipe_env.owner, CARD_A, name="On A")
+    on_b = _save(recipe_env.owner, CARD_B, name="On B")
+    _save(recipe_env.owner, CARD_C, name="On C")
+
+    def listed(*keys):
+        r = recipe_env.owner.get(
+            f"{API}/recipes",
+            params={"workflow_key": list(keys), "whole_stack": "false"},
+        )
+        assert r.status_code == 200, r.text
+        return {row["id"] for row in r.json()}
+
+    assert listed(CARD_A) == {on_a["id"]}
+    assert listed(CARD_A, CARD_B) == {on_a["id"], on_b["id"]}
+
+
 def test_an_unstacked_card_keeps_its_own_recipes_and_only_those(recipe_env):
     """The owner taking A out of its automatic group is a decision the read obeys."""
     on_a = _save(recipe_env.owner, CARD_A, name="On A")
@@ -583,7 +601,7 @@ def test_a_recipe_with_no_loras_credits_only_pictures_that_loaded_none(recipe_en
             Picture(
                 file_path="a_bare.png",
                 deleted=False,
-                created_at=datetime(2026, 9, 2),
+                created_at=datetime(2026, 9, 2, tzinfo=timezone.utc),
                 workflow_structural_hash=VARIANT_A,
                 workflow_hash_version="v1",
                 comfyui_positive_prompt=PROMPT,
@@ -669,7 +687,7 @@ def test_a_picture_never_read_for_metadata_is_credited_to_nobody(recipe_env):
                 Picture(
                     file_path=path,
                     deleted=False,
-                    created_at=datetime(2026, 9, 3),
+                    created_at=datetime(2026, 9, 3, tzinfo=timezone.utc),
                     workflow_structural_hash=VARIANT_A,
                     workflow_hash_version="v1",
                     comfyui_positive_prompt=None,
@@ -842,7 +860,7 @@ def test_a_picture_read_with_no_prompt_matches_a_recipe_with_no_prompt(recipe_en
             Picture(
                 file_path="a_promptless.png",
                 deleted=False,
-                created_at=datetime(2026, 9, 4),
+                created_at=datetime(2026, 9, 4, tzinfo=timezone.utc),
                 workflow_structural_hash=VARIANT_A,
                 workflow_hash_version="v1",
                 comfyui_positive_prompt=None,
@@ -872,7 +890,7 @@ def test_stacking_the_same_lora_twice_is_a_different_look(recipe_env):
             Picture(
                 file_path="a_stacked.png",
                 deleted=False,
-                created_at=datetime(2026, 9, 5),
+                created_at=datetime(2026, 9, 5, tzinfo=timezone.utc),
                 workflow_structural_hash=VARIANT_A,
                 workflow_hash_version="v1",
                 comfyui_positive_prompt=PROMPT,
@@ -1009,7 +1027,7 @@ def test_a_variant_keyed_by_a_superseded_rule_neither_stacks_nor_credits(recipe_
                 Picture(
                     file_path=path,
                     deleted=False,
-                    created_at=datetime(2026, 9, 6),
+                    created_at=datetime(2026, 9, 6, tzinfo=timezone.utc),
                     workflow_structural_hash=structural,
                     workflow_hash_version="v1",
                     comfyui_positive_prompt=PROMPT,
@@ -1263,6 +1281,28 @@ def test_used_looks_are_the_stacks_own_pictures_and_no_outsiders(recipe_env):
         (PROMPT, ["other_style.safetensors"], 1),
         (OTHER_PROMPT, [ADA], 1),
     ]
+
+
+def test_used_looks_with_whole_stack_false_are_the_named_cards_own(recipe_env):
+    """Card B alone: its one picture's look, not the stack's three."""
+    assert len(_used(recipe_env.owner, CARD_B)) == 3
+    r = recipe_env.owner.get(
+        f"{API}/recipes/used",
+        params={"workflow_key": [CARD_B], "whole_stack": "false"},
+    )
+    assert r.status_code == 200, r.text
+    assert [(look["prompt"], look["pictures"]) for look in r.json()] == [(PROMPT, 1)]
+
+
+def test_a_narrowed_look_is_marked_saved_by_a_siblings_recipe(recipe_env):
+    """Saved on A, it runs on B too (D10), so B's own look is already kept."""
+    _save(recipe_env.owner, CARD_A, prompt=PROMPT, loras=_ada())
+    r = recipe_env.owner.get(
+        f"{API}/recipes/used",
+        params={"workflow_key": [CARD_B], "whole_stack": "false"},
+    )
+    assert r.status_code == 200, r.text
+    assert [look["saved"] for look in r.json()] == [True]
 
 
 def test_one_look_spelled_two_ways_is_one_row(recipe_env):
@@ -1550,7 +1590,7 @@ def test_a_picture_with_no_prompt_is_not_a_look(recipe_env):
                 Picture(
                     file_path=f"no_prompt_{index}.png",
                     deleted=False,
-                    created_at=datetime(2026, 9, 2),
+                    created_at=datetime(2026, 9, 2, tzinfo=timezone.utc),
                     workflow_structural_hash=VARIANT_A,
                     workflow_hash_version="v1",
                     comfyui_positive_prompt=None,
@@ -1576,7 +1616,7 @@ def test_a_picture_with_no_prompt_but_a_lora_is_still_a_look(recipe_env):
             Picture(
                 file_path="lora_only.png",
                 deleted=False,
-                created_at=datetime(2026, 9, 2),
+                created_at=datetime(2026, 9, 2, tzinfo=timezone.utc),
                 workflow_structural_hash=VARIANT_A,
                 workflow_hash_version="v1",
                 comfyui_positive_prompt=None,

@@ -60,7 +60,7 @@ import io
 import json
 import tempfile
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -2308,7 +2308,7 @@ class TestExpiredToken(_SharedPictureLibrary):
     """
 
     def test_expired_token_is_rejected(self, library_env):
-        past = (datetime.utcnow() - timedelta(days=1)).isoformat()
+        past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
         r = library_env.owner_client.post(
             f"{API}/users/me/token",
             json={
@@ -2330,7 +2330,7 @@ class TestExpiredToken(_SharedPictureLibrary):
 
     def test_today_token_still_valid(self, library_env):
         """A token with expires_at=today (normalized to end-of-day) should still work."""
-        today_str = datetime.utcnow().strftime("%Y-%m-%d")
+        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         r = library_env.owner_client.post(
             f"{API}/users/me/token",
             json={

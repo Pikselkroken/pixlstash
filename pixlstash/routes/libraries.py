@@ -37,7 +37,7 @@ pinned, because none of them has to answer mid-swap.
 """
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -287,7 +287,8 @@ def create_router(server) -> APIRouter:
             "SELECT COUNT(*) FROM usertoken WHERE library_uuid = ? "
             "AND resource_type IS NOT NULL "
             "AND (expires_at IS NULL OR expires_at > ?)",
-            (library_uuid, datetime.utcnow()),
+            # The text UTCDateTime stores, so the raw comparison stays exact.
+            (library_uuid, datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")),
         )
         return int(row[0]) if row else 0
 

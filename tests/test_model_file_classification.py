@@ -177,6 +177,15 @@ class TestTheFolderNamesTheRole:
             == FILE_TEXT_ENCODER
         )
 
+    @pytest.mark.parametrize("folder", ["unet", "UNets", "diffusion_models"])
+    def test_a_diffusion_model_folder_names_a_checkpoint_with_no_count(self, folder):
+        # A `.gguf` has no header read, so no parameter count: the folder is
+        # the only evidence, and without it the file read as `unknown` (#1607).
+        assert (
+            classify_model_file((), 0, path=f"/models/{folder}/Flux1-Dev-Q4_K_M.gguf")
+            == FILE_CHECKPOINT
+        )
+
     def test_markers_still_win_over_the_folder(self):
         # Positive evidence outranks a directory. Someone keeping a LoRA beside
         # their VAEs has a misfiled LoRA, not a VAE.

@@ -19,7 +19,7 @@ import gc
 import json
 import os
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlmodel import select
@@ -41,7 +41,7 @@ from pixlstash.services.dedup_sweep_service import (
     stream_likeness_edges,
 )
 
-_BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
+_BASE_TIME = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
 @pytest.fixture

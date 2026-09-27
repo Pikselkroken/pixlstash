@@ -52,7 +52,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Iterable, Optional
 
@@ -605,7 +605,7 @@ def plan_sweep_in_session(
     report = SweepReport(
         policy=policy.as_dict(),
         operation_batch_id=operation_batch_id,
-        generated_at=datetime.utcnow(),
+        generated_at=datetime.now(timezone.utc),
         scanned_edges=forest.edge_count,
         candidate_groups=len(components),
         already_collapsed_groups=skip_counts[_SkipReason.ALREADY_COLLAPSED],

@@ -1,9 +1,9 @@
 // The filter menu's own rules, which the strip then shows: a tag is required or
 // excluded but never both, raising the minimum score drags the maximum up, a
-// tag-confidence threshold is one chip per tag that another pick moves, every
+// tag-confidence rule is one chip per tag that another pick moves, every
 // pick-one list follows the radiogroup contract (arrows select, one tab stop),
-// Clear puts each kind back to its own "off" value, and every count is the view
-// plus exactly one filter.
+// its leading All/Any row puts each kind back to its own "off" value, and every
+// count is the view plus exactly one filter.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { flushPromises, mount } from "@vue/test-utils";
@@ -46,14 +46,6 @@ async function openKind(wrapper, label) {
   await flushPromises();
 }
 
-function checkbox(wrapper, label) {
-  const row = wrapper
-    .findAll("label.fm-check")
-    .find((l) => l.find(".fm-check-label").text() === label);
-  expect(row, `no checkbox "${label}"`).toBeTruthy();
-  return row.find("input");
-}
-
 beforeEach(() => {
   setActivePinia(createPinia());
   getPictureCount.mockClear();
@@ -72,21 +64,78 @@ describe("FilterMenu", () => {
     expect(wrapper.find(".fm-sub .fm-n").text()).toBe("");
   });
 
-  it("moves a tag between Has and Lacks instead of holding it in both", async () => {
+  it("adds a typed tag as has on Enter, lacks on Shift+Enter, and flips on click", async () => {
     const store = useFilterStore();
     const wrapper = await mountMenu();
     await openKind(wrapper, "Tags");
+    const field = wrapper.find(".fm-sub input");
 
-    await checkbox(wrapper, "hat").setValue(true);
+    // Nothing is listed until something is typed, and each empty row says so.
+    expect(wrapper.findAll('[role="option"]')).toHaveLength(0);
+    expect(wrapper.findAll(".ftf-none").map((n) => n.text())).toEqual([
+      "None",
+      "None",
+    ]);
+    await field.setValue("ha");
+    expect(wrapper.findAll('[role="option"]').map((o) => o.text())).toEqual([
+      "hat12Tab",
+    ]);
+    await field.trigger("keydown", { key: "Enter" });
     expect(store.tagFilter).toEqual(["hat"]);
+    expect(field.element.value).toBe("");
+    expect(wrapper.findAll(".ftf-none")).toHaveLength(1);
 
-    const lacks = wrapper
-      .findAll('[role="radio"]')
-      .find((b) => b.text() === "Lacks tag");
-    await lacks.trigger("click");
-    await checkbox(wrapper, "hat").setValue(true);
-    expect(store.tagRejectedFilter).toEqual(["hat"]);
+    await field.setValue("out");
+    await field.trigger("keydown", { key: "Enter", shiftKey: true });
+    expect(store.tagRejectedFilter).toEqual(["outdoors"]);
+
+    // A tag is required or excluded, never both: its chip moves.
+    const chip = (name) =>
+      wrapper
+        .findAll(".ftf-chip")
+        .find((c) => c.find(".ftf-chip-name").text() === name);
+    expect(chip("hat").classes()).toContain("ftf-chip--has");
+    await chip("hat").find(".ftf-chip-body").trigger("click");
     expect(store.tagFilter).toEqual([]);
+    expect(store.tagRejectedFilter).toEqual(["outdoors", "hat"]);
+    expect(chip("hat").classes()).toContain("ftf-chip--lacks");
+
+    await field.setValue("hat");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(store.tagFilter).toEqual(["hat"]);
+    expect(store.tagRejectedFilter).toEqual(["outdoors"]);
+
+    // Tab completes like Enter, Shift+Tab like Shift+Enter.
+    await field.setValue("ha");
+    await field.trigger("keydown", { key: "Tab", shiftKey: true });
+    expect(store.tagRejectedFilter).toEqual(["outdoors", "hat"]);
+    await field.setValue("ha");
+    await field.trigger("keydown", { key: "Tab" });
+    expect(store.tagFilter).toEqual(["hat"]);
+    // With nothing to complete, Tab is left to move focus.
+    const tab = new KeyboardEvent("keydown", { key: "Tab", cancelable: true });
+    field.element.dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(false);
+
+    // Backspace in the empty field takes the last chip, never while typing.
+    await field.setValue("x");
+    await field.trigger("keydown", { key: "Backspace" });
+    expect(store.tagRejectedFilter).toEqual(["outdoors"]);
+    await field.setValue("");
+    await field.trigger("keydown", { key: "Backspace" });
+    expect(store.tagRejectedFilter).toEqual([]);
+    expect(store.tagFilter).toEqual(["hat"]);
+  });
+
+  it("gives Problems no footer in All Pictures, and says why No character is off elsewhere", async () => {
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Problems");
+    expect(wrapper.find(".fm-sub .tbm-footer").exists()).toBe(false);
+
+    await wrapper.setProps({ allPicturesView: false });
+    expect(wrapper.find(".fm-sub .tbm-footer").text()).toBe(
+      "No character and In no set work in All Pictures.",
+    );
   });
 
   it("raises At most to a new At least above it", async () => {
@@ -103,25 +152,63 @@ describe("FilterMenu", () => {
     ).toBeDefined();
   });
 
-  it("keeps one confidence chip per tag: another threshold moves it", async () => {
+  it("keeps one confidence chip per tag: its % or the other kind moves it", async () => {
     const store = useFilterStore();
     const wrapper = await mountMenu();
     await openKind(wrapper, "Tag confidence");
+    const field = wrapper.find(".fm-sub input");
 
-    const pick = async (label) => {
-      const row = wrapper
-        .findAll('[role="radio"]')
-        .find((b) => b.text().startsWith(label));
-      await row.trigger("click");
-      await flushPromises();
-    };
-    await pick("hat");
-    await pick("80%");
+    await field.setValue("hat");
+    await field.trigger("keydown", { key: "Enter" });
     expect(store.tagConfidenceAboveFilter).toEqual(["hat:0.80"]);
-    await pick("90%");
+
+    await wrapper.find(".ftf-thr-select").setValue("0.9");
     expect(store.tagConfidenceAboveFilter).toEqual(["hat:0.90"]);
-    await pick("90%");
+
+    await field.setValue("hat");
+    await field.trigger("keydown", { key: "Enter", shiftKey: true });
+    expect(store.tagConfidenceAboveFilter).toEqual([]);
+    expect(store.tagConfidenceBelowFilter).toEqual(["hat:0.40"]);
+
+    // Clicking the chip is the mouse path between the two kinds.
+    await wrapper.find(".ftf-chip-body").trigger("click");
+    expect(store.tagConfidenceBelowFilter).toEqual([]);
+    expect(store.tagConfidenceAboveFilter).toEqual(["hat:0.80"]);
+
+    await wrapper.find(".ftf-chip-x").trigger("click");
+    expect(store.tagConfidenceAboveFilter).toEqual([]);
+  });
+
+  it("edits one of the stats sidebar's per-bucket entries without the others", async () => {
+    const store = useFilterStore();
+    store.tagConfidenceAboveFilter = ["hat:0.20", "hat:0.40"];
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Tag confidence");
+
+    const [first] = wrapper.findAll(".ftf-thr-select");
+    await first.setValue("0.9");
+    expect(store.tagConfidenceAboveFilter).toEqual(["hat:0.90", "hat:0.40"]);
+    await wrapper.findAll(".ftf-chip-x")[1].trigger("click");
     expect(store.tagConfidenceAboveFilter).toEqual(["hat:0.90"]);
+  });
+
+  it("moves the highlight with the arrows, and Enter adds the highlighted tag", async () => {
+    const store = useFilterStore();
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Tags");
+    const field = wrapper.find(".fm-sub input");
+
+    // "t" is in both; hat leads as the more used.
+    await field.setValue("t");
+    const tabRow = () =>
+      wrapper.find(".ftf-row-kbd").element.closest('[role="option"]');
+    expect(tabRow().textContent).toContain("hat");
+    await field.trigger("keydown", { key: "ArrowDown" });
+    // The Tab keycap follows the highlight to the row it will take.
+    expect(wrapper.findAll(".ftf-row-kbd")).toHaveLength(1);
+    expect(tabRow().textContent).toContain("outdoors");
+    await field.trigger("keydown", { key: "Enter" });
+    expect(store.tagFilter).toEqual(["outdoors"]);
   });
 
   it("counts each choice as the view plus that one filter", async () => {
@@ -146,7 +233,7 @@ describe("FilterMenu", () => {
     ["Stacks", "stackStateFilter", "Stacked", "stacked", "all"],
     ["Sharing", "sharedOnlyFilter", "Shared", true, false],
   ])(
-    "%s: arrow selects, Enter keeps it, Clear restores the off value",
+    "%s: arrow selects, Enter keeps it, the off row restores the off value",
     async (kind, field, label, on, off) => {
       const store = useFilterStore();
       const wrapper = await mountMenu();
@@ -159,29 +246,117 @@ describe("FilterMenu", () => {
 
       await group.trigger("keydown", { key: "ArrowDown" });
       expect(store[field]).toBe(on);
-      expect(wrapper.find(".tbm-footer").text()).toContain(
-        `On the strip as "${kind}`,
-      );
+      // An arrow browses; only a deliberate pick closes the submenu.
+      expect(wrapper.find(".fm-sub").exists()).toBe(true);
       // Enter on the chosen row is a click on it: it confirms, never undoes.
       await row().trigger("click");
       expect(store[field]).toBe(on);
+      expect(wrapper.find(".fm-sub").exists()).toBe(false);
 
-      const clear = wrapper
-        .findAll(".fm-sub .tbm-ghost")
-        .find((b) => b.text() === "Clear");
-      await clear.trigger("click");
+      await openKind(wrapper, kind);
+      const radios = wrapper.findAll('.fm-sub [role="radio"]');
+      expect(radios[0].attributes("aria-checked")).toBe("false");
+      await radios[0].trigger("click");
       expect(store[field]).toBe(off);
+      expect(wrapper.find(".fm-sub").exists()).toBe(false);
     },
   );
 
-  it("names the chosen option in the footer, not the first", async () => {
-    const store = useFilterStore();
-    store.mediaTypeFilter = "videos";
+  it("leads each pick-one list with its off row, All or Any", async () => {
     const wrapper = await mountMenu();
-    await openKind(wrapper, "Media");
-    expect(wrapper.find(".fm-sub .tbm-footer").text()).toBe(
-      'On the strip as "Media video".',
-    );
+    for (const [kind, any] of [
+      ["Media", "All"],
+      ["Faces", "Any"],
+      ["Stacks", "All"],
+      ["Sharing", "All"],
+    ]) {
+      await openKind(wrapper, kind);
+      const first = wrapper.find('.fm-sub [role="radio"]');
+      expect(first.find(".optrow__label").text()).toBe(any);
+      expect(first.attributes("aria-checked")).toBe("true");
+      expect(wrapper.find(".fm-sub .tbm-footer").exists()).toBe(false);
+    }
+  });
+
+  it("marks each Score row's radio from its own group's value", async () => {
+    const store = useFilterStore();
+    store.minScoreFilter = 3;
+    store.maxScoreFilter = 4;
+    const wrapper = mount(FilterMenu, {
+      props: { countBaseQuery: "set_id=4", open: true },
+      // Renders the icon name, which the `true` stub drops.
+      global: { stubs: { "v-icon": { template: "<i><slot /></i>" } } },
+    });
+    await flushPromises();
+    await openKind(wrapper, "Score");
+    const marked = (group) =>
+      group
+        .findAll('[role="radio"]')
+        .filter((b) => b.text().includes("mdi-radiobox-marked"))
+        .map((b) => b.attributes("aria-label"));
+
+    const [atLeast, atMost] = wrapper.findAll('.fm-sub [role="radiogroup"]');
+    expect(marked(atLeast)).toEqual(["At least 3 stars"]);
+    expect(marked(atMost)).toEqual(["At most 4 stars"]);
+  });
+
+  // 0 stars is unrated: a range from 0 takes the unrated with it, At most 0 is
+  // them alone, and 0 to 5 is no filter at all.
+  it("reads 0 stars as unrated, with no separate unscored switch", async () => {
+    const store = useFilterStore();
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Score");
+    const checked = () =>
+      wrapper
+        .findAll('.fm-sub [role="radio"][aria-checked="true"]')
+        .map((b) => b.attributes("aria-label"));
+    const click = (label) =>
+      wrapper.find(`[aria-label="${label}"]`).trigger("click");
+    const state = () => [
+      store.minScoreFilter,
+      store.maxScoreFilter,
+      store.unscoredOnlyFilter,
+    ];
+
+    expect(checked()).toEqual(["At least 0 stars", "At most 5 stars"]);
+    expect(wrapper.text()).not.toContain("Include unscored");
+
+    await click("At most 0 stars");
+    expect(state()).toEqual([null, 0, true]);
+    await click("At most 3 stars");
+    expect(state()).toEqual([null, 3, true]);
+    await click("At least 2 stars");
+    expect(state()).toEqual([2, 3, false]);
+    await click("At least 0 stars");
+    await click("At most 5 stars");
+    expect(state()).toEqual([null, null, false]);
+    expect(checked()).toEqual(["At least 0 stars", "At most 5 stars"]);
+  });
+
+  it("shows the stats sidebar's unrated-only filter as At most 0", async () => {
+    const store = useFilterStore();
+    store.unscoredOnlyFilter = true;
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Score");
+    expect(
+      wrapper.find('[aria-label="At most 0 stars"]').attributes("aria-checked"),
+    ).toBe("true");
+
+    // Clicking the marked At least 0 confirms it, never drops the filter.
+    await wrapper.find('[aria-label="At least 0 stars"]').trigger("click");
+    expect(store.unscoredOnlyFilter).toBe(true);
+    expect(store.minScoreFilter).toBeNull();
+    expect(
+      wrapper.find('[aria-label="At most 0 stars"]').attributes("aria-checked"),
+    ).toBe("true");
+
+    // A minimum above the shown At most 0 drags it up, as it would anywhere.
+    await wrapper.find('[aria-label="At least 2 stars"]').trigger("click");
+    expect([
+      store.minScoreFilter,
+      store.maxScoreFilter,
+      store.unscoredOnlyFilter,
+    ]).toEqual([2, 2, false]);
   });
 
   it("gives each Score radiogroup one tab stop, moved and selected by arrows", async () => {
@@ -215,5 +390,64 @@ describe("FilterMenu", () => {
     await openKind(wrapper, "Stacks");
     expect(document.activeElement?.getAttribute("role")).toBe("radio");
     wrapper.unmount();
+  });
+
+  it("returns ← from a pick-one submenu to its row without changing the pick", async () => {
+    const store = useFilterStore();
+    store.stackStateFilter = "stacked";
+    const wrapper = mount(FilterMenu, {
+      props: { countBaseQuery: "set_id=4", open: true },
+      global: { stubs: { "v-icon": true, Tooltip: true } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    await openKind(wrapper, "Stacks");
+    const radio = document.activeElement;
+    expect(radio?.getAttribute("role")).toBe("radio");
+
+    radio.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }),
+    );
+    await flushPromises();
+    expect(store.stackStateFilter).toBe("stacked");
+    expect(wrapper.find(".fm-sub").exists()).toBe(false);
+    expect(document.activeElement?.textContent).toContain("Stacks");
+    wrapper.unmount();
+  });
+
+  it("lets ← move the caret in a search field, and leaves once it is at the start", async () => {
+    const wrapper = mount(FilterMenu, {
+      props: { countBaseQuery: "set_id=4", open: true },
+      global: { stubs: { "v-icon": true, Tooltip: true } },
+      attachTo: document.body,
+    });
+    await flushPromises();
+    await openKind(wrapper, "Checkpoint");
+    const field = wrapper.find(".fm-sub input");
+    await field.setValue("flux");
+    field.element.setSelectionRange(4, 4);
+    await field.trigger("keydown", { key: "ArrowLeft" });
+    expect(wrapper.find(".fm-sub").exists()).toBe(true);
+    // A selection from the start still collapses first.
+    field.element.setSelectionRange(0, 2);
+    await field.trigger("keydown", { key: "ArrowLeft" });
+    expect(wrapper.find(".fm-sub").exists()).toBe(true);
+
+    field.element.setSelectionRange(0, 0);
+    await field.trigger("keydown", { key: "ArrowLeft" });
+    expect(wrapper.find(".fm-sub").exists()).toBe(false);
+    expect(document.activeElement?.textContent).toContain("Checkpoint");
+    wrapper.unmount();
+  });
+
+  it("leaves ← to a chip's threshold select", async () => {
+    const store = useFilterStore();
+    store.tagConfidenceAboveFilter = ["hat:0.20"];
+    const wrapper = await mountMenu();
+    await openKind(wrapper, "Tag confidence");
+    await wrapper
+      .find(".ftf-thr-select")
+      .trigger("keydown", { key: "ArrowLeft" });
+    expect(wrapper.find(".fm-sub").exists()).toBe(true);
   });
 });

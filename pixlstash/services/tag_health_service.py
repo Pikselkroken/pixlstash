@@ -85,7 +85,7 @@ vault at a time; a second request while building is a no-op returning state.
 
 import threading
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable
 
 from sqlalchemy import and_, case, func, or_
@@ -561,7 +561,7 @@ def compute_tag_health_rows(
             if not is_tag_sentinel(t)
         }
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     rows: list[dict] = []
     total_tags = len(all_tags)
     for i, tag_value in enumerate(all_tags):
@@ -791,7 +791,7 @@ def list_tag_health_scoped(
         return compute_tag_health_rows(session, picture_ids=ids)
 
     rows = vault.db.run_immediate_read_task(_compute)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return {
         "rows": [
             {

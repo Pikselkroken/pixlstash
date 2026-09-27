@@ -24,7 +24,7 @@ import json
 import os
 import tempfile
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlmodel import select
@@ -58,7 +58,7 @@ from pixlstash.tasks.dedup_scan_finder import DedupScanFinder
 from pixlstash.tasks.task_type import TaskType
 from pixlstash.task_runner import TaskRunner
 
-_BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
+_BASE_TIME = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 # A 64-bit dHash is 16 hex chars. These differ from ZERO by a controlled number
 # of set bits, so the Hamming distance (and therefore the similarity) is exact.
@@ -1659,6 +1659,22 @@ def test_a_tampered_cursor_is_refused_rather_than_reinterpreted():
     forged = base64.urlsafe_b64encode(b"9|1.0|1").decode().rstrip("=")
     with pytest.raises(tiers.DedupCursorError):
         tiers.decode_queue_cursor(forged)
+
+
+def test_a_decided_cursor_minted_before_the_upgrade_reads_as_utc():
+    """An open Decided page may hold a cursor with a naive stamp; it must stay usable.
+
+    A naive value would reach the UTCDateTime bind and raise, a 500 rather than a page.
+    """
+    import base64
+
+    raw = f"{tiers.CURSOR_VERSION}|{tiers.DECIDED_CURSOR_KIND}|2026-07-30T12:28:53.123456|7"
+    legacy = base64.urlsafe_b64encode(raw.encode()).decode().rstrip("=")
+    stamp = datetime(2026, 7, 30, 12, 28, 53, 123456, tzinfo=timezone.utc)
+    assert tiers.decode_decided_cursor(legacy) == (stamp, 7)
+    fresh = tiers.encode_decided_cursor(stamp, 7)
+    assert tiers.decode_decided_cursor(fresh) == (stamp, 7)
+    assert tiers.decode_decided_cursor(fresh)[0].tzinfo is not None
 
 
 def test_the_cursor_resumes_a_tied_confidence_run_without_gap_or_repeat(server):

@@ -193,7 +193,8 @@ export function useActionReceipt({ announce = true } = {}) {
   async function takeAction(event, refocus) {
     if (store.busy) return;
     const hadFocus = event?.currentTarget === document.activeElement;
-    await (undone.value ? store.redo() : store.undo());
+    if (receipt.value?.local) await store.takeLocalReceiptAction();
+    else await (undone.value ? store.redo() : store.undo());
     if (!hadFocus) return;
     await nextTick();
     refocus?.();

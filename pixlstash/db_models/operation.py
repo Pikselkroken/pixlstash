@@ -21,7 +21,7 @@ onto a log that already has rows is exactly the migration pain the additive-only
 rule exists to avoid.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import sqlalchemy as sa
@@ -80,7 +80,9 @@ class Operation(SQLModel, table=True):
 
     batch_id: Optional[str] = Field(default=None, index=True)
 
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), index=True
+    )
     actor: Optional[str] = Field(default=None, index=True)
 
     op_type: str = Field(index=True)

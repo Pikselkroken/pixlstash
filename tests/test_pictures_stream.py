@@ -16,7 +16,7 @@ import os
 import tempfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -63,7 +63,7 @@ def _seed_pictures(server, total: int, hidden_every: int | None = None):
             pic = Picture(
                 file_path=f"pic_{i:04d}.jpg",
                 score=0,
-                imported_at=datetime.now(),
+                imported_at=datetime.now(timezone.utc),
             )
             session.add(pic)
             session.flush()
@@ -89,7 +89,7 @@ def _seed_character_pictures(server, total: int) -> tuple[int, list[int]]:
             picture = Picture(
                 file_path=f"character_{total}_{index}.jpg",
                 score=0,
-                imported_at=datetime.now(),
+                imported_at=datetime.now(timezone.utc),
             )
             session.add(picture)
             session.flush()

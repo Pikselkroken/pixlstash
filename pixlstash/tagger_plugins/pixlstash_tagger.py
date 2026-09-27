@@ -50,6 +50,7 @@ QUALITY_CROP_TAG_WHITELIST = frozenset(
     {
         "blocky",
         "malformed teeth",
+        "malformed eyes",
         "flux chin",
     }
 )
@@ -59,6 +60,7 @@ QUALITY_CROP_TAG_WHITELIST = frozenset(
 FACE_QUALITY_CROP_TAGS = frozenset(
     {
         "malformed teeth",
+        "malformed eyes",
         "flux chin",
     }
 )
@@ -1203,7 +1205,7 @@ class PixlStashTaggerPlugin(TaggerPlugin):
             ext = os.path.splitext(path_str)[1].lower()
             img = preloaded_map.get(path_str)
             if img is None:
-                if ext in _VIDEO_EXTS:
+                if ext in _VIDEO_EXTS or VideoUtils.is_animated_gif(path_str):
                     frames = VideoUtils.extract_representative_video_frames(
                         path_str, count=1
                     )

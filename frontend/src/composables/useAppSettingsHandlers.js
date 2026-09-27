@@ -72,11 +72,23 @@ export function useAppSettingsHandlers({ gridContainer, pushAppRoute }) {
     );
   }
 
+  // The set twin (#1489), from the sidebar's set context menu.
+  function handleSuggestPicturesForSet(pictureSet) {
+    if (pictureSet?.id == null) return;
+    nextTick(() =>
+      gridContainer.value?.suggestPicturesForSet?.({
+        id: pictureSet.id,
+        name: pictureSet.name,
+      }),
+    );
+  }
+
   return {
     handleViewProject,
     handleStackStatsUpdate,
     handleUpdateCheckForUpdates,
     handleEmptyScrapheapFromSidebar,
     handleSuggestPicturesForCharacter,
+    handleSuggestPicturesForSet,
   };
 }

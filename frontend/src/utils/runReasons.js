@@ -65,6 +65,29 @@ export const LORAS_UNPLACED = "loras_unplaced";
  */
 export const PICTURE_INPUT_UNFILLED = "picture_input_unfilled";
 
+/**
+ * Not a refusal either: a custom node the server replaced (#1463).
+ *
+ * A seed node (rgthree's `Seed (rgthree)` and its kin) or a text node (WAS's
+ * `Text Multiline`, `CR Text`, `Textbox`, `PrimitiveStringMultiline`) this ComfyUI lacks: its link becomes
+ * a literal, so the run goes ahead without the pack. `RunGroup.replaced_nodes` carries it.
+ */
+export const NODES_REPLACED = "nodes_replaced";
+
+/**
+ * Where the ComfyUI-PixlStash node pack lives, and how to get it.
+ *
+ * The backend says the same in `PIXLSTASH_PACK_INSTALL_HINT`
+ * (`comfyui_recipe_service.py`). Its classes all start with `PixlStash`, the
+ * same rule the server's `PIXLSTASH_NODE_PREFIX` follows.
+ */
+export const PIXLSTASH_PACK_URL =
+  "https://github.com/Pikselkroken/ComfyUI-PixlStash";
+export const PIXLSTASH_PACK_INSTALL =
+  'Install ComfyUI-PixlStash from ComfyUI Manager (search "PixlStash") or ' +
+  "from github.com/Pikselkroken/ComfyUI-PixlStash, then restart ComfyUI.";
+const PIXLSTASH_NODE_PREFIX = "PixlStash";
+
 /** One value per `fix`, so a caller switches on a constant and not on prose. */
 export const FIX_SETTINGS = "settings";
 export const FIX_RETRY = "retry";
@@ -86,6 +109,23 @@ function names(list, key) {
   return (list || [])
     .map((item) => (typeof item === "string" ? item : item?.[key]))
     .filter(Boolean);
+}
+
+/** Why one ComfyUI-PixlStash node may not run, as the pre-flight said. */
+function pixlstashNodeSentence(node) {
+  const title = node.title || node.class_type || "A PixlStash node";
+  switch (node.why) {
+    case "not_in_library":
+      return `${title} names a ${node.kind} this library does not have. Choose one in ComfyUI.`;
+    case "unreadable_id":
+      return `${title} takes its ${node.kind} from another node, so PixlStash cannot check it is in this library.`;
+    case "picks_its_own_picture":
+      return `${title} would pick its own pictures, because this run gives it none.`;
+    case "per_hub_checkpoint":
+      return `${title} names a checkpoint by its shelf number, so it runs only from an imported workflow file.`;
+    default:
+      return `${title} is a PixlStash node this version does not know how to run.`;
+  }
 }
 
 /**
@@ -116,6 +156,35 @@ export function readReason(reason) {
         false,
       );
     }
+    case NODES_REPLACED: {
+      // Named by class, once each, in the sentence: a node is not a file, and
+      // the files list would draw it as one.
+      const of = (kind) => [
+        ...new Set(
+          names(
+            (reason.nodes || []).filter(
+              (node) => (node?.replacement || "seed") === kind,
+            ),
+            "class_type",
+          ),
+        ),
+      ];
+      const sentence = (nodes, kind, instead) =>
+        nodes.length
+          ? `This ComfyUI does not have ${nodes.length === 1 ? `the ${kind} node` : `the ${kind} nodes`} ${nodes.join(", ")}, so PixlStash ${instead} instead. The run goes ahead without ${nodes.length === 1 ? "it" : "them"}.`
+          : "";
+      return read(
+        [
+          sentence(of("seed"), "seed", "writes the seed straight into the sampler"),
+          sentence(of("text"), "text", "writes the text straight into what it fed"),
+        ]
+          .filter(Boolean)
+          .join(" "),
+        null,
+        [],
+        false,
+      );
+    }
     case LORAS_SKIPPED: {
       const files = (reason.models || []).filter(Boolean);
       return read(
@@ -132,6 +201,16 @@ export function readReason(reason) {
       const said = String(reason.text || reason.detail || reason.message || "").trim();
       return read(
         `${file || "This LoRA"} cannot be skipped for this run. ${said || "Its loader cannot be taken out of this graph."} Use it, or edit the workflow's LoRAs.`,
+      );
+    }
+    case "stage_not_skippable": {
+      // Blocking, never a full run instead: the owner asked for this run
+      // without the stage (#1621). The server's sentence already says which
+      // stage and which node, so it is the whole notice when there is one.
+      const stage = reason.stage === "face_detailer" ? "FaceDetailer" : "upscale";
+      const said = String(reason.message || "").trim();
+      return read(
+        said || `The ${stage} pass cannot be switched off for this run.`,
       );
     }
     case LORAS_UNPLACED: {
@@ -178,9 +257,20 @@ export function readReason(reason) {
     }
     case "missing_nodes": {
       const nodes = names(reason.nodes, "name");
-      return read(
-        `This ComfyUI does not have ${nodes.length === 1 ? "the node" : "the nodes"} ${nodes.join(", ")}.`,
-      );
+      const ours = nodes.filter((n) => n.startsWith(PIXLSTASH_NODE_PREFIX));
+      const others = nodes.filter((n) => !ours.includes(n));
+      const sentences = [];
+      if (others.length) {
+        sentences.push(
+          `This ComfyUI does not have ${others.length === 1 ? "the node" : "the nodes"} ${others.join(", ")}.`,
+        );
+      }
+      if (ours.length) {
+        sentences.push(
+          `${ours.join(", ")} ${ours.length === 1 ? "comes" : "come"} from the ComfyUI-PixlStash node pack, which this ComfyUI does not have. ${PIXLSTASH_PACK_INSTALL}`,
+        );
+      }
+      return read(sentences.join(" "));
     }
     case "no_lora_loader":
       // The reason only ever fires because the run is PUTTING a LoRA in, so
@@ -191,15 +281,22 @@ export function readReason(reason) {
         "This workflow has no LoRA loader, so the LoRA has nowhere to go.",
         FIX_DROP_LORA,
       );
-    case "pixlstash_nodes":
-      return read("This graph calls back into PixlStash, so PixlStash will not run it.");
+    case "pixlstash_nodes": {
+      // One sentence per refused ComfyUI-PixlStash node (#1521), named by its
+      // title; an older server sends no `nodes` and gets the old sentence.
+      const nodes = (reason.nodes || []).filter(Boolean);
+      if (!nodes.length) {
+        return read("This graph calls back into PixlStash, so PixlStash will not run it.");
+      }
+      return read(nodes.map(pixlstashNodeSentence).join(" "));
+    }
     case "no_save_node":
       return read("This graph saves no image, so a run would produce nothing to keep.");
     case "a1111":
       return read("This picture was made in A1111 or Forge, so there is no ComfyUI graph to run.");
     case "ui_format":
       return read(
-        "The workflow file this card names is an editor export, which ComfyUI cannot be handed.",
+        "The workflow file this card names is an editor export, which ComfyUI cannot be handed. Open it in ComfyUI and use Convert for PixlStash.",
       );
     case PICTURE_INPUT_UNFILLED: {
       // Named by `title`, never by `slot_label`: the label is a topology hash.
@@ -277,4 +374,30 @@ export function unplacedNotice(group) {
   return loras.length
     ? [{ code: LORAS_UNPLACED, loras, workflowKey: group?.workflow_key || "" }]
     : [];
+}
+
+/**
+ * The replaced nodes of one pre-flight group, in the reason shape.
+ *
+ * Kept out of `reasons` for the reason `bypassNotice` is.
+ *
+ * @param {{replaced_nodes?: Array<Object>}} group
+ * @returns {Array<Object>} zero or one entry, so a caller can spread it.
+ */
+export function replacedNotice(group) {
+  const nodes = (group?.replaced_nodes || []).filter(Boolean);
+  return nodes.length ? [{ code: NODES_REPLACED, nodes }] : [];
+}
+
+/**
+ * Every repair the server made to one group's graph, as notices (#1463).
+ *
+ * The server's repair registry is one mechanism with one report per repair;
+ * this is its one reading, so a popup spreads this and not each notice.
+ *
+ * @param {Object} group - one pre-flight group.
+ * @returns {Array<Object>}
+ */
+export function repairNotices(group) {
+  return [...bypassNotice(group), ...replacedNotice(group)];
 }

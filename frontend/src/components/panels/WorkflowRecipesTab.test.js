@@ -118,7 +118,7 @@ describe("WorkflowRecipesTab", () => {
   it("lists the stack's recipes and says so in the header", async () => {
     const wrapper = render();
     await flushPromises();
-    expect(listSavedRecipes).toHaveBeenCalledWith([KEY]);
+    expect(listSavedRecipes).toHaveBeenCalledWith([KEY], { wholeStack: true });
     expect(namesOf(wrapper)).toEqual([
       "Rainy tram platform",
       "Red coat, backlit",
@@ -254,7 +254,7 @@ describe("WorkflowRecipesTab", () => {
     const wrapper = render();
     await flushPromises();
 
-    expect(listUsedLooks).toHaveBeenCalledWith([KEY]);
+    expect(listUsedLooks).toHaveBeenCalledWith([KEY], { wholeStack: true });
     // Not the empty sentence: a library with pictures has looks to show.
     expect(wrapper.text()).not.toContain("No recipes here yet");
     expect(wrapper.text()).toContain("a look nobody kept");
@@ -359,8 +359,25 @@ describe("WorkflowRecipesTab", () => {
     const OTHER = "b".repeat(64);
     render({ workflowKeys: [KEY, OTHER] });
     await flushPromises();
-    expect(listSavedRecipes).toHaveBeenCalledWith([KEY, OTHER]);
-    expect(listUsedLooks).toHaveBeenCalledWith([KEY, OTHER]);
+    expect(listSavedRecipes).toHaveBeenCalledWith([KEY, OTHER], { wholeStack: true });
+    expect(listUsedLooks).toHaveBeenCalledWith([KEY, OTHER], { wholeStack: true });
+  });
+
+  it("reads only the named workflows when told the stack is not wanted", async () => {
+    render({ workflowKeys: [KEY], wholeStack: false });
+    await flushPromises();
+    expect(listSavedRecipes).toHaveBeenCalledWith([KEY], { wholeStack: false });
+    expect(listUsedLooks).toHaveBeenCalledWith([KEY], { wholeStack: false });
+  });
+
+  it("reads again when only the stack flag changes", async () => {
+    // Collapsing the panel with a member selected keeps the keys and flips
+    // the flag alone; the list must widen back to the stack.
+    const wrapper = render({ workflowKeys: [KEY], wholeStack: false });
+    await flushPromises();
+    await wrapper.setProps({ wholeStack: true });
+    await flushPromises();
+    expect(listSavedRecipes).toHaveBeenLastCalledWith([KEY], { wholeStack: true });
   });
 
   it("opens the Run popup ON THE RECIPE, not on the card", async () => {

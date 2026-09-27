@@ -669,8 +669,13 @@ def _add_plugin_parsers(groups: argparse._SubParsersAction) -> None:
             "it does not tell you whether a plugin is safe, it RUNS it. The\n"
             "module body - and the model itself, with --image - executes in\n"
             "this process, with your permissions, exactly as it would in the\n"
-            "server. Nothing is sandboxed, and nothing here inspects what the\n"
-            "code does. Only test a plugin you would have installed anyway.\n"
+            "server. Nothing is sandboxed. Only test a plugin you would have\n"
+            "installed anyway.\n"
+            "\n"
+            "It reports what the code was seen reaching for while it ran -\n"
+            "connections, programs started, native libraries, files written or\n"
+            "removed - which is not a sandbox and not a verdict: it lists what\n"
+            "was seen, and a plugin written to hide from it can.\n"
             "\n"
             "What it does check: that the plugin imports the way the server\n"
             "imports it at start-up, that every plugin class it defines\n"
@@ -1628,7 +1633,25 @@ def _cmd_plugins_test(args: argparse.Namespace) -> int:
         f"About to run {args.path} in this process, unsandboxed, with your "
         "permissions.\nThis is a development check, not a security check."
     )
-    report = plugin_check.check_plugin(args.path, image=args.image)
+    recorder = plugin_check.Recorder()
+    try:
+        report = plugin_check.check_plugin(
+            args.path, image=args.image, recorder=recorder
+        )
+    except KeyboardInterrupt:
+        # Most often a plugin that never returns: the one failure the load
+        # cannot report by itself, because it hangs exactly as the boot would.
+        message = "\nInterrupted."
+        if recorder.phase == "load":
+            message += (
+                " The plugin had not returned from load; a plugin that hangs "
+                "here would hang the server's boot the same way."
+            )
+        elif recorder.phase:
+            message += f" The plugin had not returned from {recorder.phase}."
+        print(f"{message} Before it was interrupted:")
+        _print_reached(recorder)
+        return EXIT_REFUSED
     for failure in report.failures:
         # Not "Loaded <path>" first: a plugin that raised on import did not
         # load, and saying so above the error is a contradiction the reader
@@ -1666,6 +1689,11 @@ def _cmd_plugins_test(args: argparse.Namespace) -> int:
             # restart it is meant to replace.
             print(f"  warning: {warning}", file=sys.stderr)
 
+    # On every outcome: a plugin that failed to import may have reached for
+    # things first, which is when this matters most.
+    print()
+    _print_reached(report.reached)
+
     if not report.ok:
         print(
             "\nThis plugin would not work as it stands. Fix the above and run "
@@ -1678,13 +1706,20 @@ def _cmd_plugins_test(args: argparse.Namespace) -> int:
         "\nIt loads, registers and renders. That is a contract check, and it "
         "is neither a quality one nor a safety one: it says nothing about "
         "whether the captions are any good, and nothing about whether this "
-        "plugin is safe to install - it just ran it. A plugin that hangs at "
+        "plugin is safe to install - it just ran it, and the lines above are "
+        "what was seen while it did. A plugin that hangs at "
         "import would hang the server's boot the same way it would hang this "
         "command."
     )
     if not args.image:
         print("Pass --image to run it over a picture as well.")
     return EXIT_OK
+
+
+def _print_reached(recorder) -> None:
+    """Print what the plugin was seen reaching for, with its blind spots."""
+    for line in recorder.summary():
+        print(line)
 
 
 def _print_parameters(parameters: object) -> None:

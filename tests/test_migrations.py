@@ -1156,6 +1156,51 @@ def test_0122_hands_back_every_picture_that_carries_a_workflow():
             )
 
 
+def test_0123_hands_back_every_gif_for_re_embedding():
+    """Animated GIFs are now sampled over three frames, so every GIF re-embeds.
+
+    The embedding finder selects on ``image_embedding`` / ``aesthetic_score``
+    being NULL, and ``size_bin_index`` is what makes likeness drop the pairs
+    built from the frame-0 embedding. A non-GIF keeps all four.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        done = dict(
+            image_embedding=b"\x01\x02",
+            perceptual_hash="ab" * 8,
+            aesthetic_score=0.5,
+            size_bin_index=7,
+        )
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            _insert_minimal_row(conn, "picture", file_path="a/anim.GIF", **done)
+            _insert_minimal_row(conn, "picture", file_path="a/photo.png", **done)
+            conn.execute(
+                "UPDATE alembic_version SET version_num = "
+                "'0122_rescan_pictures_for_controlnet_model_names'"
+            )
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            rows = {
+                row[0]: row[1:]
+                for row in conn.execute(
+                    "SELECT file_path, image_embedding, perceptual_hash, "
+                    "aesthetic_score, size_bin_index FROM picture"
+                )
+            }
+        assert rows == {
+            "a/anim.GIF": (None, None, None, None),
+            "a/photo.png": (b"\x01\x02", "ab" * 8, 0.5, 7),
+        }
+
+
 def _has_table(conn, name: str) -> bool:
     return (
         conn.execute(
@@ -1178,6 +1223,8 @@ _SAVED_RECIPE_COLUMNS = {
     "keep_seed",
     "source_picture_id",
     "created_at",
+    "workflow_id",
+    "models",
 }
 
 
@@ -1257,6 +1304,51 @@ def test_0121_creates_saved_recipe_on_a_fresh_and_on_an_existing_vault():
             assert conn.execute(
                 "SELECT source_picture_id FROM saved_recipe"
             ).fetchone() == (None,)
+
+
+def test_0124_adds_workflow_id_and_models_on_a_fresh_and_a_populated_vault():
+    """Both columns arrive either way, and an existing recipe keeps its row.
+
+    Fresh: the baseline built them from the model and the migration must find
+    them there. Populated: a vault at 0123 has a recipe and neither column,
+    and the upgrade adds both as NULL - which for ``models`` means "inherit the
+    workflow's default recipe", the only honest reading of a recipe saved
+    before a recipe could pin a model.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(saved_recipe)")
+            }
+        assert {"workflow_id", "models"} <= columns
+
+        down = _run_alembic(
+            ["downgrade", "0123_resample_animated_gifs"], db_url, _MIGRATIONS_DIR
+        )
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(saved_recipe)")
+            }
+            assert not {"workflow_id", "models"} & columns
+            conn.execute(
+                "INSERT INTO saved_recipe (name, position, workflow_key, prompt, "
+                "loras, overrides, keep_seed) "
+                "VALUES ('a look', 0, 'a-key', 'a prompt', '[]', '{}', 0)"
+            )
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            _assert_saved_recipe_shape(conn, "migration 0124")
+            assert conn.execute(
+                "SELECT name, workflow_key, workflow_id, models FROM saved_recipe"
+            ).fetchall() == [("a look", "a-key", None, None)]
 
 
 def test_the_migration_chain_has_exactly_one_head():

@@ -710,6 +710,9 @@ Motion is feedback. Durations and easings live in `design-tokens.css`:
 - `--dur-4` (420ms): the one exception — an expressive **one-shot** for a delight
   moment (a chip flying into the sidebar, a badge landing, a sticker drop). Never
   for a routine interaction; a bulk action that animates this slow feels sluggish.
+- `--dur-attention` (500ms): the closed-inspector nudge only (§12, "Closed
+  inspector") — a one-shot that has to be *noticed* at the edge of the screen,
+  which is why it is longer than the routine ceiling.
 - `--ease-standard` for most; `--ease-decelerate` for elements entering the screen;
   `--ease-accelerate` for elements leaving it; `--ease-spring` for a physical
   **landing with a slight overshoot** — the punctuation at the end of a flight, not
@@ -767,9 +770,10 @@ These get skipped and that is exactly why a UI looks cheap.
   white on amber from 4.75 to 6.74:1 in light and 3.41 to 5.01:1 in dark. A neutral fill takes `--hover-neutral`, which
   lightens in dark and darkens in light. Never `filter: brightness()`, which moves the
   label with the fill.
-- **Amber acts, olive selects.** Amber is the key action fill and the attention dot,
-  and nothing else. Everything merely chosen is olive: a selected tile, the active
-  sidebar row, a focused group, a selected tab or table row take `--active-bar` (edge
+- **Amber acts, olive selects.** Amber is the key action fill, the attention dot
+  and the scrollbar thumb (the scroll position is a mark to find; see Scrollbars
+  below), and nothing else. Everything merely chosen is olive: a selected tile,
+  the active sidebar row, a focused group, a selected tab or table row take `--active-bar` (edge
   or ring) and `--active-wash`, the lifted olive at 0.20 in dark and the deep olive at
   0.16 in light. **No olive text or icon on an olive wash:** the selected item's label,
   icon and count take `--active-text`, the surface's own ink (7.5 - 11.2:1 at rest).
@@ -830,9 +834,14 @@ These get skipped and that is exactly why a UI looks cheap.
   is the exception `ActionReceipt`'s countdown hairline already takes (§10).
   Restore it with a scoped override on `::before`, where `@mdi/font` puts the
   animation. Never by weakening the global reset.
-- **Scrollbars:** a scroll region inside a `dark-surface` panel styles its own bar,
-  because the global `.is-desktop` treatment in `style.css` keys off `on-surface`
-  (the light-chrome pair) and does not apply in a plain browser at all. The pattern
+- **Scrollbars:** on the app's own chrome the thumb is **amber**, solid `accent`
+  over a transparent track: the global `.is-desktop` rule in `style.css` (every
+  scroller in the desktop app that sets no colour of its own), the grid
+  (`.grid-scroll-wrapper`) and the sidebar (`.sidebar-scroll`). It does not brighten
+  on hover: `accent-bright` measures 2.3 - 2.7:1 on the light chrome, under 3:1.
+  A grey thumb at 0.05 - 0.3 alpha, fading in only on hover, left the grid's scroll position impossible to find. A scroll region
+  inside a `dark-surface` panel styles its own bar, because the global
+  `.is-desktop` treatment does not apply in a plain browser at all. The pattern
   is `scrollbar-width: thin` plus
   `scrollbar-color: rgba(var(--v-theme-on-dark-surface), 0.4) transparent`, going to
   `0.55` on hover, with `scrollbar-gutter: stable` so content does not reflow when
@@ -964,6 +973,40 @@ vanish — they **fold** into the ⋯ overflow (`TbOverflowMenu`, a
   pulsing amber icon (`prefers-reduced-motion` honoured) keeps background work
   visible at every width.
 
+### Closed inspector
+
+The app-wide standard for a right-edge inspector that **describes a
+selection** and has been closed by the reader (`InspectorEdgeTab`; first
+adopted by Workflows). The inspector is open by default so the grid is laid
+out around it from the first paint. Closed, it is **never re-opened by itself**
+— opening the docked rail takes a column away under the pointer — so the
+closed state has to say what it is hiding:
+
+| Part | Value |
+|---|---|
+| Width · max height | 34px · 260px, label ellipsised; a 20×52 chevron handle when nothing is selected |
+| Label | `writing-mode: vertical-rl`, `--text-sm`, `--weight-medium`, chevron-left above it. One item: its name. Several: `N workflows` |
+| Surface | `--panel`, `--border` on all but the right edge, `--elevation-2` |
+| Corners | `--radius-md`, left corners only |
+| Selection stripe | 3px `--active-bar` on the left edge |
+| Placement | the content's right edge, vertically centred, `--z-floating` |
+
+- **Click only**, never hover: the content's scrollbar is on that edge. It is a
+  `<button>` in the Tab order, named `Show inspector: <name>`, and opening from
+  it persists (it is the same act as the toolbar toggle) and puts focus on the
+  inspector's active tab. While it shows, the content reserves its width on
+  that edge, so a click on a card's edge never lands on it; the scrollbar
+  still runs under it.
+- **Nudge on a new selection, never on the same one again.** Over
+  `--dur-attention` the tab bounces left (0 → −16 → 0 → −7 → 0 → −2 → 0px) and
+  the rail toggle's glyph turns `--selected-ink` and fades back — **glyph colour
+  only**, no background, ring or border, so it cannot read as the pressed state.
+  While tasks run the amber busy pulse owns that glyph and the flash is skipped;
+  the tab still bounces.
+- **Reduced motion:** neither plays. The label changing is the cue.
+- A deep link that lands on a selection (a picture's Recipe → *Open*) opens the
+  inspector for that visit without persisting it.
+
 ---
 
 ## 14. Layers (`--z-*`)
@@ -1029,6 +1072,12 @@ stay only for the surfaces that remain in the document, and no fourth one is add
 **There is no "just above my own layer".** A `1001` over `1000`, a `301` over `300`:
 two elements that need a plus-one belong in one stacking context, ordered by DOM
 order. A raw z-index is drift, and a raw value equal to a rung is a bug.
+
+**A tip over a surface on `--z-overlay` joins that surface's stacking context.** The
+grid context menu is teleported at 2000, the base Vuetify gives a lone tooltip, and won
+that tie on DOM order. It carries `data-tooltip-layer`, and `Tooltip` renders a tip
+whose control sits inside it *inside* it, so the tip is ordered by the menu, not by a
+bigger number. Such a surface must not clip (`overflow`, `transform`).
 
 ---
 

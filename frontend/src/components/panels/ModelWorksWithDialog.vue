@@ -6,7 +6,7 @@
     size="md"
     @close="emit('close')"
   >
-    <p v-if="store.setsLoading" class="ww__state">Reading the recipes…</p>
+    <p v-if="store.setsLoading" class="ww__state">Reading the recipes and runs…</p>
     <p v-else-if="store.setsError" class="ww__state" role="alert">
       {{ store.setsError }}
     </p>
@@ -47,7 +47,7 @@
             </Tooltip>
           </span>
           <!-- The bar is the ranking and the number is the evidence: sorted by
-               recipe count, which is the only thing co-occurrence measures.
+               recipes plus ComfyUI runs, the witnesses co-occurrence counts.
                `aria-hidden` on the bar because the figures beside it say the
                same thing in words. -->
           <span class="ww__evidence">
@@ -55,15 +55,14 @@
               <span :style="{ width: `${companion.share}%` }"></span>
             </span>
             <span class="ww__figures num"
-              >{{ recipeCount(companion.recipes) }} ·
-              {{ companion.pictures.toLocaleString() }}
-              {{ companion.pictures === 1 ? "picture" : "pictures" }}</span
+              >{{ evidenceLine(companion) }}</span
             >
           </span>
         </li>
       </ul>
       <p v-else class="ww__state">
-        No recipe in this library names this file beside another one. That is
+        No picture in this library and no recorded ComfyUI run used this file
+        beside another one. That is
         not a verdict on what it works with — only a record of what has been
         tried here.
       </p>
@@ -84,7 +83,8 @@
         <v-icon size="16">mdi-information-outline</v-icon>
         <span
           >Nothing is ruled out here. A model missing from this list has simply
-          never been in the same picture’s recipe — it may work perfectly.</span
+          never been in the same picture’s recipe or ComfyUI run — it may work
+          perfectly.</span
         >
       </p>
     </template>
@@ -93,7 +93,7 @@
 
 <script setup>
 // "Works with" for one model (#1438): the companions it has been seen beside,
-// ranked by how many recipes back each one.
+// ranked by how many recipes and ComfyUI runs back each one.
 //
 // **A dialog rather than an inspector section.** The approved design draws this
 // inside a model inspector with `Model` and `Copies` tabs, and the shelf has no
@@ -117,7 +117,9 @@ import {
 } from "../../utils/modelShelf";
 import {
   memberKindLabel,
+  evidenceLine,
   recipeCount,
+  runCount,
   setName,
 } from "../../utils/workflowSets";
 import AppDialog from "../widgets/AppDialog.vue";
@@ -225,7 +227,17 @@ const setsLabel = computed(() => {
   return n === 1 ? "In 1 set" : `In ${n} sets`;
 });
 
-const recipeLabel = computed(() => recipeCount(answer.value.recipes));
+const recipeLabel = computed(() =>
+  // A model only ComfyUI ran has no recipe to count: "0 recipes" says nothing.
+  [
+    answer.value.recipes || !answer.value.historyRuns
+      ? recipeCount(answer.value.recipes)
+      : null,
+    answer.value.historyRuns > 0 ? runCount(answer.value.historyRuns) : null,
+  ]
+    .filter(Boolean)
+    .join(" · "),
+);
 
 const setChips = computed(() =>
   answer.value.sets.slice(0, SET_CHIPS).map((combination) => ({

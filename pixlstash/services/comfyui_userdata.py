@@ -62,6 +62,16 @@ WORKFLOWS_DIR = "workflows"
 MAX_SAVED_WORKFLOW_BYTES = 32 * 1024 * 1024
 
 
+# How many of ComfyUI's most recent runs one pull reads from ``/history`` (#1518).
+# Every entry carries its whole graph, so this bounds the download; ComfyUI
+# keeps up to 10000 and forgets them all on restart, and each pull adds what it
+# read to the hub, so repeated pulls accumulate past this.
+MAX_HISTORY_ITEMS = 500
+
+# The history body, which is a graph per entry: far past 500 real graphs.
+MAX_HISTORY_BYTES = 128 * 1024 * 1024
+
+
 @dataclass(frozen=True)
 class SavedWorkflow:
     """One entry of ComfyUI's workflow listing.
@@ -196,6 +206,25 @@ def read_saved_workflow(base_url: str, relative_path: str) -> dict:
     payload = _json(status, body, url, relative_path)
     if not isinstance(payload, dict):
         raise RuntimeError(f"{relative_path} is not a JSON object")
+    return payload
+
+
+def read_history(base_url: str) -> dict:
+    """ComfyUI's most recent runs, as ``GET /history`` answers them.
+
+    At most :data:`MAX_HISTORY_ITEMS`, newest last, keyed by prompt id. Each
+    entry's ``prompt[2]`` is the API graph that ran and ``status`` says whether
+    it finished.
+
+    Raises:
+        RuntimeError: ComfyUI is unreachable, has no history route, or answers
+            with something that is not a mapping.
+    """
+    url = f"{base_url}/history?max_items={MAX_HISTORY_ITEMS}"
+    status, body = _get(url, "the run history", MAX_HISTORY_BYTES)
+    payload = _json(status, body, url, "run history")
+    if not isinstance(payload, dict):
+        raise RuntimeError("ComfyUI returned an unexpected run history")
     return payload
 
 

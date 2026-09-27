@@ -407,7 +407,9 @@ class LikenessParameterUtils:
     ) -> Optional[str]:
         """Compute a perceptual hash for an image or video file (static version)."""
         try:
-            if VideoUtils.is_video_file(rel_path or full_path):
+            if VideoUtils.is_video_file(
+                rel_path or full_path
+            ) or VideoUtils.is_animated_gif(full_path):
                 frames = VideoUtils.extract_representative_video_frames(
                     full_path, count=3
                 )

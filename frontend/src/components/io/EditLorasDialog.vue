@@ -3,7 +3,8 @@
     :open="open"
     title="Edit LoRAs"
     :subtitle="cardName"
-    size="md"
+    :size="branched ? 'xl' : 'md'"
+    :fullscreen="lanes.length > 2"
     @close="close"
     @accept="onAccept"
   >
@@ -20,7 +21,7 @@
         <v-icon size="16" class="eld-refusal-glyph">mdi-lock-outline</v-icon>
         <p class="eld-note">
           {{ refusal || "This chain cannot be edited just now." }}
-          Delete, drag and Add are off; the list is shown as read.
+          Deleting, dragging and adding are off; the list is shown as read.
         </p>
       </div>
 
@@ -29,160 +30,195 @@
         deleted for it.
       </p>
 
-      <!-- The rails say what "order" is order of, and are not rows: nothing
-           drags onto or past them. -->
-      <div class="eld-chain">
-        <div class="eld-rail" data-testid="eld-source">
+      <!-- The chain drawn as a graph: the model source, each loader and what
+           reads the result, one node each, with an arrow from every node to
+           the next. The two ends are not rows: nothing drags onto or past
+           them. -->
+      <div ref="listEl">
+      <div v-if="!branched" class="eld-chain">
+        <div class="eld-node" data-testid="eld-source">
           <template v-if="chain?.source">
-            <span class="eld-rail-name">{{ chain.source.class_type }}</span>
-            <span class="eld-quiet"
+            <span class="eld-node-title">{{ chain.source.class_type }}</span>
+            <span class="eld-node-body eld-quiet"
               >#{{ chain.source.node_id }} · hands out
               {{ (chain.source.outputs || []).join(", ") }}</span
             >
           </template>
-          <span v-else class="eld-quiet">No model source found</span>
+          <span v-else class="eld-node-body eld-quiet">No model source found</span>
         </div>
 
-        <ol ref="listEl" class="eld-list" aria-label="LoRAs, in the order the chain applies them">
-          <li
-            v-for="(row, index) in rows"
+        <ol class="eld-list" aria-label="LoRAs, in the order the chain applies them">
+          <EditLorasRow
+            v-for="row in segmentRows(null)"
             :key="row.id"
-            class="eld-row"
-            :class="{
-              'eld-row--deleted': row.deleted,
-              'eld-row--dragging': draggingId === row.id,
-              'eld-row--over': overId === row.id && draggingId !== row.id,
-            }"
-            :data-row="row.id"
-            @dragover.prevent="onDragOver(row)"
-            @dragleave="onDragLeave(row)"
-            @drop.prevent="onDrop(index)"
-          >
-            <div class="eld-line">
-              <!-- The handle is the drag source AND the keyboard path, and the
-                   keyboard path is in its name: a tooltip needs a hover a
-                   keyboard user does not have. The Recipes tab's idiom. -->
-              <button
-                class="eld-handle"
-                type="button"
-                data-focus="handle"
-                :draggable="canReorder(row) ? 'true' : 'false'"
-                :disabled="!canReorder(row)"
-                :aria-label="`Reorder ${row.name || 'this LoRA'}: hold Alt and press the up or down arrow, or drag`"
-                @dragstart="onDragStart(row, $event)"
-                @dragend="onDragEnd"
-                @keydown.up.alt.prevent="move(index, -1)"
-                @keydown.down.alt.prevent="move(index, 1)"
-              >
-                <Tooltip
-                  text="Drag to reorder, or Alt with the arrow keys"
-                  activator="parent"
-                  :describe="false"
-                />
-                <v-icon size="16">mdi-drag-vertical</v-icon>
-              </button>
-
-              <span class="eld-pos" aria-hidden="true">{{
-                row.deleted ? "—" : positions[row.id]
-              }}</span>
-
-              <span v-if="row.isNew && !row.sha256" class="eld-name">
-                <AppSelect
-                  :model-value="row.sha256"
-                  :label="`LoRA to add, row ${positions[row.id]}`"
-                  hide-label
-                  compact
-                  :options="pickerOptions"
-                  :disabled="saving"
-                  @update:model-value="(value) => pick(row, value)"
-                />
-              </span>
-              <span v-else class="eld-name">
-                <v-icon
-                  v-if="!row.onShelf && !row.isNew"
-                  size="16"
-                  class="eld-flag-glyph"
-                  aria-hidden="true"
-                  >mdi-alert-outline</v-icon
-                >
-                <span class="eld-name-text">{{
-                  row.onShelf || row.isNew ? row.name : row.fileBase
-                }}</span>
-                <span v-if="row.isNew" class="eld-tag">new</span>
-                <span v-if="row.deleted" class="visually-hidden"
-                  >, deleted</span
-                >
-              </span>
-
-              <span v-if="row.deleted || !row.hasStrength" class="eld-strength eld-quiet">
-                {{ row.deleted ? "—" : "wired" }}
-              </span>
-              <AppInput
-                v-else
-                class="eld-strength"
-                :model-value="row.strengthText"
-                :aria-label="`Strength of ${row.name || 'this LoRA'}`"
-                type="number"
-                min="-10"
-                max="10"
-                :disabled="!editable || saving"
-                :error="strengthInvalid(row)"
-                @update:model-value="(value) => (row.strengthText = value)"
-                @keydown.stop
-              />
-
-              <!-- Delete, not ×: the entry leaves the workflow, and an × in
-                   this app closes things. A deleted row stays on screen with
-                   Restore until the dialog is saved or cancelled. -->
-              <AppButton
-                v-if="row.deleted"
-                size="sm"
-                data-focus="restore"
-                :aria-label="`Restore ${row.name || 'this LoRA'}`"
-                :disabled="saving"
-                @click="restore(row)"
-              >
-                Restore
-              </AppButton>
-              <AppBarButton
-                v-else
-                icon="delete-outline"
-                data-focus="delete"
-                :tooltip="`Delete ${row.name || 'this LoRA'}`"
-                :disabled="!editable || saving"
-                @click="remove(row)"
-              />
-            </div>
-            <p
-              v-if="!row.onShelf && !row.isNew && !row.deleted"
-              class="eld-note eld-flag"
-            >
-              {{ row.fileBase }} is missing from your model shelf.
-            </p>
-          </li>
+            v-bind="rowProps(row)"
+            v-on="rowHandlers(row)"
+          />
         </ol>
 
+        <!-- Add appends the last loader, so it sits on the last wire, the
+             one into the node that reads the chain. -->
+        <span class="eld-wire eld-wire--plain" aria-hidden="true"></span>
         <div class="eld-add">
           <AppButton
             size="sm"
             icon-left="plus"
             :disabled="!canAdd"
-            @click="add"
+            :aria-label="spliceLabel"
+            @click="add(null)"
           >
-            Add a LoRA
+            {{ spliceIn ? "Insert LoRA between these nodes" : "Add a LoRA" }}
           </AppButton>
           <span v-if="editable && !shelf.length && shelfRead" class="eld-note eld-quiet">
             Your model shelf has no LoRA to add.
           </span>
         </div>
 
-        <div class="eld-rail" data-testid="eld-sink">
-          <span v-if="chain?.sink" class="eld-rail-name">{{
+        <span class="eld-wire" aria-hidden="true"></span>
+
+        <div class="eld-node" data-testid="eld-sink">
+          <span v-if="chain?.sink?.summary" class="eld-node-title">{{
             chain.sink.summary
           }}</span>
-          <span v-else class="eld-quiet">Nothing found reading the chain</span>
+          <span v-else class="eld-node-body eld-quiet"
+            >Nothing found reading the chain</span
+          >
         </div>
       </div>
+
+      <!-- The model forks: the loaders every pass reads once, at the top, then
+           a drawn fork into one lane per sampler, side by side. Every loader
+           appears exactly once, where the model actually passes through it. -->
+      <div v-else class="eld-graph" data-testid="eld-graph">
+        <div v-if="chain.source" class="eld-trunk">
+          <div class="eld-node" data-testid="eld-source">
+            <span class="eld-node-title"
+              >{{ chain.source.class_type }} #{{ chain.source.node_id }}</span
+            >
+            <span class="eld-node-body eld-quiet"
+              >hands out {{ (chain.source.outputs || []).join(", ") }}</span
+            >
+          </div>
+          <span class="eld-wire" aria-hidden="true"></span>
+          <section class="eld-group" :aria-label="everyLabel" data-testid="eld-trunk">
+            <div class="eld-group-head">
+              <span class="section-label">{{ everyLabel }}</span>
+              <span class="eld-note eld-quiet">before the fork</span>
+            </div>
+            <ol class="eld-list" :aria-label="`LoRAs ${everyWord} get, in apply order`">
+              <EditLorasRow
+                v-for="row in segmentRows(null)"
+                :key="row.id"
+                v-bind="rowProps(row)"
+                v-on="rowHandlers(row)"
+              />
+            </ol>
+            <div
+              v-if="dropTarget(null)"
+              class="eld-drop"
+              @dragover.prevent
+              @drop.prevent="dropInto(null)"
+            >
+              {{ dropTarget(null) }}
+            </div>
+            <span class="eld-wire eld-wire--plain eld-wire--short" aria-hidden="true"></span>
+            <div class="eld-add">
+              <AppButton size="sm" icon-left="plus" :disabled="!canAdd" @click="add(null)">
+                Add for {{ everyWord }}
+              </AppButton>
+            </div>
+          </section>
+        </div>
+
+        <!-- The fork: a stem off the trunk, a bar, and a leg into each lane. -->
+        <div v-if="chain.source" class="eld-fork" aria-hidden="true">
+          <span class="eld-fork-stem"></span>
+          <span
+            class="eld-fork-bar"
+            :style="{ left: legAt(0), right: `calc(100% - ${legAt(lanes.length - 1)})` }"
+          ></span>
+          <span
+            v-for="(lane, index) in lanes"
+            :key="index"
+            class="eld-fork-leg"
+            :style="{ left: legAt(index) }"
+          ></span>
+        </div>
+
+        <div class="eld-lanes" :style="{ '--eld-lanes': lanes.length }">
+          <section
+            v-for="(lane, index) in lanes"
+            :key="index"
+            class="eld-lane"
+            :class="`eld-lane--${index % 2 ? 'b' : 'a'}`"
+            :aria-label="laneName(lane)"
+            data-testid="eld-lane"
+          >
+            <header class="eld-lane-head">
+              <b>{{ laneName(lane) }}</b>{{ " " }}<small>{{ laneMeta(lane, index) }}</small>
+            </header>
+            <template v-if="lane.source">
+              <div class="eld-node">
+                <span class="eld-node-title"
+                  >{{ lane.source.class_type }} #{{ lane.source.node_id }}</span
+                >
+                <span class="eld-node-body eld-quiet">hands out MODEL</span>
+              </div>
+            </template>
+            <ol class="eld-list" :aria-label="`LoRAs only ${laneName(lane)} gets, in apply order`">
+              <EditLorasRow
+                v-for="row in segmentRows(index)"
+                :key="row.id"
+                v-bind="rowProps(row)"
+                v-on="rowHandlers(row)"
+              />
+            </ol>
+            <div
+              v-if="dropTarget(index)"
+              class="eld-drop"
+              @dragover.prevent
+              @drop.prevent="dropInto(index)"
+            >
+              {{ dropTarget(index) }}
+            </div>
+            <span class="eld-wire eld-wire--plain eld-wire--short" aria-hidden="true"></span>
+            <div class="eld-add">
+              <AppButton
+                size="sm"
+                icon-left="plus"
+                :disabled="!canAdd"
+                :aria-label="`Add a LoRA for ${laneName(lane)} only`"
+                @click="add(index)"
+              >
+                Add
+              </AppButton>
+            </div>
+            <!-- The shorter lane's sampler sits level with the other's, so
+                 both chains end on the same line. -->
+            <span class="eld-spacer"></span>
+            <span class="eld-wire" aria-hidden="true"></span>
+            <div class="eld-node">
+              <span v-if="lane.sink?.summary" class="eld-node-title">{{
+                lane.sink.summary
+              }}</span>
+              <span v-else class="eld-node-body eld-quiet"
+                >Nothing found reading this pass</span
+              >
+            </div>
+          </section>
+        </div>
+        <span v-if="editable && !shelf.length && shelfRead" class="eld-note eld-quiet">
+          Your model shelf has no LoRA to add.
+        </span>
+      </div>
+      </div>
+
+      <!-- Why the list is shorter than the workflow: a node that is not a
+           loader, or a further branch, and the loaders past it are left as
+           they are. -->
+      <p v-if="chain?.branch_note" class="eld-note eld-quiet" data-testid="eld-branch">
+        {{ chain.branch_note }}
+      </p>
 
       <!-- The empty chain says which loader class goes in, rather than
            surprising the owner with a node they did not choose. -->
@@ -280,9 +316,16 @@
  * new workflow" writes. The original card and its pictures never change: the
  * route stores a content-addressed copy.
  *
+ * **Where the model forks** (`lanes` in the read), the chain is drawn as the
+ * graph it is: the loaders every pass reads once at the top, then one lane per
+ * sampler side by side. Every loader appears once; a drag (or the row's menu)
+ * moves one within a lane, into the trunk, or across into another pass. A
+ * workflow loading a model per pass has no trunk, only lanes.
+ *
  * **Read-only when the planner refuses** (`editable: false`): ComfyUI down,
- * two model sources, a stacker node… The refusal is the server's sentence and
- * is shown instead of letting an edit be arranged that cannot be saved.
+ * loaders that start from different places… The refusal is the server's
+ * sentence and is shown instead of letting an edit be arranged that cannot be
+ * saved.
  */
 import { computed, nextTick, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
@@ -298,12 +341,10 @@ import {
   loraBase,
   loraStem,
 } from "../../utils/loraChain";
-import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import AppInput from "../widgets/AppInput.vue";
-import AppSelect from "../widgets/AppSelect.vue";
-import Tooltip from "../widgets/Tooltip.vue";
+import EditLorasRow from "./EditLorasRow.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -366,16 +407,40 @@ const picturesLabel = computed(() => {
   return `${count} ${count === 1 ? "picture" : "pictures"}`;
 });
 
-/** Each standing row's 1-based place in the chain; a deleted row has none. */
+/** One lane per pass when the model forks; empty for a straight chain. */
+const lanes = computed(() => chain.value?.lanes || []);
+const branched = computed(() => lanes.value.length > 0);
+
+/** "both passes" at a two-way fork, "every pass" past that. */
+const everyWord = computed(() =>
+  lanes.value.length === 2 ? "both passes" : "every pass",
+);
+const everyLabel = computed(
+  () => everyWord.value.charAt(0).toUpperCase() + everyWord.value.slice(1),
+);
+
+/** The rows of one segment, in list order: `null` is the trunk, a number a lane. */
+function segmentRows(lane) {
+  return rows.value.filter((row) => row.lane === lane);
+}
+
+/**
+ * Each standing row's 1-based place on its sampler's path; a deleted row has
+ * none. A lane counts on from the trunk, since the trunk runs first.
+ */
 const positions = computed(() => {
   const out = {};
-  let at = 0;
-  for (const row of rows.value) {
-    if (!row.deleted) {
-      at += 1;
-      out[row.id] = at;
-    }
-  }
+  const trunk = segmentRows(null).filter((row) => !row.deleted);
+  trunk.forEach((row, index) => {
+    out[row.id] = index + 1;
+  });
+  lanes.value.forEach((_lane, lane) => {
+    segmentRows(lane)
+      .filter((row) => !row.deleted)
+      .forEach((row, index) => {
+        out[row.id] = trunk.length + index + 1;
+      });
+  });
   return out;
 });
 
@@ -391,8 +456,16 @@ const effectiveRows = computed(() =>
   })),
 );
 
+/** Every loader as read, each marked with the segment it was read in. */
+const readLoaders = computed(() => [
+  ...(chain.value?.loaders || []).map((loader) => ({ ...loader, lane: null })),
+  ...lanes.value.flatMap((lane, index) =>
+    (lane.loaders || []).map((loader) => ({ ...loader, lane: index })),
+  ),
+]);
+
 const changeCount = computed(() =>
-  countChanges(chain.value?.loaders || [], effectiveRows.value),
+  countChanges(readLoaders.value, effectiveRows.value),
 );
 
 const changeLabel = computed(() => {
@@ -408,6 +481,39 @@ const pickerOptions = computed(() => [
     label: adapter.display_name || loraStem(adapter.filename) || adapter.sha256,
   })),
 ]);
+
+/**
+ * No row at all, both ends read, and the chain editable: the button sits on
+ * the wire between the two nodes and says so. A deleted row still stands on
+ * screen with Restore, so it keeps the list between the nodes and the button
+ * an Add; a read-only chain offers no insert to name.
+ */
+const spliceIn = computed(
+  () =>
+    editable.value &&
+    !branched.value &&
+    !rows.value.length &&
+    Boolean(chain.value?.source && chain.value?.sink?.summary),
+);
+
+/**
+ * The splice button's name, with the two nodes in it.
+ *
+ * The sink comes after the button in reading order, so "these nodes" alone
+ * points a screen reader at something it has not reached. The visible words
+ * lead, so a speech-input user can say what they see (WCAG 2.5.3).
+ */
+const spliceLabel = computed(() => {
+  if (!spliceIn.value) return undefined;
+  const { source, sink } = chain.value;
+  const reader = (sink.consumers || []).find(
+    (consumer) => String(consumer.type || "").toUpperCase() === "MODEL",
+  );
+  const readerName = reader
+    ? `${reader.class_type} #${reader.node_id}`
+    : sink.summary;
+  return `Insert LoRA between these nodes: ${source.class_type} #${source.node_id} and ${readerName}`;
+});
 
 /** A new row with nothing picked yet: Add waits for it, and so does Save. */
 const unpicked = computed(() =>
@@ -448,7 +554,9 @@ const canSave = computed(
  */
 const firstLoaderNote = computed(() => {
   const read = chain.value;
-  if (!read || !editable.value || (read.loaders || []).length) return "";
+  if (!read || !editable.value || branched.value || (read.loaders || []).length) {
+    return "";
+  }
   if (!rows.value.some((row) => row.isNew)) return "";
   const cls = read.added_loader_class;
   const source = read.source;
@@ -469,6 +577,96 @@ const firstLoaderNote = computed(() => {
   return parts.join(" ");
 });
 
+/**
+ * A loader node's title bar, spelled like the source's: its class and id. A
+ * new row has no node yet, so it names the class a save puts in.
+ */
+function loaderTitle(row) {
+  if (row.isNew) {
+    const owner = row.lane === null ? chain.value : lanes.value[row.lane];
+    return owner?.added_loader_class || "LoRA loader";
+  }
+  return `${row.classType || "LoRA loader"} #${row.nodeId}`;
+}
+
+/** A pass as the owner reads it: its sampler's title, else `KSampler #15`. */
+function laneName(lane) {
+  const sampler = lane?.sampler || {};
+  return sampler.title || `${sampler.class_type || "Node"} #${sampler.node_id}`;
+}
+
+/** Where a segment's rows go, in words: a lane's name, or "both passes". */
+function segmentLabel(lane) {
+  return lane === null ? everyWord.value : laneName(lanes.value[lane]);
+}
+
+/**
+ * The lane header's small line: the sampler's class and id when a title
+ * stands above it, and how many LoRAs that sampler gets in all, trunk
+ * included, so nobody has to add it up.
+ */
+function laneMeta(lane, index) {
+  const count = [...segmentRows(null), ...segmentRows(index)].filter(
+    (row) => !row.deleted && (!row.isNew || row.sha256),
+  ).length;
+  const all = `${count} ${count === 1 ? "LoRA" : "LoRAs"} in all`;
+  const sampler = lane?.sampler || {};
+  return sampler.title ? `${sampler.class_type} #${sampler.node_id} · ${all}` : all;
+}
+
+/** Where the fork's leg into lane *index* lands, across the lanes' width. */
+function legAt(index) {
+  return `${((index + 0.5) / lanes.value.length) * 100}%`;
+}
+
+/** The segments a row's menu can send it to: every one but its own. */
+function moveTargets(row) {
+  if (!branched.value || row.deleted) return [];
+  const targets = [];
+  if (chain.value?.source && row.lane !== null) {
+    targets.push({ lane: null, label: everyWord.value });
+  }
+  lanes.value.forEach((_lane, index) => {
+    if (row.lane !== index) targets.push({ lane: index, label: segmentLabel(index) });
+  });
+  return targets;
+}
+
+function rowProps(row) {
+  return {
+    row,
+    position: positions.value[row.id] ?? null,
+    title: loaderTitle(row),
+    editable: editable.value,
+    saving: saving.value,
+    canReorder: canReorder(row),
+    invalid: strengthInvalid(row),
+    dragging: draggingId.value === row.id,
+    over: overId.value === row.id,
+    compact: branched.value,
+    pickerOptions: pickerOptions.value,
+    moveTargets: moveTargets(row),
+  };
+}
+
+function rowHandlers(row) {
+  return {
+    dragstart: (event) => onDragStart(row, event),
+    dragend: onDragEnd,
+    dragover: () => onDragOver(row),
+    dragleave: () => onDragLeave(row),
+    drop: () => onDrop(row),
+    move: (delta) => move(row, delta),
+    "move-to": (lane) => moveTo(row, lane),
+    pick: (value) => pick(row, value),
+    strength: (value) => {
+      row.strengthText = value;
+    },
+    remove: () => remove(row),
+    restore: () => restore(row),
+  };
+}
+
 function strengthInvalid(row) {
   if (row.deleted || !row.hasStrength) return false;
   const text = String(row.strengthText ?? "").trim();
@@ -481,12 +679,13 @@ function fmt(value) {
   return Number.isFinite(number) ? number.toFixed(2) : "";
 }
 
-/** One row of the list, from one loader of the chain as read. */
-function rowOf(loader) {
+/** One row of the list, from one loader of the chain as read in *lane*. */
+function rowOf(loader, lane = null) {
   const hasStrength = loader.strength !== null && loader.strength !== undefined;
   return {
     id: `n:${loader.node_id}`,
     nodeId: String(loader.node_id),
+    classType: loader.class_type || "",
     name: loader.name || loraStem(loader.filename),
     fileBase: String(loader.filename || "").split(/[\\/]/).pop() || loader.name,
     filename: loader.filename || "",
@@ -500,6 +699,7 @@ function rowOf(loader) {
     readStrength: hasStrength ? Number(loader.strength) : null,
     deleted: false,
     isNew: false,
+    lane,
   };
 }
 
@@ -534,7 +734,12 @@ async function load() {
     const read = await getLoraChain(props.workflowKey);
     if (!mine()) return;
     chain.value = read;
-    rows.value = (read?.loaders || []).map(rowOf);
+    rows.value = [
+      ...(read?.loaders || []).map((loader) => rowOf(loader, null)),
+      ...(read?.lanes || []).flatMap((lane, index) =>
+        (lane.loaders || []).map((loader) => rowOf(loader, index)),
+      ),
+    ];
     applyDrop();
   } catch (err) {
     if (!mine()) return;
@@ -613,13 +818,14 @@ async function restore(row) {
   await focusRow(row.id, "delete");
 }
 
-/** Append one row with a shelf picker in it, just above the sampler. */
-async function add() {
+/** Append one row with a shelf picker in it to *lane*, above its sampler. */
+async function add(lane = null) {
   if (!canAdd.value) return;
   newRows += 1;
   const row = {
     id: `new:${newRows}`,
     nodeId: null,
+    classType: "",
     name: "",
     fileBase: "",
     filename: "",
@@ -629,6 +835,7 @@ async function add() {
     strengthText: fmt(1),
     deleted: false,
     isNew: true,
+    lane,
   };
   rows.value = [...rows.value, row];
   say(`A new row is at ${positions.value[row.id]}. Pick a LoRA for it.`);
@@ -669,20 +876,65 @@ function onDragEnd() {
   overId.value = null;
 }
 
-function onDrop(toIndex) {
+/**
+ * A drop on a row lands in that row's place, and in its segment: dropping a
+ * hires loader on a trunk row puts it before the fork.
+ */
+function onDrop(target) {
   const from = rows.value.findIndex((row) => row.id === draggingId.value);
+  const to = rows.value.findIndex((row) => row.id === target.id);
   onDragEnd();
-  if (from < 0 || from === toIndex) return;
-  place(from, toIndex, { focus: false });
+  if (from < 0 || to < 0 || from === to) return;
+  const row = rows.value[from];
+  const crossed = row.lane !== target.lane;
+  row.lane = target.lane;
+  place(from, to, { focus: false });
+  // Across the fork the pass is the news, not the place in it.
+  if (crossed) {
+    say(
+      `${row.name || "The new LoRA"} moved to ${segmentLabel(row.lane)}, at ${positions.value[row.id]}.`,
+    );
+  }
 }
 
-function move(index, delta) {
-  const row = rows.value[index];
-  if (!row || !canReorder(row)) return;
-  // Past any deleted row: it stays in the list struck through, and swapping
-  // with it moves nothing the save would write while announcing a move.
+/** The drop slot's words while a row from another segment is lifted. */
+function dropTarget(lane) {
+  const row = rows.value.find((entry) => entry.id === draggingId.value);
+  if (!row || row.lane === lane) return "";
+  return `Drop to move ${row.name || "the new LoRA"} to ${segmentLabel(lane)}`;
+}
+
+function dropInto(lane) {
+  const row = rows.value.find((entry) => entry.id === draggingId.value);
+  onDragEnd();
+  if (row) moveTo(row, lane);
+}
+
+/** Send *row* to the end of another segment: the drag's keyboard twin. */
+async function moveTo(row, lane) {
+  if (!canReorder(row) || row.lane === lane) return;
+  row.lane = lane;
+  rows.value = [...rows.value.filter((entry) => entry.id !== row.id), row];
+  say(
+    `${row.name || "The new LoRA"} moved to ${segmentLabel(lane)}, at ${positions.value[row.id]}.`,
+  );
+  await focusRow(row.id, "handle");
+}
+
+function move(row, delta) {
+  const index = rows.value.indexOf(row);
+  if (index < 0 || !canReorder(row)) return;
+  // Past any deleted row, and within the row's own segment: it stays in the
+  // list struck through, and swapping with it moves nothing the save would
+  // write while announcing a move. Crossing the fork is the menu's job.
   let to = index + delta;
-  while (to >= 0 && to < rows.value.length && rows.value[to].deleted) to += delta;
+  while (
+    to >= 0 &&
+    to < rows.value.length &&
+    (rows.value[to].deleted || rows.value[to].lane !== row.lane)
+  ) {
+    to += delta;
+  }
   if (to < 0 || to >= rows.value.length) return;
   place(index, to, { focus: true });
 }
@@ -698,9 +950,11 @@ function place(from, to, { focus }) {
   const [row] = next.splice(from, 1);
   next.splice(to, 0, row);
   rows.value = next;
-  const live = next.filter((entry) => !entry.deleted).length;
+  const standing = next.filter(
+    (entry) => !entry.deleted && entry.lane === row.lane,
+  );
   say(
-    `${row.name || "The new LoRA"} moved to ${positions.value[row.id]} of ${live}.`,
+    `${row.name || "The new LoRA"} moved to ${standing.indexOf(row) + 1} of ${standing.length}.`,
   );
   if (focus) void focusRow(row.id, "handle");
 }
@@ -708,11 +962,18 @@ function place(from, to, { focus }) {
 // ── Saving: a dry run to list the changes, then the write ────────────────
 
 function requestBody(dryRun) {
-  return {
-    entries: chainEntries(effectiveRows.value),
+  const effective = effectiveRows.value;
+  const body = {
+    entries: chainEntries(effective.filter((row) => row.lane === null)),
     name: newName.value.trim() || null,
     dry_run: dryRun,
   };
+  if (branched.value) {
+    body.lanes = lanes.value.map((_lane, index) =>
+      chainEntries(effective.filter((row) => row.lane === index)),
+    );
+  }
+  return body;
 }
 
 async function toConfirm() {
@@ -792,7 +1053,9 @@ watch(
 defineExpose({ rows, step, changeCount });
 </script>
 
-<style scoped>
+<!-- Not scoped: the rows are EditLorasRow's markup, drawn by these rules, and
+     every class here carries the dialog's own `eld-` prefix. -->
+<style>
 .eld-note {
   margin: 0;
   font-size: var(--text-xs);
@@ -834,32 +1097,80 @@ defineExpose({ rows, step, changeCount });
 .eld-chain {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
 }
 
-/* The two ends: filled, not bordered like a row, and with no handle, so
-   they read as the frame the list sits in rather than two more entries. */
-.eld-rail {
+/* Every step of the chain is one of these: the model source, each loader and
+   what reads the result. A title bar over a body, the same width and look for
+   all three, so the list reads as a graph and not as a list between two
+   labels. */
+.eld-node {
   display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-3);
-  min-height: var(--control-h);
-  padding: var(--space-2) var(--space-4);
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.06);
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: rgb(var(--v-theme-surface));
   font-size: var(--text-xs);
 }
 
-.eld-rail-name {
+.eld-node-title {
+  padding: var(--space-2) var(--space-3);
+  background: rgba(var(--v-theme-on-surface), 0.06);
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
+  overflow-wrap: anywhere;
+}
+
+.eld-node-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+/* The wire from one node to the next: a line ending in an arrowhead on the
+   node below, drawn rather than an icon because a glyph's own shaft reads as
+   the line and leaves a head too small to see. The plain one is the stretch
+   above the Add button, which sits on the last wire. */
+.eld-wire {
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: var(--space-6);
+  --eld-wire-color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.eld-wire::before {
+  content: "";
+  flex: 1;
+  width: var(--rail-w);
+  background: var(--eld-wire-color);
+}
+
+.eld-wire::after {
+  content: "";
+  border-top: var(--space-3) solid var(--eld-wire-color);
+  border-right: var(--space-3) solid transparent;
+  border-left: var(--space-3) solid transparent;
+}
+
+.eld-wire--plain {
+  height: var(--space-4);
+}
+
+.eld-wire--short {
+  height: var(--space-4);
+}
+
+.eld-wire--plain::after {
+  content: none;
 }
 
 .eld-list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -868,11 +1179,6 @@ defineExpose({ rows, step, changeCount });
 .eld-row {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
-  background: rgb(var(--v-theme-surface));
 }
 
 .eld-row--dragging {
@@ -881,7 +1187,7 @@ defineExpose({ rows, step, changeCount });
 
 /* Where a drop would land: the selection's bar, because the target is the
    thing chosen, not an action. */
-.eld-row--over {
+.eld-row--over > .eld-node {
   box-shadow: inset 0 var(--rail-w) 0 var(--active-bar);
 }
 
@@ -962,10 +1268,16 @@ defineExpose({ rows, step, changeCount });
   font-size: var(--text-sm);
 }
 
+.eld-actions {
+  display: inline-flex;
+  align-items: center;
+}
+
 .eld-add {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
 .eld-changes {
@@ -979,5 +1291,143 @@ defineExpose({ rows, step, changeCount });
   margin-right: auto;
   font-size: var(--text-sm);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* ── The fork drawn side by side ─────────────────────────────────────────── */
+
+.eld-graph {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* The trunk: one narrow column in the middle, every pass's loaders once. */
+.eld-trunk {
+  display: flex;
+  flex-direction: column;
+  align-self: center;
+  width: min(100%, var(--dialog-w-sm));
+}
+
+.eld-group,
+.eld-lane {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-3);
+  border: 1px solid rgb(var(--v-theme-border));
+  border-radius: var(--radius-md);
+  background: rgba(var(--v-theme-on-surface), 0.03);
+}
+
+.eld-group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+/* A stem off the trunk, a bar across, and a leg with an arrowhead into each
+   lane, drawn in the wire's colour so the fork reads as more wire. */
+.eld-fork {
+  position: relative;
+  height: var(--space-6);
+  --eld-wire-color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+.eld-fork-stem,
+.eld-fork-bar,
+.eld-fork-leg {
+  position: absolute;
+  background: var(--eld-wire-color);
+}
+
+.eld-fork-stem {
+  left: 50%;
+  top: 0;
+  width: var(--rail-w);
+  height: var(--space-3);
+  transform: translateX(-50%);
+}
+
+.eld-fork-bar {
+  top: var(--space-3);
+  height: var(--rail-w);
+}
+
+.eld-fork-leg {
+  top: var(--space-3);
+  bottom: var(--space-3);
+  width: var(--rail-w);
+  transform: translateX(-50%);
+}
+
+.eld-fork-leg::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border-top: var(--space-3) solid var(--eld-wire-color);
+  border-right: var(--space-3) solid transparent;
+  border-left: var(--space-3) solid transparent;
+}
+
+/* One lane per sampler. Two fit the xl dialog; from three the dialog goes
+   fullscreen, and past what fits the lanes scroll sideways at a floor of
+   half the default dialog's width. */
+.eld-lanes {
+  display: grid;
+  grid-template-columns: repeat(
+    var(--eld-lanes),
+    minmax(calc(var(--dialog-w-md) / 2), 1fr)
+  );
+  gap: var(--space-5);
+  overflow-x: auto;
+}
+
+.eld-lane-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 0 var(--space-1) var(--space-3);
+  border-bottom: 1px solid rgb(var(--v-theme-divider));
+  font-size: var(--text-sm);
+}
+
+.eld-lane-head small {
+  margin-left: auto;
+  font-size: var(--text-2xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  white-space: nowrap;
+}
+
+/* A rail down each lane's left edge in an identity hue, so a lane stays
+   identifiable when its header has scrolled away. Never the only cue: the
+   header names the sampler. */
+.eld-lane--a {
+  box-shadow: inset var(--rail-w) 0 0 rgb(var(--v-theme-tertiary));
+}
+
+.eld-lane--b {
+  box-shadow: inset var(--rail-w) 0 0 rgb(var(--v-theme-quaternary));
+}
+
+.eld-spacer {
+  flex: 1;
+}
+
+/* Where a lifted row from another segment would land: the selection's olive
+   bar, the same one a drop onto a row shows. */
+.eld-drop {
+  display: grid;
+  place-items: center;
+  min-height: var(--space-7);
+  margin-top: var(--space-3);
+  padding: 0 var(--space-3);
+  border: 1px dashed var(--active-bar);
+  border-radius: var(--radius-md);
+  color: var(--active-bar);
+  font-size: var(--text-xs);
+  text-align: center;
 }
 </style>

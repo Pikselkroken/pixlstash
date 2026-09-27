@@ -122,7 +122,8 @@ export function useAppNavigation({ onClearSearch, onNavigated } = {}) {
       selectionStore.setCharacterMultiMode("union");
     }
     if (charId !== ALL_PICTURES_ID) {
-      filterStore.unassignedOnlyFilter = false;
+      filterStore.noCharacterFilter = false;
+      filterStore.noSetFilter = false;
     }
     wsStore.clearPendingExternalImportIds();
     wsStore.clearSortChangedExternalIds();

@@ -3,16 +3,35 @@
     v-model="tab"
     class="wftab"
     label="Inspector"
-    :open="sidebarStore.statsOpen"
+    :open="sidebarStore.workflowInspectorOpen"
     :tabs="tabs"
   >
     <!-- The task manager, last tab and on its own: what the app is working on
          is not part of a workflow, so it replaces the body rather than sitting
          under it. Here so that a run started from this screen can be watched
          from this screen. -->
+    <!-- A stack selected whole reads as one workflow, its cover, with the
+         other members a pick away: expanding the stack just to read one of
+         them was the only way before. Outside the body below so a member's
+         read, or its failure, never takes the picker (or its focus) away. -->
+    <div
+      v-if="tab === 'workflow' && stackCover"
+      class="inspector-section wftab-head"
+    >
+      <AppSelect
+        :model-value="selectedKey"
+        class="wftab-pick"
+        label="Workflow in this stack"
+        hide-label
+        :options="stackOptions"
+        data-testid="wftab-stack-pick"
+        @update:model-value="store.pickStackMember"
+      />
+    </div>
+
     <TasksPanel v-if="tab === 'tasks'" />
 
-    <p v-else-if="!card && !multiple" class="wftab-empty">
+    <p v-else-if="!card && !multiple && !stackCover" class="wftab-empty">
       Pick a workflow to see what it is made of.
     </p>
 
@@ -22,6 +41,7 @@
     <WorkflowRecipesTab
       v-else-if="showingRecipes"
       :workflow-keys="recipeKeys"
+      :whole-stack="!recipesNarrowed"
       :stack-name="recipesStack.name"
       :stack-size="recipesStack.size"
     />
@@ -40,21 +60,6 @@
          are gated on a selection, and it is docked over the grid this rail
          sits beside), so nothing became unreachable — and the reader is told
          where the verbs are rather than left to find them. -->
-    <!-- A stack selected whole is one card on screen and one run: named, and
-         the sentence saying what Run… runs is the one the button points at,
-         visible rather than a hover tooltip touch never shows. -->
-    <template v-else-if="multiple && runTarget">
-      <div class="inspector-section">
-        <span class="section-label">Selected</span>
-        <p class="wftab-title">{{ runTarget.name }}</p>
-        <p id="wftab-run-target" class="wftab-note wftab-quiet">
-          A stack of {{ store.selectedKeys.length }} workflows. Run… runs
-          {{ runTarget.name }}, the cover; you can switch to another member in
-          the Run popup.
-        </p>
-      </div>
-    </template>
-
     <template v-else-if="multiple">
       <div class="inspector-section">
         <span class="section-label">Selected</span>
@@ -68,9 +73,18 @@
       </div>
     </template>
 
+    <!-- A stack member the grid does not list, while its read is out. -->
+    <p v-else-if="!card" class="wftab-empty">
+      {{
+        detailFailed
+          ? "Could not read this workflow just now."
+          : "Reading this workflow…"
+      }}
+    </p>
+
     <template v-else>
       <div class="inspector-section wftab-head">
-        <p class="wftab-title">{{ card.name }}</p>
+        <p v-if="!stackCover" class="wftab-title">{{ card.name }}</p>
         <p class="wftab-sub">
           {{ subtitlePrefix
           }}<button
@@ -86,8 +100,26 @@
         </p>
       </div>
 
-      <div class="inspector-section">
-        <span class="section-label">Models</span>
+      <!-- What every picture here was made with: the models and the LoRAs
+           the whole stack shares, as one list of label-and-value rows, so a
+           LoRA reads like the checkpoint above it. "Edit LoRAs…" is here even
+           with no loader at all: an entry point that only exists for
+           workflows that already have LoRAs is how adding the first one
+           stays unreachable (#1478). -->
+      <div class="inspector-section" data-testid="wftab-every-picture">
+        <div class="wftab-sec-head">
+          <span class="section-label">In every picture</span>
+          <AppButton
+            size="sm"
+            variant="ghost"
+            data-testid="wftab-edit-loras"
+            :disabled="chainNoGraph"
+            :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
+            @click="openEditLoras(selectedKey)"
+          >
+            Edit LoRAs…
+          </AppButton>
+        </div>
         <div class="wftab-field">
           <span class="wftab-label">Checkpoint</span>
           <!-- Missing: ComfyUI does not have the file (the run pre-flight's
@@ -113,6 +145,78 @@
             <p v-else class="wftab-note wftab-quiet">
               No file name was kept for it anywhere.
             </p>
+            <!-- The fix: another shelf model in its place. The card keeps its
+                 pictures, and what the replacement makes is filed on it. -->
+            <AppSelect
+              v-if="replaceOptions.length"
+              model-value=""
+              label="Replace with a model from your shelf"
+              hide-label
+              :options="replaceOptions"
+              :disabled="busy === 'model-fix'"
+              data-testid="wftab-replace-model"
+              @update:model-value="replaceCheckpoint"
+            />
+            <p
+              v-else-if="checkpointNoReplacement"
+              class="wftab-note wftab-quiet"
+              data-testid="wftab-no-replacement-checkpoint"
+            >
+              {{ checkpointNoReplacement }}
+            </p>
+            <!-- The replacement has gone missing too: say what it was, and
+                 keep the way back reachable. Choosing another above replaces
+                 the original, never the replacement. -->
+            <p
+              v-if="replacementMissing"
+              class="wftab-note wftab-quiet"
+              data-testid="wftab-fix-missing"
+            >
+              Replaced by {{ fileName(checkpointFix.now) }}, which is missing
+              too.
+              <AppButton
+                variant="ghost"
+                size="sm"
+                icon-only
+                icon-left="undo"
+                :tooltip="`Undo: load ${fileName(checkpointFix.was)} again`"
+                :disabled="busy === 'model-fix'"
+                @click="replaceCheckpoint(null)"
+              />
+            </p>
+          </div>
+          <!-- Replaced by the owner: what it loads now, flagged, and the
+               original a hover away, because this is not the workflow as its
+               pictures were made. -->
+          <div
+            v-else-if="checkpointFix"
+            class="wftab-fixed"
+            data-testid="wftab-fixed-model"
+          >
+            <span class="wftab-value">
+              <v-icon size="16" class="wftab-fixed-flag" aria-hidden="true"
+                >mdi-alert-outline</v-icon
+              >
+              <Tooltip
+                :text="`Replaced. This workflow originally used ${fileName(checkpointFix.was)}`"
+                activator="parent"
+              />
+              {{ fileName(checkpointFix.now) }}
+              <span class="visually-hidden"
+                >, replaced. This workflow originally used
+                {{ fileName(checkpointFix.was) }}</span
+              >
+            </span>
+            <AppButton
+              variant="ghost"
+              size="sm"
+              icon-only
+              icon-left="undo"
+              data-testid="wftab-undo-fix"
+              :tooltip="`Undo: load ${fileName(checkpointFix.was)} again`"
+              :disabled="busy === 'model-fix'"
+              @click="replaceCheckpoint(null)"
+            />
           </div>
           <span v-else-if="checkpointLabel" class="wftab-value">{{
             checkpointLabel
@@ -138,28 +242,131 @@
                the graph a run would submit, not the pre-flight. -->
           <span v-else class="wftab-value wftab-quiet">Not recorded</span>
         </div>
-        <div class="wftab-field">
-          <span class="wftab-label">VAE</span>
-          <span class="wftab-value">{{ vaeLabel }}</span>
+        <!-- The VAE and the text encoders (#1596): missing and replaced the
+             way the Checkpoint row is, one entry per file. -->
+        <div
+          v-for="row in supportRows"
+          :key="row.kind"
+          class="wftab-field"
+          :data-testid="`wftab-row-${row.kind}`"
+        >
+          <span class="wftab-label">{{ row.label }}</span>
+          <div class="wftab-entries">
+            <template v-for="entry in row.entries" :key="entry.id">
+              <div v-if="entry.file" class="wftab-missing">
+                <p class="wftab-warn">
+                  <v-icon size="16">mdi-alert-outline</v-icon>
+                  {{ row.missingText }}
+                </p>
+                <p class="wftab-note wftab-quiet">
+                  <span class="wftab-file"
+                    ><Tooltip :text="entry.file" activator="parent" />{{
+                      fileName(entry.file)
+                    }}</span
+                  >
+                  is not installed in ComfyUI.
+                </p>
+                <AppSelect
+                  v-if="entry.options.length"
+                  model-value=""
+                  :label="`Replace with a ${row.noun} from your shelf`"
+                  hide-label
+                  :options="entry.options"
+                  :disabled="busy === 'model-fix'"
+                  :data-testid="`wftab-replace-${row.kind}`"
+                  @update:model-value="
+                    (now) => replaceModel(row.kind, entry.file, now)
+                  "
+                />
+                <p
+                  v-else-if="entry.noReplacement"
+                  class="wftab-note wftab-quiet"
+                  :data-testid="`wftab-no-replacement-${row.kind}`"
+                >
+                  {{ entry.noReplacement }}
+                </p>
+                <p
+                  v-if="entry.fix"
+                  class="wftab-note wftab-quiet"
+                  :data-testid="`wftab-fix-missing-${row.kind}`"
+                >
+                  Replaced by {{ fileName(entry.fix.now) }}, which is missing
+                  too.
+                  <AppButton
+                    variant="ghost"
+                    size="sm"
+                    icon-only
+                    icon-left="undo"
+                    :tooltip="`Undo: load ${entry.originals} again`"
+                    :disabled="busy === 'model-fix'"
+                    :data-testid="`wftab-undo-missing-${row.kind}`"
+                    @click="replaceModel(row.kind, entry.file, null)"
+                  />
+                </p>
+              </div>
+              <div
+                v-else-if="entry.fix"
+                class="wftab-fixed"
+                :data-testid="`wftab-fixed-${row.kind}`"
+              >
+                <span class="wftab-value">
+                  <v-icon size="16" class="wftab-fixed-flag" aria-hidden="true"
+                    >mdi-alert-outline</v-icon
+                  >
+                  <Tooltip
+                    :text="`Replaced. This workflow originally used ${fileName(entry.fix.was)}`"
+                    activator="parent"
+                  />
+                  {{ fileName(entry.fix.now) }}
+                  <span class="visually-hidden"
+                    >, replaced. This workflow originally used
+                    {{ fileName(entry.fix.was) }}</span
+                  >
+                </span>
+                <AppButton
+                  variant="ghost"
+                  size="sm"
+                  icon-only
+                  icon-left="undo"
+                  :data-testid="`wftab-undo-${row.kind}`"
+                  :tooltip="`Undo: load ${fileName(entry.fix.was)} again`"
+                  :disabled="busy === 'model-fix'"
+                  @click="replaceModel(row.kind, entry.fix.was, null)"
+                />
+              </div>
+              <span v-else class="wftab-value">{{ entry.text }}</span>
+            </template>
+          </div>
         </div>
 
-        <!-- The chain, in the order it applies (#1478). "Edit LoRAs…" is
-             here even with no loader at all: an entry point that only exists
-             for workflows that already have LoRAs is how adding the first one
-             stays unreachable. -->
-        <div class="wftab-loras-head">
-          <span class="wftab-label">LoRAs</span>
-          <AppButton
-            size="sm"
-            data-testid="wftab-edit-loras"
-            :disabled="chainNoGraph"
-            :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
-            @click="openEditLoras(selectedKey)"
-          >
-            Edit LoRAs…
-          </AppButton>
+        <!-- The LoRAs every picture of every workflow in the stack loaded,
+             in the order the chain applies them. The ones that change are
+             the pile in the next section, never here. -->
+        <div
+          v-for="lora in sharedLoras"
+          :key="lora.id"
+          class="wftab-field"
+          data-testid="wftab-shared-lora"
+        >
+          <span class="wftab-label">LoRA</span>
+          <span class="wftab-value wftab-lora-value">
+            <v-icon
+              v-if="!lora.on_shelf"
+              size="16"
+              class="wftab-chain-flag"
+              aria-hidden="true"
+              >mdi-alert-outline</v-icon
+            >
+            <span class="wftab-chain-name">{{ lora.label }}</span>
+            <span v-if="!lora.on_shelf" class="visually-hidden"
+              >, not on your model shelf</span
+            >
+            <span v-if="lora.strengthText" class="wftab-chain-strength">{{
+              lora.strengthText
+            }}</span>
+          </span>
         </div>
-        <p v-if="chainPending" class="wftab-note wftab-quiet">
+        <p v-if="chainPending || summaryPending" class="wftab-note wftab-quiet">
           Reading its LoRAs…
         </p>
         <p
@@ -173,91 +380,47 @@
         <p v-else-if="chainFailed" class="wftab-note wftab-quiet">
           Could not read its LoRAs just now.
         </p>
-        <template v-else-if="chain">
-          <ol
-            v-if="chainLoaders.length"
-            class="wftab-chain"
-            aria-label="LoRAs, in the order the chain applies them"
-          >
-            <li
-              v-for="loader in chainLoaders"
-              :key="loader.node_id"
-              class="wftab-chain-row"
-            >
-              <v-icon
-                v-if="!loader.on_shelf"
-                size="16"
-                class="wftab-chain-flag"
-                aria-hidden="true"
-                >mdi-alert-outline</v-icon
-              >
-              <span class="wftab-chain-name">{{ loader.label }}</span>
-              <span v-if="!loader.on_shelf" class="visually-hidden"
-                >, not on your model shelf</span
-              >
-              <span class="wftab-chain-strength">{{ loader.strengthText }}</span>
-            </li>
-          </ol>
-          <p
-            v-if="chainLoaders.length"
-            class="wftab-note wftab-quiet"
-            data-testid="wftab-shelf-line"
-          >
-            In the order the chain applies them. {{ shelfLine }}
-          </p>
-          <p v-else class="wftab-note wftab-quiet">
-            No LoRA loader. Editing adds the first one.
-          </p>
-        </template>
-
-        <!-- Two lines per slot, as drawn: what is in it and how strong, then
-             the switch that decides whether the slot is part of the workflow
-             or part of the look. The switch re-keys the card, so it is a
-             full-width control of its own and not a chip in the first line. -->
-        <template v-if="loraSlots.length">
-          <span class="wftab-label wftab-label--group">LoRA slots</span>
-          <div v-for="slot in loraSlots" :key="slot.id" class="wftab-slot">
-            <div class="wftab-slot-line">
-              <span
-                class="wftab-chip"
-                :class="{ 'wftab-chip--empty': !slot.name }"
-              >
-                <Tooltip
-                  v-if="slot.name"
-                  :text="slot.name"
-                  activator="parent"
-                />
-                <v-icon size="16">mdi-layers-outline</v-icon>
-                {{ slot.chipText || "recipe LoRA" }}
-              </span>
-              <!-- No strength field. The card payload carries no strength
-                   (`_describe_slots` reads filenames, and `FEATURED_NAMES`
-                   has no `strength_model`), and an empty bordered box reads
-                   as a control that is broken rather than as "not recorded".
-                   It arrives with the data. -->
-            </div>
-            <!-- Disabled without a `slot_label`: the field is nullable
-                 (`WorkflowSlotModel`), and the mark is written by label, so
-                 an enabled switch here would be a control that answers a
-                 click with nothing at all. -->
-            <Segmented
-              :options="MARK_OPTIONS"
-              :model-value="slot.mark"
-              full
-              :disabled="!slot.label || Boolean(busy)"
-              :aria-label="`Is ${slot.name || 'this recipe LoRA slot'} part of the workflow?`"
-              @update:model-value="(mark) => flipMark(slot, mark)"
-            />
-            <p v-if="!slot.label" class="wftab-note wftab-quiet">
-              This slot has no recorded address, so it cannot be marked.
-            </p>
-          </div>
-        </template>
-        <!-- Only while the chain has nothing to say: once it is read, "No LoRA
-             loader" above is the same fact in the words that lead to Edit. -->
-        <p v-else-if="!chain" class="wftab-note wftab-quiet">
-          This workflow has no LoRA slot.
+        <p
+          v-else-if="sharedLoras.length"
+          class="wftab-note wftab-quiet"
+          data-testid="wftab-shared-note"
+        >
+          {{ sharedNote }}
         </p>
+        <p
+          v-else-if="chain && !chainLoaders.length"
+          class="wftab-note wftab-quiet"
+        >
+          No LoRA loader. Editing adds the first one.
+        </p>
+        <p v-if="summaryFailed" class="wftab-note wftab-quiet">
+          Could not read which LoRAs change between pictures just now.
+        </p>
+      </div>
+
+      <!-- Everything that changes, as one pile. It speaks for the whole
+           stack, like the list above, and it is where a LoRA is promoted to
+           a workflow of its own. -->
+      <div
+        v-if="summary?.varying?.length"
+        class="inspector-section"
+        data-testid="wftab-changes"
+      >
+        <span class="section-label">
+          Changes per picture
+          <span class="wftab-legend">{{ changingLabel }}</span>
+        </span>
+        <div class="wftab-field">
+          <span class="wftab-label">LoRA</span>
+          <WorkflowLoraPile
+            :summary="summary"
+            :member-names="memberNames"
+            :busy="Boolean(busy)"
+            @promote="promoteLora"
+            @show="showLora"
+          />
+        </div>
+        <p class="wftab-note wftab-quiet">{{ pileNote }}</p>
       </div>
 
       <div class="inspector-section">
@@ -300,6 +463,15 @@
             />
           </details>
         </template>
+        <p
+          v-else-if="editorOnly"
+          class="wftab-note wftab-quiet"
+          data-testid="wftab-editor-only"
+        >
+          Parameters are not available yet. This is a ComfyUI editor file:
+          open it in ComfyUI and use <strong>Convert for PixlStash</strong> to
+          hand PixlStash the graph it runs.
+        </p>
         <p v-else class="wftab-note wftab-quiet">
           Nothing this workflow made records a setting yet, so it has no
           defaults to start from.
@@ -343,76 +515,97 @@
       </div>
     </template>
 
-    <!-- The footer is the last thing in the body and sticks to its bottom, so
-         Run… is where the design puts it without a second scroll container. -->
+    <!-- The inspector's footer slot sits below the scrolling body, so Run…
+         stays where the design puts it and never scrolls. -->
     <!-- The Workflow tab's, and only its: Recipes runs a recipe from its own
          row and Tasks is the app's business, so neither wants this footer. -->
-    <div v-if="tab === 'workflow' && (card || multiple)" class="wftab-foot">
-      <AppButton
-        variant="primary"
-        icon-left="play"
-        block
-        :aria-disabled="runTarget ? undefined : 'true'"
-        :aria-describedby="runDescribedBy"
-        @click="run"
+    <template #footer>
+      <div
+        v-if="tab === 'workflow' && (card || multiple || stackCover)"
+        class="wftab-foot"
       >
-        Run…
-      </AppButton>
-      <!-- Beside Run…, as the ComfyUI mark: the ComfyUI-PixlStash node reads
-           `?pixlstash_workflow=` and loads the graph, so without the node
-           ComfyUI opens on whatever it had last. It opens what Run… runs
-           (`runTarget`), and is refused rather than hidden otherwise, for
-           Run…'s reason. The tooltip is its accessible name. -->
-      <AppButton
-        v-if="canOpenComfyui"
-        icon-only
-        tooltip="Open in ComfyUI"
-        data-testid="wftab-open-comfyui"
-        :aria-disabled="runTarget ? undefined : 'true'"
-        :aria-describedby="runTarget ? undefined : 'wftab-open-reason'"
-        @click="openInComfyui"
-      >
-        <template #icon="{ size }"><ComfyuiIcon :size="size" /></template>
-      </AppButton>
-      <v-menu
-        v-if="card"
-        v-model="menuOpen"
-        location="top end"
-        origin="bottom end"
-        :offset="8"
-      >
-        <template #activator="{ props: menuProps }">
-          <AppButton
-            v-bind="menuProps"
-            icon-left="dots-horizontal"
-            icon-only
-            tooltip="More"
-            aria-haspopup="menu"
-            :aria-expanded="menuOpen"
-          />
-        </template>
-        <div class="tbm">
-          <div class="tbm-section">
-            <button class="wftab-item" type="button" @click="toggleHidden">
-              <v-icon size="16">{{
-                detail?.hidden ? "mdi-eye-outline" : "mdi-eye-off-outline"
-              }}</v-icon>
-              {{ detail?.hidden ? "Unhide" : "Hide" }}
-            </button>
+        <AppButton
+          variant="primary"
+          icon-left="play"
+          block
+          :aria-disabled="runTarget ? undefined : 'true'"
+          :aria-describedby="runDescribedBy"
+          @click="run"
+        >
+          Run…
+        </AppButton>
+        <!-- Beside Run…, as the ComfyUI mark: the ComfyUI-PixlStash node reads
+             `?pixlstash_workflow=` and loads the graph, so without the node
+             ComfyUI opens on whatever it had last. It opens what Run… runs
+             (`runTarget`), and is refused rather than hidden otherwise, for
+             Run…'s reason or a ComfyUI without the node. The tooltip is its
+             accessible name. -->
+        <AppButton
+          v-if="canOpenComfyui"
+          icon-only
+          tooltip="Open in ComfyUI"
+          data-testid="wftab-open-comfyui"
+          :aria-disabled="runTarget && !comfyuiLacksNode ? undefined : 'true'"
+          :aria-describedby="openDescribedBy"
+          @click="openInComfyui"
+        >
+          <template #icon="{ size }"><ComfyuiIcon :size="size" /></template>
+        </AppButton>
+        <v-menu
+          v-if="card"
+          v-model="menuOpen"
+          location="top end"
+          origin="bottom end"
+          :offset="8"
+        >
+          <template #activator="{ props: menuProps }">
+            <AppButton
+              v-bind="menuProps"
+              icon-left="dots-horizontal"
+              icon-only
+              tooltip="More"
+              aria-haspopup="menu"
+              :aria-expanded="menuOpen"
+            />
+          </template>
+          <div class="tbm">
+            <div class="tbm-section">
+              <button class="wftab-item" type="button" @click="toggleHidden">
+                <v-icon size="16">{{
+                  detail?.hidden ? "mdi-eye-outline" : "mdi-eye-off-outline"
+                }}</v-icon>
+                {{ detail?.hidden ? "Unhide" : "Hide" }}
+              </button>
+            </div>
           </div>
-        </div>
-      </v-menu>
-      <p
-        v-if="!runTarget && canOpenComfyui"
-        id="wftab-open-reason"
-        class="wftab-note wftab-quiet"
-      >
-        Open one workflow, or one whole stack, at a time
-      </p>
-      <p v-if="!runTarget" id="wftab-run-reason" class="wftab-note wftab-quiet">
-        Run one workflow, or one whole stack, at a time
-      </p>
-    </div>
+        </v-menu>
+        <p
+          v-if="multiple && canOpenComfyui"
+          id="wftab-open-reason"
+          class="wftab-note wftab-quiet"
+        >
+          Open one workflow, or one whole stack, at a time
+        </p>
+        <p
+          v-else-if="comfyuiLacksNode && canOpenComfyui"
+          id="wftab-open-node-reason"
+          class="wftab-note wftab-quiet"
+        >
+          Opening a workflow needs the
+          <a
+            class="wftab-link"
+            :href="PIXLSTASH_PACK_URL"
+            target="_blank"
+            rel="noopener noreferrer"
+            >ComfyUI-PixlStash</a
+          >
+          node in ComfyUI. Install or update it, then restart ComfyUI.
+        </p>
+        <p v-if="multiple" id="wftab-run-reason" class="wftab-note wftab-quiet">
+          Run one workflow, or one whole stack, at a time
+        </p>
+      </div>
+    </template>
 
     <!-- Keyed to the card it was OPENED on, not to the selection: a save
          selects the new card, and the dialog must not re-read the chain of
@@ -438,23 +631,27 @@
 // that inspector together, and this is the rail on `/workflows`.
 //
 // What the rail shows follows the SELECTION, not the open stack: a stack
-// member selected inside its panel shows that member here, which is the only
-// way to read a member's own defaults.
+// member selected inside its panel shows that member here, and a stack
+// selected whole shows its cover with a picker for the other members.
 
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, toRaw, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
 import {
   getLoraChain,
+  getLoraSummary,
   getWorkflowCard,
   patchWorkflowCard,
   preflightWorkflowRun,
+  readModelSwap,
   setWorkflowDefaults,
+  setWorkflowModelFix,
+  setLoraPromotion,
   setWorkflowPins,
-  setWorkflowSlots,
   workflowCoverUrl,
 } from "../../api/workflows";
+import { getPixlstashNode } from "../../api/comfyui";
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { useFilterStore } from "../../stores/useFilterStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
@@ -465,27 +662,24 @@ import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { EDIT_LORAS, loraStem } from "../../utils/loraChain";
 import { quantBadge } from "../../utils/modelShelf";
+import { PIXLSTASH_PACK_URL } from "../../utils/runReasons";
 import {
   checkpointMissing,
   checkpointModel,
   checkpointUnread,
   modelDisplayName,
+  stackMemberOptions,
 } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
+import AppSelect from "../widgets/AppSelect.vue";
 import ComfyuiIcon from "../widgets/ComfyuiIcon.vue";
 import EditLorasDialog from "../io/EditLorasDialog.vue";
-import Segmented from "../widgets/Segmented.vue";
 import TasksPanel, { tasksTabFor } from "./TasksPanel.vue";
 import Tooltip from "../widgets/Tooltip.vue";
 import WorkflowDefaultRow from "./WorkflowDefaultRow.vue";
+import WorkflowLoraPile from "./WorkflowLoraPile.vue";
 import WorkflowRecipesTab from "./WorkflowRecipesTab.vue";
-
-/** B1's vocabulary, in the design's words. */
-const MARK_OPTIONS = [
-  { id: "structural", label: "Workflow" },
-  { id: "recipe", label: "Recipe" },
-];
 
 /**
  * What a card shows before "All N parameters" when nobody has pinned on it.
@@ -497,7 +691,7 @@ const MARK_OPTIONS = [
 const DEFAULT_PINS = ["steps", "cfg", "guidance", "width", "height"];
 
 const store = useWorkflowsStore();
-const { showPictures } = useWorkflowPictures();
+const { showPictures, showLoraPictures } = useWorkflowPictures();
 const sidebarStore = useSidebarStore();
 const notices = useNoticeStore();
 const filterStore = useFilterStore();
@@ -511,6 +705,30 @@ const desktop = typeof window !== "undefined" ? window.pixlstashDesktop : null;
 /** Whether there is a ComfyUI to open, and a way to open it from here. */
 const canOpenComfyui = computed(
   () => Boolean(filterStore.comfyuiUrl) && (!desktop || !!desktop.openComfyui),
+);
+
+/**
+ * ComfyUI answered that it lacks the ComfyUI-PixlStash node's
+ * `open_workflow.js`, so a link would open on whatever it had last. Only a
+ * definite no refuses: an unreachable ComfyUI, or a failed ask, leaves the
+ * button to try.
+ */
+const comfyuiLacksNode = ref(false);
+let nodeCheck = 0;
+watch(
+  () => canOpenComfyui.value && filterStore.comfyuiUrl,
+  async (url) => {
+    const check = ++nodeCheck;
+    comfyuiLacksNode.value = false;
+    if (!url) return;
+    try {
+      const { can_open_workflows: canOpen } = await getPixlstashNode();
+      if (check === nodeCheck) comfyuiLacksNode.value = canOpen === false;
+    } catch (err) {
+      console.warn("[workflows] could not ask ComfyUI for the PixlStash node", err);
+    }
+  },
+  { immediate: true },
 );
 const runDialog = useRunDialogStore();
 const tasksStore = useTasksStore();
@@ -542,7 +760,7 @@ watch(
   (wanted) => {
     if (wanted !== "recipes") return;
     tab.value = "recipes";
-    sidebarStore.statsOpen = true;
+    sidebarStore.openWorkflowInspector();
   },
   { immediate: true },
 );
@@ -574,10 +792,41 @@ const busy = ref("");
 const menuOpen = ref(false);
 const notesDraft = ref("");
 
-const multiple = computed(() => store.selectedKeys.length > 1);
+/**
+ * The cover of a stack selected WHOLE, or null.
+ *
+ * Several keys, but one card on screen: the rail shows it as one workflow,
+ * the cover by default, with a picker for the other members. The pick is the
+ * store's (`stackPickKey`), because the grid's Run follows it too.
+ */
+const stackCover = computed(() => store.stackCover);
 
+/** Several cards selected that are not one whole stack. */
+const multiple = computed(
+  () => store.selectedKeys.length > 1 && !stackCover.value,
+);
+
+/** The stack's members, from the cover's own card, which lists them in order. */
+const stackOptions = computed(() => {
+  const cover = stackCover.value;
+  if (!cover) return [];
+  // One line each: the rail's picker stays a native select, so the two-line
+  // chip rows the Run popup draws are left out here.
+  const rows = stackMemberOptions(cover.members).map(({ value, label }) => ({
+    value,
+    label,
+  }));
+  return rows.length ? rows : [{ value: cover.key, label: cover.name }];
+});
+
+/**
+ * The one card the body reads: the single selection, or the stack member
+ * picked. Every read and write below goes through this.
+ */
 const selectedKey = computed(() =>
-  store.selectedKeys.length === 1 ? store.selectedKeys[0] : null,
+  store.selectedKeys.length === 1
+    ? store.selectedKeys[0]
+    : store.stackPickKey,
 );
 
 /**
@@ -619,8 +868,25 @@ const showingRecipes = computed(
 
 /** Every selected card, because a selection's recipes are their union. */
 const recipeKeys = computed(() =>
-  multiple.value ? [...store.selectedKeys] : card.value ? [card.value.key] : [],
+  store.selectedKeys.length > 1
+    ? [...store.selectedKeys]
+    : card.value
+      ? [card.value.key]
+      : [],
 );
+
+/**
+ * Members picked inside the expanded stack, rather than the stack selected
+ * whole: the Recipes list is then theirs alone. A collapsed stack card, or a
+ * card the `?topology=` link selected with its stack shut, still lists the
+ * whole stack's recipes, because that is what the card on screen stands for.
+ */
+const recipesNarrowed = computed(() => {
+  const open = store.openStackKey;
+  if (!open || stackCover.value) return false;
+  const inside = new Set(store.stackKeys(open));
+  return recipeKeys.value.every((key) => inside.has(key));
+});
 
 /**
  * What heads the Recipes tab: the stack, when the selected card is a member.
@@ -630,15 +896,23 @@ const recipeKeys = computed(() =>
  */
 const recipesStack = computed(() => {
   // A stack selected whole heads its Recipes as the stack, not as a count.
-  if (multiple.value && runTarget.value) {
+  if (stackCover.value) {
     return {
-      name: runTarget.value.name || "",
-      size: Number(runTarget.value.stack_size) || 0,
+      name: stackCover.value.name || "",
+      size: Number(stackCover.value.stack_size) || 0,
     };
   }
   if (multiple.value) {
     const count = store.selectedKeys.length;
     return { name: `${count} workflows selected`, size: 0 };
+  }
+  // One member picked out of the open stack lists its own recipes, so it is
+  // what the header names; the size stays, since they still run on the stack.
+  if (recipesNarrowed.value) {
+    return {
+      name: card.value?.name || "",
+      size: Number((parentStack.value || card.value)?.stack_size) || 0,
+    };
   }
   const stack = parentStack.value || card.value;
   return {
@@ -668,6 +942,9 @@ const picturesLabel = computed(() => {
 });
 
 const subtitlePrefix = computed(() => {
+  if (stackCover.value) {
+    return `A stack of ${stackCover.value.stack_size} workflows · `;
+  }
   if (parentStack.value) return `In the ${parentStack.value.name} stack · `;
   if ((card.value?.stack_size ?? 1) > 1) return "Showing the cover · ";
   return "";
@@ -707,6 +984,30 @@ const checkpointIsUnread = computed(() =>
 /** ComfyUI's folders for a base model, as `missing_models` names them. */
 const BASE_MODEL_FOLDERS = new Set(["checkpoints", "diffusion_models"]);
 
+/**
+ * The support rows a missing file can be replaced in (#1596): the model-fix
+ * `slot_kind` and the pre-flight's folder for it. `clip_vision` is not `text_encoders`, so a vision
+ * encoder is never offered a text encoder.
+ */
+const SUPPORT_KINDS = [
+  {
+    kind: "vae",
+    label: "VAE",
+    cardKind: "vae",
+    folder: "vae",
+    noun: "VAE",
+    missingText: "VAE missing",
+  },
+  {
+    kind: "text_encoder",
+    label: "CLIP",
+    cardKind: "clip",
+    folder: "text_encoders",
+    noun: "text encoder",
+    missingText: "Text encoder missing",
+  },
+];
+
 /** What the pre-flight reports for a name the hub forgot: names no file. */
 const FORGOTTEN_MODEL = "(forgotten model)";
 
@@ -722,6 +1023,8 @@ const PREFLIGHT_SETTLE_MS = 250;
  * whether it has: an unreachable ComfyUI leaves the card's own answer.
  */
 const missingBaseFiles = ref([]);
+/** The same for each support kind (`SUPPORT_KINDS`), by `slot_kind`. */
+const missingFiles = ref({});
 const preflightAnswered = ref(false);
 let installedCheck = 0;
 // A rail that has closed asks nothing: an ask still settling is superseded.
@@ -766,30 +1069,200 @@ const missingCheckpointFile = computed(
     checkpointLabel.value,
 );
 
+/** The owner's replacement for this card's base model, or null. */
+const checkpointFix = computed(
+  () =>
+    (detail.value?.model_fixes ?? []).find(
+      (fix) => fix.slot_kind === "checkpoint",
+    ) ?? null,
+);
+
+/**
+ * Whether the pre-flight says the replacement itself is missing, rather than
+ * some other base model of the graph.
+ */
+const replacementMissing = computed(
+  () =>
+    Boolean(checkpointFix.value) &&
+    missingBaseFiles.value.some(
+      (file) =>
+        fileName(file).toLowerCase() ===
+        fileName(checkpointFix.value.now).toLowerCase(),
+    ),
+);
+
+/**
+ * `GET …/model-swap?replacing=` per missing file, keyed `kind:file`: the
+ * shelf models that go with the workflow's checkpoint and that the file's
+ * loader can load (`replacements`), and why there are none
+ * (`replacements_reason`). Read only when the pre-flight says a file is
+ * missing.
+ */
+const replacementsByFile = ref({});
+
+/** Why a missing file has no "Replace with…", as the row says it. */
+const NO_REPLACEMENT_TEXT = {
+  no_checkpoint:
+    "Nothing to offer: the checkpoint is not on your shelf, so nothing says what goes with it.",
+  none_go_with_it: "Nothing on your shelf is known to work with this checkpoint.",
+  none_same_base_model:
+    "Nothing on your shelf is known to have this checkpoint's base model, which its LoRAs need.",
+  none_loadable:
+    "What works with this checkpoint is not something this loader can load.",
+  needs_pixlstash_nodes:
+    "What works with this checkpoint needs a PixlStash loader, and ComfyUI-PixlStash is not installed in ComfyUI.",
+  unread: "Could not read what could replace it just now.",
+};
+
+/** A "Replace with…" picker's options for one missing file, or `[]`. */
+function replaceOptionsFor(kind, file) {
+  const models = replacementsByFile.value[`${kind}:${file}`]?.replacements;
+  return models?.length
+    ? [
+        { value: "", label: "Replace with…" },
+        ...models.map((model) => ({
+          value: model.filename,
+          // `declared`: only the file layout fits; nothing has run with it.
+          // `loader`: this loader cannot load it, so a run swaps in ours.
+          label: `${model.display_name || model.filename}${
+            model.via === "declared" ? " (untested)" : ""
+          }${model.loader ? " (through a PixlStash loader)" : ""}`,
+        })),
+      ]
+    : [];
+}
+
+const replaceOptions = computed(() =>
+  missingCheckpointFile.value
+    ? replaceOptionsFor("checkpoint", missingCheckpointFile.value)
+    : [],
+);
+
+/**
+ * Why the missing checkpoint has no "Replace with…", or "" while it has one or
+ * has not been asked. Every answer without one says so: a missing checkpoint
+ * with no picker and no word on why reads as nothing to be done.
+ */
+const checkpointNoReplacement = computed(() => {
+  const answer =
+    replacementsByFile.value[`checkpoint:${missingCheckpointFile.value}`];
+  if (!answer || answer.replacements?.length) return "";
+  const reason = answer.replacements_reason;
+  if (reason === "none_loadable")
+    return "No checkpoint on your shelf that could replace it is one this loader can load.";
+  return ["none_same_base_model", "none_go_with_it", "unread"].includes(reason)
+    ? NO_REPLACEMENT_TEXT[reason]
+    : "Nothing on your shelf can replace it.";
+});
+
+/** Whether two recorded values name one file, whatever their folders. */
+function sameFile(a, b) {
+  return fileName(a).toLowerCase() === fileName(b).toLowerCase();
+}
+
+/**
+ * The VAE row, and a CLIP row where the workflow names any, each as entries:
+ * a missing file (with its replacement when that is what is missing), a
+ * replaced one, or the plain value. The plain values stand only where neither
+ * of the others does, as the Checkpoint row's do: the card's names are what
+ * the recipes recorded, which after a fix is the original.
+ */
+const supportRows = computed(() =>
+  SUPPORT_KINDS.map((spec) => {
+    const fixes = (detail.value?.model_fixes ?? []).filter(
+      (fix) => fix.slot_kind === spec.kind,
+    );
+    const missing = missingFiles.value[spec.kind] ?? [];
+    let entries = [
+      ...missing.map((file) => ({
+        id: `missing:${file}`,
+        file,
+        fix: fixes.find((fix) => sameFile(fix.now, file)) ?? null,
+        // Every original this file replaced: two slots may share one
+        // replacement, and the pre-flight names the file, not the slot. The
+        // undo is sent by the replacement's name, which the server resolves
+        // to all of them.
+        originals: fixes
+          .filter((fix) => sameFile(fix.now, file))
+          .map((fix) => fileName(fix.was))
+          .join(" and "),
+        options: replaceOptionsFor(spec.kind, file),
+        noReplacement:
+          NO_REPLACEMENT_TEXT[
+            replacementsByFile.value[`${spec.kind}:${file}`]?.replacements_reason
+          ] ?? "",
+      })),
+      ...fixes
+        .filter((fix) => !missing.some((file) => sameFile(fix.now, file)))
+        .map((fix) => ({ id: `fix:${fix.slot_label}`, fix })),
+    ];
+    if (!entries.length) {
+      const models = (card.value?.models ?? []).filter(
+        (model) => model.kind === spec.cardKind && modelDisplayName(model),
+      );
+      entries = models.map((model, index) => ({
+        id: `model:${model.slot_label || index}`,
+        text: withQuant(modelDisplayName(model), model),
+      }));
+    }
+    if (!entries.length && spec.kind === "vae") {
+      entries = [{ id: "vae", text: "From the checkpoint" }];
+    }
+    return { ...spec, entries };
+  }).filter((row) => row.entries.length),
+);
+
+/** Replace the missing base model with `now`, or undo that (`null`). */
+function replaceCheckpoint(now) {
+  const was = now === null ? checkpointFix.value?.was : missingCheckpointFile.value;
+  return replaceModel("checkpoint", was, now);
+}
+
+/**
+ * Replace the missing file `was` in slots of `kind` with the shelf model
+ * `now`, or undo the replacement of `was` (`now: null`).
+ *
+ * The card keeps its key unless a re-key moved it, so the answer's key is
+ * followed; the grid is re-read because pictures already made with the
+ * replacement join this card. The pre-flight is asked again: it is what says
+ * whether the model now loads.
+ */
+function replaceModel(kind, was, now) {
+  const key = selectedKey.value;
+  if (!key || !was || now === "") return;
+  const unmoved = selectionMark();
+  return queueWrite("model-fix", async () => {
+    try {
+      const body = await setWorkflowModelFix(key, {
+        was,
+        now,
+        slot_kind: kind,
+      });
+      store.forgetMembers();
+      await store.fetchCards();
+      if (!unmoved()) return;
+      const moved = body?.card?.key;
+      if (moved && moved !== key) {
+        store.select(moved);
+        return;
+      }
+      detail.value = body;
+      void checkInstalled(key);
+    } catch (err) {
+      fail(
+        err,
+        now === null
+          ? "Could not undo that replacement."
+          : "Could not replace that model.",
+      );
+    }
+  });
+}
+
 /** A recorded model value as a person looks for it: the file, no folders. */
 function fileName(value) {
   return String(value).split(/[\\/]/).pop();
 }
-
-const vaeLabel = computed(() => {
-  const found = (card.value?.models ?? []).find(
-    (model) => model.kind === "vae",
-  );
-  const name = modelDisplayName(found);
-  return name ? withQuant(name, found) : "From the checkpoint";
-});
-
-const loraSlots = computed(() =>
-  (card.value?.loras ?? []).map((lora, index) => ({
-    id: lora.slot_label || `lora-${index}`,
-    label: lora.slot_label,
-    name: lora.name,
-    // The chip shows this and its tooltip shows `name`, so the precision goes
-    // on the chip: the tooltip is the raw-ish string a reader copies.
-    chipText: lora.name ? withQuant(lora.name, lora) : null,
-    mark: lora.mark,
-  })),
-);
 
 // ── The LoRA chain (#1478) ─────────────────────────────────────────────────
 
@@ -807,12 +1280,20 @@ const editPictures = ref(0);
 /** A LoRA to open with its loader already deleted (Save-as-recipe's hand-over). */
 const editDrop = ref("");
 
-/** The loaders as the inspector lists them: the shelf's name, and a strength. */
+/**
+ * The loaders as the inspector lists them: the shelf's name, and a strength.
+ * A forked chain's lanes are listed after its trunk, so every loader shows.
+ */
 const chainLoaders = computed(() =>
-  (chain.value?.loaders ?? []).map((loader) => {
+  [
+    ...(chain.value?.loaders ?? []),
+    ...(chain.value?.lanes ?? []).flatMap((lane) => lane.loaders ?? []),
+  ].map((loader) => {
     const strength = Number(loader.strength);
     return {
+      id: String(loader.node_id),
       node_id: String(loader.node_id),
+      filename: loader.filename,
       label: loader.on_shelf
         ? loader.name || loraStem(loader.filename)
         : String(loader.filename || loader.name || "").split(/[\\/]/).pop(),
@@ -868,6 +1349,148 @@ async function loadChain(key) {
   }
 }
 
+// ── The stack's LoRAs: shared, and the pile ────────────────────────────────
+
+/** `GET …/lora-summary` for the selected card's stack, and its read state. */
+const summary = ref(null);
+const summaryPending = ref(false);
+const summaryFailed = ref(false);
+
+/** The card the rail's header speaks for: the stack, when there is one. */
+const headCard = computed(
+  () => stackCover.value || parentStack.value || card.value,
+);
+
+/** The picture on top of the stack, which decides the top of the pile. */
+const coverPictureId = computed(
+  () => headCard.value?.covers?.[0]?.picture_id ?? null,
+);
+
+/** `{key: name}` over the stack, for the fan's "only in …". */
+const memberNames = computed(() =>
+  Object.fromEntries(
+    (headCard.value?.members ?? []).map((member) => [member.key, member.name]),
+  ),
+);
+
+/** Which read is the latest, so an older answer never overwrites a newer one. */
+let summaryRead = 0;
+
+/**
+ * Read the stack's LoRAs for `key`.
+ *
+ * A re-read of the SAME card (after a promotion, or when the cover arrives)
+ * keeps the pile on screen until the answer lands: blanking it unmounts the
+ * open fan and drops focus to the page.
+ */
+async function loadSummary(key) {
+  const read = ++summaryRead;
+  if (summary.value && !summary.value.keys?.includes(key)) summary.value = null;
+  summaryFailed.value = false;
+  if (!key) {
+    summary.value = null;
+    summaryPending.value = false;
+    return;
+  }
+  summaryPending.value = !summary.value;
+  try {
+    const body = await getLoraSummary(key, {
+      cover: coverPictureId.value ?? undefined,
+    });
+    if (read !== summaryRead) return;
+    summary.value = body;
+  } catch (err) {
+    if (read !== summaryRead) return;
+    console.warn(`[workflows] could not read the LoRAs of ${key}'s stack`, err);
+    summary.value = null;
+    summaryFailed.value = true;
+  } finally {
+    if (read === summaryRead) summaryPending.value = false;
+  }
+}
+
+/** A LoRA's file as the chain and the summary both name it: lowercased, no folders. */
+function loraFileKey(value) {
+  return String(value || "")
+    .split(/[\\/]/)
+    .pop()
+    .toLowerCase();
+}
+
+/**
+ * The LoRAs in every picture of every workflow in the stack, in chain order.
+ *
+ * The summary says WHICH (it counts pictures); the chain says in what order
+ * and how strong, for the selected card. A shared LoRA the chain does not
+ * name follows the chain's, by name. A workflow with no picture to count has
+ * nothing to share and nothing that changes, so its chain is the list.
+ */
+const sharedLoras = computed(() => {
+  const shared = summary.value?.shared ?? [];
+  if (!summary.value?.pictures) return chainLoaders.value;
+  const byFile = new Map(
+    chainLoaders.value.map((loader) => [loraFileKey(loader.filename), loader]),
+  );
+  const rows = shared.map((use) => {
+    const loader = byFile.get(loraFileKey(use.filename));
+    return {
+      id: use.asset,
+      label: use.name || loader?.label || "A LoRA whose name was forgotten",
+      on_shelf: loader ? loader.on_shelf : Boolean(use.on_shelf),
+      strengthText: loader?.strengthText ?? "",
+      order: loader ? chainLoaders.value.indexOf(loader) : Infinity,
+    };
+  });
+  return rows.sort((a, b) => a.order - b.order);
+});
+
+/** "Shared by both workflows in this stack. X is not on your shelf." */
+const sharedNote = computed(() => {
+  // No picture to count: the rows are the workflow's own chain.
+  if (!summary.value?.pictures) {
+    return `In the order the chain applies them. ${shelfLine.value}`;
+  }
+  const size = summary.value?.keys?.length ?? 1;
+  const scope =
+    size > 2
+      ? `Shared by all ${size} workflows in this stack.`
+      : size === 2
+        ? "Shared by both workflows in this stack."
+        : "In every picture of this workflow.";
+  const missing = sharedLoras.value.filter((lora) => !lora.on_shelf);
+  if (!missing.length) return scope;
+  const names = missing.map((lora) => lora.label).join(", ");
+  return `${scope} ${names} ${missing.length === 1 ? "is" : "are"} not on your shelf.`;
+});
+
+const changingLabel = computed(() => {
+  const count = summary.value?.varying?.length ?? 0;
+  return `${count} ${count === 1 ? "LoRA" : "LoRAs"}`;
+});
+
+const pileNote = computed(() => {
+  const rest = (summary.value?.varying?.length ?? 1) - 1;
+  const top = summary.value?.cover_asset
+    ? "On top: the cover picture's LoRA."
+    : "On top: the LoRA most pictures used.";
+  if (!rest) return `${top} Open it to see its pictures or promote it.`;
+  return `${top} Open the pile to see the other ${rest === 1 ? "one" : rest} or promote one.`;
+});
+
+/** *Show N*: the grid, narrowed to this stack's pictures of one LoRA. */
+function showLora(row) {
+  const head = headCard.value;
+  const name = row.name || "A forgotten LoRA";
+  showLoraPictures({
+    // The summary's, which names exactly the stack it counted; the grid's
+    // card leaves it null when it had to leave a member out.
+    stack: summary.value?.stack_id ?? head?.stack_id ?? null,
+    key: selectedKey.value,
+    lora: row.asset,
+    name: `${name} in ${head?.name || "this workflow"}`,
+  });
+}
+
 /** Open Edit LoRAs… on `key`, with `drop` already struck through if given. */
 function openEditLoras(key, drop = "") {
   if (!key) return;
@@ -913,7 +1536,7 @@ watch(
       honouredCard = wanted;
       store.select(wanted);
       tab.value = "workflow";
-      sidebarStore.statsOpen = true;
+      sidebarStore.openWorkflowInspector();
     }
     if (edit === EDIT_LORAS) {
       openEditLoras(wanted, typeof drop === "string" ? drop : "");
@@ -961,6 +1584,16 @@ const defaults = computed(() => {
       : DEFAULT_PINS.includes(row.input_name),
   }));
 });
+
+/**
+ * A workflow file with no recipe: an editor-format file ComfyUI has not
+ * converted yet (#1530). An API file always files a recipe, and a converted
+ * editor file files its converted graph, so `variant_count: 0` on an imported
+ * card is exactly the editor file PixlStash cannot run or parameterise.
+ */
+const editorOnly = computed(
+  () => Boolean(card.value?.imported) && card.value?.variant_count === 0,
+);
 
 const pinnedDefaults = computed(() =>
   defaults.value.filter((row) => row.pinned),
@@ -1039,32 +1672,51 @@ function stillOn(key) {
 }
 
 /**
- * Flip a LoRA slot between the workflow and the look.
+ * A mark over the selection itself, for the writes that re-read the grid.
  *
- * **This re-keys the card**, and can split it into several or merge it into
- * another, so the answer's `key` is followed rather than the key that was
- * sent: staying on the old one leaves the rail reading a card that no longer
- * exists. The grid is re-read for the same reason.
+ * `stillOn` is not enough there: a stack member's `selectedKey` is derived
+ * from the grid, so a flip or a Hide that takes the member out of its stack
+ * empties it even though the reader never moved. By identity, of the
+ * selection and of the stack pick: every gesture that selects, or picks
+ * another member, writes a new one, so a reader who moved on meanwhile —
+ * even only to another member of the same stack — is told apart.
  */
-function flipMark(slot, mark) {
+function selectionMark() {
+  const keys = toRaw(store.selectedKeys);
+  const pick = store.stackPick;
+  return () => toRaw(store.selectedKeys) === keys && store.stackPick === pick;
+}
+
+/**
+ * Promote one LoRA to a workflow of its own, or put it back (the pile's one
+ * verb, confirmed in the fan before it gets here).
+ *
+ * **This re-keys cards**: the LoRA's pictures move to a new card or back. The
+ * answer's `key` is followed, since putting a LoRA back from the card made
+ * for it takes that card away; the grid, the stack's members and the pile
+ * are all read again because every one of them has changed.
+ */
+function promoteLora(row, promoted) {
   const key = selectedKey.value;
-  if (!key || !slot.label || slot.mark === mark) return;
-  return queueWrite(`slot:${slot.label}`, async () => {
+  if (!key || !row?.asset) return;
+  const unmoved = selectionMark();
+  return queueWrite(`lora:${row.asset}`, async () => {
     try {
-      const moved = await setWorkflowSlots(key, { [slot.label]: mark });
-      // Every card of the topology may have been re-keyed, so the cached
-      // stack members are about workflows the hub no longer has.
+      const moved = await setLoraPromotion(key, row.asset, promoted);
       store.forgetMembers();
       await store.fetchCards();
-      if (!stillOn(key)) return;
-      // `select` moves `selectedKey`, which the watcher below turns into the
-      // detail read. Calling `loadDetail` here as well fetched the same card
-      // twice; when the flip did not move it the watcher does not fire, so
-      // that case reads explicitly.
-      if (moved.key === key) await loadDetail(key);
-      else store.select(moved.key);
+      if (!unmoved()) return;
+      // `select` moves `selectedKey`, which the watchers turn into every
+      // read below; when the card did not move they do not fire, so that
+      // case reads explicitly.
+      if (selectedKey.value === moved.key) {
+        await Promise.all([loadDetail(moved.key), loadSummary(moved.key)]);
+      } else store.select(moved.key);
     } catch (err) {
-      fail(err, "Could not change that LoRA slot.");
+      fail(
+        err,
+        promoted ? "Could not promote that LoRA." : "Could not put that LoRA back.",
+      );
     }
   });
 }
@@ -1080,8 +1732,8 @@ function flipMark(slot, mark) {
 function defaultsFor(key) {
   if (stillOn(key) && detail.value) return defaults.value;
   console.warn(`[workflows] a write to ${key} dropped: the selection moved`);
-  // Not "you selected another": a LoRA flip re-keys the card and moves the
-  // selection itself.
+  // Not "you selected another": a LoRA promotion re-keys the card and moves
+  // the selection itself.
   notices.push({
     level: "error",
     text: "That change was not saved: the workflow changed before it could be.",
@@ -1200,6 +1852,7 @@ function toggleHidden() {
   if (!key || !detail.value) return;
   menuOpen.value = false;
   const hiding = !detail.value.hidden;
+  const unmoved = selectionMark();
   return queueWrite("hidden", async () => {
     try {
       const body = await patchWorkflowCard(key, { hidden: hiding });
@@ -1209,6 +1862,9 @@ function toggleHidden() {
       // what keeps Unhide reachable from here.
       store.forgetMembers();
       await store.fetchCards();
+      // A stack member hidden from the rail leaves its stack, and the stack
+      // stops being selected whole: stay on the card that was hidden.
+      if (unmoved() && selectedKey.value !== key) store.select(key);
     } catch (err) {
       fail(
         err,
@@ -1219,17 +1875,23 @@ function toggleHidden() {
 }
 
 /**
- * What Run… runs: this card, or the cover of a stack selected whole
- * (`store.runnableCard`), which is several keys but one card on screen.
+ * What Run… runs: the card on screen, which for a stack selected whole is the
+ * member picked at the top. Nothing while several cards are selected.
  */
-const runTarget = computed(() =>
-  multiple.value ? store.runnableCard : card.value,
+const runTarget = computed(() => (multiple.value ? null : card.value));
+
+/**
+ * Why Run… refuses, when it is a reason worth a sentence: a stack member
+ * whose read is still out refuses too, but only for as long as the read.
+ */
+const runDescribedBy = computed(() =>
+  multiple.value ? "wftab-run-reason" : undefined,
 );
 
-/** The sentence Run… is described by: why it refuses, or which stack card. */
-const runDescribedBy = computed(() => {
-  if (!runTarget.value) return "wftab-run-reason";
-  return multiple.value ? "wftab-run-target" : undefined;
+/** Why Open in ComfyUI refuses, when it does. */
+const openDescribedBy = computed(() => {
+  if (multiple.value) return "wftab-open-reason";
+  return comfyuiLacksNode.value ? "wftab-open-node-reason" : undefined;
 });
 
 /**
@@ -1267,7 +1929,7 @@ function run() {
  */
 function openInComfyui() {
   const target = runTarget.value;
-  if (!target || !filterStore.comfyuiUrl) return;
+  if (!target || !filterStore.comfyuiUrl || comfyuiLacksNode.value) return;
   let url;
   try {
     url = new URL(filterStore.comfyuiUrl);
@@ -1312,6 +1974,16 @@ watch(
   { immediate: true },
 );
 
+// The pile's top is the cover's LoRA, so the summary is asked again when the
+// cover arrives after the key does.
+watch(
+  () => [selectedKey.value, coverPictureId.value],
+  ([key]) => {
+    void loadSummary(key);
+  },
+  { immediate: true },
+);
+
 /**
  * Ask the run pre-flight whether the base model loads, once per card./**
  * Ask the run pre-flight whether the base model loads, once per card.
@@ -1324,41 +1996,87 @@ watch(
  */
 watch(
   () => (detail.value ? selectedKey.value : null),
-  async (key) => {
-    const check = ++installedCheck;
-    missingBaseFiles.value = [];
-    preflightAnswered.value = false;
-    if (!key) return;
-    await new Promise((resolve) => setTimeout(resolve, PREFLIGHT_SETTLE_MS));
-    if (check !== installedCheck) return;
-    try {
-      const answer = await preflightWorkflowRun({
-        workflow_key: key,
-        values: [],
-      });
-      if (check !== installedCheck || !stillOn(key)) return;
-      preflightAnswered.value = true;
-      missingBaseFiles.value = (answer?.groups ?? [])
-        .flatMap((group) => group.reasons ?? [])
-        .filter((reason) => reason.code === "missing_models")
-        .flatMap((reason) => reason.models ?? [])
-        .filter((model) => BASE_MODEL_FOLDERS.has(model.folder))
-        .map((model) => String(model.file));
-    } catch (err) {
-      console.warn(`[workflows] could not pre-flight ${key}`, err);
-    }
-  },
+  (key) => checkInstalled(key),
   { immediate: true },
 );
+
+async function checkInstalled(key) {
+  const check = ++installedCheck;
+  missingBaseFiles.value = [];
+  missingFiles.value = {};
+  preflightAnswered.value = false;
+  replacementsByFile.value = {};
+  if (!key) return;
+  await new Promise((resolve) => setTimeout(resolve, PREFLIGHT_SETTLE_MS));
+  if (check !== installedCheck) return;
+  try {
+    const answer = await preflightWorkflowRun({
+      workflow_key: key,
+      values: [],
+    });
+    if (check !== installedCheck || !stillOn(key)) return;
+    preflightAnswered.value = true;
+    const missing = (answer?.groups ?? [])
+      .flatMap((group) => group.reasons ?? [])
+      .filter((reason) => reason.code === "missing_models")
+      .flatMap((reason) => reason.models ?? []);
+    const filesIn = (folders) => [
+      ...new Set(
+        missing
+          .filter((model) => folders.has(model.folder))
+          .map((model) => String(model.file)),
+      ),
+    ];
+    missingBaseFiles.value = filesIn(BASE_MODEL_FOLDERS);
+    // A forgotten name is no file anybody could replace.
+    missingFiles.value = Object.fromEntries(
+      SUPPORT_KINDS.map((spec) => [
+        spec.kind,
+        filesIn(new Set([spec.folder])).filter(
+          (file) => file !== FORGOTTEN_MODEL,
+        ),
+      ]),
+    );
+  } catch (err) {
+    console.warn(`[workflows] could not pre-flight ${key}`, err);
+    return;
+  }
+  // Only a file ComfyUI named can be replaced: a forgotten name is no file.
+  const asks = [
+    ...(missingCheckpointFile.value &&
+    missingCheckpointFile.value !== FORGOTTEN_MODEL &&
+    missingBaseFiles.value.includes(missingCheckpointFile.value)
+      ? [["checkpoint", missingCheckpointFile.value]]
+      : []),
+    ...SUPPORT_KINDS.flatMap((spec) =>
+      (missingFiles.value[spec.kind] ?? []).map((file) => [spec.kind, file]),
+    ),
+  ];
+  const results = await Promise.allSettled(
+    asks.map(([kind, file]) =>
+      readModelSwap(key, { replacing: file, slotKind: kind }),
+    ),
+  );
+  if (check !== installedCheck || !stillOn(key)) return;
+  const found = {};
+  results.forEach((result, index) => {
+    const [kind, file] = asks[index];
+    if (result.status === "fulfilled") {
+      found[`${kind}:${file}`] = result.value;
+      return;
+    }
+    // Said on the row, not left as a missing picker nobody can explain.
+    found[`${kind}:${file}`] = { replacements_reason: "unread" };
+    console.warn(
+      `[workflows] could not read replacements for ${file} on ${key}`,
+      result.reason,
+    );
+  });
+  replacementsByFile.value = found;
+}
 </script>
 
 <style scoped>
-/* The body fills the rail so the footer's `margin-top: auto` reaches the
-   bottom of a short panel, and `sticky` keeps it there on a long one. */
-.wftab :deep(.inspector-body) {
-  flex: 1;
-}
-
 .wftab-empty,
 .wftab-note {
   margin: 0;
@@ -1373,6 +2091,18 @@ watch(
 
 .wftab-quiet {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The plugin catalogue link's shape (BehaviourSection.vue). */
+.wftab-link {
+  color: rgb(var(--v-theme-on-surface));
+  font-weight: var(--weight-medium);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.wftab-link:hover {
+  text-decoration-thickness: 2px;
 }
 
 .wftab-title {
@@ -1408,6 +2138,11 @@ watch(
   gap: var(--space-2);
 }
 
+.wftab-pick :deep(.app-select__field) {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
 .wftab-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1415,10 +2150,12 @@ watch(
 }
 
 /* The 96px label column is local to this tab: no other pane pairs a label
-   with a value field at this width, so it is not a token. */
+   with a value field at this width, so it is not a token. `minmax(0, 1fr)`,
+   not `1fr`: a bare `1fr` track grows to its longest unbreakable word, and a
+   file name then scrolls the whole inspector sideways. */
 .wftab-field {
   display: grid;
-  grid-template-columns: 96px 1fr;
+  grid-template-columns: 96px minmax(0, 1fr);
   align-items: center;
   gap: var(--space-3);
 }
@@ -1426,10 +2163,6 @@ watch(
 .wftab-label {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-.wftab-label--group {
-  margin-top: var(--space-2);
 }
 
 .wftab-value {
@@ -1446,35 +2179,17 @@ watch(
   white-space: nowrap;
 }
 
-.wftab-loras-head {
+/* A section label with one quiet job on its right, as the design heads each
+   section: Edit LoRAs…, a count, the pin legend. */
+.wftab-sec-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  margin-top: var(--space-2);
 }
 
-/* The chain as read: one line per loader, name then strength, in the order
-   it applies. Plain rows, not chips: the chips below are the slot marks, and
-   a second set of chips would read as a second set of controls. */
-.wftab-chain {
-  display: flex;
-  flex-direction: column;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.wftab-chain-row {
-  display: flex;
-  align-items: center;
+.wftab-lora-value {
   gap: var(--space-2);
-  min-height: var(--control-h-sm);
-  font-size: var(--text-sm);
-}
-
-.wftab-chain-row + .wftab-chain-row {
-  border-top: 1px solid rgb(var(--v-theme-divider));
 }
 
 .wftab-chain-flag {
@@ -1495,11 +2210,38 @@ watch(
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.wftab-missing {
+.wftab-missing,
+.wftab-entries {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
+}
+
+/* A missing file's name is often one long word (`someModel_v6.safetensors`):
+   break it anywhere rather than let it run past the column. */
+.wftab-missing {
+  overflow-wrap: anywhere;
+}
+
+/* A replaced base model: the value field as every other row draws it, with
+   an icon-only Undo beside it. */
+.wftab-fixed {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.wftab-fixed > .wftab-value {
+  flex: 1;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.wftab-fixed-flag {
+  flex-shrink: 0;
+  color: rgb(var(--v-theme-surface-warning));
 }
 
 /* The hue drawn as text, so the surface variant: the fill is 2.1:1 on the
@@ -1511,47 +2253,6 @@ watch(
   margin: 0;
   font-size: var(--text-sm);
   color: rgb(var(--v-theme-surface-warning));
-}
-
-.wftab-slot {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.wftab-slot + .wftab-slot {
-  padding-top: var(--space-3);
-  border-top: 1px solid rgb(var(--v-theme-divider));
-}
-
-.wftab-slot-line {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.wftab-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: 1;
-  min-width: 0;
-  height: var(--control-h);
-  padding: 0 var(--space-3);
-  border: 1px solid rgb(var(--v-theme-divider));
-  border-radius: var(--radius-sm);
-  background: rgba(var(--v-theme-on-surface), 0.06);
-  font-size: var(--text-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.wftab-chip--empty {
-  border-style: dashed;
-  background: transparent;
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 .wftab-legend {
@@ -1589,16 +2290,16 @@ watch(
 }
 
 .wftab-foot {
-  position: sticky;
-  bottom: 0;
-  margin-top: auto;
+  flex-shrink: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-3) 0;
-  border-top: 1px solid rgb(var(--v-theme-divider));
-  background: rgb(var(--v-theme-surface));
+  /* The body's inline padding, so the buttons line up with the content while
+     the hairline spans the whole rail. */
+  padding: var(--space-3);
+  /* `border`, not `divider`: divider all but vanishes on the sidebar tone. */
+  border-top: 1px solid rgb(var(--v-theme-border));
 }
 
 .wftab-foot > :first-child {

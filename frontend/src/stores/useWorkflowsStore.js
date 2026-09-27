@@ -1,7 +1,8 @@
-import { computed, onScopeDispose, ref } from "vue";
+import { computed, onScopeDispose, ref, shallowRef, toRaw } from "vue";
 import { defineStore } from "pinia";
 
 import {
+  cloneWorkflowWithModels,
   deleteWorkflowFile,
   dissolveStack,
   duplicateWorkflow,
@@ -56,15 +57,16 @@ import { errorMessage } from "../utils/apiError";
  */
 export const PANEL_COLLAPSE_MS = 600;
 
-export const SORT_KEYS = ["rating", "used", "pictures"];
+export const SORT_KEYS = ["rating", "used", "pictures", "name"];
 
 export const SORT_LABELS = {
-  rating: { label: "Your ratings", icon: "mdi-star" },
-  used: { label: "Recently used", icon: "mdi-history" },
-  pictures: { label: "Picture count", icon: "mdi-image-multiple" },
+  rating: { label: "Your ratings" },
+  used: { label: "Recently used" },
+  pictures: { label: "Picture count" },
+  name: { label: "Name" },
 };
 
-/** The sort keys, each as `(card) => number`, descending. */
+/** The numeric sort keys, each as `(card) => number`, descending. */
 const SORT_VALUES = {
   // `rank`, not `rating`: it is the same stars smoothed towards the library's
   // mean, which is what makes a 5.0 from one picture rank below a 4.8 from
@@ -76,6 +78,11 @@ const SORT_VALUES = {
   used: (card) => (card.last_used ? Date.parse(card.last_used) : -Infinity),
   pictures: (card) => card.picture_count ?? 0,
 };
+
+// Name is the one key that reads A to Z rather than highest first. Numeric so
+// "v2" sorts before "v10"; the collator already keeps "flux" beside "Flux".
+const nameCollator = new Intl.Collator(undefined, { numeric: true });
+const byName = (a, b) => nameCollator.compare(a.name ?? "", b.name ?? "");
 
 /**
  * What the Filters panel starts on (v1.12 F7).
@@ -233,10 +240,12 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   });
 
   const sortedCards = computed(() => {
-    const value = SORT_VALUES[sortKey.value] ?? SORT_VALUES.rating;
     // A copy: `cards` is the fetch order and a sort in place would make the
     // next resort depend on the last one.
-    return [...filteredCards.value].sort((a, b) => value(b) - value(a));
+    const copy = [...filteredCards.value];
+    if (sortKey.value === "name") return copy.sort(byName);
+    const value = SORT_VALUES[sortKey.value] ?? SORT_VALUES.rating;
+    return copy.sort((a, b) => value(b) - value(a));
   });
 
   /**
@@ -822,17 +831,15 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   ]);
 
   /**
-   * The card Run acts on, or null: the one selected card, or a stack's cover
-   * when the selection is exactly that stack.
+   * The cover of a stack selected WHOLE, or null.
    *
    * A click on a stack card selects the stack WHOLE (`stackKeys`), so the
    * selection holds several keys while the reader sees one card — and a gate
-   * counting keys refused to run it. Running the cover is what the Run popup
-   * already offers a stack: it lists the members to switch to.
+   * counting keys refused to run it.
    */
-  const runnableCard = computed(() => {
+  const stackCover = computed(() => {
     const keys = selectedKeys.value;
-    if (keys.length === 1) return selectedCards.value[0] ?? null;
+    if (keys.length < 2) return null;
     const held = new Set(keys);
     // `stackKeys` rather than `isStack`, as `syncPanelToSelection` does: the
     // set compared against is `member_keys`, so that is what says "a stack".
@@ -844,6 +851,53 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     return whole.length === held.size && whole.every((key) => held.has(key))
       ? cover
       : null;
+  });
+
+  /**
+   * The member of a whole-stack selection the inspector's picker is on.
+   *
+   * Tied to the selection ARRAY it was picked on, not its contents: every
+   * gesture that selects writes a new array, so each newly selected stack —
+   * the same one clicked again included — starts on its cover, and a grid
+   * re-read that leaves the selection alone keeps the pick.
+   */
+  const stackPick = shallowRef({ keys: null, key: "" });
+
+  /** Pick `key` out of the stack selected whole. */
+  function pickStackMember(key) {
+    stackPick.value = { keys: toRaw(selectedKeys.value), key };
+  }
+
+  /** The key the stack selected whole stands for: the pick, else the cover. */
+  const stackPickKey = computed(() => {
+    const cover = stackCover.value;
+    if (!cover) return null;
+    const { keys, key } = stackPick.value;
+    return keys === toRaw(selectedKeys.value) &&
+      stackKeys(cover.key).includes(key)
+      ? key
+      : cover.key;
+  });
+
+  /**
+   * The card Run acts on, or null: the one selected card, or — when the
+   * selection is exactly one stack — the member picked in the inspector,
+   * which is the cover until somebody picks another.
+   *
+   * A member the grid has not fetched is named from the cover's `members`
+   * list; the Run popup reads its cover picture itself.
+   */
+  const runnableCard = computed(() => {
+    if (selectedKeys.value.length === 1) return selectedCards.value[0] ?? null;
+    const cover = stackCover.value;
+    const key = stackPickKey.value;
+    if (!cover || key === cover.key) return cover;
+    for (const list of Object.values(members.value)) {
+      const found = list.find((entry) => entry.key === key);
+      if (found) return found;
+    }
+    const named = (cover.members ?? []).find((entry) => entry.key === key);
+    return { key, name: named?.name || cover.name, covers: [] };
   });
 
   /**
@@ -894,6 +948,30 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     } catch (err) {
       console.warn(`[workflows] could not duplicate ${key}`, err);
       error.value = errorMessage(err, "Could not duplicate that workflow.");
+      return null;
+    } finally {
+      verbBusy.value = "";
+    }
+  }
+
+  /**
+   * Write a copy of one card with model files replaced, as a card of its own.
+   *
+   * `duplicateCard` with a body: the grid is re-read rather than patched, and
+   * the answer is handed back for the notice. `null` on failure, with the
+   * reason in `error`.
+   */
+  async function cloneCardWithModels(key, body) {
+    if (verbBusy.value) return null;
+    verbBusy.value = "clone-with-models";
+    try {
+      const answer = await cloneWorkflowWithModels(key, body);
+      forgetMembers();
+      await fetchCards();
+      return answer;
+    } catch (err) {
+      console.warn(`[workflows] could not clone ${key} with new models`, err);
+      error.value = errorMessage(err, "Could not clone that workflow.");
       return null;
     } finally {
       verbBusy.value = "";
@@ -1075,7 +1153,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
   /**
    * Change some of the filters, re-reading the grid when the server's two move.
    *
-   * A partial patch, like `setView` on the retired shelf: a checkbox row knows
+   * A partial patch, like `setView` on the retired shelf: a filter row knows
    * its own key and nothing about its neighbours' current values.
    */
   function setFilters(changes) {
@@ -1213,6 +1291,10 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     selectedCards,
     selectedStackIds,
     runnableCard,
+    stackCover,
+    stackPick,
+    stackPickKey,
+    pickStackMember,
     parkedPlace,
     park,
     unpark,
@@ -1235,6 +1317,7 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     unstackSelected,
     renameCard,
     duplicateCard,
+    cloneCardWithModels,
     deleteSelected,
     stackKeys,
     select,

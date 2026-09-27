@@ -92,11 +92,12 @@ all of them take the **default** library pin (``library_independent`` is left at
 from __future__ import annotations
 
 import os
-from typing import Literal, Optional
+from contextlib import contextmanager
+from typing import Annotated, Literal, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from pixlstash.db_models.adapter_attachment import ENTITY_CHARACTER, ENTITY_SET
 from pixlstash.pixl_logging import get_logger
@@ -122,6 +123,18 @@ from pixlstash.services.model_shelf_service import (
     forget_models,
     replace_attachments,
     update_models,
+)
+from pixlstash.services.model_workflow_sets import (
+    MAX_SET_NAME_LENGTH,
+    WorkflowSetNotFoundError,
+    WorkflowSetRefusedError,
+    add_members,
+    attach_hand_made,
+    create_set,
+    delete_set,
+    remove_members,
+    rename_set,
+    set_declines,
 )
 from pixlstash.utils.adapter_header import (
     FILE_ADAPTER,
@@ -767,12 +780,273 @@ class WorkflowSetCombination(BaseModel):
             "longer holds is counted here for the members it does resolve."
         )
     )
+    history_runs: int = Field(
+        0,
+        description=(
+            "Finished ComfyUI runs whose models resolve to exactly this set, "
+            "read off `GET /history` by the last workflow pull and counted "
+            "apart from recipes. Hub-wide, not library-scoped: ComfyUI's "
+            "history belongs to the machine."
+        ),
+    )
     picture_count: int = Field(
         description="Kept pictures in the active library those recipes made."
     )
     covers: list[WorkflowSetCover] = Field(
         default_factory=list, description="Up to three cover thumbnails, best first."
     )
+    covered_by: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Ids of the hand-made sets holding every model of this combination "
+            "on the shelf. The combination is still listed: the grid hides a "
+            "covered one, Works with reads them all."
+        ),
+    )
+
+
+# The slot vocabulary, spelled as the hub's CHECK spells it.
+WorkflowSetSlot = Literal["checkpoint", "text_encoder", "vae", "lora", "other"]
+
+
+class HandMadeSetMember(BaseModel):
+    """One member of a hand-made workflow set."""
+
+    model_config = ConfigDict(extra="allow")
+
+    sha256: str = Field(description="What the member IS; a set holds bytes, not rows.")
+    slot: WorkflowSetSlot
+    label: Optional[str] = Field(
+        default=None, description="The model's name when it was added."
+    )
+    on_shelf: bool = Field(
+        description=(
+            "A shelf row holds these bytes now. False after the file was "
+            "forgotten or deleted; it reconnects when the same file returns."
+        )
+    )
+    id: Optional[int] = Field(default=None, description="Hub `model.id`, if on shelf.")
+    name: str = Field(description="Display name, else filename, else the label.")
+    filename: Optional[str] = None
+    kind: Optional[str] = Field(default=None, description="`file_kind`, if on shelf.")
+    base_model: Optional[str] = None
+    file_size: Optional[int] = None
+
+
+class MergeOfferModel(BaseModel):
+    """A model the merge offer would add to a hand-made set (#1523)."""
+
+    id: int = Field(description="Hub `model.id`; add it by this.")
+    sha256: str = Field(description="What Keep separate records.")
+    name: str
+    kind: str = Field(description="`file_kind`.")
+    slot: WorkflowSetSlot = Field(description="The slot it would land in.")
+    picture_count: int = Field(
+        description="Kept pictures in the active library that used it."
+    )
+    recipes: int = Field(description="Recipes, in any library, that used it.")
+
+
+class MergeOffer(BaseModel):
+    """The pictures' set a hand-made set could take in by adding models (#1523)."""
+
+    head_id: int = Field(description="The file the pictures' set is named after.")
+    head_name: str
+    picture_count: int = Field(
+        description="Kept pictures in the active library that would join."
+    )
+    recipes: int = Field(description="Recipes, in any library, that would join.")
+    covers: list[WorkflowSetCover] = Field(default_factory=list)
+    models: list[MergeOfferModel] = Field(
+        description="What the merge adds, by slot, most pictures first."
+    )
+
+
+class HandMadeSet(BaseModel):
+    """A workflow set the owner put together (#1520)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: int
+    name: Optional[str] = Field(default=None, description="Null when unnamed.")
+    created_at: str
+    updated_at: str
+    incomplete: bool = Field(description="The set has no checkpoint member.")
+    checkpoint_id: Optional[int] = Field(
+        default=None, description="The on-shelf `model.id` of its checkpoint."
+    )
+    picture_count: int = Field(
+        description="Kept pictures of the combinations this set covers."
+    )
+    recipes: int = Field(description="Recipes of the combinations this set covers.")
+    covers: list[WorkflowSetCover] = Field(default_factory=list)
+    members: list[HandMadeSetMember] = Field(
+        description="Checkpoint, text encoders, VAEs, LoRAs, others; by name within."
+    )
+    declined: list[str] = Field(
+        default_factory=list,
+        description="Sha256s the owner kept out of the merge offer (#1523).",
+    )
+    offer: Optional[MergeOffer] = Field(
+        default=None,
+        description=(
+            "Models recipes used with this set's checkpoint that it lacks, and "
+            "the pictures that would join if they were added. Derived per "
+            "request; nothing joins without the owner adding them (#1523)."
+        ),
+    )
+    kept_separate: int = Field(
+        default=0,
+        description="Kept pictures here the offer leaves out because of `declined`.",
+    )
+
+
+class WorkflowSetMemberRequest(BaseModel):
+    """A member to add: a shelf model by id, or a file by sha256.
+
+    The sha256 form is the undo path: it puts back a member whose file is no
+    longer on the shelf, so it needs the slot and label the delete returned.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: Optional[int] = Field(default=None, description="Hub `model.id`.")
+    sha256: Optional[str] = Field(
+        default=None, pattern=r"^[0-9a-fA-F]{64}$", description="A full digest."
+    )
+    slot: Optional[WorkflowSetSlot] = Field(
+        default=None,
+        description=(
+            "Required with `sha256`. With `model_id` it defaults from the "
+            "file's kind; `checkpoint` is accepted for a checkpoint or an "
+            "unclassified file only."
+        ),
+    )
+    label: Optional[str] = Field(
+        default=None,
+        max_length=500,
+        description="With `sha256` only: the name to keep for it.",
+    )
+
+    @model_validator(mode="after")
+    def _one_address(self):
+        if (self.model_id is None) == (self.sha256 is None):
+            raise ValueError("Name a member by exactly one of model_id or sha256.")
+        if self.sha256 is not None and self.slot is None:
+            raise ValueError("A member named by sha256 needs its slot.")
+        if self.model_id is not None and self.label is not None:
+            raise ValueError("A label goes with sha256; a model_id brings its own.")
+        return self
+
+
+class WorkflowSetCreateRequest(BaseModel):
+    """Body of ``POST /models/workflow-sets``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(
+        default=None,
+        max_length=MAX_SET_NAME_LENGTH,
+        description="Trimmed; blank or null leaves the set unnamed.",
+    )
+    members: list[WorkflowSetMemberRequest] = Field(
+        default_factory=list,
+        max_length=MAX_MODELS_PER_EDIT,
+        description="May be empty: an empty set is a set.",
+    )
+
+
+class WorkflowSetRenameRequest(BaseModel):
+    """Body of ``PATCH /models/workflow-sets/{set_id}``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(
+        max_length=MAX_SET_NAME_LENGTH,
+        description="Trimmed; blank or null clears the name.",
+    )
+
+
+class WorkflowSetMembersRequest(BaseModel):
+    """Body of ``POST /models/workflow-sets/{set_id}/members``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    members: list[WorkflowSetMemberRequest] = Field(
+        min_length=1, max_length=MAX_MODELS_PER_EDIT
+    )
+
+
+# A member's digest as the remove route takes it: exactly 64 characters.
+Digest = Annotated[str, StringConstraints(min_length=64, max_length=64)]
+
+
+class WorkflowSetRemoveRequest(BaseModel):
+    """Body of ``POST /models/workflow-sets/{set_id}/members/remove``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Each item a full-length digest: a malformed one is a 422 rather than a
+    # string that silently matches nothing. Length, not a hex pattern: the
+    # members it names already exist, so this only has to reject what cannot
+    # be one of them, and the add path's hex check guards what goes in.
+    sha256: list[Digest] = Field(
+        min_length=1,
+        max_length=MAX_MODELS_PER_EDIT,
+        description=(
+            "Members to take out, by full digest. One not in the set is ignored."
+        ),
+    )
+
+
+class WorkflowSetDeclinesRequest(BaseModel):
+    """Body of ``PUT /models/workflow-sets/{set_id}/declines``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sha256: list[Digest] = Field(
+        max_length=MAX_MODELS_PER_EDIT,
+        description="The whole list; empty offers the merge again.",
+    )
+
+
+class WorkflowSetDeclinesResponse(BaseModel):
+    """Body of ``PUT /models/workflow-sets/{set_id}/declines``."""
+
+    set: HandMadeSet
+    previous: list[str] = Field(description="The list before; putting it undoes.")
+
+
+class RemovedWorkflowSetMember(BaseModel):
+    """What a remove took out, shaped for putting it back."""
+
+    sha256: str
+    slot: WorkflowSetSlot
+    label: Optional[str] = None
+
+
+class WorkflowSetDeleteResponse(BaseModel):
+    """Body of ``DELETE /models/workflow-sets/{set_id}``."""
+
+    deleted: HandMadeSet = Field(
+        description="The set as it was, members included, for an undo to re-post."
+    )
+
+
+class WorkflowSetMembersResponse(BaseModel):
+    """Body of ``POST /models/workflow-sets/{set_id}/members``."""
+
+    set: HandMadeSet
+    added: list[str] = Field(
+        description="The sha256s actually inserted; members already there are not."
+    )
+
+
+class WorkflowSetRemoveResponse(BaseModel):
+    """Body of ``POST /models/workflow-sets/{set_id}/members/remove``."""
+
+    set: HandMadeSet
+    removed: list[RemovedWorkflowSetMember]
 
 
 class WorkflowSetsResponse(BaseModel):
@@ -782,8 +1056,8 @@ class WorkflowSetsResponse(BaseModel):
 
     combinations: list[WorkflowSetCombination] = Field(
         description=(
-            "Every distinct set of shelf models a kept picture proves ran "
-            "together, most pictures first. A model appears in every set it "
+            "Every distinct set of shelf models a kept picture or a stored "
+            "ComfyUI run proves ran together, most pictures first. A model appears in every set it "
             "has run in; membership is not exclusive and is stored nowhere."
         )
     )
@@ -791,14 +1065,20 @@ class WorkflowSetsResponse(BaseModel):
         description=(
             "Ids that are in none of the combinations above, which is a "
             "narrower statement than it looks: it means **no kept picture in "
-            "this library was made with them**. A recipe on the hub may name "
+            "this library was made with them and no stored ComfyUI run used "
+            "them**. A recipe on the hub may name "
             "one - from another library, or from pictures since deleted - and "
             "this says nothing about that. **Not a verdict** either way: it "
             "rules nothing out about what the file works with. Engines are "
             "excluded, because no generation graph can load one and their "
             "absence from a recipe means nothing at all. Returned so the grid "
-            "can draw them rather than quietly omitting them."
+            "can draw them rather than quietly omitting them. An on-shelf "
+            "member of a hand-made set is not listed here either."
         )
+    )
+    hand_made: list[HandMadeSet] = Field(
+        default_factory=list,
+        description="The owner's own workflow sets, newest first.",
     )
 
 
@@ -885,6 +1165,38 @@ def _cover_strip(covers) -> list[WorkflowSetCover]:
         )
         for cover in covers
     ]
+
+
+def _hand_made_set(entry: dict) -> HandMadeSet:
+    """One ``attach_hand_made`` entry as the response model."""
+    offer = entry.get("offer")
+    return HandMadeSet(
+        **{
+            key: value for key, value in entry.items() if key not in ("covers", "offer")
+        },
+        covers=_cover_strip(entry["covers"]),
+        offer=(
+            MergeOffer(**{**offer, "covers": _cover_strip(offer["covers"])})
+            if offer
+            else None
+        ),
+    )
+
+
+@contextmanager
+def _workflow_set_errors():
+    """The set service's refusals as HTTP answers."""
+    try:
+        yield
+    # Logged at info, not warning: these are answers to the owner's request
+    # (a set that is gone, a second checkpoint), not faults of the server, but
+    # the log should still say what was refused and why.
+    except WorkflowSetNotFoundError as exc:
+        logger.info("Workflow set request answered 404: %s", exc)
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except WorkflowSetRefusedError as exc:
+        logger.info("Workflow set request refused (409): %s", exc)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 def _family(row: dict) -> Optional[str]:
@@ -1584,7 +1896,9 @@ def create_router(server) -> APIRouter:
             "or more recipes bound together, with the kept pictures they made. "
             "A model appears in every combination it has run in, so membership "
             "overlaps and is stored nowhere - the evidence is a self-join over "
-            "`workflow_recipe_asset`, which is read here and nowhere written.\n\n"
+            "`workflow_recipe_asset`, which is read here and nowhere written, "
+            "plus the ComfyUI runs the workflow pull stored in "
+            "`comfyui_history_model` (`history_runs`, counted apart).\n\n"
             "**Co-occurrence is evidence; its absence is not.** Two models in "
             "one recipe proves they ran together. Two models never seen "
             "together proves nothing, so nothing is withheld for lacking a "
@@ -1592,18 +1906,19 @@ def create_router(server) -> APIRouter:
             "rather than being dropped. A member the evidence could only reach "
             "by a basename two shelf rows share is flagged `ambiguous` and "
             "still listed.\n\n"
-            "Scoped to the pictures of the active library, unlike "
+            "Pictures are scoped to the active library, unlike "
             "`POST /models/companions`, which counts every recipe the hub "
             "holds: that one keeps a file some other library needs, this one "
-            "draws what the library in front of the reader has made. Changes "
-            "nothing."
+            "draws what the library in front of the reader has made - or has "
+            "run in ComfyUI (the history rows the workflow pull stored; "
+            "ComfyUI need not be running). Changes nothing."
         ),
         tags=["model_shelf"],
         response_model=WorkflowSetsResponse,
     )
     def list_workflow_sets(request: Request):
         server.auth.ensure_secure_when_required(request)
-        found = fetch_workflow_sets(server.hub, server.vault)
+        found = _workflow_sets()
         return WorkflowSetsResponse(
             combinations=[
                 WorkflowSetCombination(
@@ -1612,13 +1927,148 @@ def create_router(server) -> APIRouter:
                         WorkflowSetMember(**member) for member in combination["models"]
                     ],
                     recipes=combination["recipes"],
+                    history_runs=combination["history_runs"],
                     picture_count=combination["picture_count"],
                     covers=_cover_strip(combination["covers"]),
+                    covered_by=combination["covered_by"],
                 )
                 for combination in found["combinations"]
             ],
             no_set=found["no_set"],
+            hand_made=[_hand_made_set(entry) for entry in found["hand_made"]],
         )
+
+    def _workflow_sets() -> dict:
+        return attach_hand_made(
+            server.hub, fetch_workflow_sets(server.hub, server.vault)
+        )
+
+    def _one_set(set_id: int) -> HandMadeSet:
+        # ponytail: the whole evidence read for one set's counts; a mutation is
+        # one click, so this is paid per gesture, never per row.
+        for entry in _workflow_sets()["hand_made"]:
+            if entry["id"] == set_id:
+                return _hand_made_set(entry)
+        raise HTTPException(status_code=404, detail=f"No workflow set {set_id}.")
+
+    @router.post(
+        "/models/workflow-sets",
+        status_code=201,
+        summary="Make a workflow set by hand",
+        description=(
+            "A set of shelf models the owner says work together: at most one "
+            "checkpoint, any number of text encoders, VAEs, LoRAs and others, "
+            "no order. May be empty or unnamed. A member named by `sha256` "
+            "need not be on the shelf, which is how an undo of a delete puts "
+            "a set back whole. An engine, a file still being hashed and a "
+            "second checkpoint are refused (409). Touches no file."
+        ),
+        tags=["model_shelf"],
+        response_model=HandMadeSet,
+    )
+    def create_workflow_set(
+        request: Request, payload: WorkflowSetCreateRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        with _workflow_set_errors():
+            set_id = create_set(
+                server.hub,
+                payload.name,
+                [member.model_dump() for member in payload.members],
+            )
+        return _one_set(set_id)
+
+    @router.patch(
+        "/models/workflow-sets/{set_id}",
+        summary="Rename a workflow set",
+        description="Null or blank clears the name.",
+        tags=["model_shelf"],
+        response_model=HandMadeSet,
+    )
+    def rename_workflow_set(
+        set_id: int, request: Request, payload: WorkflowSetRenameRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        with _workflow_set_errors():
+            rename_set(server.hub, set_id, payload.name)
+        return _one_set(set_id)
+
+    @router.delete(
+        "/models/workflow-sets/{set_id}",
+        summary="Delete a workflow set",
+        description=(
+            "Drops the set and nothing else: no file, no shelf row. Returns "
+            "the set as it was, so posting it back undoes the delete."
+        ),
+        tags=["model_shelf"],
+        response_model=WorkflowSetDeleteResponse,
+    )
+    def delete_workflow_set(set_id: int, request: Request):
+        server.auth.ensure_secure_when_required(request)
+        with _workflow_set_errors():
+            snapshot = delete_set(server.hub, set_id)
+        return WorkflowSetDeleteResponse(deleted=_hand_made_set(snapshot))
+
+    @router.post(
+        "/models/workflow-sets/{set_id}/members",
+        summary="Add models to a workflow set",
+        description=(
+            "A member already in the set is left as it is and not reported "
+            "under `added`. All or nothing: one refused member (409) adds none."
+        ),
+        tags=["model_shelf"],
+        response_model=WorkflowSetMembersResponse,
+    )
+    def add_workflow_set_members(
+        set_id: int, request: Request, payload: WorkflowSetMembersRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        with _workflow_set_errors():
+            added = add_members(
+                server.hub, set_id, [member.model_dump() for member in payload.members]
+            )
+        return WorkflowSetMembersResponse(set=_one_set(set_id), added=added)
+
+    @router.post(
+        "/models/workflow-sets/{set_id}/members/remove",
+        summary="Take models out of a workflow set",
+        description=(
+            "By sha256. An emptied set is kept. `removed` carries each slot "
+            "and label, so re-adding them by sha256 undoes the remove."
+        ),
+        tags=["model_shelf"],
+        response_model=WorkflowSetRemoveResponse,
+    )
+    def remove_workflow_set_members(
+        set_id: int, request: Request, payload: WorkflowSetRemoveRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        with _workflow_set_errors():
+            removed = remove_members(server.hub, set_id, payload.sha256)
+        return WorkflowSetRemoveResponse(
+            set=_one_set(set_id),
+            removed=[RemovedWorkflowSetMember(**row) for row in removed],
+        )
+
+    @router.put(
+        "/models/workflow-sets/{set_id}/declines",
+        summary="Keep models out of a workflow set's merge offer",
+        description=(
+            "Replaces the list of models (by sha256) the set's merge offer "
+            "leaves out: Keep separate adds to it, Offer again empties it. "
+            "Returns the list as it was, so putting that back undoes the call. "
+            "Touches no member and no file."
+        ),
+        tags=["model_shelf"],
+        response_model=WorkflowSetDeclinesResponse,
+    )
+    def put_workflow_set_declines(
+        set_id: int, request: Request, payload: WorkflowSetDeclinesRequest = Body(...)
+    ):
+        server.auth.ensure_secure_when_required(request)
+        with _workflow_set_errors():
+            previous = set_declines(server.hub, set_id, payload.sha256)
+        return WorkflowSetDeclinesResponse(set=_one_set(set_id), previous=previous)
 
     @router.post(
         "/models/{model_id}/open-location",

@@ -228,6 +228,32 @@ class TestCollisionIsAMerge:
 
         assert rows(hub)[0]["base_model"] == "flux.1-dev"
 
+    def test_the_merge_carries_comfyui_run_evidence_to_the_survivor(
+        self, hub, tmp_path
+    ):
+        """#1518: runs recorded against either row are runs of the same bytes."""
+        first = write_model(tmp_path / "one" / "a.safetensors")
+        second = write_model(tmp_path / "two" / "b.safetensors")
+        first_id = register(hub, first)
+        second_id = register(hub, second)
+        with hub.transaction() as conn:
+            conn.executemany(
+                "INSERT INTO comfyui_history_model (prompt_id, model_id) VALUES (?, ?)",
+                [("both", first_id), ("both", second_id), ("second", second_id)],
+            )
+
+        CheckpointHashTask(
+            hub, [(first_id, str(first)), (second_id, str(second))]
+        ).run()
+
+        survivor = rows(hub)[0]["id"]
+        assert {
+            (row["prompt_id"], row["model_id"])
+            for row in hub.fetchall(
+                "SELECT prompt_id, model_id FROM comfyui_history_model"
+            )
+        } == {("both", survivor), ("second", survivor)}
+
     def test_the_merge_keeps_the_header_facts_only_the_dropped_row_has(
         self, hub, tmp_path
     ):

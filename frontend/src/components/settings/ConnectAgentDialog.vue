@@ -1,7 +1,9 @@
 <script setup>
 /**
- * Mints a read-only token for `pixlstash-mcp` and hands back the client
- * configuration with the token already in it.
+ * Mints a token for `pixlstash-mcp` and hands back the client configuration
+ * with the token already in it. Read-only by default; "Read and write
+ * workflows" mints a full-access token and adds `--allow-write`, because every
+ * workflow route is owner-only and a scoped token cannot reach them.
  *
  * The whole point is that nobody copies a bare secret out of the token table
  * and then hand-edits a JSON file around it: the two blocks here paste
@@ -14,6 +16,7 @@ import { createToken } from "../../api/users";
 import { copyText } from "../../utils/clipboard";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
+import Segmented from "../widgets/Segmented.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -46,6 +49,12 @@ const loading = ref(false);
 const error = ref("");
 const token = ref("");
 const copied = ref("");
+const mode = ref("read");
+const MODES = [
+  { id: "read", label: "Read-only" },
+  { id: "write", label: "Read and write workflows" },
+];
+const allowWrite = computed(() => mode.value === "write");
 
 // `-s user` is load-bearing. `claude mcp add` defaults to `-s local`, which
 // registers the server only inside the directory it was run from, so the agent
@@ -53,8 +62,14 @@ const copied = ref("");
 // from the filesystem instead. A picture library is not a per-project thing.
 const claudeCommand = computed(() => {
   const url = remoteUrl.value ? ` --url ${remoteUrl.value}` : "";
-  return `claude mcp add -s user pixlstash -e PIXLSTASH_TOKEN=${token.value} -- pixlstash-mcp${url}`;
+  const write = allowWrite.value ? " --allow-write" : "";
+  return `claude mcp add -s user pixlstash -e PIXLSTASH_TOKEN=${token.value} -- pixlstash-mcp${url}${write}`;
 });
+
+const args = computed(() => [
+  ...(remoteUrl.value ? ["--url", remoteUrl.value] : []),
+  ...(allowWrite.value ? ["--allow-write"] : []),
+]);
 
 const configJson = computed(() =>
   JSON.stringify(
@@ -62,7 +77,7 @@ const configJson = computed(() =>
       mcpServers: {
         pixlstash: {
           command: "pixlstash-mcp",
-          ...(remoteUrl.value ? { args: ["--url", remoteUrl.value] } : {}),
+          ...(args.value.length ? { args: args.value } : {}),
           env: { PIXLSTASH_TOKEN: token.value },
         },
       },
@@ -80,6 +95,7 @@ watch(
     error.value = "";
     token.value = "";
     copied.value = "";
+    mode.value = "read";
   },
 );
 
@@ -87,10 +103,12 @@ async function create() {
   error.value = "";
   loading.value = true;
   try {
-    const created = await createToken({
-      description: "AI agent (MCP)",
-      scope: "READ",
-    });
+    // Distinct descriptions so the token list says which row to revoke.
+    const created = await createToken(
+      allowWrite.value
+        ? { description: "AI agent (MCP, read/write)", scope: "ALL" }
+        : { description: "AI agent (MCP)", scope: "READ" },
+    );
     if (!created?.token) throw new Error("No token returned");
     token.value = created.token;
     emit("created");
@@ -115,25 +133,54 @@ async function copy(key, text) {
     :open="open"
     title="Connect an AI agent"
     @close="emit('close')"
-    @accept="!token && !loading && create()"
+    @accept="!token && !loading && !allowWrite && create()"
   >
     <!-- Step 1: explain what the agent gets, then mint on an explicit press. -->
     <template v-if="!token">
-      <p class="cad-hint">
-        Creates a read-only token and the configuration to paste into an MCP
-        client. The agent can search this library and read pictures, tags and
-        ComfyUI recipes. It has no tools that change or delete anything.
-      </p>
-      <p class="cad-hint">
-        The token covers the whole library. Use <strong>New token</strong> if
-        the agent should see only one set, character or project.
-      </p>
+      <div class="cad-block">
+        <span id="cad-access-label" class="section-label">Agent access</span>
+        <Segmented
+          v-model="mode"
+          :options="MODES"
+          full
+          aria-labelledby="cad-access-label"
+        />
+      </div>
+      <template v-if="!allowWrite">
+        <p class="cad-hint">
+          Creates a read-only token and the configuration to paste into an MCP
+          client. The agent can search this library and read pictures, tags and
+          ComfyUI recipes. It has no tools that change or delete anything.
+        </p>
+        <p class="cad-hint">
+          The token covers the whole library. Use <strong>New token</strong> if
+          the agent should see only one set, character or project.
+        </p>
+      </template>
+      <template v-else>
+        <p class="cad-hint">
+          The agent can also edit and store workflow graphs, and start runs
+          that use your GPU and add pictures to the library. With a ComfyUI MCP
+          server connected too, it can check its edits against your ComfyUI
+          before storing them.
+        </p>
+        <p class="cad-warn">
+          This mints a full-access token. Any agent that can read its own
+          configuration file has full owner control of PixlStash, whatever
+          tools it is offered.
+        </p>
+      </template>
       <p v-if="error" class="cad-error">{{ error }}</p>
     </template>
 
     <!-- Step 2: the token is in both blocks, and is not readable again. -->
     <template v-else>
-      <p class="cad-hint">
+      <p class="cad-hint cad-minted">
+        {{
+          allowWrite
+            ? "Full-access token for reading and writing workflows. Revoke it from the token list when you are done."
+            : "Read-only token."
+        }}
         The token is shown once and cannot be read back. Copy one of these now.
       </p>
       <p v-if="remoteUrl" class="cad-warn">
@@ -202,7 +249,7 @@ async function copy(key, text) {
         :loading="loading"
         @click="create"
       >
-        Create token
+        {{ allowWrite ? "Create full-access token" : "Create token" }}
       </AppButton>
     </template>
   </AppDialog>

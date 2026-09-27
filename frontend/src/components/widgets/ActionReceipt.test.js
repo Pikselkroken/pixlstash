@@ -370,3 +370,106 @@ describe("ActionReceipt - placement", () => {
     ).toContain("padding-bottom: 0px");
   });
 });
+
+describe("ActionReceipt - local receipts (#1573)", () => {
+  function raiseLocal(store, undo = vi.fn().mockResolvedValue(true)) {
+    store.showLocalReceipt({
+      summary: 'Added 1 model to "Portrait kit".',
+      icon: "mdi-playlist-plus",
+      undo,
+      redo: vi.fn().mockResolvedValue({}),
+    });
+    return undo;
+  }
+
+  it("draws a local receipt as the same pill and runs its own undo, then offers Redo", async () => {
+    const store = useOperationStore();
+    store.setLocalReceiptHost(true);
+    const undoSpy = vi.spyOn(store, "undo");
+    const wrapper = mount(ActionReceipt, {
+      ...globalOpts,
+      props: { localOnly: true },
+    });
+    const undo = raiseLocal(store);
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find(".r-text").text()).toBe(
+      'Added 1 model to "Portrait kit"',
+    );
+    expect(wrapper.find(".r-progress").exists()).toBe(true);
+    await wrapper.find(".r-btn").trigger("click");
+    await vi.waitFor(() => expect(undo).toHaveBeenCalledTimes(1));
+    expect(undoSpy).not.toHaveBeenCalled();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find(".r-btn").text()).toContain("Redo");
+  });
+
+  it("hides and does not announce a library receipt when local-only", async () => {
+    const store = useOperationStore();
+    const wrapper = mount(ActionReceipt, {
+      ...globalOpts,
+      props: { localOnly: true },
+    });
+    store.showReceipt(store.buildReceipt(op(), "did"));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(wrapper.find(".receipt").exists()).toBe(false);
+    expect(
+      wrapper.find('[data-testid="action-receipt-announcement"]').text(),
+    ).toBe("");
+  });
+
+  it("raises nothing, and keeps nothing, without a host screen", () => {
+    const store = useOperationStore();
+    raiseLocal(store);
+    expect(store.receipt).toBe(null);
+    store.setLocalReceiptHost(true);
+    raiseLocal(store);
+    expect(store.receipt.local).toBeTruthy();
+    store.setLocalReceiptHost(false);
+    expect(store.receipt).toBe(null);
+  });
+
+  it("narrates an undo that outlasts the window, and never says Undone for a failed one", async () => {
+    const store = useOperationStore();
+    store.setLocalReceiptHost(true);
+    let finish;
+    const slow = vi.fn(() => new Promise((resolve) => (finish = resolve)));
+    raiseLocal(store, slow);
+    const pending = store.takeLocalReceiptAction();
+    await vi.advanceTimersByTimeAsync(20_000);
+    finish(true);
+    await pending;
+    expect(store.receipt.mode).toBe("undone");
+    expect(store.receipt.mergedCount).toBe(0);
+    // The flipped pill drains on its own window; the hold was the call's only.
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(store.receipt).toBe(null);
+
+    raiseLocal(store, vi.fn().mockResolvedValue(false));
+    await store.takeLocalReceiptAction();
+    expect(store.receipt).toBe(null);
+  });
+
+  it("lets a receipt the undo raised drain on its own window", async () => {
+    const store = useOperationStore();
+    store.setLocalReceiptHost(true);
+    // Undoing a create runs the delete verb, which raises its own pill.
+    raiseLocal(
+      store,
+      vi.fn(async () => {
+        store.showLocalReceipt({
+          summary: "Deleted the set",
+          icon: "mdi-layers-remove",
+          destructive: true,
+          undo: vi.fn(),
+          redo: vi.fn(),
+        });
+        return true;
+      }),
+    );
+    await store.takeLocalReceiptAction();
+    expect(store.receipt.summary).toBe("Deleted the set");
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(store.receipt).toBe(null);
+  });
+});

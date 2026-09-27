@@ -101,21 +101,45 @@ export async function patchWorkflowCard(workflowKey, changes) {
 }
 
 /**
- * Mark a card's LoRA slots structural or recipe.
+ * The LoRAs of a card's whole stack: the ones in every picture (`shared`),
+ * the ones that change (`varying`, most pictures first) and the pictures that
+ * loaded none of those (`without`).
  *
- * **This re-keys the card**, and may split it into several or merge it into
- * another: `key` in the answer is where the card addressed here now lives,
- * and the caller has to follow it rather than keep the key it sent.
+ * Each LoRA is named by `asset`, the stored graphs' reference, which is what
+ * `setLoraPromotion` and the picture grid's `workflow_lora` filter take.
+ * `cover` is the picture on top of the stack; `cover_asset` then says which
+ * changing LoRA it loaded, for the top of the pile.
  *
  * @param {string} workflowKey
- * @param {Object<string, string>} marks `{slot_label: "structural"|"recipe"}`
+ * @param {{cover?: number}} [options]
+ * @returns {Promise<{keys: string[], pictures: number, shared: Object[],
+ *   varying: Object[], without: ?Object, cover_asset: ?string}>}
+ */
+export async function getLoraSummary(workflowKey, { cover } = {}) {
+  return unwrap(
+    apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}/lora-summary`, {
+      params: cover ? { cover } : {},
+    }),
+  );
+}
+
+/**
+ * Promote one LoRA to a workflow of its own inside the stack, or put it back.
+ *
+ * **This re-keys cards**: the pictures that loaded it move to a new card (or
+ * back). `key` in the answer is where the card addressed here now lives.
+ *
+ * @param {string} workflowKey
+ * @param {string} asset the LoRA as `getLoraSummary` names it
+ * @param {boolean} promoted
  * @returns {Promise<{key: string, moved: Object}>}
  */
-export async function setWorkflowSlots(workflowKey, marks) {
+export async function setLoraPromotion(workflowKey, asset, promoted) {
   return unwrap(
-    apiClient.put(`/workflows/${encodeURIComponent(workflowKey)}/slots`, {
-      marks,
-    }),
+    apiClient.put(
+      `/workflows/${encodeURIComponent(workflowKey)}/lora-promotion`,
+      { asset, promoted },
+    ),
   );
 }
 
@@ -134,6 +158,24 @@ export async function setWorkflowDefaults(workflowKey, defaults) {
     apiClient.put(`/workflows/${encodeURIComponent(workflowKey)}/defaults`, {
       defaults,
     }),
+  );
+}
+
+/**
+ * Replace a model a card's workflow loads (a missing checkpoint), or undo it.
+ *
+ * `was` is the file as the graph names it, `now` a shelf model's filename or
+ * `null` to load the original again. The card keeps its pictures, and a
+ * picture made with the replacement is filed on it. Answers with the card;
+ * follow its `card.key`.
+ *
+ * @param {string} workflowKey
+ * @param {{was: string, now: ?string}} fix
+ * @returns {Promise<Object>}
+ */
+export async function setWorkflowModelFix(workflowKey, fix) {
+  return unwrap(
+    apiClient.put(`/workflows/${encodeURIComponent(workflowKey)}/model-fix`, fix),
   );
 }
 
@@ -301,6 +343,62 @@ export async function duplicateWorkflow(workflowKey) {
 }
 
 /**
+ * What the Clone with new models dialog draws for one card.
+ *
+ * Without `checkpointId`: the model files the card's graph names (each
+ * resolved to a shelf row where one fits) and the shelf's checkpoints, VAEs
+ * and text encoders. With it: also the VAEs and text encoders recipes have run
+ * beside that checkpoint, each saying which step of the widening answered
+ * (`via`; `declared` when nothing has and only the file layout fits), and the LoRAs and ControlNets trained on another family (`flags`).
+ * Call it on open and on each checkpoint choice, never per keystroke: the
+ * server reads the whole shelf and every recipe to answer.
+ *
+ * With `replacing` (the Workflow tab's "Replace with…", #1596): also
+ * `replacements`, the shelf models that go with the workflow's checkpoint (for
+ * a checkpoint: that share the missing one's base model, where anything says
+ * which) and that the loader naming that file can load, and
+ * `replacements_reason` when there are none.
+ *
+ * @param {string} workflowKey
+ * @param {{checkpointId?: number, replacing?: string, slotKind?: string}} [options]
+ * @returns {Promise<Object>}
+ */
+export async function readModelSwap(
+  workflowKey,
+  { checkpointId, replacing, slotKind } = {},
+) {
+  const params = {};
+  if (checkpointId != null) params.checkpoint_id = checkpointId;
+  if (replacing != null) params.replacing = replacing;
+  if (slotKind != null) params.slot_kind = slotKind;
+  return unwrap(
+    apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}/model-swap`, {
+      params,
+    }),
+  );
+}
+
+/**
+ * Write a copy of this workflow with model files replaced, as a new card.
+ *
+ * `swaps` maps the graph's filename to the one to load instead; every loader
+ * naming it is rewritten. `verified` in the answer is false when ComfyUI was
+ * not reachable and the names were written unchecked.
+ *
+ * @param {string} workflowKey
+ * @param {{name: string, swaps: Object<string, string>}} body
+ * @returns {Promise<{name: string, workflow_key: ?string, swapped: Array, unswapped: Array, verified: boolean}>}
+ */
+export async function cloneWorkflowWithModels(workflowKey, body) {
+  return unwrap(
+    apiClient.post(
+      `/workflows/${encodeURIComponent(workflowKey)}/clone-with-models`,
+      body,
+    ),
+  );
+}
+
+/**
  * Send this card's workflow file to the system trash.
  *
  * Only a card with a file has one: a workflow the library knows from its
@@ -329,7 +427,11 @@ export async function deleteWorkflowFile(workflowKey) {
  * @param {string} workflowKey
  * @returns {Promise<{workflow_key: string, editable: boolean, refusal: ?string,
  *   source: ?Object, sink: ?Object, loaders: Array<Object>,
- *   added_loader_class: ?string}>}
+ *   added_loader_class: ?string, lanes: Array<Object>, branch_note: ?string}>}
+ *   Where the model forks, `loaders` is the trunk every pass reads and `lanes`
+ *   holds one `{source, sampler, sink, loaders, added_loader_class}` per pass;
+ *   empty for a straight chain. `branch_note` says why loaders past a further
+ *   branch are left as they are.
  */
 export async function getLoraChain(workflowKey) {
   return unwrap(
@@ -342,14 +444,16 @@ export async function getLoraChain(workflowKey) {
  *
  * `entries` is the whole chain in apply order: an existing loader by
  * `node_id` (kept, maybe moved or re-weighted), a new one by the shelf
- * `sha256` with `node_id: null`. An existing loader left out is deleted. The
+ * `sha256` with `node_id: null`. For a forked chain `entries` is the trunk
+ * and `lanes` one such list per lane, in the read's order; an existing loader
+ * may sit in any of them. An existing loader left out of all is deleted. The
  * original file is never modified: a write answers 201 with the new card's
  * `workflow_key`, and `dry_run: true` answers 200 with only the `changes` the
  * confirm step lists.
  *
  * @param {string} workflowKey
  * @param {{entries: Array<{node_id: ?string, sha256?: string, strength?: number}>,
- *   name: ?string, dry_run: boolean}} body
+ *   lanes?: Array<Array<Object>>, name: ?string, dry_run: boolean}} body
  * @returns {Promise<{dry_run: boolean, name: ?string, workflow_key: ?string,
  *   changes: Array<{kind: string, node_id: ?string, text: string}>}>}
  */

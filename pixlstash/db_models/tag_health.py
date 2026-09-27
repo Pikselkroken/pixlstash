@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
@@ -79,4 +79,6 @@ class TagHealth(SQLModel, table=True):
     # tag has never had a suggestion reviewed ("Last review: never").
     last_reviewed_at: Optional[datetime] = Field(default=None)
 
-    computed_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    computed_at: Optional[datetime] = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )

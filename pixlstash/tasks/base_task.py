@@ -2,7 +2,7 @@ import threading
 import uuid
 
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Optional
 
@@ -68,7 +68,7 @@ class BaseTask(ABC):
         self.result: Any = None
         self.error: Optional[str] = None
         self.status = TaskStatus.PENDING
-        self.created_at = datetime.utcnow()
+        self.created_at = datetime.now(timezone.utc)
         self.started_at: Optional[datetime] = None
         self.completed_at: Optional[datetime] = None
         self.attempts_used = 0
@@ -105,7 +105,7 @@ class BaseTask(ABC):
                 self.status = TaskStatus.CANCELLED
                 return None
 
-            self.started_at = datetime.utcnow()
+            self.started_at = datetime.now(timezone.utc)
             self.status = TaskStatus.RUNNING
             for attempt in range(1, self.VRAM_OOM_ATTEMPTS + 1):
                 # Recorded before the attempt runs, so whatever ends the task -
@@ -148,7 +148,7 @@ class BaseTask(ABC):
             self.status = TaskStatus.FAILED
             raise
         finally:
-            self.completed_at = datetime.utcnow()
+            self.completed_at = datetime.now(timezone.utc)
             self._done_event.set()
 
     @property

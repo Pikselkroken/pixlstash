@@ -18,7 +18,7 @@ regression guard.
 import json
 import secrets
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -110,7 +110,7 @@ def _inject_picture_scoped_all_token(server, picture_id: int) -> str:
                 library_uuid=server._active_library_uuid(),
                 token_hash=bcrypt.hash(token_value),
                 token_prefix=token_value[:8],
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
                 description="forged picture-scoped ALL token (test only)",
                 scope="ALL",
                 resource_type="picture",

@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import hashlib
 import json
 import math
 import os
@@ -7,6 +8,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from collections import Counter
 from urllib.parse import quote
 
 import websockets
@@ -50,6 +52,7 @@ from pixlstash.services.comfyui_recipe_service import (
     fetch_object_info,
     plan_lora_insertion,
     preflight_prompt,
+    read_lora_chain,
     sanitize_prompt_graph,
     unchecked_preflight,
 )
@@ -85,6 +88,7 @@ from pixlstash.services.workflow_io import api_graph, detect_workflow_io
 from pixlstash.tasks.base_task import TaskStatus
 from pixlstash.tasks.comfyui_workflow_pull_task import ComfyUIWorkflowPullTask
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.atomic_write import write_json_atomic
 from pixlstash.utils.path_utils import resolve_path_within
 from platformdirs import user_data_dir
 
@@ -93,8 +97,12 @@ from platformdirs import user_data_dir
 # stay thin and delegate to it. See pixlstash/services/comfyui_service.py.
 from pixlstash.services.comfyui_service import (
     _comfyui_abort,
-    graph_has_pixlstash_nodes,
+    comfyui_can_open_workflows,
+    library_ids_named,
+    pixlstash_node_refusals,
+    swap_pixlstash_savers,
 )
+from pixlstash.services.workflow_library_service import read_library_ids
 
 # Re-exported so existing call sites and tests that import these helpers from
 # this module keep resolving after the move into services/comfyui_service.py.
@@ -197,6 +205,99 @@ def _load_workflow_json(path: str) -> dict:
 def _save_workflow_json(path: str, payload: dict) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=True)
+
+
+# The API graph ComfyUI converted an editor-format file into (#1530), kept
+# BESIDE the file rather than over it: the file stays byte-identical to what
+# ComfyUI holds, so it still re-opens there and still deduplicates against a
+# re-pull. Not ``.json``, so the folder listing never reads it as a workflow.
+CONVERTED_SUFFIX = ".api"
+
+
+def _editor_digest(workflow: dict) -> str:
+    """Which version of an editor file a converted graph was made from."""
+    return hashlib.sha256(
+        workflow_bindings.canonical(workflow).encode("utf-8")
+    ).hexdigest()
+
+
+def converted_graph(path: str, workflow: dict) -> dict | None:
+    """The API graph stored beside the editor file at *path*, or ``None``.
+
+    ``None`` too when it will not read, or when it was converted from another
+    version of the file: a file overwritten since is a different workflow, and
+    running the old conversion would run the wrong graph.
+    """
+    sidecar = f"{path}{CONVERTED_SUFFIX}"
+    if not os.path.isfile(sidecar):
+        return None
+    try:
+        stored = _load_workflow_json(sidecar)
+    except (OSError, ValueError, RecursionError) as exc:
+        logger.warning(
+            "Converted graph %s will not load, so %s runs as an editor file: %s",
+            sidecar,
+            path,
+            exc,
+        )
+        return None
+    if not isinstance(stored, dict):
+        logger.warning("Converted graph %s is not a JSON object; ignored.", sidecar)
+        return None
+    if stored.get("converted_from") != _editor_digest(workflow):
+        logger.info(
+            "Converted graph %s was made from another version of %s; ignored "
+            "until the file is converted again.",
+            sidecar,
+            path,
+        )
+        return None
+    return api_graph(stored)
+
+
+def runnable_document(path: str, workflow: dict) -> dict:
+    """*workflow*, or the graph it was converted into if it is an editor file.
+
+    What every reader that runs or parameterises a stored file goes through,
+    so a converted editor file reads as the API graph it now has. PixlStash's
+    own keys (bindings, output choice) are the file's and carry over.
+    """
+    if api_graph(workflow) is not None:
+        return workflow
+    graph = converted_graph(path, workflow)
+    if graph is None:
+        return workflow
+    # Not the bindings: theirs are paths into the editor structure (or the
+    # start-up migration's empty list), and either would suppress detection
+    # on the API graph and fill nothing.
+    own = {
+        k: v
+        for k, v in workflow.items()
+        if str(k).startswith("pixlstash_") and k != workflow_bindings.BINDINGS_KEY
+    }
+    return {**own, **graph}
+
+
+def _converted_mtime_ns(path: str) -> int:
+    """The converted graph's mtime beside *path*, 0 when there is none."""
+    try:
+        return os.stat(f"{path}{CONVERTED_SUFFIX}").st_mtime_ns
+    except FileNotFoundError:
+        return 0
+    except OSError as exc:
+        logger.warning("Could not stat the converted graph of %s: %s", path, exc)
+        return 0
+
+
+def store_converted_graph(path: str, workflow: dict, graph: dict) -> None:
+    """Write *graph* beside the editor file at *path*, which holds *workflow*.
+
+    Atomic, so a listing racing the write never reads (and caches) half of it.
+    """
+    write_json_atomic(
+        f"{path}{CONVERTED_SUFFIX}",
+        {"converted_from": _editor_digest(workflow), "prompt": graph},
+    )
 
 
 def _store_workflow(
@@ -429,16 +530,22 @@ def trash_user_workflow(hub, workflow_name: str) -> str:
     except (TrashPermissionError, OSError, RecursionError, ValueError) as exc:
         logger.warning("Failed to delete workflow %s: %s", normalized, exc)
         raise HTTPException(status_code=500, detail="Failed to delete workflow")
-    # The placeholder migration's backup goes with the workflow it copied.
-    backup = f"{path}{workflow_bindings.BACKUP_SUFFIX}"
-    if os.path.exists(backup):
+    # The placeholder migration's backup and the converted graph go with the
+    # workflow they were made from.
+    for what, extra in (
+        ("migration backup", f"{path}{workflow_bindings.BACKUP_SUFFIX}"),
+        ("converted graph", f"{path}{CONVERTED_SUFFIX}"),
+    ):
+        if not os.path.exists(extra):
+            continue
         try:
-            os.remove(backup)
+            os.remove(extra)
         except OSError as exc:
             logger.warning(
-                "Deleted workflow %s but not its migration backup %s: %s",
+                "Deleted workflow %s but not its %s %s: %s",
                 normalized,
-                backup,
+                what,
+                extra,
                 exc,
             )
     if hub is not None:
@@ -533,6 +640,15 @@ def _file_in_hub(hub, name: str, workflow: dict) -> tuple[str | None, str | None
         return None, None
     try:
         graph = api_graph(workflow)
+        if graph is None:
+            # A converted editor file files its API graph (#1530): the card
+            # gets model slots and a structural hash instead of a topology.
+            try:
+                path = resolve_path_within(workflow_user_dir(), name)
+            except ValueError:
+                path = None
+            if path is not None:
+                graph = converted_graph(path, workflow)
         if graph is None:
             topology_hash = record_ui_graph(hub, workflow)
             structural_hash = None
@@ -670,7 +786,6 @@ def _describe_lora_insertion(
     graph: dict | None,
     object_info: dict | None,
     error: str | None,
-    digest_loader: bool = True,
 ) -> dict | None:
     """Where a LoRA loader would go, for the owner to see before a run (#1376).
 
@@ -678,9 +793,6 @@ def _describe_lora_insertion(
         graph: The API-format graph, or ``None`` for a UI-format file.
         object_info: The map already read for this request, or ``None``.
         error: Why ComfyUI could not be asked, when it could not.
-        digest_loader: Whether this surface's run would allow the
-            ComfyUI-PixlStash loader; ``False`` for a replay, so the plan does
-            not warn about a node that route will never insert.
 
     Returns:
         ``None`` when the graph already has a LoRA loader, else
@@ -704,11 +816,67 @@ def _describe_lora_insertion(
         }
     try:
         plan = plan_lora_insertion(graph, object_info)
-        plan["pixlstash_loader"] = plan["pixlstash_loader"] and digest_loader
         return {"plan": plan, "reason": None}
     except LookupError as exc:
         logger.info("No LoRA loader can be added to this graph: %s", exc)
         return {"plan": None, "reason": str(exc)}
+
+
+def _describe_lora_chain(
+    graph: dict, object_info: dict | None, error: str | None
+) -> dict:
+    """Which LoRAs feed which sampler pass, as Edit LoRAs reads the chain.
+
+    ``lora_slots`` is a flat list, so a reader of the recipe alone cannot tell
+    a two-pass graph from a straight one, nor which pass a LoRA applies to.
+    This is :func:`read_lora_chain`'s answer, cut down to names: the ``trunk``
+    every pass reads and one entry per pass where the model forks.
+
+    Args:
+        graph: The API-format graph.
+        object_info: The map already read for this request, or ``None``.
+        error: Why ComfyUI could not be asked, when it could not.
+
+    Returns:
+        ``{"branches", "trunk", "passes", "note", "refusal"}``. ``branches``
+        is ``None`` when the chain could not be read, and ``refusal`` says why.
+    """
+    unread = {"branches": None, "trunk": [], "passes": [], "note": None}
+    if object_info is None:
+        return {
+            **unread,
+            "refusal": (
+                "PixlStash could not ask ComfyUI how this graph's LoRAs are "
+                f"wired: {error}"
+            ),
+        }
+    try:
+        chain = read_lora_chain(graph, object_info)
+    except LookupError as exc:
+        logger.info("This graph's LoRA chain cannot be read: %s", exc)
+        return {**unread, "refusal": str(exc)}
+
+    def loras(loaders: list[dict]) -> list[dict]:
+        return [
+            {"node_id": str(loader["node_id"]), "name": loader["name"]}
+            for loader in loaders
+        ]
+
+    return {
+        "branches": bool(chain["lanes"]),
+        "trunk": loras(chain["loaders"]),
+        "passes": [
+            {
+                "node_id": str(lane["pass"]["node_id"]),
+                "class_type": lane["pass"].get("class_type"),
+                "title": lane["pass"].get("title"),
+                "loras": loras(lane["loaders"]),
+            }
+            for lane in chain["lanes"]
+        ],
+        "note": chain.get("branch_note"),
+        "refusal": None,
+    }
 
 
 def _missing_placeholders(payload: dict, detected=None) -> list[str]:
@@ -732,14 +900,18 @@ def _missing_placeholders(payload: dict, detected=None) -> list[str]:
 
 # ponytail: one entry per file version; stale versions age out of the LRU.
 @functools.lru_cache(maxsize=512)
-def _describe_workflow(path: str, source: str, mtime_ns: int, size: int) -> dict:
+def _describe_workflow(
+    path: str, source: str, mtime_ns: int, size: int, converted_mtime_ns: int = 0
+) -> dict:
     """List metadata for one workflow file, recomputed only when the file changes.
 
     Keyed on mtime and size so detection runs once per file version, and a file
-    that stays broken is logged once rather than on every menu open.
+    that stays broken is logged once rather than on every menu open. The
+    converted graph's mtime is in the key too, so converting a file (#1530)
+    makes it runnable on the next list rather than on its next edit.
     """
     try:
-        payload = _load_workflow_json(path)
+        payload = runnable_document(path, _load_workflow_json(path))
     except Exception as exc:
         logger.warning("Failed to read %s workflow %s: %s", source, path, exc)
         return {
@@ -1408,6 +1580,13 @@ class ComfyUIWorkflowLoraInsertionResponse(ComfyUILoraInsertionResponse):
     has_lora_loader: Optional[bool] = False
 
 
+class ComfyUIWorkflowCardResponse(BaseModel):
+    """The Workflows card a stored workflow runs as."""
+
+    name: str
+    workflow_key: str
+
+
 class ComfyUIWorkflowListResponse(BaseModel):
     """List of ComfyUI workflows, by name.
 
@@ -1429,6 +1608,12 @@ class ComfyUIWorkflowDeleteResponse(BaseModel):
 
     status: str
     name: str
+
+
+class ComfyUIPixlstashNodeResponse(BaseModel):
+    """Whether the owner's ComfyUI can open a PixlStash workflow link."""
+
+    can_open_workflows: Optional[bool] = None
 
 
 class ComfyUIAbortResponse(BaseModel):
@@ -1453,6 +1638,17 @@ class ComfyUIWorkflowImportResponse(BaseModel):
     matched: bool = False
     # The Workflows view row it is filed under; None when it could not be.
     topology_hash: Optional[str] = None
+
+
+class ComfyUIWorkflowConvertResponse(BaseModel):
+    """An editor file with the API graph ComfyUI converted it into (#1530)."""
+
+    # The stored editor file the graph now sits beside.
+    name: str
+    # True when that file was already stored; False when this stored it.
+    matched: bool
+    # The card the file is on now; None when it could not be filed.
+    workflow_key: Optional[str] = None
 
 
 class ComfyUIWorkflowPullStartResponse(BaseModel):
@@ -1508,6 +1704,9 @@ class ComfyUIWorkflowPullSummary(BaseModel):
     missing_model_files: list[str] = []
     # The cards the pull filed a file on.
     workflow_keys: list[str] = []
+    # Finished runs in ComfyUI's /history that named a shelf model, filed as
+    # companion evidence (#1518); None when the history could not be read.
+    history_runs: int | None = None
 
 
 class ComfyUIWorkflowPullStateResponse(BaseModel):
@@ -1650,6 +1849,9 @@ class ComfyUIPictureRecipeResponse(BaseModel):
 
     available: bool = False
     reason: Optional[str] = None
+    # With `reason: "pixlstash_nodes"`, the ComfyUI-PixlStash nodes a variant
+    # may not run, as `{node_id, class_type, title, why}` (#1521).
+    pixlstash_nodes: list[dict] = []
     # Which generator wrote the recipe: "comfyui" for an embedded API graph,
     # "a1111" for a picture whose recipe is A1111 infotext.
     source: str = "comfyui"
@@ -1689,6 +1891,9 @@ class ComfyUIPictureRecipeResponse(BaseModel):
     node_count: int = 0
     # Distinct class_type names the graph would execute, sorted.
     node_classes: list[str] = []
+    # How many nodes of each class, so a second sampler pass is visible even
+    # where ``node_classes`` lists its class once (#1579).
+    node_class_counts: dict[str, int] = {}
     # True when the source file entered the vault from outside this instance
     # (upload, watch folder, reference folder) rather than being generated here.
     source_is_imported: bool = False
@@ -1702,6 +1907,9 @@ class ComfyUIPictureRecipeResponse(BaseModel):
     lora_slots: list[dict] = []
     # Set only when lora_slots is empty: where a loader would be added (#1376).
     lora_insertion: Optional[ComfyUILoraInsertionResponse] = None
+    # Whether the model forks and which LoRAs feed which pass (#1579); see
+    # `_describe_lora_chain`. None for a recipe with no graph to read.
+    lora_chain: Optional[dict] = None
     preflight: Optional[ComfyUIPreflightResponse] = None
 
 
@@ -1927,7 +2135,13 @@ def create_router(server) -> APIRouter:
                     continue
                 # Copied, because the description is the cache's own dict.
                 described = dict(
-                    _describe_workflow(path, source, stat.st_mtime_ns, stat.st_size)
+                    _describe_workflow(
+                        path,
+                        source,
+                        stat.st_mtime_ns,
+                        stat.st_size,
+                        _converted_mtime_ns(path),
+                    )
                 )
                 picture_inputs = described.pop("picture_inputs", {})
                 workflows.append(
@@ -1974,7 +2188,7 @@ def create_router(server) -> APIRouter:
         if not path:
             raise HTTPException(status_code=404, detail="Workflow not found")
         try:
-            document = _load_workflow_json(path)
+            document = runnable_document(path, _load_workflow_json(path))
         except Exception as exc:
             logger.warning("Failed to read workflow %s: %s", path, exc)
             raise HTTPException(
@@ -2018,6 +2232,60 @@ def create_router(server) -> APIRouter:
             "workflow": name,
             **_describe_lora_insertion(graph, object_info, error),
         }
+
+    @router.get(
+        "/comfyui/pixlstash-node",
+        summary="Whether ComfyUI can open a PixlStash workflow",
+        description=(
+            "Asks the configured ComfyUI's /extensions whether the "
+            "ComfyUI-PixlStash node's open_workflow.js is loaded, the script "
+            "that reads ?pixlstash_workflow=<key>. can_open_workflows is null "
+            "when ComfyUI cannot be asked."
+        ),
+        response_model=ComfyUIPixlstashNodeResponse,
+    )
+    def get_comfyui_pixlstash_node(request: Request):
+        comfyui_url = _comfyui_url(server.auth.get_user_for_request(request))
+        return {"can_open_workflows": comfyui_can_open_workflows(comfyui_url)}
+
+    @router.post(
+        "/comfyui/workflows/{workflow_name}/card",
+        summary="Put a stored workflow on its Workflows card",
+        description=(
+            "Files a stored workflow, user or built-in, on its Workflows card "
+            "the way an import files it, and returns the card's key so the Run "
+            "popup can open on it. A built-in has no card until something asks: "
+            "Edit with ComfyUI asks for the built-in image edit workflow. "
+            "Idempotent: a workflow already filed answers its existing card."
+        ),
+        response_model=ComfyUIWorkflowCardResponse,
+        responses={
+            404: {"description": "No stored workflow has this name."},
+            409: {"description": "The workflow's graph could not be put on a card."},
+        },
+    )
+    def card_for_comfyui_workflow(request: Request, workflow_name: str):
+        # Sync on purpose: filing reads the file and writes the hub. Under the
+        # inbox lock, as the import is, so a delete cannot trash the file
+        # between the read and the filing and leave a card naming it.
+        with workflow_inbox.INBOX_LOCK:
+            name, _path, document = _load_stored_workflow(workflow_name)
+            _topology_hash, card_key = _file_in_hub(
+                getattr(server, "hub", None), name, document
+            )
+        if not card_key:
+            # `_file_in_hub` has logged why.
+            raise HTTPException(
+                status_code=409,
+                detail=f"PixlStash could not put the workflow {name} on a card.",
+            )
+        announce_changed_workflows(
+            server,
+            [card_key],
+            "imported",
+            origin_client_id=getattr(request.state, "origin_client_id", None),
+        )
+        return {"name": name, "workflow_key": card_key}
 
     @router.post(
         "/comfyui/abort",
@@ -2096,6 +2364,97 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=409, detail="Workflow already exists"
             ) from exc
+
+    @router.post(
+        "/comfyui/workflows/convert",
+        summary="Store ComfyUI's API conversion of an editor-format workflow",
+        description=(
+            "Takes what ComfyUI's own `graphToPrompt` returns for the workflow "
+            "open on its canvas - `workflow` (editor format) and `output` (API "
+            "format) - and stores the API graph beside the matching stored "
+            "editor file, never over it. A workflow not stored yet is stored "
+            "first, as an import would. The file's card then runs and takes "
+            "parameters from the API graph. Sent by the ComfyUI-PixlStash "
+            "node's *Convert for PixlStash* command, one workflow at a time."
+        ),
+        response_model=ComfyUIWorkflowConvertResponse,
+        responses={
+            400: {"description": "Not an editor workflow and its API graph."},
+            409: {"description": "A workflow PixlStash ships; nothing to convert."},
+        },
+    )
+    def convert_comfyui_workflow(request: Request, payload: dict = Body(...)):
+        workflow = payload.get("workflow")
+        output = payload.get("output")
+        if not isinstance(workflow, dict) or api_graph(workflow) is not None:
+            raise HTTPException(
+                status_code=400, detail="workflow must be an editor-format workflow"
+            )
+        # The envelope an embedded prompt chunk comes in is unwrapped, so the
+        # sidecar's own ``prompt`` never wraps a second one.
+        if isinstance(output, dict) and isinstance(output.get("prompt"), dict):
+            output = output["prompt"]
+        try:
+            check_comfy_workflow(output)
+        except NotAWorkflowError as exc:
+            raise HTTPException(status_code=400, detail=f"output: {exc}") from exc
+        if api_graph(output) is None:
+            raise HTTPException(
+                status_code=400, detail="output must be an API-format graph"
+            )
+        name = _normalize_workflow_name(payload.get("name")) or "workflow.json"
+        try:
+            resolve_path_within(workflow_user_dir(), name)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid workflow name")
+        hub = getattr(server, "hub", None)
+        try:
+            with workflow_inbox.INBOX_LOCK:
+                result = _store_workflow(hub, name, workflow, keep_both=True)
+                if result.get("source") == "built-in":
+                    raise HTTPException(
+                        status_code=409,
+                        detail="PixlStash ships this workflow; it has nothing to convert.",
+                    )
+                stored_name = result["name"]
+                path = resolve_path_within(workflow_user_dir(), stored_name)
+                # Digested from the file as stored, which is the placeholder-
+                # migrated document, so the check on read compares like with
+                # like.
+                store_converted_graph(path, _load_workflow_json(path), output)
+                # Filed again now the graph is there: the store above filed
+                # the editor file as a topology only.
+                _topology_hash, card_key = _file_in_hub(
+                    hub, stored_name, _load_workflow_json(path)
+                )
+        except NotAWorkflowError as exc:
+            logger.warning("Refused converting %s: %s", name, exc)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except RecursionError as exc:
+            logger.warning("Refused a conversion that nests too deeply: %s", exc)
+            raise HTTPException(
+                status_code=400, detail="Workflow JSON nests too deeply"
+            ) from exc
+        except OSError as exc:
+            logger.error("Could not store the converted graph of %s: %s", name, exc)
+            raise HTTPException(
+                status_code=500, detail="Could not store the converted graph"
+            ) from exc
+        # Handed over by the owner whether stored or matched, as an import is:
+        # a pulled file converted here is no longer a hidden one-off.
+        claim_stored_workflow(hub, stored_name)
+        logger.info("Stored ComfyUI's conversion of %s.", stored_name)
+        announce_changed_workflows(
+            server,
+            sorted({key for key in (result.get("workflow_key"), card_key) if key}),
+            "imported",
+            origin_client_id=getattr(request.state, "origin_client_id", None),
+        )
+        return {
+            "name": stored_name,
+            "matched": bool(result.get("matched")),
+            "workflow_key": card_key,
+        }
 
     @router.post(
         "/comfyui/workflows/pull",
@@ -2379,11 +2738,29 @@ def create_router(server) -> APIRouter:
         )
         preflight, seed_targets = _inspect_graph(graph, judged_against, judged_error)
         source_is_imported, source_label = _picture_source_origin(server, pic_id)
-        # A graph that calls back into PixlStash cannot be replayed as "a
-        # variant of this picture" - see the run route's refusal for why. Reported
+        # A ComfyUI-PixlStash node that may not run in a variant of this
+        # picture (#1521): the picture loader would not read this picture, a
+        # checkpoint loader names another hub's shelf row, and a loader's
+        # project, set or character must be one this library has. The run
+        # swaps a saver for SaveImage, so it is judged as swapped. Reported
         # here so the dialog can say so before the user commits to a run, and
         # offer the workflow to paste into ComfyUI instead.
-        has_pixlstash_nodes = graph_has_pixlstash_nodes(graph)
+        #
+        # Only the unscoped owner has the ids looked up: this route serves
+        # share links, and an answer that depends on whether project N exists
+        # would tell one about projects outside its scope (#708's class). A
+        # scoped reader is told every id is unchecked, and cannot run it anyway.
+        as_run = json.loads(json.dumps(graph))
+        swap_pixlstash_savers(as_run)
+        refused_nodes = pixlstash_node_refusals(
+            as_run,
+            library_ids=(
+                read_library_ids(server.vault, library_ids_named(as_run))
+                if server.auth.is_unscoped_owner_request(request)
+                else {}
+            ),
+        )
+        has_pixlstash_nodes = bool(refused_nodes)
         return {
             # "Same workflow, new seed" is only a meaningful offer when there
             # IS a seed to change. Without one the re-run is byte-identical,
@@ -2395,6 +2772,8 @@ def create_router(server) -> APIRouter:
                 if has_pixlstash_nodes
                 else (None if seed_targets else "no_seed_input")
             ),
+            # Which nodes, and why, in the run pre-flight's shape.
+            "pixlstash_nodes": refused_nodes,
             "source": "comfyui",
             # Named for the chunk it came out of, because the two are not
             # equally trustworthy: the API chunk is what ComfyUI executed, the
@@ -2430,6 +2809,12 @@ def create_router(server) -> APIRouter:
             # filename-derived classification, never a filename, a prompt or a
             # picture; low severity, and the honest bound rather than the
             # flattering one. Returning this owner-only would close it.
+            #
+            # **The key also folds in the owner's LoRA promotions**
+            # (`workflow_lora_promotion`), recoverable the same way: whether
+            # the owner promoted THIS picture's LoRA in a slot to a workflow of
+            # its own. One more bit per LoRA slot, an owner's decision rather
+            # than a regex result, about a file the graph already names.
             "workflow_key": _picture_workflow_key(server, pic_id),
             **_recipe_extras(server, request, pic_id, graph),
             # A rebuilt graph is keyed from the rebuild, not from the column
@@ -2452,17 +2837,29 @@ def create_router(server) -> APIRouter:
             # file that carries it came from outside. See R3 in
             # docs/reviews/v1.9-authz-signoff.md.
             "node_classes": collect_node_classes(graph),
+            "node_class_counts": dict(
+                sorted(
+                    Counter(
+                        node["class_type"]
+                        for node in graph.values()
+                        if isinstance(node, dict)
+                        and isinstance(node.get("class_type"), str)
+                        and node["class_type"]
+                    ).items(),
+                    # The order `node_classes` uses.
+                    key=lambda item: item[0].lower(),
+                )
+            ),
             "source_is_imported": source_is_imported,
             "source_label": source_label,
             "seed_inputs": seed_targets,
             "lora_slots": detect_lora_targets(graph),
             "lora_insertion": _describe_lora_insertion(
-                graph,
-                object_info,
-                object_info_error,
-                # A replay never inserts it, so it is never a warning here.
-                digest_loader=False,
+                graph, object_info, object_info_error
             ),
+            # Judged, like the pre-flight, only when it was asked for: the
+            # editor branch's cached map must not answer a preflight=false read.
+            "lora_chain": _describe_lora_chain(graph, judged_against, judged_error),
             "preflight": preflight,
         }
 

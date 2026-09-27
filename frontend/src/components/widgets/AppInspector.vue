@@ -13,7 +13,12 @@
          live here; a pane owns only what it says. -->
     <!-- The lightbox keeps its pane mounted while closed: the panels hold
          editing state and refs the overlay reaches into as it opens. -->
-    <div v-if="open || lightbox" v-show="open" class="inspector-content">
+    <div
+      v-if="open || lightbox"
+      v-show="open"
+      class="inspector-content"
+      :class="{ 'inspector-content--footed': $slots.footer }"
+    >
       <!-- The tab band is pinned to the toolbar height, so the sidebar tabs,
            the toolbar and this band share one bottom rule across the window.
            Tabs name the SUBJECT of the pane, never the view. -->
@@ -55,6 +60,9 @@
       <div class="inspector-body">
         <slot />
       </div>
+      <!-- A pane's own action bar (the Workflow tab's Run…): outside the
+           scroll, so it never moves and the scrollbar stops above it. -->
+      <slot name="footer" />
     </div>
   </aside>
 </template>
@@ -127,6 +135,18 @@ const emit = defineEmits(["update:modelValue"]);
   overflow-x: hidden;
   display: flex;
   flex-direction: column;
+}
+
+/* With a footer the body scrolls instead of the whole pane, so the footer
+   below it stays put. */
+.inspector-content--footed {
+  overflow: hidden;
+}
+
+.inspector-content--footed .inspector-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 /* The lightbox is dark in both themes, so its pane is a translucent

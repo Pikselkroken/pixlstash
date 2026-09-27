@@ -26,12 +26,27 @@ export async function listWorkflows() {
 }
 
 /**
+ * Put a stored workflow, user or built-in, on its Workflows card.
+ *
+ * A built-in has no card until something asks, so this is how the Run popup
+ * gets a key to open on. Idempotent; owner-only.
+ *
+ * @param {string} name - the workflow's `name` as listed.
+ * @returns {Promise<{name: string, workflow_key: string}>}
+ */
+export async function cardForWorkflow(name) {
+  return unwrap(
+    apiClient.post(comfyUrl(`/workflows/${encodeURIComponent(name)}/card`)),
+  );
+}
+
+/**
  * Where a LoRA loader would be added to a saved workflow that has none (#1376).
  *
  * `plan` is `{model, clip, rewires, pixlstash_loader}`: the node the loader
  * takes the model from (and the CLIP, `null` for a model-only loader), every
  * input it would rewire, and whether the loader may be the ComfyUI-PixlStash
- * one, which leaves the pictures un-replayable by "Generate variants". It is `null` when no loader can be added, and `reason` says why;
+ * one, which needs the node pack installed. It is `null` when no loader can be added, and `reason` says why;
  * `has_lora_loader` is true when there is a loader to swap instead. Owner-only,
  * since it asks the owner's ComfyUI.
  *
@@ -173,4 +188,14 @@ export async function getPictureRecipe(pictureId, { preflight = true } = {}) {
  */
 export async function abortRun() {
   return unwrap(apiClient.post(comfyUrl("/abort")));
+}
+
+/**
+ * Whether the configured ComfyUI can open a PixlStash workflow link: it needs
+ * the ComfyUI-PixlStash node's `open_workflow.js`. Owner-only.
+ * @returns {Promise<{can_open_workflows: ?boolean}>} `null` when ComfyUI
+ *   cannot be asked.
+ */
+export async function getPixlstashNode() {
+  return unwrap(apiClient.get(comfyUrl("/pixlstash-node")));
 }

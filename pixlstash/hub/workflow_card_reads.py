@@ -26,9 +26,18 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.workflow_cards import CORE_RULE_VERSION, topology_only_key
+from pixlstash.hub.workflow_cards import (
+    CORE_RULE_VERSION,
+    topology_only_key,
+    variant_hashes_for_keys,
+)
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.workflow_identity import WORKFLOW_KEY_VERSION
+from pixlstash.services.workflow_hash import asset_reference, normalized_filename
+from pixlstash.services.workflow_identity import (
+    WORKFLOW_KEY_VERSION,
+    model_fix_kind,
+    slots,
+)
 from pixlstash.utils.sql_chunking import chunked
 
 logger = get_logger(__name__)
@@ -298,6 +307,30 @@ def slot_marks(
     return marks
 
 
+def lora_promotions(
+    hub: HubDatabase, topology_hashes: list[str]
+) -> set[tuple[str, str, str]]:
+    """``{(topology_hash, slot_label, asset)}``: every LoRA file promoted there.
+
+    The per-file companion of :func:`slot_marks`
+    (``workflow_lora_promotion``). A promoted file reaches its card's key at
+    that slot, so its pictures are a workflow of their own.
+    """
+    found = set()
+    for batch in chunked(sorted(set(topology_hashes))):
+        placeholders = ",".join("?" * len(batch))
+        found.update(
+            (topology_hash, slot_label, asset)
+            for topology_hash, slot_label, asset in hub.fetchall(
+                "SELECT topology_hash, slot_label, asset "
+                "FROM workflow_lora_promotion "
+                f"WHERE topology_hash IN ({placeholders})",
+                tuple(batch),
+            )
+        )
+    return found
+
+
 def asset_names(
     hub: HubDatabase, structural_hashes: list[str]
 ) -> dict[str, list[tuple[str, str]]]:
@@ -313,8 +346,9 @@ def asset_names(
 
     Resolving that properly means reducing the stored document per card, which
     is a Weisfeiler-Leman refinement apiece and would roughly double the grid's
-    cost. It is worth doing when something depends on it: a *recipe* LoRA is
-    drawn as an anonymous slot rather than by name, so today nothing does.
+    cost. Nothing pairs a *recipe* LoRA to its slot: the card summarises every
+    variant's recipe LoRAs as one list, and reduces one document only for a
+    card that also has structural LoRA slots to subtract.
     """
     names: dict[str, list[tuple[str, str]]] = {}
     for batch in chunked(sorted(set(structural_hashes))):
@@ -559,6 +593,239 @@ def keys_in_stack(hub: HubDatabase, stack_id: str) -> list[str]:
     ]
 
 
+def variants_in_stack(hub: HubDatabase, stack_id: str) -> list[str]:
+    """Every variant on every card one stack holds, for the picture filter.
+
+    The cards are :func:`keys_in_stack`'s, so the filter and every other reader
+    agree about who is in a stack: a card the owner took out of its automatic
+    group (``workflow_unstacked``) or placed in a stored stack is not counted
+    in the automatic one. A bare core hash is read as ``auto:<hash>``, the
+    spelling a card's ``stack_id`` has always had; the older reading matched
+    only the bare hash and ignored both of those tables (#1622).
+
+    A value that names no stack matches nothing.
+    """
+    keys = keys_in_stack(hub, stack_id)
+    if not keys and not stack_id.startswith(AUTO_STACK_PREFIX):
+        keys = keys_in_stack(hub, AUTO_STACK_PREFIX + stack_id)
+    return variant_hashes_for_keys(hub, keys)
+
+
+# ---------------------------------------------------------------------------
+# Workflows as the owner sees them (#1622): variant -> topology -> workflow.
+#
+# Additive beside the card reads above, which every route still uses until the
+# cut-over (#1623). A workflow is a group of TOPOLOGIES: a manual placement
+# (``workflow_group_member``) first, else ``auto:<core_hash>`` under the rule
+# this build applies. A topology with neither - the backfill has not reached
+# it, or it was cached under a superseded rule - is in no workflow yet, for the
+# reason ``Card.core_hash`` gives: a NULL bucket would read as one enormous
+# workflow.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Workflow:
+    """One workflow as the hub knows it, before any picture has been counted.
+
+    ``base_topology`` is the graph a run starts from and an export writes: the
+    topology with the most stage groups, then the most LoRA loaders, then the
+    most kept pictures (#1620 D3). Automatic, with no owner control. Picture
+    counts belong to the vault, so without them the third tie-break is skipped
+    and the topology hash decides, which keeps the answer stable.
+
+    ``base_card`` is the card on the base topology with the most kept pictures,
+    whose source a run resolves (``workflow_run_service.resolve_source`` takes a
+    card).
+    """
+
+    workflow_id: str
+    topologies: list[str] = field(default_factory=list)
+    variants: list[str] = field(default_factory=list)
+    cards: list[str] = field(default_factory=list)
+    variant_topology: dict[str, str] = field(default_factory=dict)
+    variant_card: dict[str, str] = field(default_factory=dict)
+    # None where the specials pass has not read the topology yet.
+    specials: dict[str, Optional[tuple[str, ...]]] = field(default_factory=dict)
+    base_topology: Optional[str] = None
+    base_card: Optional[str] = None
+    name: Optional[str] = None
+    notes: Optional[str] = None
+    hidden: bool = False
+
+
+def workflow_of_topology(hub: HubDatabase, topology_hash: str) -> Optional[str]:
+    """The workflow one topology is in, or ``None`` while it is in none."""
+    row = hub.fetchone(
+        "SELECT workflow_id FROM workflow_group_member WHERE topology_hash = ?",
+        (topology_hash,),
+    )
+    if row is not None:
+        return row["workflow_id"]
+    row = hub.fetchone(
+        "SELECT core_hash FROM workflow_topology_core "
+        "WHERE topology_hash = ? AND core_version = ?",
+        (topology_hash, CORE_RULE_VERSION),
+    )
+    return f"{AUTO_STACK_PREFIX}{row['core_hash']}" if row else None
+
+
+def topologies_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
+    """Every topology one workflow holds, sorted; empty for an unknown id.
+
+    An automatic workflow subtracts the topologies placed elsewhere by hand,
+    so a topology is only ever in one workflow.
+    """
+    if not workflow_id.startswith(AUTO_STACK_PREFIX):
+        return [
+            topology_hash
+            for (topology_hash,) in hub.fetchall(
+                "SELECT topology_hash FROM workflow_group_member "
+                "WHERE workflow_id = ? ORDER BY topology_hash",
+                (workflow_id,),
+            )
+        ]
+    return [
+        topology_hash
+        for (topology_hash,) in hub.fetchall(
+            "SELECT c.topology_hash FROM workflow_topology_core c "
+            "WHERE c.core_version = ? AND c.core_hash = ? AND NOT EXISTS ("
+            "SELECT 1 FROM workflow_group_member m "
+            "WHERE m.topology_hash = c.topology_hash) "
+            "ORDER BY c.topology_hash",
+            (CORE_RULE_VERSION, workflow_id[len(AUTO_STACK_PREFIX) :]),
+        )
+    ]
+
+
+def variants_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
+    """Every variant filed under one workflow's topologies, sorted."""
+    found: list[str] = []
+    for batch in chunked(topologies_in_workflow(hub, workflow_id)):
+        placeholders = ",".join("?" * len(batch))
+        found += [
+            structural_hash
+            for (structural_hash,) in hub.fetchall(
+                "SELECT structural_hash FROM workflow_variant "
+                f"WHERE key_version = ? AND topology_hash IN ({placeholders})",
+                (WORKFLOW_KEY_VERSION, *batch),
+            )
+        ]
+    return sorted(found)
+
+
+def workflow_index(
+    hub: HubDatabase, picture_counts: Optional[dict[str, int]] = None
+) -> list[Workflow]:
+    """Every workflow this hub holds, built from :func:`card_index`.
+
+    Args:
+        hub: The hub.
+        picture_counts: ``{structural_hash: kept pictures}`` from the vault,
+            for the base topology's last tie-break. ``None`` skips it.
+    """
+    placed = {
+        topology_hash: workflow_id
+        for topology_hash, workflow_id in hub.fetchall(
+            "SELECT topology_hash, workflow_id FROM workflow_group_member"
+        )
+    }
+    workflows: dict[str, Workflow] = {}
+    loras: dict[str, int] = {}
+    for card in card_index(hub):
+        workflow_id = placed.get(card.topology_hash) or (
+            f"{AUTO_STACK_PREFIX}{card.core_hash}" if card.core_hash else None
+        )
+        if workflow_id is None:
+            continue
+        entry = workflows.setdefault(workflow_id, Workflow(workflow_id))
+        entry.cards.append(card.workflow_key)
+        if card.topology_hash not in entry.topologies:
+            entry.topologies.append(card.topology_hash)
+        # Per topology, so every card on it agrees - except a file-only card
+        # (#1466), which carries neither. The fullest answer wins, never the
+        # last card read.
+        known = entry.specials.get(card.topology_hash)
+        if known is None or len(card.specials or ()) > len(known):
+            entry.specials[card.topology_hash] = card.specials
+        loras[card.topology_hash] = max(
+            loras.get(card.topology_hash, 0),
+            sum(1 for s in card.slots if s.get("is_lora")),
+        )
+        for structural_hash in card.variants:
+            entry.variants.append(structural_hash)
+            entry.variant_topology[structural_hash] = card.topology_hash
+            entry.variant_card[structural_hash] = card.workflow_key
+    attrs = {
+        row["workflow_id"]: row
+        for row in hub.fetchall(
+            "SELECT workflow_id, name, notes, hidden FROM workflow_group_attr"
+        )
+    }
+    counts = picture_counts or {}
+    for entry in workflows.values():
+        entry.topologies.sort()
+        entry.variants.sort()
+        entry.cards.sort()
+        pictures: dict[str, int] = {}
+        for structural_hash, topology_hash in entry.variant_topology.items():
+            pictures[topology_hash] = pictures.get(topology_hash, 0) + counts.get(
+                structural_hash, 0
+            )
+        # Most of each, and on a full tie the smallest hash, so two reads of an
+        # unchanged hub name the same base.
+        entry.base_topology = min(
+            entry.topologies,
+            key=lambda t: (
+                -len(entry.specials.get(t) or ()),
+                -loras.get(t, 0),
+                -pictures.get(t, 0),
+                t,
+            ),
+        )
+        on_base: dict[str, int] = {}
+        for structural_hash, key in entry.variant_card.items():
+            if entry.variant_topology[structural_hash] == entry.base_topology:
+                on_base[key] = on_base.get(key, 0) + counts.get(structural_hash, 0)
+        # None for a base topology no variant is filed on (a file-only card
+        # placed by hand): nothing to run from, and a run says so (404).
+        entry.base_card = (
+            min(on_base, key=lambda key: (-on_base[key], key)) if on_base else None
+        )
+        attr = attrs.get(entry.workflow_id)
+        if attr is not None:
+            entry.name, entry.notes = attr["name"], attr["notes"]
+            entry.hidden = bool(attr["hidden"])
+    return sorted(workflows.values(), key=lambda entry: entry.workflow_id)
+
+
+def find_workflow(
+    hub: HubDatabase,
+    workflow_id: str,
+    picture_counts: Optional[dict[str, int]] = None,
+) -> Optional[Workflow]:
+    """One workflow by its id, or ``None`` when this hub has no such workflow."""
+    return next(
+        (
+            w
+            for w in workflow_index(hub, picture_counts)
+            if w.workflow_id == workflow_id
+        ),
+        None,
+    )
+
+
+def workflow_group_defaults(hub: HubDatabase, workflow_id: str) -> dict[str, str]:
+    """``{address: value}``: the owner's edits to a workflow's default recipe."""
+    return {
+        address: value
+        for address, value in hub.fetchall(
+            "SELECT address, value FROM workflow_group_default WHERE workflow_id = ?",
+            (workflow_id,),
+        )
+    }
+
+
 def picture_inputs(
     hub: HubDatabase, library_uuid: str, workflow_key: str
 ) -> list[dict]:
@@ -586,5 +853,54 @@ def picture_inputs(
             "WHERE library_uuid = ? AND workflow_key = ? "
             "ORDER BY slot_label, input_name",
             (library_uuid, workflow_key),
+        )
+    ]
+
+
+def model_fix_labels(
+    hub: HubDatabase, topology_hash: str, was: str, kind: str
+) -> list[str]:
+    """The slots of a topology taking a *kind* model that load *was*, in any variant.
+
+    Every variant and not one card's: a fix is keyed per topology, so a
+    sibling card loading *was* in a slot this card's variants do not use would
+    otherwise keep its missing file. Slots of that kind only
+    (``model_fix_kind``): the replacement is a checkpoint, a VAE or a text
+    encoder, and a slot of another kind holding a file of the same name is no
+    place for it.
+    """
+    wanted = asset_reference(normalized_filename(was))
+    hashes = [
+        row["structural_hash"]
+        for row in hub.fetchall(
+            "SELECT structural_hash FROM workflow_recipe WHERE topology_hash = ?",
+            (topology_hash,),
+        )
+    ]
+    return sorted(
+        {
+            slot.label
+            for document in variant_documents(hub, hashes).values()
+            for slot in slots(document)
+            if slot.asset == wanted
+            and model_fix_kind(slot.class_type, slot.widget) == kind
+        }
+    )
+
+
+def model_fixes(
+    hub: HubDatabase, topology_hash: str
+) -> list[tuple[str, str, str, str]]:
+    """``[(slot_label, was_name, now_name, slot_kind)]``: a topology's replaced models.
+
+    The read side of ``PUT /workflows/{key}/model-fix``. Per topology, because
+    that is what a fix is keyed on (``workflow_cards.fixed_slots``).
+    """
+    return [
+        (slot_label, was_name, now_name, slot_kind)
+        for slot_label, was_name, now_name, slot_kind in hub.fetchall(
+            "SELECT slot_label, was_name, now_name, slot_kind FROM workflow_model_fix "
+            "WHERE topology_hash = ? ORDER BY slot_label, was_norm",
+            (topology_hash,),
         )
     ]

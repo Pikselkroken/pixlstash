@@ -21,26 +21,35 @@ rather than in a caller.
 
 from __future__ import annotations
 
+import io
 import json
+import re
+from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from pixlstash.services.comfyui_recipe_service import (
     LORA_DIGEST_FIELD_RE,
     LORA_FILENAME_FIELD_RE,
     bypass_node,
+    bypass_stage,
+    detect_seed_targets,
+    listed_options,
     preflight_prompt,
     sanitize_prompt_graph,
     unchecked_preflight,
 )
-from pixlstash.services.comfyui_service import graph_has_pixlstash_nodes
+from pixlstash.services.comfyui_service import pixlstash_node_refusals
 from pixlstash.services.workflow_bindings import BINDINGS_KEY
 from pixlstash.services.workflow_hash import (
     asset_reference,
     is_link,
     normalized_filename,
 )
+from pixlstash.services.workflow_identity import model_fix_kind
 from pixlstash.services.workflow_io import api_graph
+from pixlstash.utils.adapter_header import FILE_TEXT_ENCODER, FILE_VAE
+from pixlstash.utils.comfyui_utilities import collect_seed_inputs, iter_model_fields_api
 from pixlstash.pixl_logging import get_logger
 
 logger = get_logger(__name__)
@@ -60,6 +69,7 @@ PIXLSTASH_NODES = "pixlstash_nodes"
 NO_SAVE_NODE = "no_save_node"
 NO_RUNNABLE_SOURCE = "no_runnable_source"
 LORA_NOT_SKIPPABLE = "lora_not_skippable"
+STAGE_NOT_SKIPPABLE = "stage_not_skippable"
 
 # A reference whose ``workflow_recipe_asset`` row is gone: the owner forgot the
 # model's name, and the stored graph still says a model went there without
@@ -85,6 +95,130 @@ _FOLDER_BY_FIELD = {
     "photomaker_model_name": "photomaker",
 }
 
+# Custom seed nodes a graph may name without this ComfyUI having their pack
+# (#1463). Each exists only to hand a number to a sampler's seed widget, which
+# PixlStash writes itself on every run, so the node can be dropped and its link
+# replaced with a literal. **An allow-list, not a rule**: a replacement that is
+# nearly right changes what the picture looks like, which is worse than the
+# refusal, and anything that samples, conditions or loads has no equivalent.
+# rgthree's, WAS's, Comfyroll's and image-saver's, by their class_type.
+SEED_NODE_CLASSES = frozenset(
+    {"Seed (rgthree)", "Seed", "SeedGenerator", "Seed Generator", "CR Seed"}
+)
+
+# Text nodes that only hand their own string on, by class_type, to the input
+# holding that string. Same allow-list terms as the seed nodes: WAS's
+# `Text Multiline` (which also drops its `#` comment lines), Comfyroll's
+# `CR Text`, Chibi-Nodes' `Textbox` and core's `PrimitiveStringMultiline`
+# (absent on an older ComfyUI). The string becomes a literal in whatever the
+# node fed.
+TEXT_NODE_CLASSES = {
+    "Text Multiline": "text",
+    "CR Text": "text",
+    "Textbox": "text",
+    "PrimitiveStringMultiline": "value",
+}
+
+# WAS's own `[token]` substitutions (`[time]`, `[time(%Y)]`, custom names of
+# any spelling). A literal cannot expand them, so a text holding anything in
+# square brackets keeps its refusal; core ComfyUI gives brackets no meaning.
+WAS_TOKEN_RE = re.compile(r"\[[^\[\]]*\]")
+
+
+def overriding_text_inputs(class_type: str, inputs: dict) -> list[str]:
+    """The inputs of a text node, other than its text, that may change its string.
+
+    Textbox's ``passthrough`` replaces its text whenever it is non-empty, so a
+    link or a non-empty string in any input but the text field counts. One
+    rule for the repair and the Run prompt's target, so they cannot drift.
+    """
+    return [
+        name
+        for name, value in inputs.items()
+        if name != TEXT_NODE_CLASSES.get(class_type)
+        and (is_link(value) or (isinstance(value, str) and value))
+    ]
+
+
+def prompt_text_target(
+    graph: dict, node_id: str, prompt: Optional[str]
+) -> Optional[tuple[str, str]]:
+    """Where a detected prompt node's text literally lives, as ``(node, field)``.
+
+    The encoder's own ``text`` when it holds a string; otherwise, when that
+    input is a link from output 0 of a :data:`TEXT_NODE_CLASSES` node, that
+    node's text field. Without the hop a prompt typed into the Run popup was
+    skipped, and a missing text node's repair then inlined the stored prompt.
+    A text node feeding more than one input is not a target: writing the
+    positive prompt and then the negative into it would leave both negative.
+    Nor is one with another input overriding its text (Textbox's
+    ``passthrough``): the node would ignore the prompt written into it.
+
+    Any other wired ``text`` (a prompt builder, a shared or overridden text
+    node) is the encoder's own field, and the literal replaces the link.
+    Except when *prompt* is a string a recipe reads from the wired node: the
+    picture's recipe echoed back by an untouched Run popup (a builder's recipe
+    prompt is read from its widgets), and cutting the wire would generate from
+    the builder's template instead of what it builds. ``None`` also when the
+    encoder has no string or linked ``text``.
+    """
+    inputs = (graph.get(node_id) or {}).get("inputs")
+    if not isinstance(inputs, dict):
+        return None
+    text = inputs.get("text")
+    if isinstance(text, str):
+        return node_id, "text"
+    if is_link(text) and text[1] == 0:
+        source = graph.get(str(text[0]))
+        field = TEXT_NODE_CLASSES.get((source or {}).get("class_type"))
+        readers = sum(
+            1
+            for other in graph.values()
+            if isinstance(other, dict) and isinstance(other.get("inputs"), dict)
+            for link in other["inputs"].values()
+            if is_link(link) and str(link[0]) == str(text[0])
+        )
+        source_inputs = (source or {}).get("inputs") or {}
+        if (
+            field
+            and readers == 1
+            and isinstance(source_inputs.get(field), str)
+            and not overriding_text_inputs(source["class_type"], source_inputs)
+        ):
+            return str(text[0]), field
+    if not is_link(text):
+        return None
+    source = graph.get(str(text[0]))
+    source_inputs = (source or {}).get("inputs") or {}
+    # The strings a recipe may read from this node (comfyui_utilities: a named
+    # text/value/string field, in an order its UI and API readers disagree
+    # on, else its longest string), and no other input.
+    strings = [v.strip() for v in source_inputs.values() if isinstance(v, str)]
+    recipe_texts = {
+        source_inputs[key].strip()
+        for key in ("text", "value", "string")
+        if isinstance(source_inputs.get(key), str) and source_inputs[key].strip()
+    }
+    recipe_texts.add(max(strings, key=len, default=""))
+    recipe_texts.discard("")
+    if prompt and prompt.strip() in recipe_texts:
+        logger.info(
+            "Encoder %s keeps its wire from node %s: the run prompt is that "
+            "node's own text, so the node builds the prompt as it did.",
+            node_id,
+            text[0],
+        )
+        return None
+    logger.info(
+        "Encoder %s's text was wired from node %s (%s); the run prompt "
+        "replaces that link.",
+        node_id,
+        text[0],
+        (source or {}).get("class_type"),
+    )
+    return node_id, "text"
+
+
 # Where the source of a runnable graph came from, in the order tried.
 FROM_FILE = "file"
 FROM_PICTURE = "picture"
@@ -100,7 +234,9 @@ def model_folder(class_type: str, field_name: str) -> Optional[str]:
     """
     if LORA_FILENAME_FIELD_RE.match(field_name or ""):
         return "loras"
-    if class_type == "CLIPVisionLoader":
+    # By substring, as `model_fix_kind` and the clone dialog read it: a
+    # wrapped vision loader is still no place for a text encoder.
+    if "CLIPVision" in class_type:
         return "clip_vision"
     if class_type == "UpscaleModelLoader":
         return "upscale_models"
@@ -285,6 +421,9 @@ def judge(
     *,
     wants_lora: bool = False,
     lora_slots: Optional[list[dict]] = None,
+    library_ids: Optional[dict[str, dict[int, str]]] = None,
+    picture_loader: bool = False,
+    from_file: bool = False,
 ) -> tuple[list[Reason], dict]:
     """Every reason this graph would not run, and the pre-flight behind them.
 
@@ -298,6 +437,11 @@ def judge(
     reporting ``no_lora_loader`` for one would make every plain card look
     broken.
 
+    ``library_ids``, ``picture_loader`` and ``from_file`` are what the
+    ComfyUI-PixlStash node policy needs to know about this run (#1521, see
+    :func:`~pixlstash.services.comfyui_service.pixlstash_node_refusals`); the
+    defaults refuse.
+
     Returns:
         ``(reasons, preflight)``. ``reasons`` empty means it would run.
     """
@@ -308,8 +452,14 @@ def judge(
     else:
         preflight = preflight_prompt(graph, object_info)
 
-    if graph_has_pixlstash_nodes(graph):
-        reasons.append(Reason(PIXLSTASH_NODES))
+    refused = pixlstash_node_refusals(
+        graph,
+        library_ids=library_ids,
+        picture_loader=picture_loader,
+        from_file=from_file,
+    )
+    if refused:
+        reasons.append(Reason(PIXLSTASH_NODES, {"nodes": refused}))
     if wants_lora and not (lora_slots or []):
         reasons.append(Reason(NO_LORA_LOADER))
 
@@ -332,6 +482,18 @@ def judge(
     if preflight.get("checked") and not preflight.get("has_save_image"):
         reasons.append(Reason(NO_SAVE_NODE))
     return reasons, preflight
+
+
+def with_pixlstash_refusals(reasons: list[Reason], nodes: list[dict]) -> list[Reason]:
+    """*reasons* with *nodes* added to its one ``pixlstash_nodes`` reason.
+
+    One reason per code, so a panel naming the refused nodes names them all.
+    """
+    for reason in reasons:
+        if reason.code == PIXLSTASH_NODES:
+            reason.detail["nodes"] = [*reason.detail.get("nodes", []), *nodes]
+            return reasons
+    return [*reasons, Reason(PIXLSTASH_NODES, {"nodes": nodes})]
 
 
 def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
@@ -461,6 +623,441 @@ def bypass_missing_loras(graph: dict, object_info: dict) -> list[dict]:
             for item in missing
         )
     return bypassed
+
+
+def run_seed_targets(graph: dict, object_info: Optional[dict]) -> list[dict]:
+    """The seed inputs a run writes into, as the run itself finds them.
+
+    One function for the run and for :func:`replace_missing_seed_nodes`, because
+    the replacement is only safe where this pass overwrites what it inlined: two
+    copies of the rule could agree today and drift tomorrow, and the drift would
+    be a run that quietly kept a placeholder seed.
+    """
+    return detect_seed_targets(graph, object_info or {}) or collect_seed_inputs(graph)
+
+
+def replace_missing_seed_nodes(graph: dict, object_info: dict) -> list[dict]:
+    """Drop every custom seed node this ComfyUI lacks, inlining its value.
+
+    A graph naming rgthree's ``Seed (rgthree)`` on an install without rgthree is
+    ``missing_nodes``, and the owner's only route was installing the pack. The
+    node does something PixlStash already does (#1463): it hands a number to a
+    sampler's ``seed`` / ``noise_seed``, and the run's seed pass writes that
+    widget itself. So the link from the node becomes a literal and the node
+    leaves the graph.
+
+    **The seed pass overwriting the literal is what makes this safe**, so it is
+    checked rather than assumed, and checked on the FINAL graph: a later
+    replacement can change which finder :func:`run_seed_targets` answers with
+    (``detect_seed_targets`` finding a new target stops the fallback), so an
+    input that passed alone could stop being written. If any inlined input is
+    not a target once every node is replaced, the graph is put back whole and
+    every node keeps its refusal. A consumer that is not a seed widget - an
+    ``INT`` driving width, a pack's own ``SEED`` dict - is refused the same way.
+
+    The literal is the node's own ``seed`` value, which is what
+    ``seed_mode: "keep"`` then keeps: a picture's embedded graph carries the
+    value the node actually handed on.
+
+    Keeps its refusal, logged: a class that IS installed (nothing to repair), a
+    class outside :data:`SEED_NODE_CLASSES`, a node whose own seed is wired
+    from elsewhere (the literal would cut that link), a **placeholder** seed
+    such as rgthree's ``-1`` (there is no seed to keep, and accepting it only
+    for some seed modes would make the pre-flight's answer depend on a control
+    the popups do not re-ask on), and a node feeding **more than one** input:
+    the seed pass rolls each target separately, so a hires-fix or refiner pair
+    built to share one seed would get two.
+
+    Args:
+        graph: The API-format graph, mutated in place.
+        object_info: The map this ComfyUI published.
+
+    Returns:
+        ``[{node_id, class_type, replacement, consumers}, …]``, one per node
+        replaced; empty when nothing could be replaced honestly.
+    """
+    original = deepcopy(graph)
+    replaced: list[dict] = []
+    for node_id in [str(key) for key in graph]:
+        node = graph.get(node_id)
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        if class_type not in SEED_NODE_CLASSES or class_type in object_info:
+            continue
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        if any(is_link(value) for value in inputs.values()):
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI but its own seed is wired "
+                "from another node, so it keeps its refusal: a literal would "
+                "cut that link.",
+                node_id,
+                class_type,
+            )
+            continue
+        value = inputs.get("seed")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI and carries no real seed "
+                "(%r), so it keeps its refusal.",
+                node_id,
+                class_type,
+                value,
+            )
+            continue
+        consumers = [
+            (str(other_id), str(name))
+            for other_id, other in graph.items()
+            if isinstance(other, dict) and isinstance(other.get("inputs"), dict)
+            for name, link in other["inputs"].items()
+            if is_link(link) and str(link[0]) == node_id
+        ]
+        if len(consumers) > 1:
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI and feeds %s, which share "
+                "one seed by design; the run would roll each separately, so it "
+                "keeps its refusal.",
+                node_id,
+                class_type,
+                ", ".join(f"{other}.{name}" for other, name in consumers),
+            )
+            continue
+        for other_id, name in consumers:
+            graph[other_id]["inputs"][name] = value
+        del graph[node_id]
+        replaced.append(
+            {
+                "node_id": node_id,
+                "class_type": class_type,
+                "replacement": "seed",
+                "consumers": [
+                    {"node_id": other, "field": name} for other, name in consumers
+                ],
+            }
+        )
+    targets = {
+        (str(target.get("node_id")), str(target.get("field")))
+        for target in run_seed_targets(graph, object_info)
+    }
+    unsafe = [
+        f"{consumer['node_id']}.{consumer['field']}"
+        for entry in replaced
+        for consumer in entry["consumers"]
+        if (consumer["node_id"], consumer["field"]) not in targets
+    ]
+    if unsafe:
+        logger.info(
+            "Seed nodes %s are not on this ComfyUI, but replacing them would "
+            "leave %s holding a value the run's seed pass does not write, so "
+            "the graph is left as it was and they keep their refusal.",
+            ", ".join(f"{e['node_id']} ({e['class_type']})" for e in replaced),
+            ", ".join(unsafe),
+        )
+        graph.clear()
+        graph.update(original)
+        return []
+    for entry in replaced:
+        logger.info(
+            "Node %s (%s) is not on this ComfyUI, so it is replaced: %s now "
+            "takes the run's own seed.",
+            entry["node_id"],
+            entry["class_type"],
+            ", ".join(f"{c['node_id']}.{c['field']}" for c in entry["consumers"])
+            or "nothing",
+        )
+    return replaced
+
+
+def replace_missing_text_nodes(graph: dict, object_info: dict) -> list[dict]:
+    """Drop every custom text node this ComfyUI lacks, inlining its string.
+
+    A prompt typed into WAS's ``Text Multiline`` is ``missing_nodes`` on an
+    install without WAS, although the node does nothing but hand its string to
+    a ``CLIPTextEncode``. So each link from it becomes that string and the node
+    leaves the graph. Unlike a seed, one string may feed any number of inputs.
+
+    Keeps its refusal, logged: a class that IS installed, one outside
+    :data:`TEXT_NODE_CLASSES`, a node whose text is wired from elsewhere or is
+    not a string, one with another input set that may override it (Textbox's
+    ``passthrough``), a WAS text holding a ``[token]`` only the node expands, and a
+    consumer reading any output other than the first.
+
+    Args:
+        graph: The API-format graph, mutated in place.
+        object_info: The map this ComfyUI published.
+
+    Returns:
+        ``[{node_id, class_type, replacement: "text", consumers}, …]``.
+    """
+    replaced: list[dict] = []
+    for node_id in [str(key) for key in graph]:
+        node = graph.get(node_id)
+        if not isinstance(node, dict):
+            continue
+        class_type = node.get("class_type")
+        if class_type not in TEXT_NODE_CLASSES or class_type in object_info:
+            continue
+        inputs = node.get("inputs") if isinstance(node.get("inputs"), dict) else {}
+        text = inputs.get(TEXT_NODE_CLASSES[class_type])
+        if not isinstance(text, str):
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI and its text is not a "
+                "literal (%r), so it keeps its refusal.",
+                node_id,
+                class_type,
+                text,
+            )
+            continue
+        overriding = overriding_text_inputs(class_type, inputs)
+        if overriding:
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI and %s may change its "
+                "text, so it keeps its refusal.",
+                node_id,
+                class_type,
+                ", ".join(overriding),
+            )
+            continue
+        if class_type == "Text Multiline":
+            if WAS_TOKEN_RE.search(text):
+                logger.info(
+                    "Node %s (%s) is not on this ComfyUI and its text holds a "
+                    "[token] only the node expands, so it keeps its refusal.",
+                    node_id,
+                    class_type,
+                )
+                continue
+            # The node's own loop, line for line.
+            text = "\n".join(
+                line.replace("\n", "")
+                for line in io.StringIO(text)
+                if not line.strip().startswith("#")
+            )
+        consumers = [
+            (str(other_id), str(name), link)
+            for other_id, other in graph.items()
+            if isinstance(other, dict) and isinstance(other.get("inputs"), dict)
+            for name, link in other["inputs"].items()
+            if is_link(link) and str(link[0]) == node_id
+        ]
+        if any(link[1] != 0 for _, _, link in consumers):
+            logger.info(
+                "Node %s (%s) is not on this ComfyUI and something reads an "
+                "output other than its text, so it keeps its refusal.",
+                node_id,
+                class_type,
+            )
+            continue
+        for other_id, name, _ in consumers:
+            graph[other_id]["inputs"][name] = text
+        del graph[node_id]
+        logger.info(
+            "Node %s (%s) is not on this ComfyUI, so it is replaced: %s now "
+            "holds its text.",
+            node_id,
+            class_type,
+            ", ".join(f"{other}.{name}" for other, name, _ in consumers) or "nothing",
+        )
+        replaced.append(
+            {
+                "node_id": node_id,
+                "class_type": class_type,
+                "replacement": "text",
+                "consumers": [
+                    {"node_id": other, "field": name} for other, name, _ in consumers
+                ],
+            }
+        )
+    return replaced
+
+
+@dataclass(frozen=True)
+class Repair:
+    """One refusal PixlStash can answer by changing the graph (#1463).
+
+    ``code`` is the reason it answers, ``report`` the ``RunGroup`` field that
+    names what it changed, and ``apply`` the change itself: it mutates the graph
+    and returns one entry per thing it did, empty when it did nothing.
+    """
+
+    code: str
+    report: str
+    apply: Callable[[dict, dict], list[dict]]
+
+
+# The repair registry: the one place that decides what "repairable" means. Keyed
+# on reason code so a repair runs only when `judge` reported what it answers,
+# and so a new one is an entry here rather than another patch to the run route.
+REPAIRS: tuple[Repair, ...] = (
+    Repair(
+        MISSING_MODELS,
+        "bypassed_loras",
+        bypass_missing_loras,
+    ),
+    # Text before seed, and the order is load-bearing: the seed repair's
+    # rollback restores the graph it was handed, which must already hold the
+    # text replacement it reports.
+    Repair(MISSING_NODES, "replaced_nodes", replace_missing_text_nodes),
+    Repair(MISSING_NODES, "replaced_nodes", replace_missing_seed_nodes),
+)
+
+
+def repair(
+    graph: dict, object_info: dict, reasons: list[Reason]
+) -> dict[str, list[dict]]:
+    """Apply every registered repair whose refusal *reasons* contains.
+
+    The caller judges, repairs, then judges **again**: a repair can leave its
+    refusal standing (a stacker still holding an adapter that is here, a seed
+    node feeding something that is not a seed), and only the second verdict
+    says whether the graph now runs. Re-judging is pure over the graph and the
+    ``object_info`` already fetched, so it costs no ComfyUI round-trip.
+
+    Returns:
+        ``{report_field: [entries…]}`` for every registered repair, empty lists
+        included, so the caller can assign each field without knowing the set.
+    """
+    codes = {reason.code for reason in reasons}
+    done: dict[str, list[dict]] = {}
+    for entry in REPAIRS:
+        done.setdefault(entry.report, []).extend(
+            entry.apply(graph, object_info) if entry.code in codes else []
+        )
+    return done
+
+
+# The ComfyUI-PixlStash loader a model fix swaps in where the workflow's own
+# loader cannot load the replacement (#1605), per slot kind, with the digest
+# widgets it takes in order. Checkpoints keep the rename only:
+# `PixlStashCheckpointLoader` names a per-hub shelf id and cannot fetch the
+# file, and there is no PixlStash UNET loader.
+PIXLSTASH_SWAP_LOADERS: dict[str, tuple[str, tuple[str, ...]]] = {
+    FILE_VAE: ("PixlStashVAELoader", ("vae_sha256",)),
+    FILE_TEXT_ENCODER: ("PixlStashCLIPLoader", ("clip_sha256", "clip_sha256_2")),
+}
+# The one output each of them has, which the original's first must be.
+_SWAP_OUTPUT_TYPES = {FILE_VAE: "VAE", FILE_TEXT_ENCODER: "CLIP"}
+# A widget the swapped-in loader has no place for, and the value at which
+# dropping it changes nothing (core `CLIPLoader`'s advanced `device`).
+_SWAP_DROPPABLE = {"device": "default"}
+
+# Why a loader was not swapped. Only NO_PIXLSTASH_NODES is the owner's to
+# fix, so it is checked last: when it is the answer, nothing else stood in
+# the way.
+SWAP_UNSUPPORTED = "unsupported_loader"
+SWAP_TOO_MANY_FILES = "too_many_files"
+SWAP_OUTPUTS_DIFFER = "outputs_differ"
+SWAP_CLIP_TYPE = "clip_type"
+SWAP_GGUF = "gguf"
+SWAP_NO_SHELF_COPY = "no_shelf_copy"
+SWAP_NO_PIXLSTASH_NODES = "no_pixlstash_nodes"
+
+
+def plan_pixlstash_swap(
+    graph: dict,
+    node_id: str,
+    kind: str,
+    swaps: dict[str, str],
+    object_info: Optional[dict],
+    digest_of: Callable[[str], Optional[str]],
+) -> tuple[Optional[dict], Optional[str]]:
+    """How to load *node_id*'s files, *swaps* applied, through a PixlStash loader.
+
+    Pure: :func:`apply_pixlstash_swap` writes the plan. Refused where the
+    swapped node would not do what the original did: another kind of file on
+    the node, more files than the PixlStash loader takes (a triple CLIP
+    loader), an output past the first in use or a first output of another type
+    (when ComfyUI declares it), a CLIP ``type`` it does not list, a widget it
+    has no place for. Refused too for a GGUF file (the PixlStash loaders load
+    through core ComfyUI, Pikselkroken/ComfyUI-PixlStash#27) and a file the
+    shelf holds no single digest with a present copy for (the hasher has not
+    read it, or its copies are gone).
+
+    Args:
+        swaps: The graph's filename -> the file to load instead; a file not
+            named here is loaded as it is.
+        digest_of: A filename -> its shelf SHA-256 in this slot kind, with a
+            copy present, or ``None``.
+
+    Returns:
+        ``(plan, None)`` or ``(None, reason)``, *reason* a ``SWAP_*`` code.
+        The plan is ``{class_type, type, fields: [(widget, original widget,
+        file, digest)]}``.
+    """
+    if kind not in PIXLSTASH_SWAP_LOADERS:
+        return None, SWAP_UNSUPPORTED
+    swap_class, digest_widgets = PIXLSTASH_SWAP_LOADERS[kind]
+    node = graph.get(node_id)
+    inputs = node.get("inputs") if isinstance(node, dict) else None
+    if not isinstance(inputs, dict):
+        return None, SWAP_UNSUPPORTED
+    # In the loader's declared file order (`MODEL_FILENAME_FIELDS`), which is
+    # the order its paths load in and so the order of our digest widgets.
+    fields = [
+        (widget, value)
+        for _node, cls, widget, value in iter_model_fields_api({node_id: node})
+    ]
+    if not fields or any(
+        model_fix_kind(node.get("class_type", ""), widget) != kind
+        for widget, _value in fields
+    ):
+        return None, SWAP_UNSUPPORTED
+    if len(fields) > len(digest_widgets):
+        return None, SWAP_TOO_MANY_FILES
+    named = {widget for widget, _value in fields}
+    clip_type = inputs.get("type") if kind == FILE_TEXT_ENCODER else None
+    for name, value in inputs.items():
+        if name in named or (name == "type" and kind == FILE_TEXT_ENCODER):
+            continue
+        if is_link(value) or _SWAP_DROPPABLE.get(name, object()) != value:
+            return None, SWAP_UNSUPPORTED
+    if kind == FILE_TEXT_ENCODER:
+        types = listed_options(object_info, swap_class, "type")
+        if not isinstance(clip_type, str) or (types and clip_type not in types):
+            return None, SWAP_CLIP_TYPE
+    declared = ((object_info or {}).get(node.get("class_type")) or {}).get("output")
+    # Only a list says anything: another shape is not ComfyUI's, and is read
+    # as undeclared rather than indexed.
+    if (
+        isinstance(declared, list)
+        and declared
+        and declared[0] != _SWAP_OUTPUT_TYPES[kind]
+    ):
+        return None, SWAP_OUTPUTS_DIFFER
+    for consumer in graph.values():
+        consumer_inputs = consumer.get("inputs") if isinstance(consumer, dict) else {}
+        for value in (consumer_inputs or {}).values():
+            if is_link(value) and value[0] == str(node_id) and value[1] != 0:
+                return None, SWAP_OUTPUTS_DIFFER
+    planned = []
+    for digest_widget, (widget, value) in zip(digest_widgets, fields):
+        file = swaps.get(value, value)
+        if file.lower().endswith(".gguf"):
+            return None, SWAP_GGUF
+        digest = digest_of(file)
+        if not digest:
+            return None, SWAP_NO_SHELF_COPY
+        planned.append((digest_widget, widget, file, digest))
+    if object_info is None or swap_class not in object_info:
+        return None, SWAP_NO_PIXLSTASH_NODES
+    return {"class_type": swap_class, "type": clip_type, "fields": planned}, None
+
+
+def apply_pixlstash_swap(graph: dict, node_id: str, plan: dict) -> None:
+    """Put the PixlStash loader *plan* names in place of *node_id*, id kept.
+
+    The id is kept, so every consumer's link still reads the node's first
+    output, which is the one :func:`plan_pixlstash_swap` checked is all they
+    read.
+    """
+    inputs = {widget: digest for widget, _was, _file, digest in plan["fields"]}
+    if plan["type"] is not None:
+        inputs["type"] = plan["type"]
+    graph[node_id] = {
+        **graph[node_id],
+        "class_type": plan["class_type"],
+        "inputs": inputs,
+    }
 
 
 def lora_slot_fields(inputs: dict) -> list[str]:
@@ -605,6 +1202,42 @@ def skip_requested_loras(
     return skipped, reasons, found
 
 
+def skip_requested_stages(
+    graph: dict, stages: list[str], object_info: Optional[dict]
+) -> list[Reason]:
+    """Switch the optional stages the owner asked this run to go without (#1621).
+
+    Each goes through :func:`bypass_stage` on the run's own copy. One that
+    cannot be switched off is a :data:`STAGE_NOT_SKIPPABLE` reason, which
+    blocks the card: the owner asked for a run without that stage, and running
+    it with the stage would be answering a different request. So is every
+    stage when ComfyUI cannot be asked what to wire in its place. A stage the
+    graph does not have is nothing to do.
+
+    Returns:
+        The refusals, ``{stage, message}`` each.
+    """
+    reasons: list[Reason] = []
+    for stage in dict.fromkeys(stages):
+        try:
+            # With no map every node of the stage is untyped and refuses, so a
+            # graph without the stage still runs and one with it is refused.
+            bypass_stage(graph, stage, object_info or {})
+            continue
+        except LookupError as exc:
+            message = (
+                str(exc)
+                if object_info is not None
+                else "PixlStash could not reach ComfyUI, so it cannot tell what "
+                f"to wire in place of the {stage.replace('_', ' ')} stage."
+            )
+        logger.info("Stage %s cannot be switched off as asked: %s", stage, message)
+        reasons.append(
+            Reason(STAGE_NOT_SKIPPABLE, {"stage": stage, "message": message})
+        )
+    return reasons
+
+
 def blocks_batch(reasons: list[Reason], *, allow_unchecked: bool = False) -> bool:
     """Whether one source's reasons stop the whole request rather than itself.
 
@@ -645,6 +1278,11 @@ def blocks_group(reasons: list[Reason], *, allow_unchecked: bool = False) -> boo
     return bool(reasons)
 
 
+def _named(value) -> bool:
+    """Whether a stored model pin names its model this way: non-empty text."""
+    return isinstance(value, str) and bool(value)
+
+
 def saved_recipe_body(recipe) -> dict:
     """A saved recipe as the run body fields it stands in for.
 
@@ -670,8 +1308,41 @@ def saved_recipe_body(recipe) -> dict:
             exc,
         )
         overrides = {}
+    models = None
+    if recipe.models is not None:
+        try:
+            models = json.loads(recipe.models)
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "Saved recipe %s has unreadable models, so the run loads the "
+                "workflow's default ones: %s",
+                recipe.id,
+                exc,
+            )
+        if models is not None and not (
+            isinstance(models, list)
+            and all(
+                isinstance(m, dict)
+                and isinstance(m.get("address"), str)
+                and m.get("address")
+                # Exactly one way to name the model, as `RunModel` requires.
+                and _named(m.get("filename")) != _named(m.get("sha256"))
+                for m in models
+            )
+        ):
+            logger.error(
+                "Saved recipe %s has malformed models %r, so the run loads the "
+                "workflow's default ones.",
+                recipe.id,
+                models,
+            )
+            models = None
     return {
         "workflow_key": recipe.workflow_key,
+        # The workflow it runs on (#1622), once the cut-over has filled it in,
+        # and its models, pinned over the default recipe (NULL pins nothing).
+        "workflow_id": recipe.workflow_id,
+        "models": models,
         "prompt": recipe.prompt,
         "negative": recipe.negative,
         "loras": loras if isinstance(loras, list) else [],

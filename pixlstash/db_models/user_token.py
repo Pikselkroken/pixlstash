@@ -1,9 +1,9 @@
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, TYPE_CHECKING
 
 from sqlalchemy import Column, ForeignKey
-from sqlmodel import SQLModel, Field, Integer, DateTime, Relationship
+from sqlmodel import SQLModel, Field, Integer, Relationship, UTCDateTime
 
 if TYPE_CHECKING:
     from .user import User
@@ -72,16 +72,16 @@ class UserToken(SQLModel, table=True):
     resource_type: Optional[str] = Field(default=None)
     resource_id: Optional[int] = Field(default=None)
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column(DateTime, nullable=False),
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(UTCDateTime(), nullable=False),
     )
     last_used_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column(DateTime, nullable=True),
+        sa_column=Column(UTCDateTime(), nullable=True),
     )
     expires_at: Optional[datetime] = Field(
         default=None,
-        sa_column=Column(DateTime, nullable=True),
+        sa_column=Column(UTCDateTime(), nullable=True),
     )
     include_attachments: bool = Field(default=False)
     watermark: bool = Field(default=True)

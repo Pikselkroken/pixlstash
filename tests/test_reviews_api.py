@@ -583,7 +583,7 @@ def test_review_scope_is_frozen_and_restricts_the_scan(client, server):
 
 
 def test_stale_flag_after_tagger_run(client, server):
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     from pixlstash.db_models import TaggerRun
 
@@ -593,7 +593,7 @@ def test_stale_flag_after_tagger_run(client, server):
 
     # A tagger run completed after the scan makes the review stale...
     def add_run(session):
-        session.add(TaggerRun(run="run-1", created_at=datetime.utcnow()))
+        session.add(TaggerRun(run="run-1", created_at=datetime.now(timezone.utc)))
         session.commit()
 
     server.vault.db.run_task(add_run)

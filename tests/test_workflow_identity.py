@@ -11,6 +11,7 @@ import pytest
 
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
+    asset_reference,
     structural_document,
     structural_hash,
     topology_hash,
@@ -20,9 +21,13 @@ from pixlstash.services.workflow_identity import (
     RECIPE,
     STRUCTURAL,
     UPSCALE,
+    Difference,
     core_hash,
+    core_node_labels,
+    differences_reduced,
     differs_by,
     guess_mark,
+    reduce_stored_document,
     slots,
     special_groups,
     workflow_key,
@@ -166,6 +171,37 @@ def test_a_different_checkpoint_is_a_different_workflow_in_the_same_stack():
     assert differs_by(_doc(a), _doc(b)) == ["other checkpoint"]
 
 
+def _with_companions(vae: str, clip: str) -> dict:
+    """A graph whose VAE and text encoder load from their own loaders."""
+    return _graph(
+        extra={
+            "8": _node("VAELoader", vae_name=vae),
+            "9": _node("CLIPLoader", clip_name=clip, type="flux2"),
+            "2": _node("CLIPTextEncode", text="a cat", clip=["9", 0]),
+            "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "a, b",
+    [
+        (
+            ("ae.safetensors", "t5.safetensors"),
+            ("other_vae.safetensors", "t5.safetensors"),
+        ),
+        (("ae.safetensors", "t5.safetensors"), ("ae.safetensors", "qwen.safetensors")),
+    ],
+    ids=["vae", "text_encoder"],
+)
+def test_a_different_companion_file_is_a_different_workflow_in_the_same_stack(a, b):
+    # Clone with new models re-keys on the VAE and text encoder too, not only
+    # the checkpoint: otherwise the clone would land on the original's card.
+    first, second = _with_companions(*a), _with_companions(*b)
+    assert _key(first) != _key(second)
+    assert core_hash(_doc(first)) == core_hash(_doc(second))
+
+
 def test_a_character_lora_is_part_of_the_recipe_not_the_workflow():
     a = _graph(loras=("alice_character.safetensors",))
     b = _graph(loras=("bob_character.safetensors",))
@@ -255,6 +291,44 @@ def test_plumbing_and_post_processing_stack_with_the_plain_workflow(variant):
     plain, member = _graph(), _graph(**variant)
     assert topology_hash(plain) != topology_hash(member)
     assert core_hash(_doc(plain)) == core_hash(_doc(member))
+
+
+def _core_label(graph: dict, node_id: str) -> str:
+    return core_node_labels(_doc(graph))[node_id]
+
+
+@pytest.mark.parametrize(
+    "variant",
+    [
+        {"face_detailer": True},
+        {"loras": ("a.safetensors",)},
+        {"loras": ("a.safetensors", "b.safetensors", "c.safetensors")},
+        {"loras": ("a.safetensors",), "face_detailer": True, "upscale": True},
+    ],
+    ids=["detailer", "one-lora", "three-loras", "all-of-it"],
+)
+def test_core_labels_agree_across_the_members_of_one_workflow(variant):
+    """The core address (#1622): one label per node across every member.
+
+    A slot label changes the moment a node is added anywhere, so it cannot
+    address "the sampler" across a workflow's topologies; the label on the
+    stripped core graph can. Asserted against a one-LoRA member as well as the
+    plain graph, because 1 vs 3 LoRA loaders is the case the issue names.
+    """
+    one_lora, member = _graph(loras=("a.safetensors",)), _graph(**variant)
+    assert core_hash(_doc(one_lora)) == core_hash(_doc(member))
+    for node_id in ("1", "4", "5"):  # checkpoint loader, latent, sampler
+        assert _core_label(one_lora, node_id) == _core_label(member, node_id)
+        assert _core_label(_graph(), node_id) == _core_label(member, node_id)
+
+
+def test_core_labels_tell_the_nodes_of_one_graph_apart_and_skip_stripped_ones():
+    """A shared label that named every node would pass the test above."""
+    graph = _graph(loras=("a.safetensors",), face_detailer=True)
+    labels = core_node_labels(_doc(graph))
+    assert len({labels["1"], labels["4"], labels["5"]}) == 3
+    # Stripped: LoRA loader, detailer and its detector have no core address.
+    assert not {"L0", "30", "31"} & set(labels)
 
 
 def test_an_extra_lora_loader_splits_when_loras_are_not_stripped():
@@ -370,6 +444,70 @@ def test_plumbing_only_is_never_claimed_when_a_model_differs():
 def test_plumbing_only_is_never_claimed_beside_an_unclassified_node():
     extra = {"98": _node("SomeCustomNode"), "99": _node("PreviewImage")}
     assert differs_by(_doc(_graph()), _doc(_graph(extra=extra))) == ["2 nodes differ"]
+
+
+def _differences(cover: dict, member: dict) -> list[Difference]:
+    return differences_reduced(
+        reduce_stored_document(_doc(cover)), reduce_stored_document(_doc(member))
+    )
+
+
+def test_a_nodes_chip_names_the_classes_it_counted():
+    """#1597: the detail says HOW, and names only what the chip counted."""
+    extra = {
+        "98": _node("SomeCustomNode"),
+        "97": _node("SomeCustomNode"),
+        "99": _node("PreviewImage"),
+    }
+    cover = _graph(loras=("alice.safetensors",))
+    # The upscale nodes are "+ upscale"'s, so the nodes chip leaves them out.
+    upscale, chip = _differences(cover, _graph(extra=extra, upscale=True))
+    assert upscale.chip == "+ upscale"
+    assert chip.chip == "4 nodes differ"
+    assert chip.detail == "+ PreviewImage · + SomeCustomNode ×2 · − LoraLoader"
+    # Reversed, the signs flip with it.
+    (back,) = _differences(_graph(extra=extra), cover)
+    assert back.detail == "+ LoraLoader · − PreviewImage · − SomeCustomNode ×2"
+
+
+def test_a_nodes_chip_with_no_class_change_says_what_did_change():
+    cover = _graph(loras=("alice.safetensors",))
+    rewired = _graph(loras=("alice.safetensors",))
+    rewired["5"]["inputs"]["model"] = ["1", 0]
+    assert [(d.chip, d.detail) for d in _differences(cover, rewired)] == [
+        ("1 node differs", "same nodes, wired differently")
+    ]
+
+
+def test_a_changed_node_says_whether_it_was_a_model_or_a_picture():
+    cover = _graph(img2img=True, input_picture="a.png")
+    picture = _graph(img2img=True, input_picture="b.png")
+    assert [(d.chip, d.detail) for d in _differences(cover, picture)] == [
+        ("1 node differs", "LoadImage: other picture")
+    ]
+    # A LoRA is not an "other models" chip, so a swapped one lands here.
+    alice = _graph(loras=("alice.safetensors",))
+    bob = _graph(loras=("bob.safetensors",))
+    assert [d.detail for d in _differences(alice, bob)] == ["LoraLoader: other model"]
+
+
+def test_a_model_chip_carries_both_sides_base_model_first():
+    member = _graph(ckpt="other.safetensors", upscale=True)
+    member["60"] = _node("VAELoader", vae_name="new_vae.safetensors")
+    cover = _graph()
+    cover["60"] = _node("VAELoader", vae_name="old_vae.safetensors")
+    chips = {d.chip: d for d in _differences(cover, member)}
+    # The upscaler's model belongs to "+ upscale", never to this chip.
+    assert chips["other checkpoint"].cover_assets == (
+        asset_reference("base.safetensors"),
+        asset_reference("old_vae.safetensors"),
+    )
+    assert chips["other checkpoint"].member_assets == (
+        asset_reference("other.safetensors"),
+        asset_reference("new_vae.safetensors"),
+    )
+    assert chips["+ upscale"].cover_assets == ()
+    assert chips["other checkpoint"].detail is None
 
 
 # ── type ────────────────────────────────────────────────────────────────────
@@ -596,7 +734,7 @@ def test_a_checkpoint_id_written_as_a_number_names_the_same_model():
 
 
 def test_a_numbered_digest_slot_is_a_lora_slot_and_takes_a_mark():
-    """`SHA256_FIELD_RE` keys it, so `_is_lora_widget` has to claim it.
+    """`SHA256_FIELD_RE` keys it, so `is_lora_widget` has to claim it.
 
     Missed, it is a non-LoRA slot and reaches the card key unconditionally, so
     swapping a character LoRA in a stacker's second slot forks the workflow

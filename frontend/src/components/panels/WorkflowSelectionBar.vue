@@ -227,6 +227,7 @@ const emit = defineEmits([
   "hide",
   "export",
   "duplicate",
+  "clone-with-models",
   "delete",
 ]);
 
@@ -350,7 +351,8 @@ const countTitle = computed(() => {
 
 /**
  * `POST /workflows/run` takes one card, and the Run popup shows one run. A
- * stack selected whole runs its cover (`store.runnableCard`).
+ * stack selected whole runs the member picked in the inspector, its cover
+ * until another is picked (`store.runnableCard`).
  */
 const runnable = computed(() => Boolean(store.runnableCard));
 const runTitle = computed(() => {
@@ -358,15 +360,18 @@ const runTitle = computed(() => {
     return "Select one workflow, or one whole stack, to run it";
   }
   if (single.value) return "Run this workflow";
+  if (store.runnableCard.key !== store.stackCover?.key) {
+    return `Run ${store.runnableCard.name}, the member picked in the inspector`;
+  }
   return (
     `Run ${store.runnableCard.name}, this stack's cover. ` +
-    "Pick another member in the Run popup"
+    "Pick another member in the inspector or the Run popup"
   );
 });
 
 /**
- * A stack selected whole: several keys, one card on screen. Run and Open
- * cover picture take its cover; the verbs that would have to pick one of its
+ * A stack selected whole: several keys, one card on screen. Run takes the
+ * member picked in the inspector and Open cover picture the stack's cover; the verbs that would have to pick one of its
  * workflows refuse with that rule rather than "Select one workflow".
  */
 const stackWhole = computed(() => !single.value && runnable.value);
@@ -387,7 +392,8 @@ function oneOnly(verb) {
  * be read, so it says which of the two it is.
  */
 const coverPictureId = computed(
-  () => store.runnableCard?.covers?.[0]?.picture_id ?? null,
+  () =>
+    (store.stackCover ?? store.runnableCard)?.covers?.[0]?.picture_id ?? null,
 );
 
 /**
@@ -461,7 +467,7 @@ const stackTitle = computed(() => {
  * counted as a one-off — deliberately, so that `POST /workflows/stacks/{id}/
  * unstack` cannot be attempted and refused (`useWorkflowsStore.reorderMembers`
  * says the same of the reorder route). Such a card still draws as a stack: ▸,
- * the layered count, a "differs by" row. Gating on the id alone therefore told
+ * the layered count. Gating on the id alone therefore told
  * a reader looking at a stack that nothing in their selection was one, which
  * is a sentence they can see is false — so the two refusals are separated and
  * the second names the way out.
@@ -564,6 +570,12 @@ const duplicateTitle = computed(() =>
     : oneOnly("copy"),
 );
 
+const cloneTitle = computed(() =>
+  single.value
+    ? "Write a copy that loads a different checkpoint, VAE or text encoder"
+    : "Select one workflow to clone it",
+);
+
 /**
  * Why this selection cannot become its stack's cover, or `""` when it can.
  *
@@ -612,6 +624,7 @@ const verbHandlers = computed(() => ({
   hideTitle: hideTitle.value,
   exportTitle: exportTitle.value,
   duplicateTitle: duplicateTitle.value,
+  cloneTitle: cloneTitle.value,
   deletable: deletable.value,
   deleteTitle: deleteTitle.value,
   onVerb: (verb) => {
@@ -631,7 +644,7 @@ const verbHandlers = computed(() => ({
  * of them would drift.
  *
  * The order is the design's: what running the card does, then what grouping
- * does, then what naming does, then the two that make a file, then the one
+ * does, then what naming does, then the three that make a file, then the one
  * that destroys one.
  */
 const VerbMenu = (props) => {
@@ -759,9 +772,10 @@ const VerbMenu = (props) => {
         },
       ),
       sep(),
-      // The two that write a file rather than changing a card. Both single-only:
-      // an export is one save dialog and a duplicate is one new card, and doing
-      // either forty times is a queue feature wearing a menu row's clothes.
+      // The three that write a file rather than changing a card. All single-only:
+      // an export is one save dialog and a duplicate or a clone is one new card,
+      // and doing any of them forty times is a queue feature wearing a menu
+      // row's clothes.
       item("mdi-tray-arrow-down", "Export…", {
         verb: "export",
         on: () => props.onVerb("export"),
@@ -773,6 +787,12 @@ const VerbMenu = (props) => {
         on: () => props.onVerb("duplicate"),
         disabled: !props.single,
         title: props.duplicateTitle,
+      }),
+      item("mdi-swap-horizontal", "Clone with new models…", {
+        verb: "clone-with-models",
+        on: () => props.onVerb("clone-with-models"),
+        disabled: !props.single,
+        title: props.cloneTitle,
       }),
       sep(),
       item("mdi-delete-outline", "Delete file…", {

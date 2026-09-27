@@ -1,7 +1,7 @@
 import logging
 import tempfile
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -225,7 +225,7 @@ def test_a_token_is_expired_at_exactly_its_expiry_moment():
     rejecting an ``expires_at`` equal to the moment of the check. Pin the
     stricter reading so the boundary cannot drift back.
     """
-    moment = datetime(2026, 1, 1, 12, 0, 0)
+    moment = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
     at_expiry = SimpleNamespace(expires_at=moment)
     assert auth_module.is_token_expired(at_expiry, moment) is True
     assert (

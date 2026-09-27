@@ -89,7 +89,7 @@ def test_date_sort_uses_seconds(sort_key, field):
 
     # Three timestamps within the same minute but at different seconds:
     # earliest → middle → latest
-    base = datetime.datetime(2022, 6, 15, 10, 30, 0)
+    base = datetime.datetime(2022, 6, 15, 10, 30, 0, tzinfo=datetime.timezone.utc)
     ts_early = base.replace(second=1)
     ts_mid = base.replace(second=30)
     ts_late = base.replace(second=59)

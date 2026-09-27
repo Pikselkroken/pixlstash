@@ -1,6 +1,6 @@
 import os
 import shutil
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import pytest
@@ -26,7 +26,7 @@ def test_empty_embedding_blob_is_work_again_after_the_0112_reset(tmp_path):
     shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "empty.jpg")
     shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "done.jpg")
     with Vault(image_root=str(tmp_path)) as vault:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         def seed(session: Session):
             missing = Picture(
@@ -104,7 +104,7 @@ def test_fetch_work_includes_missing_aesthetic_when_embedding_exists(tmp_path):
     )
     shutil.copy(os.path.join(PICTURES_DIR, "Bad1.png"), tmp_path / "complete.jpg")
     with Vault(image_root=str(tmp_path)) as vault:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         def seed(session: Session):
             needs_aesthetic = Picture(
@@ -212,6 +212,26 @@ def test_the_preload_pool_does_the_cpu_work_and_keeps_batch_order(tmp_path):
             f"tensor-for-{id(entry[2])}" for entry in preloaded
         ], "each picture carries the tensor preprocessed from its own image"
         assert sorted(workflow.preprocessed) == sorted(e[4] for e in preloaded)
+
+
+def test_an_animated_gif_preloads_three_frames_and_a_still_gif_one(tmp_path):
+    """An animated GIF is averaged over the frames a video is (#1487)."""
+    from PIL import Image as PILImage
+
+    frames = [PILImage.new("RGB", (32, 24), c) for c in ("red", "green", "blue")]
+    frames[0].save(
+        tmp_path / "anim.gif", save_all=True, append_images=frames[1:], duration=100
+    )
+    frames[0].save(tmp_path / "still.gif")
+    with Vault(image_root=str(tmp_path)) as vault:
+        task = ImageEmbeddingTask(
+            database=vault.db,
+            clip_workflow=_RecordingWorkflow(),
+            batch=[(1, "anim.gif"), (2, "still.gif")],
+        )
+        task._preload_images_task()
+
+        assert [entry[0] for entry in task._preloaded_images] == [1, 1, 1, 2]
 
 
 def test_the_worker_uses_the_preloaded_tensors_and_hashes(tmp_path, monkeypatch):

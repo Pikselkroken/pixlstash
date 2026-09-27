@@ -137,14 +137,26 @@ describe("Segmented", () => {
 });
 
 describe("OptionRows", () => {
-  it("takes no fill: the selected row carries a trailing check and nothing else does", () => {
+  it("takes no fill: every row carries an aligned radio indicator", () => {
     const w = mount(OptionRows, {
       props: { options: OPTIONS, modelValue: "c" },
     });
     const rows = w.findAll('[role="radio"]');
-    expect(rows[2].find(".optrow__check").exists()).toBe(true);
-    expect(rows[0].find(".optrow__check").exists()).toBe(false);
-    expect(w.findAll(".optrow__check")).toHaveLength(1);
+    expect(w.findAll(".optrow__radio")).toHaveLength(3);
+    expect(
+      rows.map((row) => row.find(".optrow__radio").text().trim()),
+    ).toEqual(["mdi-radiobox-blank", "mdi-radiobox-blank", "mdi-radiobox-marked"]);
+  });
+
+  it("draws the radio as each row's only glyph, even for an option with an icon", () => {
+    const w = mount(OptionRows, {
+      props: { options: OPTIONS, modelValue: "c" },
+    });
+    for (const row of w.findAll('[role="radio"]')) {
+      expect(row.findAll("i").map((i) => i.text().trim())).toEqual([
+        expect.stringMatching(/^mdi-radiobox-/),
+      ]);
+    }
   });
 
   it("picks on a click, even of the current value, and never on an arrow", async () => {
@@ -159,6 +171,27 @@ describe("OptionRows", () => {
     await radios[0].trigger("click");
     await radios[2].trigger("click");
     expect(w.emitted("pick")).toEqual([["a"], ["c"]]);
+    w.unmount();
+  });
+});
+
+describe("Segmented", () => {
+  it("leaves Up and Down to its container when horizontal", async () => {
+    // A switch in a grid's header: Down means "into the grid", so the group
+    // must neither flip its value nor swallow the press.
+    const outer = vi.fn();
+    document.body.addEventListener("keydown", outer);
+    const w = mount(Segmented, {
+      props: { options: OPTIONS, modelValue: "a", orientation: "horizontal" },
+      attachTo: document.body,
+    });
+    await w.trigger("keydown", { key: "ArrowDown" });
+    await w.trigger("keydown", { key: "ArrowUp" });
+    expect(w.emitted("update:modelValue")).toBeUndefined();
+    expect(outer).toHaveBeenCalledTimes(2);
+    await w.trigger("keydown", { key: "ArrowRight" });
+    expect(w.emitted("update:modelValue")).toEqual([["c"]]);
+    document.body.removeEventListener("keydown", outer);
     w.unmount();
   });
 });

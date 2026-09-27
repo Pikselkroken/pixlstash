@@ -278,6 +278,55 @@ describe("useNoticeStore - pause and resume (§9.3, WCAG 2.2.1)", () => {
     vi.advanceTimersByTime(60000);
     expect(store.notices.map((n) => n.id)).toEqual([a]);
   });
+
+  // The host's countdown bar pauses on `running`, so it must track the timer
+  // through every stop and start, including a demotion off-screen.
+  it("mirrors the countdown onto `running`", () => {
+    const store = useNoticeStore();
+    const id = store.info("bar");
+    const card = () => store.notices.find((n) => n.id === id);
+    expect(card().running).toBe(true);
+    store.pause(id);
+    expect(card().running).toBe(false);
+    store.resume(id);
+    expect(card().running).toBe(true);
+    store.pauseAll();
+    expect(card().running).toBe(false);
+    store.resumeAll();
+    expect(card().running).toBe(true);
+    store.info("b");
+    store.info("c");
+    store.error("pushes bar out");
+    expect(store.pending.some((n) => n.id === id)).toBe(true);
+    expect(card().running).toBe(false);
+  });
+
+  // Every start re-syncs the bar from the banked time with a fresh key, so it
+  // cannot drift from the timer (hidden tab, demote + re-promote).
+  it("hands the bar the fraction left on every start", () => {
+    const store = useNoticeStore();
+    const id = store.push({ level: "info", text: "x", timeout: 10000 });
+    const card = () => store.notices.find((n) => n.id === id);
+    const first = card().countdown;
+    expect(first).toMatchObject({ ms: 10000, from: 1 });
+    vi.advanceTimersByTime(4000);
+    store.pauseAll();
+    store.resumeAll();
+    expect(card().countdown.run).not.toBe(first.run);
+    expect(card().countdown).toMatchObject({ ms: 6000, from: 0.6 });
+  });
+
+  it("keeps a coalesced repeat running, and starts a promoted notice", () => {
+    const store = useNoticeStore();
+    store.setMaxVisible(1);
+    const a = store.push({ level: "info", text: "a", key: "k" });
+    const b = store.info("b");
+    store.push({ level: "info", text: "a", key: "k" });
+    expect(store.notices.find((n) => n.id === a).running).toBe(true);
+    expect(store.notices.find((n) => n.id === b).running).toBe(false);
+    store.dismiss(a);
+    expect(store.notices.find((n) => n.id === b).running).toBe(true);
+  });
 });
 
 describe("useNoticeStore - action contract (§9.4)", () => {

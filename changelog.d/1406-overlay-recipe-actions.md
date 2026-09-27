@@ -9,5 +9,6 @@
   opens the run panel so you can pick a workflow to run it through.
 - The full-screen view's **I2I** menu is gone; *Use as input for…* replaces it
   with the run panel's fuller set of options.
-- *Edit with ComfyUI* is now called **Use as input for…** in the grid's
-  right-click menu and in the selection menu. Same action, clearer name.
+- *Edit with ComfyUI…* in the grid's right-click menu and the selection menu
+  now opens the Run popup on the built-in Flux.2 Klein image edit workflow,
+  with your selected pictures as its input and the prompt box for the edit.

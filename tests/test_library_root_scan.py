@@ -11,7 +11,7 @@ drops what they deleted - the same code path a reference folder gets, with
 import os
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from PIL import Image
@@ -453,7 +453,7 @@ def test_a_move_pixlstash_recorded_is_repointed_not_deleted(server):
                 picture_id=moving.id,
                 old_path="jrn/a.png",
                 new_path="jrn/a2.png",
-                moved_at=datetime.utcnow(),
+                moved_at=datetime.now(timezone.utc),
             )
         )
         session.commit()
@@ -527,7 +527,7 @@ def test_an_owner_move_back_the_journal_catches_is_still_queued_for_review(serve
                 picture_id=moved.id,
                 old_path="Unassigned/back.png",
                 new_path="Mira/back.png",
-                moved_at=datetime.utcnow(),
+                moved_at=datetime.now(timezone.utc),
             )
         )
         session.commit()

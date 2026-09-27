@@ -4,6 +4,7 @@
     class="seg"
     :class="[`seg--${variant}`, { 'seg--full': full, 'seg--disabled': disabled }]"
     :aria-label="ariaLabel || undefined"
+    :aria-orientation="orientation === 'horizontal' ? 'horizontal' : undefined"
     :aria-disabled="disabled ? 'true' : undefined"
     @keydown="onKeydown"
   >
@@ -72,6 +73,8 @@ const props = defineProps({
   full: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   ariaLabel: { type: String, default: "" },
+  // both | horizontal. Horizontal leaves Up/Down to the container.
+  orientation: { type: String, default: "both" },
 });
 
 // `pick` fires for every click, the current value included, like OptionRows:
@@ -93,7 +96,12 @@ function select(option) {
 
 function onKeydown(event) {
   if (props.disabled) return;
-  const id = arrowStep(event, props.options, props.modelValue);
+  const id = arrowStep(
+    event,
+    props.options,
+    props.modelValue,
+    props.orientation,
+  );
   if (id !== undefined && id !== props.modelValue) {
     emit("update:modelValue", id);
   }

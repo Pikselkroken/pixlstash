@@ -386,6 +386,7 @@
   --dur-2: 200ms; /* panels, expand/collapse, default */
   --dur-3: 250ms; /* overlays, dialog enter/leave - routine ceiling */
   --dur-4: 420ms; /* expressive ONE-SHOT: FLIP flight, badge/sticker landing (delight only) */
+  --dur-attention: 500ms; /* closed-inspector nudge: edge-tab bounce + rail glyph flash, one-shot */
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-decelerate: cubic-bezier(0, 0, 0.2, 1);   /* entering elements */
   --ease-accelerate: cubic-bezier(0.4, 0, 1, 1);   /* leaving elements */

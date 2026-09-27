@@ -1,6 +1,6 @@
-// The Workflows grid's three sort keys, and the one-stack-at-a-time rule.
+// The Workflows grid's sort keys, and the one-stack-at-a-time rule.
 //
-// Every card here is deliberately inconsistent across the three axes — the
+// Every card here is deliberately inconsistent across the numeric axes — the
 // best-rated card has the fewest pictures and the oldest use — so a sort that
 // reads the wrong field cannot come out in the right order by accident.
 
@@ -17,13 +17,14 @@ vi.mock("../api/workflows", () => ({
 
 import { PANEL_COLLAPSE_MS, useWorkflowsStore } from "./useWorkflowsStore";
 
-// Input order is none of the three sorted orders, and the undated card leads:
+// Input order is none of the sorted orders, and the undated card leads:
 // a comparator that reads NaN (`Date.parse(null)`) leaves it where it started,
 // so "last" has to be earned. `rank` and `rating` disagree on purpose too —
 // the stack ranks above the workhorse but is rated below it.
 const CARDS = [
   {
     key: "never-kept-a-picture",
+    name: "Alpha v10",
     rank: 3.0,
     rating: null,
     picture_count: 0,
@@ -32,6 +33,7 @@ const CARDS = [
   },
   {
     key: "few-but-loved",
+    name: "zebra",
     rank: 4.6,
     rating: 5,
     picture_count: 2,
@@ -41,6 +43,7 @@ const CARDS = [
   },
   {
     key: "workhorse",
+    name: "alpha v2",
     rank: 4.1,
     rating: 4.2,
     picture_count: 90,
@@ -49,6 +52,7 @@ const CARDS = [
   },
   {
     key: "the-stack",
+    name: "Écru",
     rank: 4.3,
     rating: 3.5,
     picture_count: 40,
@@ -68,8 +72,8 @@ beforeEach(async () => {
   );
 });
 
-describe("the three sort keys", () => {
-  it("each reads its own field, and the order differs for all three", async () => {
+describe("the sort keys", () => {
+  it("each reads its own field, and the order differs for each", async () => {
     const store = useWorkflowsStore();
     await store.fetchCards();
 
@@ -100,6 +104,16 @@ describe("the three sort keys", () => {
       // "never" is not a date, and reading it as one is how a workflow with
       // no kept pictures would outrank every workflow made before 1970.
       "never-kept-a-picture",
+    ]);
+
+    // Name reads A to Z, the one ascending key: numbers compare as numbers
+    // ("v2" before "v10") and case and accents do not split the alphabet.
+    store.setSortKey("name");
+    expect(order(store)).toEqual([
+      "workhorse",
+      "never-kept-a-picture",
+      "the-stack",
+      "few-but-loved",
     ]);
   });
 

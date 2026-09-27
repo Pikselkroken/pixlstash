@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 import sqlalchemy as sa
@@ -89,7 +89,9 @@ class TagSuggestion(SQLModel, table=True):
     # SKIPPED = the reviewer could not decide: the row leaves the queue with no
     # decision made - no Tag write, no ledger write (reopen simply re-pends it).
     status: str = Field(default="PENDING", index=True)
-    created_at: Optional[datetime] = Field(default_factory=datetime.utcnow)
+    created_at: Optional[datetime] = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
     reviewed_at: Optional[datetime] = Field(default=None)
 
     # Prior-decision snapshot for the include_reviewed re-parent. When a scan

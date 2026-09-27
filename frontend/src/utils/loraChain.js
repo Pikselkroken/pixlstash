@@ -144,16 +144,18 @@ export function chainEntries(rows) {
 /**
  * How many changes the dialog's footer counts.
  *
- * One per delete, per added loader, per re-weighted loader, and per row that
- * had to move (see `movesBetween`). A new row with no LoRA picked yet is not a
- * change: it has nothing the save could write.
+ * One per delete, per added loader, per re-weighted loader, per loader taken
+ * across the fork, and per row that had to move within its segment (see
+ * `movesBetween`). A segment is the trunk (`lane: null`, or no `lane` at all
+ * for a straight chain) or one lane by its index. A new row with no LoRA
+ * picked yet is not a change: it has nothing the save could write.
  *
- * @param {Array<Object>} loaders - the chain as read, `GET …/lora-chain`.
+ * @param {Array<Object>} loaders - the chain as read, each with its `lane`.
  * @param {Array<Object>} rows - the dialog's rows.
  * @returns {number}
  */
 export function countChanges(loaders, rows) {
-  const before = (loaders || []).map((loader) => String(loader.node_id));
+  const laneOf = (entry) => entry.lane ?? null;
   const kept = rows.filter((row) => !row.isNew && !row.deleted);
   const deleted = rows.filter((row) => !row.isNew && row.deleted).length;
   const added = rows.filter((row) => row.isNew && row.sha256).length;
@@ -163,9 +165,23 @@ export function countChanges(loaders, rows) {
   const weighted = kept.filter((row) =>
     strengthChanged(original.get(String(row.nodeId))?.strength, row.strength),
   ).length;
-  const moved = movesBetween(
-    before,
-    kept.map((row) => String(row.nodeId)),
-  );
-  return deleted + added + weighted + moved;
+  const crossed = kept.filter(
+    (row) => laneOf(original.get(String(row.nodeId)) || {}) !== laneOf(row),
+  ).length;
+  const segments = new Set([
+    ...(loaders || []).map(laneOf),
+    ...kept.map(laneOf),
+  ]);
+  let moved = 0;
+  for (const segment of segments) {
+    moved += movesBetween(
+      (loaders || [])
+        .filter((loader) => laneOf(loader) === segment)
+        .map((loader) => String(loader.node_id)),
+      kept
+        .filter((row) => laneOf(row) === segment)
+        .map((row) => String(row.nodeId)),
+    );
+  }
+  return deleted + added + weighted + crossed + moved;
 }

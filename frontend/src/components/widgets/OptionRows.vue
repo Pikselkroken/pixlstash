@@ -17,16 +17,18 @@
       :tabindex="o.id === tabStop ? 0 : -1"
       :disabled="disabled || o.disabled"
       :data-testid="o.testid"
+      :aria-label="o.ariaLabel"
       @click="select(o)"
     >
-      <v-icon v-if="o.icon" size="16" class="optrow__icon">{{
-        iconName(o.icon)
-      }}</v-icon>
-      <span class="optrow__label">{{ o.label }}</span>
+      <v-icon class="optrow__radio">
+        {{
+          o.id === modelValue ? "mdi-radiobox-marked" : "mdi-radiobox-blank"
+        }}
+      </v-icon>
+      <span class="optrow__label">
+        <slot name="label" :option="o">{{ o.label }}</slot>
+      </span>
       <slot name="meta" :option="o" />
-      <v-icon v-if="o.id === modelValue" size="16" class="optrow__check"
-        >mdi-check</v-icon
-      >
     </button>
   </div>
 </template>
@@ -36,16 +38,20 @@
  * Pick one from a long or server-supplied list: sort by, and the filter menu's
  * pick-one lists. Two to five short options are Segmented.
  *
- * NO FILL. A fill means "press me", so the selected row carries a trailing
- * olive check and a medium-weight label in ink: olive marks, words stay
- * text. Hover is the ink wash, which follows the pointer, not the value.
+ * NO FILL. A fill means "press me", so every row carries an aligned radio
+ * indicator and the selected one is marked in olive. The medium-weight label
+ * remains a second cue: olive marks, words stay text. Hover is the ink wash,
+ * which follows the pointer, not the value.
  */
 import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 import { arrowStep, tabStopId } from "../../utils/radioGroup.js";
 
 const props = defineProps({
-  // [{ id, label, icon?, disabled?, testid? }]
+  // [{ id, label, ariaLabel?, disabled?, testid? }]. No option icon: the radio
+  // is the row's one glyph (docs/design/buttons.md, "The option row takes no
+  // fill"). A `#label` slot draws something other than words (the Score
+  // filter's stars), and `ariaLabel` then names the row.
   options: { type: Array, required: true },
   modelValue: { type: [String, Number, Boolean, null], default: null },
   columns: { type: Number, default: 1 },
@@ -58,10 +64,6 @@ const props = defineProps({
 const emit = defineEmits(["update:modelValue", "pick"]);
 
 const tabStop = computed(() => tabStopId(props.options, props.modelValue));
-
-function iconName(icon) {
-  return icon.startsWith("mdi-") ? icon : `mdi-${icon}`;
-}
 
 function select(option) {
   if (props.disabled || option.disabled) return;
@@ -125,18 +127,19 @@ function onKeydown(event) {
   font-weight: var(--weight-medium);
 }
 
-.optrow__icon {
+/* The row owns its glyph size, as a menu row does: no `size` on the v-icon,
+   which would write an inline style. `.optrow` in front outranks Vuetify's
+   `.v-icon--size-default`. */
+.optrow .optrow__radio {
   flex-shrink: 0;
-  opacity: 0.55;
+  width: var(--gutter-glyph);
+  height: var(--gutter-glyph);
+  font-size: var(--gutter-glyph);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.optrow--on .optrow__icon,
-.optrow:not(:disabled):hover .optrow__icon {
-  opacity: 1;
-}
-
-.optrow--on .optrow__icon,
-.optrow__check {
+/* One olive mark per row: the radio. */
+.optrow--on .optrow__radio {
   color: var(--selected-ink);
 }
 
@@ -145,9 +148,5 @@ function onKeydown(event) {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.optrow__check {
-  flex-shrink: 0;
 }
 </style>

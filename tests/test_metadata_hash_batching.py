@@ -31,7 +31,7 @@ import json
 import re
 import tempfile
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import pytest
@@ -206,8 +206,8 @@ def _seed_every_branch(server) -> dict:
         dated = Picture(
             file_path="dated.jpg",
             filename="dated.jpg",
-            imported_at=datetime(2026, 8, 4, 12, 34, 56),
-            created_at=datetime(2025, 1, 2, 3, 4, 5),
+            imported_at=datetime(2026, 8, 4, 12, 34, 56, tzinfo=timezone.utc),
+            created_at=datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc),
         )
         session.add(dated)
 

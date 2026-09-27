@@ -46,8 +46,17 @@ vi.mock("../../api/recipes", () => ({
   editSavedRecipe: vi.fn(),
   listSavedRecipes: (...args) => listSavedRecipes(...args),
 }));
+// Opening the dialog refreshes the set names. Unmocked, that is a real request
+// still in flight when the environment tears down.
+vi.mock("../../api/pictureSets", () => ({
+  listPictureSets: vi.fn().mockResolvedValue([]),
+}));
 const push = vi.fn();
-vi.mock("vue-router", () => ({ useRouter: () => ({ push }) }));
+const currentRoute = { name: "home" };
+vi.mock("vue-router", () => ({
+  useRouter: () => ({ push }),
+  useRoute: () => currentRoute,
+}));
 vi.mock("vuetify/components", async () => {
   const { vuetifyComponentStubs } = await import("../../testing/vuetifyStubs");
   return vuetifyComponentStubs();
@@ -132,6 +141,7 @@ async function mountRun(source = { kind: "picture", pictureIds: [42] }) {
 beforeEach(() => {
   setActivePinia(createPinia());
   vi.clearAllMocks();
+  currentRoute.name = "home";
   getWorkflowCard.mockImplementation(async (key) =>
     key === OTHER
       ? {
@@ -165,6 +175,45 @@ beforeEach(() => {
     seed_text: "418220931",
     settings: { steps: 12 },
     lora_slots: [],
+  });
+});
+
+describe("Open in Workflows", () => {
+  const openButton = (wrapper) =>
+    wrapper.findAll("button").find((b) => b.text() === "Open in Workflows");
+
+  it("closes the popup and selects the card it runs on the Workflows screen", async () => {
+    const wrapper = await mountRun({
+      kind: "edit",
+      pictureIds: [42],
+      workflowKey: OTHER,
+    });
+    await openButton(wrapper).trigger("click");
+    expect(push).toHaveBeenCalledWith({
+      name: "workflows",
+      query: { card: OTHER },
+    });
+    expect(wrapper.emitted("close")).toBeTruthy();
+  });
+
+  it("follows a switch in the Workflow picker", async () => {
+    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    await wrapper
+      .findAllComponents({ name: "AppSelect" })
+      .find((c) => c.props("label") === "Workflow")
+      .vm.$emit("update:modelValue", OTHER);
+    await flushPromises();
+    await openButton(wrapper).trigger("click");
+    expect(push).toHaveBeenCalledWith({
+      name: "workflows",
+      query: { card: OTHER },
+    });
+  });
+
+  it("is not offered on the Workflows screen itself", async () => {
+    currentRoute.name = "workflows";
+    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    expect(openButton(wrapper)).toBeUndefined();
   });
 });
 
@@ -313,10 +362,34 @@ describe("switching to another stack member", () => {
     ];
     getWorkflowCard.mockResolvedValue({ card: card({ members }) });
     const wrapper = await mountRun();
+    // The two-line row (#1525): the name, then what sets it apart as chips,
+    // the cover marked, all under the stack's heading.
+    const group = "This stack · 3 workflows";
     expect(wrapper.vm.workflowOptions).toEqual([
-      { value: KEY, label: "Krea 2: Text to Image — film-grain" },
-      { value: OTHER, label: "Krea 2: Text to Image — + upscale" },
-      { value: "c".repeat(64), label: "Detailer pass" },
+      {
+        value: KEY,
+        label: "Krea 2: Text to Image — film-grain",
+        name: "Krea 2: Text to Image",
+        chips: ["Cover", "film-grain"],
+        chipDetails: {},
+        group,
+      },
+      {
+        value: OTHER,
+        label: "Krea 2: Text to Image — + upscale",
+        name: "Krea 2: Text to Image",
+        chips: ["+ upscale"],
+        chipDetails: {},
+        group,
+      },
+      {
+        value: "c".repeat(64),
+        label: "Detailer pass",
+        name: "Detailer pass",
+        chips: [],
+        chipDetails: {},
+        group,
+      },
     ]);
     // Read off the card itself: no member's card is fetched to name it.
     expect(getWorkflowCard).toHaveBeenCalledTimes(1);
@@ -343,6 +416,32 @@ describe("switching to another stack member", () => {
       `${name} — realvisxl, + upscale`,
       `${name} — 1 node differs (1)`,
       `${name} — 1 node differs (2)`,
+    ]);
+    // The name line is numbered only where the chips under it tie as well.
+    expect(wrapper.vm.workflowOptions.slice(2).map((row) => row.name)).toEqual([
+      `${name} (1)`,
+      `${name} (2)`,
+    ]);
+  });
+
+  it("numbers a name only where the two-line rows would draw alike", async () => {
+    // The cover and a member tie on the one-line label, which the rail's
+    // native select still needs numbered; the Cover chip already tells the
+    // two-line rows apart, so their names stay as the grid prints them.
+    const name = "Krea 2";
+    const members = [
+      { key: KEY, name, sets_apart: ["film-grain"], differs_by: [] },
+      { key: OTHER, name, sets_apart: ["film-grain"], differs_by: [] },
+      { key: "c".repeat(64), name, sets_apart: ["realvisxl"], differs_by: [] },
+    ];
+    getWorkflowCard.mockResolvedValue({ card: card({ members }) });
+    const wrapper = await mountRun();
+    expect(
+      wrapper.vm.workflowOptions.map((row) => [row.label, row.name]),
+    ).toEqual([
+      [`${name} — film-grain (1)`, name],
+      [`${name} — film-grain (2)`, name],
+      [`${name} — realvisxl`, name],
     ]);
   });
 
@@ -433,6 +532,32 @@ describe("a refusal the popup offers to fix", () => {
         models: [{ file: "character.safetensors", folder: "loras" }],
       },
     ]);
+  });
+
+  it("names a replaced seed node beside a bypassed LoRA, blocking neither (#1463)", async () => {
+    const replaced = { node_id: "9", class_type: "Seed (rgthree)", replacement: "seed" };
+    preflightWorkflowRun.mockResolvedValue({
+      ok: true,
+      runs: 1,
+      groups: [
+        {
+          workflow_key: KEY,
+          reasons: [],
+          bypassed_loras: [{ file: "character.safetensors", folder: "loras" }],
+          replaced_nodes: [replaced],
+        },
+      ],
+    });
+
+    const wrapper = await mountRun();
+
+    expect(wrapper.vm.reasons).toEqual([]);
+    expect(wrapper.vm.canRun).toBe(true);
+    expect(wrapper.vm.runNotes.map((note) => note.code)).toEqual([
+      "loras_bypassed",
+      "nodes_replaced",
+    ]);
+    expect(wrapper.vm.runNotes[1].nodes).toEqual([replaced]);
   });
 
   it("names a recipe LoRA with no loader to go in, without blocking (#1478)", async () => {
@@ -894,6 +1019,61 @@ describe("\"Run a workflow on these…\", which opens with no workflow chosen", 
 
     expect(wrapper.vm.defaults.length).toBeGreaterThan(0);
     expect(wrapper.vm.canRun).toBe(true);
+  });
+
+  it("heads the library's cards apart from the picked stack's members", async () => {
+    const members = [
+      { key: KEY, name: "Krea 2", sets_apart: [], differs_by: [] },
+      { key: OTHER, name: "Krea 2", sets_apart: [], differs_by: ["+ upscale"] },
+    ];
+    getWorkflowCard.mockResolvedValue({ card: card({ members }) });
+    listWorkflowCards.mockResolvedValue({
+      cards: [
+        { key: KEY, name: "Krea 2" },
+        { key: "e".repeat(64), name: "Portrait" },
+      ],
+    });
+    const wrapper = await mountRun({
+      kind: "selection",
+      pictureIds: [1, 2],
+      pickWorkflow: true,
+    });
+    wrapper.vm.workflowKey = KEY;
+    await flushPromises();
+
+    expect(
+      wrapper.vm.workflowOptions.map((row) => [row.value, row.group]),
+    ).toEqual([
+      [KEY, "This stack · 2 workflows"],
+      [OTHER, "This stack · 2 workflows"],
+      ["e".repeat(64), "Other workflows"],
+    ]);
+  });
+});
+
+describe("Edit with ComfyUI, the built-in edit card over the selection", () => {
+  it("reads no recipe and sends the pictures to the card with the typed prompt", async () => {
+    const wrapper = await mountRun({
+      kind: "edit",
+      pictureIds: [42],
+      workflowKey: KEY,
+      emptyPrompt: true,
+    });
+    // The picture is what is edited, not a recipe to replay.
+    expect(getPictureRecipe).not.toHaveBeenCalled();
+    expect(wrapper.vm.title).toBe("Edit with ComfyUI");
+    const box = wrapper
+      .findAllComponents({ name: "AppTextarea" })
+      .find((c) => c.props("label") === "Prompt");
+    expect(box.props("modelValue")).toBe("");
+    await box.vm.$emit("update:modelValue", "make it night time");
+    await wrapper.vm.submit();
+    await flushPromises();
+
+    const body = runWorkflowCard.mock.calls[0][0];
+    expect(body.picture_ids).toEqual([42]);
+    expect(body.target).toBe(KEY);
+    expect(body.prompt).toBe("make it night time");
   });
 });
 

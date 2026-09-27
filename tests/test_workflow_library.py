@@ -21,6 +21,7 @@ import copy
 import hashlib
 import json
 import os
+import random
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -75,9 +76,12 @@ from pixlstash.services.workflow_hash import (
 from pixlstash.services import model_shelf_service
 from pixlstash.services.model_shelf_service import (
     fetch_companions,
+    propose_companions,
     fetch_picture_counts,
+    record_comfyui_history,
     fetch_workflow_sets,
 )
+from pixlstash.services.model_workflow_sets import create_set, delete_set
 from pixlstash.services.workflow_library_service import (
     scan_progress,
     topology_activity,
@@ -105,6 +109,7 @@ from pixlstash.tasks.missing_comfyui_extraction_finder import (
     MissingComfyUIExtractionFinder,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
+from pixlstash.utils.known_base_models import KNOWN_BASE_MODELS
 
 LIBRARY = "11111111-2222-4333-8444-555555555555"
 OTHER_LIBRARY = "99999999-8888-4777-8666-555555555555"
@@ -577,6 +582,127 @@ def test_ui_only_and_bypassed_nodes_do_not_reach_the_key():
     assert ui_topology_hash(workflow) == topology_hash(api_graph(TXT2IMG))
 
 
+def _typed_io(node, inputs, outputs):
+    node["inputs"] = [{"name": name, "type": kind} for name, kind in inputs]
+    node["outputs"] = [{"name": name, "type": kind} for name, kind in outputs]
+    return node
+
+
+def _latent_through(inputs, outputs, *, read_slot=0, feed_slot=None, mode=4):
+    """TXT2IMG with a node spliced into ``EmptyLatentImage -> KSampler.latent_image``.
+
+    The spliced node (93) gets *inputs* and *outputs* as ``(name, type)``;
+    EmptyLatentImage feeds its input *feed_slot* (the last one by default), a
+    LoadImage (94) feeds every other input, and the sampler reads output
+    *read_slot*.
+    """
+    workflow = ui_workflow(TXT2IMG)
+    sampler = next(node for node in workflow["nodes"] if node["id"] == 5)
+    for entry in sampler["inputs"]:
+        entry["type"] = "LATENT" if entry["name"] == "latent_image" else "*"
+    workflow["nodes"].append(
+        _typed_io(ui_node(93, "Spliced", [], mode=mode), inputs, outputs)
+    )
+    feed_slot = len(inputs) - 1 if feed_slot is None else feed_slot
+    if any(slot != feed_slot for slot in range(len(inputs))):
+        workflow["nodes"].append(
+            _typed_io(ui_node(94, "LoadImage", []), [], [("IMAGE", "IMAGE")])
+        )
+    links = workflow["links"]
+    latent = next(link for link in links if link[3] == 5 and link[4] == 3)
+    latent[1], latent[2] = 93, read_slot
+    for slot in range(len(inputs)):
+        source = (4, 0) if slot == feed_slot else (94, 0)
+        links.append([len(links) + 1, *source, 93, slot, "*"])
+    return workflow
+
+
+def _latent_source(workflow):
+    sampler = reduce_ui_graph(workflow)["5"]
+    return next(
+        ((key, slot) for name, key, slot in sampler.inputs if name == "latent_image"),
+        None,
+    )
+
+
+def test_a_bypassed_node_is_spliced_out_as_comfyui_does():
+    """ComfyUI hands the consumer what fed the bypassed node, so the key must too.
+
+    #1440: a bypassed ShowText between a captioner and a text encoder dropped
+    the edge on the editor side only, and one workflow keyed two ways.
+    """
+    workflow = _latent_through([("samples", "LATENT")], [("LATENT", "LATENT")])
+    assert _latent_source(workflow) == ("4", 0)
+    assert ui_topology_hash(workflow) == topology_hash(api_graph(TXT2IMG))
+
+
+def test_a_muted_node_still_cuts_the_edge():
+    """Muting is not bypassing: ComfyUI gives the consumer nothing."""
+    workflow = _latent_through([("samples", "LATENT")], [("LATENT", "LATENT")], mode=2)
+    assert _latent_source(workflow) is None
+    assert ui_topology_hash(workflow) != topology_hash(api_graph(TXT2IMG))
+
+
+def test_a_bypass_prefers_the_input_on_the_same_slot():
+    workflow = _latent_through(
+        [("a", "LATENT"), ("b", "LATENT")],
+        [("x", "LATENT"), ("y", "LATENT")],
+        read_slot=1,
+        feed_slot=1,
+    )
+    assert _latent_source(workflow) == ("4", 0)
+
+
+def test_a_bypass_passes_over_a_same_slot_input_of_the_wrong_type():
+    """Slot 0 is an IMAGE and the sampler wants a LATENT: the LATENT input wins."""
+    workflow = _latent_through(
+        [("image", "IMAGE"), ("samples", "LATENT")], [("LATENT", "LATENT")]
+    )
+    assert _latent_source(workflow) == ("4", 0)
+
+
+def test_a_bypass_matches_types_as_litegraph_does():
+    """Case-insensitive, and a comma list matches on any member."""
+    workflow = _latent_through(
+        [("image", "IMAGE"), ("samples", "image,latent")], [("LATENT", "LATENT")]
+    )
+    assert _latent_source(workflow) == ("4", 0)
+
+
+def test_a_bypass_with_no_input_of_the_type_drops_the_edge():
+    workflow = _latent_through(
+        [("image", "IMAGE")], [("LATENT", "LATENT")], feed_slot=1
+    )
+    assert _latent_source(workflow) is None
+
+
+def test_a_bypassed_subgraph_instance_is_spliced_not_entered():
+    """ComfyUI checks bypass before it looks inside a subgraph instance.
+
+    VAEDecode's ``samples`` is typed ``*`` here, and an any-type consumer takes
+    the input on the same slot number: the instance's ``model``.
+    """
+    workflow = subgraph_ui_workflow()
+    instance = next(node for node in workflow["nodes"] if node["id"] == 10)
+    instance["mode"] = 4
+    _typed_io(
+        instance,
+        [
+            ("model", "MODEL"),
+            ("positive", "CONDITIONING"),
+            ("negative", "CONDITIONING"),
+        ],
+        [("LATENT", "LATENT")],
+    )
+    decode = next(node for node in workflow["nodes"] if node["id"] == 6)
+    decode["inputs"][0]["type"] = "*"
+    nodes = reduce_ui_graph(workflow)
+    assert ("samples", "1", 0) in nodes["6"].inputs
+    assert not {"EmptyLatentImage", "KSampler"} & {
+        node.class_type for node in nodes.values()
+    }
+
+
 def test_a_reroute_is_stepped_through():
     """A Reroute exists only in the UI graph, so it must not key as a node."""
     workflow = ui_workflow(TXT2IMG)
@@ -587,6 +713,91 @@ def test_a_reroute_is_stepped_through():
             link[3], link[4] = 92, 0
     workflow["links"].append([len(workflow["links"]) + 1, 92, 0, 6, 0, "LATENT"])
     assert ui_topology_hash(workflow) == topology_hash(api_graph(TXT2IMG))
+
+
+# ---------------------------------------------------------------------------
+# Portability on real pairs (#1440 plan §2.2)
+#
+# The same workflow saved by ComfyUI in both formats. A pulled workflow is
+# always the editor half and the pictures it made carry the API half, so the
+# topology is the only thing that can join them.
+# ---------------------------------------------------------------------------
+
+PAIRED = Path(__file__).parent / "comfyui_workflows" / "paired" / "multigpu"
+PAIRED_NAMES = sorted(path.stem for path in (PAIRED / "ui").glob("*.json"))
+
+
+def _paired(name):
+    with open(PAIRED / "ui" / f"{name}.json", encoding="utf-8") as handle:
+        ui = json.load(handle)
+    with open(PAIRED / "api" / f"{name}.json", encoding="utf-8") as handle:
+        api = json.load(handle)
+    return ui, api
+
+
+def test_the_paired_corpus_is_all_there():
+    """An empty glob would parametrize nothing and pass."""
+    assert len(PAIRED_NAMES) == 15
+    assert sorted(path.stem for path in (PAIRED / "api").glob("*.json")) == (
+        PAIRED_NAMES
+    )
+
+
+@pytest.mark.parametrize("name", PAIRED_NAMES)
+def test_both_formats_of_a_real_workflow_key_to_one_topology(name):
+    ui, api = _paired(name)
+    assert ui_topology_hash(ui) == topology_hash(api)
+
+
+def _shuffled(workflow, rng):
+    rng.shuffle(workflow["nodes"])
+    rng.shuffle(workflow["links"])
+
+
+def _moved(workflow, rng):
+    for node in workflow["nodes"]:
+        node["pos"] = [rng.randint(-5000, 5000), rng.randint(-5000, 5000)]
+        node["size"] = [rng.randint(50, 900), rng.randint(50, 900)]
+
+
+def _reordered(workflow, rng):
+    for node in workflow["nodes"]:
+        node["order"] = rng.randint(0, 10_000)
+
+
+def _renumbered(workflow, rng):
+    """New node ids AND new link ids, everywhere either is written."""
+    node_ids = [node["id"] for node in workflow["nodes"]]
+    new_node = dict(zip(node_ids, rng.sample(range(1000, 100_000), len(node_ids))))
+    link_ids = [link[0] for link in workflow["links"]]
+    new_link = dict(zip(link_ids, rng.sample(range(1000, 100_000), len(link_ids))))
+    for node in workflow["nodes"]:
+        node["id"] = new_node[node["id"]]
+        for entry in node.get("inputs") or ():
+            if entry.get("link") is not None:
+                entry["link"] = new_link[entry["link"]]
+        for entry in node.get("outputs") or ():
+            if entry.get("links"):
+                entry["links"] = [new_link[link] for link in entry["links"]]
+    workflow["links"] = [
+        [new_link[link[0]], new_node[link[1]], link[2], new_node[link[3]], *link[4:]]
+        for link in workflow["links"]
+    ]
+
+
+@pytest.mark.parametrize(
+    "disturb", [_shuffled, _moved, _reordered, _renumbered], ids=lambda f: f.__name__
+)
+def test_editor_bookkeeping_does_not_reach_the_topology(disturb):
+    """Layout, evaluation order, array order and ids are the editor's, not the graph's."""
+    rng = random.Random(1440)
+    for name in PAIRED_NAMES:
+        ui, _api = _paired(name)
+        before = ui_topology_hash(ui)
+        disturbed = copy.deepcopy(ui)
+        disturb(disturbed, rng)
+        assert disturbed != ui, name
+        assert ui_topology_hash(disturbed) == before, name
 
 
 # ---------------------------------------------------------------------------
@@ -2135,6 +2346,522 @@ def test_a_digest_the_shelf_cannot_match_yet_makes_its_companions_unknown(hub):
             "UPDATE model SET sha256 = printf('%064d', id) WHERE sha256 IS NULL"
         )
     assert companion_ids(fetch_companions(hub, [doomed]), "orphaned") == [vae]
+
+
+def set_base_model(hub, model_id, base_model):
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = ? WHERE id = ?", (base_model, model_id)
+        )
+
+
+def proposed(result, kind):
+    return [(item["id"], item["via"]) for item in result[kind]]
+
+
+def test_a_checkpoint_proposes_what_its_own_recipes_ran_with(companions_shelf):
+    ids = companions_shelf.ids
+
+    result = propose_companions(companions_shelf.hub, ids["ckpt_a"])
+
+    assert proposed(result, "vae") == [(ids["vae_a"], "checkpoint")]
+    assert proposed(result, "text_encoder") == [(ids["clip_shared"], "checkpoint")]
+    assert result["vae"][0]["recipes"] == 1
+
+
+def test_a_support_file_only_an_ambiguous_name_reaches_is_not_proposed(
+    companions_shelf,
+):
+    """B's VAE is `twin.safetensors`, which two shelf rows are called."""
+    ids = companions_shelf.ids
+
+    result = propose_companions(companions_shelf.hub, ids["ckpt_b"])
+
+    assert result["vae"] == []
+    assert proposed(result, "text_encoder") == [(ids["clip_shared"], "checkpoint")]
+
+
+def test_a_checkpoint_no_recipe_names_widens_to_its_base_model(companions_shelf):
+    ids = companions_shelf.ids
+    set_base_model(companions_shelf.hub, ids["ckpt_a"], "FLUX.1 dev")
+    set_base_model(companions_shelf.hub, ids["lonely"], "flux1-dev")
+
+    result = propose_companions(companions_shelf.hub, ids["lonely"])
+
+    assert proposed(result, "vae") == [(ids["vae_a"], "base_model")]
+    assert proposed(result, "text_encoder") == [(ids["clip_shared"], "base_model")]
+
+
+def test_a_base_model_nothing_ran_with_widens_to_its_family(companions_shelf):
+    ids = companions_shelf.ids
+    set_base_model(companions_shelf.hub, ids["ckpt_a"], "FLUX.1 dev")
+    set_base_model(companions_shelf.hub, ids["lonely"], "FLUX.1 schnell")
+
+    result = propose_companions(companions_shelf.hub, ids["lonely"])
+
+    assert proposed(result, "vae") == [(ids["vae_a"], "family")]
+
+
+def test_the_family_step_never_crosses_from_image_to_video(
+    companions_shelf, monkeypatch
+):
+    """No family spans two modalities today, so one is made to for the test."""
+    ids = companions_shelf.ids
+    set_base_model(companions_shelf.hub, ids["ckpt_a"], "FLUX.1 dev")
+    set_base_model(companions_shelf.hub, ids["lonely"], "FLUX.1 schnell")
+    monkeypatch.setitem(KNOWN_BASE_MODELS["FLUX.1 dev"], "modality", "video")
+
+    result = propose_companions(companions_shelf.hub, ids["lonely"])
+
+    assert result == {"vae": [], "text_encoder": []}
+
+
+def test_a_cold_checkpoint_with_no_file_of_a_declared_layout_proposes_nothing(
+    companions_shelf,
+):
+    """SDXL declares layouts, but no support file here has one recorded."""
+    ids = companions_shelf.ids
+    set_base_model(companions_shelf.hub, ids["ckpt_a"], "FLUX.1 dev")
+    set_base_model(companions_shelf.hub, ids["lonely"], "SDXL 1.0")
+
+    result = propose_companions(companions_shelf.hub, ids["lonely"])
+
+    assert result == {"vae": [], "text_encoder": []}
+    assert propose_companions(companions_shelf.hub, 999_999) == result
+
+
+def set_layout(hub, model_id, layout):
+    with hub.transaction() as conn:
+        conn.execute("UPDATE model SET family = ? WHERE id = ?", (layout, model_id))
+
+
+def test_a_family_nothing_ran_with_proposes_the_layouts_it_declares(
+    companions_shelf,
+):
+    """The cold case: labelled `declared`, counted as no recipe, and only the
+    layouts SDXL takes, never the FLUX VAE or the T5 beside them."""
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    set_base_model(hub, ids["ckpt_a"], "FLUX.1 dev")
+    set_base_model(hub, ids["lonely"], "SDXL 1.0")
+    set_layout(hub, ids["vae_a"], "vae_16ch")
+    set_layout(hub, ids["clip_shared"], "clip_l")
+    sdxl_vae = shelf_file(hub, "sdxl_vae.safetensors", "vae")
+    set_layout(hub, sdxl_vae, "vae_4ch")
+    clip_g = shelf_file(hub, "Clip_G.safetensors", "text_encoder")
+    set_layout(hub, clip_g, "clip_g")
+    set_layout(hub, shelf_file(hub, "t5xxl.safetensors", "text_encoder"), "t5_xxl")
+
+    result = propose_companions(hub, ids["lonely"])
+
+    assert proposed(result, "vae") == [(sdxl_vae, "declared")]
+    assert proposed(result, "text_encoder") == [
+        (clip_g, "declared"),
+        (ids["clip_shared"], "declared"),
+    ]
+    assert {item["recipes"] for kind in result.values() for item in kind} == {0}
+    assert result["vae"][0]["family"] == "vae_4ch"
+
+
+def test_a_grouped_file_does_not_hide_the_declared_layouts_of_a_cold_checkpoint(
+    companions_shelf,
+):
+    """A set grouping only one encoder with a checkpoint nothing has run with:
+    the grouped file leads, once, and the declared fallback still answers for
+    the rest. Keying the fallback on "the list is empty" let the grouped entry
+    switch it off (#1520 rebased onto #1514)."""
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    set_base_model(hub, ids["lonely"], "SDXL 1.0")
+    set_layout(hub, ids["clip_shared"], "clip_l")
+    clip_g = shelf_file(hub, "Clip_G.safetensors", "text_encoder")
+    set_layout(hub, clip_g, "clip_g")
+    sdxl_vae = shelf_file(hub, "sdxl_vae.safetensors", "vae")
+    set_layout(hub, sdxl_vae, "vae_4ch")
+    hash_rows(hub, ids["lonely"], clip_g)
+    create_set(hub, "Cold", [{"model_id": ids["lonely"]}, {"model_id": clip_g}])
+
+    result = propose_companions(hub, ids["lonely"])
+
+    assert proposed(result, "text_encoder") == [
+        (clip_g, "grouped"),
+        (ids["clip_shared"], "declared"),
+    ]
+    assert proposed(result, "vae") == [(sdxl_vae, "declared")]
+
+
+def test_evidence_that_only_repeats_a_grouped_file_still_leaves_the_declared_fallback(
+    companions_shelf,
+):
+    """A ComfyUI run proves the checkpoint with the ONE encoder its set already
+    groups. That step tells the other encoder row nothing new, so the declared
+    layouts still answer for it rather than the row going empty (#1520 review)."""
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    set_base_model(hub, ids["lonely"], "SDXL 1.0")
+    set_layout(hub, ids["clip_shared"], "clip_l")
+    clip_g = shelf_file(hub, "Clip_G.safetensors", "text_encoder")
+    set_layout(hub, clip_g, "clip_g")
+    hash_rows(hub, ids["lonely"], clip_g)
+    create_set(hub, "Cold", [{"model_id": ids["lonely"]}, {"model_id": clip_g}])
+    record_comfyui_history(
+        hub,
+        {
+            "ran": history_entry(
+                generation_graph(
+                    "lonely.safetensors", "vae_a.safetensors", "Clip_G.safetensors"
+                )
+            )
+        },
+    )
+
+    result = propose_companions(hub, ids["lonely"])
+
+    assert proposed(result, "text_encoder") == [
+        (clip_g, "grouped"),
+        (ids["clip_shared"], "declared"),
+    ]
+
+
+def test_deleting_a_set_returns_exactly_what_it_deleted(companions_shelf):
+    """The snapshot is the undo, so it is read on the transaction that deletes:
+    every member row that went, by hash, slot and label, and nothing left
+    behind in the tables (#1520 review)."""
+    hub, ids = grouped_shelf(companions_shelf)
+    set_id = create_set(
+        hub,
+        "Night",
+        [
+            {"model_id": ids["ckpt_a"]},
+            {"model_id": ids["vae_grouped"]},
+            {"sha256": "ab" * 32, "slot": "lora", "label": "Gone_LoRA.safetensors"},
+        ],
+    )
+
+    snapshot = delete_set(hub, set_id)
+
+    assert snapshot["name"] == "Night"
+    assert {(m["sha256"], m["slot"]) for m in snapshot["members"]} == {
+        (
+            hub.fetchone("SELECT sha256 FROM model WHERE id = ?", (ids["ckpt_a"],))[0],
+            "checkpoint",
+        ),
+        (
+            hub.fetchone(
+                "SELECT sha256 FROM model WHERE id = ?", (ids["vae_grouped"],)
+            )[0],
+            "vae",
+        ),
+        ("ab" * 32, "lora"),
+    }
+    gone = next(m for m in snapshot["members"] if m["sha256"] == "ab" * 32)
+    assert (gone["on_shelf"], gone["label"]) == (False, "Gone_LoRA.safetensors")
+    assert not hub.fetchall(
+        "SELECT 1 FROM model_workflow_set_member WHERE set_id = ?", (set_id,)
+    )
+
+
+def test_evidence_in_the_family_outranks_the_declared_layouts(companions_shelf):
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    set_base_model(hub, ids["ckpt_a"], "FLUX.1 dev")
+    set_base_model(hub, ids["lonely"], "FLUX.1 schnell")
+    set_layout(hub, ids["vae_a"], "vae_16ch")
+    set_layout(hub, shelf_file(hub, "another_ae.safetensors", "vae"), "vae_16ch")
+
+    result = propose_companions(hub, ids["lonely"])
+
+    assert proposed(result, "vae") == [(ids["vae_a"], "family")]
+
+
+def test_a_kind_the_family_declares_no_layout_for_proposes_nothing(hub):
+    """Z-Image's encoder is a Qwen, which no stored layout names: its VAE is
+    declared, its text encoder is not, and a T5 is no stand-in."""
+    ckpt = shelf_file(hub, "zimage.safetensors", "checkpoint")
+    set_base_model(hub, ckpt, "Z-Image Turbo")
+    vae = shelf_file(hub, "ae.safetensors", "vae")
+    set_layout(hub, vae, "vae_16ch")
+    set_layout(hub, shelf_file(hub, "t5xxl.safetensors", "text_encoder"), "t5_xxl")
+
+    result = propose_companions(hub, ckpt)
+
+    assert proposed(result, "vae") == [(vae, "declared")]
+    assert result["text_encoder"] == []
+
+
+def identify_base_model(hub, model_id, canonical, source):
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model_canonical = ?, base_model_source = ? "
+            "WHERE id = ?",
+            (canonical, source, model_id),
+        )
+
+
+def test_an_identified_base_model_widens_like_a_recorded_one(companions_shelf):
+    """No `base_model` typed on either row: the shelf named both by filename."""
+    ids = companions_shelf.ids
+    identify_base_model(companions_shelf.hub, ids["ckpt_a"], "FLUX.1 dev", "filename")
+    identify_base_model(companions_shelf.hub, ids["lonely"], "FLUX.1 dev", "filename")
+
+    result = propose_companions(companions_shelf.hub, ids["lonely"])
+
+    assert proposed(result, "vae") == [(ids["vae_a"], "base_model")]
+
+
+def test_a_fuzzy_guess_at_a_base_model_never_widens(companions_shelf):
+    ids = companions_shelf.ids
+    identify_base_model(companions_shelf.hub, ids["ckpt_a"], "FLUX.1 dev", "filename")
+    identify_base_model(
+        companions_shelf.hub, ids["lonely"], "FLUX.1 dev", "filename_fuzzy"
+    )
+
+    result = propose_companions(companions_shelf.hub, ids["lonely"])
+
+    assert result == {"vae": [], "text_encoder": []}
+
+
+def test_a_support_file_with_no_filename_is_never_proposed(companions_shelf):
+    """A clone would have nothing to write for it."""
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    with hub.transaction() as conn:
+        folder = conn.execute(
+            "INSERT INTO model_folder (path, kind, movable) "
+            "VALUES ('/models/vae', 'user', 'per_item')"
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO model_file (model_id, model_folder_id, relpath, state) "
+            "VALUES (?, ?, 'vae_a.safetensors', 'present')",
+            (ids["vae_a"], folder),
+        )
+        conn.execute("UPDATE model SET filename = NULL WHERE id = ?", (ids["vae_a"],))
+
+    result = propose_companions(hub, ids["ckpt_a"])
+
+    assert result["vae"] == []
+    assert proposed(result, "text_encoder") == [(ids["clip_shared"], "checkpoint")]
+
+
+def history_entry(graph, status="success"):
+    """One ``GET /history`` entry as ComfyUI answers it."""
+    return {
+        "prompt": [0, "unused", graph, {}, ["7"]],
+        "outputs": {},
+        "status": {"status_str": status, "completed": status == "success"},
+    }
+
+
+def test_a_comfyui_run_proposes_for_a_checkpoint_no_recipe_names(companions_shelf):
+    """`lonely` ran in ComfyUI only; the run is evidence, counted apart."""
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    history = {
+        "ran": history_entry(
+            generation_graph(
+                "lonely.safetensors", "vae_a.safetensors", "twin.safetensors"
+            )
+        ),
+        "failed": history_entry(
+            generation_graph(
+                "lonely.safetensors", "vae_a.safetensors", "clip_shared.safetensors"
+            ),
+            status="error",
+        ),
+        "not a run": {"prompt": "junk"},
+    }
+
+    assert record_comfyui_history(hub, history) == 1
+    # Twice is the same evidence, not twice the evidence.
+    assert record_comfyui_history(hub, history) == 1
+
+    result = propose_companions(hub, ids["lonely"])
+    assert proposed(result, "vae") == [(ids["vae_a"], "checkpoint")]
+    assert result["vae"][0]["recipes"] == 0
+    assert result["vae"][0]["history_runs"] == 1
+    # `twin` is two shelf rows, and the errored run proves nothing.
+    assert result["text_encoder"] == []
+    # Only unambiguous shelf ids are kept: never a name, never a guess.
+    stored = {
+        int(row["model_id"])
+        for row in hub.fetchall("SELECT model_id FROM comfyui_history_model")
+    }
+    assert stored == {ids["lonely"], ids["vae_a"]}
+
+    recipe_side = propose_companions(hub, ids["ckpt_a"])["vae"][0]
+    assert (recipe_side["recipes"], recipe_side["history_runs"]) == (1, 0)
+
+
+def test_a_run_ranks_behind_a_recipe_and_a_forgotten_model_drops_out(
+    companions_shelf,
+):
+    ids = companions_shelf.ids
+    hub = companions_shelf.hub
+    vae_b = shelf_file(hub, "vae_b.safetensors", "vae")
+    record_comfyui_history(
+        hub,
+        {
+            str(n): history_entry(
+                generation_graph(
+                    "ckpt_a.safetensors",
+                    "vae_b.safetensors",
+                    "clip_shared.safetensors",
+                )
+            )
+            for n in range(3)
+        },
+    )
+
+    result = propose_companions(hub, ids["ckpt_a"])
+    assert [item["id"] for item in result["vae"]] == [ids["vae_a"], vae_b]
+    assert result["vae"][1]["history_runs"] == 3
+
+    with hub.transaction() as conn:
+        model_shelf_service._purge(conn, [vae_b])
+    assert [item["id"] for item in propose_companions(hub, ids["ckpt_a"])["vae"]] == [
+        ids["vae_a"]
+    ]
+
+
+def hash_rows(hub, *model_ids):
+    """Give rows a digest: a hand-made set holds files by sha256."""
+    with hub.transaction() as conn:
+        conn.executemany(
+            "UPDATE model SET sha256 = printf('%064d', id) WHERE id = ?",
+            [(model_id,) for model_id in model_ids],
+        )
+
+
+def grouped_shelf(companions_shelf):
+    """The companions shelf plus a VAE only a hand-made set pairs with A."""
+    hub = companions_shelf.hub
+    ids = dict(companions_shelf.ids)
+    ids["vae_grouped"] = shelf_file(hub, "vae_grouped.safetensors", "vae")
+    hash_rows(
+        hub,
+        *(
+            ids[name]
+            for name in ("ckpt_a", "ckpt_b", "vae_a", "clip_shared", "vae_grouped")
+        ),
+    )
+    return hub, ids
+
+
+def test_a_hand_made_set_proposes_its_members_ahead_of_the_evidence(
+    companions_shelf,
+):
+    hub, ids = grouped_shelf(companions_shelf)
+    create_set(
+        hub,
+        "Night",
+        [
+            {"model_id": ids["ckpt_a"]},
+            {"model_id": ids["vae_grouped"]},
+            {"model_id": ids["clip_shared"]},
+        ],
+    )
+
+    result = propose_companions(hub, ids["ckpt_a"])
+
+    assert proposed(result, "vae") == [
+        (ids["vae_grouped"], "grouped"),
+        (ids["vae_a"], "checkpoint"),
+    ]
+    grouped, recipe = result["vae"]
+    assert (grouped["set_name"], grouped["prepick"], grouped["recipes"]) == (
+        "Night",
+        True,
+        0,
+    )
+    assert (recipe["set_name"], recipe["prepick"]) == (None, True)
+    # The recipe also names the grouped encoder: listed once, as grouped.
+    assert proposed(result, "text_encoder") == [(ids["clip_shared"], "grouped")]
+
+
+def test_a_grouped_kind_is_prepicked_only_when_the_sets_agree_on_one_file(
+    companions_shelf,
+):
+    hub, ids = grouped_shelf(companions_shelf)
+    for name in ("One", "Two"):
+        create_set(
+            hub,
+            name,
+            [{"model_id": ids["ckpt_a"]}, {"model_id": ids["vae_grouped"]}],
+        )
+    agreed = propose_companions(hub, ids["ckpt_a"])
+    assert [(e["id"], e["prepick"]) for e in agreed["vae"][:1]] == [
+        (ids["vae_grouped"], True)
+    ]
+    # The newest matching set names it.
+    assert agreed["vae"][0]["set_name"] == "Two"
+
+    create_set(hub, None, [{"model_id": ids["ckpt_a"]}, {"model_id": ids["vae_a"]}])
+    split = propose_companions(hub, ids["ckpt_a"])
+    assert [(e["id"], e["via"], e["prepick"]) for e in split["vae"]] == [
+        (ids["vae_a"], "grouped", False),
+        (ids["vae_grouped"], "grouped", False),
+    ]
+    assert split["vae"][0]["set_name"] is None
+
+
+def test_a_grouped_encoder_pair_of_two_layouts_is_prepicked_each(
+    companions_shelf,
+):
+    """A Flux set holds one clip_l and one t5_xxl: one file per row, so both are
+    pre-picked. Counting per kind would refuse both and hand the rows to
+    weaker, ungrouped evidence (#1520 review)."""
+    hub, ids = grouped_shelf(companions_shelf)
+    clip = shelf_file(hub, "Clip_L.safetensors", "text_encoder")
+    t5 = shelf_file(hub, "T5_XXL.safetensors", "text_encoder")
+    hash_rows(hub, clip, t5)
+    with hub.transaction() as conn:
+        conn.execute("UPDATE model SET family = 'clip_l' WHERE id = ?", (clip,))
+        conn.execute("UPDATE model SET family = 't5_xxl' WHERE id = ?", (t5,))
+    create_set(
+        hub,
+        "Flux",
+        [{"model_id": ids["ckpt_a"]}, {"model_id": clip}, {"model_id": t5}],
+    )
+
+    result = propose_companions(hub, ids["ckpt_a"])
+
+    grouped = {
+        e["id"]: e["prepick"] for e in result["text_encoder"] if e["via"] == "grouped"
+    }
+    assert grouped == {clip: True, t5: True}
+
+
+def test_a_set_without_this_checkpoint_or_off_the_shelf_proposes_nothing(
+    companions_shelf,
+):
+    hub, ids = grouped_shelf(companions_shelf)
+    # No checkpoint - A itself is there, but filed as "other" - then another
+    # checkpoint's set.
+    create_set(
+        hub,
+        "Loose",
+        [
+            {"model_id": ids["ckpt_a"], "slot": "other"},
+            {"model_id": ids["vae_grouped"]},
+        ],
+    )
+    create_set(
+        hub, "B", [{"model_id": ids["ckpt_b"]}, {"model_id": ids["vae_grouped"]}]
+    )
+    # A's own set, holding a VAE whose file is no longer on the shelf.
+    create_set(
+        hub,
+        "Gone",
+        [
+            {"model_id": ids["ckpt_a"]},
+            {"sha256": "ab" * 32, "slot": "vae", "label": "vanished.safetensors"},
+        ],
+    )
+
+    result = propose_companions(hub, ids["ckpt_a"])
+
+    assert proposed(result, "vae") == [(ids["vae_a"], "checkpoint")]
+    assert proposed(result, "text_encoder") == [(ids["clip_shared"], "checkpoint")]
 
 
 # ---------------------------------------------------------------------------

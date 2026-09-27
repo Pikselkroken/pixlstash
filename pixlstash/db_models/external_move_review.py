@@ -5,7 +5,7 @@ Phase 4b's move engine: PixlStash moves a file when an assignment change makes
 its folder stop being true; when the *owner* moves a file, PixlStash
 reconsiders the assignment instead. ``ReferenceFolderScanTask`` writes one row
 here per picture it found moved that the move journal (``PictureMove``) did not
-claim as PixlStash's own - see ``docs/backend_architecture.md`` §26, "The move
+claim as PixlStash's own - see ``docs/backend_architecture.md`` §24.4, "The move
 journal, and why it is Phase 4b's job".
 
 Nothing here is applied automatically. A row is the raw fact only; every read
@@ -17,7 +17,7 @@ acted on (applied or dismissed) or once a read finds nothing left to reconcile
 - there is no status column, the table holds exactly what is still pending.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
@@ -45,4 +45,4 @@ class ExternalMoveReview(SQLModel, table=True):
     picture_id: int = Field(index=True)
     old_path: str
     new_path: str
-    detected_at: datetime = Field(default_factory=datetime.utcnow)
+    detected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

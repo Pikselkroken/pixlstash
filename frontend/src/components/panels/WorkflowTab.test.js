@@ -4,9 +4,9 @@
 // * A default's provenance and its reset. Reset is a WHOLE-SET write, so the
 //   request has to carry every other edited value; a reset that sends only
 //   the row it was fired on resets all of them and reads as working.
-// * The LoRA slot's Workflow/Recipe switch. It re-keys the card, so the rail
-//   has to follow the key the answer names — staying put leaves it reading a
-//   card the hub no longer has.
+// * The LoRA pile's Promote. It re-keys cards, so the rail has to follow the
+//   key the answer names — staying put leaves it reading a card the hub no
+//   longer has — and it must write nothing before it is confirmed.
 // * Run… with several workflows selected. It must stay on screen and refuse,
 //   which is `aria-disabled` plus the reason; a button that disappears
 //   teaches nobody why.
@@ -21,9 +21,12 @@ const patchWorkflowCard = vi.fn();
 const preflightWorkflowRun = vi.fn();
 const setWorkflowDefaults = vi.fn();
 const setWorkflowPins = vi.fn();
-const setWorkflowSlots = vi.fn();
+const getLoraSummary = vi.fn();
+const setLoraPromotion = vi.fn();
 const stackWorkflows = vi.fn();
 const getLoraChain = vi.fn();
+const readModelSwap = vi.fn();
+const setWorkflowModelFix = vi.fn();
 
 vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
@@ -32,12 +35,20 @@ vi.mock("../../api/workflows", () => ({
   preflightWorkflowRun: (...args) => preflightWorkflowRun(...args),
   setWorkflowDefaults: (...args) => setWorkflowDefaults(...args),
   setWorkflowPins: (...args) => setWorkflowPins(...args),
-  setWorkflowSlots: (...args) => setWorkflowSlots(...args),
+  getLoraSummary: (...args) => getLoraSummary(...args),
+  setLoraPromotion: (...args) => setLoraPromotion(...args),
   // `WorkflowCard` renders its covers through this, so a mock without it
   // throws in the render and every assertion in the file goes with it.
   workflowCoverUrl: (cover) => cover?.url ?? "",
   stackWorkflows: (...args) => stackWorkflows(...args),
   getLoraChain: (...args) => getLoraChain(...args),
+  readModelSwap: (...args) => readModelSwap(...args),
+  setWorkflowModelFix: (...args) => setWorkflowModelFix(...args),
+}));
+
+const getPixlstashNode = vi.fn();
+vi.mock("../../api/comfyui", () => ({
+  getPixlstashNode: (...args) => getPixlstashNode(...args),
 }));
 
 // *Show all N pictures* (F7) leaves this screen for the library, and
@@ -111,6 +122,54 @@ function card(overrides = {}) {
     rank: 4.5,
     ...overrides,
   };
+}
+
+const ADA = `asset:${"1".repeat(64)}`;
+const BO = `asset:${"2".repeat(64)}`;
+
+/** `GET /workflows/{key}/lora-summary`: two LoRAs that change, Ada on the cover. */
+function loraSummary(overrides = {}) {
+  return {
+    keys: [KEY],
+    pictures: 5,
+    shared: [],
+    varying: [
+      {
+        asset: BO,
+        filename: "bo.safetensors",
+        name: "Bo",
+        on_shelf: true,
+        pictures: 3,
+        members: [KEY],
+        picture_ids: [31, 32, 33],
+        promoted: false,
+      },
+      {
+        asset: ADA,
+        filename: "ada.safetensors",
+        name: "Ada",
+        on_shelf: true,
+        pictures: 2,
+        members: [KEY],
+        picture_ids: [21, 22],
+        promoted: false,
+      },
+    ],
+    without: null,
+    cover_asset: ADA,
+    ...overrides,
+  };
+}
+
+/** Promote the pile's top LoRA (Ada, the cover's) and confirm it. */
+async function promote(wrapper) {
+  await wrapper
+    .find(`[data-testid='wftab-fan-row-${ADA}']`)
+    .findAll("button")
+    .find((button) => button.text().includes("Promote"))
+    .trigger("click");
+  await wrapper.find("[data-testid='wftab-fan-confirm']").trigger("click");
+  await flush(wrapper);
 }
 
 /** `GET /workflows/{key}/lora-chain`, as the route serves it (#1478). */
@@ -211,6 +270,19 @@ async function settle(wrapper) {
   await flush(wrapper);
 }
 
+/**
+ * `readModelSwap` answering `?replacing=` per slot kind, as the server does:
+ * `replacements` already filtered to what goes with the checkpoint and what
+ * the loader lists (#1596).
+ */
+function replacementsByKind(byKind, reasons = {}) {
+  return (_key, { slotKind } = {}) =>
+    Promise.resolve({
+      replacements: byKind[slotKind] ?? [],
+      replacements_reason: reasons[slotKind] ?? null,
+    });
+}
+
 function textOf(wrapper) {
   return wrapper.text().replace(/\s+/g, " ");
 }
@@ -219,7 +291,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   window.localStorage.clear();
   route.query = {};
-  useSidebarStore().statsOpen = true;
+  useSidebarStore().workflowInspectorOpen = true;
   getWorkflowCard.mockReset().mockResolvedValue(detail());
   listWorkflowCards.mockReset().mockResolvedValue({
     cards: [card()],
@@ -229,7 +301,8 @@ beforeEach(() => {
   patchWorkflowCard.mockReset().mockResolvedValue(detail());
   setWorkflowDefaults.mockReset().mockResolvedValue(detail());
   setWorkflowPins.mockReset().mockResolvedValue({ pins: [] });
-  setWorkflowSlots.mockReset().mockResolvedValue({ key: MOVED, moved: {} });
+  getLoraSummary.mockReset().mockResolvedValue(loraSummary());
+  setLoraPromotion.mockReset().mockResolvedValue({ key: MOVED, moved: {} });
   stackWorkflows.mockReset().mockResolvedValue({ stack_id: "s", keys: [] });
   getLoraChain.mockReset().mockResolvedValue(loraChain());
   replace.mockReset();
@@ -300,8 +373,7 @@ describe("the models the panel names", () => {
     getWorkflowCard.mockResolvedValue(detail({ card: quantised }));
     const { wrapper } = await mountWith([KEY], [quantised]);
     const values = wrapper.findAll(".wftab-value").map((el) => el.text());
-    expect(values).toEqual(["t5xxl · FP8 E4M3", "ae"]);
-    expect(wrapper.find(".wftab-chip").text()).toContain("detail · Q4_K_M");
+    expect(values.slice(0, 2)).toEqual(["t5xxl · FP8 E4M3", "ae"]);
   });
 
   it("falls back to the filename where the shelf has no name", async () => {
@@ -361,6 +433,140 @@ describe("a checkpoint that will not load", () => {
       "realvisXL_v5.safetensors is not installed in ComfyUI.",
     );
     expect(line.tooltip).toBe("SDXL/realvisXL_v5.safetensors");
+  });
+
+  it("offers the shelf's checkpoints and replaces the missing file with one", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap.mockReset().mockImplementation(
+      replacementsByKind({
+        checkpoint: [
+          { id: 7, filename: "realvisXL_v5_bf16.safetensors", display_name: "RealVis 5" },
+        ],
+      }),
+    );
+    const fixed = detail({
+      card: named,
+      model_fixes: [
+        {
+          slot_label: "n1/ckpt_name",
+          was: "SDXL/realvisXL_v5_fp8.safetensors",
+          now: "realvisXL_v5_bf16.safetensors",
+          slot_kind: "checkpoint",
+        },
+      ],
+    });
+    setWorkflowModelFix.mockReset().mockResolvedValue(fixed);
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+
+    const picker = wrapper.find('[data-testid="wftab-replace-model"] select');
+    expect(picker.text()).toContain("RealVis 5");
+    preflightWorkflowRun.mockResolvedValue({ groups: [] });
+    await picker.setValue("realvisXL_v5_bf16.safetensors");
+    await settle(wrapper);
+
+    // The graph's own spelling of the missing file, folders and all: that is
+    // what the server matches the stored graphs on.
+    expect(setWorkflowModelFix).toHaveBeenCalledWith(KEY, {
+      was: "SDXL/realvisXL_v5_fp8.safetensors",
+      now: "realvisXL_v5_bf16.safetensors",
+      slot_kind: "checkpoint",
+    });
+    expect(textOf(wrapper)).not.toContain("Checkpoint missing");
+    const row = wrapper.find('[data-testid="wftab-fixed-model"]');
+    expect(row.text()).toContain("realvisXL_v5_bf16.safetensors");
+    // A checkpoint's fix is the Checkpoint row's, never the VAE row's.
+    expect(wrapper.find('[data-testid="wftab-fixed-vae"]').exists()).toBe(false);
+    // The original, a hover away: the provenance the flag is there for.
+    expect(row.find("tooltip-stub").attributes("text")).toBe(
+      "Replaced. This workflow originally used realvisXL_v5_fp8.safetensors",
+    );
+
+    setWorkflowModelFix.mockResolvedValue(detail({ card: named }));
+    await row.find('[data-testid="wftab-undo-fix"]').trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowModelFix).toHaveBeenLastCalledWith(KEY, {
+      was: "SDXL/realvisXL_v5_fp8.safetensors",
+      now: null,
+      slot_kind: "checkpoint",
+    });
+  });
+
+  it.each([
+    ["none_same_base_model", "is known to have this checkpoint's base model"],
+    ["none_go_with_it", "is known to work with this checkpoint"],
+    ["none_loadable", "is one this loader can load"],
+    ["unread", "Could not read what could replace it"],
+    [null, "Nothing on your shelf can replace it."],
+  ])("says why no checkpoint is offered (%s)", async (reason, text) => {
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: named }));
+    readModelSwap
+      .mockReset()
+      .mockImplementation(replacementsByKind({}, { checkpoint: reason }));
+    const { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-replace-model"]').exists()).toBe(
+      false,
+    );
+    expect(
+      wrapper.find('[data-testid="wftab-no-replacement-checkpoint"]').text(),
+    ).toContain(text);
+  });
+
+  it("says the replacement is missing only when it is the file missing", async () => {
+    const fix = {
+      slot_label: "n1/ckpt_name",
+      was: "realvisXL_v5_fp8.safetensors",
+      now: "realvisXL_v5_bf16.safetensors",
+      slot_kind: "checkpoint",
+    };
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: named, model_fixes: [fix] }),
+    );
+    readModelSwap.mockReset().mockResolvedValue({ checkpoints: [] });
+
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/refiner.safetensors"),
+    );
+    let { wrapper } = await mountWith([KEY], [named]);
+    await settle(wrapper);
+    expect(textOf(wrapper)).toContain("Checkpoint missing");
+    expect(wrapper.find('[data-testid="wftab-fix-missing"]').exists()).toBe(
+      false,
+    );
+    wrapper.unmount();
+    mounted.pop();
+
+    preflightWorkflowRun.mockResolvedValue(
+      missingFile("SDXL/realvisXL_v5_bf16.safetensors"),
+    );
+    ({ wrapper } = await mountWith([KEY], [named]));
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-fix-missing"]').text()).toContain(
+      "Replaced by realvisXL_v5_bf16.safetensors, which is missing too.",
+    );
+  });
+
+  it("offers no replacement for a file nobody can name", async () => {
+    preflightWorkflowRun.mockResolvedValue(missingFile("(forgotten model)"));
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: unnamed, graph_base_models: [] }),
+    );
+    readModelSwap.mockReset().mockResolvedValue({
+      checkpoints: [{ id: 7, filename: "x.safetensors" }],
+    });
+    const { wrapper } = await mountWith([KEY], [unnamed]);
+    await settle(wrapper);
+    expect(readModelSwap).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-testid="wftab-replace-model"]').exists()).toBe(
+      false,
+    );
   });
 
   it("names an unnamed checkpoint from the graph a run would submit", async () => {
@@ -559,6 +765,232 @@ describe("a checkpoint that will not load", () => {
   });
 });
 
+describe("a VAE or text encoder that will not load (#1596)", () => {
+  const withSupport = card({
+    models: [
+      { name: "realvisXL_v5", kind: "checkpoint", slot_label: "n1/ckpt_name" },
+      { name: "sdxl_vae", kind: "vae", slot_label: "n2/vae_name" },
+      { name: "t5xxl", kind: "clip", slot_label: "n3/clip_name" },
+    ],
+  });
+
+  function missing(...models) {
+    return {
+      groups: [{ reasons: [{ code: "missing_models", models }] }],
+    };
+  }
+
+  function row(wrapper, kind) {
+    return wrapper.find(`[data-testid="wftab-row-${kind}"]`);
+  }
+
+  it("offers the shelf's VAEs and replaces the missing one, and only that row", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missing({ file: "SDXL/sdxl_vae_fp8.safetensors", folder: "vae" }),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
+    readModelSwap.mockReset().mockImplementation(
+      replacementsByKind({
+        checkpoint: [{ id: 1, filename: "other-ckpt.safetensors" }],
+        vae: [
+          { id: 7, filename: "sdxl_vae_bf16.safetensors", display_name: "SDXL VAE", via: "grouped" },
+          { id: 9, filename: "sdxl_vae_alt.safetensors", via: "declared" },
+          { id: 10, filename: "sdxl_vae_shelf.safetensors", loader: "PixlStashVAELoader" },
+        ],
+        text_encoder: [{ id: 8, filename: "t5xxl_bf16.safetensors" }],
+      }),
+    );
+    const fix = {
+      slot_label: "n2/vae_name",
+      was: "SDXL/sdxl_vae_fp8.safetensors",
+      now: "sdxl_vae_bf16.safetensors",
+      slot_kind: "vae",
+    };
+    setWorkflowModelFix
+      .mockReset()
+      .mockResolvedValue(detail({ card: withSupport, model_fixes: [fix] }));
+    const { wrapper } = await mountWith([KEY], [withSupport]);
+    await settle(wrapper);
+
+    expect(textOf(wrapper)).toContain("VAE missing");
+    // Not the checkpoint's picker, and not the text encoder row.
+    expect(textOf(wrapper)).not.toContain("Checkpoint missing");
+    expect(wrapper.find('[data-testid="wftab-replace-model"]').exists()).toBe(false);
+    expect(row(wrapper, "text_encoder").text()).toContain("t5xxl");
+    // Asked for THIS file in a VAE slot: the server filters by what goes with
+    // the checkpoint and what the loader lists.
+    expect(readModelSwap).toHaveBeenCalledWith(KEY, {
+      replacing: "SDXL/sdxl_vae_fp8.safetensors",
+      slotKind: "vae",
+    });
+    expect(readModelSwap).toHaveBeenCalledTimes(1);
+    const picker = row(wrapper, "vae").find('[data-testid="wftab-replace-vae"] select');
+    expect(picker.text()).toContain("SDXL VAE");
+    // Only the file layout fits: said, not hidden.
+    expect(picker.text()).toContain("sdxl_vae_alt.safetensors (untested)");
+    // The loader cannot load it; a run swaps in ours, and the option says so.
+    expect(picker.text()).toContain(
+      "sdxl_vae_shelf.safetensors (through a PixlStash loader)",
+    );
+    expect(picker.text()).not.toContain("other-ckpt");
+    preflightWorkflowRun.mockResolvedValue({ groups: [] });
+    await picker.setValue("sdxl_vae_bf16.safetensors");
+    await settle(wrapper);
+
+    expect(setWorkflowModelFix).toHaveBeenCalledWith(KEY, {
+      was: "SDXL/sdxl_vae_fp8.safetensors",
+      now: "sdxl_vae_bf16.safetensors",
+      slot_kind: "vae",
+    });
+    const fixed = row(wrapper, "vae").find('[data-testid="wftab-fixed-vae"]');
+    expect(fixed.text()).toContain("sdxl_vae_bf16.safetensors");
+    expect(fixed.find("tooltip-stub").attributes("text")).toBe(
+      "Replaced. This workflow originally used sdxl_vae_fp8.safetensors",
+    );
+    // The Checkpoint row is untouched by a VAE fix.
+    expect(wrapper.find('[data-testid="wftab-fixed-model"]').exists()).toBe(false);
+
+    setWorkflowModelFix.mockResolvedValue(detail({ card: withSupport }));
+    await fixed.find('[data-testid="wftab-undo-vae"]').trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowModelFix).toHaveBeenLastCalledWith(KEY, {
+      was: "SDXL/sdxl_vae_fp8.safetensors",
+      now: null,
+      slot_kind: "vae",
+    });
+  });
+
+  it("shows a missing text encoder on its own row, and never a vision one", async () => {
+    preflightWorkflowRun.mockResolvedValue(
+      missing(
+        { file: "t5xxl_fp8.safetensors", folder: "text_encoders" },
+        { file: "clip_vision_h.safetensors", folder: "clip_vision" },
+      ),
+    );
+    getWorkflowCard.mockResolvedValue(detail({ card: withSupport }));
+    readModelSwap.mockReset().mockImplementation(
+      replacementsByKind(
+        { text_encoder: [{ id: 8, filename: "t5xxl_bf16.safetensors" }] },
+      ),
+    );
+    const { wrapper } = await mountWith([KEY], [withSupport]);
+    await settle(wrapper);
+
+    const encoders = row(wrapper, "text_encoder");
+    expect(encoders.text()).toContain("Text encoder missing");
+    expect(encoders.text()).toContain("t5xxl_fp8.safetensors");
+    expect(textOf(wrapper)).not.toContain("clip_vision_h");
+    expect(
+      encoders.find('[data-testid="wftab-replace-text_encoder"] select').text(),
+    ).toContain("t5xxl_bf16.safetensors");
+    expect(row(wrapper, "vae").text()).toContain("sdxl_vae");
+  });
+});
+
+describe("a missing replacement shared by two slots (#1596)", () => {
+  it("undoes every original it replaced, by the replacement's name", async () => {
+    const withVaes = card({
+      models: [{ name: "sdxl_vae", kind: "vae", slot_label: "n2/vae_name" }],
+    });
+    const fixes = ["a", "b"].map((slot) => ({
+      slot_label: `${slot}/vae_name`,
+      was: `vae_${slot}_fp8.safetensors`,
+      now: "vae_bf16.safetensors",
+      slot_kind: "vae",
+    }));
+    preflightWorkflowRun.mockResolvedValue({
+      groups: [
+        {
+          reasons: [
+            {
+              code: "missing_models",
+              models: [{ file: "SDXL/vae_bf16.safetensors", folder: "vae" }],
+            },
+          ],
+        },
+      ],
+    });
+    getWorkflowCard.mockResolvedValue(
+      detail({ card: withVaes, model_fixes: fixes }),
+    );
+    readModelSwap.mockReset().mockImplementation(replacementsByKind({}));
+    setWorkflowModelFix
+      .mockReset()
+      .mockResolvedValue(detail({ card: withVaes }));
+    const { wrapper } = await mountWith([KEY], [withVaes]);
+    await settle(wrapper);
+    const undo = wrapper.find('[data-testid="wftab-undo-missing-vae"]');
+    expect(undo.attributes("aria-label")).toBe(
+      "Undo: load vae_a_fp8.safetensors and vae_b_fp8.safetensors again",
+    );
+    await undo.trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowModelFix).toHaveBeenCalledWith(KEY, {
+      was: "SDXL/vae_bf16.safetensors",
+      now: null,
+      slot_kind: "vae",
+    });
+  });
+});
+
+describe("no replacement to offer (#1596)", () => {
+  it("says why instead of drawing an empty picker", async () => {
+    const withVae = card({
+      models: [
+        { name: "realvisXL_v5", kind: "checkpoint", slot_label: "n1/ckpt_name" },
+        { name: "sdxl_vae", kind: "vae", slot_label: "n2/vae_name" },
+      ],
+    });
+    preflightWorkflowRun.mockResolvedValue({
+      groups: [
+        {
+          reasons: [
+            {
+              code: "missing_models",
+              models: [{ file: "sdxl_vae_fp8.safetensors", folder: "vae" }],
+            },
+          ],
+        },
+      ],
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: withVae }));
+    readModelSwap
+      .mockReset()
+      .mockImplementation(replacementsByKind({}, { vae: "none_loadable" }));
+    const { wrapper } = await mountWith([KEY], [withVae]);
+    await settle(wrapper);
+    expect(wrapper.find('[data-testid="wftab-replace-vae"]').exists()).toBe(false);
+    expect(
+      wrapper.find('[data-testid="wftab-no-replacement-vae"]').text(),
+    ).toContain("not something this loader can load");
+  });
+
+  it("says a failed read rather than showing nothing", async () => {
+    const withVae = card({
+      models: [{ name: "sdxl_vae", kind: "vae", slot_label: "n2/vae_name" }],
+    });
+    preflightWorkflowRun.mockResolvedValue({
+      groups: [
+        {
+          reasons: [
+            {
+              code: "missing_models",
+              models: [{ file: "sdxl_vae_fp8.safetensors", folder: "vae" }],
+            },
+          ],
+        },
+      ],
+    });
+    getWorkflowCard.mockResolvedValue(detail({ card: withVae }));
+    readModelSwap.mockReset().mockRejectedValue(new Error("offline"));
+    const { wrapper } = await mountWith([KEY], [withVae]);
+    await settle(wrapper);
+    expect(
+      wrapper.find('[data-testid="wftab-no-replacement-vae"]').text(),
+    ).toContain("Could not read what could replace it just now.");
+  });
+});
+
 describe("a default's provenance and reset", () => {
   it("says where each value came from, on the row it belongs to", async () => {
     getWorkflowCard.mockResolvedValue(
@@ -657,60 +1089,197 @@ describe("a default's provenance and reset", () => {
   });
 });
 
-describe("marking a LoRA slot", () => {
-  it("calls the slots route with the slot's own label", async () => {
-    const { wrapper } = await mountWith([KEY]);
-    const recipe = wrapper
-      .findAll("button")
-      .find((button) => button.text() === "Recipe");
-    await recipe.trigger("click");
-    await flush(wrapper);
-    expect(setWorkflowSlots).toHaveBeenCalledWith(KEY, { l1: "recipe" });
+describe("an editor file ComfyUI has not converted (#1530)", () => {
+  const editorFile = { imported: true, variant_count: 0 };
+
+  it("says its parameters are not available yet, and how to convert it", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: editorFile }));
+    const { wrapper } = await mountWith([KEY], [card(editorFile)]);
+    expect(wrapper.find('[data-testid="wftab-editor-only"]').exists()).toBe(true);
+    expect(textOf(wrapper)).toContain("Convert for PixlStash");
   });
 
-  it("follows the key the flip moved the card to", async () => {
-    const { wrapper, store } = await mountWith([KEY]);
-    const recipe = wrapper
+  it("says nothing of converting a card its pictures made", async () => {
+    const pictureOnly = { imported: false, variant_count: 0 };
+    getWorkflowCard.mockResolvedValue(detail({ card: pictureOnly }));
+    const { wrapper } = await mountWith([KEY], [card(pictureOnly)]);
+    expect(wrapper.find('[data-testid="wftab-editor-only"]').exists()).toBe(false);
+  });
+
+  it("says nothing of converting once it has a recipe", async () => {
+    const converted = { imported: true, variant_count: 1 };
+    getWorkflowCard.mockResolvedValue(detail({ card: converted }));
+    const { wrapper } = await mountWith([KEY], [card(converted)]);
+    expect(wrapper.find('[data-testid="wftab-editor-only"]').exists()).toBe(false);
+  });
+});
+
+describe("the LoRA pile", () => {
+  it("lists what every picture shares and piles what changes", async () => {
+    // Shared means the whole stack: the chain says in what order and how
+    // strong, the summary says which. A chain loader that changes between
+    // pictures is in the pile and never in the list.
+    getLoraSummary.mockResolvedValue(
+      loraSummary({
+        shared: [
+          {
+            asset: `asset:${"9".repeat(64)}`,
+            filename: "lightning-8step.safetensors",
+            name: "Lightning 8-step",
+            on_shelf: true,
+            pictures: 5,
+            members: [KEY],
+          },
+        ],
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    const shared = wrapper.findAll("[data-testid='wftab-shared-lora']");
+    expect(shared.map((row) => row.text())).toEqual([
+      expect.stringContaining("Lightning 8-step"),
+    ]);
+    expect(textOf(wrapper)).toContain("In every picture of this workflow.");
+    expect(textOf(wrapper)).not.toContain("LoRA slots");
+    // The cover's LoRA is on top, though Bo has more pictures.
+    const pile = wrapper.find("[data-testid='wftab-pile']");
+    expect(pile.text()).toContain("Ada");
+    expect(pile.text()).toContain("+1");
+    expect(textOf(wrapper)).toContain("On top: the cover picture's LoRA.");
+    expect(getLoraSummary).toHaveBeenCalledWith(KEY, { cover: undefined });
+  });
+
+  it("shows no pile when nothing changes between pictures", async () => {
+    getLoraSummary.mockResolvedValue(loraSummary({ varying: [] }));
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.find("[data-testid='wftab-changes']").exists()).toBe(false);
+  });
+
+  it("offers no confirmation on the No LoRA row, which cannot be promoted", async () => {
+    // Its `asset` is empty, which equals the "nothing being confirmed" state.
+    getLoraSummary.mockResolvedValue(
+      loraSummary({
+        without: { asset: "", pictures: 2, members: [KEY], picture_ids: [41] },
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    const row = wrapper.find("[data-testid='wftab-fan-row-none']");
+    expect(row.text()).toContain("No LoRA");
+    expect(row.find(".wfpile-confirm").exists()).toBe(false);
+    expect(wrapper.find("[data-testid='wftab-fan-confirm']").exists()).toBe(false);
+  });
+
+  it("explains Promote only while a LoRA can still be promoted", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.find("[data-testid='wftab-fan-explain']").text()).toContain(
+      "makes it part of the workflow",
+    );
+    const summary = loraSummary();
+    summary.varying.forEach((row) => (row.promoted = true));
+    getLoraSummary.mockResolvedValue(summary);
+    const { wrapper: allPromoted } = await mountWith([KEY]);
+    expect(
+      allPromoted.find("[data-testid='wftab-fan-explain']").exists(),
+    ).toBe(false);
+  });
+
+  it("writes nothing until the promotion is confirmed, then names the file", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    const row = wrapper.find(`[data-testid='wftab-fan-row-${ADA}']`);
+    await row
       .findAll("button")
-      .find((button) => button.text() === "Recipe");
-    await recipe.trigger("click");
+      .find((button) => button.text().includes("Promote"))
+      .trigger("click");
     await flush(wrapper);
-    // The card was re-keyed, so the rail has to be reading the new key —
-    // otherwise it sits on a card the hub no longer has.
+    expect(setLoraPromotion).not.toHaveBeenCalled();
+    // The confirmation says what moves and what stays.
+    expect(row.text()).toContain("Its 2 pictures become");
+    expect(row.text()).toContain("The other 3 pictures stay");
+
+    await wrapper.find("[data-testid='wftab-fan-confirm']").trigger("click");
+    await flush(wrapper);
+    expect(setLoraPromotion).toHaveBeenCalledWith(KEY, ADA, true);
+  });
+
+  it("puts a promoted LoRA back from the same row", async () => {
+    getLoraSummary.mockResolvedValue(
+      loraSummary({
+        varying: loraSummary().varying.map((use) =>
+          use.asset === ADA ? { ...use, promoted: true } : use,
+        ),
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    const row = wrapper.find(`[data-testid='wftab-fan-row-${ADA}']`);
+    expect(row.text()).toContain("Promoted");
+    expect(
+      row.findAll("button").some((button) => button.text().includes("Promote")),
+    ).toBe(false);
+    await row
+      .findAll("button")
+      .find((button) => button.text() === "Put back")
+      .trigger("click");
+    await wrapper.find("[data-testid='wftab-fan-confirm']").trigger("click");
+    await flush(wrapper);
+    expect(setLoraPromotion).toHaveBeenCalledWith(KEY, ADA, false);
+  });
+
+  it("follows the key the promotion answers with", async () => {
+    const { wrapper, store } = await mountWith([KEY]);
+    await promote(wrapper);
+    // Putting a LoRA back takes its card away, so the rail has to read the
+    // card the answer names, not the one it sent.
     expect(store.selectedKeys).toEqual([MOVED]);
     expect(getWorkflowCard).toHaveBeenLastCalledWith(MOVED);
   });
 
-  it("writes nothing when the mark it was given is the mark it has", async () => {
+  it("reads the pile again when the card stays where it is", async () => {
+    setLoraPromotion.mockResolvedValue({ key: KEY, moved: {} });
     const { wrapper } = await mountWith([KEY]);
-    // Through the component's own handler, not through `Segmented`: that
-    // widget already refuses to emit for the active option, so a click on
-    // "Workflow" is silent whether or not this guard exists.
-    await wrapper.vm.flipMark(
-      { label: "l1", name: "lightning-8step", mark: "structural" },
-      "structural",
-    );
-    await flush(wrapper);
-    expect(setWorkflowSlots).not.toHaveBeenCalled();
+    getLoraSummary.mockClear();
+    await promote(wrapper);
+    expect(getLoraSummary).toHaveBeenCalledWith(KEY, expect.anything());
   });
 
-  it("refuses a slot the payload gave no address for", async () => {
-    // `slot_label` is nullable, and the mark is written BY label, so an
-    // enabled switch on a slot without one is a control that answers a
-    // click with nothing at all.
-    getWorkflowCard.mockResolvedValue(detail());
-    const { wrapper } = await mountWith(
-      [KEY],
-      [
-        card({
-          loras: [{ name: "mystery", kind: "lora", mark: "structural" }],
-        }),
-      ],
-    );
-    expect(wrapper.findComponent({ name: "Segmented" }).props("disabled")).toBe(
-      true,
-    );
-    expect(textOf(wrapper)).toContain("no recorded address");
+  it("keeps the pile on screen while it is read again after a promotion", async () => {
+    // Blanking it would unmount the open fan and drop focus to the page.
+    setLoraPromotion.mockResolvedValue({ key: KEY, moved: {} });
+    const { wrapper } = await mountWith([KEY]);
+    getLoraSummary.mockImplementation(() => new Promise(() => {}));
+    await promote(wrapper);
+    expect(wrapper.find("[data-testid='wftab-pile']").exists()).toBe(true);
+  });
+
+  it("narrows Show N to the stack the summary counted", async () => {
+    // The grid's card has no stack id when it left a member out; the
+    // summary still names the stack it counted over.
+    getLoraSummary.mockResolvedValue(loraSummary({ stack_id: "auto:whole" }));
+    const { wrapper } = await mountWith([KEY], [card({ stack_id: null })]);
+    await wrapper
+      .find(`[data-testid='wftab-fan-row-${BO}']`)
+      .findAll("button")
+      .find((button) => button.text() === "Show 3")
+      .trigger("click");
+    expect(useFilterStore().workflowFilter).toMatchObject({
+      stack: "auto:whole",
+      lora: BO,
+    });
+  });
+
+  it("shows the stack's pictures of one LoRA, as a removable chip", async () => {
+    const { wrapper } = await mountWith([
+      KEY,
+    ], [card({ stack_id: "auto:core" })]);
+    await wrapper
+      .find(`[data-testid='wftab-fan-row-${BO}']`)
+      .findAll("button")
+      .find((button) => button.text() === "Show 3")
+      .trigger("click");
+    expect(useFilterStore().workflowFilter).toEqual({
+      stack: "auto:core",
+      lora: BO,
+      name: "Bo in Cinematic portrait",
+    });
+    expect(push).toHaveBeenCalledWith("/");
   });
 });
 
@@ -722,10 +1291,10 @@ describe("the Recipes tab (v1.12 F6)", () => {
     const sidebar = useSidebarStore();
     // Shut, which is the state that made the link a dead end of its own: the
     // card would be selected behind a rail nobody opened.
-    sidebar.statsOpen = false;
+    sidebar.workflowInspectorOpen = false;
     const { wrapper } = await mountWith([KEY]);
 
-    expect(sidebar.statsOpen).toBe(true);
+    expect(sidebar.workflowInspectorOpen).toBe(true);
     expect(wrapper.findComponent({ name: "WorkflowRecipesTab" }).exists()).toBe(
       true,
     );
@@ -736,9 +1305,9 @@ describe("the Recipes tab (v1.12 F6)", () => {
     // watcher that fired unconditionally would only show up in the RAIL being
     // forced open on a screen the reader had shut it on.
     const sidebar = useSidebarStore();
-    sidebar.statsOpen = false;
+    sidebar.workflowInspectorOpen = false;
     const { wrapper } = await mountWith([KEY]);
-    expect(sidebar.statsOpen).toBe(false);
+    expect(sidebar.workflowInspectorOpen).toBe(false);
     expect(wrapper.findComponent({ name: "WorkflowRecipesTab" }).exists()).toBe(
       false,
     );
@@ -778,6 +1347,44 @@ describe("the Recipes tab (v1.12 F6)", () => {
     const tab = wrapper.findComponent({ name: "WorkflowRecipesTab" });
     expect(tab.exists()).toBe(true);
     expect(tab.props("workflowKeys")).toEqual([KEY, OTHER]);
+  });
+
+  it("lists only the members picked inside an expanded stack", async () => {
+    const stack = card({ stack_size: 3, member_keys: [OTHER, MOVED] });
+    const { wrapper, store } = await mountWith([KEY], [stack]);
+    store.members = {
+      [KEY]: [card({ key: OTHER, name: "Member B" }), card({ key: MOVED })],
+    };
+    await wrapper
+      .findAll("button")
+      .find((b) => b.text().trim() === "Recipes")
+      .trigger("click");
+    await flush(wrapper);
+    const tab = () => wrapper.findComponent({ name: "WorkflowRecipesTab" });
+
+    // Collapsed: the cover stands for the stack.
+    expect(tab().props("wholeStack")).toBe(true);
+
+    store.openStackKey = KEY;
+    store.selectedKeys = [OTHER];
+    await flush(wrapper);
+    expect(tab().props("workflowKeys")).toEqual([OTHER]);
+    expect(tab().props("wholeStack")).toBe(false);
+    expect(tab().props("stackName")).toBe("Member B");
+
+    store.selectedKeys = [OTHER, MOVED];
+    await flush(wrapper);
+    expect(tab().props("wholeStack")).toBe(false);
+
+    // The cover's own row in the open panel is one member like the others.
+    store.selectedKeys = [KEY];
+    await flush(wrapper);
+    expect(tab().props("wholeStack")).toBe(false);
+
+    // The whole stack selected, open or not, is the stack again.
+    store.selectedKeys = [KEY, OTHER, MOVED];
+    await flush(wrapper);
+    expect(tab().props("wholeStack")).toBe(true);
   });
 
   it("puts the refused Run… back when the Workflow tab is chosen", async () => {
@@ -868,30 +1475,185 @@ describe("with several workflows selected", () => {
     expect(runDialog.source.pictureIds).toEqual([99]);
   });
 
-  it("runs a stack selected whole on its cover", async () => {
+  it("shows a stack selected whole as its cover, with a member picker", async () => {
     // A click on a stack card selects the cover and its members: several keys,
-    // one card on screen, and the one Run… should take.
-    const { wrapper } = await mountWith(
-      [KEY, OTHER],
-      [card({ stack_size: 2, member_keys: [OTHER] })],
+    // one card on screen. The rail reads it as one workflow, the cover first,
+    // and the picker at the top switches to another member without expanding
+    // the stack.
+    const cover = card({
+      stack_size: 2,
+      member_keys: [OTHER],
+      members: [
+        { key: KEY, name: "Cinematic portrait", sets_apart: [], differs_by: [] },
+        { key: OTHER, name: "Cinematic portrait", sets_apart: ["Flux"], differs_by: [] },
+      ],
+    });
+    getWorkflowCard.mockImplementation(async (key) =>
+      key === OTHER
+        ? detail({ card: { key: OTHER, name: "Flux portrait", stack_size: 2 } })
+        : detail({ card: { stack_size: 2 } }),
     );
-    const run = wrapper
-      .findAll("button")
-      .find((b) => b.text().includes("Run…"));
-    expect(run.attributes("aria-disabled")).toBeUndefined();
-    // Named in visible text, which is what Run… is described by; never the
-    // "N workflows selected" count of a genuinely several selection.
+    const { wrapper } = await mountWith([KEY, OTHER], [cover]);
+
     const text = textOf(wrapper);
     expect(text).not.toContain("workflows selected");
-    expect(
-      wrapper.find(`#${run.attributes("aria-describedby")}`).text(),
-    ).toContain("Run… runs Cinematic portrait, the cover");
-    await run.trigger("click");
+    expect(text).toContain("A stack of 2 workflows");
+    const pick = wrapper.find("[data-testid='wftab-stack-pick'] select");
+    expect(pick.element.value).toBe(KEY);
+    expect(pick.findAll("option").map((o) => o.text())).toEqual([
+      "Cinematic portrait",
+      "Cinematic portrait — Flux",
+    ]);
+    expect(getWorkflowCard).toHaveBeenLastCalledWith(KEY);
+
+    const run = () =>
+      wrapper.findAll("button").find((b) => b.text().includes("Run…"));
+    expect(run().attributes("aria-disabled")).toBeUndefined();
+    await run().trigger("click");
     await flush(wrapper);
     expect(useRunDialogStore().source).toMatchObject({
       kind: "card",
       workflowKey: KEY,
     });
+
+    // Picking the member reads it and makes it what Run… runs.
+    await pick.setValue(OTHER);
+    await flush(wrapper);
+    expect(getWorkflowCard).toHaveBeenLastCalledWith(OTHER);
+    expect(getLoraChain).toHaveBeenLastCalledWith(OTHER);
+    await run().trigger("click");
+    await flush(wrapper);
+    expect(useRunDialogStore().source).toMatchObject({ workflowKey: OTHER });
+  });
+
+  /** A two-card stack whose cover is KEY and member OTHER. */
+  function twoStack() {
+    return card({
+      stack_size: 2,
+      member_keys: [OTHER],
+      members: [
+        { key: KEY, name: "Cinematic portrait" },
+        { key: OTHER, name: "Flux portrait" },
+      ],
+    });
+  }
+
+  it("keeps the picker on screen while a member reads, and says a failed read", async () => {
+    let fail;
+    getWorkflowCard.mockImplementation((key) =>
+      key === OTHER
+        ? new Promise((_, reject) => {
+            fail = reject;
+          })
+        : Promise.resolve(detail({ card: { stack_size: 2 } })),
+    );
+    const { wrapper } = await mountWith([KEY, OTHER], [twoStack()]);
+    const pick = () => wrapper.find("[data-testid='wftab-stack-pick'] select");
+    await pick().setValue(OTHER);
+    await flush(wrapper);
+    expect(pick().exists()).toBe(true);
+    expect(pick().element.value).toBe(OTHER);
+    expect(textOf(wrapper)).toContain("Reading this workflow…");
+    // Run… stays on screen, refusing only for as long as the read.
+    const run = wrapper.findAll("button").find((b) => b.text().includes("Run…"));
+    expect(run.attributes("aria-disabled")).toBe("true");
+
+    fail(new Error("offline"));
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("Could not read this workflow just now.");
+    await pick().setValue(KEY);
+    await flush(wrapper);
+    expect(textOf(wrapper)).toContain("Cinematic portrait");
+    expect(textOf(wrapper)).not.toContain("Could not read");
+  });
+
+  it("follows a picked member that a promotion takes out of its stack", async () => {
+    getWorkflowCard.mockImplementation(async (key) =>
+      detail({
+        card: card({ key, name: key === OTHER ? "Flux portrait" : "Cover" }),
+      }),
+    );
+    const { wrapper, store } = await mountWith([KEY, OTHER], [twoStack()]);
+    await wrapper.find("[data-testid='wftab-stack-pick'] select").setValue(OTHER);
+    await flush(wrapper);
+    // The flip re-keys the member and splits the stack: the grid comes back
+    // without the old stack, so the rail can no longer derive the pick.
+    listWorkflowCards.mockResolvedValue({
+      cards: [card({ key: KEY }), card({ key: MOVED })],
+      one_offs: 0,
+      hidden: 0,
+    });
+    await promote(wrapper);
+    expect(setLoraPromotion).toHaveBeenCalledWith(OTHER, ADA, true);
+    expect(store.selectedKeys).toEqual([MOVED]);
+  });
+
+  it("leaves a reader who picked another member during a promotion where they are", async () => {
+    const stack = card({
+      stack_size: 3,
+      member_keys: [OTHER, MOVED],
+      members: [
+        { key: KEY, name: "Cover" },
+        { key: OTHER, name: "Flux portrait" },
+        { key: MOVED, name: "Third" },
+      ],
+    });
+    getWorkflowCard.mockImplementation(async (key) =>
+      detail({ card: card({ key, name: key }) }),
+    );
+    let answer;
+    setLoraPromotion.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    // The re-read after the flip hands the grid the same stack back, minus
+    // the flipped member, which the answer re-keyed.
+    listWorkflowCards.mockResolvedValue({
+      cards: [{ ...stack, member_keys: [MOVED], stack_size: 2 }],
+      one_offs: 0,
+      hidden: 0,
+    });
+    const { wrapper, store } = await mountWith([KEY, OTHER, MOVED], [stack]);
+    const pick = () => wrapper.find("[data-testid='wftab-stack-pick'] select");
+    await pick().setValue(OTHER);
+    await flush(wrapper);
+    await promote(wrapper);
+    // Mid-write, the reader moves on to another member of the same stack.
+    await pick().setValue(MOVED);
+    await flush(wrapper);
+    answer({ key: "f".repeat(64), moved: {} });
+    await flush(wrapper);
+    await flush(wrapper);
+    // Not yanked onto the flipped card: the selection and the pick stand.
+    expect(store.selectedKeys).toEqual([KEY, OTHER, MOVED]);
+    expect(store.stackPick.key).toBe(MOVED);
+  });
+
+  it("starts every newly selected stack on its cover", async () => {
+    const stack = (key, member) =>
+      card({
+        key,
+        stack_size: 2,
+        member_keys: [member],
+        members: [
+          { key, name: `Cover ${key[0]}` },
+          { key: member, name: `Member ${member[0]}` },
+        ],
+      });
+    const { wrapper, store } = await mountWith(
+      [KEY, OTHER],
+      [stack(KEY, OTHER), stack(MOVED, "e".repeat(64))],
+    );
+    await wrapper.find("[data-testid='wftab-stack-pick'] select").setValue(OTHER);
+    await flush(wrapper);
+    store.selectedKeys = [MOVED, "e".repeat(64)];
+    await flush(wrapper);
+    expect(
+      wrapper.find("[data-testid='wftab-stack-pick'] select").element.value,
+    ).toBe(MOVED);
+    expect(getWorkflowCard).toHaveBeenLastCalledWith(MOVED);
   });
 
   it("says how many are selected and offers no verbs of its own", async () => {
@@ -925,6 +1687,8 @@ describe("Open in ComfyUI", () => {
   let open;
   beforeEach(() => {
     open = vi.spyOn(window, "open").mockImplementation(() => null);
+    getPixlstashNode.mockReset();
+    getPixlstashNode.mockResolvedValue({ can_open_workflows: true });
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -1030,6 +1794,37 @@ describe("Open in ComfyUI", () => {
     );
     await button.trigger("click");
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("refuses, with the reason, when ComfyUI lacks the PixlStash node", async () => {
+    configure();
+    getPixlstashNode.mockResolvedValue({ can_open_workflows: false });
+    const { wrapper } = await mountWith([KEY], [card()]);
+    await flush(wrapper);
+
+    const button = openButton(wrapper);
+    expect(button.attributes("aria-disabled")).toBe("true");
+    const described = button.attributes("aria-describedby");
+    const reason = wrapper.find(`#${described}`);
+    expect(reason.text()).toContain("needs the ComfyUI-PixlStash node");
+    const link = reason.find("a");
+    expect(link.attributes("href")).toBe(
+      "https://github.com/Pikselkroken/ComfyUI-PixlStash",
+    );
+    expect(link.attributes("target")).toBe("_blank");
+    await button.trigger("click");
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("still opens when ComfyUI cannot be asked about the node", async () => {
+    configure();
+    getPixlstashNode.mockResolvedValue({ can_open_workflows: null });
+    const { wrapper } = await mountWith([KEY], [card()]);
+    await flush(wrapper);
+
+    await openButton(wrapper).trigger("click");
+
+    expect(open).toHaveBeenCalled();
   });
 
   it("opens a stack selected whole on its cover, as Run… runs it", async () => {
@@ -1230,7 +2025,7 @@ describe("the more menu and hiding", () => {
 });
 
 describe("which card the rail shows", () => {
-  it("keeps showing a card the flip moved out of the grid", async () => {
+  it("keeps showing a card a promotion moved out of the grid", async () => {
     // A flip can merge this card into somebody else's stack, and the grid
     // lists one card per stack — so the successor key is not in `cards` and
     // the detail read is the only thing that still has it.
@@ -1243,23 +2038,15 @@ describe("which card the rail shows", () => {
       hidden: 0,
     });
     const { wrapper } = await mountWith([KEY]);
-    const recipe = wrapper
-      .findAll("button")
-      .find((button) => button.text() === "Recipe");
-    await recipe.trigger("click");
-    await flush(wrapper);
+    await promote(wrapper);
     expect(textOf(wrapper)).toContain("Merged into a stack");
     expect(textOf(wrapper)).not.toContain("Pick a workflow");
   });
 
-  it("forgets the cached stack members a flip may have re-keyed", async () => {
+  it("forgets the cached stack members a promotion may have re-keyed", async () => {
     const { wrapper, store } = await mountWith([KEY]);
     store.members = { [KEY]: [card()] };
-    const recipe = wrapper
-      .findAll("button")
-      .find((button) => button.text() === "Recipe");
-    await recipe.trigger("click");
-    await flush(wrapper);
+    await promote(wrapper);
     expect(store.members).toEqual({});
   });
 
@@ -1414,6 +2201,11 @@ describe("the LoRA chain (#1478)", () => {
     },
   };
 
+  // No picture unless a test says so, so the chain is the whole list.
+  beforeEach(() => {
+    getLoraSummary.mockResolvedValue(loraSummary({ pictures: 0, varying: [] }));
+  });
+
   async function mountChain(keys = [KEY]) {
     const store = useWorkflowsStore();
     store.cards = [card()];
@@ -1427,10 +2219,12 @@ describe("the LoRA chain (#1478)", () => {
     return wrapper.find("[data-testid='wftab-edit-loras']");
   }
 
-  it("lists the loaders in apply order, with strengths and the shelf count", async () => {
+  it("lists a picture-less workflow's loaders in apply order, with the shelf count", async () => {
+    // Nothing to count, so nothing is shared and nothing changes: the rows
+    // are the workflow's own chain.
     const { wrapper } = await mountChain();
     expect(getLoraChain).toHaveBeenCalledWith(KEY);
-    const rows = wrapper.findAll(".wftab-chain-row");
+    const rows = wrapper.findAll("[data-testid='wftab-shared-lora']");
     expect(
       rows.map((row) => [
         row.find(".wftab-chain-name").text(),
@@ -1444,10 +2238,70 @@ describe("the LoRA chain (#1478)", () => {
       ["hairstyle-v3.safetensors", "0.60"],
     ]);
     expect(
-      wrapper.find("[data-testid='wftab-shelf-line']").text().replace(/\s+/g, " "),
+      wrapper.find("[data-testid='wftab-shared-note']").text().replace(/\s+/g, " "),
     ).toBe("In the order the chain applies them. 3 of 4 are on your model shelf.");
-    // B1's workflow/look mark stays beside it.
-    expect(wrapper.findComponent({ name: "Segmented" }).exists()).toBe(true);
+    // The Workflow | Recipe switches are gone.
+    expect(wrapper.findComponent({ name: "Segmented" }).exists()).toBe(false);
+  });
+
+  it("lists only what every picture shares, in the chain's order", async () => {
+    // Given out of order, and neon-rain changes between pictures, so it is in
+    // the pile rather than here.
+    const shared = (filename, name) => ({
+      asset: `asset:${filename}`,
+      filename,
+      name,
+      on_shelf: true,
+      pictures: 5,
+      members: [KEY, OTHER],
+    });
+    getLoraSummary.mockResolvedValue(
+      loraSummary({
+        keys: [KEY, OTHER],
+        shared: [
+          shared("hairstyle-v3.safetensors", "Hairstyle v3"),
+          shared("lightning-8step.safetensors", "Lightning"),
+          shared("film-grain-35mm.safetensors", "Film grain"),
+        ],
+      }),
+    );
+    const { wrapper } = await mountChain();
+    const rows = wrapper.findAll("[data-testid='wftab-shared-lora']");
+    expect(
+      rows.map((row) => [
+        row.find(".wftab-chain-name").text(),
+        row.find(".wftab-chain-strength").text(),
+      ]),
+    ).toEqual([
+      ["Lightning", "1.00"],
+      ["Film grain", "0.40"],
+      ["Hairstyle v3", "0.60"],
+    ]);
+    // Off the shelf by the chain's own answer, and said so in words.
+    expect(
+      wrapper.find("[data-testid='wftab-shared-note']").text().replace(/\s+/g, " "),
+    ).toBe(
+      "Shared by both workflows in this stack. Hairstyle v3 is not on your shelf.",
+    );
+  });
+
+  it("lists a forked chain's lane loaders after its trunk", async () => {
+    const [first, second] = loraChain().loaders;
+    getLoraChain.mockResolvedValue(
+      loraChain({
+        source: null,
+        loaders: [],
+        lanes: [
+          { sampler: { node_id: "3" }, loaders: [first] },
+          { sampler: { node_id: "15" }, loaders: [second] },
+        ],
+      }),
+    );
+    const { wrapper } = await mountChain();
+    expect(
+      wrapper.findAll(".wftab-chain-name").map((name) => name.text()),
+    ).toEqual(["lightning-8step", "neon-rain-v2"]);
+    expect(textOf(wrapper)).not.toContain("No LoRA loader");
   });
 
   it("offers Edit LoRAs… on a workflow with no loader at all", async () => {
@@ -1479,11 +2333,11 @@ describe("the LoRA chain (#1478)", () => {
   it("opens Edit LoRAs… from Save-as-recipe's link, with the entry deleted", async () => {
     route.query = { card: OTHER, edit: "loras", drop_lora: "hairstyle-v3.safetensors" };
     const sidebar = useSidebarStore();
-    sidebar.statsOpen = false;
+    sidebar.workflowInspectorOpen = false;
     const { wrapper, store } = await mountChain([]);
 
     expect(store.selectedKeys).toEqual([OTHER]);
-    expect(sidebar.statsOpen).toBe(true);
+    expect(sidebar.workflowInspectorOpen).toBe(true);
     const dialog = wrapper.findComponent({ name: "EditLorasDialog" });
     expect(dialog.exists()).toBe(true);
     expect(dialog.props("workflowKey")).toBe(OTHER);

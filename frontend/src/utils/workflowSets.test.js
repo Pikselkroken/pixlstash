@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  evidenceLine,
+  fillFromPictures,
+  fillFromSets,
+  handMadeCard,
+  handMadeName,
   headModel,
+  rowBaseModel,
   kindCounts,
+  offerText,
   setCard,
   setGroups,
   setName,
+  setSlots,
   sharingLabel,
+  slotSuggestions,
   worksWith,
 } from "./workflowSets";
 
@@ -26,12 +35,13 @@ function model(id, name, kind = "checkpoint", extra = {}) {
 function combination(
   key,
   models,
-  { recipes = 1, pictures = 1, covers = [] } = {},
+  { recipes = 1, pictures = 1, covers = [], runs = 0 } = {},
 ) {
   return {
     key,
     models,
     recipes,
+    history_runs: runs,
     picture_count: pictures,
     // `{picture_id, version}`, which is what the route serves. NOT a URL: an
     // `<img src>` never reaches the Axios interceptor, so the card builds the src
@@ -211,6 +221,57 @@ describe("setCard", () => {
   });
 });
 
+describe("setCard from ComfyUI runs (#1565)", () => {
+  const ran = combination("1,2,4", [CKPT, VAE, CLIP], {
+    recipes: 0,
+    pictures: 0,
+    runs: 1,
+  });
+
+  it("marks a card only ComfyUI ran, and prints no zero counts", () => {
+    const card = setCard(setGroups([ran])[0]);
+    expect(card.fromComfyUI).toBe(true);
+    expect(card.facts).toEqual(["3 models", "1 ComfyUI run"]);
+  });
+
+  it("marks a card with recipes elsewhere but no picture here (open question a)", () => {
+    const elsewhere = combination("1,2,4", [CKPT, VAE, CLIP], {
+      recipes: 2,
+      pictures: 0,
+      runs: 3,
+    });
+    const card = setCard(setGroups([elsewhere])[0]);
+    expect(card.fromComfyUI).toBe(true);
+    expect(card.facts).toEqual(["3 models", "2 recipes", "3 ComfyUI runs"]);
+  });
+
+  it("orders run-only groups by their runs", () => {
+    // The key would put model:1 first; the runs must win.
+    const once = combination("1", [CKPT], { recipes: 0, pictures: 0, runs: 1 });
+    const often = combination("6", [OTHER_CKPT], {
+      recipes: 0,
+      pictures: 0,
+      runs: 5,
+    });
+    expect(setGroups([once, often]).map((g) => g.key)).toEqual([
+      "model:6",
+      "model:1",
+    ]);
+  });
+
+  it("does not mark a card any picture backs", () => {
+    const pictured = combination("1,2", [CKPT, VAE], { pictures: 1 });
+    const card = setCard(setGroups([ran, pictured])[0]);
+    expect(card.fromComfyUI).toBe(false);
+    expect(card.facts).toEqual([
+      "3 models",
+      "1 recipe",
+      "1 picture",
+      "1 ComfyUI run",
+    ]);
+  });
+});
+
 describe("kindCounts", () => {
   it("writes a count of one out, so a tally does not read as a label", () => {
     expect(kindCounts([VAE])).toEqual(["VAE 1"]);
@@ -222,6 +283,20 @@ describe("kindCounts", () => {
       "Text encoder 1",
       "LoRA 1",
     ]);
+  });
+});
+
+describe("evidenceLine", () => {
+  it("prints a run-only entry's runs alone, and runs only when there are some", () => {
+    expect(evidenceLine({ recipes: 0, pictures: 0, historyRuns: 2 })).toBe(
+      "2 ComfyUI runs",
+    );
+    expect(evidenceLine({ recipes: 1, pictures: 0, historyRuns: 0 })).toBe(
+      "1 recipe · 0 pictures",
+    );
+    expect(evidenceLine({ recipes: 1, pictures: 3, historyRuns: 1 })).toBe(
+      "1 recipe · 3 pictures · 1 ComfyUI run",
+    );
   });
 });
 
@@ -279,8 +354,38 @@ describe("worksWith", () => {
     expect(worksWith(ALL, 999)).toEqual({
       companions: [],
       recipes: 0,
+      historyRuns: 0,
       sets: [],
     });
+  });
+
+  it("ranks by recipes plus ComfyUI runs, so the bar is the order", () => {
+    // #1565: a run is a witness too, so the bar must not be empty, and it must
+    // never be longer than the bar of a companion ranked above it.
+    const ran = combination("1,6", [CKPT, OTHER_CKPT], {
+      recipes: 0,
+      pictures: 0,
+      runs: 2,
+    });
+    const { companions, historyRuns } = worksWith([...ALL, ran], CKPT.id);
+    expect(historyRuns).toBe(2);
+    const last = companions.at(-1);
+    expect([last.name, last.recipes, last.historyRuns]).toEqual([
+      "juggernautXL_v9",
+      0,
+      2,
+    ]);
+    expect(last.share).toBeGreaterThan(0);
+
+    const busy = combination("1,6", [CKPT, OTHER_CKPT], {
+      recipes: 0,
+      pictures: 0,
+      runs: 40,
+    });
+    const ranked = worksWith([...ALL, busy], CKPT.id).companions;
+    expect(ranked[0].name).toBe("juggernautXL_v9");
+    const shares = ranked.map((c) => c.share);
+    expect(shares).toEqual([...shares].sort((a, b) => b - a));
   });
 });
 
@@ -298,5 +403,288 @@ describe("setName", () => {
 
   it("falls back to the members it has when a set is all adapters", () => {
     expect(setName(combination("5", [LORA]))).toBe("filmgrain_xl");
+  });
+});
+
+describe("hand-made sets (#1520)", () => {
+  const shelfRow = (id, name, fileKind, base = "SDXL") => ({
+    id,
+    sha256: `h${id}`,
+    file_kind: fileKind,
+    display_name: name,
+    filename: `${name}.safetensors`,
+    base_model: base,
+  });
+  const slotMember = (id, name, slot, extra = {}) => ({
+    sha256: `h${id}`,
+    slot,
+    label: name,
+    on_shelf: true,
+    id,
+    name,
+    base_model: "SDXL",
+    ...extra,
+  });
+
+  const rows = [
+    shelfRow(1, "RealVis XL", "checkpoint"),
+    shelfRow(2, "Film Grain", "adapter"),
+    shelfRow(3, "Soft Light", "adapter"),
+    shelfRow(4, "Ink Wash", "adapter"),
+    shelfRow(5, "Flux LoRA", "adapter", "Flux"),
+    shelfRow(6, "Tagger", "engine"),
+  ];
+  const mine = { id: 1, members: [slotMember(1, "RealVis XL", "checkpoint")] };
+  const other = {
+    id: 2,
+    members: [
+      slotMember(9, "Juggernaut", "checkpoint"),
+      slotMember(3, "Soft Light", "lora"),
+    ],
+  };
+  const combinations = [
+    {
+      key: "1,4",
+      recipes: 2,
+      picture_count: 2,
+      models: [
+        { id: 1, name: "RealVis XL", kind: "checkpoint" },
+        { id: 4, name: "Ink Wash", kind: "adapter" },
+      ],
+    },
+  ];
+
+  it("ranks your sets, then recipes with the checkpoint, then the base model, then all", () => {
+    const sections = slotSuggestions({
+      set: mine,
+      slotId: "lora",
+      rows,
+      sets: [mine, other],
+      combinations,
+    });
+    const names = Object.fromEntries(
+      sections.map((s) => [s.id, s.items.map((r) => r.display_name)]),
+    );
+    expect(names).toEqual({
+      sets: ["Soft Light"],
+      checkpoint: ["Ink Wash"],
+      base: ["Film Grain"],
+      all: ["Flux LoRA"],
+    });
+  });
+
+  it("is one unfiltered list until a checkpoint is chosen, and never offers an engine", () => {
+    const sections = slotSuggestions({
+      set: { id: 3, members: [] },
+      slotId: "other",
+      rows,
+      sets: [],
+      combinations,
+    });
+    expect(sections).toHaveLength(1);
+    const names = sections[0].items.map((r) => r.display_name);
+    expect(names).not.toContain("Tagger");
+    expect(names).toContain("RealVis XL");
+  });
+
+  it("filters by the typed text and leaves out what the set already holds", () => {
+    const held = {
+      ...mine,
+      members: [...mine.members, slotMember(2, "Film Grain", "lora")],
+    };
+    const sections = slotSuggestions({
+      set: held,
+      slotId: "lora",
+      rows,
+      sets: [held],
+      combinations,
+      query: "  in",
+    });
+    const offered = sections
+      .filter((s) => !s.held)
+      .flatMap((s) => s.items.map((r) => r.display_name));
+    expect(offered).toEqual(["Ink Wash"]);
+    // A match the set already holds is not offered, but comes back so the
+    // picker can say why the search does not list it.
+    const heldSection = sections.find((s) => s.held);
+    expect(heldSection.items.map((r) => r.display_name)).toEqual(["Film Grain"]);
+  });
+
+  it("names, sorts and filters by the shelf's name, and still finds the filename (#1574)", () => {
+    const file = (id, filename, extra = {}) => ({
+      id,
+      sha256: `f${id}`,
+      file_kind: "checkpoint",
+      display_name: null,
+      filename,
+      base_model: "SDXL",
+      ...extra,
+    });
+    const shelf = [
+      file(20, "Juggernaut_XL.fp8.safetensors"),
+      // The shelf calls this "Flux.1 Dev": first by what is shown, last by
+      // what is on disk.
+      file(21, "zz_flux1-dev.safetensors", { matched_name: "Flux.1 Dev" }),
+    ];
+    const ids = (query) =>
+      slotSuggestions({
+        set: { id: 3, members: [] },
+        slotId: "checkpoint",
+        rows: shelf,
+        sets: [],
+        combinations: [],
+        query,
+      })[0].items.map((r) => r.id);
+    expect(ids("")).toEqual([21, 20]);
+    // Typing the drawn name finds it though the file spells it differently.
+    expect(ids("flux.1 d")).toEqual([21]);
+    // What is on disk still matches: the quant postfix the name drops.
+    expect(ids(".fp8.")).toEqual([20]);
+  });
+
+  it("names the base-model group plainly and folds the other base models", () => {
+    const sections = slotSuggestions({
+      set: mine,
+      slotId: "lora",
+      rows,
+      sets: [mine],
+      combinations: [],
+    });
+    const base = sections.find((s) => s.id === "base");
+    const all = sections.find((s) => s.id === "all");
+    expect(base.label).toBe("SDXL LoRAs");
+    expect(all.label).toBe("Other base models");
+    expect(all.collapsed).toBe("1 more for another base model");
+  });
+
+  it("fills from pictures with what ran beside the checkpoint, in its own slot", () => {
+    expect(fillFromPictures(mine, combinations, rows)).toMatchObject([
+      { id: 4, slot: "lora" },
+    ]);
+    expect(
+      fillFromPictures({ id: 5, members: [] }, combinations, rows),
+    ).toEqual([]);
+  });
+
+  it("labels a fill item with both witnesses it is ranked by (#1565)", () => {
+    const both = [
+      {
+        key: "1,4",
+        models: [
+          { id: 1, name: "ckpt", kind: "checkpoint" },
+          { id: 4, name: "lora", kind: "adapter" },
+        ],
+        recipes: 1,
+        history_runs: 30,
+        picture_count: 1,
+      },
+    ];
+    expect(fillFromPictures(mine, both, rows)[0].detail).toBe(
+      "LoRA · 1 recipe · 30 ComfyUI runs",
+    );
+  });
+
+  it("never offers a second checkpoint from pictures, since the add is all or nothing", () => {
+    const withRefiner = [
+      ...combinations,
+      {
+        key: "1,7",
+        recipes: 1,
+        picture_count: 1,
+        models: [
+          { id: 1, name: "RealVis XL", kind: "checkpoint" },
+          { id: 7, name: "Refiner", kind: "checkpoint" },
+        ],
+      },
+    ];
+    const ids = fillFromPictures(mine, withRefiner, [
+      ...rows,
+      shelfRow(7, "Refiner", "checkpoint"),
+    ]).map((item) => item.id);
+    expect(ids).toEqual([4]);
+  });
+
+  it("fills from a set with other sets' members, never their checkpoint", () => {
+    expect(fillFromSets(mine, [mine, other])).toMatchObject([
+      { id: 3, slot: "lora", from: ["Juggernaut"] },
+    ]);
+  });
+
+  it("lists every slot with its ＋, and drops Checkpoint's once it holds one", () => {
+    const keys = setSlots(mine).map(({ slot, items }) => [
+      slot.id,
+      items.map((i) => i.key),
+    ]);
+    expect(keys).toEqual([
+      ["checkpoint", ["m:h1"]],
+      ["text_encoder", ["add:text_encoder"]],
+      ["vae", ["add:vae"]],
+      ["lora", ["add:lora"]],
+      ["other", ["add:other"]],
+    ]);
+  });
+
+  it("puts the merge offer's ghosts before each slot's ＋, a checkpoint ghost in place of it (#1523)", () => {
+    const incomplete = {
+      id: 9,
+      members: [{ sha256: "h3", slot: "lora", on_shelf: true, id: 3 }],
+      offer: {
+        picture_count: 0,
+        recipes: 2,
+        models: [
+          { id: 1, sha256: "h1", slot: "checkpoint" },
+          { id: 5, sha256: "h5", slot: "lora" },
+        ],
+      },
+    };
+    const keys = setSlots(incomplete).map(({ slot, items }) => [
+      slot.id,
+      items.map((i) => i.key),
+    ]);
+    expect(keys).toEqual([
+      ["checkpoint", ["g:h1"]],
+      ["text_encoder", ["add:text_encoder"]],
+      ["vae", ["add:vae"]],
+      ["lora", ["m:h3", "g:h5", "add:lora"]],
+      ["other", ["add:other"]],
+    ]);
+    // No picture in this library: counted in recipes instead.
+    expect(offerText(incomplete)).toBe("2 recipes need 2 more");
+    expect(handMadeCard(incomplete).offer).toEqual({
+      adds: 2,
+      text: "2 recipes need 2 more",
+    });
+  });
+
+  it("compares base models the way the server fills a member's", () => {
+    // A fuzzy guess is not the base model; the folded raw label is.
+    expect(
+      rowBaseModel({
+        base_model: "sdxl_base_v1-0",
+        base_model_folded: "SDXL 1.0",
+        base_model_canonical: "SDXL",
+        base_model_source: "filename_fuzzy",
+      }),
+    ).toBe("SDXL 1.0");
+    expect(
+      rowBaseModel({
+        base_model: "sdxl_base_v1-0",
+        base_model_folded: "SDXL 1.0",
+        base_model_canonical: "SDXL 1.0",
+        base_model_source: "filename",
+      }),
+    ).toBe("SDXL 1.0");
+    expect(rowBaseModel({ base_model: "MyBase" })).toBe("MyBase");
+  });
+
+  it("names a set by its own name, its checkpoint's, or Untitled set", () => {
+    expect(handMadeName({ name: "Kit", members: mine.members })).toBe("Kit");
+    expect(handMadeName(mine)).toBe("RealVis XL");
+    expect(handMadeName({ members: [] })).toBe("Untitled set");
+    expect(handMadeCard({ id: 4, members: [] })).toMatchObject({
+      handMade: true,
+      incomplete: true,
+      name: "Untitled set",
+    });
   });
 });

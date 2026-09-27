@@ -19,11 +19,11 @@ Nothing here stores pixels, and no row in this module ever causes a delete: a
 verdict is either a stack (additive) or a "keep separate" note.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Column, DateTime, ForeignKey, Index, Integer, String
-from sqlmodel import Field, SQLModel
+from sqlalchemy import Column, ForeignKey, Index, Integer, String
+from sqlmodel import Field, SQLModel, UTCDateTime
 
 # ``DedupGroup.tier`` / scan tier values. Ordered loosest-last: tier 1 is exact
 # and always on, each looser tier is an opt-in that requires the tier above it.
@@ -88,8 +88,8 @@ class DedupGroup(SQLModel, table=True):
     resolved: bool = Field(default=False, index=True)
     scan_id: Optional[int] = Field(default=None, index=True)
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column("created_at", DateTime, nullable=False),
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column("created_at", UTCDateTime(), nullable=False),
     )
 
     __table_args__ = (
@@ -182,11 +182,11 @@ class DedupVerdict(SQLModel, table=True):
         default=None, sa_column=Column("batch_id", String, nullable=True, index=True)
     )
     decided_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column("decided_at", DateTime, nullable=False),
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column("decided_at", UTCDateTime(), nullable=False),
     )
     reopened_at: Optional[datetime] = Field(
-        default=None, sa_column=Column("reopened_at", DateTime, nullable=True)
+        default=None, sa_column=Column("reopened_at", UTCDateTime(), nullable=True)
     )
     reopen_batch_id: Optional[str] = Field(
         default=None,
@@ -237,15 +237,15 @@ class DedupScan(SQLModel, table=True):
         default=None, sa_column=Column("error", String, nullable=True)
     )
     started_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column("started_at", DateTime, nullable=False),
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column("started_at", UTCDateTime(), nullable=False),
     )
     updated_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column("updated_at", DateTime, nullable=False),
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column("updated_at", UTCDateTime(), nullable=False),
     )
     finished_at: Optional[datetime] = Field(
-        default=None, sa_column=Column("finished_at", DateTime, nullable=True)
+        default=None, sa_column=Column("finished_at", UTCDateTime(), nullable=True)
     )
 
 

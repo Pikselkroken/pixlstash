@@ -12,8 +12,10 @@ import pytest
 from pixlstash.services.comfyui_recipe_service import (
     MAX_SEED_64,
     MODEL_FILENAME_FIELDS,
+    PIXLSTASH_PACK_INSTALL_HINT,
     advertised_model_names,
     apply_adapter,
+    apply_filename_swap,
     apply_lora_chain,
     apply_model_swap,
     apply_seeds,
@@ -25,6 +27,7 @@ from pixlstash.services.comfyui_recipe_service import (
     bypass_node,
     insert_adapter,
     model_filename_fields,
+    pass_label,
     plan_lora_chain,
     plan_lora_insertion,
     preflight_prompt,
@@ -33,6 +36,9 @@ from pixlstash.services.comfyui_recipe_service import (
     sanitize_prompt_graph,
     unchecked_preflight,
 )
+from pixlstash.routes.comfyui import _describe_lora_chain
+from pixlstash.services.workflow_identity import model_fix_kind
+from pixlstash.utils.adapter_header import FILE_CHECKPOINT, FILE_TEXT_ENCODER, FILE_VAE
 from pixlstash.utils.comfyui_utilities import extract_recipe_extras
 
 GRAPH = {
@@ -157,10 +163,26 @@ class TestPreflightDoesNotGuess:
         assert result["missing_models"] == []
         assert result["unchecked_fields"] == 1
 
-    def test_an_empty_combo_list_is_unchecked_not_everything_missing(self):
-        info = {
-            "CheckpointLoaderSimple": {"input": {"required": {"ckpt_name": [[], {}]}}}
+    def test_an_empty_list_from_a_custom_loader_is_unchecked(self):
+        """A pack's list may be filled lazily, so empty proves nothing."""
+        info = {"UnetLoaderGGUF": {"input": {"required": {"unet_name": [[], {}]}}}}
+        graph = {
+            "4": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": "x.gguf"}}
         }
+        result = preflight_prompt(graph, info)
+        assert result["ok"] is True
+        assert result["unchecked_fields"] == 1
+
+    @pytest.mark.parametrize(
+        "spec", [[[], {}], ["COMBO", {"options": []}]], ids=["v1", "v3"]
+    )
+    def test_an_empty_list_from_a_core_loader_means_nothing_is_installed(self, spec):
+        """ComfyUI reads its own loaders' folders on every object_info.
+
+        An empty checkpoints folder once let a missing checkpoint pass the
+        pre-flight with no warning anywhere.
+        """
+        info = {"CheckpointLoaderSimple": {"input": {"required": {"ckpt_name": spec}}}}
         graph = {
             "4": {
                 "class_type": "CheckpointLoaderSimple",
@@ -168,8 +190,23 @@ class TestPreflightDoesNotGuess:
             }
         }
         result = preflight_prompt(graph, info)
-        assert result["ok"] is True
-        assert result["unchecked_fields"] == 1
+        assert result["ok"] is False
+        assert [m["value"] for m in result["missing_models"]] == ["x.safetensors"]
+        assert result["unchecked_fields"] == 0
+
+    def test_a_remote_combo_is_unchecked_even_on_a_core_loader(self):
+        info = {
+            "CheckpointLoaderSimple": {
+                "input": {"required": {"ckpt_name": [[], {"remote": {"route": "/x"}}]}}
+            }
+        }
+        graph = {
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "x.safetensors"},
+            }
+        }
+        assert preflight_prompt(graph, info)["unchecked_fields"] == 1
 
     def test_a_node_class_not_in_the_loader_map_is_never_filename_checked(self):
         assert "SaveImage" not in MODEL_FILENAME_FIELDS
@@ -1048,17 +1085,14 @@ class TestLoraInsertion:
         assert inputs["adapter_kind"] == "— Any —"
         assert inputs["clip"] == ["4", 1]
 
-        # A replay never gets it: its variant would carry a PixlStash node,
-        # which Generate variants refuses to replay.
-        graph = self._checkpoint_graph()
-        with pytest.raises(LookupError, match="not on this ComfyUI"):
-            insert_adapter(graph, plan, elsewhere, info, digest_loader=False)
-        assert "9" not in graph
-
         # Neither: refused, saying why the core loader could not.
         graph = self._checkpoint_graph()
-        with pytest.raises(LookupError, match="not on this ComfyUI.*ComfyUI-PixlStash"):
+        with pytest.raises(
+            LookupError, match="not on this ComfyUI.*ComfyUI-PixlStash"
+        ) as refused:
             insert_adapter(graph, plan, elsewhere, self.INFO)
+        assert str(refused.value).endswith(PIXLSTASH_PACK_INSTALL_HINT)
+        assert "github.com/Pikselkroken/ComfyUI-PixlStash" in str(refused.value)
         assert "9" not in graph
 
     def test_a_graph_that_no_longer_reads_the_plan_is_refused_whole(self):
@@ -1092,44 +1126,139 @@ class TestLoraInsertion:
             {"class_type": "LoraLoaderModelOnly", "inputs": {"lora_name": None}},
         ],
     )
-    def test_a_lora_loaded_where_no_slot_is_seen_is_not_stacked_on(self, loader):
+    def test_a_lora_loaded_where_no_slot_is_seen_does_not_stop_an_insert(self, loader):
+        """A loader always goes in the MODEL path, whatever else loads a LoRA.
+
+        It applies alongside that node, never instead of it, so there is no
+        reason to refuse; #1376 used to, and nearly nothing could take one.
+        """
         graph = self._checkpoint_graph()
-        # The control: the same graph without it takes a loader.
-        assert plan_lora_insertion(graph, self.INFO)["model"]["node_id"] == "4"
         graph["5"] = loader
-        with pytest.raises(LookupError, match="already loads a LoRA"):
+        # VAEDecode: the wired `lora_name` reads node 8, so its output is typed.
+        info = {**self.INFO, "VAEDecode": {"output": ["IMAGE"]}}
+        plan = plan_lora_insertion(graph, info)
+        assert plan["model"]["node_id"] == "4"
+        assert ("3", "model") in {(r["node_id"], r["field"]) for r in plan["rewires"]}
+
+    def _sampler_spec(self):
+        return {
+            "input": {
+                "required": {
+                    "model": ["MODEL", {}],
+                    "seed": ["INT", {"default": 0}],
+                    "positive": ["CONDITIONING", {}],
+                    "negative": ["CONDITIONING", {}],
+                }
+            },
+            "output": ["LATENT"],
+        }
+
+    def test_a_seed_node_this_comfyui_lacks_does_not_stop_an_insert(self):
+        """The sampler says its seed is an INT, so that link is no model.
+
+        The single MODEL path from the checkpoint to the sampler is still there
+        to follow; refusing here was "cannot tell where a LoRA would go" over a
+        number.
+        """
+        graph = self._checkpoint_graph()
+        graph["20"] = {"class_type": "Seed (rgthree)", "inputs": {"seed": 42}}
+        graph["3"]["inputs"]["seed"] = ["20", 0]
+        info = {**self.INFO, "KSampler": self._sampler_spec()}
+        plan = plan_lora_insertion(graph, info)
+        assert plan["model"]["node_id"] == "4"
+        assert ("3", "model") in {(r["node_id"], r["field"]) for r in plan["rewires"]}
+
+    def test_a_model_loader_this_comfyui_lacks_is_typed_by_its_reader(self):
+        """The sampler's `model` input says MODEL, so the unknown node is the source."""
+        graph = self._checkpoint_graph()
+        graph["20"] = {"class_type": "SomePackUnetLoader", "inputs": {"name": "x"}}
+        graph["3"]["inputs"]["model"] = ["20", 0]
+        info = {**self.INFO, "KSampler": self._sampler_spec()}
+        plan = plan_lora_insertion(graph, info)
+        assert plan["model"]["node_id"] == "20"
+
+    def test_a_link_neither_end_can_type_is_still_refused(self):
+        """An unknown node read by an input nobody declares may be the model."""
+        graph = self._checkpoint_graph()
+        graph["20"] = {"class_type": "MysteryNode", "inputs": {}}
+        graph["21"] = {"class_type": "OtherMystery", "inputs": {"thing": ["20", 0]}}
+        with pytest.raises(
+            LookupError, match="no MysteryNode node.*hands on the model"
+        ):
             plan_lora_insertion(graph, self.INFO)
 
-    def test_a_node_comfyui_declares_a_lora_type_on_is_one_too(self):
-        """Nothing in its name or its values says LoRA; its spec does."""
+    def test_a_stacker_in_the_model_path_reads_the_inserted_loader(self):
+        """It sits after the model source, so it is one of the readers rewired."""
         graph = self._checkpoint_graph()
-        graph["5"] = {"class_type": "Efficient Loader", "inputs": {"stack": ["9", 0]}}
-        info = {
-            **self.INFO,
-            "Efficient Loader": {
-                "input": {"required": {"stack": ["LORA_STACK", {}]}},
-                "output": ["CONDITIONING"],
+        graph["5"] = {
+            "class_type": "Power Lora Loader (rgthree)",
+            "inputs": {
+                "model": ["4", 0],
+                "clip": ["4", 1],
+                "lora_1": {"on": True, "lora": "a.st", "strength": 1},
             },
         }
-        with pytest.raises(LookupError, match="already loads a LoRA"):
-            plan_lora_insertion(graph, info)
-
-    def test_a_second_model_chain_of_another_kind_refuses_the_whole_graph(self):
-        """A model no LoRA loader can patch, beside one it can, is not half-done."""
-        graph = self._checkpoint_graph()
-        graph["20"] = {"class_type": "WanVideoModelLoader", "inputs": {}}
-        graph["21"] = {"class_type": "WanVideoSampler", "inputs": {"model": ["20", 0]}}
+        graph["3"]["inputs"]["model"] = ["5", 0]
         info = {
             **self.INFO,
-            "WanVideoModelLoader": {"output": ["WANVIDEOMODEL"]},
-            "WanVideoSampler": {"output": ["LATENT"]},
+            "Power Lora Loader (rgthree)": {"output": ["MODEL", "CLIP"]},
+        }
+        plan = plan_lora_insertion(graph, info)
+        assert plan["model"]["node_id"] == "4"
+        rewired = {(r["node_id"], r["field"]) for r in plan["rewires"]}
+        assert {("5", "model"), ("5", "clip")} <= rewired
+        assert ("3", "model") not in rewired
+
+    @pytest.mark.parametrize(
+        "loader_class, kind, reader_class, field",
+        [
+            # The upscale pass after decoding: a model, and nothing to do with
+            # the MODEL path a LoRA goes on.
+            (
+                "UpscaleModelLoader",
+                "UPSCALE_MODEL",
+                "ImageUpscaleWithModel",
+                "upscale_model",
+            ),
+            ("WanVideoModelLoader", "WANVIDEOMODEL", "WanVideoSampler", "model"),
+        ],
+    )
+    def test_another_kind_of_model_does_not_stop_an_insert(
+        self, loader_class, kind, reader_class, field
+    ):
+        """Only MODEL is patched, so only the MODEL path matters."""
+        graph = self._checkpoint_graph()
+        graph["20"] = {"class_type": loader_class, "inputs": {}}
+        graph["21"] = {"class_type": reader_class, "inputs": {field: ["20", 0]}}
+        info = {
+            **self.INFO,
+            loader_class: {"output": [kind]},
+            reader_class: {"output": ["IMAGE"]},
             "VAEDecode": {"output": ["IMAGE"]},
         }
-        with pytest.raises(LookupError, match="own kind, which a LoRA loader cannot"):
-            plan_lora_insertion(graph, info)
-        # The control: the same graph without that chain still splices.
-        del graph["21"], graph["20"]
+        plan = plan_lora_insertion(graph, info)
+        assert plan["model"]["node_id"] == "4"
+        assert "21" not in {r["node_id"] for r in plan["rewires"]}
+
+    def test_a_branch_no_output_reads_is_not_a_second_model(self):
+        """A leftover UNET loader wired into nothing never runs in ComfyUI."""
+        graph = self._checkpoint_graph()
+        graph["9"] = {"class_type": "SaveImage", "inputs": {"images": ["8", 0]}}
+        graph["20"] = {"class_type": "UnetLoaderGGUF", "inputs": {}}
+        graph["21"] = {
+            "class_type": "ModelSamplingFlux",
+            "inputs": {"model": ["20", 0]},
+        }
+        info = {
+            **self.INFO,
+            "VAEDecode": {"output": ["IMAGE"]},
+            "SaveImage": {"output": [], "output_node": True},
+        }
         assert plan_lora_insertion(graph, info)["model"]["node_id"] == "4"
+        # The control: without `output_node` nothing says #20 is dead.
+        info["SaveImage"] = {"output": []}
+        with pytest.raises(LookupError, match="loads 2 models"):
+            plan_lora_insertion(graph, info)
 
     def test_a_spec_that_does_not_say_what_a_node_hands_on_is_refused(self):
         """An output list too short hides exactly the chain the refusals look for."""
@@ -1483,30 +1612,488 @@ class TestLoraChain:
             apply_lora_chain(graph, plan, info)
         assert graph == before
 
-    def test_a_stacker_is_refused(self):
+    def test_a_stacker_is_an_ordinary_node_the_chain_goes_in_front_of(self):
+        """Not edited, not refused: the chain runs from the source to it."""
         graph = self._graph(loaders=("a",))
         graph["10"]["inputs"]["lora_name_2"] = "b.safetensors"
-        with pytest.raises(LookupError, match="several LoRAs in one node"):
-            read_lora_chain(graph, self.INFO)
+        chain = read_lora_chain(graph, self.INFO)
+        assert chain["loaders"] == []
+        assert chain["model_source"]["node_id"] == "4"
+        assert {s["node_id"] for s in chain["sinks"]} == {"10"}
 
-    def test_a_prompt_tag_loader_is_refused(self):
+    def test_a_prompt_tag_node_does_not_stop_the_chain_being_edited(self):
         graph = self._graph(loaders=("a",))
         graph["6"]["inputs"]["text"] = "a cat <lora:style:0.8>"
-        with pytest.raises(LookupError, match="cannot edit"):
-            read_lora_chain(graph, self.INFO)
+        chain = read_lora_chain(graph, self.INFO)
+        assert [loader["node_id"] for loader in chain["loaders"]] == ["10"]
 
-    def test_a_branching_chain_is_refused(self):
-        graph = self._graph()
-        # #11's model is read by the next loader AND by the sampler.
-        graph["7"]["inputs"]["model2"] = ["11", 0]
-        with pytest.raises(LookupError, match="to the next loader and to #7"):
-            read_lora_chain(graph, self.INFO)
+    def test_a_lora_node_this_comfyui_lacks_is_left_out_of_the_chain(self):
+        """Its wiring cannot be read, so it is not moved; the chain still reads."""
+        graph = self._graph(loaders=("a",))
+        graph["68"] = {
+            "class_type": "UninstalledLoraThing",
+            "inputs": {"lora_name": "hero.safetensors", "clip": ["10", 1]},
+        }
+        chain = read_lora_chain(graph, self.INFO)
+        assert [loader["node_id"] for loader in chain["loaders"]] == ["10"]
 
-    def test_two_model_sources_are_refused(self):
+    def test_a_lora_node_that_takes_no_model_is_left_out_of_the_chain(self):
+        """A character prompt builder: a LoRA slot, a CLIP in, no model."""
+        graph = self._graph(loaders=("a",))
+        graph["68"] = {
+            "class_type": "LoRACharacterPromptBuilder",
+            "inputs": {"lora_name": "hero.safetensors", "clip": ["10", 1]},
+        }
+        info = {
+            **self.INFO,
+            "LoRACharacterPromptBuilder": {
+                "input": {"required": {"clip": ["CLIP", {}]}},
+                "output": ["STRING"],
+            },
+        }
+        chain = read_lora_chain(graph, info)
+        assert [loader["node_id"] for loader in chain["loaders"]] == ["10"]
+        # A CLIP reader of the chain's end like any other.
+        assert "68" in {s["node_id"] for s in chain["sinks"]}
+
+    def _two_pass(self):
+        """Loaders #10, #11 for both passes, then #12 on the hires pass only.
+
+        Base pass #3 reads #11 straight; hires pass #15 reads #12. The encoders
+        read #11's CLIP, and #12's CLIP output is read by nothing, the way a
+        LoraLoader on a hires branch is usually wired.
+        """
+        graph = self._graph(loaders=("a", "b"))
+        del graph["7"]
+        graph["12"] = self._loader("c.safetensors", 0.7, ["11", 0], ["11", 1])
+        for node_id, title, model in (
+            ("3", "Base pass", ["11", 0]),
+            ("15", "Hires pass", ["12", 0]),
+        ):
+            graph[node_id] = {
+                "class_type": "TwinSampler",
+                "inputs": {"model1": model, "positive": ["6", 0]},
+                "_meta": {"title": title},
+            }
+        return graph
+
+    def _edit_lanes(self, graph, entries, lanes):
+        chain = read_lora_chain(graph, self.INFO)
+        plan = plan_lora_chain(graph, chain, entries, self.INFO, lanes)
+        apply_lora_chain(graph, plan, self.INFO)
+        return plan
+
+    def test_a_fork_reads_as_a_trunk_and_one_lane_per_pass(self):
+        chain = read_lora_chain(self._two_pass(), self.INFO)
+        assert [loader["node_id"] for loader in chain["loaders"]] == ["10", "11"]
+        # Every reader of the trunk's model is a lane; the trunk keeps its CLIP.
+        assert {(s["node_id"], s["type"]) for s in chain["sinks"]} == {
+            ("6", "CLIP"),
+            ("8", "CLIP"),
+        }
+        lanes = chain["lanes"]
+        assert [lane["pass"] for lane in lanes] == [
+            {"node_id": "3", "class_type": "TwinSampler", "title": "Base pass"},
+            {"node_id": "15", "class_type": "TwinSampler", "title": "Hires pass"},
+        ]
+        assert [[x["node_id"] for x in lane["loaders"]] for lane in lanes] == [
+            [],
+            ["12"],
+        ]
+        assert [(s["node_id"], s["field"]) for s in lanes[0]["sinks"]] == [
+            ("3", "model1")
+        ]
+        assert [(s["node_id"], s["field"]) for s in lanes[1]["sinks"]] == [
+            ("15", "model1")
+        ]
+        assert chain["branch_note"] is None
+
+    def test_a_straight_chain_has_no_lanes(self):
+        assert read_lora_chain(self._graph(), self.INFO)["lanes"] == []
+
+    def test_the_recipe_says_which_loras_feed_which_pass(self):
+        """What get_recipe tells a reader about a two-pass graph (#1579)."""
+        chain = _describe_lora_chain(self._two_pass(), self.INFO, None)
+        assert chain["branches"] is True
+        assert chain["refusal"] is None
+        assert [lora["node_id"] for lora in chain["trunk"]] == ["10", "11"]
+        assert [
+            (p["node_id"], p["title"], [lora["name"] for lora in p["loras"]])
+            for p in chain["passes"]
+        ] == [("3", "Base pass", []), ("15", "Hires pass", ["c"])]
+
+        straight = _describe_lora_chain(self._graph(), self.INFO, None)
+        assert straight["branches"] is False
+        assert straight["passes"] == []
+
+        # Unknown, not "straight": nothing was read.
+        unread = _describe_lora_chain(self._two_pass(), None, "ComfyUI is down")
+        assert unread["branches"] is None
+        assert "ComfyUI is down" in unread["refusal"]
+
+    def test_one_edit_per_pass_rewires_each_lane_off_the_trunk(self):
+        graph = self._two_pass()
+        plan = self._edit_lanes(
+            graph,
+            [{"node_id": "10", "strength": 0.9}],
+            [
+                [{"node_id": None, "adapter": self.NEW, "strength": 0.3}],
+                [{"node_id": "11"}],
+            ],
+        )
+        new = str(max(int(n) for n in graph))
+        assert "12" not in graph
+        # The base lane has nothing reading a CLIP, so its new loader has none.
+        assert graph[new]["class_type"] == "LoraLoaderModelOnly"
+        assert graph[new]["inputs"]["model"] == ["10", 0]
+        assert graph["3"]["inputs"]["model1"] == [new, 0]
+        # #11 crossed the fork: only the hires pass reads it now.
+        assert graph["11"]["inputs"]["model"] == ["10", 0]
+        assert graph["11"]["inputs"]["clip"] == ["10", 1]
+        assert graph["15"]["inputs"]["model1"] == ["11", 0]
+        # The encoders follow the trunk's CLIP end, which is #10 now.
+        assert graph["6"]["inputs"]["conditioner"] == ["10", 1]
+        assert graph["8"]["inputs"]["conditioner"] == ["10", 1]
+        assert [c["text"] for c in plan["changes"][:4]] == [
+            "Loader #12 deleted: c",
+            "A loader added for skin-detail-xl at 0.30, on Base pass only, as "
+            "LoraLoaderModelOnly: nothing on that side reads a CLIP, so it does "
+            "not change the prompt",
+            "#11 b moved to Hires pass only; nothing there reads its CLIP, so it "
+            "no longer changes the prompt",
+            "#10 a from 0.50 to 0.90",
+        ]
+
+    def test_a_loader_moved_into_the_trunk_reaches_both_passes_and_back(self):
+        original = self._two_pass()
+        graph = json.loads(json.dumps(original))
+        plan = self._edit_lanes(
+            graph,
+            [{"node_id": "10"}, {"node_id": "11"}, {"node_id": "12"}],
+            [[], []],
+        )
+        assert graph["3"]["inputs"]["model1"] == ["12", 0]
+        assert graph["15"]["inputs"]["model1"] == ["12", 0]
+        assert graph["6"]["inputs"]["conditioner"] == ["12", 1]
+        assert plan["changes"][0]["text"] == (
+            "#12 c moved before the fork: both passes get it"
+        )
+        # Read again, #12 is the trunk's end and both lanes are empty; moving it
+        # back to the hires pass is the workflow it came from.
+        chain = read_lora_chain(graph, self.INFO)
+        assert [loader["node_id"] for loader in chain["loaders"]] == ["10", "11", "12"]
+        self._edit_lanes(
+            graph, [{"node_id": "10"}, {"node_id": "11"}], [[], [{"node_id": "12"}]]
+        )
+        assert graph == original
+
+    def test_lanes_left_out_keep_every_pass_as_read(self):
+        graph = self._two_pass()
+        chain = read_lora_chain(graph, self.INFO)
+        plan = plan_lora_chain(graph, chain, [{"node_id": "10"}], self.INFO)
+        assert [c["text"] for c in plan["changes"]][0] == "Loader #11 deleted: b"
+        assert plan["lanes"][1]["order"] == ["12"]
+
+    def test_a_lane_loader_moved_to_the_trunk_needs_no_lanes(self):
+        graph = self._two_pass()
+        chain = read_lora_chain(graph, self.INFO)
+        entries = [{"node_id": n} for n in ("10", "11", "12")]
+        plan = plan_lora_chain(graph, chain, entries, self.INFO)
+        assert plan["order"] == ["10", "11", "12"]
+        assert plan["lanes"][1]["order"] == []
+
+    def test_one_loader_in_the_trunk_and_a_lane_is_refused(self):
+        graph = self._two_pass()
+        chain = read_lora_chain(graph, self.INFO)
+        with pytest.raises(LookupError, match="#12 is listed twice"):
+            plan_lora_chain(
+                graph,
+                chain,
+                [{"node_id": "10"}, {"node_id": "11"}, {"node_id": "12"}],
+                self.INFO,
+                [[], [{"node_id": "12"}]],
+            )
+
+    def test_an_unsampler_on_the_way_does_not_name_the_pass(self):
+        # #13 inverts the latent with the hires model before #15 samples it,
+        # and is met first: the lower id at the same depth.
+        graph = self._two_pass()
+        graph["13"] = {"class_type": "Unsampler", "inputs": {"model": ["12", 0]}}
+        graph["15"]["inputs"]["latent_image"] = ["13", 0]
+        info = {**self.INFO, "Unsampler": {"output": ["LATENT"]}}
+        lanes = read_lora_chain(graph, info)["lanes"]
+        assert [pass_label(lane) for lane in lanes] == ["Base pass", "Hires pass"]
+
+    def test_lanes_that_do_not_match_the_chain_are_refused(self):
+        graph = self._two_pass()
+        chain = read_lora_chain(graph, self.INFO)
+        with pytest.raises(LookupError, match="goes 2 ways"):
+            plan_lora_chain(graph, chain, [], self.INFO, [[]])
+
+    def test_a_fork_further_down_a_lane_ends_that_lane_and_says_why(self):
+        """#12's model goes to the hires sampler AND to loader #13."""
+        graph = self._two_pass()
+        graph["13"] = self._loader("a.safetensors", 1.0, ["12", 0], ["12", 1])
+        graph["16"] = {"class_type": "TwinSampler", "inputs": {"model1": ["13", 0]}}
+        chain = read_lora_chain(graph, self.INFO)
+        assert [x["node_id"] for x in chain["lanes"][1]["loaders"]] == ["12"]
+        note = chain["branch_note"]
+        assert note.startswith("The chain stops at #12 LoraLoader, because its model")
+        assert "goes 2 ways" in note and "#13 LoraLoader is past the branch" in note
+
+    def test_a_lane_add_says_where_its_clip_goes(self):
+        """#12's CLIP feeds encoder #9, so a new hires loader carries one too."""
+        graph = self._two_pass()
+        graph["9"] = {
+            "class_type": "PromptEncoder",
+            "inputs": {"conditioner": ["12", 1]},
+        }
+        plan = self._edit_lanes(
+            graph,
+            [{"node_id": "10"}, {"node_id": "11"}],
+            [[], [{"node_id": "12"}, {"node_id": None, "adapter": self.NEW}]],
+        )
+        new = str(max(int(n) for n in graph))
+        assert graph[new]["class_type"] == "LoraLoader"
+        assert graph[new]["inputs"]["clip"] == ["12", 1]
+        assert graph["9"]["inputs"]["conditioner"] == [new, 1]
+        assert plan["changes"][0]["text"] == (
+            "A loader added for skin-detail-xl at 1.00, its model on Hires pass "
+            "only; its CLIP goes to #9 PromptEncoder"
+        )
+
+    def test_a_guider_and_a_scheduler_on_one_model_are_one_pass(self):
+        """SamplerCustomAdvanced's shape: a straight chain, not a fork."""
+        info = {
+            **self.INFO,
+            "BasicGuider": {"output": ["GUIDER"]},
+            "BasicScheduler": {"output": ["SIGMAS"]},
+            "SamplerCustomAdvanced": {"output": ["LATENT"]},
+        }
+        graph = {
+            "1": {"class_type": "UnetLoaderGGUF", "inputs": {}},
+            "10": {
+                "class_type": "LoraLoaderModelOnly",
+                "inputs": {
+                    "lora_name": "a.safetensors",
+                    "strength_model": 1.0,
+                    "model": ["1", 0],
+                },
+            },
+            "22": {"class_type": "BasicGuider", "inputs": {"model": ["10", 0]}},
+            "17": {"class_type": "BasicScheduler", "inputs": {"model": ["10", 0]}},
+            "30": {
+                "class_type": "SamplerCustomAdvanced",
+                "inputs": {"guider": ["22", 0], "sigmas": ["17", 0]},
+            },
+        }
+        chain = read_lora_chain(graph, info)
+        assert chain["lanes"] == []
+        assert [s["node_id"] for s in chain["sinks"]] == ["17", "22"]
+
+    def test_a_nested_fork_names_the_lane_by_its_own_sampler(self):
+        graph = self._two_pass()
+        graph["13"] = self._loader("a.safetensors", 1.0, ["12", 0], ["12", 1])
+        graph["16"] = {
+            "class_type": "TwinSampler",
+            "inputs": {"model1": ["13", 0]},
+            "_meta": {"title": "Upscale pass"},
+        }
+        lanes = read_lora_chain(graph, self.INFO)["lanes"]
+        assert [pass_label(lane) for lane in lanes] == ["Base pass", "Hires pass"]
+
+    def test_branches_that_merge_again_are_refused(self):
+        graph = self._graph(loaders=())
+        del graph["7"]
+        info = {**self.INFO, "ModelMergeSimple": {"output": ["MODEL"]}}
+        graph["10"] = self._loader("a.safetensors", 1.0, ["4", 0], ["4", 1])
+        graph["11"] = self._loader("b.safetensors", 1.0, ["4", 0], ["4", 1])
+        graph["20"] = {
+            "class_type": "ModelMergeSimple",
+            "inputs": {"model1": ["10", 0], "model2": ["11", 0]},
+        }
+        graph["7"] = {"class_type": "TwinSampler", "inputs": {"model1": ["20", 0]}}
+        with pytest.raises(LookupError, match="meet again at #7 TwinSampler"):
+            read_lora_chain(graph, info)
+
+    def test_two_models_into_one_sampler_are_refused(self):
         graph = self._graph(loaders=("a",))
         graph["5"] = {"class_type": "UnetLoaderGGUF", "inputs": {}}
         graph["7"]["inputs"]["model2"] = ["5", 0]
-        with pytest.raises(LookupError, match="loads 2 models"):
+        with pytest.raises(LookupError, match="meet again at #7"):
+            read_lora_chain(graph, self.INFO)
+
+    def _base_and_refiner(self):
+        """Two checkpoints, each with its own CLIP: #4 → #10 → #3, #5 → #11 → #15.
+
+        Each pass encodes its own prompt from its own loader's CLIP (#6, #9).
+        """
+        graph = {
+            "4": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
+            "5": {"class_type": "CheckpointLoaderSimple", "inputs": {}},
+            "10": self._loader("a.safetensors", 0.5, ["4", 0], ["4", 1]),
+            "11": self._loader("b.safetensors", 0.6, ["5", 0], ["5", 1]),
+            "6": {"class_type": "PromptEncoder", "inputs": {"conditioner": ["10", 1]}},
+            "9": {"class_type": "PromptEncoder", "inputs": {"conditioner": ["11", 1]}},
+        }
+        for node_id, model, prompt in (("3", "10", "6"), ("15", "11", "9")):
+            graph[node_id] = {
+                "class_type": "TwinSampler",
+                "inputs": {"model1": [model, 0], "positive": [prompt, 0]},
+            }
+        return graph
+
+    def test_a_model_per_pass_with_a_clip_per_pass_is_editable(self):
+        chain = read_lora_chain(self._base_and_refiner(), self.INFO)
+        assert chain["model_source"] is None and chain["clip_source"] is None
+        assert [lane["clip_source"]["node_id"] for lane in chain["lanes"]] == [
+            "4",
+            "5",
+        ]
+        assert [
+            [(s["node_id"], s["type"]) for s in lane["sinks"]]
+            for lane in chain["lanes"]
+        ] == [[("3", "MODEL"), ("6", "CLIP")], [("15", "MODEL"), ("9", "CLIP")]]
+
+    def test_each_pass_keeps_its_own_clip_through_an_edit(self):
+        graph = self._base_and_refiner()
+        self._edit_lanes(
+            graph,
+            [],
+            [
+                [{"node_id": None, "adapter": self.NEW}],
+                [{"node_id": "11"}, {"node_id": "10"}],
+            ],
+        )
+        new = str(max(int(n) for n in graph))
+        # The base pass's new loader reads checkpoint #4's CLIP, not #5's.
+        assert graph[new]["inputs"]["model"] == ["4", 0]
+        assert graph[new]["inputs"]["clip"] == ["4", 1]
+        assert graph["6"]["inputs"]["conditioner"] == [new, 1]
+        # #10 crossed into the refiner's chain, CLIP and all.
+        assert graph["10"]["inputs"]["model"] == ["11", 0]
+        assert graph["10"]["inputs"]["clip"] == ["11", 1]
+        assert graph["9"]["inputs"]["conditioner"] == ["10", 1]
+        assert graph["15"]["inputs"]["model1"] == ["10", 0]
+
+    def test_a_pass_with_no_clip_loader_starts_at_its_own_checkpoints_clip(self):
+        """The refiner's loader #11 is model-only; checkpoint #5 still has a CLIP."""
+        graph = self._base_and_refiner()
+        graph["11"] = {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "lora_name": "a.safetensors",
+                "strength_model": 1.0,
+                "model": ["5", 0],
+            },
+        }
+        graph["9"]["inputs"]["conditioner"] = ["5", 1]
+        chain = read_lora_chain(graph, self.INFO)
+        assert chain["lanes"][1]["clip_source"]["node_id"] == "5"
+        self._edit_lanes(graph, [], [[], [{"node_id": "11"}, {"node_id": "10"}]])
+        # #10 crossed with its CLIP, which now reads the refiner's checkpoint.
+        assert graph["10"]["inputs"]["clip"] == ["5", 1]
+        assert graph["10"]["inputs"]["model"] == ["11", 0]
+
+    def test_a_clip_loader_moved_where_no_clip_is_handed_out_is_refused(self):
+        """Two UNETs and two CLIP loaders: the bare lane has no CLIP to offer."""
+        info = {**self.INFO, "CLIPLoader": {"output": ["CLIP"]}}
+        graph = self._two_models()
+        graph["30"] = {"class_type": "CLIPLoader", "inputs": {}}
+        graph["31"] = {"class_type": "CLIPLoader", "inputs": {}}
+        graph["10"] = self._loader("a.safetensors", 1.0, ["1", 0], ["30", 0])
+        graph["6"] = {
+            "class_type": "PromptEncoder",
+            "inputs": {"conditioner": ["10", 1]},
+        }
+        graph["9"] = {
+            "class_type": "PromptEncoder",
+            "inputs": {"conditioner": ["31", 0]},
+        }
+        graph["3"]["inputs"]["positive"] = ["6", 0]
+        graph["15"]["inputs"]["positive"] = ["9", 0]
+        chain = read_lora_chain(graph, info)
+        with pytest.raises(LookupError, match="nothing on TwinSampler #15's side"):
+            plan_lora_chain(graph, chain, [], info, [[], [{"node_id": "10"}]])
+
+    def test_a_lane_taking_its_clip_from_elsewhere_is_refused(self):
+        """#12 reads the checkpoint's CLIP, not the trunk's end at #11."""
+        graph = self._two_pass()
+        graph["12"]["inputs"]["clip"] = ["4", 1]
+        with pytest.raises(LookupError, match="take their CLIP from somewhere"):
+            read_lora_chain(graph, self.INFO)
+
+    def _two_models(self):
+        """Wan 2.2's shape: high noise #1 → #10 → #3, low noise #2 → #15."""
+        return {
+            "1": {"class_type": "UnetLoaderGGUF", "inputs": {}},
+            "2": {"class_type": "UnetLoaderGGUF", "inputs": {}},
+            "10": {
+                "class_type": "LoraLoaderModelOnly",
+                "inputs": {
+                    "lora_name": "a.safetensors",
+                    "strength_model": 1.0,
+                    "model": ["1", 0],
+                },
+            },
+            "3": {"class_type": "TwinSampler", "inputs": {"model1": ["10", 0]}},
+            "15": {"class_type": "TwinSampler", "inputs": {"model1": ["2", 0]}},
+        }
+
+    def test_two_models_read_as_one_lane_each_with_no_trunk(self):
+        chain = read_lora_chain(self._two_models(), self.INFO)
+        assert chain["model_source"] is None and chain["loaders"] == []
+        assert [lane["source"]["node_id"] for lane in chain["lanes"]] == ["1", "2"]
+        assert [lane["pass"]["title"] for lane in chain["lanes"]] == [None, None]
+        assert pass_label(chain["lanes"][1]) == "TwinSampler #15"
+
+    def test_a_loader_moved_between_two_models_changes_which_model_it_patches(self):
+        graph = self._two_models()
+        plan = self._edit_lanes(graph, [], [[], [{"node_id": "10"}]])
+        assert graph["10"]["inputs"]["model"] == ["2", 0]
+        assert graph["15"]["inputs"]["model1"] == ["10", 0]
+        assert graph["3"]["inputs"]["model1"] == ["1", 0]
+        assert plan["changes"][0]["text"] == "#10 a moved to TwinSampler #15 only"
+
+    def test_two_models_have_no_trunk_to_add_to(self):
+        graph = self._two_models()
+        chain = read_lora_chain(graph, self.INFO)
+        with pytest.raises(LookupError, match="no LoRA can go before them all"):
+            plan_lora_chain(
+                graph,
+                chain,
+                [{"node_id": None, "adapter": self.NEW, "strength": 1.0}],
+                self.INFO,
+                [[{"node_id": "10"}], []],
+            )
+
+    def test_a_straight_chain_has_no_branch_note(self):
+        assert read_lora_chain(self._graph(), self.INFO)["branch_note"] is None
+
+    def test_a_dead_branch_is_neither_a_second_model_nor_a_loader(self):
+        """A second UNET and a LoRA wired into nothing: ComfyUI never runs them."""
+        graph = self._graph(loaders=("a",))
+        graph["9"] = {"class_type": "SaveImage", "inputs": {"images": ["7", 0]}}
+        graph["20"] = {"class_type": "UnetLoaderGGUF", "inputs": {}}
+        graph["21"] = {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {
+                "lora_name": "a.safetensors",
+                "strength_model": 1.0,
+                "model": ["20", 0],
+            },
+        }
+        info = {**self.INFO, "SaveImage": {"output": [], "output_node": True}}
+        chain = read_lora_chain(graph, info)
+        assert chain["model_source"]["node_id"] == "4"
+        assert [loader["node_id"] for loader in chain["loaders"]] == ["10"]
+
+    def test_a_second_model_that_goes_several_ways_is_refused(self):
+        graph = self._graph(loaders=("a",))
+        graph["5"] = {"class_type": "UnetLoaderGGUF", "inputs": {}}
+        graph["7"]["inputs"]["model2"] = ["5", 0]
+        graph["9"] = {"class_type": "TwinSampler", "inputs": {"model1": ["5", 0]}}
+        with pytest.raises(LookupError, match="loads 2 models, and the one from #5"):
             read_lora_chain(graph, self.INFO)
 
     def test_the_untyped_reading_follows_the_model_links_and_lists_every_slot(self):
@@ -1524,6 +2111,34 @@ class TestLoraChain:
             ("10", "lora_name"),
         ]
         assert chain["model_source"]["node_id"] == "4"
+
+    def test_a_refused_chain_still_names_its_two_ends_when_comfyui_answered(self):
+        # Refused for its shape: the read-only view still says what the chain
+        # runs between, and nothing untyped does.
+        graph = self._graph()
+        # A second model source for the sampler's other input, which also
+        # goes to a second sampler.
+        graph["5"] = {"class_type": "UnetLoaderGGUF", "inputs": {}}
+        graph["7"]["inputs"]["model2"] = ["5", 0]
+        graph["9"] = {"class_type": "TwinSampler", "inputs": {"model1": ["5", 0]}}
+        with pytest.raises(LookupError, match="loads 2 models"):
+            read_lora_chain(graph, self.INFO)
+        chain = read_lora_chain_untyped(graph, self.INFO)
+        assert chain["model_source"]["node_id"] == "4"
+        # #7 reads the chain's end on model1; model2 is the other model.
+        assert [(s["node_id"], s["type"]) for s in chain["sinks"]] == [
+            ("7", "MODEL"),
+            ("6", "CLIP"),
+            ("8", "CLIP"),
+        ]
+        assert chain["sink_summary"] == (
+            "TwinSampler #7 reads model · 2 text encoders read clip"
+        )
+        # Without ComfyUI the source is still followed by name; the readers
+        # need the types, so none are named.
+        untyped = read_lora_chain_untyped(graph)
+        assert untyped["model_source"]["node_id"] == "4"
+        assert untyped["sinks"] == [] and untyped["sink_summary"] is None
 
 
 class TestAdvertisedModelNames:
@@ -1792,6 +2407,217 @@ class TestModelSwap:
             == []
         )
         assert graph["4"]["inputs"]["ckpt_name"] == "kept/kept.safetensors"
+
+
+class TestFilenameSwap:
+    """Clone with new models: replace a file that loads with a different one."""
+
+    def _graph(self):
+        return {
+            "4": {
+                "class_type": "CheckpointLoaderSimple",
+                "inputs": {"ckpt_name": "zimage/zimage-turbo.safetensors"},
+            },
+            "5": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
+            "6": {
+                "class_type": "DualCLIPLoader",
+                "inputs": {
+                    "clip_name1": "qwen_3_4b.safetensors",
+                    "clip_name2": "ae.safetensors",
+                },
+            },
+        }
+
+    def test_every_field_naming_the_file_is_rewritten(self):
+        graph = self._graph()
+        swapped, unswapped = apply_filename_swap(
+            graph, {"ae.safetensors": "flux2-vae.safetensors"}
+        )
+        assert graph["5"]["inputs"]["vae_name"] == "flux2-vae.safetensors"
+        assert graph["6"]["inputs"]["clip_name2"] == "flux2-vae.safetensors"
+        assert {(s["node_id"], s["field"]) for s in swapped} == {
+            ("5", "vae_name"),
+            ("6", "clip_name2"),
+        }
+        assert unswapped == []
+
+    def test_a_widget_filter_leaves_every_other_field_naming_the_file(self):
+        """A workflow's model fix names a checkpoint: a VAE of that name stays."""
+        graph = self._graph()
+        graph["5"]["inputs"]["vae_name"] = "zimage/zimage-turbo.safetensors"
+        swapped, _ = apply_filename_swap(
+            graph,
+            {"zimage/zimage-turbo.safetensors": "krea2.safetensors"},
+            fields=lambda _cls, field: field == "ckpt_name",
+        )
+        assert graph["4"]["inputs"]["ckpt_name"] == "krea2.safetensors"
+        assert graph["5"]["inputs"]["vae_name"] == "zimage/zimage-turbo.safetensors"
+        assert [(s["node_id"], s["field"]) for s in swapped] == [("4", "ckpt_name")]
+
+    def test_a_text_encoder_fix_leaves_a_vision_encoder_of_that_name(self):
+        """#1596: the run rewrite asks the loader's class, not just the field."""
+        graph = self._graph()
+        graph["7"] = {
+            "class_type": "CLIPVisionLoader",
+            "inputs": {"clip_name": "qwen_3_4b.safetensors"},
+        }
+        swapped, _ = apply_filename_swap(
+            graph,
+            {"qwen_3_4b.safetensors": "qwen_3_4b_bf16.safetensors"},
+            fields=lambda cls, field: model_fix_kind(cls, field) == FILE_TEXT_ENCODER,
+        )
+        assert graph["6"]["inputs"]["clip_name1"] == "qwen_3_4b_bf16.safetensors"
+        assert graph["7"]["inputs"]["clip_name"] == "qwen_3_4b.safetensors"
+        assert [(s["node_id"], s["field"]) for s in swapped] == [("6", "clip_name1")]
+
+    def test_model_fix_kind_reads_the_slot_a_shelf_kind_may_fill(self):
+        assert model_fix_kind("UNETLoader", "unet_name") == FILE_CHECKPOINT
+        assert model_fix_kind("VAELoader", "vae_name") == FILE_VAE
+        assert model_fix_kind("TripleCLIPLoader", "clip_name3") == FILE_TEXT_ENCODER
+        assert model_fix_kind("CLIPVisionLoader", "clip_name") is None
+        assert model_fix_kind("LoraLoader", "lora_name") is None
+
+    def test_a_key_matches_the_whole_name_whatever_its_case_or_separators(self):
+        graph = self._graph()
+        swapped, _ = apply_filename_swap(
+            graph, {"ZIMAGE\\Zimage-Turbo.safetensors": "krea2.safetensors"}
+        )
+        assert graph["4"]["inputs"]["ckpt_name"] == "krea2.safetensors"
+        assert swapped[0]["was"] == "zimage/zimage-turbo.safetensors"
+
+    def test_a_bare_key_never_rewrites_a_file_of_that_name_in_a_folder(self):
+        graph = self._graph()
+        graph["7"] = {
+            "class_type": "ControlNetLoader",
+            "inputs": {"control_net_name": "canny/ae.safetensors"},
+        }
+        apply_filename_swap(graph, {"ae.safetensors": "flux2-vae.safetensors"})
+        assert graph["5"]["inputs"]["vae_name"] == "flux2-vae.safetensors"
+        assert graph["7"]["inputs"]["control_net_name"] == "canny/ae.safetensors"
+
+    def test_a_key_with_a_folder_never_matches_another_folders_file(self):
+        graph = self._graph()
+        graph["7"] = {
+            "class_type": "CLIPVisionLoader",
+            "inputs": {"clip_name": "clip_vision/qwen_3_4b.safetensors"},
+        }
+        graph["6"]["inputs"]["clip_name1"] = "text_encoders/qwen_3_4b.safetensors"
+        apply_filename_swap(
+            graph, {"text_encoders/qwen_3_4b.safetensors": "mistral.safetensors"}
+        )
+        assert graph["6"]["inputs"]["clip_name1"] == "mistral.safetensors"
+        assert graph["7"]["inputs"]["clip_name"] == "clip_vision/qwen_3_4b.safetensors"
+
+    def test_a_basename_two_keys_share_is_left_alone(self):
+        graph = self._graph()
+        swapped, unswapped = apply_filename_swap(
+            graph,
+            {
+                "a/zimage-turbo.safetensors": "one.safetensors",
+                "b/zimage-turbo.safetensors": "two.safetensors",
+            },
+        )
+        assert swapped == []
+        assert graph["4"]["inputs"]["ckpt_name"] == "zimage/zimage-turbo.safetensors"
+        assert {u["reason"] for u in unswapped} == {"not_in_graph"}
+
+    def test_without_object_info_the_name_is_written_unverified(self):
+        graph = self._graph()
+        swapped, _ = apply_filename_swap(
+            graph, {"zimage/zimage-turbo.safetensors": "krea2.safetensors"}
+        )
+        assert swapped == [
+            {
+                "node_id": "4",
+                "class_type": "CheckpointLoaderSimple",
+                "field": "ckpt_name",
+                "was": "zimage/zimage-turbo.safetensors",
+                "now": "krea2.safetensors",
+                "verified": False,
+            }
+        ]
+
+    def test_with_object_info_the_options_own_spelling_is_written(self):
+        info = {
+            "CheckpointLoaderSimple": {
+                "input": {"required": {"ckpt_name": [["krea/krea2.safetensors"], {}]}}
+            }
+        }
+        graph = self._graph()
+        swapped, _ = apply_filename_swap(
+            graph,
+            {"zimage/zimage-turbo.safetensors": "krea\\krea2.safetensors"},
+            info,
+        )
+        assert graph["4"]["inputs"]["ckpt_name"] == "krea/krea2.safetensors"
+        assert swapped[0]["verified"] is True
+
+    def test_a_shelf_basename_finds_the_subfolder_comfyui_lists_it_under(self):
+        info = {
+            "CheckpointLoaderSimple": {
+                "input": {
+                    "required": {
+                        "ckpt_name": [
+                            ["other.safetensors", "krea/krea2.safetensors"],
+                            {},
+                        ]
+                    }
+                }
+            }
+        }
+        graph = self._graph()
+        apply_filename_swap(
+            graph, {"zimage/zimage-turbo.safetensors": "krea2.safetensors"}, info
+        )
+        assert graph["4"]["inputs"]["ckpt_name"] == "krea/krea2.safetensors"
+
+    def test_a_replacement_comfyui_does_not_list_is_reported_not_written(self):
+        info = {
+            "CheckpointLoaderSimple": {
+                "input": {"required": {"ckpt_name": [["other.safetensors"], {}]}}
+            }
+        }
+        graph = self._graph()
+        swapped, unswapped = apply_filename_swap(
+            graph, {"zimage/zimage-turbo.safetensors": "krea2.safetensors"}, info
+        )
+        assert swapped == []
+        assert graph["4"]["inputs"]["ckpt_name"] == "zimage/zimage-turbo.safetensors"
+        assert unswapped == [
+            {
+                "was": "zimage/zimage-turbo.safetensors",
+                "now": "krea2.safetensors",
+                "reason": "not_on_comfyui",
+            }
+        ]
+
+    def test_a_name_comfyui_lists_in_two_folders_is_refused_as_ambiguous(self):
+        info = {
+            "VAELoader": {
+                "input": {
+                    "required": {
+                        "vae_name": [
+                            ["flux/new.safetensors", "sd3/new.safetensors"],
+                            {},
+                        ]
+                    }
+                }
+            }
+        }
+        graph = self._graph()
+        swapped, unswapped = apply_filename_swap(
+            graph, {"ae.safetensors": "new.safetensors"}, info
+        )
+        assert graph["5"]["inputs"]["vae_name"] == "ae.safetensors"
+        assert {u["reason"] for u in unswapped} == {"several_on_comfyui"}
+
+    def test_a_swap_onto_the_same_file_changes_nothing(self):
+        graph = self._graph()
+        swapped, unswapped = apply_filename_swap(
+            graph, {"ae.safetensors": "ae.safetensors"}
+        )
+        assert swapped == [] and unswapped == []
+        assert graph == self._graph()
 
 
 class TestWrappedLoaders:

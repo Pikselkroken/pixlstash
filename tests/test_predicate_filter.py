@@ -134,10 +134,12 @@ def test_apply_deleted_filter_false_emits_no_deleted_clause(session):
 
 
 def test_include_unimported_false_requires_imported_at(session):
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     imported = _add_picture(
-        session, file_path="a.jpg", imported_at=datetime(2020, 1, 1)
+        session,
+        file_path="a.jpg",
+        imported_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
     )
     _add_picture(session, file_path="b.jpg", imported_at=None)
 

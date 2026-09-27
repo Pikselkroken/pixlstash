@@ -20,19 +20,18 @@ derived data that can be dropped and recomputed at any time, and a dismissal
 only hides a row from one list.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import (
     Column,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
     String,
     UniqueConstraint,
 )
-from sqlmodel import Field, SQLModel
+from sqlmodel import Field, SQLModel, UTCDateTime
 
 
 class StackCohesion(SQLModel, table=True):
@@ -115,8 +114,8 @@ class StackCohesion(SQLModel, table=True):
         sa_column=Column("nearest_edges", String, nullable=False, server_default="[]"),
     )
     computed_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column("computed_at", DateTime, nullable=False),
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column("computed_at", UTCDateTime(), nullable=False),
     )
 
 
@@ -160,8 +159,8 @@ class MixedStackDismissal(SQLModel, table=True):
     )
     member_count: int = Field(default=0)
     dismissed_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column("dismissed_at", DateTime, nullable=False),
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column("dismissed_at", UTCDateTime(), nullable=False),
     )
     actor: Optional[str] = Field(
         default=None, sa_column=Column("actor", String, nullable=True)

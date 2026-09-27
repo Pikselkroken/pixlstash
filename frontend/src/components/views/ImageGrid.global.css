@@ -1,20 +1,14 @@
 /* Non-scoped so pseudo-element selectors aren't weakened by the data-v attribute */
-/* Shared subtle scrollbar treatment - keep in sync with .sidebar-scroll in SideBar.vue:
-   nearly invisible at rest, fades in on hover/use. The transparent border +
-   background-clip insets the thumb equally from both track edges so it floats
+/* Shared scrollbar treatment - keep in sync with .sidebar-scroll in SideBar.vue:
+   an amber thumb, so the scroll position can always be found. Chromium honours
+   scrollbar-color in ImageGrid.css over these; they serve Safari. The
+   transparent border + background-clip insets the thumb equally from both track edges so it floats
    as a centred pill with symmetric gutters (no flush-against-the-panel edge). */
 .grid-scroll-wrapper::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-surface), 0.05) !important;
+  background: rgb(var(--v-theme-accent)) !important;
   background-clip: padding-box !important;
   border: 2px solid transparent !important;
   border-radius: var(--radius-md) !important;
-  transition: background 0.15s ease !important;
-}
-.grid-scroll-wrapper:hover::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-theme-on-surface), 0.18) !important;
-}
-.grid-scroll-wrapper::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--v-theme-on-surface), 0.3) !important;
 }
 .grid-scroll-wrapper::-webkit-scrollbar-track {
   background: transparent !important;

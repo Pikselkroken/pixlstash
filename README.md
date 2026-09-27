@@ -579,7 +579,9 @@ one; image filters are re-scanned every time the Filters menu is listed.
 one verb that imports the plugin instead of reading it: it loads the file the
 way the server does, registers what it defines, and checks that the parameter
 schema is one the settings screen can render — so a typo costs a command rather
-than a restart. `--image PATH` runs it over one picture as well, and stops
+than a restart, and it ends by listing the connections, programs and file
+writes it saw the plugin make while it ran. `--image PATH` runs it over one
+picture as well, and stops
 instead of running when the plugin reports its model is not present — though a
 plugin that downloads inside `init()` still will, since by then it is the
 plugin's code deciding.
@@ -745,23 +747,25 @@ GPL-only backend internals, different obligations may apply.
 
 ## Connecting an AI agent (MCP)
 
-`pixlstash-mcp` is a read-only [MCP](https://modelcontextprotocol.io) server:
-an agent can search the library and read pictures, tags and ComfyUI recipes,
-and it has no tools that change anything. It talks to a running PixlStash
-server with an API token and sees exactly what that token sees.
+`pixlstash-mcp` is an [MCP](https://modelcontextprotocol.io) server: an agent
+can search the library and read pictures, tags and ComfyUI recipes. By default
+it has no tools that change anything; `--allow-write` adds workflow editing
+(see [Read and write workflows](#read-and-write-workflows)). It talks to a
+running PixlStash server with an API token and sees exactly what that token
+sees.
 
 The quickest way in is **API Tokens → Connect AI agent** in your account
-settings: it mints a read-only token and hands back the finished configuration
-to paste, either a one-line `claude mcp add …` or the `mcpServers` block below.
+settings: it mints a read-only token (unless you choose **Read and write
+workflows**) and hands back the finished configuration to paste, either a one-line `claude mcp add …` or the `mcpServers` block below.
 That token covers the whole library. To narrow it to one set, character or
 project, mint a **Read-only share** token with **New token** instead and put it
 in the configuration yourself.
 
-A full-access token also works, and you should not give it one: any agent that
-can read its own config file then has full owner control of PixlStash - not
-just read access to your pictures - because that token authorises writes,
-deletes and the local-only filesystem endpoints, and nothing here limits what
-else the agent does with it.
+For read-only use, do not give it a full-access token: any agent that can read
+its own config file then has full owner control of PixlStash - not just read
+access to your pictures - because that token authorises writes, deletes and the
+local-only filesystem endpoints, and nothing here limits what else the agent
+does with it. Write mode needs exactly that token, and that is its cost.
 
 `get_recipe` also asks your ComfyUI whether a recipe's nodes and models are
 installed.
@@ -808,7 +812,62 @@ Tools: `search_pictures`, `list_pictures`, `count_pictures`, `get_picture`,
 `view_picture`, `list_tags`, `list_sets`, `list_characters`, `list_projects`,
 `get_recipe`.
 `list_pictures` and `search_pictures` also narrow by `set_id`, `character_id`,
-`project_id` and `tags`.
+`project_id` and `tags`; `list_pictures` and `count_pictures` also by the
+`workflow_key` a recipe names. `get_recipe` says whether the model forks into
+several sampler passes and which LoRAs feed each, and gives the path that opens
+the picture's workflow card in PixlStash.
+
+The MCP server reads `PIXLSTASH_TOKEN` once, when it starts. After you replace
+or revoke the token, restart or reconnect it in your MCP client.
+
+### Read and write workflows
+
+Choose **Read and write workflows** in **Connect AI agent** and the agent can
+also edit and store workflow graphs and start runs. The dialog mints a
+full-access token and adds `--allow-write` to the configuration:
+
+```json
+{
+  "mcpServers": {
+    "pixlstash": {
+      "command": "pixlstash-mcp",
+      "args": ["--allow-write"],
+      "env": { "PIXLSTASH_TOKEN": "<your full-access token>" }
+    }
+  }
+}
+```
+
+Every workflow route is owner-only, so a read-only or shared token cannot use
+these tools, and `pixlstash-mcp` says so at start-up. The flag decides which
+tools are offered; it does not limit the token, which can do anything you can.
+
+Extra tools: `list_workflows`, `get_workflow`, `export_workflow_graph`,
+`import_workflow_graph`, `preflight_workflow`, `run_workflow`.
+
+A stored workflow is never changed in place: importing an edited graph makes a
+new workflow card, and importing an unchanged one matches the stored copy and
+adds nothing. A different prompt, seed or LoRA is not a graph edit; pass it to
+the run instead.
+
+#### With a ComfyUI MCP server
+
+PixlStash does not edit graphs itself. Connect ComfyUI's own MCP server
+([comfy-mcp](https://docs.comfy.org/agent-tools/mcp)) to the same agent and
+the two work on one file; they never talk to each other, the agent goes
+between them:
+
+1. `export_workflow_graph` (PixlStash) writes a workflow's graph to a JSON file,
+   in PixlStash's cache folder unless you name a path, and returns the path.
+2. The agent edits that file. ComfyUI's server tells it what inputs a node
+   takes on your install and which models are on disk, and can set widget
+   values for it.
+3. ComfyUI's server validates the edited file. Do not store one that fails.
+4. `import_workflow_graph` (PixlStash) stores it as a new workflow card.
+5. `preflight_workflow` checks it would run; `run_workflow` runs it.
+
+Run through PixlStash, not through ComfyUI's server: a run there goes straight
+to ComfyUI, and its pictures never reach your library.
 
 If the agent answers questions about your library from the shell instead of
 from these tools, it is almost always one of two things:

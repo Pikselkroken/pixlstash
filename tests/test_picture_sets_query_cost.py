@@ -21,7 +21,7 @@ import gc
 import json
 import os
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 from sqlalchemy import event
@@ -67,7 +67,7 @@ def _seed_sets(server, set_count: int, members_per_set: int, hidden_every=None):
     def _insert(session):
         created = {}
         hidden = set()
-        base = datetime(2026, 1, 1)
+        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
         for set_index in range(set_count):
             picture_set = PictureSet(name=f"Set {set_index:02d}")
             session.add(picture_set)
@@ -124,7 +124,7 @@ def _seed_scoped_sets(server):
         project = Project(name="Scoped Project")
         session.add(project)
         session.flush()
-        base = datetime(2026, 1, 1)
+        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
         ids = {"project_id": project.id}
 
         def _picture(name, score, in_project, deleted):

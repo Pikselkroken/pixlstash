@@ -9,7 +9,7 @@ import time
 
 from fastapi.testclient import TestClient
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 from sqlalchemy import event as sa_event
@@ -331,7 +331,7 @@ def test_list_includes_tagger_confidence():
                     confidence=0.42,
                     model_version="test-v1",
                     status="PENDING",
-                    predicted_at=datetime.utcnow(),
+                    predicted_at=datetime.now(timezone.utc),
                 )
             )
             session.commit()
@@ -356,7 +356,7 @@ def _seed_prediction(server, pic_id, tag, confidence):
                 confidence=confidence,
                 model_version="test-v1",
                 status="PENDING",
-                predicted_at=datetime.utcnow(),
+                predicted_at=datetime.now(timezone.utc),
             )
         )
         session.commit()
@@ -799,7 +799,7 @@ def test_scan_tag_confidence_fallback_ignores_stale_model_version():
                     confidence=0.99,
                     model_version="old-v0",
                     status="PENDING",
-                    predicted_at=datetime(2020, 1, 1),
+                    predicted_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
                 )
             )
             session.commit()
@@ -1708,7 +1708,7 @@ def test_scan_tag_survives_large_picture_ids_scope():
                         "confidence": 0.95,
                         "model_version": "v1",
                         "status": "PENDING",
-                        "predicted_at": datetime.utcnow(),
+                        "predicted_at": datetime.now(timezone.utc),
                     }
                     for i in embedded
                 ],

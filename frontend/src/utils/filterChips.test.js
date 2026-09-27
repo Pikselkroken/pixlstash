@@ -19,7 +19,8 @@ describe("filterChips", () => {
 
   it("gives every active filter its own chip, one per tag or model", () => {
     const s = useFilterStore();
-    s.unassignedOnlyFilter = true;
+    s.noCharacterFilter = true;
+    s.noSetFilter = true;
     s.minScoreFilter = 3;
     s.maxScoreFilter = 4;
     s.tagFilter = ["outdoors"];
@@ -30,6 +31,7 @@ describe("filterChips", () => {
     s.sharedOnlyFilter = true;
     expect(chipText(s)).toEqual([
       "Problem no character",
+      "Problem in no set",
       "Sharing shared",
       "Score 3–4",
       "Has tag outdoors",
@@ -89,9 +91,10 @@ describe("filterChips", () => {
     expect(chipText(s)).toEqual(["Stacks unresolved"]);
   });
 
-  it("hides No character outside All Pictures, where it does nothing", () => {
+  it("hides No character and In no set outside All Pictures", () => {
     const s = useFilterStore();
-    s.unassignedOnlyFilter = true;
+    s.noCharacterFilter = true;
+    s.noSetFilter = true;
     expect(filterChips(s, { allPicturesView: false })).toEqual([]);
   });
 
@@ -108,6 +111,8 @@ describe("scoreChipValue", () => {
     [3, 3, false, "3"],
     [3, null, false, "3+"],
     [null, 4, false, "up to 4"],
+    [null, 4, true, "up to 4"],
+    [null, 0, true, "unscored"],
     [3, 4, true, "3–4 or unscored"],
     [null, null, true, "unscored"],
     [null, null, false, ""],

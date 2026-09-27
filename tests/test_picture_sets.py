@@ -307,20 +307,20 @@ def test_reassigning_set_project_reconciles_member_picture_memberships():
         gc.collect()
 
 
-def _first_test_image():
+def _first_test_image(index=0):
     import glob
 
     candidates = glob.glob(
         os.path.join(os.path.dirname(__file__), "..", "pictures", "*.png")
     ) + glob.glob(os.path.join(os.path.dirname(__file__), "..", "pictures", "*.jpg"))
     assert candidates, "No test images found in pictures/ directory"
-    path = candidates[0]
+    path = candidates[index]
     mime = "image/png" if path.lower().endswith(".png") else "image/jpeg"
     return path, mime
 
 
-def _import_one_picture(client):
-    path, mime = _first_test_image()
+def _import_one_picture(client, index=0):
+    path, mime = _first_test_image(index)
     with open(path, "rb") as image_file:
         import_resp = upload_pictures_and_wait(
             client, [("file", (os.path.basename(path), image_file, mime))]
@@ -630,6 +630,48 @@ def test_members_endpoint_expands_stack_siblings():
         assert members_expanded_resp.status_code == 200
         expanded_ids = set(members_expanded_resp.json()["picture_ids"])
         assert pic_a in expanded_ids and pic_b in expanded_ids
+    finally:
+        server.close()
+        temp_dir.cleanup()
+        gc.collect()
+
+
+def test_member_routes_refuse_bad_ids_and_empty_replace():
+    """Issue #1580: a non-numeric member path is a 422, not a 500, and PUT
+    refuses to empty a set unless ``allow_empty`` is passed."""
+    temp_dir, client, server = setup_server_with_temp_db()
+    try:
+        first = _import_one_picture(client)
+        set_id = client.post("/picture_sets", json={"name": "Guarded"}).json()[
+            "picture_set"
+        ]["id"]
+        members_url = f"/api/v1/picture_sets/{set_id}/members"
+
+        assert client.post(f"{members_url}/remove").status_code == 422
+        assert client.delete(f"{members_url}/abc").status_code == 422
+
+        def member_ids():
+            resp = client.get(members_url)
+            assert resp.status_code == 200
+            return set(resp.json()["picture_ids"])
+
+        # A partial replace reports what it evicted.
+        second = _import_one_picture(client, index=1)
+        resp = client.put(members_url, json={"picture_ids": [first, second]})
+        assert resp.json() == {"status": "success", "members": 2, "removed": 0}
+        resp = client.put(members_url, json={"picture_ids": [first]})
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "success", "members": 1, "removed": 1}
+
+        for body in ({"picture_ids": []}, {}, {"picture_ids": [987654]}):
+            resp = client.put(members_url, json=body)
+            assert resp.status_code == 400, (body, resp.text)
+            assert member_ids() == {first}
+
+        resp = client.put(members_url, json={"picture_ids": [], "allow_empty": True})
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "success", "members": 0, "removed": 1}
+        assert member_ids() == set()
     finally:
         server.close()
         temp_dir.cleanup()

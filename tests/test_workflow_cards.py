@@ -8,18 +8,41 @@ asserted there cannot drift apart.
 import json
 import logging
 import sqlite3
+from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
 from pixlstash.hub import workflow_cards
+from pixlstash.services.workflow_hash import structural_document, topology_hash
 from pixlstash.hub.workflow_cards import record_identity
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflows import (
     forget_asset_names,
+    forget_model_ghosts,
     record_api_graph,
     record_ui_graph,
 )
-from pixlstash.hub.workflow_card_reads import card_index
+from pixlstash.hub.workflow_card_reads import (
+    Card,
+    card_index,
+    model_fix_labels,
+    model_fixes,
+    topologies_in_workflow,
+    variants_in_stack,
+    variants_in_workflow,
+    workflow_index,
+    workflow_of_topology,
+)
+from pixlstash.services import workflow_card_service
+from pixlstash.services.workflow_run_service import saved_recipe_body
+from pixlstash.hub.workflow_card_writes import (
+    record_loader_swaps,
+    set_attributes,
+    set_model_fix,
+)
+from pixlstash.services.workflow_card_service import _figures, _superseded_variants
+from pixlstash.services.workflow_library_service import CoverCandidate
 from pixlstash.services.workflow_identity import (
     CORE_VERSION,
     FACE_DETAILER,
@@ -27,11 +50,13 @@ from pixlstash.services.workflow_identity import (
     STRUCTURAL,
     UPSCALE,
     WORKFLOW_KEY_VERSION,
+    loader_swaps,
+    unswapped,
 )
 from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tasks.workflow_card_backfill_finder import WorkflowCardBackfillFinder
 from pixlstash.tasks.workflow_card_backfill_task import WorkflowCardBackfillTask
-from tests.test_workflow_identity import _graph
+from tests.test_workflow_identity import _graph, _node
 
 CARD_TABLES = (
     "workflow_variant",
@@ -46,6 +71,8 @@ CARD_TABLES = (
     "workflow_stack",
     "workflow_stack_member",
     "workflow_unstacked",
+    "workflow_model_fix",
+    "workflow_loader_swap",
 )
 
 SPEED_LORA = "test-lightning-8step.safetensors"
@@ -825,3 +852,824 @@ def test_a_card_whose_only_file_a_pull_wrote_is_not_hand_imported(hub):
         hub, "api copy.json", keys.topology_hash, keys.structural_hash
     )
     assert hand()[api_key] is True
+
+
+def _base_slot_label(hub, topology_hash, widget="ckpt_name"):
+    slots = json.loads(
+        hub.fetchone(
+            "SELECT slots FROM workflow_topology_core WHERE topology_hash = ?",
+            (topology_hash,),
+        )["slots"]
+    )
+    return next(slot["label"] for slot in slots if slot["widget"] == widget)
+
+
+def test_a_replaced_model_keeps_the_card_and_its_pictures(hub):
+    """A missing checkpoint replaced: runs with the new one land on the old card.
+
+    The pictures already made with the replacement join it when the fix is set,
+    one filed afterwards lands there on its own, and undoing the fix sends both
+    back to a card of their own - the original's pictures never move.
+    """
+    old = record_api_graph(hub, _graph(ckpt="test-model-fp8.safetensors"))
+    early = record_api_graph(hub, _graph(ckpt="test-model-bf16.safetensors"))
+    card = card_of(hub, old.structural_hash)
+    apart = card_of(hub, early.structural_hash)
+    assert apart != card
+    label = _base_slot_label(hub, old.topology_hash)
+
+    moved = set_model_fix(
+        hub,
+        old.topology_hash,
+        [label],
+        "sdxl/test-model-FP8.safetensors",
+        "test-model-bf16.safetensors",
+        {},
+    )
+
+    assert card_of(hub, old.structural_hash) == card
+    assert card_of(hub, early.structural_hash) == card
+    assert moved == {apart: [card]}
+    assert model_fixes(hub, old.topology_hash) == [
+        (
+            label,
+            "sdxl/test-model-FP8.safetensors",
+            "test-model-bf16.safetensors",
+            "checkpoint",
+        )
+    ]
+    later = record_api_graph(
+        hub, _graph(ckpt="test-model-bf16.safetensors", preview=False, extra=None)
+    )
+    assert later.structural_hash == early.structural_hash
+    # A second run of the replacement with a different graph value spelling
+    # still files on the card: the key reads the file, not its folder.
+    folder = record_api_graph(hub, _graph(ckpt="sdxl/test-model-bf16.safetensors"))
+    assert card_of(hub, folder.structural_hash) == card
+
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        [label],
+        "sdxl/test-model-FP8.safetensors",
+        None,
+        {},
+    )
+
+    assert card_of(hub, old.structural_hash) == card
+    assert card_of(hub, early.structural_hash) == apart
+    assert model_fixes(hub, old.topology_hash) == []
+
+
+def test_a_fix_targets_checkpoint_slots_across_the_whole_topology(hub):
+    """Every card of the graph, and never a VAE slot naming the same file.
+
+    Only the sibling card loads the missing file, so its slot is found from
+    the topology rather than from the card being fixed. It also has a VAE
+    slot holding a file of that name, which is no place for a checkpoint.
+    """
+    missing = "test-model-fp8.safetensors"
+
+    def with_vae(ckpt, vae):
+        return _graph(
+            ckpt=ckpt,
+            extra={
+                "8": _node("VAELoader", vae_name=vae),
+                "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+            },
+        )
+
+    mine = record_api_graph(
+        hub, with_vae("test-other.safetensors", "test-vae-a.safetensors")
+    )
+    sibling = record_api_graph(hub, with_vae(missing, missing))
+    assert card_of(hub, mine.structural_hash) != card_of(hub, sibling.structural_hash)
+
+    assert model_fix_labels(hub, mine.topology_hash, missing, "checkpoint") == [
+        _base_slot_label(hub, mine.topology_hash)
+    ]
+    assert model_fix_labels(hub, mine.topology_hash, missing, "vae") == [
+        _base_slot_label(hub, mine.topology_hash, "vae_name")
+    ]
+
+
+def test_a_vae_naming_the_replaced_file_does_not_flag_its_pictures(hub):
+    """A fix is a checkpoint's: a VAE of that name is still what loads there."""
+    replaced = "test-model-fp8.safetensors"
+    fixed = record_api_graph(
+        hub,
+        _graph(
+            ckpt=replaced,
+            extra={
+                "8": _node("VAELoader", vae_name="test-vae-a.safetensors"),
+                "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+            },
+        ),
+    )
+    vae_only = record_api_graph(
+        hub,
+        _graph(
+            ckpt="test-other.safetensors",
+            extra={
+                "8": _node("VAELoader", vae_name=replaced),
+                "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+            },
+        ),
+    )
+    set_model_fix(
+        hub,
+        fixed.topology_hash,
+        model_fix_labels(hub, fixed.topology_hash, replaced, "checkpoint"),
+        replaced,
+        "test-model-bf16.safetensors",
+        {},
+    )
+    cards = [
+        Card(
+            workflow_key=card_of(hub, keys.structural_hash),
+            topology_hash=keys.topology_hash,
+            variants=[keys.structural_hash],
+        )
+        for keys in (fixed, vae_only)
+    ]
+
+    assert _superseded_variants(hub, cards) == {fixed.structural_hash}
+
+
+def _with_vae(ckpt, vae):
+    return _graph(
+        ckpt=ckpt,
+        extra={
+            "8": _node("VAELoader", vae_name=vae),
+            "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+        },
+    )
+
+
+def test_a_replaced_vae_keeps_the_card_and_leaves_a_checkpoint_of_that_name(hub):
+    """#1596: a missing VAE fixed as #1587 fixes a checkpoint, in its own slot.
+
+    The sibling card loads the missing file as its CHECKPOINT: a VAE fix must
+    neither name that slot nor flag that card's pictures.
+    """
+    missing = "test-vae-fp8.safetensors"
+    old = record_api_graph(hub, _with_vae("test-base.safetensors", missing))
+    new = record_api_graph(
+        hub, _with_vae("test-base.safetensors", "test-vae-bf16.safetensors")
+    )
+    as_checkpoint = record_api_graph(hub, _with_vae(missing, "test-vae-a.safetensors"))
+    card = card_of(hub, old.structural_hash)
+    other = card_of(hub, as_checkpoint.structural_hash)
+    assert card_of(hub, new.structural_hash) != card
+    vae_label = _base_slot_label(hub, old.topology_hash, "vae_name")
+
+    labels = model_fix_labels(hub, old.topology_hash, missing, "vae")
+    assert labels == [vae_label]
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        labels,
+        missing,
+        "test-vae-bf16.safetensors",
+        {},
+        kind="vae",
+    )
+
+    assert card_of(hub, new.structural_hash) == card
+    assert card_of(hub, as_checkpoint.structural_hash) == other
+    assert model_fixes(hub, old.topology_hash) == [
+        (vae_label, missing, "test-vae-bf16.safetensors", "vae")
+    ]
+    cards = [
+        Card(
+            workflow_key=card_of(hub, keys.structural_hash),
+            topology_hash=keys.topology_hash,
+            variants=[keys.structural_hash],
+        )
+        for keys in (old, new, as_checkpoint)
+    ]
+    assert _superseded_variants(hub, cards) == {old.structural_hash}
+
+
+def test_a_swapped_in_pixlstash_loader_keeps_the_card(hub):
+    """#1605: a fix run through a PixlStash loader files on the original card.
+
+    The swapped node changes the topology, and with it every slot label: the
+    speed LoRA's structural slot included, which is in the key. The recorded
+    swap reads the graph back as the original, so the key comes out the same;
+    undoing the fix sends it to the replacement's card, as a renamed file's
+    pictures go, and a PixlStash loader holding any other file stays apart.
+    """
+    missing, now = "test-vae-fp8.safetensors", "test-vae-bf16.safetensors"
+    digest = "ab" * 32
+
+    def with_vae(vae_node):
+        return _graph(
+            loras=(SPEED_LORA,),
+            extra={
+                "8": vae_node,
+                "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+            },
+        )
+
+    original = with_vae(_node("VAELoader", vae_name=missing))
+    old = record_api_graph(hub, original)
+    plain = record_api_graph(hub, with_vae(_node("VAELoader", vae_name=now)))
+    card = card_of(hub, old.structural_hash)
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        model_fix_labels(hub, old.topology_hash, missing, "vae"),
+        missing,
+        now,
+        {},
+        kind="vae",
+    )
+    assert card_of(hub, plain.structural_hash) == card
+
+    swapped = with_vae(_node("PixlStashVAELoader", vae_sha256=digest))
+    swapped_topology, swaps = loader_swaps(
+        original, swapped, {"8": {"vae_sha256": ("vae_name", now)}}
+    )
+    assert swapped_topology != old.topology_hash
+    record_loader_swaps(hub, swapped_topology, swaps)
+    ran = record_api_graph(hub, swapped)
+    # Carded under the original topology, whose cache it then reads, so the
+    # backfill counts it done. Asked before anything else of the swapped
+    # topology is filed, whose cache would hide a lookup there.
+    assert ran.structural_hash not in workflow_cards.unidentified_variants(hub, 100)
+    by_hand = record_api_graph(
+        hub, with_vae(_node("PixlStashVAELoader", vae_sha256="cd" * 32))
+    )
+
+    assert card_of(hub, ran.structural_hash) == card
+    assert card_of(hub, by_hand.structural_hash) != card
+    # Carded under the topology it was swapped from, which is what a re-key of
+    # that topology selects its variants by.
+    assert (
+        hub.fetchone(
+            "SELECT topology_hash FROM workflow_variant WHERE structural_hash = ?",
+            (ran.structural_hash,),
+        )["topology_hash"]
+        == old.topology_hash
+    )
+
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        model_fix_labels(hub, old.topology_hash, missing, "vae"),
+        missing,
+        None,
+        {},
+        kind="vae",
+    )
+    assert card_of(hub, old.structural_hash) == card
+    assert card_of(hub, ran.structural_hash) == card_of(hub, plain.structural_hash)
+    assert card_of(hub, ran.structural_hash) != card
+
+
+def test_an_unswap_matches_exactly_the_files_the_swap_recorded():
+    """#1605: a second encoder, or a second original, keys the graph as itself."""
+    x, z = "11" * 32, "22" * 32
+
+    def with_clip(node):
+        return _graph(extra={"8": node, "9": _node("CLIPTextEncode", clip=["8", 0])})
+
+    original = with_clip(
+        _node("CLIPLoader", clip_name="test-t5-fp8.safetensors", type="flux")
+    )
+    one = with_clip(_node("PixlStashCLIPLoader", clip_sha256=x, type="flux"))
+    topology, swaps = loader_swaps(
+        original, one, {"8": {"clip_sha256": ("clip_name", "test-t5.safetensors")}}
+    )
+    swapped_from, restored = unswapped(structural_document(one), swaps)
+    assert swapped_from == topology_hash(original)
+    assert restored["8"]["class_type"] == "CLIPLoader"
+
+    two = with_clip(
+        _node("PixlStashCLIPLoader", clip_sha256=x, clip_sha256_2=z, type="flux")
+    )
+    assert unswapped(structural_document(two), swaps)[0] is None
+    # The same swap recorded from another loader class: which one it was is a
+    # guess.
+    other = replace(swaps[0], topology_hash="0" * 64, class_type="CLIPLoaderGGUF")
+    assert unswapped(structural_document(one), [*swaps, other])[0] is None
+
+
+def test_an_unswap_puts_back_all_of_a_runs_swapped_loaders_or_none():
+    """Two loaders swapped in one run: a graph matching only one keys as itself."""
+    x, y = "11" * 32, "22" * 32
+
+    def graph(vae, clip):
+        return _graph(
+            extra={
+                "7": clip,
+                "9": _node("CLIPTextEncode", clip=["7", 0]),
+                "8": vae,
+                "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+            }
+        )
+
+    original = graph(
+        _node("VAELoader", vae_name="test-vae-fp8.safetensors"),
+        _node("CLIPLoader", clip_name="test-t5-fp8.safetensors", type="flux"),
+    )
+    both = graph(
+        _node("PixlStashVAELoader", vae_sha256=x),
+        _node("PixlStashCLIPLoader", clip_sha256=y, type="flux"),
+    )
+    _topology, swaps = loader_swaps(
+        original,
+        both,
+        {
+            "8": {"vae_sha256": ("vae_name", "test-vae.safetensors")},
+            "7": {"clip_sha256": ("clip_name", "test-t5.safetensors")},
+        },
+    )
+    assert unswapped(structural_document(both), swaps)[0] == topology_hash(original)
+    one = graph(
+        _node("PixlStashVAELoader", vae_sha256=x),
+        _node("PixlStashCLIPLoader", clip_sha256="33" * 32, type="flux"),
+    )
+    assert unswapped(structural_document(one), swaps) == (
+        None,
+        structural_document(one),
+    )
+
+
+def test_a_text_encoder_fix_names_encoder_slots_and_never_a_vision_one(hub):
+    """``clip_name`` on a CLIP vision loader is an image encoder, not a text one."""
+    missing = "test-t5-fp8.safetensors"
+    keys = record_api_graph(
+        hub,
+        _graph(
+            extra={
+                "8": _node(
+                    "DualCLIPLoader",
+                    clip_name1="test-clip-l.safetensors",
+                    clip_name2=missing,
+                ),
+                "9": _node("CLIPVisionLoader", clip_name=missing),
+            }
+        ),
+    )
+    label = {
+        (slot["class_type"], slot["widget"]): slot["label"]
+        for slot in json.loads(
+            hub.fetchone(
+                "SELECT slots FROM workflow_topology_core WHERE topology_hash = ?",
+                (keys.topology_hash,),
+            )["slots"]
+        )
+    }
+
+    assert model_fix_labels(hub, keys.topology_hash, missing, "text_encoder") == [
+        label[("DualCLIPLoader", "clip_name2")]
+    ]
+    assert model_fix_labels(hub, keys.topology_hash, missing, "checkpoint") == []
+
+
+def test_a_vision_encoder_of_a_replaced_text_encoders_name_is_not_flagged(hub):
+    """The asset rows say `clip_name`, not which loader: the document decides."""
+    missing = "test-t5-fp8.safetensors"
+
+    def encoders(text, vision):
+        return _graph(
+            extra={
+                "8": _node(
+                    "DualCLIPLoader",
+                    clip_name1="test-clip-l.safetensors",
+                    clip_name2=text,
+                ),
+                "9": _node("CLIPVisionLoader", clip_name=vision),
+            }
+        )
+
+    as_text = record_api_graph(hub, encoders(missing, "test-vision.safetensors"))
+    as_vision = record_api_graph(hub, encoders("test-t5-bf16.safetensors", missing))
+    assert as_text.topology_hash == as_vision.topology_hash
+    set_model_fix(
+        hub,
+        as_text.topology_hash,
+        model_fix_labels(hub, as_text.topology_hash, missing, "text_encoder"),
+        missing,
+        "test-t5-bf16.safetensors",
+        {},
+        kind="text_encoder",
+    )
+    cards = [
+        Card(
+            workflow_key=card_of(hub, keys.structural_hash),
+            topology_hash=keys.topology_hash,
+            variants=[keys.structural_hash],
+        )
+        for keys in (as_text, as_vision)
+    ]
+
+    assert _superseded_variants(hub, cards) == {as_text.structural_hash}
+
+
+def test_a_hub_made_before_the_slot_kind_reads_its_fixes_as_checkpoints(tmp_path):
+    """A development hub that ran #1587: its fixes were all checkpoints."""
+    path = str(tmp_path / "older.db")
+    database = HubDatabase(path)
+    with database.transaction() as conn:
+        conn.execute("ALTER TABLE workflow_model_fix DROP COLUMN slot_kind")
+        conn.execute(
+            "INSERT INTO workflow_model_fix (topology_hash, slot_label, was_norm, "
+            "now_norm, was_name, now_name) VALUES ('t', 'l', 'a', 'b', 'a', 'b')"
+        )
+    database.close()
+
+    reopened = HubDatabase(path)
+    try:
+        assert model_fixes(reopened, "t") == [("l", "a", "b", "checkpoint")]
+    finally:
+        reopened.close()
+
+
+def test_the_fixed_card_keeps_its_own_name_whoever_has_more_pictures(hub):
+    """The owner is fixing THIS card, not folding it into the replacement's."""
+    old = record_api_graph(hub, _graph(ckpt="test-model-fp8.safetensors"))
+    new = record_api_graph(hub, _graph(ckpt="test-model-bf16.safetensors"))
+    card = card_of(hub, old.structural_hash)
+    other = card_of(hub, new.structural_hash)
+    set_attributes(hub, card, name="The one being fixed")
+    set_attributes(hub, other, name="The busier card")
+
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        [_base_slot_label(hub, old.topology_hash)],
+        "test-model-fp8.safetensors",
+        "test-model-bf16.safetensors",
+        {old.structural_hash: 1, new.structural_hash: 30},
+        keep_key=card,
+    )
+
+    assert card_of(hub, new.structural_hash) == card
+    assert (
+        hub.fetchone("SELECT name FROM workflow_attr WHERE workflow_key = ?", (card,))[
+            "name"
+        ]
+        == "The one being fixed"
+    )
+
+
+def test_forgetting_a_replaced_model_forgets_the_replacement(hub):
+    keys = record_api_graph(hub, _graph(ckpt="test-private-name.safetensors"))
+    set_model_fix(
+        hub,
+        keys.topology_hash,
+        [_base_slot_label(hub, keys.topology_hash)],
+        "test-private-name.safetensors",
+        "test-model-bf16.safetensors",
+        {},
+    )
+
+    forget_asset_names(hub, "test-private-name.safetensors")
+
+    assert "test-private-name" not in json.dumps(all_card_rows(hub))
+
+
+def test_forgetting_model_ghosts_forgets_their_replacements(hub):
+    """Settings › Privacy's purge: a replaced model is a ghost by definition."""
+    keys = record_api_graph(hub, _graph(ckpt="test-private-name.safetensors"))
+    set_model_fix(
+        hub,
+        keys.topology_hash,
+        [_base_slot_label(hub, keys.topology_hash)],
+        "test-private-name.safetensors",
+        "test-model-bf16.safetensors",
+        {},
+    )
+
+    assert forget_model_ghosts(hub)
+
+    assert "test-private-name" not in json.dumps(all_card_rows(hub))
+
+
+def test_covers_made_with_the_replaced_model_are_flagged_and_go_last(hub):
+    old = record_api_graph(hub, _graph(ckpt="test-model-fp8.safetensors"))
+    new = record_api_graph(hub, _graph(ckpt="test-model-bf16.safetensors"))
+    set_model_fix(
+        hub,
+        old.topology_hash,
+        [_base_slot_label(hub, old.topology_hash)],
+        "test-model-fp8.safetensors",
+        "test-model-bf16.safetensors",
+        {},
+    )
+    key = card_of(hub, old.structural_hash)
+    card = Card(
+        workflow_key=key,
+        topology_hash=old.topology_hash,
+        variants=[old.structural_hash, new.structural_hash],
+    )
+    superseded = _superseded_variants(hub, [card])
+    assert superseded == {old.structural_hash}
+
+    candidates = [
+        # The old model's picture is rated higher, and still goes last.
+        CoverCandidate(old.structural_hash, 1, 5, 0.9, None),
+        CoverCandidate(new.structural_hash, 2, 2, 0.1, None),
+    ]
+    (figure,) = _figures([card], {}, candidates, {}, superseded)
+
+    assert [(c.picture_id, c.superseded) for c in figure.covers] == [
+        (2, False),
+        (1, True),
+    ]
+
+
+# ── workflows and their default recipe (#1622) ─────────────────────────────
+
+
+def _file_run(hub, *, strength=None, steps=20, **graph_options):
+    """File one run of ``_graph(...)`` into a library; return its keys."""
+    graph = _graph(**graph_options)
+    graph["5"]["inputs"]["steps"] = steps
+    if strength is not None:
+        graph["L0"]["inputs"]["strength_model"] = strength
+    return record_api_graph(hub, graph, library_uuid="test-library")
+
+
+def _defaults(hub, monkeypatch, runs):
+    """``workflow_defaults`` with the vault's two reads answered by *runs*."""
+    monkeypatch.setattr(
+        workflow_card_service,
+        "read_instance_hashes",
+        lambda vault, variants, score, limit: sorted(
+            {keys.instance_hash for keys in runs if keys.structural_hash in variants}
+        ),
+    )
+    monkeypatch.setattr(
+        workflow_card_service,
+        "read_variant_picture_counts",
+        lambda vault: {keys.structural_hash: 1 for keys in runs},
+    )
+    workflow_id = workflow_of_topology(hub, runs[0].topology_hash)
+    vault = SimpleNamespace(library_uuid="test-library")
+    return workflow_id, workflow_card_service.workflow_defaults(hub, vault, workflow_id)
+
+
+def _four_runs(hub):
+    return [
+        _file_run(hub, ckpt="a.safetensors", loras=("x.safetensors",), strength=0.8),
+        _file_run(
+            hub,
+            ckpt="a.safetensors",
+            loras=("x.safetensors",),
+            strength=0.8,
+            face_detailer=True,
+        ),
+        _file_run(
+            hub,
+            ckpt="b.safetensors",
+            loras=("x.safetensors", "y.safetensors"),
+            strength=0.6,
+            steps=30,
+        ),
+        _file_run(hub, ckpt="a.safetensors"),
+    ]
+
+
+def test_one_workflow_spans_the_topologies_its_core_hash_groups(hub):
+    runs = _four_runs(hub)
+    ids = {workflow_of_topology(hub, keys.topology_hash) for keys in runs}
+    assert len(ids) == 1
+    (workflow_id,) = ids
+    assert workflow_id.startswith("auto:")
+    assert set(topologies_in_workflow(hub, workflow_id)) == {
+        keys.topology_hash for keys in runs
+    }
+    assert set(variants_in_workflow(hub, workflow_id)) == {
+        keys.structural_hash for keys in runs
+    }
+    (entry,) = workflow_index(hub)
+    # A variant is on one card (it keys workflow_variant), so none repeats.
+    assert sorted(entry.variants) == sorted({keys.structural_hash for keys in runs})
+    # The base graph has the most stage groups: the detailer run's.
+    assert entry.base_topology == runs[1].topology_hash
+    assert entry.base_card == card_of(hub, runs[1].structural_hash)
+
+
+def test_a_topology_placed_by_hand_leaves_its_automatic_workflow(hub):
+    runs = _four_runs(hub)
+    workflow_id = workflow_of_topology(hub, runs[0].topology_hash)
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group (workflow_id, kind) VALUES ('0' || ?, 'manual')",
+            ("1" * 31,),
+        )
+        conn.execute(
+            "INSERT INTO workflow_group_member (topology_hash, workflow_id) "
+            "VALUES (?, ?)",
+            (runs[3].topology_hash, "0" + "1" * 31),
+        )
+    assert workflow_of_topology(hub, runs[3].topology_hash) == "0" + "1" * 31
+    assert runs[3].topology_hash not in topologies_in_workflow(hub, workflow_id)
+    assert topologies_in_workflow(hub, "0" + "1" * 31) == [runs[3].topology_hash]
+
+
+def test_the_default_recipe_is_the_modal_checkpoint_and_the_majority_loras(
+    hub, monkeypatch
+):
+    runs = _four_runs(hub)
+    workflow_id, recipe = _defaults(hub, monkeypatch, runs)
+
+    assert recipe.workflow_id == workflow_id
+    # a.safetensors in three runs of four, b in one.
+    (checkpoint,) = [m for m in recipe.models if m.address.endswith("/ckpt_name")]
+    assert checkpoint.address.startswith("core:")
+    assert (checkpoint.filename, checkpoint.kind) == ("a.safetensors", "checkpoint")
+    # x in three runs of four (more than half) at its modal strength; y in one.
+    assert [(lora.filename, lora.strength) for lora in recipe.loras] == [
+        ("x.safetensors", 0.8)
+    ]
+    # Three runs at 20 steps, one at 30.
+    steps = {d.input_name: d.value for d in recipe.values}
+    assert steps["steps"] == 20
+    assert recipe.sampled == 4
+    # The base graph has a face detailer, and three runs of four went without.
+    assert recipe.stages == {"face_detailer": False}
+
+
+def test_exactly_half_is_not_a_majority(hub, monkeypatch):
+    runs = [
+        _file_run(hub, loras=("x.safetensors",)),
+        _file_run(hub),
+    ]
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    assert recipe.loras == []
+
+
+def test_the_owner_s_edits_replace_what_they_name(hub, monkeypatch):
+    runs = _four_runs(hub)
+    workflow_id = workflow_of_topology(hub, runs[0].topology_hash)
+    _, computed = _defaults(hub, monkeypatch, runs)
+    steps = next(d for d in computed.values if d.input_name == "steps")
+    checkpoint = next(m for m in computed.models if m.address.endswith("/ckpt_name"))
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, ?)",
+            [
+                (workflow_id, f"{steps.slot_label}/steps", "25"),
+                (workflow_id, checkpoint.address, "c.safetensors"),
+                (workflow_id, "lora:" + "d" * 64, "0.5"),
+            ],
+        )
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    edited = next(d for d in recipe.values if d.input_name == "steps")
+    assert (edited.value, edited.provenance) == (25, "edited")
+    model = next(m for m in recipe.models if m.address == checkpoint.address)
+    assert (model.filename, model.provenance) == ("c.safetensors", "edited")
+    assert ("d" * 64, 0.5) in [(lora.sha256, lora.strength) for lora in recipe.loras]
+
+
+def test_the_stack_filter_leaves_out_a_card_taken_out_of_its_group(hub):
+    first = record_api_graph(hub, _graph(ckpt="a.safetensors"))
+    second = record_api_graph(hub, _graph(ckpt="b.safetensors"))
+    core = hub.fetchone(
+        "SELECT core_hash FROM workflow_topology_core WHERE topology_hash = ?",
+        (first.topology_hash,),
+    )["core_hash"]
+    both = {first.structural_hash, second.structural_hash}
+    assert set(variants_in_stack(hub, f"auto:{core}")) == both
+    # The bare hash is the same stack, not a different reading of it.
+    assert set(variants_in_stack(hub, core)) == both
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_unstacked (workflow_key) VALUES (?)",
+            (card_of(hub, second.structural_hash),),
+        )
+    assert variants_in_stack(hub, core) == [first.structural_hash]
+    assert variants_in_stack(hub, "no-such-stack") == []
+
+
+def test_the_stage_vote_counts_only_topologies_whose_stages_are_known(hub, monkeypatch):
+    """An unread topology neither votes for a stage nor pads the electorate."""
+    runs = [
+        _file_run(hub, face_detailer=True),
+        _file_run(hub, steps=21),
+        _file_run(hub, steps=22),
+        *(_file_run(hub, preview=True, steps=s) for s in (23, 24, 25)),
+    ]
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE workflow_topology_core SET specials = NULL WHERE topology_hash = ?",
+            (runs[3].topology_hash,),
+        )
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    # Two of the three runs whose stages are known went without the detailer.
+    assert recipe.stages == {"face_detailer": False}
+
+
+def test_a_saved_recipe_with_malformed_models_inherits_the_default():
+    recipe = SimpleNamespace(
+        id=7,
+        workflow_key="k",
+        workflow_id=None,
+        prompt="",
+        negative=None,
+        loras="[]",
+        overrides="{}",
+        seed=None,
+        keep_seed=False,
+    )
+    valid = [{"address": "core:a/ckpt_name", "filename": "x.safetensors"}]
+    for stored, expected in (
+        (json.dumps(valid), valid),
+        ("[1, 2]", None),
+        ('["x"]', None),
+        ('[{"address": "core:a/ckpt_name"}]', None),
+        ('[{"address": 5, "filename": "x.safetensors"}]', None),
+        ('[{"address": "core:a/ckpt_name", "filename": 123}]', None),
+        (
+            '[{"address": "core:a/ckpt_name", "filename": "x", "sha256": "y"}]',
+            None,
+        ),
+        (None, None),
+    ):
+        body = saved_recipe_body(SimpleNamespace(**vars(recipe), models=stored))
+        assert body["models"] == expected, stored
+
+
+def test_a_file_only_card_does_not_blank_its_topology_s_stages(hub):
+    """A manual workflow's topology can carry a file-only card (#1466) too."""
+    detailed = record_api_graph(hub, _graph(face_detailer=True))
+    workflow_cards.record_file(hub, "test-detailer.json", detailed.topology_hash)
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO workflow_group (workflow_id, kind) VALUES (?, 'manual')",
+            ("a" * 32,),
+        )
+        conn.execute(
+            "INSERT INTO workflow_group_member (topology_hash, workflow_id) "
+            "VALUES (?, ?)",
+            (detailed.topology_hash, "a" * 32),
+        )
+    (entry,) = [w for w in workflow_index(hub) if w.workflow_id == "a" * 32]
+    assert len(entry.cards) == 2, entry.cards
+    assert entry.specials[detailed.topology_hash] == ("face_detailer",)
+
+
+def test_a_lora_split_with_no_majority_decides_nothing(hub, monkeypatch):
+    """50/50 between two LoRAs is no consensus, not "run without LoRAs"."""
+    split = [
+        _file_run(hub, loras=("x.safetensors",)),
+        _file_run(hub, loras=("y.safetensors",)),
+    ]
+    _, recipe = _defaults(hub, monkeypatch, split)
+    assert (recipe.loras, recipe.loras_decided) == ([], False)
+
+
+def test_most_runs_without_a_lora_decide_none(hub, monkeypatch):
+    runs = [
+        _file_run(hub, loras=("x.safetensors",)),
+        _file_run(hub, steps=21),
+        _file_run(hub, steps=22),
+    ]
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    assert (recipe.loras, recipe.loras_decided) == ([], True)
+
+
+def test_a_swapped_run_votes_for_its_original_loader_s_file(hub, monkeypatch):
+    """#1605 meets #1622: a run through a PixlStash loader is read unswapped."""
+    missing, now = "test-vae-fp8.safetensors", "test-vae-bf16.safetensors"
+
+    def with_vae(vae_node, steps=20):
+        graph = _graph(
+            extra={
+                "8": vae_node,
+                "6": _node("VAEDecode", samples=["5", 0], vae=["8", 0]),
+            },
+        )
+        graph["5"]["inputs"]["steps"] = steps
+        return graph
+
+    original = with_vae(_node("VAELoader", vae_name=missing))
+    old = record_api_graph(hub, original, library_uuid="test-library")
+    plain = record_api_graph(
+        hub, with_vae(_node("VAELoader", vae_name=now)), library_uuid="test-library"
+    )
+    swapped_topology, swaps = loader_swaps(
+        original,
+        with_vae(_node("PixlStashVAELoader", vae_sha256="ab" * 32)),
+        {"8": {"vae_sha256": ("vae_name", now)}},
+    )
+    record_loader_swaps(hub, swapped_topology, swaps)
+    ran = [
+        record_api_graph(
+            hub,
+            with_vae(_node("PixlStashVAELoader", vae_sha256="ab" * 32), steps),
+            library_uuid="test-library",
+        )
+        for steps in (21, 22)
+    ]
+    runs = [old, plain, *ran]
+    _, recipe = _defaults(hub, monkeypatch, runs)
+    (vae,) = [m for m in recipe.models if m.address.endswith("/vae_name")]
+    # Three runs loaded the bf16 file, two of them through the swapped loader.
+    assert vae.filename == now

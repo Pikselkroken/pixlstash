@@ -51,8 +51,11 @@ from pixlstash.services.model_features import (
 from pixlstash.services.stack_detector import repair_stacks
 from pixlstash.services.workflow_hash import (
     SHA256_FIELD_RE,
+    WorkflowGraphError,
+    assets_from_reduction,
     digests_with_prefix,
     normalized_filename,
+    reduce_api_graph,
 )
 from pixlstash.services.workflow_library_service import (
     cover_order,
@@ -67,7 +70,16 @@ from pixlstash.utils.adapter_header import (
     FILE_UNKNOWN,
     FILE_VAE,
 )
-from pixlstash.utils.known_base_models import SOURCE_USER, fold
+from pixlstash.utils.known_base_models import (
+    COMPANION_LAYOUTS,
+    SOURCE_FILENAME,
+    SOURCE_USER,
+    family_of,
+    fold,
+    modality_of,
+    rank,
+)
+from pixlstash.utils.sql_chunking import chunked
 
 logger = get_logger(__name__)
 
@@ -478,6 +490,41 @@ def fetch_picture_counts(hub, vault) -> dict[int, dict[str, int]]:
     }
 
 
+def attached_characters(vault, digests: list[str]) -> dict[str, list[tuple[int, str]]]:
+    """``{sha256: [(character id, name)]}`` for the adapters named, oldest first.
+
+    The workflow card's half of :func:`fetch_attachments`: only characters, and
+    with their names, for the card's recipe LoRAs (``workflow_card_service``).
+    """
+    if not digests:
+        return {}
+
+    def fetch(session: Session):
+        rows = []
+        for batch in chunked(digests):
+            rows.extend(
+                session.exec(
+                    select(
+                        AdapterAttachment.adapter_sha256, Character.id, Character.name
+                    )
+                    .join(Character, Character.id == AdapterAttachment.entity_id)
+                    .where(
+                        AdapterAttachment.entity_type == ENTITY_CHARACTER,
+                        AdapterAttachment.adapter_sha256.in_(batch),
+                    )
+                    .order_by(Character.id)
+                ).all()
+            )
+        return rows
+
+    attached: dict[str, list[tuple[int, str]]] = {}
+    for sha256, character_id, name in vault.db.run_task(
+        fetch, priority=DBPriority.IMMEDIATE
+    ):
+        attached.setdefault(sha256.lower(), []).append((character_id, name))
+    return attached
+
+
 def recipe_asset_index(
     hub,
 ) -> tuple[dict[str, set[int]], dict[str, int], dict[int, str], dict[int, str]]:
@@ -649,6 +696,21 @@ def models_for_digest(
     return {by_digest[digest] for digest in digests_with_prefix(value, sorted_digests)}
 
 
+def families_clash(base_model: Optional[str], other_base_model: Optional[str]) -> bool:
+    """Whether two models were made for different families or modalities.
+
+    Only where both fold to a known family (:func:`family_of`): an unknown
+    family is never a clash, because "we cannot tell" is not "they differ".
+    What the clone dialog flags a LoRA with against its new checkpoint, and
+    what a run flags a pinned model with (#1620 Q3). **A flag, never a block**:
+    a base model a family table does not know about is still the owner's call.
+    """
+    family, other = family_of(base_model), family_of(other_base_model)
+    if not family or not other:
+        return False
+    return family != other or modality_of(base_model) != modality_of(other_base_model)
+
+
 # What a generation graph loads BESIDE a model rather than as one: the files a
 # delete can leave with nothing to serve.
 SUPPORT_FILE_KINDS = (FILE_VAE, FILE_TEXT_ENCODER)
@@ -662,7 +724,7 @@ _NOT_CONSUMERS = (*SUPPORT_FILE_KINDS, FILE_ADAPTER, FILE_ENGINE)
 
 
 def resolve_recipe_models(
-    hub,
+    hub, index: Optional[tuple] = None
 ) -> tuple[dict[str, set[int]], dict[str, set[int]], set[str]]:
     """Which shelf models each recipe on this hub is proven to have run with.
 
@@ -687,8 +749,11 @@ def resolve_recipe_models(
     both read co-occurrence off the same table and must agree about what a
     recipe names - a second copy of this resolution is how the delete warning
     and the grid would come to disagree about the same pair of files.
+
+    *index* is a :func:`recipe_asset_index` the caller already built in this
+    request, so a route that needs both does not scan the tables twice.
     """
-    by_name, by_digest, _filenames, _names = recipe_asset_index(hub)
+    by_name, by_digest, _filenames, _names = index or recipe_asset_index(hub)
     sorted_digests = sorted(by_digest)
     digests_are_complete = not hub.fetchall(
         "SELECT 1 FROM model WHERE sha256 IS NULL AND file_kind <> ? LIMIT 1",
@@ -861,6 +926,334 @@ def fetch_companions(hub, ids: list[int]) -> dict:
     return result
 
 
+def record_comfyui_history(hub, history: dict) -> int:
+    """File which shelf models ran together in each finished ComfyUI run.
+
+    *history* is ``GET /history`` as ComfyUI answers it. A run counts only when
+    its status says it finished: a run that errored proves nothing about its
+    files working together. Each asset name resolves the way a recipe's does
+    (:func:`resolve_recipe_models`), but **only an unambiguous match is kept**,
+    because what is stored is the model id and a guess stored as an id stops
+    reading as a guess. A name the shelf does not hold is not stored at all, so
+    nothing here keeps a model name the shelf has forgotten.
+
+    Idempotent: a run read twice writes nothing new, and one re-read after the
+    shelf gained a file gains that file.
+
+    Returns:
+        How many finished runs named at least one shelf model.
+    """
+    by_name, by_digest, _filenames, _names = recipe_asset_index(hub)
+    sorted_digests = sorted(by_digest)
+    rows: list[tuple[str, int]] = []
+    runs = 0
+    for prompt_id, entry in history.items():
+        try:
+            if entry["status"]["status_str"] != "success":
+                continue
+            nodes = reduce_api_graph(entry["prompt"][2])
+        except (KeyError, IndexError, TypeError, WorkflowGraphError) as exc:
+            logger.info(
+                "Skipped ComfyUI run %s from the history: no finished graph (%s: %s)",
+                prompt_id,
+                type(exc).__name__,
+                exc,
+            )
+            continue
+        found: set[int] = set()
+        for widget, value in assets_from_reduction(nodes):
+            if SHA256_FIELD_RE.search(widget):
+                matched = models_for_digest(value, by_digest, sorted_digests)
+            else:
+                matched = by_name.get(value, set())
+            if len(matched) == 1:
+                found |= matched
+        if found:
+            runs += 1
+            rows.extend((str(prompt_id), model_id) for model_id in found)
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO comfyui_history_model (prompt_id, model_id) "
+            "VALUES (?, ?)",
+            rows,
+        )
+    return runs
+
+
+def known_base_model(row) -> Optional[str]:
+    """The base model a clone may reason about for one ``model`` row, or ``None``.
+
+    The identified known label (``base_model_canonical``) when it came from the
+    owner, the file's declared metadata or its filename, and otherwise the
+    stored ``base_model`` folded where it folds. A **fuzzy** match is left out:
+    the shelf tags those as guesses, and a guess would widen the companion
+    ladder or flag a LoRA on a claim nobody made.
+    """
+    canonical = row["base_model_canonical"]
+    if canonical and rank(row["base_model_source"]) >= rank(SOURCE_FILENAME):
+        return canonical
+    return fold(row["base_model"]) or row["base_model"]
+
+
+# The widening ladder `propose_companions` climbs, narrowest first. Each answer
+# carries the step that produced it, so a weaker inference reads as weaker. The
+# last step is not evidence at all, and says so.
+VIA_CHECKPOINT = "checkpoint"
+VIA_BASE_MODEL = "base_model"
+VIA_FAMILY = "family"
+VIA_DECLARED = "declared"
+# Not a ladder step: a hand-made workflow set (#1520) that names this checkpoint.
+# The owner's own word, so it is listed ahead of every step of the ladder,
+# the declared-layout fallback included.
+VIA_GROUPED = "grouped"
+
+
+def propose_companions(
+    hub, checkpoint_id: int, index: Optional[tuple] = None
+) -> dict[str, list[dict]]:
+    """The VAEs and text encoders recipes have run beside *checkpoint_id*.
+
+    :func:`fetch_companions` read forwards: the same co-occurrence evidence, asked
+    "what goes with this" rather than "what would deleting this orphan". A VAE
+    carries no ``base_model`` to compare, so the first three steps propose a
+    support file only because a recipe on this hub named it beside a
+    checkpoint. The fourth is the cold case, and is not evidence.
+
+    Per support kind, the first step of the ladder with any answer wins:
+
+    1. ``checkpoint`` - recipes that name this checkpoint;
+    2. ``base_model`` - recipes naming any base model with the same base model
+       label (:func:`known_base_model`: the identified label unless it is a
+       fuzzy guess), when this checkpoint has one;
+    3. ``family`` - recipes naming any base model of the same architecture
+       family (:func:`family_of`), when the label folds to one, and never
+       across modalities (:func:`modality_of`): a video base does not answer
+       for an image checkpoint, nor the reverse;
+    4. ``declared`` - no recipe at all: the shelf's support files whose stored
+       tensor layout (``model.family``) the family declares in
+       :data:`~pixlstash.utils.known_base_models.COMPANION_LAYOUTS`. A layout
+       that fits says the file loads, not that it suits, so these carry
+       ``recipes`` 0 and the caller must present them as untested.
+
+    **ComfyUI's own runs count too** (#1518): the ``comfyui_history_model``
+    rows a workflow pull read off ``GET /history``, so a checkpoint used in
+    ComfyUI but in nothing PixlStash filed still has evidence. Nothing here asks
+    ComfyUI; the rows are whatever the last pull left. The two are counted
+    apart, ``recipes`` and ``history_runs``, and recipe evidence ranks first.
+    A run is evidence at every step, so ``declared`` answers only when neither
+    kind does.
+
+    A checkpoint nothing in its family has run with, whose family declares no
+    layout for a kind or whose shelf holds no file of that layout, proposes
+    nothing for that kind, and the caller is expected to say so. A support file a
+    recipe reached only through an ambiguous name is not proposed from that
+    recipe: it may be another row's file. Nor is one with no filename, which a
+    clone has nothing to write for.
+
+    Args:
+        hub: The open hub database.
+        checkpoint_id: The ``model.id`` the clone will load instead.
+        index: A :func:`recipe_asset_index` already built in this request.
+
+    **Grouped by the owner comes first.** Ahead of the ladder, every
+    hand-made workflow set whose checkpoint member is this checkpoint proposes
+    its on-shelf VAE and text-encoder members (``via: "grouped"``, ``recipes:
+    0``, ``set_name`` the newest such set's name). ``prepick`` says whether the
+    dialog may select one for the owner: true when the matching sets between
+    them name exactly one on-shelf file of that kind, false when they name
+    several. A set with no checkpoint never matches, and a member off the shelf
+    is skipped. Ladder entries follow, minus any file already grouped, each
+    with ``prepick`` true and ``set_name`` null.
+
+    Returns:
+        ``{"vae": [...], "text_encoder": [...]}``, each entry ``{"id",
+        "filename", "display_name", "family", "via", "recipes",
+        "history_runs", "set_name", "prepick"}``: grouped entries first, then
+        most recipes first, then most runs. ``family`` is the file's own layout
+        (``clip_l``, ``t5_xxl``), which is how a caller tells two text encoders
+        apart. Both lists empty for an unknown id.
+    """
+    models = {
+        int(row["id"]): row
+        for row in hub.fetchall(
+            "SELECT id, file_kind, base_model, base_model_canonical, "
+            "base_model_source, filename, display_name, family FROM model"
+        )
+    }
+    proposals: dict[str, list[dict]] = {kind: [] for kind in SUPPORT_FILE_KINDS}
+    target = models.get(checkpoint_id)
+    if target is None:
+        return proposals
+    recipe_models, ambiguous, _unresolved = resolve_recipe_models(hub, index)
+
+    consumers = {
+        model_id: row
+        for model_id, row in models.items()
+        if row["file_kind"] not in _NOT_CONSUMERS
+    }
+    ladder: list[tuple[str, set[int]]] = [(VIA_CHECKPOINT, {checkpoint_id})]
+    label = known_base_model(target)
+    if label:
+        ladder.append(
+            (
+                VIA_BASE_MODEL,
+                {
+                    model_id
+                    for model_id, row in consumers.items()
+                    if known_base_model(row) == label
+                },
+            )
+        )
+    family = family_of(label)
+    if family:
+        modality = modality_of(label)
+        ladder.append(
+            (
+                VIA_FAMILY,
+                {
+                    model_id
+                    for model_id, row in consumers.items()
+                    if family_of(known_base_model(row)) == family
+                    and modality_of(known_base_model(row)) == modality
+                },
+            )
+        )
+
+    # ComfyUI's own runs (#1518), already resolved to unambiguous model ids by
+    # `record_comfyui_history`, so nothing is subtracted from them.
+    runs = _history_runs(hub)
+
+    def tally(witnesses, kind, anchors, skip) -> dict[int, int]:
+        counts: dict[int, int] = {}
+        for key, members in witnesses.items():
+            if not members & anchors:
+                continue
+            for member in members - skip.get(key, set()):
+                row = models.get(member)
+                if row is not None and row["file_kind"] == kind and row["filename"]:
+                    counts[member] = counts.get(member, 0) + 1
+        return counts
+
+    # Newest set first, so a file two sets group reads under the newest name.
+    grouped: dict[str, dict[int, Optional[str]]] = {
+        kind: {} for kind in SUPPORT_FILE_KINDS
+    }
+    for row in hub.fetchall(
+        "SELECT s.name, member_model.id AS model_id "
+        "FROM model_workflow_set AS s "
+        "JOIN model_workflow_set_member AS ckpt "
+        "  ON ckpt.set_id = s.id AND ckpt.slot = 'checkpoint' "
+        "JOIN model AS ckpt_model ON ckpt_model.sha256 = ckpt.sha256 "
+        "JOIN model_workflow_set_member AS member "
+        "  ON member.set_id = s.id AND member.slot IN ('vae', 'text_encoder') "
+        "JOIN model AS member_model ON member_model.sha256 = member.sha256 "
+        "WHERE ckpt_model.id = ? "
+        "ORDER BY s.created_at DESC, s.id DESC",
+        (checkpoint_id,),
+    ):
+        row_model = models.get(int(row["model_id"]))
+        # Filed by what the file IS, so a VAE never lands in the encoder list
+        # whichever slot it was put in; no filename means nothing to write.
+        if row_model is None or not row_model["filename"]:
+            continue
+        if row_model["file_kind"] in grouped:
+            grouped[row_model["file_kind"]].setdefault(
+                int(row["model_id"]), row["name"]
+            )
+
+    def layout_count(kind: str, model_id: int) -> int:
+        # Per LAYOUT, not per kind: a Flux set's clip_l and t5_xxl are one file
+        # each for two different rows, and counting them together would refuse
+        # to pre-pick either and hand both rows to weaker, ungrouped evidence.
+        family = models[model_id]["family"]
+        return sum(1 for other in grouped[kind] if models[other]["family"] == family)
+
+    for kind in SUPPORT_FILE_KINDS:
+        proposals[kind] = [
+            {
+                "id": model_id,
+                "filename": models[model_id]["filename"],
+                "display_name": models[model_id]["display_name"],
+                "family": models[model_id]["family"],
+                "via": VIA_GROUPED,
+                "recipes": 0,
+                "history_runs": 0,
+                "set_name": set_name,
+                "prepick": layout_count(kind, model_id) == 1,
+            }
+            for model_id, set_name in sorted(
+                grouped[kind].items(),
+                key=lambda item: (models[item[0]]["filename"] or "").lower(),
+            )
+        ]
+        # Whether an EVIDENCE step answered, on recipes or ComfyUI runs (#1518).
+        # Not `proposals[kind]`: the grouped
+        # entries are already in there, and reading them as evidence would
+        # skip the declared fallback for a row the owner's sets do not cover
+        # (a Flux set grouping a clip_l leaves its t5 row with nothing).
+        ladder_found = False
+        for via, anchors in ladder:
+            by_recipe = tally(recipe_models, kind, anchors, ambiguous)
+            by_run = tally(runs, kind, anchors, {})
+            if not by_recipe and not by_run:
+                continue
+            step = [
+                {
+                    "id": model_id,
+                    "filename": models[model_id]["filename"],
+                    "display_name": models[model_id]["display_name"],
+                    "family": models[model_id]["family"],
+                    "via": via,
+                    "recipes": by_recipe.get(model_id, 0),
+                    "history_runs": by_run.get(model_id, 0),
+                    "set_name": None,
+                    "prepick": True,
+                }
+                for model_id in sorted(
+                    by_recipe.keys() | by_run.keys(),
+                    key=lambda m: (
+                        -by_recipe.get(m, 0),
+                        -by_run.get(m, 0),
+                        (models[m]["filename"] or "").lower(),
+                    ),
+                )
+                # Already listed above as grouped. Dropped here rather than
+                # before the step is chosen, so grouping a file never widens
+                # the ladder past the step that found it.
+                if model_id not in grouped[kind]
+            ]
+            proposals[kind] += step
+            # Found only if the step added something. Evidence that merely
+            # repeats files the owner already grouped tells the other rows of
+            # this kind nothing new, so the declared fallback still answers
+            # for them.
+            ladder_found = bool(step)
+            break
+        layouts = COMPANION_LAYOUTS.get(family, {}).get(kind)
+        if ladder_found or not layouts:
+            continue
+        proposals[kind] += [
+            {
+                "id": model_id,
+                "filename": row["filename"],
+                "display_name": row["display_name"],
+                "family": row["family"],
+                "via": VIA_DECLARED,
+                "recipes": 0,
+                "history_runs": 0,
+            }
+            for model_id, row in sorted(
+                models.items(), key=lambda item: (item[1]["filename"] or "").lower()
+            )
+            if row["file_kind"] == kind
+            and row["filename"]
+            and row["family"] in layouts
+            # Listed above as grouped already, under the owner's own word.
+            and model_id not in grouped[kind]
+        ]
+    return proposals
+
+
 # How many of a combination's pictures the grid puts on a card's cover.
 #
 # Three, the shipped workflow card's cover depth (`workflow_card_service`'s
@@ -869,8 +1262,21 @@ def fetch_companions(hub, ids: list[int]) -> dict:
 SET_COVER_DEPTH = 3
 
 
+def _history_runs(hub) -> dict[str, set[int]]:
+    """Return each stored ComfyUI run's model ids, keyed on its ``prompt_id``.
+
+    The one reader of ``comfyui_history_model`` (#1518). The rows were resolved
+    to unambiguous model ids when the workflow pull stored them, so a caller
+    has no doubt to add; ComfyUI itself is never contacted.
+    """
+    runs: dict[str, set[int]] = {}
+    for row in hub.fetchall("SELECT prompt_id, model_id FROM comfyui_history_model"):
+        runs.setdefault(row["prompt_id"], set()).add(int(row["model_id"]))
+    return runs
+
+
 def fetch_workflow_sets(hub, vault) -> dict:
-    """Every set of shelf models a picture in this library proves ran together.
+    """Every set of shelf models a picture here or a ComfyUI run proves ran together.
 
     One entry per distinct *combination* - the model ids one recipe resolves to.
     Several recipes that name the same files are one combination, with their
@@ -884,21 +1290,35 @@ def fetch_workflow_sets(hub, vault) -> dict:
     dropped, so the caller can say it cannot tell rather than implying nobody
     has tried them.
 
-    Scoped to the pictures of the ACTIVE library, unlike
+    Pictures are scoped to the ACTIVE library, unlike
     :func:`fetch_companions`, which counts every recipe the hub holds. The two
     differ because they answer different questions: a delete warning must keep
     a file some other library needs, and this grid is a picture of what the
     library in front of the reader has actually made. A recipe the hub holds
-    with no kept picture here is therefore not a set.
+    with no kept picture here is therefore not a set, unless ComfyUI ran it.
+
+    **ComfyUI's own runs are witnesses too** (#1565): every finished run the
+    workflow pull stored in ``comfyui_history_model`` counts one
+    ``history_runs`` against the combination its models resolve to exactly,
+    kept apart from ``recipes`` and ``picture_count``. A combination survives
+    the cut with a kept picture here OR a stored run, so one that has only ever
+    run in ComfyUI is a set with no cover. Runs are hub-wide, like
+    ``recipes``: ComfyUI's history is a fact about the machine, not about a
+    library. They were resolved unambiguously when stored, so they never mark
+    a member ``ambiguous``.
 
     Returns:
         ``{"combinations": [...], "no_set": [model_id, ...]}``. Each
         combination carries ``key`` (its sorted member ids, joined), ``models``
         (``id``, ``name``, ``filename``, ``kind``, ``file_size``,
-        ``ambiguous``), ``recipes``, ``picture_count`` and ``covers`` (up to
-        :data:`SET_COVER_DEPTH` cover candidates, best first).
+        ``ambiguous``), ``recipes``, ``history_runs``, ``picture_count`` and
+        ``covers`` (up to :data:`SET_COVER_DEPTH` cover candidates, best
+        first). ``hub_combinations`` is every combination some recipe names,
+        before the "a picture here" cut, so it holds every library's recipes
+        and no run-only combination; only the merge offer reads it.
     """
     recipe_models, ambiguous, unresolved = resolve_recipe_models(hub)
+    runs = _history_runs(hub)
     pictures = vault.db.run_immediate_read_task(
         lambda session: (
             recipe_picture_counts(session),
@@ -923,16 +1343,23 @@ def fetch_workflow_sets(hub, vault) -> dict:
     # recipe that could only match a basename is enough to make the membership
     # a guess, and a second, cleaner witness does not unmake the first.
     grouped: dict[frozenset[int], dict] = {}
+
+    def empty() -> dict:
+        return {
+            "recipes": 0,
+            "history_runs": 0,
+            "picture_count": 0,
+            "covers": [],
+            "unsure": set(),
+        }
+
     for recipe, members in recipe_models.items():
         # Models the shelf no longer holds - a Forget between the recipe read
         # and now - are dropped rather than drawn as an id with no name.
         present = frozenset(member for member in members if member in models)
         if not present:
             continue
-        entry = grouped.setdefault(
-            present,
-            {"recipes": 0, "picture_count": 0, "covers": [], "unsure": set()},
-        )
+        entry = grouped.setdefault(present, empty())
         entry["recipes"] += 1
         entry["picture_count"] += counts.get(recipe, 0)
         entry["covers"].extend(covers_by_recipe.get(recipe, ()))
@@ -940,21 +1367,27 @@ def fetch_workflow_sets(hub, vault) -> dict:
             entry["unsure"].update(present)
         entry["unsure"].update(ambiguous.get(recipe, set()) & present)
 
+    # One witness per exact set, like a recipe: a run counts against the
+    # combination its STORED models are, never against every subset of it.
+    # Those are the names the pull could pin to one shelf row; a name it could
+    # not (#1518) is not stored, so a run proves at least this set ran. `unsure`
+    # is left alone - a run cannot add doubt, and cannot remove a recipe's.
+    for members in runs.values():
+        present = frozenset(member for member in members if member in models)
+        if not present:
+            continue
+        grouped.setdefault(present, empty())["history_runs"] += 1
+
     def name(model_id: int) -> str:
         row = models[model_id]
         return row["display_name"] or row["filename"] or f"model {model_id}"
 
-    combinations = []
+    every = []
     for present, entry in grouped.items():
-        # A combination with no kept picture in this library is not a set here:
-        # the grid draws what the library has made, and a recipe that made
-        # nothing in it has no cover, no count and nothing to show.
-        if not entry["picture_count"]:
-            continue
         ordered = sorted(
             present, key=lambda m: (_set_kind_rank(models[m]), name(m).lower())
         )
-        combinations.append(
+        every.append(
             {
                 "key": ",".join(str(m) for m in sorted(present)),
                 "models": [
@@ -969,6 +1402,7 @@ def fetch_workflow_sets(hub, vault) -> dict:
                     for model_id in ordered
                 ],
                 "recipes": entry["recipes"],
+                "history_runs": entry["history_runs"],
                 "picture_count": entry["picture_count"],
                 "covers": sorted(entry["covers"], key=cover_order, reverse=True)[
                     :SET_COVER_DEPTH
@@ -977,7 +1411,18 @@ def fetch_workflow_sets(hub, vault) -> dict:
         )
     # Biggest evidence first, so the grid opens on the combinations the library
     # actually leans on; the key breaks ties so a refetch draws the same order.
-    combinations.sort(key=lambda c: (-c["picture_count"], -c["recipes"], c["key"]))
+    every.sort(
+        key=lambda c: (
+            -c["picture_count"],
+            -c["recipes"],
+            -c["history_runs"],
+            c["key"],
+        )
+    )
+    # A combination with no kept picture in this library and no stored
+    # ComfyUI run is not a set here: a recipe that made nothing in it has no
+    # cover, no count and nothing to show. A run is its own proof, cover or no.
+    combinations = [c for c in every if c["picture_count"] or c["history_runs"]]
 
     # Read off the combinations that SURVIVED, not off `grouped`: a model whose
     # only recipes made no kept picture here would otherwise be in no
@@ -988,6 +1433,11 @@ def fetch_workflow_sets(hub, vault) -> dict:
     }
     return {
         "combinations": combinations,
+        # Every library's recipes, pictures here or not: the hand-made sets'
+        # merge offer is a hub fact, like the sets (#1523). Not served.
+        # Recipe combinations only: the offer is worded in pictures and
+        # recipes, and a run-only one would read "0 recipes need N more".
+        "hub_combinations": [c for c in every if c["recipes"]],
         # Engines are left out, and that is the honesty rule rather than an
         # exception to it. `no_set` means "nothing here has been made with
         # these", which is a statement a reader can act on for a checkpoint and

@@ -9,7 +9,8 @@ export const useFilterStore = defineStore("filter", () => {
   const _maxScore = ref(null);
   // Pictures nobody has rated (`unscored=1`, i.e. score IS NULL OR 0). Alone it
   // is the unrated only; beside a score range it adds the unrated to that range
-  // (the filter menu's "Include unscored"), which the backend ORs.
+  // (the filter menu's Score sets it for a range from 0 stars), which the
+  // backend ORs.
   const _unscoredOnly = ref(false);
   const minScoreFilter = computed({
     get: () => _minScore.value,
@@ -37,7 +38,10 @@ export const useFilterStore = defineStore("filter", () => {
   const tagConfidenceBelowFilter = ref([]);
   const faceBboxFilter = ref(null);
   const sharedOnlyFilter = ref(false);
-  const unassignedOnlyFilter = ref(false);
+  // "Problems" in All Pictures: no named person, and in no set. Independent;
+  // both on is the old combined "unassigned" view.
+  const noCharacterFilter = ref(false);
+  const noSetFilter = ref(false);
   const comfyuiModelFilter = ref([]);
   const comfyuiLoraFilter = ref([]);
   const comfyuiConfigured = ref(false);
@@ -62,7 +66,8 @@ export const useFilterStore = defineStore("filter", () => {
   // panel no longer offers it: the duplicate queue owns that work.
   const stackStateFilter = ref("all");
   // One workflow card's pictures (v1.12 F7's *Show all N pictures*):
-  // `{key, name}`, or null. The name is carried because the chip has to say
+  // `{key, name}`, or null. The Workflow tab's LoRA pile narrows it to one
+  // LoRA of one stack instead: `{stack, lora, name}` (`workflowFilterParams`). The name is carried because the chip has to say
   // which workflow, and the grid holds no workflow cards to look it up in.
   const workflowFilter = ref(null);
 
@@ -79,7 +84,8 @@ export const useFilterStore = defineStore("filter", () => {
     tagConfidenceBelowFilter.value = [];
     faceBboxFilter.value = null;
     sharedOnlyFilter.value = false;
-    unassignedOnlyFilter.value = false;
+    noCharacterFilter.value = false;
+    noSetFilter.value = false;
     comfyuiModelFilter.value = [];
     comfyuiLoraFilter.value = [];
     impossibleSources.value = [];
@@ -100,7 +106,8 @@ export const useFilterStore = defineStore("filter", () => {
     tagConfidenceBelowFilter,
     faceBboxFilter,
     sharedOnlyFilter,
-    unassignedOnlyFilter,
+    noCharacterFilter,
+    noSetFilter,
     comfyuiModelFilter,
     comfyuiLoraFilter,
     comfyuiConfigured,
@@ -111,3 +118,19 @@ export const useFilterStore = defineStore("filter", () => {
     resetFilters,
   };
 });
+
+/**
+ * The listing params one `workflowFilter` sends: `workflow_key` or
+ * `workflow_stack`, and `workflow_lora` when it names a LoRA.
+ *
+ * @param {?{key?: string, stack?: string, lora?: string}} filter
+ * @returns {Array<[string, string]>}
+ */
+export function workflowFilterParams(filter) {
+  if (!filter) return [];
+  return [
+    ...(filter.key ? [["workflow_key", filter.key]] : []),
+    ...(filter.stack ? [["workflow_stack", filter.stack]] : []),
+    ...(filter.lora ? [["workflow_lora", filter.lora]] : []),
+  ];
+}

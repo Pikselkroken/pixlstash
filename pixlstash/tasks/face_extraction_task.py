@@ -22,6 +22,7 @@ from pixlstash.inference.engine import InferenceEngine
 from pixlstash.inference.vram_budget import ORT_ARENA_SHARE
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.image_processing.face_utils import FaceUtils
+from pixlstash.utils.image_processing.video_utils import VideoUtils
 from pixlstash.utils.insightface_batched import BatchedFaceRunner
 from pixlstash.utils.media_files import SUPPORTED_IMAGE_EXTS
 from pixlstash.utils.insightface_model_utils import (
@@ -164,10 +165,7 @@ class FaceExtractionTask(BaseTask):
                 file_path = str(
                     ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
                 )
-                ext = os.path.splitext(file_path)[1].lower()
-                if ext not in self._IMAGE_EXTS:
-                    if ext not in self._VIDEO_EXTS:
-                        return None, None, 1.0
+                if self._is_multiframe(file_path):
                     try:
                         return (file_path, *self._read_video_frames(file_path))
                     except Exception as exc:
@@ -179,6 +177,8 @@ class FaceExtractionTask(BaseTask):
                             exc,
                         )
                         return None, None, 1.0
+                if os.path.splitext(file_path)[1].lower() not in self._IMAGE_EXTS:
+                    return None, None, 1.0
                 img, inv_scale = ImageUtils.load_image_bgr_reduced(
                     file_path, FaceExtractionTask.INFERENCE_MAX_SIDE
                 )
@@ -602,6 +602,12 @@ class FaceExtractionTask(BaseTask):
     # recognition calls but longer gaps between visible DB progress ticks.
     _FLUSH_CHUNK_SIZE = 100
 
+    @classmethod
+    def _is_multiframe(cls, file_path: str) -> bool:
+        """True when faces are sampled across frames: a video or an animated GIF."""
+        ext = os.path.splitext(file_path)[1].lower()
+        return ext in cls._VIDEO_EXTS or VideoUtils.is_animated_gif(file_path)
+
     @staticmethod
     def _read_video_frames(
         file_path: str,
@@ -722,6 +728,7 @@ class FaceExtractionTask(BaseTask):
                 _p in chunk_paths
                 and _bimg is not None
                 and os.path.splitext(_p)[1].lower() in self._IMAGE_EXTS
+                and not self._is_multiframe(_p)
             ):
                 _batch_paths.append(_p)
                 _batch_imgs.append(_bimg)
@@ -751,6 +758,7 @@ class FaceExtractionTask(BaseTask):
                 ImageUtils.resolve_picture_path(self._db.image_root, pic.file_path)
             )
             ext = os.path.splitext(file_path)[1].lower()
+            is_multiframe = self._is_multiframe(file_path)
             if self._stop_event.is_set():
                 logger.debug(
                     "FaceExtractionTask: stop requested, aborting after %d pictures.",
@@ -777,7 +785,9 @@ class FaceExtractionTask(BaseTask):
 
             face_objects = []
 
-            if ext in self._IMAGE_EXTS:
+            # A GIF's extension is an image one, so the multi-frame test has
+            # to come first or an animated GIF never reaches the video path.
+            if ext in self._IMAGE_EXTS and not is_multiframe:
                 read_start = time.time()
                 preloaded_entry = preloaded.get(file_path)
                 if preloaded_entry is not None:
@@ -838,7 +848,7 @@ class FaceExtractionTask(BaseTask):
                                 (pic.id, pic.file_path, img, bboxes_loaded, inv_scale)
                             )
 
-            elif ext in self._VIDEO_EXTS:
+            elif is_multiframe:
                 if need_faces:
                     preloaded_entry = preloaded.get(file_path)
                     if preloaded_entry is not None:

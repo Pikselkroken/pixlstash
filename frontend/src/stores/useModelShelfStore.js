@@ -3,18 +3,25 @@ import { defineStore } from "pinia";
 import { clearModelIcons, setModelIcon } from "../api/modelIcons";
 import { mergeModelCopies } from "../api/modelFiles";
 import {
+  addWorkflowSetMembers,
   BASE_MODEL_UNASSIGNED,
+  createWorkflowSet,
   deleteModels,
+  deleteWorkflowSet,
   editModels,
   fetchWorkflowSets,
   forgetModels,
   listAdapters,
   listBaseModelCompletions,
   listCheckpoints,
+  removeWorkflowSetMembers,
+  renameWorkflowSet,
   setAdapterAttachments,
+  setWorkflowSetDeclines,
 } from "../api/modelShelf";
 import { onSessionReset } from "../utils/apiClient";
 import { useNoticeStore } from "./useNoticeStore";
+import { useOperationStore } from "./useOperationStore";
 import { errorDetail } from "../utils/apiError";
 import {
   adapterKindKey,
@@ -25,6 +32,7 @@ import {
   capabilityLabel,
   compareGroups,
   defaultSortDirection,
+  deriveModelName,
   fileKindLabel,
   locationState,
   presentCopies,
@@ -33,7 +41,14 @@ import {
   offlineFolders,
   UNSET_GROUP_KEY,
 } from "../utils/modelShelf";
-import { setCard, setGroups, worksWith } from "../utils/workflowSets";
+import {
+  handMadeCard,
+  handMadeName,
+  pictureCount,
+  setCard,
+  setGroups,
+  worksWith,
+} from "../utils/workflowSets";
 
 /** Where the `Show` selection is remembered between visits. */
 const FILTERS_KEY = "pixlstash:modelShelfFilters";
@@ -316,6 +331,18 @@ const MAX_MODELS_PER_ICON_SET = 500;
 // the client's own 60 s timeout, which would report as failed writes the server
 // had committed. It also leaves sockets for the row thumbnails.
 const ICON_SET_CONCURRENCY = 6;
+
+// The glyph on each set verb's receipt: the one on the control that did it
+// where there is one, else the picture sets' own add/remove glyphs.
+const SET_RECEIPT_ICONS = {
+  create: "mdi-plus",
+  add: "mdi-playlist-plus",
+  remove: "mdi-playlist-minus",
+  rename: "mdi-pencil-outline",
+  delete: "mdi-layers-remove",
+  "keep-out": "mdi-call-split",
+  "offer-again": "mdi-table-arrow-down",
+};
 
 /** What each curated column is called in a receipt. */
 const FIELD_WORDS = {
@@ -1508,7 +1535,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   // row list: `fetchRows` runs on every `Show` checkbox and this one is a window
   // over every kept picture in the vault. Fetched once when something needs it
   // and again after a scan, never per filter tick.
-  const workflowSets = ref({ combinations: [], noSet: [] });
+  const workflowSets = ref({ combinations: [], noSet: [], handMade: [] });
   const setsLoading = ref(false);
   const setsError = ref("");
   const setsLoaded = ref(false);
@@ -1546,6 +1573,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       workflowSets.value = {
         combinations: body.combinations,
         noSet: body.no_set,
+        handMade: body.hand_made ?? [],
       };
       setsLoaded.value = true;
     } catch (err) {
@@ -1586,8 +1614,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    */
   const visibleCombinations = computed(() => {
     const shown = shownModelIds.value;
-    return workflowSets.value.combinations.filter((combination) =>
-      (combination.models ?? []).some((model) => shown.has(model.id)),
+    return workflowSets.value.combinations.filter(
+      (combination) =>
+        // A combination one of the owner's sets can build is drawn on THAT
+        // card and not again as evidence (#1520): evidence cards are built only
+        // from the pictures no hand-made set covers.
+        !combination.covered_by?.length &&
+        (combination.models ?? []).some((model) => shown.has(model.id)),
     );
   });
 
@@ -1603,6 +1636,70 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setGroups(visibleCombinations.value).map((group) => ({
       ...group,
       card: setCard(group),
+    })),
+  );
+
+  /**
+   * The owner's own sets (#1520), newest first, each shaped as the grid draws
+   * it. Not narrowed by `Show`: the owner made them, and a kind checkbox hiding
+   * one would read as the set having gone. `models` is the ON-SHELF members, the
+   * ones a tray row can select; the slots draw every member from `set`.
+   */
+  const handMadeSets = computed(() =>
+    (workflowSets.value.handMade ?? []).map(withShelfNames),
+  );
+
+  /**
+   * A set with every member called what the shelf calls it (#1520 feedback).
+   *
+   * The server names a member by its stored display name or its FILENAME, so a
+   * set named after its checkpoint read "realvisXL_v5.safetensors" while the
+   * shelf row beside it read "RealVis XL v5". On the shelf, a member takes the
+   * row's own `modelName`; off it, the label it was kept under, with a filename
+   * run through the same `deriveModelName` the shelf uses. Every set this store
+   * hands out or names in a receipt goes through here, so one name is shown
+   * everywhere.
+   */
+  function withShelfNames(set) {
+    if (!set) return set;
+    const byId = new Map(rows.value.map((row) => [row.id, row]));
+    const shelfName = (model) => {
+      const row = byId.get(model.id);
+      return (row && modelName(row).text) || model.name;
+    };
+    return {
+      ...set,
+      // The merge offer's models (#1523) are always on the shelf.
+      offer: set.offer && {
+        ...set.offer,
+        head_name: shelfName({ id: set.offer.head_id, name: set.offer.head_name }),
+        models: (set.offer.models ?? []).map((model) => ({
+          ...model,
+          name: shelfName(model),
+        })),
+      },
+      members: (set.members ?? []).map((member) => {
+        const row = member.id != null ? byId.get(member.id) : null;
+        const kept = member.label || member.name || "";
+        const name = row
+          ? modelName(row).text || member.name
+          : (/\.[a-z0-9]{2,12}$/i.test(kept) && deriveModelName(kept)) || kept;
+        return { ...member, name: name || member.name };
+      }),
+    };
+  }
+
+  /** What a set is called, in the shelf's names - for receipts. */
+  function setLabel(set) {
+    return handMadeName(withShelfNames(set));
+  }
+  const handMadeGroups = computed(() =>
+    handMadeSets.value.map((set) => ({
+      key: `hand:${set.id}`,
+      set,
+      head: null,
+      models: (set.members ?? []).filter((m) => m.on_shelf && m.id != null),
+      card: handMadeCard(set),
     })),
   );
 
@@ -1644,6 +1741,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   const setGridModelIds = computed(() => {
     const known = new Set(rows.value.map((row) => row.id));
     const ids = new Set();
+    const hand = handMadeGroups.value.find((g) => g.key === openSetKey.value);
+    for (const model of hand?.models ?? []) {
+      if (known.has(model.id)) ids.add(model.id);
+    }
     for (const group of setGroupList.value) {
       // A closed tray is not on screen. Keeping all its members here made
       // Select all and the verb bar reach files with no selected representation.
@@ -1713,15 +1814,493 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * than in the grid because the key lives here and the grid is not the only
    * thing that can change what it names.
    */
-  watch(setGroupList, (groups) => {
+  watch([setGroupList, handMadeGroups], ([groups, hand]) => {
     if (!openSetKey.value) return;
-    if (!groups.some((group) => group.key === openSetKey.value)) {
+    if (![...groups, ...hand].some((group) => group.key === openSetKey.value)) {
       openSetKey.value = "";
     }
   });
 
+  // ── Hand-made sets: selection and verbs (#1520) ───────────────────────────
+  //
+  // **Sets are selected as sets, in a selection of their own.** A hand-made
+  // card stands for the SET, whose verbs (Rename, Delete set) touch no file; a
+  // model card or tray member stands for one file, whose verbs are the shelf's.
+  // The two kinds can be held together - Ctrl+click adds either kind, and
+  // select-all takes both - and each keeps its own pill, so a file Delete and
+  // a set Delete are never behind one button. A replacing gesture (a plain
+  // click, a Shift-range) drops the other kind, as it drops everything else.
+
+  /** Selected hand-made set ids. */
+  const selectedSetIds = ref(new Set());
+
   /**
-   * What one model has been seen beside, ranked by the recipes backing each.
+   * A checkpoint just put into a set, `{setId, modelId}`, or null.
+   *
+   * The design offers to set a checkpoint's base model ONCE, at the moment it
+   * goes in, because the slot suggestions follow it. Recorded here, by every
+   * write that can put one in (the slot popup, New workflow set with this
+   * checkpoint), so the tray can ask whichever gesture it came from.
+   */
+  const checkpointAdded = ref(null);
+
+  /**
+   * Record a checkpoint that went in, read off the SERVER's answer - the
+   * members it actually stored - never the request: a member added without a
+   * slot is placed by the server, and a refused one never went in at all.
+   *
+   * @param {number} setId
+   * @param {Array<Object>} members - the stored members that were just added.
+   */
+  function noteCheckpoint(setId, members) {
+    const checkpoint = members.find(
+      (m) => m.slot === "checkpoint" && m.on_shelf && m.id != null,
+    );
+    if (checkpoint) {
+      checkpointAdded.value = { setId, modelId: checkpoint.id };
+    }
+  }
+  let setAnchor = null;
+
+  const selectedSets = computed(() =>
+    handMadeSets.value.filter((set) => selectedSetIds.value.has(set.id)),
+  );
+
+  /**
+   * Click, Ctrl+click, Shift+click on a hand-made card.
+   *
+   * @param {number} id
+   * @param {{ctrl?: boolean, shift?: boolean}} mods
+   * @param {Array<number>} ordered - the set ids in drawn order, for a range.
+   */
+  function selectSet(id, { ctrl = false, shift = false } = {}, ordered = []) {
+    if (!ctrl) clearSelection();
+    if (shift && setAnchor != null) {
+      const from = ordered.indexOf(setAnchor);
+      const to = ordered.indexOf(id);
+      if (from >= 0 && to >= 0) {
+        const [a, b] = from < to ? [from, to] : [to, from];
+        selectedSetIds.value = new Set(ordered.slice(a, b + 1));
+        return;
+      }
+    }
+    const next = ctrl ? new Set(selectedSetIds.value) : new Set();
+    if (ctrl && next.has(id)) next.delete(id);
+    else next.add(id);
+    selectedSetIds.value = next;
+    setAnchor = id;
+  }
+
+  function clearSetSelection() {
+    if (selectedSetIds.value.size) selectedSetIds.value = new Set();
+  }
+
+  // A set that is gone cannot stay selected.
+  watch(handMadeSets, (sets) => {
+    const live = new Set(sets.map((set) => set.id));
+    const kept = [...selectedSetIds.value].filter((id) => live.has(id));
+    if (kept.length !== selectedSetIds.value.size) {
+      selectedSetIds.value = new Set(kept);
+    }
+  });
+
+  /**
+   * Run one set write, refetch, and show its receipt with Undo.
+   *
+   * The receipt is the grid's own pill (`ActionReceipt`, raised through
+   * `showLocalReceipt`), because sets are not in the operation log but a
+   * receipt must read the same everywhere: one at a time, a draining countdown,
+   * Undo flipping to Redo. Each write replaces the pill, so its Undo is always
+   * the latest write's, as on the grid. An undo that could itself lose
+   * work - undoing a create after the set has been filled - goes through the
+   * delete verb, so it gets a receipt and an Undo of its own; a failed undo says
+   * so. The refetch is the whole payload because coverage moves with
+   * membership: adding one LoRA can pull a combination off the evidence cards
+   * and onto this one.
+   *
+   * @param {Function} write - the call.
+   * @param {Object} options
+   * @param {string|Function} options.receipt - the sentence, or one from the
+   *   result.
+   * @param {Function} options.undo - reverses the result; may resolve a value
+   *   `redo` needs.
+   * @param {Function} [options.redo] - `(undoResult) => Promise`, for a write
+   *   that cannot simply run again (a restored set has a new id). Defaults to
+   *   running `write` again.
+   * @param {Function} [options.hasUndo] - `(result) => boolean`; false narrates
+   *   in a plain notice, for a write that changed nothing.
+   * @param {string} options.verb - a `SET_RECEIPT_ICONS` key.
+   * @param {string} options.failure - the sentence when the write fails.
+   * @param {boolean} [options.quiet] - no receipt: the caller narrates it, as
+   *   the set picker does while it is open (#1574). A failure still says so.
+   * @returns {Promise<*>} what `write` resolved to, or null when it failed.
+   */
+  async function setWrite(write, options) {
+    const { receipt, undo, redo, hasUndo, verb, failure, quiet } = options;
+    const notices = useNoticeStore();
+    let result;
+    try {
+      result = await write();
+    } catch (err) {
+      notices.push({
+        level: "error",
+        text: errorDetail(err) || failure,
+      });
+      return null;
+    }
+    await loadWorkflowSets({ force: true });
+    if (quiet) return result;
+    const text = typeof receipt === "function" ? receipt(result) : receipt;
+    if (!text) return result;
+    if (hasUndo && !hasUndo(result)) {
+      notices.push({ level: "info", text });
+      return result;
+    }
+    raiseSetReceipt(
+      text,
+      verb,
+      () => undo(result),
+      (undone) => (redo ? redo(undone) : setWrite(write, options)),
+    );
+    return result;
+  }
+
+  /**
+   * The grid's pill for one set write, with Undo and Redo.
+   *
+   * @param {string} text - the sentence.
+   * @param {string} verb - a `SET_RECEIPT_ICONS` key.
+   * @param {Function} undo - `() => Promise`; resolves `false` for an undo that
+   *   failed through a verb which already said so, else what `redo` needs.
+   * @param {Function} redo - `(undoResult) => Promise`.
+   */
+  function raiseSetReceipt(text, verb, undo, redo) {
+    const notices = useNoticeStore();
+    let undone;
+    useOperationStore().showLocalReceipt({
+      summary: text,
+      icon: SET_RECEIPT_ICONS[verb],
+      destructive: verb === "delete",
+      undo: async () => {
+        try {
+          // `false` is an undo that failed through a verb which already said
+          // so (undoing a create runs the delete verb, which never throws).
+          const out = await undo();
+          if (out === false) return false;
+          undone = out;
+          return true;
+        } catch (err) {
+          console.warn("[ModelShelf] a set undo failed", { err });
+          notices.push({
+            level: "error",
+            // `err.message` too: an undo that partly failed says how much
+            // itself, and that sentence is not a server detail.
+            text:
+              errorDetail(err) || err?.message || "That could not be undone.",
+          });
+          return false;
+        } finally {
+          await loadWorkflowSets({ force: true });
+        }
+      },
+      redo: () => redo(undone),
+    });
+  }
+
+  /** A removed or deleted member, as the create and add routes take it back. */
+  function memberBack(member) {
+    return { sha256: member.sha256, slot: member.slot, label: member.label };
+  }
+
+  /**
+   * Make a set, optionally with members, and open its tray.
+   *
+   * @param {{name?: string|null, members?: Array<Object>}} [body]
+   * @returns {Promise<Object|null>} the new set.
+   */
+  async function createHandMadeSet(body = {}) {
+    const created = await setWrite(() => createWorkflowSet(body), {
+      receipt: (set) =>
+        `Made "${setLabel(set)}" with ${(set.members ?? []).length} ${
+          (set.members ?? []).length === 1 ? "model" : "models"
+        }.`,
+      // Through the delete verb, not a bare call: this receipt can still be up
+      // while the set is filled, and undoing it then would take every model added
+      // since with no way back. The delete's own receipt offers that way back.
+      undo: async (set) => (await deleteHandMadeSets([set])) ?? false,
+      verb: "create",
+      failure: "The set could not be made.",
+    });
+    if (created) {
+      clearSelection();
+      openSetKey.value = `hand:${created.id}`;
+      noteCheckpoint(created.id, created.members ?? []);
+    }
+    return created;
+  }
+
+  /** Rename one set; an empty name goes back to the checkpoint's. */
+  function renameHandMadeSet(set, name) {
+    const before = set.name ?? null;
+    const next = String(name ?? "").trim() || null;
+    if (next === before) return Promise.resolve(set);
+    return setWrite(() => renameWorkflowSet(set.id, next), {
+      receipt: (renamed) => `Renamed the set "${setLabel(renamed)}".`,
+      undo: () => renameWorkflowSet(set.id, before),
+      verb: "rename",
+      failure: "The set could not be renamed.",
+    });
+  }
+
+  /**
+   * Delete sets. Files are never touched, so there is no confirm: the receipt's
+   * Undo recreates each set from the snapshot the server returned.
+   */
+  async function deleteHandMadeSets(sets) {
+    if (!sets.length) return null;
+    return setWrite(
+      // Settled one by one: a set another tab already deleted must not cost
+      // the receipt - and so the Undo - of the ones this call did delete.
+      async () => {
+        const settled = await Promise.allSettled(
+          sets.map((set) => deleteWorkflowSet(set.id)),
+        );
+        const deleted = settled
+          .filter((r) => r.status === "fulfilled")
+          .map((r) => r.value.deleted);
+        const failed = settled.filter((r) => r.status === "rejected");
+        if (!deleted.length) throw failed[0].reason;
+        return { deleted, failed: failed.length };
+      },
+      {
+        receipt: ({ deleted, failed }) =>
+          (deleted.length === 1
+            ? `Deleted the set "${setLabel(deleted[0])}". No file was touched.`
+            : `Deleted ${deleted.length} sets. No file was touched.`) +
+          (failed
+            ? ` ${failed} could not be deleted and ${failed === 1 ? "is" : "are"} still there.`
+            : ""),
+        // Settled one by one, like the delete: one set that cannot come back
+        // must not hide the ones that did, and the failure says how many. A
+        // partial restore still counts as undone, so Redo can delete the sets
+        // that did come back.
+        undo: async ({ deleted }) => {
+          const settled = await Promise.allSettled(
+            deleted.map((snapshot) =>
+              createWorkflowSet({
+                name: snapshot.name ?? null,
+                members: (snapshot.members ?? []).map(memberBack),
+              }),
+            ),
+          );
+          const failed = settled.filter((r) => r.status === "rejected");
+          if (failed.length === deleted.length) throw failed[0].reason;
+          if (failed.length) {
+            console.warn("[ModelShelf] a set restore failed", {
+              reasons: failed.map((r) => r.reason),
+            });
+            useNoticeStore().push({
+              level: "error",
+              text: `${failed.length} of ${deleted.length} sets could not be restored.`,
+            });
+          }
+          return settled
+            .filter((r) => r.status === "fulfilled")
+            .map((r) => r.value);
+        },
+        // The restored sets have new ids, so Redo deletes those.
+        redo: (restored) => deleteHandMadeSets(restored),
+        verb: "delete",
+        failure: "The set could not be deleted.",
+      },
+    );
+  }
+
+  /**
+   * Add shelf models to a set, each in its own slot unless one is given.
+   *
+   * @param {Object} set
+   * @param {Array<{model_id: number, slot?: string}>} members
+   * @param {{joined?: boolean, quiet?: boolean}} [options] - `joined` says in
+   *   the receipt how many pictures joined the set, which is what a merge
+   *   (#1523) is for; `quiet` raises no receipt (see `announceAdded`).
+   */
+  async function addToHandMadeSet(
+    set,
+    members,
+    { joined = false, quiet = false } = {},
+  ) {
+    if (!members.length) return null;
+    const before = Number(set.picture_count) || 0;
+    const result = await setWrite(
+      () => addWorkflowSetMembers(set.id, members),
+      {
+        receipt: ({ added, set: after }) => {
+          if (!added.length) {
+            return `Nothing added: "${setLabel(set)}" already holds ${
+              members.length === 1 ? "it" : "them"
+            }.`;
+          }
+          const gained = (Number(after?.picture_count) || 0) - before;
+          return (
+            `Added ${added.length} ${added.length === 1 ? "model" : "models"} to "${setLabel(set)}".` +
+            (joined && gained > 0 ? ` ${pictureCount(gained)} joined it.` : "")
+          );
+        },
+        undo: ({ added }) => removeWorkflowSetMembers(set.id, added),
+        hasUndo: ({ added }) => added.length > 0,
+        verb: "add",
+        failure: "Those models could not be added to the set.",
+        quiet,
+      },
+    );
+    if (result?.added?.length) {
+      const added = new Set(result.added);
+      noteCheckpoint(
+        set.id,
+        (result.set?.members ?? []).filter((m) => added.has(m.sha256)),
+      );
+    }
+    return result;
+  }
+
+  /**
+   * One receipt for the models a set picker added while it was open (#1574).
+   *
+   * The picker adds quietly and narrates each add in its own status line, so
+   * five LoRAs picked one by one are one pill when it closes, not five that
+   * replace each other. Undo takes all of them back out.
+   *
+   * @param {Object} set
+   * @param {Array<{model_id: number, slot: string, sha256: string, name: string}>}
+   *   added - in the order they went in.
+   * @param {string} noun - the slot's plural, e.g. "LoRAs".
+   */
+  function announceAdded(set, added, noun) {
+    if (!added.length) return;
+    const what =
+      added.length === 1 ? `"${added[0].name}"` : `${added.length} ${noun}`;
+    raiseSetReceipt(
+      `Added ${what} to "${setLabel(set)}".`,
+      "add",
+      () =>
+        removeWorkflowSetMembers(
+          set.id,
+          added.map((m) => m.sha256),
+        ),
+      () =>
+        addToHandMadeSet(
+          set,
+          added.map(({ model_id, slot }) => ({ model_id, slot })),
+        ),
+    );
+  }
+
+  /** Take members off a set, by hash. The files stay on the shelf. */
+  function removeFromHandMadeSet(set, sha256s, { quiet = false } = {}) {
+    if (!sha256s.length) return Promise.resolve(null);
+    return setWrite(() => removeWorkflowSetMembers(set.id, sha256s), {
+      quiet,
+      receipt: ({ removed }) =>
+        `Took ${removed.length} ${removed.length === 1 ? "model" : "models"} off "${setLabel(set)}". The ${
+          removed.length === 1 ? "file stays" : "files stay"
+        } on the shelf.`,
+      undo: ({ removed }) =>
+        addWorkflowSetMembers(set.id, removed.map(memberBack)),
+      verb: "remove",
+      failure: "Those models could not be taken off the set.",
+    });
+  }
+
+  /**
+   * Keep models out of a set's merge offer (#1523): all of them ("Keep
+   * separate"), or one ghost.
+   *
+   * The server stores the list whole, so every write here is a DELTA applied to
+   * the latest list at the moment it runs, one at a time: two quick Deletes on
+   * two ghosts both land, and undoing an older Keep separate takes out only
+   * what that one added rather than putting back a list a later one extended.
+   *
+   * @param {Object} set - a set from `handMadeSets`, carrying its `offer`.
+   * @param {Array<Object>} [models] - offered models; all of them if omitted.
+   */
+  function keepOutOfHandMadeSet(set, models) {
+    const offer = set.offer;
+    const out = (models ?? offer?.models ?? []).map((m) => m.sha256);
+    if (!out.length) return Promise.resolve(null);
+    const receipt = models
+      ? `Kept ${models.map((m) => m.name).join(", ")} out of "${setLabel(set)}".`
+      : `Kept "${setLabel(set)}" separate from ${
+          offer.picture_count
+            ? pictureCount(offer.picture_count)
+            : "those recipes"
+        }.`;
+    return setWrite(() => changeDeclines(set.id, { add: out }), {
+      receipt,
+      undo: () => changeDeclines(set.id, { remove: out }),
+      verb: "keep-out",
+      failure: "The set could not be kept separate.",
+    });
+  }
+
+  /** Forget every Keep separate on a set, so its merge offer comes back. */
+  function offerMergeAgain(set) {
+    return setWrite(() => changeDeclines(set.id, { clear: true }), {
+      receipt: `The merge is offered again on "${setLabel(set)}".`,
+      undo: ({ previous }) => changeDeclines(set.id, { add: previous }),
+      verb: "offer-again",
+      failure: "The merge could not be offered again.",
+    });
+  }
+
+  let declineQueue = Promise.resolve();
+
+  /**
+   * One change to a set's kept-out list, queued behind any still in flight
+   * and computed from the list the last write returned.
+   */
+  function changeDeclines(setId, { add = [], remove = [], clear = false }) {
+    const run = async () => {
+      const current =
+        latestDeclines.get(setId) ??
+        handMadeSets.value.find((s) => s.id === setId)?.declined ??
+        [];
+      const gone = new Set(remove);
+      const next = clear
+        ? []
+        : [...new Set([...current.filter((sha) => !gone.has(sha)), ...add])];
+      const result = await setWorkflowSetDeclines(setId, next);
+      latestDeclines.set(setId, result?.set?.declined ?? next);
+      return result;
+    };
+    const queued = declineQueue.then(run, run);
+    declineQueue = queued.catch(() => null);
+    return queued;
+  }
+
+  // What each set's list was after this session's last write to it, as the
+  // server answered it. Kept across refetches: one that left before the last
+  // write landed would otherwise hand the next write a stale list. Dropped
+  // only for a set that is gone.
+  const latestDeclines = new Map();
+  watch(handMadeSets, (sets) => {
+    const live = new Set(sets.map((set) => set.id));
+    for (const id of [...latestDeclines.keys()]) {
+      if (!live.has(id)) latestDeclines.delete(id);
+    }
+  });
+
+  /** The hand-made sets holding any of these model ids, for the delete warning. */
+  function handMadeSetsHolding(ids) {
+    const wanted = new Set(ids);
+    return handMadeSets.value.filter((set) =>
+      (set.members ?? []).some((m) => m.on_shelf && wanted.has(m.id)),
+    );
+  }
+
+  /**
+   * What one model has been seen beside, ranked by the recipes and ComfyUI
+   * runs backing each.
    *
    * Read from the whole payload rather than from `visibleCombinations`: the
    * question is what this file has run with, and a `Show` checkbox is about what
@@ -1958,6 +2537,17 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   );
 
   /**
+   * The selected models as rows, a ticked stack expanded into its members.
+   *
+   * {@link selectedModelIds} for a verb that needs more than the id: Assign
+   * addresses each model by its own `sha256` and unions its own `attachments`,
+   * and a stack row carries only the cover's.
+   */
+  const selectedModels = computed(() =>
+    selectedRows.value.flatMap((row) => row.members ?? [row]),
+  );
+
+  /**
    * The model a Shift-range measures from: the last one picked deliberately.
    *
    * Held apart from the selection itself, exactly as `lastSelectedImageId` is
@@ -2052,6 +2642,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       anchorOccurrence.value = occurrence;
       return;
     }
+    // A plain click or a range REPLACES the selection, selected sets included;
+    // only Ctrl adds a model beside them.
+    clearSetSelection();
     const sequence = Array.isArray(order) ? order : [];
     const idOf = (item) => (typeof item === "object" ? item.id : item);
     const occurrenceOf = (item) =>
@@ -2079,7 +2672,10 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
       // The anchor stays where it was: dragging a range out and back with
       // repeated Shift+clicks has to measure from the same end each time.
       selectedIds.value = new Set(
-        sequence.slice(start, end + 1).map(idOf).flatMap(withinRange),
+        sequence
+          .slice(start, end + 1)
+          .map(idOf)
+          .flatMap(withinRange),
       );
       return;
     }
@@ -2089,16 +2685,25 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }
 
   /**
-   * Select every model the screen shows, ungrouped duplicates and all.
+   * Select everything the screen shows: every model, ungrouped duplicates and
+   * all, and on the set grid every hand-made ("Grouped by you") set as well.
    *
    * Two screens, two answers to "shown", one expression: `screenRows` is the
    * list the reader is looking at, runs taken whole either way. On the set grid
    * that differs from the row list in both directions - it leaves out a model no
    * recipe names, and it takes in one the `Show` narrowing hides from the list
    * while a card still lists it.
+   *
+   * Select-all means all of it, so both kinds are taken and both pills come up
+   * together. Hand-made sets are never narrowed by `Show`, so all of them are
+   * drawn.
    */
   function selectVisible() {
     const drawn = screenRows.value;
+    if (view.groupBy === GRID_GROUP_BY && handMadeSets.value.length) {
+      selectedSetIds.value = new Set(handMadeSets.value.map((set) => set.id));
+      setAnchor = handMadeSets.value[0].id;
+    }
     // **With nothing drawn the selection is left alone, and this is where that
     // is decided.** It used to be a guard at one caller, reading `visibleRows`;
     // on the set grid that is the wrong list, so the key said "select" and
@@ -2119,6 +2724,15 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     anchorId.value = null;
     anchorOccurrence.value = null;
   }
+
+  // Sets are selected on the set grid only; leaving it must not leave a
+  // selection behind that Delete could act on unseen.
+  watch(
+    () => view.groupBy,
+    (axis) => {
+      if (axis !== GRID_GROUP_BY) clearSetSelection();
+    },
+  );
 
   /**
    * Drop ids the shelf no longer holds.
@@ -2327,7 +2941,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
    * blind write of just the new entity, which would silently detach every other
    * character already using the model.
    *
-   * The rows are re-read from `selectedRows` rather than trusted from the
+   * The rows are re-read from `selectedModels` rather than trusted from the
    * payload: the picker emits ids it was handed, and between the menu opening
    * and the click landing the selection may have moved. Anything no longer
    * selected, or without a hash to address, is dropped rather than written.
@@ -2353,7 +2967,9 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
   }) {
     const notices = useNoticeStore();
     const wanted = new Set(subjectIds.map((id) => String(id)));
-    const targets = selectedRows.value.filter(
+    // Off `selectedModels`, not `selectedRows`: a ticked stack is one row with
+    // the cover's id and hash, and assigning it has to reach every member.
+    const targets = selectedModels.value.filter(
       (row) => wanted.has(String(row.id)) && row.sha256,
     );
     if (!targets.length) return false;
@@ -2533,11 +3149,13 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     // derived from this machine's models and this library's pictures, and the
     // credential that could read both has just changed.
     setsEpoch += 1;
-    workflowSets.value = { combinations: [], noSet: [] };
+    workflowSets.value = { combinations: [], noSet: [], handMade: [] };
     setsLoaded.value = false;
     setsLoading.value = false;
     setsError.value = "";
     openSetKey.value = "";
+    selectedSetIds.value = new Set();
+    checkpointAdded.value = null;
   }
 
   const unsubscribeSessionReset = onSessionReset(resetForSession);
@@ -2570,6 +3188,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     selectedIds,
     selectedRows,
     anchorId,
+    anchorOccurrence,
     isSelected,
     toggleSelected,
     selectFromClick,
@@ -2583,6 +3202,7 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     setIconOnSelected,
     clearIconsOnSelected,
     selectedModelIds,
+    selectedModels,
     setAttachment,
     rows,
     loading,
@@ -2610,6 +3230,22 @@ export const useModelShelfStore = defineStore("modelShelf", () => {
     noSetRows,
     openSetKey,
     toggleSet,
+    handMadeSets,
+    handMadeGroups,
+    selectedSetIds,
+    selectedSets,
+    selectSet,
+    clearSetSelection,
+    createHandMadeSet,
+    renameHandMadeSet,
+    deleteHandMadeSets,
+    addToHandMadeSet,
+    announceAdded,
+    removeFromHandMadeSet,
+    keepOutOfHandMadeSet,
+    offerMergeAgain,
+    handMadeSetsHolding,
+    checkpointAdded,
     worksWithModel,
     offlineMounts,
     renderedCount,

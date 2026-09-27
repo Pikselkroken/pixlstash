@@ -397,7 +397,7 @@
       </header>
 
       <div
-        v-if="comfyuiProgress && comfyuiProgress.visible"
+        v-if="comfyuiProgress && comfyuiProgress.visible && !editTabShowsRun"
         class="overlay-progress overlay-progress--comfyui"
         :class="{
           'overlay-progress--error': comfyuiProgress.status === 'failed',
@@ -813,6 +813,21 @@
             @run="emit('run-recipe', image?.id)"
             @use-as-input="emit('use-as-input', image?.id)"
           />
+
+          <!-- `v-show` inside a `v-if`: the typed instruction, the chosen
+               workflow and a run in flight survive a trip to Info and a step
+               over a video, where the tab itself is absent. -->
+          <OverlayEditPanel
+            v-if="editTabAvailable"
+            v-show="sidebarTab === 'edit'"
+            :picture-id="image?.id ?? null"
+            :active="sidebarTab === 'edit'"
+            :comfyui-progress="comfyuiProgress"
+            :comfyui-progress-percent="comfyuiProgressPercent"
+            @show-picture="showEditResult"
+            @running="(on) => (editRunning = on)"
+            @more-options="(payload) => emit('edit-more-options', payload)"
+          />
         </AppInspector>
 
         <!-- The lightbox's own narration of an undoable action. Last child of
@@ -887,6 +902,7 @@ import {
 import {
   getPictureMetadata,
   listPictureFaces,
+  listPicturesByIds,
   listPictureDetections,
   addPictureFace,
   downloadPicture,
@@ -916,6 +932,7 @@ import OverlayDescriptionPanel from "./OverlayDescriptionPanel.vue";
 import OverlayFilmstrip from "./OverlayFilmstrip.vue";
 import OverlayMetadataPanel from "./OverlayMetadataPanel.vue";
 import OverlayRecipePanel from "./OverlayRecipePanel.vue";
+import OverlayEditPanel from "./OverlayEditPanel.vue";
 import OverlayTagsPanel from "./OverlayTagsPanel.vue";
 import OverlayActionReceipt from "../widgets/OverlayActionReceipt.vue";
 import OverlaySaveAsDialog from "../widgets/OverlaySaveAsDialog.vue";
@@ -1107,14 +1124,41 @@ const chosenSidebarTab = ref("info");
 // take the tab away for the length of one file read on every filmstrip step
 // and put it back, under the reader's cursor.
 const recipeTabShown = ref(false);
+// ── Edit (#1381) ───────────────────────────────────────────────────────────
+//
+// Offered whenever this machine has a ComfyUI and the session may write,
+// whether or not the picture has a recipe: a holiday photo gets Edit too. Absent
+// rather than disabled when it cannot be used, by the Recipe tab's rule, and
+// absent on a video (the design's answer: no edit workflow takes one yet).
+//
+// The PANEL hangs off `editTabAvailable` alone, so stepping over a video hides
+// the tab without unmounting the typed instruction or a run in flight.
+const editTabAvailable = computed(
+  () => comfyuiConfigured.value && !isReadOnly.value,
+);
+const editTabShown = computed(
+  () =>
+    editTabAvailable.value &&
+    !!image.value?.id &&
+    !isSupportedVideoFile(getOverlayFormat(image.value)),
+);
+// Whether a run the Edit tab started is still going. While that tab is on
+// screen its own bar reports the run, so the lightbox's ComfyUI bar would be a
+// second copy. A run from the grid's menus still gets the lightbox bar.
+const editRunning = ref(false);
+const editTabShowsRun = computed(
+  () => editRunning.value && sidebarOpen.value && sidebarTab.value === "edit",
+);
 // The reader's CHOICE is remembered even while the tab it names is gone, so
 // stepping over a photo in a run of ComfyUI pictures does not silently move
 // them to Info for the rest of the walk.
 const sidebarTab = computed({
-  get: () =>
-    chosenSidebarTab.value === "recipe" && !recipeTabShown.value
-      ? "info"
-      : chosenSidebarTab.value,
+  get: () => {
+    const chosen = chosenSidebarTab.value;
+    if (chosen === "recipe" && !recipeTabShown.value) return "info";
+    if (chosen === "edit" && !editTabShown.value) return "info";
+    return chosen;
+  },
   set: (value) => {
     chosenSidebarTab.value = value;
   },
@@ -1124,6 +1168,21 @@ const sidebarTab = computed({
 // by another name, which is the thing hiding Recipe was meant to avoid. With
 // no tabs the band is gone and the pane is the plain inspector every other
 // screen uses.
+const sidebarTabs = computed(() => {
+  const tabs = [
+    { value: "info", label: "Info", icon: "mdi-information-outline" },
+  ];
+  if (recipeTabShown.value) {
+    tabs.push({ value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" });
+  }
+  if (editTabShown.value) {
+    // `mdi-sitemap-outline` is the app's ComfyUI workflow glyph everywhere
+    // else (the Run popup, *Use as input for…*, the Workflows view).
+    tabs.push({ value: "edit", label: "Edit", icon: "mdi-sitemap-outline" });
+  }
+  return tabs.length > 1 ? tabs : [];
+});
+
 // **The band taking focus with it when it goes.** Arrow keys are a window
 // listener, so a reader can step the filmstrip with focus sitting on a tab
 // button; the next picture having no recipe then unmounts the button under
@@ -1132,20 +1191,18 @@ const sidebarTab = computed({
 // it happened. It catches Info as well as Recipe, which means a reader who
 // never opened Recipe loses focus the same way. The canvas is where the
 // receipt's Escape path already sends it.
-watch(recipeTabShown, (shown) => {
-  if (shown) return;
-  const active = document.activeElement;
-  if (!active || !active.closest?.(".inspector-tabs")) return;
-  nextTick(() => overlayCanvasRef.value?.focus?.());
-});
-
-const sidebarTabs = computed(() =>
-  recipeTabShown.value
-    ? [
-        { value: "info", label: "Info", icon: "mdi-information-outline" },
-        { value: "recipe", label: "Recipe", icon: "mdi-bookmark-outline" },
-      ]
-    : [],
+// Edit coming and going removes tab buttons the same way, so the rule is on the
+// band as a whole: whenever the tab set changes and the focused tab button did
+// not survive it.
+watch(
+  () => sidebarTabs.value.map((tab) => tab.value).join(","),
+  () => {
+    const active = document.activeElement;
+    if (!active || !active.closest?.(".inspector-tabs")) return;
+    nextTick(() => {
+      if (!active.isConnected) overlayCanvasRef.value?.focus?.();
+    });
+  },
 );
 
 const chromeHidden = ref(false);
@@ -1349,6 +1406,59 @@ function setOverlayImageById(nextId) {
   // Tag state reset is handled by OverlayTagsPanel's image-id watcher.
 }
 
+/**
+ * The Edit tab's *Show it*: move to the picture its run made. The grid defers
+ * `picture_imported` inserts while the lightbox is open (§9.1), so the result
+ * is usually in neither the frozen snapshot nor the live list, and a plain
+ * `initialImageId` move found nothing and did nothing. Its grid row is read by
+ * id and slotted in after the picture the run started from, so next/prev and
+ * the filmstrip agree with what is on screen; then the grid is told, so the
+ * URL follows. Only this path reads by id: the runner's own step to a newest
+ * member goes by the grid's `overlayImageId`, which does not follow filmstrip
+ * steps, and letting it through would pull a reader off a picture they moved to.
+ */
+async function showEditResult(id, sourceId) {
+  const idKey = String(id);
+  const fromId = image.value?.id;
+  if (!open.value || idKey === "") return;
+  if (!allImageById.value.has(idKey) && !filmstripImageById.value.has(idKey)) {
+    let row = null;
+    try {
+      const rows = await listPicturesByIds([idKey], { fields: "grid" });
+      row = Array.isArray(rows) ? rows[0] : null;
+    } catch (err) {
+      console.warn(`Could not read edited picture ${idKey} to show it:`, err);
+    }
+    // Overtaken: the lightbox closed or the reader moved on meanwhile.
+    if (!open.value || image.value?.id !== fromId) return;
+    if (!row) {
+      noticeStore.error("Couldn't open the edited picture. Try again.", {
+        key: "edit-show-result",
+      });
+      return;
+    }
+    const list = overlayImages.value.slice();
+    if (!list.some((item) => String(item?.id) === idKey)) {
+      const anchor = String(sourceId ?? fromId);
+      const at = list.findIndex((item) => String(item?.id) === anchor);
+      list.splice(at === -1 ? list.length : at + 1, 0, row);
+      frozenAllImages.value = list;
+      // The stack grew by this read, not by a restructure seen on the grid:
+      // re-record its signature, or the next grid repaint reads the change as
+      // one and sends the reader back to the leader.
+      const stackId = getPictureStackId(row);
+      if (stackId && overlayStackSignatures.value.has(stackId)) {
+        const next = new Map(overlayStackSignatures.value);
+        next.set(stackId, getOverlayStackSignature(stackId));
+        overlayStackSignatures.value = next;
+      }
+    }
+  }
+  setOverlayImageById(idKey);
+  void ensureOverlayFilmstripForImage();
+  emit("show-picture", id);
+}
+
 const emit = defineEmits([
   "close",
   "apply-score",
@@ -1365,6 +1475,9 @@ const emit = defineEmits([
   // the lightbox asks for it rather than hosting a second one.
   "run-recipe",
   "use-as-input",
+  // The Edit tab (#1381): step to its result, or open the Run popup on it.
+  "show-picture",
+  "edit-more-options",
 ]);
 
 const descriptionPanelRef = ref(null);
@@ -3493,12 +3606,13 @@ async function fetchOverlayMetadata(imageId) {
     // The picture's own BYTES, where the server is unconditionally
     // authoritative and this component never holds an optimistic value. The
     // local-wins default above is right for everything the overlay can edit and
-    // wrong for these two: `orientation` is what `mediaVersion` builds the
-    // cache-buster from, so keeping a stale copy leaves `fullImageSrc` pointing
-    // at the file the `<img>` has already decoded. An in-place rotate moves it
+    // wrong for these: `frame_count` goes stale on an in-place edit, and
+    // `orientation` is what `mediaVersion` builds the cache-buster from, so
+    // keeping a stale copy leaves `fullImageSrc` pointing at the file the
+    // `<img>` has already decoded. An in-place rotate moves it
     // and nothing else, which is exactly the case a local-wins merge would
     // swallow whole.
-    for (const field of ["pixel_sha", "orientation"]) {
+    for (const field of ["pixel_sha", "orientation", "frame_count"]) {
       if (data[field] !== undefined && data[field] !== null) {
         merged[field] = data[field];
       }

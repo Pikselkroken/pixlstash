@@ -21,7 +21,7 @@ forever would let a *second*, genuine, owner-made move of the same file between
 the same two folders be dismissed as ours.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
@@ -79,6 +79,6 @@ class PictureMove(SQLModel, table=True):
     picture_id: Optional[int] = Field(default=None, index=True)
     old_path: str = Field(index=True)
     new_path: str = Field(index=True)
-    moved_at: datetime = Field(default_factory=datetime.utcnow)
+    moved_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     reason: str = Field(default=REASON_LAYOUT)
     consumed: bool = Field(default=False)

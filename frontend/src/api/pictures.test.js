@@ -14,6 +14,7 @@ import {
   getLikenessGroups,
   faceSearch,
   likenessSearch,
+  setLikenessSearch,
   searchPictures,
   getPictureStats,
   clearGuestScoreSession,
@@ -111,6 +112,16 @@ describe("api/pictures", () => {
     await likenessSearch([1, 2]);
     expect(apiClient.post).toHaveBeenCalledWith(
       "/pictures/likeness-search?source_picture_ids=1&source_picture_ids=2&top_n=500&threshold=0.05",
+    );
+  });
+
+  // The set suggestion fetches wide (floor 0) and excludes the set's own
+  // members, so its length is the count the "Add" button can promise.
+  it("setLikenessSearch queries by set, excludes its members, asks for tags", async () => {
+    apiClient.post.mockResolvedValue({ data: [] });
+    await setLikenessSearch(4);
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/pictures/likeness-search?source_set_id=4&top_n=500&threshold=0&exclude_set_id=4&include_tag_counts=true",
     );
   });
 

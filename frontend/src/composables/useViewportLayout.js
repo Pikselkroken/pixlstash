@@ -70,10 +70,11 @@ export function useViewportLayout({ mainAreaRef }) {
     }
   }
 
-  // Opening or closing the stats rail changes the width the grid has to work
-  // with, so the column ceiling is recomputed with it.
+  // Opening or closing the right rail changes the width the grid has to work
+  // with, so the column ceiling is recomputed with it. Both flags: the
+  // Workflows inspector has its own.
   watch(
-    () => sidebarStore.statsOpen,
+    () => [sidebarStore.statsOpen, sidebarStore.workflowInspectorOpen],
     () => {
       updateIsMobile();
     },

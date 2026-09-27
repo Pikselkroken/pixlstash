@@ -5,6 +5,7 @@ import {
   ref,
   onBeforeUnmount,
   onMounted,
+  onUpdated,
   watch,
   nextTick,
 } from "vue";
@@ -238,6 +239,7 @@ const emit = defineEmits([
   "images-moved",
   "empty-scrapheap",
   "suggest-pictures-for-character",
+  "suggest-pictures-for-set",
   "view-project",
   "update:check-for-updates",
   "select-folder",
@@ -406,12 +408,23 @@ const sidebarCtxHeader = ref(null);
 // (auto-hide, dock mode).
 const sidebarCtxEmpty = ref(false);
 
+// The rendered menu's height. It depends on the target (a set's menu is
+// several rows taller than a folder's), so a fixed estimate flipped the taller
+// menus one row too late and clipped their last entry. Measured after every
+// render; the correcting re-render lands before paint.
+const sidebarCtxMenuEl = ref(null);
+const sidebarCtxMenuH = ref(0);
+onUpdated(() => {
+  if (sidebarCtxMenuEl.value) {
+    sidebarCtxMenuH.value = sidebarCtxMenuEl.value.offsetHeight;
+  }
+});
+
 // Computed style for the main context menu - opens upward when near the bottom.
 const sidebarCtxMenuStyle = computed(() => {
   const MENU_W = 165;
-  const MENU_H = 190; // actual menu height estimate
   const x = Math.min(sidebarCtxX.value, window.innerWidth - MENU_W - 8);
-  if (sidebarCtxY.value + MENU_H > window.innerHeight - 8) {
+  if (sidebarCtxY.value + sidebarCtxMenuH.value > window.innerHeight - 8) {
     return {
       left: x + "px",
       bottom: window.innerHeight - sidebarCtxY.value + "px",
@@ -2939,6 +2952,18 @@ function suggestPicturesForCharacterFromCtx(character) {
   emit("suggest-pictures-for-character", {
     id: character.id,
     name: character.name,
+  });
+}
+
+// "Suggest more pictures" for a set (#1489): ranks the library against the
+// set's members so the pictures that belong in it can be added in one action.
+// Like the person twin above, it does not select the set first.
+function suggestPicturesForSetFromCtx(pictureSet) {
+  if (!pictureSet?.id) return;
+  closeSidebarCtxMenu();
+  emit("suggest-pictures-for-set", {
+    id: pictureSet.id,
+    name: pictureSet.name,
   });
 }
 
@@ -7749,6 +7774,7 @@ defineExpose({
   <Teleport to="body">
     <div
       v-if="sidebarCtxVisible"
+      ref="sidebarCtxMenuEl"
       class="ctx-menu sidebar-ctx-menu"
       :style="sidebarCtxMenuStyle"
       @contextmenu.prevent
@@ -7921,6 +7947,20 @@ defineExpose({
         </button>
       </template>
       <template v-if="sidebarCtxSet">
+        <!-- Hidden on a locked set: adding to it is refused, and an action
+             that cannot complete is worse than one that is not offered. -->
+        <button
+          v-if="!isReadOnly && !sidebarCtxSet.locked"
+          class="ctx-item"
+          @click="suggestPicturesForSetFromCtx(sidebarCtxSet)"
+        >
+          <Tooltip
+            :text="`Rank the library against ${sidebarCtxSet.name} to find pictures that belong in it`"
+            activator="parent"
+          />
+          <v-icon class="ctx-icon">mdi-image-search</v-icon>
+          <span class="ctx-label-text">Suggest more pictures</span>
+        </button>
         <button
           class="ctx-item"
           :disabled="

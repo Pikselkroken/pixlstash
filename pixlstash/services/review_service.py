@@ -12,7 +12,7 @@ Mirrors the vault-task conventions of the sibling services (all DB access via
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import func, or_
@@ -178,7 +178,7 @@ def create_review(
             set_id=set_id,
             character_id=character_id,
             status=OPEN,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
         session.add(review)
         session.commit()
@@ -522,7 +522,7 @@ def refresh_review(
 
     def _update(session: Session) -> dict:
         row = session.get(Review, review_id)
-        row.refreshed_at = datetime.utcnow()
+        row.refreshed_at = datetime.now(timezone.utc)
         row.scanned = scan["scanned"]
         row.prev_reviewed = scan["prev_reviewed"]
         # found = everything currently in the review's queue (all statuses).

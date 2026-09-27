@@ -874,7 +874,6 @@ const sortRowOptions = computed(() =>
   filteredSortOptions.value.map((opt) => ({
     id: opt.value,
     label: opt.label,
-    icon: gbGetSortIcon(opt.value),
   })),
 );
 

@@ -1,5 +1,5 @@
 <template>
-  <div class="fm-cascade" @keydown.left="onLeft">
+  <div class="fm-cascade" @keydown.left.capture="onLeft">
     <div ref="rootRef" class="tbm fm-root" role="group" aria-label="Filters">
       <span class="tbm-caret tbm-caret--start"></span>
       <div class="tbm-header">
@@ -81,8 +81,8 @@
       class="fm-sub-slot"
       :style="{ marginTop: `${subTop}px` }"
     >
-      <!-- Media, Faces, Stacks, Sharing: pick one. "Any" is left out on
-           purpose; removing the chip (or Clear) is how you get back to any. -->
+      <!-- Media, Faces, Stacks, Sharing: pick one, led by the row that turns
+           the filter off ("All" or "Any"), so no filter is a choice too. -->
       <div
         v-if="PICK_ONE[sub]"
         class="tbm fm-sub"
@@ -91,15 +91,6 @@
       >
         <div class="tbm-header">
           <span class="tbm-title">{{ PICK_ONE[sub].title }}</span>
-          <span class="tbm-spacer"></span>
-          <button
-            class="tbm-ghost"
-            type="button"
-            :disabled="pickValue(sub) == null"
-            @click="setPick(sub, null)"
-          >
-            Clear
-          </button>
         </div>
         <div class="tbm-section">
           <OptionRows
@@ -107,14 +98,12 @@
             :model-value="pickValue(sub)"
             :aria-label="PICK_ONE[sub].title"
             @update:model-value="(id) => setPick(sub, id)"
+            @pick="backToRow"
           >
             <template #meta="{ option }">
               <span class="fm-n">{{ formatCount(option.count) }}</span>
             </template>
           </OptionRows>
-        </div>
-        <div class="tbm-footer">
-          On the strip as "{{ PICK_ONE[sub].kind }} {{ pickFooterChip(sub) }}".
         </div>
       </div>
 
@@ -126,108 +115,48 @@
       >
         <div class="tbm-header">
           <span class="tbm-title">Score</span>
-          <span class="tbm-spacer"></span>
-          <button
-            class="tbm-ghost"
-            type="button"
-            :disabled="!scoreActive"
-            @click="clearScore"
-          >
-            Clear
-          </button>
-        </div>
-        <div
-          class="tbm-section"
-          role="radiogroup"
-          aria-label="At least"
-          @keydown="(e) => onStarKeydown(e, 'minScoreFilter')"
-        >
-          <span class="tbm-label">At least</span>
-          <button
-            v-for="o in starOptions('minScoreFilter')"
-            :key="`minScoreFilter-${o.id}`"
-            class="fm-row"
-            type="button"
-            role="radio"
-            :aria-checked="store.minScoreFilter === o.id ? 'true' : 'false'"
-            :aria-label="o.id == null ? 'Any' : `At least ${o.id} stars`"
-            :tabindex="
-              o.id ===
-              tabStopId(starOptions('minScoreFilter'), store.minScoreFilter)
-                ? 0
-                : -1
-            "
-            :disabled="o.disabled"
-            @click="setStar('minScoreFilter', o.id)"
-          >
-            <span class="fm-row-label">
-              <template v-if="o.id == null">Any</template>
-              <span v-else class="fm-stars" aria-hidden="true">
-                <v-icon
-                  v-for="i in 5"
-                  :key="i"
-                  size="14"
-                  :class="{ 'fm-star--off': i > o.id }"
-                  >mdi-star</v-icon
-                >
-              </span>
-            </span>
-            <v-icon size="16" class="fm-row-trail">{{
-              store.minScoreFilter === o.id ? "mdi-check" : ""
-            }}</v-icon>
-          </button>
-        </div>
-        <div
-          class="tbm-section"
-          role="radiogroup"
-          aria-label="At most"
-          @keydown="(e) => onStarKeydown(e, 'maxScoreFilter')"
-        >
-          <span class="tbm-label">At most</span>
-          <button
-            v-for="o in starOptions('maxScoreFilter')"
-            :key="`maxScoreFilter-${o.id}`"
-            class="fm-row"
-            type="button"
-            role="radio"
-            :aria-checked="store.maxScoreFilter === o.id ? 'true' : 'false'"
-            :aria-label="o.id == null ? 'Any' : `At most ${o.id} stars`"
-            :tabindex="
-              o.id ===
-              tabStopId(starOptions('maxScoreFilter'), store.maxScoreFilter)
-                ? 0
-                : -1
-            "
-            :disabled="o.disabled"
-            @click="setStar('maxScoreFilter', o.id)"
-          >
-            <span class="fm-row-label">
-              <template v-if="o.id == null">Any</template>
-              <span v-else class="fm-stars" aria-hidden="true">
-                <v-icon
-                  v-for="i in 5"
-                  :key="i"
-                  size="14"
-                  :class="{ 'fm-star--off': i > o.id }"
-                  >mdi-star</v-icon
-                >
-              </span>
-            </span>
-            <v-icon size="16" class="fm-row-trail">{{
-              store.maxScoreFilter === o.id ? "mdi-check" : ""
-            }}</v-icon>
-          </button>
         </div>
         <div class="tbm-section">
-          <label class="tbm-check fm-check">
-            <input
-              type="checkbox"
-              :checked="store.unscoredOnlyFilter"
-              @change="store.unscoredOnlyFilter = $event.target.checked"
-            />
-            <span class="fm-check-label">Include unscored</span>
-            <span class="fm-n">{{ formatCount(count("unscored=1")) }}</span>
-          </label>
+          <span class="tbm-label">At least</span>
+          <OptionRows
+            :options="starOptions('minScoreFilter')"
+            :model-value="starValue('minScoreFilter')"
+            aria-label="At least"
+            @update:model-value="(n) => setStar('minScoreFilter', n)"
+          >
+            <template #label="{ option }">
+              <span class="fm-stars" aria-hidden="true">
+                <v-icon
+                  v-for="i in 5"
+                  :key="i"
+                  size="14"
+                  :class="{ 'fm-star--off': i > option.id }"
+                  >mdi-star</v-icon
+                >
+              </span>
+            </template>
+          </OptionRows>
+        </div>
+        <div class="tbm-section">
+          <span class="tbm-label">At most</span>
+          <OptionRows
+            :options="starOptions('maxScoreFilter')"
+            :model-value="starValue('maxScoreFilter')"
+            aria-label="At most"
+            @update:model-value="(n) => setStar('maxScoreFilter', n)"
+          >
+            <template #label="{ option }">
+              <span class="fm-stars" aria-hidden="true">
+                <v-icon
+                  v-for="i in 5"
+                  :key="i"
+                  size="14"
+                  :class="{ 'fm-star--off': i > option.id }"
+                  >mdi-star</v-icon
+                >
+              </span>
+            </template>
+          </OptionRows>
         </div>
         <div class="tbm-footer">{{ scoreHint }}</div>
       </div>
@@ -258,12 +187,29 @@
             <input
               type="checkbox"
               :disabled="!allPicturesView"
-              :checked="allPicturesView && store.unassignedOnlyFilter"
-              @change="store.unassignedOnlyFilter = $event.target.checked"
+              :checked="allPicturesView && store.noCharacterFilter"
+              @change="store.noCharacterFilter = $event.target.checked"
             />
             <span class="fm-check-label">No character</span>
             <span v-if="allPicturesView" class="fm-n">{{
-              formatCount(count("character_id=UNASSIGNED"))
+              formatCount(
+                count("character_id=UNASSIGNED&unassigned_by=character"),
+              )
+            }}</span>
+          </label>
+          <label
+            class="tbm-check fm-check"
+            :class="{ 'fm-check--off': !allPicturesView }"
+          >
+            <input
+              type="checkbox"
+              :disabled="!allPicturesView"
+              :checked="allPicturesView && store.noSetFilter"
+              @change="store.noSetFilter = $event.target.checked"
+            />
+            <span class="fm-check-label">In no set</span>
+            <span v-if="allPicturesView" class="fm-n">{{
+              formatCount(count("character_id=UNASSIGNED&unassigned_by=set"))
             }}</span>
           </label>
           <label class="tbm-check fm-check">
@@ -296,43 +242,39 @@
             </label>
           </div>
         </div>
-        <div class="tbm-footer">
-          {{
-            allPicturesView
-              ? 'Chips read "Problem no character".'
-              : "No character works in All Pictures."
-          }}
+        <div v-if="!allPicturesView" class="tbm-footer">
+          No character and In no set work in All Pictures.
         </div>
       </div>
 
-      <FilterChecklistMenu
+      <FilterTagField
         v-else-if="sub === 'tags'"
         title="Tags"
-        placeholder="Filter tags…"
-        :items="tagItems"
-        :checked="tagMode === 'has' ? store.tagFilter : store.tagRejectedFilter"
-        :clearable="
-          Boolean(store.tagFilter.length || store.tagRejectedFilter.length)
-        "
-        empty-text="No tag matches."
-        @toggle="toggleTag"
-        @clear="clearTags"
-      >
-        <template #top>
-          <Segmented
-            v-model="tagMode"
-            :options="TAG_MODE_OPTIONS"
-            full
-            aria-label="Tag rule"
-            class="fm-seg"
-          />
-        </template>
-      </FilterChecklistMenu>
-
-      <FilterConfidenceMenu
-        v-else-if="sub === 'confidence'"
         :tags="tagRows"
-        :count="count"
+        :rows="tagFieldRows"
+        footer="Click a chip to flip it between has and lacks."
+        @add="setTag"
+        @flip="
+          (chip, from) => setTag(chip.tag, from === 'has' ? 'lacks' : 'has')
+        "
+        @remove="(chip, rule) => toggleIn(TAG_FIELDS[rule], chip.tag, false)"
+        @clear="clearTags"
+      />
+
+      <FilterTagField
+        v-else-if="sub === 'confidence'"
+        title="Tag confidence"
+        :tags="tagRows"
+        :rows="confidenceFieldRows"
+        footer="Click a chip to flip it between missing and doubtful; its % is its own menu."
+        @add="setConfidence"
+        @flip="
+          (chip, from) =>
+            setConfidence(chip.tag, from === 'missing' ? 'doubtful' : 'missing')
+        "
+        @threshold="setThreshold"
+        @remove="removeConfidence"
+        @clear="clearConfidence"
       />
 
       <FilterChecklistMenu
@@ -377,10 +319,8 @@
  */
 import { computed, nextTick, reactive, ref, watch } from "vue";
 import OptionRows from "../widgets/OptionRows.vue";
-import Segmented from "../widgets/Segmented.vue";
-import { arrowStep, tabStopId } from "../../utils/radioGroup.js";
 import FilterChecklistMenu from "./FilterChecklistMenu.vue";
-import FilterConfidenceMenu from "./FilterConfidenceMenu.vue";
+import FilterTagField from "./FilterTagField.vue";
 import { isReadOnly } from "../../utils/apiClient";
 import { listTags } from "../../api/tags";
 import { listComfyuiLoras, listComfyuiModels } from "../../api/pictures";
@@ -392,12 +332,16 @@ import {
   useFilterCounts,
 } from "../../composables/useFilterCounts";
 import {
+  CONFIDENCE_THRESHOLDS,
+  DOUBTFUL_THRESHOLDS,
   FACE_OPTIONS,
   IMPOSSIBLE_OPTIONS,
   MEDIA_OPTIONS,
   STACK_OPTIONS,
+  confidenceEntry,
   filterChips,
   modelLabel,
+  parseConfidenceEntry,
   scoreChipValue,
 } from "../../utils/filterChips";
 
@@ -429,12 +373,12 @@ const CONTENT_KINDS = [
 const formatParams = (exts) =>
   filterParams(exts.map((e) => ["format", e.toUpperCase()]));
 
-// Each pick-one kind: its store field, its "off" value, and the one query
-// parameter a choice adds for its count.
+// Each pick-one kind: its store field, its "off" value and that row's label,
+// and the one query parameter a choice adds for its count.
 const PICK_ONE = {
   media: {
     title: "Media",
-    kind: "Media",
+    anyLabel: "All",
     field: "mediaTypeFilter",
     off: "all",
     options: MEDIA_OPTIONS,
@@ -443,7 +387,7 @@ const PICK_ONE = {
   },
   faces: {
     title: "Faces",
-    kind: "Faces",
+    anyLabel: "Any",
     field: "faceBboxFilter",
     off: null,
     options: FACE_OPTIONS,
@@ -451,7 +395,7 @@ const PICK_ONE = {
   },
   stacks: {
     title: "Stacks",
-    kind: "Stacks",
+    anyLabel: "All",
     field: "stackStateFilter",
     off: "all",
     options: STACK_OPTIONS,
@@ -461,7 +405,7 @@ const PICK_ONE = {
   // complement, so "Not shared" waits on that.
   sharing: {
     title: "Sharing",
-    kind: "Sharing",
+    anyLabel: "All",
     field: "sharedOnlyFilter",
     off: false,
     options: [
@@ -476,11 +420,7 @@ const PICK_ONE = {
   },
 };
 
-const STAR_ROWS = [null, 1, 2, 3, 4, 5];
-const TAG_MODE_OPTIONS = [
-  { id: "has", label: "Has tag" },
-  { id: "lacks", label: "Lacks tag" },
-];
+const STAR_ROWS = [0, 1, 2, 3, 4, 5];
 
 const sub = ref(null);
 const subTop = ref(0);
@@ -560,11 +500,28 @@ function toggle(kind) {
   else openKind(kind);
 }
 
-// Left arrow inside a submenu returns to its row, unless it is moving a caret.
+// Left arrow inside a submenu returns to its row, unless it is moving a caret
+// or a chip's threshold. Caught in the capture phase so a radio group's own
+// arrow handling never sees it and changes the pick instead.
 function onLeft(event) {
-  if (!sub.value || event.target?.tagName === "INPUT") return;
-  if (!subRef.value?.contains(event.target)) return;
+  const target = event.target;
+  const field = target?.tagName === "INPUT" ? target : null;
+  if (
+    !sub.value ||
+    target?.tagName === "SELECT" ||
+    (field && (field.selectionStart || field.selectionEnd))
+  ) {
+    return;
+  }
+  if (!subRef.value?.contains(target)) return;
   event.preventDefault();
+  event.stopPropagation();
+  backToRow();
+}
+
+// A deliberate pick in a pick-one submenu (not an arrow browsing it) is done
+// with that submenu. Score keeps its menu: it has two groups to set.
+function backToRow() {
   rowRefs[sub.value]?.focus();
   sub.value = null;
 }
@@ -587,12 +544,13 @@ watch(
 );
 
 // ── Pick-one kinds ───────────────────────────────────────────────────────────
+// The off row carries the unfiltered count.
 function pickOptions(kind) {
   const def = PICK_ONE[kind];
-  return def.options.map((o) => ({
-    ...o,
-    count: count(def.params(o.id)),
-  }));
+  return [
+    { id: null, label: def.anyLabel, count: total.value },
+    ...def.options.map((o) => ({ ...o, count: count(def.params(o.id)) })),
+  ];
 }
 
 function pickValue(kind) {
@@ -606,63 +564,55 @@ function setPick(kind, id) {
   store[def.field] = id == null ? def.off : id;
 }
 
-// The chosen option's chip, or the first option's as an example.
-function pickFooterChip(kind) {
-  const def = PICK_ONE[kind];
-  const value = pickValue(kind);
-  return (def.options.find((o) => o.id === value) ?? def.options[0]).chip;
-}
-
 // ── Score ────────────────────────────────────────────────────────────────────
-const scoreActive = computed(
-  () =>
-    store.minScoreFilter != null ||
-    store.maxScoreFilter != null ||
-    store.unscoredOnlyFilter,
-);
-
+// 0 stars is unrated (score empty or 0), so At least 0 and At most 5 are the
+// whole library and there is no separate "Any" or "Include unscored": a range
+// from 0 takes the unrated with it, and At most 0 is the unrated alone. The
+// store keeps its three fields; `unscoredOnlyFilter` is derived from the two.
 const scoreHint = computed(() => {
   const min = store.minScoreFilter;
-  if (min === 2) return "1 is dimmed under At most: it is below the minimum.";
-  if (min > 2) {
-    return `1–${min - 1} are dimmed under At most: they are below the minimum.`;
+  if (min === 1) return "0 is dimmed under At most: it is below the minimum.";
+  if (min > 1) {
+    return `0–${min - 1} are dimmed under At most: they are below the minimum.`;
   }
-  return "At least and At most make one Score chip.";
+  return "0 stars is unrated.";
 });
 
-// At most rows below the minimum are disabled, which arrowStep and tabStopId
-// both skip.
+function starValue(field) {
+  if (field === "minScoreFilter") return store.minScoreFilter ?? 0;
+  if (store.maxScoreFilter != null) return store.maxScoreFilter;
+  // Unrated alone, as the stats sidebar sets it, reads as At most 0.
+  return store.unscoredOnlyFilter && store.minScoreFilter == null ? 0 : 5;
+}
+
+// At most rows below the minimum are disabled, which the radiogroup's arrows
+// skip. The rows draw stars, so each names itself for a screen reader.
 function starOptions(field) {
-  const min = store.minScoreFilter;
+  const min = store.minScoreFilter ?? 0;
+  const word = field === "minScoreFilter" ? "At least" : "At most";
   return STAR_ROWS.map((id) => ({
     id,
-    disabled:
-      field === "maxScoreFilter" && id != null && min != null && id < min,
+    ariaLabel: `${word} ${id} stars`,
+    disabled: field === "maxScoreFilter" && id < min,
   }));
 }
 
+// Starts from the range the menu SHOWS, not the raw fields: the stats sidebar's
+// unrated-only filter leaves both fields null and reads as At most 0, so
+// deriving from the raw fields would drop it on a click that changes nothing.
 function setStar(field, n) {
-  store[field] = n;
-  if (
-    field === "minScoreFilter" &&
-    n != null &&
-    store.maxScoreFilter != null &&
-    store.maxScoreFilter < n
-  ) {
-    store.maxScoreFilter = n;
+  let min = starValue("minScoreFilter");
+  let max = starValue("maxScoreFilter");
+  if (field === "minScoreFilter") {
+    min = n;
+    max = Math.max(max, n);
+  } else {
+    max = n;
   }
-}
-
-// The radiogroup contract (utils/radioGroup.js): one tab stop, arrows select.
-function onStarKeydown(event, field) {
-  const id = arrowStep(event, starOptions(field), store[field]);
-  if (id !== undefined) setStar(field, id);
-}
-
-function clearScore() {
-  store.minScoreFilter = null;
-  store.maxScoreFilter = null;
-  store.unscoredOnlyFilter = false;
+  store.minScoreFilter = min || null;
+  store.maxScoreFilter = max === 5 ? null : max;
+  store.unscoredOnlyFilter =
+    store.minScoreFilter == null && store.maxScoreFilter != null;
 }
 
 // ── Problems ─────────────────────────────────────────────────────────────────
@@ -679,7 +629,7 @@ const impossibleAllParams = filterParams(
 const problemsActive = computed(
   () =>
     impossibleCount.value > 0 ||
-    (props.allPicturesView && store.unassignedOnlyFilter),
+    (props.allPicturesView && (store.noCharacterFilter || store.noSetFilter)),
 );
 
 function setAllImpossible(on) {
@@ -692,20 +642,17 @@ function toggleImpossible(id, on) {
 
 function clearProblems() {
   store.impossibleSources = [];
-  store.unassignedOnlyFilter = false;
+  store.noCharacterFilter = false;
+  store.noSetFilter = false;
 }
 
 // ── Lists: tags, models, LoRAs ───────────────────────────────────────────────
 const tagRows = ref([]);
 const modelNames = ref([]);
 const loraNames = ref([]);
-const tagMode = ref("has");
 
 // /tags counts span the pictures this session may see, not the current view:
 // one request for the whole vocabulary rather than one per tag.
-const tagItems = computed(() =>
-  tagRows.value.map((t) => ({ value: t.tag, label: t.tag, count: t.count })),
-);
 const modelItems = computed(() =>
   modelNames.value.map((m) => ({
     value: m.value,
@@ -744,19 +691,109 @@ function toggleIn(field, value, on) {
     : current.filter((v) => v !== value);
 }
 
+// ── Tags and Tag confidence: a field that adds chips ─────────────────────────
+const TAG_FIELDS = { has: "tagFilter", lacks: "tagRejectedFilter" };
+
+const tagFieldRows = computed(() => [
+  {
+    id: "has",
+    label: "Has tag",
+    short: "has",
+    tone: "has",
+    icon: "mdi-check",
+    chips: store.tagFilter.map((tag) => ({ tag })),
+  },
+  {
+    id: "lacks",
+    label: "Lacks tag",
+    short: "lacks",
+    tone: "lacks",
+    icon: "mdi-cancel",
+    chips: store.tagRejectedFilter.map((tag) => ({ tag })),
+  },
+]);
+
 // A tag is either required or excluded, never both.
-function toggleTag(tag, on) {
-  const [into, other] =
-    tagMode.value === "has"
-      ? ["tagFilter", "tagRejectedFilter"]
-      : ["tagRejectedFilter", "tagFilter"];
-  toggleIn(into, tag, on);
-  if (on) toggleIn(other, tag, false);
+function setTag(tag, rule) {
+  toggleIn(TAG_FIELDS[rule], tag, true);
+  toggleIn(TAG_FIELDS[rule === "has" ? "lacks" : "has"], tag, false);
 }
 
 function clearTags() {
   store.tagFilter = [];
   store.tagRejectedFilter = [];
+}
+
+// Missing asks for a confident tagger, doubtful for an unsure one, so each
+// kind has its own thresholds and its own default.
+const CONFIDENCE_KINDS = {
+  missing: {
+    field: "tagConfidenceAboveFilter",
+    thresholds: CONFIDENCE_THRESHOLDS,
+    initial: 0.8,
+  },
+  doubtful: {
+    field: "tagConfidenceBelowFilter",
+    thresholds: DOUBTFUL_THRESHOLDS,
+    initial: 0.4,
+  },
+};
+
+const confidenceFieldRows = computed(() => [
+  {
+    id: "missing",
+    label: "Missing — tagger sees it, tag not applied",
+    short: "missing",
+    sign: "≥",
+    thresholds: CONFIDENCE_KINDS.missing.thresholds,
+    chips: (store.tagConfidenceAboveFilter || []).map(parseConfidenceEntry),
+  },
+  {
+    id: "doubtful",
+    label: "Doubtful — applied, tagger unsure",
+    short: "doubtful",
+    sign: "<",
+    thresholds: CONFIDENCE_KINDS.doubtful.thresholds,
+    chips: (store.tagConfidenceBelowFilter || []).map(parseConfidenceEntry),
+  },
+]);
+
+function withoutTag(entries, tag) {
+  return (entries || []).filter((e) => parseConfidenceEntry(e).tag !== tag);
+}
+
+// Adding a tag gives it one rule: it leaves the other kind, and a tag already
+// in this kind keeps its threshold. Missing and doubtful cannot both hold for
+// one picture, so the two together would only ever match nothing.
+function setConfidence(tag, kind) {
+  const def = CONFIDENCE_KINDS[kind];
+  const other = CONFIDENCE_KINDS[kind === "missing" ? "doubtful" : "missing"];
+  store[other.field] = withoutTag(store[other.field], tag);
+  const mine = store[def.field] || [];
+  if (mine.some((e) => parseConfidenceEntry(e).tag === tag)) return;
+  store[def.field] = [...mine, confidenceEntry(tag, def.initial)];
+}
+
+// The threshold menu and the × act on the one chip, never on every entry for
+// its tag: the stats sidebar can hold several (one per histogram bucket).
+function setThreshold(chip, kind, threshold) {
+  const field = CONFIDENCE_KINDS[kind].field;
+  const was = confidenceEntry(chip.tag, chip.threshold);
+  const now = confidenceEntry(chip.tag, threshold);
+  store[field] = (store[field] || [])
+    .filter((e) => e !== now)
+    .map((e) => (e === was ? now : e));
+}
+
+function removeConfidence(chip, kind) {
+  const field = CONFIDENCE_KINDS[kind].field;
+  const entry = confidenceEntry(chip.tag, chip.threshold);
+  store[field] = (store[field] || []).filter((e) => e !== entry);
+}
+
+function clearConfidence() {
+  store.tagConfidenceAboveFilter = [];
+  store.tagConfidenceBelowFilter = [];
 }
 </script>
 
@@ -790,9 +827,6 @@ function clearTags() {
 .fm-star--off {
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
   opacity: 0.6;
-}
-.fm-seg {
-  margin-bottom: var(--space-2);
 }
 .fm-check--off {
   opacity: var(--opacity-disabled);

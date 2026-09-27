@@ -21,7 +21,7 @@ import gc
 import json
 import os
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -69,7 +69,12 @@ def _seed(server):
         session.flush()
 
         def _pic(name, **kwargs):
-            pic = Picture(file_path=name, score=0, imported_at=datetime.now(), **kwargs)
+            pic = Picture(
+                file_path=name,
+                score=0,
+                imported_at=datetime.now(timezone.utc),
+                **kwargs,
+            )
             session.add(pic)
             session.flush()
             return pic

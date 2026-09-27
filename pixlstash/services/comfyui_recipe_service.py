@@ -24,12 +24,17 @@ import math
 import random
 import re
 from copy import deepcopy
-from typing import Any, Optional
+from graphlib import CycleError, TopologicalSorter
+from typing import Any, Callable, Optional
 
 import requests
 
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.workflow_hash import MODEL_EXTENSIONS, is_link
+from pixlstash.services.workflow_hash import (
+    MODEL_EXTENSIONS,
+    is_link,
+    reduce_api_graph,
+)
 
 logger = get_logger(__name__)
 
@@ -77,7 +82,7 @@ INPUT_IMAGE_FIELDS: dict[str, tuple[str, ...]] = {
 LORA_FILENAME_FIELD_RE = re.compile(r"^lora_name(_\d+)?$")
 LORA_DIGEST_FIELDS = ("adapter_sha256", "lora_sha256")
 # The same names as a PATTERN, for the different question "is this widget a
-# LoRA slot at all?" - which `workflow_identity._is_lora_widget` asks of a
+# LoRA slot at all?" - which `workflow_identity.is_lora_widget` asks of a
 # widget it already has, and which has to cover the numbered spelling because
 # `workflow_hash.SHA256_FIELD_RE` keys one as an asset. A digest slot missed
 # here lands in the card key with no mark check, so swapping a character LoRA
@@ -96,6 +101,14 @@ _LORA_STRENGTH_FIELDS = (("model", "strength_model"), ("clip", "strength_clip"))
 # The ComfyUI-PixlStash loader: LoraLoader's signature with the file named by
 # digest, so it can go where ComfyUI does not have the file by name (#1376).
 PIXLSTASH_ADAPTER_LOADER = "PixlStashAdapterLoader"
+
+# How to get the ComfyUI-PixlStash node pack, ending every sentence that
+# refuses for want of it. The frontend's copy is PIXLSTASH_PACK_INSTALL in
+# frontend/src/utils/runReasons.js.
+PIXLSTASH_PACK_INSTALL_HINT = (
+    'Install ComfyUI-PixlStash from ComfyUI Manager (search "PixlStash") or '
+    "from github.com/Pikselkroken/ComfyUI-PixlStash, then restart ComfyUI."
+)
 
 # Loader input fields that hold a model FILE NAME, keyed by the node's own
 # `class_type`. Checks are filename-level only: we compare the graph's value
@@ -267,6 +280,73 @@ def _combo_options(node_spec: Any, field: str) -> list[str] | None:
         return None
     values = [opt for opt in options if isinstance(opt, str)]
     return values or None
+
+
+# ComfyUI's own loaders, which read their model folder on every
+# ``object_info``: an empty list from one of these means the folder holds
+# nothing, never "filled in later". Custom packs are left out because their
+# lists may be lazy (see :func:`_combo_options`).
+CORE_FOLDER_LOADERS = frozenset(
+    {
+        "CheckpointLoaderSimple",
+        "CheckpointLoader",
+        "UNETLoader",
+        "LoraLoader",
+        "LoraLoaderModelOnly",
+        "VAELoader",
+        "CLIPLoader",
+        "DualCLIPLoader",
+        "TripleCLIPLoader",
+        "CLIPVisionLoader",
+        "ControlNetLoader",
+        "DiffControlNetLoader",
+        "StyleModelLoader",
+        "GLIGENLoader",
+        "UpscaleModelLoader",
+        "HypernetworkLoader",
+        "PhotoMakerLoader",
+    }
+)
+
+
+def _lists_nothing(node_spec: Any, field: str) -> bool:
+    """Whether *field* is a combo whose embedded option list is empty."""
+    found = find_input_spec(node_spec, field)
+    if found is None:
+        return False
+    type_field, opts = found
+    if opts.get("remote"):
+        return False
+    if type_field == "COMBO":
+        type_field = opts.get("options")
+    return isinstance(type_field, (list, tuple)) and not any(
+        isinstance(opt, str) for opt in type_field
+    )
+
+
+def listed_options(
+    object_info: dict | None, class_type: str, field: str
+) -> list[str] | None:
+    """What ComfyUI lists for one loader field, or ``None`` when it cannot say.
+
+    ``None`` for no ``object_info``, a class it does not declare, or a field it
+    does not enumerate (see :func:`_combo_options`): each means "unchecked".
+    ``[]`` only for a model field of a :data:`CORE_FOLDER_LOADERS` loader that
+    lists nothing: that folder is empty, so every file it is asked for is
+    missing.
+    """
+    if object_info is None:
+        return None
+    spec = object_info.get(class_type)
+    options = _combo_options(spec, field)
+    if (
+        options is None
+        and class_type in CORE_FOLDER_LOADERS
+        and field in MODEL_FILENAME_FIELDS.get(class_type, ())
+        and _lists_nothing(spec, field)
+    ):
+        return []
+    return options
 
 
 def _normalize_filename(value: str) -> str:
@@ -447,7 +527,7 @@ def preflight_prompt(prompt_graph: dict, object_info: dict) -> dict:
             if not isinstance(value, str) or not value:
                 # Missing, or wired from another node - not a literal filename.
                 continue
-            options = _combo_options(object_info.get(class_type), field)
+            options = listed_options(object_info, class_type, field)
             if options is None:
                 unchecked_fields += 1
                 continue
@@ -625,6 +705,155 @@ def apply_model_swap(
             )
             break
     return substitutions
+
+
+def _swap_key(value: str, swaps: dict[str, str]) -> str | None:
+    """The key of *swaps* one loader value names, or ``None``.
+
+    The whole recorded name only, separators unified and case folded. There is
+    no basename tier: the clone dialog sends the graph's own values as keys, so
+    an exact match always exists, and a basename one would let a swap of
+    ``diffusion_pytorch_model.safetensors`` rewrite a ControlNet loader's
+    ``canny/diffusion_pytorch_model.safetensors`` too. Two keys folding onto
+    one value is no answer: which of them was meant is a guess.
+    """
+    wanted = _normalize_filename(value).lower()
+    hits = [was for was in swaps if _normalize_filename(was).lower() == wanted]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _option_by_basename(value: str, options: list[str]) -> str | None:
+    """The one option whose basename is *value*'s, in ComfyUI's spelling.
+
+    A shelf row knows its file by name, and ComfyUI lists it under whatever
+    subfolder of its model folder it sits in (``flux/krea2.safetensors``), so a
+    whole-name match alone would refuse nearly every real swap. Two options of
+    that basename is not an answer. Case is kept, as in :func:`_matching_option`.
+    """
+    hits = _options_by_basename(value, options)
+    return hits[0] if len(hits) == 1 else None
+
+
+def _options_by_basename(value: str, options: list[str]) -> list[str]:
+    """Every option whose basename is *value*'s, in ComfyUI's spelling."""
+    base = _normalize_filename(value).rsplit("/", 1)[-1]
+    return [
+        option
+        for option in options
+        if _normalize_filename(option).rsplit("/", 1)[-1] == base
+    ]
+
+
+def listed_as(filename: str, options: list[str]) -> str | None:
+    """How a loader lists *filename*, or ``None`` when it does not.
+
+    The rule :func:`apply_filename_swap` writes a replacement by: the exact
+    option, else the one option of that basename. Shared so a file offered as
+    a replacement is one the rewrite will then load.
+    """
+    return _matching_option(filename, options) or _option_by_basename(filename, options)
+
+
+def apply_filename_swap(
+    prompt_graph: dict,
+    swaps: dict[str, str],
+    object_info: dict | None = None,
+    fields: Callable[[str, str], bool] | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Point every loader naming one file at another file instead.
+
+    The clone-with-new-models rewrite. Deliberately not :func:`apply_model_swap`:
+    that one substitutes **the same bytes** under another name, aimed at fields
+    ComfyUI cannot load; this one replaces a file that loads perfectly well with
+    a **different** file the owner chose. Same shape, opposite intent.
+
+    Swapped by filename, never by node address: every loader field naming a
+    *swaps* key is rewritten, wherever it is in the graph. The fields read come
+    from :func:`pixlstash.utils.comfyui_utilities.iter_model_fields_api`, the
+    walk the clone dialog's slot list reads too, so the two agree on which
+    widgets name a model.
+
+    With *object_info* the replacement is written in **the option's spelling**
+    (:func:`_matching_option`, then :func:`_option_by_basename`), because
+    ComfyUI compares exactly; a replacement
+    that loader does not advertise is left unwritten and reported. Without it
+    the replacement is written as given and marked ``verified: False``: the
+    clone must not need ComfyUI to be running.
+
+    Args:
+        prompt_graph: The API-format graph, mutated in place.
+        swaps: The graph's filename -> the filename to load instead.
+        object_info: The map from :func:`fetch_object_info`, or ``None``.
+        fields: Only rewrite the fields for which ``fields(class_type,
+            field)`` is true, or every model field when ``None``. A
+            workflow's model fix names one kind of model, and a field of
+            another kind holding a file of the same name is no place for it.
+
+    Returns:
+        ``(substitutions, unswapped)``. One ``{node_id, class_type, field, was,
+        now, verified}`` per field rewritten, and one ``{was, now, reason}`` per
+        swap that did not land: ``not_in_graph`` when no field names it,
+        ``not_on_comfyui`` when ComfyUI does not list the replacement, and
+        ``several_on_comfyui`` when it lists that name in more than one folder.
+    """
+    # Local for the cycle: `comfyui_utilities` imports `model_filename_fields`
+    # from this module.
+    from pixlstash.utils.comfyui_utilities import iter_model_fields_api
+
+    substitutions: list[dict] = []
+    unswapped: list[dict] = []
+    matched: set[str] = set()
+    # Listed first, then written: the walk reads the inputs it rewrites.
+    for node_id, class_type, field, value in list(iter_model_fields_api(prompt_graph)):
+        if fields is not None and not fields(class_type, field):
+            continue
+        key = _swap_key(value, swaps)
+        if key is None:
+            continue
+        matched.add(key)
+        now = swaps[key]
+        verified = False
+        options = (
+            _combo_options(object_info.get(class_type), field)
+            if object_info is not None
+            else None
+        )
+        if options:
+            listed = listed_as(now, options)
+            if listed is None:
+                # Two files of that name in two folders may be two different
+                # models: writing either is a guess, so it is refused - but as
+                # what it is, not as a file ComfyUI does not have.
+                several = len(_options_by_basename(now, options)) > 1
+                unswapped.append(
+                    {
+                        "was": value,
+                        "now": now,
+                        "reason": "several_on_comfyui" if several else "not_on_comfyui",
+                    }
+                )
+                continue
+            now, verified = listed, True
+        if now == value:
+            # The owner kept this file: nothing to write or report.
+            continue
+        prompt_graph[node_id]["inputs"][field] = now
+        substitutions.append(
+            {
+                "node_id": str(node_id),
+                "class_type": class_type,
+                "field": field,
+                "was": value,
+                "now": now,
+                "verified": verified,
+            }
+        )
+    unswapped.extend(
+        {"was": was, "now": now, "reason": "not_in_graph"}
+        for was, now in swaps.items()
+        if was not in matched
+    )
+    return substitutions, unswapped
 
 
 def detect_seed_targets(prompt_graph: dict, object_info: dict) -> list[dict]:
@@ -948,6 +1177,58 @@ def apply_adapter(
     return written
 
 
+def _live_graph(graph: dict, object_info: dict) -> dict:
+    """*graph* without the nodes no output reads, as ComfyUI runs it.
+
+    ComfyUI executes backwards from its output nodes (``output_node`` in
+    ``object_info``: SaveImage, PreviewImage), so a leftover branch - a second
+    UNET loader and a LoRA wired into nothing - never runs, and must not be
+    read as a second model or a second chain. A graph whose ``object_info``
+    names no output node is returned whole: nothing says what is dead.
+    """
+    live = _live_ids(graph, object_info)
+    if live is None:
+        return graph
+    dead = sorted(set(map(str, graph)) - live)
+    if dead:
+        logger.info("Nodes %s feed no output, so the LoRA chain ignores them.", dead)
+    return {node_id: node for node_id, node in graph.items() if str(node_id) in live}
+
+
+def _output_ids(graph: dict, object_info: dict) -> list[str]:
+    """The ids of *graph*'s output nodes, as ``object_info`` marks them."""
+    return [
+        str(node_id)
+        for node_id, node in graph.items()
+        if isinstance(node, dict)
+        and (object_info.get(node.get("class_type")) or {}).get("output_node")
+    ]
+
+
+def _live_ids(graph: dict, object_info: dict) -> set[str] | None:
+    """The ids of the nodes some output reads, or ``None`` when none is known.
+
+    ``None`` rather than every id: a graph whose ``object_info`` names no
+    output node says nothing about which of its nodes are dead.
+    """
+    outputs = _output_ids(graph, object_info)
+    if not outputs:
+        return None
+    live: set[str] = set()
+    pending = list(outputs)
+    while pending:
+        node_id = pending.pop()
+        if node_id in live or not isinstance(graph.get(node_id), dict):
+            continue
+        live.add(node_id)
+        pending.extend(
+            str(value[0])
+            for value in (graph[node_id].get("inputs") or {}).values()
+            if is_link(value)
+        )
+    return live
+
+
 def _model_links(graph: dict, object_info: dict) -> list[dict]:
     """Every link in *graph* carrying a model or a CLIP, typed by its source.
 
@@ -959,13 +1240,20 @@ def _model_links(graph: dict, object_info: dict) -> list[dict]:
 
     Returns:
         ``[{"node_id", "class_type", "field", "type", "source", "kind"}, …]``,
-        ``type`` being ``MODEL``, ``CLIP`` or ``OTHER_MODEL`` (a model of a
-        kind a LoRA loader cannot patch), ``source`` ``(node_id, index)``.
+        ``type`` being ``MODEL`` or ``CLIP``, ``source`` ``(node_id, index)``.
+        A link carrying any other kind of model (an upscaler's, a detector's)
+        is left out: no LoRA loader goes on its path.
+
+    **A source ComfyUI cannot type is typed by its reader instead.** A seed
+    node from a pack this ComfyUI lacks hands the sampler an INT, and the
+    sampler's own spec says ``seed`` is an INT: that link is no model, and the
+    single MODEL path from checkpoint to sampler is still there to follow. Only
+    when neither end says what the link carries is it refused.
 
     Raises:
-        LookupError: A link whose source class this ComfyUI lacks, or whose
-            output list does not reach the link's index - what it hands on is
-            unknown, and it may be the model.
+        LookupError: A link neither end can type - a source class this ComfyUI
+            lacks (or whose output list does not reach the link's index) read
+            by an input whose type is unknown too - since it may be the model.
     """
     links: list[dict] = []
     for node_id, node in graph.items():
@@ -976,38 +1264,85 @@ def _model_links(graph: dict, object_info: dict) -> list[dict]:
                 continue
             source_class = graph[value[0]].get("class_type")
             spec = object_info.get(source_class)
-            if not isinstance(spec, dict):
-                raise LookupError(
-                    f"This ComfyUI has no {source_class} node, so PixlStash cannot "
-                    f"tell what node {value[0]} hands on, or where a LoRA would go."
+            outputs = spec.get("output") if isinstance(spec, dict) else None
+            if isinstance(outputs, list) and 0 <= value[1] <= len(outputs) - 1:
+                kind = outputs[value[1]]
+            else:
+                # Not a type PixlStash can read off the source: no such class,
+                # no output list, or one shorter than the graph's own link. The
+                # reader's declared input type answers instead; with neither,
+                # the link may be the model itself.
+                kind = _declared_input_type(
+                    object_info.get(node.get("class_type")), field
                 )
-            outputs = spec.get("output")
-            if not isinstance(outputs, list) or not 0 <= value[1] <= len(outputs) - 1:
-                # Not a type PixlStash can read as "not a model": a spec with no
-                # output list, or one shorter than the graph's own link, hides
-                # exactly the second model chain the refusals below exist for.
-                raise LookupError(
-                    f"This ComfyUI does not say what {source_class} (node "
-                    f"{value[0]}) hands on, so PixlStash cannot tell whether a "
-                    "LoRA belongs there."
+                if kind is None:
+                    what = (
+                        f"This ComfyUI has no {source_class} node"
+                        if not isinstance(spec, dict)
+                        else f"This ComfyUI does not say what {source_class} hands on"
+                    )
+                    raise LookupError(
+                        f"{what}, and #{node_id} {node.get('class_type')} does not "
+                        f"say what its {field} takes, so PixlStash cannot tell "
+                        f"whether node {value[0]} hands on the model."
+                    )
+                logger.info(
+                    "Node %s (%s) cannot be typed by this ComfyUI; its link into "
+                    "#%s %s is read as %s, the type that input declares.",
+                    value[0],
+                    source_class,
+                    node_id,
+                    field,
+                    kind,
                 )
-            kind = outputs[value[1]]
-            # A MODEL-ish type that is not MODEL (WANVIDEOMODEL, and the packs
-            # that mint their own) is kept, because the > 1 refusal has to see
-            # it: a LoRA loader cannot patch it, and a graph carrying one beside
-            # a patchable model would otherwise run half-LoRA'd in silence.
-            if kind == "MODEL" or kind == "CLIP" or "MODEL" in str(kind):
+            # Only the two types a LoRA loader patches. Any other "model"
+            # (UPSCALE_MODEL, a detector, WANVIDEOMODEL) is on a path of its
+            # own, and the MODEL path from source to sampler is the only one a
+            # loader goes in.
+            if kind in ("MODEL", "CLIP"):
                 links.append(
                     {
                         "node_id": str(node_id),
                         "class_type": node.get("class_type"),
                         "field": field,
-                        "type": kind if kind in ("MODEL", "CLIP") else "OTHER_MODEL",
+                        "type": kind,
                         "source": (value[0], value[1]),
-                        "kind": kind,
                     }
                 )
     return links
+
+
+def _declared_input_type(node_spec: dict | None, field: str) -> str | None:
+    """The type *node_spec* declares for its input *field*, or ``None``.
+
+    A combo (a list of options) is a value, not a link type, and reads as
+    ``"COMBO"``. ``None`` for an unknown class, an undeclared field, or the
+    wildcard ``*``, none of which says what the link carries.
+    """
+    inputs = node_spec.get("input") if isinstance(node_spec, dict) else None
+    for group in ("required", "optional"):
+        entry = ((inputs or {}).get(group) or {}).get(field)
+        if not isinstance(entry, (list, tuple)) or not entry:
+            continue
+        declared = entry[0]
+        if isinstance(declared, list):
+            return "COMBO"
+        if isinstance(declared, str) and declared and declared != "*":
+            return declared
+        return None
+    return None
+
+
+def _sources(links: list[dict], kind: str) -> list[tuple]:
+    """Every ``(node_id, output)`` handing out *kind* from a node taking none."""
+    takers = {link["node_id"] for link in links if link["type"] == kind}
+    return sorted(
+        {
+            link["source"]
+            for link in links
+            if link["type"] == kind and link["source"][0] not in takers
+        }
+    )
 
 
 def _source_of(graph: dict, links: list[dict], kind: str) -> dict | None:
@@ -1017,14 +1352,7 @@ def _source_of(graph: dict, links: list[dict], kind: str) -> dict | None:
         LookupError: When there are several - a refiner, a merge: which one a
             LoRA is for is the owner's call.
     """
-    takers = {link["node_id"] for link in links if link["type"] == kind}
-    roots = sorted(
-        {
-            link["source"]
-            for link in links
-            if link["type"] == kind and link["source"][0] not in takers
-        }
-    )
+    roots = _sources(links, kind)
     if len(roots) > 1:
         named = ", ".join(f"#{n} {graph[n].get('class_type')}" for n, _ in roots)
         what = "models" if kind == "MODEL" else "text encoders"
@@ -1070,39 +1398,25 @@ def plan_lora_insertion(prompt_graph: dict, object_info: dict) -> dict:
         resolves by digest could be the one inserted, which is what makes a
         picture from that run unreplayable by "Generate variants".
 
+    **A node that loads a LoRA some way of its own does not stop it.** A
+    stacker, a prompt-tag encoder or a character prompt builder is an ordinary
+    node here: a loader spliced into the MODEL path patches the model whatever
+    that node does, and it applies alongside, never instead.
+
     Raises:
         LookupError: When the graph cannot be spliced honestly - no model
             source, more than one (a refiner, a merge: which one the LoRA is
-            for is the owner's call), a second model chain of a type this
-            loader cannot patch (``WANVIDEOMODEL`` and the like), a node
-            already loading a LoRA some way of its own, a CLIP source that
-            reads the model (splicing would make a cycle), or a node this
-            ComfyUI does not have, so what it hands on is unknown.
+            for is the owner's call), a CLIP source that reads the model
+            (splicing would make a cycle), or a link neither end can type, so
+            what it carries is unknown. Another kind of model (an upscaler's,
+            ``WANVIDEOMODEL``) is on a path of its own and changes nothing.
     """
-    graph = prompt_graph or {}
-    for node_id, node in graph.items():
-        if not isinstance(node, dict) or not isinstance(node.get("inputs"), dict):
-            continue
-        if _already_loads_a_lora(node, object_info):
-            # A loader detect_lora_targets cannot swap is still a loader: adding
-            # another ahead of it would stack two adapters without saying so.
-            raise LookupError(
-                f"Node {node_id} ({node.get('class_type')}) already loads a LoRA "
-                "in a way PixlStash cannot swap, so it will not add a second one. "
-                "Change it in ComfyUI."
-            )
+    graph = _live_graph(prompt_graph or {}, object_info)
     links = _model_links(graph, object_info)
 
     def source_of(kind: str) -> dict | None:
         return _source_of(graph, links, kind)
 
-    foreign = source_of("OTHER_MODEL")
-    if foreign is not None:
-        raise LookupError(
-            f"#{foreign['node_id']} {foreign['class_type']} loads a model of its "
-            "own kind, which a LoRA loader cannot patch, so PixlStash will not "
-            "add one to part of this workflow. Add the loader in ComfyUI."
-        )
     model = source_of("MODEL")
     if model is None:
         raise LookupError(
@@ -1150,40 +1464,6 @@ def plan_lora_insertion(prompt_graph: dict, object_info: dict) -> dict:
     }
 
 
-def _already_loads_a_lora(node: dict, object_info: dict) -> bool:
-    """True when this node loads a LoRA in a way :func:`detect_lora_targets` misses.
-
-    **Decided at the class level, not on widget spellings.** By the time
-    insertion is being planned, a swappable slot has been ruled out, so any
-    remaining node that has anything to do with LoRAs is one PixlStash cannot
-    swap - and splicing a loader in front of it would leave two adapters live
-    with nothing said. Widget spellings only covered the two shapes anyone
-    happened to name: a wired ``lora_name``, rgthree's ``lora_1`` dicts, and
-    then not ``lora_1_name`` (easy-loraStack), a prompt tag
-    (``<lora:style:0.8>``), or a ``lora_name`` holding ``None``.
-
-    The three rules: the class name mentions a LoRA, ComfyUI declares a
-    LoRA-ish type on one of its inputs or outputs, or one of its values carries
-    a ``<lora:…>`` prompt tag.
-    """
-    class_type = str(node.get("class_type") or "")
-    if "lora" in class_type.lower():
-        return True
-    spec = object_info.get(class_type)
-    if isinstance(spec, dict):
-        declared = [str(out) for out in spec.get("output") or []]
-        for group in ("required", "optional"):
-            for entry in ((spec.get("input") or {}).get(group) or {}).values():
-                if isinstance(entry, (list, tuple)) and entry:
-                    declared.append(str(entry[0]))
-        if any("LORA" in name.upper() for name in declared):
-            return True
-    return any(
-        isinstance(value, str) and "<lora:" in value.lower()
-        for value in (node.get("inputs") or {}).values()
-    )
-
-
 def _widget_defaults(node_spec: dict) -> dict:
     """The value every widget of a node would start at in ComfyUI's own editor."""
     values = {}
@@ -1203,18 +1483,14 @@ def _widget_defaults(node_spec: dict) -> dict:
 
 
 def _inserted_loader(
-    adapter: dict, object_info: dict, with_clip: bool, digest_loader: bool = True
+    adapter: dict, object_info: dict, with_clip: bool
 ) -> tuple[str, str, str]:
     """``(class, field, value)`` of the loader to insert for *adapter*.
 
     ComfyUI's own loader first, when this ComfyUI lists the file: it needs no
-    node pack, and a picture made with it stays replayable by "Generate
-    variants", which refuses any graph carrying a PixlStash node. The
-    ComfyUI-PixlStash loader when the file is not there by name, since it
-    resolves the file by its digest and fetches it when it has to.
-
-    ``digest_loader=False`` leaves the second out, for a replay: its output
-    would carry a PixlStash node, which "Generate variants" then refuses.
+    node pack. The ComfyUI-PixlStash loader when the file is not there by
+    name, since it resolves the file by its digest and fetches it when it has
+    to.
 
     Raises:
         LookupError: When neither can load it, saying why the first could not.
@@ -1235,13 +1511,11 @@ def _inserted_loader(
                 reason = "That LoRA is on your shelf but not on this ComfyUI"
             if name is not None:
                 return core, "lora_name", name
-    if not digest_loader:
-        raise LookupError(f"{reason}.")
     if PIXLSTASH_ADAPTER_LOADER in object_info:
         return PIXLSTASH_ADAPTER_LOADER, "adapter_sha256", adapter["sha256"]
     raise LookupError(
         f"{reason}, and ComfyUI-PixlStash, which could fetch it by its hash, is "
-        "not installed there."
+        f"not installed there. {PIXLSTASH_PACK_INSTALL_HINT}"
     )
 
 
@@ -1250,7 +1524,6 @@ def insert_adapter(
     plan: dict,
     adapter: Optional[dict],
     object_info: dict,
-    digest_loader: bool = True,
 ) -> dict:
     """Add a LoRA loader carrying *adapter* to *prompt_graph*, as *plan* says.
 
@@ -1271,7 +1544,6 @@ def insert_adapter(
             file, so the workflow has a slot to swap from then on. No adapter
             means no digest loader either - nothing has a digest to resolve.
         object_info: The map the plan was made with.
-        digest_loader: Whether the ComfyUI-PixlStash loader may be used.
 
     Returns:
         ``{"node_id", "class_type"}`` of the loader added.
@@ -1296,9 +1568,7 @@ def insert_adapter(
             )
         field = value = None
     else:
-        loader, field, value = _inserted_loader(
-            adapter, object_info, clip is not None, digest_loader
-        )
+        loader, field, value = _inserted_loader(adapter, object_info, clip is not None)
     spec = object_info.get(loader) or {}
     outputs = spec.get("output") if isinstance(spec.get("output"), list) else []
     sources = {"MODEL": plan["model"], "CLIP": clip}
@@ -1423,6 +1693,186 @@ def bypass_node(prompt_graph: dict, node_id: str, object_info: dict) -> None:
     del prompt_graph[node_id]
 
 
+def bypass_stage(prompt_graph: dict, group: str, object_info: dict) -> list[dict]:
+    """Switch one optional stage (an upscale, a FaceDetailer pass) off (#1621).
+
+    Every node :func:`~pixlstash.services.workflow_identity.node_groups` puts in
+    *group* goes through :func:`bypass_node`, consumers before what they read,
+    so a FaceDetailer reading another's pipe is taken out first. A node with no
+    linked input (``UpscaleModelLoader``, ``SAMLoader``, a detector provider)
+    is not bypassed: it has nothing to stand in for it, and once what read it
+    is gone it is pruned with everything else the stage alone kept alive.
+
+    **Pruned** is only a node some output read before and none reads now: a
+    left-over model loader would otherwise be judged as a missing model and
+    refuse a run that does not need it. Nodes that were already dead are left
+    as they were. **A duplicate save is dropped**: an output node rewired onto
+    exactly the links another output node of its class reads, which is what a
+    graph saving before and after the upscale becomes. Widgets are not
+    compared - the two saves differ by ``filename_prefix`` and still save one
+    image twice - and the untouched save is the one kept.
+
+    All or nothing: the stage is taken out of a copy, and *prompt_graph* is
+    rewritten only once every node of it has been.
+
+    Args:
+        prompt_graph: The API-format graph, mutated in place.
+        group: ``workflow_identity.UPSCALE`` or ``workflow_identity.FACE_DETAILER``.
+        object_info: The map from :func:`fetch_object_info`.
+
+    Returns:
+        ``[{"node_id", "class_type", "action"}, …]``, ``action`` being
+        ``bypassed``, ``pruned`` or ``duplicate_save``; empty when the graph has
+        no such stage.
+
+    Raises:
+        LookupError: A node of the stage cannot be bypassed - something reads an
+            output (a FaceDetailer's MASK or DETAILER_PIPE) that no input of the
+            same type can stand in for, or this ComfyUI does not know the class.
+    """
+    # Local: workflow_identity imports this module.
+    from pixlstash.services.workflow_identity import node_groups
+
+    graph = deepcopy(prompt_graph)
+    live_before = _live_ids(graph, object_info)
+    in_stage = {
+        node_id
+        for node_id, node_group in node_groups(reduce_api_graph(graph)).items()
+        if node_group == group and (live_before is None or node_id in live_before)
+    }
+    reads = {
+        str(node_id): {
+            str(value[0])
+            for value in (node.get("inputs") or {}).values()
+            if is_link(value) and isinstance(graph.get(str(value[0])), dict)
+        }
+        for node_id, node in graph.items()
+        if isinstance(node, dict)
+    }
+    try:
+        order = list(TopologicalSorter(reads).static_order())
+    except CycleError as exc:
+        raise LookupError(
+            f"This graph loops back on itself ({exc.args[1]}), so PixlStash "
+            f"cannot tell what the {group.replace('_', ' ')} stage feeds."
+        ) from exc
+    read_by: dict[str, set[str]] = {node_id: set() for node_id in reads}
+    for node_id, sources in reads.items():
+        for source in sources:
+            read_by[source].add(node_id)
+
+    def reach(start: str, edges: dict[str, set[str]]) -> set[str]:
+        seen: set[str] = set()
+        pending = list(edges[start])
+        while pending:
+            node_id = pending.pop()
+            if node_id not in seen:
+                seen.add(node_id)
+                pending.extend(edges[node_id])
+        return seen
+
+    def samplers(nodes: set[str]) -> set[str]:
+        return {
+            n
+            for n in nodes
+            if n not in in_stage and _samples(graph[n].get("class_type"))
+        }
+
+    # A stage runs after the picture is made. A node of the group that feeds a
+    # sampler outside it is not one: with no sampler before it, it prepares an
+    # input (img2img's resize) and stays; with one, it is a hires fix in pixel
+    # space whose re-encode and second sampler `node_groups` does not claim,
+    # so taking only the upscale out would leave a pass nobody asked for.
+    for node_id in sorted(in_stage, key=_node_order_key):
+        feeds = samplers(reach(node_id, read_by))
+        if not feeds:
+            continue
+        if not samplers(reach(node_id, reads)):
+            in_stage.discard(node_id)
+            continue
+        raise LookupError(
+            f"The {group.replace('_', ' ')} stage cannot be switched off: node "
+            f"{node_id} ({graph[node_id].get('class_type')}) feeds another "
+            f"sampling pass (node {min(feeds, key=_node_order_key)}), which "
+            "would still run."
+        )
+    if not in_stage:
+        return []
+    changes: list[dict] = []
+    outputs_before = {
+        node_id: deepcopy(graph[node_id].get("inputs"))
+        for node_id in _output_ids(graph, object_info)
+    }
+    for node_id in reversed(order):
+        if node_id not in in_stage:
+            continue
+        inputs = graph[node_id].get("inputs") or {}
+        if not any(is_link(value) for value in inputs.values()):
+            continue
+        class_type = graph[node_id].get("class_type")
+        try:
+            bypass_node(graph, node_id, object_info)
+        except LookupError as exc:
+            raise LookupError(
+                f"The {group.replace('_', ' ')} stage cannot be switched off: "
+                f"node {node_id} ({class_type}) cannot be bypassed. {exc}"
+            ) from exc
+        changes.append(
+            {"node_id": node_id, "class_type": class_type, "action": "bypassed"}
+        )
+    live_after = _live_ids(graph, object_info)
+    if live_before is not None and live_after is not None:
+        for node_id in sorted(live_before - live_after, key=_node_order_key):
+            if node_id in graph:
+                changes.append(
+                    {
+                        "node_id": node_id,
+                        "class_type": graph[node_id].get("class_type"),
+                        "action": "pruned",
+                    }
+                )
+                del graph[node_id]
+    rewired = {
+        node_id
+        for node_id, inputs in outputs_before.items()
+        if node_id in graph and graph[node_id].get("inputs") != inputs
+    }
+    kept: set[tuple] = set()
+    for node_id in sorted(
+        outputs_before, key=lambda n: (n in rewired, _node_order_key(n))
+    ):
+        if node_id not in graph:
+            continue
+        node = graph[node_id]
+        links = tuple(
+            sorted(
+                (str(field), str(value[0]), int(value[1]))
+                for field, value in (node.get("inputs") or {}).items()
+                if is_link(value)
+            )
+        )
+        key = (node.get("class_type"), links)
+        if links and key in kept and node_id in rewired:
+            changes.append(
+                {
+                    "node_id": node_id,
+                    "class_type": node.get("class_type"),
+                    "action": "duplicate_save",
+                }
+            )
+            del graph[node_id]
+            continue
+        kept.add(key)
+    logger.info(
+        "The %s stage is switched off for this run: %s",
+        group,
+        ", ".join(f"{c['action']} #{c['node_id']} {c['class_type']}" for c in changes),
+    )
+    prompt_graph.clear()
+    prompt_graph.update(graph)
+    return changes
+
+
 # ── The LoRA chain (#1478) ──────────────────────────────────────────────────
 #
 # A LoRA loader patches what the model source hands out and everything below it
@@ -1473,10 +1923,13 @@ def _chain_loader(node_id: str, node: dict, object_info: dict) -> dict | None:
     :func:`detect_lora_targets` can read, and ComfyUI says it takes a MODEL in
     and hands one on - which is what makes it a link rather than a leaf.
 
-    Raises:
-        LookupError: A stacker (several slots on one node), a class this
-            ComfyUI lacks, or a node that loads a LoRA but is not wired as a
-            loader is - none of which PixlStash can put in order honestly.
+    Anything else that loads a LoRA - a stacker with several slots, a node
+    that takes no model in (a character prompt builder), one with nothing
+    wired into its model - is ``None`` too: an ordinary node of the graph,
+    which loaders can go in front of or after, but not one this chain edits.
+
+    A class this ComfyUI lacks is ``None`` as well: its wiring cannot be read,
+    so it cannot be moved, but loaders can still go around it.
     """
     inputs = node["inputs"]
     class_type = node.get("class_type")
@@ -1485,16 +1938,22 @@ def _chain_loader(node_id: str, node: dict, object_info: dict) -> dict | None:
     if not slots and not numbered:
         return None
     if numbered or len(slots) != 1:
-        raise LookupError(
-            f"Node {node_id} ({class_type}) holds several LoRAs in one node, "
-            "which PixlStash cannot put in order. Change it in ComfyUI."
+        logger.info(
+            "Node %s (%s) holds several LoRAs, so it is left in the graph as it "
+            "is rather than edited as a link of the chain.",
+            node_id,
+            class_type,
         )
+        return None
     spec = object_info.get(class_type)
     if not isinstance(spec, dict):
-        raise LookupError(
-            f"This ComfyUI has no {class_type} node, so PixlStash cannot tell "
-            f"how node {node_id} is wired into the LoRA chain."
+        logger.info(
+            "Node %s (%s) loads a LoRA and this ComfyUI does not have its class, "
+            "so it is left in the graph as it is rather than edited as a link.",
+            node_id,
+            class_type,
         )
+        return None
     outputs = spec.get("output") if isinstance(spec.get("output"), list) else []
     model_field = _input_of_type(spec, "MODEL")
     clip_field = _input_of_type(spec, "CLIP")
@@ -1502,18 +1961,18 @@ def _chain_loader(node_id: str, node: dict, object_info: dict) -> dict | None:
         model_field is None
         or "MODEL" not in outputs
         or (clip_field is not None and "CLIP" not in outputs)
-    ):
-        raise LookupError(
-            f"Node {node_id} ({class_type}) loads a LoRA but does not take and "
-            "hand on a model the way a LoRA loader does, so PixlStash cannot "
-            "put it in a chain. Change it in ComfyUI."
+        or any(
+            field is not None and not is_link(inputs.get(field))
+            for field in (model_field, clip_field)
         )
-    for field in (model_field, clip_field):
-        if field is not None and not is_link(inputs.get(field)):
-            raise LookupError(
-                f"Node {node_id} ({class_type}) has nothing wired into its "
-                f"{field}, so it is not part of a chain PixlStash can read."
-            )
+    ):
+        logger.info(
+            "Node %s (%s) loads a LoRA but is not wired as a LoRA loader is, so "
+            "it is left in the graph as it is rather than edited as a link.",
+            node_id,
+            class_type,
+        )
+        return None
     slot = slots[0]
     return {
         **slot,
@@ -1531,14 +1990,14 @@ def _walk_chain(
     readers: dict,
     wire: str,
     out: str,
-    what: str,
 ) -> list[str]:
     """The loaders from *head* on, each the only reader of the one before.
 
-    Raises:
-        LookupError: When a loader's output is read by the next loader AND by
-            something else - a branch, where moving either would change what
-            the other reads.
+    **A branch ends the chain.** When a loader's output is read by the next
+    loader AND by something else (a second sampler pass reading the model
+    before its extra LoRA), the chain stops at that loader: everything after
+    the branch reads it, so a LoRA added at the end reaches both, and the
+    loaders past the branch are left as ordinary nodes.
     """
     order = [head]
     current = head
@@ -1551,17 +2010,8 @@ def _walk_chain(
             and link["node_id"] not in order
             and link["field"] == loaders[link["node_id"]][wire]
         ]
-        if not chained:
+        if not chained or len(read_by) > 1:
             return order
-        if len(read_by) > 1:
-            others = sorted(
-                {f"#{link['node_id']}" for link in read_by if link is not chained[0]}
-            )
-            raise LookupError(
-                f"Loader #{current} hands its {what} to the next loader and to "
-                f"{', '.join(others)} besides, so moving either would change what "
-                "the other reads. Change the chain in ComfyUI."
-            )
         current = chained[0]["node_id"]
         order.append(current)
 
@@ -1607,6 +2057,109 @@ def _readers_phrase(sinks: list[dict], kind: str, noun: str) -> str | None:
     return f"{joined} {'reads' if count == 1 else 'read'} {noun}"
 
 
+def _sink_summary(sinks: list[dict]) -> str | None:
+    """``KSampler #7 reads model · 2 text encoders read clip``, or ``None``."""
+    summary = " · ".join(
+        phrase
+        for phrase in (
+            _readers_phrase(sinks, "MODEL", "model"),
+            _readers_phrase(sinks, "CLIP", "clip"),
+        )
+        if phrase
+    )
+    return summary or None
+
+
+def _pass_of(graph: dict, links: list[dict], starts: list[str]) -> dict:
+    """The sampler a lane's model reaches, as the owner names that pass.
+
+    Searched breadth first down every link from the lane's readers, nearest
+    first, for a node whose class is a sampler (``KSampler``,
+    ``SamplerCustomAdvanced``): a model patch, a guider or a scheduler is on the
+    way to one, and the pass is named by what samples it. A lane that reaches
+    no sampler (a face detailer) is named by the first node its model stops at.
+    ``title`` is the node's ComfyUI title when the owner gave it one, ``None``
+    when it is only the class name again.
+    """
+    onward: dict[str, set[str]] = {}
+    for node_id, node in graph.items():
+        for value in ((node or {}).get("inputs") or {}).values():
+            if is_link(value):
+                onward.setdefault(str(value[0]), set()).add(str(node_id))
+    seen: set[str] = set()
+    level = sorted({str(n) for n in starts}, key=_node_order_key)
+    found = None
+    while level and found is None:
+        seen.update(level)
+        found = next(
+            (n for n in level if _samples((graph.get(n) or {}).get("class_type"))),
+            None,
+        )
+        level = sorted(
+            {m for n in level for m in onward.get(n, ()) if m not in seen},
+            key=_node_order_key,
+        )
+    if found is None:
+        # No sampler downstream: follow the model while it goes one way.
+        found = str(sorted(starts, key=_node_order_key)[0])
+        visited: set[str] = set()
+        while found not in visited:
+            visited.add(found)
+            model_onward = {
+                link["node_id"]
+                for link in links
+                if link["type"] == "MODEL" and str(link["source"][0]) == found
+            }
+            if len(model_onward) != 1:
+                break
+            found = next(iter(model_onward))
+    node = graph.get(found) or {}
+    class_type = node.get("class_type")
+    title = str((node.get("_meta") or {}).get("title") or "").strip()
+    return {
+        "node_id": found,
+        "class_type": class_type,
+        "title": title if title and title != class_type else None,
+    }
+
+
+def _samples(class_type: Any) -> bool:
+    """Whether *class_type* reads as a sampler a pass is named by.
+
+    By name, since ``object_info`` does not say. ``Unsampler`` (an inversion
+    step) reads the model on the way to the real sampler and is not one.
+    ``KSamplerSelect`` and its kin take no link, so a search down the links
+    never reaches them.
+    """
+    name = str(class_type or "").lower()
+    return "sampler" in name and not name.startswith("unsampler")
+
+
+def pass_label(lane: dict) -> str:
+    """A lane as the owner reads it: its sampler's title, else ``KSampler #15``."""
+    found = lane["pass"]
+    return found.get("title") or (
+        f"{found.get('class_type') or 'node'} #{found['node_id']}"
+    )
+
+
+def _model_downstream(links: list[dict], node_id: str) -> set[str]:
+    """Every node the model handed on by *node_id* reaches."""
+    found: set[str] = set()
+    pending = [str(node_id)]
+    while pending:
+        current = pending.pop()
+        for link in links:
+            if (
+                link["type"] == "MODEL"
+                and str(link["source"][0]) == current
+                and link["node_id"] not in found
+            ):
+                found.add(link["node_id"])
+                pending.append(link["node_id"])
+    return found
+
+
 def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
     """The graph's LoRA loaders in the order a run applies them, typed by ComfyUI.
 
@@ -1617,26 +2170,38 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
     loaders that carry one, and must pass them in the same order the MODEL
     chain does. A model-only loader sits in the MODEL chain alone.
 
-    A reader of the anchor that is NOT the first loader is left as it is: that
-    branch runs without the LoRAs today, and editing the chain does not change
-    what it reads.
+    **Where the model goes several ways, the chain is a tree.** The loaders
+    every pass reads are the trunk (``loaders``), and each node reading the
+    fork - a base sampler, a hires pass, a detailer - starts a **lane** of its
+    own with the loaders only it reads. A fork straight at the anchor has an
+    empty trunk. A workflow loading **several models** (Wan 2.2's high and low
+    noise) has no trunk at all: ``model_source`` is ``None`` and each lane
+    starts at its own model. A lane's CLIP, when its loaders carry one, must
+    come off the trunk's CLIP end.
 
     Returns:
-        ``{"model_source": {"node_id", "class_type", "output"},
+        ``{"model_source": {"node_id", "class_type", "output"} or None,
         "clip_source": … or None, "loaders": [{…detect_lora_targets slot,
         "name", "model_field", "clip_field", "model_out", "clip_out"}, …],
         "sinks": [{"node_id", "class_type", "field", "type"}, …],
-        "sink_summary": str or None}``.
+        "sink_summary": str or None, "lanes": [{"source": … or None,
+        "pass": {"node_id", "class_type", "title"}, "loaders", "sinks",
+        "sink_summary"}, …], "branch_note": str or None}``. ``lanes`` is
+        empty for a straight chain; for a tree the trunk's ``sinks`` are only
+        what reads its CLIP, since every reader of its model is a lane.
 
     Raises:
         LookupError: With the owner-facing sentence, when the chain cannot be
-            edited honestly: the insertion planner's refusals (no model source,
-            several, a foreign model type, a class this ComfyUI lacks), a node
-            loading a LoRA in a way PixlStash cannot edit (a stacker, rgthree's
-            dicts, a prompt tag, a wired ``lora_name``), loaders that do not
-            form one straight chain, or a loader output something else reads.
+            edited honestly: no model source, a link neither end can type,
+            loaders that do not start from one place, a second model that
+            itself goes several ways, CLIP passed in another order than the
+            model, or a loader output something else reads. A node loading a
+            LoRA some other way (a stacker, rgthree's dicts, a prompt tag, a
+            character prompt builder) is not one: it stays in the graph as an
+            ordinary node, so a chain can always be built in the MODEL path
+            around it.
     """
-    graph = prompt_graph or {}
+    graph = _live_graph(prompt_graph or {}, object_info)
     loaders: dict[str, dict] = {}
     for raw_id, node in graph.items():
         if not isinstance(node, dict) or not isinstance(node.get("inputs"), dict):
@@ -1645,22 +2210,9 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
         loader = _chain_loader(node_id, node, object_info)
         if loader is not None:
             loaders[node_id] = loader
-        elif _already_loads_a_lora(node, object_info):
-            raise LookupError(
-                f"Node {node_id} ({node.get('class_type')}) loads a LoRA in a way "
-                "PixlStash cannot edit, so the chain can only be changed in "
-                "ComfyUI."
-            )
     links = _model_links(graph, object_info)
-    foreign = _source_of(graph, links, "OTHER_MODEL")
-    if foreign is not None:
-        raise LookupError(
-            f"#{foreign['node_id']} {foreign['class_type']} loads a model of its "
-            "own kind, which a LoRA loader cannot patch, so PixlStash will not "
-            "edit the LoRAs of part of this workflow. Change them in ComfyUI."
-        )
-    model_root = _source_of(graph, links, "MODEL")
-    if model_root is None:
+    roots = [(str(node_id), output) for node_id, output in _sources(links, "MODEL")]
+    if not roots:
         raise LookupError(
             "PixlStash could not find the model this workflow loads, so there is "
             "no chain of LoRAs to edit."
@@ -1681,104 +2233,324 @@ def read_lora_chain(prompt_graph: dict, object_info: dict) -> dict:
     for link in links:
         readers.setdefault((str(link["source"][0]), link["source"][1]), []).append(link)
 
-    def anchor(node_id: str, field: str) -> dict:
-        source = graph[node_id]["inputs"][field]
+    def link_of(end: tuple) -> dict:
         return {
-            "node_id": str(source[0]),
-            "class_type": graph[str(source[0])].get("class_type"),
-            "output": source[1],
+            "node_id": end[0],
+            "class_type": graph[end[0]].get("class_type"),
+            "output": end[1],
         }
 
-    order: list[str] = []
-    model_source = model_root
-    if loaders:
-        heads = [
-            n
-            for n, loader in loaders.items()
-            if str(graph[n]["inputs"][loader["model_field"]][0]) not in loaders
-        ]
-        if len(heads) == 1:
-            order = _walk_chain(
-                heads[0], loaders, readers, "model_field", "model_out", "model"
-            )
-        if len(heads) != 1 or len(order) != len(loaders):
-            raise LookupError(
-                "The LoRA loaders in this workflow do not form one chain between "
-                "the model and the sampler, so there is no single order to edit. "
-                "Change them in ComfyUI."
-            )
-        model_source = anchor(order[0], loaders[order[0]]["model_field"])
+    def input_of(node_id: str, wire: str) -> tuple:
+        source = graph[node_id]["inputs"][loaders[node_id][wire]]
+        return (str(source[0]), source[1])
 
-    clip_members = [n for n in order if loaders[n]["clip_field"] is not None]
-    clip_order: list[str] = []
-    if clip_members:
-        clip_loaders = {n: loaders[n] for n in clip_members}
-        heads = [
-            n
-            for n in clip_members
-            if str(graph[n]["inputs"][loaders[n]["clip_field"]][0]) not in clip_loaders
-        ]
-        if len(heads) == 1:
-            clip_order = _walk_chain(
-                heads[0], clip_loaders, readers, "clip_field", "clip_out", "CLIP"
+    def readers_by_node(end: tuple) -> dict[str, list[dict]]:
+        by_node: dict[str, list[dict]] = {}
+        for link in readers.get(end, []):
+            by_node.setdefault(link["node_id"], []).append(link)
+        return by_node
+
+    def run_from(by_node: dict[str, list[dict]]) -> list[str]:
+        """The loaders from the lone reader in *by_node* on, if it is a loader."""
+        if len(by_node) != 1:
+            return []
+        node_id, reads = next(iter(by_node.items()))
+        if node_id not in loaders or not any(
+            link["field"] == loaders[node_id]["model_field"] for link in reads
+        ):
+            return []
+        return _walk_chain(node_id, loaders, readers, "model_field", "model_out")
+
+    trunk: list[str] = []
+    # Each lane as read: where it starts, its loaders, and - for a lane with no
+    # loader off a shared fork - the one node that reads the fork for it.
+    lanes: list[dict] = []
+    if len(roots) > 1:
+        model_source = None
+        fork = None
+        for root in roots:
+            by_node = readers_by_node(root)
+            if len(by_node) > 1:
+                raise LookupError(
+                    f"This workflow loads {len(roots)} models, and the one from "
+                    f"#{root[0]} {graph[root[0]].get('class_type')} goes several "
+                    "ways, so there is no single chain of LoRAs to edit for it. "
+                    "Change them in ComfyUI."
+                )
+            lanes.append(
+                {
+                    "source": link_of(root),
+                    "start": root,
+                    "order": run_from(by_node),
+                    "own": None,
+                }
             )
-        if clip_order != clip_members:
+    else:
+        anchor = roots[0]
+        if loaders:
+            heads = [n for n in loaders if input_of(n, "model_field")[0] not in loaders]
+            starts = {input_of(n, "model_field") for n in heads}
+            # The chain is the run of loaders straight after the model source; a
+            # lone run elsewhere on the path (after a model patch) is one too,
+            # and so are several runs off the same node (a fork before any
+            # loader).
+            at_root = any(input_of(n, "model_field")[0] == anchor[0] for n in heads)
+            if not at_root and len(starts) == 1:
+                anchor = next(iter(starts))
+            elif not at_root:
+                raise LookupError(
+                    "The LoRA loaders in this workflow do not form one chain "
+                    "between the model and the sampler, so there is no single "
+                    "order to edit. Change them in ComfyUI."
+                )
+        model_source = link_of(anchor)
+        fork = anchor
+        by_node = readers_by_node(anchor)
+        if len(by_node) == 1:
+            trunk = run_from(by_node)
+            if trunk:
+                fork = (trunk[-1], loaders[trunk[-1]]["model_out"])
+                by_node = readers_by_node(fork)
+        if len(by_node) > 1:
+            # A lane per loader run off the fork, and one per sampler for the
+            # readers that are not loaders: a guider and a scheduler reading
+            # the same model are one pass (SamplerCustomAdvanced's), while a
+            # base and a hires sampler reading it straight are two.
+            plain: dict[str, set[str]] = {}
+            for node_id in by_node:
+                order = run_from({node_id: by_node[node_id]})
+                if not order:
+                    sampler = _pass_of(graph, links, [node_id])["node_id"]
+                    plain.setdefault(sampler, set()).add(node_id)
+                    continue
+                lanes.append(
+                    {"source": None, "start": fork, "order": order, "own": None}
+                )
+            for own in plain.values():
+                lanes.append({"source": None, "start": fork, "order": [], "own": own})
+            if len(lanes) < 2:
+                lanes = []
+
+    members = set(trunk) | {n for lane in lanes for n in lane["order"]}
+    off_chain = sorted(set(loaders) - members, key=_node_order_key)
+    if off_chain:
+        logger.info(
+            "LoRA loaders %s are past the chain's end, so they are left as "
+            "ordinary nodes rather than edited.",
+            off_chain,
+        )
+
+    def clip_run(order: list[str]) -> list[str]:
+        """The loaders of *order* carrying a CLIP, checked to pass it in order."""
+        carriers = [n for n in order if loaders[n]["clip_field"] is not None]
+        if not carriers:
+            return []
+        subset = {n: loaders[n] for n in carriers}
+        heads = [n for n in carriers if input_of(n, "clip_field")[0] not in subset]
+        walked = (
+            _walk_chain(heads[0], subset, readers, "clip_field", "clip_out")
+            if len(heads) == 1
+            else []
+        )
+        if walked != carriers:
             raise LookupError(
                 "The model and the CLIP pass through this workflow's LoRA loaders "
                 "in different orders, so moving one would reorder only half of "
                 "it. Change the chain in ComfyUI."
             )
-        clip_source = anchor(clip_members[0], loaders[clip_members[0]]["clip_field"])
-    else:
-        clip_source = _source_of(graph, links, "CLIP")
-        if clip_source is not None and clip_source["node_id"] in {
-            link["node_id"] for link in links if link["type"] == "MODEL"
-        }:
+        return carriers
+
+    model_readers = {link["node_id"] for link in links if link["type"] == "MODEL"}
+
+    def refuse_cycle(source: dict | None) -> None:
+        # A loader would feed a node its own CLIP input comes through: a cycle
+        # ComfyUI refuses, after the run is queued.
+        if source is not None and source["node_id"] in model_readers:
             raise LookupError(
-                f"#{clip_source['node_id']} {clip_source['class_type']} hands out "
+                f"#{source['node_id']} {source['class_type']} hands out "
                 "this workflow's CLIP and reads its model, so a LoRA loader cannot "
                 "sit in front of both. Change the chain in ComfyUI."
             )
 
-    model_end = (
-        (order[-1], loaders[order[-1]]["model_out"])
-        if order
-        else (model_source["node_id"], model_source["output"])
-    )
-    clip_end = None
-    if clip_members:
-        clip_end = (clip_members[-1], loaders[clip_members[-1]]["clip_out"])
-    elif clip_source is not None:
-        clip_end = (clip_source["node_id"], clip_source["output"])
-    sinks = [
-        {key: link[key] for key in ("node_id", "class_type", "field", "type")}
-        for end in (model_end, clip_end)
-        if end is not None
-        for link in readers.get(end, [])
-        if link["node_id"] not in loaders
-    ]
-    sinks.sort(
-        key=lambda s: (s["type"] != "MODEL", _node_order_key(s["node_id"]), s["field"])
-    )
-    summary = " · ".join(
-        phrase
-        for phrase in (
-            _readers_phrase(sinks, "MODEL", "model"),
-            _readers_phrase(sinks, "CLIP", "clip"),
+    trunk_clip = clip_run(trunk)
+    if trunk_clip:
+        clip_source = link_of(input_of(trunk_clip[0], "clip_field"))
+        clip_end = (trunk_clip[-1], loaders[trunk_clip[-1]]["clip_out"])
+    else:
+        if model_source is None:
+            # A model per pass may come with a text encoder per pass (SDXL's
+            # base and refiner checkpoints). Each lane then starts its CLIP
+            # where its own loaders read it; one shared source is only the
+            # fallback for a lane that has none.
+            clip_roots = _sources(links, "CLIP")
+            clip_source = (
+                link_of((str(clip_roots[0][0]), clip_roots[0][1]))
+                if len(clip_roots) == 1
+                else None
+            )
+        else:
+            clip_source = _source_of(graph, links, "CLIP")
+        refuse_cycle(clip_source)
+        clip_end = (
+            (str(clip_source["node_id"]), clip_source["output"])
+            if clip_source is not None
+            else None
         )
-        if phrase
-    )
+
+    def sinks_of(end: tuple | None, own: set[str] | None = None) -> list[dict]:
+        return [
+            {key: link[key] for key in ("node_id", "class_type", "field", "type")}
+            for link in (readers.get(end, []) if end is not None else [])
+            if link["node_id"] not in members
+            and (own is None or link["node_id"] in own)
+        ]
+
+    def in_order(sinks: list[dict]) -> list[dict]:
+        return sorted(
+            sinks,
+            key=lambda s: (
+                s["type"] != "MODEL",
+                _node_order_key(s["node_id"]),
+                s["field"],
+            ),
+        )
+
+    model_end = (trunk[-1], loaders[trunk[-1]]["model_out"]) if trunk else fork
+    sinks = in_order((sinks_of(model_end) if not lanes else []) + sinks_of(clip_end))
+    notes: list[str] = []
+    claimed: set[str] = set()
+
+    def note_for(end: str, end_sinks: list[dict]) -> None:
+        past = [
+            n
+            for n in off_chain
+            if n not in claimed and n in _model_downstream(links, end)
+        ]
+        claimed.update(past)
+        note = _branch_note(graph, end, past, end_sinks)
+        if note:
+            notes.append(note)
+
+    read_lanes: list[dict] = []
+    for lane in lanes:
+        order = lane["order"]
+        carriers = clip_run(order)
+        lane_clip = clip_end
+        if carriers and lane["source"] is not None:
+            lane_clip = input_of(carriers[0], "clip_field")
+            refuse_cycle(link_of(lane_clip))
+        elif lane["source"] is not None:
+            # No CLIP loader on this side: a checkpoint handing out the lane's
+            # model hands out its CLIP too, and that is where one starts.
+            own = [
+                (str(node_id), output)
+                for node_id, output in _sources(links, "CLIP")
+                if str(node_id) == lane["source"]["node_id"]
+            ]
+            if len(own) == 1:
+                lane_clip = own[0]
+        if carriers and input_of(carriers[0], "clip_field") != lane_clip:
+            raise LookupError(
+                "The LoRAs on one side of this workflow's fork take their CLIP "
+                "from somewhere other than the chain they branch off, so "
+                "PixlStash cannot tell where a moved loader's CLIP should come "
+                "from. Change them in ComfyUI."
+            )
+        end = (order[-1], loaders[order[-1]]["model_out"]) if order else lane["start"]
+        lane_sinks = in_order(
+            sinks_of(end, None if order else lane["own"])
+            + (
+                sinks_of((carriers[-1], loaders[carriers[-1]]["clip_out"]))
+                if carriers
+                else []
+            )
+        )
+        starts = [s["node_id"] for s in lane_sinks if s["type"] == "MODEL"] or [end[0]]
+        read_lanes.append(
+            {
+                "source": lane["source"],
+                # Where a lane with a model of its own starts its CLIP; a lane
+                # off the trunk starts at the trunk's CLIP end, wherever the
+                # edit leaves it.
+                "clip_source": link_of(lane_clip) if lane_clip is not None else None,
+                "pass": _pass_of(graph, links, starts),
+                "loaders": [loaders[n] for n in order],
+                "sinks": lane_sinks,
+                "sink_summary": _sink_summary(lane_sinks),
+            }
+        )
+        note_for(
+            order[-1] if order else min(lane["own"] or {end[0]}, key=_node_order_key),
+            lane_sinks,
+        )
+    if not lanes and off_chain:
+        note_for(model_end[0], sinks)
+    named = [lane["pass"]["node_id"] for lane in read_lanes]
+    for node_id in named:
+        if named.count(node_id) > 1:
+            # Two branches that meet again (a model merge) are one pass, and
+            # a move "to KSampler #3 only" would name both sides alike.
+            raise LookupError(
+                f"The branches of this workflow's model meet again at #{node_id} "
+                f"{graph[node_id].get('class_type')}, so there are no separate "
+                "passes to edit their LoRAs by. Change them in ComfyUI."
+            )
+    # "In the order ComfyUI runs them" as near as ids say it: the base sampler
+    # is normally the lower id.
+    read_lanes.sort(key=lambda lane: _node_order_key(lane["pass"]["node_id"]))
     return {
         "model_source": model_source,
         "clip_source": clip_source,
-        "loaders": [loaders[n] for n in order],
+        "loaders": [loaders[n] for n in trunk],
         "sinks": sinks,
-        "sink_summary": summary or None,
+        "sink_summary": _sink_summary(sinks),
+        "lanes": read_lanes,
+        "branch_note": " ".join(notes) or None,
     }
 
 
-def read_lora_chain_untyped(prompt_graph: dict) -> dict:
-    """The loaders as a best-effort list, for when ComfyUI cannot type the links.
+def _branch_note(
+    graph: dict, end: str, off_chain: list[str], sinks: list[dict]
+) -> str | None:
+    """Why a chain stops at *end*, when loaders lie past it.
+
+    Said rather than left for the owner to puzzle over: the list shows fewer
+    loaders than the workflow has, and the reason is either a node that is not
+    a loader in between, or a further branch - the model goes several ways
+    from *end*, so a LoRA added there reaches every one of them, while one
+    past the branch reaches only its own side.
+    """
+    if not off_chain:
+        return None
+    readers = [sink for sink in sinks if sink["type"] == "MODEL"]
+    named, count = _readers_named(readers, rail=False)
+    past = " and ".join(
+        f"#{n} {graph[n].get('class_type')}" for n in off_chain if n in graph
+    )
+    one = len(off_chain) == 1
+    if count < 2:
+        return (
+            f"{past} {'is' if one else 'are'} further along the model path, "
+            f"past #{end} {graph[end].get('class_type')}, so "
+            f"{'it is' if one else 'they are'} left as "
+            f"{'it is' if one else 'they are'}; change {'it' if one else 'them'} "
+            "in ComfyUI."
+        )
+    return (
+        f"The chain stops at #{end} {graph[end].get('class_type')}, because its "
+        f"model goes {count} ways from there ({named}). A LoRA added here reaches "
+        f"all of them. {past} {'is' if one else 'are'} past the branch and "
+        f"{'reaches' if one else 'reach'} only {'its' if one else 'their'} own "
+        f"side, so {'it is' if one else 'they are'} left as "
+        f"{'it is' if one else 'they are'}; change {'it' if one else 'them'} in "
+        "ComfyUI."
+    )
+
+
+def read_lora_chain_untyped(
+    prompt_graph: dict, object_info: dict | None = None
+) -> dict:
+    """The loaders as a best-effort list, for a chain that cannot be edited.
 
     Follows each loader's ``model`` input by NAME, which is the guess
     :func:`read_lora_chain` exists not to make - so this is only ever shown
@@ -1786,9 +2558,14 @@ def read_lora_chain_untyped(prompt_graph: dict) -> dict:
     LoRA slot is listed, a stacker's numbered ones included: a list that left
     one out would be the silent drop #1478 is about.
 
+    With *object_info* (ComfyUI answered, and the chain was refused for its
+    shape) the two ends are read typed as well, best effort: the model source
+    when no loader named one, and the nodes reading the chain's end, so the
+    read-only view names what the chain runs between.
+
     Returns:
         The shape :func:`read_lora_chain` returns, with ``clip_source`` ``None``,
-        no sinks and no summary, since none of those can be known untyped.
+        and no sinks or summary unless *object_info* could type them.
     """
     graph = prompt_graph or {}
     slots: dict[str, list[dict]] = {}
@@ -1819,21 +2596,51 @@ def read_lora_chain_untyped(prompt_graph: dict) -> dict:
         pending.extend(reversed(followers.get(node_id, [])))
     # A cycle of loaders reading each other has no head; they are still listed.
     order += [n for n in sorted(slots, key=_node_order_key) if n not in order]
+    # Only the loaders ON the model path say where it runs: a LoRA slot on a
+    # node that takes no model (a prompt builder) is listed, but is no end.
+    on_path = [n for n in order if is_link(graph[n]["inputs"].get("model"))]
     model_source = None
-    if order:
-        link = graph[order[0]]["inputs"].get("model")
+    if on_path:
+        link = graph[on_path[0]]["inputs"].get("model")
         if is_link(link) and isinstance(graph.get(link[0]), dict):
             model_source = {
                 "node_id": str(link[0]),
                 "class_type": graph[link[0]].get("class_type"),
                 "output": link[1],
             }
+    sinks: list[dict] = []
+    if object_info is not None:
+        try:
+            links = _model_links(graph, object_info)
+            if model_source is None:
+                model_source = _source_of(graph, links, "MODEL")
+        except LookupError as exc:
+            logger.info("The ends of a read-only LoRA chain cannot be typed: %s", exc)
+            links = []
+        # What the chain's end hands on: the last loader's outputs, or the model
+        # source's own when there is no loader to follow.
+        end = on_path[-1] if on_path else (model_source or {}).get("node_id")
+        sinks = sorted(
+            (
+                {key: link[key] for key in ("node_id", "class_type", "field", "type")}
+                for link in links
+                if str(link["source"][0]) == str(end)
+                and link["type"] in ("MODEL", "CLIP")
+                and link["node_id"] not in slots
+            ),
+            key=lambda s: (
+                s["type"] != "MODEL",
+                _node_order_key(s["node_id"]),
+                s["field"],
+            ),
+        )
     return {
         "model_source": model_source,
         "clip_source": None,
         "loaders": [slot for node_id in order for slot in slots[node_id]],
-        "sinks": [],
-        "sink_summary": None,
+        "sinks": sinks,
+        "sink_summary": _sink_summary(sinks),
+        "lanes": [],
     }
 
 
@@ -1937,8 +2744,38 @@ def _rewired_change(sinks: list[dict]) -> dict | None:
     }
 
 
+def _wire_segment(
+    work: dict | None,
+    order: list[str],
+    wiring: dict,
+    model_link: list | None,
+    clip_link: list | None,
+) -> tuple[list | None, list | None]:
+    """Chain *order* one loader after another from the two links; the ends.
+
+    Each loader reads the one before it (*model_link* / *clip_link* for the
+    first), and the answer is what the last hands on. With *work* ``None``
+    nothing is written, which is how the planner asks where a segment ends.
+    """
+    for node_id in order:
+        wire = wiring[node_id]
+        if work is not None:
+            inputs = work[node_id]["inputs"]
+            inputs[wire["model_field"]] = list(model_link)
+            if wire["clip_field"]:
+                inputs[wire["clip_field"]] = list(clip_link)
+        model_link = [node_id, wire["model_out"]]
+        if wire["clip_field"]:
+            clip_link = [node_id, wire["clip_out"]]
+    return model_link, clip_link
+
+
 def plan_lora_chain(
-    prompt_graph: dict, chain: dict, entries: list[dict], object_info: dict
+    prompt_graph: dict,
+    chain: dict,
+    entries: list[dict],
+    object_info: dict,
+    lanes: list[list[dict]] | None = None,
 ) -> dict:
     """Validate the chain the owner left and say what it changes, writing nothing.
 
@@ -1948,12 +2785,15 @@ def plan_lora_chain(
     Args:
         prompt_graph: The graph *chain* was read from.
         chain: :func:`read_lora_chain`'s answer for it.
-        entries: The chain in apply order. ``{"node_id": str, "strength":
+        entries: The trunk in apply order. ``{"node_id": str, "strength":
             float | None}`` keeps an existing loader (moved and re-weighted as
             it lands); ``{"node_id": None, "adapter": {"sha256", "filenames"},
-            "strength": float | None, "name": str | None}`` adds one. An
-            existing loader missing from the list is deleted.
+            "strength": float | None, "name": str | None}`` adds one.
         object_info: The map *chain* was typed with.
+        lanes: One list of entries per lane of *chain*, in its order, shaped
+            like *entries*. An existing loader may land in any segment, which
+            is how one crosses the fork. ``None`` keeps every lane as read.
+            An existing loader missing from every list is deleted.
 
     Returns:
         The plan :func:`apply_lora_chain` carries out, with ``changes`` - the
@@ -1961,11 +2801,72 @@ def plan_lora_chain(
 
     Raises:
         LookupError: An unknown or repeated loader, a strength that cannot be
-            written, or a new LoRA no loader on this ComfyUI can carry.
+            written, a new LoRA no loader on this ComfyUI can carry, lanes
+            that do not match the chain's, or a trunk loader in a workflow
+            whose models have no shared stretch.
     """
     graph = prompt_graph or {}
-    loaders = {loader["node_id"]: loader for loader in chain["loaders"]}
-    old_order = list(loaders)
+    read_lanes = chain.get("lanes") or []
+    if lanes is None:
+        # Every pass as read, less any loader *entries* already moved into the
+        # trunk: that is a crossing, not a loader listed twice.
+        listed = {str(e["node_id"]) for e in entries if e.get("node_id") is not None}
+        lanes = [
+            [
+                {"node_id": loader["node_id"]}
+                for loader in lane["loaders"]
+                if loader["node_id"] not in listed
+            ]
+            for lane in read_lanes
+        ]
+    if len(lanes) != len(read_lanes):
+        raise LookupError(
+            f"This workflow's model goes {len(read_lanes) or 1} "
+            f"{'way' if len(read_lanes) < 2 else 'ways'}, and the edit names "
+            f"{len(lanes)} passes. Open Edit LoRAs again."
+        )
+    if chain.get("model_source") is None and entries:
+        raise LookupError(
+            "This workflow loads a model for each pass, so no LoRA can go before "
+            "them all. Add it to one pass."
+        )
+    everyone = "both passes" if len(read_lanes) == 2 else "every pass"
+    segments = [
+        {
+            "entries": entries,
+            "old": [loader["node_id"] for loader in chain["loaders"]],
+            "with_clip": chain.get("clip_source") is not None,
+            "clip_read": any(s["type"] == "CLIP" for s in chain["sinks"]),
+            "label": everyone,
+        }
+    ] + [
+        {
+            "entries": lane_entries,
+            "old": [loader["node_id"] for loader in lane["loaders"]],
+            # A new loader in a lane carries a CLIP only where something in
+            # that lane reads one; elsewhere its CLIP half would reach nothing.
+            "with_clip": any(s["type"] == "CLIP" for s in lane["sinks"]),
+            "clip_read": any(s["type"] == "CLIP" for s in lane["sinks"]),
+            # Who a CLIP half there reaches, said in the change: those text
+            # encoders may well feed every pass, so "only" is the model's.
+            "clip_names": _readers_named(
+                [s for s in lane["sinks"] if s["type"] == "CLIP"], rail=False
+            )[0],
+            "label": pass_label(lane),
+        }
+        for lane_entries, lane in zip(lanes, read_lanes)
+    ]
+    loaders = {
+        loader["node_id"]: loader
+        for segment_loaders in [chain["loaders"]]
+        + [lane["loaders"] for lane in read_lanes]
+        for loader in segment_loaders
+    }
+    home = {
+        node_id: index
+        for index, segment in enumerate(segments)
+        for node_id in segment["old"]
+    }
     names = {node_id: loader["name"] for node_id, loader in loaders.items()}
     wiring = {
         node_id: {
@@ -1974,116 +2875,164 @@ def plan_lora_chain(
         }
         for node_id, loader in loaders.items()
     }
-    with_clip = chain.get("clip_source") is not None
     next_id = max((int(k) for k in graph if str(k).isdigit()), default=0) + 1
-    order: list[str] = []
+    placed: set[str] = set()
     added: dict[str, dict] = {}
     widgets: dict[str, dict] = {}
     added_changes: list[dict] = []
+    move_changes: list[dict] = []
     strength_changes: list[dict] = []
-    for entry in entries:
-        node_id = entry.get("node_id")
-        strength = entry.get("strength")
-        if node_id is not None:
-            node_id = str(node_id)
-            if node_id not in loaders:
-                raise LookupError(f"This workflow has no LoRA loader #{node_id}.")
-            if node_id in order:
-                raise LookupError(
-                    f"Loader #{node_id} is listed twice, and one loader can only "
-                    "sit in one place in the chain."
+    for index, segment in enumerate(segments):
+        order: list[str] = []
+        segment["order"] = order
+        for entry in segment["entries"]:
+            node_id = entry.get("node_id")
+            strength = entry.get("strength")
+            if node_id is not None:
+                node_id = str(node_id)
+                if node_id not in loaders:
+                    raise LookupError(f"This workflow has no LoRA loader #{node_id}.")
+                if node_id in placed:
+                    raise LookupError(
+                        f"Loader #{node_id} is listed twice, and one loader can "
+                        "only sit in one place in the chain."
+                    )
+                placed.add(node_id)
+                order.append(node_id)
+                if home[node_id] != index:
+                    move_changes.append(
+                        _crossed_change(node_id, names[node_id], segment, index, wiring)
+                    )
+                if strength is None:
+                    continue
+                fields, old = _strength_update(
+                    node_id, graph[node_id]["inputs"], float(strength)
                 )
-            order.append(node_id)
-            if strength is None:
+                if fields:
+                    widgets[node_id] = fields
+                    strength_changes.append(
+                        {
+                            "kind": "strength",
+                            "node_id": node_id,
+                            "text": (
+                                f"#{node_id} {names[node_id]} from "
+                                f"{_strength_text(old)} to {_strength_text(strength)}"
+                            ),
+                        }
+                    )
                 continue
-            fields, old = _strength_update(
-                node_id, graph[node_id]["inputs"], float(strength)
+            adapter = entry.get("adapter")
+            if not adapter:
+                raise LookupError("A new loader needs a LoRA from your model shelf.")
+            with_clip = segment["with_clip"]
+            loader_class, field, value = _inserted_loader(
+                adapter, object_info, with_clip
             )
-            if fields:
-                widgets[node_id] = fields
-                strength_changes.append(
-                    {
-                        "kind": "strength",
-                        "node_id": node_id,
-                        "text": (
-                            f"#{node_id} {names[node_id]} from "
-                            f"{_strength_text(old)} to {_strength_text(strength)}"
-                        ),
-                    }
-                )
-            continue
-        adapter = entry.get("adapter")
-        if not adapter:
-            raise LookupError("A new loader needs a LoRA from your model shelf.")
-        loader_class, field, value = _inserted_loader(
-            adapter, object_info, with_clip, digest_loader=False
-        )
-        spec = object_info.get(loader_class) or {}
-        outputs = spec.get("output") if isinstance(spec.get("output"), list) else []
-        model_field = _input_of_type(spec, "MODEL")
-        clip_field = _input_of_type(spec, "CLIP") if with_clip else None
-        for kind, wire in (("MODEL", model_field), ("CLIP", clip_field))[
-            : 2 if with_clip else 1
-        ]:
-            if wire is None or kind not in outputs:
-                raise LookupError(
-                    f"{loader_class} on this ComfyUI does not take and hand on a "
-                    f"{kind}, so PixlStash cannot wire it in."
-                )
-        inputs = _widget_defaults(spec)
-        inputs[field] = value
-        if strength is not None:
-            for widget in ("strength_model", "strength_clip", "strength"):
-                if widget in inputs:
-                    inputs[widget] = float(strength)
-        shown = inputs.get("strength_model", inputs.get("strength", 1.0))
-        node_id = str(next_id)
-        next_id += 1
-        added[node_id] = {
-            "class_type": loader_class,
-            "inputs": inputs,
-            "_meta": {"title": "LoRA (added by PixlStash)"},
-        }
-        wiring[node_id] = {
-            "model_field": model_field,
-            "clip_field": clip_field,
-            "model_out": outputs.index("MODEL"),
-            "clip_out": outputs.index("CLIP") if clip_field else None,
-        }
-        names[node_id] = entry.get("name") or lora_display_name(
-            (adapter.get("filenames") or [adapter.get("sha256", "")])[-1]
-        )
-        order.append(node_id)
-        added_changes.append(
-            {
-                "kind": "added",
-                "node_id": node_id,
-                "text": (
-                    f"A loader added for {names[node_id]} at {_strength_text(shown)}"
-                ),
+            spec = object_info.get(loader_class) or {}
+            outputs = spec.get("output") if isinstance(spec.get("output"), list) else []
+            model_field = _input_of_type(spec, "MODEL")
+            clip_field = _input_of_type(spec, "CLIP") if with_clip else None
+            for kind, wire in (("MODEL", model_field), ("CLIP", clip_field))[
+                : 2 if with_clip else 1
+            ]:
+                if wire is None or kind not in outputs:
+                    raise LookupError(
+                        f"{loader_class} on this ComfyUI does not take and hand on "
+                        f"a {kind}, so PixlStash cannot wire it in."
+                    )
+            inputs = _widget_defaults(spec)
+            inputs[field] = value
+            if strength is not None:
+                for widget in ("strength_model", "strength_clip", "strength"):
+                    if widget in inputs:
+                        inputs[widget] = float(strength)
+            shown = inputs.get("strength_model", inputs.get("strength", 1.0))
+            node_id = str(next_id)
+            next_id += 1
+            added[node_id] = {
+                "class_type": loader_class,
+                "inputs": inputs,
+                "_meta": {"title": "LoRA (added by PixlStash)"},
             }
-        )
-    deleted = [node_id for node_id in old_order if node_id not in order]
+            wiring[node_id] = {
+                "model_field": model_field,
+                "clip_field": clip_field,
+                "model_out": outputs.index("MODEL"),
+                "clip_out": outputs.index("CLIP") if clip_field else None,
+            }
+            names[node_id] = entry.get("name") or lora_display_name(
+                (adapter.get("filenames") or [adapter.get("sha256", "")])[-1]
+            )
+            order.append(node_id)
+            where = ""
+            if read_lanes and index == 0:
+                where = f", before the fork: {everyone} get it"
+            elif read_lanes and clip_field:
+                where = (
+                    f", its model on {segment['label']} only; its CLIP goes to "
+                    f"{segment['clip_names']}"
+                )
+            elif read_lanes:
+                where = (
+                    f", on {segment['label']} only, as {loader_class}: nothing on "
+                    "that side reads a CLIP, so it does not change the prompt"
+                )
+            added_changes.append(
+                {
+                    "kind": "added",
+                    "node_id": node_id,
+                    "text": (
+                        f"A loader added for {names[node_id]} at "
+                        f"{_strength_text(shown)}{where}"
+                    ),
+                }
+            )
+    deleted = [node_id for node_id in loaders if node_id not in placed]
+    for segment in segments:
+        move_changes += _move_changes(segment["old"], segment["order"], names)
+
+    def moved_sinks(sinks: list[dict], model_end, clip_end) -> list[dict]:
+        return [
+            sink
+            for sink in sinks
+            if graph[sink["node_id"]]["inputs"].get(sink["field"])
+            != (model_end if sink["type"] == "MODEL" else clip_end)
+        ]
 
     model = chain["model_source"]
     clip = chain.get("clip_source")
-    model_end = (
-        [order[-1], wiring[order[-1]]["model_out"]]
-        if order
-        else [model["node_id"], model["output"]]
+    model_end, clip_end = _wire_segment(
+        None,
+        segments[0]["order"],
+        wiring,
+        [model["node_id"], model["output"]] if model else None,
+        [clip["node_id"], clip["output"]] if clip else None,
     )
-    clip_carriers = [n for n in order if wiring[n]["clip_field"]]
-    clip_end = (
-        [clip_carriers[-1], wiring[clip_carriers[-1]]["clip_out"]]
-        if clip_carriers
-        else ([clip["node_id"], clip["output"]] if clip else None)
-    )
-    rewired = [
-        sink
-        for sink in chain["sinks"]
-        if graph[sink["node_id"]]["inputs"].get(sink["field"])
-        != (model_end if sink["type"] == "MODEL" else clip_end)
-    ]
+    rewired = moved_sinks(chain["sinks"], model_end, clip_end)
+    plan_lanes = []
+    for segment, lane in zip(segments[1:], read_lanes):
+        source = lane["source"]
+        start = [source["node_id"], source["output"]] if source else model_end
+        clip_start = _lane_clip_start(lane, clip_end)
+        carrier = next((n for n in segment["order"] if wiring[n]["clip_field"]), None)
+        if carrier is not None and clip_start is None:
+            raise LookupError(
+                f"#{carrier} {names[carrier]} carries a CLIP, and nothing on "
+                f"{segment['label']}'s side hands one out for it to read. Change "
+                "it in ComfyUI."
+            )
+        lane_model, lane_clip = _wire_segment(
+            None, segment["order"], wiring, start, clip_start
+        )
+        rewired += moved_sinks(lane["sinks"], lane_model, lane_clip)
+        plan_lanes.append(
+            {
+                "order": segment["order"],
+                "source": source,
+                "clip_source": lane.get("clip_source"),
+                "sinks": lane["sinks"],
+            }
+        )
 
     changes = [
         {
@@ -2094,13 +3043,14 @@ def plan_lora_chain(
         for node_id in deleted
     ]
     changes += added_changes
-    changes += _move_changes(old_order, order, names)
+    changes += move_changes
     changes += strength_changes
     rewire = _rewired_change(rewired)
     if rewire is not None:
         changes.append(rewire)
     return {
-        "order": order,
+        "order": segments[0]["order"],
+        "lanes": plan_lanes,
         "added": added,
         "deleted": deleted,
         "widgets": widgets,
@@ -2112,15 +3062,42 @@ def plan_lora_chain(
     }
 
 
+def _lane_clip_start(lane: dict, clip_end: list | None) -> list | None:
+    """Where a lane's CLIP chain starts: its own source for a lane with a
+    model of its own, the trunk's CLIP end (as the edit leaves it) otherwise."""
+    if lane.get("source") is None:
+        return clip_end
+    clip = lane.get("clip_source")
+    return [clip["node_id"], clip["output"]] if clip else None
+
+
+def _crossed_change(
+    node_id: str, name: str, segment: dict, index: int, wiring: dict
+) -> dict:
+    """``#12 detail moved to Hires pass only``: a loader taken across the fork."""
+    if index == 0:
+        text = f"#{node_id} {name} moved before the fork: {segment['label']} get it"
+    else:
+        text = f"#{node_id} {name} moved to {segment['label']} only"
+        if wiring[node_id]["clip_field"] and not segment["clip_read"]:
+            # Nothing on that side reads a CLIP, so the loader's text-encoder
+            # half stops reaching any prompt. Said, because it changes pictures.
+            text += "; nothing there reads its CLIP, so it no longer changes the prompt"
+        elif wiring[node_id]["clip_field"]:
+            text += f"; its CLIP goes to {segment['clip_names']}"
+    return {"kind": "moved", "node_id": node_id, "text": text}
+
+
 def apply_lora_chain(prompt_graph: dict, plan: dict, object_info: dict) -> None:
     """Carry out :func:`plan_lora_chain`'s plan on *prompt_graph*, whole or not at all.
 
     Deleted loaders go through :func:`bypass_node`, new ones are added under
-    their planned ids, then every loader in the new order reads the one before
-    it (the anchor for the first), and every sink reads the last. Node ids
-    survive a move, so a picture's recorded graph can still be read against
-    the edited one. Worked on a copy and swapped in at the end, so a refusal
-    part way leaves the graph as it was.
+    their planned ids, then every loader in the trunk reads the one before it
+    (the anchor for the first), each lane chains the same way off the trunk's
+    end (or off its own model), and every sink reads the end of its segment.
+    Node ids survive a move, so a picture's recorded graph can still be read
+    against the edited one. Worked on a copy and swapped in at the end, so a
+    refusal part way leaves the graph as it was.
 
     Raises:
         LookupError: From :func:`bypass_node`, when a loader to delete cannot
@@ -2131,23 +3108,32 @@ def apply_lora_chain(prompt_graph: dict, plan: dict, object_info: dict) -> None:
         bypass_node(work, node_id, object_info)
     for node_id, node in plan["added"].items():
         work[node_id] = deepcopy(node)
+    wiring = plan["wiring"]
+
+    def rewire(sinks: list[dict], model_end, clip_end) -> None:
+        for sink in sinks:
+            end = model_end if sink["type"] == "MODEL" else clip_end
+            work[sink["node_id"]]["inputs"][sink["field"]] = list(end)
+
     model = plan["model_source"]
     clip = plan["clip_source"]
-    model_link = [model["node_id"], model["output"]]
-    clip_link = [clip["node_id"], clip["output"]] if clip else None
-    for node_id in plan["order"]:
-        wire = plan["wiring"][node_id]
-        inputs = work[node_id]["inputs"]
-        inputs[wire["model_field"]] = list(model_link)
-        model_link = [node_id, wire["model_out"]]
-        if wire["clip_field"]:
-            inputs[wire["clip_field"]] = list(clip_link)
-            clip_link = [node_id, wire["clip_out"]]
+    model_end, clip_end = _wire_segment(
+        work,
+        plan["order"],
+        wiring,
+        [model["node_id"], model["output"]] if model else None,
+        [clip["node_id"], clip["output"]] if clip else None,
+    )
     for node_id, fields in plan["widgets"].items():
         work[node_id]["inputs"].update(fields)
-    for sink in plan["sinks"]:
-        end = model_link if sink["type"] == "MODEL" else clip_link
-        work[sink["node_id"]]["inputs"][sink["field"]] = list(end)
+    rewire(plan["sinks"], model_end, clip_end)
+    for lane in plan.get("lanes") or []:
+        source = lane["source"]
+        start = [source["node_id"], source["output"]] if source else model_end
+        lane_model, lane_clip = _wire_segment(
+            work, lane["order"], wiring, start, _lane_clip_start(lane, clip_end)
+        )
+        rewire(lane["sinks"], lane_model, lane_clip)
     prompt_graph.clear()
     prompt_graph.update(work)
 

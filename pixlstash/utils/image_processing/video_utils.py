@@ -30,6 +30,35 @@ class VideoUtils:
         return ext in VIDEO_EXTENSIONS
 
     @staticmethod
+    def is_animated_gif(file_path: str) -> bool:
+        """Return True for a .gif with more than one frame.
+
+        Only the frame-sampling sites consult this; a GIF stays a picture
+        everywhere else (thumbnails, export, ``is_video``).
+        """
+        if os.path.splitext(file_path)[1].lower() != ".gif":
+            return False
+        try:
+            with Image.open(file_path) as img:
+                # is_animated only looks for a second frame; n_frames walks
+                # the whole file.
+                return bool(getattr(img, "is_animated", False))
+        except Exception as exc:
+            logger.debug(
+                "Could not open %s to check for animation, treating it as a still: %s",
+                file_path,
+                exc,
+            )
+            return False
+
+    @staticmethod
+    def is_multiframe_file(file_path: str) -> bool:
+        """Return True for a video or an animated GIF."""
+        return VideoUtils.is_video_file(file_path) or VideoUtils.is_animated_gif(
+            file_path
+        )
+
+    @staticmethod
     def extract_created_at_from_bytes(data: bytes) -> Optional[datetime]:
         """Extract the recording creation time from MP4/MOV container bytes.
 

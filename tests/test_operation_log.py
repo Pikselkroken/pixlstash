@@ -30,7 +30,7 @@ import json
 import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -322,7 +322,7 @@ def _seed_prediction(
                 confidence=confidence,
                 model_version=model_version,
                 status=status,
-                predicted_at=datetime.utcnow(),
+                predicted_at=datetime.now(timezone.utc),
             )
         )
         session.commit()

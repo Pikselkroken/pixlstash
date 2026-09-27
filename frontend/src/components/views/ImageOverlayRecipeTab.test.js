@@ -30,6 +30,8 @@ import { enableAutoUnmount, mount } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 
 import ImageOverlay from "./ImageOverlay.vue";
+import { isReadOnly } from "../../utils/apiClient";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 
 enableAutoUnmount(afterEach);
 
@@ -58,6 +60,9 @@ const recipeBody = (id) =>
 // Set by the test that drives the read's failure path.
 let recipeThrows = false;
 
+// What a read of pictures by id (`/pictures?id=…&fields=grid`) answers.
+let gridRows = [];
+
 const getMock = vi.fn(async (url) => {
   if (typeof url === "string" && url.includes("/recipe")) {
     if (recipeThrows) {
@@ -75,6 +80,9 @@ const getMock = vi.fn(async (url) => {
       });
     }
     return { data: answer };
+  }
+  if (typeof url === "string" && url.startsWith("/pictures?id=")) {
+    return { data: gridRows };
   }
   if (typeof url === "string" && url.includes("/metadata")) {
     return { data: { id: 7, tags: [] } };
@@ -116,6 +124,11 @@ const STUBS = {
   ComfyUiRunner: true,
   ProgressOverlay: true,
   VTooltip: true,
+  OverlayEditPanel: {
+    name: "OverlayEditPanel",
+    props: ["pictureId", "active", "comfyuiProgress", "comfyuiProgressPercent"],
+    template: "<div class='edit-stub'></div>",
+  },
 };
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
@@ -129,7 +142,11 @@ const tabLabels = (wrapper) =>
 
 const activeTab = (wrapper) => labelOf(wrapper.find(".inspector-tab--active"));
 
-async function openOn(id, allImages, { attach = false } = {}) {
+async function openOn(
+  id,
+  allImages,
+  { attach = false, comfyuiConfigured = false } = {},
+) {
   const wrapper = mount(ImageOverlay, {
     // Focus only moves for real in an attached tree, so the test that is
     // about focus asks for one; the rest do not pay for it.
@@ -142,6 +159,7 @@ async function openOn(id, allImages, { attach = false } = {}) {
       tagUpdate: { key: 0, pictureIds: [] },
       descriptionUpdate: { key: 0, pictureIds: [] },
       smartScoreUpdate: { key: 0, pictureIds: [] },
+      comfyuiConfigured,
     },
     global: { stubs: STUBS },
   });
@@ -157,7 +175,9 @@ beforeEach(() => {
   pendingRecipe = null;
   recipeRefusal = null;
   recipeThrows = false;
+  gridRows = [];
   getMock.mockClear();
+  isReadOnly.value = false;
 });
 
 const recipePanel = (wrapper) =>
@@ -326,5 +346,137 @@ describe("the lightbox Recipe tab follows the picture", () => {
     await flush();
     await flush();
     expect(tabLabels(wrapper)).toEqual([]);
+  });
+});
+
+// The Edit tab (#1381) hangs off the machine and the session, never the
+// picture's recipe: a holiday photo gets it too. Absent, not disabled, where it
+// cannot be used - the Recipe tab's rule.
+describe("the lightbox Edit tab", () => {
+  const configured = { comfyuiConfigured: true };
+
+  it("sits after Recipe when ComfyUI is configured", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe", "Edit"]);
+  });
+
+  it("is offered on a picture with no recipe", async () => {
+    picturesWithARecipe = new Set();
+    const wrapper = await openOn(7, undefined, configured);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Edit"]);
+  });
+
+  it("is absent without ComfyUI", async () => {
+    const wrapper = await openOn(7);
+    expect(tabLabels(wrapper)).toEqual(["Info", "Recipe"]);
+    expect(wrapper.find(".edit-stub").exists()).toBe(false);
+  });
+
+  it("is absent in a read-only session", async () => {
+    isReadOnly.value = true;
+    const wrapper = await openOn(7, undefined, configured);
+    expect(tabLabels(wrapper)).not.toContain("Edit");
+    expect(wrapper.find(".edit-stub").exists()).toBe(false);
+  });
+
+  it("is absent on a video, and the choice comes back after it", async () => {
+    const wrapper = await openOn(
+      7,
+      [
+        { id: 7, tags: [] },
+        { id: 9, tags: [], format: "mp4" },
+      ],
+      configured,
+    );
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    expect(activeTab(wrapper)).toBe("Edit");
+    expect(
+      wrapper.findComponent({ name: "OverlayEditPanel" }).props("active"),
+    ).toBe(true);
+
+    await wrapper.setProps({ initialImageId: 9 });
+    await flush();
+    await flush();
+    expect(tabLabels(wrapper)).not.toContain("Edit");
+    expect(wrapper.find(".overlay-sidebar-group").isVisible()).toBe(true);
+    // Hidden, not unmounted: the typed instruction and a run in flight live
+    // in the panel.
+    expect(wrapper.find(".edit-stub").exists()).toBe(true);
+
+    await wrapper.setProps({ initialImageId: 7 });
+    await flush();
+    await flush();
+    expect(activeTab(wrapper)).toBe("Edit");
+  });
+
+  const editPanel = (wrapper) =>
+    wrapper.findComponent({ name: "OverlayEditPanel" });
+  const lightboxBar = (wrapper) =>
+    wrapper.find(".overlay-progress--comfyui").exists();
+  const running = { visible: true, status: "running", message: "ComfyUI" };
+
+  it("drops the lightbox ComfyUI bar only while the Edit tab shows the run", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    await wrapper.setProps({ comfyuiProgress: running });
+    // A run from the grid's menus: the Edit tab has nothing of its own.
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    expect(lightboxBar(wrapper)).toBe(true);
+    editPanel(wrapper).vm.$emit("running", true);
+    await flush();
+    expect(lightboxBar(wrapper)).toBe(false);
+    // On Info the tab's bar is out of sight, so the lightbox's comes back.
+    await wrapper.findAll(".inspector-tab")[0].trigger("click");
+    expect(lightboxBar(wrapper)).toBe(true);
+    await wrapper.findAll(".inspector-tab")[2].trigger("click");
+    editPanel(wrapper).vm.$emit("running", false);
+    await flush();
+    expect(lightboxBar(wrapper)).toBe(true);
+  });
+
+  it("shows an edit result the grid has not inserted yet", async () => {
+    gridRows = [{ id: 8, stack_id: "s1", tags: [] }];
+    const wrapper = await openOn(
+      7,
+      [
+        { id: 7, stack_id: "s1", tags: [] },
+        { id: 5, tags: [] },
+      ],
+      configured,
+    );
+    editPanel(wrapper).vm.$emit("show-picture", 8, 7);
+    await flush();
+    await flush();
+    expect(editPanel(wrapper).props("pictureId")).toBe(8);
+    expect(wrapper.emitted("show-picture")).toEqual([[8]]);
+    expect(getMock).toHaveBeenCalledWith("/pictures?id=8&fields=grid");
+  });
+
+  it("stays put and says so when the result cannot be read", async () => {
+    const wrapper = await openOn(7, undefined, configured);
+    const error = vi.spyOn(useNoticeStore(), "error");
+    editPanel(wrapper).vm.$emit("show-picture", 8, 7);
+    await flush();
+    await flush();
+    expect(editPanel(wrapper).props("pictureId")).toBe(7);
+    expect(wrapper.emitted("show-picture")).toBeUndefined();
+    expect(error).toHaveBeenCalledOnce();
+  });
+
+  it("does not move a reader who stepped on while the result was read", async () => {
+    gridRows = [{ id: 8, tags: [] }];
+    const wrapper = await openOn(
+      7,
+      [
+        { id: 7, tags: [] },
+        { id: 5, tags: [] },
+      ],
+      configured,
+    );
+    editPanel(wrapper).vm.$emit("show-picture", 8, 7);
+    await wrapper.setProps({ initialImageId: 5 });
+    await flush();
+    await flush();
+    expect(editPanel(wrapper).props("pictureId")).toBe(5);
+    expect(wrapper.emitted("show-picture")).toBeUndefined();
   });
 });

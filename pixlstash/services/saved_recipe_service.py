@@ -26,7 +26,7 @@ holds.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
 
 from sqlalchemy import func
@@ -357,7 +357,7 @@ def create_in_session(session: Session, fields: dict) -> dict:
         seed=fields.get("seed"),
         keep_seed=bool(fields.get("keep_seed")),
         source_picture_id=fields.get("source_picture_id"),
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(timezone.utc),
     )
     session.add(recipe)
     session.commit()

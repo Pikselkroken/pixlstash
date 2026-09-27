@@ -484,13 +484,19 @@
       <!-- The set grid, ahead of every row-list state: its groups OVERLAP, so
            it is a different screen rather than a banded version of this one. It
            still reads `visibleRows`, so Show and the filters keep applying. -->
+      <!-- `firstRead`, not `loading`: a refetch after an edit (assign, stack,
+           rename) must leave the list mounted. Swapping it for the state line
+           destroys the scrollport and drops the reader back at the top. -->
       <ModelSetGrid
-        v-if="isSetGrid && !store.loading && !store.error"
+        v-if="isSetGrid && !firstRead && !store.error"
+        ref="setGridRef"
         @works-with="showWorksWith"
         @menu="openGridMenu"
         @rename="startRenameSelected"
+        @set-menu="({ x, y, el }) => setBarRef?.openContextMenu(x, y, el)"
+        @rename-set="startRenameSet"
       />
-      <p v-else-if="store.loading" class="shelf-state">Reading the shelf…</p>
+      <p v-else-if="firstRead" class="shelf-state">Reading the shelf…</p>
       <p v-else-if="store.error" class="shelf-state" role="alert">
         {{ store.error }}
       </p>
@@ -1392,8 +1398,12 @@
          at one would have taken a shared VAE with it. A card stands for its BASE
          MODEL now and a tray row for one file, so everything this bar can be
          aimed at on that screen is exactly one model, which is what its verbs
-         write. One bar for both views, so the refusals cannot drift. -->
-    <div v-if="isShelfTab" class="selbar-float">
+         write. One bar for both views, so the refusals cannot drift.
+         A hand-made set card (#1520) selects its SET instead, which takes the
+         second pill below: its verbs touch no file. The two selections can be
+         held together (Ctrl+click, Ctrl+A), and then both pills are up side by
+         side, each with its own verbs. -->
+    <div v-if="isShelfTab" ref="selFloatEl" class="selbar-float">
       <ShelfSelectionBar
         ref="selBarRef"
         @rename="startRenameSelected"
@@ -1411,8 +1421,28 @@
         @forget="confirmForget"
         @delete="confirmDelete"
         @works-with="openWorksWith"
+        @new-set="newSetWithCheckpoint"
+        @remove-from-set="removeSelectedFromSet"
+      />
+      <WorkflowSetSelectionBar
+        v-if="isSetGrid"
+        ref="setBarRef"
+        @rename="startRenameSet"
+        @delete="store.deleteHandMadeSets(store.selectedSets)"
+        @merge-offer="setGridRef?.openOffer(store.selectedSets[0]?.id)"
+        @keep-separate="store.keepOutOfHandMadeSet(store.selectedSets[0])"
+        @offer-again="store.offerMergeAgain(store.selectedSets[0])"
       />
     </div>
+    <!-- The set receipts (#1573): the grid's own pill, lifted clear of the
+         selection pill when both are up. Local receipts only - a library
+         action's Undo would revert something this screen cannot show. -->
+    <ActionReceipt v-if="isShelfTab" local-only :lift-px="receiptLift" />
+    <WorkflowSetRenameDialog
+      :set="renamingSet"
+      @close="renamingSet = null"
+      @save="saveSetName"
+    />
 
     <ModelWorksWithDialog :model="worksWithModel" @close="closeWorksWith" />
     <ShelfEditDialog :verb="editVerb" @close="editVerb = ''" />
@@ -1546,6 +1576,9 @@ import { useRoute, useRouter } from "vue-router";
 import ShelfShowPanel from "../panels/ShelfShowPanel.vue";
 import ShelfSortPanel from "../panels/ShelfSortPanel.vue";
 import ShelfSelectionBar from "../panels/ShelfSelectionBar.vue";
+import WorkflowSetRenameDialog from "../panels/WorkflowSetRenameDialog.vue";
+import { handMadeName } from "../../utils/workflowSets";
+import WorkflowSetSelectionBar from "../panels/WorkflowSetSelectionBar.vue";
 import BaseModelInput from "../widgets/BaseModelInput.vue";
 import ShelfEditDialog from "../panels/ShelfEditDialog.vue";
 import MergeCopiesDialog from "../panels/MergeCopiesDialog.vue";
@@ -1553,6 +1586,8 @@ import ShelfMoveDialog from "../panels/ShelfMoveDialog.vue";
 import ModelFoldersDialog from "../panels/ModelFoldersDialog.vue";
 import ModelWorksWithDialog from "../panels/ModelWorksWithDialog.vue";
 import ModelSetGrid from "./ModelSetGrid.vue";
+import ActionReceipt from "../widgets/ActionReceipt.vue";
+import { FLOATING_BOTTOM_GAP_PX } from "../../utils/floatingBottom";
 import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import TbOverflowMenu from "../panels/TbOverflowMenu.vue";
 import AiToolkitIcon from "../widgets/AiToolkitIcon.vue";
@@ -1587,6 +1622,7 @@ import {
 import { useModelFoldersStore } from "../../stores/useModelFoldersStore";
 import { useModelMovesStore } from "../../stores/useModelMovesStore";
 import { useNoticeStore } from "../../stores/useNoticeStore";
+import { useOperationStore } from "../../stores/useOperationStore";
 import { useReviewSessionsStore } from "../../stores/useReviewSessionsStore";
 import { useSidebarStore } from "../../stores/useSidebarStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
@@ -1815,6 +1851,20 @@ async function askAndDelete(permanent) {
     });
   }
   const leftBehind = companionsSentences(companions, ids.length);
+  // The owner's own sets keep a deleted member by its hash, marked "Not on
+  // shelf" (#1520), so the prompt says how far the delete reaches and names the
+  // safer verb rather than leaving the reader to find a greyed tile later.
+  // True on BOTH paths: set membership lives in its own table keyed by hash,
+  // which neither the trash nor a permanent delete touches - "kept by its file
+  // hash" is what squares it with a permanent delete's "everything recorded".
+  const holding = store.handMadeSetsHolding(ids);
+  const inSets = holding.length
+    ? ` ${many ? "They stay" : "It stays"} in ${
+        holding.length === 1
+          ? `your set "${handMadeName(holding[0])}"`
+          : `${holding.length} of your workflow sets`
+      }, kept by ${many ? "their" : "its"} file hash and marked Not on shelf. To take ${many ? "them" : "it"} off a set only, use Remove from set.`
+    : "";
   const ok = await confirm({
     title: permanent
       ? `Permanently delete ${many ? `${ids.length} models?` : "this model?"}`
@@ -1823,7 +1873,8 @@ async function askAndDelete(permanent) {
       (permanent
         ? `The files for ${subject} are deleted permanently from this machine, along with everything recorded about them.`
         : `The files for ${subject} go to your ${trash}, where you can put them back. The shelf stops listing them.`) +
-      (leftBehind ? ` ${leftBehind}` : ""),
+      (leftBehind ? ` ${leftBehind}` : "") +
+      inSets,
     warning: permanent
       ? "There is no undo for this."
       : `A very large file may be too big for the ${trash} and be deleted outright.`,
@@ -2328,7 +2379,8 @@ function shelfOwnsTheKey(event) {
  * still leaves selectable everywhere else - which is what the reporter saw.
  * It runs the store action the selection pill's "Select all shown" already
  * runs, so the key and the button say the same thing: everything the current
- * `Show` selection DRAWS, runs taken whole. Cmd counts as Ctrl (`metaKey`),
+ * `Show` selection DRAWS, runs taken whole - and on the set grid every
+ * hand-made set too. Cmd counts as Ctrl (`metaKey`),
  * Shift and Alt do not - those are chords this list does not define and are
  * left to the browser, AltGr+A among them.
  *
@@ -2352,7 +2404,15 @@ function onShelfKeydown(event) {
     !event.altKey &&
     !event.shiftKey &&
     String(event.key).toLowerCase() === "a";
-  if (event.key !== "Escape" && event.key !== "Delete" && !wantsSelectAll) {
+  // F2 is let through for a selected hand-made set, whose pill and menu
+  // advertise it; a row's own F2 is handled on the row.
+  const renamesSet = event.key === "F2" && store.selectedSets.length > 0;
+  if (
+    event.key !== "Escape" &&
+    event.key !== "Delete" &&
+    !wantsSelectAll &&
+    !renamesSet
+  ) {
     return;
   }
   if (!shelfOwnsTheKey(event)) return;
@@ -2365,10 +2425,40 @@ function onShelfKeydown(event) {
     // would have passed the guard and then cleared the selection to nothing. The
     // pill's *Select all shown* never had the guard at all, so moving it into
     // the store fixed a second caller as well. The press is still claimed either
-    // way, or declining would hand it to the native select-all.
+    // way, or declining would hand it to the native select-all. On the set grid
+    // it takes the hand-made "Grouped by you" sets as well as the models.
     store.selectVisible();
     return;
   }
+  // Selected hand-made SETS (#1520) answer the same two keys with the set
+  // vocabulary: Escape clears, Delete deletes the sets - never a file. The
+  // early return above already admits only these two keys here; the check is
+  // restated so this block is correct read on its own.
+  //
+  // Sets and models can be held together (Ctrl+click, Ctrl+A). Escape clears
+  // both. Delete deletes the sets only when no model is selected: with both,
+  // it falls through to the FILE confirmation below, so one key never deletes
+  // sets unprompted while also arming a file delete. The sets' own pill still
+  // deletes them.
+  if (store.selectedSets.length && isSetGrid.value) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      store.clearSetSelection();
+      store.clearSelection();
+      return;
+    }
+    if (event.key === "Delete" && !store.selectedRows.length) {
+      event.preventDefault();
+      store.deleteHandMadeSets(store.selectedSets);
+      return;
+    }
+    if (event.key === "F2") {
+      event.preventDefault();
+      startRenameSet();
+      return;
+    }
+  }
+  if (renamesSet) return;
   // Escape and Delete are both about a selection, and the guard above no longer
   // asks for one.
   if (!store.selectedRows.length) return;
@@ -2384,6 +2474,83 @@ function onShelfKeydown(event) {
 
 onMounted(() => window.addEventListener("keydown", onShelfKeydown));
 onUnmounted(() => window.removeEventListener("keydown", onShelfKeydown));
+
+// ── Hand-made workflow sets (#1520) ─────────────────────────────────────────
+
+const setGridRef = ref(null);
+const setBarRef = ref(null);
+
+// The set receipt sits above whichever selection pill is up, lifted by its
+// MEASURED height the way the grid lifts its own (`actionReceiptLift`). Local
+// rather than through the bottom-anchor registry: the pills never registered
+// there, and doing so would move the notice stack as well.
+const selFloatEl = ref(null);
+const selFloatHeight = ref(0);
+let selFloatObserver = null;
+watch(
+  selFloatEl,
+  (el) => {
+    selFloatObserver?.disconnect();
+    selFloatObserver = null;
+    selFloatHeight.value = el?.offsetHeight || 0;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    selFloatObserver = new ResizeObserver(([entry]) => {
+      selFloatHeight.value =
+        entry.borderBoxSize?.[0]?.blockSize ?? entry.target.offsetHeight;
+    });
+    selFloatObserver.observe(el);
+  },
+  { flush: "post" },
+);
+onUnmounted(() => selFloatObserver?.disconnect());
+const receiptLift = computed(() =>
+  selFloatHeight.value > 0 ? selFloatHeight.value + FLOATING_BOTTOM_GAP_PX : 0,
+);
+/** The set the rename dialog is open on, or null. */
+const renamingSet = ref(null);
+
+function startRenameSet() {
+  if (store.selectedSets.length === 1)
+    renamingSet.value = store.selectedSets[0];
+}
+
+async function saveSetName(name) {
+  const set = renamingSet.value;
+  renamingSet.value = null;
+  if (set) await store.renameHandMadeSet(set, name);
+}
+
+/**
+ * "New workflow set with this checkpoint", from a checkpoint's menu.
+ *
+ * The set grid is where a set is filled, so the shelf goes there. Asked from an
+ * EVIDENCE card, the new set opens with Fill from pictures ready: that card is
+ * the pictures, and they are what the owner is most likely to want to keep.
+ */
+async function newSetWithCheckpoint() {
+  const row = store.selectedRows[0];
+  if (!row) return;
+  const fromEvidence = isSetGrid.value;
+  if (!isSetGrid.value) store.setView({ groupBy: "workflow_set" });
+  const created = await store.createHandMadeSet({
+    members: [{ model_id: row.id, slot: "checkpoint" }],
+  });
+  if (created && fromEvidence) {
+    await nextTick();
+    setGridRef.value?.openFill("pictures");
+  }
+}
+
+/** Remove from set: the selected members of the open hand-made tray. */
+function removeSelectedFromSet() {
+  const open = store.handMadeGroups.find((g) => g.key === store.openSetKey);
+  if (!open) return;
+  const ids = new Set(store.selectedModelIds);
+  const hashes = (open.set.members ?? [])
+    .filter((m) => m.on_shelf && ids.has(m.id))
+    .map((m) => m.sha256);
+  store.removeFromHandMadeSet(open.set, hashes);
+}
 
 // ── The thumbnail verb ──────────────────────────────────────────────────────
 
@@ -2793,6 +2960,15 @@ const route = useRoute();
 const router = useRouter();
 
 const isShelfTab = computed(() => route.name !== "models-runs");
+
+// Set receipts exist only while this tab shows them: their Undo means nothing
+// on the runs tab or another screen, and a write landing after the reader left
+// must not raise one there.
+const operationStore = useOperationStore();
+watch(isShelfTab, (on) => operationStore.setLocalReceiptHost(on), {
+  immediate: true,
+});
+onUnmounted(() => operationStore.setLocalReceiptHost(false));
 
 /** How many runs the other view is showing, for the count beside the tabs. */
 const runsCount = ref(null);
@@ -3979,6 +4155,16 @@ const grouped = computed(() => store.view.groupBy !== "none");
  */
 const isSetGrid = computed(
   () => isShelfTab.value && store.view.groupBy === GRID_GROUP_BY,
+);
+
+/**
+ * True while a read is in flight with nothing to show yet. A refetch over rows
+ * already on screen keeps them until the new ones land, so the list keeps its
+ * scroll position; one over an empty view (Reset from a narrowed, empty Show)
+ * still says it is reading rather than flashing an empty state.
+ */
+const firstRead = computed(
+  () => store.loading && (!store.loaded || !store.visibleRows.length),
 );
 
 /**

@@ -13,8 +13,8 @@ import pathlib
 import pytest
 
 from pixlstash.services.comfyui_recipe_service import MODEL_FILENAME_FIELDS
-from pixlstash.services.workflow_card_service import _SLOT_KINDS
-from pixlstash.services.workflow_identity import _is_lora_widget
+from pixlstash.services.workflow_card_service import slot_kind
+from pixlstash.services.workflow_identity import is_lora_widget
 from pixlstash.utils.comfyui_utilities import _NOT_A_MODEL_WIDGET
 from pixlstash.services.workflow_identity import CHECKPOINT_WIDGETS
 from pixlstash.utils.comfyui_utilities import (
@@ -91,21 +91,23 @@ def test_loaded_model_widgets_agrees_with_the_csv_and_keeps_the_widget(
     base = [name for widget, name in found if widget in CHECKPOINT_WIDGETS]
     assert "|".join(base) == expected["models"]
     assert "|".join(loras) == expected["loras"]
-    # Every widget is one `_SLOT_KINDS` turns into a real slot kind, rather
+    # Every widget is one `slot_kind` turns into a real slot kind, rather
     # than falling through to its own raw name - which a card row branches on
     # and `cardAccessibleName` reads out loud ("model_path Krea 2").
     #
-    # Asserted against `_SLOT_KINDS` and NOT against `MODEL_FILENAME_FIELDS`:
+    # Asserted against `slot_kind` and NOT against `MODEL_FILENAME_FIELDS`:
     # the widgets come off that map, so a subset relation to it holds by
     # construction for every possible input and says nothing. `lora_name` is
     # excluded because a LoRA is not a slot kind - it is its own list.
-    assert {widget for widget, _ in found if widget != "lora_name"} <= set(_SLOT_KINDS)
+    assert all(
+        slot_kind(widget) != widget for widget, _ in found if widget != "lora_name"
+    )
 
 
 def test_every_widget_recovery_can_emit_has_a_slot_kind() -> None:
     """No recovered slot reaches a card under its own raw widget name.
 
-    ``_describe_slots`` falls through to ``_SLOT_KINDS.get(widget, widget)``,
+    ``_describe_slots`` falls through to the widget's own name (``slot_kind``),
     and ``kind`` is not internal: ``cardAccessibleName`` renders it, so a
     widget missing from that map is read out loud - "model_path Krea 2" (#1483).
 
@@ -129,11 +131,11 @@ def test_every_widget_recovery_can_emit_has_a_slot_kind() -> None:
     unmapped = sorted(
         widget
         for widget in emittable
-        if widget not in _SLOT_KINDS and not _is_lora_widget(widget)
+        if slot_kind(widget) == widget and not is_lora_widget(widget)
     )
     assert not unmapped, (
         f"{unmapped} can be recovered off a workflow file but has no "
-        "_SLOT_KINDS entry, so the slot reaches the card - and a screen "
+        "slot kind, so the slot reaches the card - and a screen "
         "reader - under its raw widget name."
     )
 

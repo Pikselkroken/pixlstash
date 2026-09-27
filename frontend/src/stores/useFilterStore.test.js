@@ -3,7 +3,7 @@ import { setActivePinia, createPinia } from "pinia";
 
 import { useFilterStore } from "./useFilterStore";
 
-// A score range and "unscored" combine: the filter menu's "Include unscored"
+// A score range and "unscored" combine: the filter menu's Score, from 0 stars,
 // adds the unrated to the range. Neither setter may clear the other.
 
 beforeEach(() => {

@@ -84,7 +84,7 @@ from __future__ import annotations
 import json
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import partial
 from typing import TYPE_CHECKING, Any, Iterable, Optional
 
@@ -344,7 +344,7 @@ def _upsert_verdict(
     row.cover_picture_id = cover_picture_id
     row.stack_id = stack_id
     row.batch_id = batch_id
-    row.decided_at = datetime.utcnow()
+    row.decided_at = datetime.now(timezone.utc)
     row.reopened_at = None
     session.add(row)
 
@@ -564,7 +564,7 @@ def _stack_members(
     normalize_stack_positions(session, stack_id)
     stack = session.get(PictureStack, stack_id)
     if stack is not None:
-        stack.updated_at = datetime.utcnow()
+        stack.updated_at = datetime.now(timezone.utc)
         session.add(stack)
     return stack_id
 
@@ -1281,7 +1281,7 @@ def reopen_verdict_in_session(
         unstacked = target_ids
         event_ids.update(target_ids)
 
-    row.reopened_at = datetime.utcnow()
+    row.reopened_at = datetime.now(timezone.utc)
     if clear_batch:
         row.reopen_batch_id = clear_batch
     session.add(row)
@@ -1399,7 +1399,7 @@ def restore_verdicts_in_session(
         return
 
     is_redo = direction == operation_log_service.RESTORE_REDO
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     reopened_at = None if is_redo else now
     signatures: list[str] = []
     for start in range(0, len(batch_ids), ID_CHUNK):
@@ -1485,7 +1485,7 @@ def restore_reopens_in_session(
         return
 
     is_undo = direction == operation_log_service.RESTORE_UNDO
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     signatures: list[str] = []
     for start in range(0, len(batch_ids), ID_CHUNK):
         chunk = batch_ids[start : start + ID_CHUNK]

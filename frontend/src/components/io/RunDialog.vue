@@ -56,7 +56,22 @@
       <!-- ── Right: the form, four columns ──────────────────────────────── -->
       <div class="rund-form">
         <div class="rund-f rund-f--4">
-          <span class="rund-l">Workflow</span>
+          <span class="rund-l">
+            Workflow<span class="rund-sp" />
+            <!-- Not on the Workflows view itself: there the card is already
+                 in the grid behind this popup. -->
+            <AppButton
+              v-if="activeKey && route?.name !== 'workflows'"
+              size="sm"
+              variant="ghost"
+              icon-left="sitemap-outline"
+              tooltip="Close this and show the workflow in the Workflows view"
+              :disabled="submitting"
+              @click="openInWorkflows"
+            >
+              Open in Workflows
+            </AppButton>
+          </span>
           <AppSelect
             v-model="workflowKey"
             label="Workflow"
@@ -191,6 +206,7 @@
           <AppTextarea
             v-model="prompt"
             label="Prompt"
+            :placeholder="isEdit ? 'Describe the change, e.g. make it night time' : ''"
             :rows="3"
             :disabled="submitting"
             @keydown.stop
@@ -583,7 +599,7 @@
  * identical row was one press away from here.
  */
 import { computed, nextTick, reactive, ref, useId, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { VIcon } from "vuetify/components";
 
 import { getPictureRecipe } from "../../api/comfyui";
@@ -603,11 +619,12 @@ import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
 import { editLorasRoute, loraStem } from "../../utils/loraChain";
 import { wouldDuplicate } from "../../utils/recipeKey";
+import { stackMemberOptions } from "../../utils/workflowCard";
 import {
   PICTURE_INPUT_UNFILLED,
-  bypassNotice,
   LORAS_BYPASSED,
   reasonsBlock,
+  repairNotices,
   unplacedNotice,
 } from "../../utils/runReasons";
 import SaveRecipeDialog from "./SaveRecipeDialog.vue";
@@ -635,6 +652,7 @@ const props = defineProps({
 
 const emit = defineEmits(["close", "run", "open-settings"]);
 const router = useRouter();
+const route = useRoute();
 
 /**
  * `MAX_RUNS_PER_REQUEST` (`pixlstash/routes/comfyui.py`), which `_plan`
@@ -878,9 +896,16 @@ const savedRecipe = computed(() => props.source?.savedRecipe || null);
 /** A card with no source picture picks where its output is filed. */
 const picksDestination = computed(() => !pictureIds.value.length);
 
-const title = computed(() =>
-  kind.value === "card" ? "Run workflow" : "Run recipe",
-);
+/**
+ * "edit" is "Edit with ComfyUI…" (the grid's menus): the built-in image edit
+ * card run over the selection, which fills its picture input. The pictures are
+ * what is edited, not recipes to replay, so none of their recipes is read.
+ */
+const isEdit = computed(() => kind.value === "edit");
+const title = computed(() => {
+  if (isEdit.value) return "Edit with ComfyUI";
+  return kind.value === "card" ? "Run workflow" : "Run recipe";
+});
 const subtitle = computed(() => card.value?.name || "");
 const sourceName = computed(
   () => props.source?.name || card.value?.name || "This run",
@@ -896,6 +921,7 @@ const sourceName = computed(
  */
 const coverUrl = computed(() => {
   if (props.source?.coverUrl) return props.source.coverUrl;
+  if (isEdit.value && pictureIds.value.length) return thumbUrl(pictureIds.value[0]);
   const cover = card.value?.covers?.[0];
   return cover ? workflowCoverUrl(cover) : "";
 });
@@ -904,6 +930,9 @@ const seedText = computed(() => recipe.value?.seed_text || "");
 const sourceKindLine = computed(() => {
   const many = pictureIds.value.length;
   if (kind.value === "card") return "Workflow, with no picture behind it";
+  if (isEdit.value) {
+    return many > 1 ? `${many} pictures to edit, one run each` : "The picture to edit";
+  }
   if (many > 1) return `${many} pictures, all on this workflow`;
   return "This picture's recipe";
 });
@@ -1205,50 +1234,21 @@ const seedOptions = [
 const workflowOptions = computed(() => {
   // A stack comes whole, in its own order, from the card: members often share
   // a generated name, so each says what sets it apart from the others.
-  const rows = numberAlike(
-    (card.value?.members || []).map((member) => ({
-      value: member.key,
-      label: memberLabel(member),
-    })),
-  );
+  const rows = stackMemberOptions(card.value?.members);
   if (card.value && !rows.length) {
     rows.push({ value: card.value.key, label: card.value.name });
   }
   // "Run a workflow on these…" opens with the whole library in the picker;
   // otherwise only the stack's own members, which is the switch the design
-  // describes.
+  // describes. Under the stack's heading, the library's cards get their own.
+  const group = rows.some((option) => option.group) ? "Other workflows" : undefined;
   for (const row of props.source?.pickWorkflow ? cards.value : []) {
     if (!rows.some((option) => option.value === row.key)) {
-      rows.push({ value: row.key, label: row.name });
+      rows.push({ value: row.key, label: row.name, group });
     }
   }
   return rows;
 });
-
-// The chips that only say a model differs, which `sets_apart` already names.
-const MODEL_CHIPS = new Set(["other checkpoint", "other models"]);
-
-/** "Name — what sets it apart": the models only it loads, then its chips. */
-function memberLabel(member) {
-  const models = member.sets_apart || [];
-  const chips = (member.differs_by || []).filter(
-    (chip) => !models.length || !MODEL_CHIPS.has(chip),
-  );
-  const apart = [...models, ...chips];
-  return apart.length ? `${member.name} — ${apart.join(", ")}` : member.name;
-}
-
-/** Rows that still read alike are numbered, as the Pictures rows are. */
-function numberAlike(rows) {
-  const total = {};
-  for (const row of rows) total[row.label] = (total[row.label] || 0) + 1;
-  const seen = {};
-  return rows.map((row) => {
-    if (total[row.label] < 2) return row;
-    seen[row.label] = (seen[row.label] || 0) + 1;
-    return { ...row, label: `${row.label} (${seen[row.label]})` };
-  });
-}
 
 const adapterOptions = computed(() =>
   adapters.value
@@ -1865,6 +1865,18 @@ function editLoras(workflowKey) {
   void router?.push?.(editLorasRoute(key));
 }
 
+/**
+ * "Open in Workflows": the card this popup runs, selected on the Workflows
+ * screen with its rail open. The popup closes, as it does for Edit LoRAs…,
+ * because the screen it opens on is behind it.
+ */
+function openInWorkflows() {
+  if (!activeKey.value || submitting.value) return;
+  const key = activeKey.value;
+  emit("close");
+  void router?.push?.({ name: "workflows", query: { card: key } });
+}
+
 async function loadAdapters() {
   if (adapters.value.length) return;
   try {
@@ -1923,7 +1935,7 @@ async function runPreflight(token = loadToken) {
     if (!mine() || askedFor !== activeKey.value) return;
     reasons.value = (answer?.groups || []).flatMap((group) => group.reasons || []);
     bypassed.value = (answer?.groups || []).flatMap((group) => [
-      ...bypassNotice(group),
+      ...repairNotices(group),
       ...unplacedNotice(group),
     ]);
     plannedRuns.value = Number(answer?.runs) || 0;
@@ -1985,7 +1997,7 @@ async function load() {
     }
     // One picture is a recipe to prefill from; several are a card the server
     // already agreed they share, so the card alone is the honest source.
-    if (pictureIds.value.length === 1) {
+    if (pictureIds.value.length === 1 && !isEdit.value) {
       const data = await getPictureRecipe(pictureIds.value[0], { preflight: false });
       if (!mine()) return;
       recipe.value = data?.reason === "no_prompt_chunk" ? null : data;

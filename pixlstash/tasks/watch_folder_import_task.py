@@ -1,6 +1,6 @@
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Session, select
@@ -115,7 +115,7 @@ class WatchFolderImportTask(BaseTask):
                     # something files it.
                     subfolder=resolve_placement(self._db),
                 )
-                pic.imported_at = datetime.now()
+                pic.imported_at = datetime.now(timezone.utc)
                 import_source_folder = candidate.get("import_source_folder")
                 if isinstance(import_source_folder, str) and import_source_folder:
                     pic.import_source_folder = import_source_folder

@@ -40,12 +40,16 @@ from pixlstash.services.workflow_hash import (
     ReducedNode,
     WorkflowGraphError,
     _digest,
+    asset_reference,
     drop_widgets,
     graph_key,
+    is_link,
     node_labels,
+    normalized_filename,
     reduce_api_graph,
 )
 from pixlstash.services.workflow_io import is_picture_loader
+from pixlstash.utils.adapter_header import FILE_CHECKPOINT, FILE_TEXT_ENCODER, FILE_VAE
 
 # Stamped beside every cached value, so a change of rule re-keys visibly.
 # Stack overrides are keyed on workflow keys, not on core hashes, so a
@@ -54,6 +58,10 @@ WORKFLOW_KEY_VERSION = "v1"
 CORE_VERSION = "v1"
 
 ASSET_REFERENCE_PREFIX = "asset:"
+
+# What an address on the core graph is spelled with, so a core address and a
+# base slot label (a bare digest) can never be read as each other.
+CORE_ADDRESS_PREFIX = "core:"
 
 STRUCTURAL = "structural"
 RECIPE = "recipe"
@@ -83,21 +91,11 @@ _PICTURE_WIDGET_RE = re.compile(r"(^|_)(image|images|video|mask)(_|$)")
 # changed rather than falling back to "other models". The shelf loader names
 # its checkpoint by id, not by filename (#1416).
 #
-# **The client's copy is gone; a server one is not.** The retired workflow
-# shelf kept a `BASE_WIDGETS` of its own for the Models column, and the two
-# drifted in both directions - `diffusion_model` and `model_path` only there,
-# `checkpoint_id` only here - so a workflow read as having a base model on one
-# side and a changed one on the other (#1416). A guardrail held them equal
-# until F1b (#1404) deleted the shelf.
-#
-# **`_SLOT_KINDS` in `workflow_card_service.py` still answers the same
-# question and already disagrees**, and it is the one a card is labelled from:
-# `unet_name` is `"unet"` there, never `"checkpoint"`, and `diffusion_model`,
-# `model_path` and `checkpoint_id` are absent altogether. So a Flux/SD3/Wan
-# graph is a base-model change to `differs_by` here and is NOT the card's
-# headline model there, which falls back to the first slot. Same drift, moved
-# from client-vs-server to server-vs-server, and nothing asserts it: the two
-# want reconciling behind one helper rather than a comment (#1404 review).
+# **The one answer to "is this the base model".** The retired workflow shelf
+# kept a `BASE_WIDGETS` of its own and it drifted from this set (#1416), and
+# `workflow_card_service._SLOT_KINDS` later drifted the same way. Which KIND of
+# base model a spelling is lives beside it in :func:`base_model_kind`, and the
+# card service asks that rather than keeping a copy (#1622).
 CHECKPOINT_WIDGETS = frozenset(
     {
         "ckpt_name",
@@ -107,6 +105,43 @@ CHECKPOINT_WIDGETS = frozenset(
         "checkpoint_id",
     }
 )
+
+
+# The base-model spellings that are a diffusion model on its own (a UNET) rather
+# than a whole checkpoint. A graph carrying both is led by its checkpoint.
+_UNET_WIDGETS = frozenset({"unet_name", "diffusion_model"})
+
+
+def base_model_kind(widget: str) -> Optional[str]:
+    """``checkpoint`` or ``unet`` for a widget naming the base model, else ``None``.
+
+    Derived from :data:`CHECKPOINT_WIDGETS`, so a widget added there is a base
+    model everywhere the same day.
+    """
+    if widget not in CHECKPOINT_WIDGETS:
+        return None
+    return "unet" if widget in _UNET_WIDGETS else "checkpoint"
+
+
+def model_fix_kind(class_type: str, widget: str) -> Optional[str]:
+    """The shelf ``file_kind`` a model fix may put in this loader field, or ``None``.
+
+    A fix replaces a missing file with a shelf model of the kind the slot
+    takes (``PUT /workflows/{key}/model-fix``), and every read of a fix -
+    which slots it names, which fields a run rewrites, which covers it
+    supersedes - asks this, so a file of the same name in another kind of
+    slot is never touched. ``clip_name`` on a vision loader is an image
+    encoder, not a text encoder (the clone dialog's rule, and the pre-flight's
+    ``clip_vision`` folder).
+    """
+    if widget in CHECKPOINT_WIDGETS:
+        return FILE_CHECKPOINT
+    if widget == "vae_name":
+        return FILE_VAE
+    if widget.startswith("clip_name") and "CLIPVision" not in class_type:
+        return FILE_TEXT_ENCODER
+    return None
+
 
 PLUMBING = "plumbing"
 UPSCALE = "upscale"
@@ -157,7 +192,7 @@ class Slot:
     is_lora: bool
 
 
-def _is_lora_widget(widget: str) -> bool:
+def is_lora_widget(widget: str) -> bool:
     """Whether this widget names a LoRA, so its slot takes a mark.
 
     Both spellings carry the numbered form a stacker gives its second and third
@@ -168,6 +203,29 @@ def _is_lora_widget(widget: str) -> bool:
     return bool(
         LORA_FILENAME_FIELD_RE.match(widget) or LORA_DIGEST_FIELD_RE.match(widget)
     )
+
+
+def lora_assets(document: dict) -> set[str]:
+    """Every LoRA file a stored document loads, as its ``asset:`` reference.
+
+    A read of the document as stored, with no reduction: which files, not
+    which slot each sat in, which is all a picture filter asks. A widget that
+    :func:`is_lora_widget` names and whose value is a reference counts;
+    anything else in a LoRA widget (a nulled or unfilled one) names no file.
+    """
+    found = set()
+    for node in document.values():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(inputs, dict):
+            continue
+        for widget, value in inputs.items():
+            if (
+                is_lora_widget(str(widget))
+                and isinstance(value, str)
+                and value.startswith(ASSET_REFERENCE_PREFIX)
+            ):
+                found.add(value)
+    return found
 
 
 def slots(document: dict) -> list[Slot]:
@@ -206,7 +264,7 @@ def _slots(nodes: dict[str, ReducedNode]) -> list[Slot]:
                     class_type=node.class_type,
                     widget=widget,
                     asset=value,
-                    is_lora=_is_lora_widget(widget),
+                    is_lora=is_lora_widget(widget),
                 )
             )
     return sorted(found, key=lambda s: (s.label, s.asset))
@@ -281,7 +339,10 @@ def guess_mark(normalized_filename: str) -> str:
 
 
 def workflow_key(
-    topology_hash: str, workflow_slots: list[Slot], structural_labels: Collection[str]
+    topology_hash: str,
+    workflow_slots: list[Slot],
+    structural_labels: Collection[str],
+    promoted: Collection[tuple[str, str]] = (),
 ) -> str:
     """The card key: topology, non-LoRA models and structural LoRA slots.
 
@@ -290,13 +351,148 @@ def workflow_key(
         workflow_slots: :func:`slots` of the document.
         structural_labels: Labels of the LoRA slots marked structural. A LoRA
             slot not named here is a recipe slot and does not reach the key.
+        promoted: ``(label, asset)`` of the LoRA files promoted one at a time
+            (``workflow_lora_promotion``). A recipe slot holding exactly that
+            file reaches the key; the same slot holding any other file does
+            not. Empty by default, so a topology with no promotion keys the
+            way it always has.
     """
     pairs = sorted(
         [slot.label, slot.asset]
         for slot in workflow_slots
-        if not slot.is_lora or slot.label in structural_labels
+        if not slot.is_lora
+        or slot.label in structural_labels
+        or (slot.label, slot.asset) in promoted
     )
     return _digest([WORKFLOW_KEY_VERSION, topology_hash, pairs])
+
+
+@dataclass(frozen=True)
+class LoaderSwap:
+    """A PixlStash loader a model fix put in place of the workflow's own (#1605).
+
+    Swapping the node changes the topology, so a picture made with the swapped
+    graph would file on a card of its own. This is what reads it back as the
+    original: :func:`unswapped` puts the original loader back in a stored
+    document before the card key is computed. Keyed by the swapped topology
+    and the node's label in it, as a slot is.
+
+    ``fields`` is ``(swapped widget, the reference it holds, original widget,
+    the reference to read it as)`` per file, the original reference naming the
+    file the node loads (a model fix's replacement then reads as its original
+    through ``workflow_cards.fixed_slots``, as a rewritten name does).
+    """
+
+    topology_hash: str
+    node_label: str
+    class_type: str
+    swap_class: str
+    fields: tuple[tuple[str, str, str, str], ...]
+
+
+def loader_swaps(
+    original: dict, swapped: dict, files: dict[str, dict[str, tuple[str, str]]]
+) -> tuple[str, list[LoaderSwap]]:
+    """The swapped topology and a :class:`LoaderSwap` per swapped node.
+
+    Args:
+        original: The API graph before the swap.
+        swapped: The same graph, node ids kept, with loaders swapped.
+        files: ``{node_id: {swapped widget: (original widget, filename)}}``
+            for each swapped node; the swapped widget holds the file's digest.
+
+    Raises:
+        WorkflowGraphError: Either graph will not reduce.
+    """
+    before = reduce_api_graph(original)
+    after = reduce_api_graph(swapped)
+    topology = graph_key(drop_widgets(before))
+    labels = node_labels(drop_widgets(after), rounds=None)
+    swaps = [
+        LoaderSwap(
+            topology_hash=topology,
+            node_label=labels[node_id],
+            class_type=before[node_id].class_type,
+            swap_class=after[node_id].class_type,
+            fields=tuple(
+                sorted(
+                    (
+                        widget,
+                        asset_reference(
+                            str(swapped[node_id]["inputs"][widget]).lower()
+                        ),
+                        original_widget,
+                        asset_reference(normalized_filename(filename)),
+                    )
+                    for widget, (original_widget, filename) in by_widget.items()
+                )
+            ),
+        )
+        for node_id, by_widget in files.items()
+    ]
+    return graph_key(drop_widgets(after)), swaps
+
+
+def unswapped(
+    document: dict, swaps: Collection[LoaderSwap]
+) -> tuple[Optional[str], dict]:
+    """*document* with each swapped-in loader put back, and the topology it is then.
+
+    ``(None, document)`` when no node of *document* is one of *swaps*: a node
+    matches on its label, its class and exactly the references the swap
+    recorded, so a PixlStash loader holding another file, or a second one,
+    stays what it is. The document put back must then BE the recorded
+    topology, so a graph where only some of a run's swapped loaders match
+    keys as itself. One placed by hand with the very files a swap recorded is
+    the same graph, and so the same variant: it cards as the original too.
+    *swaps* are those of the document's own topology.
+
+    Raises:
+        WorkflowGraphError: The document will not reduce.
+    """
+    if not swaps:
+        return None, document
+    by_label: dict[str, list[LoaderSwap]] = {}
+    for swap in swaps:
+        by_label.setdefault(swap.node_label, []).append(swap)
+    restored = dict(document)
+    topologies = set()
+    for node_id, label in topology_node_labels(document).items():
+        node = document[node_id]
+        inputs = node.get("inputs") or {}
+        held = {
+            name: value
+            for name, value in inputs.items()
+            if isinstance(value, str) and value.startswith(ASSET_REFERENCE_PREFIX)
+        }
+        matching = [
+            s
+            for s in by_label.get(label, ())
+            if s.swap_class == node.get("class_type")
+            and held == {w: ref for w, ref, _, _ in s.fields}
+        ]
+        if not matching:
+            continue
+        # Two originals swapped to this one graph (a core and a GGUF loader
+        # holding the same file) leave which it was a guess.
+        topologies.update(s.topology_hash for s in matching)
+        swap = matching[0]
+        # Links only: the original's other widgets are parameters, nulled in a
+        # stored document, and widget names never reach the topology.
+        put_back = {name: value for name, value in inputs.items() if is_link(value)}
+        put_back.update({widget: ref for _, _, widget, ref in swap.fields})
+        restored[node_id] = {"class_type": swap.class_type, "inputs": put_back}
+    if len(topologies) != 1:
+        # None matched, or two swaps disagree about the graph this was (or
+        # which loader a node was): a guess, so the document keys as itself.
+        return None, document
+    topology = topologies.pop()
+    if graph_key(drop_widgets(reduce_api_graph(restored))) != topology:
+        # Only some of a run's swapped loaders matched (another holds other
+        # files), so what was put back is not the graph they were swapped
+        # from, and keying it there would cache the wrong slots on it.
+        return None, document
+    return topology, restored
 
 
 # The post-processing groups a card says it has, in the order a name lists
@@ -354,7 +550,7 @@ def node_groups(nodes: dict[str, ReducedNode]) -> dict[str, Optional[str]]:
             groups[node_id] = UPSCALE
         elif _FACE_DETAILER_CLASS_RE.match(cls):
             groups[node_id] = FACE_DETAILER
-        elif any(_is_lora_widget(name) for name, _ in node.widgets) or (
+        elif any(is_lora_widget(name) for name, _ in node.widgets) or (
             "lora" in cls.lower() and "loader" in cls.lower()
         ):
             groups[node_id] = LORA
@@ -397,8 +593,31 @@ def core_hash(document: dict, *, strip_loras: bool = True) -> str:
     Raises:
         WorkflowGraphError: Nothing is left once the strip groups are removed.
     """
-    strip = {PLUMBING, UPSCALE, FACE_DETAILER} | ({LORA} if strip_loras else set())
-    return _stripped_key(_reduce(document), strip)
+    return _stripped_key(_reduce(document), _core_strip(strip_loras))
+
+
+def core_node_labels(document: dict, *, strip_loras: bool = True) -> dict[str, str]:
+    """Each surviving node's label on the core graph: ``{node_id: label}``.
+
+    The **core address** (#1622). A slot label is refined over the whole
+    topology, so it means nothing outside one topology, and a workflow spans
+    several. Every topology of one automatic workflow shares a
+    :func:`core_hash`, so their stripped graphs are isomorphic and these
+    labels agree across all of them: the sampler of the graph with a detailer
+    and the sampler of the one without get the same label.
+
+    The same strip as :func:`core_hash`, so the hash and the address cannot
+    disagree about what the core is. Nodes the strip removes (plumbing, stages,
+    LoRA loaders) have no core label and are left out.
+
+    Raises:
+        WorkflowGraphError: The document is a raw graph, or nothing survives.
+    """
+    return node_labels(_strip(_reduce(document), _core_strip(strip_loras)), rounds=None)
+
+
+def _core_strip(strip_loras: bool) -> set[str]:
+    return {PLUMBING, UPSCALE, FACE_DETAILER} | ({LORA} if strip_loras else set())
 
 
 def _stripped_key(
@@ -407,6 +626,16 @@ def _stripped_key(
     *,
     keep_widgets: bool = False,
 ) -> str:
+    return graph_key(_strip(nodes, strip, keep_widgets=keep_widgets))
+
+
+def _strip(
+    nodes: dict[str, ReducedNode],
+    strip: Collection[str],
+    *,
+    keep_widgets: bool = False,
+) -> dict[str, ReducedNode]:
+    """*nodes* without the *strip* groups, edges re-wired through them."""
     groups = node_groups(nodes)
     removed = {node_id for node_id, group in groups.items() if group in strip}
 
@@ -440,7 +669,7 @@ def _stripped_key(
         )
     if not kept:
         raise WorkflowGraphError("nothing is left of the graph once stripped")
-    return graph_key(kept)
+    return kept
 
 
 def workflow_type(document: dict) -> Optional[str]:
@@ -543,6 +772,46 @@ def differs_by_reduced(
     describing a stack costs, and it grows with the stack rather than with the
     library.
     """
+    return [
+        difference.chip
+        for difference in differences_reduced(
+            cover_nodes, member_nodes, upscale_factor=upscale_factor
+        )
+    ]
+
+
+@dataclass(frozen=True)
+class Difference:
+    """One ``differs_by`` chip and what it stands for (#1597).
+
+    ``detail`` spells out an ``N nodes differ`` chip: the node classes added
+    and removed, or that the same nodes load other models or are wired
+    differently. It is ``None`` on every other chip.
+
+    ``cover_assets`` and ``member_assets`` are set on ``other checkpoint`` /
+    ``other models``: the non-LoRA models only the cover loads and only the
+    member loads, as the stored document's asset references, base models first.
+    Readable names live only in ``workflow_recipe_asset``, so turning them into
+    words is the caller's.
+
+    **No settings.** A stored document nulls every parameter (steps, cfg, a
+    seed alike), and a card is many recipes with many settings, so there is no
+    one "steps 20 -> 28" for a card to state.
+    """
+
+    chip: str
+    detail: Optional[str] = None
+    cover_assets: tuple[str, ...] = ()
+    member_assets: tuple[str, ...] = ()
+
+
+def differences_reduced(
+    cover_nodes: dict[str, ReducedNode],
+    member_nodes: dict[str, ReducedNode],
+    *,
+    upscale_factor: Optional[float] = None,
+) -> list[Difference]:
+    """:func:`differs_by_reduced` with what each chip stands for."""
     cover = _class_counts(cover_nodes)
     member = _class_counts(member_nodes)
     added, removed = member - cover, cover - member
@@ -550,8 +819,10 @@ def differs_by_reduced(
     def count(counter: Counter, group: Optional[str]) -> int:
         return sum(n for (_, g), n in counter.items() if g == group)
 
-    chips: list[str] = []
-    unclassified = 0
+    chips: list[Difference] = []
+    # The groups whose class changes the "N nodes differ" chip counts, so its
+    # detail names exactly the nodes it counted.
+    unclassified_groups: set[Optional[str]] = {LORA, None}
     # A step one side lacks brings its own models (an upscaler, a detector);
     # they are that step's chip, not "other models".
     chipped: set[str] = set()
@@ -560,30 +831,40 @@ def differs_by_reduced(
         if plus or minus:
             chipped.add(group)
         if plus and minus:
-            unclassified += plus + minus
+            unclassified_groups.add(group)
         elif plus:
             factor = (
                 f" {upscale_factor:g}×" if group == UPSCALE and upscale_factor else ""
             )
-            chips.append(f"+ {label}{factor}")
+            chips.append(Difference(f"+ {label}{factor}"))
         elif minus:
-            chips.append(f"− {label}")
+            chips.append(Difference(f"− {label}"))
 
     cover_slots = _slots_outside(cover_nodes, chipped)
     member_slots = _slots_outside(member_nodes, chipped)
-    models_differ = _assets(cover_slots, lora=False) != _assets(
-        member_slots, lora=False
-    )
-    if models_differ:
+    cover_models = _assets(cover_slots, lora=False)
+    member_models = _assets(member_slots, lora=False)
+    if cover_models != member_models:
         checkpoint = _assets(cover_slots, lora=False, widgets=CHECKPOINT_WIDGETS)
-        if checkpoint != _assets(member_slots, lora=False, widgets=CHECKPOINT_WIDGETS):
-            chips.append("other checkpoint")
-        else:
-            chips.append("other models")
+        chip = (
+            "other checkpoint"
+            if checkpoint
+            != _assets(member_slots, lora=False, widgets=CHECKPOINT_WIDGETS)
+            else "other models"
+        )
+        chips.append(
+            Difference(
+                chip,
+                cover_assets=_changed_assets(cover_models - member_models),
+                member_assets=_changed_assets(member_models - cover_models),
+            )
+        )
 
     plumbing = count(added, PLUMBING) + count(removed, PLUMBING)
-    unclassified += sum(
-        count(counter, group) for counter in (added, removed) for group in (LORA, None)
+    unclassified = sum(
+        count(counter, group)
+        for counter in (added, removed)
+        for group in unclassified_groups
     )
     if (
         plumbing
@@ -592,30 +873,84 @@ def differs_by_reduced(
         and _stripped_key(cover_nodes, {PLUMBING}, keep_widgets=True)
         == _stripped_key(member_nodes, {PLUMBING}, keep_widgets=True)
     ):
-        return ["plumbing only"]
+        return [Difference("plumbing only")]
     unclassified += plumbing
+    unclassified_groups.add(PLUMBING)
+    detail = _class_changes(added, removed, unclassified_groups)
     if not chips and not unclassified:
         # Same classes and the same models overall, but not on the same
         # loaders (a base and a refiner swapped) or not wired the same way.
         # Never [] for graphs that are not the same.
-        unclassified = _nodes_differing(cover_nodes, member_nodes)
+        unclassified, detail = _nodes_differing(cover_nodes, member_nodes)
     if unclassified:
         chips.append(
-            "1 node differs" if unclassified == 1 else f"{unclassified} nodes differ"
+            Difference(
+                "1 node differs"
+                if unclassified == 1
+                else f"{unclassified} nodes differ",
+                detail=detail,
+            )
         )
     return chips
 
 
+def _class_changes(
+    added: Counter, removed: Counter, groups: Collection[Optional[str]]
+) -> str:
+    """``+ ImageScaleBy · − LoraLoaderModelOnly ×2`` for the counted groups."""
+    parts = [
+        f"{sign} {cls}" + (f" ×{n}" if n > 1 else "")
+        for sign, counter in (("+", added), ("−", removed))
+        for (cls, group), n in sorted(counter.items(), key=lambda kv: kv[0][0])
+        if group in groups
+    ]
+    return " · ".join(parts)
+
+
+def _changed_assets(changed: Counter) -> tuple[str, ...]:
+    """The asset references in *changed*, base models first, then by widget."""
+    return tuple(
+        asset
+        for widget, asset in sorted(
+            changed, key=lambda wa: (wa[0] not in CHECKPOINT_WIDGETS, wa)
+        )
+    )
+
+
 def _nodes_differing(
     cover_nodes: dict[str, ReducedNode], member_nodes: dict[str, ReducedNode]
-) -> int:
+) -> tuple[int, Optional[str]]:
+    """How many nodes differ when no class does, and how they differ."""
     if graph_key(cover_nodes) == graph_key(member_nodes):
-        return 0
+        return 0, None
     cover = Counter((n.class_type, n.widgets) for n in cover_nodes.values())
     member = Counter((n.class_type, n.widgets) for n in member_nodes.values())
     # Wiring alone can differ with every node descriptor equal; that is still
     # at least one node that differs.
-    return max(sum((cover - member).values()), sum((member - cover).values()), 1)
+    count = max(sum((cover - member).values()), sum((member - cover).values()), 1)
+    moved = sorted(
+        {
+            f"{cls}: other {'picture' if _names_pictures(cls, widgets) else 'model'}"
+            for cls, widgets in (cover - member) + (member - cover)
+        }
+    )
+    if moved:
+        return count, " · ".join(moved)
+    return count, "same nodes, wired differently"
+
+
+def _names_pictures(class_type: str, widgets: tuple) -> bool:
+    """Whether every asset a node names is a picture input, as :func:`_slots` reads it.
+
+    The stored document keeps an input picture's reference beside the models,
+    so a changed ``LoadImage`` is "other picture", never "other model".
+    """
+    named = [name for name, value in widgets if value is not None]
+    return bool(named) and all(
+        _PICTURE_WIDGET_RE.search(name)
+        or name in INPUT_IMAGE_FIELDS.get(class_type, ())
+        for name in named
+    )
 
 
 def _slots_outside(

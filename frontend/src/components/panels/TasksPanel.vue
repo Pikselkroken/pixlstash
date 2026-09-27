@@ -5,8 +5,8 @@
        this change is not supposed to touch. It also means `.tm-system-bar`'s
        `margin-top: auto` still resolves against the body: inert in the stats
        rail, which never gives `.inspector-body` a height, and a real pin to
-       the bottom on `/workflows`, where `.wftab`'s `:deep(.inspector-body)
-       { flex: 1 }` does. That difference is pre-existing and left alone. -->
+       the bottom on `/workflows`, where the inspector's footer slot makes the
+       body `flex: 1` (`.inspector-content--footed`). That difference is pre-existing and left alone. -->
   <div v-if="tasksStore.activeEntries.length === 0" class="tm-idle-msg">
     No active tasks
   </div>

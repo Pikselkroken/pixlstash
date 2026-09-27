@@ -30,4 +30,32 @@ describe("OverlayMetadataPanel", () => {
     });
     expect(rows(wrapper).map((r) => r.label)).not.toContain("ID");
   });
+
+  const frames = (image) =>
+    rows(
+      mount(OverlayMetadataPanel, {
+        props: { image },
+        global: { stubs: { "v-icon": true } },
+      }),
+    ).find((r) => r.label === "Frames")?.value;
+
+  it("shows a video's frame count", () => {
+    expect(frames({ id: 1, format: "mp4", frame_count: 1440 })).toBe(
+      (1440).toLocaleString(),
+    );
+  });
+
+  it("shows a one-frame video's count, but not an unknown one", () => {
+    expect(frames({ id: 1, format: "mp4", frame_count: 1 })).toBe("1");
+    expect(frames({ id: 1, format: "mp4", frame_count: null })).toBeUndefined();
+  });
+
+  it("shows an animated GIF's frame count", () => {
+    expect(frames({ id: 1, format: "gif", frame_count: 12 })).toBe("12");
+  });
+
+  it("has no frames row for a still image", () => {
+    expect(frames({ id: 1, format: "png", frame_count: 1 })).toBeUndefined();
+    expect(frames({ id: 1, format: "gif", frame_count: 1 })).toBeUndefined();
+  });
 });

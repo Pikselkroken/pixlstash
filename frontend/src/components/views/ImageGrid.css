@@ -330,12 +330,9 @@
   overflow-x: hidden;
   width: 100%;
   padding-right: 0px;
-  /* Shared subtle scrollbar treatment - keep in sync with .sidebar-scroll in SideBar.vue */
-  scrollbar-color: rgba(var(--v-theme-on-surface), 0.05) transparent;
+  /* Shared amber scrollbar treatment - keep in sync with .sidebar-scroll in SideBar.vue */
+  scrollbar-color: rgb(var(--v-theme-accent)) transparent;
   scrollbar-width: thin;
-}
-.grid-scroll-wrapper:hover {
-  scrollbar-color: rgba(var(--v-theme-on-surface), 0.18) transparent;
 }
 .empty-state {
   position: absolute;

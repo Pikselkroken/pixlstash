@@ -106,6 +106,8 @@ class FakeComfyUI:
             NEEDS_PACK, {}
         )
         self.requested: list[str] = []
+        # `GET /history`; None answers 404, as a ComfyUI without the route.
+        self.history: dict | None = None
 
     def get(self, url, **_kwargs):
         self.requested.append(url)
@@ -121,6 +123,8 @@ class FakeComfyUI:
             info = {name: {} for name in self.classes if name != ABSENT_CLASS}
             info.update(_LOADERS)
             return _Response(200, info)
+        if url.startswith(f"{BASE}/history?") and self.history is not None:
+            return _Response(200, self.history)
         if url.startswith(f"{BASE}/api/userdata?"):
             return _Response(
                 200,
@@ -889,3 +893,51 @@ def test_both_formats_count_a_case_only_difference_as_missing():
     }
     ui_absent, _unread = model_triage(NEEDS_PACK, object_info, advertised)
     assert api_absent == ui_absent == [ABSENT_MODEL]
+
+
+def _shelf_model(hub, filename: str, file_kind: str) -> int:
+    with hub.transaction() as conn:
+        return conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES (?, ?, 'external')",
+            (file_kind, filename),
+        ).lastrowid
+
+
+def test_a_pull_files_comfyuis_run_history_as_model_evidence(comfy, folders, hub):
+    """#1518: which shelf models ran together, kept for when ComfyUI is off."""
+    checkpoint = _shelf_model(hub, "ckpt.safetensors", "checkpoint")
+    vae = _shelf_model(hub, "ae.safetensors", "vae")
+    graph = {
+        "1": {
+            "class_type": "CheckpointLoaderSimple",
+            "inputs": {"ckpt_name": "sub/ckpt.safetensors"},
+        },
+        "2": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
+        "3": {
+            "class_type": "VAEDecode",
+            "inputs": {"samples": ["1", 0], "vae": ["2", 0]},
+        },
+    }
+    comfy.history = {
+        "run-1": {
+            "prompt": [0, "run-1", graph, {}, ["3"]],
+            "status": {"status_str": "success", "completed": True},
+        }
+    }
+
+    result = _pull(hub)
+
+    assert result["history_runs"] == 1
+    assert any(url.startswith(f"{BASE}/history?max_items=") for url in comfy.requested)
+    assert {
+        (row["prompt_id"], int(row["model_id"]))
+        for row in hub.fetchall("SELECT prompt_id, model_id FROM comfyui_history_model")
+    } == {("run-1", checkpoint), ("run-1", vae)}
+
+
+def test_a_comfyui_without_history_still_pulls_its_workflows(comfy, folders, hub):
+    result = _pull(hub)
+
+    assert result["history_runs"] is None
+    assert result["pulled"] == 2

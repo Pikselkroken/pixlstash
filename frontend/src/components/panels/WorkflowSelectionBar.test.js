@@ -164,6 +164,39 @@ describe("the pill's gates", () => {
     expect(tooltip(many, "rename")).toContain("Select one workflow");
   });
 
+  it("Run follows the member picked in the inspector, back to the cover on a new selection", async () => {
+    const { wrapper, store } = bar([]);
+    store.cards = CARDS.map((entry) =>
+      entry.key === "c"
+        ? {
+            ...entry,
+            members: [
+              { key: "c", name: "c" },
+              { key: "c1", name: "Member one" },
+            ],
+          }
+        : entry,
+    );
+    store.select("c", { whole: true });
+    store.pickStackMember("c1");
+    await wrapper.vm.$nextTick();
+    // Named from the cover's `members`: the grid never fetched the member.
+    expect(store.runnableCard).toMatchObject({ key: "c1", name: "Member one" });
+    expect(tooltip(wrapper, "run")).toBe(
+      "Run Member one, the member picked in the inspector",
+    );
+
+    // Clicking the same stack again is a new selection, so it starts over.
+    store.select("c", { whole: true });
+    await wrapper.vm.$nextTick();
+    expect(store.runnableCard?.key).toBe("c");
+
+    // A pick outside the stack is never honoured.
+    store.pickStackMember("a");
+    await wrapper.vm.$nextTick();
+    expect(store.runnableCard?.key).toBe("c");
+  });
+
   it("Run takes a stack selected whole, and runs its cover", async () => {
     // A click on a stack card selects the cover AND its members, so the key
     // count is two while the reader sees one card.
