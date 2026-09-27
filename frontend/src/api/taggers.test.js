@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("../utils/apiClient", () => ({
   API_BASE_URL: "/api/v1",
-  apiClient: { get: vi.fn() },
+  apiClient: { get: vi.fn(), post: vi.fn() },
 }));
 
 import { apiClient } from "../utils/apiClient";
@@ -10,10 +10,12 @@ import {
   listTaggers,
   listTaggerPluginDiagnostics,
   getLabelThresholds,
+  recheckQualityCrop,
 } from "./taggers";
 
 beforeEach(() => {
   apiClient.get.mockReset();
+  apiClient.post.mockReset();
 });
 
 describe("api/taggers", () => {
@@ -81,5 +83,13 @@ describe("api/taggers", () => {
     expect(apiClient.get).toHaveBeenCalledWith("/tagger/label-thresholds", {
       params: { offset: 0 },
     });
+  });
+
+  it("recheckQualityCrop POSTs the crop re-check route and returns the body", async () => {
+    apiClient.post.mockResolvedValue({ data: { queued: 7 } });
+    await expect(recheckQualityCrop()).resolves.toEqual({ queued: 7 });
+    expect(apiClient.post).toHaveBeenCalledWith(
+      "/taggers/pixlstash_tagger/quality-crop/recheck",
+    );
   });
 });

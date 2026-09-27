@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mount } from "@vue/test-utils";
 import { flushPromises } from "@vue/test-utils";
 
@@ -39,7 +39,20 @@ vi.mock("../../api/config", () => ({
   patchUserConfig: vi.fn().mockResolvedValue({}),
 }));
 
+vi.mock("../../api/taggers", () => ({
+  recheckQualityCrop: vi.fn(),
+}));
+
+import { createPinia, setActivePinia } from "pinia";
 import { patchUserConfig } from "../../api/config";
+import { recheckQualityCrop } from "../../api/taggers";
+import {
+  activeConfirm,
+  registerConfirmHost,
+  resolveConfirm,
+  unregisterConfirmHost,
+} from "../../composables/useConfirm";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import PluginSelect from "./PluginSelect.vue";
 import Tooltip from "./Tooltip.vue";
 
@@ -296,5 +309,175 @@ describe("PluginSelect with no capable plugins", () => {
   it("still names a plugin that is saved but gone", () => {
     const w = mountPicker("gone", "tag", []);
     expect(w.get(".ps-empty").text()).toContain("gone is still selected");
+  });
+});
+
+describe("PluginSelect quality crop re-check offer", () => {
+  const CROP_SCHEMA = [
+    { name: "threshold_offset", type: "float", default: 0 },
+    {
+      name: "quality_crop",
+      type: "select",
+      default: "off",
+      options: ["off", "320", "512"],
+    },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setActivePinia(createPinia());
+    registerConfirmHost();
+    recheckQualityCrop.mockResolvedValue({ queued: 12 });
+  });
+  afterEach(() => unregisterConfirmHost());
+
+  /** Mount with the PixlStash tagger active and `saved` as its stored params. */
+  function mountWithParams(saved, plugins = PLUGINS) {
+    return mount(PluginSelect, {
+      props: {
+        plugins: plugins.map((p) => ({
+          ...p,
+          supports_tags: true,
+          parameter_schema: CROP_SCHEMA,
+        })),
+        kind: "tag",
+        settings: {
+          active_tag_plugin: "pixlstash_tagger",
+          plugins: { pixlstash_tagger: { params: saved } },
+        },
+      },
+      global: { stubs: { TaggerPluginSettingsDialog: true } },
+    });
+  }
+
+  async function save(w, name, params) {
+    await gear(w).trigger("click");
+    w.findComponent({ name: "TaggerPluginSettingsDialog" }).vm.$emit(
+      "saved",
+      { name, params },
+    );
+    await flushPromises();
+  }
+
+  it.each([
+    ["off", "512"],
+    ["320", "512"],
+    ["512", "320"],
+  ])("offers the re-check when the crop goes %s -> %s", async (from, to) => {
+    const w = mountWithParams({ threshold_offset: 0, quality_crop: from });
+    await save(w, "pixlstash_tagger", { threshold_offset: 0, quality_crop: to });
+    expect(activeConfirm.value?.options).toMatchObject({
+      title: "Re-check tagged pictures?",
+      confirmLabel: "Re-check",
+      cancelLabel: "Not now",
+      danger: false,
+    });
+    expect(activeConfirm.value.options.message).toContain(
+      "It never removes a tag.",
+    );
+    resolveConfirm(false);
+  });
+
+  it("offers it when a never-saved crop (the default, off) is set", async () => {
+    const w = mountWithParams({ threshold_offset: 0 });
+    await save(w, "pixlstash_tagger", { threshold_offset: 0, quality_crop: "512" });
+    expect(activeConfirm.value).not.toBeNull();
+    resolveConfirm(false);
+  });
+
+  it("reads a never-saved crop as its default, so saving that default is no change", async () => {
+    const w = mount(PluginSelect, {
+      props: {
+        plugins: [
+          {
+            name: "pixlstash_tagger",
+            supports_tags: true,
+            parameter_schema: [
+              { name: "quality_crop", type: "select", default: "512" },
+            ],
+          },
+        ],
+        kind: "tag",
+        settings: { active_tag_plugin: "pixlstash_tagger" },
+      },
+      global: { stubs: { TaggerPluginSettingsDialog: true } },
+    });
+    await save(w, "pixlstash_tagger", { quality_crop: "512" });
+    expect(activeConfirm.value).toBeNull();
+  });
+
+  it.each([
+    ["the crop is turned off", "512", { quality_crop: "off" }],
+    ["nothing changed", "512", { quality_crop: "512" }],
+    ["only the offset changed", "320", { threshold_offset: 0.1, quality_crop: "320" }],
+  ])("does not offer it when %s", async (_why, from, to) => {
+    const w = mountWithParams({ threshold_offset: 0, quality_crop: from });
+    await save(w, "pixlstash_tagger", { threshold_offset: 0, ...to });
+    expect(activeConfirm.value).toBeNull();
+    expect(recheckQualityCrop).not.toHaveBeenCalled();
+  });
+
+  it("does not offer it for another plugin's quality_crop", async () => {
+    const w = mountWithParams({ quality_crop: "off" });
+    await save(w, "wd14", { quality_crop: "512" });
+    expect(activeConfirm.value).toBeNull();
+  });
+
+  it("queues the re-check on confirm and says how many", async () => {
+    const w = mountWithParams({ quality_crop: "off" });
+    await save(w, "pixlstash_tagger", { quality_crop: "320" });
+    resolveConfirm(true);
+    await flushPromises();
+    expect(recheckQualityCrop).toHaveBeenCalledTimes(1);
+    expect(useNoticeStore().notices.at(-1)).toMatchObject({
+      level: "success",
+      text: "Re-checking 12 pictures in the background.",
+    });
+  });
+
+  it("says one picture in the singular", async () => {
+    recheckQualityCrop.mockResolvedValue({ queued: 1 });
+    const w = mountWithParams({ quality_crop: "off" });
+    await save(w, "pixlstash_tagger", { quality_crop: "320" });
+    resolveConfirm(true);
+    await flushPromises();
+    expect(useNoticeStore().notices.at(-1).text).toBe(
+      "Re-checking 1 picture in the background.",
+    );
+  });
+
+  it("says so when nothing was queued", async () => {
+    recheckQualityCrop.mockResolvedValue({ queued: 0 });
+    const w = mountWithParams({ quality_crop: "off" });
+    await save(w, "pixlstash_tagger", { quality_crop: "320" });
+    resolveConfirm(true);
+    await flushPromises();
+    expect(useNoticeStore().notices.at(-1).text).toBe(
+      "No tagged pictures to re-check yet.",
+    );
+  });
+
+  it("shows the server's refusal as an error notice", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    recheckQualityCrop.mockRejectedValue({
+      response: { status: 409, data: { detail: "The quality crop is off." } },
+    });
+    const w = mountWithParams({ quality_crop: "off" });
+    await save(w, "pixlstash_tagger", { quality_crop: "512" });
+    resolveConfirm(true);
+    await flushPromises();
+    expect(useNoticeStore().notices.at(-1)).toMatchObject({
+      level: "error",
+      text: "The quality crop is off.",
+    });
+  });
+
+  it("does nothing on Not now", async () => {
+    const w = mountWithParams({ quality_crop: "off" });
+    await save(w, "pixlstash_tagger", { quality_crop: "512" });
+    resolveConfirm(false);
+    await flushPromises();
+    expect(recheckQualityCrop).not.toHaveBeenCalled();
+    expect(useNoticeStore().notices).toHaveLength(0);
   });
 });

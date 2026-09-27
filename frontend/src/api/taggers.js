@@ -1,5 +1,5 @@
-// Tagger plugins resource - /taggers, /taggers/plugin-diagnostics and
-// /tagger/label-thresholds.
+// Tagger plugins resource - /taggers, /taggers/plugin-diagnostics,
+// /taggers/pixlstash_tagger/quality-crop/recheck and /tagger/label-thresholds.
 //
 // `/taggers` returns both the installed plugins and the user's per-plugin
 // settings in one body; the settings are written back through the user config
@@ -9,6 +9,10 @@
 
 import { apiClient } from "../utils/apiClient";
 import { unwrap } from "../utils/unwrap";
+
+/** The PixlStash tagger's crop-only re-check route, named once. */
+export const QUALITY_CROP_RECHECK_PATH =
+  "/taggers/pixlstash_tagger/quality-crop/recheck";
 
 /**
  * List the installed tagger plugins together with their current settings.
@@ -46,4 +50,16 @@ export async function getLabelThresholds(offset) {
   return unwrap(apiClient.get("/tagger/label-thresholds", {
     params: offset != null ? { offset } : {},
   }));
+}
+
+/**
+ * Queue a crop-only re-check of the pictures the PixlStash tagger has already
+ * tagged: the close-up quality pass runs again with the saved quality crop.
+ *
+ * Answers 409 with a `detail` sentence while the quality crop is off; the
+ * rejection propagates for the caller to show.
+ * @returns {Promise<Object>} the body: `queued`, the number of pictures queued.
+ */
+export async function recheckQualityCrop() {
+  return unwrap(apiClient.post(QUALITY_CROP_RECHECK_PATH));
 }

@@ -8,12 +8,19 @@
  * description, so readiness and purpose can be read without choosing, which
  * saves. The gear configures the chosen plugin and refuses while None is.
  *
+ * Saving a new PixlStash quality crop size offers to re-check the pictures
+ * already tagged (`composables/qualityCropRecheck.js`).
+ *
  * Was a radio table (issue #1344), then briefly a native <select>, whose popup
  * cannot take the menu styling or a tooltip per option.
  */
 import { computed, ref } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 import { patchUserConfig } from "../../api/config";
+import {
+  offerQualityCropRecheck,
+  shouldOfferQualityCropRecheck,
+} from "../../composables/qualityCropRecheck";
 import TaggerPluginSettingsDialog from "./TaggerPluginSettingsDialog.vue";
 import { errorDetail } from "../../utils/apiError";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
@@ -168,7 +175,26 @@ async function choose(value) {
   }
 }
 
+/**
+ * A plugin's params as its settings dialog opened them: the saved values over
+ * the schema defaults, since a param never saved still has a value in effect.
+ */
+function effectiveParams(name) {
+  const plugin = props.plugins.find((p) => p.name === name);
+  const defaults = {};
+  for (const field of plugin?.parameter_schema ?? []) {
+    defaults[field.name] = field.default ?? null;
+  }
+  return { ...defaults, ...(props.settings?.plugins?.[name]?.params || {}) };
+}
+
 function onParamsSaved({ name, params }) {
+  // Read before the merge below: afterwards the settings hold the new values.
+  const offerRecheck = shouldOfferQualityCropRecheck(
+    name,
+    effectiveParams(name),
+    params,
+  );
   const next = {
     ...(props.settings || {}),
     plugins: {
@@ -183,6 +209,7 @@ function onParamsSaved({ name, params }) {
     },
   };
   emit("update:settings", next);
+  if (offerRecheck) offerQualityCropRecheck();
 }
 </script>
 
