@@ -1139,16 +1139,20 @@ const replaceOptions = computed(() =>
 );
 
 /**
- * Why the missing checkpoint has no "Replace with…", or "". Only the reasons
- * worded for it: the rest speak of a file that goes WITH a checkpoint.
+ * Why the missing checkpoint has no "Replace with…", or "" while it has one or
+ * has not been asked. Every answer without one says so: a missing checkpoint
+ * with no picker and no word on why reads as nothing to be done.
  */
 const checkpointNoReplacement = computed(() => {
-  const reason =
-    replacementsByFile.value[`checkpoint:${missingCheckpointFile.value}`]
-      ?.replacements_reason;
+  const answer =
+    replacementsByFile.value[`checkpoint:${missingCheckpointFile.value}`];
+  if (!answer || answer.replacements?.length) return "";
+  const reason = answer.replacements_reason;
+  if (reason === "none_loadable")
+    return "No checkpoint on your shelf that could replace it is one this loader can load.";
   return ["none_same_base_model", "none_go_with_it", "unread"].includes(reason)
     ? NO_REPLACEMENT_TEXT[reason]
-    : "";
+    : "Nothing on your shelf can replace it.";
 });
 
 /** Whether two recorded values name one file, whatever their folders. */

@@ -498,6 +498,9 @@ describe("a checkpoint that will not load", () => {
   it.each([
     ["none_same_base_model", "is known to have this checkpoint's base model"],
     ["none_go_with_it", "is known to work with this checkpoint"],
+    ["none_loadable", "is one this loader can load"],
+    ["unread", "Could not read what could replace it"],
+    [null, "Nothing on your shelf can replace it."],
   ])("says why no checkpoint is offered (%s)", async (reason, text) => {
     preflightWorkflowRun.mockResolvedValue(
       missingFile("SDXL/realvisXL_v5_fp8.safetensors"),
