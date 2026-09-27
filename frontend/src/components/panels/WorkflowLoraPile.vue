@@ -56,6 +56,7 @@
           v-for="row in rows"
           :key="row.asset || 'none'"
           class="wfpile-row-wrap"
+          :class="{ 'wfpile-row-wrap--none': !row.asset }"
           :data-testid="`wftab-fan-row-${row.asset || 'none'}`"
         >
           <div class="wfpile-row">
@@ -401,6 +402,14 @@ function answer(row) {
 .wfpile-row-wrap {
   padding: var(--space-3) var(--space-5);
   border-top: 1px solid rgb(var(--v-theme-divider));
+}
+
+/* "No LoRA" is not one of the LoRAs, so it stands apart below them rather
+   than reading as the next row of a list that ran out of room. */
+.wfpile-row-wrap--none {
+  margin-top: var(--space-4);
+  border-top-color: rgb(var(--v-theme-border));
+  background: rgba(var(--v-theme-on-surface), 0.06);
 }
 
 .wfpile-row {
