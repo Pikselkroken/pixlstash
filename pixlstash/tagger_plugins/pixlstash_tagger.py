@@ -73,9 +73,40 @@ PIXLSTASH_TAGGER_IMAGE_SIZE_FULL = 576
 # +0.07) and flattens after it, for about +38% crop-pass GPU. Crops natively smaller
 # than this are still upscaled; the model expects features at its training scale.
 PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP = 512
+# The user's choice of quality crop, the PixlStash tagger's ``quality_crop`` param.
+# Values are strings so the settings dropdown round-trips them unchanged.
+QUALITY_CROP_OFF = "off"
+QUALITY_CROP_SIZES = {"320": 320, "512": 512}
+PIXLSTASH_TAGGER_QUALITY_CROP_DEFAULT = str(PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP)
 # A face quality crop is a square of this multiple of the face box's long side, so
 # the window follows the face instead of cutting a fixed pixel square out of it.
 FACE_QUALITY_CROP_SCALE = 1.4
+
+
+def quality_crop_size(value) -> int | None:
+    """Resolve a ``quality_crop`` setting to a crop size, or **None** for off.
+
+    Args:
+        value: The stored ``quality_crop`` param: ``"off"`` or a key of
+            ``QUALITY_CROP_SIZES``.
+
+    Returns:
+        The square side every quality crop is resized to, or ``None`` when the
+        quality crop pass is switched off. An unrecognised value (a hand-edited
+        settings blob) is logged and resolves to the default.
+    """
+    key = str(value).strip().lower()
+    if key == QUALITY_CROP_OFF:
+        return None
+    if key in QUALITY_CROP_SIZES:
+        return QUALITY_CROP_SIZES[key]
+    logger.warning(
+        "Unrecognised PixlStash tagger quality_crop %r; using the default %s.",
+        value,
+        PIXLSTASH_TAGGER_QUALITY_CROP_DEFAULT,
+    )
+    return QUALITY_CROP_SIZES[PIXLSTASH_TAGGER_QUALITY_CROP_DEFAULT]
+
 
 # ------------------------------------------------------------------------- #
 # Grad-CAM anomaly-localisation tuning
@@ -649,6 +680,7 @@ class PixlStashTaggerService:
         stop_event=None,
         threshold_offset: float = 0.0,
         out_raw_scores: dict | None = None,
+        image_size: int | None = None,
     ) -> dict:
         """Run the PixlStash tagger on quality-crop images and return only whitelist tags.
 
@@ -662,6 +694,8 @@ class PixlStashTaggerService:
             out_raw_scores: When provided, raw confidence scores for every label
                 above ``min_confidence`` are merged into this dict
                 (``{key: {label: float}}``) during the same GPU pass.
+            image_size: Square side each crop is resized to; defaults to
+                ``PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP``.
 
         Returns:
             Dict mapping key to list of whitelist-filtered quality tags.
@@ -669,13 +703,14 @@ class PixlStashTaggerService:
         """
         if not items:
             return {}
+        image_size = image_size or self._image_size_quality_crop
         if out_raw_scores is not None:
             raw, scores_by_key = self.tag_and_score_items(
                 items,
                 stop_event=stop_event,
                 threshold_offset=threshold_offset,
                 threshold=None,
-                image_size=self._image_size_quality_crop,
+                image_size=image_size,
                 pass_name="quality_crops",
             )
             out_raw_scores.update(scores_by_key)
@@ -685,7 +720,7 @@ class PixlStashTaggerService:
                 stop_event=stop_event,
                 threshold_offset=threshold_offset,
                 threshold=None,
-                image_size=self._image_size_quality_crop,
+                image_size=image_size,
                 pass_name="quality_crops",
             )
         filtered = {}
@@ -1126,6 +1161,24 @@ class PixlStashTaggerPlugin(TaggerPlugin):
                 "description": (
                     "Percentage points added to each label's base threshold. "
                     "Positive values raise the bar; negative values lower it."
+                ),
+            },
+            {
+                "name": "quality_crop",
+                "label": "Quality crop",
+                "type": "select",
+                "default": PIXLSTASH_TAGGER_QUALITY_CROP_DEFAULT,
+                "options": [
+                    {"value": QUALITY_CROP_OFF, "label": "Off"},
+                    {"value": "320", "label": "320p"},
+                    {"value": "512", "label": "512p"},
+                ],
+                "description": (
+                    "A second, close-up pass over the largest face (or the "
+                    "picture's centre) for defects too small to see in the "
+                    "whole picture, like malformed eyes and teeth. 512p "
+                    "catches the most and takes the most GPU time; Off skips "
+                    "the pass. Applies to pictures tagged from now on."
                 ),
             },
         ]

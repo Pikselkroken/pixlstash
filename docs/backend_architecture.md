@@ -1541,7 +1541,7 @@ User plugin preferences are stored in a single `User.tagger_settings` JSON colum
   "active_description_plugin": "florence2",
   "plugins": {
     "wd14":             {"enabled": false, "params": {"threshold": 0.85}},
-    "pixlstash_tagger": {"enabled": true,  "params": {"threshold_offset": 0.0}},
+    "pixlstash_tagger": {"enabled": true,  "params": {"threshold_offset": 0.0, "quality_crop": "512"}},
     "florence2":        {                   "params": {"max_new_tokens": 120, "fast_mode": false}}
   }
 }
@@ -1551,6 +1551,7 @@ User plugin preferences are stored in a single `User.tagger_settings` JSON colum
 - **Description plugins** are selected via the single `active_description_plugin` value (radio-select). Florence-2 is the fallback if the configured plugin is unavailable.
 - Missing entries are filled with per-plugin defaults on every serialise; unknown plugin names are preserved on read for downgrade safety.
 - Written exclusively through `PATCH /users/me/config` (`tagger_settings` key); `user_settings_utils._apply_tagger_settings_patch` validates all plugin names and parameter names against the live registry.
+- **`pixlstash_tagger.params.quality_crop`** (`"off"`, `"320"`, `"512"`; default `"512"`) drives `TagTask`'s quality crop pass: a second PixlStash-tagger pass over the picture's largest face, or its centre when it has none, that owns the tags in `QUALITY_CROP_TAG_WHITELIST`. The value is the square each crop is resized to (`quality_crop_size`); a face crop's window is `FACE_QUALITY_CROP_SCALE` (1.4) x the face box's long side, shifted inside the picture rather than clipped so it stays square, and the centre crop's window is the target itself. `"off"` skips the pass and its face lookup, and the full-image pass's tags stand. `TagTask` reads the setting from its own `TaggingWorkflow`, never the CPU-spillover engine's, which is built without the user's settings. 512 is the default because each crop tag's AUC rises from 320 to 512 and flattens after (#1648). A change applies to pictures tagged afterwards; nothing is re-tagged.
 
 Models are lazily loaded on first `init()` call and can be unloaded after idle to free device memory unless `keep_models_in_memory` is set.
 

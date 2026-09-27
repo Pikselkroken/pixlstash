@@ -13,7 +13,10 @@ from pixlstash.tagger_plugins.pixlstash_tagger import (
     CENTRE_CROP_TAG_WHITELIST,
     FACE_QUALITY_CROP_TAGS,
     QUALITY_CROP_TAG_WHITELIST,
+    PixlStashTaggerPlugin,
+    quality_crop_size,
 )
+from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.tasks.tag_task import TagTask
 from pixlstash.utils.image_processing.face_utils import square_window_around_bbox
 
@@ -265,11 +268,12 @@ class _PredictionDb:
         self.prediction_calls = []
         self.tag_payloads = []
         self.cleared_sentinels = []
+        # {picture_id: [face, ...]}; empty, every picture takes the centre crop.
+        self.faces = {}
 
     def run_immediate_read_task(self, fn, *args, **kwargs):
-        # Only `_fetch_faces_for_pictures` comes through here: no faces, so
-        # every picture takes the centre-crop fallback.
-        return {}
+        # Only `_fetch_faces_for_pictures` comes through here.
+        return self.faces
 
     def run_task(self, fn, *args, priority=None):
         name = getattr(fn, "__name__", "")
@@ -378,6 +382,99 @@ def test_crop_confidences_are_never_stamped_with_another_models_version(tmp_path
         "crop confidences must not even be collected when the full pass is a "
         "different model"
     )
+
+
+class _CropSizeWorkflow(_PluginWorkflow):
+    """The built-in tagger for both passes, with a chosen quality-crop size."""
+
+    def __init__(self, size):
+        super().__init__()
+        self.size = size
+        self.crop_calls = []
+        self.full_pass_tags = ["blocky"]
+        self.crop_tags = []
+
+    def active_plugin_name(self, engine_override=None):
+        return engine_override or "pixlstash_tagger"
+
+    def active_model_version(self, engine_override=None):
+        return "v1"
+
+    def pixlstash_tagger_image_size_quality_crop(self):
+        return self.size
+
+    def tag_quality_crops(self, items, out_raw_scores=None, image_size=None, **kw):
+        self.crop_calls.append(image_size)
+        return super().tag_quality_crops(items, out_raw_scores=out_raw_scores, **kw)
+
+
+def test_the_quality_crop_runs_at_the_size_the_user_chose(tmp_path):
+    """The setting's size reaches the tagger, and the crop still owns its tags."""
+    picture = Picture(id=1, file_path=str(_png(tmp_path, "sized.png")))
+    db = _PredictionDb(str(tmp_path), [1])
+    db.faces = {1: [_FakeFace(11, [10, 10, 40, 40])]}
+    workflow = _CropSizeWorkflow(320)
+
+    _prediction_task(db, workflow, [picture])._tag_pictures_batch()
+
+    assert workflow.crop_calls == [320]
+    applied = {u["pic_id"]: set(u["tags"]) for u in db.tag_payloads}
+    assert applied == {1: set()}, "the crop overruled the full pass's 'blocky'"
+
+
+def test_a_quality_crop_switched_off_leaves_the_full_pass_tags_alone(tmp_path):
+    """Off: no crop is built or scored, and nothing strips the full pass's tags.
+
+    The picture has a face because a face crop needs no target size: with the
+    faceless centre crop, a pass that ignored Off would still score nothing.
+    """
+    picture = Picture(id=1, file_path=str(_png(tmp_path, "off.png")))
+    db = _PredictionDb(str(tmp_path), [1])
+    db.faces = {1: [_FakeFace(11, [10, 10, 40, 40])]}
+    workflow = _CropSizeWorkflow(None)
+
+    _prediction_task(db, workflow, [picture])._tag_pictures_batch()
+
+    assert workflow.crop_calls == []
+    applied = {u["pic_id"]: set(u["tags"]) for u in db.tag_payloads}
+    assert applied == {1: {"blocky"}}
+
+
+@pytest.mark.parametrize(
+    "params, expected",
+    [
+        ({}, 512),  # settings saved before the option existed
+        ({"quality_crop": "512"}, 512),
+        ({"quality_crop": "320"}, 320),
+        ({"quality_crop": "off"}, None),
+        ({"quality_crop": "banana"}, 512),  # hand-edited: logged, default
+    ],
+)
+def test_the_workflow_reads_the_quality_crop_setting(params, expected):
+    settings = {"plugins": {"pixlstash_tagger": {"params": params}}}
+    workflow = TaggingWorkflow(
+        engine=None,
+        use_wd14=False,
+        use_pixlstash_tagger=True,
+        tagger_settings=settings,
+    )
+
+    assert workflow.pixlstash_tagger_image_size_quality_crop() == expected
+
+
+def test_the_quality_crop_setting_is_a_three_way_choice_defaulting_to_512():
+    """The settings dialog renders the schema; its values must resolve."""
+    plugin = PixlStashTaggerPlugin()
+    (field,) = [f for f in plugin.parameter_schema() if f["name"] == "quality_crop"]
+
+    assert field["type"] == "select"
+    assert [o["value"] for o in field["options"]] == ["off", "320", "512"]
+    assert plugin.default_params()["quality_crop"] == "512"
+    assert [quality_crop_size(o["value"]) for o in field["options"]] == [
+        None,
+        320,
+        512,
+    ]
 
 
 def test_a_crop_never_deletes_another_models_tags(tmp_path):

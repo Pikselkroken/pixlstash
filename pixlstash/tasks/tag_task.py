@@ -961,126 +961,138 @@ class TagTask(BaseTask):
                 crop_inference_s = 0.0
                 crop_fetch_s = 0.0
                 crop_build_s = 0.0
-                try:
-                    crop_fetch_start = time.perf_counter()
-                    pic_ids = [p.id for p in batch]
-                    faces_by_pic = self._db.run_immediate_read_task(
-                        lambda session: self._fetch_faces_for_pictures(
-                            session, pic_ids
-                        ),
-                    )
-                    crop_fetch_s = time.perf_counter() - crop_fetch_start
-                    target = active_workflow.pixlstash_tagger_image_size_quality_crop()
-                    quality_items = []
-                    key_to_path = {}
-                    # Paths whose crop is the faceless centre-crop fallback; these are
-                    # judged against the reduced CENTRE_CROP_TAG_WHITELIST (no face tags).
-                    centre_crop_paths: set = set()
-                    # CPU work, and it sits between the two GPU timers: PIL
-                    # crops and resizes, plus a decode for any picture the
-                    # preload missed.
-                    crop_build_start = time.perf_counter()
-                    for pic in batch:
-                        built = self._build_quality_crop(
-                            pic,
-                            faces_by_pic.get(pic.id, []),
-                            target,
-                            preloaded_images,
+                # From the task's own workflow, not `active_workflow`: the CPU
+                # spillover engine is built without the user's tagger settings
+                # and would always report the default. None: the user switched
+                # the pass off, and the full-image pass's tags stand.
+                target = (
+                    self._tagging_workflow.pixlstash_tagger_image_size_quality_crop()
+                )
+                if target is None:
+                    logger.debug("TagTask %s: quality crop pass is off", self.id)
+                else:
+                    try:
+                        crop_fetch_start = time.perf_counter()
+                        pic_ids = [p.id for p in batch]
+                        faces_by_pic = self._db.run_immediate_read_task(
+                            lambda session: self._fetch_faces_for_pictures(
+                                session, pic_ids
+                            ),
                         )
-                        if built is None:
-                            continue
-                        key, crop, file_path, is_centre_crop = built
-                        quality_items.append((key, crop))
-                        key_to_path[key] = file_path
-                        if is_centre_crop:
-                            centre_crop_paths.add(file_path)
-                    crop_build_s = time.perf_counter() - crop_build_start
-                    if quality_items:
-                        # Single GPU pass: get quality tags AND raw scores for predictions.
-                        crop_raw_scores: dict = {}
-                        crop_inf_start = time.perf_counter()
-                        quality_results = active_workflow.tag_quality_crops(
-                            quality_items,
-                            out_raw_scores=crop_raw_scores
-                            if crop_is_full_pass_model
-                            else None,
-                        )
-                        crop_inference_s = time.perf_counter() - crop_inf_start
-                        # The crop's authoritative tag set depends on its type: a face
-                        # crop owns the full whitelist; the faceless centre-crop fallback
-                        # owns only the non-face quality tags.
-                        whitelist_by_path = {
-                            path: (
-                                CENTRE_CROP_TAG_WHITELIST
-                                if path in centre_crop_paths
-                                else QUALITY_CROP_TAG_WHITELIST
+                        crop_fetch_s = time.perf_counter() - crop_fetch_start
+                        quality_items = []
+                        key_to_path = {}
+                        # Paths whose crop is the faceless centre-crop fallback; these are
+                        # judged against the reduced CENTRE_CROP_TAG_WHITELIST (no face tags).
+                        centre_crop_paths: set = set()
+                        # CPU work, and it sits between the two GPU timers: PIL
+                        # crops and resizes, plus a decode for any picture the
+                        # preload missed.
+                        crop_build_start = time.perf_counter()
+                        for pic in batch:
+                            built = self._build_quality_crop(
+                                pic,
+                                faces_by_pic.get(pic.id, []),
+                                target,
+                                preloaded_images,
                             )
-                            for path in key_to_path.values()
-                        }
-                        # Accumulate quality tags found across all crops per picture path,
-                        # keeping only those the crop is allowed to own.
-                        quality_tags_by_path = {}
-                        for key, quality_tags in quality_results.items():
-                            path = key_to_path.get(key)
-                            if path:
-                                allowed = whitelist_by_path[path]
-                                quality_tags_by_path.setdefault(path, set()).update(
-                                    t for t in quality_tags if t in allowed
-                                )
-                        # Crops are ground truth for the tags they own: strip those tags
-                        # if the full-image pass produced them, then add only what the
-                        # crop confirmed.  Applies to every picture that produced a crop -
-                        # the largest face when one was found, otherwise the centre-crop
-                        # fallback (which leaves face tags from the full-image pass alone).
-                        #
-                        # "Ground truth" is an argument about RESOLUTION and it
-                        # stands on its own - a 448 px crop really does judge
-                        # "blocky" better than a downscaled full image, whatever
-                        # model ran the full pass. What it must not do is orphan
-                        # another model's prediction row: strip a tag the full
-                        # pass emitted a CONFIDENCE for, and
-                        # `_resolve_pending_predictions` reads the applied set
-                        # back and flips that model's own call to REJECTED.
-                        #
-                        # So the precondition is "there are no rows to orphan",
-                        # not "same model". WD14 reports no confidences at all,
-                        # so its full pass writes no prediction rows and the
-                        # strip stays exactly as shipped; a plugin that does
-                        # report them keeps its output.
-                        for path, crop_quality in quality_tags_by_path.items():
-                            if path not in tag_results:
+                            if built is None:
                                 continue
-                            allowed = whitelist_by_path[path]
-                            if crop_is_full_pass_model or not full_scores_by_path:
-                                kept = [
-                                    t for t in tag_results[path] if t not in allowed
-                                ]
-                            else:
-                                kept = list(tag_results[path])
-                            tag_results[path] = list(
-                                dict.fromkeys(kept + list(crop_quality))
+                            key, crop, file_path, is_centre_crop = built
+                            quality_items.append((key, crop))
+                            key_to_path[key] = file_path
+                            if is_centre_crop:
+                                centre_crop_paths.add(file_path)
+                        crop_build_s = time.perf_counter() - crop_build_start
+                        if quality_items:
+                            # Single GPU pass: get quality tags AND raw scores for predictions.
+                            crop_raw_scores: dict = {}
+                            crop_inf_start = time.perf_counter()
+                            quality_results = active_workflow.tag_quality_crops(
+                                quality_items,
+                                image_size=target,
+                                out_raw_scores=crop_raw_scores
+                                if crop_is_full_pass_model
+                                else None,
                             )
-                            if crop_quality:
-                                logger.debug(
-                                    "Quality crop tags for %s: %s", path, crop_quality
+                            crop_inference_s = time.perf_counter() - crop_inf_start
+                            # The crop's authoritative tag set depends on its type: a face
+                            # crop owns the full whitelist; the faceless centre-crop fallback
+                            # owns only the non-face quality tags.
+                            whitelist_by_path = {
+                                path: (
+                                    CENTRE_CROP_TAG_WHITELIST
+                                    if path in centre_crop_paths
+                                    else QUALITY_CROP_TAG_WHITELIST
                                 )
-                        # Boost prediction scores using crop confidence, limited to the
-                        # tags the crop is allowed to own (centre crops don't boost face
-                        # tags).
-                        if full_scores_by_path and crop_raw_scores:
-                            for key, tag_scores in crop_raw_scores.items():
+                                for path in key_to_path.values()
+                            }
+                            # Accumulate quality tags found across all crops per picture path,
+                            # keeping only those the crop is allowed to own.
+                            quality_tags_by_path = {}
+                            for key, quality_tags in quality_results.items():
                                 path = key_to_path.get(key)
-                                if path is None:
+                                if path:
+                                    allowed = whitelist_by_path[path]
+                                    quality_tags_by_path.setdefault(path, set()).update(
+                                        t for t in quality_tags if t in allowed
+                                    )
+                            # Crops are ground truth for the tags they own: strip those tags
+                            # if the full-image pass produced them, then add only what the
+                            # crop confirmed.  Applies to every picture that produced a crop -
+                            # the largest face when one was found, otherwise the centre-crop
+                            # fallback (which leaves face tags from the full-image pass alone).
+                            #
+                            # "Ground truth" is an argument about RESOLUTION and it
+                            # stands on its own - a 448 px crop really does judge
+                            # "blocky" better than a downscaled full image, whatever
+                            # model ran the full pass. What it must not do is orphan
+                            # another model's prediction row: strip a tag the full
+                            # pass emitted a CONFIDENCE for, and
+                            # `_resolve_pending_predictions` reads the applied set
+                            # back and flips that model's own call to REJECTED.
+                            #
+                            # So the precondition is "there are no rows to orphan",
+                            # not "same model". WD14 reports no confidences at all,
+                            # so its full pass writes no prediction rows and the
+                            # strip stays exactly as shipped; a plugin that does
+                            # report them keeps its output.
+                            for path, crop_quality in quality_tags_by_path.items():
+                                if path not in tag_results:
                                     continue
                                 allowed = whitelist_by_path[path]
-                                merged = full_scores_by_path.setdefault(path, {})
-                                for tag, conf in tag_scores.items():
-                                    if tag not in allowed:
+                                if crop_is_full_pass_model or not full_scores_by_path:
+                                    kept = [
+                                        t for t in tag_results[path] if t not in allowed
+                                    ]
+                                else:
+                                    kept = list(tag_results[path])
+                                tag_results[path] = list(
+                                    dict.fromkeys(kept + list(crop_quality))
+                                )
+                                if crop_quality:
+                                    logger.debug(
+                                        "Quality crop tags for %s: %s",
+                                        path,
+                                        crop_quality,
+                                    )
+                            # Boost prediction scores using crop confidence, limited to the
+                            # tags the crop is allowed to own (centre crops don't boost face
+                            # tags).
+                            if full_scores_by_path and crop_raw_scores:
+                                for key, tag_scores in crop_raw_scores.items():
+                                    path = key_to_path.get(key)
+                                    if path is None:
                                         continue
-                                    if conf > merged.get(tag, 0.0):
-                                        merged[tag] = conf
-                except Exception as exc:
-                    logger.warning("Quality crop pass failed: %s", exc)
+                                    allowed = whitelist_by_path[path]
+                                    merged = full_scores_by_path.setdefault(path, {})
+                                    for tag, conf in tag_scores.items():
+                                        if tag not in allowed:
+                                            continue
+                                        if conf > merged.get(tag, 0.0):
+                                            merged[tag] = conf
+                    except Exception as exc:
+                        logger.warning("Quality crop pass failed: %s", exc)
                 # --- end quality crop pass ---
 
                 update_payloads = []

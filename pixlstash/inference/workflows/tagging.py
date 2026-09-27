@@ -15,6 +15,10 @@ from pixlstash.inference.vram_budget import (
     WD14_PER_ITEM_MB,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.tagger_plugins.pixlstash_tagger import (
+    PIXLSTASH_TAGGER_QUALITY_CROP_DEFAULT,
+    quality_crop_size,
+)
 from pixlstash.utils.accelerator import (
     MPS,
     is_accelerated,
@@ -73,9 +77,17 @@ class TaggingWorkflow:
         """Whether the PixlStash tagger is active for this workflow instance."""
         return self._use_pixlstash_tagger
 
-    def pixlstash_tagger_image_size_quality_crop(self) -> int:
-        """Return the quality-crop image size expected by the PixlStash tagger."""
-        return int(self._engine.pixlstash_tagger_service._image_size_quality_crop)
+    def pixlstash_tagger_image_size_quality_crop(self) -> int | None:
+        """Return the configured quality-crop size, or **None** when it is off.
+
+        Read from the PixlStash tagger's ``quality_crop`` param. Settings that
+        predate the param carry none and get the default size.
+        """
+        plugins = self._tagger_settings.get("plugins") or {}
+        params = (plugins.get("pixlstash_tagger") or {}).get("params") or {}
+        return quality_crop_size(
+            params.get("quality_crop", PIXLSTASH_TAGGER_QUALITY_CROP_DEFAULT)
+        )
 
     def active_plugin_name(self, engine_override: str | None = None) -> str:
         """The plugin :meth:`tag_images` runs for the full-image pass.
@@ -245,17 +257,20 @@ class TaggingWorkflow:
         items,
         stop_event=None,
         out_raw_scores: dict | None = None,
+        image_size: int | None = None,
     ) -> dict:
         """Run the custom tagger on pre-cropped face/quality images.
 
-        The crops should already be sized and centred on a face region at the
-        custom tagger's native quality-crop resolution.
+        The crops should already be centred on a face region (or the picture's
+        centre); the tagger resizes each one to *image_size*.
 
         Args:
             items: List of ``(key, PIL.Image)`` pairs.
             stop_event: Optional :class:`threading.Event` to interrupt.
             out_raw_scores: If provided, per-label confidence scores are
                 written into this dict during the same GPU pass.
+            image_size: Square side each crop is resized to; the service's
+                default when omitted.
 
         Returns:
             ``{key: [quality_tag, ...]}`` - keys with no matching whitelist
@@ -271,6 +286,7 @@ class TaggingWorkflow:
             stop_event=stop_event,
             threshold_offset=self._threshold_offset,
             out_raw_scores=out_raw_scores,
+            image_size=image_size,
         )
 
     def score_images_custom(
