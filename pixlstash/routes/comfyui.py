@@ -8,6 +8,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from collections import Counter
 from urllib.parse import quote
 
 import websockets
@@ -51,6 +52,7 @@ from pixlstash.services.comfyui_recipe_service import (
     fetch_object_info,
     plan_lora_insertion,
     preflight_prompt,
+    read_lora_chain,
     sanitize_prompt_graph,
     unchecked_preflight,
 )
@@ -818,6 +820,63 @@ def _describe_lora_insertion(
     except LookupError as exc:
         logger.info("No LoRA loader can be added to this graph: %s", exc)
         return {"plan": None, "reason": str(exc)}
+
+
+def _describe_lora_chain(
+    graph: dict, object_info: dict | None, error: str | None
+) -> dict:
+    """Which LoRAs feed which sampler pass, as Edit LoRAs reads the chain.
+
+    ``lora_slots`` is a flat list, so a reader of the recipe alone cannot tell
+    a two-pass graph from a straight one, nor which pass a LoRA applies to.
+    This is :func:`read_lora_chain`'s answer, cut down to names: the ``trunk``
+    every pass reads and one entry per pass where the model forks.
+
+    Args:
+        graph: The API-format graph.
+        object_info: The map already read for this request, or ``None``.
+        error: Why ComfyUI could not be asked, when it could not.
+
+    Returns:
+        ``{"branches", "trunk", "passes", "note", "refusal"}``. ``branches``
+        is ``None`` when the chain could not be read, and ``refusal`` says why.
+    """
+    unread = {"branches": None, "trunk": [], "passes": [], "note": None}
+    if object_info is None:
+        return {
+            **unread,
+            "refusal": (
+                "PixlStash could not ask ComfyUI how this graph's LoRAs are "
+                f"wired: {error}"
+            ),
+        }
+    try:
+        chain = read_lora_chain(graph, object_info)
+    except LookupError as exc:
+        logger.info("This graph's LoRA chain cannot be read: %s", exc)
+        return {**unread, "refusal": str(exc)}
+
+    def loras(loaders: list[dict]) -> list[dict]:
+        return [
+            {"node_id": str(loader["node_id"]), "name": loader["name"]}
+            for loader in loaders
+        ]
+
+    return {
+        "branches": bool(chain["lanes"]),
+        "trunk": loras(chain["loaders"]),
+        "passes": [
+            {
+                "node_id": str(lane["pass"]["node_id"]),
+                "class_type": lane["pass"].get("class_type"),
+                "title": lane["pass"].get("title"),
+                "loras": loras(lane["loaders"]),
+            }
+            for lane in chain["lanes"]
+        ],
+        "note": chain.get("branch_note"),
+        "refusal": None,
+    }
 
 
 def _missing_placeholders(payload: dict, detected=None) -> list[str]:
@@ -1832,6 +1891,9 @@ class ComfyUIPictureRecipeResponse(BaseModel):
     node_count: int = 0
     # Distinct class_type names the graph would execute, sorted.
     node_classes: list[str] = []
+    # How many nodes of each class, so a second sampler pass is visible even
+    # where ``node_classes`` lists its class once (#1579).
+    node_class_counts: dict[str, int] = {}
     # True when the source file entered the vault from outside this instance
     # (upload, watch folder, reference folder) rather than being generated here.
     source_is_imported: bool = False
@@ -1845,6 +1907,9 @@ class ComfyUIPictureRecipeResponse(BaseModel):
     lora_slots: list[dict] = []
     # Set only when lora_slots is empty: where a loader would be added (#1376).
     lora_insertion: Optional[ComfyUILoraInsertionResponse] = None
+    # Whether the model forks and which LoRAs feed which pass (#1579); see
+    # `_describe_lora_chain`. None for a recipe with no graph to read.
+    lora_chain: Optional[dict] = None
     preflight: Optional[ComfyUIPreflightResponse] = None
 
 
@@ -2766,6 +2831,17 @@ def create_router(server) -> APIRouter:
             # file that carries it came from outside. See R3 in
             # docs/reviews/v1.9-authz-signoff.md.
             "node_classes": collect_node_classes(graph),
+            "node_class_counts": dict(
+                sorted(
+                    Counter(
+                        node["class_type"]
+                        for node in graph.values()
+                        if isinstance(node, dict)
+                        and isinstance(node.get("class_type"), str)
+                        and node["class_type"]
+                    ).items()
+                )
+            ),
             "source_is_imported": source_is_imported,
             "source_label": source_label,
             "seed_inputs": seed_targets,
@@ -2773,6 +2849,7 @@ def create_router(server) -> APIRouter:
             "lora_insertion": _describe_lora_insertion(
                 graph, object_info, object_info_error
             ),
+            "lora_chain": _describe_lora_chain(graph, object_info, object_info_error),
             "preflight": preflight,
         }
 

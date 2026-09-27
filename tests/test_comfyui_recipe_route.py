@@ -211,6 +211,17 @@ class TestRecipeDisclosesNodeClasses:
         # free of the non-node bookkeeping key the sanitizer drops.
         assert body["node_classes"] == EXPECTED_CLASSES
         assert body["node_count"] == 5
+        # The count the distinct list hides: a second pass of one class.
+        assert body["node_class_counts"] == {
+            "CLIPTextEncode": 2,
+            "CheckpointLoaderSimple": 1,
+            "KSampler": 1,
+            "SaveImage": 1,
+        }
+        # This map is too sparse to type the chain, and says so rather than
+        # calling it straight.
+        assert body["lora_chain"]["branches"] is None
+        assert body["lora_chain"]["refusal"]
 
     def test_the_class_list_survives_an_unreachable_comfyui(self, env, monkeypatch):
         """The disclosure is read from the file, not from ComfyUI.

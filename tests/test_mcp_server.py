@@ -449,6 +449,64 @@ def test_membership_filters_reach_the_listing_as_query_params():
     assert len(seen) == 1
 
 
+def test_a_workflow_key_filters_the_listing_and_the_count_but_not_search():
+    seen = []
+
+    def fetch(path, params):
+        seen.append((path, dict(params)))
+        return 200, "application/json", b"[]"
+
+    key = "k" * 64
+    _call(fetch, "list_pictures", workflow_key=key)
+    _call(fetch, "count_pictures", workflow_key=key)
+    assert seen == [
+        ("/pictures", {**seen[0][1], "workflow_key": key}),
+        ("/pictures/count", {**seen[1][1], "workflow_key": key}),
+    ]
+    assert all(params["workflow_key"] == key for _, params in seen)
+
+    # The search route has no such filter; ignoring it would widen the answer.
+    result = _call(fetch, "search_pictures", query="cat", workflow_key=key)
+    assert result["isError"] is True
+    assert _call(fetch, "list_pictures", workflow_key=7)["isError"] is True
+    assert len(seen) == 2
+
+
+def test_a_rejected_token_says_to_reconnect():
+    def fetch(path, params):
+        return 401, "application/json", b'{"detail":"Not authenticated"}'
+
+    result = _call(fetch, "list_tags")
+    assert result["isError"] is True
+    text = result["content"][0]["text"]
+    assert "rejected the API token" in text
+    assert "PIXLSTASH_TOKEN" in text
+    # Any other refusal keeps the plain form the owner probe reads.
+    with pytest.raises(mcp_server.ToolError, match=r"^PixlStash answered 403: no$"):
+        mcp_server._checked(403, "", b'{"detail":"no"}')
+
+
+def test_a_recipe_links_to_its_workflow_card():
+    def recipe(body):
+        def fetch(path, params):
+            return 200, "application/json", json.dumps(body).encode()
+
+        result = _call(fetch, "get_recipe", picture_id=1)
+        assert result["isError"] is False, result
+        return json.loads(result["content"][0]["text"])
+
+    key = "ab/c?d"
+    answer = recipe({"workflow_key": key, "lora_slots": [{"node_id": "10"}]})
+    assert answer["workflow_link"] == "/workflows?card=ab%2Fc%3Fd"
+    assert answer["edit_loras_link"] == "/workflows?card=ab%2Fc%3Fd&edit=loras"
+
+    # No LoRA to edit, no Edit LoRAs link; no card, no link at all.
+    answer = recipe({"workflow_key": key, "lora_slots": []})
+    assert "edit_loras_link" not in answer
+    answer = recipe({"available": False, "workflow_key": None})
+    assert "workflow_link" not in answer
+
+
 @contextmanager
 def _recording_server(status: int = 200, body: bytes = b"[]"):
     """A loopback HTTP server that records what actually reached it."""

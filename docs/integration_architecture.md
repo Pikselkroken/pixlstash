@@ -1708,6 +1708,10 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
    "workflow_key": "…", "models": ["…"], "loras": [],
    "node_count": 12,
    "node_classes": ["CheckpointLoaderSimple","CLIPTextEncode","KSampler","SaveImage"],
+   "node_class_counts": {"CLIPTextEncode": 2, "CheckpointLoaderSimple": 1,
+                         "KSampler": 1, "SaveImage": 1},
+   "lora_chain": {"branches": false, "trunk": [{"node_id": "10", "name": "…"}],
+                  "passes": [], "note": null, "refusal": null},
    "source_is_imported": true, "source_label": "Watched folder",
    "seed_inputs": [{"node_id":"3","class_type":"KSampler","field":"seed","value":1}],
    "preflight": {"ok": true, "checked": true, "missing_node_classes": [],
@@ -1716,6 +1720,7 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
                  "unchecked_models": 0}}
   ```
   `node_classes` (distinct `class_type`, sorted) and `source_is_imported` / `source_label` exist for the owner's **consent** decision, not for display polish — see the untrusted-graph note below. `node_classes` is read from the file, so unlike everything under `preflight` it is populated even when ComfyUI was unreachable.
+  `node_class_counts` is the same list with how many nodes of each class, so a second sampler pass shows where the distinct list names its class once. `lora_chain` is the Edit LoRAs chain reader's view of the picture's own graph (#1579): `trunk` holds the LoRAs every pass reads, and `passes` holds one `{node_id, class_type, title, loras}` per sampler pass where the model forks, with `branches` true exactly then. It is typed from the same `/object_info` read the pre-flight makes, so without that map (ComfyUI unreachable, or `preflight=false` on a picture carrying its API graph) `branches` is `null` and `refusal` says why, as it also does for a chain the reader refuses. `null` is "not known", never "straight". `null` for an A1111 or unconvertible editor recipe.
   **Three distinct negative answers, and the SPA must not collapse them**, because they send the user to three different places:
   | Response | Meaning | UI |
   |---|---|---|
