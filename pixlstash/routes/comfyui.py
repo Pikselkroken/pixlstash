@@ -93,9 +93,7 @@ from platformdirs import user_data_dir
 # ComfyUI workflow-execution orchestration and the output-import pipeline live in
 # the service layer (backend refactor Phase 2 §4.5); the route handlers below
 # stay thin and delegate to it. See pixlstash/services/comfyui_service.py.
-from pixlstash.services.comfyui_recipe_service import PIXLSTASH_PACK_INSTALL_HINT
 from pixlstash.services.comfyui_service import (
-    PIXLSTASH_NODE_PREFIX,
     _comfyui_abort,
     comfyui_can_open_workflows,
     library_ids_named,
@@ -1377,15 +1375,9 @@ def _describe_preflight_failure(preflight: dict) -> str:
     difference between an actionable message and a support ticket.
     """
     parts: list[str] = []
-    classes = [str(c) for c in preflight.get("missing_node_classes") or []]
-    # Our own pack's classes get named as such, with how to install it: the
-    # bare class name does not tell the owner the fix is a node pack we ship.
-    ours = [c for c in classes if c.startswith(PIXLSTASH_NODE_PREFIX)]
-    others = [c for c in classes if c not in ours]
-    if ours:
-        parts.append("missing ComfyUI-PixlStash nodes: " + ", ".join(ours))
-    if others:
-        parts.append("missing node types: " + ", ".join(others))
+    classes = preflight.get("missing_node_classes") or []
+    if classes:
+        parts.append("missing node types: " + ", ".join(str(c) for c in classes))
     models = [
         str(item.get("value")) for item in preflight.get("missing_models") or [] if item
     ]
@@ -1403,10 +1395,7 @@ def _describe_preflight_failure(preflight: dict) -> str:
         )
     if not parts:
         return "This recipe cannot run on your ComfyUI."
-    sentence = "Your ComfyUI cannot run this recipe - " + "; ".join(parts) + "."
-    if ours:
-        sentence += " " + PIXLSTASH_PACK_INSTALL_HINT
-    return sentence
+    return "Your ComfyUI cannot run this recipe - " + "; ".join(parts) + "."
 
 
 # How long a fetched `/object_info` map may be reused, and by whom. It is

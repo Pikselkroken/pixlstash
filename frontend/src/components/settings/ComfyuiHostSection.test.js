@@ -76,6 +76,22 @@ describe("ComfyUI-PixlStash status line", () => {
     expect(status(await mountPane()).exists()).toBe(false);
   });
 
+  it("keeps the newest answer when an older one lands late", async () => {
+    let answerFirst;
+    comfyui.getPixlstashNode
+      .mockReturnValueOnce(new Promise((r) => (answerFirst = r)))
+      .mockResolvedValueOnce({ can_open_workflows: true });
+    const wrapper = await mountPane();
+    await wrapper.setProps({ open: false });
+    await wrapper.setProps({ open: true });
+    await flushPromises();
+    answerFirst({ can_open_workflows: false });
+    await flushPromises();
+    expect(status(wrapper).text()).toBe(
+      "ComfyUI-PixlStash node pack: installed.",
+    );
+  });
+
   it("asks nothing while no ComfyUI is configured", async () => {
     config.getUserConfig.mockResolvedValue({ comfyui_url: null });
     const wrapper = await mountPane();

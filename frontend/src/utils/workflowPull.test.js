@@ -11,6 +11,24 @@ const URL = "http://192.0.2.10:8188";
 const kinds = (report) => report.lines.map((line) => line.kind);
 
 describe("pullSummaryLines", () => {
+  it("names our own node pack, and how to install it, among missing nodes", () => {
+    const report = pullSummaryLines(
+      {
+        listed: 1,
+        pulled: 1,
+        nodes_checked: true,
+        missing_nodes: 1,
+        missing_node_classes: ["rgthreeSeed", "PixlStashAdapterLoader"],
+      },
+      URL,
+    );
+    const error = report.lines.find((l) => l.kind === "error");
+    expect(error.text).toContain(
+      "Some come from the ComfyUI-PixlStash node pack.",
+    );
+    expect(error.text).toContain("github.com/Pikselkroken/ComfyUI-PixlStash");
+  });
+
   it("counts what was pulled and names the machine", () => {
     const report = pullSummaryLines(
       { listed: 3, pulled: 1, matched: 1, already_shipped: 1, nodes_checked: true },
@@ -46,6 +64,7 @@ describe("pullSummaryLines", () => {
       "2 workflows won't run on 192.0.2.10:8188: they use nodes that ComfyUI doesn't have.",
     );
     expect(byKind.error.names).toEqual(["A", "B"]);
+    expect(byKind.error.text).not.toContain("ComfyUI-PixlStash");
     expect(byKind.warning.text).toBe(
       "1 workflow names a model file 192.0.2.10:8188 doesn't list.",
     );

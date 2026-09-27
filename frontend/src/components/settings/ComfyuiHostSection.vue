@@ -224,26 +224,29 @@ watch(
           Configure Host
         </AppButton>
       </div>
-      <p
-        v-if="packInstalled !== null"
-        class="wf-pack-status"
-        role="status"
-        data-testid="comfyui-pack-status"
-      >
-        <a
-          class="wf-pack-link"
-          :href="PIXLSTASH_PACK_URL"
-          target="_blank"
-          rel="noopener noreferrer"
-          >ComfyUI-PixlStash</a
+      <!-- The live region is always there, so a line that arrives in it is
+           announced; one inserted already filled often is not. -->
+      <div role="status">
+        <p
+          v-if="packInstalled !== null"
+          class="wf-pack-status"
+          data-testid="comfyui-pack-status"
         >
-        node pack:
-        <template v-if="packInstalled">installed.</template>
-        <template v-else>
-          not found, or too old. Opening workflows in ComfyUI and some recipes
-          need it. {{ PIXLSTASH_PACK_INSTALL }}
-        </template>
-      </p>
+          <a
+            class="wf-pack-link"
+            :href="PIXLSTASH_PACK_URL"
+            target="_blank"
+            rel="noopener noreferrer"
+            >ComfyUI-PixlStash</a
+          >
+          node pack:
+          <template v-if="packInstalled">installed.</template>
+          <template v-else>
+            not found, or too old. Opening workflows in ComfyUI and some recipes
+            need it. {{ PIXLSTASH_PACK_INSTALL }}
+          </template>
+        </p>
+      </div>
     </SettingsSection>
 
     <AppDialog
@@ -348,7 +351,7 @@ watch(
   margin: var(--space-3) 0 0;
   font-size: var(--text-xs);
   line-height: var(--leading-body);
-  color: rgba(var(--v-theme-on-surface), 0.6);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 /* The plugin catalogue link's shape (BehaviourSection.vue). */
