@@ -7161,6 +7161,9 @@ def test_a_pixlstash_loader_stands_in_only_where_it_does_what_the_original_did()
     assert plan(dual) == (None, run_service.SWAP_OUTPUTS_DIFFER)
     info["DualCLIPLoader"] = {"output": ["CLIP"]}
     assert plan(dual)[1] is None
+    # A declaration that is not a list is read as none, never indexed.
+    info["DualCLIPLoader"] = {"output": {"clip": "CLIP"}}
+    assert plan(dual)[1] is None
 
 
 def test_a_model_no_copy_of_which_is_left_is_still_a_missing_model(

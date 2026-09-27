@@ -976,7 +976,13 @@ def plan_pixlstash_swap(
         if not isinstance(clip_type, str) or (types and clip_type not in types):
             return None, SWAP_CLIP_TYPE
     declared = ((object_info or {}).get(node.get("class_type")) or {}).get("output")
-    if declared and declared[0] != _SWAP_OUTPUT_TYPES[kind]:
+    # Only a list says anything: another shape is not ComfyUI's, and is read
+    # as undeclared rather than indexed.
+    if (
+        isinstance(declared, list)
+        and declared
+        and declared[0] != _SWAP_OUTPUT_TYPES[kind]
+    ):
         return None, SWAP_OUTPUTS_DIFFER
     for consumer in graph.values():
         consumer_inputs = consumer.get("inputs") if isinstance(consumer, dict) else {}
