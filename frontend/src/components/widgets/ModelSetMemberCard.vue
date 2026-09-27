@@ -91,8 +91,7 @@ import { VIcon } from "vuetify/components";
 
 import { formatModelSize, generatedMark } from "../../utils/modelShelf";
 import {
-  pictureCount,
-  recipeCount,
+  evidenceLine,
   sharingLabel,
 } from "../../utils/workflowSets";
 import ModelMark from "./ModelMark.vue";
@@ -137,11 +136,7 @@ const initials = computed(() =>
 
 const size = computed(() => formatModelSize(props.member.file_size));
 
-const evidence = computed(() =>
-  [recipeCount(props.member.recipes), pictureCount(props.member.pictures)].join(
-    " · ",
-  ),
-);
+const evidence = computed(() => evidenceLine(props.member));
 
 const sharing = computed(() => sharingLabel(props.member.otherSets));
 

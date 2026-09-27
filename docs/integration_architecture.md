@@ -507,15 +507,16 @@ and groups nothing; the client folds.**
 
 | Route | Answers | Costs |
 |---|---|---|
-| `GET /models/workflow-sets` | **Which shelf models a kept picture proves ran together** — one entry per *combination* (the exact model ids one or more recipes bound), with its recipe count, its picture count and up to three cover thumbnails as `{picture_id, version}`, plus `no_set`: the ids in none of those combinations, i.e. the models **no kept
-picture in this library was made with** (engines excluded - see rule 1). | one pass over `workflow_recipe_asset`, plus the `GROUP BY workflow_structural_hash` and the `ROW_NUMBER()` cover window the shelf's `used by` counts and the workflows grid already run |
+| `GET /models/workflow-sets` | **Which shelf models a kept picture or a stored ComfyUI run proves ran together** — one entry per *combination* (the exact model ids one or more recipes or runs bound), with its recipe count, its `history_runs` (finished ComfyUI runs, #1565, counted apart), its picture count and up to three cover thumbnails as `{picture_id, version}`, plus `no_set`: the ids in none of those combinations, i.e. the models **no kept
+picture in this library was made with and no stored ComfyUI run used** (engines excluded - see rule 1). | one pass over `workflow_recipe_asset` and one over `comfyui_history_model`, plus the `GROUP BY workflow_structural_hash` and the `ROW_NUMBER()` cover window the shelf's `used by` counts and the workflows grid already run |
 
 Rules neither side may drift from:
 
 1. **Co-occurrence is evidence; its absence is not.** No combination is withheld
    for lacking a pairing, `no_set` is returned rather than dropped, and a member
    the evidence could only reach through a basename several shelf rows answer to
-   carries `ambiguous: true` and is still listed. A client may not render a
+   carries `ambiguous: true` and is still listed. A ComfyUI run never sets
+   `ambiguous`: the pull stored only unambiguous matches. A client may not render a
    missing companion as incompatible, which is why the grid and the *Works with*
    dialog both close with that sentence in as many words.
 2. **Membership is not stored and overlaps.** A model appears in every
@@ -538,6 +539,11 @@ Rules neither side may drift from:
    counts every recipe the hub holds. A delete warning must keep a file some
    other library needs; this grid is a picture of what the library in front of
    the reader has made, so a recipe with no kept picture here is not a set.
+   **A stored ComfyUI run is the exception (#1565):** a combination with no
+   kept picture here and no stored run is not a set, but one with a run is,
+   drawn with no cover. `history_runs` is hub-wide because ComfyUI's history
+   is a fact about the machine, not about a library; the client marks a card
+   "Ran in ComfyUI" when its pictures are 0 and its runs are not.
 6. **A cover is two facts, not a path.** `{picture_id, version}`, and the client
    builds the URL with `pictureThumbnailUrl` (`api/pictures.js`). An `<img src>`
    never reaches the Axios interceptor, so a path served from here arrives with
@@ -571,6 +577,9 @@ Rules neither side may drift from:
    `members` with their `slot`. `PUT .../{set_id}/declines` (`{sha256: [...]}`,
    the whole list) answers `{set, previous}`, and putting `previous` back is
    the undo. `picture_count` counts this library; `recipes` counts every one.
+   The offer reads recipe combinations only: one only ComfyUI ran is covered
+   by a set like any other but never offered, since the offer is worded in
+   pictures and recipes.
 
 ### 2.3 The `/workflows` contract (v1.11)
 
@@ -1712,6 +1721,10 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
    "workflow_key": "…", "models": ["…"], "loras": [],
    "node_count": 12,
    "node_classes": ["CheckpointLoaderSimple","CLIPTextEncode","KSampler","SaveImage"],
+   "node_class_counts": {"CLIPTextEncode": 2, "CheckpointLoaderSimple": 1,
+                         "KSampler": 1, "SaveImage": 1},
+   "lora_chain": {"branches": false, "trunk": [{"node_id": "10", "name": "…"}],
+                  "passes": [], "note": null, "refusal": null},
    "source_is_imported": true, "source_label": "Watched folder",
    "seed_inputs": [{"node_id":"3","class_type":"KSampler","field":"seed","value":1}],
    "preflight": {"ok": true, "checked": true, "missing_node_classes": [],
@@ -1720,6 +1733,7 @@ Two round trips, both scoped to the source picture (`PICTURE_SCOPED` in `ROUTE_P
                  "unchecked_models": 0}}
   ```
   `node_classes` (distinct `class_type`, sorted) and `source_is_imported` / `source_label` exist for the owner's **consent** decision, not for display polish — see the untrusted-graph note below. `node_classes` is read from the file, so unlike everything under `preflight` it is populated even when ComfyUI was unreachable.
+  `node_class_counts` is the same list with how many nodes of each class, so a second sampler pass shows where the distinct list names its class once. `lora_chain` is the Edit LoRAs chain reader's view of the picture's own graph (#1579): `trunk` holds the LoRAs every pass reads, and `passes` holds one `{node_id, class_type, title, loras}` per sampler pass where the model forks, with `branches` true exactly then. It is typed from the same `/object_info` read the pre-flight makes, so with ComfyUI unreachable, or `preflight=false`, `branches` is `null` and `refusal` says why, as it also does for a chain the reader refuses. `null` is "not known", never "straight". `null` for an A1111 or unconvertible editor recipe.
   **Three distinct negative answers, and the SPA must not collapse them**, because they send the user to three different places:
   | Response | Meaning | UI |
   |---|---|---|

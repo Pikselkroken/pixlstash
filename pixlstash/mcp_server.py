@@ -107,7 +107,12 @@ matches meaning rather than filename.
 character_id or project_id from the list tools.
 - One picture's tags and scores -> get_picture. To actually look at it -> \
 view_picture.
-- "how was this made" -> get_recipe."""
+- "how was this made" -> get_recipe. It names the workflow card the picture \
+is on (workflow_key, and a workflow_link to open it in PixlStash), whether its \
+model forks into several sampler passes and which LoRAs feed each \
+(lora_chain), and how many nodes of each class it runs (node_class_counts).
+- "other pictures made with that workflow" -> list_pictures or count_pictures \
+with its workflow_key."""
 
 READ_ONLY_ENDING = """\
 Everything is read-only; there is no tool here that changes the library. A \
@@ -174,6 +179,13 @@ _PROJECT_ID = {
     "description": "Only pictures in this project id (see list_projects), or "
     "'UNASSIGNED' for those in none.",
 }
+# `GET /pictures` and `/pictures/count` take it; `/pictures/search` does not,
+# so search_pictures leaves it out rather than drop it without a word.
+_WORKFLOW_KEY_FILTER = {
+    "type": "string",
+    "description": "Only pictures made by this workflow card: the "
+    "workflow_key get_recipe reports.",
+}
 # The membership filters every picture listing shares.
 _FILTERS = {
     "tags": _TAGS,
@@ -206,7 +218,10 @@ READ_TOOLS = [
         "set, character, project or tags. Returns picture metadata. Use this "
         "rather than listing image files: the library holds pictures the "
         "filesystem does not show as a collection.",
-        "inputSchema": {"type": "object", "properties": dict(_FILTERS)},
+        "inputSchema": {
+            "type": "object",
+            "properties": {**_FILTERS, "workflow_key": _WORKFLOW_KEY_FILTER},
+        },
     },
     {
         "name": "count_pictures",
@@ -216,9 +231,12 @@ READ_TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                key: value
-                for key, value in _FILTERS.items()
-                if key not in ("limit", "offset")
+                **{
+                    key: value
+                    for key, value in _FILTERS.items()
+                    if key not in ("limit", "offset")
+                },
+                "workflow_key": _WORKFLOW_KEY_FILTER,
             },
         },
     },
@@ -270,7 +288,11 @@ READ_TOOLS = [
     {
         "name": "get_recipe",
         "description": "How a picture was made, when it carries a ComfyUI "
-        "recipe: prompt, seed, models, LoRAs and node classes.",
+        "recipe: prompt, seed, models, LoRAs and node classes with their "
+        "counts. lora_chain says whether the model forks into several sampler "
+        "passes and which LoRAs feed each. workflow_key names the workflow "
+        "card; workflow_link is the path that opens that card in PixlStash, "
+        "and edit_loras_link opens it with Edit LoRAs.",
         "inputSchema": {
             "type": "object",
             "properties": {"picture_id": _PICTURE_ID},
@@ -636,7 +658,31 @@ def _paging(arguments: dict) -> dict:
         if isinstance(value, bool) or not isinstance(value, (int, str)):
             raise ToolError(f"{key} must be an id")
         params[key] = str(value)
+    # A query parameter, not a path segment, so it cannot reshape the request.
+    workflow_key = arguments.get("workflow_key")
+    if workflow_key is not None:
+        if not isinstance(workflow_key, str) or len(workflow_key) > MAX_KEY_LENGTH:
+            raise ToolError(
+                f"workflow_key must be a string of at most {MAX_KEY_LENGTH} characters"
+            )
+        params["workflow_key"] = workflow_key
     return params
+
+
+def _workflow_links(recipe: object) -> object:
+    """*recipe* with the app paths that open its workflow card, when it has one.
+
+    Paths, not URLs: the desktop app serves its own window on a port that
+    changes every launch, so no host this server knows is the one the owner
+    has open.
+    """
+    if not isinstance(recipe, dict) or not isinstance(recipe.get("workflow_key"), str):
+        return recipe
+    link = "/workflows?card=" + urllib.parse.quote(recipe["workflow_key"], safe="")
+    recipe["workflow_link"] = link
+    if recipe.get("lora_slots"):
+        recipe["edit_loras_link"] = link + "&edit=loras"
+    return recipe
 
 
 def _get(fetch: Fetch, path: str, params: dict | None = None) -> tuple[str, bytes]:
@@ -653,6 +699,15 @@ def _checked(status: int, content_type: str, body: bytes) -> tuple[str, bytes]:
             detail = json.loads(body).get("detail", "")
         except (ValueError, AttributeError):
             detail = body[:200].decode("utf-8", "replace")
+        if status == 401:
+            # The token is read once, at start-up: a client that changed
+            # PIXLSTASH_TOKEN is still talking through the old one.
+            raise ToolError(
+                f"PixlStash rejected the API token (401: {detail}): it is "
+                "mistyped, revoked, or for another PixlStash. This server reads "
+                "PIXLSTASH_TOKEN only when it starts, so after changing the "
+                "token, restart or reconnect this MCP server in the client."
+            )
         raise ToolError(f"PixlStash answered {status}: {detail}")
     return content_type, body
 
@@ -677,6 +732,10 @@ def call_tool(
         query = arguments.get("query")
         if not isinstance(query, str) or not query.strip():
             raise ToolError("query must be a non-empty string")
+        if arguments.get("workflow_key") is not None:
+            raise ToolError(
+                "search_pictures cannot filter by workflow_key; use list_pictures"
+            )
         params = {"query": query, **_paging(arguments)}
         return _json_content(_get(fetch, "/pictures/search", params)[1])
     if name == "list_pictures":
@@ -709,7 +768,8 @@ def call_tool(
         return _json_content(_get(fetch, "/projects")[1])
     if name == "get_recipe":
         path = f"/comfyui/pictures/{_picture_id(arguments)}/recipe"
-        return _json_content(_get(fetch, path)[1])
+        recipe = _workflow_links(json.loads(_get(fetch, path)[1]))
+        return [{"type": "text", "text": json.dumps(recipe, indent=1)}]
     raise ToolError(f"Unknown tool: {name}")
 
 

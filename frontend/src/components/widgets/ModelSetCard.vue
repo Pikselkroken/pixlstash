@@ -66,7 +66,16 @@
       <span v-else class="msc__empty-line">Checkpoint not on shelf</span>
     </div>
     <div v-else class="msc__cover msc__cover--empty" aria-hidden="true">
-      <span class="msc__empty-line">No picture to show</span>
+      <!-- On the grid only because ComfyUI ran it (#1565): say where the
+           evidence came from, with the run count where recipes would sit. -->
+      <template v-if="card.fromComfyUI">
+        <span class="msc__badge msc__badge--start">
+          <v-icon size="12">mdi-sitemap-outline</v-icon
+          >{{ card.historyRuns === 1 ? "1 run" : `${card.historyRuns} runs` }}
+        </span>
+        <span class="msc__empty-line">Ran in ComfyUI</span>
+      </template>
+      <span v-else class="msc__empty-line">No picture to show</span>
     </div>
     <!-- The lasting merge offer (#1523): on the cover until the owner merges
          or keeps the set separate. Opens the tray on its offer strip. Not a
@@ -251,6 +260,7 @@ const accessibleName = computed(() => {
   return [
     name,
     kindLabel,
+    props.card.fromComfyUI ? "ran in ComfyUI" : null,
     kinds.length ? `with ${kinds.join(", ")}` : "nothing else has run with it",
     facts.join(", "),
   ]

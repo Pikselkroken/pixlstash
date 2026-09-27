@@ -12,6 +12,7 @@ import pytest
 from pixlstash.services.comfyui_recipe_service import (
     MAX_SEED_64,
     MODEL_FILENAME_FIELDS,
+    PIXLSTASH_PACK_INSTALL_HINT,
     advertised_model_names,
     apply_adapter,
     apply_filename_swap,
@@ -35,6 +36,7 @@ from pixlstash.services.comfyui_recipe_service import (
     sanitize_prompt_graph,
     unchecked_preflight,
 )
+from pixlstash.routes.comfyui import _describe_lora_chain
 from pixlstash.services.workflow_identity import model_fix_kind
 from pixlstash.utils.adapter_header import FILE_CHECKPOINT, FILE_TEXT_ENCODER, FILE_VAE
 from pixlstash.utils.comfyui_utilities import extract_recipe_extras
@@ -1054,8 +1056,12 @@ class TestLoraInsertion:
 
         # Neither: refused, saying why the core loader could not.
         graph = self._checkpoint_graph()
-        with pytest.raises(LookupError, match="not on this ComfyUI.*ComfyUI-PixlStash"):
+        with pytest.raises(
+            LookupError, match="not on this ComfyUI.*ComfyUI-PixlStash"
+        ) as refused:
             insert_adapter(graph, plan, elsewhere, self.INFO)
+        assert str(refused.value).endswith(PIXLSTASH_PACK_INSTALL_HINT)
+        assert "github.com/Pikselkroken/ComfyUI-PixlStash" in str(refused.value)
         assert "9" not in graph
 
     def test_a_graph_that_no_longer_reads_the_plan_is_refused_whole(self):
@@ -1673,6 +1679,26 @@ class TestLoraChain:
 
     def test_a_straight_chain_has_no_lanes(self):
         assert read_lora_chain(self._graph(), self.INFO)["lanes"] == []
+
+    def test_the_recipe_says_which_loras_feed_which_pass(self):
+        """What get_recipe tells a reader about a two-pass graph (#1579)."""
+        chain = _describe_lora_chain(self._two_pass(), self.INFO, None)
+        assert chain["branches"] is True
+        assert chain["refusal"] is None
+        assert [lora["node_id"] for lora in chain["trunk"]] == ["10", "11"]
+        assert [
+            (p["node_id"], p["title"], [lora["name"] for lora in p["loras"]])
+            for p in chain["passes"]
+        ] == [("3", "Base pass", []), ("15", "Hires pass", ["c"])]
+
+        straight = _describe_lora_chain(self._graph(), self.INFO, None)
+        assert straight["branches"] is False
+        assert straight["passes"] == []
+
+        # Unknown, not "straight": nothing was read.
+        unread = _describe_lora_chain(self._two_pass(), None, "ComfyUI is down")
+        assert unread["branches"] is None
+        assert "ComfyUI is down" in unread["refusal"]
 
     def test_one_edit_per_pass_rewires_each_lane_off_the_trunk(self):
         graph = self._two_pass()

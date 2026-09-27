@@ -584,8 +584,15 @@
           id="wftab-open-node-reason"
           class="wftab-note wftab-quiet"
         >
-          Opening a workflow needs the ComfyUI-PixlStash node in ComfyUI.
-          Install or update it, then restart ComfyUI.
+          Opening a workflow needs the
+          <a
+            class="wftab-link"
+            :href="PIXLSTASH_PACK_URL"
+            target="_blank"
+            rel="noopener noreferrer"
+            >ComfyUI-PixlStash</a
+          >
+          node in ComfyUI. Install or update it, then restart ComfyUI.
         </p>
         <p v-if="multiple" id="wftab-run-reason" class="wftab-note wftab-quiet">
           Run one workflow, or one whole stack, at a time
@@ -648,6 +655,7 @@ import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
 import { EDIT_LORAS, loraStem } from "../../utils/loraChain";
 import { quantBadge } from "../../utils/modelShelf";
+import { PIXLSTASH_PACK_URL } from "../../utils/runReasons";
 import {
   checkpointMissing,
   checkpointModel,
@@ -2039,6 +2047,18 @@ async function checkInstalled(key) {
 
 .wftab-quiet {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* The plugin catalogue link's shape (BehaviourSection.vue). */
+.wftab-link {
+  color: rgb(var(--v-theme-on-surface));
+  font-weight: var(--weight-medium);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.wftab-link:hover {
+  text-decoration-thickness: 2px;
 }
 
 .wftab-title {

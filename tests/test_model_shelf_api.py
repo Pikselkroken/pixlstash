@@ -213,6 +213,8 @@ def _seed_hub(server) -> dict[str, int]:
         # the hub, so a leftover row aborts the wipe rather than lingering.
         conn.execute("DELETE FROM model_file")
         conn.execute("DELETE FROM model_capability")
+        # ComfyUI runs name model ids, and the ids are about to be reissued.
+        conn.execute("DELETE FROM comfyui_history_model")
         conn.execute("DELETE FROM model")
         conn.execute("DELETE FROM model_folder")
         conn.execute("DELETE FROM adapter_stack")
@@ -1014,6 +1016,158 @@ def test_workflow_sets_flags_a_member_two_shelf_rows_answer_to(shelf_env):
         _wipe_recipes(shelf_env.server)
 
 
+def _seed_run(server, prompt_id: str, model_ids) -> None:
+    """One finished ComfyUI run, as the workflow pull stores it (#1518)."""
+    with server.hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO comfyui_history_model (prompt_id, model_id) VALUES (?, ?)",
+            [(prompt_id, model_id) for model_id in model_ids],
+        )
+
+
+def _key(*model_ids) -> str:
+    return ",".join(str(m) for m in sorted(model_ids))
+
+
+def _vae_and_encoder(shelf_env) -> tuple[int, int]:
+    """A VAE and a text encoder beside the seeded checkpoint; the next test's
+    seed wipes them with every other model row."""
+    return (
+        _add_model(shelf_env, "vae", "sdxl_vae.safetensors", _h("vaefile")),
+        _add_model(shelf_env, "text_encoder", "clip_l.safetensors", _h("clipfile")),
+    )
+
+
+def test_workflow_sets_serve_a_set_that_only_ran_in_comfyui(shelf_env):
+    """#1565: a checkpoint + VAE + text encoder no picture was made with, but
+    that ComfyUI ran, is a set with no cover - not three files in `no_set`."""
+    ckpt = shelf_env.model_ids["base_xl.safetensors"]
+    vae, encoder = _vae_and_encoder(shelf_env)
+    _seed_run(shelf_env.server, "run-1", [ckpt, vae, encoder])
+
+    body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+    card = {c["key"]: c for c in body["combinations"]}[_key(ckpt, vae, encoder)]
+    assert (card["picture_count"], card["recipes"], card["history_runs"]) == (0, 0, 1)
+    assert card["covers"] == []
+    assert card["models"][0]["id"] == ckpt
+    assert not {ckpt, vae, encoder} & set(body["no_set"])
+
+
+def test_workflow_sets_count_runs_apart_from_recipes(shelf_env):
+    ckpt = shelf_env.model_ids["base_xl.safetensors"]
+    vae, encoder = _vae_and_encoder(shelf_env)
+    try:
+        _seed_recipe(
+            shelf_env.server,
+            "hr-both",
+            [
+                ("ckpt_name", "base_xl.safetensors"),
+                ("vae_name", "sdxl_vae.safetensors"),
+                ("clip_name", "clip_l.safetensors"),
+            ],
+        )
+        _seed_picture(shelf_env.server, "hr-both", score=3)
+        for prompt_id in ("run-a", "run-b"):
+            _seed_run(shelf_env.server, prompt_id, [ckpt, vae, encoder])
+
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+        card = {c["key"]: c for c in body["combinations"]}[_key(ckpt, vae, encoder)]
+        assert (card["recipes"], card["history_runs"], card["picture_count"]) == (
+            1,
+            2,
+            1,
+        )
+    finally:
+        _wipe_recipes(shelf_env.server)
+
+
+def test_workflow_sets_never_mark_a_run_ambiguous(shelf_env):
+    """A run was resolved to exact ids when it was stored, so it carries no
+    doubt - even while a recipe makes one of its members' basenames a guess."""
+    ids = shelf_env.model_ids
+    try:
+        with shelf_env.server.hub.transaction() as conn:
+            conn.executemany(
+                "UPDATE model SET filename = 'twin.safetensors' WHERE id = ?",
+                [(ids["alice.safetensors"],), (ids["dana.safetensors"],)],
+            )
+        _seed_recipe(shelf_env.server, "hr-twin", [("lora_name", "twin.safetensors")])
+        _seed_picture(shelf_env.server, "hr-twin", score=3)
+        _seed_run(
+            shelf_env.server,
+            "run-exact",
+            [ids["base_xl.safetensors"], ids["alice.safetensors"]],
+        )
+
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+        by_key = {c["key"]: c for c in body["combinations"]}
+        twin = by_key[_key(ids["alice.safetensors"], ids["dana.safetensors"])]
+        assert all(m["ambiguous"] for m in twin["models"])
+        run = by_key[_key(ids["base_xl.safetensors"], ids["alice.safetensors"])]
+        assert [m["ambiguous"] for m in run["models"]] == [False, False]
+    finally:
+        _wipe_recipes(shelf_env.server)
+
+
+def test_workflow_sets_skip_a_run_member_the_shelf_forgot(shelf_env):
+    """The history row outlived its model: the run counts for what is left,
+    and a run of nothing left is no set at all."""
+    ckpt = shelf_env.model_ids["base_xl.safetensors"]
+    gone = max(shelf_env.model_ids.values()) + 1000
+    _seed_run(shelf_env.server, "run-partial", [ckpt, gone])
+    _seed_run(shelf_env.server, "run-empty", [gone])
+
+    body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+    by_key = {c["key"]: c for c in body["combinations"]}
+    assert by_key[_key(ckpt)]["history_runs"] == 1
+    assert all(gone not in {m["id"] for m in c["models"]} for c in body["combinations"])
+
+
+def test_workflow_sets_order_run_only_sets_by_their_runs(shelf_env):
+    ids = shelf_env.model_ids
+    _seed_run(shelf_env.server, "run-once", [ids["dana.safetensors"]])
+    for n in range(2):
+        _seed_run(shelf_env.server, f"run-often-{n}", [ids["bob.safetensors"]])
+
+    body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+    keys = [c["key"] for c in body["combinations"]]
+    assert keys.index(_key(ids["bob.safetensors"])) < keys.index(
+        _key(ids["dana.safetensors"])
+    )
+
+
+def test_workflow_sets_order_a_run_only_set_after_every_pictured_one(shelf_env):
+    ids = shelf_env.model_ids
+    try:
+        _seed_recipe(
+            shelf_env.server,
+            "hr-pictured",
+            [("ckpt_name", "base_xl.safetensors"), ("lora_name", "alice.safetensors")],
+        )
+        _seed_picture(shelf_env.server, "hr-pictured", score=3)
+        # More runs than the pictured set has anything: still second.
+        for n in range(3):
+            _seed_run(
+                shelf_env.server,
+                f"run-{n}",
+                [ids["base_xl.safetensors"], ids["dana.safetensors"]],
+            )
+
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+        assert [c["key"] for c in body["combinations"]] == [
+            _key(ids["base_xl.safetensors"], ids["alice.safetensors"]),
+            _key(ids["base_xl.safetensors"], ids["dana.safetensors"]),
+        ]
+    finally:
+        _wipe_recipes(shelf_env.server)
+
+
 # ---------------------------------------------------------------------------
 # Hand-made workflow sets (#1520)
 # ---------------------------------------------------------------------------
@@ -1693,6 +1847,35 @@ def test_one_pictures_set_is_offered_to_the_set_needing_fewest_models(shelf_env)
     finally:
         _wipe_sets(server)
         _wipe_recipes(server)
+
+
+def test_a_run_only_near_miss_is_not_offered(shelf_env):
+    """#1565: the offer is worded in pictures and recipes, so a combination
+    only ComfyUI ran is covered like any other but never offered."""
+    ids = shelf_env.model_ids
+    server = shelf_env.server
+    try:
+        _seed_run(
+            server, "run-near", [ids["base_xl.safetensors"], ids["dana.safetensors"]]
+        )
+        _seed_run(server, "run-held", [ids["base_xl.safetensors"]])
+        set_id = _new_set(
+            shelf_env, members=[{"model_id": ids["base_xl.safetensors"]}]
+        )["id"]
+
+        body = shelf_env.owner.get(f"{API}/models/workflow-sets").json()
+
+        assert {e["id"]: e for e in body["hand_made"]}[set_id]["offer"] is None
+        by_key = {c["key"]: c for c in body["combinations"]}
+        assert by_key[_key(ids["base_xl.safetensors"])]["covered_by"] == [set_id]
+        assert (
+            by_key[_key(ids["base_xl.safetensors"], ids["dana.safetensors"])][
+                "covered_by"
+            ]
+            == []
+        )
+    finally:
+        _wipe_sets(server)
 
 
 def test_declines_refuse_an_unknown_set_and_a_short_digest(shelf_env):

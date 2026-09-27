@@ -780,6 +780,15 @@ class WorkflowSetCombination(BaseModel):
             "longer holds is counted here for the members it does resolve."
         )
     )
+    history_runs: int = Field(
+        0,
+        description=(
+            "Finished ComfyUI runs whose models resolve to exactly this set, "
+            "read off `GET /history` by the last workflow pull and counted "
+            "apart from recipes. Hub-wide, not library-scoped: ComfyUI's "
+            "history belongs to the machine."
+        ),
+    )
     picture_count: int = Field(
         description="Kept pictures in the active library those recipes made."
     )
@@ -1047,8 +1056,8 @@ class WorkflowSetsResponse(BaseModel):
 
     combinations: list[WorkflowSetCombination] = Field(
         description=(
-            "Every distinct set of shelf models a kept picture proves ran "
-            "together, most pictures first. A model appears in every set it "
+            "Every distinct set of shelf models a kept picture or a stored "
+            "ComfyUI run proves ran together, most pictures first. A model appears in every set it "
             "has run in; membership is not exclusive and is stored nowhere."
         )
     )
@@ -1056,7 +1065,8 @@ class WorkflowSetsResponse(BaseModel):
         description=(
             "Ids that are in none of the combinations above, which is a "
             "narrower statement than it looks: it means **no kept picture in "
-            "this library was made with them**. A recipe on the hub may name "
+            "this library was made with them and no stored ComfyUI run used "
+            "them**. A recipe on the hub may name "
             "one - from another library, or from pictures since deleted - and "
             "this says nothing about that. **Not a verdict** either way: it "
             "rules nothing out about what the file works with. Engines are "
@@ -1886,7 +1896,9 @@ def create_router(server) -> APIRouter:
             "or more recipes bound together, with the kept pictures they made. "
             "A model appears in every combination it has run in, so membership "
             "overlaps and is stored nowhere - the evidence is a self-join over "
-            "`workflow_recipe_asset`, which is read here and nowhere written.\n\n"
+            "`workflow_recipe_asset`, which is read here and nowhere written, "
+            "plus the ComfyUI runs the workflow pull stored in "
+            "`comfyui_history_model` (`history_runs`, counted apart).\n\n"
             "**Co-occurrence is evidence; its absence is not.** Two models in "
             "one recipe proves they ran together. Two models never seen "
             "together proves nothing, so nothing is withheld for lacking a "
@@ -1894,11 +1906,12 @@ def create_router(server) -> APIRouter:
             "rather than being dropped. A member the evidence could only reach "
             "by a basename two shelf rows share is flagged `ambiguous` and "
             "still listed.\n\n"
-            "Scoped to the pictures of the active library, unlike "
+            "Pictures are scoped to the active library, unlike "
             "`POST /models/companions`, which counts every recipe the hub "
             "holds: that one keeps a file some other library needs, this one "
-            "draws what the library in front of the reader has made. Changes "
-            "nothing."
+            "draws what the library in front of the reader has made - or has "
+            "run in ComfyUI (the history rows the workflow pull stored; "
+            "ComfyUI need not be running). Changes nothing."
         ),
         tags=["model_shelf"],
         response_model=WorkflowSetsResponse,
@@ -1914,6 +1927,7 @@ def create_router(server) -> APIRouter:
                         WorkflowSetMember(**member) for member in combination["models"]
                     ],
                     recipes=combination["recipes"],
+                    history_runs=combination["history_runs"],
                     picture_count=combination["picture_count"],
                     covers=_cover_strip(combination["covers"]),
                     covered_by=combination["covered_by"],
