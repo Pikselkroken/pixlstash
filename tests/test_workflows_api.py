@@ -6960,6 +6960,79 @@ def test_a_fix_the_loader_cannot_load_runs_through_a_pixlstash_loader(
             _unshelve(conn, [digest])
 
 
+def test_a_loader_left_unswapped_keeps_its_file_missing(runnable, monkeypatch, caplog):
+    """Two loaders name the missing VAE and only one can be swapped.
+
+    The other still names a file ComfyUI does not have: the pre-flight says
+    so, and the miss is logged rather than dropped because the file name was
+    loaded elsewhere.
+    """
+    missing, replacement = (
+        "test-vae-two-fp8.safetensors",
+        "test-vae-two-bf16.safetensors",
+    )
+    digest = _h("vae-two-bf16")
+    embedded = json.loads(json.dumps(RUN_DOCUMENT))
+    embedded["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    embedded["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    embedded["3"]["inputs"].update({"steps": 20, "cfg": 7.0, "seed": 1})
+    embedded["8"] = {"class_type": "VAELoader", "inputs": {"vae_name": missing}}
+    # A widget our loader has no place for: this one is refused.
+    embedded["7"] = {
+        "class_type": "VAELoader",
+        "inputs": {"vae_name": missing, "device": "cpu"},
+    }
+    embedded["6"] = {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["3", 0], "vae": ["8", 0]},
+    }
+    embedded["5"] = {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["3", 0], "vae": ["7", 0]},
+    }
+    embedded["4"]["inputs"]["images"] = ["6", 0]
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (
+            json.loads(json.dumps(embedded)),
+            [],
+        ),
+    )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["VAELoader"] = {
+        "input": {"required": {"vae_name": [["other.safetensors"], {}]}}
+    }
+    info["VAEDecode"] = {"input": {"required": {}}}
+    info["PixlStashVAELoader"] = {"input": {"required": {"vae_sha256": ["STRING", {}]}}}
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    with runnable.server.hub.transaction() as conn:
+        _shelve_with_copy(conn, "vae", replacement, digest)
+        conn.execute(
+            "INSERT INTO workflow_model_fix (topology_hash, slot_label, was_norm, "
+            "now_norm, was_name, now_name, slot_kind) VALUES (?, ?, ?, ?, ?, ?, 'vae')",
+            (RUN_TOPOLOGY, "l", missing, replacement, missing, replacement),
+        )
+    try:
+        with caplog.at_level(logging.WARNING, logger="pixlstash.routes.workflows"):
+            payload = _preflight(runnable.owner, workflow_key=RUN_CARD)
+        assert "missing_models" in _reasons(payload), payload
+        assert [
+            (sub["node_id"], sub["class_type"])
+            for sub in payload["groups"][0]["substitutions"]
+        ] == [("8", "PixlStashVAELoader")], payload
+        assert any(
+            "was not loaded" in record.getMessage() and missing in record.getMessage()
+            for record in caplog.records
+        ), caplog.text
+    finally:
+        with runnable.server.hub.transaction() as conn:
+            conn.execute("DELETE FROM workflow_model_fix")
+            _unshelve(conn, [digest])
+
+
 def test_a_rename_on_a_loader_swapped_afterwards_is_still_reported(
     runnable, monkeypatch
 ):

@@ -2588,7 +2588,6 @@ def create_router(server) -> APIRouter:
             for node_id, cls, widget, value in iter_model_fields_api(graph)
             if model_fix_kind(cls, widget) == kind and value in unlisted
         }
-        loaded = set()
         for node_id in sorted(nodes):
             plan, refusal = run_service.plan_pixlstash_swap(
                 graph, node_id, kind, swaps, object_info, _shelf_digest(_hub(), kind)
@@ -2613,10 +2612,14 @@ def create_router(server) -> APIRouter:
                     for digest_widget, widget, file, _d in plan["fields"]
                 },
             )
-            loaded.update(
-                before[node_id]["inputs"][w] for _dw, w, _f, _d in plan["fields"]
-            )
-        return [m for m in missed if m["was"] not in loaded]
+        # Still missed while any loader of this kind names the file: two
+        # nodes may load it and only one be swapped.
+        still_named = {
+            value
+            for _node, cls, widget, value in iter_model_fields_api(graph)
+            if model_fix_kind(cls, widget) == kind
+        }
+        return [m for m in missed if m["was"] in still_named]
 
     def _record_loader_swaps(card, graph: dict, swapped: dict) -> None:
         """Card the swapped graph's pictures as the original's (#1605).
