@@ -951,10 +951,12 @@ def plan_pixlstash_swap(
     inputs = node.get("inputs") if isinstance(node, dict) else None
     if not isinstance(inputs, dict):
         return None, SWAP_UNSUPPORTED
-    fields = sorted(
+    # In the loader's declared file order (`MODEL_FILENAME_FIELDS`), which is
+    # the order its paths load in and so the order of our digest widgets.
+    fields = [
         (widget, value)
         for _node, cls, widget, value in iter_model_fields_api({node_id: node})
-    )
+    ]
     if not fields or any(
         model_fix_kind(node.get("class_type", ""), widget) != kind
         for widget, _value in fields

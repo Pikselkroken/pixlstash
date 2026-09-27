@@ -5674,7 +5674,7 @@ def create_router(server) -> APIRouter:
             return [], "none_go_with_it"
         object_info, error = _read_object_info(_comfyui_url(_user(request)))
         needs_pixlstash_nodes = False
-        for cls, widget, value, _kind, node_id in loaders:
+        for cls, widget, value, fix_kind, node_id in loaders:
             options = listed_options(object_info, cls, widget)
             if options:
                 # Listed by this loader, or loadable through a PixlStash one
@@ -5687,10 +5687,10 @@ def create_router(server) -> APIRouter:
                     plan, refusal = run_service.plan_pixlstash_swap(
                         graph,
                         node_id,
-                        kind,
+                        fix_kind,
                         {value: c.filename},
                         object_info,
-                        _shelf_digest(_hub(), kind),
+                        _shelf_digest(_hub(), fix_kind),
                     )
                     if plan is not None:
                         kept.append(c.model_copy(update={"loader": plan["class_type"]}))
