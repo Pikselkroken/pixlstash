@@ -2121,10 +2121,12 @@ async function checkInstalled(key) {
 }
 
 /* The 96px label column is local to this tab: no other pane pairs a label
-   with a value field at this width, so it is not a token. */
+   with a value field at this width, so it is not a token. `minmax(0, 1fr)`,
+   not `1fr`: a bare `1fr` track grows to its longest unbreakable word, and a
+   file name then scrolls the whole inspector sideways. */
 .wftab-field {
   display: grid;
-  grid-template-columns: 96px 1fr;
+  grid-template-columns: 96px minmax(0, 1fr);
   align-items: center;
   gap: var(--space-3);
 }
@@ -2185,6 +2187,12 @@ async function checkInstalled(key) {
   flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
+}
+
+/* A missing file's name is often one long word (`someModel_v6.safetensors`):
+   break it anywhere rather than let it run past the column. */
+.wftab-missing {
+  overflow-wrap: anywhere;
 }
 
 /* A replaced base model: the value field as every other row draws it, with
