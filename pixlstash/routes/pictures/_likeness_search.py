@@ -18,6 +18,7 @@ import numpy as np
 from fastapi import File, HTTPException, Query, Request, UploadFile
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
+from starlette.concurrency import run_in_threadpool
 
 from pixlstash.authz.membership import enforce_set_scope
 from pixlstash.inference.cpu_query_encoders import (
@@ -445,7 +446,12 @@ def register_routes(router, server):
                         detail=f"File {idx + 1}: could not decode uploaded image.",
                     ) from exc
 
-                query_embeddings.append(_encode_query_image(server, pil_image))
+                # On a threadpool worker: this handler is async, and the encode
+                # (on Metal, possibly a wait for the CPU encoders to load) would
+                # otherwise block every request the server is handling.
+                query_embeddings.append(
+                    await run_in_threadpool(_encode_query_image, server, pil_image)
+                )
         else:
             raise HTTPException(
                 status_code=400,

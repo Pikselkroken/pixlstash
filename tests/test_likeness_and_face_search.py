@@ -1,3 +1,4 @@
+import asyncio
 import tempfile
 import os
 
@@ -10,6 +11,7 @@ from pixlstash.server import Server
 from pixlstash.db_models.face import Face
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.tag import Tag
+from pixlstash.routes.pictures import _likeness_search as _likeness_search_module
 from pixlstash.scoring.character_likeness import count_pictures_by_character_likeness
 from pixlstash.services import search_query_service
 from pixlstash.tasks import TaskType
@@ -1145,3 +1147,39 @@ def test_likeness_search_by_set_survives_mixed_embedding_widths(set_env):
     returned = [row["picture_id"] for row in resp.json()]
     assert ids["near"] in returned
     assert ids["odd"] not in returned
+
+
+def test_likeness_search_encodes_an_uploaded_image_off_the_event_loop(
+    set_env, monkeypatch
+):
+    """The upload encode runs on a threadpool worker, not on the event loop.
+
+    The handler is ``async def``. An encode called inline there blocks every
+    request the server is handling, and on Metal it can wait up to a minute for
+    the CPU query encoders to load.
+    """
+    client, _server, ids, _sets = set_env
+    calls = []
+
+    def spy_encode(server, pil_image):
+        try:
+            asyncio.get_running_loop()
+            on_event_loop = True
+        except RuntimeError:
+            on_event_loop = False
+        calls.append(on_event_loop)
+        # The +x unit vector the set members are seeded around.
+        return np.array([1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32)
+
+    monkeypatch.setattr(_likeness_search_module, "_encode_query_image", spy_encode)
+    resp = client.post(
+        f"{API_PREFIX}/pictures/likeness-search",
+        params={"top_n": 500},
+        files=[("files", ("query.png", random_images[0], "image/png"))],
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert calls, "the upload never reached _encode_query_image"
+    assert calls == [False], "the query image was encoded on the event loop"
+    # The spy's vector is what the ranking used.
+    assert ids["m1"] in [row["picture_id"] for row in resp.json()]
