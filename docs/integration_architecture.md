@@ -828,8 +828,9 @@ Five rules the client must not re-derive:
 1. **The workflow export is scrubbed and the recipe export is not, and that is
    the whole difference between them.** The export blanks the prompt and
    caption targets **and every other widget a person could have written in**,
-   nulls seeds, empties every LoRA slot the owner has not marked `structural` —
-   **by filename and by digest** — strips `_meta` titles, blanks picture file
+   nulls seeds, empties every LoRA slot that does not load a LoRA of the
+   workflow's default recipe (#1623; before it, every slot not marked
+   `structural`) — **by filename and by digest** — strips `_meta` titles, blanks picture file
    names and anything in a widget named like a key or a password, resets output
    paths (`filename_prefix` names a folder on the owner's disk), drops
    `checkpoint_id` (a row id in this machine's database), and drops any model
@@ -940,7 +941,7 @@ a narrowing parameter and a policy to check it against.
 
 **The cards (v1.12 B3) sit beside the topology list, not on top of it.** The
 shipped Workflows shelf reads `GET /workflows` and keeps working until F1b
-swaps the route; B9 then moves the grid onto `/workflows` itself. Five things
+swaps the route; B9 then moves the grid onto `/workflows` itself. Six things
 the two sides have agreed:
 
 1. **The entry's shape is `frontend/src/utils/workflowCard.js`, and the
@@ -995,12 +996,15 @@ the two sides have agreed:
    the same rules, so the overlay and the card agree; its `name` stays RAW
    there, because it is the model shelf lookup's own key and what the chip's
    hover text shows.
-2. **A card is not a topology and not a variant.** `key` is the topology plus
-   the non-LoRA models plus the LoRA slots marked *structural*
-   (`services/workflow_identity.py`), so adding a character LoRA keeps the same
-   card. In this API and in the code the `workflow_recipe` / `structural_hash`
-   tier is a **variant**; a *saved recipe* is the look a person keeps, and B6's
-   `saved_recipe` table keys those on the same card key, so
+2. **Two layers reach the client: a workflow and a recipe.** An entry is a
+   **workflow** (`id`), and every value that used to tell cards or stack
+   members apart - a checkpoint, a LoRA, a parameter, a stage on or off - is a
+   **recipe** value: the workflow's `default_recipe`, a saved recipe's
+   overrides over it, or one run's body. No route names a card key, a slot
+   mark or a stack member any more; the card (topology plus non-LoRA models)
+   and the `workflow_recipe` / `structural_hash` tier, which this API calls a
+   **variant**, are internal storage a workflow's figures are counted over. A
+   *saved recipe* is the look a person keeps, filed on its `workflow_id`, so
    `saved_recipe_count` is a real count rather than a placeholder.
 3. **`rating` and `rank` are different numbers and neither substitutes for the
    other.** `rating` is the plain mean of the stars a card has and is `null`

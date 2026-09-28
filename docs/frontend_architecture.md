@@ -702,7 +702,7 @@ The overlay's right-hand panels, extracted from `ImageOverlay.vue` so each owns 
 
   *Use as input for…* is also in the lightbox's right-click menu, and both go to `ImageGrid.runWorkflowOnPicture`: it closes the lightbox and opens the Run popup on **that one picture**, with no id at all falling back to nothing rather than to the selection. **It narrows unconditionally, which `handleImageContextMenu` deliberately does not**: that one keeps a selection the right-clicked picture is already in, because in the grid the selection is on screen. `openOverlay` never touches `selectedImageIds`, so in the lightbox it is invisible, and both ways in name one picture — handing the popup fifty unseen pictures from a control whose tooltip says "this picture" is the regression `ImageGridUseAsInput.test.js` exists to catch. The sibling entry *Run a workflow on these…* does take the whole selection, which is what it says; the same file pins that too, so the narrowing above cannot be "fixed" into narrowing both.
 
-  **Two things the design draws are still absent rather than faked**, each waiting on a later step of that plan: the workflow's name and the stack it is in (the workflow cards read, #1395), and the workflow's own value beside an overridden setting — *"workflow: 8"* — (#1397's owner-only route). The *"Matches your saved recipe X"* banner and **Save** shipped with F6 (#1408). **Run…** is the Run popup as of #1407, and stays visible and `aria-disabled` with the reason when it cannot run, which is the shape the design gives an A1111 picture.
+  **Two things the design draws are still absent rather than faked**, each waiting on a later step of that plan: the workflow's name (the workflow cards read, #1395), and the workflow's own value beside an overridden setting — *"workflow: 8"* — (#1397's owner-only route). The *"Matches your saved recipe X"* banner and **Save** shipped with F6 (#1408). **Run…** is the Run popup as of #1407, and stays visible and `aria-disabled` with the reason when it cannot run, which is the shape the design gives an A1111 picture.
 - `OverlayFilmstrip.vue` (338 lines) — the frozen-navigation filmstrip strip (reads `overlayImages`, see §9.1).
 
 #### `Toolbar.vue` (`panels/`, ~1 410 lines)
@@ -1815,7 +1815,11 @@ The Workflows grid, **on `/workflows`** (`WORKFLOW_ROUTES`,
 `/workflows-next` route. Owner-only, and bounced for a READ session by the same
 watcher the model shelf uses. See §13.2 for the destination itself. **One card
 per workflow** (#1623), keyed by the workflow's `id`; there are no stacks, no
-member rows and no panel.
+member rows and no panel. `StackPanel.vue`, the rail that listed a stack's
+member cards and their slot marks, was deleted with `useWorkflowPrefsStore`;
+merge and split on the selection pill (below) replace it, and a checkpoint or
+LoRA that used to be a member is a recipe value the workflow's pictures are
+filtered by.
 
 - **Toolbar**: Sort (Your ratings / Recently used / Picture count / Name) in the
   shipped `.tbm` popover, *Add…*, which is today's workflow import
@@ -1967,6 +1971,12 @@ member rows and no panel.
   it.
 
 #### `WorkflowTab.vue` + `WorkflowDefaultRow.vue` (`panels/`), v1.12 F3
+
+**The two tabs are the two layers** (#1620): *Workflow* is the workflow and
+its default recipe (models, LoRAs and parameter defaults), *Recipes* the
+recipes kept against it. Nothing in the rail names a card, a stack member or a
+slot mark; the design pass that shows recipe values against the workflow's
+defaults is a follow-up, so today each tab draws its own layer.
 
 The Workflows grid's right rail, mounted by `App.vue` on `/workflows` in place
 of `StatsSidebar`. Three `AppInspector` tabs — **Recipes | Workflow | Tasks**,
