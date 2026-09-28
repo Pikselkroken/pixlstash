@@ -52,6 +52,7 @@ threads on Metal (``docs/apple-metal-thread-safety.md``, "Not covered").
 from __future__ import annotations
 
 import threading
+import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Iterator, Optional
 
@@ -125,18 +126,34 @@ class CpuQueryEncoders:
     """
 
     #: How long a search waits for the copies before refusing. Generous because
-    #: the wait only happens in the seconds after start-up, and the alternative
-    #: to waiting is refusing a search the owner asked for.
+    #: the alternative to waiting is refusing a search the owner asked for. The
+    #: wait covers the load after start-up, and the reload after an idle sweep
+    #: or a library switch.
     DEFAULT_WAIT_S = 60.0
+
+    #: How long :meth:`unload` waits for encodes already running. An encode
+    #: takes well under a second; the bound is for one that hangs, which would
+    #: otherwise hold the idle sweep's thread - and, from the settings route,
+    #: the event loop - for as long as it hangs.
+    UNLOAD_DRAIN_S = 10.0
 
     def __init__(self, clip_service, sbert_service) -> None:
         self._clip_service = clip_service
         self._sbert_service = sbert_service
         self._loaded = threading.Event()
         self._lock = threading.Lock()
-        # Signalled when the last running encode finishes, for ``unload``.
+        # Signalled when the last running encode finishes and when an unload
+        # ends, for whichever of ``unload`` and ``load`` is waiting on it.
         self._idle = threading.Condition(self._lock)
         self._encodes_running = 0
+        # Unloads in progress. While any is, encodes refuse and a load may not
+        # flag the pair, so searches arriving mid-drain cannot hold it open.
+        self._unloading = 0
+        # Bumped each time an unload releases the models, so a load that one
+        # overtook can tell its work was undone.
+        self._unload_generation = 0
+        # Serialises encodes that fall back to the inference device.
+        self._fallback_lock = threading.Lock()
         self._loader = None
         self._pending = None
 
@@ -189,27 +206,31 @@ class CpuQueryEncoders:
         loading, so the log names which half is missing. Nothing raises: the
         task that calls this reports :meth:`is_loaded`, and a partial load is
         refused by :meth:`ensure_serving` rather than half-served.
+
+        An unload in progress is waited out before the pair is flagged. If that
+        unload released what this load had just loaded, the load runs once
+        more: the searches waiting on it would otherwise sit out their whole
+        timeout for a flag nothing was going to set.
         """
-        for label, service in (
-            ("CLIP", self._clip_service),
-            ("SBERT", self._sbert_service),
-        ):
-            try:
-                service.ensure_ready()
-            except Exception:
-                logger.exception(
-                    "Could not load the CPU %s copy used to encode search "
-                    "queries; searches will be refused until this succeeds "
-                    "rather than encode on the inference device, which can "
-                    "crash the process (docs/apple-metal-thread-safety.md)",
-                    label,
-                )
-        # Checked and flagged under the lock ``unload`` holds, so an unload
-        # cannot land between the two and leave the flag over released models.
-        with self._lock:
-            loaded = self.is_loaded()
-            if loaded:
-                self._loaded.set()
+        loaded = False
+        for _attempt in range(2):
+            with self._lock:
+                generation = self._unload_generation
+            self._load_services()
+            # Checked and flagged under the lock ``unload`` holds, and never
+            # while one is counted, so an unload cannot land between the two
+            # and leave the flag over released models.
+            with self._lock:
+                while self._unloading:
+                    self._idle.wait()
+                loaded = self.is_loaded()
+                if loaded:
+                    self._loaded.set()
+                    break
+                if self._unload_generation == generation:
+                    # Nothing released the models: a load failure, already
+                    # logged, which another attempt would only repeat.
+                    break
         if loaded:
             logger.info(
                 "Search queries will be encoded on CPU copies of CLIP and "
@@ -217,11 +238,11 @@ class CpuQueryEncoders:
                 "GPU worker is using it."
             )
 
-    def unload(self) -> None:
+    def unload(self) -> bool:
         """Release both copies, so the idle sweep can have their memory back.
 
-        Clearing the loaded flag is the whole of it: without that,
-        :meth:`ensure_serving` returns at once for a pair whose models have
+        Clearing the loaded flag is what makes the next search reload: without
+        it, :meth:`ensure_serving` returns at once for a pair whose models have
         gone, and the encode fails on the search thread instead of queueing a
         reload. ``_pending`` is deliberately left alone - ``_request_load``
         already re-queues once a task has settled, and dropping a task that is
@@ -234,29 +255,46 @@ class CpuQueryEncoders:
         **Waits for encodes already running**, because the idle sweep that
         calls this cannot see a search: releasing a model under one makes the
         service reload it lazily on the search thread, which is the import race
-        the load task exists to avoid. Clearing the flag first stops new
-        encodes from starting while it waits.
+        the load task exists to avoid. While it waits, new encodes refuse and a
+        load may not flag the pair, so searches that keep arriving cannot hold
+        it open; they wait for the reload instead. The wait is bounded by
+        :data:`UNLOAD_DRAIN_S`: an encode still running then is left alone, the
+        models are kept, and the next sweep tries again.
+
+        Returns:
+            ``True`` when the models were released, ``False`` when a running
+            encode outlasted the wait and they were kept.
         """
         with self._lock:
-            self._loaded.clear()
-            while self._encodes_running:
-                self._idle.wait()
-            # A load that finished during the wait may have set it again.
-            self._loaded.clear()
-            # Still under the lock, so ``load`` cannot flag the pair between
-            # the flag clearing and the models going.
-            for label, service in (
-                ("CLIP", self._clip_service),
-                ("SBERT", self._sbert_service),
-            ):
-                try:
-                    service.unload()
-                except Exception:
-                    logger.exception(
-                        "Could not unload the CPU %s copy; its memory stays "
-                        "held until the process exits",
-                        label,
-                    )
+            self._unloading += 1
+            try:
+                self._loaded.clear()
+                deadline = time.monotonic() + self.UNLOAD_DRAIN_S
+                while self._encodes_running:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        logger.warning(
+                            "Kept the CPU query encoders loaded: %d search "
+                            "encode(s) were still running after %.0f s. The "
+                            "next idle sweep will try again.",
+                            self._encodes_running,
+                            self.UNLOAD_DRAIN_S,
+                        )
+                        if self.is_loaded():
+                            self._loaded.set()
+                        return False
+                    self._idle.wait(timeout=remaining)
+                # Another unload that gave up during the wait may have set it
+                # again; the models are going, so the flag goes with them.
+                self._loaded.clear()
+                # Still under the lock and still counted, so no load can flag
+                # the pair between the flag clearing and the models going.
+                self._release_services()
+                self._unload_generation += 1
+                return True
+            finally:
+                self._unloading -= 1
+                self._idle.notify_all()
 
     def start_loading(self) -> bool:
         """Queue a load if one is not already in flight, without waiting.
@@ -323,6 +361,18 @@ class CpuQueryEncoders:
                 STILL_LOADING_DETAIL, worker_running=True
             )
         return True
+
+    @contextmanager
+    def device_fallback(self) -> Iterator[None]:
+        """Hold the turn for one encode that falls back to the inference device.
+
+        Taken by a caller whose :meth:`ensure_serving` returned ``False``. With
+        no worker, nothing in the background is using the device, but two
+        searches falling back at once would still be two threads on it, so they
+        take turns.
+        """
+        with self._fallback_lock:
+            yield
 
     def encode_query(self, query: str) -> list:
         """Encode *query* into an SBERT embedding on the CPU.
@@ -432,7 +482,7 @@ class CpuQueryEncoders:
             CpuQueryEncodersNotReadyError: The pair is not loaded.
         """
         with self._lock:
-            if not self._loaded.is_set():
+            if self._unloading or not self._loaded.is_set():
                 raise CpuQueryEncodersNotReadyError(
                     STILL_LOADING_DETAIL, worker_running=True
                 )
@@ -444,3 +494,35 @@ class CpuQueryEncoders:
                 self._encodes_running -= 1
                 if not self._encodes_running:
                     self._idle.notify_all()
+
+    def _load_services(self) -> None:
+        """Run each copy's ``ensure_ready``, logging a failure per copy."""
+        for label, service in (
+            ("CLIP", self._clip_service),
+            ("SBERT", self._sbert_service),
+        ):
+            try:
+                service.ensure_ready()
+            except Exception:
+                logger.exception(
+                    "Could not load the CPU %s copy used to encode search "
+                    "queries; searches will be refused until this succeeds "
+                    "rather than encode on the inference device, which can "
+                    "crash the process (docs/apple-metal-thread-safety.md)",
+                    label,
+                )
+
+    def _release_services(self) -> None:
+        """Unload each copy, logging a failure per copy. Caller holds the lock."""
+        for label, service in (
+            ("CLIP", self._clip_service),
+            ("SBERT", self._sbert_service),
+        ):
+            try:
+                service.unload()
+            except Exception:
+                logger.exception(
+                    "Could not unload the CPU %s copy; its memory stays held "
+                    "until the process exits",
+                    label,
+                )

@@ -81,14 +81,16 @@ class TextEmbeddingWorkflow:
         if not query:
             return []
         encoders = self._engine.query_encoders
-        if encoders is not None and encoders.ensure_serving():
+        if encoders is None:
+            return self._engine.sbert_service.encode([query.lower()])
+        if encoders.ensure_serving():
             return encoders.encode_query(query)
-        # Either this host needs no copies, or no GPU worker is running - and
-        # with no worker there is no second thread on the accelerator to
-        # collide with, so encoding here is safe. ``ensure_serving`` raises
-        # rather than returning False when a worker *is* running, because then
-        # this line is the crash.
-        return self._engine.sbert_service.encode([query.lower()])
+        # No GPU worker is running, so nothing in the background is on the
+        # accelerator; searches falling back take turns so that two of them are
+        # not two threads on it. ``ensure_serving`` raises rather than returning
+        # False when a worker *is* running, because then this is the crash.
+        with encoders.device_fallback():
+            return self._engine.sbert_service.encode([query.lower()])
 
     def encode_clip_query(self, query: str) -> Optional[np.ndarray]:
         """Generate a CLIP text embedding for a free-form query string.
@@ -103,9 +105,12 @@ class TextEmbeddingWorkflow:
             A normalised ``np.ndarray`` (shape ``[D]``) or ``None`` on failure.
         """
         encoders = self._engine.query_encoders
-        if encoders is not None and encoders.ensure_serving():
+        if encoders is None:
+            return self._engine.clip_service.encode_text(query)
+        if encoders.ensure_serving():
             return encoders.encode_clip_query(query)
-        return self._engine.clip_service.encode_text(query)
+        with encoders.device_fallback():
+            return self._engine.clip_service.encode_text(query)
 
     @staticmethod
     def _flatten_texts(texts: dict) -> list[str]:

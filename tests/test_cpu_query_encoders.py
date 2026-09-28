@@ -38,6 +38,9 @@ from pixlstash.inference.workflows.clip_embedding import ClipEmbeddingWorkflow
 from pixlstash.inference.workflows.text_embedding import TextEmbeddingWorkflow
 from pixlstash.tasks.base_task import QueueType, TaskPriority, TaskStatus
 from pixlstash.tasks.cpu_query_encoder_load_task import CpuQueryEncoderLoadTask
+from pixlstash.tasks.task_type import TaskType
+from pixlstash.vault import Vault
+import pixlstash.vault as vault_module
 
 
 class _RecordingService:
@@ -102,6 +105,172 @@ def _engine(*, with_cpu_copies):
         query_encoders=_loaded_pair() if with_cpu_copies else None,
         device="mps" if with_cpu_copies else "cuda",
     )
+
+
+class _ProbeLock:
+    """A lock that reports which threads are blocked waiting for it.
+
+    Lets a test wait until a thread is *provably* stuck on the lock, instead of
+    sleeping and hoping, so each check holds in both directions: a broken guard
+    leaves the thread unblocked and the wait fails, whatever the machine's load.
+    """
+
+    def __init__(self):
+        self._inner = threading.Lock()
+        self._blocked = set()
+        self._changed = threading.Condition()
+
+    def acquire(self, blocking=True, timeout=-1):
+        if self._inner.acquire(False):
+            return True
+        if not blocking:
+            return False
+        ident = threading.get_ident()
+        with self._changed:
+            self._blocked.add(ident)
+            self._changed.notify_all()
+        try:
+            return self._inner.acquire(True, timeout)
+        finally:
+            with self._changed:
+                self._blocked.discard(ident)
+
+    def release(self):
+        self._inner.release()
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc_info):
+        self.release()
+
+    def wait_until_blocked(self, thread, timeout=5.0):
+        with self._changed:
+            return self._changed.wait_for(
+                lambda: thread.ident in self._blocked, timeout
+            )
+
+
+class _ProbeCondition(threading.Condition):
+    """A Condition that counts how often a thread has started waiting on it."""
+
+    def __init__(self, lock):
+        super().__init__(lock)
+        self._waits = 0
+        self._waits_changed = threading.Condition()
+
+    def wait(self, timeout=None):
+        with self._waits_changed:
+            self._waits += 1
+            self._waits_changed.notify_all()
+        return super().wait(timeout)
+
+    def wait_for_waits(self, count, timeout=5.0):
+        with self._waits_changed:
+            return self._waits_changed.wait_for(lambda: self._waits >= count, timeout)
+
+
+def _instrument(pair):
+    """Swap the pair's lock and condition for probes. Call before any thread."""
+    lock = _ProbeLock()
+    pair._lock = lock
+    pair._idle = _ProbeCondition(lock)
+    return lock, pair._idle
+
+
+def _bind_worker_loader(pair):
+    """Bind a loader that runs ``load()`` on its own thread, as the GPU worker.
+
+    Returns the list of load tasks it queues; each has a ``done`` event.
+    """
+    tasks = []
+
+    def loader():
+        task = types.SimpleNamespace(status=TaskStatus.RUNNING, done=threading.Event())
+
+        def run():
+            pair.load()
+            task.status = TaskStatus.COMPLETED
+            task.done.set()
+
+        tasks.append(task)
+        threading.Thread(target=run, daemon=True).start()
+        return task
+
+    pair.bind_loader(loader)
+    return tasks
+
+
+def _hold_sbert_encode(pair):
+    """Start an SBERT encode that blocks until released.
+
+    Returns ``(thread, release, loaded_while_encoding)``: the search thread, the
+    event that lets it finish, and whether the model was still loaded when the
+    encode completed.
+    """
+    sbert = pair._sbert_service
+    started, release = threading.Event(), threading.Event()
+    loaded_while_encoding = []
+    real_encode = sbert.encode
+
+    def slow_encode(texts):
+        started.set()
+        # Long enough that only the test's own release ends it: an encode
+        # finishing on its own would notify waiters the test is watching.
+        release.wait(60)
+        loaded_while_encoding.append(sbert.loaded)
+        return real_encode(texts)
+
+    sbert.encode = slow_encode
+    thread = threading.Thread(target=pair.encode_query, args=("a cat",), daemon=True)
+    thread.start()
+    assert started.wait(5), "the encode never started"
+    return thread, release, loaded_while_encoding
+
+
+class _GuardedFlag(threading.Event):
+    """The pair's loaded flag, recording any moment it is set over a missing model."""
+
+    def __init__(self, pair):
+        super().__init__()
+        self._pair = pair
+        self.violations = []
+
+    def set(self):
+        if not self._pair.is_loaded():
+            self.violations.append("flagged while a model was missing")
+        super().set()
+
+
+class _LockingService(_RecordingService):
+    """A service whose load and unload share a lock, as ``ClipService``'s do.
+
+    ``gate`` holds the next load inside that lock until it is set, so a test can
+    land an unload in the middle of a load.
+    """
+
+    def __init__(self, label):
+        super().__init__(label)
+        self._lock = threading.RLock()
+        self.gate = None
+        self.in_load = threading.Event()
+        self.unload_waiting = threading.Event()
+        self.loads = 0
+
+    def ensure_ready(self):
+        with self._lock:
+            self.in_load.set()
+            if self.gate is not None:
+                gate, self.gate = self.gate, None
+                gate.wait(5)
+            self.loads += 1
+            super().ensure_ready()
+
+    def unload(self):
+        self.unload_waiting.set()
+        with self._lock:
+            super().unload()
 
 
 # ---------------------------------------------------------------------------
@@ -504,8 +673,6 @@ def _vault_hook(engine, runner):
     The real method, without standing up a Vault: the bug it guards against is
     an ordering one, and the method is where the ordering lands.
     """
-    from pixlstash.vault import Vault
-
     return Vault._queue_cpu_query_encoder_load(
         types.SimpleNamespace(_engine=engine, _task_runner=runner)
     )
@@ -565,8 +732,6 @@ def test_ensure_ready_queues_the_load():
     once, which runs inside ``Server.__init__`` before the engine exists - so
     nothing was ever queued and the first search answered 503 forever. A test
     that only calls the hook directly cannot see that."""
-    from pixlstash.vault import Vault
-
     calls = []
     Vault.ensure_ready(
         types.SimpleNamespace(
@@ -584,8 +749,6 @@ def test_start_queues_the_load_before_the_planner_can_fill_the_gpu_queue():
     preempt a running task, and the planner queues tagging and description work
     the moment it starts - one such batch held the load over 86 s on a real
     library, long enough for a search to give up and answer 503."""
-    from pixlstash.vault import Vault
-
     order = []
     Vault.start(
         types.SimpleNamespace(
@@ -613,7 +776,7 @@ def test_start_queues_the_load_before_the_planner_can_fill_the_gpu_queue():
 
 def test_unload_releases_both_copies():
     """On unified memory these sit in the same pool the accelerator uses, so
-    leaving ~630 MB here defeats a reclaim the owner asked for."""
+    leaving ~0.7 GB here defeats a reclaim the owner asked for."""
     pair = _loaded_pair()
 
     pair.unload()
@@ -657,36 +820,170 @@ def test_unload_waits_for_an_encode_that_is_already_running():
     real service reload itself lazily on the search thread - the
     transformers/accelerate import race this module exists to avoid."""
     pair = _loaded_pair()
-    sbert = pair._sbert_service
-    started, release = threading.Event(), threading.Event()
-    loaded_while_encoding = []
-    real_encode = sbert.encode
-
-    def slow_encode(texts):
-        started.set()
-        release.wait(5)
-        loaded_while_encoding.append(sbert.loaded)
-        return real_encode(texts)
-
-    sbert.encode = slow_encode
-    search = threading.Thread(target=pair.encode_query, args=("a cat",))
-    search.start()
-    assert started.wait(5), "the encode never started"
-    sweep = threading.Thread(target=pair.unload)
+    _lock, idle = _instrument(pair)
+    search, release, loaded_while_encoding = _hold_sbert_encode(pair)
+    sweep = threading.Thread(target=pair.unload, daemon=True)
     sweep.start()
-    sweep.join(0.2)
     try:
-        assert sweep.is_alive(), "unload did not wait for the running encode"
-        assert sbert.unloads == 0, "the model was released under a running encode"
+        assert idle.wait_for_waits(1), "unload did not wait for the running encode"
+        assert pair._sbert_service.unloads == 0, (
+            "the model was released under a running encode"
+        )
     finally:
         release.set()
         search.join(5)
         sweep.join(5)
 
+    assert not sweep.is_alive(), "unload never finished"
     assert loaded_while_encoding == [True]
     # And once the encode finished, the unload did happen.
-    assert (pair._clip_service.unloads, sbert.unloads) == (1, 1)
+    assert (pair._clip_service.unloads, pair._sbert_service.unloads) == (1, 1)
     assert not pair.is_loaded()
+
+
+def test_searches_arriving_while_unload_drains_cannot_hold_it_open():
+    """While ``unload`` waits for running encodes it releases its lock. A search
+    arriving then used to queue a load that re-flagged the still-resident pair
+    at once, let its own encode in, and so on: with searches overlapping, the
+    drain never ended. Now the reload waits for the unload, and the search
+    waits for the reload."""
+    pair = _loaded_pair()
+    _lock, idle = _instrument(pair)
+    _bind_worker_loader(pair)
+    first, release, _ = _hold_sbert_encode(pair)
+    sweep = threading.Thread(target=pair.unload, daemon=True)
+    sweep.start()
+    assert idle.wait_for_waits(1), "unload is not draining"
+
+    second = {}
+
+    def search_during_the_drain():
+        try:
+            if pair.ensure_serving(timeout_s=5):
+                # CLIP, which is not held: this encode could run at once.
+                second["unloads_before_encoding"] = pair._clip_service.unloads
+                second["result"] = pair.encode_clip_query("a dog")
+        except Exception as exc:  # recorded for the assertion below
+            second["error"] = exc
+
+    search = threading.Thread(target=search_during_the_drain, daemon=True)
+    search.start()
+    try:
+        assert idle.wait_for_waits(2), "the reload did not wait for the unload"
+        assert not pair._loaded.is_set(), (
+            "a reload flagged the pair while the unload was draining"
+        )
+    finally:
+        release.set()
+        for thread in (first, sweep, search):
+            thread.join(5)
+
+    assert not sweep.is_alive(), "unload never finished"
+    assert "error" not in second, second.get("error")
+    assert second.get("unloads_before_encoding") == 1, (
+        "the second search encoded before the unload released the models"
+    )
+    assert second.get("result") == "cpu-clip-text"
+    assert pair.is_loaded() and pair._loaded.is_set(), "the reload did not land"
+
+
+def test_a_hung_encode_cannot_hold_an_unload_forever(caplog):
+    """The drain is bounded. An encode still running when it ends is left
+    alone: the models stay, the pair keeps serving, and the next sweep tries
+    again - instead of the sweep's thread (or, from the settings route, the
+    event loop) waiting for as long as the encode hangs."""
+    pair = _loaded_pair()
+    _lock, idle = _instrument(pair)
+    tasks = _bind_worker_loader(pair)
+    pair.UNLOAD_DRAIN_S = 0.5
+    search, release, _ = _hold_sbert_encode(pair)
+    sweep = threading.Thread(target=pair.unload, daemon=True)
+    try:
+        with caplog.at_level(logging.WARNING):
+            sweep.start()
+            assert idle.wait_for_waits(1), "unload is not draining"
+            # A search during the drain queues a load, which waits for the unload.
+            waiter = threading.Thread(
+                target=pair.ensure_serving, kwargs={"timeout_s": 5}, daemon=True
+            )
+            waiter.start()
+            assert idle.wait_for_waits(2), "the queued load is not waiting"
+            sweep.join(5)
+        assert not sweep.is_alive(), "unload waited on a hung encode for ever"
+        assert pair._sbert_service.unloads == 0, "released a model a search was using"
+        assert pair._loaded.is_set(), (
+            "the skipped unload left the pair refusing searches"
+        )
+        assert any(
+            "Kept the CPU query encoders" in r.getMessage() for r in caplog.records
+        )
+        # The load runs on the GPU worker: left waiting, it would stop all GPU work.
+        assert tasks and tasks[0].done.wait(3), (
+            "the load waiting on the unload never woke"
+        )
+    finally:
+        release.set()
+        search.join(5)
+
+
+def test_an_unload_that_gives_up_cannot_leave_another_flagged_over_nothing():
+    """Two sweeps can overlap (two progress polls). One that gives up restores
+    the flag for a pair it kept; if the other then drains and releases, the
+    flag has to go with the models - and while the other is still draining, a
+    search that saw the restored flag must not get in."""
+    pair = _loaded_pair()
+    _lock, idle = _instrument(pair)
+    search, release, _ = _hold_sbert_encode(pair)
+    pair.UNLOAD_DRAIN_S = 0.2
+    quick = threading.Thread(target=pair.unload, daemon=True)
+    quick.start()
+    assert idle.wait_for_waits(1), "the first unload is not draining"
+    pair.UNLOAD_DRAIN_S = 30.0
+    patient = threading.Thread(target=pair.unload, daemon=True)
+    patient.start()
+    try:
+        quick.join(5)
+        assert not quick.is_alive(), "the first unload did not give up"
+        assert pair._loaded.is_set(), "the first unload did not restore the flag"
+        with pytest.raises(CpuQueryEncodersNotReadyError):
+            pair.encode_clip_query("a dog")
+    finally:
+        release.set()
+        search.join(5)
+        patient.join(5)
+
+    assert not patient.is_alive(), "the second unload never finished"
+    assert pair._clip_service.calls[-1] != ("encode_text", "a dog")
+    assert not pair.is_loaded()
+    assert not pair._loaded.is_set(), (
+        "the pair is flagged as serving while its models are released"
+    )
+
+
+def test_a_load_that_an_unload_overtakes_loads_again():
+    """An unload that lands while a load is running releases what the load has
+    just loaded. The load used to return unflagged, and every search waiting on
+    it sat out its whole timeout; now it loads once more."""
+    clip, sbert = _LockingService("cpu"), _LockingService("cpu")
+    pair = CpuQueryEncoders(clip, sbert)
+    gate = threading.Event()
+    clip.gate = gate
+    loader = threading.Thread(target=pair.load, daemon=True)
+    loader.start()
+    assert clip.in_load.wait(5), "the load never started"
+    sweep = threading.Thread(target=pair.unload, daemon=True)
+    sweep.start()
+    assert clip.unload_waiting.wait(5), "the unload never reached the models"
+    gate.set()
+    loader.join(5)
+    sweep.join(5)
+
+    assert not loader.is_alive() and not sweep.is_alive()
+    assert clip.unloads == 1, "the unload never released the model"
+    assert clip.loads == 2, "the load did not run again after the unload"
+    assert pair.is_loaded() and pair._loaded.is_set(), (
+        "the load gave up after the unload released what it loaded"
+    )
 
 
 @pytest.mark.parametrize(
@@ -718,12 +1015,14 @@ def test_an_encode_that_lost_the_race_to_an_unload_refuses(method, argument, ser
     assert getattr(pair, method)(argument) is not None
 
 
-def test_an_unload_during_a_load_never_leaves_the_pair_flagged_over_nothing():
-    """``load`` checks both copies and then sets the flag. An unload landing
-    between the two left the flag set over released models, so every later
-    search skipped the reload and encoded on nothing."""
+def test_an_unload_during_a_load_check_waits_for_it():
+    """``load`` checks both copies and sets the flag under the lock ``unload``
+    takes, so an unload cannot land between the check and the flag and leave
+    the flag set over released models."""
     pair = _pair()
-    sweep = threading.Thread(target=pair.unload)
+    lock, _idle = _instrument(pair)
+    flag = pair._loaded = _GuardedFlag(pair)
+    sweep = threading.Thread(target=pair.unload, daemon=True)
     real_is_loaded = pair.is_loaded
     first_call = []
 
@@ -733,7 +1032,7 @@ def test_an_unload_during_a_load_never_leaves_the_pair_flagged_over_nothing():
             first_call.append(loaded)
             # The sweep arrives between the check and the flag.
             sweep.start()
-            sweep.join(0.2)
+            assert lock.wait_until_blocked(sweep), "the sweep did not wait for the load"
         return loaded
 
     pair.is_loaded = is_loaded_then_unload
@@ -741,61 +1040,26 @@ def test_an_unload_during_a_load_never_leaves_the_pair_flagged_over_nothing():
     sweep.join(5)
 
     assert first_call == [True], "the load never reached its check"
-    assert pair._clip_service.unloads == 1, "the sweep never ran"
-    assert not real_is_loaded()
-    assert not pair._loaded.is_set(), (
-        "the pair is flagged as serving while its models are released"
-    )
-
-
-def test_a_load_that_finishes_while_unload_waits_does_not_outlive_it():
-    """``unload`` releases its lock while it waits for a running encode, and a
-    queued load can finish in that gap and set the flag again. The models go
-    regardless, so the flag has to go with them."""
-    pair = _loaded_pair()
-    sbert = pair._sbert_service
-    started, release = threading.Event(), threading.Event()
-    real_encode = sbert.encode
-
-    def slow_encode(texts):
-        started.set()
-        release.wait(5)
-        return real_encode(texts)
-
-    sbert.encode = slow_encode
-    search = threading.Thread(target=pair.encode_query, args=("a cat",))
-    search.start()
-    assert started.wait(5), "the encode never started"
-    sweep = threading.Thread(target=pair.unload)
-    sweep.start()
-    sweep.join(0.2)
-    try:
-        assert sweep.is_alive(), "unload did not wait for the running encode"
-        pair.load()
-        assert pair._loaded.is_set(), "the load did not land inside the wait"
-    finally:
-        release.set()
-        search.join(5)
-        sweep.join(5)
-
-    assert not pair.is_loaded()
-    assert not pair._loaded.is_set(), (
-        "the pair is flagged as serving while its models are released"
-    )
+    assert not sweep.is_alive() and pair._clip_service.unloads == 1
+    assert not real_is_loaded() and not flag.is_set()
+    assert flag.violations == []
 
 
 def test_a_load_cannot_flag_the_pair_while_unload_is_releasing_it():
-    """The models are released under the same lock ``load`` flags the pair
-    under. Released outside it, a load could check both copies after the flag
-    cleared but before they went, and flag a pair that was about to be empty."""
+    """The models are released under the lock ``load`` flags the pair under,
+    and while the unload is still counted. A load arriving then waits, finds
+    the models gone and loads them again - it never flags an emptying pair."""
     pair = _loaded_pair()
+    lock, _idle = _instrument(pair)
+    flag = pair._loaded = _GuardedFlag(pair)
+    flag.set()
     clip = pair._clip_service
     real_unload = clip.unload
-    loader = threading.Thread(target=pair.load)
+    loader = threading.Thread(target=pair.load, daemon=True)
 
     def unload_after_a_load_tries_to_flag():
         loader.start()
-        loader.join(0.2)
+        assert lock.wait_until_blocked(loader), "the load did not wait for the unload"
         real_unload()
 
     clip.unload = unload_after_a_load_tries_to_flag
@@ -803,10 +1067,8 @@ def test_a_load_cannot_flag_the_pair_while_unload_is_releasing_it():
     loader.join(5)
 
     assert not loader.is_alive(), "the load never finished"
-    assert not pair.is_loaded()
-    assert not pair._loaded.is_set(), (
-        "the pair is flagged as serving while its models are released"
-    )
+    assert flag.violations == []
+    assert pair.is_loaded() and flag.is_set(), "the load did not load again"
 
 
 # ---------------------------------------------------------------------------
@@ -855,15 +1117,73 @@ def test_a_running_worker_makes_the_caller_wait_instead_of_falling_back():
     assert engine.sbert_service.calls == [], "fell back to the device mid-crash-window"
 
 
-def test_the_lazy_engine_build_also_queues_the_load():
+def test_encodes_that_fall_back_to_the_device_take_turns():
+    """With no worker the device has no *background* user, but two searches
+    falling back at once would still be two threads on it. They take turns."""
+    engine = _engine(with_cpu_copies=True)
+    engine.query_encoders = _pair()  # no loader bound: every search falls back
+    probe = engine.query_encoders._fallback_lock = _ProbeLock()
+    started, release = threading.Event(), threading.Event()
+    real_encode = engine.sbert_service.encode
+
+    def slow_encode(texts):
+        started.set()
+        release.wait(5)
+        return real_encode(texts)
+
+    engine.sbert_service.encode = slow_encode
+    workflow = TextEmbeddingWorkflow(engine)
+    first = threading.Thread(target=workflow.encode_query, args=("a cat",), daemon=True)
+    second = threading.Thread(
+        target=workflow.encode_clip_query, args=("a dog",), daemon=True
+    )
+    first.start()
+    assert started.wait(5), "the first fallback encode never started"
+    second.start()
+    try:
+        assert probe.wait_until_blocked(second), "the second fallback did not wait"
+        assert engine.clip_service.calls == [], "two threads reached the device at once"
+    finally:
+        release.set()
+        first.join(5)
+        second.join(5)
+
+    assert engine.clip_service.calls == [("encode_text", "a dog")]
+
+
+def test_the_lazy_engine_build_also_queues_the_load(monkeypatch):
     """``Vault.get_worker_future`` is the third place an engine is built, and
     the one I missed: without the hook the copies exist with no loader bound and
     every later search reports "no GPU worker" for the life of the process."""
-    import inspect
 
-    from pixlstash.vault import Vault
+    class _Queued(Exception):
+        """Raised by the stand-in hook, so the call stops once it has queued."""
 
-    source = inspect.getsource(Vault.get_worker_future)
-    assert "_queue_cpu_query_encoder_load()" in source, (
-        "the lazy engine build no longer queues the encoder load"
+    def queue_the_load():
+        raise _Queued
+
+    monkeypatch.setattr(
+        vault_module,
+        "InferenceEngine",
+        types.SimpleNamespace(create=lambda **_: object()),
     )
+    stand_in = types.SimpleNamespace(
+        _engine=None,
+        image_root="unused",
+        _force_cpu=False,
+        _fast_captions=True,
+        _max_vram_gb=None,
+        _wd14_tagger_enabled=False,
+        _pixlstash_tagger_enabled=True,
+        _wd14_threshold=None,
+        _pixlstash_tagger_threshold_offset=0.0,
+        _keep_models_in_memory=True,
+        _insightface_model_pack=None,
+        _tagger_settings={},
+        _bind_engine_services=lambda: None,
+        _queue_cpu_query_encoder_load=queue_the_load,
+    )
+
+    with pytest.raises(_Queued):
+        Vault.get_worker_future(stand_in, TaskType.TAGGER, object, 1, "tags")
+    assert stand_in._engine is not None, "no engine was built"

@@ -88,11 +88,14 @@ class ClipEmbeddingWorkflow:
             Float32 numpy array of shape ``(1, D)`` or ``None`` on failure.
         """
         encoders = self._engine.query_encoders
-        if encoders is not None and encoders.ensure_serving():
+        if encoders is None:
+            return self.encode_images([image])
+        if encoders.ensure_serving():
             return encoders.encode_query_image(image)
-        # No copies on this host, or no GPU worker running - see
-        # ``TextEmbeddingWorkflow.encode_query`` for why the latter is safe.
-        return self.encode_images([image])
+        # No GPU worker running - see ``TextEmbeddingWorkflow.encode_query``
+        # for why falling back is safe, and why fallbacks take turns.
+        with encoders.device_fallback():
+            return self.encode_images([image])
 
     def suggested_batch_size(self) -> int:
         """Return the VRAM-budget-constrained batch size for a CLIP inference pass.
