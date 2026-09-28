@@ -180,7 +180,9 @@ _PROJECT_ID = {
 }
 # `GET /pictures` and `/pictures/count` take it; `/pictures/search` does not,
 # so search_pictures leaves it out rather than drop it without a word.
-# A workflow id: `auto:<core hash>` or a manual group's uuid.
+# A workflow id: `auto:<core hash>` or a manual group's uuid. The pattern is
+# also the JSON-schema one, where `$` is the end; Python checks it with
+# `fullmatch`, since there `$` also matches before a trailing newline.
 WORKFLOW_ID_PATTERN = r"^(auto:[0-9a-f]{64}|[0-9a-f]{32})$"
 _WORKFLOW_ID_RE = re.compile(WORKFLOW_ID_PATTERN)
 _WORKFLOW_FILTER = {
@@ -589,7 +591,7 @@ def _picture_id(arguments: dict) -> int:
 def _workflow_id(arguments: dict) -> str:
     """The workflow id argument, checked so no value can reshape a request."""
     value = arguments.get("workflow_id")
-    if not isinstance(value, str) or not _WORKFLOW_ID_RE.match(value):
+    if not isinstance(value, str) or not _WORKFLOW_ID_RE.fullmatch(value):
         raise ToolError(
             "workflow_id must be a workflow id: auto:<64 hex> or 32 hex "
             "(see list_workflows)"

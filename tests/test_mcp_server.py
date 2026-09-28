@@ -910,7 +910,13 @@ def test_a_workflow_id_cannot_reshape_the_request_path():
         return 200, "application/json", b"{}"
 
     # Not a workflow id, so it never reaches the transport at all.
-    for bad in ("x/../../users/me/tokens", "auto:" + "a" * 64 + "/..", ["abc"]):
+    for bad in (
+        "x/../../users/me/tokens",
+        "auto:" + "a" * 64 + "/..",
+        "auto:" + "a" * 64 + "\n",
+        "c" * 32 + "\n",
+        ["abc"],
+    ):
         assert _write(fetch, "get_workflow", workflow_id=bad)["isError"] is True
     assert requested == []
     # Positive control: a well-formed id is sent, its colon encoded.
