@@ -812,6 +812,50 @@ describe("WorkflowRecipesTab", () => {
     ]);
   });
 
+  it("builds each defaults PUT from the set as it is now, and Undo reverts only its own rows", async () => {
+    listSavedRecipes.mockResolvedValue([
+      recipe(1, "Rainy tram platform", { overrides: { "KSampler/steps": 40 } }),
+    ]);
+    setWorkflowDefaults.mockImplementation(async () => detail());
+    const wrapper = render();
+    await flushPromises();
+    // Since the tab read its detail, the Workflow tab edited Denoise.
+    const denoise = { label: "Denoise", slot_label: "core:KSampler", input_name: "denoise", value: 0.5, provenance: "edited" };
+    const withDenoise = () =>
+      detail(KEY, "Cinematic portrait", {
+        values: [...detail().card.default_recipe.values, denoise],
+      });
+    getWorkflowCard.mockImplementation(async () => withDenoise());
+    await wrapper.findAll(".ctx-item").find((el) => el.text().includes("Make these")).trigger("click");
+    await flushPromises();
+    await wrapper.findAll("button").find((el) => el.text().startsWith("Make 1 default")).trigger("click");
+    await flushPromises();
+    expect(setWorkflowDefaults).toHaveBeenLastCalledWith(KEY, [
+      { slot_label: "core:KSampler", input_name: "cfg", value: 7 },
+      { slot_label: "core:KSampler", input_name: "denoise", value: 0.5 },
+      { slot_label: "core:KSampler", input_name: "steps", value: 40 },
+    ]);
+    // The Workflow tab is told, or its next whole-set PUT drops Steps.
+    expect(wrapper.emitted("defaults-changed")?.at(-1)?.[0]).toBe(KEY);
+
+    // Before Undo, CFG was edited again elsewhere: Undo keeps that and only
+    // takes Steps back to computed.
+    getWorkflowCard.mockImplementation(async () =>
+      detail(KEY, "Cinematic portrait", {
+        values: [
+          { label: "Steps", slot_label: "core:KSampler", input_name: "steps", value: 40, provenance: "edited" },
+          { label: "CFG", slot_label: "core:KSampler", input_name: "cfg", value: 9, provenance: "edited" },
+          denoise,
+        ],
+      }),
+    );
+    await useNoticeStore().notices.at(-1).action.handler();
+    expect(setWorkflowDefaults).toHaveBeenLastCalledWith(KEY, [
+      { slot_label: "core:KSampler", input_name: "cfg", value: 9 },
+      { slot_label: "core:KSampler", input_name: "denoise", value: 0.5 },
+    ]);
+  });
+
   it("will not make nothing the default", async () => {
     listSavedRecipes.mockResolvedValue([
       recipe(1, "Rainy tram platform", { overrides: { "KSampler/steps": 40 } }),

@@ -53,6 +53,19 @@ function sameFile(a, b) {
  * Pair two LoRA lists as multisets: each load is matched at most once, equal
  * strengths first, so one file loaded twice pairs with its own strengths.
  */
+/**
+ * Whether two LoRA lists can be compared at all. A LoRA is matched by digest
+ * when both sides carry one, else by file name; a LoRA with neither on the
+ * other side's terms (a default LoRA the owner added has no filename, a look
+ * carries no digests) cannot be paired, and comparing anyway prints "+ X" and
+ * a nameless "without" for what is really one LoRA.
+ */
+function comparable(mine, theirs) {
+  const allSha = (list) => list.every((lora) => lora.sha256);
+  const ok = (lora, other) => Boolean(lora.filename) || (lora.sha256 && allSha(other));
+  return mine.every((lora) => ok(lora, theirs)) && theirs.every((lora) => ok(lora, mine));
+}
+
 function pairLoras(mine, theirs) {
   const left = mine.map((lora) => ({ lora, with: null }));
   const free = theirs.map((lora) => ({ lora, taken: false }));
@@ -132,7 +145,9 @@ export function recipeDiff(recipe, defaultRecipe) {
 
   // LoRAs: an empty list runs the default's, so it differs in none of them.
   const mine = recipe.loras || [];
-  if (mine.length) {
+  if (mine.length && !comparable(mine, defaultRecipe.loras || [])) {
+    segments.push(segment("lora-unknown", [{ text: "LoRAs not compared", quiet: true }]));
+  } else if (mine.length) {
     const { pairs, added, removed } = pairLoras(mine, defaultRecipe.loras || []);
     for (const lora of added) {
       segments.push(
@@ -184,10 +199,12 @@ export function recipeDiff(recipe, defaultRecipe) {
  */
 export function lookLoraDiff(look, defaultRecipe) {
   if (!defaultRecipe) return null;
-  const { added, removed } = pairLoras(
-    (look?.loras || []).map((lora) => ({ filename: lora.filename })),
-    (defaultRecipe.loras || []).map((lora) => ({ filename: lora.filename })),
-  );
+  const mine = (look?.loras || []).map((lora) => ({ filename: lora.filename }));
+  const theirs = (defaultRecipe.loras || []).map((lora) => ({ filename: lora.filename }));
+  // Looks carry no digests: a nameless default LoRA cannot be matched, so the
+  // look keeps its plain LoRA list.
+  if (!comparable(mine, theirs)) return null;
+  const { added, removed } = pairLoras(mine, theirs);
   return [
     ...added.map((lora) => segment("lora-add", [`+ ${shortName(lora.filename)}`])),
     ...removed.map((lora) => segment("lora-without", [`without ${shortName(lora.filename)}`])),

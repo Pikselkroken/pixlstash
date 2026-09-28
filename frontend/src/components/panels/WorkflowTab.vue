@@ -23,6 +23,7 @@
       v-else-if="showingRecipes"
       :workflow-ids="recipeKeys"
       :workflow-name="recipesName"
+      @defaults-changed="takeDefaults"
     />
 
     <!-- Several selected: the tab says so, and the VERBS ARE THE PILL'S.
@@ -1661,10 +1662,19 @@ const alsoUsed = computed(() =>
   ),
 );
 
-/** The summary the pile draws: its `varying` is ALSO USED. */
+/**
+ * The summary the pile draws: its `varying` is ALSO USED. `without` ("No
+ * LoRA") is counted by the server against the whole of `varying`, so once a
+ * default LoRA is taken out of the pile it answers a different question, and
+ * is dropped rather than shown with a wrong count.
+ */
 const pileSummary = computed(() => ({
   ...summary.value,
   varying: alsoUsed.value,
+  without:
+    alsoUsed.value.length === (summary.value?.varying?.length ?? 0)
+      ? (summary.value?.without ?? null)
+      : null,
   cover_asset: alsoUsed.value.some(
     (use) => use.asset === summary.value?.cover_asset,
   )
@@ -1824,6 +1834,15 @@ const pinnedDefaults = computed(() =>
 const unpinnedDefaults = computed(() =>
   defaults.value.filter((row) => !row.pinned),
 );
+
+/**
+ * The Recipes tab wrote this workflow's defaults ("Make these the defaults").
+ * Take its answer, or the next reset, pin or edit here would PUT the whole set
+ * from a stale copy and drop what it wrote.
+ */
+function takeDefaults(workflowId, body) {
+  if (workflowId === selectedKey.value && body) detail.value = body;
+}
 
 /** Read one card's detail, and say which of the three states it is in. */
 async function loadDetail(key) {

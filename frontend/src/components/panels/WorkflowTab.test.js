@@ -1121,6 +1121,24 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     expect(wrapper.find(".wftab-coverage").exists()).toBe(false);
   });
 
+  it("drops the pile's No LoRA row once a default LoRA leaves the pile", async () => {
+    const none = { asset: "", filename: null, name: null, on_shelf: true, pictures: 1, picture_ids: [9] };
+    getLoraSummary.mockResolvedValue(loraSummary({ without: none }));
+    getWorkflowCard.mockResolvedValue(
+      withRecipe({ loras: [{ filename: "bo.safetensors", sha256: BO_SHA, strength: 1, provenance: "best" }] }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.findComponent({ name: "WorkflowLoraPile" }).props("summary").without).toBe(null);
+  });
+
+  it("keeps the No LoRA row while the pile is the server's whole varying", async () => {
+    const none = { asset: "", filename: null, name: null, on_shelf: true, pictures: 1, picture_ids: [9] };
+    getLoraSummary.mockResolvedValue(loraSummary({ without: none }));
+    getWorkflowCard.mockResolvedValue(withRecipe({ loras: [] }));
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.findComponent({ name: "WorkflowLoraPile" }).props("summary").without).toEqual(none);
+  });
+
   it("has no ALSO USED section when every LoRA that changes is a default", async () => {
     getWorkflowCard.mockResolvedValue(
       withRecipe({
@@ -1263,6 +1281,27 @@ describe("a default's provenance and reset", () => {
     expect(rowNamed(wrapper, "cfg").find(".wfdef-prov").text()).toBe("Yours");
     expect(rowNamed(wrapper, "steps").find(".wfdef-prov").exists()).toBe(false);
     expect(textOf(wrapper)).not.toContain("from your best pictures");
+  });
+
+  it("takes the defaults the Recipes tab wrote, so its own next PUT keeps them", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: { defaults: [STEPS, CFG] } }));
+    const { wrapper } = await mountWith([KEY]);
+    const tabButton = (name) =>
+      wrapper.findAll("button").find((b) => b.text().trim() === name);
+    await tabButton("Recipes").trigger("click");
+    await flush(wrapper);
+    // "Make these the defaults" made steps an edit.
+    const written = detail({
+      card: { defaults: [{ ...STEPS, value: "30", provenance: "edited" }, CFG] },
+    });
+    wrapper.findComponent({ name: "WorkflowRecipesTab" }).vm.$emit("defaults-changed", KEY, written);
+    await tabButton("Workflow").trigger("click");
+    await flush(wrapper);
+    await rowNamed(wrapper, "cfg").find(".wfdef-reset").trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowDefaults).toHaveBeenLastCalledWith(KEY, [
+      { slot_label: "slot-a", input_name: "steps", value: "30" },
+    ]);
   });
 
   it("offers the reset only on a value the owner edited", async () => {

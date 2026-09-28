@@ -95,6 +95,29 @@ describe("recipeDiff", () => {
   });
 });
 
+describe("a default LoRA the owner added has no filename", () => {
+  const withNameless = {
+    ...DEFAULT,
+    loras: [...DEFAULT.loras, { filename: null, sha256: "a".repeat(64), strength: 1 }],
+  };
+
+  it("pairs by digest when the recipe carries digests", () => {
+    const recipe = { loras: withNameless.loras.map((lora) => ({ ...lora, filename: lora.filename || "ada.safetensors" })) };
+    expect(recipeDiff(recipe, withNameless).segments).toEqual([]);
+  });
+
+  it("says the LoRAs were not compared when the recipe has no digests", () => {
+    const recipe = { loras: [{ filename: "ada.safetensors", strength: 1 }] };
+    expect(recipeDiff(recipe, withNameless).segments.map((s) => s.text)).toEqual([
+      "LoRAs not compared",
+    ]);
+  });
+
+  it("gives a look no LoRA diff, rather than a nameless 'without'", () => {
+    expect(lookLoraDiff({ loras: [{ filename: "ada.safetensors" }] }, withNameless)).toBe(null);
+  });
+});
+
 describe("lookLoraDiff", () => {
   it("names the LoRAs a look adds and leaves out, by short name", () => {
     const segments = lookLoraDiff(

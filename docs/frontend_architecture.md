@@ -2259,10 +2259,15 @@ new code calls a *variant*. Owner-only, like everything under `/workflows`.
   a recipe's **parameter** differences only: `PUT /workflows/{id}/defaults`
   refuses models and LoRAs (F-1), so the item is not offered when no
   parameter differs, nor on a multi-selection. The PUT **replaces the whole
-  edited set**, so the tab sends the detail's existing `provenance: edited`
-  rows back with the ticked ones over them, keeps the answer as the detail
-  (the card's line re-diffs), and pushes a `success` notice (8 s) whose Undo
-  PUTs the previous edited set. Focus returns to the card's ⋯.
+  edited set**, so the tab re-reads the workflow's edited rows just before
+  each PUT (the Workflow tab may have edited them since) and sends them back
+  with the ticked ones over them. It keeps the answer for its own diffs and
+  emits `defaults-changed(workflowId, detail)`, which `WorkflowTab` takes as
+  its detail: that tab builds its own whole-set PUTs (reset, edit) from its
+  copy, and a stale one would drop what this wrote. The `success` notice (8 s)
+  offers Undo, which re-reads the set too and reverts **only the addresses
+  this write changed**, each to its previous edit or to computed, so an edit
+  made elsewhere in between survives. Focus returns to the card's ⋯.
 - **`SaveRecipeDialog` is a list of checkboxes, and the seed is off.** "What
   the recipe keeps" is a promise about the row, so every line can be unticked
   and an unticked line is not sent. **`keep_seed` is what makes a stored seed

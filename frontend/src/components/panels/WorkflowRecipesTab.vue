@@ -414,6 +414,13 @@ const props = defineProps({
   workflowName: { type: String, default: "" },
 });
 
+/**
+ * `defaults-changed(workflowId, detail)`: this tab wrote a workflow's defaults.
+ * The Workflow tab keeps its own copy of the detail and builds its whole-set
+ * PUTs from it, so it has to take this answer or its next write drops ours.
+ */
+const emit = defineEmits(["defaults-changed"]);
+
 const { confirm } = useConfirm();
 const notices = useNoticeStore();
 const runDialog = useRunDialogStore();
@@ -554,6 +561,7 @@ const lookDiffs = computed(() => {
   const base = defaultOf(keys[0]);
   for (const look of looks.value) {
     const lora = base.wait ? [base.wait] : lookLoraDiff(look, base.recipe);
+    if (!lora) continue;
     const segments = lora.length ? lora : [{ parts: [{ text: "Default LoRAs" }], text: "Default LoRAs" }];
     out[look.key] = finish([...segments, quiet(picturesLabel(look.pictures))]);
   }
@@ -828,10 +836,36 @@ function addressKey(row) {
   return `${row.slot_label}\u0000${row.input_name}`;
 }
 
-/** Write a workflow's edited set and keep the answer as its detail. */
-async function writeDefaults(workflowId, defaults) {
-  const body = await setWorkflowDefaults(workflowId, defaults);
+/** The workflow's edited parameters as the server has them NOW, keyed. */
+async function editedNow(workflowId) {
+  const body = await getWorkflowCard(workflowId);
+  const values = body?.card?.default_recipe?.values || [];
+  return new Map(
+    values
+      .filter((row) => row.provenance === "edited")
+      .map(({ slot_label, input_name, value }) => [
+        addressKey({ slot_label, input_name }),
+        { slot_label, input_name, value },
+      ]),
+  );
+}
+
+/**
+ * Change some addresses of a workflow's edited set, leaving every other edit
+ * as the server has it at this moment. `changes` maps an address to its new
+ * row, or to null to drop the edit (back to computed). The set is read fresh
+ * each time rather than taken from a detail read earlier: the PUT replaces the
+ * whole set, and the Workflow tab may have edited it since.
+ */
+async function writeDefaults(workflowId, changes) {
+  const edited = await editedNow(workflowId);
+  for (const [key, row] of changes) {
+    if (row) edited.set(key, row);
+    else edited.delete(key);
+  }
+  const body = await setWorkflowDefaults(workflowId, [...edited.values()]);
   if (details.value[workflowId]) details.value[workflowId] = { state: "ready", body };
+  emit("defaults-changed", workflowId, body);
 }
 
 /**
@@ -846,23 +880,22 @@ async function confirmMakeDefaults(rows) {
   const job = makingDefaults.value;
   if (!job || job.busy) return;
   const workflowId = job.recipe.workflow_id;
-  const values = details.value[workflowId]?.body?.card?.default_recipe?.values || [];
-  const previous = values
-    .filter((row) => row.provenance === "edited")
-    .map(({ slot_label, input_name, value }) => ({ slot_label, input_name, value }));
   const taken = new Map(
     rows.map((row) => [
       addressKey(row),
       { slot_label: row.slot_label, input_name: row.input_name, value: row.to },
     ]),
   );
+  // What Undo puts back: each taken address as it was just before, an edit or
+  // nothing (computed). Only these addresses: an edit made elsewhere between
+  // now and Undo is not ours to revert.
+  let previous;
   job.busy = true;
   job.error = "";
   try {
-    await writeDefaults(workflowId, [
-      ...previous.filter((row) => !taken.has(addressKey(row))),
-      ...taken.values(),
-    ]);
+    const before = await editedNow(workflowId);
+    previous = new Map([...taken.keys()].map((key) => [key, before.get(key) || null]));
+    await writeDefaults(workflowId, taken);
   } catch (err) {
     job.busy = false;
     job.error = errorMessage(err, "Could not change the defaults.");
