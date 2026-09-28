@@ -20,6 +20,7 @@ import requests
 from fastapi import HTTPException
 
 from pixlstash.hub.db import HubDatabase
+from pixlstash.hub.workflow_card_reads import workflow_of_topology
 from pixlstash.routes import comfyui as comfyui_module
 from pixlstash.server import Server
 from pixlstash.services import comfyui_userdata, workflow_inbox
@@ -343,7 +344,11 @@ def test_a_pull_stores_every_workflow_and_a_second_matches_them(comfy, folders, 
     assert _stored(user) == ["Plain.json", "Sub - Needs pack.json"]
     # Stored byte-for-byte what ComfyUI holds.
     assert json.loads((user / "Plain.json").read_text("utf-8")) == PLAIN
-    assert announced == first["workflow_keys"] and len(announced) == 2
+    # Both are editor-format files with no recipe: each is its own workflow,
+    # named by its topology (#1623), and both are announced.
+    assert announced == first["workflow_ids"]
+    assert len(set(announced)) == 2
+    assert all(workflow_id.startswith("auto:") for workflow_id in announced)
 
     second = _pull(hub)
     assert (second["pulled"], second["matched"]) == (0, 2)
@@ -425,8 +430,15 @@ API_GRAPH = {
 
 def test_a_pulled_api_graph_does_not_count_itself_as_known(comfy, folders, hub):
     comfy.workflows = {"Api.json": API_GRAPH}
-    result = _pull(hub)
+    announced: list[str] = []
+    result = _pull(hub, announced)
     assert result["pulled"] == 1
+    # The graph is filed with a core hash, so the pull names its workflow.
+    (topology,) = [
+        row[0] for row in hub.fetchall("SELECT topology_hash FROM workflow_recipe")
+    ]
+    assert announced == result["workflow_ids"] == [workflow_of_topology(hub, topology)]
+    assert announced[0].startswith("auto:")
     # It filed a recipe row of its own; that is not a picture.
     assert hub.fetchone("SELECT 1 FROM workflow_recipe") is not None
     assert result["known_from_pictures"] == 0

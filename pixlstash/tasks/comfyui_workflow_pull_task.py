@@ -226,14 +226,14 @@ class ComfyUIWorkflowPullTask(BaseTask):
             comfyui_url: The ComfyUI base URL, without a trailing slash. Also
                 the ``origin`` its rows are recorded under.
             store: Files one document under a name and answers with the import
-                route's result (``name``, ``matched``, ``workflow_key``,
+                route's result (``name``, ``matched``, ``workflow_id``,
                 ``topology_hash``, and ``builtin`` when the match is a workflow
                 PixlStash ships). Called with *lock* held.
             lock: Held around each entry's dismissal check, store and origin
                 row - ``workflow_inbox.INBOX_LOCK``, which the delete holds
                 around its dismissal. Without it a workflow deleted mid-pull
                 is written straight back by the same pull.
-            announce: Called once at the end with the card keys that changed,
+            announce: Called once at the end with the workflow ids that changed,
                 so the Workflows screen looks again.
         """
         super().__init__(
@@ -289,14 +289,14 @@ class ComfyUIWorkflowPullTask(BaseTask):
             "models_unread": 0,
             "models_unchecked": 0,
             "missing_model_files": [],
-            "workflow_keys": [],
+            "workflow_ids": [],
         }
         advertised = (
             advertised_model_names(object_info) if object_info is not None else None
         )
         missing_classes: set[str] = set()
         missing_files: set[str] = set()
-        keys: list[str] = []
+        workflow_ids: list[str] = []
         for entry in entries:
             try:
                 pulled = self._pull_one(entry)
@@ -316,8 +316,8 @@ class ComfyUIWorkflowPullTask(BaseTask):
                     result["changed"] += 1
                 else:
                     result["pulled"] += 1
-                if outcome.get("workflow_key"):
-                    keys.append(outcome["workflow_key"])
+                if outcome.get("workflow_id"):
+                    workflow_ids.append(outcome["workflow_id"])
                 if self._topology_has_pictures(outcome.get("topology_hash")):
                     result["known_from_pictures"] += 1
                 if object_info is None:
@@ -356,7 +356,7 @@ class ComfyUIWorkflowPullTask(BaseTask):
         result["history_runs"] = self._read_history()
         result["missing_node_classes"] = sorted(missing_classes, key=str.lower)
         result["missing_model_files"] = sorted(missing_files, key=str.lower)
-        result["workflow_keys"] = sorted(set(keys))
+        result["workflow_ids"] = sorted(set(workflow_ids))
         logger.info(
             "Pulled ComfyUI workflows from %s: %d listed, %d new, %d changed, "
             "%d already stored, %d shipped with PixlStash, %d deleted here and "
@@ -373,7 +373,7 @@ class ComfyUIWorkflowPullTask(BaseTask):
         )
         if self._announce is not None:
             try:
-                self._announce(result["workflow_keys"])
+                self._announce(result["workflow_ids"])
             except Exception as exc:
                 logger.warning(
                     "Pulled ComfyUI workflows but could not announce the change: %s",

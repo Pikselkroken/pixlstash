@@ -1,7 +1,7 @@
 <template>
   <div class="wfrt">
     <div class="inspector-section wfrt-head">
-      <p class="wfrt-title">{{ stackName }}</p>
+      <p class="wfrt-title">{{ workflowName }}</p>
       <p class="wfrt-sub">{{ subtitle }}</p>
     </div>
 
@@ -271,7 +271,7 @@
     <SaveRecipeDialog
       v-if="savingSource"
       :open="Boolean(savingSource)"
-      :workflow-key="savingSource.workflowKey"
+      :workflow-id="savingSource.workflowId"
       :prompt="savingSource.prompt"
       :negative="savingSource.negative"
       :loras="savingSource.loras"
@@ -293,11 +293,8 @@
 /**
  * The Recipes tab of the Workflows grid's inspector (v1.12 F6).
  *
- * One card per saved recipe of the selected card's **stack**: a recipe runs on
- * any workflow in the stack it was saved from, so a selected member shows the
- * stack's recipes and not a list of its own. `GET /recipes?workflow_key=` does
- * that resolution, which is why this passes the selected key and not the
- * stack's.
+ * One card per saved recipe of the selected workflows (`GET /recipes?
+ * workflow_id=`), and beside them every look their pictures were made with.
  *
  * The order is the owner's and is written back whole on every move, because
  * `PUT /recipes/order` refuses a list with an unknown id rather than leaving
@@ -333,24 +330,12 @@ import Tooltip from "../widgets/Tooltip.vue";
 
 const props = defineProps({
   /**
-   * The selected cards' keys. Every one's whole stack is listed, as one union,
-   * unless `wholeStack` is false.
-   *
-   * A selection of several is the union of their stacks, counted once: two
-   * members of one stack resolve to the same keys, and the server folds them
-   * before it reads any picture. With `wholeStack` false it is the union of
-   * the keys themselves.
+   * The selected workflows' ids (#1623). A selection of several is listed as
+   * one union, each recipe once.
    */
-  workflowKeys: { type: Array, default: () => [] },
-  /**
-   * False when the keys are members picked inside an expanded stack: then the
-   * list is theirs alone, not the stack around them.
-   */
-  wholeStack: { type: Boolean, default: true },
-  /** What the header names - the stack, when a member is selected. */
-  stackName: { type: String, default: "" },
-  /** How many workflows that stack holds; 1 or 0 means it is not a stack. */
-  stackSize: { type: Number, default: 0 },
+  workflowIds: { type: Array, default: () => [] },
+  /** What the header names. */
+  workflowName: { type: String, default: "" },
 });
 
 const { confirm } = useConfirm();
@@ -366,7 +351,7 @@ const menuId = ref(null);
 const renamingId = ref(null);
 const renameDraft = ref("");
 const exportId = ref(null);
-/** Every recipe the stack's own pictures carry; `saved` is the server's. */
+/** Every recipe the workflows' own pictures carry; `saved` is the server's. */
 const looks = ref([]);
 /** The recipe whose cover picture is being read, so its Clone… can show it. */
 const savingLook = ref("");
@@ -405,13 +390,6 @@ const subtitle = computed(() => {
     if (found || !kept) {
       parts.push(`${found} recipe${found === 1 ? "" : "s"} from your pictures`);
     }
-  }
-  if (props.stackSize > 1) {
-    parts.push(
-      props.wholeStack
-        ? `runs on any of its ${props.stackSize} workflows`
-        : `recipes run on any of the stack's ${props.stackSize} workflows`,
-    );
   }
   return parts.join(" · ");
 });
@@ -470,9 +448,7 @@ function keyedLooks(used) {
  */
 async function refreshLooks(token) {
   try {
-    const used = await listUsedLooks(props.workflowKeys.filter(Boolean), {
-      wholeStack: props.wholeStack,
-    });
+    const used = await listUsedLooks(props.workflowIds.filter(Boolean));
     if (token === loadToken) looks.value = keyedLooks(used);
   } catch (err) {
     // The recipe is gone either way; only a mark below may be stale until
@@ -485,7 +461,7 @@ async function load() {
   const token = (loadToken += 1);
   const mine = () => token === loadToken;
   loadError.value = "";
-  const keys = props.workflowKeys.filter(Boolean);
+  const keys = props.workflowIds.filter(Boolean);
   if (!keys.length) {
     recipes.value = [];
     looks.value = [];
@@ -507,8 +483,8 @@ async function load() {
     // in the first, so reading them apart could mark a look against a list
     // of saved recipes that is not the one on screen.
     const [saved, used] = await Promise.all([
-      listSavedRecipes(keys, { wholeStack: props.wholeStack }),
-      listUsedLooks(keys, { wholeStack: props.wholeStack }),
+      listSavedRecipes(keys),
+      listUsedLooks(keys),
     ]);
     if (!mine()) return;
     recipes.value = saved;
@@ -529,8 +505,7 @@ async function load() {
 // one recipe out of date on a screen the selection never moved off.
 watch(
   [
-    () => props.workflowKeys,
-    () => props.wholeStack,
+    () => props.workflowIds,
     () => workflows.recipesEpoch,
   ],
   () => load(),
@@ -717,9 +692,9 @@ async function keepLook(look) {
     // would be credited 0 - the one thing both halves promise cannot happen.
     // The picture is read for the two things the columns do not hold: the
     // LoRA strengths, and the seed.
-    if (!recipe?.workflow_key) {
-      // The card this look belongs to is what the recipe is filed under, and
-      // `_picture_workflow_key` can legitimately answer with nothing. Guessing
+    if (!recipe?.workflow_id) {
+      // The workflow this look belongs to is what the recipe is filed under,
+      // and the recipe read can legitimately answer with none. Guessing
       // from the selection would file it on a workflow that never made it.
       notices.push({
         level: "error",
@@ -728,7 +703,7 @@ async function keepLook(look) {
       return;
     }
     savingSource.value = {
-      workflowKey: recipe.workflow_key,
+      workflowId: recipe.workflow_id,
       prompt: look.prompt,
       negative: recipe?.negative_prompt || "",
       loras: resolveRecipeLoras(
@@ -776,7 +751,7 @@ function openPicture(pictureId) {
 function run(recipe) {
   runDialog.openRun({
     kind: "card",
-    workflowKey: recipe.workflow_key,
+    workflowId: recipe.workflow_id,
     savedRecipe: recipe,
     name: recipe.name,
   });

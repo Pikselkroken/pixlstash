@@ -6,9 +6,8 @@
 // * A refused write. The rail is moved first so it does not stall, so it has
 //   to be put back when the server says no - otherwise the tab shows an order
 //   that does not exist.
-// * The header. A recipe runs on its stack, so a selected member lists the
-//   STACK's recipes; the key it lists by is the selected card's, because that
-//   is what `GET /recipes?workflow_key=` resolves from.
+// * The read. The tab lists the selected workflows' recipes by workflow id
+//   (`GET /recipes?workflow_id=`), #1623.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
@@ -57,14 +56,14 @@ import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import WorkflowRecipesTab from "./WorkflowRecipesTab.vue";
 
-const KEY = "a".repeat(64);
+const KEY = `auto:${"a".repeat(64)}`;
 
 function recipe(id, name, extra = {}) {
   return {
     id,
     name,
     position: id,
-    workflow_key: KEY,
+    workflow_id: KEY,
     prompt: `${name} prompt`,
     loras: [{ filename: "mira_v2.safetensors", strength: 0.85 }],
     overrides: { "KSampler/steps": 12 },
@@ -77,9 +76,8 @@ function recipe(id, name, extra = {}) {
 function render(props = {}) {
   return mount(WorkflowRecipesTab, {
     props: {
-      workflowKeys: [KEY],
-      stackName: "Cinematic portrait",
-      stackSize: 6,
+      workflowIds: [KEY],
+      workflowName: "Cinematic portrait",
       ...props,
     },
     global: { stubs: { teleport: true } },
@@ -105,7 +103,7 @@ describe("WorkflowRecipesTab", () => {
     listUsedLooks.mockResolvedValue([]);
     getWorkflowCard.mockResolvedValue({});
     getPictureRecipe.mockResolvedValue({
-      workflow_key: KEY,
+      workflow_id: KEY,
       positive_prompt: "a look nobody kept",
       loras: ["mira_v2.safetensors"],
       model_slots: [
@@ -115,31 +113,24 @@ describe("WorkflowRecipesTab", () => {
     });
   });
 
-  it("lists the stack's recipes and says so in the header", async () => {
+  it("lists the workflow's recipes by its id", async () => {
     const wrapper = render();
     await flushPromises();
-    expect(listSavedRecipes).toHaveBeenCalledWith([KEY], { wholeStack: true });
+    expect(listSavedRecipes).toHaveBeenCalledWith([KEY]);
+    expect(wrapper.find(".wfrt-title").text()).toBe("Cinematic portrait");
     expect(namesOf(wrapper)).toEqual([
       "Rainy tram platform",
       "Red coat, backlit",
       "Harbour fog",
     ]);
     expect(wrapper.find(".wfrt-sub").text()).toBe(
-      "3 saved · runs on any of its 6 workflows",
+      "3 saved",
     );
     // What the card credits and what it changed, on one line.
     expect(wrapper.findAll(".wfrt-facts")[0].text()).toBe("31 pictures · steps 12");
     // LoRA name and strength, which is the look.
     expect(wrapper.find(".wfrt-chip").text()).toContain("mira_v2.safetensors");
     expect(wrapper.find(".wfrt-strength").text()).toBe("0.85");
-  });
-
-  it("leaves the stack clause out when the card is not a stack", async () => {
-    const wrapper = render({ stackSize: 1 });
-    await flushPromises();
-    expect(wrapper.find(".wfrt-sub").text()).toBe(
-      "3 saved",
-    );
   });
 
   it("writes the whole new order when a recipe is moved by keyboard", async () => {
@@ -244,7 +235,7 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     expect(wrapper.find(".wfrt-hint").exists()).toBe(false);
     expect(wrapper.find(".wfrt-sub").text()).toBe(
-      "1 recipe from your pictures · runs on any of its 6 workflows",
+      "1 recipe from your pictures",
     );
   });
 
@@ -254,7 +245,7 @@ describe("WorkflowRecipesTab", () => {
     const wrapper = render();
     await flushPromises();
 
-    expect(listUsedLooks).toHaveBeenCalledWith([KEY], { wholeStack: true });
+    expect(listUsedLooks).toHaveBeenCalledWith([KEY]);
     // Not the empty sentence: a library with pictures has looks to show.
     expect(wrapper.text()).not.toContain("No recipes here yet");
     expect(wrapper.text()).toContain("a look nobody kept");
@@ -269,12 +260,12 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     expect(wrapper.text()).toContain("No recipes here yet");
     // Never "nothing has been made with this workflow": a picture only shows
-    // up once its ComfyUI metadata has been read, so an unread stack is not
+    // up once its ComfyUI metadata has been read, so an unread workflow is not
     // an empty one.
     expect(wrapper.text()).not.toContain("Nothing has been made");
     // An answered read of nothing is a count, and says 0.
     expect(wrapper.find(".wfrt-sub").text()).toBe(
-      "0 recipes from your pictures · runs on any of its 6 workflows",
+      "0 recipes from your pictures",
     );
   });
 
@@ -283,7 +274,7 @@ describe("WorkflowRecipesTab", () => {
     listSavedRecipes.mockImplementation(
       () => new Promise((resolve) => (answer = resolve)),
     );
-    const wrapper = render({ stackSize: 1 });
+    const wrapper = render();
     await flushPromises();
     expect(wrapper.text()).toContain("Reading your recipes");
     expect(wrapper.find(".wfrt-sub").text()).toBe("");
@@ -357,27 +348,10 @@ describe("WorkflowRecipesTab", () => {
 
   it("asks about every selected workflow at once", async () => {
     const OTHER = "b".repeat(64);
-    render({ workflowKeys: [KEY, OTHER] });
+    render({ workflowIds: [KEY, OTHER] });
     await flushPromises();
-    expect(listSavedRecipes).toHaveBeenCalledWith([KEY, OTHER], { wholeStack: true });
-    expect(listUsedLooks).toHaveBeenCalledWith([KEY, OTHER], { wholeStack: true });
-  });
-
-  it("reads only the named workflows when told the stack is not wanted", async () => {
-    render({ workflowKeys: [KEY], wholeStack: false });
-    await flushPromises();
-    expect(listSavedRecipes).toHaveBeenCalledWith([KEY], { wholeStack: false });
-    expect(listUsedLooks).toHaveBeenCalledWith([KEY], { wholeStack: false });
-  });
-
-  it("reads again when only the stack flag changes", async () => {
-    // Collapsing the panel with a member selected keeps the keys and flips
-    // the flag alone; the list must widen back to the stack.
-    const wrapper = render({ workflowKeys: [KEY], wholeStack: false });
-    await flushPromises();
-    await wrapper.setProps({ wholeStack: true });
-    await flushPromises();
-    expect(listSavedRecipes).toHaveBeenLastCalledWith([KEY], { wholeStack: true });
+    expect(listSavedRecipes).toHaveBeenCalledWith([KEY, OTHER]);
+    expect(listUsedLooks).toHaveBeenCalledWith([KEY, OTHER]);
   });
 
   it("opens the Run popup ON THE RECIPE, not on the card", async () => {
@@ -393,7 +367,8 @@ describe("WorkflowRecipesTab", () => {
     // `savedRecipe` is the whole point of the button: without it the popup
     // opens on the bare card and the recipe's look is not what runs.
     expect(source.savedRecipe).toMatchObject({ id: 1 });
-    expect(source.workflowKey).toBe(KEY);
+    expect(source.workflowId).toBe(KEY);
+    expect(source).not.toHaveProperty("workflowKey");
   });
 
   it("re-reads when a recipe is saved on another surface", async () => {
@@ -432,7 +407,7 @@ describe("WorkflowRecipesTab", () => {
       .trigger("keydown", { key: "ArrowDown", altKey: true });
 
     listSavedRecipes.mockResolvedValue([recipe(9, "Another card's recipe")]);
-    await wrapper.setProps({ workflowKeys: ["b".repeat(64)] });
+    await wrapper.setProps({ workflowIds: ["b".repeat(64)] });
     await flushPromises();
     refuse(new Error("no"));
     await flushPromises();
@@ -498,7 +473,7 @@ describe("WorkflowRecipesTab", () => {
     // 422, and the catch would wipe both halves behind "Could not read your
     // saved recipes", which is neither true nor useful.
     const many = Array.from({ length: 101 }, (_, i) => `key-${i}`);
-    const wrapper = render({ workflowKeys: many });
+    const wrapper = render({ workflowIds: many });
     await flushPromises();
 
     expect(listSavedRecipes).not.toHaveBeenCalled();
@@ -516,7 +491,7 @@ describe("WorkflowRecipesTab", () => {
     listSavedRecipes.mockResolvedValue([]);
     listUsedLooks.mockResolvedValue([LOOK]);
     getPictureRecipe.mockResolvedValue({
-      workflow_key: KEY,
+      workflow_id: KEY,
       // What the graph says today, which is not what the column holds.
       positive_prompt: "a prompt the column never got",
       loras: ["some/Other.safetensors"],
@@ -546,8 +521,8 @@ describe("WorkflowRecipesTab", () => {
   it("refuses to file a look on a workflow the picture does not name", async () => {
     listSavedRecipes.mockResolvedValue([]);
     listUsedLooks.mockResolvedValue([LOOK]);
-    getPictureRecipe.mockResolvedValue({ workflow_key: null });
-    const wrapper = render({ workflowKeys: [KEY, "b".repeat(64)] });
+    getPictureRecipe.mockResolvedValue({ workflow_id: null });
+    const wrapper = render({ workflowIds: [KEY, "b".repeat(64)] });
     await flushPromises();
     await wrapper
       .findAll("button")
@@ -632,7 +607,7 @@ describe("WorkflowRecipesTab", () => {
 
     const other = [recipe(1, "Another card's recipe")];
     listSavedRecipes.mockResolvedValue(other);
-    await wrapper.setProps({ workflowKeys: ["b".repeat(64)] });
+    await wrapper.setProps({ workflowIds: ["b".repeat(64)] });
     await flushPromises();
     const reads = listUsedLooks.mock.calls.length;
 

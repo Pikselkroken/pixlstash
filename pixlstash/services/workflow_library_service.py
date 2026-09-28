@@ -13,16 +13,17 @@ scrapheap in would make it read as live.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import inf
 from typing import Optional
 
-from sqlalchemy import and_, case, func, nullslast, or_
+from sqlalchemy import and_, case, func, nullslast, or_, text
 from sqlmodel import Session, select
 
 from pixlstash.db_models import Character, Picture, PictureSet, Project
-from pixlstash.services.saved_recipe_service import counts_by_workflow_key
+from pixlstash.services.saved_recipe_service import counts_by_workflow_id
 from pixlstash.stacking import get_or_create_stack_for_picture
 
 
@@ -189,8 +190,8 @@ def read_recipe_activity(
 def read_variant_picture_counts(vault) -> dict[str, int]:
     """``{structural_hash: kept pictures}``, vault-wide.
 
-    What a slot-mark flip decides its merge winner on (v1.12 B4): the flip is
-    a hub write, the counts belong to whichever vault is attached, and the two
+    What a model fix's card re-key decides its merge winner on (v1.12 B4), and
+    what picks a workflow's base topology: the re-key is a hub write, the counts belong to whichever vault is attached, and the two
     are joined by the hub on the variants it is re-keying.
     """
     return vault.db.run_immediate_read_task(recipe_picture_counts)
@@ -403,40 +404,6 @@ def variant_picture_ids(
     )
 
 
-def cover_pictures_by_pixel_sha(
-    session: Session, pixel_shas: list[str]
-) -> dict[str, CoverCandidate]:
-    """Resolve the owner's chosen covers, which are stored by content.
-
-    A ``pixel_sha`` with no kept picture behind it is simply absent: the cover
-    was destroyed or binned, and the card falls back to its computed one rather
-    than showing a hole. The rows come back as :class:`CoverCandidate` with no
-    ``structural_hash`` -- a chosen cover belongs to the card, not to one of its
-    variants -- so the caller can build its URL the same way as any other.
-    """
-    if not pixel_shas:
-        return {}
-    rows = session.exec(
-        select(
-            Picture.pixel_sha,
-            Picture.id,
-            Picture.score,
-            Picture.smart_score,
-            _USED_AT,
-            Picture.thumbnail_width,
-            Picture.thumbnail_height,
-            Picture.orientation,
-            Picture.square_crop_x,
-            Picture.square_crop_y,
-            Picture.square_crop_side,
-        )
-        .where(Picture.pixel_sha.in_(pixel_shas))
-        .where(Picture.deleted.is_(False))
-        .order_by(Picture.id)
-    ).all()
-    return {row[0]: CoverCandidate("", *row[1:]) for row in rows}
-
-
 def instance_hashes_for_variants(
     session: Session,
     structural_hashes: list[str],
@@ -477,29 +444,66 @@ def instance_hashes_for_variants(
     return [instance_hash for instance_hash, _ in session.exec(query).all()]
 
 
+def variant_model_values(session: Session) -> dict[str, dict[str, Counter]]:
+    """``{structural_hash: {"checkpoints"|"loras": Counter(value -> pictures)}}``.
+
+    The checkpoint and LoRA values every kept picture used, as the picture
+    grid's ``comfyui_model`` / ``comfyui_lora`` filters match them
+    (``picture.comfyui_models`` / ``comfyui_loras``, the raw widget values),
+    so a value served from here filters to the pictures it counted. One
+    grouped read per column over the whole vault; unscoped, and served only to
+    owner routes, like :func:`variant_activity`.
+    """
+    found: dict[str, dict[str, Counter]] = {}
+    for kind, column in (
+        ("checkpoints", "comfyui_models"),
+        ("loras", "comfyui_loras"),
+    ):
+        rows = session.execute(
+            text(
+                "SELECT p.workflow_structural_hash, j.value, COUNT(*) "
+                # json_each reads its argument before any WHERE can guard it,
+                # so a malformed value is swapped for an empty array in place:
+                # one bad row must not fail the whole grid.
+                f"FROM picture p, json_each(CASE WHEN json_valid(p.{column}) "
+                f"THEN p.{column} ELSE '[]' END) j "
+                "WHERE p.deleted = 0 AND p.workflow_structural_hash IS NOT NULL "
+                "GROUP BY p.workflow_structural_hash, j.value"
+            )
+        ).all()
+        for structural_hash, value, pictures in rows:
+            if isinstance(value, str) and value:
+                found.setdefault(structural_hash, {}).setdefault(kind, Counter())[
+                    value
+                ] += int(pictures)
+    return found
+
+
 def read_card_grid(
     vault, cover_depth: int
-) -> tuple[dict[str, VariantActivity], list[CoverCandidate], dict[str, int]]:
+) -> tuple[
+    dict[str, VariantActivity],
+    list[CoverCandidate],
+    dict[str, int],
+    dict[str, dict[str, Counter]],
+]:
     """The grid's whole vault side in one session.
 
-    Three statements, one task: the per-variant counts, the cover candidates
-    and how many saved recipes each card holds. They share a session because
-    the round trip is the expensive part, not the third `GROUP BY`.
+    Four statements, one task: the per-variant counts, the cover candidates,
+    how many saved recipes each workflow holds (by ``workflow_id``) and the
+    checkpoint and LoRA values each variant's pictures used. They share a
+    session because the round trip is the expensive part.
     """
 
     def _read(session: Session):
         return (
             variant_activity(session),
             variant_cover_candidates(session, cover_depth),
-            counts_by_workflow_key(session),
+            counts_by_workflow_id(session),
+            variant_model_values(session),
         )
 
     return vault.db.run_immediate_read_task(_read)
-
-
-def read_chosen_covers(vault, pixel_shas: list[str]) -> dict[str, CoverCandidate]:
-    """The pictures the owner picked as covers, by content."""
-    return vault.db.run_immediate_read_task(cover_pictures_by_pixel_sha, pixel_shas)
 
 
 def read_card_picture_ids(vault, structural_hashes: list[str], limit: int) -> list[int]:
@@ -575,10 +579,9 @@ def read_picture_variant(vault, picture_id: int) -> Optional[str]:
 def oldest_kept_by_pixel_sha(session: Session, pixel_shas: list[str]) -> dict[str, int]:
     """``{pixel_sha: picture_id}``: the picture a pinned input resolves to (#1457).
 
-    **The OLDEST kept copy, deliberately**, where
-    :func:`cover_pictures_by_pixel_sha` lets the newest win. A pin must feed a
-    run the same picture every time, and the oldest id is the one importing a
-    duplicate of the same bytes does not move. A content with no kept copy is
+    **The OLDEST kept copy, deliberately**: a pin must feed a run the same
+    picture every time, and the oldest id is the one importing a duplicate of
+    the same bytes does not move. A content with no kept copy is
     absent, which is the pin's picture having gone.
     """
     if not pixel_shas:

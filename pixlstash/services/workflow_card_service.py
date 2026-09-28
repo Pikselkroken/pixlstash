@@ -1,43 +1,29 @@
-"""Assembling a workflow CARD out of hub rows and vault counts (v1.12 B3).
+"""Assembling a WORKFLOW's grid entry out of hub rows and vault counts (#1623).
 
-**Computed per request, with no aggregate table.** The grid costs three vault
-queries in one session - one ``GROUP BY workflow_structural_hash``, one
-``ROW_NUMBER()`` window and one ``GROUP BY workflow_key`` over the saved
-recipes - and a fourth only on a library where somebody has actually chosen a
-cover. Beside them are ten hub statements, of which two are ``card_index``'s
-(a scan of the variant table, and one grouped read of ``workflow_file`` for
-the cards that have no variant at all, #1466) and one more is only issued
-where a slot name actually reaches the shelf; everything else here is
-arithmetic over their results, plus F7's ghost pass - one grouped count, and
-the five reads ``model_ghost_names`` makes, two of them whole-table scans,
-measured together at 1.3 ms (:func:`_describe_ghosts`). The recipe-LoRA
-pass (:func:`_describe_recipe_loras`) adds the shelf index once more, one
-vault read of the character attachments, and one reduced document per card
-that has both a structural and a recipe LoRA slot - none at all on a grid
-with no recipe slot.
-An aggregate table would have to be invalidated by every rating,
-every import, every soft delete and every re-run of the card backfill, and
-would be a second source of truth for numbers the vault can already produce
-inside the frame budget.
+A workflow is a group of topologies (``hub/workflow_card_reads.workflow_index``);
+its counts, covers and ghosts are every variant's, and its models are its base
+card's. The figures are read per variant and folded per workflow here.
 
-Measured on the owner's library (13k kept pictures, 629 variants, 245 cards):
-about 75 ms, of which the largest single part is ``describe_differences``
-reducing one graph per stacked card. F7's ghost pass adds 1.3 ms to that on a
-hub of the same shape, so the figure stands.
+**Computed per request, with no aggregate table.** The grid costs a handful of
+grouped vault queries - per-variant counts, the cover window, the saved recipes
+per card, the kept pictures per variant, and the checkpoint and LoRA values
+the pictures used - and the hub reads ``card_index`` and ``workflow_index``
+make, plus F7's ghost pass (one grouped count and the five reads
+``model_ghost_names`` makes, measured together at 1.3 ms,
+:func:`_describe_ghosts`). An aggregate table would have to be invalidated by
+every rating, every import, every soft delete and every re-run of the card
+backfill, and would be a second source of truth for numbers the vault can
+already produce inside the frame budget.
 
-Three orderings are decided here and nowhere else:
+Two orderings are decided here and nowhere else:
 
 * **Cover rank** is the Bayesian mean ``(C·m + Σscore)/(C + n_rated)`` with
   ``C = 5`` and *m* the library's own mean rating, then picture count. A plain
-  mean would put a card with one 5★ picture above a card with forty averaging
+  mean would put a workflow with one 5★ picture above one with forty averaging
   4.5, which is the failure the prior exists to stop.
-* **A card's cover pictures** are its best three, and they are picked in memory
-  out of the best three of each of its variants - always a superset, because a
-  card's pictures are the union of its variants'.
-* **The effective stack** is a manual assignment, then an unstacking, then the
-  automatic group by ``core_hash``. A stored member row for a card that has
-  since left its group is ignored rather than honoured, and a card that joined
-  a group after the owner last ordered it is appended in cover-rank order.
+* **A workflow's cover pictures** are its best three, picked in memory out of
+  the best three of each of its variants - always a superset, because a
+  workflow's pictures are the union of its variants'.
 """
 
 from __future__ import annotations
@@ -51,21 +37,15 @@ from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_card_reads import (
-    AUTO_STACK_PREFIX,
     Card,
-    StackRows,
     Workflow,
     asset_names,
     card_index,
-    chosen_covers,
-    default_overrides,
     find_workflow,
     instance_documents,
-    lora_promotions,
-    slot_marks,
-    stack_rows,
     variant_documents,
     workflow_group_defaults,
+    workflow_index,
 )
 from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS, loader_swaps_of
 from pixlstash.hub.workflows import model_ghost_names, picture_ghosts_by_variant
@@ -73,7 +53,6 @@ from pixlstash.pixl_logging import get_logger
 from pixlstash.services.comfyui_recipe_service import LORA_DIGEST_FIELD_RE
 from pixlstash.services.model_shelf_service import (
     adapter_digest_index,
-    attached_characters,
     models_for_digest,
     recipe_asset_index,
 )
@@ -84,18 +63,12 @@ from pixlstash.services.workflow_hash import (
 )
 from pixlstash.services.workflow_identity import (
     CORE_ADDRESS_PREFIX,
-    RECIPE,
-    STRUCTURAL,
-    WORKFLOW_KEY_VERSION,
-    Difference,
     Slot,
     base_model_kind,
     core_node_labels,
-    differences_reduced,
     unswapped,
     is_lora_widget,
     model_fix_kind,
-    reduce_stored_document,
     slots,
     topology_node_labels,
 )
@@ -104,7 +77,6 @@ from pixlstash.services.workflow_library_service import (
     VariantActivity,
     cover_order,
     read_card_grid,
-    read_chosen_covers,
     read_best_picture_ids,
     read_instance_hashes,
     read_picture_variant,
@@ -188,25 +160,24 @@ def slot_kind(widget: str) -> str:
 
 @dataclass(frozen=True)
 class SlotModel:
-    """One model a card names: its file, and which slot it sits in.
+    """One model a workflow's base card names: its file, and which slot it is in.
 
-    ``label`` is the slot's address - the same one ``PUT /workflows/{key}/
-    slots`` marks and ``workflow_default_override`` is keyed on. It travels
-    with the slot because a client that draws a LoRA's Workflow/Recipe switch
-    has nothing else to name the slot it just flipped.
+    ``label`` is the slot's address on the base topology. ``name`` is the
+    graph's filename put through
+    :func:`~pixlstash.utils.model_utils.derive_model_name`, so a checkpoint
+    chip reads ``t5xxl`` rather than ``t5xxl_fp8_e4m3fn.safetensors``. The
+    shelf lookup is done on the RAW value before that (:func:`model_titles`
+    keys on it), which is the one ordering rule here: strip early and every
+    shelf title silently stops resolving.
 
-    ``name`` is the graph's filename put through
-    :func:`~pixlstash.utils.model_utils.derive_model_name`, so a card's
-    checkpoint chip reads ``t5xxl`` rather than
-    ``t5xxl_fp8_e4m3fn.safetensors``. The shelf lookup is done on the RAW
-    value before that (:func:`model_titles` keys on it), which is the one
-    ordering rule here: strip early and every shelf title silently stops
-    resolving.
+    **A LoRA slot of a stored recipe carries no name.** Which LoRA fills it is
+    the recipe's business (``recipe_values`` and the default recipe say what
+    ran); only a workflow known from its file alone names the LoRA the file
+    loads.
     """
 
     name: Optional[str]
     kind: str
-    mark: Optional[str] = None
     label: Optional[str] = None
     # The precision the file was stored at, as one canonical id
     # (:func:`~pixlstash.utils.model_utils.canonical_quant`): the shelf's own
@@ -224,41 +195,28 @@ class SlotModel:
     title: Optional[str] = None
     # The rest of what the shelf draws this model with (:class:`ShelfMark`):
     # its chosen picture, and the base model - in both spellings - that a
-    # generated mark takes its colour from. All null far more often than not,
-    # and a card that has to draw itself out of its models rather than its
-    # pictures (#1466) is the one reader of them.
+    # generated mark takes its colour from.
     icon: Optional[str] = None
     base_model: Optional[str] = None
     base_model_folded: Optional[str] = None
-    # A LoRA file promoted on its own (``workflow_lora_promotion``): its slot
-    # is a recipe slot, but this card is the one file in it that keys a
-    # workflow, so it is named and marked structural here. What a generated
-    # card name appends, since it is the only thing telling this card apart.
-    promoted: bool = False
-
-
-@dataclass(frozen=True)
-class RecipeLora:
-    """One LoRA that has filled a card's recipe slots, and who it is of.
-
-    ``name`` is the shelf's title where the shelf holds exactly one model by
-    that value, the derived filename otherwise. ``recipes`` is how many of the
-    card's variants loaded it. ``character_id`` is set only where that one
-    model is attached to exactly one character in this library: two would be
-    a guess about which face to draw, and no face is better than the wrong one.
-    """
-
-    name: str
-    recipes: int
-    character_id: Optional[int] = None
-    character_name: Optional[str] = None
 
 
 @dataclass
-class CardFigures:
-    """One card's counts, its rank and the pictures that would cover it."""
+class WorkflowFigures:
+    """One workflow's counts, its rank and the pictures that would cover it.
+
+    ``card`` is the workflow as the grid draws it: its base card (the card a
+    run starts from) with the workflow's own name, notes and hidden flag laid
+    over it, and **every** variant of the workflow, the base card's first, so
+    the counts, covers and ghosts are the workflow's and the models the base
+    card's. ``base`` is that base card as the hub holds it, for anything that
+    resolves a graph; ``None`` for a workflow whose base topology has no
+    variant filed.
+    """
 
     card: Card
+    workflow: Workflow
+    base: Optional[Card] = None
     pictures: int = 0
     rated: int = 0
     score_total: int = 0
@@ -266,32 +224,27 @@ class CardFigures:
     rank: float = 0.0
     covers: list[CoverCandidate] = field(default_factory=list)
     saved_recipes: int = 0
-    stack_id: Optional[str] = None
-    stack_size: int = 1
-    member_keys: list[str] = field(default_factory=list)
-    differs_by: list[str] = field(default_factory=list)
-    # What a `differs_by` chip stands for, keyed by the chip (#1597). Only the
-    # chips there is something to say about: "N nodes differ", "other
-    # checkpoint" and "other models".
-    differs_by_detail: dict[str, str] = field(default_factory=dict)
     models: list[SlotModel] = field(default_factory=list)
     loras: list[SlotModel] = field(default_factory=list)
-    recipe_loras: list[RecipeLora] = field(default_factory=list)
     ghosts: int = 0
     model_ghosts: int = 0
-    # A LoRA file was promoted to make this card (``workflow_lora_promotion``).
-    # The owner asked for it, so it is never a one-off however few pictures.
-    promoted: bool = False
-    promoted_labels: dict[str, str] = field(default_factory=dict)
+    # ``{"checkpoints": [(name, pictures)], "loras": [(name, pictures)]}``:
+    # the values the workflow's kept pictures used, most used first, spelled
+    # as the picture filters take them (:func:`_describe_recipe_values`).
+    recipe_values: dict[str, list[tuple[str, int]]] = field(default_factory=dict)
+
+    @property
+    def workflow_id(self) -> str:
+        return self.workflow.workflow_id
 
     @property
     def rating(self) -> Optional[float]:
-        """The mean of the stars this card has, or ``None`` when it has none.
+        """The mean of the stars this workflow has, or ``None`` when it has none.
 
         The PLAIN mean, deliberately, and not :attr:`rank`. The rank is
-        smoothed towards the library's average so that cards can be ordered
-        against each other; showing it as the card's rating would tell somebody
-        their never-rated workflow is rated 4.0.
+        smoothed towards the library's average so that workflows can be
+        ordered against each other; showing it as the rating would tell
+        somebody their never-rated workflow is rated 4.0.
         """
         return (self.score_total / self.rated) if self.rated else None
 
@@ -309,21 +262,7 @@ class CardFigures:
             and self.rated == 0
             and not self.card.hand_imported
             and not self.saved_recipes
-            and not self.promoted
         )
-
-
-@dataclass
-class Stack:
-    """An effective stack: its members in order, the first one the cover."""
-
-    stack_id: str
-    kind: str
-    member_keys: list[str]
-
-    @property
-    def cover_key(self) -> str:
-        return self.member_keys[0]
 
 
 @dataclass
@@ -331,48 +270,67 @@ class Grid:
     """``GET /workflows``: what the Workflows view opens on.
 
     ``cards`` is what the grid draws - visible, in cover-rank order, hidden
-    cards and one-offs removed. ``figures`` is every card including those,
-    because a card the grid does not draw still has to open by its own URL:
-    hiding one is a decision about the grid, not a deletion.
+    workflows and one-offs removed. ``figures`` is every workflow including
+    those, because a workflow the grid does not draw still has to open by its
+    own URL: hiding one is a decision about the grid, not a deletion.
     """
 
-    cards: list[CardFigures]
-    stacks: list[Stack]
+    cards: list[WorkflowFigures]
     one_offs: int
     hidden: int
-    figures: list[CardFigures] = field(default_factory=list)
+    figures: list[WorkflowFigures] = field(default_factory=list)
 
-    def figure(self, workflow_key: str) -> Optional[CardFigures]:
-        """One card's figures by key, hidden and one-off cards included."""
-        return next(
-            (f for f in self.figures if f.card.workflow_key == workflow_key), None
-        )
+    def figure(self, workflow_id: str) -> Optional[WorkflowFigures]:
+        """One workflow's figures by id, hidden and one-off ones included."""
+        return next((f for f in self.figures if f.workflow_id == workflow_id), None)
 
 
 def _figures(
+    workflows: list[Workflow],
     cards: list[Card],
     activity: dict[str, VariantActivity],
     candidates: list[CoverCandidate],
     saved_recipes: dict[str, int],
     superseded: frozenset[str] = frozenset(),
-) -> list[CardFigures]:
-    """Fold each card's variants into one set of counts and one cover strip.
+) -> list[WorkflowFigures]:
+    """Fold each workflow's variants into one set of counts and one cover strip.
 
     A picture of a *superseded* variant - made with a model the owner has
     since replaced - is flagged and covers only where no picture made with
-    the workflow as it now stands can.
+    the workflow as it now stands can. *saved_recipes* is by workflow id.
     """
     by_variant: dict[str, list[CoverCandidate]] = {}
     for candidate in candidates:
         by_variant.setdefault(candidate.structural_hash, []).append(candidate)
+    by_key = {card.workflow_key: card for card in cards}
 
     figures = []
-    for card in cards:
-        figure = CardFigures(
-            card=card, saved_recipes=saved_recipes.get(card.workflow_key, 0)
+    for workflow in workflows:
+        members = [by_key[key] for key in workflow.cards if key in by_key]
+        base = by_key.get(workflow.base_card or "")
+        head = base or members[0]
+        variants = list(
+            dict.fromkeys([*(base.variants if base else ()), *workflow.variants])
+        )
+        files = [card.file_name for card in [head, *members] if card.file_name]
+        card = replace(
+            head,
+            name=workflow.name,
+            notes=workflow.notes,
+            hidden=workflow.hidden,
+            imported=any(member.imported for member in members),
+            hand_imported=any(member.hand_imported for member in members),
+            file_name=files[0] if files else None,
+            variants=variants,
+        )
+        figure = WorkflowFigures(
+            card=card,
+            workflow=workflow,
+            base=base,
+            saved_recipes=saved_recipes.get(workflow.workflow_id, 0),
         )
         strip: list[CoverCandidate] = []
-        for structural_hash in card.variants:
+        for structural_hash in variants:
             seen = activity.get(structural_hash)
             if seen is not None:
                 figure.pictures += seen.pictures
@@ -461,8 +419,8 @@ def _superseded_variants(hub: HubDatabase, cards: list[Card]) -> frozenset[str]:
     return frozenset(superseded)
 
 
-def _rank(figures: list[CardFigures]) -> None:
-    """Score every card by the Bayesian mean of its ratings, in place.
+def _rank(figures: list[WorkflowFigures]) -> None:
+    """Score every workflow by the Bayesian mean of its ratings, in place.
 
     *m* is the library's own mean rating rather than a constant, so a library
     that rates generously is not flattened towards somebody else's idea of
@@ -478,233 +436,9 @@ def _rank(figures: list[CardFigures]) -> None:
         )
 
 
-def _rank_order(figure: CardFigures) -> tuple:
-    """Cover rank, then picture count, then the key so ties are stable."""
-    return (-figure.rank, -figure.pictures, figure.card.workflow_key)
-
-
-def effective_stacks(
-    figures: list[CardFigures], rows: StackRows
-) -> tuple[list[Stack], dict[str, str]]:
-    """Group the visible cards: manual assignment, unstacking, then the group.
-
-    Returns the stacks and ``{workflow_key: stack_id}``. A group of one is not
-    a stack - the card stands on its own - so the map only names cards that
-    genuinely share a tile.
-    """
-    by_key = {figure.card.workflow_key: figure for figure in figures}
-    manual: dict[str, str] = {}
-    for stack_id, members in rows.members.items():
-        if rows.kinds.get(stack_id) != "manual":
-            continue
-        for _, key in members:
-            if key in by_key:
-                manual[key] = stack_id
-
-    # Positions the owner gave inside an automatic group, filed under the core
-    # hash the row was written against.
-    #
-    # **That keying is what ignores a card which has left its group**, and it
-    # is why nothing here compares the two. A card groups under its OWN core
-    # hash, so a row written when it had another one is looked up in a dict it
-    # is not in: it takes cover-rank order like any newcomer, and no stored
-    # position can re-admit it or hand it a cover it no longer deserves. A
-    # card the owner has since assigned to a manual stack is out of reach for
-    # the same reason - a manual group reads `_manual_positions` instead.
-    positions: dict[str, dict[str, int]] = {}
-    for stack_id, members in rows.members.items():
-        if rows.kinds.get(stack_id) != "auto":
-            continue
-        core = rows.core_hashes.get(stack_id)
-        for position, key in members:
-            positions.setdefault(core, {})[key] = position
-
-    grouped: dict[tuple[str, str], list[CardFigures]] = {}
-    for figure in figures:
-        key = figure.card.workflow_key
-        if key in manual:
-            grouped.setdefault(("manual", manual[key]), []).append(figure)
-        elif key in rows.unstacked or figure.card.core_hash is None:
-            continue
-        else:
-            grouped.setdefault(("auto", figure.card.core_hash), []).append(figure)
-
-    stacks, belongs = [], {}
-    for (kind, identity), members in sorted(grouped.items()):
-        placed = (
-            positions.get(identity, {})
-            if kind == "auto"
-            else _manual_positions(rows, identity)
-        )
-        # Ordered ones first, in the owner's order; everything that joined
-        # since is appended in cover-rank order rather than silently first.
-        ordered = sorted(
-            (m for m in members if m.card.workflow_key in placed),
-            key=lambda m: placed[m.card.workflow_key],
-        ) + sorted(
-            (m for m in members if m.card.workflow_key not in placed), key=_rank_order
-        )
-        if len(ordered) < 2:
-            continue
-        stack_id = identity if kind == "manual" else f"{AUTO_STACK_PREFIX}{identity}"
-        stacks.append(
-            Stack(
-                stack_id=stack_id,
-                kind=kind,
-                member_keys=[m.card.workflow_key for m in ordered],
-            )
-        )
-        for member in ordered:
-            member.stack_id = stack_id
-            belongs[member.card.workflow_key] = stack_id
-    return stacks, belongs
-
-
-def _manual_positions(rows: StackRows, stack_id: str) -> dict[str, int]:
-    return {key: position for position, key in rows.members.get(stack_id, ())}
-
-
-def describe_differences(
-    hub: HubDatabase,
-    figures: list[CardFigures],
-    stacks: list[Stack],
-    names: Optional[dict[str, list[tuple]]] = None,
-) -> None:
-    """Fill in each stacked member's "differs by" chips against its cover.
-
-    Only stacked cards are described: a card on its own has nothing to differ
-    from, and reducing every document in the library to answer that would be
-    the one expensive thing in the grid.
-
-    *names* is :func:`read_grid`'s one ``asset_names`` read, which is what
-    puts a readable model name in an "other checkpoint" chip's detail. Left
-    out, every model in that detail reads "unnamed model".
-    """
-    by_key = {figure.card.workflow_key: figure for figure in figures}
-    wanted = {
-        by_key[key].card.variants[0]: key
-        for stack in stacks
-        for key in stack.member_keys
-        if by_key.get(key) and by_key[key].card.variants
-    }
-    documents = variant_documents(hub, list(wanted))
-    # Reduced ONCE per card rather than once per comparison. A stack compares
-    # every member against one cover, so re-reducing that cover per member is a
-    # cost that grows with the stack rather than with the library - and an
-    # automatic group is free to be large, since `STRIP_LORAS_FOR_STACKS` is
-    # deliberately generous about what stacks together.
-    for_key = {}
-    for structural_hash, key in wanted.items():
-        document = documents.get(structural_hash)
-        if document is None:
-            continue
-        try:
-            for_key[key] = reduce_stored_document(document)
-        except WorkflowGraphError as exc:
-            logger.info(
-                "Card %s will not reduce, so it shows no difference chips: %s",
-                key,
-                exc,
-            )
-    changed_models: list[tuple[CardFigures, Difference]] = []
-    for stack in stacks:
-        cover = for_key.get(stack.cover_key)
-        if cover is None and len(stack.member_keys) > 1:
-            # Nothing to compare the members against, so the whole stack shows
-            # no chips. Said out loud rather than fallen through silently: a
-            # manual stack can now be covered by a card with no recipe at all
-            # (#1466), which has no document to reduce, and a stack that
-            # quietly stopped explaining itself is a bug that looks like a
-            # design.
-            logger.info(
-                "Stack %s is covered by card %s, which has no document to "
-                "reduce, so its members show no difference chips.",
-                stack.stack_id,
-                stack.cover_key,
-            )
-        for key in stack.member_keys[1:]:
-            member = for_key.get(key)
-            if cover is None or member is None:
-                continue
-            try:
-                differences = differences_reduced(cover, member)
-            except WorkflowGraphError as exc:
-                logger.info(
-                    "Card %s cannot be compared with its stack cover %s, so it "
-                    "shows no difference chips: %s",
-                    key,
-                    stack.cover_key,
-                    exc,
-                )
-                continue
-            figure = by_key[key]
-            figure.differs_by = [difference.chip for difference in differences]
-            figure.differs_by_detail = {
-                difference.chip: difference.detail
-                for difference in differences
-                if difference.detail
-            }
-            changed_models.extend(
-                (figure, difference)
-                for difference in differences
-                if difference.cover_assets or difference.member_assets
-            )
-        # The cover gets no chips, and the grid's one card per stack is the
-        # cover: the chips say how a member differs from the cover, so the
-        # members' union printed under the cover itself said nothing true.
-    if changed_models:
-        _describe_model_changes(hub, changed_models, names or {})
-
-
-def _describe_model_changes(
-    hub: HubDatabase,
-    changed: list[tuple[CardFigures, Difference]],
-    names: dict[str, list[tuple]],
-) -> None:
-    """Spell an "other checkpoint" chip as ``Krea 2 → Flux Dev fp8``.
-
-    The chip's assets are references; ``workflow_recipe_asset`` holds the
-    filenames they were made from, and the shelf the title a person knows the
-    model by. A reference no row names any more (the name was forgotten) reads
-    "unnamed model" rather than disappearing, so the arrow stays honest.
-    """
-    filenames = {
-        asset_reference(filename): filename
-        for pairs in names.values()
-        for _, filename in pairs
-    }
-    marks = model_marks(
-        hub,
-        sorted(
-            {
-                filenames[asset]
-                for _, difference in changed
-                for asset in difference.cover_assets + difference.member_assets
-                if asset in filenames
-            }
-        ),
-    )
-
-    def spoken(assets: tuple[str, ...]) -> str:
-        said = []
-        for asset in assets:
-            filename = filenames.get(asset)
-            if filename is None:
-                said.append("unnamed model")
-                continue
-            fields = _mark_fields(marks.get(filename.lower()), filename)
-            name = (fields.get("title") or "").strip() or _derived(filename)
-            quant = fields.get("quant")
-            said.append(f"{name} {quant}" if quant else name)
-        return ", ".join(dict.fromkeys(said))
-
-    for figure, difference in changed:
-        was, now = spoken(difference.cover_assets), spoken(difference.member_assets)
-        if was and now:
-            detail = f"{was} → {now}"
-        else:
-            detail = f"+ {now}" if now else f"− {was}"
-        figure.differs_by_detail[difference.chip] = detail
+def _rank_order(figure: WorkflowFigures) -> tuple:
+    """Cover rank, then picture count, then the id so ties are stable."""
+    return (-figure.rank, -figure.pictures, figure.workflow_id)
 
 
 def read_grid(
@@ -715,133 +449,87 @@ def read_grid(
     include_one_offs: bool = False,
     file_models=None,
 ) -> Grid:
-    """Everything ``GET /workflows`` answers. See the module docstring
-    for what it costs.
+    """Everything ``GET /workflows`` answers: one entry per workflow.
 
-    *file_models* is how a card with **no variant** gets its models (#1466):
-    ``(file name) -> [(widget name, filename)]``, or ``None`` to leave those
-    cards without any. Passed in rather than done here because reading a
-    stored workflow file is I/O against a folder this layer does not know -
-    the same split ``routes/workflows.py::_source_graph_for`` already keeps,
-    where the route owns the read and the service owns what is made of it. It
-    is called once per such card and for no other, so a grid with none pays
-    nothing at all.
+    Figures are read per variant and folded per workflow (a workflow is a
+    group of topologies, :func:`~pixlstash.hub.workflow_card_reads.
+    workflow_index`); what a workflow's models are is its base card's. A card
+    in no workflow yet - its topology not reached by the backfill - is not on
+    the grid.
+
+    *file_models* is how a workflow whose base card has **no variant** gets
+    its models (#1466): ``(file name) -> [(widget name, filename)]``, or
+    ``None`` to leave it without any. Passed in rather than done here because
+    reading a stored workflow file is I/O against a folder this layer does not
+    know.
 
     The two flags are the Filters panel's *Show hidden workflows* and the
     unticked *Hide one-offs* (F7). They widen what is DRAWN; ``hidden`` and
     ``one_offs`` are counted either way, so the panel can label its own
-    checkboxes with the number it is letting in. Widening here rather than in
-    the client is what keeps the stacking honest: the grouping runs over
-    exactly the cards the grid shows, so letting a hidden member back in makes
-    its stack two again instead of leaving the cover claiming a size its own
-    grid contradicts.
+    checkboxes with the number it is letting in.
     """
     cards = card_index(hub)
-    activity, candidates, saved_recipes = read_card_grid(vault, COVER_DEPTH)
+    counts = (
+        read_variant_picture_counts(vault)
+        if getattr(vault, "library_uuid", None)
+        else None
+    )
+    workflows = workflow_index(hub, counts, cards)
+    activity, candidates, saved_recipes, model_values = read_card_grid(
+        vault, COVER_DEPTH
+    )
     figures = _figures(
-        cards, activity, candidates, saved_recipes, _superseded_variants(hub, cards)
+        workflows,
+        cards,
+        activity,
+        candidates,
+        saved_recipes,
+        _superseded_variants(hub, cards),
     )
     _rank(figures)
-    # One read of `workflow_recipe_asset` for every pass below. Every variant,
+    # One read of `workflow_recipe_asset` for every pass below: every variant,
     # which is what the ghost pass needs and a superset of the first variants
-    # the slot and difference passes read - the passes called it separately
-    # when the ghost pass arrived, which was the same table twice for no
-    # answer the first read could not give. Before the one-off filter, which
-    # asks it which cards a promoted LoRA made.
+    # the slot pass reads.
     names = asset_names(
         hub, [variant for figure in figures for variant in figure.card.variants]
     )
-    _mark_promoted(hub, figures, names)
 
-    # Hidden cards and one-offs come out BEFORE the grouping, so a stack is
-    # counted as the owner sees it: hiding one member of a pair leaves the
-    # other standing alone, with `stack_size` 1. That is the grid telling the
-    # truth about what it drew rather than a stack being destroyed - the
-    # `workflow_stack_member` rows are untouched and unhiding restores it.
-    #
     # **Both counts are taken over the same set whatever the flags say** -
-    # hidden over every card, one-offs over the cards that are not hidden -
+    # hidden over every workflow, one-offs over the ones that are not hidden -
     # so ticking one checkbox does not move the other's number underneath it.
     hidden = sum(1 for figure in figures if figure.card.hidden)
     one_offs = sum(1 for figure in figures if figure.one_off and not figure.card.hidden)
-    visible = [
+    drawn = [
         figure
         for figure in figures
         if (include_hidden or not figure.card.hidden)
         and (include_one_offs or not figure.one_off)
     ]
-
-    # Over every card and not only the drawn ones: a hidden card still opens
-    # on the detail route, and it would otherwise show a cover the owner has
-    # already replaced. The same single query either way.
-    _apply_chosen_covers(hub, vault, figures)
-    rows = stack_rows(hub)
-    # **The id is served only where the grid drew the WHOLE stack.**
-    # `PUT /workflows/stacks/{id}/order` takes a complete member list and
-    # refuses one that names anything less, deliberately - a key left out
-    # would leave the stack with no record that it had gone. It counts the
-    # hidden cards and the one-offs this listing dropped above, so a client
-    # ordering what the grid gave it would be refused with a sentence about
-    # keys it was never told existed. Grouping the whole set alongside the
-    # drawn one is how that is detected: same pure function, same rows, no
-    # second query. A client reads the null as "this stack cannot be
-    # addressed from here" and offers no reorder at all, which is the one
-    # honest answer while the panel can only show part of it.
-    whole = {
-        stack.stack_id: set(stack.member_keys)
-        for stack in effective_stacks(figures, rows)[0]
-    }
-    # **That pass WROTE `stack_id` onto every figure it grouped**, hidden
-    # cards and one-offs included, and nothing below would clear them: the
-    # drawn pass only ever sets ids, and a card whose group collapses below
-    # two once the dropped cards are taken is in no drawn stack to be
-    # revisited. It would be served `stack_size: 1` beside a non-null id -
-    # the one state the field's contract says cannot happen. Cleared here,
-    # before the grouping whose answer is served.
-    for figure in figures:
-        figure.stack_id = None
-    stacks, belongs = effective_stacks(visible, rows)
-    partial = {
-        key
-        for stack in stacks
-        if whole.get(stack.stack_id) != set(stack.member_keys)
-        for key in stack.member_keys
-    }
-    for figure in figures:
-        if figure.card.workflow_key in partial:
-            figure.stack_id = None
-    describe_differences(hub, visible, stacks, names)
-    # Every member, not only the cover. The grid draws the cover alone, so this
-    # costs it nothing - but a member opened on its own carries the difference
-    # chips it earned against that cover, and a card declaring `stack_size: 1`
-    # while carrying "other checkpoint" is telling its reader it differs from
-    # something the payload never names. `factChips` reads it exactly that way,
-    # showing those chips as plain facts with no "differs by" before them.
-    members = by_key(visible)
-    for stack in stacks:
-        for key in stack.member_keys:
-            member = members.get(key)
-            if member is not None:
-                member.stack_size = len(stack.member_keys)
-                member.member_keys = list(stack.member_keys)
-
-    # One card per stack, and it is the cover: `stack_size` is what makes a
-    # card a stack to its reader, so a grid that also listed the members would
-    # draw each of them twice. The members are still reachable - the cover
-    # carries their keys - and each opens on the detail route.
-    covered = {key for stack in stacks for key in stack.member_keys[1:]}
-    drawn = [figure for figure in visible if figure.card.workflow_key not in covered]
     drawn.sort(key=_rank_order)
     _describe_slots(hub, figures, names, _recovered_slots(figures, file_models))
     _describe_ghosts(hub, vault, figures, names)
-    _describe_recipe_loras(hub, vault, figures, names)
-    return Grid(
-        cards=drawn,
-        stacks=stacks,
-        one_offs=one_offs,
-        hidden=hidden,
-        figures=figures,
-    )
+    _describe_recipe_values(figures, model_values)
+    return Grid(cards=drawn, one_offs=one_offs, hidden=hidden, figures=figures)
+
+
+def _describe_recipe_values(
+    figures: list[WorkflowFigures], by_variant: dict[str, dict[str, Counter]]
+) -> None:
+    """Fill in the checkpoints and LoRAs each workflow's kept pictures used.
+
+    Most used first, then by name; spelled as the picture filters take them
+    (``workflow_library_service.variant_model_values``), so "this workflow's
+    pictures made with X" is one filter away.
+    """
+    for figure in figures:
+        totals = {"checkpoints": Counter(), "loras": Counter()}
+        for variant in figure.card.variants:
+            for kind, used in by_variant.get(variant, {}).items():
+                totals[kind].update(used)
+        figure.recipe_values = {
+            kind: sorted(used.items(), key=lambda item: (-item[1], item[0]))
+            for kind, used in totals.items()
+        }
 
 
 def _shelf_candidates(
@@ -971,61 +659,7 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
     return marks
 
 
-def _mark_promoted(
-    hub: HubDatabase, figures: list[CardFigures], names: dict[str, list[tuple]]
-) -> None:
-    """Fill :attr:`CardFigures.promoted_labels` and ``promoted`` per card.
-
-    ``{slot label: filename}`` of each slot whose promoted file this card
-    loads THERE. By label and not merely by file, because a file promoted at
-    two slots may sit in only one of them on a given card; the first variant's
-    stored document is reduced to say which, and only for a card whose
-    topology has a promotion at all. Every variant of the card holds the same
-    file at a promoted slot (the key includes the pair), so one answers. A
-    file whose name was forgotten keys the card but cannot be named, so it
-    marks the card promoted and leaves its slot unnamed.
-    """
-    promotions = lora_promotions(hub, [figure.card.topology_hash for figure in figures])
-    if not promotions:
-        return
-    topologies = {topology_hash for topology_hash, _, _ in promotions}
-    wanted = [
-        figure
-        for figure in figures
-        if figure.card.variants and figure.card.topology_hash in topologies
-    ]
-    documents = variant_documents(hub, [figure.card.variants[0] for figure in wanted])
-    for figure in wanted:
-        document = documents.get(figure.card.variants[0])
-        if document is None:
-            continue
-        try:
-            document_slots = slots(document)
-        except WorkflowGraphError as exc:
-            logger.info(
-                "Card %s will not reduce, so its promoted LoRA is not named: %s",
-                figure.card.workflow_key,
-                exc,
-            )
-            continue
-        files = {
-            asset_reference(filename): filename
-            for widget, filename in names.get(figure.card.variants[0], ())
-            if is_lora_widget(widget)
-        }
-        promoted = [
-            slot
-            for slot in document_slots
-            if slot.is_lora
-            and (figure.card.topology_hash, slot.label, slot.asset) in promotions
-        ]
-        figure.promoted = bool(promoted)
-        figure.promoted_labels = {
-            slot.label: files[slot.asset] for slot in promoted if slot.asset in files
-        }
-
-
-def _recovered_slots(figures: list[CardFigures], file_models) -> dict[str, list]:
+def _recovered_slots(figures: list[WorkflowFigures], file_models) -> dict[str, list]:
     """``{workflow_key: [(widget name, filename)]}`` for the cards with no recipe.
 
     A card with no variant is a stored workflow file and nothing else (#1466),
@@ -1055,23 +689,20 @@ def _recovered_slots(figures: list[CardFigures], file_models) -> dict[str, list]
 
 def _describe_slots(
     hub: HubDatabase,
-    figures: list[CardFigures],
+    figures: list[WorkflowFigures],
     names: dict[str, list[tuple]],
     recovered: Optional[dict[str, list]] = None,
 ) -> None:
-    """Fill in each card's models and LoRAs from the cached slot list.
+    """Fill in each workflow's models and LoRA slots from its base card's slots.
 
-    One hub read for the whole grid and no document reduced: the slot list and
-    its marks are what B2 cached per topology precisely so a card read does not
-    have to re-derive them. ``names`` is :func:`read_grid`'s one
+    No document reduced: the slot list is what B2 cached per topology
+    precisely so a read does not have to re-derive it. ``names`` is :func:`read_grid`'s one
     :func:`~pixlstash.hub.workflow_card_reads.asset_names` read, the table that
     holds the readable filenames, shared with :func:`_describe_ghosts`.
 
-    **A recipe LoRA is a slot, not a file.** Which character LoRA happened to
-    be in it is the recipe's business and not the workflow's - so its name is
-    left off here rather than paired to a slot the hub cannot address (see
-    :func:`~pixlstash.hub.workflow_card_reads.asset_names`). What the recipes
-    put in it is summarised per card instead, by :func:`_describe_recipe_loras`.
+    **A LoRA slot is a slot, not a file.** Which LoRA fills it is the
+    recipe's business, so its name is left off (see :class:`SlotModel`); what
+    the pictures put in it is ``recipe_values``.
 
     A second hub read puts the shelf's own name - and its picture, for a card
     that has to draw itself out of its models (#1466) - beside each filename,
@@ -1083,7 +714,6 @@ def _describe_slots(
     cached slot list because they have no recipe. It is empty for every other
     card, and a card is in exactly one of the two branches below.
     """
-    marks = slot_marks(hub, [figure.card.topology_hash for figure in figures])
     # Off `read_grid`'s shared `names` rather than a read of its own: that one
     # covers EVERY variant where this pass only draws the first, so it is a
     # superset and resolving a few filenames no chip shows is cheaper than a
@@ -1102,9 +732,6 @@ def _describe_slots(
         ):
             by_widget.setdefault(widget, []).append(filename)
         taken: Counter = Counter()
-        # The promoted file of each promoted slot on THIS card
-        # (`_mark_promoted`), by label.
-        promoted_here = figure.promoted_labels
 
         def next_name(widget: str) -> Optional[str]:
             found = by_widget.get(widget, ())
@@ -1115,33 +742,14 @@ def _describe_slots(
         for slot in card.slots:
             widget = str(slot.get("widget") or "")
             if slot.get("is_lora"):
-                mark = marks.get(
-                    (card.topology_hash, str(slot.get("label") or "")), RECIPE
-                )
-                # The name is consumed either way, so a structural LoRA and the
-                # recipe slot beside it do not both claim the first filename.
-                name = next_name(widget)
-                promoted = mark == RECIPE and slot.get("label") in promoted_here
-                if promoted:
-                    mark = STRUCTURAL
-                    name = promoted_here[slot.get("label")]
+                # Consumed all the same, so the next LoRA slot does not claim
+                # this one's file.
+                next_name(widget)
                 figure.loras.append(
                     SlotModel(
-                        # Derived, not raw: a LoRA chip reads `Foxglove`
-                        # rather than `Foxglove_fp8.safetensors`. The shelf
-                        # lookup below still keys on the RAW value.
-                        name=_derived(None if mark == RECIPE else name),
+                        name=None,
                         kind="lora",
-                        mark=mark,
-                        promoted=promoted,
                         label=str(slot.get("label") or "") or None,
-                        **(
-                            {}
-                            if mark == RECIPE
-                            else _mark_fields(
-                                marks_by_name.get((name or "").lower()), name
-                            )
-                        ),
                     )
                 )
             else:
@@ -1158,19 +766,13 @@ def _describe_slots(
         # A card with no recipe has no cached slots at all, so this is the
         # other branch of the same `if` rather than an addition to it: the
         # loop above ran zero times. **No `label`** - a slot label is an
-        # address inside a stored topology and these slots have none, so
-        # inventing one would hand a client a target for
-        # `PUT /workflows/{key}/slots` that nothing could resolve. And every
-        # LoRA here is STRUCTURAL: it is in the file, which is exactly what
-        # the mark means; `recipe` is a slot some recipe fills, and this card
-        # has no recipe.
+        # address inside a stored topology and these slots have none. A LoRA
+        # here is named: it is in the file, and there is no recipe to fill it.
         for widget, filename in recovered.get(card.workflow_key, ()):
             fields = _mark_fields(marks_by_name.get(filename.lower()), filename)
             name = _derived(filename)
             if widget == "lora_name":
-                figure.loras.append(
-                    SlotModel(name=name, kind="lora", mark=STRUCTURAL, **fields)
-                )
+                figure.loras.append(SlotModel(name=name, kind="lora", **fields))
             else:
                 figure.models.append(
                     SlotModel(
@@ -1230,10 +832,10 @@ def _mark_fields(mark: Optional[ShelfMark], name: Optional[str] = None) -> dict:
 def _describe_ghosts(
     hub: HubDatabase,
     vault,
-    figures: list[CardFigures],
+    figures: list[WorkflowFigures],
     names: dict[str, list[tuple]],
 ) -> None:
-    """Fill in what each card keeps of something deleted (F7's Ghosts filter).
+    """Fill in what each workflow keeps of something deleted (F7's Ghosts filter).
 
     Two kinds, counted apart because forgetting them is two different purges in
     Settings › Privacy: a **picture ghost** is the thumbnail and prompt of a
@@ -1272,10 +874,9 @@ def _describe_ghosts(
     the hub already bumps rather than on a timer.
 
     **The names come from** ``names`` **- every variant - and not from**
-    :attr:`CardFigures.models` **and** :attr:`~CardFigures.loras`. Those two
-    lists are what the CARD is drawn as: they cover the card's first variant
-    alone, and a recipe LoRA is deliberately anonymous there (its summary,
-    ``recipe_loras``, drops names it cannot resolve), so a forgotten
+    :attr:`WorkflowFigures.models` **and** :attr:`~WorkflowFigures.loras`.
+    Those two lists are what the entry is drawn as: they cover the base card's
+    first variant alone, and a LoRA slot is anonymous there, so a forgotten
     character LoRA - the commonest model ghost of all - would never be counted.
     """
     # `vault.library_uuid` is a real property returning `Optional[str]`, so a
@@ -1316,198 +917,14 @@ def _describe_ghosts(
         )
 
 
-def _describe_recipe_loras(
-    hub: HubDatabase,
-    vault,
-    figures: list[CardFigures],
-    names: dict[str, list[tuple]],
-) -> None:
-    """Fill in which LoRAs have filled each card's recipe slots, most used first.
-
-    The card key ignores them on purpose, so this is a summary of how the
-    workflow has been RUN rather than of what it loads: every variant's LoRA
-    values, less the card's structural ones, counted once per variant. One
-    list per card, not one per slot - ``names`` is keyed by widget and cannot
-    say which loader a value sat on (:func:`~pixlstash.hub.workflow_card_reads.
-    asset_names`), and the card draws one pile anyway.
-
-    **The structural values are read off ONE reduced document per card**, and
-    only for a card that has both kinds of LoRA slot: the card key includes
-    every structural (label, asset) pair, so they are the same in every
-    variant, and a card whose LoRA slots are all recipe slots needs no
-    reduction at all. A card whose document will not reduce is left with no
-    list and says so in the log; its client draws the plain LoRA glyph.
-
-    A stacked card counts its own variants, not its stack's, like every other
-    figure on it.
-    """
-    wanted = [
-        figure
-        for figure in figures
-        if figure.card.variants and any(lora.mark == RECIPE for lora in figure.loras)
-    ]
-    if not wanted:
-        return
-    structural = _structural_lora_assets(hub, wanted)
-    counts: dict[str, Counter] = {}
-    for figure in wanted:
-        fixed = structural.get(figure.card.workflow_key)
-        if fixed is None:
-            continue
-        used: Counter = Counter()
-        for variant in figure.card.variants:
-            used.update(
-                {
-                    filename
-                    for widget, filename in names.get(variant, ())
-                    if is_lora_widget(widget) and asset_reference(filename) not in fixed
-                }
-            )
-        counts[figure.card.workflow_key] = used
-
-    values = sorted({value for used in counts.values() for value in used})
-    candidates, titles = _shelf_candidates(hub, values)
-    # Only a value that names exactly one shelf model gets a title or a face,
-    # by the same rule `model_marks` draws a picture by.
-    single = {
-        value: next(iter(models))
-        for value, models in candidates.items()
-        if len(models) == 1
-    }
-    digests = _model_digests(hub, sorted(set(single.values())))
-    characters = attached_characters(vault, sorted(set(digests.values())))
-
-    for figure in wanted:
-        used = counts.get(figure.card.workflow_key)
-        if not used:
-            continue
-        # Keyed by the model where one resolved, so one LoRA named by its
-        # filename in one variant and by its digest in another is one entry.
-        # Sorted so the value that names the entry does not follow set order
-        # between restarts, and a filename (it has an extension) before a
-        # digest, which reads as nothing when the shelf has no title for it.
-        merged: dict[object, list] = {}
-        for value, recipes in sorted(
-            used.items(), key=lambda item: ("." not in item[0], item[0])
-        ):
-            model_id = single.get(value)
-            key = model_id if model_id is not None else value
-            entry = merged.setdefault(key, [value, 0, model_id])
-            entry[1] += recipes
-        loras = []
-        for value, recipes, model_id in merged.values():
-            attached = characters.get(digests.get(model_id), ())
-            character = attached[0] if len(attached) == 1 else (None, None)
-            loras.append(
-                RecipeLora(
-                    name=titles.get(model_id) or _derived(value) or value,
-                    recipes=recipes,
-                    character_id=character[0],
-                    character_name=character[1],
-                )
-            )
-        loras.sort(key=lambda lora: (-lora.recipes, lora.name.lower()))
-        figure.recipe_loras = loras
-
-
-def _structural_lora_assets(
-    hub: HubDatabase, figures: list[CardFigures]
-) -> dict[str, set[str]]:
-    """``{workflow_key: asset references of its structural LoRA slots}``.
-
-    Empty for a card with no structural LoRA slot, without reading anything.
-    A card whose first variant's document is missing or will not reduce is
-    absent, which :func:`_describe_recipe_loras` reads as "do not guess".
-    """
-    found: dict[str, set[str]] = {}
-    need: dict[str, CardFigures] = {}
-    for figure in figures:
-        if any(lora.mark == STRUCTURAL for lora in figure.loras):
-            need[figure.card.variants[0]] = figure
-        else:
-            found[figure.card.workflow_key] = set()
-    documents = variant_documents(hub, list(need))
-    for variant, figure in need.items():
-        key = figure.card.workflow_key
-        document = documents.get(variant)
-        if document is None:
-            logger.info(
-                "Card %s has no stored document for variant %s, so its recipe "
-                "LoRAs cannot be told from its own and are not listed.",
-                key,
-                variant,
-            )
-            continue
-        labels = {lora.label for lora in figure.loras if lora.mark == STRUCTURAL}
-        try:
-            found[key] = {
-                slot.asset
-                for slot in slots(document)
-                if slot.is_lora and slot.label in labels
-            }
-        except WorkflowGraphError as exc:
-            logger.info(
-                "Card %s will not reduce, so its recipe LoRAs are not listed: %s",
-                key,
-                exc,
-            )
-    return found
-
-
-def _model_digests(hub: HubDatabase, ids: list[int]) -> dict[int, str]:
-    """``{model id: lowercase sha256}`` for the shelf models that have one."""
-    digests = {}
-    for batch in chunked(ids):
-        placeholders = ",".join("?" * len(batch))
-        for row in hub.fetchall(
-            f"SELECT id, sha256 FROM model WHERE id IN ({placeholders}) "
-            "AND sha256 IS NOT NULL",
-            tuple(batch),
-        ):
-            digests[row["id"]] = row["sha256"].lower()
-    return digests
-
-
-def by_key(figures: list[CardFigures]) -> dict[str, CardFigures]:
-    """``{workflow_key: figures}``, for the joins this module makes in memory."""
-    return {figure.card.workflow_key: figure for figure in figures}
-
-
-def _apply_chosen_covers(hub: HubDatabase, vault, figures: list[CardFigures]) -> None:
-    """Move the owner's chosen cover to the front of its card's strip.
-
-    One extra query, and only when the owner has actually chosen something: a
-    library where nobody has picked a cover pays nothing for the feature.
-    """
-    library_uuid = getattr(vault, "library_uuid", None)
-    if not library_uuid:
-        return
-    chosen = chosen_covers(hub, library_uuid)
-    if not chosen:
-        return
-    pictures = read_chosen_covers(vault, sorted(set(chosen.values())))
-    for figure in figures:
-        # By the key's own sha, and never by a default: `chosen.get(key, "")`
-        # would look an unchosen card up under the empty string, so one row
-        # written with an empty `pixel_sha` would cover every card at once.
-        pixel_sha = chosen.get(figure.card.workflow_key)
-        picked = pictures.get(pixel_sha) if pixel_sha else None
-        if picked is None:
-            continue
-        strip = [picked] + [
-            other for other in figure.covers if other.picture_id != picked.picture_id
-        ]
-        figure.covers = strip[:COVER_DEPTH]
-
-
 @dataclass(frozen=True)
 class Default:
-    """One parameter a card starts from, and where the value came from.
+    """One parameter a workflow starts from, and where the value came from.
 
     ``label`` is what a reader sees (``utils/workflowCard.js`` keys the ⓘ list
-    on it, so it is unique within a card); ``slot_label`` and ``input_name``
-    are the address ``workflow_default_override`` is keyed on and are what a
-    later write route edits.
+    on it, so it is unique within a workflow); ``slot_label`` and
+    ``input_name`` are the address ``workflow_group_default`` is keyed on
+    (``<slot_label>/<input_name>``) and are what ``PUT …/defaults`` edits.
     """
 
     label: str
@@ -1515,101 +932,6 @@ class Default:
     input_name: str
     value: bool | int | float | str
     provenance: str
-
-
-def card_defaults(hub: HubDatabase, vault, card: Card) -> list[Default]:
-    """The value each featured parameter most often had, and on which pictures.
-
-    The mode over the instance documents of this card's pictures rated
-    ``BEST_SCORE`` and up, falling back to every picture of the card when
-    nothing is rated. An owner's override replaces the value and says so.
-
-    **Counted per distinct instance, not per picture.** Fifty pictures from one
-    same-seed batch ran one instance and vote once between them, which is the
-    intended reading: the mode is over settings a person chose, and choosing a
-    setting once and generating fifty times is still choosing it once.
-
-    Addressed by ``(slot label, input name)`` and never by node id, which is
-    what ``workflow_default_override`` is keyed on: node ids are renumbered by
-    every re-serialisation, and the same card's variants do not agree about
-    them.
-    """
-    library_uuid = getattr(vault, "library_uuid", None)
-    overrides = default_overrides(hub, card.workflow_key)
-    if not library_uuid:
-        return _overrides_only(overrides)
-
-    provenance = FROM_BEST
-    instance_hashes = read_instance_hashes(
-        vault, card.variants, BEST_SCORE, DEFAULT_SAMPLE
-    )
-    if not instance_hashes:
-        provenance = FROM_ALL
-        instance_hashes = read_instance_hashes(
-            vault, card.variants, None, DEFAULT_SAMPLE
-        )
-    documents = instance_documents(hub, library_uuid, instance_hashes)
-
-    labels = {}
-    for structural_hash, document in variant_documents(
-        hub, sorted({structural_hash for structural_hash, _ in documents})
-    ).items():
-        try:
-            labels[structural_hash] = topology_node_labels(document)
-        except WorkflowGraphError as exc:
-            logger.info(
-                "Variant %s of card %s will not reduce, so its instances "
-                "contribute no default: %s",
-                structural_hash,
-                card.workflow_key,
-                exc,
-            )
-
-    seen: dict[tuple[str, str], Counter] = {}
-    for structural_hash, document in documents:
-        label_of = labels.get(structural_hash)
-        if label_of is None:
-            continue
-        for node_id, node in document.items():
-            label = label_of.get(str(node_id))
-            if label is None or not isinstance(node, dict):
-                continue
-            for name, value in (node.get("inputs") or {}).items():
-                # The type check is also what rejects a connected input: an
-                # API-format link is a two-element list, so it never reaches
-                # the counter. No separate `is_link` guard, which would be a
-                # branch no input can take and no test could hold.
-                if name not in FEATURED_NAMES:
-                    continue
-                if not isinstance(value, (bool, int, float, str)):
-                    continue
-                seen.setdefault((label, name), Counter())[value] += 1
-
-    addresses = sorted(set(seen) | set(overrides))
-    labels = _labels(addresses)
-    defaults = []
-    for address in addresses:
-        if address in overrides:
-            defaults.append(
-                Default(labels[address], *address, overrides[address], EDITED)
-            )
-            continue
-        counter = seen[address]
-        # Most often, and on a tie the value whose text sorts LAST, which is
-        # what `max` over `(count, str(value))` picks: 30 over 20, but 9 over
-        # 30, because the tie-break is lexical rather than numeric. Any total
-        # order would do - what matters is that it is one, since a mode read
-        # off a dict's insertion order would differ between two reads of the
-        # same library, which is a card whose defaults move when nothing
-        # changed.
-        #
-        # The counter is keyed on the raw value, so `True` and `1` share a
-        # bucket (Python hashes them equal). Both render as the same control
-        # and a graph does not mix them on one input, so this is left alone
-        # rather than paid for with a type tag on every count.
-        value = max(counter.items(), key=lambda item: (item[1], str(item[0])))[0]
-        defaults.append(Default(labels[address], *address, value, provenance))
-    return defaults
 
 
 def _labels(addresses: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
@@ -1629,16 +951,6 @@ def _labels(addresses: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
             input_name if seen[input_name] == 1 else f"{input_name} {seen[input_name]}"
         )
     return labels
-
-
-def _overrides_only(overrides: dict[tuple[str, str], str]) -> list[Default]:
-    """A vault with no library uuid can still say what the owner set."""
-    addresses = sorted(overrides)
-    labels = _labels(addresses)
-    return [
-        Default(labels[address], *address, overrides[address], EDITED)
-        for address in addresses
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -2027,13 +1339,12 @@ def _float_or_none(value) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
-# The stack's LoRAs, as the Workflow inspector shows them.
+# A workflow's LoRAs, as the Workflow inspector shows them.
 #
-# The inspector describes the whole stack: the LoRAs every picture of every
-# member loaded are one list, and everything that changes is one pile. Read on
-# demand for one stack rather than on the grid, because it reduces every
-# variant's document to find which slot a file sat in, and a grid read cannot
-# afford that per card.
+# The LoRAs every kept picture of the workflow loaded are one list, and
+# everything that changes is one pile. Read on demand for one workflow rather
+# than on the grid, because it reduces every variant's document to find which
+# slot a file sat in, and a grid read cannot afford that per workflow.
 # ---------------------------------------------------------------------------
 
 # How many pictures a pile row's strip shows.
@@ -2042,18 +1353,14 @@ LORA_STRIP_DEPTH = 3
 
 @dataclass
 class LoraUse:
-    """One LoRA file across a stack: how many pictures loaded it, and where.
+    """One LoRA file across a workflow: how many kept pictures loaded it.
 
     ``asset`` is the stored documents' reference (``asset:…``), the one handle
-    that survives a forgotten name, and what a promotion and a picture filter
-    are addressed by. ``filename`` is ``None`` for a file whose name was
+    that survives a forgotten name, and what the picture filter
+    ``workflow_lora`` takes. ``filename`` is ``None`` for a file whose name was
     forgotten. ``name`` is the shelf's title where exactly one shelf model
     answers to the file, its derived filename otherwise, ``None`` when there
     is no filename to derive from.
-
-    ``promoted`` is true when some member's card key includes this file:
-    promoted on its own, or sitting in a slot marked structural. Either way
-    its pictures are a workflow of their own, which is what the pile says.
     """
 
     asset: str
@@ -2061,14 +1368,12 @@ class LoraUse:
     name: Optional[str] = None
     on_shelf: bool = False
     pictures: int = 0
-    members: list[str] = field(default_factory=list)
     picture_ids: list[int] = field(default_factory=list)
-    promoted: bool = False
 
 
 @dataclass
 class LoraSummary:
-    """A stack's LoRAs: the ones in every picture, and the ones that change.
+    """A workflow's LoRAs: the ones in every picture, and the ones that change.
 
     ``pictures`` counts only the pictures whose variant could be read, which
     is the total both lists are measured against. ``without`` is the pictures
@@ -2077,7 +1382,6 @@ class LoraSummary:
     the top of the pile.
     """
 
-    keys: list[str]
     pictures: int = 0
     shared: list[LoraUse] = field(default_factory=list)
     varying: list[LoraUse] = field(default_factory=list)
@@ -2085,56 +1389,41 @@ class LoraSummary:
     cover_asset: Optional[str] = None
 
 
-def stack_lora_summary(
+def workflow_lora_summary(
     hub: HubDatabase,
     vault,
-    keys: list[str],
+    variants: list[str],
     cover_picture_id: Optional[int] = None,
 ) -> LoraSummary:
-    """Which LoRAs a stack's pictures share, and which change between them.
+    """Which LoRAs a workflow's pictures share, and which change between them.
 
-    **Shared means in every kept picture of every member.** A file only one
-    member loads changes across the stack, so it is in the pile even when that
-    member loads it every time. A variant with no kept picture says nothing
-    about what the pictures used and is left out, and a variant whose document
-    will not reduce is left out of the total as well as the lists, so a "No
-    LoRA" row never counts pictures nobody could read.
+    **Shared means in every kept picture of the workflow.** A variant with no
+    kept picture says nothing about what the pictures used and is left out,
+    and a variant whose document will not reduce is left out of the total as
+    well as the lists, so a "No LoRA" row never counts pictures nobody could
+    read.
 
     Args:
-        hub: The hub the cards live in.
+        hub: The hub the variants live in.
         vault: The open library, for picture counts and strips.
-        keys: The stack's cards, cover first (``effective_stack_keys``).
-        cover_picture_id: The picture on top of the stack's cover, if any.
+        variants: The workflow's variants (``Workflow.variants``).
+        cover_picture_id: The picture on top of the workflow's cover, if any.
     """
-    summary = LoraSummary(keys=list(keys))
-    variant_rows = []
-    for batch in chunked(list(keys)):
-        placeholders = ",".join("?" * len(batch))
-        variant_rows += hub.fetchall(
-            "SELECT structural_hash, topology_hash, workflow_key "
-            "FROM workflow_variant "
-            f"WHERE key_version = ? AND workflow_key IN ({placeholders}) "
-            "ORDER BY structural_hash",
-            (WORKFLOW_KEY_VERSION, *batch),
-        )
+    summary = LoraSummary()
     counts = read_variant_picture_counts(vault)
-    live = [row for row in variant_rows if counts.get(row["structural_hash"], 0) > 0]
+    live = sorted(v for v in set(variants) if counts.get(v, 0) > 0)
     if not live:
         return summary
-    documents = variant_documents(hub, [row["structural_hash"] for row in live])
-    topologies = sorted({row["topology_hash"] for row in live})
-    marks = slot_marks(hub, topologies)
-    promotions = lora_promotions(hub, topologies)
+    documents = variant_documents(hub, live)
 
-    # {structural_hash: {asset: promoted}} for every variant that reduced.
-    loaded: dict[str, dict[str, bool]] = {}
-    for row in live:
-        structural_hash = row["structural_hash"]
+    # {structural_hash: {asset}} for every variant that reduced.
+    loaded: dict[str, set[str]] = {}
+    for structural_hash in live:
         document = documents.get(structural_hash)
         if document is None:
             logger.info(
                 "Variant %s has no stored document, so its pictures are left "
-                "out of its stack's LoRA summary.",
+                "out of its workflow's LoRA summary.",
                 structural_hash,
             )
             continue
@@ -2143,38 +1432,24 @@ def stack_lora_summary(
         except WorkflowGraphError as exc:
             logger.info(
                 "Variant %s will not reduce, so its pictures are left out of "
-                "its stack's LoRA summary: %s",
+                "its workflow's LoRA summary: %s",
                 structural_hash,
                 exc,
             )
             continue
-        topology_hash = row["topology_hash"]
-        found: dict[str, bool] = {}
-        for slot in document_slots:
-            if not slot.is_lora:
-                continue
-            promoted = (topology_hash, slot.label, slot.asset) in promotions or (
-                marks.get((topology_hash, slot.label)) == STRUCTURAL
-            )
-            found[slot.asset] = found.get(slot.asset, False) or promoted
-        loaded[structural_hash] = found
+        loaded[structural_hash] = {
+            slot.asset for slot in document_slots if slot.is_lora
+        }
 
-    key_of = {row["structural_hash"]: row["workflow_key"] for row in live}
-    order = {key: index for index, key in enumerate(keys)}
     uses: dict[str, LoraUse] = {}
     variants_of: dict[str, list[str]] = {}
     for structural_hash, found in loaded.items():
         pictures = counts[structural_hash]
         summary.pictures += pictures
-        for asset, promoted in found.items():
+        for asset in found:
             use = uses.setdefault(asset, LoraUse(asset=asset))
             use.pictures += pictures
-            use.promoted = use.promoted or promoted
-            if key_of[structural_hash] not in use.members:
-                use.members.append(key_of[structural_hash])
             variants_of.setdefault(asset, []).append(structural_hash)
-    for use in uses.values():
-        use.members.sort(key=lambda key: order.get(key, len(order)))
 
     filenames = {
         asset_reference(filename): filename
@@ -2206,20 +1481,18 @@ def stack_lora_summary(
     bare = [
         structural_hash
         for structural_hash, found in loaded.items()
-        if changing and not changing & set(found)
+        if changing and not changing & found
     ]
     if bare:
         summary.without = LoraUse(
             asset="",
             pictures=sum(counts[structural_hash] for structural_hash in bare),
-            members=sorted(
-                {key_of[structural_hash] for structural_hash in bare},
-                key=lambda key: order.get(key, len(order)),
-            ),
             picture_ids=read_best_picture_ids(vault, bare, LORA_STRIP_DEPTH),
         )
     if cover_picture_id is not None and changing:
-        on_cover = loaded.get(read_picture_variant(vault, cover_picture_id) or "", {})
+        on_cover = loaded.get(
+            read_picture_variant(vault, cover_picture_id) or "", set()
+        )
         summary.cover_asset = next(
             (use.asset for use in summary.varying if use.asset in on_cover), None
         )

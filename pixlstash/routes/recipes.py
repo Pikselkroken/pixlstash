@@ -5,15 +5,14 @@ overrides - and not the hub's ``workflow_recipe`` row, which new code calls a
 *variant*. The rows are vault rows because they are authored and must travel
 with a snapshot (``db_models/saved_recipe.py``).
 
-**A recipe belongs to one workflow and runs on its whole stack** (decision
-D10). ``GET /recipes?workflow_key=…`` therefore answers with every member's
-recipes, resolved through the hub (``whole_stack=false`` reads only the
-workflows named, for members picked inside an expanded stack), and an Unstack leaves each recipe with the
-workflow it was saved from because that is the only thing the row names.
+**A recipe belongs to one workflow** (#1623): ``GET /recipes?workflow_id=…``
+answers with that workflow's recipes, and credit counts its pictures, resolved
+through the hub (``variants_in_workflow``). The card a recipe was saved from
+(``workflow_key``) is internal storage and never on the wire.
 
 **Every route here is ``OWNER_ONLY``, and that is a decision.** A recipe holds
 the owner's prompt and names the models they run; the credit beside it counts
-pictures across the whole stack, which is the whole-library disclosure class
+pictures across the whole workflow, which is the whole-library disclosure class
 §16 exists for. Declared in ``pixlstash/authz/registry.py``, never inline.
 """
 
@@ -25,8 +24,14 @@ from typing import Annotated, Any, Optional
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
-from pixlstash.hub.workflow_cards import effective_stack_keys, variant_hashes_for_keys
+from pixlstash.hub.workflow_card_reads import (
+    AUTO_STACK_PREFIX,
+    find_workflow,
+    variants_in_workflow,
+)
 from pixlstash.hub.workflows import shelf_model_names
+from pixlstash.routes.workflows import RunModel
+from pixlstash.services.workflow_library_service import read_variant_picture_counts
 from pixlstash.services.workflow_export import download_name
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import normalized_filename
@@ -54,21 +59,16 @@ MAX_SEED_LENGTH = 64
 # as a 500, which is the class the unknown-source-picture check above closes.
 MAX_REORDER_IDS = 500
 # How many workflows one selection may ask about at once. The Workflows grid
-# selects with shift and ctrl, so this is a gesture's worth of cards, not a
-# library's; each key costs a stack resolution and every stack's variants go
-# into one ``IN`` on the picture table.
+# selects with shift and ctrl, so this is a gesture's worth of workflows, not a
+# library's; each costs a resolution and every one's variants go into one
+# ``IN`` on the picture table.
 MAX_UNION_KEYS = 100
-# Off when the owner has picked single members inside an expanded stack: they
-# asked about those workflows, not the stack around them.
-WHOLE_STACK_DESCRIPTION = (
-    "Widen each named workflow to its whole stack (the default). False reads "
-    "only the workflows named."
-)
-# A workflow key is a 64-character digest. Declared on the ITEM: `max_length`
-# on a `list[str]` bounds the list, so a ceiling written there would leave
-# every individual key unbounded - which is exactly what happened when this
-# parameter stopped being a single string.
-WorkflowKey = Annotated[str, StringConstraints(max_length=200)]
+# The models one recipe may pin: one per loader, and no real graph has more.
+MAX_MODELS = 64
+# ``auto:<core hash>`` or a manual group's uuid. Declared on the ITEM:
+# `max_length` on a `list[str]` bounds the list, not each id.
+WORKFLOW_ID_PATTERN = rf"^(?:{AUTO_STACK_PREFIX}[0-9a-f]{{64}}|[0-9a-f]{{32}})$"
+WorkflowId = Annotated[str, StringConstraints(pattern=WORKFLOW_ID_PATTERN)]
 
 
 def _bounded_overrides(value: Optional[dict]) -> Optional[dict]:
@@ -94,9 +94,14 @@ class RecipeLora(BaseModel):
 
 
 class SavedRecipePayload(BaseModel):
-    """What ``POST /recipes`` takes. Every field but the key has a default."""
+    """What ``POST /recipes`` takes. Every field but the workflow has a default.
 
-    workflow_key: str = Field(min_length=1, max_length=200)
+    ``models`` pins models by loader address over the workflow's default
+    recipe, validated as a run's are (``RunModel``); absent pins nothing.
+    """
+
+    workflow_id: WorkflowId
+    models: Optional[list[RunModel]] = Field(None, max_length=MAX_MODELS)
     name: str = Field("", max_length=MAX_NAME_LENGTH)
     prompt: str = Field("", max_length=MAX_PROMPT_LENGTH)
     negative: Optional[str] = Field(None, max_length=MAX_PROMPT_LENGTH)
@@ -112,7 +117,7 @@ class SavedRecipePayload(BaseModel):
 class SavedRecipeEdit(BaseModel):
     """What ``PATCH /recipes/{id}`` takes: the fields actually sent, and no more.
 
-    ``workflow_key`` is absent on purpose - a recipe does not move between
+    The workflow is absent on purpose - a recipe does not move between
     workflows - and so is ``position``, which is ``PUT /recipes/order``'s job.
     """
 
@@ -134,7 +139,20 @@ class SavedRecipeOut(BaseModel):
     id: int
     name: str
     position: int
-    workflow_key: str
+    workflow_id: Optional[str] = Field(
+        None,
+        description=(
+            "The workflow it runs on; null for a recipe the conversion has "
+            "not reached yet."
+        ),
+    )
+    models: Optional[list[dict]] = Field(
+        None,
+        description=(
+            "`[{address, filename|sha256}]` pinned over the default recipe; "
+            "null pins nothing."
+        ),
+    )
     prompt: str
     negative: Optional[str] = None
     loras: list[dict] = Field(default_factory=list)
@@ -146,14 +164,14 @@ class SavedRecipeOut(BaseModel):
     pictures: int = Field(
         0,
         description=(
-            "Kept pictures of this recipe's stack whose prompt and LoRA names "
+            "Kept pictures of this recipe's workflow whose prompt and LoRA names "
             "are the recipe's. Computed on read; 0 on a write's own response."
         ),
     )
 
 
 class UsedLook(BaseModel):
-    """One look this stack's pictures were made with, saved or not.
+    """One look this workflow's pictures were made with, saved or not.
 
     Not a saved recipe: it has no id, no name and no place in the tab's order,
     because nothing was authored. ``loras`` are file names with no strength -
@@ -167,7 +185,7 @@ class UsedLook(BaseModel):
     cover_picture_id: Optional[int] = None
     saved: bool = Field(
         False,
-        description="A saved recipe of this stack keeps this look.",
+        description="A saved recipe of this workflow keeps this look.",
     )
 
 
@@ -193,7 +211,7 @@ class RecipeExport(BaseModel):
     """``GET /recipes/{id}/export``: the recipe whole, and what it gives away.
 
     Nothing is withheld, which is the difference from
-    ``GET /workflows/{key}/export``: a recipe IS the prompt and the LoRA names,
+    ``GET /workflows/{workflow_id}/export``: a recipe IS the prompt and the LoRA names,
     and one with those taken out would make nothing. ``shares`` is what the
     dialog lists so the owner agrees to it knowing what it says.
     """
@@ -254,46 +272,38 @@ def create_router(server) -> APIRouter:
 
     Args:
         server: The Server instance, for ``vault`` (the recipes) and ``hub``
-            (which workflows a recipe's stack covers).
+            (which variants a recipe's workflow covers).
 
     Returns:
         The configured router.
     """
     router = APIRouter(tags=["recipes"])
 
-    def _announce(request: Request, workflow_key: Optional[str]) -> None:
-        """Say the card's saved recipes changed, so an open tab re-reads them.
+    def _announce(request: Request, workflow_id: Optional[str]) -> None:
+        """Say the workflow's saved recipes changed, so an open tab re-reads them.
 
-        The card's own `saved_recipe_count` moves with them, and the one-off
-        clause reads it (a card carrying a saved recipe is never folded away),
-        so the Workflows grid is stale until it looks again.
+        The workflow's own `saved_recipe_count` moves with them, and the
+        one-off clause reads it (a workflow carrying a saved recipe is never
+        folded away), so the Workflows grid is stale until it looks again.
         """
         announce_changed_workflows(
             server,
-            [workflow_key] if workflow_key else [],
+            [workflow_id] if workflow_id else [],
             "recipes",
             origin_client_id=getattr(request.state, "origin_client_id", None),
         )
 
-    def _resolve_keys(hub, keys: list[str], whole_stack: bool) -> list[str]:
-        """The workflows a read covers: each named one's stack, or just those named.
-
-        Deduplicated for the size of the query and not for the answer: two
-        members of one stack resolve to the same keys, and both reads end in an
-        ``IN``, which already counts a row once however many times its key was
-        listed. Keeping the list short is what this is for.
-        """
-        resolved: list[str] = []
-        for key in keys:
-            for member in effective_stack_keys(hub, key) if whole_stack else [key]:
-                if member not in resolved:
-                    resolved.append(member)
-        return resolved
+    def _variants(hub, workflow_ids: list[str]) -> list[str]:
+        """Every variant the named workflows hold; an unknown id adds none."""
+        found: set[str] = set()
+        for workflow_id in workflow_ids:
+            found.update(variants_in_workflow(hub, workflow_id))
+        return sorted(found)
 
     def _hub():
         hub = getattr(server, "hub", None)
         if hub is None:
-            # Without a hub there are no workflow cards, so there is no stack to
+            # Without a hub there are no workflows, so there is nothing to
             # resolve and no credit to count. A configuration state, not a
             # fault, and the same answer the Workflows reads give.
             raise HTTPException(
@@ -307,44 +317,37 @@ def create_router(server) -> APIRouter:
         summary="List saved recipes",
         description=(
             "The owner's saved recipes, each with how many kept pictures it "
-            "accounts for. Given a workflow key, the recipes of every workflow "
-            "in that one's stack (only that workflow's with `whole_stack=false`); "
+            "accounts for. Given a workflow id, that workflow's recipes; "
             "given none, every recipe in the library."
         ),
         response_model=list[SavedRecipeOut],
     )
     def list_recipes(
         request: Request,
-        workflow_key: list[WorkflowKey] = Query(
+        workflow_id: list[WorkflowId] = Query(
             default_factory=list,
             max_length=MAX_UNION_KEYS,
             description=(
-                "Show the recipes of this workflow (its whole stack unless "
-                "`whole_stack=false`). Repeat it "
-                "for a selection of several; the answer is the union."
+                "Show the recipes of this workflow. Repeat it for a selection "
+                "of several; the answer is the union."
             ),
-        ),
-        whole_stack: bool = Query(
-            default=True,
-            description=WHOLE_STACK_DESCRIPTION,
         ),
     ):
         server.auth.ensure_secure_when_required(request)
-        workflow_keys = [key for key in workflow_key if key]
-        if not workflow_keys:
+        workflow_ids = list(dict.fromkeys(workflow_id))
+        if not workflow_ids:
             # Every recipe in the library, with no credit: crediting them would
-            # mean resolving a stack per workflow, which is a query per card for
-            # a number this listing is not the place for. The tab, which is what
-            # shows credit, always names its workflow.
+            # mean resolving every workflow, a query per workflow for a number
+            # this listing is not the place for. The tab, which is what shows
+            # credit, always names its workflow.
             return saved_recipe_service.read_recipes(server.vault)
 
         hub = _hub()
-        keys = _resolve_keys(hub, workflow_keys, whole_stack)
-        recipes = saved_recipe_service.read_recipes(server.vault, keys)
+        recipes = saved_recipe_service.read_recipes(server.vault, workflow_ids)
         if not recipes:
             return []
         groups = saved_recipe_service.read_credit_groups(
-            server.vault, variant_hashes_for_keys(hub, keys)
+            server.vault, _variants(hub, workflow_ids)
         )
         credit = saved_recipe_service.credit_by_recipe(recipes, groups)
         for recipe in recipes:
@@ -354,21 +357,39 @@ def create_router(server) -> APIRouter:
     @router.post(
         "/recipes",
         summary="Save a recipe",
-        description="Keep a look: prompt, LoRAs and overrides, on one workflow.",
+        description=(
+            "Keep a look: prompt, LoRAs, overrides and pinned models, on one workflow."
+        ),
         response_model=SavedRecipeOut,
         status_code=201,
+        responses={404: {"description": "Unknown workflow."}},
     )
     def create_recipe(request: Request, payload: SavedRecipePayload):
         server.auth.ensure_secure_when_required(request)
+        workflow = find_workflow(
+            _hub(),
+            payload.workflow_id,
+            read_variant_picture_counts(server.vault),
+        )
+        if workflow is None or workflow.base_card is None:
+            raise HTTPException(status_code=404, detail="Unknown workflow.")
         fields = payload.model_dump()
         fields["loras"] = [lora.model_dump() for lora in payload.loras]
+        fields["models"] = (
+            None
+            if payload.models is None
+            else [model.model_dump(exclude_none=True) for model in payload.models]
+        )
+        # The NOT NULL card column, internal since #1623: the card a run of
+        # this workflow starts from, which is what a card re-key follows.
+        fields["workflow_key"] = workflow.base_card
         try:
             recipe = saved_recipe_service.create_recipe(server.vault, fields)
         except saved_recipe_service.UnknownSourcePicture as exc:
             # A bad id in the body, not a fault: answered as a refusal rather
             # than left to the vault's foreign key, which would be a 500.
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        _announce(request, payload.workflow_key)
+        _announce(request, payload.workflow_id)
         return recipe
 
     # Declared before the ``{recipe_id}`` routes below. Nothing collides today —
@@ -394,8 +415,8 @@ def create_router(server) -> APIRouter:
         ordered = saved_recipe_service.reorder_recipes(server.vault, recipe_ids)
         if ordered is None:
             raise HTTPException(status_code=404, detail="No such recipe.")
-        # No key: a reorder is one tab's list and the ids are recipes, not
-        # cards. The event still says "look again", which is all it promises.
+        # No id: a reorder is one tab's list and the ids are recipes, not
+        # workflows. The event still says "look again", which is all it promises.
         _announce(request, None)
         return {"recipe_ids": ordered}
 
@@ -404,46 +425,33 @@ def create_router(server) -> APIRouter:
         summary="Looks this workflow's pictures were made with",
         description=(
             "Every distinct prompt-and-LoRAs combination the kept pictures of "
-            "this workflow's stack carry, with how many pictures each accounts "
-            "for; a look a saved recipe already keeps says so in `saved`. A library "
+            "this workflow carry, with how many pictures each accounts for; a "
+            "look a saved recipe already keeps says so in `saved`. A library "
             "that has never saved a recipe still has these, so the Recipes tab "
             "has something to show and something to save from. Name several "
-            "workflows to get the union across all of their stacks. With "
-            "`whole_stack=false` only the named workflows' pictures are read; "
-            "`saved` still counts every recipe of their stacks."
+            "workflows to get the union."
         ),
         response_model=list[UsedLook],
     )
     def list_used_looks(
         request: Request,
-        workflow_key: list[WorkflowKey] = Query(
+        workflow_id: list[WorkflowId] = Query(
             default_factory=list,
             max_length=MAX_UNION_KEYS,
             description=(
-                "A workflow to read (its whole stack unless `whole_stack=false`). "
-                "Repeat it for a selection of "
-                "several; the answer is the union, counted once per look."
+                "A workflow to read. Repeat it for a selection of several; the "
+                "answer is the union, counted once per look."
             ),
-        ),
-        whole_stack: bool = Query(
-            default=True,
-            description=WHOLE_STACK_DESCRIPTION,
         ),
     ):
         server.auth.ensure_secure_when_required(request)
-        keys = [key for key in workflow_key if key]
-        if not keys:
+        workflow_ids = list(dict.fromkeys(workflow_id))
+        if not workflow_ids:
             return []
         hub = _hub()
-        read_keys = _resolve_keys(hub, keys, whole_stack)
-        # ``saved`` is judged against the whole stack's recipes even when the
-        # looks are narrowed: a recipe saved on a sibling runs on this member
-        # too (D10), so its look here is kept, not one to save again.
-        recipes = saved_recipe_service.read_recipes(
-            server.vault, _resolve_keys(hub, keys, True)
-        )
+        recipes = saved_recipe_service.read_recipes(server.vault, workflow_ids)
         groups = saved_recipe_service.read_credit_groups(
-            server.vault, variant_hashes_for_keys(hub, read_keys)
+            server.vault, _variants(hub, workflow_ids)
         )
         return saved_recipe_service.used_looks(groups, recipes)
 
@@ -470,7 +478,7 @@ def create_router(server) -> APIRouter:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         if recipe is None:
             raise HTTPException(status_code=404, detail="No such recipe.")
-        _announce(request, recipe.get("workflow_key"))
+        _announce(request, recipe.get("workflow_id"))
         return recipe
 
     @router.get(
@@ -518,7 +526,7 @@ def create_router(server) -> APIRouter:
         server.auth.ensure_secure_when_required(request)
         if not saved_recipe_service.delete_recipe(server.vault, recipe_id):
             raise HTTPException(status_code=404, detail="No such recipe.")
-        # The row is gone, so the card it was on cannot be named. Reading it
+        # The row is gone, so the workflow it was on cannot be named. Reading it
         # first, only to put it in an event that says "look again" anyway,
         # would be a query bought for nothing.
         _announce(request, None)

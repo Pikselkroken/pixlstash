@@ -1,36 +1,25 @@
-"""What the owner writes about a workflow CARD (v1.12 B4).
+"""The card writes that remain after the cut-over (#1623): a model fix.
 
 :mod:`pixlstash.hub.workflow_cards` derives a card from a stored document and
-:mod:`pixlstash.hub.workflow_card_reads` reads the rows back; this module is
-the other half - the owner's own decisions about a card, and the only place
-that writes them.
-
-**Nothing here decides anything about identity.** A key is
-``services/workflow_identity.workflow_key`` and a stack is the automatic
-grouping resolved in ``workflow_cards.effective_stack_keys``; this module takes
-the keys its caller resolved and writes rows.
+:mod:`pixlstash.hub.workflow_card_reads` reads the rows back. The owner's
+decisions about a WORKFLOW are written by
+:mod:`pixlstash.hub.workflow_group_writes`; what is left here re-keys cards
+internally - a model fix, which reads a replacement as the original it
+replaced - and records a swapped-in loader.
 
 **One transaction per logical write**, so a crash can never leave attributes on
-a key no variant is on, or a stack row with no members. The mark flip is the
-one that needs it: it re-keys every variant of a topology AND carries the
-owner's attributes across in the same breath, and either half alone is a card
-somebody has named, pinned and stacked losing its name.
-
-**Every user-attribute table is keyed on ``workflow_key`` and that is what
-makes the carry-over one loop** (:data:`_KEYED_TABLES`). A table added to the
-card's vocabulary belongs in that tuple, or a mark flip silently drops it -
-which is the failure this module is shaped to make impossible to forget.
+a key no variant is on. A re-key moves every variant of a topology AND carries
+the card tables across in the same breath (:data:`_KEYED_TABLES`), which the
+cut-over's conversion reads once; a table added there belongs in that tuple.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-import uuid
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.workflow_card_reads import AUTO_STACK_PREFIX
 from pixlstash.hub.workflow_cards import (
     fixed_slots,
     loader_swaps_of,
@@ -39,7 +28,6 @@ from pixlstash.hub.workflow_cards import (
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import WorkflowGraphError, normalized_filename
 from pixlstash.services.workflow_identity import (
-    RECIPE,
     STRUCTURAL,
     WORKFLOW_KEY_VERSION,
     LoaderSwap,
@@ -66,302 +54,6 @@ _KEYED_TABLES = (
 )
 
 
-class _Unset:
-    """Sentinel: this attribute was not in the request, so it stands."""
-
-
-UNSET = _Unset()
-
-
-def set_attributes(
-    hub: HubDatabase,
-    key: str,
-    name=UNSET,
-    notes=UNSET,
-    hidden=UNSET,
-) -> None:
-    """Write the attributes the request carried; the rest stand.
-
-    ``None`` for *name* or *notes* clears it, which is the column's own
-    default (no name of the owner's own, no notes) and not the same as leaving
-    the field out.
-    """
-    fields = {"name": name, "notes": notes, "hidden": hidden}
-    given = {
-        column: (int(bool(value)) if column == "hidden" else value)
-        for column, value in fields.items()
-        if not isinstance(value, _Unset)
-    }
-    if not given:
-        return
-    columns = ", ".join(given)
-    placeholders = ", ".join("?" for _ in given)
-    updates = ", ".join(f"{column} = excluded.{column}" for column in given)
-    with hub.transaction() as conn:
-        conn.execute(
-            f"INSERT INTO workflow_attr (workflow_key, {columns}) "
-            f"VALUES (?, {placeholders}) "
-            f"ON CONFLICT(workflow_key) DO UPDATE SET {updates}",
-            (key, *given.values()),
-        )
-
-
-def replace_defaults(
-    hub: HubDatabase, key: str, defaults: list[tuple[str, str, str]]
-) -> None:
-    """Set this card's whole override set: ``[(slot_label, input_name, value)]``.
-
-    Whole rather than per address, because the form the owner edits shows every
-    featured parameter at once and an empty list is somebody clearing them all.
-    """
-    with hub.transaction() as conn:
-        conn.execute(
-            "DELETE FROM workflow_default_override WHERE workflow_key = ?", (key,)
-        )
-        conn.executemany(
-            "INSERT INTO workflow_default_override "
-            "(workflow_key, slot_label, input_name, value) VALUES (?, ?, ?, ?)",
-            [
-                (key, slot_label, input_name, value)
-                for slot_label, input_name, value in defaults
-            ],
-        )
-
-
-def replace_pins(
-    hub: HubDatabase, key: str, pins: Optional[list[tuple[str, str]]]
-) -> None:
-    """Store this card's pins whole, or forget them with ``None``.
-
-    A row holding ``[]`` is somebody who unpinned everything, which the schema
-    distinguishes from never having pinned - so an empty list writes a row and
-    ``None`` deletes it.
-    """
-    with hub.transaction() as conn:
-        if pins is None:
-            conn.execute("DELETE FROM workflow_key_pins WHERE workflow_key = ?", (key,))
-            return
-        conn.execute(
-            "INSERT INTO workflow_key_pins (workflow_key, pins) VALUES (?, ?) "
-            "ON CONFLICT(workflow_key) DO UPDATE SET pins = excluded.pins",
-            (key, json.dumps([list(pin) for pin in pins])),
-        )
-
-
-def replace_picture_inputs(
-    hub: HubDatabase,
-    library_uuid: str,
-    key: str,
-    inputs: list[tuple[str, str, str, Optional[str]]],
-) -> None:
-    """Set how this card's picture inputs are filled, in ONE library.
-
-    ``inputs`` is ``[(slot_label, input_name, mode, pixel_sha)]``. Scoped to
-    *library_uuid* because a picture is a picture in one vault: a second
-    library gets its own setup rather than a picture it does not hold.
-    """
-    with hub.transaction() as conn:
-        conn.execute(
-            "DELETE FROM workflow_key_picture_input "
-            "WHERE library_uuid = ? AND workflow_key = ?",
-            (library_uuid, key),
-        )
-        conn.executemany(
-            "INSERT INTO workflow_key_picture_input (library_uuid, workflow_key, "
-            "slot_label, input_name, mode, pixel_sha) VALUES (?, ?, ?, ?, ?, ?)",
-            [
-                (library_uuid, key, slot_label, input_name, mode, pixel_sha)
-                for slot_label, input_name, mode, pixel_sha in inputs
-            ],
-        )
-
-
-def flip_slot_marks(
-    hub: HubDatabase,
-    topology_hash: str,
-    marks: dict[str, str],
-    variant_pictures: dict[str, int],
-) -> dict[str, list[str]]:
-    """Re-mark LoRA slots of one topology and re-key its cards, carrying over.
-
-    A mark decides whether a LoRA slot reaches the card key
-    (``workflow_identity.workflow_key``), so flipping one re-keys every variant
-    of the topology. **That re-keying and the carry-over are one transaction**:
-    a card the owner has named, pinned and stacked must arrive on its new key
-    with all of it, or the flip is a destructive operation dressed as a
-    correction.
-
-    Which way the cards move decides what "carrying over" means, and both
-    directions are here rather than in the caller:
-
-    * a **split** (``recipe`` → ``structural``: the LoRA now reaches the key)
-      turns one card into several, and every new key inherits the attributes;
-    * a **merge** (``structural`` → ``recipe``) folds several into one, and the
-      member with the most pictures wins - ties broken on the key, because an
-      arbitrary winner is a card whose name depends on row order.
-
-    Args:
-        topology_hash: The topology whose slots are being marked.
-        marks: ``{slot_label: "structural" | "recipe"}``. A slot not named
-            keeps the mark it has; a label this topology does not have is
-            written and ignored by every reader, so callers validate first.
-        variant_pictures: ``{structural_hash: kept pictures}``, read from the
-            vault by the caller. A variant missing from it counts zero, which
-            is what an unscanned library looks like.
-
-    Returns:
-        ``{old key: [key, ...]}`` for every card whose variants did not all
-        stay put, biggest first, and empty when the flip changed nothing. A
-        list because a split has several: a caller following the card somebody
-        was looking at takes the first, which is the one with most of its
-        pictures.
-
-        **The old key is among its own successors when a variant is still on
-        it**, which is not a special case so much as the honest answer: a
-        variant whose stored document will not parse or will not reduce is
-        logged and left on the key it has, and if a sibling moved, that card
-        both moved and did not. A reader that treats every key in this mapping
-        as a card that went away will act on the half that is not true.
-    """
-    documents = _topology_documents(hub, topology_hash)
-    with hub.transaction() as conn:
-        conn.executemany(
-            "INSERT INTO workflow_slot_mark (topology_hash, slot_label, mark) "
-            "VALUES (?, ?, ?) ON CONFLICT(topology_hash, slot_label) "
-            "DO UPDATE SET mark = excluded.mark",
-            [(topology_hash, label, mark) for label, mark in marks.items()],
-        )
-        moved = _rekey_variants(conn, topology_hash, documents, variant_pictures)
-    if moved:
-        logger.info(
-            "A slot-mark flip on topology %s moved %d card(s) to new keys.",
-            topology_hash,
-            len(moved),
-        )
-    return moved
-
-
-def set_lora_promotion(
-    hub: HubDatabase,
-    topology_hash: str,
-    asset: str,
-    promoted: bool,
-    variant_pictures: dict[str, int],
-) -> Optional[dict[str, list[str]]]:
-    """Promote one LoRA file to a workflow of its own, or put it back.
-
-    The per-file counterpart of :func:`flip_slot_marks`: promoting reaches the
-    card key with *asset* at every LoRA slot of this topology that has held it,
-    and with no other file at those slots, so only the pictures that loaded
-    this file move to a new card. The re-key and the carry-over are one
-    transaction, as a flip's are.
-
-    **Putting back a file whose whole slot is marked structural** turns the
-    slot into a recipe slot and promotes every OTHER file it has held, so they
-    stay on the cards they are on and only this one folds back. That is what
-    lets the per-file control undo a split a per-slot mark made.
-
-    A promoted card is split off an existing one and would inherit its
-    attributes, owner's name included; two cards reading the same typed name
-    is the confusion this control exists to end, so the split-off card's name
-    is cleared and it reads as its generated one. A card ALL of whose pictures
-    loaded the file is re-keyed rather than split, and keeps its name.
-
-    Args:
-        topology_hash: The topology the file is (un)promoted in.
-        asset: The file's reference in the stored documents (``asset:…``).
-        promoted: ``True`` to promote, ``False`` to put back.
-        variant_pictures: ``{structural_hash: kept pictures}``, as for a flip.
-
-    Returns:
-        :func:`flip_slot_marks`' ``moved`` mapping, or ``None`` when no stored
-        document of this topology loads *asset* in a LoRA slot, which the
-        caller reports rather than answering with a change that did nothing.
-    """
-    documents = _topology_documents(hub, topology_hash)
-    held: dict[str, set[str]] = {}
-    for structural_hash, document in documents.items():
-        try:
-            document_slots = slots(document)
-        except WorkflowGraphError as exc:
-            logger.error(
-                "Variant %s will not reduce, so a LoRA promotion cannot see "
-                "which files its slots hold: %s",
-                structural_hash,
-                exc,
-            )
-            continue
-        for slot in document_slots:
-            if slot.is_lora:
-                held.setdefault(slot.label, set()).add(slot.asset)
-    labels = sorted(label for label, assets in held.items() if asset in assets)
-    if not labels:
-        return None
-    with hub.transaction() as conn:
-        marks = dict(
-            conn.execute(
-                "SELECT slot_label, mark FROM workflow_slot_mark "
-                "WHERE topology_hash = ?",
-                (topology_hash,),
-            ).fetchall()
-        )
-        if promoted:
-            conn.executemany(
-                "INSERT OR IGNORE INTO workflow_lora_promotion "
-                "(topology_hash, slot_label, asset) VALUES (?, ?, ?)",
-                [
-                    (topology_hash, label, asset)
-                    for label in labels
-                    if marks.get(label) != STRUCTURAL
-                ],
-            )
-        else:
-            conn.execute(
-                "DELETE FROM workflow_lora_promotion "
-                "WHERE topology_hash = ? AND asset = ?",
-                (topology_hash, asset),
-            )
-            for label in labels:
-                if marks.get(label) != STRUCTURAL:
-                    continue
-                conn.execute(
-                    "UPDATE workflow_slot_mark SET mark = ? "
-                    "WHERE topology_hash = ? AND slot_label = ?",
-                    (RECIPE, topology_hash, label),
-                )
-                conn.executemany(
-                    "INSERT OR IGNORE INTO workflow_lora_promotion "
-                    "(topology_hash, slot_label, asset) VALUES (?, ?, ?)",
-                    [
-                        (topology_hash, label, other)
-                        for other in sorted(held[label] - {asset})
-                    ],
-                )
-        moved = _rekey_variants(conn, topology_hash, documents, variant_pictures)
-        if promoted:
-            split_off = sorted(
-                {
-                    key
-                    for old_key, keys in moved.items()
-                    if old_key in keys
-                    for key in keys
-                    if key != old_key
-                }
-            )
-            conn.executemany(
-                "UPDATE workflow_attr SET name = NULL WHERE workflow_key = ?",
-                [(key,) for key in split_off],
-            )
-    logger.info(
-        "LoRA %s %s on topology %s; %d card(s) moved.",
-        asset,
-        "promoted" if promoted else "put back",
-        topology_hash,
-        len(moved),
-    )
-    return moved
-
-
 def set_model_fix(
     hub: HubDatabase,
     topology_hash: str,
@@ -377,7 +69,7 @@ def set_model_fix(
     ``now=None`` takes the replacement back out. *kind* is the shelf
     ``file_kind`` the slots take (``workflow_identity.model_fix_kind``), kept
     so the Workflow tab can say which row a fix belongs to. Either way every variant of
-    the topology is re-keyed in the same transaction, the way a mark flip is:
+    the topology is re-keyed in the same transaction:
     setting a fix folds the pictures already made with *now* onto the card the
     original made, and undoing it moves them back onto a card of their own.
 
@@ -386,7 +78,8 @@ def set_model_fix(
     owner is fixing THIS card rather than folding it into another.
 
     Returns:
-        :func:`flip_slot_marks`' ``moved`` mapping.
+        ``{old key: [new key, ...]}``, biggest successor first; the old key is
+        among its own successors when a variant is still on it.
     """
     was_norm = normalized_filename(was)
     documents = _topology_documents(hub, topology_hash)
@@ -752,115 +445,3 @@ def _drop_thin_stacks(conn: sqlite3.Connection) -> None:
         "DELETE FROM workflow_stack WHERE stack_id NOT IN "
         "(SELECT stack_id FROM workflow_stack_member)"
     )
-
-
-def stack_together(hub: HubDatabase, keys: list[str]) -> str:
-    """Put these cards in one manual stack, in this order; return its id.
-
-    *keys* is the resolved member list in the order the owner selected them,
-    so ``keys[0]`` is the cover - which is what "merging keeps the first
-    selected stack's name and cover" comes to, a stack having no name and no
-    cover of its own beyond its first member's.
-
-    Each card leaves whatever stack it was in, and its ``workflow_unstacked``
-    row goes with it: stacking a card by hand is the owner reversing the
-    decision to keep it out of a group, so leaving the row would take it back
-    out the moment this stack dissolved.
-    """
-    stack_id = uuid.uuid4().hex
-    with hub.transaction() as conn:
-        conn.executemany(
-            "DELETE FROM workflow_stack_member WHERE workflow_key = ?",
-            [(key,) for key in keys],
-        )
-        conn.executemany(
-            "DELETE FROM workflow_unstacked WHERE workflow_key = ?",
-            [(key,) for key in keys],
-        )
-        conn.execute(
-            "INSERT INTO workflow_stack (stack_id, kind, core_hash) "
-            "VALUES (?, 'manual', NULL)",
-            (stack_id,),
-        )
-        conn.executemany(
-            "INSERT INTO workflow_stack_member (stack_id, workflow_key, position) "
-            "VALUES (?, ?, ?)",
-            [(stack_id, key, position) for position, key in enumerate(keys)],
-        )
-        _drop_thin_stacks(conn)
-    return stack_id
-
-
-def set_stack_order(hub: HubDatabase, stack_id: str, keys: list[str]) -> None:
-    """Set one stack's member order, ``keys[0]`` the cover.
-
-    An automatic grouping is not a row until somebody orders it, so this is
-    also what materialises one: the id carries its core hash
-    (:data:`AUTO_STACK_PREFIX`) and the row is written on first use. A manual
-    stack's row already exists and keeps its kind.
-    """
-    is_auto = stack_id.startswith(AUTO_STACK_PREFIX)
-    with hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_stack (stack_id, kind, core_hash) VALUES (?, ?, ?) "
-            "ON CONFLICT(stack_id) DO NOTHING",
-            (
-                stack_id,
-                "auto" if is_auto else "manual",
-                stack_id[len(AUTO_STACK_PREFIX) :] if is_auto else None,
-            ),
-        )
-        conn.execute(
-            "DELETE FROM workflow_stack_member WHERE stack_id = ?", (stack_id,)
-        )
-        # By key as well as by stack, exactly as `stack_together` does. The
-        # primary key `(stack_id, workflow_key)` does not stop a card holding
-        # two memberships, and `effective_stack_keys` orders by `stack_id` to
-        # make that state *reproducible* rather than correct - so a card
-        # ordered into this stack has to leave the one it was in, or the two
-        # answers disagree about which stack it is in.
-        conn.executemany(
-            "DELETE FROM workflow_stack_member WHERE workflow_key = ?",
-            [(key,) for key in keys],
-        )
-        conn.executemany(
-            "INSERT INTO workflow_stack_member (stack_id, workflow_key, position) "
-            "VALUES (?, ?, ?)",
-            [(stack_id, key, position) for position, key in enumerate(keys)],
-        )
-        _drop_thin_stacks(conn)
-
-
-def unstack_stack(hub: HubDatabase, stack_id: str, keys: list[str]) -> None:
-    """Dissolve one whole stack: every member stands on its own afterwards.
-
-    *keys* is the effective membership the caller resolved, which for an
-    automatic grouping is not stored anywhere - hence the
-    ``workflow_unstacked`` rows: without them the group re-forms on the next
-    read and the gesture reads as having done nothing.
-    """
-    with hub.transaction() as conn:
-        conn.execute(
-            "DELETE FROM workflow_stack_member WHERE stack_id = ?", (stack_id,)
-        )
-        conn.execute("DELETE FROM workflow_stack WHERE stack_id = ?", (stack_id,))
-        conn.executemany(
-            "INSERT OR IGNORE INTO workflow_unstacked (workflow_key) VALUES (?)",
-            [(key,) for key in keys],
-        )
-
-
-def unstack_card(hub: HubDatabase, key: str) -> None:
-    """Take one card out of its stack, leaving the rest of the stack standing.
-
-    The remaining members keep their stack unless one is left alone, in which
-    case it dissolves - and that card returns to its automatic group, because
-    it was stacked by hand and never taken out of one.
-    """
-    with hub.transaction() as conn:
-        conn.execute("DELETE FROM workflow_stack_member WHERE workflow_key = ?", (key,))
-        conn.execute(
-            "INSERT OR IGNORE INTO workflow_unstacked (workflow_key) VALUES (?)",
-            (key,),
-        )
-        _drop_thin_stacks(conn)

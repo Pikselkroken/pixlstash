@@ -29,10 +29,8 @@ import { ALL_PICTURES_ID } from "../stores/useViewStore";
  * surfaces it reconciles look after themselves on this path: the route change
  * remounts `ImageGrid`, and the sidebar counts do not depend on a filter.
  *
- * `workflow_key` and not `workflow_stack`, even for a stack's cover, because
- * the number the reader clicked is that CARD's own picture count — the grid
- * draws a stack as its cover and never sums its members. A stack filter would
- * answer with more pictures than the link said.
+ * `workflow=<id>`: the number the reader clicked is the workflow's own
+ * picture count, summed over every topology it holds, and so is the filter.
  *
  * Here rather than in either component because both of them need it and a
  * second spelling of the chip's shape is a chip the strip cannot remove.
@@ -45,22 +43,21 @@ export function useWorkflowPictures() {
   const searchStore = useSearchStore();
   const gridStore = useGridStore();
 
-  /** @param {{key: string, name: string}} card */
+  /** @param {{id: string, name: string}} card */
   function showPictures(card) {
-    if (!card?.key) return;
-    showFiltered({ key: card.key, name: card.name });
+    if (!card?.id) return;
+    showFiltered({ id: card.id, name: card.name });
   }
 
   /**
-   * *Show N* on the Workflow tab's LoRA pile: the pictures of one stack that
-   * loaded one LoRA. By stack and not by key, because the pile counts over
-   * the whole stack and the link says that count.
+   * *Show N* on the Workflow tab's LoRA pile: the pictures of one workflow
+   * that loaded one LoRA.
    *
-   * @param {{stack: ?string, key: string, lora: string, name: string}} target
+   * @param {{id: string, lora: string, name: string}} target
    */
-  function showLoraPictures({ stack, key, lora, name }) {
-    if (!lora || (!stack && !key)) return;
-    showFiltered(stack ? { stack, lora, name } : { key, lora, name });
+  function showLoraPictures({ id, lora, name }) {
+    if (!lora || !id) return;
+    showFiltered({ id, lora, name });
   }
 
   function showFiltered(filter) {

@@ -70,18 +70,6 @@
         </div>
       </section>
 
-      <section v-if="card.differs_by?.length" class="info-popover__group">
-        <span class="tbm-label">Differs by</span>
-        <div class="info-popover__chips">
-          <span
-            v-for="(fact, i) in card.differs_by"
-            :key="i"
-            class="info-popover__chip"
-            >{{ fact }}</span
-          >
-        </div>
-      </section>
-
       <section class="info-popover__group">
         <span class="tbm-label">Defaults</span>
         <dl class="info-popover__kv">
@@ -108,7 +96,7 @@ import { VIcon, VMenu } from "vuetify/components";
 
 import { useWorkflowPictures } from "../../composables/useWorkflowPictures";
 import { quantBadge } from "../../utils/modelShelf";
-import { isStack, modelDisplayName } from "../../utils/workflowCard";
+import { modelDisplayName } from "../../utils/workflowCard";
 
 const props = defineProps({
   /** One workflow card (see utils/workflowCard.js for the shape). */
@@ -127,21 +115,16 @@ watch(open, async (isOpen) => {
 });
 
 // Split in two so the figure can be the link (F7) while the words around it
-// stay text. "Found in" leads the line on a lone card and follows the stack
-// count on a stack, which is the only reason the prefix is not a constant.
+// stay text.
 const picturesLabel = computed(() => {
   const n = props.card.picture_count ?? 0;
   return n === 1 ? "1 picture" : `${n} pictures`;
 });
 
-const subtitlePrefix = computed(() =>
-  isStack(props.card)
-    ? `Stack of ${props.card.stack_size} workflows · found in `
-    : "Found in ",
-);
+const subtitlePrefix = "Found in ";
 
-// Every slot, not just the checkpoint: a stack whose difference reads "other
-// models" has to have those models listed somewhere, and this is the somewhere.
+// Every slot, not just the checkpoint: this is where the VAE and text
+// encoders the card itself never names are listed.
 //
 // Named by `modelDisplayName`, like every other surface that shows a model: this
 // panel sits directly under the card's own name row, so a list calling the
@@ -157,12 +140,10 @@ const models = computed(() => [
   })),
   ...(props.card.loras ?? []).map((lora, i) => ({
     key: `lora-${i}`,
-    icon: lora.mark === "recipe" ? "plus" : "layers",
-    name: lora.mark === "recipe" ? "LoRA slot" : modelDisplayName(lora),
-    // A recipe slot names no file, so there is nothing to read a precision
-    // off - and `quantBadge(null)` is null, which draws nothing.
-    quant: lora.mark === "recipe" ? null : quantBadge(lora.quant),
-    note: lora.mark === "recipe" ? "filled by the recipe" : "in the workflow",
+    icon: "layers",
+    name: modelDisplayName(lora),
+    quant: quantBadge(lora.quant),
+    note: "in the workflow",
   })),
 ]);
 </script>
@@ -233,12 +214,6 @@ const models = computed(() => [
 .info-popover__note {
   flex-shrink: 0;
   color: rgba(var(--v-theme-on-panel), var(--opacity-text-secondary));
-}
-
-.info-popover__chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
 }
 
 /* The card's fact chip, spelled a second time: the popover WRAPS its chips and

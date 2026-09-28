@@ -269,7 +269,7 @@ READ_BLOCKED_GET_PATHS: frozenset[str] = frozenset(
 
 # The templated half of the same belt. A GET whose path starts with one of these
 # is refused to every scoped token, so a templated owner-class route such as
-# ``/workflows/{workflow_key}/pictures`` survives the gate rollback too. A
+# ``/workflows/{workflow_id}/pictures`` survives the gate rollback too. A
 # prefix may only stand for routes that are ALL owner-class GETs:
 # ``tests/test_architecture_guardrails.py::
 # test_read_blocked_get_prefixes_cover_only_owner_class_gets`` fails the build

@@ -20,11 +20,12 @@ with it, since over-blocking is its own regression.
 
 The B5 classes at the foot of the file cover the same endpoint's *extended*
 read - the negative prompt, the sampler settings, the LoRA strengths, the
-workflow card, and the A1111 branch - plus the picture-list filters that
-resolve a card to the variants that made its pictures.
+workflow, and the A1111 branch - plus the picture-list filter that resolves
+a workflow to the variants that made its pictures.
 """
 
 import gc
+import hashlib
 import io
 import json
 import os
@@ -43,7 +44,6 @@ from pixlstash.services.workflow_hash import (
     ui_topology_hash,
 )
 from pixlstash.db_models import Picture, Project
-from pixlstash.hub import workflow_cards
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.db_models.generation import Generation, GenerationInput
 from pixlstash.server import Server
@@ -490,8 +490,20 @@ def _variant_of(server, pic_id: int) -> str:
     raise AssertionError(f"picture {pic_id} was never filed under a variant")
 
 
+def _core(name: str) -> str:
+    """A stand-in core hash: 64 hex, like the real one."""
+    return hashlib.sha256(name.encode("utf-8")).hexdigest()
+
+
+CORE_SHARED = _core("core-shared")
+CORE_OTHER = _core("core-other")
+# A manual group's id: 32 hex, a uuid's.
+MANUAL_ID = _core("manual-group")[:32]
+
+
 def _card_picture(server, pic_id: int, key: str, core: str) -> str:
-    """Put *pic_id*'s variant on card *key*, and its topology in stack *core*.
+    """Put *pic_id*'s variant on card *key*, and its topology in the automatic
+    workflow ``auto:<core>``.
 
     The rows the card pass derives, written directly with the names this test
     can assert on. Content-addressed rows (the topology and the recipe) are the
@@ -609,32 +621,67 @@ class TestRecipeReadsTheWholeRecipe:
         assert body["reason"] == "no_prompt_chunk"
         assert body["source"] == "comfyui"
 
-    def test_the_workflow_key_is_the_card_the_hub_holds(self, env, monkeypatch):
+    def test_the_workflow_id_is_the_workflow_of_the_variants_topology(
+        self, env, monkeypatch
+    ):
+        """Automatic by its core, and a manual placement wins; the card key
+        is internal and never on the wire (#1623)."""
         server, client, pic_id = env
         _comfyui_unreachable(monkeypatch)
-        _card_picture(server, pic_id, "key-alpha", "core-shared")
+        structural = _card_picture(server, pic_id, "key-alpha", CORE_OTHER)
 
         body = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe").json()
-        assert body["workflow_key"] == "key-alpha"
+        assert body["workflow_id"] == f"auto:{CORE_OTHER}"
+        assert "workflow_key" not in body
 
-    def test_a_variant_the_hub_has_no_card_for_gets_no_key(self, env):
-        """The other direction: the read reports a card, it never invents one."""
+        topology = server.hub.fetchone(
+            "SELECT topology_hash FROM workflow_variant WHERE structural_hash = ?",
+            (structural,),
+        )["topology_hash"]
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO workflow_group (workflow_id, kind) "
+                "VALUES (?, 'manual')",
+                (MANUAL_ID,),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO workflow_group_member "
+                "(topology_hash, workflow_id) VALUES (?, ?)",
+                (topology, MANUAL_ID),
+            )
+        try:
+            body = client.get(f"{API}/comfyui/pictures/{pic_id}/recipe").json()
+            assert body["workflow_id"] == MANUAL_ID
+        finally:
+            with server.hub.transaction() as conn:
+                conn.execute(
+                    "DELETE FROM workflow_group_member WHERE workflow_id = ?",
+                    (MANUAL_ID,),
+                )
+                conn.execute(
+                    "DELETE FROM workflow_group WHERE workflow_id = ?", (MANUAL_ID,)
+                )
+
+    def test_a_picture_the_hub_has_no_workflow_for_gets_no_id(self, env):
+        """The other direction: the read reports a workflow, never invents one."""
         server, _client, _pic_id = env
-        assert workflow_cards.key_of_variant(server.hub, "z" * 64) is None
+        assert comfyui_module._picture_workflow_id(server, 10**9) is None
 
 
 class TestPictureListWorkflowFilters:
-    """Both directions: the card's own pictures, and nobody else's."""
+    """Both directions: the workflow's own pictures, and nobody else's."""
 
-    def _two_carded_pictures(self, server, client) -> tuple[int, int]:
+    def _two_carded_pictures(
+        self, server, client, beta_core: str = CORE_SHARED
+    ) -> tuple[int, int]:
         alpha = _upload_one(
             client, "alpha.png", _recipe_png_bytes(FULL_GRAPH, (1, 2, 3))
         )
         beta = _upload_one(
             client, "beta.png", _a1111_png_bytes(A1111_PARAMETERS, (3, 2, 1))
         )
-        _card_picture(server, alpha, "key-alpha", "core-shared")
-        _card_picture(server, beta, "key-beta", "core-shared")
+        _card_picture(server, alpha, "key-alpha", CORE_SHARED)
+        _card_picture(server, beta, "key-beta", beta_core)
         return alpha, beta
 
     def _ids(self, client, query: str) -> set[int]:
@@ -642,43 +689,79 @@ class TestPictureListWorkflowFilters:
         assert r.status_code == 200, r.text
         return {p["id"] for p in r.json()}
 
-    def test_a_key_lists_its_own_pictures_and_only_those(self, env):
+    def test_a_workflow_lists_its_own_pictures_and_only_those(self, env):
         server, client, pic_id = env
-        alpha, beta = self._two_carded_pictures(server, client)
+        alpha, beta = self._two_carded_pictures(server, client, CORE_OTHER)
 
-        assert self._ids(client, "?workflow_key=key-alpha") == {alpha}
-        assert self._ids(client, "?workflow_key=key-beta") == {beta}
+        assert self._ids(client, f"?workflow=auto:{CORE_SHARED}") == {alpha}
+        assert self._ids(client, f"?workflow=auto:{CORE_OTHER}") == {beta}
         # The control: without the filter all three are there, so the two
         # assertions above are narrowing rather than describing an empty grid.
         assert {alpha, beta, pic_id} <= self._ids(client, "")
 
-    def test_an_automatic_stack_lists_every_card_sharing_its_core_hash(self, env):
+    def test_an_automatic_workflow_lists_every_card_sharing_its_core_hash(self, env):
         server, client, _pic_id = env
         alpha, beta = self._two_carded_pictures(server, client)
 
-        assert self._ids(client, "?workflow_stack=core-shared") == {alpha, beta}
+        assert self._ids(client, f"?workflow=auto:{CORE_SHARED}") == {alpha, beta}
 
-    def test_a_stored_stack_lists_the_cards_it_names(self, env):
-        """The other half of the same query: membership rows, not a core hash.
-
-        Nothing writes these tables yet, so the rows are written here - the
-        point is that a stack named by its own id resolves rather than coming
-        back as an empty grid.
-        """
+    def test_a_manual_group_lists_the_topologies_it_holds(self, env):
+        """Placed by hand, a topology leaves its automatic workflow."""
         server, client, _pic_id = env
-        alpha, _beta = self._two_carded_pictures(server, client)
+        alpha, beta = self._two_carded_pictures(server, client)
+        topology = server.hub.fetchone(
+            "SELECT topology_hash FROM workflow_variant WHERE workflow_key = ?",
+            ("key-alpha",),
+        )["topology_hash"]
         with server.hub.transaction() as conn:
             conn.execute(
-                "INSERT OR REPLACE INTO workflow_stack (stack_id, kind, core_hash) "
-                "VALUES ('stack-one', 'manual', NULL)"
+                "INSERT OR IGNORE INTO workflow_group (workflow_id, kind) "
+                "VALUES (?, 'manual')",
+                (MANUAL_ID,),
             )
             conn.execute(
-                "INSERT OR REPLACE INTO workflow_stack_member "
-                "(stack_id, workflow_key, position) VALUES ('stack-one', 'key-alpha', 0)"
+                "INSERT OR REPLACE INTO workflow_group_member "
+                "(topology_hash, workflow_id) VALUES (?, ?)",
+                (topology, MANUAL_ID),
             )
+        try:
+            assert self._ids(client, f"?workflow={MANUAL_ID}") == {alpha}
+            assert self._ids(client, f"?workflow=auto:{CORE_SHARED}") == {beta}
+        finally:
+            with server.hub.transaction() as conn:
+                conn.execute(
+                    "DELETE FROM workflow_group_member WHERE workflow_id = ?",
+                    (MANUAL_ID,),
+                )
+                conn.execute(
+                    "DELETE FROM workflow_group WHERE workflow_id = ?", (MANUAL_ID,)
+                )
 
-        # Only the card the stack names, though both cards share a core hash.
-        assert self._ids(client, "?workflow_stack=stack-one") == {alpha}
+    def test_a_workflow_combines_with_the_model_filter(self, env):
+        """Filtering a workflow's pictures by a recipe value (#1623): the two
+        narrow each other, as every pair of filters on this route does.
+
+        The env picture loads the same checkpoint but is in another workflow,
+        so the model filter alone lists it and the pair must not; beta is in
+        the workflow but its A1111 infotext is not a ComfyUI model record, so
+        the workflow alone lists it and the pair must not either.
+        """
+        server, client, pic_id = env
+        alpha, beta = self._two_carded_pictures(server, client)
+        model = "sd_xl_base_1.0.safetensors"
+
+        assert {pic_id, alpha} <= self._ids(client, f"?comfyui_model={model}")
+        assert beta in self._ids(client, f"?workflow=auto:{CORE_SHARED}")
+        assert self._ids(
+            client, f"?workflow=auto:{CORE_SHARED}&comfyui_model={model}"
+        ) == {alpha}
+        assert (
+            self._ids(
+                client,
+                f"?workflow=auto:{CORE_SHARED}&comfyui_model=nobody.safetensors",
+            )
+            == set()
+        )
 
     def test_the_resolved_parameter_name_is_not_reachable_from_the_query(self, env):
         """`Picture.find` declares it now, so a client must not be able to send it.
@@ -694,31 +777,21 @@ class TestPictureListWorkflowFilters:
         assert pic_id in {p["id"] for p in r.json()}, "and it filtered nothing"
 
     def test_an_empty_parameter_is_a_filter_not_the_absence_of_one(self, env):
-        """`?workflow_key=` names no card, so it must not answer with everything."""
+        """`?workflow=` names no workflow, so it must not answer with everything."""
         server, client, _pic_id = env
         self._two_carded_pictures(server, client)
 
-        assert self._ids(client, "?workflow_key=") == set()
+        assert self._ids(client, "?workflow=") == set()
 
-    def test_a_card_nothing_was_made_with_lists_nothing(self, env):
+    def test_a_workflow_nothing_was_made_with_lists_nothing(self, env):
         """The direction that fails open if the empty list reads as no filter."""
         server, client, _ = env
         self._two_carded_pictures(server, client)
 
-        assert self._ids(client, "?workflow_key=key-nobody-has") == set()
-        assert self._ids(client, "?workflow_stack=core-nobody-has") == set()
-
-    def test_the_two_filters_narrow_each_other(self, env):
-        server, client, _ = env
-        alpha, _ = self._two_carded_pictures(server, client)
-
-        assert self._ids(
-            client, "?workflow_key=key-alpha&workflow_stack=core-shared"
-        ) == {alpha}
-        assert (
-            self._ids(client, "?workflow_key=key-alpha&workflow_stack=core-nobody-has")
-            == set()
-        )
+        assert self._ids(client, f"?workflow=auto:{_core('nobody')}") == set()
+        assert self._ids(client, "?workflow=key-alpha") == set()
+        # The old parameters are gone: neither filters anything any more.
+        assert self._ids(client, "?workflow_key=key-alpha") == self._ids(client, "")
 
 
 class TestTheFieldsThatCannotBeRendered:
@@ -753,8 +826,8 @@ class TestTheFieldsThatCannotBeRendered:
                 def fetchall(*_a, **_kw):
                     raise sqlite3.OperationalError("the hub is not answering")
 
-        assert _resolve_workflow_filter(_NoHub(), {"workflow_key": "k"}) == []
-        assert _resolve_workflow_filter(_BrokenHub(), {"workflow_key": "k"}) == []
+        assert _resolve_workflow_filter(_NoHub(), {"workflow": "k"}) == []
+        assert _resolve_workflow_filter(_BrokenHub(), {"workflow": "k"}) == []
         # The control: no filter asked for is still no filter, not an empty one.
         assert _resolve_workflow_filter(_NoHub(), {}) is None
 

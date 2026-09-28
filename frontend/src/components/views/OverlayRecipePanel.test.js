@@ -127,7 +127,7 @@ function render(props = {}) {
           name: "SaveRecipeDialog",
           props: [
             "open",
-            "workflowKey",
+            "workflowId",
             "prompt",
             "negative",
             "loras",
@@ -681,7 +681,7 @@ describe("OverlayRecipePanel", () => {
   /** The recipe payload as the overlay now builds it, with a card behind it. */
   const ON_A_CARD = {
     ...RECIPE,
-    workflowKey: "c".repeat(64),
+    workflowId: "c".repeat(64),
     loraNames: ["style.safetensors", "gone.safetensors"],
   };
 
@@ -699,7 +699,7 @@ describe("OverlayRecipePanel", () => {
     ]);
     const wrapper = render({ recipe: ON_A_CARD });
     await flushPromises();
-    expect(listSavedRecipes).toHaveBeenCalledWith(ON_A_CARD.workflowKey);
+    expect(listSavedRecipes).toHaveBeenCalledWith(ON_A_CARD.workflowId);
     expect(wrapper.find(".recipe-match").exists()).toBe(false);
     expect(wrapper.text()).toContain("Save as recipe");
     expect(wrapper.text()).not.toContain("Saved");

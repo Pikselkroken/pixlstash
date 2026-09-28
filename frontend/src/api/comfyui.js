@@ -32,7 +32,7 @@ export async function listWorkflows() {
  * gets a key to open on. Idempotent; owner-only.
  *
  * @param {string} name - the workflow's `name` as listed.
- * @returns {Promise<{name: string, workflow_key: string}>}
+ * @returns {Promise<{name: string, workflow_id: string}>}
  */
 export async function cardForWorkflow(name) {
   return unwrap(

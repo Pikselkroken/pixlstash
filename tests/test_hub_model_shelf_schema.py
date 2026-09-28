@@ -877,7 +877,7 @@ class TestComponentRoleBackfill:
             "checkpoint",
             "unknown",
         )
-        assert hub.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert hub.execute("PRAGMA user_version").fetchone()[0] == CURRENT_DATA_VERSION
 
     def test_a_fresh_hub_records_the_backfill_as_done(self, hub):
         apply_migrations(hub)
