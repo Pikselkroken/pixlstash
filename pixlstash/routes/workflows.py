@@ -4887,7 +4887,7 @@ def create_router(server) -> APIRouter:
                 logger.info(
                     "[workflows] Run of %s: batch_size pinned to 1 on nodes %s so "
                     "count (%s) decides how many pictures come out.",
-                    group.workflow_key,
+                    group.workflow_id,
                     pinned,
                     body.count,
                 )

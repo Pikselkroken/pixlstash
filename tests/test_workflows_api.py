@@ -5356,7 +5356,8 @@ def test_count_decides_the_pictures_not_the_graphs_batch_size(runnable, monkeypa
         lambda server, picture_id, object_info=None: (embedded, []),
     )
     r = runnable.owner.post(
-        f"{API}/workflows/run", json={"workflow_key": RUN_CARD, "count": 2}
+        f"{API}/workflows/run",
+        json={"picture_ids": [runnable.picture_id], "count": 2},
     )
     assert r.status_code == 200, r.text
     assert len(runnable.submitted) == 2
