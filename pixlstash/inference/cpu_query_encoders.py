@@ -2,19 +2,19 @@
 
 A search encodes its query on a request thread: text search and export by
 query call ``Vault.generate_text_embedding`` before their database task, and
-likeness search runs ``_encode_query_image`` on a threadpool worker. The GPU
-worker is meanwhile running the embedding and tagging batches. On CUDA that
-is fine - two threads may use one context - but torch's Metal backend fills its
-kernel-name set without a lock, and every dtype cast routes through that lookup,
-so two threads casting at once corrupt it. The process then dies or hangs
-instead of raising, which is why no ``except`` around the encode can help.
+likeness search's handler runs on a threadpool worker. The GPU worker is
+meanwhile running the embedding and tagging batches. On CUDA that is fine - two
+threads may use one context - but torch's Metal backend is not safe on two
+threads at once: the process dies or hangs instead of raising, which is why no
+``except`` around the encode can help. ``docs/apple-metal-thread-safety.md``
+has the causes.
 
-Measured against ``upstream/develop`` on an M1 Pro, torch 2.13.0: a real server
-driven through the HTTP routes at roughly two encodes a second survived 4 runs
-of 4, and the same server driven at a hundred a second crashed 1 run in 3 with
+Measured on ``develop`` on an M1 Pro, torch 2.13.0: a real server driven
+through the HTTP routes at roughly two encodes a second survived 4 runs of 4,
+while six threads calling the encoders directly at about a hundred a second,
+with the worker embedding an upload, crashed 1 run in 3 with
 ``NSInvalidArgumentException: attempt to insert nil object`` raised from inside
-a ``matmul``. It is a race, so it is load-dependent rather than certain; see
-``docs/apple-metal-thread-safety.md``.
+a ``matmul``. It is a race, so it is load-dependent rather than certain.
 
 Keeping the query encoders off Metal removes the second thread rather than
 trying to synchronise it. The copies are the same classes, model names, weights
@@ -44,9 +44,10 @@ needs *two* threads on Metal, and a runner that refuses tasks has no GPU worker
 doing Metal work to collide with. ``ensure_serving`` returns ``False`` there,
 which is permission rather than failure. Refusing instead broke search in
 configurations with an engine but no running worker, which the multi-project
-authz suite caught. The reasoning has two gaps: a stopping runner refuses tasks
-while its worker finishes its last batch, and two searches in that state are two
-threads on Metal (``docs/apple-metal-thread-safety.md``, "Not covered").
+authz suite caught. Searches falling back take turns
+(:meth:`CpuQueryEncoders.device_fallback`), so two of them are never two threads
+on Metal. One gap remains: a stopping runner refuses tasks while its worker
+finishes its last batch (``docs/apple-metal-thread-safety.md``, "Not covered").
 """
 
 from __future__ import annotations
@@ -323,9 +324,10 @@ class CpuQueryEncoders:
         these copies exist to prevent needs *two* threads on Metal, and a runner
         that refuses tasks has no GPU worker doing Metal work to collide with.
         Refusing instead would break search in configurations with an engine
-        but no running worker, which the authz suites caught. Two gaps: a
-        stopping runner refuses tasks while its worker finishes its last batch,
-        and two searches in that state are two threads on Metal.
+        but no running worker, which the authz suites caught. A caller that
+        falls back takes its turn through :meth:`device_fallback`. One gap
+        remains: a stopping runner refuses tasks while its worker finishes its
+        last batch.
 
         A worker that *is* running is the opposite case: the copies are the only
         safe encoder, so a caller waits for them rather than falling back.
