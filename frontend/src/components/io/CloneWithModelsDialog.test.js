@@ -99,7 +99,7 @@ const CHOSEN = {
 
 function open() {
   return mount(CloneWithModelsDialog, {
-    props: { open: true, workflowKey: KEY, cardName: "Portrait" },
+    props: { open: true, workflowId: KEY, cardName: "Portrait" },
     global: { stubs: { teleport: true } },
   });
 }
@@ -121,7 +121,7 @@ describe("CloneWithModelsDialog", () => {
     );
     cloneWorkflowWithModels.mockResolvedValue({
       name: "Portrait — Krea 2.json",
-      workflow_key: "b".repeat(64),
+      workflow_id: "b".repeat(64),
       swapped: [],
       unswapped: [],
       verified: true,
@@ -351,7 +351,7 @@ describe("CloneWithModelsDialog", () => {
         "qwen_3_4b.safetensors": "mistral.safetensors",
       },
     });
-    expect(wrapper.emitted("cloned")?.[0]?.[0].workflow_key).toBe(
+    expect(wrapper.emitted("cloned")?.[0]?.[0].workflow_id).toBe(
       "b".repeat(64),
     );
   });
@@ -447,7 +447,7 @@ describe("CloneWithModelsDialog", () => {
   it("reads the new card's models when the card changes while open", async () => {
     const wrapper = open();
     await flushPromises();
-    await wrapper.setProps({ workflowKey: "c".repeat(64) });
+    await wrapper.setProps({ workflowId: "c".repeat(64) });
     await flushPromises();
     expect(wrapper.text()).not.toContain("Reading this workflow's models");
     expect(selects(wrapper)[0].element.value).toBe("1");

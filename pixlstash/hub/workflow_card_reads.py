@@ -1,7 +1,11 @@
-"""What the hub answers about a workflow CARD (v1.12 B3).
+"""What the hub answers about cards and the workflows they make (B3, #1623).
 
 :mod:`pixlstash.hub.workflow_cards` derives a card and writes its rows; this
-module only reads them back, for the Workflows grid and for one card's detail.
+module reads them back and groups them into WORKFLOWS (``workflow_index``),
+which is what the Workflows grid and every route show. The card-table reads
+kept below the workflow ones (``stack_rows``, ``key_pins``,
+``default_overrides``, ``slot_marks``) are the cut-over conversion's; no route
+reads them.
 
 **No aggregate table, and no join to the vault.** Everything that counts
 pictures is computed per request in the vault
@@ -29,7 +33,6 @@ from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.workflow_cards import (
     CORE_RULE_VERSION,
     topology_only_key,
-    variant_hashes_for_keys,
 )
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_hash import asset_reference, normalized_filename
@@ -42,14 +45,9 @@ from pixlstash.utils.sql_chunking import chunked
 
 logger = get_logger(__name__)
 
-# The prefix an automatic stack's id carries. An automatic grouping is not a
-# row - it IS the set of cards sharing a ``core_hash`` - so ``auto:`` and that
-# hash are the only thing that names one, and storing an ordered grouping
-# under the same id is what makes ordering it idempotent. Defined here because
-# three modules need the same literal:
-# :mod:`pixlstash.services.workflow_card_service` produces it,
-# :func:`keys_in_stack` below resolves it, and
-# :mod:`pixlstash.hub.workflow_card_writes` writes it.
+# The prefix an automatic workflow's id carries. An automatic grouping is not a
+# row - it IS the set of topologies sharing a ``core_hash`` - so ``auto:`` and
+# that hash are the only thing that names one.
 AUTO_STACK_PREFIX = "auto:"
 
 
@@ -96,8 +94,7 @@ class StackRows:
 
     ``members`` is ``{stack_id: [(position, workflow_key)]}`` and is NOT the
     effective grouping: a row for a card that has since left its automatic
-    group is still here, and resolving that is
-    :func:`pixlstash.services.workflow_card_service.effective_stacks`.
+    group is still here. Read once, by the cut-over's conversion.
     """
 
     kinds: dict[str, str]
@@ -198,7 +195,7 @@ def _file_only_cards(hub: HubDatabase, keyed: set[str]) -> list[Card]:
     of this topology named, not the ones in this file. A NULL ``core_hash`` is
     already "stacks with nothing", which is the right answer for a card whose
     models nobody has read, and it keeps this card out of the automatic groups
-    :func:`keys_in_stack` resolves from the variant table.
+    :func:`workflow_index` builds.
     """
     found = {}
     for row in hub.fetchall(
@@ -307,30 +304,6 @@ def slot_marks(
     return marks
 
 
-def lora_promotions(
-    hub: HubDatabase, topology_hashes: list[str]
-) -> set[tuple[str, str, str]]:
-    """``{(topology_hash, slot_label, asset)}``: every LoRA file promoted there.
-
-    The per-file companion of :func:`slot_marks`
-    (``workflow_lora_promotion``). A promoted file reaches its card's key at
-    that slot, so its pictures are a workflow of their own.
-    """
-    found = set()
-    for batch in chunked(sorted(set(topology_hashes))):
-        placeholders = ",".join("?" * len(batch))
-        found.update(
-            (topology_hash, slot_label, asset)
-            for topology_hash, slot_label, asset in hub.fetchall(
-                "SELECT topology_hash, slot_label, asset "
-                "FROM workflow_lora_promotion "
-                f"WHERE topology_hash IN ({placeholders})",
-                tuple(batch),
-            )
-        )
-    return found
-
-
 def asset_names(
     hub: HubDatabase, structural_hashes: list[str]
 ) -> dict[str, list[tuple[str, str]]]:
@@ -389,22 +362,6 @@ def stack_rows(hub: HubDatabase) -> StackRows:
             for (key,) in hub.fetchall("SELECT workflow_key FROM workflow_unstacked")
         ),
     )
-
-
-def chosen_covers(hub: HubDatabase, library_uuid: str) -> dict[str, str]:
-    """``{workflow_key: pixel_sha}`` for the covers the owner picked here.
-
-    By ``pixel_sha`` and not by picture id, because SQLite reuses a vault id the
-    moment the next import lands, and by library because a picture is a picture
-    in one vault.
-    """
-    return {
-        key: pixel_sha
-        for key, pixel_sha in hub.fetchall(
-            "SELECT workflow_key, pixel_sha FROM workflow_cover WHERE library_uuid = ?",
-            (library_uuid,),
-        )
-    }
 
 
 def variant_documents(
@@ -545,82 +502,19 @@ def key_pins(hub: HubDatabase, workflow_key: str) -> Optional[list[tuple[str, st
     return pins
 
 
-def keys_in_stack(hub: HubDatabase, stack_id: str) -> list[str]:
-    """Every card one stack holds, in order; empty when it holds none.
-
-    Both kinds of stack answer here, because both can be addressed by a write
-    and only one of them is a row:
-
-    * a **stored** stack (manual, or an automatic group somebody has ordered)
-      has a ``workflow_stack_member`` row per card;
-    * an automatic grouping that nobody has ordered is not a row at all - it
-      IS the set of cards sharing a ``core_hash``, and ``auto:<core_hash>`` is
-      the only thing that names it
-      (:data:`pixlstash.hub.workflow_card_writes.AUTO_STACK_PREFIX`).
-
-    The automatic half subtracts the cards that have left the group, the way
-    :func:`pixlstash.hub.workflow_cards.effective_stack_keys` does: a stored
-    membership elsewhere or a ``workflow_unstacked`` row both mean this group
-    is no longer where that card sits, and dissolving a group would otherwise
-    write an ``unstacked`` row for a card that is not in it.
-    """
-    stored = [
-        key
-        for (key,) in hub.fetchall(
-            "SELECT workflow_key FROM workflow_stack_member WHERE stack_id = ? "
-            "ORDER BY position, workflow_key",
-            (stack_id,),
-        )
-    ]
-    if stored or not stack_id.startswith(AUTO_STACK_PREFIX):
-        return stored
-    return [
-        key
-        for (key,) in hub.fetchall(
-            "SELECT DISTINCT v.workflow_key FROM workflow_variant v "
-            "JOIN workflow_topology_core c ON c.topology_hash = v.topology_hash "
-            "AND c.core_version = ? "
-            "WHERE v.key_version = ? AND c.core_hash = ? "
-            "AND v.workflow_key NOT IN (SELECT workflow_key FROM workflow_stack_member) "
-            "AND v.workflow_key NOT IN (SELECT workflow_key FROM workflow_unstacked) "
-            "ORDER BY v.workflow_key",
-            (
-                CORE_RULE_VERSION,
-                WORKFLOW_KEY_VERSION,
-                stack_id[len(AUTO_STACK_PREFIX) :],
-            ),
-        )
-    ]
-
-
-def variants_in_stack(hub: HubDatabase, stack_id: str) -> list[str]:
-    """Every variant on every card one stack holds, for the picture filter.
-
-    The cards are :func:`keys_in_stack`'s, so the filter and every other reader
-    agree about who is in a stack: a card the owner took out of its automatic
-    group (``workflow_unstacked``) or placed in a stored stack is not counted
-    in the automatic one. A bare core hash is read as ``auto:<hash>``, the
-    spelling a card's ``stack_id`` has always had; the older reading matched
-    only the bare hash and ignored both of those tables (#1622).
-
-    A value that names no stack matches nothing.
-    """
-    keys = keys_in_stack(hub, stack_id)
-    if not keys and not stack_id.startswith(AUTO_STACK_PREFIX):
-        keys = keys_in_stack(hub, AUTO_STACK_PREFIX + stack_id)
-    return variant_hashes_for_keys(hub, keys)
-
-
 # ---------------------------------------------------------------------------
 # Workflows as the owner sees them (#1622): variant -> topology -> workflow.
 #
-# Additive beside the card reads above, which every route still uses until the
-# cut-over (#1623). A workflow is a group of TOPOLOGIES: a manual placement
+# What every route reads since the cut-over (#1623). A workflow is a group of
+# TOPOLOGIES: a manual placement
 # (``workflow_group_member``) first, else ``auto:<core_hash>`` under the rule
-# this build applies. A topology with neither - the backfill has not reached
-# it, or it was cached under a superseded rule - is in no workflow yet, for the
-# reason ``Card.core_hash`` gives: a NULL bucket would read as one enormous
-# workflow.
+# this build applies. A topology known only from a stored workflow FILE (an
+# editor-format file has a topology and no recipe, #1466) has no core hash and
+# is a workflow of its own, ``auto:<topology_hash>``: the grid showed such a
+# file as a card before the cut-over and must not lose it. Any other topology
+# with neither - the backfill has not reached it, or it was cached under a
+# superseded rule - is in no workflow yet, for the reason ``Card.core_hash``
+# gives: a NULL bucket would read as one enormous workflow.
 # ---------------------------------------------------------------------------
 
 
@@ -667,7 +561,24 @@ def workflow_of_topology(hub: HubDatabase, topology_hash: str) -> Optional[str]:
         "WHERE topology_hash = ? AND core_version = ?",
         (topology_hash, CORE_RULE_VERSION),
     )
-    return f"{AUTO_STACK_PREFIX}{row['core_hash']}" if row else None
+    if row is not None:
+        return f"{AUTO_STACK_PREFIX}{row['core_hash']}"
+    if _file_only_topology(hub, topology_hash):
+        return f"{AUTO_STACK_PREFIX}{topology_hash}"
+    return None
+
+
+def _file_only_topology(hub: HubDatabase, topology_hash: str) -> bool:
+    """A topology a stored file names and no current variant is filed under."""
+    return (
+        hub.fetchone(
+            "SELECT 1 FROM workflow_file f WHERE f.topology_hash = ? "
+            "AND NOT EXISTS (SELECT 1 FROM workflow_variant v "
+            "WHERE v.topology_hash = f.topology_hash AND v.key_version = ?)",
+            (topology_hash, WORKFLOW_KEY_VERSION),
+        )
+        is not None
+    )
 
 
 def topologies_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
@@ -685,7 +596,8 @@ def topologies_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
                 (workflow_id,),
             )
         ]
-    return [
+    digest = workflow_id[len(AUTO_STACK_PREFIX) :]
+    found = [
         topology_hash
         for (topology_hash,) in hub.fetchall(
             "SELECT c.topology_hash FROM workflow_topology_core c "
@@ -693,9 +605,16 @@ def topologies_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
             "SELECT 1 FROM workflow_group_member m "
             "WHERE m.topology_hash = c.topology_hash) "
             "ORDER BY c.topology_hash",
-            (CORE_RULE_VERSION, workflow_id[len(AUTO_STACK_PREFIX) :]),
+            (CORE_RULE_VERSION, digest),
         )
     ]
+    if found:
+        return found
+    # A file-only topology is its own workflow, `auto:<topology_hash>`.
+    placed = hub.fetchone(
+        "SELECT 1 FROM workflow_group_member WHERE topology_hash = ?", (digest,)
+    )
+    return [digest] if placed is None and _file_only_topology(hub, digest) else []
 
 
 def variants_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
@@ -715,14 +634,21 @@ def variants_in_workflow(hub: HubDatabase, workflow_id: str) -> list[str]:
 
 
 def workflow_index(
-    hub: HubDatabase, picture_counts: Optional[dict[str, int]] = None
+    hub: HubDatabase,
+    picture_counts: Optional[dict[str, int]] = None,
+    cards: Optional[list[Card]] = None,
 ) -> list[Workflow]:
     """Every workflow this hub holds, built from :func:`card_index`.
+
+    A file-only card (#1466) is ``auto:<topology_hash>`` unless its topology
+    is in a workflow already; any other card whose topology is in no workflow
+    (the backfill has not reached it) is left out.
 
     Args:
         hub: The hub.
         picture_counts: ``{structural_hash: kept pictures}`` from the vault,
             for the base topology's last tie-break. ``None`` skips it.
+        cards: :func:`card_index`'s answer when the caller already read it.
     """
     placed = {
         topology_hash: workflow_id
@@ -732,14 +658,25 @@ def workflow_index(
     }
     workflows: dict[str, Workflow] = {}
     loras: dict[str, int] = {}
-    for card in card_index(hub):
+    cards = cards if cards is not None else card_index(hub)
+    # A file-only card reads no core hash of its own, so it joins whatever
+    # workflow another card of its topology is in.
+    core_of = {card.topology_hash: card.core_hash for card in cards if card.core_hash}
+    topology_of: dict[str, str] = {}
+    for card in cards:
+        core = core_of.get(card.topology_hash)
         workflow_id = placed.get(card.topology_hash) or (
-            f"{AUTO_STACK_PREFIX}{card.core_hash}" if card.core_hash else None
+            f"{AUTO_STACK_PREFIX}{core}"
+            if core
+            else None
+            if card.variants
+            else f"{AUTO_STACK_PREFIX}{card.topology_hash}"
         )
         if workflow_id is None:
             continue
         entry = workflows.setdefault(workflow_id, Workflow(workflow_id))
         entry.cards.append(card.workflow_key)
+        topology_of[card.workflow_key] = card.topology_hash
         if card.topology_hash not in entry.topologies:
             entry.topologies.append(card.topology_hash)
         # Per topology, so every card on it agrees - except a file-only card
@@ -787,10 +724,15 @@ def workflow_index(
         for structural_hash, key in entry.variant_card.items():
             if entry.variant_topology[structural_hash] == entry.base_topology:
                 on_base[key] = on_base.get(key, 0) + counts.get(structural_hash, 0)
-        # None for a base topology no variant is filed on (a file-only card
-        # placed by hand): nothing to run from, and a run says so (404).
+        # A base topology no variant is filed on is a file-only card's, which
+        # runs from its file.
         entry.base_card = (
-            min(on_base, key=lambda key: (-on_base[key], key)) if on_base else None
+            min(on_base, key=lambda key: (-on_base[key], key))
+            if on_base
+            else min(
+                (k for k in entry.cards if topology_of[k] == entry.base_topology),
+                default=None,
+            )
         )
         attr = attrs.get(entry.workflow_id)
         if attr is not None:
@@ -803,16 +745,93 @@ def find_workflow(
     hub: HubDatabase,
     workflow_id: str,
     picture_counts: Optional[dict[str, int]] = None,
+    cards: Optional[list[Card]] = None,
 ) -> Optional[Workflow]:
     """One workflow by its id, or ``None`` when this hub has no such workflow."""
     return next(
         (
             w
-            for w in workflow_index(hub, picture_counts)
+            for w in workflow_index(hub, picture_counts, cards)
             if w.workflow_id == workflow_id
         ),
         None,
     )
+
+
+def group_pins(hub: HubDatabase, workflow_id: str) -> Optional[list[tuple[str, str]]]:
+    """The parameters the owner pinned on a workflow, or ``None`` for no choice.
+
+    The read side of ``PUT /workflows/{id}/pins``, which stores addresses
+    (``<slot label>/<input name>``). A ``[slot label, input name]`` pair is
+    read too, the shape ``workflow_key_pins`` holds. As :func:`key_pins`: an
+    unreadable row answers ``None``, never ``[]``, and a pin that is neither
+    shape is logged and left out.
+    """
+    row = hub.fetchone(
+        "SELECT pins FROM workflow_group_pins WHERE workflow_id = ?", (workflow_id,)
+    )
+    if row is None:
+        return None
+    try:
+        stored = json.loads(row["pins"])
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            "The pins of workflow %s will not parse, so it reads as having made "
+            "no choice and its default pins apply: %s",
+            workflow_id,
+            exc,
+        )
+        return None
+    if not isinstance(stored, list):
+        logger.warning(
+            "The pins of workflow %s parsed as %s rather than a list, so it reads "
+            "as having made no choice and its default pins apply.",
+            workflow_id,
+            type(stored).__name__,
+        )
+        return None
+    pins = []
+    for pin in stored:
+        if isinstance(pin, str) and "/" in pin.strip("/"):
+            slot_label, _, input_name = pin.rpartition("/")
+            pins.append((slot_label, input_name))
+        elif isinstance(pin, (list, tuple)) and len(pin) == 2:
+            pins.append((str(pin[0]), str(pin[1])))
+        else:
+            logger.warning(
+                "A pin of workflow %s is %r rather than an address, so it is left "
+                "out; that parameter will not be pinned.",
+                workflow_id,
+                pin,
+            )
+    return pins
+
+
+def group_picture_inputs(
+    hub: HubDatabase, library_uuid: str, workflow_id: str
+) -> list[dict]:
+    """How each picture input of a workflow is filled here (``PUT …/inputs``).
+
+    Returns:
+        ``[{slot_label, input_name, mode, pixel_sha}]``, the address split at
+        its last ``/``, ordered so two reads of an unchanged hub agree.
+    """
+    found = []
+    for address, mode, pixel_sha in hub.fetchall(
+        "SELECT address, mode, pixel_sha FROM workflow_group_picture_input "
+        "WHERE library_uuid = ? AND workflow_id = ? ORDER BY address",
+        (library_uuid, workflow_id),
+    ):
+        slot_label, _, input_name = address.rpartition("/")
+        found.append(
+            {
+                "slot_label": slot_label,
+                "input_name": input_name,
+                "mode": mode,
+                "pixel_sha": pixel_sha,
+            }
+        )
+    return found
 
 
 def workflow_group_defaults(hub: HubDatabase, workflow_id: str) -> dict[str, str]:
@@ -824,37 +843,6 @@ def workflow_group_defaults(hub: HubDatabase, workflow_id: str) -> dict[str, str
             (workflow_id,),
         )
     }
-
-
-def picture_inputs(
-    hub: HubDatabase, library_uuid: str, workflow_key: str
-) -> list[dict]:
-    """How each picture input of a card is filled, as the owner set it (B4).
-
-    The read side of ``PUT /workflows/{key}/inputs``. Scoped to one library for
-    the reason the table is keyed that way: a ``fixed`` row names a picture by
-    ``pixel_sha`` in ONE vault, and handing another library's setup to a run
-    would have it look for a picture that library does not hold.
-
-    Returns:
-        ``[{slot_label, input_name, mode, pixel_sha}]``, ordered so two reads
-        of an unchanged hub answer identically.
-    """
-    return [
-        {
-            "slot_label": slot_label,
-            "input_name": input_name,
-            "mode": mode,
-            "pixel_sha": pixel_sha,
-        }
-        for slot_label, input_name, mode, pixel_sha in hub.fetchall(
-            "SELECT slot_label, input_name, mode, pixel_sha "
-            "FROM workflow_key_picture_input "
-            "WHERE library_uuid = ? AND workflow_key = ? "
-            "ORDER BY slot_label, input_name",
-            (library_uuid, workflow_key),
-        )
-    ]
 
 
 def model_fix_labels(

@@ -9,6 +9,7 @@ import {
   PIXLSTASH_PACK_INSTALL,
   readReason,
   reasonsBlock,
+  unplacedNotice,
 } from "./runReasons";
 
 describe("picture_input_unfilled (#1457)", () => {
@@ -105,5 +106,16 @@ describe("missing_nodes names our own pack", () => {
       "This ComfyUI does not have the nodes rgthreeSeed, KSamplerAdvanced.",
     );
     expect(read.text).not.toContain("PixlStash");
+  });
+});
+
+describe("loras_unplaced names its workflow by id (#1623)", () => {
+  it("carries the group's workflow_id for Edit LoRAs…", () => {
+    const [notice] = unplacedNotice({
+      workflow_id: "auto:" + "c".repeat(64),
+      unplaced_loras: [{ filename: "a.safetensors" }],
+    });
+    expect(notice.workflowId).toBe("auto:" + "c".repeat(64));
+    expect(notice).not.toHaveProperty("workflowKey");
   });
 });

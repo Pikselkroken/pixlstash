@@ -1,44 +1,35 @@
-"""The Workflows view: the library list, the cards, and what the owner writes.
+"""The Workflows view: the grid of workflows, one opened, and what the owner writes.
 
-**The view opens at card level** (workflow implementation plan §F1, design
-`DECISIONS.md`). A card is one workflow as the owner thinks of it; the recipes
-filed under it are the same graph bound to different models, and they are the
-card's *variants* rather than cards of their own. On the owner's library that
-is ~192 cards instead of ~617 rows. B9 (#1410) retired the topology list that
-used to hold `GET /workflows`, and the grid took the route.
+**One entry per workflow** (#1623). A workflow is a group of topologies:
+``auto:<core hash>`` for the automatic group, or a uuid hex for one the owner
+merged or split (``hub/workflow_card_reads.workflow_index``). Its variants are
+every recipe filed under those topologies, and checkpoint, LoRAs and values are
+its *recipe* - a default recipe read off its best pictures, which the owner can
+edit, and whatever a run or a saved recipe puts over it. The card key
+(``workflow_key``) is internal storage: no path, body or answer here names it.
+Everything that acts on ONE graph (the graph, export, the LoRA chain, model
+swap and fix, duplicate, clone, delete) acts on the workflow's **base card**,
+the busiest card of its base topology.
 
 **Two databases, no join.** The rows live in the hub and are content-addressed;
 the counts live in whichever vault is attached. Nothing here crosses that
 boundary — the hub answers "which workflows exist", the vault answers "how many
 of my pictures came from each", and a hash the hub has never heard of is simply
-a workflow this machine does not have. That is the arrangement
-``pixlstash/hub/schema.py`` chose content addressing for, and it is why a
-detached library still lists correctly against a hub that has the recipes.
+a workflow this machine does not have.
 
 **Every route here is ``OWNER_ONLY``, and that is not the default speaking.**
-The card counts are read across every kept picture in the vault, so handing
-one to a picture-, set- or project-scoped token would disclose the size of the
-whole library one workflow at a time. The same goes for the picture ids the rail's
+The counts are read across every kept picture in the vault, so handing one to
+a picture-, set- or project-scoped token would disclose the size of the whole
+library one workflow at a time. The same goes for the picture ids the rail's
 tiles are made of. Declared in ``pixlstash/authz/registry.py``, never inline.
 They also refuse remote plaintext under ``require_ssl``, like the model-shelf
 reads that name the same model files.
 
-**The writes are the owner editing their own library** (v1.12 B4): a card's
-name, notes and hidden flag, its parameter overrides, pins and picture inputs,
-which of its LoRA slots are part of the workflow, and which cards sit in one
-stack. They are ``OWNER_ONLY`` for the reason the reads are and one more: they
-are the owner's own decisions about their library and there is nothing scoped
-about them.
-
-**No write here decides identity or grouping.** A card key is
-``services/workflow_identity``, a stack is resolved in
-``hub/workflow_cards.effective_stack_keys``, and the rows are written by
-``hub/workflow_card_writes``; this module validates a request, resolves the
-keys with those, and says "look again" on the way out
-(``EventType.CHANGED_WORKFLOWS``).
-
-Running a workflow is still a later step (§F5), and forgetting ghosts is a
-privacy purge that lives with the retention setting in ``routes/config.py``.
+**The writes are the owner editing their own library**: a workflow's name,
+notes and hidden flag, its default-recipe parameters, pins and picture inputs
+(``hub/workflow_group_writes``), and merging workflows or splitting a topology
+out of one. Each says "look again" on the way out
+(``EventType.CHANGED_WORKFLOWS``, naming workflow ids).
 """
 
 from __future__ import annotations
@@ -63,38 +54,33 @@ from pydantic import (
 )
 
 from pixlstash.hub.workflow_card_reads import (
+    AUTO_STACK_PREFIX,
+    Workflow,
     asset_names,
     card_index,
-    default_overrides,
     find_card,
+    find_workflow,
+    group_picture_inputs,
+    group_pins,
     instance_documents,
-    key_pins,
-    keys_in_stack,
     model_fix_labels,
     model_fixes,
-    lora_promotions,
-    picture_inputs,
-    slot_marks,
+    workflow_index,
+    workflow_of_topology,
 )
 from pixlstash.hub.workflow_card_writes import (
-    AUTO_STACK_PREFIX,
-    flip_slot_marks,
-    replace_defaults,
-    replace_picture_inputs,
-    replace_pins,
-    set_attributes,
     record_loader_swaps,
-    set_lora_promotion,
     set_model_fix,
-    set_stack_order,
-    stack_together,
-    unstack_card,
-    unstack_stack,
 )
-from pixlstash.hub.workflow_cards import (
-    STRIP_LORAS_FOR_STACKS,
-    effective_stack_keys,
-    stack_id_of,
+from pixlstash.hub.workflow_cards import STRIP_LORAS_FOR_STACKS
+from pixlstash.hub.workflow_group_writes import (
+    is_parameter_address,
+    merge_workflows,
+    replace_group_picture_inputs,
+    replace_group_pins,
+    replace_parameter_defaults,
+    set_group_attributes,
+    split_topology,
 )
 from pixlstash.hub.workflows import (
     assets_for_topology_recipes,
@@ -141,12 +127,10 @@ from pixlstash.services.workflow_card_service import (
     BASE_MODEL_KINDS,
     BEST_SCORE,
     DefaultRecipe,
-    by_key,
-    card_defaults,
     read_grid,
     slot_kind,
-    stack_lora_summary,
     workflow_defaults,
+    workflow_lora_summary,
 )
 from pixlstash.services import saved_recipe_service
 from pixlstash.services.model_shelf_service import (
@@ -172,12 +156,14 @@ from pixlstash.routes.comfyui import (
     store_workflow_copy,
     trash_user_workflow,
 )
-from pixlstash.services.workflow_export import download_stem, scrub_for_export
+from pixlstash.services.workflow_export import (
+    LORA_SLOTS,
+    download_stem,
+    scrub_for_export,
+)
 from pixlstash.services.workflow_identity import (
     CHECKPOINT_WIDGETS,
     CORE_ADDRESS_PREFIX,
-    RECIPE,
-    STRUCTURAL,
     loader_swaps,
     core_node_labels,
     model_fix_kind,
@@ -190,7 +176,7 @@ from pixlstash.services.workflow_hash import (
     normalized_filename,
     structural_document,
 )
-from pixlstash.services.workflow_identity import slots, topology_node_labels
+from pixlstash.services.workflow_identity import topology_node_labels
 from pixlstash.services.workflow_inputs import (
     CardInput,
     card_input_modes,
@@ -286,16 +272,15 @@ class WorkflowGraph(BaseModel):
 
 
 class WorkflowSlotModel(BaseModel):
-    """One model a card names, in the slot it sits in.
+    """One model a workflow's base card names, in the slot it sits in.
 
     ``kind`` is the slot rather than the file (``checkpoint``, ``unet``,
     ``vae``, ``clip``, ``lora``…), because that is what a card row shows: it
-    names the checkpoint only, and ⓘ lists the rest. ``mark`` is B1's own
-    vocabulary (``structural`` | ``recipe``) and is set on LoRA slots only.
+    names the checkpoint only, and ⓘ lists the rest.
 
-    ``name`` is ``None`` for a **recipe** LoRA, which is a slot rather than a
-    file — which character LoRA went in it is the recipe's business, not the
-    workflow's — and for a model whose name was forgotten.
+    ``name`` is ``None`` for a LoRA slot, which is a slot rather than a file —
+    which LoRA went in it is the recipe's business (``recipe_values``,
+    ``default_recipe``) — and for a model whose name was forgotten.
 
     On a card with **no recipe** (``variant_count: 0``, #1466) these are not
     read off a stored slot list at all: they are recovered from the workflow
@@ -374,11 +359,10 @@ class WorkflowSlotModel(BaseModel):
             "because `FP8 E4M3` is display copy and belongs in the client."
         ),
     )
-    mark: str | None = None
     slot_label: str | None = Field(
         None,
         description=(
-            "The slot's address, as `PUT /workflows/{key}/slots` marks it. "
+            "The slot's label on the base topology. "
             "Null for a slot the cached list gave no label — which is every "
             "slot of a card that has no recipe (#1466), since a label is an "
             "address inside a stored topology and such a card has none."
@@ -405,19 +389,6 @@ class WorkflowDefault(BaseModel):
     input_name: str
     value: bool | int | float | str
     provenance: str
-
-
-class WorkflowRecipeLora(BaseModel):
-    """One LoRA that has filled the card's recipe slots in some variant.
-
-    ``character_id`` is null for a LoRA attached to no character in this
-    library (or to several), and the card then draws a LoRA glyph for it.
-    """
-
-    name: str
-    recipes: int
-    character_id: int | None = None
-    character_name: str | None = None
 
 
 class WorkflowCover(BaseModel):
@@ -466,69 +437,89 @@ class WorkflowCover(BaseModel):
         False,
         description=(
             "Made with a model the owner has since replaced in this workflow "
-            "(`PUT /workflows/{key}/model-fix`). Such a picture covers only "
+            "(`PUT /workflows/{workflow_id}/model-fix`). Such a picture covers only "
             "where no picture made with the workflow as it now stands can."
         ),
     )
 
 
-class WorkflowStackMember(BaseModel):
-    """One card of a stack, as a picker lists it without reading its card.
+class RecipeValue(BaseModel):
+    """One value a workflow's kept pictures used, and on how many of them."""
 
-    Members of one stack usually share a base model and a type, so their
-    generated names differ only by a number (:func:`_display_names`);
-    ``sets_apart`` says what this one loads that not every member does, and ``differs_by`` is its chips against the cover
-    for the difference that is not a model (a step added, nodes rewired).
+    name: str = Field(
+        description=(
+            "The value as the picture grid's `comfyui_model` / `comfyui_lora` "
+            "filters take it, so it filters to the pictures it counts."
+        )
+    )
+    pictures: int
+
+
+class RecipeValues(BaseModel):
+    """The checkpoints and LoRAs a workflow's kept pictures used, most first."""
+
+    checkpoints: list[RecipeValue] = Field(default_factory=list)
+    loras: list[RecipeValue] = Field(default_factory=list)
+
+
+class DefaultRecipeModel(BaseModel):
+    """One model the default recipe loads, at its loader's address."""
+
+    address: str
+    kind: str = Field(description="The shelf file kind the loader takes.")
+    filename: str | None = Field(
+        None, description="The file, or null where its name was forgotten."
+    )
+    provenance: str
+
+
+class DefaultRecipeLora(BaseModel):
+    """One LoRA of the default recipe."""
+
+    filename: str | None = None
+    sha256: str | None = Field(
+        None, description="The shelf's digest, or null where it cannot name it."
+    )
+    strength: float | None = None
+    provenance: str
+
+
+class DefaultRecipePayload(BaseModel):
+    """What a workflow runs with when nobody says otherwise (#1622).
+
+    Read off the newest instances of its 4★+ pictures (else of every picture),
+    with the owner's edits (`provenance: edited`) over it. `stages` names each
+    optional stage the base graph has and whether the recipe runs it.
     """
 
-    key: str
-    name: str
-    sets_apart: list[str] = Field(
-        default_factory=list,
-        description=(
-            "The models and structural LoRAs this member loads that some "
-            "other member of the stack does not, as the shelf names them. "
-            "Recipe LoRAs are left out: they vary inside one card."
-        ),
-    )
-    differs_by: list[str] = Field(
-        default_factory=list,
-        description="This member's chips against the cover; empty on the cover.",
-    )
-    differs_by_detail: dict[str, str] = Field(
-        default_factory=dict,
-        description=(
-            "What a `differs_by` chip stands for, keyed by the chip: the node "
-            'classes an "N nodes differ" chip counted (`+ ImageScaleBy · − '
-            "LoraLoaderModelOnly`), or the cover's models against this "
-            'member\'s for "other checkpoint" / "other models" (`Krea 2 → '
-            "Flux Dev fp8`). A chip with nothing more to say is absent."
-        ),
-    )
+    sampled: int = 0
+    models: list[DefaultRecipeModel] = Field(default_factory=list)
+    loras: list[DefaultRecipeLora] = Field(default_factory=list)
+    values: list[WorkflowDefault] = Field(default_factory=list)
+    stages: dict[str, bool] = Field(default_factory=dict)
 
 
 class WorkflowCard(BaseModel):
-    """One card of the Workflows grid (v1.12 B3).
+    """One workflow on the Workflows grid (#1623).
 
-    A **card** is a workflow as a person means it: the topology, the non-LoRA
-    models and the LoRA slots marked structural, so swapping a character LoRA
-    stays the same card. The `workflow_recipe` / `structural_hash` tier is a
-    **variant**; a *saved recipe* is the look a person keeps.
+    A **workflow** is a group of topologies; its variants are every recipe
+    filed under them, and the checkpoint and LoRAs a picture used are its
+    recipe, not its identity (`recipe_values` lists them). `models` and
+    `loras` are its base card's slots, the graph a run starts from.
 
-    **This shape is fixed by a shipped consumer**, `frontend/src/utils/
-    workflowCard.js`, and `docs/frontend_architecture.md` §"WorkflowCard.vue"
-    guarantees it needs no mapping layer — so the field names are snake_case
-    and `mark` carries B1's vocabulary rather than anything invented here.
-
-    ``stack_size`` of 2 or more is what makes a card a stack: the grid draws
-    one card per stack, the cover's, and ``member_keys`` names the rest so a
-    caller can open them. ``differs_by`` is empty on the cover, which is what
-    the members are compared against.
+    **This shape is read by** `frontend/src/utils/workflowCard.js`, so the
+    field names are snake_case and need no mapping layer.
     """
 
-    key: str
+    id: str = Field(
+        description="The workflow: `auto:<core hash>` or a merged/split group's id."
+    )
     name: str | None = Field(
-        None, description="The owner's own name, if they gave one."
+        None,
+        description=(
+            "What the workflow is called: the owner's name, else its file's, "
+            "else one generated from its base model and type."
+        ),
     )
     type: str | None = None
     type_label: str | None = Field(
@@ -541,126 +532,107 @@ class WorkflowCard(BaseModel):
         ),
     )
     imported: bool = Field(
-        False, description="A workflow file on this machine runs this card."
+        False, description="A workflow file on this machine runs this workflow."
     )
     hidden: bool = Field(
         False,
         description=(
-            "The owner has hidden this card. **On the GRID** it is true only "
-            "for a card `include_hidden` let in, so a client that did not ask "
-            "never sees it set - but one that did has to mark those cards, or "
-            "the checkbox silently mixes them into the grid they were kept "
-            "out of. **On the detail route it is always the card's own "
-            "state**, with no flag involved: `GET /workflows/{key}` "
-            "opens a hidden card by design, which is how it can be unhidden. "
-            "`WorkflowCardDetail.hidden` is the same fact beside it."
+            "The owner has hidden this workflow. **On the GRID** it is true "
+            "only for one `include_hidden` let in. **On the detail route it is "
+            "always the workflow's own state**: `GET /workflows/{workflow_id}` "
+            "opens a hidden workflow by design, which is how it can be "
+            "unhidden."
         ),
     )
     models: list[WorkflowSlotModel] = Field(default_factory=list)
     loras: list[WorkflowSlotModel] = Field(default_factory=list)
-    recipe_loras: list[WorkflowRecipeLora] = Field(
-        default_factory=list,
-        description=(
-            "Every LoRA the card's variants loaded into its recipe slots, "
-            "most-used first. Empty on a card with no recipe slot."
-        ),
-    )
-    differs_by: list[str] = Field(default_factory=list)
-    differs_by_detail: dict[str, str] = Field(
-        default_factory=dict,
-        description=(
-            "What a `differs_by` chip stands for, keyed by the chip: the node "
-            'classes an "N nodes differ" chip counted (`+ ImageScaleBy · − '
-            "LoraLoaderModelOnly`), or the cover's models against this "
-            'member\'s for "other checkpoint" / "other models" (`Krea 2 → '
-            "Flux Dev fp8`). A chip with nothing more to say is absent."
-        ),
-    )
     picture_count: int = 0
     rating: float | None = Field(
-        None, description="Mean of the stars this card has; null when it has none."
+        None,
+        description="Mean of the stars this workflow has; null when it has none.",
     )
     covers: list[WorkflowCover] = Field(
         default_factory=list,
         description="Up to three cover pictures, the cover first.",
     )
-    stack_size: int = 1
     saved_recipe_count: int = 0
-    defaults: list[WorkflowDefault] = Field(default_factory=list)
-    # Beyond the shared shape, and additive: a caller that only knows
-    # `workflowCard.js` ignores these and needs no translation for the rest.
-    topology_hash: str
+    defaults: list[WorkflowDefault] = Field(
+        default_factory=list,
+        description=(
+            "The featured values it starts from: empty on the grid, the "
+            "default recipe's `values` on the detail route."
+        ),
+    )
+    base_topology: str | None = Field(
+        None,
+        description=(
+            "The topology a run starts from and an export writes: the one "
+            "with the most stages, then LoRA loaders, then kept pictures."
+        ),
+    )
+    topologies: list[str] = Field(
+        default_factory=list,
+        description="Every topology of the workflow, sorted: what `split` takes.",
+    )
     specials: list[str] | None = Field(
         None,
         description=(
-            "The post-processing this workflow carries, from `upscale` and "
+            "The post-processing the base graph carries, from `upscale` and "
             "`face_detailer`. **Null and `[]` are different answers**: null "
-            "means the card's document has not been read for it yet, `[]` "
-            "means it was read and the graph has none. The generated `name` "
-            "says `+ FaceDetailer` only on `[]`'s side of that line, so a "
-            "consumer drawing its own chip has to keep the two apart too."
+            "means the graph has not been read for it yet, `[]` means it was "
+            "read and has none."
         ),
     )
     variant_count: int = 0
-    member_keys: list[str] = Field(default_factory=list)
-    members: list[WorkflowStackMember] = Field(
-        default_factory=list,
-        description=(
-            "The whole stack in its order, the cover first and this card "
-            "included, each with its name and what sets it apart. Empty "
-            "outside a stack."
-        ),
-    )
-    stack_id: str | None = Field(
-        None,
-        description=(
-            "The stack this card sits in, or null when it stands alone. "
-            "Either a stored stack's id or `auto:<core hash>` for an "
-            "automatic grouping nobody has ordered yet - the two are what "
-            "`PUT /workflows/stacks/{stack_id}/order` and "
-            "`POST /workflows/stacks/{stack_id}/unstack` are addressed by, "
-            "and neither can be derived from anything else the card carries."
-        ),
-    )
     last_used: str | None = Field(
         None,
         description=(
-            "When a kept picture was last made by any variant of this card, "
-            "as the same ISO string `/workflows` serves. Null when the card "
-            "has no kept pictures. The Workflows grid's *Recently used* sort "
-            "reads it; `rank` cannot stand in, being a rating."
+            "When a kept picture was last made by any variant of this "
+            "workflow. Null when it has no kept pictures."
         ),
     )
     rank: float = Field(
         0.0,
         description=(
             "The Bayesian cover rank the grid is ordered by. Not `rating`: "
-            "it is smoothed towards the library's mean so cards can be "
+            "it is smoothed towards the library's mean so workflows can be "
             "ordered against each other, and is meaningless on its own."
         ),
     )
     ghosts: int = Field(
         0,
         description=(
-            "Picture ghosts this card's variants keep for the active library: "
-            "the thumbnail and prompt of a picture the library no longer has."
+            "Picture ghosts this workflow's variants keep for the active "
+            "library: the thumbnail and prompt of a picture the library no "
+            "longer has."
         ),
     )
     model_ghosts: int = Field(
         0,
         description=(
-            "How many VALUES this card's variants name that the shelf does "
-            "not hold - a model filename, or a `*_sha256` digest, which is "
-            "what the shelf judges. A card naming one missing model by both "
-            "counts 2, so this is not a count of models: read it as "
-            "'something here is gone'. With `ghosts`, what the Filters "
-            "panel's Ghosts row asks about."
+            "How many VALUES this workflow's variants name that the shelf does "
+            "not hold - a model filename, or a `*_sha256` digest. Read it as "
+            "'something here is gone', not as a count of models."
+        ),
+    )
+    recipe_values: RecipeValues = Field(
+        default_factory=RecipeValues,
+        description=(
+            "The checkpoints and LoRAs its kept pictures used, with how many "
+            "pictures each, most used first: the input to the picture filter."
+        ),
+    )
+    default_recipe: DefaultRecipePayload | None = Field(
+        None,
+        description=(
+            "Null on the grid (it samples stored runs per workflow); filled "
+            "on the detail route and on every write's answer."
         ),
     )
 
 
 class WorkflowCards(BaseModel):
-    """``GET /workflows``: the grid, and what it left out.
+    """``GET /workflows``: the grid, one entry per workflow, and what it left out.
 
     ``one_offs`` and ``hidden`` are counts rather than rows on purpose: both
     sets are excluded from ``cards``, and the view offers them as a way back in
@@ -687,7 +659,7 @@ class ModelFixRow(BaseModel):
 
 
 class WorkflowCardDetail(BaseModel):
-    """``GET /workflows/{workflow_key}``: one card opened."""
+    """``GET /workflows/{workflow_id}``: one workflow opened."""
 
     card: WorkflowCard
     notes: str | None = None
@@ -697,7 +669,7 @@ class WorkflowCardDetail(BaseModel):
         None,
         description=(
             "The parameters the owner pinned, addressed as `PUT "
-            "/workflows/{key}/pins` takes them. `null` is a card nobody has "
+            "/workflows/{workflow_id}/pins` takes them. `null` is a workflow nobody has "
             "pinned on, so the client's own default pins apply; `[]` is "
             "somebody who unpinned everything. Without this the pins were "
             "write-only and the Workflow tab could not draw the pin it sets."
@@ -718,10 +690,9 @@ class WorkflowCardDetail(BaseModel):
     model_fixes: list[ModelFixRow] = Field(
         default_factory=list,
         description=(
-            "The models the owner replaced in this workflow because the "
-            "original is gone (`PUT /workflows/{key}/model-fix`). A run loads "
-            "`now` wherever the graph names `was`, and a picture made with it "
-            "is filed on this card."
+            "The models the owner replaced in this workflow's base graph "
+            "because the original is gone (`PUT /workflows/{workflow_id}/"
+            "model-fix`). A run loads `now` wherever the graph names `was`."
         ),
     )
 
@@ -734,14 +705,12 @@ MAX_NAME_LENGTH = 200
 MAX_NOTES_LENGTH = 4000
 MAX_LABEL_LENGTH = 200
 MAX_VALUE_LENGTH = 2000
-# A slot list, a pin list and a parameter form are all per-topology and small;
-# a stack is a handful of cards somebody selected. The stack ceiling is the
-# largest because a merge expands each selection to its whole stack first.
-MAX_SLOT_MARKS = 200
+# A pin list and a parameter form are small; a merge is a handful of
+# workflows somebody selected.
 MAX_DEFAULTS = 200
 MAX_PINS = 200
 MAX_INPUTS = 200
-MAX_STACK_KEYS = 500
+MAX_MERGE_IDS = 200
 
 # A run request's own ceilings. The picture list is capped at the same place
 # the shipped run route caps a selection, because it is the same gesture.
@@ -772,11 +741,11 @@ BEST_PICTURE_DEPTH = 5
 # neither does a widget name, so the last one separates the two.
 OVERRIDE_ADDRESS_SEPARATOR = "/"
 
-# A stack is named either by the id ``stack_together`` minted (a uuid4 hex) or,
-# for an automatic grouping, by ``auto:`` and the core hash that IS the
-# grouping. Checked rather than trusted, so a malformed id is a 422 naming the
-# parameter instead of a write against a stack nothing will ever read.
-_STACK_ID_RE = re.compile(rf"^(?:{AUTO_STACK_PREFIX}[0-9a-f]{{64}}|[0-9a-f]{{32}})$")
+# A workflow is named either by ``auto:`` and the core hash that IS the
+# automatic group, or by the uuid hex a merge or split minted. Checked rather
+# than trusted, so a malformed id is a 422 naming the parameter instead of a
+# write against a workflow nothing will ever read.
+_WORKFLOW_ID_RE = re.compile(rf"^(?:{AUTO_STACK_PREFIX}[0-9a-f]{{64}}|[0-9a-f]{{32}})$")
 
 # The extension a picture keeps when it is uploaded into ComfyUI's input folder.
 # Anything else is dropped rather than carried into a name another program
@@ -786,9 +755,9 @@ _PIXEL_SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class WorkflowCardEdit(BaseModel):
-    """``PATCH /workflows/{key}``: the fields the request carries, and no more.
+    """``PATCH /workflows/{workflow_id}``: the fields the request carries, and no more.
 
-    ``null`` for ``name`` or ``notes`` clears it, which is the card's own
+    ``null`` for ``name`` or ``notes`` clears it, which is the workflow's own
     default and not the same as leaving the field out - so the handler reads
     ``exclude_unset`` rather than testing for ``None``.
     """
@@ -798,31 +767,10 @@ class WorkflowCardEdit(BaseModel):
     hidden: bool | None = None
 
 
-class SlotMarks(BaseModel):
-    """``PUT /workflows/{key}/slots``: which LoRA slots are the workflow's.
-
-    ``marks`` is ``{slot_label: "structural" | "recipe"}`` over this card's
-    LoRA slots. A slot left out keeps the mark it has, so correcting one is one
-    entry rather than the whole list.
-    """
-
-    marks: dict[str, str] = Field(default_factory=dict, max_length=MAX_SLOT_MARKS)
-
-    @field_validator("marks")
-    @classmethod
-    def _known_marks(cls, value: dict[str, str]) -> dict[str, str]:
-        for label, mark in value.items():
-            if len(label) > MAX_LABEL_LENGTH:
-                raise ValueError("A slot label is longer than a slot label can be.")
-            if mark not in (STRUCTURAL, RECIPE):
-                raise ValueError(f"mark must be {STRUCTURAL!r} or {RECIPE!r}.")
-        return value
-
-
 def _one_row_per_address(entries) -> None:
     """Refuse a whole-set write that names one parameter twice.
 
-    Both tables these feed are keyed on ``(…, slot_label, input_name)``, so a
+    Both tables these feed are keyed on the address ``slot_label/input_name``, so a
     repeated address is a UNIQUE violation out of the database - a 500 for
     what is a bad request, and the same class as the ``fixed``-without-a-
     picture CHECK the model beside this one pre-validates. Refused here for
@@ -841,10 +789,11 @@ def _one_row_per_address(entries) -> None:
 
 
 class ParameterAddress(BaseModel):
-    """One parameter of a card, addressed the way the card's defaults are.
+    """One parameter of a workflow, by address: ``<slot_label>/<input_name>``.
 
-    ``(slot_label, input_name)`` and never a node id: every re-serialisation
-    renumbers those and a card's variants disagree about them.
+    ``slot_label`` is a ``core:<label>`` shared by every topology of the
+    workflow, or a label on its base topology; never a node id, which every
+    re-serialisation renumbers.
     """
 
     slot_label: str = Field(min_length=1, max_length=MAX_LABEL_LENGTH)
@@ -852,17 +801,19 @@ class ParameterAddress(BaseModel):
 
 
 class CardDefault(ParameterAddress):
-    """One parameter the owner has set this card to start from."""
+    """One parameter the owner has set this workflow to start from."""
 
     value: bool | int | float | str
 
 
 class CardDefaults(BaseModel):
-    """``PUT /workflows/{key}/defaults``: the card's whole override set.
+    """``PUT /workflows/{workflow_id}/defaults``: the whole parameter edit set.
 
     Whole rather than per parameter, because the form shows every featured
     parameter at once - so an empty list is somebody clearing them all, which
-    is a state and not a no-op.
+    is a state and not a no-op. Parameters only: an address naming a model
+    loader's file or a ``lora:`` is refused, because those rows are the
+    default recipe's models and LoRAs, which this form does not show.
     """
 
     defaults: list[CardDefault] = Field(default_factory=list, max_length=MAX_DEFAULTS)
@@ -874,6 +825,13 @@ class CardDefaults(BaseModel):
             if len(str(default.value)) > MAX_VALUE_LENGTH:
                 raise ValueError(
                     f"A parameter value is longer than {MAX_VALUE_LENGTH} characters."
+                )
+            address = (
+                f"{default.slot_label}{OVERRIDE_ADDRESS_SEPARATOR}{default.input_name}"
+            )
+            if not is_parameter_address(address):
+                raise ValueError(
+                    f"{address!r} names a model or a LoRA, not a parameter."
                 )
         _one_row_per_address(value)
         return value
@@ -888,7 +846,7 @@ _FIX_KIND_NAMES = {
 
 
 class ModelFix(BaseModel):
-    """``PUT /workflows/{key}/model-fix``: replace a model, or undo that.
+    """``PUT /workflows/{workflow_id}/model-fix``: replace a model, or undo that.
 
     ``was`` is the file the workflow names, as the graph spells it; ``now`` a
     file on the model shelf, or ``null`` to load the original again.
@@ -903,9 +861,9 @@ class ModelFix(BaseModel):
 
 
 class CardPins(BaseModel):
-    """``PUT /workflows/{key}/pins``: which parameters the form shows first.
+    """``PUT /workflows/{workflow_id}/pins``: which parameters the form shows first.
 
-    ``null`` forgets the card's pins, so the defaults apply again; ``[]`` is
+    ``null`` forgets the workflow's pins, so the defaults apply again; ``[]`` is
     somebody who unpinned everything, which the hub keeps as a row.
     """
 
@@ -913,7 +871,7 @@ class CardPins(BaseModel):
 
 
 class CardPictureInput(ParameterAddress):
-    """How one picture input of a card is filled.
+    """How one picture input of a workflow is filled.
 
     ``fixed`` names a picture by content (``pixel_sha``) rather than by id,
     because SQLite reuses a vault id the moment the next import lands. A
@@ -929,7 +887,7 @@ class CardPictureInput(ParameterAddress):
 
 
 class CardPictureInputs(BaseModel):
-    """``PUT /workflows/{key}/inputs``: this card's whole picture-input setup."""
+    """``PUT /workflows/{workflow_id}/inputs``: its whole picture-input setup."""
 
     inputs: list[CardPictureInput] = Field(default_factory=list, max_length=MAX_INPUTS)
 
@@ -947,65 +905,39 @@ class CardPictureInputs(BaseModel):
         return value
 
 
-class StackKeys(BaseModel):
-    """A complete, ordered list of card keys. ``keys[0]`` is the cover."""
+class WorkflowMerge(BaseModel):
+    """``POST /workflows/merge``: the workflows to fold into one, cover first."""
 
-    keys: list[str] = Field(default_factory=list, max_length=MAX_STACK_KEYS)
-
-
-class StackResult(BaseModel):
-    """A stack as it stands after the write, so a caller can confirm it."""
-
-    stack_id: str | None = None
-    keys: list[str] = Field(default_factory=list)
+    ids: list[str] = Field(min_length=2, max_length=MAX_MERGE_IDS)
 
 
-class SlotMarkResult(BaseModel):
-    """Where a mark flip left the card that was addressed, and what else moved.
+class WorkflowMerged(BaseModel):
+    """The workflow a merge made, and the ones it folded in."""
 
-    ``key`` is where the requested card now lives: flipping a mark re-keys
-    every variant of the topology, so the card the caller was looking at has a
-    new URL and nothing else in the response would tell them. A split has
-    several successors and this is the biggest of them - the one holding most
-    of the pictures the card had - because a client has to open one of them.
-
-    ``moved`` is ``{old key: [key, ...]}`` over every card of that topology,
-    biggest first, and empty when the marks asked for were already the marks
-    in force.
-
-    **A key may list itself**, and a client must not read every entry as a
-    card that went away. A variant whose stored document will not parse keeps
-    the key it is on, so if a sibling moved, that card both moved and did not:
-    it is still open at its own URL and still holds its name, its pins and its
-    saved recipes. ``key`` is the one to follow; the list is what to check a
-    key against before deciding it is gone.
-    """
-
-    key: str
-    moved: dict[str, list[str]] = Field(default_factory=dict)
+    id: str
+    ids: list[str]
 
 
-class LoraPromotion(BaseModel):
-    """``PUT /workflows/{key}/lora-promotion``: one LoRA file in or out of the key.
+class WorkflowSplit(BaseModel):
+    """``POST /workflows/{workflow_id}/split``: the topology to take out."""
 
-    ``asset`` is the file as ``GET /workflows/{key}/lora-summary`` names it,
-    the stored documents' reference rather than a filename, so a file whose
-    name was forgotten can still be promoted and put back.
-    """
+    topology: str = Field(pattern=r"^[0-9a-f]{64}$")
 
-    asset: str = Field(pattern=r"^asset:[0-9a-f]{64}$")
-    promoted: bool
+
+class WorkflowSplitResult(BaseModel):
+    """The new workflow holding just the topology that was split out."""
+
+    id: str
 
 
 class WorkflowLoraUse(BaseModel):
-    """One LoRA file across a stack, as the inspector's pile lists it."""
+    """One LoRA file across a workflow, as the inspector's pile lists it."""
 
     asset: str = Field(
         description=(
             "The file's reference in the stored graphs (`asset:<sha256>`): "
-            "what `PUT …/lora-promotion` and the picture listing's "
-            "`workflow_lora` take. Empty on the row for pictures that loaded "
-            "none of the LoRAs that change."
+            "what the picture listing's `workflow_lora` takes. Empty on the "
+            "row for pictures that loaded none of the LoRAs that change."
         )
     )
     filename: str | None = Field(
@@ -1021,42 +953,22 @@ class WorkflowLoraUse(BaseModel):
     )
     on_shelf: bool = False
     pictures: int = 0
-    members: list[str] = Field(
-        default_factory=list,
-        description="The stack's cards whose pictures loaded it, in stack order.",
-    )
     picture_ids: list[int] = Field(
         default_factory=list,
         description="Its best kept pictures, best first, for a strip. At most 3.",
     )
-    promoted: bool = Field(
-        False,
-        description=(
-            "Its pictures are a workflow of their own: promoted, or in a slot "
-            "marked structural. A shared LoRA can carry it too (a speed LoRA "
-            "guessed structural), where it changes nothing a reader sees."
-        ),
-    )
 
 
 class WorkflowLoraSummary(BaseModel):
-    """``GET /workflows/{key}/lora-summary``: the stack's LoRAs in two parts.
+    """``GET /workflows/{workflow_id}/lora-summary``: its LoRAs in two parts.
 
-    ``shared`` is the LoRAs every kept picture of every card in the stack
-    loaded; ``varying`` is the rest, most pictures first; ``without`` is the
-    pictures that loaded none of ``varying``. ``pictures`` is what both are
-    counted against, and leaves out pictures whose graph could not be read.
+    ``shared`` is the LoRAs every kept picture of the workflow loaded;
+    ``varying`` is the rest, most pictures first; ``without`` is the pictures
+    that loaded none of ``varying``. ``pictures`` is what both are counted
+    against, and leaves out pictures whose graph could not be read.
     """
 
-    keys: list[str]
-    stack_id: str | None = Field(
-        None,
-        description=(
-            "The id naming the stack `keys` is, for the picture listing's "
-            "`workflow_stack`, so a *Show N* counts what the summary counted "
-            "even where the grid leaves a member out. Null for a lone card."
-        ),
-    )
+    workflow_id: str
     pictures: int = 0
     shared: list[WorkflowLoraUse] = Field(default_factory=list)
     varying: list[WorkflowLoraUse] = Field(default_factory=list)
@@ -1090,7 +1002,7 @@ class RunLoraSlot(BaseModel):
 
     A skip is for THIS run: the loader is bypassed on the run's own copy of the
     graph and the stored workflow keeps it. Editing the workflow for good is
-    ``PUT /workflows/{key}/lora-chain``.
+    ``PUT /workflows/{workflow_id}/lora-chain``.
     """
 
     node_id: str = Field(min_length=1, max_length=MAX_LABEL_LENGTH)
@@ -1120,13 +1032,13 @@ class RunModel(BaseModel):
 
 
 class RunValue(ParameterAddress):
-    """One parameter this run sets, over the card's defaults."""
+    """One parameter this run sets, over the workflow's default recipe."""
 
     value: bool | int | float | str
 
 
 class RunInput(ParameterAddress):
-    """One picture input this run fills, addressed the way a card addresses.
+    """One picture input this run fills, by the address the pre-flight gave.
 
     ``picture_id`` is the picture it gets on every submission of this run;
     ``null`` says "my selection goes here", which is how a caller picks the
@@ -1148,26 +1060,27 @@ class RunRequest(BaseModel):
     """``POST /workflows/run`` and its dry run, which take the same body.
 
     **Exactly one source**, and the three are different questions: pictures
-    ask "run what made these", a saved recipe asks "run this look", and a key
-    asks "run this card". ``target`` overrides which card actually runs, which
-    is how a stack's other member is chosen.
+    ask "run what made these", a saved recipe asks "run this look", and a
+    ``workflow_id`` asks "run this workflow". ``target`` names the workflow
+    that actually runs instead, over the pictures selected.
 
-    **Edited defaults are overrides applied here**, never written back into a
-    graph: the stored document is content-addressed and rewriting it would
-    change the identity of the very card being run.
+    **The default recipe and the request's values are applied here**, never
+    written back into a graph: the stored document is content-addressed and
+    rewriting it would change the identity of what is being run.
     """
 
     picture_ids: list[Annotated[int, Field(le=MAX_PICTURE_ID)]] = Field(
         default_factory=list, max_length=MAX_RUN_PICTURES
     )
     saved_recipe_id: int | None = None
-    workflow_key: str | None = None
     # A workflow (#1622): `auto:<core hash>` or an owner's group. It runs its
     # base topology's graph with its DEFAULT RECIPE applied by the server, and
     # this body's values, models, LoRAs and skipped stages over that.
     workflow_id: str | None = Field(None, max_length=MAX_LABEL_LENGTH)
 
-    target: str | None = None
+    # A workflow to run instead of the source's, over its pictures; with its
+    # default recipe applied, as a `workflow_id` source is.
+    target: str | None = Field(None, max_length=MAX_LABEL_LENGTH)
 
     prompt: str | None = Field(None, max_length=MAX_PROMPT_LENGTH)
     negative: str | None = Field(None, max_length=MAX_PROMPT_LENGTH)
@@ -1194,7 +1107,7 @@ class RunRequest(BaseModel):
     seed_mode: Literal["new", "keep", "fixed"] = "new"
     seed: int | None = Field(None, ge=0, le=MAX_SEED_64)
     destination: RunDestination | None = None
-    # What fills each picture input of the card (#1457), first answer wins:
+    # What fills each picture input of the workflow (#1457), first answer wins:
     # an entry here, a `fixed` pin whose picture is still kept, a stored
     # `selection` fed from `picture_ids`, and - once those have been applied
     # to every input - the one input still open when exactly one is, which the
@@ -1268,10 +1181,10 @@ class RunRequest(BaseModel):
 
 
 class RunPictureInput(ParameterAddress):
-    """One picture input of the card a group runs, and what fills it.
+    """One picture input of the graph a group runs, and what fills it.
 
     ``fill`` is the server's answer and the client's to show, never to
-    re-derive: ``request`` (this body's entry), ``fixed`` (the card's pin),
+    re-derive: ``request`` (this body's entry), ``fixed`` (the workflow's pin),
     ``selection`` (the group's pictures, one per submission), ``graph`` (open,
     and the file the graph already names is on this ComfyUI) or ``null`` (open
     and unfilled, which ``picture_input_unfilled`` names).
@@ -1290,7 +1203,7 @@ class RunPictureInput(ParameterAddress):
 
 
 class RunGroup(BaseModel):
-    """One card a request resolved to, and whether it would run.
+    """One graph a request resolved to, and whether it would run.
 
     ``reasons`` empty is the only thing that means "this would run". Each
     reason is a code and its payload, so a panel can act on it rather than
@@ -1300,8 +1213,8 @@ class RunGroup(BaseModel):
     on.
     """
 
-    workflow_key: str
-    # The workflow this group ran as, when the request named one (#1622).
+    # The workflow this group runs: the one named, or for a picture-sourced
+    # run the workflow of the picture's variant. Null for a picture in none.
     workflow_id: str | None = None
     source: str | None = None
     source_picture_id: int | None = None
@@ -1332,11 +1245,11 @@ class RunGroup(BaseModel):
     # that is refused, because it is a fact about the recipe and the graph and
     # holds whatever ComfyUI says: `[{filename, sha256, node_id, reason}]`.
     unplaced_loras: list[dict] = Field(default_factory=list)
-    # Every picture input of the card, enumerated from the graph this run
-    # resolved with the card's stored setup laid over it (#1457). It is the
-    # card's WHOLE set, which is what makes the whole-set
-    # `PUT /workflows/{key}/inputs` safe to call after reading it: a client
-    # never writes back a set it has not seen.
+    # Every picture input of the graph, enumerated from the graph this run
+    # resolved with the workflow's stored setup laid over it (#1457). It is
+    # the WHOLE set, which is what makes the whole-set
+    # `PUT /workflows/{workflow_id}/inputs` safe to call after reading it: a
+    # client never writes back a set it has not seen.
     picture_inputs: list[RunPictureInput] = Field(default_factory=list)
     # A custom node this ComfyUI lacks, replaced by what PixlStash already does
     # (#1463): a seed node, whose link becomes a literal the run's
@@ -1370,7 +1283,7 @@ class RunResult(BaseModel):
 
 
 class WorkflowExport(BaseModel):
-    """``GET /workflows/{key}/export``: a ComfyUI file, minus every run of it.
+    """``GET /workflows/{workflow_id}/export``: a ComfyUI file, minus every run of it.
 
     ``removed`` names the CATEGORIES that were taken out and never the values:
     the point of the route is that those values do not travel, and an answer
@@ -1389,12 +1302,12 @@ class WorkflowExport(BaseModel):
 
 
 class WorkflowRunnableGraph(BaseModel):
-    """``GET /workflows/{key}/graph``: the graph as it runs, for this owner's ComfyUI.
+    """``GET /workflows/{workflow_id}/graph``: the graph as it runs, for this owner's ComfyUI.
 
     The unscrubbed sibling of :class:`WorkflowExport`. Duplicate writes the
     same graph into a file; this hands it to the ComfyUI-PixlStash node, which
     opens it in the ComfyUI editor when the Workflow tab's *Open in ComfyUI*
-    sends ComfyUI there with ``?pixlstash_workflow=<key>``.
+    sends ComfyUI there with ``?pixlstash_workflow=<workflow_id>``.
     """
 
     name: str = Field(description="What to call the workflow in ComfyUI.")
@@ -1416,17 +1329,20 @@ class WorkflowRunnableGraph(BaseModel):
 
 
 class WorkflowFile(BaseModel):
-    """One workflow file this machine now holds, and the card it landed on."""
+    """One workflow file this machine now holds, and the workflow it is in."""
 
     name: str = Field(description="What the file is called in the user folder.")
-    workflow_key: str | None = Field(
+    workflow_id: str | None = Field(
         None,
-        description="The card it was filed on, or null when it could not be filed.",
+        description=(
+            "The workflow it was filed in, or null when it could not be filed "
+            "or its graph is in no workflow yet."
+        ),
     )
 
 
 class InsertedLoader(WorkflowFile):
-    """The file written by ``POST /workflows/{key}/insert-lora-loader``."""
+    """The file written by ``POST /workflows/{workflow_id}/insert-lora-loader``."""
 
     node_id: str = Field(description="The id the new loader has in the graph.")
     class_type: str = Field(description="Which loader node was added.")
@@ -1515,7 +1431,7 @@ class LoraChainLane(BaseModel):
 
 
 class LoraChain(BaseModel):
-    """``GET /workflows/{key}/lora-chain``: the LoRA chain as the editor shows it.
+    """``GET /workflows/{workflow_id}/lora-chain``: the LoRA chain as the editor shows it.
 
     A straight chain is ``loaders`` between ``source`` and ``sink``. Where the
     model forks, ``loaders`` is the trunk every pass reads and ``lanes`` holds
@@ -1523,7 +1439,7 @@ class LoraChain(BaseModel):
     and every lane names its own.
     """
 
-    workflow_key: str
+    workflow_id: str
     editable: bool = False
     refusal: str | None = Field(
         None, description="Why the chain can only be looked at, when it can."
@@ -1570,7 +1486,7 @@ class LoraChainEntry(BaseModel):
 
 
 class LoraChainEdit(BaseModel):
-    """``PUT /workflows/{key}/lora-chain``: the whole chain, in apply order.
+    """``PUT /workflows/{workflow_id}/lora-chain``: the whole chain, in apply order.
 
     ``entries`` is the trunk (the whole chain when it is straight); ``lanes``
     one list per lane of the chain as read, in its order. A loader may land in
@@ -1605,12 +1521,16 @@ class LoraChainChange(BaseModel):
 
 
 class LoraChainSaved(BaseModel):
-    """What a chain edit changed, and the new card a write filed it on."""
+    """What a chain edit changed, and the workflow the new file is in."""
 
     dry_run: bool = False
     name: str | None = Field(None, description="The file written; null on a dry run.")
-    workflow_key: str | None = Field(
-        None, description="The NEW card; null on a dry run."
+    workflow_id: str | None = Field(
+        None,
+        description=(
+            "The workflow the new file is in; null on a dry run or where it "
+            "is in none yet."
+        ),
     )
     changes: list[LoraChainChange] = Field(default_factory=list)
 
@@ -1636,7 +1556,7 @@ class SwapModel(BaseModel):
 
 
 class SwapSlot(BaseModel):
-    """One model file the card's graph names, and the shelf row it is, if any."""
+    """One model file the workflow's graph names, and the shelf row it is, if any."""
 
     filename: str = Field(description="The name exactly as the graph holds it.")
     kind: str = Field(
@@ -1726,7 +1646,7 @@ class ModelFixCandidate(BaseModel):
 
 
 class ModelSwapOptions(BaseModel):
-    """``GET /workflows/{key}/model-swap``: what the clone dialog draws."""
+    """``GET /workflows/{workflow_id}/model-swap``: what the clone dialog draws."""
 
     slots: list[SwapSlot]
     checkpoints: list[SwapModel]
@@ -1781,7 +1701,7 @@ MAX_SWAPS = 64
 
 
 class CloneWithModels(BaseModel):
-    """``POST /workflows/{key}/clone-with-models``."""
+    """``POST /workflows/{workflow_id}/clone-with-models``."""
 
     name: str = Field(min_length=1, max_length=MAX_NAME_LENGTH)
     swaps: dict[str, str] = Field(
@@ -1792,7 +1712,7 @@ class CloneWithModels(BaseModel):
     @classmethod
     def _model_files_only(cls, swaps: dict[str, str]) -> dict[str, str]:
         # A replacement without a model extension would be nulled out of the
-        # structural hash, so the clone would fold onto the original's card.
+        # structural hash, so the clone would fold onto the original's variant.
         if not swaps or len(swaps) > MAX_SWAPS:
             raise ValueError(f"swaps must name 1 to {MAX_SWAPS} files")
         for was, now in swaps.items():
@@ -1804,7 +1724,7 @@ class CloneWithModels(BaseModel):
 
 
 class ClonedWorkflow(WorkflowFile):
-    """The file ``POST /workflows/{key}/clone-with-models`` wrote."""
+    """The file ``POST /workflows/{workflow_id}/clone-with-models`` wrote."""
 
     swapped: list[dict] = Field(description="One entry per loader field rewritten.")
     unswapped: list[dict] = Field(
@@ -1819,10 +1739,10 @@ class ClonedWorkflow(WorkflowFile):
 
 
 class WorkflowDeleted(BaseModel):
-    """Which file went to the trash, and which card it came off."""
+    """Which file went to the trash, and which workflow it came off."""
 
     deleted: str
-    workflow_key: str
+    workflow_id: str
 
 
 @dataclass
@@ -2033,8 +1953,8 @@ def _specials_suffix(card) -> str:
     )
 
 
-def _display_name(card, models=(), loras=()) -> str:
-    """What a card is called: the owner's name, else its file, else its models.
+def _display_name(card, models=()) -> str:
+    """What a workflow is called: the owner's name, else its file, else its models.
 
     That order is how much the name is *theirs*: one they typed, then the file
     they dropped, then a description built here.
@@ -2051,12 +1971,9 @@ def _display_name(card, models=(), loras=()) -> str:
     the header or what the owner typed, and it is in the same database as the
     card. A model this machine has never scanned still falls back to its stem.
 
-    The suffix is on the generated name only. A card named after its workflow
+    The suffix is on the generated name only. A workflow named after its
     FILE keeps the owner's spelling untouched: appending to a name somebody
-    chose is inventing, not describing. A LoRA promoted to a workflow of its
-    own (*loras*) is appended too, ``Krea 2: Text to Image + Watercolor``,
-    because it is the one thing telling that card from the one it was split
-    off, which is otherwise generated the same name.
+    chose is inventing, not describing.
     """
     if card.name:
         return card.name
@@ -2075,40 +1992,29 @@ def _display_name(card, models=(), loras=()) -> str:
         # the whole name can be an extension or end in a separator). Named for
         # what it does rather than after its VAE; the grid numbers the
         # duplicates this makes.
-        return (
-            (label or UNNAMED_CARD) + _specials_suffix(card) + _promoted_suffix(loras)
-        )
+        return (label or UNNAMED_CARD) + _specials_suffix(card)
     named = f"{stem}: {label}" if label else stem
-    return named + _specials_suffix(card) + _promoted_suffix(loras)
-
-
-def _promoted_suffix(loras) -> str:
-    """`` + Watercolor`` for each LoRA promoted to this card, or nothing."""
-    return "".join(
-        f" + {(lora.title or '').strip() or lora.name}"
-        for lora in loras
-        if lora.promoted and lora.name
-    )
+    return named + _specials_suffix(card)
 
 
 def _display_names(figures) -> dict[str, str]:
-    """Every card's name, by key, with no generated name printed twice.
+    """Every workflow's name, by id, with no generated name printed twice.
 
     A name the owner typed or a workflow file's is left alone however many
-    cards share it: renaming what somebody chose is inventing. Generated names
-    that collide are numbered ``Text to Image (2)``, ``(3)``, in key order so a
-    card keeps its number from one read to the next.
+    workflows share it: renaming what somebody chose is inventing. Generated
+    names that collide are numbered ``Text to Image (2)``, ``(3)``, in id order
+    so a workflow keeps its number from one read to the next.
     """
-    # ponytail: key order is stable across reads but a new card can shift the
-    # numbers after it; store a sequence on the card if that ever matters.
+    # ponytail: id order is stable across reads but a new workflow can shift
+    # the numbers after it; store a sequence if that ever matters.
     names = {}
     generated = {}
-    for figure in sorted(figures, key=lambda f: f.card.workflow_key):
+    for figure in sorted(figures, key=lambda f: f.workflow_id):
         card = figure.card
-        name = _display_name(card, figure.models, figure.loras)
-        names[card.workflow_key] = name
+        name = _display_name(card, figure.models)
+        names[figure.workflow_id] = name
         if not card.name and not card.file_name:
-            generated.setdefault(name, []).append(card.workflow_key)
+            generated.setdefault(name, []).append(figure.workflow_id)
     for name, keys in generated.items():
         for number, key in enumerate(keys[1:], start=2):
             names[key] = f"{name} ({number})"
@@ -2193,143 +2099,116 @@ def _slot_models(slots) -> list[WorkflowSlotModel]:
             base_model=slot.base_model,
             base_model_folded=slot.base_model_folded,
             kind=slot.kind,
-            mark=slot.mark,
             slot_label=slot.label,
         )
         for slot in slots
     ]
 
 
-def _slot_names(figure) -> list[str]:
-    """What a card loads, as :func:`_stack_members` compares cards by."""
-    names = []
-    for slot in [*figure.models, *figure.loras]:
-        if not slot.name or (slot.kind == "lora" and slot.mark == RECIPE):
-            continue
-        named = (slot.title or "").strip() or slot.name
-        names.append(f"{named} {slot.quant}" if slot.quant else named)
-    return names
+def _entry(figure, recipe=None, names=None) -> WorkflowCard:
+    """Render one workflow's figures in the shape ``workflowCard.js`` reads.
 
-
-def _stack_members(
-    figure, figures_by_key, card_names=None
-) -> list[WorkflowStackMember]:
-    """The stack *figure* is in, each member named and told apart.
-
-    *card_names* is :func:`_display_names` over the grid, so a member reads
-    as its own card does; left out, each is named alone. A model the member's own
-    name already says (the checkpoint a generated name starts with) is not
-    said again.
+    *recipe* is its :class:`DefaultRecipe`, read on the detail route and the
+    write answers only; *names* is :func:`_display_names` over the same grid,
+    which keeps two generated names apart.
     """
-    if not figures_by_key or figure.stack_size < 2:
-        return []
-    figures = [figures_by_key.get(key) for key in figure.member_keys]
-    if any(member is None for member in figures):
-        logger.warning(
-            "Stack of card %s names a member the grid has no figures for; "
-            "its members are not listed: %s",
-            figure.card.workflow_key,
-            figure.member_keys,
-        )
-        return []
-    loads = [_slot_names(member) for member in figures]
-    shared = set.intersection(*(set(names) for names in loads))
-    members = []
-    for position, (member, names) in enumerate(zip(figures, loads)):
-        name = (card_names or {}).get(member.card.workflow_key) or _display_name(
-            member.card, member.models, member.loras
-        )
-        members.append(
-            WorkflowStackMember(
-                key=member.card.workflow_key,
-                name=name,
-                sets_apart=list(
-                    dict.fromkeys(n for n in names if n not in shared and n not in name)
-                ),
-                differs_by=member.differs_by if position else [],
-                differs_by_detail=member.differs_by_detail if position else {},
-            )
-        )
-    return members
-
-
-def _card(figure, defaults=(), figures_by_key=None, names=None) -> WorkflowCard:
-    """Render one card's figures in the shape ``workflowCard.js`` documents.
-
-    *figures_by_key* (every card of the grid, by key) is what names the other
-    members of its stack (``members``); left out, the card lists none.
-    *names* is :func:`_display_names` over the same grid, which is what keeps
-    two generated names apart; left out, the card is named alone.
-    """
+    workflow = figure.workflow
     return WorkflowCard(
-        key=figure.card.workflow_key,
-        name=(names or {}).get(figure.card.workflow_key)
-        or _display_name(figure.card, figure.models, figure.loras),
+        id=workflow.workflow_id,
+        name=(names or {}).get(workflow.workflow_id)
+        or _display_name(figure.card, figure.models),
         type=figure.card.workflow_type,
         type_label=_TYPE_LABELS.get(figure.card.workflow_type),
         imported=figure.card.imported,
         hidden=figure.card.hidden,
         models=_slot_models(figure.models),
         loras=_slot_models(figure.loras),
-        recipe_loras=[
-            WorkflowRecipeLora(
-                name=lora.name,
-                recipes=lora.recipes,
-                character_id=lora.character_id,
-                character_name=lora.character_name,
-            )
-            for lora in figure.recipe_loras
-        ],
         specials=None if figure.card.specials is None else list(figure.card.specials),
-        differs_by=figure.differs_by,
-        differs_by_detail=figure.differs_by_detail,
         picture_count=figure.pictures,
         rating=figure.rating,
         covers=_covers(figure.covers),
-        stack_size=figure.stack_size,
         saved_recipe_count=figure.saved_recipes,
-        defaults=[
-            WorkflowDefault(
-                label=default.label,
-                slot_label=default.slot_label,
-                input_name=default.input_name,
-                value=default.value,
-                provenance=default.provenance,
-            )
-            for default in defaults
-        ],
-        topology_hash=figure.card.topology_hash,
-        variant_count=len(figure.card.variants),
+        defaults=_defaults_payload(recipe.values) if recipe else [],
+        base_topology=workflow.base_topology,
+        topologies=list(workflow.topologies),
+        variant_count=len(workflow.variants),
         rank=figure.rank,
         last_used=_iso(figure.last_used),
-        member_keys=[
-            key for key in figure.member_keys if key != figure.card.workflow_key
-        ],
-        members=_stack_members(figure, figures_by_key, names),
-        stack_id=figure.stack_id,
         ghosts=figure.ghosts,
         model_ghosts=figure.model_ghosts,
+        recipe_values=RecipeValues(
+            **{
+                kind: [
+                    RecipeValue(name=name, pictures=pictures)
+                    for name, pictures in values
+                ]
+                for kind, values in figure.recipe_values.items()
+            }
+        ),
+        default_recipe=_recipe_payload(recipe) if recipe else None,
     )
 
 
-def _card_variants(hub, vault, card) -> list[WorkflowVariant]:
-    """The stored graphs one card is made of, with what each one made.
-
-    The card's variants are a subset of its topology's recipes - a topology can
-    carry several cards, one per set of models - so the topology-wide hub reads
-    are filtered rather than re-queried per variant.
-    """
-    wanted = set(card.variants)
-    # A variant a model fix swapped a PixlStash loader into is filed under the
-    # swapped topology and carded under this one (#1605).
-    topologies = [card.topology_hash] + [
-        row[0]
-        for row in hub.fetchall(
-            "SELECT DISTINCT swapped_topology_hash FROM workflow_loader_swap "
-            "WHERE topology_hash = ?",
-            (card.topology_hash,),
+def _defaults_payload(values) -> list[WorkflowDefault]:
+    return [
+        WorkflowDefault(
+            label=default.label,
+            slot_label=default.slot_label,
+            input_name=default.input_name,
+            value=default.value,
+            provenance=default.provenance,
         )
+        for default in values
     ]
+
+
+def _recipe_payload(recipe: DefaultRecipe) -> DefaultRecipePayload:
+    return DefaultRecipePayload(
+        sampled=recipe.sampled,
+        models=[
+            DefaultRecipeModel(
+                address=model.address,
+                kind=model.kind,
+                filename=model.filename,
+                provenance=model.provenance,
+            )
+            for model in recipe.models
+        ],
+        loras=[
+            DefaultRecipeLora(
+                filename=lora.filename,
+                sha256=lora.sha256,
+                strength=lora.strength,
+                provenance=lora.provenance,
+            )
+            for lora in recipe.loras
+        ],
+        values=_defaults_payload(recipe.values),
+        stages=dict(recipe.stages),
+    )
+
+
+def _workflow_variants(hub, vault, workflow: Workflow) -> list[WorkflowVariant]:
+    """The stored graphs a workflow is made of, with what each one made.
+
+    Its variants are a subset of its topologies' recipes, so the
+    topology-wide hub reads are filtered rather than re-queried per variant.
+    """
+    wanted = set(workflow.variants)
+    # A variant a model fix swapped a PixlStash loader into is filed under the
+    # swapped topology and carded under the original one (#1605). Two
+    # originals can swap to one graph, so each topology is read once.
+    topologies = list(workflow.topologies)
+    for topology_hash in workflow.topologies:
+        topologies += [
+            row[0]
+            for row in hub.fetchall(
+                "SELECT DISTINCT swapped_topology_hash FROM workflow_loader_swap "
+                "WHERE topology_hash = ?",
+                (topology_hash,),
+            )
+            if row[0] not in topologies
+        ]
     recipes, assets, forgotten = [], {}, {}
     for topology in topologies:
         recipes += [
@@ -2410,21 +2289,61 @@ def create_router(server) -> APIRouter:
             )
         return WorkflowGraph(structural_hash=structural_hash, document=document)
 
-    # ── The cards (v1.12 B3) ────────────────────────────────────────────────
-    # On `/workflows` itself since B9 (#1410) retired the topology list that
-    # used to hold the prefix. The detail and picture routes are
-    # `/workflows/{workflow_key}` and `/workflows/{workflow_key}/pictures`.
-    #
-    # The payload is `frontend/src/utils/workflowCard.js`'s documented card,
-    # which is already merged and already has components reading it; see the
-    # `WorkflowCard` model.
+    # ── The workflows (#1623) ───────────────────────────────────────────────
+    # The grid is `/workflows` itself, one entry per workflow. The payload is
+    # `frontend/src/utils/workflowCard.js`'s documented card; see
+    # `WorkflowCard`.
+
+    def _counts() -> dict[str, int] | None:
+        """``{structural_hash: kept pictures}``, or ``None`` with no library.
+
+        What a workflow's base card is chosen on (its last tie-break), read
+        the same way the default recipe reads it so the two agree.
+        """
+        if _library_uuid() is None:
+            return None
+        return read_variant_picture_counts(server.vault)
+
+    def _workflow_id(workflow_id: str) -> str:
+        if not _WORKFLOW_ID_RE.match(workflow_id):
+            raise HTTPException(
+                status_code=422,
+                detail="Invalid workflow_id: expected auto:<core hash> or a group id.",
+            )
+        return workflow_id
+
+    def _require_workflow(hub, workflow_id: str) -> Workflow:
+        """One workflow by id, or a 404 - never a row written on a dead id."""
+        workflow = find_workflow(hub, _workflow_id(workflow_id), _counts())
+        if workflow is None:
+            raise HTTPException(status_code=404, detail="Unknown workflow.")
+        return workflow
+
+    def _require_base(hub, workflow_id: str):
+        """``(workflow, base card)``: what a one-graph gesture acts on, or a 404."""
+        cards = card_index(hub)
+        workflow = find_workflow(hub, _workflow_id(workflow_id), _counts(), cards)
+        if workflow is None:
+            raise HTTPException(status_code=404, detail="Unknown workflow.")
+        card = next((c for c in cards if c.workflow_key == workflow.base_card), None)
+        if card is None:
+            raise HTTPException(
+                status_code=404,
+                detail="This workflow has no graph filed to act on.",
+            )
+        return workflow, card
+
+    def _workflow_of_card(hub, key: str | None) -> str | None:
+        """The workflow a card is in, for an answer that names a new file's."""
+        card = find_card(hub, key) if key else None
+        return workflow_of_topology(hub, card.topology_hash) if card else None
 
     @router.get(
         "/workflows",
         summary="The Workflows grid",
         description=(
-            "Every workflow card this machine holds, in cover-rank order, one "
-            "card per stack. Hidden cards and one-offs are counted rather than "
+            "Every workflow this machine holds, one entry each, in cover-rank "
+            "order. Hidden workflows and one-offs are counted rather than "
             "listed, unless the two flags ask for them."
         ),
         response_model=WorkflowCards,
@@ -2434,7 +2353,7 @@ def create_router(server) -> APIRouter:
         include_hidden: bool = Query(
             False,
             description=(
-                "List hidden cards too - the Filters panel's *Show hidden "
+                "List hidden workflows too - the Filters panel's *Show hidden "
                 "workflows*. `hidden` still counts them either way."
             ),
         ),
@@ -2454,60 +2373,53 @@ def create_router(server) -> APIRouter:
             include_one_offs=include_one_offs,
             file_models=_file_models,
         )
-        figures_by_key = by_key(grid.figures)
         names = _display_names(grid.figures)
         return WorkflowCards(
-            cards=[
-                _card(figure, figures_by_key=figures_by_key, names=names)
-                for figure in grid.cards
-            ],
+            cards=[_entry(figure, names=names) for figure in grid.cards],
             one_offs=grid.one_offs,
             hidden=grid.hidden,
         )
 
     @router.get(
-        "/workflows/{workflow_key}",
-        summary="One workflow card",
+        "/workflows/{workflow_id}",
+        summary="One workflow",
         description=(
-            "A card opened: its variants, and the value each featured "
-            "parameter starts from with where that value came from."
+            "A workflow opened: its variants, its default recipe, and the "
+            "value each featured parameter starts from with where that value "
+            "came from."
         ),
         response_model=WorkflowCardDetail,
-        responses={404: {"description": "This machine has no such card."}},
+        responses={404: {"description": "This machine has no such workflow."}},
     )
-    def get_card(request: Request, workflow_key: str):
+    def get_card(request: Request, workflow_id: str):
         server.auth.ensure_secure_when_required(request)
-        _require_hash(workflow_key, "workflow_key")
-        return _read_detail(_hub(), workflow_key)
+        return _read_detail(_hub(), _workflow_id(workflow_id))
 
-    def _read_detail(hub, workflow_key: str) -> WorkflowCardDetail:
-        """One card opened, for the detail route and for what a write answers.
+    def _read_detail(hub, workflow_id: str) -> WorkflowCardDetail:
+        """One workflow opened, for the detail route and for what a write answers.
 
-        The whole grid for one card, because its rank is Bayesian: the prior is
-        the library's own mean rating, which cannot be read off one card. A
-        write answers with this so the caller sees the card it just changed
-        rather than an echo of its own request - and pays the grid read once,
-        on a gesture a person made, rather than per card.
+        The whole grid for one workflow, because its rank is Bayesian: the
+        prior is the library's own mean rating, which cannot be read off one
+        workflow. A write answers with this so the caller sees the workflow it
+        just changed rather than an echo of its own request.
         """
         grid = read_grid(hub, server.vault, file_models=_file_models)
-        figure = grid.figure(workflow_key)
+        figure = grid.figure(workflow_id)
         if figure is None:
-            raise HTTPException(status_code=404, detail="Unknown workflow card.")
-        card = figure.card
-        pins = key_pins(hub, workflow_key)
+            raise HTTPException(status_code=404, detail="Unknown workflow.")
+        workflow = figure.workflow
+        recipe = workflow_defaults(hub, server.vault, workflow_id)
+        pins = group_pins(hub, workflow_id)
         graph_models = (
-            None if _base_model_slot(figure.models) else _graph_base_models(card)
+            None
+            if _base_model_slot(figure.models) or figure.base is None
+            else _graph_base_models(figure.base)
         )
         return WorkflowCardDetail(
-            card=_card(
-                figure,
-                card_defaults(hub, server.vault, card),
-                by_key(grid.figures),
-                _display_names(grid.figures),
-            ),
-            notes=card.notes,
-            hidden=card.hidden,
-            variants=_card_variants(hub, server.vault, card),
+            card=_entry(figure, recipe, _display_names(grid.figures)),
+            notes=workflow.notes,
+            hidden=workflow.hidden,
+            variants=_workflow_variants(hub, server.vault, workflow),
             pins=None
             if pins is None
             else [
@@ -2517,7 +2429,11 @@ def create_router(server) -> APIRouter:
             graph_base_models=graph_models,
             model_fixes=[
                 ModelFixRow(slot_label=label, was=was, now=now, slot_kind=kind)
-                for label, was, now, kind in model_fixes(hub, card.topology_hash)
+                for label, was, now, kind in (
+                    model_fixes(hub, workflow.base_topology)
+                    if workflow.base_topology
+                    else []
+                )
             ],
         )
 
@@ -2748,18 +2664,18 @@ def create_router(server) -> APIRouter:
         return found
 
     @router.get(
-        "/workflows/{workflow_key}/pictures",
-        summary="Pictures made with a card",
+        "/workflows/{workflow_id}/pictures",
+        summary="Pictures made with a workflow",
         description=(
-            "The newest kept pictures made by any variant of one card, newest "
-            "first. Ids only: the caller already has the thumbnail route."
+            "The newest kept pictures made by any variant of one workflow, "
+            "newest first. Ids only: the caller already has the thumbnail route."
         ),
         response_model=list[int],
-        responses={404: {"description": "This machine has no such card."}},
+        responses={404: {"description": "This machine has no such workflow."}},
     )
     def list_card_pictures(
         request: Request,
-        workflow_key: str,
+        workflow_id: str,
         limit: int = Query(
             6,
             ge=1,
@@ -2768,394 +2684,183 @@ def create_router(server) -> APIRouter:
         ),
     ):
         server.auth.ensure_secure_when_required(request)
-        _require_hash(workflow_key, "workflow_key")
-        card = find_card(_hub(), workflow_key)
-        if card is None:
-            raise HTTPException(status_code=404, detail="Unknown workflow card.")
-        return read_card_picture_ids(server.vault, card.variants, limit)
+        workflow = _require_workflow(_hub(), workflow_id)
+        return read_card_picture_ids(server.vault, workflow.variants, limit)
 
-    # ── The writes (v1.12 B4) ───────────────────────────────────────────────
-    # The stack routes are declared BEFORE the templated card routes below:
-    # FastAPI matches in declaration order, and `/workflows/stacks/{id}/order`
-    # would otherwise sit behind nothing today but behind the first
-    # `/workflows/{key}/{anything}` somebody adds.
+    # ── The writes (#1623) ──────────────────────────────────────────────────
+    # `merge` is declared BEFORE the templated routes below: FastAPI matches
+    # in declaration order, and a `/workflows/{workflow_id}/...` route added
+    # later must not shadow it.
     #
-    # Every one of these emits `CHANGED_WORKFLOWS`, which is a "look again"
-    # signal and not a card: the counts, covers and stacks a card shows are
+    # Every one of these emits `CHANGED_WORKFLOWS` naming workflow ids, which
+    # is a "look again" signal and not a workflow: the counts and covers are
     # computed per request over the whole vault, so the client re-reads
     # `GET /workflows` rather than trusting what a write carried back.
 
-    def _announce(request: Request, keys, reason: str) -> None:
-        """Tell every other tab which cards to look at again, and why."""
+    def _announce(request: Request, ids, reason: str) -> None:
+        """Tell every other tab which workflows to look at again, and why."""
         announce_changed_workflows(
             server,
-            keys,
+            ids,
             reason,
             origin_client_id=getattr(request.state, "origin_client_id", None),
         )
 
-    def _require_card(hub, workflow_key: str):
-        """One card by key, or a 404 - never an attribute row on a dead key."""
-        _require_hash(workflow_key, "workflow_key")
-        card = find_card(hub, workflow_key)
-        if card is None:
-            raise HTTPException(status_code=404, detail="Unknown workflow card.")
-        return card
-
-    def _known_keys(hub, keys: list[str]) -> list[str]:
-        """The keys, checked whole: one unknown card refuses the request.
-
-        Refused whole rather than filtered, for `PUT /recipes/order`'s reason:
-        a half-applied stack is worse than a rejected one, and a filtered list
-        would silently stack fewer cards than the owner selected.
-        """
-        if len(set(keys)) != len(keys):
-            raise HTTPException(status_code=400, detail="keys must be unique")
-        known = {card.workflow_key for card in card_index(hub)}
-        for key in keys:
-            _require_hash(key, "workflow_key")
-            if key not in known:
-                raise HTTPException(status_code=404, detail="Unknown workflow card.")
-        return keys
-
-    def _stack_id(stack_id: str) -> str:
-        if not _STACK_ID_RE.match(stack_id):
+    @router.post(
+        "/workflows/merge",
+        summary="Merge workflows",
+        description=(
+            "Put every topology of the named workflows in one. The first id "
+            "is the cover: its name, notes, defaults, pins and picture inputs "
+            "are the merged workflow's; every other workflow's notes follow, "
+            "headed by its name, then every other distinct name as `Also "
+            "named: …`. A manual cover keeps "
+            "its id; otherwise the merge is a new workflow. Saved recipes of "
+            "the merged workflows move with them."
+        ),
+        response_model=WorkflowMerged,
+        status_code=201,
+        responses={
+            400: {"description": "Fewer than two workflows, or one named twice."},
+            404: {"description": "One of the workflows does not exist."},
+        },
+    )
+    def merge(request: Request, payload: WorkflowMerge = Body(...)):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        ids = [_workflow_id(workflow_id) for workflow_id in payload.ids]
+        if len(set(ids)) != len(ids):
+            raise HTTPException(status_code=400, detail="ids must be unique.")
+        known = {w.workflow_id: w for w in workflow_index(hub)}
+        missing = [workflow_id for workflow_id in ids if workflow_id not in known]
+        if missing:
             raise HTTPException(
-                status_code=422,
-                detail="Invalid stack_id: expected a stack id or auto:<core hash>.",
+                status_code=404, detail=f"Unknown workflow {missing[0]}."
             )
-        return stack_id
+        merged = merge_workflows(
+            hub,
+            ids,
+            {workflow_id: known[workflow_id].topologies for workflow_id in ids},
+        )
+        if _library_uuid() is not None:
+            try:
+                saved_recipe_service.rehome_recipes(server.vault, ids, merged)
+            except Exception:
+                # The hub has already merged; this is the only record of
+                # which recipes still name a workflow that is gone.
+                logger.exception(
+                    "Merged workflows %s into %s, but could not move their "
+                    "saved recipes; they still name the old ids.",
+                    ids,
+                    merged,
+                )
+                raise
+        _announce(request, sorted({*ids, merged}), "changed")
+        return WorkflowMerged(id=merged, ids=ids)
 
     @router.post(
-        "/workflows/stacks",
-        summary="Stack workflows together",
+        "/workflows/{workflow_id}/split",
+        summary="Split a topology out of a workflow",
         description=(
-            "Put the cards named in one stack, in the order given. A card "
-            "already in a stack brings its whole stack with it, and the first "
-            "key stays the cover — so merging two stacks keeps the "
-            "first-selected one's cover and the name that goes with it."
+            "Take one topology of this workflow out into a workflow of its "
+            "own, for a graph the automatic grouping put with others by "
+            "mistake. The workflow it leaves keeps its name and settings."
         ),
-        response_model=StackResult,
+        response_model=WorkflowSplitResult,
         status_code=201,
-        responses={404: {"description": "One of the cards does not exist."}},
+        responses={
+            400: {
+                "description": (
+                    "The workflow has one topology, or does not hold that one."
+                )
+            },
+            404: {"description": "This machine has no such workflow."},
+        },
     )
-    def stack_workflows(request: Request, payload: StackKeys = Body(...)):
+    def split(request: Request, workflow_id: str, payload: WorkflowSplit = Body(...)):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        selected = _known_keys(hub, payload.keys)
-        if len(selected) < 2:
+        workflow = _require_workflow(hub, workflow_id)
+        if payload.topology not in workflow.topologies:
             raise HTTPException(
-                status_code=400, detail="A stack needs at least two cards."
+                status_code=400, detail="This workflow does not hold that topology."
             )
-        # Each selection expands to the stack it is already in, in selection
-        # order, so stacking two stacks merges them rather than pulling one
-        # card out of each.
-        members: list[str] = []
-        for key in selected:
-            for member in effective_stack_keys(hub, key):
-                if member not in members:
-                    members.append(member)
-        if len(members) > MAX_STACK_KEYS:
-            raise HTTPException(
-                status_code=400, detail="That would make a stack too large to order."
-            )
-        stack_id = stack_together(hub, members)
-        _announce(request, members, "stacks")
-        return StackResult(stack_id=stack_id, keys=members)
-
-    @router.put(
-        "/workflows/stacks/{stack_id}/order",
-        summary="Reorder a stack",
-        description=(
-            "Set a stack's member order by a complete ordered key list; the "
-            "first key is the cover. Ordering an automatic grouping is what "
-            "makes it a stack of its own, so the order survives a regrouping."
-        ),
-        response_model=StackResult,
-        responses={404: {"description": "One of the cards does not exist."}},
-    )
-    def reorder_stack(request: Request, stack_id: str, payload: StackKeys = Body(...)):
-        server.auth.ensure_secure_when_required(request)
-        hub = _hub()
-        _stack_id(stack_id)
-        keys = _known_keys(hub, payload.keys)
-        if len(keys) < 2:
-            raise HTTPException(
-                status_code=400, detail="A stack needs at least two cards."
-            )
-        members = keys_in_stack(hub, stack_id)
-        if not members:
-            # A shape this hub does not hold, checked like its `unstack`
-            # sibling rather than written blind: a well-formed id naming no
-            # stack would otherwise mint one, and an `auto:` id naming no
-            # group would mint one with a `core_hash` no topology has.
-            raise HTTPException(status_code=404, detail="Unknown workflow stack.")
-        if set(keys) != set(members):
-            # A complete ordered list of what is in the stack, and refused
-            # whole when it is not. A key left out would be deleted from the
-            # stack by the write - with no record that it left, so it would
-            # rejoin its automatic group on the next read with nothing said -
-            # and a key added is `POST /workflows/stacks`' gesture, not this
-            # one.
+        if len(workflow.topologies) < 2:
             raise HTTPException(
                 status_code=400,
-                detail="keys must name every card in the stack, and no other.",
+                detail="This workflow has one topology; there is nothing to split.",
             )
-        set_stack_order(hub, stack_id, keys)
-        _announce(request, keys, "stacks")
-        return StackResult(stack_id=stack_id, keys=keys)
-
-    @router.post(
-        "/workflows/stacks/{stack_id}/unstack",
-        summary="Dissolve a stack",
-        description=(
-            "Take a whole stack apart: every member stands on its own "
-            "afterwards and stays out of the automatic grouping it came from."
-        ),
-        response_model=StackResult,
-        responses={404: {"description": "This machine has no such stack."}},
-    )
-    def dissolve_stack(request: Request, stack_id: str):
-        server.auth.ensure_secure_when_required(request)
-        hub = _hub()
-        _stack_id(stack_id)
-        keys = keys_in_stack(hub, stack_id)
-        if not keys:
-            raise HTTPException(status_code=404, detail="Unknown workflow stack.")
-        unstack_stack(hub, stack_id, keys)
-        _announce(request, keys, "stacks")
-        return StackResult(stack_id=None, keys=keys)
+        new_id = split_topology(hub, workflow_id, payload.topology)
+        _announce(request, [workflow_id, new_id], "changed")
+        return WorkflowSplitResult(id=new_id)
 
     @router.patch(
-        "/workflows/{workflow_key}",
-        summary="Edit a workflow card",
+        "/workflows/{workflow_id}",
+        summary="Edit a workflow",
         description=(
             "Write the fields the request carries; the rest stand. A null name "
-            "or notes clears it. Hiding a card takes it out of the grid — it "
+            "or notes clears it. Hiding a workflow takes it off the grid — it "
             "still opens by its own URL, and nothing about it is deleted."
         ),
         response_model=WorkflowCardDetail,
-        responses={404: {"description": "This machine has no such card."}},
+        responses={404: {"description": "This machine has no such workflow."}},
     )
-    def edit_card(request: Request, workflow_key: str, payload: WorkflowCardEdit):
+    def edit_card(request: Request, workflow_id: str, payload: WorkflowCardEdit):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        _require_card(hub, workflow_key)
+        _require_workflow(hub, workflow_id)
         changes = payload.model_dump(exclude_unset=True)
         if "hidden" in changes and changes["hidden"] is None:
             # The column is NOT NULL and has no "unset" state: a null there is
             # a caller meaning "not hidden", which the hub is told plainly
             # rather than left to coerce.
             changes["hidden"] = False
-        set_attributes(hub, workflow_key, **changes)
-        _announce(request, [workflow_key], "changed")
-        return _read_detail(hub, workflow_key)
-
-    @router.put(
-        "/workflows/{workflow_key}/slots",
-        summary="Mark a card's LoRA slots",
-        description=(
-            "Say which of this workflow's LoRA slots are part of the workflow "
-            "(structural) and which are part of the look (recipe). This "
-            "re-keys every card of the topology: a card may split into "
-            "several or several may merge into one, and the response says "
-            "where this card went."
-        ),
-        response_model=SlotMarkResult,
-        responses={404: {"description": "This machine has no such card."}},
-    )
-    def mark_slots(request: Request, workflow_key: str, payload: SlotMarks = Body(...)):
-        server.auth.ensure_secure_when_required(request)
-        hub = _hub()
-        card = _require_card(hub, workflow_key)
-        lora_labels = {slot.get("label") for slot in card.slots if slot.get("is_lora")}
-        unknown = sorted(set(payload.marks) - lora_labels)
-        if unknown:
-            # Named rather than ignored: a mark on a label this topology has no
-            # LoRA slot for is a row every reader skips, so accepting it would
-            # answer 200 to a flip that cannot have happened.
-            raise HTTPException(
-                status_code=422,
-                detail=f"This workflow has no LoRA slot called {unknown[0]!r}.",
-            )
-        _require_library()
-        moved = flip_slot_marks(
-            hub,
-            card.topology_hash,
-            payload.marks,
-            read_variant_picture_counts(server.vault),
-        )
-        _carry_saved_recipes(card.topology_hash, moved, "A slot-mark flip")
-        return _rekeyed(request, workflow_key, moved)
-
-    def _require_library() -> None:
-        """503 unless a library is open, for a write that re-keys cards.
-
-        A re-key decides its merge winner on the vault's picture counts and has
-        to move the vault's saved recipes afterwards. With no library open it
-        could do neither, and a re-key that skipped both would pick an
-        arbitrary winner and orphan the recipes.
-        """
-        if getattr(server.vault, "library_uuid", None) is None:
-            raise HTTPException(
-                status_code=503,
-                detail="No library is open, so a workflow cannot be re-keyed.",
-            )
-
-    def _carry_saved_recipes(topology_hash: str, moved: dict, what: str) -> None:
-        """Move the saved recipes onto the cards a re-key sent their pictures to.
-
-        The migration `db_models/saved_recipe.py` says a re-keying owes this
-        table. A second database, so it cannot be in the hub's transaction; it
-        is the first thing after it, and it is logged.
-        """
-        try:
-            rekeyed = saved_recipe_service.rekey_recipes(server.vault, moved)
-        except Exception:
-            # The hub transaction has already committed, so the cards have
-            # moved and the recipes have not. Re-running the write will not
-            # repair it - what it asked for is now what is in force, so a
-            # second PUT re-keys nothing and returns an empty `moved` - which
-            # is exactly why the map goes in the log rather than only the
-            # count: it is the only record of which key each recipe set
-            # belongs on. Raised rather than answered 200, because a saved
-            # recipe is authored and silently stranding one is the failure
-            # `rekey_in_session` exists to close.
-            logger.exception(
-                "%s on topology %s re-keyed its cards but could not move the "
-                "saved recipes with them. The recipes are still on their old "
-                "keys; the cards moved as %r.",
-                what,
-                topology_hash,
-                moved,
-            )
-            raise
-        if rekeyed:
-            logger.info(
-                "%s on topology %s moved %d saved recipe(s) onto the cards "
-                "their workflows were re-keyed to.",
-                what,
-                topology_hash,
-                rekeyed,
-            )
-
-    def _rekeyed(
-        request: Request, workflow_key: str, moved: dict, stay: bool = False
-    ) -> SlotMarkResult:
-        """Announce a re-key and say where the addressed card went.
-
-        *stay* answers with the addressed key whenever a variant is still on
-        it, rather than with the biggest successor: promoting a LoRA splits
-        pictures OFF the card being looked at, which is still there.
-        """
-        successors = moved.get(workflow_key) or [workflow_key]
-        if stay and workflow_key in successors:
-            successors = [workflow_key]
-        touched = {workflow_key, *moved}
-        touched.update(key for keys in moved.values() for key in keys)
-        _announce(request, sorted(touched), "changed")
-        return SlotMarkResult(key=successors[0], moved=moved)
+        set_group_attributes(hub, workflow_id, **changes)
+        _announce(request, [workflow_id], "changed")
+        return _read_detail(hub, workflow_id)
 
     @router.get(
-        "/workflows/{workflow_key}/lora-summary",
-        summary="The LoRAs of a workflow's stack",
+        "/workflows/{workflow_id}/lora-summary",
+        summary="The LoRAs of a workflow",
         description=(
-            "Which LoRAs every picture of every workflow in this card's stack "
-            "loaded, and which change between them: for each, how many "
-            "pictures, which workflows, its best pictures, and whether it has "
-            "been promoted to a workflow of its own. `cover` names the picture "
-            "on top of the stack, to say which changing LoRA it loaded."
+            "Which LoRAs every kept picture of this workflow loaded, and which "
+            "change between them: for each, how many pictures and its best "
+            "pictures. `cover` names the picture on top of the workflow's "
+            "cover, to say which changing LoRA it loaded."
         ),
         response_model=WorkflowLoraSummary,
-        responses={404: {"description": "This machine has no such card."}},
+        responses={404: {"description": "This machine has no such workflow."}},
     )
     def lora_summary(
         request: Request,
-        workflow_key: str,
+        workflow_id: str,
         cover: int | None = Query(
-            None, ge=1, description="The picture on top of the stack's cover."
+            None, ge=1, description="The picture on top of the workflow's cover."
         ),
     ):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        _require_card(hub, workflow_key)
-        keys = effective_stack_keys(hub, workflow_key)
-        stack_id = stack_id_of(hub, workflow_key) if len(keys) > 1 else None
-        if getattr(server.vault, "library_uuid", None) is None:
+        workflow = _require_workflow(hub, workflow_id)
+        if _library_uuid() is None:
             # No pictures to count, so nothing is shared and nothing changes.
-            return WorkflowLoraSummary(keys=keys, stack_id=stack_id)
-        summary = stack_lora_summary(hub, server.vault, keys, cover)
-        return WorkflowLoraSummary(**asdict(summary), stack_id=stack_id)
+            return WorkflowLoraSummary(workflow_id=workflow_id)
+        summary = workflow_lora_summary(hub, server.vault, workflow.variants, cover)
+        return WorkflowLoraSummary(workflow_id=workflow_id, **asdict(summary))
 
     @router.put(
-        "/workflows/{workflow_key}/lora-promotion",
-        summary="Promote one LoRA to a workflow of its own",
-        description=(
-            "Give the pictures that loaded one LoRA file a workflow of their "
-            "own inside this card's stack, which always loads it and exports "
-            "with it, or with `promoted: false` put them back with the rest. "
-            "Applies to every workflow in the stack that loaded the file, and "
-            "moves no picture that loaded any other file. Answers like "
-            "`PUT …/slots`: `key` is where this card now lives."
-        ),
-        response_model=SlotMarkResult,
-        responses={
-            404: {"description": "This machine has no such card."},
-            409: {"description": "No workflow in the stack loaded that LoRA."},
-            503: {"description": "No library is open."},
-        },
-    )
-    def promote_lora(
-        request: Request, workflow_key: str, payload: LoraPromotion = Body(...)
-    ):
-        server.auth.ensure_secure_when_required(request)
-        hub = _hub()
-        _require_card(hub, workflow_key)
-        _require_library()
-        counts = read_variant_picture_counts(server.vault)
-        topologies = sorted(
-            {
-                card.topology_hash
-                for card in (
-                    find_card(hub, key)
-                    for key in effective_stack_keys(hub, workflow_key)
-                )
-                if card is not None and card.topology_hash
-            }
-        )
-        moved: dict[str, list[str]] = {}
-        loaded = False
-        for topology_hash in topologies:
-            result = set_lora_promotion(
-                hub, topology_hash, payload.asset, payload.promoted, counts
-            )
-            if result is None:
-                continue
-            loaded = True
-            _carry_saved_recipes(topology_hash, result, "A LoRA promotion")
-            moved.update(result)
-        if not loaded:
-            raise HTTPException(
-                status_code=409,
-                detail="No workflow in this stack loaded that LoRA.",
-            )
-        return _rekeyed(request, workflow_key, moved, stay=True)
-
-    @router.put(
-        "/workflows/{workflow_key}/model-fix",
+        "/workflows/{workflow_id}/model-fix",
         summary="Replace a missing model in a workflow",
         description=(
             "Load another model wherever this workflow names `was` in a slot "
             "of `now`'s kind (a checkpoint, a VAE or a text encoder) - the fix "
             "for a workflow whose model is gone - or, with `now: null`, the "
-            "original again. The card keeps its key, its pictures and its "
-            "settings, and a picture made with the replacement is filed on it. "
-            "Applies to every card of the workflow's graph that loaded `was`. "
-            "Answers with the card, whose `key` is the one to follow."
+            "original again, in the workflow's base graph. The workflow keeps "
+            "its pictures and its settings, and a picture made with the "
+            "replacement is filed in it. Answers with the workflow."
         ),
         response_model=WorkflowCardDetail,
         responses={
-            404: {"description": "No such card, or `now` is not on the shelf."},
+            404: {"description": "No such workflow, or `now` is not on the shelf."},
             409: {"description": "The workflow does not load `was` there."},
             422: {
                 "description": (
@@ -3165,10 +2870,10 @@ def create_router(server) -> APIRouter:
             503: {"description": "No library is open."},
         },
     )
-    def fix_model(request: Request, workflow_key: str, payload: ModelFix = Body(...)):
+    def fix_model(request: Request, workflow_id: str, payload: ModelFix = Body(...)):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        card = _require_card(hub, workflow_key)
+        _workflow, card = _require_base(hub, workflow_id)
         was, now, kind = payload.was, payload.now, payload.slot_kind
         if now is not None:
             # A shelf model of a kind a slot can take, and nothing else,
@@ -3330,10 +3035,9 @@ def create_router(server) -> APIRouter:
                 status_code=503,
                 detail="No library is open, so a workflow cannot be re-keyed.",
             )
-        # The card's own key, unless a re-key moved it: then where its
-        # pictures went, as the slot marks answer.
-        key = workflow_key
-        touched = {workflow_key}
+        # The base card's own key, unless a re-key moved it: then where its
+        # pictures went. Internal: the workflow keeps its id either way.
+        key = card.workflow_key
         for original, labels in targets:
             moved = set_model_fix(
                 hub,
@@ -3357,91 +3061,97 @@ def create_router(server) -> APIRouter:
                     moved,
                 )
                 raise
-            touched.update(moved)
-            touched.update(k for keys in moved.values() for k in keys)
             key = (moved.get(key) or [key])[0]
-        _announce(request, sorted(touched), "changed")
-        return _read_detail(hub, key)
+        _announce(request, [workflow_id], "changed")
+        return _read_detail(hub, workflow_id)
 
     @router.put(
-        "/workflows/{workflow_key}/defaults",
-        summary="Set a card's parameter defaults",
+        "/workflows/{workflow_id}/defaults",
+        summary="Set a workflow's parameter defaults",
         description=(
-            "Replace this card's whole set of parameter overrides. An empty "
-            "list clears them, and the card's defaults then come from the "
-            "pictures it has made again."
+            "Replace this workflow's whole set of parameter edits, each "
+            "addressed `<slot_label>/<input_name>`. An empty list clears them, "
+            "and its defaults then come from the pictures it has made again. "
+            "The default recipe's models and LoRAs are not touched."
         ),
         response_model=WorkflowCardDetail,
-        responses={404: {"description": "This machine has no such card."}},
+        responses={404: {"description": "This machine has no such workflow."}},
     )
     def set_defaults(
-        request: Request, workflow_key: str, payload: CardDefaults = Body(...)
+        request: Request, workflow_id: str, payload: CardDefaults = Body(...)
     ):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        _require_card(hub, workflow_key)
-        replace_defaults(
+        _require_workflow(hub, workflow_id)
+        replace_parameter_defaults(
             hub,
-            workflow_key,
+            workflow_id,
             [
-                (default.slot_label, default.input_name, _stored_value(default.value))
+                (
+                    f"{default.slot_label}{OVERRIDE_ADDRESS_SEPARATOR}"
+                    f"{default.input_name}",
+                    _stored_value(default.value),
+                )
                 for default in payload.defaults
             ],
         )
-        _announce(request, [workflow_key], "changed")
-        return _read_detail(hub, workflow_key)
+        _announce(request, [workflow_id], "changed")
+        return _read_detail(hub, workflow_id)
 
     @router.put(
-        "/workflows/{workflow_key}/pins",
-        summary="Set a card's pinned parameters",
+        "/workflows/{workflow_id}/pins",
+        summary="Set a workflow's pinned parameters",
         description=(
-            "Which parameters this card's form shows before 'All N'. An empty "
-            "list is everything unpinned; null forgets the choice, so the "
-            "default pins apply again."
+            "Which parameters this workflow's form shows before 'All N'. An "
+            "empty list is everything unpinned; null forgets the choice, so "
+            "the default pins apply again."
         ),
         response_model=CardPins,
-        responses={404: {"description": "This machine has no such card."}},
+        responses={404: {"description": "This machine has no such workflow."}},
     )
-    def set_pins(request: Request, workflow_key: str, payload: CardPins = Body(...)):
+    def set_pins(request: Request, workflow_id: str, payload: CardPins = Body(...)):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        _require_card(hub, workflow_key)
-        replace_pins(
+        _require_workflow(hub, workflow_id)
+        replace_group_pins(
             hub,
-            workflow_key,
+            workflow_id,
             None
             if payload.pins is None
-            else [(pin.slot_label, pin.input_name) for pin in payload.pins],
+            else [
+                f"{pin.slot_label}{OVERRIDE_ADDRESS_SEPARATOR}{pin.input_name}"
+                for pin in payload.pins
+            ],
         )
-        _announce(request, [workflow_key], "changed")
+        _announce(request, [workflow_id], "changed")
         return payload
 
     @router.put(
-        "/workflows/{workflow_key}/inputs",
-        summary="Set a card's picture inputs",
+        "/workflows/{workflow_id}/inputs",
+        summary="Set a workflow's picture inputs",
         description=(
-            "How each picture input of this card is filled: from the "
+            "How each picture input of this workflow is filled: from the "
             "selection, from a picker, or from one fixed picture. Kept per "
             "library, because a picture is a picture in one library. A fixed "
             "input names its picture by pixel_sha or by picture_id, and one "
             "given by id is stored as that picture's content. Replaces the "
-            "card's whole set, so read it first: every run pre-flight returns "
-            "it as picture_inputs."
+            "whole set, so read it first: every run pre-flight returns it as "
+            "picture_inputs."
         ),
         response_model=CardPictureInputs,
         responses={
             400: {"description": "A pinned picture_id is not a kept picture."},
-            404: {"description": "This machine has no such card."},
+            404: {"description": "This machine has no such workflow."},
             503: {"description": "No library is open, so there is nothing to set up."},
         },
     )
     def set_picture_inputs(
-        request: Request, workflow_key: str, payload: CardPictureInputs = Body(...)
+        request: Request, workflow_id: str, payload: CardPictureInputs = Body(...)
     ):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        _require_card(hub, workflow_key)
-        library_uuid = getattr(server.vault, "library_uuid", None)
+        _require_workflow(hub, workflow_id)
+        library_uuid = _library_uuid()
         if not library_uuid:
             raise HTTPException(
                 status_code=503,
@@ -3469,36 +3179,21 @@ def create_router(server) -> APIRouter:
             entries.append(
                 entry.model_copy(update={"pixel_sha": pixel_sha, "picture_id": None})
             )
-        replace_picture_inputs(
+        replace_group_picture_inputs(
             hub,
             library_uuid,
-            workflow_key,
+            workflow_id,
             [
-                (entry.slot_label, entry.input_name, entry.mode, entry.pixel_sha)
+                (
+                    f"{entry.slot_label}{OVERRIDE_ADDRESS_SEPARATOR}{entry.input_name}",
+                    entry.mode,
+                    entry.pixel_sha,
+                )
                 for entry in entries
             ],
         )
-        _announce(request, [workflow_key], "changed")
+        _announce(request, [workflow_id], "changed")
         return CardPictureInputs(inputs=entries)
-
-    @router.post(
-        "/workflows/{workflow_key}/unstack",
-        summary="Take a card out of its stack",
-        description=(
-            "Stand this card on its own. The rest of its stack stays as it "
-            "was unless one card is left, in which case that stack dissolves."
-        ),
-        response_model=StackResult,
-        responses={404: {"description": "This machine has no such card."}},
-    )
-    def unstack_workflow(request: Request, workflow_key: str):
-        server.auth.ensure_secure_when_required(request)
-        hub = _hub()
-        _require_card(hub, workflow_key)
-        before = effective_stack_keys(hub, workflow_key)
-        unstack_card(hub, workflow_key)
-        _announce(request, before, "stacks")
-        return StackResult(stack_id=None, keys=[workflow_key])
 
     # ── Running a card (v1.12 B7) ─────────────────────────────────────────
     #
@@ -3957,23 +3652,27 @@ def create_router(server) -> APIRouter:
 
     def _card_inputs(
         hub,
-        workflow_key: str,
+        workflow_id: str | None,
         graph: dict,
         addressed: bool,
         bindings: list | None = None,
     ) -> list[CardInput]:
-        """This card's picture inputs in *graph*, with its stored setup over them.
+        """The picture inputs in *graph*, with the workflow's stored setup over them.
 
         A graph that will not reduce has nothing addressable in it. That is a
         400 only when the request ADDRESSED an input (``_apply_addressed``'s
-        rule and wording); otherwise the card runs exactly as it did before
-        picture inputs were filled, rather than a runnable card starting to
+        rule and wording); otherwise the graph runs exactly as it did before
+        picture inputs were filled, rather than a runnable one starting to
         refuse over a question nobody asked.
         """
         library_uuid = _library_uuid()
-        stored = picture_inputs(hub, library_uuid, workflow_key) if library_uuid else []
+        stored = (
+            group_picture_inputs(hub, library_uuid, workflow_id)
+            if library_uuid and workflow_id
+            else []
+        )
         try:
-            inputs = card_input_modes(graph, stored)
+            inputs = card_input_modes(graph, _on_graph_labels(graph, stored))
         except WorkflowGraphError as exc:
             if addressed:
                 raise HTTPException(
@@ -3984,9 +3683,9 @@ def create_router(server) -> APIRouter:
                     ),
                 ) from exc
             logger.info(
-                "Card %s's graph will not reduce, so its picture inputs are "
+                "Workflow %s's graph will not reduce, so its picture inputs are "
                 "left as the graph has them: %s",
-                workflow_key,
+                workflow_id,
                 exc,
             )
             return []
@@ -4003,6 +3702,35 @@ def create_router(server) -> APIRouter:
             and binding.get("role") == workflow_bindings.IMAGE
         }
         return [item for item in inputs if bound.intersection(item.node_ids)]
+
+    def _on_graph_labels(graph: dict, stored: list[dict]) -> list[dict]:
+        """*stored* with each ``core:`` address put as the graph's own slot label.
+
+        A workflow's setup may address an input by its core address, which
+        every topology of the workflow shares (the conversion writes those);
+        :func:`card_input_modes` reads slot labels. A graph with no core, or
+        a core address it has no node for, leaves the row as it is, which
+        then reads as an input the graph has lost.
+        """
+        if not any(row["slot_label"].startswith(CORE_ADDRESS_PREFIX) for row in stored):
+            return stored
+        try:
+            labels, core = _graph_labels(graph, "picture inputs")
+        except HTTPException as exc:
+            logger.info(
+                "Picture-input addresses left as stored, the graph will not reduce: %s",
+                exc.detail,
+            )
+            return stored
+        by_core = {
+            CORE_ADDRESS_PREFIX + label: labels[node_id]
+            for node_id, label in core.items()
+            if node_id in labels
+        }
+        return [
+            {**row, "slot_label": by_core.get(row["slot_label"], row["slot_label"])}
+            for row in stored
+        ]
 
     def _fill_inputs(
         graph: dict,
@@ -4218,7 +3946,6 @@ def create_router(server) -> APIRouter:
             for name, given in (
                 ("picture_ids", bool(body.picture_ids)),
                 ("saved_recipe_id", body.saved_recipe_id is not None),
-                ("workflow_key", bool(body.workflow_key)),
                 ("workflow_id", bool(body.workflow_id)),
             )
             if given
@@ -4227,8 +3954,8 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "Name exactly one source: picture_ids, saved_recipe_id, "
-                    "workflow_key or workflow_id."
+                    "Name exactly one source: picture_ids, saved_recipe_id or "
+                    "workflow_id."
                 ),
             )
 
@@ -4360,12 +4087,7 @@ def create_router(server) -> APIRouter:
 
     def _workflow_recipe(workflow_id: str) -> DefaultRecipe:
         """A workflow's default recipe, or the 404 / 422 saying why not."""
-        if not _STACK_ID_RE.match(workflow_id):
-            raise HTTPException(
-                status_code=422,
-                detail="Invalid workflow_id: expected auto:<core hash> or a group id.",
-            )
-        recipe = workflow_defaults(_hub(), server.vault, workflow_id)
+        recipe = workflow_defaults(_hub(), server.vault, _workflow_id(workflow_id))
         if recipe is None or recipe.base_card is None:
             raise HTTPException(status_code=404, detail="Unknown workflow.")
         return recipe
@@ -4428,15 +4150,15 @@ def create_router(server) -> APIRouter:
     def _groups_for(
         body: RunRequest, recipe_key: str | None, base_card: str | None = None
     ) -> list[tuple[str | None, list[int], list[run_service.Reason]]]:
-        """``(workflow_key, picture_ids, reasons)`` per card this request runs.
+        """``(card key, picture_ids, reasons)`` per graph this request runs.
 
-        With several pictures and no target the server groups them by each
-        picture's recipe, which is the whole reason this is not one key: a
-        selection spanning three cards is three different graphs, and running
-        the first one over all of them would be silently wrong.
+        The card key is internal: the base card of a workflow, or the card a
+        picture's variant is on. With several pictures and no target the
+        server groups them by each picture's recipe, which is the whole reason
+        this is not one key: a selection spanning three cards is three
+        different graphs, and running the first one over all of them would be
+        silently wrong.
         """
-        if body.workflow_key:
-            return [(_require_hash(body.workflow_key, "workflow_key"), [], [])]
         if base_card is not None:
             return [(base_card, [], [])]
         if body.saved_recipe_id is not None:
@@ -4478,8 +4200,9 @@ def create_router(server) -> APIRouter:
         _require_one_source(body)
         body, recipe_key, recipe_loras, recipe_workflow = _with_recipe(body)
         # A workflow run (#1622): the server applies the default recipe, and
-        # the request - or the saved recipe it names - over it.
-        workflow_id = body.workflow_id or recipe_workflow
+        # the request - or the saved recipe it names - over it. A target is
+        # the workflow that runs instead, over the source's pictures.
+        workflow_id = body.target or body.workflow_id or recipe_workflow
         recipe = _workflow_recipe(workflow_id) if workflow_id else None
         if recipe is not None:
             body = _under_defaults(body, recipe)
@@ -4506,14 +4229,15 @@ def create_router(server) -> APIRouter:
                 ),
             )
         groups = _groups_for(
-            body, recipe_key, recipe.base_card if recipe is not None else None
+            body,
+            recipe_key,
+            recipe.base_card if recipe is not None and not body.target else None,
         )
         if body.target:
-            # One target replaces every group's card, keeping the pictures that
-            # chose it: "run this stack member over what I selected".
-            target = _require_hash(body.target, "target")
+            # One target replaces every group's graph, keeping the pictures
+            # that chose it: "run this workflow over what I selected".
             pictures = [pid for _, ids, _ in groups for pid in ids]
-            groups = [(target, pictures, [])]
+            groups = [(recipe.base_card, pictures, [])]
         if body.skip_loras and len({key for key, _, _ in groups if key}) > 1:
             # A skip names a loader by its node id, which only means one thing
             # in one graph: across cards it could skip an unrelated LoRA and
@@ -4554,20 +4278,19 @@ def create_router(server) -> APIRouter:
         # graph was resolved to look in: a skip no graph has is refused below.
         skips_found: set[tuple[str, str]] = set()
         skips_checked = False
-        for workflow_key, picture_ids, reasons in groups:
+        for card_key, picture_ids, reasons in groups:
             group = RunGroup(
-                workflow_key=workflow_key or "",
                 workflow_id=workflow_id,
                 picture_ids=picture_ids,
                 reasons=[r.as_dict() for r in reasons],
             )
-            if not workflow_key:
+            if not card_key:
                 # Every keyless group converges here, so the invariant lives
                 # here and not at each producer: `reasons` empty is the only
                 # thing that means a group would run, and one with no card
                 # cannot. Today every producer already attaches a reason (a
                 # picture on no card gets `a1111` or `no_runnable_source`, and
-                # `POST /recipes` refuses an empty `workflow_key` outright), so
+                # `POST /recipes` refuses a recipe with no workflow), so
                 # the fallback is the guard on the next one.
                 group.reasons = (
                     reasons
@@ -4579,18 +4302,24 @@ def create_router(server) -> APIRouter:
             if reasons:
                 planned.append(group)
                 continue
-            card = find_card(hub, workflow_key)
+            card = find_card(hub, card_key)
             if card is None:
                 group.reasons = [
                     run_service.Reason(
-                        run_service.NO_RUNNABLE_SOURCE, {"workflow_key": workflow_key}
+                        run_service.NO_RUNNABLE_SOURCE,
+                        {"workflow_id": group.workflow_id},
                     ).as_dict()
                 ]
                 planned.append(group)
                 continue
+            if group.workflow_id is None:
+                # A picture-sourced group runs the workflow its variant is in.
+                group.workflow_id = workflow_of_topology(hub, card.topology_hash)
             source, failure = _source_graph_for(card, object_info)
             if source is None:
-                group.reasons = [failure.as_dict()]
+                group.reasons = [
+                    {**failure.as_dict(), "workflow_id": group.workflow_id}
+                ]
                 planned.append(group)
                 continue
             group.source = source.origin
@@ -4606,7 +4335,7 @@ def create_router(server) -> APIRouter:
             # keeps every other node's id - so the fill below still finds its
             # nodes in the graph the bypass left.
             card_inputs = _card_inputs(
-                hub, workflow_key, graph, bool(requested), source.bindings
+                hub, group.workflow_id, graph, bool(requested), source.bindings
             )
             reached_inputs = True
             addressed.update(item.address for item in card_inputs)
@@ -4732,7 +4461,7 @@ def create_router(server) -> APIRouter:
                 for unplaced in group.unplaced_loras:
                     logger.info(
                         "[workflows] Card %s runs without saved LoRA %s: %s",
-                        workflow_key,
+                        card_key,
                         unplaced["filename"] or unplaced["sha256"],
                         unplaced["reason"],
                     )
@@ -4814,7 +4543,7 @@ def create_router(server) -> APIRouter:
                         "[workflows] Card %s loads %s in place of %s on node %s "
                         "(%s.%s): the same model, from the copy this shelf still "
                         "has.",
-                        workflow_key,
+                        card_key,
                         swap["now"],
                         swap["was"],
                         swap["node_id"],
@@ -4907,7 +4636,7 @@ def create_router(server) -> APIRouter:
                 logger.warning(
                     "[workflows] Running card %s UNINSPECTED on the owner's "
                     "explicit acknowledgement: %s",
-                    workflow_key,
+                    card_key,
                     ", ".join(r.code for r in found),
                 )
             # A selection feeding an input repeats the run per picture, and
@@ -5041,17 +4770,18 @@ def create_router(server) -> APIRouter:
 
     @router.post(
         "/workflows/run",
-        summary="Run a workflow card",
+        summary="Run a workflow",
         description=(
-            "Runs the card named by picture_ids, saved_recipe_id or "
-            "workflow_key; target runs another card instead, which is how a "
-            "stack's other member is chosen. With several pictures and no "
+            "Runs what picture_ids, saved_recipe_id or workflow_id names; a "
+            "workflow_id (or a target, which runs that workflow instead over "
+            "the pictures selected) runs its base graph with its default "
+            "recipe applied under the request. With several pictures and no "
             "target the server groups them by each picture's recipe. count "
             "submits that many runs of each, seed_mode is new, keep or fixed, "
             "and prompt/negative/loras/values are overrides applied to the "
             "graph at run time and never written back into it. inputs fills "
-            "the card's picture inputs; with exactly one left open by the "
-            "card's pins and stored setup, the selection fills it unasked and "
+            "the graph's picture inputs; with exactly one left open by the "
+            "workflow's pins and stored setup, the selection fills it unasked and "
             "the run repeats once per selected picture. Pictures are uploaded "
             "into ComfyUI's input folder only after every refusal is decided. "
             "New runs are NOT stacked with their source unless stack: true, "
@@ -5209,7 +4939,7 @@ def create_router(server) -> APIRouter:
                             daemon=True,
                         ).start()
                     prompts.append(
-                        {"workflow_key": group.workflow_key, "prompt_id": prompt_id}
+                        {"workflow_id": group.workflow_id, "prompt_id": prompt_id}
                     )
 
     def _tag_for_stack(graph: dict, stack_id: int, source_id: int) -> None:
@@ -5248,15 +4978,14 @@ def create_router(server) -> APIRouter:
     # ── The file gestures (v1.12 B8) ──────────────────────────────────────
     #
     # Export, Duplicate, Clone with new models, Insert loader and Delete: the
-    # five gestures that write or read a FILE, against a card that may never
-    # have had one. Each starts from `_source_graph_for`, so a card the library
-    # only knows from its pictures exports and duplicates like any other - that
-    # is most of what makes them worth having.
+    # five gestures that write or read a FILE, against a workflow that may
+    # never have had one. Each acts on the workflow's base card and starts from
+    # `_source_graph_for`, so a workflow the library only knows from its
+    # pictures exports and duplicates like any other.
     #
-    # Edited defaults are NOT applied to any of these. A default is an override
-    # the run path puts in at submit time (implementation plan rule 1), and
-    # writing one into a graph would make the workflow and the override the
-    # same thing.
+    # Only the export applies the default recipe: it is the workflow as it is
+    # meant to be run. A copy written for the owner (duplicate, clone, a chain
+    # edit) is the graph as it is.
 
     def _card_source(card, object_info: dict | None = None):
         """One card's runnable graph, or the 409 that says why there is none.
@@ -5294,8 +5023,11 @@ def create_router(server) -> APIRouter:
             )
         return source
 
-    def _file_stem(card) -> str:
-        """What a file written for this card should be called, without .json.
+    def _file_stem(card, name: str | None = None) -> str:
+        """What a file written for this workflow should be called, without .json.
+
+        *name* is the workflow's own name, which wins over the base card's
+        file and the generated one.
 
         Sanitised, because a card's name is the owner's own text and it goes
         both into a path under the user folder and into a download name the
@@ -5304,7 +5036,7 @@ def create_router(server) -> APIRouter:
         Windows separator. ``resolve_path_within`` is still the backstop on
         this side (``routes/comfyui.py``); this is the half that leaves.
         """
-        stem = os.path.splitext(card.file_name)[0] if card.file_name else ""
+        stem = name or (os.path.splitext(card.file_name)[0] if card.file_name else "")
         return download_stem(stem or _display_name(card)) or "workflow"
 
     # Which of the two cleanings is the authority: for a file written on THIS
@@ -5313,100 +5045,131 @@ def create_router(server) -> APIRouter:
     # export's `filename` there is no server-side backstop at all, because the
     # client writes that file — so there `download_stem` is the authority.
 
-    def _structural_lora_slots(card, graph: dict) -> set[tuple[str, str]]:
-        """``(node id, widget)`` of every LoRA slot the owner marked structural.
+    def _export_default_recipe(
+        recipe: DefaultRecipe, graph: dict, object_info: dict | None
+    ) -> tuple[set[tuple[str, str]], bool]:
+        """Apply the default recipe to an export's graph.
 
-        Everything else the export empties, which is why this reads the
-        STRUCTURAL marks rather than the recipe ones: an unmarked slot, a
-        topology the backfill has not frozen yet and a loader the label map
-        does not reach all then fall on the side that publishes nothing.
+        Returns the LoRA slots it keeps, and whether it took a loader out.
 
-        A mark is keyed by ``<node label>/<widget>`` (``workflow_identity``'s
-        own slot label), so the widget is carried through rather than the node
-        alone — a stacker's three slots are three marks on one node.
-
-        A LoRA file promoted to a workflow of its own
-        (``workflow_lora_promotion``) is kept too, but only where the graph
-        still loads THAT file in the slot: the promotion is of a file, and any
-        other file in the same slot is still the look.
+        Its values and models; its LoRAs where the graph already loads them,
+        every other LoRA loader bypassed and each off stage switched off -
+        both best effort, as a run does it: a loader that cannot be taken out
+        is left for :func:`scrub_for_export` to empty, and a stage that
+        cannot stays. With no majority among the LoRAs (``loras_decided``
+        false) none is kept, so nothing that is the look leaves the machine.
         """
-        hub = _hub()
-        keep = {
-            label
-            for (topology_hash, label), mark in slot_marks(
-                hub, [card.topology_hash]
-            ).items()
-            if topology_hash == card.topology_hash and mark == STRUCTURAL
-        }
-        promoted = {
-            (label, asset)
-            for _, label, asset in lora_promotions(hub, [card.topology_hash])
-        }
-        if not keep and not promoted:
-            return set()
-        try:
-            document = structural_document(graph)
-            labels = topology_node_labels(document)
-            # By loader and widget, not by label: twin loaders share a label,
-            # and a twin holding another file is still the look.
-            kept_files = {
-                (slot.node_id, slot.widget)
-                for slot in slots(document)
-                if slot.is_lora and (slot.label, slot.asset) in promoted
+        _apply_addressed(graph, _recipe_values(recipe))
+        _apply_models(
+            _hub(),
+            graph,
+            [
+                RunModel(address=m.address, filename=m.filename)
+                for m in recipe.models
+                if m.filename
+            ],
+            object_info,
+        )
+        targets = detect_lora_targets(graph)
+        keep: set[tuple[str, str]] = set()
+        if recipe.loras_decided and targets:
+            digests = _slot_digests(targets, adapter_digest_index(_hub()))
+            wanted_digests = {
+                lora.sha256.lower() for lora in recipe.loras if lora.sha256
             }
-        except WorkflowGraphError as exc:
-            # No labels means no node is known to be structural, so every LoRA
-            # slot is emptied. Logged rather than raised: a less useful export
-            # is the right failure here, and `scrub_for_export` refuses the
-            # graph on its own if the reduction is what it needed.
+            wanted_names = {
+                normalized_filename(lora.filename)
+                for lora in recipe.loras
+                if lora.filename
+            }
+            for target in targets:
+                slot = (str(target["node_id"]), str(target["field"]))
+                if digests.get(slot) in wanted_digests or (
+                    target.get("by") != "digest"
+                    and normalized_filename(str(target.get("value") or ""))
+                    in wanted_names
+                ):
+                    keep.add(slot)
+        skip = [
+            (str(target["node_id"]), str(target["field"]))
+            for target in targets
+            if (str(target["node_id"]), str(target["field"])) not in keep
+        ]
+        skipped, left_in, _found = run_service.skip_requested_loras(
+            graph, skip, object_info
+        )
+        for reason in left_in:
             logger.info(
-                "Card %s exports with every LoRA slot emptied, its graph will "
-                "not reduce to slot labels: %s",
-                card.workflow_key,
-                exc,
+                "[workflows] Workflow %s exports with a LoRA loader its default "
+                "recipe leaves out still in place (emptied): %s",
+                recipe.workflow_id,
+                reason.as_dict(),
             )
-            return set()
-        return kept_files | {
-            (node_id, widget)
-            for node_id, label in labels.items()
-            for widget in ((graph.get(node_id) or {}).get("inputs") or {})
-            if f"{label}/{widget}" in keep
-        }
+        off = [stage for stage, on in sorted(recipe.stages.items()) if not on]
+        for reason in run_service.skip_requested_stages(graph, off, object_info):
+            logger.info(
+                "[workflows] Workflow %s exports with a stage its default "
+                "recipe runs without: %s",
+                recipe.workflow_id,
+                reason.as_dict(),
+            )
+        return keep, bool(skipped)
 
     @router.get(
-        "/workflows/{workflow_key}/export",
+        "/workflows/{workflow_id}/export",
         summary="Export a workflow",
         description=(
-            "This workflow as a ComfyUI file somebody else can open: prompts "
-            "and caption targets blank, seeds nulled, the LoRA slots that are "
-            "part of the look emptied, node titles stripped, picture file "
-            "names blanked, and any model name this machine does not hold "
-            "left out. Export a recipe instead to share what was actually run."
+            "This workflow as a ComfyUI file somebody else can open: its base "
+            "graph with its default recipe applied (values and models set, "
+            "LoRA loaders outside the recipe and stages it runs without "
+            "bypassed where ComfyUI says how), then prompts and caption "
+            "targets blank, seeds nulled, every LoRA slot not in the default "
+            "recipe emptied, node titles stripped, picture file names blanked, "
+            "and any model name this machine does not hold left out. Export a "
+            "recipe instead to share what was actually run."
         ),
         response_model=WorkflowExport,
         responses={
-            404: {"description": "This machine has no such card."},
+            404: {"description": "This machine has no such workflow."},
             409: {"description": "There is no graph to export, or it will not read."},
         },
     )
-    def export_workflow(request: Request, workflow_key: str):
+    def export_workflow(request: Request, workflow_id: str):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        card = _require_card(hub, workflow_key)
+        workflow, card = _require_base(hub, workflow_id)
         source = _card_source(card)
+        recipe = workflow_defaults(hub, server.vault, workflow.workflow_id)
+        # Only a bypass asks it: without ComfyUI nothing is bypassed and the
+        # scrub empties every LoRA slot outside the recipe instead.
+        object_info, _error = _read_object_info(_comfyui_url(_user(request)))
+        graph = deepcopy(source.graph)
         try:
+            keep, bypassed = (
+                _export_default_recipe(recipe, graph, object_info)
+                if recipe is not None
+                else (set(), False)
+            )
             document, removed = scrub_for_export(
-                source.graph,
-                structural_lora_slots=_structural_lora_slots(card, source.graph),
+                graph,
+                kept_lora_slots=keep,
                 unvouched=unvouched_model_values(hub),
             )
+            if bypassed and LORA_SLOTS not in removed:
+                # A loader taken out is the same fact as one emptied.
+                removed = sorted([*removed, LORA_SLOTS])
+        except HTTPException as exc:
+            if exc.status_code != 400:
+                raise
+            # The recipe addresses a graph that will not reduce, which is
+            # the scrub's own refusal below, and answered the same way.
+            raise HTTPException(status_code=409, detail=exc.detail) from exc
         except (WorkflowGraphError, RecursionError) as exc:
             # Refused rather than exported unscrubbed. A graph PixlStash cannot
             # read is one it can promise nothing about, and the promise is the
             # route. `RecursionError` is the same answer and the same class of
             # input: an embedded graph comes out of a picture that arrived from
-            # somewhere else, which is why `_store_workflow` and
-            # `_trash_stored_workflow` both name it too.
+            # somewhere else.
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -5415,14 +5178,14 @@ def create_router(server) -> APIRouter:
                 ),
             ) from exc
         return WorkflowExport(
-            filename=f"{_file_stem(card)}.json",
+            filename=f"{_file_stem(card, workflow.name)}.json",
             workflow=document,
             removed=removed,
             source=source.origin,
         )
 
     @router.get(
-        "/workflows/{workflow_key}/graph",
+        "/workflows/{workflow_id}/graph",
         summary="A workflow's runnable graph",
         description=(
             "This workflow as Run would submit it, prompt and seed kept, for "
@@ -5432,19 +5195,19 @@ def create_router(server) -> APIRouter:
             "replacement swapped for a ComfyUI-PixlStash one). Credential widgets are blanked. A graph from a stored recipe has "
             "no seeds (`seedless`) and may name models the library forgot "
             "(`forgotten`). The ComfyUI-PixlStash node reads it when ComfyUI "
-            "is opened with `?pixlstash_workflow=<key>`. Export instead to "
+            "is opened with `?pixlstash_workflow=<workflow_id>`. Export instead to "
             "give it away."
         ),
         response_model=WorkflowRunnableGraph,
         responses={
-            404: {"description": "This machine has no such card."},
-            409: {"description": "There is no graph for this card."},
+            404: {"description": "This machine has no such workflow."},
+            409: {"description": "There is no graph for this workflow."},
         },
     )
-    def get_runnable_graph(request: Request, workflow_key: str):
+    def get_runnable_graph(request: Request, workflow_id: str):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        card = _require_card(hub, workflow_key)
+        workflow, card = _require_base(hub, workflow_id)
         # Resolved the way Run… resolves it: with ComfyUI's own model list, so
         # an editor-only picture graph is rebuilt and a renamed model loads
         # (#1439). Without ComfyUI the file and picture tiers still answer.
@@ -5475,7 +5238,7 @@ def create_router(server) -> APIRouter:
                 if isinstance(value, str) and SECRET_FIELD_RE.search(name):
                     inputs[name] = ""
         return WorkflowRunnableGraph(
-            name=_file_stem(card),
+            name=_file_stem(card, workflow.name),
             workflow=graph,
             source=source.origin,
             seedless=source.seedless,
@@ -5483,12 +5246,12 @@ def create_router(server) -> APIRouter:
         )
 
     @router.post(
-        "/workflows/{workflow_key}/duplicate",
+        "/workflows/{workflow_id}/duplicate",
         summary="Duplicate a workflow",
         description=(
             "Write this workflow into the user's workflow folder under a free "
             "name, so it can be opened and changed in ComfyUI without touching "
-            "the original. A card the library only knows from its pictures "
+            "the original. A workflow the library only knows from its pictures "
             "gets a file this way for the first time."
         ),
         response_model=WorkflowFile,
@@ -5499,21 +5262,25 @@ def create_router(server) -> APIRouter:
             500: {"description": "The copy could not be written."},
         },
     )
-    def duplicate_workflow(request: Request, workflow_key: str):
+    def duplicate_workflow(request: Request, workflow_id: str):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        card = _require_card(hub, workflow_key)
+        workflow, card = _require_base(hub, workflow_id)
         source = _card_source(card)
         # Unscrubbed on purpose: this file stays on the owner's machine and is
         # meant to RUN, and a copy with its models blanked would not.
         name, key = _store_copy(
-            hub, f"{_file_stem(card)} (copy)", source.graph, source.bindings
+            hub,
+            f"{_file_stem(card, workflow.name)} (copy)",
+            source.graph,
+            source.bindings,
         )
-        _announce(request, sorted({workflow_key, key} - {None}), "imported")
-        return WorkflowFile(name=name, workflow_key=key)
+        landed = _workflow_of_card(hub, key)
+        _announce(request, sorted({workflow_id, landed} - {None}), "imported")
+        return WorkflowFile(name=name, workflow_id=landed)
 
     @router.post(
-        "/workflows/{workflow_key}/insert-lora-loader",
+        "/workflows/{workflow_id}/insert-lora-loader",
         summary="Add a LoRA loader to a workflow",
         description=(
             "Write a copy of this workflow with a LoRA loader spliced in right "
@@ -5521,7 +5288,7 @@ def create_router(server) -> APIRouter:
             "LoRA now has a slot to swap into. The loader starts at ComfyUI's "
             "own widget defaults — no LoRA is chosen here — so pick one before "
             "running the copy as it is. The original file is not changed; the "
-            "copy is a card of its own."
+            "copy is a workflow file of its own."
         ),
         response_model=InsertedLoader,
         status_code=201,
@@ -5531,10 +5298,10 @@ def create_router(server) -> APIRouter:
             503: {"description": "ComfyUI could not be reached."},
         },
     )
-    def insert_lora_loader(request: Request, workflow_key: str):
+    def insert_lora_loader(request: Request, workflow_id: str):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        card = _require_card(hub, workflow_key)
+        workflow, card = _require_base(hub, workflow_id)
         source = _card_source(card)
         # ComfyUI types the links (#1376): an API-format link carries no type,
         # so without `object_info` an input reading the model could be missed
@@ -5555,12 +5322,13 @@ def create_router(server) -> APIRouter:
         except LookupError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         name, key = _store_copy(
-            hub, f"{_file_stem(card)} (LoRA)", graph, source.bindings
+            hub, f"{_file_stem(card, workflow.name)} (LoRA)", graph, source.bindings
         )
-        _announce(request, sorted({workflow_key, key} - {None}), "imported")
+        landed = _workflow_of_card(hub, key)
+        _announce(request, sorted({workflow_id, landed} - {None}), "imported")
         return InsertedLoader(
             name=name,
-            workflow_key=key,
+            workflow_id=landed,
             node_id=loader["node_id"],
             class_type=loader["class_type"],
         )
@@ -5631,7 +5399,7 @@ def create_router(server) -> APIRouter:
         )
 
     def _chain_payload(
-        workflow_key: str, chain: dict, refusal: str | None, object_info
+        workflow_id: str, chain: dict, refusal: str | None, object_info
     ) -> LoraChain:
         model = chain.get("model_source")
         clip = chain.get("clip_source")
@@ -5665,7 +5433,7 @@ def create_router(server) -> APIRouter:
                 )
             )
         return LoraChain(
-            workflow_key=workflow_key,
+            workflow_id=workflow_id,
             editable=refusal is None,
             refusal=refusal,
             source=None
@@ -5689,7 +5457,7 @@ def create_router(server) -> APIRouter:
         )
 
     @router.get(
-        "/workflows/{workflow_key}/lora-chain",
+        "/workflows/{workflow_id}/lora-chain",
         summary="A workflow's LoRA chain",
         description=(
             "The LoRA loaders between this workflow's model source and what "
@@ -5708,10 +5476,10 @@ def create_router(server) -> APIRouter:
             409: {"description": "There is no graph for this card."},
         },
     )
-    def get_lora_chain(request: Request, workflow_key: str):
+    def get_lora_chain(request: Request, workflow_id: str):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        card = _require_card(hub, workflow_key)
+        _workflow, card = _require_base(hub, workflow_id)
         graph = _card_source(card).graph
         # Cached: the inspector asks on every card it selects, the map is
         # megabytes, and an unreachable ComfyUI would otherwise cost a full
@@ -5732,16 +5500,16 @@ def create_router(server) -> APIRouter:
                 refusal = None
             except LookupError as exc:
                 logger.info(
-                    "Card %s's LoRA chain is shown read-only: %s", workflow_key, exc
+                    "Workflow %s's LoRA chain is shown read-only: %s", workflow_id, exc
                 )
                 refusal = str(exc)
         if chain is None:
             chain = read_lora_chain_untyped(graph, object_info)
         _shelf_chain(hub, chain)
-        return _chain_payload(workflow_key, chain, refusal, object_info)
+        return _chain_payload(workflow_id, chain, refusal, object_info)
 
     @router.put(
-        "/workflows/{workflow_key}/lora-chain",
+        "/workflows/{workflow_id}/lora-chain",
         summary="Edit a workflow's LoRA chain",
         description=(
             "Write a copy of this workflow with its LoRA chain as the owner "
@@ -5749,7 +5517,7 @@ def create_router(server) -> APIRouter:
             "one list per pass), an existing loader by node_id "
             "(moved and re-weighted, its id kept), a new one by the shelf "
             "sha256 of its LoRA, and every loader left out deleted. One call "
-            "is one new card; the original file is never changed. dry_run "
+            "is one new file; the original file is never changed. dry_run "
             "answers the list of changes and writes nothing."
         ),
         response_model=LoraChainSaved,
@@ -5773,12 +5541,12 @@ def create_router(server) -> APIRouter:
     def edit_lora_chain(
         request: Request,
         response: Response,
-        workflow_key: str,
+        workflow_id: str,
         payload: LoraChainEdit = Body(...),
     ):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        card = _require_card(hub, workflow_key)
+        workflow, card = _require_base(hub, workflow_id)
         source = _card_source(card)
         object_info, error = _read_object_info(_comfyui_url(_user(request)))
         if object_info is None:
@@ -5862,11 +5630,15 @@ def create_router(server) -> APIRouter:
         asked = re.sub(r"\.json$", "", (payload.name or "").strip(), flags=re.I)
         stem = download_stem(asked) if asked else ""
         name, key = _store_copy(
-            hub, stem or f"{_file_stem(card)} (edited)", graph, source.bindings
+            hub,
+            stem or f"{_file_stem(card, workflow.name)} (edited)",
+            graph,
+            source.bindings,
         )
-        _announce(request, sorted({workflow_key, key} - {None}), "imported")
+        landed = _workflow_of_card(hub, key)
+        _announce(request, sorted({workflow_id, landed} - {None}), "imported")
         return LoraChainSaved(
-            dry_run=False, name=name, workflow_key=key, changes=plan["changes"]
+            dry_run=False, name=name, workflow_id=landed, changes=plan["changes"]
         )
 
     def _swap_models(hub) -> dict[int, SwapModel]:
@@ -6193,7 +5965,7 @@ def create_router(server) -> APIRouter:
         return [], "none_loadable"
 
     @router.get(
-        "/workflows/{workflow_key}/model-swap",
+        "/workflows/{workflow_id}/model-swap",
         summary="What a workflow could be cloned onto",
         description=(
             "The model files this workflow loads, the shelf's checkpoints, VAEs "
@@ -6207,20 +5979,20 @@ def create_router(server) -> APIRouter:
         ),
         response_model=ModelSwapOptions,
         responses={
-            404: {"description": "No such card, or no such checkpoint."},
+            404: {"description": "No such workflow, or no such checkpoint."},
             409: {"description": "There is no graph to clone."},
         },
     )
     def read_model_swap(
         request: Request,
-        workflow_key: str,
+        workflow_id: str,
         checkpoint_id: int | None = None,
         replacing: str | None = Query(None, min_length=1, max_length=MAX_VALUE_LENGTH),
         slot_kind: Literal["checkpoint", "vae", "text_encoder"] | None = None,
     ):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        card = _require_card(hub, workflow_key)
+        _workflow, card = _require_base(hub, workflow_id)
         # The graph is read on the proposal call too: the LoRA flags are about
         # the files it names.
         source = _card_source(card)
@@ -6288,7 +6060,7 @@ def create_router(server) -> APIRouter:
         return options
 
     @router.post(
-        "/workflows/{workflow_key}/clone-with-models",
+        "/workflows/{workflow_id}/clone-with-models",
         summary="Clone a workflow onto other models",
         description=(
             "Write a copy of this workflow with some of its model files "
@@ -6296,21 +6068,21 @@ def create_router(server) -> APIRouter:
             "naming a replaced file is rewritten. When ComfyUI answers, each "
             "new name is written as ComfyUI lists it and a name it does not "
             "list is left out; when it does not, the names are written "
-            "unchecked. The original file is not changed; the clone is a card "
-            "of its own."
+            "unchecked. The original file is not changed; the clone is a file "
+            "of its own, in the same workflow."
         ),
         response_model=ClonedWorkflow,
         status_code=201,
         responses={
-            404: {"description": "This machine has no such card."},
+            404: {"description": "This machine has no such workflow."},
             409: {"description": "No graph to clone, or a swap could not be made."},
             500: {"description": "The copy could not be written."},
         },
     )
-    def clone_with_models(request: Request, workflow_key: str, body: CloneWithModels):
+    def clone_with_models(request: Request, workflow_id: str, body: CloneWithModels):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        card = _require_card(hub, workflow_key)
+        _workflow, card = _require_base(hub, workflow_id)
         source = _card_source(card)
         graph = deepcopy(source.graph)
         # Not `insert_lora_loader`'s 503: nothing here depends on ComfyUI's link
@@ -6318,9 +6090,9 @@ def create_router(server) -> APIRouter:
         object_info, error = _read_object_info(_comfyui_url(_user(request)))
         if object_info is None:
             logger.info(
-                "Cloning card %s with its model names unchecked, ComfyUI did "
+                "Cloning workflow %s with its model names unchecked, ComfyUI did "
                 "not answer: %s",
-                workflow_key,
+                workflow_id,
                 error,
             )
         swapped, unswapped = apply_filename_swap(graph, body.swaps, object_info)
@@ -6344,68 +6116,21 @@ def create_router(server) -> APIRouter:
                     + "; ".join(f"{u['now']} ({u['reason']})" for u in unswapped)
                 ),
             )
+        # Only filenames change, so the clone has the original's topology and
+        # is a file of the same workflow: its name, pins and defaults already
+        # apply to it, and there is nothing to carry.
         name, key = _store_copy(
             hub, download_stem(body.name) or "workflow", graph, source.bindings
         )
-        landed = find_card(hub, key) if key else None
-        if landed is not None and key != workflow_key:
-            _carry_to_clone(hub, workflow_key, landed, body.name, graph, swapped)
-        _announce(request, sorted({workflow_key, key} - {None}), "imported")
+        landed = _workflow_of_card(hub, key)
+        _announce(request, sorted({workflow_id, landed} - {None}), "imported")
         return ClonedWorkflow(
             name=name,
-            workflow_key=key,
+            workflow_id=landed,
             swapped=swapped,
             unswapped=unswapped,
             verified=all(entry["verified"] for entry in swapped),
         )
-
-    def _carry_to_clone(
-        hub, source_key: str, landed, name: str, graph: dict, swapped: list
-    ):
-        """Give a clone the name typed for it and the original's pins and defaults.
-
-        A new key is a blank card, and pins and defaults are addressed by
-        ``(slot label, input name)``, which a filename swap does not move, so
-        the owner's choices on the original fit the clone as they stand. Each is
-        carried only where the card has none of its own: the clone may land on
-        a card that already exists (a second clone, or the same workflow built
-        by hand), and its owner's choices stand. Notes are not carried: they
-        describe the original's history, which the clone does not share.
-
-        A default on a loader field the swap rewrote is dropped, whatever its
-        value, or it would put some other model back on the clone's first run.
-        """
-        if landed.name is None:
-            set_attributes(hub, landed.workflow_key, name=name.strip())
-        if key_pins(hub, landed.workflow_key) is None:
-            pins = key_pins(hub, source_key)
-            if pins is not None:
-                replace_pins(hub, landed.workflow_key, pins)
-        overrides = default_overrides(hub, source_key)
-        if not overrides or default_overrides(hub, landed.workflow_key):
-            return
-        try:
-            labels = topology_node_labels(structural_document(graph))
-        except WorkflowGraphError as exc:
-            logger.warning(
-                "Clone %s of card %s will not reduce, so its swapped loader "
-                "fields cannot be told apart and the original's defaults are "
-                "not carried: %s",
-                landed.workflow_key,
-                source_key,
-                exc,
-            )
-            return
-        rewritten = {
-            (labels.get(entry["node_id"]), entry["field"]) for entry in swapped
-        }
-        defaults = [
-            (slot_label, input_name, value)
-            for (slot_label, input_name), value in overrides.items()
-            if (slot_label, input_name) not in rewritten
-        ]
-        if defaults:
-            replace_defaults(hub, landed.workflow_key, defaults)
 
     def _store_copy(
         hub, stem: str, graph: dict, bindings: list | None = None
@@ -6433,32 +6158,45 @@ def create_router(server) -> APIRouter:
             ) from exc
 
     @router.delete(
-        "/workflows/{workflow_key}",
-        summary="Delete an imported workflow",
+        "/workflows/{workflow_id}",
+        summary="Delete an imported workflow's file",
         description=(
-            "Send this card's workflow file to the system trash and take it "
-            "off the card. Only a file this machine holds can be deleted: a "
-            "workflow the library knows from its pictures has no file, and is "
-            "hidden rather than deleted. The card itself and its pictures stay."
+            "Send this workflow's file to the system trash: its base card's, "
+            "else the first file any of its graphs has. Only a file this "
+            "machine holds can be deleted: a workflow the library knows from "
+            "its pictures has no file, and is hidden rather than deleted. The "
+            "workflow itself and its pictures stay."
         ),
         response_model=WorkflowDeleted,
         responses={
             404: {
                 "description": (
-                    "This machine has no such card, or the card names a file "
+                    "This machine has no such workflow, or it names a file "
                     "the user folder does not hold — a built-in, or one "
                     "already gone from disk."
                 )
             },
-            409: {"description": "This card has no workflow file to delete."},
+            409: {"description": "This workflow has no file to delete."},
             500: {"description": "The file could not be moved to the trash."},
         },
     )
-    def delete_workflow(request: Request, workflow_key: str):
+    def delete_workflow(request: Request, workflow_id: str):
         server.auth.ensure_secure_when_required(request)
         hub = _hub()
-        card = _require_card(hub, workflow_key)
-        if not card.file_name:
+        cards = card_index(hub)
+        workflow = find_workflow(hub, _workflow_id(workflow_id), _counts(), cards)
+        if workflow is None:
+            raise HTTPException(status_code=404, detail="Unknown workflow.")
+        by_key = {c.workflow_key: c for c in cards}
+        card = next(
+            (
+                by_key[key]
+                for key in [workflow.base_card, *workflow.cards]
+                if key in by_key and by_key[key].file_name
+            ),
+            None,
+        )
+        if card is None:
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -6467,7 +6205,7 @@ def create_router(server) -> APIRouter:
                 ),
             )
         deleted = trash_user_workflow(hub, card.file_name)
-        _announce(request, [workflow_key], "changed")
-        return WorkflowDeleted(deleted=deleted, workflow_key=workflow_key)
+        _announce(request, [workflow_id], "changed")
+        return WorkflowDeleted(deleted=deleted, workflow_id=workflow_id)
 
     return router

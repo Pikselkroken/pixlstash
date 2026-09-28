@@ -29,12 +29,12 @@
         <div class="section-label section-label--on-dark edit-sec">
           <span :id="workflowLabelId">Workflow</span>
           <span class="edit-sec-end">
-            <span v-if="workflowKey === rememberedKey" class="edit-aside"
+            <span v-if="workflowId === rememberedKey" class="edit-aside"
               >last used</span
             >
             <!-- The Recipe tab's "Open", on the card this tab would run. -->
             <button
-              v-if="workflowKey"
+              v-if="workflowId"
               class="edit-sec-act"
               type="button"
               @click="openInWorkflows"
@@ -86,12 +86,12 @@
           >
             <button
               v-for="card in cards"
-              :key="card.key"
+              :key="card.id"
               class="ctx-item edit-option"
               type="button"
               role="menuitemradio"
-              :aria-checked="card.key === workflowKey ? 'true' : 'false'"
-              @click="choose(card.key)"
+              :aria-checked="card.id === workflowId ? 'true' : 'false'"
+              @click="choose(card.id)"
             >
               <span class="ctx-label-text">{{
                 card.name || "Untitled workflow"
@@ -298,7 +298,7 @@ const unrunnable = ref(0);
 const loaded = ref(false);
 const loading = ref(false);
 const loadError = ref("");
-const workflowKey = ref("");
+const workflowId = ref("");
 const rememberedKey = ref("");
 // Kept across filmstrip steps on purpose, so one instruction can be run on
 // several pictures in a row. It is never filled from the picture's recipe.
@@ -320,7 +320,7 @@ const pickerTriggerRef = ref(null);
 let refocusPicker = false;
 
 const chosenCard = computed(
-  () => cards.value.find((card) => card.key === workflowKey.value) || null,
+  () => cards.value.find((card) => card.id === workflowId.value) || null,
 );
 
 // Whether the reader has picked a card by hand since the list loaded, which the
@@ -329,7 +329,7 @@ let choseByHand = false;
 
 function choose(key) {
   choseByHand = true;
-  workflowKey.value = key;
+  workflowId.value = key;
   pickerOpen.value = false;
   refocusPicker = true;
 }
@@ -353,9 +353,9 @@ watch(storageKey, () => {
   rememberedKey.value = readRemembered();
   if (
     !choseByHand &&
-    cards.value.some((card) => card.key === rememberedKey.value)
+    cards.value.some((card) => card.id === rememberedKey.value)
   ) {
-    workflowKey.value = rememberedKey.value;
+    workflowId.value = rememberedKey.value;
   }
 });
 
@@ -407,7 +407,7 @@ async function loadCards() {
   loading.value = true;
   loadError.value = "";
   try {
-    // The Workflows grid's own list: one card per stack, its cover, and no
+    // The Workflows grid's own list: one card per workflow, and no
     // one-offs. Every variant and every pulled experiment made the picker too
     // long to be any use.
     const { cards: all } = await listWorkflowCards();
@@ -416,13 +416,13 @@ async function loadCards() {
     cards.value = edits.filter((_, index) => runs[index]);
     unrunnable.value = edits.length - cards.value.length;
     rememberedKey.value = readRemembered();
-    const known = cards.value.some((card) => card.key === rememberedKey.value);
+    const known = cards.value.some((card) => card.id === rememberedKey.value);
     // The last one used from this tab, else the first Image to Image card in
     // the grid's own order, else whatever edit card comes first.
-    workflowKey.value = known
+    workflowId.value = known
       ? rememberedKey.value
       : (cards.value.find((card) => card.type === "img2img") || cards.value[0])
-          ?.key || "";
+          ?.id || "";
     loaded.value = true;
   } catch (err) {
     loadError.value = errorMessage(err, "Could not read your workflows.");
@@ -438,13 +438,13 @@ async function wouldRun(card) {
   try {
     const answer = await preflightWorkflowRun({
       picture_ids: [id],
-      target: card.key,
+      target: card.id,
     });
     return (answer?.groups || [])
       .flatMap((group) => group.reasons || [])
       .every((reason) => UNCHECKED_CODES.includes(reason.code));
   } catch (err) {
-    console.warn(`Could not pre-flight ${card.key} for the Edit tab:`, err);
+    console.warn(`Could not pre-flight ${card.id} for the Edit tab:`, err);
     return true;
   }
 }
@@ -563,8 +563,8 @@ function onInstructionKeydown(event) {
 }
 
 function openInWorkflows() {
-  if (!workflowKey.value) return;
-  router.push({ name: "workflows", query: { card: workflowKey.value } });
+  if (!workflowId.value) return;
+  router.push({ name: "workflows", query: { workflow: workflowId.value } });
 }
 
 function onMoreOptions() {
@@ -572,7 +572,7 @@ function onMoreOptions() {
   if (!Number.isFinite(id) || id <= 0) return;
   emit("more-options", {
     pictureId: id,
-    workflowKey: workflowKey.value,
+    workflowId: workflowId.value,
     // Trimmed as Run trims it, so a blank box means the same thing on both
     // paths: no instruction.
     prompt: instruction.value.trim(),
@@ -581,12 +581,12 @@ function onMoreOptions() {
 
 async function submit() {
   const id = Number(props.pictureId);
-  if (submitting.value || !workflowKey.value) return;
+  if (submitting.value || !workflowId.value) return;
   if (!Number.isFinite(id) || id <= 0) return;
   submitting.value = true;
   submitError.value = "";
   clearTimeout(resolveTimer);
-  const card = cards.value.find((row) => row.key === workflowKey.value);
+  const card = cards.value.find((row) => row.id === workflowId.value);
   const text = instruction.value.trim();
   try {
     // Before the run, so the member it adds can be told apart afterwards.
@@ -603,7 +603,7 @@ async function submit() {
     };
     const answer = await runWorkflowCard({
       picture_ids: [id],
-      target: workflowKey.value,
+      target: workflowId.value,
       // An empty box leaves the workflow's own prompt alone: `""` would blank
       // every positive prompt node in the graph.
       prompt: text || null,
@@ -624,7 +624,7 @@ async function submit() {
         : "Nothing was queued.";
       return;
     }
-    remember(workflowKey.value);
+    remember(workflowId.value);
     run.value = {
       sourceId: id,
       workflowName: card?.name || "Untitled workflow",

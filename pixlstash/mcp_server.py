@@ -13,9 +13,9 @@ back to the agent as a tool error. By default every tool is a ``GET``; mint a
 ``READ`` token for it. The token is read from the environment rather than
 argv, which other accounts on the machine can list.
 
-``--allow-write`` adds the workflow tools: list and read workflow cards, hand
-a card's graph out as a file, take an edited graph back as a new workflow,
-and preflight or run a card. They are a fixed allowlist of non-destructive
+``--allow-write`` adds the workflow tools: list and read workflows, hand a
+workflow's graph out as a file, take an edited graph back, and preflight or
+run a workflow. They are a fixed allowlist of non-destructive
 routes plus one, ``run_workflow``, that spends GPU time and makes pictures.
 Every route they wrap is owner-only, so they need an unscoped (``ALL``)
 token; the flag narrows what this server offers, never what the token can
@@ -64,7 +64,6 @@ SUPPORTED_PROTOCOL_VERSIONS = {"2024-11-05", PROTOCOL_VERSION}
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 200
 TIMEOUT_SECONDS = 60
-MAX_KEY_LENGTH = 200
 # ponytail: a real graph is 50-500 KB; this only stops a stray path at a huge file.
 MAX_GRAPH_BYTES = 16 * 1024 * 1024
 
@@ -107,12 +106,12 @@ matches meaning rather than filename.
 character_id or project_id from the list tools.
 - One picture's tags and scores -> get_picture. To actually look at it -> \
 view_picture.
-- "how was this made" -> get_recipe. It names the workflow card the picture \
-is on (workflow_key, and a workflow_link to open it in PixlStash), whether its \
+- "how was this made" -> get_recipe. It names the workflow the picture is \
+in (workflow_id, and a workflow_link to open it in PixlStash), whether its \
 model forks into several sampler passes and which LoRAs feed each \
 (lora_chain), and how many nodes of each class it runs (node_class_counts).
 - "other pictures made with that workflow" -> list_pictures or count_pictures \
-with its workflow_key."""
+with its workflow_id."""
 
 READ_ONLY_ENDING = """\
 Everything is read-only; there is no tool here that changes the library. A \
@@ -122,29 +121,29 @@ data is missing."""
 # Appended in --allow-write mode, in place of READ_ONLY_ENDING. Comfy MCP tool
 # names are in parentheses so a rename there dates a word, not the procedure.
 WRITE_INSTRUCTIONS = """\
-Workflow tools. list_workflows and get_workflow read the owner's workflow \
-cards. To change a workflow's graph, go round this loop:
+Workflow tools. list_workflows and get_workflow read the owner's \
+workflows. To change a workflow's graph, go round this loop:
 
-1. export_workflow_graph writes the card's runnable graph (ComfyUI API \
+1. export_workflow_graph writes the workflow's runnable graph (ComfyUI API \
 format) to a file and returns its path.
 2. Edit that file. If a ComfyUI MCP server is connected, use it to make the \
 edit correct: ask it for a node's real inputs (nodes) and which models are on \
 disk (search_models), or set widget values with it (set_workflow_slot).
 3. Validate the edited file with the ComfyUI MCP server (validate_workflow) \
 before importing. Do not store a graph that does not validate.
-4. import_workflow_graph stores it and answers with its workflow_key.
-5. preflight_workflow with that key says whether it would run; then \
+4. import_workflow_graph stores it and answers with its workflow_id.
+5. preflight_workflow with that id says whether it would run; then \
 run_workflow runs it.
 
 Run here, not with the ComfyUI MCP server's own run tool: that submits \
 straight to ComfyUI, and its pictures never reach PixlStash. run_workflow \
-imports what it makes into the library and ties it to the card.
+imports what it makes into the library and ties it to the workflow.
 
 A stored graph is never changed in place. An import with a different graph \
-is a new workflow, with its own key; importing an unchanged graph matches \
-the stored one and adds nothing. A different prompt, seed, LoRA or value is \
-not a graph edit: pass it to preflight_workflow and run_workflow instead of \
-re-importing, or every tweak becomes a new card.
+is a new graph, which may land in a workflow of its own; importing an \
+unchanged graph matches the stored one and adds nothing. A different prompt, \
+seed, LoRA or value is not a graph edit: pass it to preflight_workflow and \
+run_workflow instead of re-importing, or every tweak becomes a new graph.
 
 These tools need a full-access token. A refusal from them means the token is \
 read-only or scoped."""
@@ -181,10 +180,14 @@ _PROJECT_ID = {
 }
 # `GET /pictures` and `/pictures/count` take it; `/pictures/search` does not,
 # so search_pictures leaves it out rather than drop it without a word.
-_WORKFLOW_KEY_FILTER = {
+# A workflow id: `auto:<core hash>` or a manual group's uuid.
+WORKFLOW_ID_PATTERN = r"^(auto:[0-9a-f]{64}|[0-9a-f]{32})$"
+_WORKFLOW_ID_RE = re.compile(WORKFLOW_ID_PATTERN)
+_WORKFLOW_FILTER = {
     "type": "string",
-    "description": "Only pictures made by this workflow card: the "
-    "workflow_key get_recipe reports.",
+    "pattern": WORKFLOW_ID_PATTERN,
+    "description": "Only pictures made by this workflow: the workflow_id "
+    "get_recipe reports.",
 }
 # The membership filters every picture listing shares.
 _FILTERS = {
@@ -220,7 +223,7 @@ READ_TOOLS = [
         "filesystem does not show as a collection.",
         "inputSchema": {
             "type": "object",
-            "properties": {**_FILTERS, "workflow_key": _WORKFLOW_KEY_FILTER},
+            "properties": {**_FILTERS, "workflow_id": _WORKFLOW_FILTER},
         },
     },
     {
@@ -236,7 +239,7 @@ READ_TOOLS = [
                     for key, value in _FILTERS.items()
                     if key not in ("limit", "offset")
                 },
-                "workflow_key": _WORKFLOW_KEY_FILTER,
+                "workflow_id": _WORKFLOW_FILTER,
             },
         },
     },
@@ -290,9 +293,9 @@ READ_TOOLS = [
         "description": "How a picture was made, when it carries a ComfyUI "
         "recipe: prompt, seed, models, LoRAs and node classes with their "
         "counts. lora_chain says whether the model forks into several sampler "
-        "passes and which LoRAs feed each. workflow_key names the workflow "
-        "card; workflow_link is the path that opens that card in PixlStash, "
-        "and edit_loras_link opens it with Edit LoRAs.",
+        "passes and which LoRAs feed each. workflow_id names the workflow "
+        "it is in; workflow_link is the path that opens that workflow in "
+        "PixlStash, and edit_loras_link opens it with Edit LoRAs.",
         "inputSchema": {
             "type": "object",
             "properties": {"picture_id": _PICTURE_ID},
@@ -309,9 +312,10 @@ for _entry in READ_TOOLS:
     }
 del _entry
 
-_WORKFLOW_KEY = {
+_WORKFLOW_ID = {
     "type": "string",
-    "description": "The workflow card's key (see list_workflows).",
+    "pattern": WORKFLOW_ID_PATTERN,
+    "description": "The workflow's id (see list_workflows).",
 }
 # The run body is `RunRequest`'s; the route validates it. Only the fields an
 # agent is likely to need are described, and extra fields are not invited:
@@ -320,7 +324,7 @@ _WORKFLOW_KEY = {
 _RUN_SCHEMA = {
     "type": "object",
     "properties": {
-        "workflow_key": _WORKFLOW_KEY,
+        "workflow_id": _WORKFLOW_ID,
         "prompt": {"type": "string", "description": "Positive prompt override."},
         "negative": {"type": "string", "description": "Negative prompt override."},
         "count": {"type": "integer", "description": "How many runs (default 1)."},
@@ -337,15 +341,15 @@ _RUN_SCHEMA = {
             "description": 'Where the new pictures are filed, e.g. {"set_id": 12}.',
         },
     },
-    "required": ["workflow_key"],
+    "required": ["workflow_id"],
 }
 
 WORKFLOW_TOOLS = [
     {
         "name": "list_workflows",
-        "description": "The owner's workflow cards: key, name, variants and "
-        "how many pictures each made. Hidden cards and one-offs are only "
-        "counted unless asked for. get_workflow has one card's detail.",
+        "description": "The owner's workflows: id, name, variants and how "
+        "many pictures each made. Hidden workflows and one-offs are only "
+        "counted unless asked for. get_workflow has one workflow's detail.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -357,18 +361,18 @@ WORKFLOW_TOOLS = [
     },
     {
         "name": "get_workflow",
-        "description": "One workflow card: its variants, and each featured "
-        "parameter's starting value with where it came from.",
+        "description": "One workflow: its variants, its default recipe, and "
+        "each featured parameter's starting value with where it came from.",
         "inputSchema": {
             "type": "object",
-            "properties": {"workflow_key": _WORKFLOW_KEY},
-            "required": ["workflow_key"],
+            "properties": {"workflow_id": _WORKFLOW_ID},
+            "required": ["workflow_id"],
         },
         "annotations": {"readOnlyHint": True, "openWorldHint": False},
     },
     {
         "name": "export_workflow_graph",
-        "description": "Write a workflow card's runnable graph (ComfyUI API "
+        "description": "Write a workflow's runnable graph (ComfyUI API "
         "format, prompt and seed kept, credentials blanked) to a JSON file on "
         "this machine and return the path, not the graph. Changes nothing in "
         "PixlStash, but it does write a file: to out_path if given, "
@@ -378,13 +382,13 @@ WORKFLOW_TOOLS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "workflow_key": _WORKFLOW_KEY,
+                "workflow_id": _WORKFLOW_ID,
                 "out_path": {
                     "type": "string",
                     "description": "Where to write the file (optional).",
                 },
             },
-            "required": ["workflow_key"],
+            "required": ["workflow_id"],
         },
         # Writes, and may overwrite, a file on this machine: a client must
         # not auto-approve it as a read.
@@ -398,10 +402,11 @@ WORKFLOW_TOOLS = [
         "name": "import_workflow_graph",
         "description": "Store a ComfyUI workflow (API or UI format) in "
         "PixlStash, from a file path or an inline object. Validate it first "
-        "if a ComfyUI MCP server is connected. A new graph becomes a new "
-        "workflow card; the answer carries its workflow_key. An unchanged "
+        "if a ComfyUI MCP server is connected. The answer carries the "
+        "workflow_id of the workflow the graph is in. An unchanged "
         "graph matches the stored copy (matched: true) and adds nothing. "
-        "overwrite replaces the file of that name, it does not update a card.",
+        "overwrite replaces the file of that name, it does not change a "
+        "workflow.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -432,7 +437,7 @@ WORKFLOW_TOOLS = [
     },
     {
         "name": "preflight_workflow",
-        "description": "Whether run_workflow would run this card, submitting "
+        "description": "Whether run_workflow would run this workflow, submitting "
         "nothing: {ok, runs, groups}, each group with the reasons it would "
         "not run (missing_nodes, missing_models, comfyui_unreachable...). Call "
         "it before run_workflow.",
@@ -441,10 +446,10 @@ WORKFLOW_TOOLS = [
     },
     {
         "name": "run_workflow",
-        "description": "Run a workflow card on the owner's ComfyUI. Spends GPU "
+        "description": "Run a workflow on the owner's ComfyUI. Spends GPU "
         "time and makes new pictures, which PixlStash imports into the "
-        "library tied to the card, filed per destination. prompt, seed, "
-        "loras and values override the card for this run only. Call "
+        "library tied to the workflow, filed per destination. prompt, seed, "
+        "loras and values override the workflow for this run only. Call "
         "preflight_workflow first.",
         "inputSchema": _RUN_SCHEMA,
         "annotations": {
@@ -581,24 +586,30 @@ def _picture_id(arguments: dict) -> int:
         raise ToolError("picture_id must be an integer") from exc
 
 
-def _quoted_key(arguments: dict, name: str = "workflow_key") -> str:
-    """An opaque key, percent-encoded so no argument can reshape the path."""
-    value = arguments.get(name)
-    if not isinstance(value, str) or not value or len(value) > MAX_KEY_LENGTH:
+def _workflow_id(arguments: dict) -> str:
+    """The workflow id argument, checked so no value can reshape a request."""
+    value = arguments.get("workflow_id")
+    if not isinstance(value, str) or not _WORKFLOW_ID_RE.match(value):
         raise ToolError(
-            f"{name} must be a non-empty string of at most {MAX_KEY_LENGTH} characters"
+            "workflow_id must be a workflow id: auto:<64 hex> or 32 hex "
+            "(see list_workflows)"
         )
-    return urllib.parse.quote(value, safe="")
+    return value
+
+
+def _quoted_id(arguments: dict) -> str:
+    """The workflow id, percent-encoded for a path segment."""
+    return urllib.parse.quote(_workflow_id(arguments), safe="")
 
 
 def _graph_dir() -> str:
     return os.path.join(user_cache_dir(SERVER_NAME), "mcp", "graphs")
 
 
-def _write_graph(out_path: str | None, workflow_key: str, document: dict) -> str:
+def _write_graph(out_path: str | None, workflow_id: str, document: dict) -> str:
     """Write *document* as JSON and return the absolute path it went to."""
     if out_path is None:
-        safe = re.sub(r"[^A-Za-z0-9_-]", "_", workflow_key)
+        safe = re.sub(r"[^A-Za-z0-9_-]", "_", workflow_id)
         out_path = os.path.join(_graph_dir(), f"{safe}.json")
     path = os.path.abspath(os.path.expanduser(out_path))
     try:
@@ -659,26 +670,21 @@ def _paging(arguments: dict) -> dict:
             raise ToolError(f"{key} must be an id")
         params[key] = str(value)
     # A query parameter, not a path segment, so it cannot reshape the request.
-    workflow_key = arguments.get("workflow_key")
-    if workflow_key is not None:
-        if not isinstance(workflow_key, str) or len(workflow_key) > MAX_KEY_LENGTH:
-            raise ToolError(
-                f"workflow_key must be a string of at most {MAX_KEY_LENGTH} characters"
-            )
-        params["workflow_key"] = workflow_key
+    if arguments.get("workflow_id") is not None:
+        params["workflow"] = _workflow_id(arguments)
     return params
 
 
 def _workflow_links(recipe: object) -> object:
-    """*recipe* with the app paths that open its workflow card, when it has one.
+    """*recipe* with the app paths that open its workflow, when it has one.
 
     Paths, not URLs: the desktop app serves its own window on a port that
     changes every launch, so no host this server knows is the one the owner
     has open.
     """
-    if not isinstance(recipe, dict) or not isinstance(recipe.get("workflow_key"), str):
+    if not isinstance(recipe, dict) or not isinstance(recipe.get("workflow_id"), str):
         return recipe
-    link = "/workflows?card=" + urllib.parse.quote(recipe["workflow_key"], safe="")
+    link = "/workflows?workflow=" + urllib.parse.quote(recipe["workflow_id"], safe="")
     recipe["workflow_link"] = link
     if recipe.get("lora_slots"):
         recipe["edit_loras_link"] = link + "&edit=loras"
@@ -732,9 +738,9 @@ def call_tool(
         query = arguments.get("query")
         if not isinstance(query, str) or not query.strip():
             raise ToolError("query must be a non-empty string")
-        if arguments.get("workflow_key") is not None:
+        if arguments.get("workflow_id") is not None:
             raise ToolError(
-                "search_pictures cannot filter by workflow_key; use list_pictures"
+                "search_pictures cannot filter by workflow_id; use list_pictures"
             )
         params = {"query": query, **_paging(arguments)}
         return _json_content(_get(fetch, "/pictures/search", params)[1])
@@ -787,18 +793,18 @@ def _call_workflow_tool(fetch: Fetch, name: str, arguments: dict) -> list[dict] 
         }
         return _json_content(_get(fetch, "/workflows", params)[1])
     if name == "get_workflow":
-        return _json_content(_get(fetch, f"/workflows/{_quoted_key(arguments)}")[1])
+        return _json_content(_get(fetch, f"/workflows/{_quoted_id(arguments)}")[1])
     if name == "export_workflow_graph":
         out_path = arguments.get("out_path")
         if out_path is not None and (not isinstance(out_path, str) or not out_path):
             raise ToolError("out_path must be a non-empty string")
-        key = _quoted_key(arguments)
-        graph = json.loads(_get(fetch, f"/workflows/{key}/graph")[1])
+        workflow_id = _quoted_id(arguments)
+        graph = json.loads(_get(fetch, f"/workflows/{workflow_id}/graph")[1])
         workflow = graph.get("workflow") if isinstance(graph, dict) else None
         if not isinstance(workflow, dict):
             raise ToolError("PixlStash answered with no workflow graph")
         summary = {
-            "path": _write_graph(out_path, arguments["workflow_key"], workflow),
+            "path": _write_graph(out_path, arguments["workflow_id"], workflow),
             "format": "api",
             "nodes": len(workflow),
             "name": graph.get("name"),

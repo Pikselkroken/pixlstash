@@ -38,13 +38,11 @@ const vuetify = createVuetify({
 });
 
 const CARD = {
-  key: "w1",
+  id: "w1",
   name: "Cinematic portrait",
   models: [{ name: "realvisXL_v5", kind: "checkpoint" }],
-  loras: [{ name: "lightning-8step", mark: "structural" }],
-  differs_by: ["+ face detailer"],
+  loras: [{ name: "lightning-8step" }],
   picture_count: 184,
-  stack_size: 6,
   saved_recipe_count: 3,
 };
 

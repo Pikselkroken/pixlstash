@@ -40,6 +40,7 @@ class TaskType(str, Enum):
     LAYOUT_MOVE = "LayoutMoveTask"
     GHOST_CASCADE = "GhostCascadeTask"
     WORKFLOW_CARD_BACKFILL = "WorkflowCardBackfillTask"
+    SAVED_RECIPE_CONVERT = "SavedRecipeConvertTask"
 
     @staticmethod
     def all():

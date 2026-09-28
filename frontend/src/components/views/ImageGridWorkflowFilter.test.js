@@ -135,19 +135,19 @@ describe("the workflow chip and the grid's filter watcher", () => {
     await settle(wrapper);
     apiGet.mockClear();
 
-    useFilterStore().workflowFilter = { key: KEY, name: "Cinematic portrait" };
+    useFilterStore().workflowFilter = { id: KEY, name: "Cinematic portrait" };
     await settle(wrapper);
 
     const urls = gridUrls();
     expect(urls.length).toBeGreaterThan(0);
-    expect(urls.every((url) => url.includes(`workflow_key=${KEY}`))).toBe(true);
+    expect(urls.every((url) => url.includes(`workflow=${KEY}`))).toBe(true);
     wrapper.unmount();
   });
 
   it("refetches the whole library when the chip is removed", async () => {
     const wrapper = mountGrid();
     await settle(wrapper);
-    useFilterStore().workflowFilter = { key: KEY, name: "Cinematic portrait" };
+    useFilterStore().workflowFilter = { id: KEY, name: "Cinematic portrait" };
     await settle(wrapper);
     apiGet.mockClear();
 
@@ -157,7 +157,7 @@ describe("the workflow chip and the grid's filter watcher", () => {
 
     const urls = gridUrls();
     expect(urls.length).toBeGreaterThan(0);
-    expect(urls.some((url) => url.includes("workflow_key"))).toBe(false);
+    expect(urls.some((url) => url.includes("workflow="))).toBe(false);
     wrapper.unmount();
   });
 });

@@ -141,15 +141,9 @@ export const GROUP_BY_KEYS = [
 export const GRID_GROUP_BY = "workflow_set";
 
 /**
- * How an open set's tray draws its models.
- *
- * The Workflows grid's own two, by name and by behaviour (`STACK_VIEWS`,
- * `useWorkflowPrefsStore`). Remembered HERE rather than read from that store
- * because it documents itself as a Workflows-screen preference and its List
- * columns are workflow columns - `Workflow`, `Checkpoint`, `Differs by` - where a
- * set's are `Model`, `Kind`, `Size`, `In other sets`. One remembered choice
- * across both trays would be the better product; it wants that store renaming
- * rather than this screen reaching into it.
+ * How an open set's tray draws its models: as cards, or as a list whose
+ * columns are `Model`, `Kind`, `Size`, `In other sets`. The Workflows grid's
+ * stack panel had the same pair until #1623 removed it.
  */
 export const TRAY_VIEWS = ["grid", "list"];
 

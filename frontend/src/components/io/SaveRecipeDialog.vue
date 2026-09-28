@@ -167,9 +167,9 @@
         >
       </div>
 
-      <p v-if="stackName" class="svr-note svr-quiet">
-        Saved to <b class="svr-strong">{{ stackName }}</b
-        >. It runs on any workflow in that stack.
+      <p v-if="workflowName" class="svr-note svr-quiet">
+        Saved to <b class="svr-strong">{{ workflowName }}</b
+        >.
       </p>
 
       <p v-if="saveError" class="svr-note svr-note--bad" role="alert">
@@ -198,7 +198,7 @@
           variant="primary"
           :icon-left="collision ? 'content-save-edit-outline' : 'bookmark-plus-outline'"
           :loading="saving"
-          :disabled="!name.trim() || !workflowKey || existingPending"
+          :disabled="!name.trim() || !workflowId || existingPending"
           @click="save"
         >
           {{ collision ? `Replace “${collision.name}”` : "Save recipe" }}
@@ -228,7 +228,7 @@
  * fixed seed makes the same picture every time, which is almost never what
  * keeping a look means.
  *
- * **A name already on this card's stack turns Save into Replace** (#1480).
+ * **A name already on this workflow turns Save into Replace** (#1480).
  * Nothing makes a recipe name unique, so the alternative was a second row
  * reading exactly the same thing as the first, with nothing to tell them
  * apart and no undo.
@@ -255,8 +255,14 @@ import AppInput from "../widgets/AppInput.vue";
 
 const props = defineProps({
   open: { type: Boolean, default: false },
-  /** The card the recipe is filed under. Its stack is what it can run on. */
-  workflowKey: { type: String, default: "" },
+  /** The workflow the recipe is filed under (#1623: a workflow id). */
+  workflowId: { type: String, default: "" },
+  /**
+   * `[{address, filename}]`: the checkpoint the run pinned, when the owner
+   * chose one. Saved with the recipe so it runs on that model, not the
+   * workflow's default. Null when the run kept the default.
+   */
+  models: { type: Array, default: null },
   /** The name to start the box at - the card's, usually. */
   suggestedName: { type: String, default: "" },
   prompt: { type: String, default: "" },
@@ -310,22 +316,17 @@ const saving = ref(false);
 const saveError = ref("");
 /** Row id -> whether it goes into the recipe. */
 const kept = reactive({});
-/** The card's own name, for "Saved to X". */
-const stackName = ref("");
+/** The workflow's own name, for "Saved to X". */
+const workflowName = ref("");
 /**
- * The recipes already on this card's STACK, for the name collision.
+ * The recipes already on this workflow, for the name collision.
  *
- * Read here rather than handed over by the caller, although two of the three
- * already hold a list: **`GET /recipes?workflow_key=` resolves the stack
- * server-side and nothing on the client can.** The Recipes tab's own list is
- * the union of every selected card's stack, and a `PATCH` matched against a
- * row of another stack would overwrite a recipe on a workflow nobody was
- * saving to; narrowing that union by `workflow_key` instead drops the target's
- * own stack siblings, which is the collision this exists to catch. One read on
- * a dialog somebody deliberately opened is the cheaper half of that trade.
+ * Read here rather than handed over by the caller: the Recipes tab's own list
+ * is the union of every selected workflow's, and a `PATCH` matched against a
+ * row of another workflow would overwrite a recipe nobody was saving to.
  */
 const existing = ref([]);
-/** A suggested or typed name cannot save until its stack collision check settles. */
+/** A suggested or typed name cannot save until its collision check settles. */
 const existingPending = ref(false);
 /** The last name this dialog put in the box itself, as opposed to the owner. */
 let proposed = "";
@@ -461,17 +462,17 @@ watch(rows, (list) => {
 });
 
 watch(
-  () => [props.open, props.workflowKey],
+  () => [props.open, props.workflowId],
   async () => {
-    stackName.value = "";
+    workflowName.value = "";
     existing.value = [];
-    existingPending.value = Boolean(props.open && props.workflowKey);
-    if (!props.open || !props.workflowKey) return;
-    const wanted = props.workflowKey;
+    existingPending.value = Boolean(props.open && props.workflowId);
+    if (!props.open || !props.workflowId) return;
+    const wanted = props.workflowId;
     void getWorkflowCard(wanted)
       .then((body) => {
-        if (wanted !== props.workflowKey) return;
-        stackName.value = body?.card?.name || "";
+        if (wanted !== props.workflowId) return;
+        workflowName.value = body?.card?.name || "";
         // Never over anything the owner has typed.
         if (name.value === proposed) propose();
       })
@@ -479,11 +480,11 @@ watch(
         // The line it feeds is not load-bearing: without a name the dialog drops
         // the sentence rather than printing a blank one, and the save is
         // unaffected.
-        console.warn("Could not read the card a recipe would be saved to:", err);
+        console.warn(`Could not read the workflow ${wanted} a recipe would be saved to:`, err);
       });
     try {
       const rows = await listSavedRecipes(wanted);
-      if (wanted !== props.workflowKey) return;
+      if (wanted !== props.workflowId) return;
       existing.value = rows;
       if (name.value === proposed) propose();
     } catch (err) {
@@ -492,7 +493,7 @@ watch(
       // round: a failed read must not turn a save into an overwrite.
       console.warn("Could not read this card's saved recipes:", err);
     } finally {
-      if (wanted === props.workflowKey) existingPending.value = false;
+      if (wanted === props.workflowId) existingPending.value = false;
     }
   },
   { immediate: true },
@@ -510,7 +511,7 @@ watch(
  * asked for.
  */
 function propose() {
-  const base = (props.suggestedName || stackName.value || "Recipe").trim();
+  const base = (props.suggestedName || workflowName.value || "Recipe").trim();
   const taken = new Set(
     existing.value.map((row) => (row.name || "").trim().toLowerCase()),
   );
@@ -590,9 +591,9 @@ async function answerTakeOut() {
   asking.value = null;
   takeOut.value = "";
   emit("close");
-  emit("handoff", { workflowKey: props.workflowKey, filename: row.filename });
+  emit("handoff", { workflowId: props.workflowId, filename: row.filename });
   await router?.push?.(
-    editLorasRoute(props.workflowKey, { dropLora: row.filename }),
+    editLorasRoute(props.workflowId, { dropLora: row.filename }),
   );
 }
 
@@ -609,7 +610,7 @@ function onAccept() {
  */
 async function creditOf(recipeId) {
   try {
-    const list = await listSavedRecipes(props.workflowKey);
+    const list = await listSavedRecipes(props.workflowId);
     return list.find((row) => row.id === recipeId)?.pictures ?? 0;
   } catch (err) {
     console.warn("Could not read the new recipe's credit:", err);
@@ -674,7 +675,7 @@ function replacement() {
 
 async function save() {
   const label = name.value.trim();
-  if (!label || !props.workflowKey || saving.value || existingPending.value) {
+  if (!label || !props.workflowId || saving.value || existingPending.value) {
     return;
   }
   const replacing = collision.value;
@@ -710,8 +711,9 @@ async function save() {
     const saved = replacing
       ? await editSavedRecipe(replacing.id, replacement())
       : await createSavedRecipe({
-          workflow_key: props.workflowKey,
+          workflow_id: props.workflowId,
           ...body(),
+          ...(props.models?.length ? { models: props.models } : {}),
         });
     const credited = await creditOf(saved?.id);
     const verb = replacing ? "Replaced" : "Saved";

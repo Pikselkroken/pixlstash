@@ -1,7 +1,7 @@
 <template>
   <article
     class="wf-card"
-    :class="{ 'wf-card--stack': stackMark, 'wf-card--selected': selected }"
+    :class="{ 'wf-card--selected': selected }"
     role="group"
     :aria-label="accessibleName"
     data-testid="workflow-card"
@@ -64,18 +64,8 @@
       >
         <v-icon size="12">mdi-star</v-icon>{{ card.rating.toFixed(1) }}
       </span>
-      <!-- The stack panel's cover member, named on its own picture. The cover
-           is what the others are compared against, so its special row is
-           empty; without the flag it reads as "this one differs by nothing".
-           Inside the cover box, bottom-left, because the host used to pin it to
-           the whole cell's corner, which is the meta rows' text. -->
-      <span v-if="coverFlag" class="stack-cover-flag">Cover</span>
     </div>
-    <div
-      v-else
-      class="wf-card__cover wf-card__cover--empty"
-      :class="{ 'wf-card__cover--stack': stackMark }"
-    >
+    <div v-else class="wf-card__cover wf-card__cover--empty">
       <span v-if="card.type" class="wf-card__type" aria-hidden="true">{{
         card.type
       }}</span>
@@ -93,119 +83,21 @@
         @click="emit('run')"
         >Run it…</AppButton
       >
-      <span v-if="coverFlag" class="stack-cover-flag">Cover</span>
     </div>
-
-    <!-- The layered count opens the stack too (#1402): it is the mark that
-         says there are more cards under this one, so it is where a reader
-         reaches first. A button, but `aria-hidden` and off the tab order like
-         the rest of the card's decoration — ▸ below is the announced control,
-         and hiding this one is only defensible while the two do exactly the
-         same thing. So no `.stop`: like ▸, the click also reaches the row
-         underneath and selects the card. -->
-    <button
-      v-if="stackMark"
-      type="button"
-      class="wf-card__badge wf-card__badge--start wf-card__badge--button"
-      tabindex="-1"
-      aria-hidden="true"
-      @click="emit('toggle')"
-    >
-      <Tooltip :text="stackLabel" activator="parent" />
-      <v-icon size="12">mdi-layers</v-icon>{{ card.stack_size }}
-    </button>
 
     <!-- The visible rows are hidden from assistive tech: the card's own label
          already reads all of them, including what "+N" clipped. -->
     <div class="wf-card__meta">
       <div class="wf-card__row">
-        <AppButton
-          v-if="stackMark"
-          class="wf-card__toggle"
-          :class="{ 'wf-card__toggle--open': expanded }"
-          variant="ghost"
-          size="sm"
-          icon-left="menu-right"
-          icon-only
-          tabindex="-1"
-          :tooltip="
-            expanded
-              ? 'Hide the workflows in this stack'
-              : 'Show the workflows in this stack'
-          "
-          :aria-expanded="String(expanded)"
-          :aria-controls="panelId || undefined"
-          @click="emit('toggle')"
-        />
         <span class="wf-card__name" aria-hidden="true">{{ card.name }}</span>
       </div>
       <!-- Row 2, the strip: the base model's mark, a hairline, then one mark
-           per LoRA of the workflow's own (#1485), and one pile for its recipe
-           slots: every LoRA a recipe has put in them, most used first. Names
-           are in each mark's tooltip, and the card's accessible name reads
-           them all. -->
+           per LoRA of the workflow's own (#1485). Names are in each mark's
+           tooltip, and the card's accessible name reads them all. -->
       <div class="wf-card__row">
         <ul v-if="stripMarks.length" class="wf-card__strip" aria-hidden="true">
           <template v-for="mark in stripMarks" :key="mark.key">
-            <li
-              v-if="mark.pile"
-              class="wf-card__mark wf-card__pile"
-              :class="{ 'wf-card__pile--stacked': pileStacked }"
-            >
-              <Tooltip activator="parent" :describe="false">
-                <!-- One block: the tooltip lays its children out in a row. -->
-                <div v-if="recipeLoras.length">
-                  <div>
-                    <strong>Recipe LoRAs</strong>
-                    <span class="wf-card__tip-dim">
-                      · {{ recipesLabel(card.variant_count ?? 0) }}</span
-                    >
-                  </div>
-                  <div
-                    v-for="face in tipFaces"
-                    :key="face.key"
-                    class="wf-card__tip-row"
-                  >
-                    <span class="wf-card__pile-face">
-                      <img
-                        v-if="face.src"
-                        :src="face.src"
-                        alt=""
-                        @error="dropFace(face.src)"
-                      />
-                      <v-icon v-else>mdi-layers-outline</v-icon>
-                    </span>
-                    {{ face.label }}
-                    <span class="wf-card__tip-dim"
-                      >·{{ face.character ? "" : " no character ·" }}
-                      {{ recipesLabel(face.recipes) }}</span
-                    >
-                  </div>
-                  <div v-if="tipMore" class="wf-card__tip-dim">
-                    and {{ tipMore }} more
-                  </div>
-                </div>
-                <template v-else>Recipe LoRA slot</template>
-              </Tooltip>
-              <span
-                v-for="face in pileFaces"
-                :key="face.key"
-                class="wf-card__pile-face"
-              >
-                <img
-                  v-if="face.src"
-                  :src="face.src"
-                  alt=""
-                  loading="lazy"
-                  @error="dropFace(face.src)"
-                />
-                <v-icon v-else>mdi-layers-outline</v-icon>
-              </span>
-              <span v-if="pileMore" class="wf-card__pile-more"
-                >+{{ pileMore }}</span
-              >
-            </li>
-            <li v-else class="wf-card__mark">
+            <li class="wf-card__mark">
               <Tooltip
                 :text="mark.label"
                 activator="parent"
@@ -260,12 +152,6 @@
         </template>
       </div>
       <div class="wf-card__row wf-card__row--facts">
-        <span
-          v-if="differsBy(card)"
-          class="wf-card__none"
-          aria-hidden="true"
-          >differs by</span
-        >
         <ChipRow :items="facts" aria-hidden="true" />
       </div>
     </div>
@@ -296,27 +182,22 @@
 // clip to "+N" instead of wrapping, exactly
 // --wf-meta-h tall whatever the card holds. ⓘ is pinned bottom-right.
 //
-// ▸ and ⓘ are real buttons at tabindex -1: the grid's roving cursor owns Tab.
+// ⓘ is a real button at tabindex -1: the grid's roving cursor owns Tab.
 
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import { VIcon } from "vuetify/components";
 
-import { characterThumbnailUrl } from "../../api/characters";
 import { workflowCoverUrl } from "../../api/workflows";
 import { quantBadge } from "../../utils/modelShelf";
 import {
   cardAccessibleName,
   checkpointModel,
   coverCellStyle,
-  differsBy,
   factChips,
-  isStack,
   checkpointMissing,
   checkpointUnread,
   lorasUnread,
   modelDisplayName,
-  recipeLoraCount,
-  recipeLoraLabel,
 } from "../../utils/workflowCard";
 import AppButton from "./AppButton.vue";
 import ChipRow from "./ChipRow.vue";
@@ -324,27 +205,16 @@ import InfoPopover from "./InfoPopover.vue";
 import ModelMark from "./ModelMark.vue";
 import Tooltip from "./Tooltip.vue";
 
-// How many marks row 2 draws before it counts the rest (#1485). Sized for the
-// NARROWEST host, a one-column stack panel: its 1px border and --space-4
-// padding take the 240px column floor to a 214px card, whose row is 196px
-// after the card's border and --space-3 padding. Five --wf-mark (28px) marks,
-// the hairline, "+N" and their 4px gaps are ~185px there; a sixth mark would
-// not fit, and `overflow: hidden` would then clip the "+N" rather than a mark.
-// `WorkflowCard.test.js` sums this against the tokens.
+// How many marks row 2 draws before it counts the rest (#1485). Five --wf-mark
+// (28px) marks, the hairline, "+N" and their 4px gaps are ~185px, inside the
+// row of a card at the grid's 240px column floor; `overflow: hidden` would
+// otherwise clip the "+N" rather than a mark. `WorkflowCard.test.js` sums this
+// against the tokens.
 const STRIP_MARKS = 5;
-// Faces the recipe pile draws before "+N", and rows its tooltip lists.
-const PILE_FACES = 3;
-const TIP_ROWS = 4;
 
 const props = defineProps({
   /** One workflow card (see utils/workflowCard.js for the shape). */
   card: { type: Object, required: true },
-  /** A stack card's panel is open. */
-  expanded: { type: Boolean, default: false },
-  /** The id of the panel ▸ opens, for `aria-controls`. */
-  panelId: { type: String, default: "" },
-  /** This card is a row inside its own stack's open panel. */
-  member: { type: Boolean, default: false },
   /**
    * The card is selected.
    *
@@ -357,38 +227,10 @@ const props = defineProps({
    * that is this.
    */
   selected: { type: Boolean, default: false },
-  /** Flag this member as its stack's cover, on its own cover picture. */
-  coverFlag: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["toggle", "run"]);
+const emit = defineEmits(["run"]);
 
-const stack = computed(() => isStack(props.card));
-/**
- * Whether to wear the marks that say "there are more cards under this one".
- *
- * A member row is served the WHOLE stack's `stack_size`, so `stack` is true for
- * every row in the panel and each of them drew the layered count and a ▸ that
- * did nothing: no `@toggle` is bound there, and `openStack(memberKey)` would
- * not find the key among the grid's cards anyway. Worse for a reader, each ▸
- * offered `aria-expanded="false"` with nothing to expand.
- *
- * `stack` itself is left alone below: `factChips` branches on it, and the
- * "differs by" chips are exactly what a member row exists to show.
- */
-const stackMark = computed(() => stack.value && !props.member);
-/**
- * What the layered badge means, in words.
- *
- * The badge is a glyph and a bare number sitting opposite another glyph and
- * another bare number (the picture count), so which of the two is "how many
- * workflows" is a guess. The accessible name has said "stack of N workflows"
- * all along; this is the same sentence for the reader who can see it, and it
- * costs the card no layout.
- */
-const stackLabel = computed(
-  () => `${props.card.stack_size} workflows in this stack`,
-);
 /**
  * The cover pictures this card can actually draw.
  *
@@ -492,24 +334,14 @@ const base = computed(() => {
 });
 /**
  * Row 2's marks: the base model leads, whatever order the file listed its
- * loaders in, then every LoRA in document order. The recipe slots are ONE
- * pile, where the first of them sits: which LoRA fills a slot is each
- * recipe's answer, not the workflow's, so the pile shows all the answers
- * rather than one mark per slot. Clipped to STRIP_MARKS by `markCost`.
+ * loaders in, then every LoRA in document order. Clipped to STRIP_MARKS.
  */
 const allMarks = computed(() => {
-  const loras = [];
-  (props.card.loras ?? []).forEach((lora, i) => {
-    if (lora.mark !== "recipe") {
-      loras.push({
-        key: `lora-${i}`,
-        label: markLabel(lora),
-        row: markRow(lora),
-      });
-    } else if (!loras.some((mark) => mark.pile)) {
-      loras.push({ key: "recipe-loras", pile: true });
-    }
-  });
+  const loras = (props.card.loras ?? []).map((lora, i) => ({
+    key: `lora-${i}`,
+    label: markLabel(lora),
+    row: markRow(lora),
+  }));
   if (!base.value) return loras;
   const model = base.value.model;
   return [
@@ -524,98 +356,18 @@ const allMarks = computed(() => {
     ...loras,
   ];
 });
-/**
- * Whether the recipe LoRAs have to overlap. While every one of them fits in
- * what the strip has left after the card's other marks, each is a full mark
- * of its own, as large as the checkpoint's; only past that do they stack.
- */
-const pileStacked = computed(() => {
-  const others = allMarks.value.filter((mark) => !mark.pile).length;
-  return recipeLoras.value.length > Math.max(1, STRIP_MARKS - others);
-});
-/**
- * How many of the STRIP_MARKS budget a mark takes. Side by side, the recipe
- * LoRAs take one each. Stacked, the pile overlaps its faces (28px, then 16px
- * per face after the first) and ends in "+N" past three: two faces or three
- * fit in two marks' width (60px), three and a "+N" in three (92px).
- */
-function markCost(mark) {
-  if (!mark.pile) return 1;
-  const count = recipeLoras.value.length;
-  if (!pileStacked.value) return Math.max(1, count);
-  return count <= PILE_FACES ? 2 : 3;
-}
-const stripMarks = computed(() => {
-  const drawn = [];
-  let left = STRIP_MARKS;
-  for (const mark of allMarks.value) {
-    left -= markCost(mark);
-    if (left < 0) break;
-    drawn.push(mark);
-  }
-  return drawn;
-});
+const stripMarks = computed(() => allMarks.value.slice(0, STRIP_MARKS));
 const stripOverflow = computed(
   () => allMarks.value.length - stripMarks.value.length,
 );
-// Counts the workflow's own LoRAs, then what its recipe slots have held
-// ("1 LoRA · 3 characters"). A slot no recipe has named a LoRA for is only
-// counted, as a slot, on a card that has no LoRAs of its own.
+// Counts the workflow's own LoRAs.
 const loraCount = computed(() => {
-  const loras = props.card.loras ?? [];
-  const slots = loras.filter((lora) => lora.mark === "recipe").length;
-  const count = loras.length - slots;
-  const own = count ? (count === 1 ? "1 LoRA" : `${count} LoRAs`) : "";
-  const cast = slots ? recipeLoraCount(recipeLoras.value) : "";
-  if (own && cast) return `${own} · ${cast}`;
-  if (own || cast) return own || cast;
-  if (slots) return slots === 1 ? "1 LoRA slot" : `${slots} LoRA slots`;
+  const count = (props.card.loras ?? []).length;
+  if (count) return count === 1 ? "1 LoRA" : `${count} LoRAs`;
   return lorasAreUnread.value ? "LoRAs not read" : "No LoRAs";
 });
-/** What has filled the recipe slots, most used first (the service's order). */
-const recipeLoras = computed(() => props.card.recipe_loras ?? []);
-// Thumbnails that 404ed: a character with no reference face yet has none to
-// lend, and the pile then shows it as the LoRA glyph like any other LoRA.
-const failedFaces = ref([]);
-function dropFace(src) {
-  if (!failedFaces.value.includes(src)) {
-    failedFaces.value = [...failedFaces.value, src];
-  }
-}
-function faceOf(lora, i) {
-  const src =
-    lora.character_id == null ? "" : characterThumbnailUrl(lora.character_id);
-  return {
-    key: `${i}-${lora.name}`,
-    src: failedFaces.value.includes(src) ? "" : src,
-    label: recipeLoraLabel(lora, recipeLoras.value),
-    character: lora.character_id != null,
-    recipes: lora.recipes,
-  };
-}
-// An empty list still draws one glyph: the slot is there, nothing names it.
-const pileFaces = computed(() => {
-  if (!recipeLoras.value.length) return [{ key: "empty", src: "" }];
-  return pileStacked.value
-    ? recipeLoras.value.slice(0, PILE_FACES).map(faceOf)
-    : recipeLoras.value.map(faceOf);
-});
-const pileMore = computed(() =>
-  pileStacked.value ? Math.max(0, recipeLoras.value.length - PILE_FACES) : 0,
-);
-const tipFaces = computed(() =>
-  recipeLoras.value.slice(0, TIP_ROWS).map(faceOf),
-);
-const tipMore = computed(() =>
-  Math.max(0, recipeLoras.value.length - TIP_ROWS),
-);
-function recipesLabel(n) {
-  return n === 1 ? "1 recipe" : `${n} recipes`;
-}
 const facts = computed(() => factChips(props.card, { short: true }));
-const accessibleName = computed(() =>
-  cardAccessibleName(props.card, { member: props.member }),
-);
+const accessibleName = computed(() => cardAccessibleName(props.card));
 </script>
 
 <style scoped>
@@ -778,33 +530,12 @@ const accessibleName = computed(() =>
   pointer-events: none;
 }
 
-.wf-card__badge--start {
-  left: var(--space-3);
-  z-index: 1;
-}
-
-/* The badge family is inert decoration; this one is a control, so it takes
-   the clicks back and drops the button chrome that would otherwise paint a
-   second border over the pill. */
-.wf-card__badge--button {
-  border: 0;
-  font-family: inherit;
-  pointer-events: auto;
-  cursor: pointer;
-}
-
-/* A pictureless stack's count sits top-left of the empty cover, so the
-   cover's content starts below it. */
-.wf-card__cover--stack {
-  padding-top: var(--space-6);
-}
-
 .wf-card__badge--end {
   right: var(--space-3);
 }
 
-/* Per picture, so on the cell's own corner - bottom-left, clear of the stack
-   count and picture count on the cover's top corners - and hoverable for its
+/* Per picture, so on the cell's own corner - bottom-left, clear of the
+   picture count on the cover's top corner - and hoverable for its
    tooltip. */
 .wf-card__pic-flag {
   top: auto;
@@ -818,19 +549,6 @@ const accessibleName = computed(() =>
 .wf-card__badge--bottom {
   top: auto;
   bottom: var(--space-3);
-}
-
-/* The stack panel's cover flag is the grid's chip (App.css), set on this
-   card's badge geometry so it and the rating badge in the opposite corner sit
-   on one baseline in one shape. */
-.wf-card__cover .stack-cover-flag {
-  left: var(--space-3);
-  bottom: var(--space-3);
-  display: inline-flex;
-  align-items: center;
-  min-height: var(--badge-size);
-  border-radius: var(--radius-pill);
-  line-height: var(--leading-snug);
 }
 
 .wf-card__cover--empty {
@@ -878,69 +596,6 @@ const accessibleName = computed(() =>
   position: relative;
   display: inline-flex;
   flex: none;
-}
-
-/* The recipe slots' LoRAs: what has filled them, each a full --entity-thumb
-   mark like the checkpoint's. A face where the LoRA's character has one, the
-   LoRA glyph on a panel square otherwise. Side by side at the strip's own gap
-   while they fit; past that they overlap avatar-stack style, each with a
-   surface-coloured ring so the overlap reads as separate marks. The ring is
-   a shadow, not a border, so it never shrinks the face. */
-.wf-card__pile {
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.wf-card__pile-face {
-  display: inline-grid;
-  place-items: center;
-  flex: none;
-  width: var(--entity-thumb);
-  height: var(--entity-thumb);
-  overflow: hidden;
-  border-radius: var(--radius-sm);
-  background: rgb(var(--v-theme-panel));
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.wf-card__pile-face .v-icon {
-  font-size: var(--gutter-glyph);
-}
-
-.wf-card__pile--stacked {
-  gap: 0;
-}
-
-.wf-card__pile--stacked .wf-card__pile-face {
-  box-shadow: 0 0 0 2px rgb(var(--v-theme-surface));
-}
-
-.wf-card__pile--stacked .wf-card__pile-face + .wf-card__pile-face {
-  margin-left: calc(-1 * var(--space-4));
-}
-
-.wf-card__pile-face img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.wf-card__pile-more {
-  margin-left: var(--space-1);
-  font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-/* The pile's tooltip: one row per LoRA, its face beside its name. */
-.wf-card__tip-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-2);
-}
-
-.wf-card__tip-dim {
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
 /* The hairline after the base model: the one thing that says the first mark
@@ -1016,27 +671,6 @@ const accessibleName = computed(() =>
   flex-shrink: 0;
   font-size: var(--text-2xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-/* ▸ carries full ink where ⓘ recedes: opening a stack is the card's own
-   affordance, ⓘ is the same escape hatch on every card. */
-.wf-card__toggle {
-  flex-shrink: 0;
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.wf-card__toggle :deep(.app-btn__icon) {
-  transition: transform var(--dur-1) var(--ease-standard);
-}
-
-.wf-card__toggle--open :deep(.app-btn__icon) {
-  transform: rotate(90deg);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .wf-card__toggle :deep(.app-btn__icon) {
-    transition: none;
-  }
 }
 
 .wf-card__info {

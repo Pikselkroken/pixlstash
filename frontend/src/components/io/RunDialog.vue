@@ -73,7 +73,7 @@
             </AppButton>
           </span>
           <AppSelect
-            v-model="workflowKey"
+            v-model="workflowId"
             label="Workflow"
             hide-label
             compact
@@ -418,22 +418,42 @@
           <label :for="stackId">Stack new pictures with the ones they came from</label>
         </div>
 
-        <div v-if="checkpointField" class="rund-f rund-f--4">
+        <!-- The workflow's optional stages the default recipe runs (#1623);
+             an unticked stage is sent as `skip_stages`. -->
+        <div
+          v-for="stage in stageRows"
+          :key="stage.name"
+          class="rund-f rund-f--4 rund-check"
+        >
+          <input
+            :id="`${stageId}-${stage.name}`"
+            class="rund-box"
+            type="checkbox"
+            :checked="stageOn(stage.name)"
+            :disabled="submitting"
+            @change="setStage(stage.name, $event.target.checked)"
+          />
+          <label :for="`${stageId}-${stage.name}`">Run the {{ stage.label }} stage</label>
+        </div>
+
+        <!-- The checkpoint is a MODEL of the default recipe, sent as
+             `models: [{address, filename}]` (#1623), not a parameter value. -->
+        <div v-if="checkpointModel" class="rund-f rund-f--4">
           <span class="rund-l">
             Checkpoint
             <RunResetChip
-              v-if="isEdited(checkpointField)"
-              :value="baseOf(checkpointField)"
+              v-if="checkpointEdited"
+              :value="checkpointBase"
               label="Checkpoint"
-              @reset="resetValue(checkpointField)"
+              @reset="checkpointEdit = null"
             />
           </span>
           <AppInput
-            :model-value="String(currentValue(checkpointField))"
+            :model-value="checkpointValue"
             aria-label="Checkpoint"
             mono
             :disabled="submitting"
-            @update:model-value="(v) => setValue(checkpointField, coerce(checkpointField, v))"
+            @update:model-value="setCheckpoint"
             @keydown.stop
           />
         </div>
@@ -554,7 +574,8 @@
   <SaveRecipeDialog
     v-if="saveOpen"
     :open="saveOpen"
-    :workflow-key="activeKey"
+    :workflow-id="activeKey"
+    :models="checkpointEdited ? runModels : null"
     :suggested-name="card?.name || ''"
     :prompt="prompt"
     :negative="negative"
@@ -619,7 +640,6 @@ import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
 import { editLorasRoute, loraStem } from "../../utils/loraChain";
 import { wouldDuplicate } from "../../utils/recipeKey";
-import { stackMemberOptions } from "../../utils/workflowCard";
 import {
   PICTURE_INPUT_UNFILLED,
   LORAS_BYPASSED,
@@ -641,7 +661,7 @@ import RunResetChip from "./RunResetChip.vue";
 const props = defineProps({
   open: { type: Boolean, default: false },
   /**
-   * `{kind, pictureIds, workflowKey, pickWorkflow, name, coverUrl}` - see
+   * `{kind, pictureIds, workflowId, pickWorkflow, name, coverUrl}` - see
    * `useRunDialogStore`. Replaced rather than mutated, so a new source is one
    * watcher tick and never a half-swapped form.
    */
@@ -668,6 +688,8 @@ const MAX_VALUES = 200;
 const SCALAR_PINNED = ["steps", "cfg", "cfg_scale", "guidance"];
 const SIZE_INPUTS = ["width", "height"];
 const CHECKPOINT_INPUT = "ckpt_name";
+/** The stages `skip_stages` takes, as a row names them. */
+const STAGE_LABELS = { upscale: "upscale", face_detailer: "face detailer" };
 /**
  * Said in the Save dialog when the form is set to keep the source's seed.
  *
@@ -684,6 +706,7 @@ const SEPARATOR = "/";
 const blockerId = useId();
 const picsLabelId = useId();
 const stackId = useId();
+const stageId = useId();
 /** Bumped per open, so a slower earlier read cannot write over a later one. */
 let loadToken = 0;
 const runDialog = useRunDialogStore();
@@ -758,7 +781,7 @@ const pickerFor = ref(null);
 const inputsBusy = ref(false);
 /**
  * The card `pictureInputs` was read for. A write goes to `activeKey`, and a
- * stack-member switch moves that at once while the new card's inputs are still
+ * workflow switch moves that at once while the new card's inputs are still
  * being read - so a pin then would PUT one card's rows under another's key and
  * replace its setup with rows that match nothing.
  */
@@ -820,6 +843,8 @@ const skippedLoras = computed(() =>
 const dirty = computed(
   () =>
     skippedLoras.value.length > 0 ||
+    Object.keys(stageChoice).length > 0 ||
+    checkpointEdited.value ||
     prompt.value !== basePrompt.value ||
     negative.value !== baseNegative.value ||
     Object.keys(edits).length > 0 ||
@@ -844,7 +869,7 @@ const LAST_SET_KEY = "pixlstash:runDialogSetId";
  * choosing the first workflow in "Run a workflow on these…", where the previous
  * value is the empty string either way. Here the two are different call sites.
  */
-const workflowKey = computed({
+const workflowId = computed({
   get: () => activeKey.value,
   set: (key) => {
     if (!key || key === activeKey.value) return;
@@ -877,7 +902,31 @@ async function switchCard(key, keepEdits) {
   }
 }
 
-const defaults = computed(() => card.value?.defaults || []);
+/**
+ * The checkpoint of the workflow's default recipe (#1623), or null: the
+ * detail read fills `default_recipe`, and its `address` is what a run's
+ * `models` pin names.
+ */
+const checkpointModel = computed(
+  () =>
+    (card.value?.default_recipe?.models || []).find(
+      (model) => model.kind === "checkpoint" && model.address,
+    ) || null,
+);
+/** The owner's checkpoint, or null while the row is untouched. */
+const checkpointEdit = ref(null);
+
+/**
+ * The card's parameters. Its `ckpt_name` is left out where the default recipe
+ * names the checkpoint as a MODEL: that row is sent as `models`, and sending
+ * the same widget as a value too would give the run two answers.
+ */
+const defaults = computed(() => {
+  const all = card.value?.defaults || [];
+  return checkpointModel.value
+    ? all.filter((field) => field.input_name !== CHECKPOINT_INPUT)
+    : all;
+});
 const hasRecipe = computed(() => Boolean(recipe.value));
 const loraSlots = computed(() => recipe.value?.lora_slots || []);
 const pictureIds = computed(() => props.source?.pictureIds || []);
@@ -947,12 +996,7 @@ function address(field) {
  * chip carries and what it puts back.
  */
 function baseOf(field) {
-  // Only while the card being run is the one that MADE the picture. A stack
-  // member is a different graph, so the picture's own steps say nothing about
-  // it, and showing them would make its defaults look like edits.
-  const ownCard = recipe.value?.workflow_key
-    ? recipe.value.workflow_key === activeKey.value
-    : false;
+  const ownCard = runsOwnWorkflow.value;
   // And only when the name picks out ONE parameter. `recipe.settings` is
   // `{field: value}` with no slot, so a graph with two samplers both carrying
   // `steps` would otherwise show the same picture value in both rows and send
@@ -965,6 +1009,83 @@ function baseOf(field) {
     ? fromPicture
     : field.value;
 }
+
+/**
+ * Whether the workflow being run is the one that MADE the picture. Another
+ * workflow is a different graph, so the picture's own settings say nothing
+ * about it, and showing them would make its defaults look like edits.
+ */
+const runsOwnWorkflow = computed(() =>
+  recipe.value?.workflow_id
+    ? recipe.value.workflow_id === activeKey.value
+    : false,
+);
+
+/** The checkpoint the row starts at: the picture's own, else the default's. */
+const checkpointBase = computed(() => {
+  const own = runsOwnWorkflow.value
+    ? recipe.value?.settings?.[CHECKPOINT_INPUT]
+    : null;
+  return String(own || checkpointModel.value?.filename || "");
+});
+const checkpointValue = computed(() => checkpointEdit.value ?? checkpointBase.value);
+const checkpointEdited = computed(() => checkpointEdit.value !== null);
+
+function setCheckpoint(raw) {
+  const text = String(raw ?? "").trim();
+  checkpointEdit.value = text === checkpointBase.value ? null : text;
+}
+
+/**
+ * The checkpoint as a run's `models` takes it, or [] when there is no row or
+ * nothing in it. The row is always sent, edited or not, for the reason
+ * `runBody` sends every value: the form is what runs.
+ */
+const runModels = computed(() =>
+  checkpointModel.value && checkpointValue.value
+    ? [{ address: checkpointModel.value.address, filename: checkpointValue.value }]
+    : [],
+);
+
+/**
+ * The optional stages the base graph carries, as the rows draw them. Only the
+ * ones the default recipe runs: the server cannot switch a recipe-off stage
+ * back on, so a tickable row for one would promise a run it will not make.
+ */
+const stageRows = computed(() =>
+  (card.value?.specials || [])
+    .filter(
+      (name) =>
+        name in STAGE_LABELS &&
+        card.value?.default_recipe?.stages?.[name] !== false,
+    )
+    .map((name) => ({ name, label: STAGE_LABELS[name] })),
+);
+/** stage -> the owner's on/off, over the default recipe's. */
+const stageChoice = reactive({});
+
+function stageOn(name) {
+  if (name in stageChoice) return stageChoice[name];
+  return card.value?.default_recipe?.stages?.[name] ?? true;
+}
+
+async function setStage(name, on) {
+  const byDefault = card.value?.default_recipe?.stages?.[name] ?? true;
+  if (on === byDefault) delete stageChoice[name];
+  else stageChoice[name] = on;
+  // The answer changes: a stage that cannot be taken out is refused
+  // (`stage_not_skippable`).
+  await runPreflight();
+}
+
+function clearStages() {
+  for (const name of Object.keys(stageChoice)) delete stageChoice[name];
+}
+
+/** The stages this run goes without, as `skip_stages` takes them. */
+const skippedStages = computed(() =>
+  stageRows.value.filter((row) => !stageOn(row.name)).map((row) => row.name),
+);
 
 function currentValue(field) {
   const key = address(field);
@@ -1042,11 +1163,10 @@ const sizeFields = computed(() => {
   const both = SIZE_INPUTS.map((name) => byInput.value[name]);
   return both.every(Boolean) ? both : [];
 });
-const checkpointField = computed(() => byInput.value[CHECKPOINT_INPUT] || null);
 const pinnedAddresses = computed(
   () =>
     new Set(
-      [...scalarFields.value, ...sizeFields.value, checkpointField.value]
+      [...scalarFields.value, ...sizeFields.value]
         .filter(Boolean)
         .map(address),
     ),
@@ -1148,7 +1268,7 @@ const recipeOverrides = computed(() =>
 // `keepsTheSameLook` as the tab, off the same read, because two copies of that
 // comparison is how it went wrong the first time (`utils/recipeKey.js`).
 
-/** The saved recipes of `activeKey`'s stack, and the key they were read for. */
+/** The saved recipes of `activeKey`, and the id they were read for. */
 const savedRecipes = ref([]);
 const savedForKey = ref("");
 const savedReasonId = useId();
@@ -1231,20 +1351,16 @@ const seedOptions = [
   { value: "fixed", label: "A seed I choose" },
 ];
 
+/**
+ * The workflows the picker offers: the one being run, and - for "Run a
+ * workflow on these…" - the whole library. Workflows only (#1623): there are
+ * no stack members to switch between any more.
+ */
 const workflowOptions = computed(() => {
-  // A stack comes whole, in its own order, from the card: members often share
-  // a generated name, so each says what sets it apart from the others.
-  const rows = stackMemberOptions(card.value?.members);
-  if (card.value && !rows.length) {
-    rows.push({ value: card.value.key, label: card.value.name });
-  }
-  // "Run a workflow on these…" opens with the whole library in the picker;
-  // otherwise only the stack's own members, which is the switch the design
-  // describes. Under the stack's heading, the library's cards get their own.
-  const group = rows.some((option) => option.group) ? "Other workflows" : undefined;
+  const rows = card.value ? [{ value: card.value.id, label: card.value.name }] : [];
   for (const row of props.source?.pickWorkflow ? cards.value : []) {
-    if (!rows.some((option) => option.value === row.key)) {
-      rows.push({ value: row.key, label: row.name, group });
+    if (!rows.some((option) => option.value === row.id)) {
+      rows.push({ value: row.id, label: row.name });
     }
   }
   return rows;
@@ -1618,17 +1734,19 @@ function runBody() {
   // are any: the route rewires around each, and a key it is not sent cannot
   // refuse a run over a feature nobody used.
   if (skippedLoras.value.length) body.skip_loras = skippedLoras.value;
+  // The same for the stages the owner turned off (#1623).
+  if (skippedStages.value.length) body.skip_stages = skippedStages.value;
+  // The checkpoint row, by the default recipe's loader address (#1623).
+  if (runModels.value.length) body.models = runModels.value;
   if (savedRecipe.value) {
     body.saved_recipe_id = savedRecipe.value.id;
-    // The picker still chooses which member of the stack runs: a recipe runs
-    // on any workflow in the stack it was saved from, and `target` replaces
-    // the group's card whatever named it.
+    // `target` is the workflow the picker chose, whatever named the group.
     body.target = activeKey.value;
   } else if (pictureIds.value.length) {
     body.picture_ids = pictureIds.value;
     body.target = activeKey.value;
   } else {
-    body.workflow_key = activeKey.value;
+    body.workflow_id = activeKey.value;
   }
   const setId = picksDestination.value ? destinationSetId.value : props.context?.set_id;
   const destination = {
@@ -1858,8 +1976,8 @@ async function dropLoras() {
  * closes and the Workflows screen opens on that card with the dialog up.
  * Nothing is run.
  */
-function editLoras(workflowKey) {
-  const key = workflowKey || activeKey.value;
+function editLoras(workflowId) {
+  const key = workflowId || activeKey.value;
   if (!key) return;
   emit("close");
   void router?.push?.(editLorasRoute(key));
@@ -1874,7 +1992,7 @@ function openInWorkflows() {
   if (!activeKey.value || submitting.value) return;
   const key = activeKey.value;
   emit("close");
-  void router?.push?.({ name: "workflows", query: { card: key } });
+  void router?.push?.({ name: "workflows", query: { workflow: key } });
 }
 
 async function loadAdapters() {
@@ -1892,8 +2010,8 @@ async function loadAdapters() {
  * Load the card behind `key`, keeping every edit whose address it still has.
  *
  * The fields that do NOT survive are named rather than dropped in silence:
- * switching to a stack member is a deliberate comparison, and a steps value
- * that quietly went back to 8 is the thing the design asks to be told about.
+ * switching workflows is a deliberate comparison, and a steps value that
+ * quietly went back to 8 is the thing the design asks to be told about.
  */
 async function loadCard(key, { keepEdits = false } = {}) {
   // A popup reopened on another source while this read was out has its own
@@ -1902,9 +2020,13 @@ async function loadCard(key, { keepEdits = false } = {}) {
   const detail = await getWorkflowCard(key);
   if (token !== loadToken) return;
   const next = detail?.card || null;
+  // Stages are the graph's, so a choice made on one workflow says nothing
+  // about another's.
+  clearStages();
   if (!keepEdits) {
     card.value = next;
     fellBack.value = [];
+    checkpointEdit.value = null;
     return;
   }
   const addresses = new Set((next?.defaults || []).map(address));
@@ -1913,6 +2035,17 @@ async function loadCard(key, { keepEdits = false } = {}) {
   for (const key2 of lost) {
     delete edits[key2];
     delete editedLabels[key2];
+  }
+  // A chosen checkpoint survives only onto a loader of the same address.
+  const nextCheckpoint = (next?.default_recipe?.models || []).find(
+    (model) => model.kind === "checkpoint",
+  );
+  if (
+    checkpointEdit.value !== null &&
+    nextCheckpoint?.address !== checkpointModel.value?.address
+  ) {
+    fellBack.value = [...fellBack.value, "Checkpoint"];
+    checkpointEdit.value = null;
   }
   card.value = next;
 }
@@ -1939,7 +2072,7 @@ async function runPreflight(token = loadToken) {
       ...unplacedNotice(group),
     ]);
     plannedRuns.value = Number(answer?.runs) || 0;
-    // One group: this popup always runs one card (`target`, a key or a saved
+    // One group: this popup always runs one workflow (`target`, an id or a saved
     // recipe), so the first group's inputs are the card's.
     pictureInputs.value = answer?.groups?.[0]?.picture_inputs || [];
     inputsKey.value = askedFor;
@@ -1990,6 +2123,8 @@ async function load() {
   clearPicks();
   pickerFor.value = null;
   stackChoice.value = null;
+  checkpointEdit.value = null;
+  clearStages();
   inputsError.value = "";
   try {
     if (props.source?.pickWorkflow) {
@@ -2002,7 +2137,7 @@ async function load() {
       if (!mine()) return;
       recipe.value = data?.reason === "no_prompt_chunk" ? null : data;
     }
-    const key = props.source?.workflowKey || recipe.value?.workflow_key || "";
+    const key = props.source?.workflowId || recipe.value?.workflow_id || "";
     activeKey.value = key;
     if (key) await loadCard(key);
     if (!mine()) return;
@@ -2067,7 +2202,7 @@ function applySavedRecipe() {
   for (const [key, value] of Object.entries(row.overrides || {})) {
     const field = byAddress.get(key);
     // An address this card does not carry is left alone rather than invented:
-    // the recipe may have been saved on another member of the stack.
+    // the recipe may have been saved on another workflow.
     if (!field) continue;
     setValue(field, value);
   }

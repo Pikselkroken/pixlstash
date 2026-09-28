@@ -52,7 +52,7 @@ function loader(nodeId, filename, strength, overrides = {}) {
 
 function chain(overrides = {}) {
   return {
-    workflow_key: KEY,
+    workflow_id: KEY,
     editable: true,
     refusal: null,
     source: {
@@ -86,7 +86,7 @@ async function mountDialog(props = {}) {
   const wrapper = mount(EditLorasDialog, {
     props: {
       open: true,
-      workflowKey: KEY,
+      workflowId: KEY,
       cardName: "SDXL + face detailer",
       pictureCount: 184,
       ...props,
@@ -144,7 +144,7 @@ beforeEach(() => {
       ? {
           dry_run: true,
           name: null,
-          workflow_key: null,
+          workflow_id: null,
           changes: [
             { kind: "deleted", node_id: "33", text: "Loader #33 deleted: hairstyle-v3" },
             { kind: "rewired", node_id: "7", text: "#7 KSampler and 2 text encoders rewired" },
@@ -153,7 +153,7 @@ beforeEach(() => {
       : {
           dry_run: false,
           name: "SDXL + face detailer (edited).json",
-          workflow_key: NEW_KEY,
+          workflow_id: NEW_KEY,
           changes: [],
         },
   );
@@ -485,7 +485,7 @@ describe("the second step", () => {
   it("writes on 'Save as a new workflow' and moves the grid onto the new card", async () => {
     const wrapper = await toStepTwo();
     const store = useWorkflowsStore();
-    const fetchCards = vi.spyOn(store, "fetchCards").mockResolvedValue();
+    const refetch = vi.spyOn(store, "refetch").mockResolvedValue();
     const select = vi.spyOn(store, "select");
     const notices = useNoticeStore();
     const push = vi.spyOn(notices, "push");
@@ -504,12 +504,12 @@ describe("the second step", () => {
       name: "SDXL + face detailer (edited)",
       dry_run: false,
     });
-    expect(fetchCards).toHaveBeenCalled();
+    expect(refetch).toHaveBeenCalled();
     expect(select).toHaveBeenCalledWith(NEW_KEY);
     expect(push.mock.calls[0][0].text).toBe(
       "Saved “SDXL + face detailer (edited)” as a new workflow.",
     );
-    expect(wrapper.emitted("saved")?.[0]?.[0]?.workflow_key).toBe(NEW_KEY);
+    expect(wrapper.emitted("saved")?.[0]?.[0]?.workflow_id).toBe(NEW_KEY);
     expect(wrapper.emitted("close")).toBeTruthy();
   });
 

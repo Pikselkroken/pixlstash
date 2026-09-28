@@ -2,11 +2,11 @@
 //
 // The dialog, the inspector and the Save-as-recipe hand-over all have to agree
 // on three things: what a LoRA is called on screen, how an edited list becomes
-// `PUT /workflows/{key}/lora-chain`'s `entries`, and how a link names "open this
-// card with Edit LoRAs… open". One module, so a second spelling of any of them
+// `PUT /workflows/{id}/lora-chain`'s `entries`, and how a link names "open this
+// workflow with Edit LoRAs… open". One module, so a second spelling of any of them
 // cannot drift from the first.
 
-/** The query value that opens Edit LoRAs… on the card `?card=` selects. */
+/** The query value that opens Edit LoRAs… on the workflow `?workflow=` selects. */
 export const EDIT_LORAS = "loras";
 
 /**
@@ -48,17 +48,17 @@ export function loraBase(filename) {
 /**
  * Where "The workflow" in Save-as-recipe sends the owner.
  *
- * `/workflows?card=<key>&edit=loras&drop_lora=<filename>`: the card selected,
+ * `/workflows?workflow=<id>&edit=loras&drop_lora=<filename>`: the workflow selected,
  * the rail open on its Workflow tab, Edit LoRAs… open, and the loader for
  * `drop_lora` already struck through. See `router/index.js` for the scheme and
  * `WorkflowTab.vue` for the half that honours it.
  *
- * @param {string} workflowKey
+ * @param {string} workflowId
  * @param {{dropLora?: string}} [options]
  * @returns {{name: string, query: Object<string, string>}}
  */
-export function editLorasRoute(workflowKey, { dropLora = "" } = {}) {
-  const query = { card: workflowKey, edit: EDIT_LORAS };
+export function editLorasRoute(workflowId, { dropLora = "" } = {}) {
+  const query = { workflow: workflowId, edit: EDIT_LORAS };
   if (dropLora) query.drop_lora = dropLora;
   return { name: "workflows", query };
 }

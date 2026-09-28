@@ -363,16 +363,16 @@ export function bypassNotice(group) {
  * reason shape.
  *
  * Kept out of `reasons` for the reason `bypassNotice` is: the run goes ahead.
- * `workflowKey` rides along because the fix is "Edit LoRAs…" on THAT card,
- * and in a batch every group is a different one.
+ * `workflowId` rides along because the fix is "Edit LoRAs…" on THAT
+ * workflow, and in a batch every group is a different one.
  *
- * @param {{workflow_key?: string, unplaced_loras?: Array<Object>}} group
+ * @param {{workflow_id?: string, unplaced_loras?: Array<Object>}} group
  * @returns {Array<Object>} zero or one entry, so a caller can spread it.
  */
 export function unplacedNotice(group) {
   const loras = (group?.unplaced_loras || []).filter(Boolean);
   return loras.length
-    ? [{ code: LORAS_UNPLACED, loras, workflowKey: group?.workflow_key || "" }]
+    ? [{ code: LORAS_UNPLACED, loras, workflowId: group?.workflow_id || "" }]
     : [];
 }
 

@@ -6,11 +6,11 @@
 //   that sits beside the control, is the same pixels and the wrong thing:
 //   the first resets to nothing, the second pushes the four-column grid out of
 //   alignment the moment one field is edited.
-// * Switching to another stack member. The edits are kept, and the ones the
+// * Switching to another workflow. The edits are kept, and the ones the
 //   new card has no address for are NAMED. Dropping them silently is what
 //   makes a run quietly use 8 steps when the form said 16.
 // * The body's source. `POST /workflows/run` takes exactly one of
-//   picture_ids / saved_recipe_id / workflow_key, and a card chosen over
+//   picture_ids / saved_recipe_id / workflow_id, and a workflow chosen over
 //   pictures is `target`, not a second source. Getting this wrong is a 400 on
 //   every run from the grid.
 
@@ -64,8 +64,8 @@ vi.mock("vuetify/components", async () => {
 
 import RunDialog from "./RunDialog.vue";
 
-const KEY = "a".repeat(64);
-const OTHER = "b".repeat(64);
+const KEY = `auto:${"a".repeat(64)}`;
+const OTHER = `auto:${"b".repeat(64)}`;
 
 /** A parameter as `GET /workflows/{key}` serves it. */
 function def(label, inputName, value, slotLabel = "KSampler") {
@@ -80,12 +80,11 @@ function def(label, inputName, value, slotLabel = "KSampler") {
 
 function card(overrides = {}) {
   return {
-    key: KEY,
+    id: KEY,
     name: "Cinematic portrait",
     covers: [],
     models: [],
     loras: [],
-    member_keys: [],
     defaults: [
       def("Steps", "steps", 8),
       def("CFG", "cfg", 2.0),
@@ -146,7 +145,7 @@ beforeEach(() => {
     key === OTHER
       ? {
           card: card({
-            key: OTHER,
+            id: OTHER,
             name: "Cinematic portrait · detailer",
             // No `denoise`, so an edit made on the first card has no address
             // here and must be reported as having fallen back.
@@ -169,7 +168,7 @@ beforeEach(() => {
   ]);
   getPictureRecipe.mockResolvedValue({
     available: true,
-    workflow_key: KEY,
+    workflow_id: KEY,
     positive_prompt: "a rainy tram platform",
     negative_prompt: null,
     seed_text: "418220931",
@@ -186,18 +185,18 @@ describe("Open in Workflows", () => {
     const wrapper = await mountRun({
       kind: "edit",
       pictureIds: [42],
-      workflowKey: OTHER,
+      workflowId: OTHER,
     });
     await openButton(wrapper).trigger("click");
     expect(push).toHaveBeenCalledWith({
       name: "workflows",
-      query: { card: OTHER },
+      query: { workflow: OTHER },
     });
     expect(wrapper.emitted("close")).toBeTruthy();
   });
 
   it("follows a switch in the Workflow picker", async () => {
-    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
     await wrapper
       .findAllComponents({ name: "AppSelect" })
       .find((c) => c.props("label") === "Workflow")
@@ -206,13 +205,13 @@ describe("Open in Workflows", () => {
     await openButton(wrapper).trigger("click");
     expect(push).toHaveBeenCalledWith({
       name: "workflows",
-      query: { card: OTHER },
+      query: { workflow: OTHER },
     });
   });
 
   it("is not offered on the Workflows screen itself", async () => {
     currentRoute.name = "workflows";
-    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
     expect(openButton(wrapper)).toBeUndefined();
   });
 });
@@ -223,7 +222,7 @@ describe("the prompt box", () => {
     // none, or differ, and the box must not open on something else.
     getPictureRecipe.mockResolvedValue({
       available: true,
-      workflow_key: KEY,
+      workflow_id: KEY,
       positive_prompt: null,
       lora_slots: [],
     });
@@ -294,13 +293,13 @@ describe("the ↺ chip", () => {
   });
 });
 
-describe("switching to another stack member", () => {
+describe("switching to another workflow", () => {
   it("keeps the edits the new workflow has an address for", async () => {
     const wrapper = await mountRun();
     const steps = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
     wrapper.vm.setValue(steps, 16);
 
-    wrapper.vm.workflowKey = OTHER;
+    wrapper.vm.workflowId = OTHER;
     await flushPromises();
 
     const kept = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
@@ -314,7 +313,7 @@ describe("switching to another stack member", () => {
     );
     wrapper.vm.setValue(denoise, 0.6);
 
-    wrapper.vm.workflowKey = OTHER;
+    wrapper.vm.workflowId = OTHER;
     await flushPromises();
 
     expect(wrapper.vm.fellBack).toEqual(["Denoise"]);
@@ -333,116 +332,18 @@ describe("switching to another stack member", () => {
 
   it("stops reading the picture's own settings once it is another card", async () => {
     // The picture was made by THIS card, so its steps=12 is what the form
-    // opens showing. A stack member is a different graph: 12 says nothing
-    // about it, and carrying it over would make that member's own 20 look
+    // opens showing. Another workflow is a different graph: 12 says nothing
+    // about it, and carrying it over would make that workflow's own 20 look
     // like an edit somebody made.
     const wrapper = await mountRun();
     const before = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
     expect(wrapper.vm.currentValue(before)).toBe(12);
 
-    wrapper.vm.workflowKey = OTHER;
+    wrapper.vm.workflowId = OTHER;
     await flushPromises();
 
     const after = wrapper.vm.scalarFields.find((f) => f.input_name === "steps");
     expect(wrapper.vm.currentValue(after)).toBe(20);
-  });
-
-  it("lists the whole stack, each member told apart from the others", async () => {
-    // `GET /workflows` generates members of one stack the same name, so the
-    // picker would offer two identical rows without what sets them apart.
-    const members = [
-      { key: KEY, name: "Krea 2: Text to Image", sets_apart: ["film-grain"], differs_by: [] },
-      {
-        key: OTHER,
-        name: "Krea 2: Text to Image",
-        sets_apart: [],
-        differs_by: ["+ upscale"],
-      },
-      { key: "c".repeat(64), name: "Detailer pass", sets_apart: [], differs_by: [] },
-    ];
-    getWorkflowCard.mockResolvedValue({ card: card({ members }) });
-    const wrapper = await mountRun();
-    // The two-line row (#1525): the name, then what sets it apart as chips,
-    // the cover marked, all under the stack's heading.
-    const group = "This stack · 3 workflows";
-    expect(wrapper.vm.workflowOptions).toEqual([
-      {
-        value: KEY,
-        label: "Krea 2: Text to Image — film-grain",
-        name: "Krea 2: Text to Image",
-        chips: ["Cover", "film-grain"],
-        chipDetails: {},
-        group,
-      },
-      {
-        value: OTHER,
-        label: "Krea 2: Text to Image — + upscale",
-        name: "Krea 2: Text to Image",
-        chips: ["+ upscale"],
-        chipDetails: {},
-        group,
-      },
-      {
-        value: "c".repeat(64),
-        label: "Detailer pass",
-        name: "Detailer pass",
-        chips: [],
-        chipDetails: {},
-        group,
-      },
-    ]);
-    // Read off the card itself: no member's card is fetched to name it.
-    expect(getWorkflowCard).toHaveBeenCalledTimes(1);
-  });
-
-  it("says both kinds of difference, and numbers rows that still tie", async () => {
-    const name = "Krea 2: Text to Image";
-    const members = [
-      { key: KEY, name, sets_apart: ["realvisxl"], differs_by: [] },
-      {
-        key: OTHER,
-        name,
-        sets_apart: ["realvisxl"],
-        // "other checkpoint" is what `sets_apart` already names; the step is not.
-        differs_by: ["other checkpoint", "+ upscale"],
-      },
-      { key: "c".repeat(64), name, sets_apart: [], differs_by: ["1 node differs"] },
-      { key: "d".repeat(64), name, sets_apart: [], differs_by: ["1 node differs"] },
-    ];
-    getWorkflowCard.mockResolvedValue({ card: card({ members }) });
-    const wrapper = await mountRun();
-    expect(wrapper.vm.workflowOptions.map((row) => row.label)).toEqual([
-      `${name} — realvisxl`,
-      `${name} — realvisxl, + upscale`,
-      `${name} — 1 node differs (1)`,
-      `${name} — 1 node differs (2)`,
-    ]);
-    // The name line is numbered only where the chips under it tie as well.
-    expect(wrapper.vm.workflowOptions.slice(2).map((row) => row.name)).toEqual([
-      `${name} (1)`,
-      `${name} (2)`,
-    ]);
-  });
-
-  it("numbers a name only where the two-line rows would draw alike", async () => {
-    // The cover and a member tie on the one-line label, which the rail's
-    // native select still needs numbered; the Cover chip already tells the
-    // two-line rows apart, so their names stay as the grid prints them.
-    const name = "Krea 2";
-    const members = [
-      { key: KEY, name, sets_apart: ["film-grain"], differs_by: [] },
-      { key: OTHER, name, sets_apart: ["film-grain"], differs_by: [] },
-      { key: "c".repeat(64), name, sets_apart: ["realvisxl"], differs_by: [] },
-    ];
-    getWorkflowCard.mockResolvedValue({ card: card({ members }) });
-    const wrapper = await mountRun();
-    expect(
-      wrapper.vm.workflowOptions.map((row) => [row.label, row.name]),
-    ).toEqual([
-      [`${name} — film-grain (1)`, name],
-      [`${name} — film-grain (2)`, name],
-      [`${name} — realvisxl`, name],
-    ]);
   });
 
   it("keeps the card of a popup reopened while the old card read was out", async () => {
@@ -450,15 +351,15 @@ describe("switching to another stack member", () => {
     getWorkflowCard.mockImplementationOnce(
       () => new Promise((resolve) => (release = () => resolve({ card: card() }))),
     );
-    const wrapper = await mountRun({ kind: "workflow", workflowKey: KEY });
-    await wrapper.setProps({ source: { kind: "workflow", workflowKey: OTHER } });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await wrapper.setProps({ source: { kind: "card", workflowId: OTHER } });
     await flushPromises();
     release();
     await flushPromises();
-    expect(wrapper.vm.card.key).toBe(OTHER);
+    expect(wrapper.vm.card.id).toBe(OTHER);
   });
 
-  it("offers the card alone when it is in no stack", async () => {
+  it("offers the workflow alone, never a list of stack members (#1623)", async () => {
     const wrapper = await mountRun();
     expect(wrapper.vm.workflowOptions).toEqual([
       { value: KEY, label: "Cinematic portrait" },
@@ -470,7 +371,7 @@ describe("switching to another stack member", () => {
     const cfg = wrapper.vm.scalarFields.find((f) => f.input_name === "cfg");
     wrapper.vm.setValue(cfg, 4);
 
-    wrapper.vm.workflowKey = OTHER;
+    wrapper.vm.workflowId = OTHER;
     await flushPromises();
 
     expect(wrapper.vm.fellBack).toEqual([]);
@@ -486,7 +387,7 @@ describe("a refusal the popup offers to fix", () => {
       .mockResolvedValueOnce({
         ok: false,
         runs: 0,
-        groups: [{ workflow_key: KEY, reasons: [{ code: "no_lora_loader" }] }],
+        groups: [{ workflow_id: KEY, reasons: [{ code: "no_lora_loader" }] }],
       })
       .mockResolvedValue({ ok: true, runs: 1, groups: [] });
 
@@ -512,7 +413,7 @@ describe("a refusal the popup offers to fix", () => {
       runs: 1,
       groups: [
         {
-          workflow_key: KEY,
+          workflow_id: KEY,
           reasons: [],
           bypassed_loras: [{ file: "character.safetensors", folder: "loras" }],
         },
@@ -541,7 +442,7 @@ describe("a refusal the popup offers to fix", () => {
       runs: 1,
       groups: [
         {
-          workflow_key: KEY,
+          workflow_id: KEY,
           reasons: [],
           bypassed_loras: [{ file: "character.safetensors", folder: "loras" }],
           replaced_nodes: [replaced],
@@ -574,7 +475,7 @@ describe("a refusal the popup offers to fix", () => {
       runs: 1,
       groups: [
         {
-          workflow_key: OTHER,
+          workflow_id: OTHER,
           reasons: [],
           bypassed_loras: [],
           unplaced_loras: [unplaced],
@@ -587,7 +488,7 @@ describe("a refusal the popup offers to fix", () => {
     expect(wrapper.vm.reasons).toEqual([]);
     expect(wrapper.vm.canRun).toBe(true);
     expect(wrapper.vm.runNotes).toEqual([
-      { code: "loras_unplaced", loras: [unplaced], workflowKey: OTHER },
+      { code: "loras_unplaced", loras: [unplaced], workflowId: OTHER },
     ]);
 
     // Its fix is Edit LoRAs… on THAT group's card, which closes this popup.
@@ -597,7 +498,7 @@ describe("a refusal the popup offers to fix", () => {
     await flushPromises();
     expect(push).toHaveBeenCalledWith({
       name: "workflows",
-      query: { card: OTHER, edit: "loras" },
+      query: { workflow: OTHER, edit: "loras" },
     });
     expect(wrapper.emitted("close")).toBeTruthy();
   });
@@ -670,7 +571,7 @@ describe("the LoRAs a graph already loads", () => {
     // meant every stock workflow opened the popup with no LoRAs at all.
     getPictureRecipe.mockResolvedValue({
       available: true,
-      workflow_key: KEY,
+      workflow_id: KEY,
       settings: {},
       lora_slots: [filenameSlot("mira_v2.safetensors")],
     });
@@ -689,7 +590,7 @@ describe("the LoRAs a graph already loads", () => {
   it("resolves the graph's filename to a shelf digest", async () => {
     getPictureRecipe.mockResolvedValue({
       available: true,
-      workflow_key: KEY,
+      workflow_id: KEY,
       settings: {},
       lora_slots: [filenameSlot("mira_v2.safetensors")],
     });
@@ -702,7 +603,7 @@ describe("the LoRAs a graph already loads", () => {
     // it relative to ComfyUI's `loras` folder.
     getPictureRecipe.mockResolvedValue({
       available: true,
-      workflow_key: KEY,
+      workflow_id: KEY,
       settings: {},
       lora_slots: [filenameSlot("film-grain-35mm.safetensors")],
     });
@@ -713,7 +614,7 @@ describe("the LoRAs a graph already loads", () => {
   it("still shows a LoRA the shelf cannot name, and says so", async () => {
     getPictureRecipe.mockResolvedValue({
       available: true,
-      workflow_key: KEY,
+      workflow_id: KEY,
       settings: {},
       lora_slots: [filenameSlot("somebody-elses.safetensors")],
     });
@@ -743,7 +644,7 @@ describe("the LoRAs a graph already loads", () => {
     ]);
     getPictureRecipe.mockResolvedValue({
       available: true,
-      workflow_key: KEY,
+      workflow_id: KEY,
       settings: {},
       lora_slots: [filenameSlot("dupe.safetensors")],
     });
@@ -758,7 +659,7 @@ describe("the LoRAs a graph already loads", () => {
     // would refuse the run over a LoRA nobody changed.
     getPictureRecipe.mockResolvedValue({
       available: true,
-      workflow_key: KEY,
+      workflow_id: KEY,
       settings: {},
       lora_slots: [
         filenameSlot("mira_v2.safetensors"),
@@ -776,7 +677,7 @@ describe("the LoRAs a graph already loads", () => {
   it("sends the row the owner swapped, and only that one", async () => {
     getPictureRecipe.mockResolvedValue({
       available: true,
-      workflow_key: KEY,
+      workflow_id: KEY,
       settings: {},
       lora_slots: [
         filenameSlot("mira_v2.safetensors"),
@@ -802,7 +703,7 @@ describe("the LoRAs a graph already loads", () => {
   it("sends a strength the owner changed on an otherwise untouched row", async () => {
     getPictureRecipe.mockResolvedValue({
       available: true,
-      workflow_key: KEY,
+      workflow_id: KEY,
       settings: {},
       lora_slots: [filenameSlot("mira_v2.safetensors")],
     });
@@ -838,7 +739,7 @@ describe("skipping a graph LoRA for this run", () => {
   async function mountTwo() {
     getPictureRecipe.mockResolvedValue({
       available: true,
-      workflow_key: KEY,
+      workflow_id: KEY,
       settings: {},
       lora_slots: [
         filenameSlot("mira_v2.safetensors"),
@@ -913,7 +814,7 @@ describe("skipping a graph LoRA for this run", () => {
       runs: 1,
       groups: [
         {
-          workflow_key: KEY,
+          workflow_id: KEY,
           reasons: [],
           bypassed_loras: [
             { file: "Somebody-Elses.safetensors", folder: "loras", requested: false },
@@ -936,7 +837,7 @@ describe("skipping a graph LoRA for this run", () => {
       runs: 1,
       groups: [
         {
-          workflow_key: KEY,
+          workflow_id: KEY,
           reasons: [],
           bypassed_loras: [
             { file: "gone.safetensors", folder: "loras", requested: false },
@@ -966,7 +867,7 @@ describe("the picture beside the form", () => {
     getWorkflowCard.mockResolvedValue({
       card: card({ covers: [{ url: "/pictures/thumbnails/812.webp?v=3" }] }),
     });
-    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
 
     expect(wrapper.vm.coverUrl).toBe("/api/v1/pictures/thumbnails/812.webp?v=3");
   });
@@ -976,7 +877,7 @@ describe("the picture beside the form", () => {
     // not put the prefix on twice.
     const wrapper = await mountRun({
       kind: "card",
-      workflowKey: KEY,
+      workflowId: KEY,
       coverUrl: "/api/v1/pictures/thumbnails/9.webp",
     });
     expect(wrapper.vm.coverUrl).toBe("/api/v1/pictures/thumbnails/9.webp");
@@ -1014,23 +915,18 @@ describe("\"Run a workflow on these…\", which opens with no workflow chosen", 
     expect(wrapper.vm.defaults).toEqual([]);
     expect(wrapper.vm.canRun).toBe(false);
 
-    wrapper.vm.workflowKey = KEY;
+    wrapper.vm.workflowId = KEY;
     await flushPromises();
 
     expect(wrapper.vm.defaults.length).toBeGreaterThan(0);
     expect(wrapper.vm.canRun).toBe(true);
   });
 
-  it("heads the library's cards apart from the picked stack's members", async () => {
-    const members = [
-      { key: KEY, name: "Krea 2", sets_apart: [], differs_by: [] },
-      { key: OTHER, name: "Krea 2", sets_apart: [], differs_by: ["+ upscale"] },
-    ];
-    getWorkflowCard.mockResolvedValue({ card: card({ members }) });
+  it("lists the library's workflows by id, the chosen one once", async () => {
     listWorkflowCards.mockResolvedValue({
       cards: [
-        { key: KEY, name: "Krea 2" },
-        { key: "e".repeat(64), name: "Portrait" },
+        { id: KEY, name: "Krea 2" },
+        { id: `auto:${"e".repeat(64)}`, name: "Portrait" },
       ],
     });
     const wrapper = await mountRun({
@@ -1038,15 +934,12 @@ describe("\"Run a workflow on these…\", which opens with no workflow chosen", 
       pictureIds: [1, 2],
       pickWorkflow: true,
     });
-    wrapper.vm.workflowKey = KEY;
+    wrapper.vm.workflowId = KEY;
     await flushPromises();
 
-    expect(
-      wrapper.vm.workflowOptions.map((row) => [row.value, row.group]),
-    ).toEqual([
-      [KEY, "This stack · 2 workflows"],
-      [OTHER, "This stack · 2 workflows"],
-      ["e".repeat(64), "Other workflows"],
+    expect(wrapper.vm.workflowOptions).toEqual([
+      { value: KEY, label: "Cinematic portrait" },
+      { value: `auto:${"e".repeat(64)}`, label: "Portrait" },
     ]);
   });
 });
@@ -1056,7 +949,7 @@ describe("Edit with ComfyUI, the built-in edit card over the selection", () => {
     const wrapper = await mountRun({
       kind: "edit",
       pictureIds: [42],
-      workflowKey: KEY,
+      workflowId: KEY,
       emptyPrompt: true,
     });
     // The picture is what is edited, not a recipe to replay.
@@ -1087,18 +980,108 @@ describe("the body it sends", () => {
     expect(body.picture_ids).toEqual([42]);
     expect(body.target).toBe(KEY);
     // Exactly one source, or the route answers 400 before it reads anything.
-    expect(body.workflow_key).toBeUndefined();
+    expect(body.workflow_id).toBeUndefined();
   });
 
   it("names the card itself when there is no picture behind it", async () => {
-    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
     await wrapper.vm.submit();
     await flushPromises();
 
     const body = runWorkflowCard.mock.calls[0][0];
-    expect(body.workflow_key).toBe(KEY);
+    expect(body.workflow_id).toBe(KEY);
+    expect(body).not.toHaveProperty("workflow_key");
     expect(body.picture_ids).toBeUndefined();
     expect(body.target).toBeUndefined();
+  });
+
+  it("sends the checkpoint as a model at its default-recipe address (#1623)", async () => {
+    const address = "core:CheckpointLoader/ckpt_name";
+    getWorkflowCard.mockResolvedValue({
+      card: card({
+        default_recipe: {
+          models: [
+            { address, kind: "checkpoint", filename: "realvisXL_v5.safetensors" },
+          ],
+          loras: [],
+          values: [],
+          stages: {},
+        },
+      }),
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    // Untouched, the form's checkpoint still goes as the model it shows.
+    expect(wrapper.vm.checkpointValue).toBe("realvisXL_v5.safetensors");
+    wrapper.vm.setCheckpoint("juggernautXL.safetensors");
+    await wrapper.vm.submit();
+    await flushPromises();
+
+    const body = runWorkflowCard.mock.calls[0][0];
+    expect(body.models).toEqual([
+      { address, filename: "juggernautXL.safetensors" },
+    ]);
+    // Never twice: the ckpt_name widget is not also sent as a value.
+    expect(sentValue(body, "ckpt_name")).toBeUndefined();
+  });
+
+  it("sends the stages the owner turned off as skip_stages (#1623)", async () => {
+    getWorkflowCard.mockResolvedValue({
+      card: card({
+        specials: ["upscale", "face_detailer"],
+        default_recipe: {
+          models: [],
+          loras: [],
+          values: [],
+          stages: { upscale: true, face_detailer: true },
+        },
+      }),
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(wrapper.text()).toContain("Run the upscale stage");
+    expect(wrapper.text()).toContain("Run the face detailer stage");
+    await wrapper.vm.setStage("face_detailer", false);
+    await flushPromises();
+    // Asked again, so a stage that cannot come out is refused before Run.
+    expect(preflightWorkflowRun.mock.lastCall[0].skip_stages).toEqual([
+      "face_detailer",
+    ]);
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].skip_stages).toEqual([
+      "face_detailer",
+    ]);
+  });
+
+  it("offers no row for a stage the default recipe runs without", async () => {
+    // The server cannot switch a recipe-off stage back on, so a tickable
+    // row for it would promise a run it will not make.
+    getWorkflowCard.mockResolvedValue({
+      card: card({
+        specials: ["upscale", "face_detailer"],
+        default_recipe: {
+          models: [],
+          loras: [],
+          values: [],
+          stages: { upscale: false, face_detailer: true },
+        },
+      }),
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(wrapper.text()).not.toContain("Run the upscale stage");
+    expect(wrapper.text()).toContain("Run the face detailer stage");
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0]).not.toHaveProperty("skip_stages");
+  });
+
+  it("sends no skip_stages while every stage is on", async () => {
+    getWorkflowCard.mockResolvedValue({
+      card: card({ specials: ["upscale"], default_recipe: { stages: {} } }),
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0]).not.toHaveProperty("skip_stages");
   });
 
   it("sends an edit as an addressed override, not as a rewritten default", async () => {
@@ -1217,7 +1200,7 @@ describe("the body it sends", () => {
     // the run generates from no prompt at all. A card and a multi-picture
     // selection both read no recipe, so the box is empty because nothing
     // filled it - which is not an instruction to blank anything.
-    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
     expect(wrapper.vm.prompt).toBe("");
     await wrapper.vm.submit();
     await flushPromises();
@@ -1384,7 +1367,7 @@ describe("the pictures a workflow takes", () => {
     return {
       ok: !reasons.length,
       runs: 3,
-      groups: [{ workflow_key: KEY, reasons, picture_inputs: inputs }],
+      groups: [{ workflow_id: KEY, reasons, picture_inputs: inputs }],
     };
   }
 
@@ -1400,7 +1383,7 @@ describe("the pictures a workflow takes", () => {
         input(REFERENCE, { mode: "fixed", pixel_sha: "f".repeat(64), picture_id: 7, fill: "fixed" }),
       ]),
     );
-    const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2, 3], workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2, 3], workflowId: KEY });
 
     const rows = wrapper.findAll(".rund-in");
     expect(rows).toHaveLength(2);
@@ -1420,7 +1403,7 @@ describe("the pictures a workflow takes", () => {
 
   it("sends the stack choice the owner made over the default", async () => {
     preflightWorkflowRun.mockResolvedValue(answer([input(SUBJECT, { fill: "selection" })]));
-    const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2], workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2], workflowId: KEY });
     await wrapper.find(".rund-box").setValue(false);
     await wrapper.vm.submit();
     expect(runWorkflowCard.mock.calls[0][0].stack).toBe(false);
@@ -1477,7 +1460,7 @@ describe("the pictures a workflow takes", () => {
         input(REFERENCE, { mode: "fixed", pixel_sha: otherPin, picture_id: 7, fill: "fixed" }),
       ]),
     );
-    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
 
     await wrapper.vm.togglePin(wrapper.vm.pictureInputs[0]);
     await flushPromises();
@@ -1492,7 +1475,7 @@ describe("the pictures a workflow takes", () => {
     preflightWorkflowRun.mockResolvedValue(
       answer([input(REFERENCE, { mode: "fixed", pixel_sha: "e".repeat(64), picture_id: 7, fill: "fixed" })]),
     );
-    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
 
     await wrapper.vm.togglePin(wrapper.vm.pictureInputs[0]);
     await flushPromises();
@@ -1509,7 +1492,7 @@ describe("the pictures a workflow takes", () => {
     preflightWorkflowRun.mockResolvedValue(
       answer([input(SUBJECT, { mode: "selection", fill: "selection" }), input(REFERENCE, { fill: "graph" })]),
     );
-    const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2], workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2], workflowId: KEY });
 
     await wrapper.vm.useSelectionHere(wrapper.vm.pictureInputs[1]);
     await flushPromises();
@@ -1528,7 +1511,7 @@ describe("the pictures a workflow takes", () => {
     setWorkflowInputs.mockRejectedValue({
       response: { status: 400, data: { detail: "Picture 99 is not a kept picture of this library, so it cannot be pinned." } },
     });
-    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
 
     await wrapper.vm.togglePin(wrapper.vm.pictureInputs[0]);
     await flushPromises();
@@ -1545,7 +1528,7 @@ describe("the pictures a workflow takes", () => {
       input(REFERENCE, { fill: "request", picture_id: 98 }),
     ];
     preflightWorkflowRun.mockResolvedValue(answer(rows));
-    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
 
     let release;
     preflightWorkflowRun.mockImplementationOnce(
@@ -1569,11 +1552,11 @@ describe("the pictures a workflow takes", () => {
     preflightWorkflowRun.mockResolvedValue(
       answer([input(SUBJECT, { fill: "request", picture_id: 99 })]),
     );
-    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
     const oldRow = wrapper.vm.pictureInputs[0];
 
     preflightWorkflowRun.mockImplementation(() => new Promise(() => {}));
-    wrapper.vm.workflowKey = OTHER;
+    wrapper.vm.workflowId = OTHER;
     await flushPromises();
     expect(wrapper.vm.pictureInputs).toEqual([]);
 
@@ -1586,7 +1569,7 @@ describe("the pictures a workflow takes", () => {
     preflightWorkflowRun.mockResolvedValueOnce(
       answer([input(SUBJECT, { fill: "request", picture_id: 99 })]),
     );
-    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
     const row = wrapper.vm.pictureInputs[0];
 
     preflightWorkflowRun.mockRejectedValue({
@@ -1603,7 +1586,7 @@ describe("the pictures a workflow takes", () => {
     // Every output would join the FIRST picture's stack, which is not "the
     // ones they came from".
     preflightWorkflowRun.mockResolvedValue(answer([input(SUBJECT, { fill: "graph" })]));
-    const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2], workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "picture", pictureIds: [1, 2], workflowId: KEY });
     expect(wrapper.find(".rund-box").exists()).toBe(false);
   });
 
@@ -1617,7 +1600,7 @@ describe("the pictures a workflow takes", () => {
       prompts: [],
       groups: [
         {
-          workflow_key: KEY,
+          workflow_id: KEY,
           reasons: [UNFILLED],
           picture_inputs: [
             input(REFERENCE, { mode: "fixed", pixel_sha: "e".repeat(64), picture_missing: true }),
@@ -1625,7 +1608,7 @@ describe("the pictures a workflow takes", () => {
         },
       ],
     });
-    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
     await wrapper.vm.submit();
     await flushPromises();
 
@@ -1639,7 +1622,7 @@ describe("the pictures a workflow takes", () => {
     preflightWorkflowRun.mockResolvedValue(
       answer([input(REFERENCE, { mode: "fixed", pixel_sha: "e".repeat(64), picture_id: 7, fill: "fixed" })]),
     );
-    const wrapper = await mountRun({ kind: "card", workflowKey: KEY });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
     const pin = wrapper.findComponent({ name: "AppBarButton" });
     expect(pin.attributes("tooltip")).toBe("Keep this picture for Reference on every run");
     expect(pin.attributes("aria-pressed")).toBe("true");

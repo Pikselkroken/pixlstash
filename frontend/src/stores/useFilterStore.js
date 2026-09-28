@@ -65,9 +65,9 @@ export const useFilterStore = defineStore("filter", () => {
   // has ruled on yet) is still honoured by the store and the API, but the filter
   // panel no longer offers it: the duplicate queue owns that work.
   const stackStateFilter = ref("all");
-  // One workflow card's pictures (v1.12 F7's *Show all N pictures*):
-  // `{key, name}`, or null. The Workflow tab's LoRA pile narrows it to one
-  // LoRA of one stack instead: `{stack, lora, name}` (`workflowFilterParams`). The name is carried because the chip has to say
+  // One workflow's pictures (v1.12 F7's *Show all N pictures*):
+  // `{id, name}`, or null. The Workflow tab's LoRA pile narrows it to one
+  // LoRA: `{id, lora, name}` (`workflowFilterParams`). The name is carried because the chip has to say
   // which workflow, and the grid holds no workflow cards to look it up in.
   const workflowFilter = ref(null);
 
@@ -120,17 +120,16 @@ export const useFilterStore = defineStore("filter", () => {
 });
 
 /**
- * The listing params one `workflowFilter` sends: `workflow_key` or
- * `workflow_stack`, and `workflow_lora` when it names a LoRA.
+ * The listing params one `workflowFilter` sends: `workflow` (the workflow
+ * id), and `workflow_lora` when it names a LoRA.
  *
- * @param {?{key?: string, stack?: string, lora?: string}} filter
+ * @param {?{id?: string, lora?: string}} filter
  * @returns {Array<[string, string]>}
  */
 export function workflowFilterParams(filter) {
   if (!filter) return [];
   return [
-    ...(filter.key ? [["workflow_key", filter.key]] : []),
-    ...(filter.stack ? [["workflow_stack", filter.stack]] : []),
+    ...(filter.id ? [["workflow", filter.id]] : []),
     ...(filter.lora ? [["workflow_lora", filter.lora]] : []),
   ];
 }

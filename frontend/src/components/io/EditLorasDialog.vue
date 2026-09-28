@@ -349,7 +349,7 @@ import EditLorasRow from "./EditLorasRow.vue";
 const props = defineProps({
   open: { type: Boolean, default: false },
   /** The card whose chain is edited. The save never modifies it. */
-  workflowKey: { type: String, default: "" },
+  workflowId: { type: String, default: "" },
   /** What the owner calls the card: the subtitle, and the new name's stem. */
   cardName: { type: String, default: "" },
   /** How many pictures the card made, for "its N pictures stay as they are". */
@@ -728,10 +728,10 @@ async function load() {
   newName.value = "";
   changes.value = [];
   say("");
-  if (!props.workflowKey) return;
+  if (!props.workflowId) return;
   loading.value = true;
   try {
-    const read = await getLoraChain(props.workflowKey);
+    const read = await getLoraChain(props.workflowId);
     if (!mine()) return;
     chain.value = read;
     rows.value = [
@@ -744,7 +744,7 @@ async function load() {
   } catch (err) {
     if (!mine()) return;
     console.warn(
-      `[workflows] could not read the LoRA chain of ${props.workflowKey}`,
+      `[workflows] could not read the LoRA chain of ${props.workflowId}`,
       err,
     );
     loadError.value = errorMessage(err, "Could not read this workflow's LoRAs.");
@@ -988,7 +988,7 @@ async function toConfirm() {
   changes.value = [];
   const token = loadToken;
   try {
-    const answer = await saveLoraChain(props.workflowKey, requestBody(true));
+    const answer = await saveLoraChain(props.workflowId, requestBody(true));
     if (token !== loadToken) return;
     changes.value = Array.isArray(answer?.changes) ? answer.changes : [];
   } catch (err) {
@@ -1008,7 +1008,7 @@ async function save() {
   saving.value = true;
   saveError.value = "";
   try {
-    const answer = await saveLoraChain(props.workflowKey, requestBody(false));
+    const answer = await saveLoraChain(props.workflowId, requestBody(false));
     const saved = String(answer?.name || newName.value.trim() || "");
     notices.push({
       level: "success",
@@ -1018,9 +1018,8 @@ async function save() {
     });
     // The new card is a card of its own, so the grid is re-read and the rail
     // moves onto it: the owner's next look is at what they just made.
-    workflows.forgetMembers();
-    await workflows.fetchCards();
-    if (answer?.workflow_key) workflows.select(answer.workflow_key);
+    await workflows.refetch();
+    if (answer?.workflow_id) workflows.select(answer.workflow_id);
     emit("saved", answer);
     emit("close");
   } catch (err) {
@@ -1042,7 +1041,7 @@ function close() {
 }
 
 watch(
-  () => [props.open, props.workflowKey],
+  () => [props.open, props.workflowId],
   ([isOpen]) => {
     if (isOpen) void load();
     else loadToken += 1;

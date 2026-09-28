@@ -13,7 +13,6 @@ import {
   checkpointUnread,
   lorasUnread,
   modelDisplayName,
-  stackMemberOptions,
 } from "./workflowCard";
 
 describe("fitChipCount", () => {
@@ -38,26 +37,22 @@ describe("fitChipCount", () => {
   });
 });
 
-const STACK = {
+const CARD = {
+  id: "auto:" + "c".repeat(64),
   name: "Cinematic portrait",
   models: [
     { name: "sdxl_vae", kind: "vae" },
     { name: "realvisXL_v5", kind: "checkpoint" },
   ],
-  loras: [
-    { name: "lightning-8step", mark: "structural" },
-    { name: "", mark: "recipe" },
-  ],
-  differs_by: ["+ face detailer", "+ upscale 2×"],
+  loras: [{ name: "lightning-8step" }],
   type: "txt2img",
   picture_count: 184,
   rating: 4.85,
-  stack_size: 6,
 };
 
 describe("card chips", () => {
   it("names the checkpoint slot, whatever order the models arrive in", () => {
-    expect(checkpointModel(STACK).name).toBe("realvisXL_v5");
+    expect(checkpointModel(CARD).name).toBe("realvisXL_v5");
     // No checkpoint slot (a unet graph): the first model still names the row.
     expect(
       checkpointModel({ models: [{ name: "flux1-dev", kind: "unet" }] }).name,
@@ -102,106 +97,41 @@ describe("card chips", () => {
     expect(spoken).not.toContain("realvisxl.safetensors");
   });
 
-  it("gives a stack its differences and a single workflow its type", () => {
-    expect(factChips(STACK).map((c) => c.label)).toEqual([
-      "+ face detailer",
-      "+ upscale 2×",
-    ]);
-    const single = { ...STACK, stack_size: 1, differs_by: [], imported: true };
-    expect(factChips(single).map((c) => c.label)).toEqual([
-      "txt2img",
-      "imported",
-    ]);
-  });
-
-  it("says what a chip stands for, on hover and in the accessible name", () => {
-    // #1597: "2 nodes differ" says THAT, the detail says HOW.
-    const member = {
-      ...STACK,
-      differs_by: ["other checkpoint", "2 nodes differ"],
-      differs_by_detail: {
-        "other checkpoint": "Krea 2 → Flux Dev fp8",
-        "2 nodes differ": "+ ImageScaleBy · − LoraLoaderModelOnly",
-      },
-    };
-    expect(factChips(member).map((c) => c.title)).toEqual([
-      "Krea 2 → Flux Dev fp8",
-      "+ ImageScaleBy · − LoraLoaderModelOnly",
-    ]);
-    // The chips are aria-hidden, so the name is where a reader hears it.
-    expect(cardAccessibleName(member)).toContain(
-      "differs by: other checkpoint (Krea 2 → Flux Dev fp8), 2 nodes differ " +
-        "(+ ImageScaleBy · − LoraLoaderModelOnly)",
-    );
-    // A chip with nothing more to say gets no title rather than an empty one.
-    expect(factChips(STACK).map((c) => c.title)).toEqual([undefined, undefined]);
-  });
-
-  it("hands a picker option the details of the chips it draws", () => {
-    const detail = { "1 node differs": "+ ImageScaleBy" };
-    const [, member] = stackMemberOptions([
-      { key: "a", name: "Krea", sets_apart: [], differs_by: [] },
-      {
-        key: "b",
-        name: "Krea",
-        sets_apart: [],
-        differs_by: ["1 node differs"],
-        differs_by_detail: detail,
-      },
-    ]);
-    expect(member.chips).toEqual(["1 node differs"]);
-    expect(member.chipDetails).toEqual(detail);
-  });
-
-  it("gives a stack's cover its type, since it differs from nothing", () => {
-    const cover = { ...STACK, differs_by: [], imported: true };
-    expect(factChips(cover).map((c) => c.label)).toEqual([
-      "txt2img",
-      "imported",
-    ]);
-    const spoken = cardAccessibleName(cover);
+  it("gives a workflow its type, and imported where it came from a file", () => {
+    expect(factChips(CARD).map((c) => c.label)).toEqual(["txt2img"]);
+    expect(
+      factChips({ ...CARD, imported: true }).map((c) => c.label),
+    ).toEqual(["txt2img", "imported"]);
+    const spoken = cardAccessibleName({ ...CARD, imported: true });
     expect(spoken).toContain("facts: txt2img, imported");
-    expect(spoken).not.toContain("differs by");
   });
 
   // A hidden card is only ever drawn because somebody ticked *Show hidden
   // workflows* (F7). Unmarked it is indistinguishable from a card that was
   // never hidden, in the one grid it was deliberately kept out of — and it
   // leads the row because the row clips to "+N".
-  it("leads with `hidden`, on a lone card and on a stack alike", () => {
-    expect(
-      factChips({ ...STACK, stack_size: 1, differs_by: [], hidden: true }).map(
-        (c) => c.label,
-      ),
-    ).toEqual(["hidden", "txt2img"]);
-    expect(factChips({ ...STACK, hidden: true }).map((c) => c.label)).toEqual([
+  it("leads with `hidden`", () => {
+    expect(factChips({ ...CARD, hidden: true }).map((c) => c.label)).toEqual([
       "hidden",
-      "+ face detailer",
-      "+ upscale 2×",
+      "txt2img",
     ]);
     // And a card nobody hid says nothing about it.
-    expect(factChips({ ...STACK, hidden: false }).map((c) => c.label)).toEqual([
-      "+ face detailer",
-      "+ upscale 2×",
+    expect(factChips({ ...CARD, hidden: false }).map((c) => c.label)).toEqual([
+      "txt2img",
     ]);
   });
 });
 
 describe("cardAccessibleName", () => {
-  it("names every LoRA with workflow or recipe, since +N is not a control", () => {
-    const loras = Array.from({ length: 5 }, (_, i) => ({
-      name: `lora-${i}`,
-      mark: "structural",
-    }));
-    const name = cardAccessibleName({
-      ...STACK,
-      loras: [...loras, { mark: "recipe" }],
-    });
+  it("names every LoRA, since +N is not a control", () => {
+    const loras = Array.from({ length: 5 }, (_, i) => ({ name: `lora-${i}` }));
+    const name = cardAccessibleName({ ...CARD, loras });
     for (let i = 0; i < 5; i++)
       expect(name).toContain(`lora-${i}, workflow LoRA`);
-    expect(name).toContain("recipe LoRA slot");
-    expect(name).toContain("stack of 6 workflows");
-    expect(name).toContain("differs by: + face detailer, + upscale 2×");
+    // No stacks and no recipe slots since #1623: nothing says either.
+    expect(name).not.toContain("stack of");
+    expect(name).not.toContain("recipe LoRA");
+    expect(name).toContain("facts: txt2img");
     expect(name).toContain("rated 4.8 of 5");
   });
 
@@ -249,7 +179,7 @@ describe("checkpointUnread / lorasUnread", () => {
     const halfRead = {
       variant_count: 0,
       models: [],
-      loras: [{ name: "add_detail.safetensors", mark: "structural" }],
+      loras: [{ name: "add_detail.safetensors" }],
     };
     expect(checkpointUnread(halfRead)).toBe(true);
     expect(lorasUnread(halfRead)).toBe(false);

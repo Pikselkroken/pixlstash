@@ -25,7 +25,7 @@
            out: the count would not add up, and nothing would say why. -->
       <div
         v-for="group in groups"
-        :key="group.workflow_key || group.picture_ids.join(',')"
+        :key="group.workflow_id || group.picture_ids.join(',')"
         class="mmd-row"
         :class="{ 'mmd-row--off': group.reasons.length }"
       >
@@ -252,7 +252,7 @@ const anyRefusal = computed(() =>
 const blockedReasons = computed(() =>
   groups.value.flatMap((group) =>
     [...(group.reasons || []), ...repairNotices(group)].map((reason) => ({
-      key: group.workflow_key || group.picture_ids.join(","),
+      key: group.workflow_id || group.picture_ids.join(","),
       subject: nameOf(group),
       reason,
     })),
@@ -264,8 +264,8 @@ function thumbUrl(id) {
 }
 
 function nameOf(group) {
-  if (!group.workflow_key) return "No workflow";
-  return names.value[group.workflow_key] || "Unsaved recipe";
+  if (!group.workflow_id) return "No workflow";
+  return names.value[group.workflow_id] || "Unsaved recipe";
 }
 
 function subOf(group) {
@@ -323,7 +323,7 @@ async function load() {
       reasons: group.reasons || [],
     }));
     names.value = Object.fromEntries(
-      (library.cards || []).map((row) => [row.key, row.name]),
+      (library.cards || []).map((row) => [row.id, row.name]),
     );
   } catch (err) {
     if (mine()) {

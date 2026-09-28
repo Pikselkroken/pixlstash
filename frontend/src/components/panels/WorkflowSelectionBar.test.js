@@ -4,8 +4,8 @@
 // confirm either.
 //
 // **The gates**, because each one is a refusal the SERVER also enforces: Run
-// takes one card, a stack needs two, Unstack all needs a stack in the
-// selection, and Delete needs a file — so a gate that disagrees with the route
+// takes one workflow, Merge needs two, Split needs one workflow holding more
+// than one topology, and Delete needs a file — so a gate that disagrees with the route
 // is a button that can only come back refused.
 //
 // **The parity**, because `menu-parity.spec.js` exists: the picture grid's
@@ -65,17 +65,14 @@ const globalOpts = {
   },
 };
 
-const card = (key, extra = {}) => ({
-  key,
-  name: key,
+const card = (id, extra = {}) => ({
+  id,
+  name: id,
   models: [],
   loras: [],
-  differs_by: [],
   picture_count: 1,
   covers: [],
-  stack_size: 1,
-  member_keys: [],
-  stack_id: null,
+  topologies: ["t-" + id],
   imported: false,
   hidden: false,
   ...extra,
@@ -84,16 +81,12 @@ const card = (key, extra = {}) => ({
 const CARDS = [
   card("a"),
   card("b", { imported: true }),
+  // A workflow holding three topologies, which Split can hand out.
   card("c", {
     imported: true,
-    stack_id: "s1",
-    stack_size: 2,
-    member_keys: ["c1"],
+    topologies: ["a".repeat(64), "b".repeat(64), "c".repeat(64)],
   }),
   card("d", { hidden: true }),
-  // Drawn as a stack, but the grid holds only part of it — so the server
-  // sends no `stack_id` and the dissolve route cannot be addressed.
-  card("e", { stack_size: 2, stack_id: null, member_keys: [] }),
   card("p", {
     picture_count: 3,
     covers: [
@@ -164,124 +157,37 @@ describe("the pill's gates", () => {
     expect(tooltip(many, "rename")).toContain("Select one workflow");
   });
 
-  it("Run follows the member picked in the inspector, back to the cover on a new selection", async () => {
-    const { wrapper, store } = bar([]);
-    store.cards = CARDS.map((entry) =>
-      entry.key === "c"
-        ? {
-            ...entry,
-            members: [
-              { key: "c", name: "c" },
-              { key: "c1", name: "Member one" },
-            ],
-          }
-        : entry,
-    );
-    store.select("c", { whole: true });
-    store.pickStackMember("c1");
-    await wrapper.vm.$nextTick();
-    // Named from the cover's `members`: the grid never fetched the member.
-    expect(store.runnableCard).toMatchObject({ key: "c1", name: "Member one" });
-    expect(tooltip(wrapper, "run")).toBe(
-      "Run Member one, the member picked in the inspector",
-    );
-
-    // Clicking the same stack again is a new selection, so it starts over.
-    store.select("c", { whole: true });
-    await wrapper.vm.$nextTick();
-    expect(store.runnableCard?.key).toBe("c");
-
-    // A pick outside the stack is never honoured.
-    store.pickStackMember("a");
-    await wrapper.vm.$nextTick();
-    expect(store.runnableCard?.key).toBe("c");
-  });
-
-  it("Run takes a stack selected whole, and runs its cover", async () => {
-    // A click on a stack card selects the cover AND its members, so the key
-    // count is two while the reader sees one card.
-    const { wrapper, store } = bar([]);
-    store.select("c", { whole: true });
-    await wrapper.vm.$nextTick();
-    expect(store.selectedKeys).toEqual(["c", "c1"]);
-    expect(enabled(wrapper, "run")).toBe(true);
-    expect(store.runnableCard?.key).toBe("c");
-
-    await verb(wrapper, "run").trigger("click");
-    expect(wrapper.emitted("run")).toHaveLength(1);
-
-    // What is said around it names the stack's cover and the stack's rule,
-    // never "Select one workflow" for the one card the reader clicked.
-    expect(tooltip(wrapper, "run")).toContain("Run c, this stack's cover");
-    expect(verb(wrapper, "run").attributes("aria-label")).toContain(
-      "this stack's cover",
-    );
-    expect(tooltip(wrapper, "rename")).toBe(
-      "A stack is several workflows. Open it and pick one to rename",
-    );
-    expect(wrapper.text()).not.toContain("Select one workflow");
-
-    // A stack plus anything else is several cards again.
-    store.select("a", { additive: true });
-    await wrapper.vm.$nextTick();
-    expect(enabled(wrapper, "run")).toBe(false);
-    expect(store.runnableCard).toBeNull();
-    expect(tooltip(wrapper, "run")).toBe(
-      "Select one workflow, or one whole stack, to run it",
-    );
-    expect(tooltip(wrapper, "rename")).toBe("Select one workflow to rename it");
-
-    // The stack's size in the WRONG keys is not the stack either.
-    store.selectRange(["c", "a"]);
-    await wrapper.vm.$nextTick();
-    expect(enabled(wrapper, "run")).toBe(false);
-
-    // So is PART of a stack: two members is not the stack.
-    store.members = { c: [card("c"), card("c1"), card("c2")] };
-    store.cards = CARDS.map((entry) =>
-      entry.key === "c"
-        ? { ...entry, stack_size: 3, member_keys: ["c1", "c2"] }
-        : entry,
-    );
-    store.selectRange(["c", "c1"]);
-    await wrapper.vm.$nextTick();
-    expect(enabled(wrapper, "run")).toBe(false);
-  });
-
-  it("Stack needs two, and says which of the two things it would do", () => {
+  it("Merge needs two, and names the first selected as what is kept", async () => {
     const one = bar(["a"]).wrapper;
-    expect(enabled(one, "stack")).toBe(false);
+    expect(enabled(one, "merge")).toBe(false);
+    expect(tooltip(one, "merge")).toContain("Select two or more");
 
     const two = bar(["a", "b"]).wrapper;
-    expect(enabled(two, "stack")).toBe(true);
-    expect(tooltip(two, "stack")).toContain("Group these 2");
-
-    // Something already stacked in the selection makes this a MERGE, which is
-    // a different sentence and the reader is entitled to know which.
-    const fusing = bar(["a", "c"]).wrapper;
-    expect(tooltip(fusing, "stack")).toContain("Fuse these 2");
+    expect(enabled(two, "merge")).toBe(true);
+    expect(tooltip(two, "merge")).toContain("Merge these 2");
+    await verb(two, "merge").trigger("click");
+    expect(two.emitted("merge")).toHaveLength(1);
   });
 
-  it("Unstack all needs a stack in the selection, not merely a selection", () => {
-    const loose = bar(["a", "b"]).wrapper;
-    expect(enabled(loose, "unstack")).toBe(false);
-    expect(tooltip(loose, "unstack")).toContain("part of a stack");
+  it("offers one Split row per topology, only on a workflow holding several", async () => {
+    // One topology: nothing to split, and no row at all rather than a refusal
+    // naming a hash nobody has heard of.
+    expect(bar(["a"]).wrapper.vm.splitTopologies).toEqual([]);
+    // Two selected: Split acts on one workflow.
+    expect(bar(["c", "a"]).wrapper.vm.splitTopologies).toEqual([]);
 
-    const stacked = bar(["c"]).wrapper;
-    expect(enabled(stacked, "unstack")).toBe(true);
-  });
-
-  it("does not tell a reader looking at a stack that they have none", () => {
-    // The server withholds `stack_id` for a stack it drew only PART of — a
-    // hidden member, or one counted as a one-off — so the route cannot be
-    // addressed. The card still draws as a stack, so "Nothing in this
-    // selection is part of a stack" is a sentence the reader can see is
-    // false; the refusal has to name the real reason and the way out.
-    const { wrapper } = bar(["e"]);
-    expect(enabled(wrapper, "unstack")).toBe(false);
-    const why = tooltip(wrapper, "unstack");
-    expect(why).not.toContain("Nothing in this selection");
-    expect(why).toContain("only drawn part of this stack");
+    const { wrapper } = bar(["c"]);
+    const rows = verbMenus(wrapper)[0]
+      .findAll(".ctx-item")
+      .filter((el) => el.attributes("data-verb") === "split");
+    expect(rows.map((el) => el.find(".ctx-label-text").text())).toEqual([
+      "Split out graph 1 of 3",
+      "Split out graph 2 of 3",
+      "Split out graph 3 of 3",
+    ]);
+    // Each row sends ITS topology, which is what the route takes.
+    await rows[1].trigger("click");
+    expect(wrapper.emitted("split")).toEqual([["b".repeat(64)]]);
   });
 
   it("Delete needs EVERY selected card to have a file, not merely one", () => {
@@ -356,8 +262,7 @@ describe("the two menus cannot diverge", () => {
     expect(labels).toEqual(
       expect.arrayContaining([
         "Run…",
-        "Stack together",
-        "Unstack all",
+        "Merge",
         "Rename",
         "Hide",
         "Delete file…",
@@ -403,10 +308,8 @@ describe("the two menus cannot diverge", () => {
   });
 
   it("refuses a verb with aria-disabled, so its reason stays hoverable", () => {
-    // *Make it the cover* is a stack member's verb and `StackPanel` owns the
-    // gesture. It is listed here anyway and refused with its reason: this is
-    // where a reader who has never opened a stack finds out that opening one
-    // is a gesture, which a hidden item could never tell them.
+    // Merge with one workflow selected is listed anyway and refused with its
+    // reason.
     //
     // **Never the NATIVE `disabled`.** That fires no pointer events, so the
     // tooltip carrying the reason never opens — and "the verb stays on screen
@@ -416,7 +319,7 @@ describe("the two menus cannot diverge", () => {
     const { wrapper } = bar(["a"]);
     const row = verbMenus(wrapper)[0]
       .findAll(".ctx-item")
-      .find((el) => el.find(".ctx-label-text").text() === "Make it the cover");
+      .find((el) => el.find(".ctx-label-text").text() === "Merge");
     expect(row.attributes("aria-disabled")).toBe("true");
     expect(row.attributes("disabled")).toBeUndefined();
     expect(row.classes()).toContain("ctx-item--disabled");
@@ -426,11 +329,11 @@ describe("the two menus cannot diverge", () => {
     const { wrapper } = bar(["a"]);
     const row = verbMenus(wrapper)[0]
       .findAll(".ctx-item")
-      .find((el) => el.find(".ctx-label-text").text() === "Make it the cover");
+      .find((el) => el.find(".ctx-label-text").text() === "Merge");
     await row.trigger("click");
     // Without the native attribute the browser no longer swallows the press,
     // so the handler has to. A refused row that still fired would be strictly
     // worse than the disabled one it replaced.
-    expect(wrapper.emitted("make-cover")).toBeUndefined();
+    expect(wrapper.emitted("merge")).toBeUndefined();
   });
 });
