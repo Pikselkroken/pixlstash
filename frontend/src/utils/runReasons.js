@@ -273,12 +273,20 @@ export function readReason(reason) {
       return read(sentences.join(" "));
     }
     case "no_lora_loader":
-      // The reason only ever fires because the run is PUTTING a LoRA in, so
-      // taking it out again is the fix this route can actually carry out.
-      // Inserting a loader is the shipped replay route's trick (#1376) and
-      // `POST /workflows/run` has no field for it.
+      // Fires only for a LoRA addressed to a slot (`loras`), so taking it out
+      // is a fix that works; Add LoRA puts one in a loader of its own instead.
       return read(
         "This workflow has no LoRA loader, so the LoRA has nowhere to go.",
+        FIX_DROP_LORA,
+      );
+    case "lora_not_insertable":
+      // An added LoRA (`add_loras`) the run could not splice in. The server's
+      // sentence says why - no model source to add it after, or the file is
+      // not on this ComfyUI and ComfyUI-PixlStash is not there to fetch it.
+      return read(
+        reason.detail
+          ? `The LoRA cannot be added to this workflow. ${reason.detail}`
+          : "The LoRA cannot be added to this workflow.",
         FIX_DROP_LORA,
       );
     case "pixlstash_nodes": {

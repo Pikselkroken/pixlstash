@@ -355,15 +355,15 @@ class WorkflowSlotModel(BaseModel):
             "its file alone."
         ),
     )
-    family: str | None = Field(
+    base_model_family: str | None = Field(
         None,
         description=(
-            "The architecture family the model shelf serves for this file "
-            "(`sdxl`, `flux1`, …), the same value as `family` on its "
-            "`GET /models` row, or null where the shelf cannot say. What a "
-            "client compares a LoRA's `family` against to tell whether it "
-            "fits this workflow's checkpoint: null on either side is not a "
-            "clash."
+            "The family of the base model the shelf identified this file as "
+            "(`sdxl`, `flux1`, `krea2`, …), filename guesses included: the "
+            "same value as `base_model_family` on its `GET /adapters` or "
+            "`GET /checkpoints` row, or null where the shelf cannot say. What "
+            "a client compares a LoRA's `base_model_family` against to narrow "
+            "the workflows it fits."
         ),
     )
     kind: str
@@ -1063,6 +1063,22 @@ class RunLora(BaseModel):
     strength_clip: float | None = Field(None, ge=-10.0, le=10.0)
 
 
+class RunAddedLora(BaseModel):
+    """One shelf LoRA a run ADDS, in a loader of its own, over whatever the graph loads.
+
+    No slot is named: a new loader is spliced in right after the model source
+    on the run's own copy (``plan_lora_insertion`` / ``insert_adapter``, the
+    same splice ``insert-lora-loader`` writes into a stored copy), so the
+    workflow keeps every LoRA it already loads and a graph with no loader at
+    all can still take one. A LoRA the graph already loads is not added a
+    second time; its strengths are set on the loader that has it.
+    """
+
+    sha256: str = Field(min_length=1, max_length=64)
+    strength_model: float | None = Field(None, ge=-10.0, le=10.0)
+    strength_clip: float | None = Field(None, ge=-10.0, le=10.0)
+
+
 class RunLoraSlot(BaseModel):
     """One LoRA slot a run skips (#1478), addressed as :class:`RunLora` addresses it.
 
@@ -1151,6 +1167,14 @@ class RunRequest(BaseModel):
     prompt: str | None = Field(None, max_length=MAX_PROMPT_LENGTH)
     negative: str | None = Field(None, max_length=MAX_PROMPT_LENGTH)
     loras: list[RunLora] = Field(default_factory=list, max_length=MAX_RUN_LORAS)
+    # LoRAs this run adds in new loaders of their own, after `loras` and the
+    # recipe's LoRAs are placed: nothing the graph loads is replaced, so a
+    # workflow's own LoRAs keep running (Create with LoRA…). Needs ComfyUI's
+    # node types, so an unreachable ComfyUI is a 400 rather than a run that
+    # quietly leaves the LoRA out.
+    add_loras: list[RunAddedLora] = Field(
+        default_factory=list, max_length=MAX_RUN_LORAS
+    )
     # LoRA slots this run goes without (#1478): each loader is bypassed on the
     # run's copy, its consumers reading its inputs. Applied to every group of
     # the run whose graph has that slot; a slot no graph has is a 400.
@@ -2165,7 +2189,7 @@ def _slot_models(slots) -> list[WorkflowSlotModel]:
             base_model=slot.base_model,
             base_model_folded=slot.base_model_folded,
             sha256=slot.sha256,
-            family=slot.family,
+            base_model_family=slot.base_model_family,
             kind=slot.kind,
             slot_label=slot.label,
         )
@@ -3787,6 +3811,86 @@ def create_router(server) -> APIRouter:
                     inputs["strength_clip"] = item.strength_clip
         return []
 
+    def _add_loras(
+        graph: dict,
+        loras: list[RunAddedLora],
+        object_info: dict | None,
+        allow_unchecked: bool,
+    ) -> list[run_service.Reason]:
+        """Splice a loader per LoRA into *graph*, after the model source.
+
+        A LoRA the graph already loads gets its strengths set on that loader
+        instead of a second copy. Each new loader goes in after the previous
+        one, so they stack in the order given. Returns the reasons that stop
+        this card: ``lora_not_insertable`` with the splice's own sentence,
+        which says why (no model source to splice after, or the LoRA is not on
+        this ComfyUI and ComfyUI-PixlStash is not there to fetch it).
+        """
+        if object_info is None:
+            # The splice is typed by ComfyUI (#1376): without its node list an
+            # input reading the model could be missed, and that branch would
+            # run without the LoRA. `judge` already refuses an uninspected
+            # graph as `comfyui_unreachable`; a caller that consented to run
+            # unchecked asked for the LoRA, not for a run without it.
+            if not allow_unchecked:
+                return []
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "PixlStash could not reach ComfyUI, so it cannot tell where "
+                    "to add the LoRA. Start ComfyUI, or run without it."
+                ),
+            )
+        hub = getattr(server, "hub", None)
+        shelf_index = adapter_digest_index(hub)
+        for item in loras:
+            sha256 = item.sha256.strip().lower()
+            adapter = _shelf_adapter(hub, sha256)
+            slots = detect_lora_targets(graph)
+            digests = _slot_digests(slots, shelf_index) if slots else {}
+            present = [
+                slot
+                for slot in slots
+                if digests.get((str(slot["node_id"]), str(slot["field"]))) == sha256
+            ]
+            if present:
+                found = _apply_loras(
+                    graph,
+                    [
+                        RunLora(
+                            node_id=str(slot["node_id"]),
+                            field=str(slot["field"]),
+                            sha256=sha256,
+                            strength_model=item.strength_model,
+                            strength_clip=item.strength_clip,
+                        )
+                        for slot in present
+                    ],
+                    object_info,
+                )
+                if found:
+                    return found
+                continue
+            try:
+                plan = plan_lora_insertion(graph, object_info)
+                loader = insert_adapter(graph, plan, adapter, object_info)
+            except LookupError as exc:
+                logger.info("LoRA %s cannot be added to this workflow: %s", sha256, exc)
+                return [
+                    run_service.Reason(
+                        run_service.LORA_NOT_INSERTABLE, {"detail": str(exc)}
+                    )
+                ]
+            inputs = (graph.get(loader["node_id"]) or {}).get("inputs") or {}
+            if item.strength_model is not None:
+                for name in ("strength_model", "strength"):
+                    if name in inputs:
+                        inputs[name] = item.strength_model
+                        break
+            if item.strength_clip is not None and "strength_clip" in inputs:
+                inputs["strength_clip"] = item.strength_clip
+        return []
+
     def _slot_digests(slots: list[dict], shelf_index) -> dict:
         """``{(node_id, field): sha256 or None}``: which shelf LoRA each slot loads.
 
@@ -4649,6 +4753,10 @@ def create_router(server) -> APIRouter:
                         ],
                         object_info,
                     )
+            if body.add_loras and not found:
+                found += _add_loras(
+                    graph, body.add_loras, object_info, body.allow_unchecked
+                )
             # The stages the owner switched off, after the LoRAs are placed:
             # the prune can take out a loader only the stage read, and a LoRA
             # addressed to it before then would be a 400 for a slot the graph

@@ -33,6 +33,11 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    *                   overrides and seed in underneath the form.
    *   prompt        - the prompt box's starting text, when the caller already
    *                   shows one; still an editable prefill, not a lock.
+   *   lora          - "Create with LoRA…" from a person's or a set's menu:
+   *                   `{entityType: "character" | "set", entityId, name}`.
+   *                   The picker narrows to the workflows that fit the LoRA
+   *                   attached to it, that LoRA starts as an added row, and
+   *                   the results go to the person or set.
    */
   const source = ref(null);
   /**
@@ -45,11 +50,6 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    * one gesture.
    */
   const makeMore = ref(null);
-  /**
-   * The Create with LoRA popup's source, or null: `{entityType, entityId,
-   * name}` for the person or picture set whose attached LoRA it runs.
-   */
-  const loraRun = ref(null);
   /** `{client_id, set_id, project_id, character_id}` from ImageGrid. */
   const context = ref({});
 
@@ -65,26 +65,17 @@ export const useRunDialogStore = defineStore("runDialog", () => {
 
   function openRun(next) {
     makeMore.value = null;
-    loraRun.value = null;
     source.value = { pictureIds: [], ...next };
   }
 
   function openMakeMore(next) {
     source.value = null;
-    loraRun.value = null;
     makeMore.value = { pictureIds: [], ...next };
-  }
-
-  function openLoraRun(next) {
-    source.value = null;
-    makeMore.value = null;
-    loraRun.value = { ...next };
   }
 
   function close() {
     source.value = null;
     makeMore.value = null;
-    loraRun.value = null;
   }
 
   /**
@@ -122,12 +113,10 @@ export const useRunDialogStore = defineStore("runDialog", () => {
   return {
     source,
     makeMore,
-    loraRun,
     context,
     hasRunner,
     openRun,
     openMakeMore,
-    openLoraRun,
     close,
     attachRunner,
     started,

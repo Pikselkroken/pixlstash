@@ -5343,6 +5343,13 @@ def test_the_identified_base_model_is_served_filtered_and_sorted_on(shelf_env):
     assert row["family"] is None, row["family"]
     alice_row = next(r for r in rows if r["id"] == alice)
     assert alice_row["family"] == "sdxl"
+    # What narrowing reads does take the guess: the shelf already shows the
+    # row as SDXL, and a LoRA whose base model came from its filename would
+    # otherwise narrow nothing (the Create with LoRA picker).
+    assert row["base_model_family"] == "sdxl", row["base_model_family"]
+    assert alice_row["base_model_family"] == "sdxl"
+    dana = next(r for r in rows if r["filename"] == "dana.safetensors")
+    assert dana["base_model_family"] is None
     assert row["matched_name"] is None, "an adapter's name is never its base"
 
     r = shelf_env.owner.get(f"{API}/adapters", params={"base_model": "SDXL 1.0"})

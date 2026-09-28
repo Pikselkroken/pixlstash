@@ -704,6 +704,14 @@ Seven rules the client must not re-derive:
    workflow has no loader left for it, or the shelf cannot identify it.
    `skip_loras` is refused (400) on a run spanning several cards: a node id
    names one loader on one graph.
+   `add_loras: [{sha256, strength_model, strength_clip}]` adds shelf LoRAs in
+   loaders of their own, spliced in after the model source on the run's copy:
+   no slot is named and nothing the graph loads is replaced, so it works on a
+   graph with no loader. A LoRA the graph already loads has its strengths set
+   instead. A splice that cannot be made is the reason `lora_not_insertable`
+   (`{detail}`, the server's sentence); with ComfyUI unreachable the run is
+   refused as `comfyui_unreachable`, and `allow_unchecked` does not run it
+   without the LoRA (400).
    `skip_stages: ["upscale" | "face_detailer"]` (#1621) switches an optional
    stage off for the run: its nodes are bypassed on the run's copy and what
    only they read is pruned. A card that has no such stage runs unchanged; one
@@ -958,7 +966,7 @@ the two sides have agreed:
    backend serves that document** with no mapping layer. Since #1623 it is one
    entry per workflow keyed `id`, and the fields are the ones in the `GET
    /workflows` row above; each slot is `{name, title, icon, base_model,
-   base_model_folded, sha256, family, kind, quant, slot_label}` with no `mark`, and the stack
+   base_model_folded, sha256, base_model_family, kind, quant, slot_label}` with no `mark`, and the stack
    fields are gone. The historical notes below that speak of a card, a stack
    or a mark describe the contract before #1623.
 
@@ -1101,13 +1109,15 @@ the two sides have agreed:
    to draw itself out of its models rather than its pictures would otherwise
    need a second request per model to do it.
 
-   `sha256` and `family` name the shelf file a slot loads and the family the
-   shelf serves for it (`model_shelf_service.served_family`, the same value as
-   the `GET /models` row's `family`). Both are null where the shelf does not
-   hold the file or the name could be more than one file. They let a client
-   check a LoRA against a workflow's checkpoint, and match the checkpoint
-   against a hand-made workflow set, without another request: the Create with
-   LoRA dialog does both (`frontend/src/utils/loraWorkflows.js`).
+   `sha256` and `base_model_family` name the shelf file a slot loads and the
+   family of the base model the shelf identified it as
+   (`model_shelf_service.base_model_family`: filename guesses included, the
+   same value as `base_model_family` on its `GET /adapters` or
+   `GET /checkpoints` row, where `family` stays the stated-only one). Both are
+   null where the shelf does not hold the file or the name could be more than
+   one file. They let a client narrow workflows to a LoRA's base model, and
+   match the checkpoint against a hand-made workflow set, without another
+   request: Create with LoRA… does both (`frontend/src/utils/loraWorkflows.js`).
 
    **A stored workflow is put on its card on request.** `POST
    /api/v1/comfyui/workflows/{workflow_name}/card` (`OWNER_ONLY`) files a

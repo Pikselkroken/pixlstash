@@ -121,6 +121,7 @@ from pixlstash.services.model_shelf_service import (
     fetch_picture_counts,
     fetch_workflow_sets,
     forget_models,
+    base_model_family,
     replace_attachments,
     served_family,
     update_models,
@@ -360,6 +361,17 @@ class ModelResponse(BaseModel):
             "tensors show for a support file (`vae_4ch`, `vae_16ch`, `clip_l`, "
             "`clip_g`, `t5_xxl`, ...). Null when neither says. Never a group: "
             "one T5 serves several families."
+        ),
+    )
+    base_model_family: Optional[str] = Field(
+        default=None,
+        description=(
+            "The family of the base model this row was identified as "
+            "(`base_model_canonical`, else `base_model`), **filename guesses "
+            "included**, and never a support file's tensor family. For "
+            "narrowing a list to what probably fits, such as the workflows a "
+            "LoRA can run on; `family` is the one to state as fact. Null when "
+            "no known base model is recorded."
         ),
     )
     quant: Optional[str] = Field(
@@ -1240,6 +1252,7 @@ def _to_response(
         base_model_source=row["base_model_source"],
         matched_name=_matched_name(row),
         family=served_family(row),
+        base_model_family=base_model_family(row),
         quant=canonical_quant(row["quant"]),
         weights_id=row["weights_id"],
         trigger_words=row["trigger_words"],

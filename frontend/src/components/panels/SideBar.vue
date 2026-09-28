@@ -2969,13 +2969,19 @@ function suggestPicturesForSetFromCtx(pictureSet) {
   });
 }
 
-// "Create with LoRA…" (person or set): the workflows that can run the LoRA
-// attached to it, with that LoRA in the loader and the results filed back to
-// it. The dialog is App.vue's, like the other Run popups.
+// "Create with LoRA…" (person or set): the Run popup, with its workflow
+// picker narrowed to what fits the LoRA attached to it, that LoRA added to the
+// run and the results filed back to it. The popup is App.vue's.
 function openLoraRunFromCtx(entityType, item) {
   if (!item?.id) return;
   closeSidebarCtxMenu();
-  runDialogStore.openLoraRun({ entityType, entityId: item.id, name: item.name });
+  runDialogStore.openRun({
+    kind: "card",
+    pickWorkflow: true,
+    emptyPrompt: true,
+    name: item.name,
+    lora: { entityType, entityId: item.id, name: item.name },
+  });
 }
 
 function openSetCtxIconMenu(event) {

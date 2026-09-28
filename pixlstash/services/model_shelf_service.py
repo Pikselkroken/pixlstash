@@ -715,6 +715,19 @@ def served_family(row) -> Optional[str]:
     )
 
 
+def base_model_family(row) -> Optional[str]:
+    """The family of the base model a ``model`` row was identified as, guesses included.
+
+    Unlike :func:`served_family` this takes the identified label whatever its
+    source, a filename guess included, and never the tensors' own family of a
+    support file. It is for narrowing a list to what probably fits (a LoRA
+    against a workflow's checkpoint), where a guess the shelf already shows
+    beside the row is better than no answer; it is never stated as a fact.
+    *row* needs ``base_model`` and ``base_model_canonical``.
+    """
+    return family_of(row["base_model_canonical"]) or family_of(row["base_model"])
+
+
 def families_clash(base_model: Optional[str], other_base_model: Optional[str]) -> bool:
     """Whether two models were made for different families or modalities.
 

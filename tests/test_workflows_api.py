@@ -1737,7 +1737,7 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
             "base_model_folded": None,
             # No file, so no shelf row to name or to read a family off.
             "sha256": None,
-            "family": None,
+            "base_model_family": None,
             "kind": "lora",
             # A recipe slot names no file at all, so there is nothing to read a
             # precision off either - and nothing is what it serves.
@@ -2348,7 +2348,7 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             # so a client can check a character's LoRA against this workflow
             # without a second read.
             "sha256": _h("realvisxl-digest"),
-            "family": _EDITOR_FAMILY,
+            "base_model_family": _EDITOR_FAMILY,
             "kind": "unet",
             # Null and not an empty string: neither the shelf's column nor the
             # filename records a precision for this file.
@@ -2359,7 +2359,8 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
         }
     ]
     # The family is the one the model shelf serves for the same file: a client
-    # compares a LoRA's shelf `family` against this, so the two must agree.
+    # compares a LoRA's shelf `base_model_family` against this, so the two
+    # must agree.
     shelf = workflow_env.owner.get(f"{API}/checkpoints")
     assert shelf.status_code == 200, shelf.text
     row = next(
@@ -2367,7 +2368,7 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
         for entry in shelf.json()["checkpoints"]
         if entry["sha256"] == _h("realvisxl-digest")
     )
-    assert row["family"] == card["models"][0]["family"]
+    assert row["base_model_family"] == card["models"][0]["base_model_family"]
     # Named, because a LoRA named in the file is one the workflow loads and
     # there is no recipe to fill it. Null title and null icon are the state:
     # the shelf does not hold this file.
@@ -2379,7 +2380,7 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             "base_model": None,
             "base_model_folded": None,
             "sha256": None,
-            "family": None,
+            "base_model_family": None,
             "kind": "lora",
             "quant": None,
             "slot_label": None,
@@ -10354,6 +10355,138 @@ def test_inserting_a_lora_loader_writes_a_copy_with_a_slot_to_swap_into(loaderle
     # The sampler now reads the loader rather than the checkpoint, or the run
     # would go through without the LoRA and say nothing.
     assert written["2"]["inputs"]["model"] == [body["node_id"], 0]
+
+
+def _serve_the_adapter_on(fixture, object_info: dict) -> None:
+    """Make *object_info*'s model-only loader list the run tests' shelf LoRA."""
+    info = json.loads(json.dumps(object_info))
+    options = info["LoraLoaderModelOnly"]["input"]["required"]["lora_name"][0]
+    options.append(RUN_ADAPTER_FILENAME)
+    fixture.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+
+def test_a_run_adds_a_lora_in_a_loader_of_its_own(loaderless):
+    """`add_loras` splices a loader in on the run's copy (Create with LoRA…).
+
+    The workflow has no LoRA loader at all, which is the case a slot-addressed
+    `loras` entry cannot serve; the stored file is not touched.
+    """
+    _serve_the_adapter_on(loaderless, LOADERLESS_OBJECT_INFO)
+    r = loaderless.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "add_loras": [{"sha256": RUN_ADAPTER_DIGEST, "strength_model": 0.6}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    graph = loaderless.submitted[0]["graph"]
+    added = [
+        node_id
+        for node_id, node in graph.items()
+        if node["class_type"] == "LoraLoaderModelOnly"
+    ]
+    assert len(added) == 1, graph
+    inputs = graph[added[0]]["inputs"]
+    assert inputs["lora_name"] == RUN_ADAPTER_FILENAME
+    assert inputs["strength_model"] == 0.6
+    assert inputs["model"] == ["1", 0]
+    # The sampler reads the LoRA, or the run would go through without it.
+    assert graph["2"]["inputs"]["model"] == [added[0], 0]
+
+
+def test_an_added_lora_replaces_none_of_the_workflows_own(runnable):
+    """The graph's own loader keeps its LoRA; the added one goes in beside it."""
+    info = json.loads(json.dumps({**RUN_OBJECT_INFO, **LOADERLESS_OBJECT_INFO}))
+    info["LoraLoader"] = json.loads(json.dumps(RUN_OBJECT_INFO["LoraLoader"]))
+    info["CheckpointLoaderSimple"]["output"] = ["MODEL", "CLIP", "VAE"]
+    info["KSampler"]["output"] = ["LATENT"]
+    info["SaveImage"]["output"] = []
+    # The graph's CLIP never reaches a text encoder, so the splice is a
+    # model-only loader.
+    info["LoraLoaderModelOnly"]["input"]["required"]["lora_name"] = [
+        ["add_detail.safetensors", RUN_ADAPTER_FILENAME],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_id": RUN_WF, "add_loras": [{"sha256": RUN_ADAPTER_DIGEST}]},
+    )
+    assert r.status_code == 200, r.text
+    assert runnable.submitted, [g["reasons"] for g in r.json()["groups"]]
+    graph = runnable.submitted[0]["graph"]
+    assert graph["2"]["inputs"]["lora_name"] == "add_detail.safetensors"
+    loaders = [
+        node["inputs"]["lora_name"]
+        for node in graph.values()
+        if node["class_type"] in ("LoraLoader", "LoraLoaderModelOnly")
+    ]
+    assert sorted(loaders) == ["add_detail.safetensors", RUN_ADAPTER_FILENAME]
+
+
+def test_an_added_lora_the_graph_already_loads_is_not_added_twice(runnable):
+    """Its strength is set on the loader that has it instead of a second copy."""
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "loras": [{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
+            "add_loras": [{"sha256": RUN_ADAPTER_DIGEST, "strength_model": 0.3}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    graph = runnable.submitted[0]["graph"]
+    assert [n for n in graph.values() if n["class_type"] == "LoraLoader"] == [
+        graph["2"]
+    ]
+    assert graph["2"]["inputs"]["lora_name"] == RUN_ADAPTER_FILENAME
+    assert graph["2"]["inputs"]["strength_model"] == 0.3
+
+
+def test_a_lora_that_cannot_be_added_is_a_reason_with_the_splices_sentence(
+    loaderless,
+):
+    """Not on this ComfyUI, and no ComfyUI-PixlStash to fetch it: said, not run."""
+    payload = _preflight(
+        loaderless.owner,
+        workflow_id=RUN_WF,
+        add_loras=[{"sha256": RUN_ADAPTER_DIGEST}],
+    )
+    reasons = [r for group in payload["groups"] for r in group["reasons"]]
+    refused = [r for r in reasons if r["code"] == "lora_not_insertable"]
+    assert refused, reasons
+    assert "ComfyUI-PixlStash" in refused[0]["detail"]
+
+
+def test_an_added_lora_without_comfyui_is_the_unreachable_reason(loaderless):
+    """Not a 400: the pre-flight's own refusal, which the popup offers a Retry for."""
+    loaderless.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+    )
+    payload = _preflight(
+        loaderless.owner,
+        workflow_id=RUN_WF,
+        add_loras=[{"sha256": RUN_ADAPTER_DIGEST}],
+    )
+    # Refused by the pre-flight's own ComfyUI reason (this owner has no
+    # address set), never by a 400 the popup would read as a refusal of the body.
+    assert _reasons(payload) & {"comfyui_unreachable", "comfyui_not_configured"}
+    r = loaderless.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "add_loras": [{"sha256": RUN_ADAPTER_DIGEST}],
+            "allow_unchecked": True,
+        },
+    )
+    # Consent to run unchecked is not consent to run without the LoRA.
+    assert r.status_code == 400, r.text
+    assert loaderless.submitted == []
 
 
 def test_inserting_a_loader_leaves_the_original_workflow_alone(loaderless):
