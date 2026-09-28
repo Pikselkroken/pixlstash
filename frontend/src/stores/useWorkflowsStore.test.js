@@ -167,6 +167,15 @@ describe("merge and split", () => {
     expect(store.verbBusy).toBe("");
   });
 
+  it("merges only what the grid can still resolve, cover first", async () => {
+    mergeWorkflows.mockResolvedValue({ id: "merged" });
+    const store = useWorkflowsStore();
+    await store.fetchCards();
+    store.selectRange(["the-stack", "gone-since", "workhorse"]);
+    expect(await store.mergeSelected()).toBe(true);
+    expect(mergeWorkflows).toHaveBeenCalledWith(["the-stack", "workhorse"]);
+  });
+
   it("refuses to merge one workflow, and says why a refused merge failed", async () => {
     const store = useWorkflowsStore();
     await store.fetchCards();

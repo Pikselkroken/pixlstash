@@ -387,7 +387,10 @@ export const useWorkflowsStore = defineStore("workflows", () => {
    * The selection moves to the merged workflow: the ids it named are gone.
    */
   async function mergeSelected() {
-    const ids = [...selectedKeys.value];
+    // Off `selectedCards`, as `deleteSelected` is: an id the grid can no
+    // longer resolve would refuse the whole merge. Selection order is kept,
+    // so the first selected is still the cover.
+    const ids = selectedCards.value.map((card) => card.id);
     if (ids.length < 2 || verbBusy.value) return false;
     verbBusy.value = "merge";
     try {

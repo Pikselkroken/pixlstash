@@ -452,7 +452,9 @@ def model_pins(hub, card: Card) -> list[dict]:
         pins.append(
             {
                 "address": f"{CORE_ADDRESS_PREFIX}{label}/{slot.widget}",
-                "filename": fixed.get((slot.label, filename), filename),
+                "filename": fixed.get(
+                    (slot.label, normalized_filename(filename)), filename
+                ),
             }
         )
     return sorted(pins, key=lambda pin: pin["address"])
