@@ -175,12 +175,16 @@ describe("merge and split", () => {
     expect(mergeWorkflows).not.toHaveBeenCalled();
 
     mergeWorkflows.mockRejectedValue(new Error("400"));
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-    store.selectRange(["workhorse", "the-stack"]);
-    expect(await store.mergeSelected()).toBe(false);
-    expect(store.error).not.toBe("");
-    // The selection stands: nothing was merged.
-    expect(store.selectedKeys).toEqual(["workhorse", "the-stack"]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      store.selectRange(["workhorse", "the-stack"]);
+      expect(await store.mergeSelected()).toBe(false);
+      expect(store.error).not.toBe("");
+      // The selection stands: nothing was merged.
+      expect(store.selectedKeys).toEqual(["workhorse", "the-stack"]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("splits one topology out and selects the new workflow", async () => {
