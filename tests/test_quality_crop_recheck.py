@@ -33,8 +33,13 @@ from pixlstash.db_models import (
     UserToken,
     make_tag_sentinel,
 )
+from pixlstash.authz.policy import AccessPolicy
+from pixlstash.authz.registry import ROUTE_POLICIES
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.server import Server
+from pixlstash.services.quality_crop_recheck_service import (
+    count_pending_quality_crop_rechecks,
+)
 from pixlstash.task_runner import TaskCancelledError
 from pixlstash.tasks.quality_crop_recheck_finder import QualityCropRecheckFinder
 from pixlstash.tasks.quality_crop_recheck_task import QualityCropRecheckTask
@@ -451,6 +456,19 @@ def test_the_finder_selects_only_pending_live_tagged_unlocked_pictures(engine):
         assert [p.id for p in found] == [wanted, untagged_but_done]
 
 
+def test_the_tasks_panel_counts_only_the_work_that_will_run(engine):
+    """A locked picture keeps its flag but is not counted, so the count drains."""
+    with Session(engine) as session:
+        _picture(session, tags=["woman"])
+        _picture(session, tags=["woman"], pending=False)
+        _picture(session, tags=["woman"], deleted=True)
+        locked = _picture(session, tags=["woman"])
+        _lock(session, locked)
+
+        assert count_pending_quality_crop_rechecks(session) == 1
+        assert _pending(session, locked), "the locked picture keeps its flag"
+
+
 def test_the_pending_probe_is_served_by_its_partial_index(engine):
     with Session(engine) as session:
         _picture(session, tags=["woman"])
@@ -656,6 +674,15 @@ def test_only_the_owner_may_request_a_recheck(route_env):
         name: {"Authorization": f"Bearer {token}"}
         for name, token in route_env.tokens.items()
     }
+
+    # READ is the only non-owner token scope, and the middleware refuses its
+    # POSTs before routing, so the negatives below cannot tell OWNER_ONLY from a
+    # looser policy. Pin the declaration itself.
+    assert ROUTE_POLICIES[("POST", RECHECK_TEMPLATE)].policy is AccessPolicy.OWNER_ONLY
+
+    resp = route_env.anon.post(RECHECK)
+    assert resp.status_code == 401, f"anonymous: {resp.status_code} {resp.text}"
+    assert _pending_ids(route_env.server) == set(), "anonymous marked pictures"
 
     for name in ("unscoped_read", "scoped_read"):
         resp = route_env.anon.post(RECHECK, headers=bearer[name])

@@ -72,11 +72,20 @@ def mark_quality_crop_recheck_in_session(session: Session) -> int:
 
 
 def count_pending_quality_crop_rechecks(session: Session) -> int:
-    """Pictures still waiting for their crop re-check, for the tasks panel."""
+    """Pictures still waiting for their crop re-check, for the tasks panel.
+
+    A locked picture keeps its flag (the task skips it, and resumes once the set
+    is unlocked) but is not counted, so the panel drains to zero rather than
+    showing work that will not run.
+    """
     result = session.exec(
         select(func.count())
         .select_from(Picture)
-        .where(Picture.quality_crop_pending.is_(True), Picture.deleted.is_(False))
+        .where(
+            Picture.quality_crop_pending.is_(True),
+            Picture.deleted.is_(False),
+            ~Picture.id.in_(locked_picture_id_subquery()),
+        )
     ).one()
     if isinstance(result, (tuple, list)):
         return int(result[0] or 0)
