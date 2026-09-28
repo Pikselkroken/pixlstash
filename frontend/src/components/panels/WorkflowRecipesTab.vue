@@ -373,7 +373,7 @@
  * `PUT /recipes/order` refuses a list with an unknown id rather than leaving
  * half an order behind.
  */
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
 import { getPictureRecipe } from "../../api/comfyui";
@@ -575,9 +575,24 @@ const hidden = ref({});
 /** Lines the owner expanded. */
 const expanded = ref({});
 
+/**
+ * Re-measures when a line's box changes size without its content changing:
+ * the rail animates its width open from zero, so a count taken on mount can be
+ * of a line still wrapping at a fraction of its width.
+ */
+const diffObserver = new ResizeObserver(() => measure());
+onBeforeUnmount(() => diffObserver.disconnect());
+
 function registerDiff(key, el) {
-  if (el) diffEls.set(key, el);
-  else diffEls.delete(key);
+  const previous = diffEls.get(key);
+  if (previous === el) return;
+  if (previous) diffObserver.unobserve(previous);
+  if (el) {
+    diffEls.set(key, el);
+    diffObserver.observe(el);
+  } else {
+    diffEls.delete(key);
+  }
 }
 
 /**
@@ -600,8 +615,6 @@ function measure() {
   hidden.value = next;
 }
 
-// ponytail: measured on content change only; a late web-font swap that
-// re-wraps a line is not re-measured until the next change.
 watch([recipeDiffs, lookDiffs], measure, { flush: "post" });
 
 function toggleMore(key) {

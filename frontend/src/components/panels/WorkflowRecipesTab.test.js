@@ -775,6 +775,57 @@ describe("WorkflowRecipesTab", () => {
     }
   });
 
+  it("re-counts +N more when a line's box resizes, as the rail opening does", async () => {
+    const proto = HTMLElement.prototype;
+    const saved = ["clientHeight", "offsetTop", "offsetHeight"].map((key) => [
+      key,
+      Object.getOwnPropertyDescriptor(proto, key),
+    ]);
+    const Observer = globalThis.ResizeObserver;
+    let resized = null;
+    const observed = new Set();
+    globalThis.ResizeObserver = class {
+      constructor(callback) { resized = callback; }
+      observe(el) { observed.add(el); }
+      unobserve(el) { observed.delete(el); }
+      disconnect() { observed.clear(); }
+    };
+    // Mid-animation the line is one segment tall; open, it is two.
+    let lineHeight = 16;
+    const segIndex = (el) => [...el.parentElement.children].indexOf(el);
+    Object.defineProperty(proto, "clientHeight", {
+      configurable: true,
+      get() { return this.classList.contains("wfrt-diff") ? lineHeight : 0; },
+    });
+    Object.defineProperty(proto, "offsetTop", {
+      configurable: true,
+      get() { return this.classList.contains("wfrt-seg") ? segIndex(this) * 16 : 0; },
+    });
+    Object.defineProperty(proto, "offsetHeight", {
+      configurable: true,
+      get() { return this.classList.contains("wfrt-seg") ? 16 : 0; },
+    });
+    try {
+      listSavedRecipes.mockResolvedValue([
+        recipe(1, "Busy", { overrides: { "x/a": 1, "x/b": 2, "x/c": 3, "x/d": 4 } }),
+      ]);
+      const wrapper = render();
+      await flushPromises();
+      expect(wrapper.find(".wfrt-more").text()).toBe("+3 more");
+      expect([...observed].some((el) => el.classList.contains("wfrt-diff"))).toBe(true);
+      lineHeight = 32;
+      resized();
+      await flushPromises();
+      expect(wrapper.find(".wfrt-more").text()).toBe("+2 more");
+    } finally {
+      globalThis.ResizeObserver = Observer;
+      for (const [key, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(proto, key, descriptor);
+        else delete proto[key];
+      }
+    }
+  });
+
   it("makes a recipe's parameters the defaults, keeping existing edits, with Undo", async () => {
     listSavedRecipes.mockResolvedValue([
       recipe(1, "Rainy tram platform", { overrides: { "KSampler/steps": 40, "KSampler/cfg": 5 } }),
