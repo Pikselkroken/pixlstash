@@ -314,16 +314,21 @@ class TagTask(BaseTask):
             return file_path, PILImage.fromarray(array), False
         return file_path, None, _file_is_readable(str(file_path))
 
-    def _build_quality_crop(self, pic, faces, target, preloaded_images):
+    def _build_quality_crop(
+        self, pic, faces, target, preloaded_images, face_scale=FACE_CROP_SCALE
+    ):
         """Build the high-resolution quality crop for one picture.
 
         Args:
             pic: The picture to crop.
             faces: That picture's `Face` rows, unfiltered.
-            target: Side of the faceless centre crop. A face crop is sized by
-                the face instead (`FACE_CROP_SCALE`); the tagger resizes every
-                crop to its own input size either way.
+            target: Side of the faceless centre crop, and of the face crop
+                when `face_scale` is None. The tagger resizes every crop to its
+                own input size either way.
             preloaded_images: The task's path -> image cache; populated on a miss.
+            face_scale: A face crop's side as a multiple of the face box's long
+                side; None takes the fixed `target` window instead (the
+                `whole_face_crop` setting turned off).
 
         Returns:
             ``(key, crop, file_path, is_centre_crop)``, or **None** when this
@@ -376,7 +381,7 @@ class TagTask(BaseTask):
                 )
                 # Sized by the face, not by `target`: a fixed window cut into
                 # the majority of faces (median long side 384px against the
-                # old 320px window) and could miss the chin or an eye.
+                # 320px window) and could miss the chin or an eye.
                 x1, y1, x2, y2 = (float(v) for v in largest_face.bbox)
                 long_side = max(x2 - x1, y2 - y1)
                 if not long_side > 0:
@@ -388,9 +393,8 @@ class TagTask(BaseTask):
                     raise ValueError(
                         f"face bbox {largest_face.bbox} lies outside the {w}x{h} frame"
                     )
-                expanded = expand_bbox_to_square(
-                    largest_face.bbox, w, h, FACE_CROP_SCALE * long_side
-                )
+                side = face_scale * long_side if face_scale else target
+                expanded = expand_bbox_to_square(largest_face.bbox, w, h, side)
                 return (
                     f"{file_path}#face{largest_face.id}",
                     img.crop(expanded),
@@ -979,6 +983,9 @@ class TagTask(BaseTask):
                     )
                     crop_fetch_s = time.perf_counter() - crop_fetch_start
                     target = active_workflow.pixlstash_tagger_image_size_quality_crop()
+                    face_scale = (
+                        FACE_CROP_SCALE if active_workflow.whole_face_crop() else None
+                    )
                     quality_items = []
                     key_to_path = {}
                     # Paths whose crop is the faceless centre-crop fallback; these are
@@ -994,6 +1001,7 @@ class TagTask(BaseTask):
                             faces_by_pic.get(pic.id, []),
                             target,
                             preloaded_images,
+                            face_scale,
                         )
                         if built is None:
                             continue

@@ -15,6 +15,10 @@ from pixlstash.inference.vram_budget import (
     WD14_PER_ITEM_MB,
 )
 from pixlstash.pixl_logging import get_logger
+from pixlstash.tagger_plugins.pixlstash_tagger import (
+    PIXLSTASH_TAGGER_IMAGE_SIZE_FIXED_QUALITY_CROP,
+    PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP,
+)
 from pixlstash.utils.accelerator import (
     MPS,
     is_accelerated,
@@ -73,9 +77,20 @@ class TaggingWorkflow:
         """Whether the PixlStash tagger is active for this workflow instance."""
         return self._use_pixlstash_tagger
 
+    def whole_face_crop(self) -> bool:
+        """Whether the quality crop covers the whole face (the user setting)."""
+        params = (
+            self._tagger_settings.get("plugins", {})
+            .get("pixlstash_tagger", {})
+            .get("params", {})
+        )
+        return bool(params.get("whole_face_crop", False))
+
     def pixlstash_tagger_image_size_quality_crop(self) -> int:
         """Return the quality-crop image size expected by the PixlStash tagger."""
-        return int(self._engine.pixlstash_tagger_service._image_size_quality_crop)
+        if self.whole_face_crop():
+            return PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP
+        return PIXLSTASH_TAGGER_IMAGE_SIZE_FIXED_QUALITY_CROP
 
     def active_plugin_name(self, engine_override: str | None = None) -> str:
         """The plugin :meth:`tag_images` runs for the full-image pass.
@@ -271,6 +286,7 @@ class TaggingWorkflow:
             stop_event=stop_event,
             threshold_offset=self._threshold_offset,
             out_raw_scores=out_raw_scores,
+            image_size=self.pixlstash_tagger_image_size_quality_crop(),
         )
 
     def score_images_custom(
@@ -356,7 +372,7 @@ class TaggingWorkflow:
             items,
             stop_event=stop_event,
             min_confidence=min_confidence,
-            image_size=self._engine.pixlstash_tagger_service._image_size_quality_crop,
+            image_size=self.pixlstash_tagger_image_size_quality_crop(),
         )
 
     def ensure_active_plugin_ready(self, engine_override: str | None = None) -> None:

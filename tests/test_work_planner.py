@@ -1052,6 +1052,9 @@ class _FakeTaggingWorkflow:
     def tag_images(self, image_paths, **kwargs):
         return {path: ["tag"] for path in image_paths}
 
+    def whole_face_crop(self) -> bool:
+        return True
+
     def pixlstash_tagger_image_size_quality_crop(self) -> int:
         return 32
 

@@ -9,9 +9,11 @@ from sqlmodel import SQLModel, Session, create_engine, select
 from pixlstash.db_models.picture import Picture
 from pixlstash.db_models.tag import Tag
 from pixlstash.db_models.tag_prediction import TagPrediction
+from pixlstash.inference.workflows.tagging import TaggingWorkflow
 from pixlstash.tagger_plugins.pixlstash_tagger import (
     CENTRE_CROP_TAG_WHITELIST,
     FACE_QUALITY_CROP_TAGS,
+    PixlStashTaggerPlugin,
     QUALITY_CROP_TAG_WHITELIST,
 )
 from pixlstash.tasks.tag_task import TagTask
@@ -324,6 +326,9 @@ class _PluginWorkflow:
     def active_model_version(self, engine_override=None):
         return "acme_tagger:v1"
 
+    def whole_face_crop(self):
+        return True
+
     def pixlstash_tagger_image_size_quality_crop(self):
         return 32
 
@@ -570,7 +575,7 @@ def test_a_face_low_in_a_rotated_photo_still_yields_a_crop(tmp_path):
     assert crop.size == (2419, 2419), f"a square face-sized crop; got {crop.size}"
 
 
-def _face_crop_box(tmp_path, name, size, bbox, target=512):
+def _face_crop_box(tmp_path, name, size, bbox, target=512, face_scale=1.4):
     """The box `_build_quality_crop` cut, recovered from a gradient image."""
     from PIL import Image as PILImage
 
@@ -587,7 +592,11 @@ def _face_crop_box(tmp_path, name, size, bbox, target=512):
     image.save(path)
     task = _task_for(_FakeDb(str(tmp_path)))
     built = task._build_quality_crop(
-        Picture(id=1, file_path=str(path)), [_FakeFace(1, bbox)], target, {}
+        Picture(id=1, file_path=str(path)),
+        [_FakeFace(1, bbox)],
+        target,
+        {},
+        face_scale,
     )
     assert built is not None and built[3] is False
     crop = built[1]
@@ -630,3 +639,64 @@ def test_a_zero_size_face_gets_no_crop(tmp_path):
 def test_a_face_bigger_than_the_frame_takes_the_short_side(tmp_path):
     box = _face_crop_box(tmp_path, "huge-face.png", (800, 600), [100, 50, 700, 550])
     assert box == (100, 0, 700, 600)
+
+
+def test_with_whole_face_crop_off_a_face_gets_the_fixed_window(tmp_path):
+    """The setting's off position: a `target` square centred on the face."""
+    box = _face_crop_box(
+        tmp_path,
+        "fixed-window.png",
+        (1200, 1000),
+        [400, 300, 700, 700],
+        target=320,
+        face_scale=None,
+    )
+    assert box == (390, 340, 710, 660)
+
+
+@pytest.mark.parametrize(
+    "params, expected",
+    [({"whole_face_crop": True}, 512), ({"whole_face_crop": False}, 320), ({}, 320)],
+)
+def test_the_whole_face_crop_setting_picks_the_crop_input_size(params, expected):
+    settings = {"plugins": {"pixlstash_tagger": {"params": params}}}
+    workflow = TaggingWorkflow(
+        engine=None, use_wd14=False, use_pixlstash_tagger=True, tagger_settings=settings
+    )
+    assert workflow.whole_face_crop() is (expected == 512)
+    assert workflow.pixlstash_tagger_image_size_quality_crop() == expected
+
+
+def test_whole_face_crop_is_a_user_setting_that_defaults_off():
+    """Declared in the schema, so the tagger settings dialog shows it."""
+    schema = {f["name"]: f for f in PixlStashTaggerPlugin().parameter_schema()}
+    assert schema["whole_face_crop"]["type"] == "bool"
+    assert schema["whole_face_crop"]["default"] is False
+
+
+@pytest.mark.parametrize("whole_face, expected_side", [(True, 28), (False, 32)])
+def test_the_tagging_pass_honours_the_whole_face_crop_setting(
+    tmp_path, whole_face, expected_side
+):
+    """A 20px face: 1.4 x 20 = 28 with the setting on, the 32px target off."""
+
+    class _FaceDb(_PredictionDb):
+        def run_immediate_read_task(self, fn, *args, **kwargs):
+            return {1: [_FakeFace(11, [10, 10, 30, 30])]}
+
+    class _CropWorkflow(_PluginWorkflow):
+        def whole_face_crop(self):
+            return whole_face
+
+        def tag_quality_crops(self, items, out_raw_scores=None, **_kwargs):
+            self.crop_sizes = [crop.size for _key, crop in items]
+            return {}
+
+    picture = Picture(id=1, file_path=str(_png(tmp_path, "setting.png")))
+    workflow = _CropWorkflow()
+
+    _prediction_task(
+        _FaceDb(str(tmp_path), [1]), workflow, [picture]
+    )._tag_pictures_batch()
+
+    assert workflow.crop_sizes == [(expected_side, expected_side)]
