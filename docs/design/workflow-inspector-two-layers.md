@@ -58,9 +58,12 @@ counts and "Show N" links, never as structure.
   a default LoRA only has to be in >50% of 4★+ pictures. The section is built
   from `default_recipe` (models, LoRAs, stages), not from `lora-summary.shared`.
 - The pile stays as it is and gets renamed **ALSO USED**. It lists only the
-  LoRAs that are **not** in the default recipe: `lora-summary.varying` minus the
-  filenames in `default_recipe.loras`, worked out on the client. A LoRA appears
-  once on the tab, either as a default row or in the pile, never both.
+  LoRAs that are **not** in the default recipe: `lora-summary.varying` minus
+  the default's LoRAs, worked out on the client. **The join key is the digest**
+  (`default_recipe.loras[].sha256` against the `asset:<sha256>` reference
+  `lora-summary` carries), never the filename, which is null for a forgotten
+  name. A LoRA appears once on the tab, either as a default row or in the pile,
+  never both.
 - A default LoRA that is not in every picture says so on its own row: "in 31 of
   40" (from `lora-summary` shared/varying `pictures`). A LoRA that is in every
   picture gets no count. Having no count means "all of them".
@@ -74,10 +77,11 @@ counts and "Show N" links, never as structure.
   the tab.
 - **Provenance** sits under the section label as one note, and on a row only
   when that row is an exception:
-  - Section note: "Most used in your 4★+ pictures." If `sampled` says there are
-    no 4★+ pictures, it reads "Most used in all 40 pictures, none rated 4★ yet."
-  - A row whose provenance is `all` while its siblings are `best`: no mark. The
-    owner cannot act on that difference, so it would only be noise.
+  - Section note: "Most used in your 4★+ pictures." when the computed rows'
+    `provenance` is `best`, and "Most used in its pictures. None is rated 4★
+    yet." when it is `all`. Provenance is decided for the whole recipe, so the
+    note never has to speak for a mix. It says "most used", not a count of
+    pictures: the sample is the newest runs (`DEFAULT_SAMPLE`), counted per run.
   - A row whose provenance is `edited`: the text "Yours" plus a reset button
     ("Back to the most used: <value>"). This is the only per-row provenance
     mark. It is the one the owner can act on, and the one that explains why the
@@ -95,7 +99,7 @@ counts and "Show N" links, never as structure.
  │ VAE         sdxl_vae                 │
  │ LoRA        detail_tweaker 0.6       │
  │ LoRA        film_grain 0.4  in 31 of 40│
- │ LoRA        anya_v2 0.8  Yours  ↺    │
+ │ LoRA        character_v2 0.8  Yours  ↺    │
  │ Stages      Upscale · Face detailer off│
  │                                      │
  │ ALSO USED                            │
@@ -118,7 +122,7 @@ counts and "Show N" links, never as structure.
    only if it is already open. It never opens by itself; a closed rail gets the
    standard edge-tab nudge.
 2. The head and DEFAULT RECIPE render from the `GET /workflows/{id}` detail. The
-   pile renders from `lora-summary` when it arrives. If a default LoRA's filename
+   pile renders from `lora-summary` when it arrives. If a default LoRA's digest
    is in `varying`, that LoRA goes into its default row with an "in N of M"
    count and leaves the pile.
 3. The owner reads down the tab. The "in N of M" counts and "Yours" answer "why
@@ -133,7 +137,7 @@ counts and "Show N" links, never as structure.
 | Section label DEFAULT RECIPE | tab | Names the group | `h3`-level heading, or `role=heading aria-level=3`, so SR users can jump by heading |
 | Provenance note | under label | States where the values come from | Plain text, read in order |
 | "in N of M" | default LoRA row | States coverage | Part of the row's text, not a tooltip, so SR users hear it |
-| "Yours" + ↺ | edited row | ↺ resets to the computed value. No confirm, 5 s Undo toast | ↺ is a Button with `aria-label="Reset <field> to the most used, <value>"`; focus stays on the row after reset |
+| "Yours" + ↺ | edited row | ↺ resets to the computed value. No confirm, 8 s Undo toast (§1.2) | ↺ is a Button with `aria-label="Reset <field> to the most used, <value>"`; focus stays on the row after reset |
 | Stages row | DEFAULT RECIPE | Read-only summary (see §1.4) | Text |
 | Pile | ALSO USED | Opens the fan (unchanged) | Existing: button with `aria-expanded`; fan is a `role=dialog`; Esc closes and returns focus to the pile |
 
@@ -185,7 +189,7 @@ counts and "Show N" links, never as structure.
   PUT back of the prior value, or a reset if the prior value was computed.
 - **The recipe-card version confirms** with a small dialog listing each change
   as a checkbox row, all ticked:
-  "Checkpoint → realvisXL", "Add anya_v2 0.8", "Take out film_grain",
+  "Checkpoint → realvisXL", "Add character_v2 0.8", "Take out film_grain",
   "Steps 30 → 40". The primary button (amber) is "Make N defaults". The body
   line reads "Runs from this workflow start from these. Your pictures and saved
   recipes are not changed." Cancel and Esc do nothing.
@@ -231,7 +235,7 @@ counts and "Show N" links, never as structure.
 | Make default | pile fan row, checkpoint disclosure row | Adds that value to the default recipe; marks it "Yours" | Button; `aria-label="Make <name> part of the default recipe"`; pending uses `aria-busy`, never dims |
 | Take out of default | default LoRA row ⋯ | Removes the LoRA from the default recipe [F-1] | Menu item; the toast offers Undo |
 | Make these the defaults… | recipe card ⋯ | Opens the confirm dialog | Menu item; the dialog traps focus, first checkbox focused, Esc cancels, focus returns to ⋯ |
-| Change checkboxes | dialog | Choose which differences to take | DS Checkbox; label is the full sentence ("Add anya_v2 at 0.8") |
+| Change checkboxes | dialog | Choose which differences to take | DS Checkbox; label is the full sentence ("Add character_v2 at 0.8") |
 | Undo | toast | Reverts the last default change | Reachable by Tab from the page (toast region), `role=status` live region; toast pauses while focused |
 
 #### States
@@ -270,23 +274,45 @@ counts and "Show N" links, never as structure.
   order separated by " · ":
   1. models: "realvisXL" (checkpoint, filename without folders and extension;
      other kinds prefixed, e.g. "VAE: xl_vae")
-  2. added LoRAs: "+ anya_v2 0.8"
+  2. added LoRAs: "+ character_v2 0.8"
   3. strength-only changes: "detail_tweaker 0.6 → 0.9"
   4. removed default LoRAs: "without film_grain". The word carries the meaning,
      not a strike-through, so it reads the same to a screen reader and in
      monochrome.
   5. parameters: "Steps 40", "CFG 7"
-  6. stages: "no upscale"
-  7. seed: "seed 1234" only when `keep_seed`
+  6. seed: "seed 1234" only when `keep_seed`
+
+  Stages are not in the list: a saved recipe carries no stage choice today
+  ("no upscale" needs **[needs F-5]**, and becomes segment 6 when it lands).
 - The line shows at most 2 lines, then "+N more" as a button that expands the
   card in place ("Fewer" collapses it). No tooltip-only content.
 - **Changes nothing but the prompt:** the line reads "Only the prompt", in the
   quiet style. Never leave it empty. An empty line is indistinguishable from
   "still loading".
-- **Negative prompt differs:** list "own negative prompt" in position 5.
+- **The negative prompt is not a difference.** The default recipe holds no
+  prompt, negative or seed, so the negative is text like the prompt, never a
+  diff segment.
+- **Rules the client diff must follow**, or it prints differences that are not
+  there:
+  - LoRAs are compared by digest, as a multiset: a recipe may load one file
+    twice (the tab keys chips by position for that reason), and each load is
+    matched once.
+  - **A saved recipe with an empty LoRA list runs the default's LoRAs** (the
+    run route fills them in when neither the body nor the recipe names any), so
+    it shows no LoRA segments at all, never "without" every default LoRA. It
+    follows that "without every default LoRA" cannot be saved today; that is
+    the model's limit, not this card's.
+  - A recipe with `models` NULL inherits the default's models and shows no
+    model segment.
+  - Parameters are compared by the input they fill, not by address spelling: a
+    default is addressed `core:<label>/<input>` and an older override may carry
+    the base topology's slot label for the same input. An override that
+    resolves to no default row is still a segment, named by its input.
 - **Card chips are gone.** The one-chip-per-LoRA row and the facts line are
-  replaced by the diff line. LoRA names go through the shelf name resolver, not
-  the raw filename (`modelDisplayName` is `title || name` today, so chips print raw filenames the shelf would shorten).
+  replaced by the diff line. Names are the shelf's short name for the file
+  where it has one (the `name` `lora-summary` already serves), else the file
+  name without folders and extension. The chips today print `lora.filename`
+  raw.
 - **FROM YOUR PICTURES looks:** same card shape. `/recipes/used` gives only
   prompt and LoRA filenames, so the diff line shows the **LoRA part only**
   (added and without), followed by "N pictures". It never says "Only the
@@ -295,11 +321,11 @@ counts and "Show N" links, never as structure.
 
 ```
  ┌──────────────────────────────────────┐
- │ ▣  Anya in rain                  ⋯   │
- │    realvisXL · + anya_v2 0.8 ·       │
+ │ ▣  Character in rain                  ⋯   │
+ │    realvisXL · + character_v2 0.8 ·       │
  │    without film_grain · Steps 40     │
  │    +2 more                           │
- │    "anya, standing in the rain, neon │
+ │    "woman standing in the rain, neon │
  │    reflections, 35mm…"               │
  │                              [Run…]  │
  └──────────────────────────────────────┘
@@ -361,20 +387,21 @@ counts and "Show N" links, never as structure.
   "Upscale" / "Face detailer", grouped under one "Stages" legend (`fieldset`).
   Repeating "Run the … stage" on every row makes four words to read for one
   word of information.
-- **Default state:** the default recipe's value. When a recipe is loaded, the
-  recipe's value. A row that differs from the default gets the same
+- **Default state:** the default recipe's value. (A loaded saved recipe cannot
+  change it until it carries stages, **[needs F-5]**.) A row that differs from the default gets the same
   `RunResetChip` the Checkpoint row uses ("Default: on"), so stages follow the
   pattern already in the form.
-- **A default-off stage is hidden, as shipped.** Showing it disabled would offer
-  a thing the owner cannot get from here. The Workflow tab's Stages row is where
-  "off" is visible (§1.1).
-  Hidden rather than disabled because the fix is in ComfyUI, not in this dialog.
+- **A default-off stage is hidden, as shipped.** Off by default means most of
+  the workflow's sampled pictures ran without it (the base graph still has it),
+  and a run can only take stages out (`skip_stages`), never switch one back on.
+  Showing it disabled would offer a thing the owner cannot get from here. The
+  Workflow tab's Stages row is where "off" is visible (§1.1). When a run can
+  switch a stage on **[needs F-5]**, the row is shown unticked like any other.
 - **Workflow tab Stages row: read-only for now.** It reads "Upscale · Face
-  detailer off". An off stage gets a quiet reason on focus/expand: "Off in the
-  graph. Turn it on in ComfyUI." Editing the default's stage on/off needs a
+  detailer off". An off stage gets a quiet reason as visible text: "Off: most
+  of its pictures ran without it." Editing the default's stage on/off needs a
   write the API does not have **[needs F-3]**. When F-3 lands, the row becomes
-  DS Switches that only allow on → off (skip by default), since the server
-  cannot turn a graph-off stage on.
+  switches, both directions.
 
 #### Flow
 
@@ -420,27 +447,34 @@ counts and "Show N" links, never as structure.
 - **The entry point is the inspector rows**, not a new grid filter. The owner
   is already reading "which checkpoint, how many" there, and the grid's filter
   menu has no idea which workflow's values are relevant.
-  - A DEFAULT RECIPE model or LoRA row gets "Show N" (ghost, small), N from
+  - A DEFAULT RECIPE **Checkpoint or LoRA** row gets "Show N" (ghost, small), N from
     `recipe_values`, **only when N is below the workflow's picture count**. A
     value in every picture would only repeat the head's "N pictures" link, and
     on a workflow with three universal LoRAs that is a column of identical
-    "Show 40" buttons (the lead designer's objection, accepted).
+    "Show 40" buttons (the lead designer's objection, accepted). VAE and text
+    encoder rows get none: `recipe_values` counts only checkpoints and LoRAs,
+    and the listing has no filter for them.
   - The Checkpoint row gets "+K others ▸": a disclosure (not a menu) listing the
     other `recipe_values.checkpoints`, each with its count, "Show N", and later
     "Make default".
   - Pile fan rows keep their existing "Show N" (`workflow_lora`).
-- **Where it lands:** All Pictures, through the existing `showFiltered` path.
+- **Where it lands:** All Pictures, through the existing `showFiltered` path,
+  which today carries only a workflow id and a pile LoRA: it has to learn to set
+  `comfyuiModelFilter` / `comfyuiLoraFilter` beside `workflowFilter`.
   The filter strip shows **two removable chips**: "Workflow: Portrait SDXL"
-  and "Checkpoint: realvisXL" (or "LoRA: anya_v2"). Today the pile makes one
-  combined chip ("anya_v2 in Portrait SDXL"). Split it, so "back to the whole
+  and "Checkpoint: realvisXL" (or "LoRA: character_v2"). Today the pile makes one
+  combined chip ("character_v2 in Portrait SDXL"). Split it, so "back to the whole
   workflow" is one × on the second chip.
   Checkpoint uses `workflow` + `comfyui_model`; LoRA-from-row uses
   `workflow` + `comfyui_lora`; the pile keeps `workflow_lora=asset:<sha>`.
 - **What the reader sees:** the grid, count matching N (see Wrong below), the
   chips, and the inspector (if open) switching to the Picture tab as it does for
   any grid view.
-- **How they get back:** × on the value chip leaves the workflow's pictures. × on
-  the Workflow chip, or "Clear all", gives the whole library. Browser Back
+- **How they get back:** × on the value chip leaves the workflow's pictures. ×
+  on the Workflow chip removes the value chip with it (the value was opened as
+  a narrowing of that workflow: left alone, a pile `workflow_lora` matches
+  nothing and a checkpoint chip would silently filter the whole library), so it
+  lands on the whole library, as "Clear all" does. Browser Back
   returns to the Workflows view with the same workflow still selected and the
   tab scroll kept, where the router already does so. No new "back" button.
 - **Replaces stack browsing:** no stack-member list anywhere. A LoRA/checkpoint
@@ -493,6 +527,15 @@ counts and "Show N" links, never as structure.
   Show N, Make default, and ↺ are ghost buttons; the recipe card's Run… stays the shipped secondary button.
 - **Multi-selection** of workflows keeps today's "N workflows selected" block.
   Merge/split stay on the bottom pill. None of the new verbs appear there.
+- **Recipes tab on a multi-selection** lists the union of the selected
+  workflows' recipes, so there is no single default. Each saved card is diffed
+  against **its own** workflow's default (one detail read per distinct
+  `workflow_id`), and the diff line ends with "on <workflow name>". A look from
+  pictures carries no `workflow_id`, so on a multi-selection it keeps today's
+  LoRA list instead of a diff.
+- **A saved recipe with no `workflow_id`** (saved before the cut-over and not
+  converted) has no default to compare with. Its diff line reads "Not
+  compared: not filed on a workflow" in the quiet style, and Run… works as today.
 - **Focus return:** every dialog/fan returns focus to its opener. Rows that
   disappear after an action hand focus to the next row (see §1.2).
 - **Reduced motion:** the pile's fan and the row moving between sections must
@@ -503,8 +546,9 @@ counts and "Show N" links, never as structure.
 1. **Section name: "DEFAULT RECIPE" or keep "IN EVERY PICTURE" with counts?**
    Recommend DEFAULT RECIPE. The old name is now false for any LoRA under 100%.
 2. **When a default changes, should saved recipes follow it?** Today a saved
-   recipe stores its full LoRA list, so making X a default makes old recipes
-   read "without X" (and run without it). Alternative: store recipes as
+   recipe with LoRAs stores its full list, so making X a default makes it read
+   "without X" (and run without it), while a recipe saved with no LoRAs runs
+   the default's and silently gains X. Alternative: store recipes as
    diffs, so they inherit. Recommend keeping stored lists and showing the
    honest "without X" for v1.12. Changing recipe storage is a model change, not
    a UI one.
@@ -529,11 +573,17 @@ counts and "Show N" links, never as structure.
   `differs: [...]` against the default would also do. It unblocks the full diff
   line and "Only the prompt" on FROM YOUR PICTURES.
 - **F-3: default-recipe stage write.** `stages: {upscale: false}` on the same
-  PUT, allowing on → off only (refuse turning on a graph-off stage with a named
-  reason). It unblocks Switches on the Workflow tab's Stages row.
+  PUT, both directions (every stage it names is one the base graph has). It
+  unblocks switches on the Workflow tab's Stages row.
 - **F-4 (frontend-only, no API): split the pile's combined filter chip** into
-  Workflow + LoRA chips (§1.5). It is listed so it is not lost if §1.5 ships in
+  Workflow + LoRA chips (§1.5), with the Workflow chip first and taking its
+  value chip with it on ×. It is listed so it is not lost if §1.5 ships in
   parts.
+- **F-5: stages on a saved recipe and a run.** `SavedRecipe.stages: {stage:
+  bool} | null` (NULL inherits the default, as `models` does), and a run body
+  field that can switch a default-off stage **on** (`skip_stages` can only take
+  one out). It unblocks the "no upscale" diff segment, a loaded recipe setting
+  the Run form's stage rows, and showing a default-off stage in Run.
 
 ## 2. Visual spec
 
@@ -638,7 +688,7 @@ Reference chrome is the shipped Vue (`WorkflowTab.vue`, `WorkflowDefaultRow.vue`
 - `.wftab-field`, label "Stages", value `.wftab-value` with the read-only text
   "Upscale · Face detailer off". Name and "off" are ink. The " · " separator is
   secondary. No strike-through, no hue, no switch before F-3.
-- The off reason ("Off in the graph. Turn it on in ComfyUI.") goes under the
+- The off reason ("Off: most of its pictures ran without it.") goes under the
   field as `.wftab-note.wftab-quiet`, as visible text.
 
 #### Long filename at 288px
@@ -749,7 +799,7 @@ The card keeps `padding: --space-3`, `gap: --space-3`, `--radius-md`, 1px
   arrow "→" in `.wfrt-quiet` (secondary) so the names carry the line. Numbers
   (strengths, 30 → 40, seed) are `tabular-nums` in the UI face, not mono.
   `.wfrt-strength`'s mono does not apply inside a sentence.
-- "+ anya_v2 0.8": the "+" is the same ink, followed by a space. "without
+- "+ character_v2 0.8": the "+" is the same ink, followed by a space. "without
   film_grain": all ink, the word does the work. "detail_tweaker 0.6 → 0.9": old
   and new both ink, arrow secondary.
 - **No emphasis.** No weight change, no colour, no chip, no strike-through. Hue
@@ -898,10 +948,12 @@ belongs to the footer Run… only. See Objection 2 on "ghost".
   - Chip 1: kind "Workflow", value the workflow name.
   - Chip 2: kind "Checkpoint" or "LoRA", value the short (resolver) name.
 - Order: Workflow first, so × on the second chip leaves the first standing.
+  This is a change: `utils/filterChips.js` pushes the model and LoRA chips
+  before the Workflow chip today.
   Gap `--space-2`, as the strip does. No new chip component, no olive, no amber.
 
 **Wrong looks like**
-- One combined chip "anya_v2 in Portrait SDXL".
+- One combined chip "character_v2 in Portrait SDXL".
 - A raw `.safetensors` filename in the value chip.
 - Chips styled differently from the other filter chips (pill radius, hue).
 
