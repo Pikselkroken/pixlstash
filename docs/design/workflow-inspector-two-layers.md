@@ -1,11 +1,15 @@
 # Workflow inspector and Recipes tab: the two layers
 
-Status: **proposed** (#1653, follow-up to #1620). Flows by the `ui-ux-expert`,
-visual spec by the `lead-designer`, reconciled here; where they disagreed the
-settlement is recorded in §2.10. Nothing here is built yet. The data model and
-API are #1622 / #1623 and are not changed by this document: where a control
-needs a field the API does not have, it is marked **[needs F-n]** and the field
-is named under "Follow-up issues" (§1.8).
+Status: **shipped on the current API** (#1653, follow-up to #1620). Flows by
+the `ui-ux-expert`, visual spec by the `lead-designer`, reconciled here; where
+they disagreed the settlement is recorded in §2.10. Everything not marked
+**[needs F-n]** is built, including F-4. The data model and API are #1622 /
+#1623 and were not changed: a control that needs a field the API does not have
+is marked **[needs F-n]**, is not rendered, and its field is named under
+"Follow-up issues" (§1.8). Not built yet, with no API blocker: the
+`stage_not_skippable` inline error under a Run stage row (§1.4 step 4), the
+focus move and announcement after Show N lands (§1.5 step 3), and the
+"Clone a look below" empty-state line (§1.3).
 
 Surfaces: the Workflow tab (`frontend/src/components/panels/WorkflowTab.vue`,
 `WorkflowDefaultRow.vue`, `WorkflowLoraPile.vue`), the Recipes tab

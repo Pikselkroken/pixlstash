@@ -1861,7 +1861,8 @@ filtered by.
 - ***Show all N pictures*** (F7) is the picture figure in `WorkflowTab`'s
   header and in `InfoPopover`, wired by `composables/useWorkflowPictures.js`:
   `showPictures({id, name})` writes `useFilterStore().workflowFilter = {id,
-  name}` (`{id, lora, name}` for a LoRA's pictures) and pushes `/`, so the
+  name}` (`{id, name, lora, loraName}` for a pile LoRA's pictures, and
+  `opened` for a default-recipe row's value, below) and pushes `/`, so the
   library opens narrowed with a removable **Workflow** chip on #1387's strip;
   `workflowFilterParams` sends it as `workflow=<id>` (plus `workflow_lora`).
   **It clears the view it lands in first** — `handleResetToAll`'s own
@@ -2059,19 +2060,48 @@ can no longer see.
   `defaults` after any earlier write they queued behind. If the selection
   moved in between (the owner's click), `defaultsFor` refuses the write with a notice rather than sending one
   card's set to another.
-- **The LoRA section has no switch.** *In every picture* lists the models and
-  the LoRAs every picture of the workflow loaded
-  (`GET /workflows/{id}/lora-summary`'s `shared`, ordered and given strengths
-  by matching the chain's loaders on the file; a card with no picture falls
-  back to the chain itself). *Changes per picture* is one pile
-  (`WorkflowLoraPile.vue`): the first LoRA on top, "+N", and a `v-menu` that
-  fans out over the grid with each LoRA's picture strip, count and *Show N*,
-  its only action (the library narrowed by `workflow=<id>` + `workflow_lora`,
-  `useWorkflowPictures.showLoraPictures({id, lora, name})`).
-- **Models and Defaults read the default recipe** (#1623). The Models rows
+- **DEFAULT RECIPE, ALSO USED, PARAMETERS** (#1653, design
+  `docs/design/workflow-inspector-two-layers.md` §1.1, §1.5, §2.1-2.3). The
+  first section is built from `detail.card.default_recipe` alone: its models
+  (Checkpoint, VAE, CLIP, the missing-model and model-fix states unchanged),
+  its `loras` and a read-only **Stages** row from `stages` (omitted when the
+  base graph has none; "Off: most of its pictures ran without it." under it
+  when one is off). Until the detail lands the section reads "Reading its
+  default recipe…" rather than drawing the grid card's slots as if they were
+  the default; a failed read offers Retry. Provenance is said once, as a note
+  under the label (`best` / `all`); a row is marked only when it is the
+  exception, "Yours" (`provenance: edited`) under its label, and only a
+  parameter row has a reset, because `PUT …/defaults` writes parameters only
+  (no "Make default" / "Take out of default" until F-1).
+  - **Default LoRAs join `lora-summary` and the chain by DIGEST**
+    (`default_recipe.loras[].sha256` against `asset:<sha256>` and the chain
+    loaders' `sha256`), never by filename, which is null for a forgotten name.
+    The summary names the row and says whether it is on the shelf; the chain
+    gives the order; the strength is the recipe's. A default LoRA in `varying`
+    says "in N of M"; one in every picture says nothing. A workflow with
+    nothing sampled lists the chain itself.
+  - **ALSO USED** is `lora-summary.varying` minus the default's digests, drawn
+    as the pile (`WorkflowLoraPile.vue`: the cover's LoRA on top, "+N", a
+    `v-menu` fan with each LoRA's strip and *Show N*). No section when it is
+    empty.
+  - ***Show N* on the Checkpoint and default LoRA rows** comes from the card's
+    `recipe_values`, matched to the row by file (`recipe_values` names are
+    what `comfyui_model` / `comfyui_lora` take), and only when N is below the
+    workflow's `picture_count`. The Checkpoint row's "+K others" disclosure
+    lists the other `recipe_values.checkpoints`, each with its own *Show N*.
+  - **Landing is two chips** (`useWorkflowPictures`):
+    `showValuePictures({id, name, kind, value, label})` sets
+    `workflowFilter = {id, name, opened: {kind, value, label}}` beside
+    `comfyuiModelFilter` / `comfyuiLoraFilter = [value]`; the pile's
+    `showLoraPictures` keeps `workflow_lora` on the workflow filter
+    (`{id, name, lora, loraName}`) because it only narrows a workflow.
+    `filterChips` puts the Workflow chip first, then the value chip (the
+    pile's LoRA gets a chip of its own); × on the value chip leaves the
+    workflow, × on the Workflow chip takes the value it was opened with too.
+- **Models and Parameters read the default recipe** (#1623). The Models rows
   (Checkpoint, VAE, CLIP) read `detail.card.default_recipe.models` once the
-  detail read lands, the base card's own slots before that, since the grid
-  serves `default_recipe` null; Defaults read `default_recipe.values`, and
+  detail read lands, since the grid serves `default_recipe` null; Parameters
+  read `default_recipe.values`, and
   `PUT /workflows/{id}/defaults` sends parameter rows only. Replace-model and
   Hide re-read the grid through `store.refetch()`, which bumps the store's
   epoch and clears `loading` so the re-read is not refused behind an older
@@ -2200,10 +2230,39 @@ new code calls a *variant*. Owner-only, like everything under `/workflows`.
   `source_picture_id` and a `pictures` **count**, never a list of ids, so the
   design's five-tile strip would be four tiles of invention: the picture the
   row names is a `1 / 1` square at the head of the card's first line — a band
-  across the card would have needed an aspect ratio this app does not have —
-  and the credit is the number on the line below ("31 pictures · steps 12", the
-  override's `input_name` only, since the slot label is a node name that means
-  nothing outside the graph).
+  across the card would have needed an aspect ratio this app does not have.
+- **A card states only what it changes against the default recipe** (#1653,
+  `docs/design/workflow-inspector-two-layers.md` §1.3). The LoRA chips and the
+  facts line are gone; under the name sits one **diff line** from
+  **`utils/recipeDiff.js`** (`recipeDiff(recipe, default_recipe)`), in a fixed
+  order: models, "+ added 0.8", "name 0.6 → 0.9", "without name", parameters,
+  "seed N" (only with `keep_seed`). The rules it must keep or it prints
+  differences that are not there: LoRAs pair **by digest as a multiset**
+  (short name where either side has no digest); an **empty LoRA list runs the
+  default's**, so it has no LoRA segments; `models` NULL inherits; a parameter
+  matches its default row **by the input it fills** (exact `core:` address
+  first, else the one row with that `input_name`), and one matching no row is
+  still a segment, named by its input. The negative prompt is never a segment.
+  The default is `card.default_recipe` from `GET /workflows/{id}`, read once
+  per distinct `workflow_id` without holding the cards back, so the line reads
+  "Comparing with the default…" until it lands, "Could not compare with the
+  default." if it fails, "Not compared: not filed on a workflow" with no
+  `workflow_id`, and **"Only the prompt"** — never empty — when nothing
+  differs. On a multi-selection each card is diffed against its own workflow
+  and ends "on <name>". Looks from pictures carry LoRA file names only, so
+  theirs is the LoRA part (`lookLoraDiff`) plus "N pictures", or "Default
+  LoRAs · N pictures"; on a multi-selection a look keeps its LoRA list. The
+  line clamps at two lines; the hidden count behind "+N more" is **measured**
+  after each render (a segment ending below the line's box), since the clamp
+  is CSS. The card's `aria-label` is "<name>, <diff text>".
+- **"Make these the defaults…"** (card ⋯, `io/MakeDefaultsDialog.vue`) takes
+  a recipe's **parameter** differences only: `PUT /workflows/{id}/defaults`
+  refuses models and LoRAs (F-1), so the item is not offered when no
+  parameter differs, nor on a multi-selection. The PUT **replaces the whole
+  edited set**, so the tab sends the detail's existing `provenance: edited`
+  rows back with the ticked ones over them, keeps the answer as the detail
+  (the card's line re-diffs), and pushes a `success` notice (8 s) whose Undo
+  PUTs the previous edited set. Focus returns to the card's ⋯.
 - **`SaveRecipeDialog` is a list of checkboxes, and the seed is off.** "What
   the recipe keeps" is a promise about the row, so every line can be unticked
   and an unticked line is not sent. **`keep_seed` is what makes a stored seed

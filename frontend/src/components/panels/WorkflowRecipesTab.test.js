@@ -20,6 +20,7 @@ const editSavedRecipe = vi.fn();
 const deleteSavedRecipe = vi.fn();
 const listUsedLooks = vi.fn();
 const getWorkflowCard = vi.fn();
+const setWorkflowDefaults = vi.fn();
 vi.mock("../../api/comfyui", () => ({
   getPictureRecipe: (...args) => getPictureRecipe(...args),
 }));
@@ -35,6 +36,7 @@ vi.mock("../../api/recipes", () => ({
 vi.mock("../../api/workflows", () => ({
   exportWorkflow: vi.fn(),
   getWorkflowCard: (...args) => getWorkflowCard(...args),
+  setWorkflowDefaults: (...args) => setWorkflowDefaults(...args),
 }));
 vi.mock("../../api/pictures", () => ({
   pictureThumbnailUrl: (id) => `/api/v1/pictures/thumbnails/${id}.webp`,
@@ -73,6 +75,32 @@ function recipe(id, name, extra = {}) {
   };
 }
 
+/** A workflow detail whose default recipe `recipe()` changes nothing in. */
+function detail(id = KEY, name = "Cinematic portrait", extra = {}) {
+  return {
+    card: {
+      id,
+      name,
+      default_recipe: {
+        models: [
+          { address: "core:Loader/ckpt_name", kind: "checkpoint", filename: "juggernaut.safetensors" },
+        ],
+        loras: [{ filename: "mira_v2.safetensors", sha256: null, strength: 0.85 }],
+        values: [
+          { label: "Steps", slot_label: "core:KSampler", input_name: "steps", value: 12, provenance: "best" },
+          { label: "CFG", slot_label: "core:KSampler", input_name: "cfg", value: 7, provenance: "edited" },
+        ],
+        ...extra,
+      },
+    },
+  };
+}
+
+/** The diff lines, top to bottom. */
+function diffsOf(wrapper) {
+  return wrapper.findAll(".wfrt-diff").map((line) => line.text());
+}
+
 function render(props = {}) {
   return mount(WorkflowRecipesTab, {
     props: {
@@ -101,7 +129,7 @@ describe("WorkflowRecipesTab", () => {
     ]);
     reorderSavedRecipes.mockImplementation(async (ids) => ids);
     listUsedLooks.mockResolvedValue([]);
-    getWorkflowCard.mockResolvedValue({});
+    getWorkflowCard.mockImplementation(async (id) => detail(id));
     getPictureRecipe.mockResolvedValue({
       workflow_id: KEY,
       positive_prompt: "a look nobody kept",
@@ -126,11 +154,11 @@ describe("WorkflowRecipesTab", () => {
     expect(wrapper.find(".wfrt-sub").text()).toBe(
       "3 saved",
     );
-    // What the card credits and what it changed, on one line.
-    expect(wrapper.findAll(".wfrt-facts")[0].text()).toBe("31 pictures · steps 12");
-    // LoRA name and strength, which is the look.
-    expect(wrapper.find(".wfrt-chip").text()).toContain("mira_v2.safetensors");
-    expect(wrapper.find(".wfrt-strength").text()).toBe("0.85");
+    // Nothing but the prompt differs from the default, and the card says so
+    // in place of the LoRA chips and the facts line (#1653).
+    expect(diffsOf(wrapper)[0]).toBe("Only the prompt");
+    expect(wrapper.find(".wfrt-chip").exists()).toBe(false);
+    expect(wrapper.find(".wfrt-facts").exists()).toBe(false);
   });
 
   it("writes the whole new order when a recipe is moved by keyboard", async () => {
@@ -615,5 +643,194 @@ describe("WorkflowRecipesTab", () => {
     await flushPromises();
     expect(namesOf(wrapper)).toEqual(["Another card's recipe"]);
     expect(listUsedLooks).toHaveBeenCalledTimes(reads);
+  });
+
+  // ── The diff line and "Make these the defaults…" (#1653) ─────────────────
+
+  it("states only what a recipe changes, in the fixed order", async () => {
+    listSavedRecipes.mockResolvedValue([
+      recipe(1, "Rainy tram platform", {
+        models: [{ address: "core:Loader/ckpt_name", filename: "xl/realvisXL.safetensors" }],
+        loras: [
+          { filename: "mira_v2.safetensors", strength: 0.5 },
+          { filename: "chars/ada.safetensors", strength: 0.8 },
+        ],
+        overrides: { "KSampler/steps": 40 },
+        keep_seed: true,
+        seed: 1234,
+      }),
+    ]);
+    const wrapper = render();
+    await flushPromises();
+    const text = "realvisXL · + ada 0.8 · mira_v2 0.85 → 0.5 · Steps 40 · seed 1234";
+    expect(diffsOf(wrapper)).toEqual([text]);
+    // The separators and the arrow are the quiet ink; the names are not.
+    const quiet = wrapper.findAll(".wfrt-diff .wfrt-quiet").map((el) => el.text());
+    expect(quiet).toEqual(["·", "·", "→", "·", "·"]);
+    // A screen reader hears the difference with the name.
+    expect(wrapper.find(".wfrt-card").attributes("aria-label")).toBe(
+      `Rainy tram platform, ${text}`,
+    );
+  });
+
+  it("says why a card is not compared, and never 'Only the prompt' early", async () => {
+    let answer;
+    getWorkflowCard.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    listSavedRecipes.mockResolvedValue([
+      recipe(1, "Filed"),
+      recipe(2, "Loose", { workflow_id: null }),
+    ]);
+    const wrapper = render();
+    await flushPromises();
+    expect(diffsOf(wrapper)).toEqual([
+      "Comparing with the default…",
+      "Not compared: not filed on a workflow",
+    ]);
+    answer(detail());
+    await flushPromises();
+    expect(diffsOf(wrapper)[0]).toBe("Only the prompt");
+
+    getWorkflowCard.mockRejectedValue(new Error("boom"));
+    useWorkflowsStore().recipesEpoch += 1;
+    await flushPromises();
+    expect(diffsOf(wrapper)[0]).toBe("Could not compare with the default.");
+  });
+
+  it("diffs each card against its own workflow on a multi-selection", async () => {
+    const OTHER = "b".repeat(32);
+    getWorkflowCard.mockImplementation(async (id) =>
+      id === OTHER ? detail(id, "Neon", { values: [] }) : detail(id),
+    );
+    listSavedRecipes.mockResolvedValue([
+      recipe(1, "Here"),
+      recipe(2, "There", { workflow_id: OTHER }),
+    ]);
+    listUsedLooks.mockResolvedValue([{ ...LOOK, loras: [{ filename: "ada.safetensors" }] }]);
+    // A third selected workflow with no saved recipe has nothing to diff.
+    const wrapper = render({ workflowIds: [KEY, OTHER, "c".repeat(32)] });
+    await flushPromises();
+    expect(getWorkflowCard.mock.calls.map(([id]) => id).sort()).toEqual([KEY, OTHER].sort());
+    expect(diffsOf(wrapper)).toEqual([
+      "Only the prompt · on Cinematic portrait",
+      "steps 12 · on Neon",
+    ]);
+    // A look carries no workflow, so it keeps its LoRA list.
+    expect(wrapper.find(".wfrt-chip").text()).toContain("ada.safetensors");
+    // The defaults verb belongs to one workflow.
+    expect(wrapper.text()).not.toContain("Make these the defaults");
+  });
+
+  it("gives a look from pictures its LoRA part and its count", async () => {
+    listSavedRecipes.mockResolvedValue([]);
+    listUsedLooks.mockResolvedValue([
+      { ...LOOK, loras: [{ filename: "x/ada.safetensors" }] },
+      { ...LOOK, prompt: "same LoRAs", loras: [{ filename: "mira_v2.safetensors" }] },
+    ]);
+    const wrapper = render();
+    await flushPromises();
+    expect(diffsOf(wrapper)).toEqual([
+      "+ ada · without mira_v2 · 12 pictures",
+      "Default LoRAs · 12 pictures",
+    ]);
+  });
+
+  it("clamps the diff to two lines behind +N more", async () => {
+    // jsdom lays nothing out: a line two segments tall, each segment one high.
+    const proto = HTMLElement.prototype;
+    const saved = ["clientHeight", "offsetTop", "offsetHeight"].map((key) => [
+      key,
+      Object.getOwnPropertyDescriptor(proto, key),
+    ]);
+    const segIndex = (el) => [...el.parentElement.children].indexOf(el);
+    Object.defineProperty(proto, "clientHeight", {
+      configurable: true,
+      get() { return this.classList.contains("wfrt-diff") ? 32 : 0; },
+    });
+    Object.defineProperty(proto, "offsetTop", {
+      configurable: true,
+      get() { return this.classList.contains("wfrt-seg") ? segIndex(this) * 16 : 0; },
+    });
+    Object.defineProperty(proto, "offsetHeight", {
+      configurable: true,
+      get() { return this.classList.contains("wfrt-seg") ? 16 : 0; },
+    });
+    try {
+      listSavedRecipes.mockResolvedValue([
+        recipe(1, "Busy", { overrides: { "x/a": 1, "x/b": 2, "x/c": 3, "x/d": 4 } }),
+      ]);
+      const wrapper = render();
+      await flushPromises();
+      const more = wrapper.find(".wfrt-more");
+      expect(more.text()).toBe("+2 more");
+      expect(more.attributes("aria-expanded")).toBe("false");
+      await more.trigger("click");
+      expect(wrapper.find(".wfrt-more").text()).toBe("Fewer");
+      expect(wrapper.find(".wfrt-more").attributes("aria-expanded")).toBe("true");
+      expect(wrapper.find(".wfrt-diff--open").exists()).toBe(true);
+    } finally {
+      for (const [key, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(proto, key, descriptor);
+        else delete proto[key];
+      }
+    }
+  });
+
+  it("makes a recipe's parameters the defaults, keeping existing edits, with Undo", async () => {
+    listSavedRecipes.mockResolvedValue([
+      recipe(1, "Rainy tram platform", { overrides: { "KSampler/steps": 40, "KSampler/cfg": 5 } }),
+    ]);
+    setWorkflowDefaults.mockImplementation(async () => detail());
+    const wrapper = render();
+    await flushPromises();
+    const item = wrapper.findAll(".ctx-item").find((el) => el.text().includes("Make these the defaults"));
+    await item.trigger("click");
+    await flushPromises();
+
+    const boxes = wrapper.findAll(".mkd-box");
+    expect(boxes.map((box) => box.element.checked)).toEqual([true, true]);
+    expect(wrapper.findAll(".mkd-check label").map((el) => el.text())).toEqual([
+      "Steps 12 → 40",
+      "CFG 7 → 5",
+    ]);
+    // Untick CFG: only Steps is taken, and the edited CFG 7 goes back unchanged.
+    await boxes[1].setValue(false);
+    const primary = wrapper.findAll("button").find((el) => el.text().startsWith("Make 1 default"));
+    await primary.trigger("click");
+    await flushPromises();
+    expect(setWorkflowDefaults).toHaveBeenCalledWith(KEY, [
+      { slot_label: "core:KSampler", input_name: "cfg", value: 7 },
+      { slot_label: "core:KSampler", input_name: "steps", value: 40 },
+    ]);
+    expect(wrapper.find(".mkd-box").exists()).toBe(false);
+
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.level).toBe("success");
+    expect(notice.timeout).toBe(8000);
+    await notice.action.handler();
+    expect(setWorkflowDefaults).toHaveBeenLastCalledWith(KEY, [
+      { slot_label: "core:KSampler", input_name: "cfg", value: 7 },
+    ]);
+  });
+
+  it("will not make nothing the default", async () => {
+    listSavedRecipes.mockResolvedValue([
+      recipe(1, "Rainy tram platform", { overrides: { "KSampler/steps": 40 } }),
+    ]);
+    const wrapper = render();
+    await flushPromises();
+    await wrapper.findAll(".ctx-item").find((el) => el.text().includes("Make these")).trigger("click");
+    await flushPromises();
+    await wrapper.find(".mkd-box").setValue(false);
+    const primary = wrapper.findAll("button").find((el) => el.text().startsWith("Make 0"));
+    expect(primary.attributes("aria-disabled")).toBe("true");
+    expect(wrapper.text()).toContain("Tick at least one");
+    await primary.trigger("click");
+    expect(setWorkflowDefaults).not.toHaveBeenCalled();
+  });
+
+  it("offers no defaults verb when no parameter differs", async () => {
+    const wrapper = render();
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Make these the defaults");
   });
 });

@@ -20,10 +20,10 @@
     />
     <span class="wfdef-name">
       {{ row.label }}
-      <!-- Every value says where it came from, always: a row that only
-           annotates the edited ones leaves the reader guessing what the
-           silent ones are, which is the question this line exists for. -->
-      <span class="wfdef-prov">{{ PROVENANCE[row.provenance] || row.provenance }}</span>
+      <!-- Only the exception is marked (#1653): where the computed values
+           come from is said once, under the section label, and "Yours" is
+           the one provenance the owner can act on (↺). -->
+      <span v-if="row.provenance === 'edited'" class="wfdef-prov">Yours</span>
     </span>
     <span class="wfdef-value">
       <span class="wfdef-text num">{{ row.value }}</span>
@@ -51,13 +51,6 @@
 // places for the reset to go wrong.
 
 import AppButton from "../widgets/AppButton.vue";
-
-/** What the server's three provenances are called on screen. */
-const PROVENANCE = {
-  best: "from your best pictures",
-  all: "from its pictures",
-  edited: "edited by you",
-};
 
 defineProps({
   /** `{label, slot_label, input_name, value, provenance, pinned}`. */
@@ -97,9 +90,12 @@ const emit = defineEmits(["toggle-pin", "reset"]);
   font-size: var(--text-xs);
 }
 
+/* "Yours": the one exception mark, a step above the label through weight and
+   full ink, never hue (design §2.1, shared with the default-recipe rows). */
 .wfdef-prov {
   font-size: var(--text-2xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .wfdef-value {

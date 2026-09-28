@@ -17,7 +17,7 @@
         class="wfpile"
         :class="{ 'wfpile--one': rest === 0, 'wfpile--two': rest === 1 }"
         :aria-expanded="open"
-        :aria-label="`${count} ${count === 1 ? 'LoRA changes' : 'LoRAs change'} per picture. On top: ${label(top)}`"
+        :aria-label="`${count} ${count === 1 ? 'LoRA' : 'LoRAs'} also used, not in the default recipe. On top: ${label(top)}`"
         data-testid="wftab-pile"
       >
         <span class="wfpile-back" aria-hidden="true"></span>
@@ -32,11 +32,11 @@
     <div
       class="tbm wfpile-fan"
       role="dialog"
-      aria-label="LoRAs that change per picture"
+      aria-label="LoRAs also used, not in the default recipe"
       data-testid="wftab-fan"
     >
       <div class="wfpile-head">
-        <span class="wfpile-title">Changes per picture</span>
+        <span class="wfpile-title">Also used</span>
         <span class="wfpile-quiet"
           >{{ count }} {{ count === 1 ? "LoRA" : "LoRAs" }} across
           {{ summary.pictures }}
@@ -87,10 +87,11 @@
 </template>
 
 <script setup>
-// The Workflow tab's pile of LoRAs that change per picture, and the fan it
-// opens into (the "Shared LoRAs and a pile" design). It describes the whole
-// workflow: `summary` is `GET /workflows/{id}/lora-summary`. Its one verb is
-// Show: the grid, narrowed to one LoRA's pictures.
+// The Workflow tab's ALSO USED pile: the LoRAs its pictures used that are not
+// in the default recipe, and the fan it opens into (#1653). It describes the
+// whole workflow: `summary` is `GET /workflows/{id}/lora-summary` with the
+// default recipe's LoRAs already taken out of `varying` by the tab. Its one
+// verb is Show: the grid, narrowed to one LoRA's pictures.
 
 import { computed, ref } from "vue";
 import { VMenu } from "vuetify/components";
@@ -190,9 +191,11 @@ function show(row) {
   outline: none;
 }
 
+/* The global ink ring, on the top card rather than the button's box (which
+   includes the cards peeking out below it). */
 .wfpile:focus-visible .wfpile-top {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: 1px;
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
 }
 
 .wfpile-back {

@@ -53,14 +53,35 @@ export function useWorkflowPictures() {
    * *Show N* on the Workflow tab's LoRA pile: the pictures of one workflow
    * that loaded one LoRA.
    *
-   * @param {{id: string, lora: string, name: string}} target
+   * The LoRA rides on the workflow filter (`workflow_lora` only narrows a
+   * workflow), but the strip draws it as a chip of its own (`loraName`), so
+   * "back to the whole workflow" is one × (F-4).
+   *
+   * @param {{id: string, lora: string, name: string, loraName: string}} target
    */
-  function showLoraPictures({ id, lora, name }) {
+  function showLoraPictures({ id, lora, name, loraName }) {
     if (!lora || !id) return;
-    showFiltered({ id, lora, name });
+    showFiltered({ id, lora, name, loraName });
   }
 
-  function showFiltered(filter) {
+  /**
+   * *Show N* on a default-recipe row (#1653): one workflow's pictures made
+   * with one checkpoint (`kind: "model"`) or LoRA (`kind: "lora"`). `value`
+   * is a `recipe_values` name, which is exactly what the listing's
+   * `comfyui_model` / `comfyui_lora` take. The workflow filter remembers what
+   * it was opened with, so its chip's × takes that value chip too.
+   *
+   * @param {{id: string, name: string, kind: "model"|"lora", value: string, label: string}} target
+   */
+  function showValuePictures({ id, name, kind, value, label }) {
+    if (!id || !value || !["model", "lora"].includes(kind)) return;
+    showFiltered({ id, name, opened: { kind, value, label } }, () => {
+      if (kind === "model") filterStore.comfyuiModelFilter = [value];
+      else filterStore.comfyuiLoraFilter = [value];
+    });
+  }
+
+  function showFiltered(filter, narrow = null) {
     selectionStore.selectedCharacter = ALL_PICTURES_ID;
     selectionStore.selectedSet = null;
     selectionStore.selectedSetIds = [];
@@ -74,9 +95,10 @@ export function useWorkflowPictures() {
     // navigates to one workflow's pictures or to the whole library.
     filterStore.resetFilters();
     filterStore.workflowFilter = filter;
+    narrow?.();
     gridStore.refreshGridVersion();
     router.push("/");
   }
 
-  return { showPictures, showLoraPictures };
+  return { showPictures, showLoraPictures, showValuePictures };
 }
