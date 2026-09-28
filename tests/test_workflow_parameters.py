@@ -139,6 +139,28 @@ def test_connected_bound_secret_and_structured_inputs_are_not_parameters():
     assert ("11", "resolution") not in keys and ("11", "scale") in keys
 
 
+def test_a_latents_batch_size_is_not_offered_since_a_run_pins_it():
+    """The Run popup's count is the number of pictures; batch_size would be dead."""
+    graph = _graph()
+    graph["22"] = {
+        "class_type": "SDXL Empty Latent Image (rgthree)",
+        "inputs": {"batch_size": 4, "dimensions": "1024 x 1024"},
+    }
+    graph["23"] = {"class_type": "SomePackNode", "inputs": {"batch_size": 8}}
+    graph["24"] = {"class_type": "PrimitiveInt", "inputs": {"value": 4}}
+    graph["25"] = {"class_type": "WanImageToVideo", "inputs": {"batch_size": ["24", 0]}}
+    info = dict(_OBJECT_INFO)
+    info["WanImageToVideo"] = {"input": {"required": {}}, "output": ["LATENT"]}
+    keys = {p.key for p in wp.describe_parameters(graph, info)}
+    assert ("5", "batch_size") not in keys and ("5", "height") in keys
+    assert ("22", "batch_size") not in keys and ("22", "dimensions") in keys
+    # Not a latent: its batch_size may mean anything, and stays a setting.
+    assert ("23", "batch_size") in keys
+    # A primitive that only sets a batch size is as dead as the input itself;
+    # one that also sets a width (node 10 here) stays.
+    assert ("24", "value") not in keys and ("10", "value") in keys
+
+
 def test_every_picture_input_is_bound_not_only_the_one_a_run_fills():
     graph = _graph()
     graph["20"] = {"class_type": "LoadImage", "inputs": {"image": "a.png"}}

@@ -5327,6 +5327,68 @@ def test_a_kept_pictures_embedded_graph_is_the_second_source(runnable, monkeypat
     assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 33
 
 
+def test_count_decides_the_pictures_not_the_graphs_batch_size(runnable, monkeypatch):
+    """Every latent a submission creates is a batch of one, however it is set.
+
+    Wrong if a submitted latent still says 4 or still reads the primitive: a
+    count of 2 would then come back as eight pictures. ComfyUI's answer
+    decides which nodes create latents, so a Wan image-to-video node counts and
+    ``RebatchLatents``, whose ``batch_size`` is a chunk size, does not.
+    """
+    embedded = json.loads(json.dumps(RUN_DOCUMENT))
+    embedded["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    embedded["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    embedded["5"] = {
+        "class_type": "EmptyLatentImage",
+        "inputs": {"width": 512, "height": 512, "batch_size": 4},
+    }
+    embedded["6"] = {"class_type": "PrimitiveInt", "inputs": {"value": 4}}
+    embedded["7"] = {
+        "class_type": "EmptySD3LatentImage",
+        "inputs": {"width": ["6", 0], "height": 512, "batch_size": ["6", 0]},
+    }
+    embedded["8"] = {
+        "class_type": "WanImageToVideo",
+        "inputs": {"width": 512, "length": 33, "batch_size": 2.0},
+    }
+    embedded["9"] = {
+        "class_type": "RebatchLatents",
+        "inputs": {"latents": ["5", 0], "batch_size": 8},
+    }
+    object_info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    outputs = {
+        "EmptyLatentImage": ["LATENT"],
+        "EmptySD3LatentImage": ["LATENT"],
+        "WanImageToVideo": ["CONDITIONING", "CONDITIONING", "LATENT"],
+        "RebatchLatents": ["LATENT"],
+        "PrimitiveInt": ["INT"],
+    }
+    for class_type, output in outputs.items():
+        object_info[class_type] = {"input": {"required": {}}, "output": output}
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (object_info, None)
+    )
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (embedded, []),
+    )
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"picture_ids": [runnable.picture_id], "count": 2},
+    )
+    assert r.status_code == 200, r.text
+    assert len(runnable.submitted) == 2
+    for sent in runnable.submitted:
+        graph = sent["graph"]
+        assert graph["5"]["inputs"]["batch_size"] == 1
+        assert graph["7"]["inputs"]["batch_size"] == 1
+        # Only the batch link is cut: the primitive still sets the width.
+        assert graph["7"]["inputs"]["width"] == ["6", 0]
+        assert graph["8"]["inputs"]["batch_size"] == 1
+        assert graph["9"]["inputs"]["batch_size"] == 8
+
+
 def test_a_picture_whose_file_has_gone_falls_through_instead_of_erroring(
     runnable, monkeypatch
 ):

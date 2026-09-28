@@ -48,6 +48,7 @@ from pixlstash.services.workflow_hash import (
 )
 from pixlstash.services.workflow_identity import model_fix_kind
 from pixlstash.services.workflow_io import api_graph
+from pixlstash.services.workflow_parameters import is_picture_batch
 from pixlstash.utils.adapter_header import FILE_TEXT_ENCODER, FILE_VAE
 from pixlstash.utils.comfyui_utilities import collect_seed_inputs, iter_model_fields_api
 from pixlstash.pixl_logging import get_logger
@@ -632,6 +633,41 @@ def run_seed_targets(graph: dict, object_info: Optional[dict]) -> list[dict]:
     be a run that quietly kept a placeholder seed.
     """
     return detect_seed_targets(graph, object_info or {}) or collect_seed_inputs(graph)
+
+
+def pin_batch_size(graph: dict, object_info: Optional[dict] = None) -> list[str]:
+    """Set every picture batch (:func:`is_picture_batch`) to a literal 1.
+
+    The Run popup's count is how many pictures a run makes: one submission
+    each, each with its own seed. A graph saved with ``batch_size: 4`` made
+    four per submission, so a count of 1 came back as four pictures.
+
+    **A wired value is replaced too**: a primitive (or a size picker's batch
+    output) setting the batch would otherwise multiply the count just the same.
+    The link is cut on the latent's input only, so whatever else the source
+    drives keeps its value. A batch the graph builds afterwards on purpose
+    (``RepeatLatentBatch``) is left as authored.
+
+    Returns:
+        The ids of the nodes it changed.
+    """
+    pinned = []
+    for node_id, node in graph.items():
+        inputs = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(inputs, dict) or "batch_size" not in inputs:
+            continue
+        class_type = str(node.get("class_type") or "")
+        if not is_picture_batch(class_type, "batch_size", object_info):
+            continue
+        value = inputs["batch_size"]
+        if isinstance(value, bool) or value == 1:
+            continue
+        # A float counts: ComfyUI casts an INT input with int(), so 4.0 is 4.
+        if not (is_link(value) or isinstance(value, (int, float))):
+            continue
+        inputs["batch_size"] = 1
+        pinned.append(str(node_id))
+    return pinned
 
 
 def replace_missing_seed_nodes(graph: dict, object_info: dict) -> list[dict]:

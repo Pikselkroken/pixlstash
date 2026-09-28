@@ -4344,6 +4344,18 @@ def create_router(server) -> APIRouter:
                 # of it however either addresses the input.
                 _apply_addressed(graph, _recipe_values(recipe))
             _apply_addressed(graph, body.values)
+            # After every value: `count` is the number of pictures, one per
+            # submission, and a batch saved in the graph (or a recipe) would
+            # multiply it.
+            pinned = run_service.pin_batch_size(graph, object_info)
+            if pinned:
+                logger.info(
+                    "[workflows] Run of %s: batch_size pinned to 1 on nodes %s so "
+                    "count (%s) decides how many pictures come out.",
+                    card_key,
+                    pinned,
+                    body.count,
+                )
             group.flags = _apply_models(hub, graph, body.models, object_info)
             _apply_prompts(graph, body.prompt, body.negative)
             # A saved recipe's LoRAs are matched against the graph as it stood
