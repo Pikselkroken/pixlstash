@@ -1603,7 +1603,7 @@ by query before their database task, likeness search on a threadpool worker —
 while the GPU worker runs the embedding and tagging batches. So on Metal, and
 only on Metal, `InferenceEngine.create` also builds
 `inference/cpu_query_encoders.CpuQueryEncoders`: the same classes, weights and
-preprocessing on the `cpu` device, about 0.65 GB and 1.8–2.8 s to load.
+preprocessing on the `cpu` device, about 0.7 GB and 1.8–2.8 s to load.
 `TextEmbeddingWorkflow.encode_query`/`encode_clip_query` and
 `ClipEmbeddingWorkflow.encode_query_image` route to them; `engine.query_encoders
 is None` on every other host, which is what those three branch on. The worker's
@@ -1619,13 +1619,16 @@ went 1.95 s to 9.11 s. The weights load on a `CpuQueryEncoderLoadTask` instead:
 queue is what serialises it against the worker's own model loads and so keeps it
 clear of the transformers/accelerate import race.
 
-`Vault` queues that task from **both** `ensure_ready` and `start`, because
-neither is reliably the later one: at boot `Server.__init__` calls `start()`
-before `app` builds the engine, and on a library switch `_bring_up` calls
-`ensure_ready()` before the new runner has started. Whichever runs second
-queues it; the call is idempotent. In `start` it is queued *before* the work
-planner, since `URGENT` heads the queue but cannot preempt a task already
-running — one planner-queued batch held the load for over 86 s.
+`Vault` asks for that task from both `ensure_ready` and `start`; the call is
+idempotent, and the one in `ensure_ready` normally queues it. At boot
+`Server.__init__` calls `start()` before `app` builds the engine, so `start`
+finds nothing to load; on a library switch `_bring_up` calls `ensure_ready()`
+first, and a runner accepts tasks before it starts. The call in `start` covers a
+runner that was stopped when `ensure_ready` ran. The load has to be queued
+before the planner has work to queue, since `URGENT` heads the queue but cannot
+preempt a task already running — one planner-queued batch held the load for
+over 86 s. On a switch the planner has not started yet; at boot the model
+finders queue nothing until the engine exists.
 
 A search arriving while the load is still running waits on it
 (`CpuQueryEncoders.ensure_serving`, 60 s) and answers 503 rather than falling

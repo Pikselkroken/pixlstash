@@ -447,12 +447,14 @@ class Vault:
         since they were then the first models in the process and paid the whole
         cold-import cost.
 
-        **Called from both :meth:`ensure_ready` and :meth:`start`, because
-        neither is always the later one.** At boot ``Server.__init__`` calls
-        ``start()`` before ``app`` calls ``ensure_ready()``, so the engine does
-        not exist yet; on a library switch ``_bring_up`` calls ``ensure_ready()``
-        first, so the runner has not started yet. Whichever runs second queues
-        the load; both being too early leaves it to the first search. It is
+        **Called from both :meth:`ensure_ready` and :meth:`start`.** The call
+        in ``ensure_ready`` is the one that normally queues the load: at boot
+        ``Server.__init__`` calls ``start()`` before ``app`` calls
+        ``ensure_ready()``, so the engine does not exist yet when ``start``
+        runs, and on a library switch ``_bring_up`` calls ``ensure_ready()``
+        first, into a runner that accepts tasks before it starts. The call in
+        ``start`` covers a runner that was stopped when ``ensure_ready`` ran; a
+        load neither could queue is left to the first search. It is
         idempotent, so calling it twice queues one task.
 
         Queued rather than awaited, so nothing blocks on it. A search that
@@ -470,9 +472,9 @@ class Vault:
 
         encoders.bind_loader(_queue_load)
         if not encoders.start_loading():
-            # Expected on whichever of the two calls comes first; the other one
-            # (or the first search) queues it. Debug rather than warning so a
-            # normal boot does not look broken.
+            # Only a stopped runner refuses the task; start() or the first
+            # search queues it once the runner runs again. Debug rather than
+            # warning, because a stopped runner is a normal state.
             logger.debug(
                 "CPU query-encoder load not queued yet; the task runner is not "
                 "running. It will be queued when it is."

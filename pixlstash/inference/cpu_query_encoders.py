@@ -228,7 +228,7 @@ class CpuQueryEncoders:
         still running would queue a second load beside it.
 
         On Apple Silicon this is the same memory pool the accelerator uses, so
-        leaving ~630 MB here would quietly defeat a reclaim the owner asked
+        leaving ~0.7 GB here would quietly defeat a reclaim the owner asked
         for. The cost is that the next search waits for a reload.
 
         **Waits for encodes already running**, because the idle sweep that
@@ -261,12 +261,11 @@ class CpuQueryEncoders:
     def start_loading(self) -> bool:
         """Queue a load if one is not already in flight, without waiting.
 
-        Idempotent and never raises, because the Vault calls it from both the
-        points that could be the right one and neither always is: at boot
-        ``Vault.start`` runs inside ``Server.__init__``, before ``app`` builds
-        the engine, while on a library switch ``ensure_ready`` builds the engine
-        before the new runner has started. Whichever comes second does the work;
-        a search does it if both were too early.
+        Idempotent and never raises, because the Vault calls it from both
+        ``ensure_ready`` and ``start``. The call in ``ensure_ready`` normally
+        queues the load, since a runner accepts tasks before it starts; the
+        call in ``start`` covers a runner that was stopped at the time. A load
+        neither could queue is left to the first search.
 
         Returns:
             ``True`` when a load is queued or already done.

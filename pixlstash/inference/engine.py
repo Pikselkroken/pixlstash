@@ -374,7 +374,7 @@ class InferenceEngine:
     def close(self) -> None:
         """Unload all models and release GPU/CPU memory."""
         # Before the lifecycle call, which ends in trim_process_memory(): these
-        # have to be dropped by then or their ~630 MB is still held when the
+        # have to be dropped by then or their ~0.7 GB is still held when the
         # code that returns memory to the OS runs.
         if self.query_encoders is not None:
             self.query_encoders.unload()

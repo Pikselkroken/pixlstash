@@ -2,11 +2,12 @@
 
 **Summary.** PyTorch's MPS (Metal) backend is not safe to use from several threads
 at once. When it happens, the process dies with no Python traceback, trips a
-Metal assertion, or hangs. The triggers you are most likely to hit:
+Metal assertion, or hangs. The measured triggers:
 
 - loading a model onto `mps` with Hugging Face transformers, which copies
-  weights on four threads;
-- two models running their first passes on different threads;
+  weights on up to four threads;
+- several threads running inference on Metal at once, at high density: six
+  threads at about 100 encodes a second crashed 1 run in 3;
 - one thread calling `torch.mps.empty_cache()` while another runs a model.
 
 Two rules avoid it:
@@ -16,7 +17,9 @@ Two rules avoid it:
 - Never run Metal work on two threads at the same time.
 
 Every combination tested fails the same way, including torch 2.14.0 with
-transformers 5.17.0, the newest releases as of 2026-09-13.
+transformers 5.17.0, the newest releases as of 2026-09-13. Upstream `main` has
+since fixed the first two causes below, but no release contains the fixes yet
+(see "Fixed upstream, not yet released").
 
 ## Symptoms
 
@@ -34,6 +37,10 @@ transformers 5.17.0, the newest releases as of 2026-09-13.
   (0x…) of class MPSGraph. It is possible that this object was over-released`.
   This happens when one thread flushes the cache while another runs a model;
   see path 3.
+- An uncaught `NSInvalidArgumentException: attempt to insert nil object`
+  aborts the process, raised from inside a `matmul`. This is the only crash
+  seen through PixlStash's own code, with several threads running inference
+  at once (see "Measured").
 - A model load hangs forever at `Loading weights 0/N`, often with threads
   spinning at full CPU.
 - It is intermittent. Loading with a single loader thread avoided it in every
@@ -41,21 +48,25 @@ transformers 5.17.0, the newest releases as of 2026-09-13.
 
 ## Cause
 
-Apple's rules: a Metal command queue may be shared across threads, but a
-command buffer or encoder may only be used by one thread at a time
+Apple's rules: command queues are thread-safe, but only one CPU thread may
+access a command buffer at a time, and only one encoder at a time may append
+commands to it
 ([Metal Programming Guide](https://developer.apple.com/library/archive/documentation/Miscellaneous/Conceptual/MetalProgrammingGuide/Cmd-Submiss/Cmd-Submiss.html)).
-torch serialises most Metal work onto one dispatch queue per device. Two paths
-skip it, in both the v2.13.0 and v2.14.0 source. A third was found by
+torch serialises most Metal work onto a serial dispatch queue: one per device
+in 2.13, and one per stream in 2.14, which adds a pool of 32 streams. Two paths
+skip that queue, in both the v2.13.0 and v2.14.0 source. A third was found by
 measurement.
 
 ### 1. The kernel-name set (dtype casts, other unary ops)
 
 - `MetalShaderLibrary::hasFunction()` (`aten/src/ATen/native/mps/OperationUtils.mm`)
   fills a `std::unordered_set<std::string> functionNames` on first use. Its only
-  guard is a plain `bool functionNamesPopulated`.
+  guard is a plain `bool functionNamesPopulated`. Both are declared in
+  `MetalShaderLibrary.h`.
 - `exec_unary_kernel` calls it *before* entering the stream's queue. Two
   threads that reach it together insert into the set at the same time and
-  corrupt it.
+  corrupt it. Dtype casts reach `exec_unary_kernel` through
+  `copy_cast_kernel_mps` (`operations/Copy.mm`).
 - Native samples of hung processes show the loader threads in
   `copy_cast_kernel_mps → MetalShaderLibrary::exec_unary_kernel →
   std::__hash_table<std::string>::__emplace_unique_key_args`, running rather
@@ -66,8 +77,15 @@ measurement.
   hash). The 28th, a `cast` crash, faulted in Metal's encoder code (path 2
   below).
 - `exec_unary_kernel` also calls `getPipelineStateForFunc` before entering the
-  queue, and that writes two more unlocked caches, `cplMap` and `libMap`. The
-  file's `kernelCache` has no lock either.
+  queue. That writes the unlocked pipeline cache `cplMap` and, on first use,
+  the library's `library` member. The binary-op path looks its pipeline up
+  *inside* the queue, but the unary path writes the same `cplMap` from outside
+  it, so the queue does not protect `cplMap` even for binary ops. The MPS-to-CPU cast
+  (`exec_unary_kernel_raw`) also looks its pipeline up before the queue.
+- Other caches in the file are unlocked too, though this path does not write
+  them: `libMap` (written only by `getLibrary(params)`) and `kernelCache`
+  (reached through `getCachedKernelFunctionPtr`, which 2.14.0's
+  `contiguous_copy_kernel_mps` calls outside the queue).
 
 How it got into 2.13.0 (neither change is in 2.12.x; 2.12 was not measured):
 
@@ -94,7 +112,32 @@ called `torch.mps.empty_cache()` after each one. The process aborted within
 2–6 s, after 32–93 flushes, with the `MPSGraph` weak-reference message above.
 At the crash, the flushing thread was in `empty_cache()` and the other was
 inside `F.embedding`. The torch source for this path has not been audited; the
-evidence is the measurement alone.
+evidence is the measurement alone, and it has no recorded run count.
+
+It is rare in PixlStash's own traffic. Through PixlStash's services on
+`develop`, 25 runs spread over three pairings, this one among them, failed
+none (2026-09-21). Flushing on one thread while the tagger loaded on another
+failed 0 of 24 runs (2026-09-27): 12 with a CLIP batch before each flush, 12
+with flushes alone. A load is not a model run, so that is a near neighbour of
+this path rather than the path itself.
+
+### Fixed upstream, not yet released
+
+After 2.14.0, upstream `main` fixed paths 1 and 2:
+
+- [pytorch#167541](https://github.com/pytorch/pytorch/pull/167541) (landed
+  2026-09-21) puts a mutex around `functionNamesPopulated` and the
+  `MetalShaderLibrary` caches;
+  [pytorch#197837](https://github.com/pytorch/pytorch/pull/197837) (2026-09-23)
+  moved that lock out of the class.
+- [pytorch#197836](https://github.com/pytorch/pytorch/pull/197836) keeps the
+  stream's command-buffer state on the serial queue, so `deviceSynchronize`
+  now enters it. It landed on 2026-09-22, was reverted, and relanded on
+  2026-09-23.
+
+None of these is in v2.14.0 or v2.14.1-rc1, and path 3 has not been checked
+against them. Until PixlStash requires a torch that contains them, the rules in
+"What to do" still apply.
 
 ### Why transformers hits it
 
@@ -102,7 +145,8 @@ evidence is the measurement alone.
   `min(4, cpu_count)` workers (`core_model_loading.py`).
 - **Tensors land on Metal first.** When `device_map` names `mps`, it opens the
   safetensors file directly on Metal (`modeling_utils.py`, `backend="pread"`),
-  and each worker calls `tensor.to(device, dtype)`.
+  and each worker calls `tensor.to(device, dtype)`. Without a `device_map`,
+  the file is memory-mapped on the CPU and none of this applies.
 - **A dtype mismatch means concurrent casts.** If the requested `dtype` differs
   from the checkpoint's, the workers cast on Metal at the same time. For
   example, a bf16 checkpoint loaded with `dtype=torch.float32` does this.
@@ -110,7 +154,9 @@ evidence is the measurement alone.
   offloaded to disk, or a quantiser quantises the model on the fly
   (bitsandbytes NF4/INT8, for one). A checkpoint that is already quantised
   still loads on the pool.
-- **5.17.0 changes nothing here** compared with 5.16.1.
+- **5.17.0 changes nothing in this path** compared with 5.16.1. Its loader
+  changes are elsewhere: converter parameters forced onto the CPU, `pread` on
+  Windows, and the dtype of GGUF checkpoints.
 
 Not every hang during a threaded load is this race. One sampled hang had no
 Metal frames at all: a safetensors slice read was waiting on the Python GIL
@@ -212,6 +258,10 @@ The transformers `mps-cast` failures involve no `synchronize()` on the loader
 threads, which makes them the cleanest evidence for path 1. The four columns
 ran at the same time on the same GPU.
 
+Re-checked on 2026-09-28 with torch 2.13.0: threads `cast` failed 3 of 3 (a
+hang, the `setCurrentCommandEncoder` assertion, a `SIGSEGV`) and threads `copy`
+failed 0 of 3.
+
 ## What to do
 
 - **Loading with transformers:** set `HF_DEACTIVATE_ASYNC_LOAD=1` before the
@@ -233,9 +283,12 @@ ran at the same time on the same GPU.
 
 ## What PixlStash does
 
-Two threads reach Metal in the product, and each is closed at its source rather
-than synchronised. Nothing here is a retry or a fallback, because neither can
-work: these failures kill or hang the process before Python sees anything.
+Two paths put a second thread on Metal in everyday use: transformers' loader
+pool and search queries. Both are closed at their source rather than
+synchronised. Other paths still reach Metal from a thread other than the GPU
+worker; they are listed under "Not covered". Nothing here is a retry or a
+fallback, because neither can work: these failures kill or hang the process
+before Python sees anything.
 
 ### Loading: one loader thread wherever Metal exists
 
@@ -247,19 +300,22 @@ before a plugin's `init()`, because a plugin that loads a model at init would
 otherwise take the command down the way it would the server.
 
 Set whenever Metal is **present**, not only when it is the inference device:
-accelerate's `device_map="auto"` places weights on Metal whenever the host
-offers it, whatever PixlStash chose for itself. transformers reads the variable
-on every load, so setting it before the first one is enough — import order does
-not matter. A value already in the environment is the owner's and is kept, with
-a warning when transformers would read it as false.
+`device_map="auto"` places every weight on Metal whenever the host offers it,
+whatever PixlStash chose for itself. transformers sizes that map with
+accelerate's `get_max_memory`, which lists only `mps`, and no `cpu`, when Metal
+is available. transformers reads the variable on every load, so setting it
+before the first one is enough — import order does not matter. A value already
+in the environment is the owner's and is kept, with a warning when transformers
+would read it as false.
 
 ### Searching: the query encoders are held a second time, on the CPU
 
 A query is encoded on a request thread — text search and export by query
 before their database task, likeness search on a threadpool worker — while the
 GPU worker runs the embedding and tagging batches. So on Metal, and only on Metal,
-`InferenceEngine.create` also builds `inference/cpu_query_encoders.py`: the same
-classes, weights and preprocessing on the `cpu` device.
+`InferenceEngine.create` also builds `CpuQueryEncoders`
+(`inference/cpu_query_encoders.py`): the same classes, weights and
+preprocessing on the `cpu` device.
 
 `TextEmbeddingWorkflow.encode_query` / `encode_clip_query` and
 `ClipEmbeddingWorkflow.encode_query_image` route to them.
@@ -279,15 +335,31 @@ CPU. That looks wrong and is the point: the queue is what serialises it against
 the worker's own model loads, and loading a model on a request thread beside
 one of those races transformers' and accelerate's *imports* rather than Metal —
 it failed with `ImportError: cannot import name 'AcceleratorState' from
-partially initialized module 'accelerate.state'`.
+partially initialized module 'accelerate.state'`. `torchvision` has the same
+problem: its package imports itself in a cycle, so when two threads import it
+for the first time from different entry points (`open_clip` for CLIP,
+`torchvision.models` for the tagger), one raises `_DeadlockError` and the other
+gets a half-built `torchvision.ops`. A harness hit it in 7 of 12 cold starts,
+and in 0 of 12 once `open_clip` and `torchvision` had been imported on one
+thread first.
 
-`Vault` queues it from **both** `ensure_ready` and `start`, because neither is
-reliably the later one: at boot `Server.__init__` calls `start()` before `app`
-builds the engine, and on a library switch `_bring_up` calls `ensure_ready()`
-before the new runner starts. Whichever runs second queues it, idempotently. In
-`start` it goes in *before* the work planner: `URGENT` heads the queue but
-cannot preempt a running task, and one planner-queued batch held the load for
-over 86 s — long enough for a search to time out.
+`Vault` asks for the load from both `ensure_ready` and `start`; the call is
+idempotent. The call in `ensure_ready` is the one that normally queues it. At
+boot `Server.__init__` calls `start()` before `app` builds the engine, so
+`start` finds nothing to load yet. On a library switch `_bring_up` calls
+`ensure_ready()` first, and a runner accepts tasks before it starts. The call
+in `start` covers a runner that was stopped when `ensure_ready` ran.
+
+The load has to be queued before the planner has work to queue: `URGENT` heads
+the queue but cannot preempt a running task, and one planner-queued batch held
+the load for over 86 s — long enough for a search to time out. On a switch the
+planner has not started yet. At boot it has, but the model finders queue
+nothing until the engine exists, and `ensure_ready` queues the load straight
+after building it. On restarts with work already pending, the load ran first in
+8 of 8 (2026-09-27). Running first also means it imports `torchvision` alone,
+before any tagging starts, so the `torchvision` race above did not occur in
+those restarts. With the encoders switched off, as on a CUDA or CPU host, it
+occurred in 1 of 8.
 
 A search that arrives while the load is still running waits (60 s) and then
 answers 503; it never falls back to the Metal services, because with the worker
@@ -324,27 +396,49 @@ it lazily on the search thread, the import race above.
 
 ### Not covered
 
-Image plugins run on `asyncio.to_thread` (`services/plugin_service.py`), so a
-torch plugin that uses Metal is still a second thread on it. Closing that needs
-the plugin run routed onto the GPU worker, which this does not do.
+These still do Metal work on a thread other than the GPU worker:
+
+- **The tagger preload.** `TagTask.on_queued` loads the tagger on its own
+  `TagModelPreload` thread (`.to(mps)`, then `.half()` over its 344 weights)
+  while the worker may be running CLIP. In the real app the first preload
+  overlapped a CLIP batch on the worker in 10 of 10 runs, with a cache flush
+  inside it. No crash came of it in those runs or in 72 targeted concurrent
+  ones (2026-09-27), but it is the same race.
+- **`GET /pictures/{id}/anomaly_region`.** On the request thread it loads the
+  tagger if it is not resident, then runs Grad-CAM, which casts the shared
+  model to fp32 and back around a forward and backward pass. Not measured.
+  Because the cast is in place on the shared model, a tag batch on the worker
+  at that moment would meet fp32 weights, on CUDA as well as Metal (the CPU
+  model is fp32 throughout).
+- **The idle sweep.** `Vault._maybe_aggressive_unload` runs `engine.close()`
+  from the worker-progress poll, on a request thread, and `close()` ends in
+  `torch.mps.empty_cache()`: path 3's trigger. It runs only with "keep models
+  in memory" off, and its idle check sees the task queues, not the two paths
+  above. Not measured.
+- **Image plugins.** They run on `asyncio.to_thread`
+  (`services/plugin_service.py`), so a torch plugin that uses Metal is a
+  second thread on it. No built-in image plugin imports torch.
+
+Closing any of these means routing the work onto the GPU worker, which this
+does not do.
 
 ### Measured
 
 | Measure | Result |
 |---|---|
-| A transformers load on Metal, unguarded | 10 of 10 processes failed (6 hangs, 3 SIGSEGV, 1 SIGBUS) |
+| A transformers load on Metal, unguarded (2026-09-21; the version table above, from 2026-09-13, has 4 of 10 for the same pair) | 10 of 10 processes failed (6 hangs, 3 SIGSEGV, 1 SIGBUS) |
 | The same load with `HF_DEACTIVATE_ASYNC_LOAD=1` | 0 of 10 failed |
-| A real server driven through the HTTP routes, ~2 encodes/s | 4 of 4 runs clean |
+| A real server driven through the HTTP routes, ~2 encodes/s, before the CPU copies | 4 of 4 runs clean |
 | The same server driven at ~100 encodes/s, before the CPU copies | 1 of 3 runs died with `NSInvalidArgumentException` raised from inside a `matmul` |
 | The same, after | 4 of 4 runs clean, and the Metal services received no query call at all |
 | Boot, real app and real library, before the copies existed | 1.95 s (`create` builds the engine in 0.003 s) |
 | Boot with the copies loaded inline in `create` | **9.11 s** — they became the first models in the process and paid every import |
 | Boot with the load queued onto the GPU worker | 1.87–2.06 s, copies warm at boot + 9–11 s |
-| Memory the copies hold, Metal hosts only | ~630 MB, released by the idle sweep |
+| Memory the copies hold, Metal hosts only | About 0.7 GB: 696 MB of fp32 weights (CLIP 605 MB, SBERT 91 MB), 610 MB of process growth. Released by the idle sweep |
 | Do fp32 query vectors rank differently from the fp16 ones they replace? | No. 20 queries over an 8,625-vector library: top-1 identical 20/20, top-10 identical 20/20, largest rank move 1 place, max per-dim delta 4.91e-04 |
 | A search arriving before the queued load finishes | Waits 8.6 s and then answers; the next query takes 0.05 s |
 | A library switch | The new vault gets its own copies; its first query waits 4.5 s and then answers |
 
 torch 2.13.0, transformers 5.16.1, macOS 26.6.2, arm64. The crash is a race, so
 the rate is load-dependent: a light workload will not show it, which is why the
-density is quoted alongside every figure.
+crash rows quote their density.
