@@ -86,7 +86,7 @@ from pixlstash.services.workflow_run_service import (
     replace_missing_text_nodes,
     skip_requested_loras,
 )
-from pixlstash.utils.known_base_models import fold
+from pixlstash.utils.known_base_models import family_of, fold
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
 from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
@@ -1735,6 +1735,9 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
             "icon": None,
             "base_model": None,
             "base_model_folded": None,
+            # No file, so no shelf row to name or to read a family off.
+            "sha256": None,
+            "family": None,
             "kind": "lora",
             # A recipe slot names no file at all, so there is nothing to read a
             # precision off either - and nothing is what it serves.
@@ -2244,6 +2247,7 @@ _EDITOR_ICON = _h("editor-card-icon")
 # real fold to do rather than passing a canonical label through untouched.
 _EDITOR_BASE_MODEL = "flux.1-dev"
 _EDITOR_BASE_MODEL_FOLDED = fold(_EDITOR_BASE_MODEL)
+_EDITOR_FAMILY = family_of(_EDITOR_BASE_MODEL)
 
 
 def _file_a_workflow(server, tmp_path, monkeypatch, name, workflow, keys=None) -> str:
@@ -2332,6 +2336,7 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
     # `folded or raw`, so the same model has to arrive here spelled the way it
     # arrives on the shelf or one file gets two colours in two places.
     assert _EDITOR_BASE_MODEL_FOLDED not in (None, _EDITOR_BASE_MODEL)
+    assert _EDITOR_FAMILY is not None
     assert card["models"] == [
         {
             "name": _SHELF_DERIVED,
@@ -2339,6 +2344,11 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             "icon": _EDITOR_ICON,
             "base_model": _EDITOR_BASE_MODEL,
             "base_model_folded": _EDITOR_BASE_MODEL_FOLDED,
+            # Which shelf file it is, and the family the shelf serves for it,
+            # so a client can check a character's LoRA against this workflow
+            # without a second read.
+            "sha256": _h("realvisxl-digest"),
+            "family": _EDITOR_FAMILY,
             "kind": "unet",
             # Null and not an empty string: neither the shelf's column nor the
             # filename records a precision for this file.
@@ -2358,6 +2368,8 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             "icon": None,
             "base_model": None,
             "base_model_folded": None,
+            "sha256": None,
+            "family": None,
             "kind": "lora",
             "quant": None,
             "slot_label": None,

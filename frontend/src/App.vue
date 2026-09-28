@@ -107,6 +107,10 @@ const RunDialog = defineAsyncComponent(
 const MakeMoreDialog = defineAsyncComponent(
   () => import("./components/io/MakeMoreDialog.vue"),
 );
+// "Create with LoRA…", opened from a person's or a picture set's menu.
+const CreateWithLoraDialog = defineAsyncComponent(
+  () => import("./components/io/CreateWithLoraDialog.vue"),
+);
 
 // --- Stores ---
 const selectionStore = useSelectionStore();
@@ -893,6 +897,18 @@ defineExpose({
         open
         :source="runDialogStore.makeMore"
         :context="runDialogStore.context"
+        @close="runDialogStore.close()"
+        @run="onRunStarted"
+        @open-settings="openSettingsDialog"
+      />
+      <!-- The grid's context only for its `client_id`, and only while a grid
+           is mounted to follow the run: the destination is the person or set
+           the menu was opened on, never the view behind it. -->
+      <CreateWithLoraDialog
+        v-if="runDialogStore.loraRun"
+        open
+        :source="runDialogStore.loraRun"
+        :context="runDialogStore.hasRunner ? runDialogStore.context : {}"
         @close="runDialogStore.close()"
         @run="onRunStarted"
         @open-settings="openSettingsDialog"

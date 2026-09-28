@@ -103,6 +103,7 @@ import { useProjectStore } from "../../stores/useProjectStore";
 import { useUserPrefsStore } from "../../stores/useUserPrefsStore";
 import { useGridStore } from "../../stores/useGridStore";
 import { useFilterStore } from "../../stores/useFilterStore";
+import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorDetail } from "../../utils/apiError";
 import { activateOnEnterOrSpace } from "../../utils/keyboardActivation.js";
 import {
@@ -163,6 +164,7 @@ const telemetryIndicatorTitle = computed(() => {
 });
 const gridStore = useGridStore();
 const filterStore = useFilterStore();
+const runDialogStore = useRunDialogStore();
 const viewStore = useViewStore();
 const route = useRoute();
 
@@ -2965,6 +2967,15 @@ function suggestPicturesForSetFromCtx(pictureSet) {
     id: pictureSet.id,
     name: pictureSet.name,
   });
+}
+
+// "Create with LoRA…" (person or set): the workflows that can run the LoRA
+// attached to it, with that LoRA in the loader and the results filed back to
+// it. The dialog is App.vue's, like the other Run popups.
+function openLoraRunFromCtx(entityType, item) {
+  if (!item?.id) return;
+  closeSidebarCtxMenu();
+  runDialogStore.openLoraRun({ entityType, entityId: item.id, name: item.name });
 }
 
 function openSetCtxIconMenu(event) {
@@ -7856,6 +7867,18 @@ defineExpose({
           <span class="ctx-label-text">Suggest more pictures</span>
         </button>
         <button
+          v-if="!isReadOnly && filterStore.comfyuiConfigured"
+          class="ctx-item"
+          @click="openLoraRunFromCtx('character', sidebarCtxCharacter)"
+        >
+          <Tooltip
+            :text="`Run a workflow with ${sidebarCtxCharacter.name}'s LoRA`"
+            activator="parent"
+          />
+          <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
+          <span class="ctx-label-text">Create with LoRA…</span>
+        </button>
+        <button
           class="ctx-item"
           :disabled="
             isReadOnly ||
@@ -7960,6 +7983,22 @@ defineExpose({
           />
           <v-icon class="ctx-icon">mdi-image-search</v-icon>
           <span class="ctx-label-text">Suggest more pictures</span>
+        </button>
+        <!-- Hidden on a locked set for the same reason: the run files its
+             pictures into the set, and a locked set refuses them. -->
+        <button
+          v-if="
+            !isReadOnly && !sidebarCtxSet.locked && filterStore.comfyuiConfigured
+          "
+          class="ctx-item"
+          @click="openLoraRunFromCtx('set', sidebarCtxSet)"
+        >
+          <Tooltip
+            :text="`Run a workflow with the LoRA attached to ${sidebarCtxSet.name}`"
+            activator="parent"
+          />
+          <v-icon class="ctx-icon">mdi-sitemap-outline</v-icon>
+          <span class="ctx-label-text">Create with LoRA…</span>
         </button>
         <button
           class="ctx-item"

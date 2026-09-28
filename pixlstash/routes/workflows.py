@@ -346,6 +346,26 @@ class WorkflowSlotModel(BaseModel):
             "two colours in two places."
         ),
     )
+    sha256: str | None = Field(
+        None,
+        description=(
+            "The shelf file this slot loads, or null where the shelf does not "
+            "hold it or the name could be more than one file. A LoRA slot "
+            "carries one only where it carries a `name`: on a card known from "
+            "its file alone."
+        ),
+    )
+    family: str | None = Field(
+        None,
+        description=(
+            "The architecture family the model shelf serves for this file "
+            "(`sdxl`, `flux1`, …), the same value as `family` on its "
+            "`GET /models` row, or null where the shelf cannot say. What a "
+            "client compares a LoRA's `family` against to tell whether it "
+            "fits this workflow's checkpoint: null on either side is not a "
+            "clash."
+        ),
+    )
     kind: str
     quant: str | None = Field(
         None,
@@ -2144,6 +2164,8 @@ def _slot_models(slots) -> list[WorkflowSlotModel]:
             icon=slot.icon,
             base_model=slot.base_model,
             base_model_folded=slot.base_model_folded,
+            sha256=slot.sha256,
+            family=slot.family,
             kind=slot.kind,
             slot_label=slot.label,
         )

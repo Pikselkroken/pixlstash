@@ -122,6 +122,7 @@ from pixlstash.services.model_shelf_service import (
     fetch_workflow_sets,
     forget_models,
     replace_attachments,
+    served_family,
     update_models,
 )
 from pixlstash.services.model_workflow_sets import (
@@ -151,7 +152,6 @@ from pixlstash.utils.known_base_models import (
     SOURCE_FILENAME,
     SOURCE_USER,
     completions,
-    family_of,
     fold,
 )
 from pixlstash.utils.model_utils import canonical_quant, derive_model_name
@@ -1199,21 +1199,6 @@ def _workflow_set_errors():
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-def _family(row: dict) -> Optional[str]:
-    """The architecture family to serve for *row*.
-
-    From the identified base model only when it was stated (by the file or a
-    person), never from a guess: the family is what the LoRA swap labels
-    compatibility with, and a guessed family there would be stated as fact.
-    """
-    stated = row["base_model_source"] in (SOURCE_USER, SOURCE_DECLARED)
-    return (
-        family_of(row["base_model"])
-        or (family_of(row["base_model_canonical"]) if stated else None)
-        or row["family"]
-    )
-
-
 def _matched_name(row: dict) -> Optional[str]:
     """The known base model a checkpoint's filename simply IS, or ``None``.
 
@@ -1254,7 +1239,7 @@ def _to_response(
         base_model_canonical=row["base_model_canonical"],
         base_model_source=row["base_model_source"],
         matched_name=_matched_name(row),
-        family=_family(row),
+        family=served_family(row),
         quant=canonical_quant(row["quant"]),
         weights_id=row["weights_id"],
         trigger_words=row["trigger_words"],

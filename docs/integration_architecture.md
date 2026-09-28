@@ -958,7 +958,7 @@ the two sides have agreed:
    backend serves that document** with no mapping layer. Since #1623 it is one
    entry per workflow keyed `id`, and the fields are the ones in the `GET
    /workflows` row above; each slot is `{name, title, icon, base_model,
-   base_model_folded, kind, quant, slot_label}` with no `mark`, and the stack
+   base_model_folded, sha256, family, kind, quant, slot_label}` with no `mark`, and the stack
    fields are gone. The historical notes below that speak of a card, a stack
    or a mark describe the contract before #1623.
 
@@ -1100,6 +1100,14 @@ the two sides have agreed:
    these: they are what the model shelf draws a model with, and a card that has
    to draw itself out of its models rather than its pictures would otherwise
    need a second request per model to do it.
+
+   `sha256` and `family` name the shelf file a slot loads and the family the
+   shelf serves for it (`model_shelf_service.served_family`, the same value as
+   the `GET /models` row's `family`). Both are null where the shelf does not
+   hold the file or the name could be more than one file. They let a client
+   check a LoRA against a workflow's checkpoint, and match the checkpoint
+   against a hand-made workflow set, without another request: the Create with
+   LoRA dialog does both (`frontend/src/utils/loraWorkflows.js`).
 
    **A stored workflow is put on its card on request.** `POST
    /api/v1/comfyui/workflows/{workflow_name}/card` (`OWNER_ONLY`) files a
