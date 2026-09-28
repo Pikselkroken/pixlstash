@@ -892,7 +892,9 @@ class Picture(SQLModel, table=True):
                 lines.append(
                     f"{idx:>4} {pic_id:>6} {float(combined_score):>9.4f} {float(fuzzy_val):>7.4f} {float(embed_val):>7.4f} {float(min_tag_val):>8.4f}"
                 )
-            logger.info(
+            # DEBUG, not INFO: this carries the search text, which has no
+            # business in the log at the default level.
+            logger.debug(
                 "Semantic search score breakdown (top %d) query=%r:\n%s",
                 len(top_rows),
                 query,

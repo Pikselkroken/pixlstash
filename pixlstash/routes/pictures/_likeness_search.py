@@ -18,13 +18,9 @@ import numpy as np
 from fastapi import File, HTTPException, Query, Request, UploadFile
 from PIL import Image
 from pydantic import BaseModel, ConfigDict
-from starlette.concurrency import run_in_threadpool
 
 from pixlstash.authz.membership import enforce_set_scope
-from pixlstash.inference.cpu_query_encoders import (
-    NO_GPU_WORKER_DETAIL,
-    CpuQueryEncodersNotReadyError,
-)
+from pixlstash.inference.cpu_query_encoders import CpuQueryEncodersNotReadyError
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.likeness.likeness_utils import LikenessUtils
 from pixlstash.services import search_query_service
@@ -76,7 +72,7 @@ def _encode_query_image(server, pil_image: Image.Image) -> np.ndarray:
         logger.warning("likeness-search: cannot encode the query image yet: %s", exc)
         raise HTTPException(
             status_code=503,
-            detail=str(exc) if exc.worker_running else NO_GPU_WORKER_DETAIL,
+            detail=str(exc),
         ) from exc
     except Exception as exc:
         logger.error("likeness-search: CLIP encoding failed for query image: %s", exc)
@@ -153,7 +149,10 @@ def register_routes(router, server):
         response_model=list[ImageLikenessMatchResponse],
         response_model_exclude_none=True,
     )
-    async def search_by_image_likeness(
+    # A plain ``def``, so FastAPI runs it on a threadpool worker: the query
+    # encode (on Metal, possibly a wait for the CPU encoders to load), the
+    # database reads and the scoring would otherwise block every request.
+    def search_by_image_likeness(
         request: Request,
         files: List[UploadFile] = File(
             default=[], description="One or more query images to search against."
@@ -425,7 +424,7 @@ def register_routes(router, server):
                         detail=f"File {idx + 1}: uploaded file must be an image.",
                     )
 
-                raw_bytes = await file.read()
+                raw_bytes = file.file.read()
                 if not raw_bytes:
                     raise HTTPException(
                         status_code=400,
@@ -446,12 +445,7 @@ def register_routes(router, server):
                         detail=f"File {idx + 1}: could not decode uploaded image.",
                     ) from exc
 
-                # On a threadpool worker: this handler is async, and the encode
-                # (on Metal, possibly a wait for the CPU encoders to load) would
-                # otherwise block every request the server is handling.
-                query_embeddings.append(
-                    await run_in_threadpool(_encode_query_image, server, pil_image)
-                )
+                query_embeddings.append(_encode_query_image(server, pil_image))
         else:
             raise HTTPException(
                 status_code=400,

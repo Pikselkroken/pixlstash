@@ -1149,29 +1149,40 @@ def test_likeness_search_by_set_survives_mixed_embedding_widths(set_env):
     assert ids["odd"] not in returned
 
 
-def test_likeness_search_encodes_an_uploaded_image_off_the_event_loop(
-    set_env, monkeypatch
-):
-    """The upload encode runs on a threadpool worker, not on the event loop.
+def _on_event_loop() -> bool:
+    """Whether the calling thread is running an asyncio event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
 
-    The handler is ``async def``. An encode called inline there blocks every
-    request the server is handling, and on Metal it can wait up to a minute for
-    the CPU query encoders to load.
+
+def test_likeness_search_runs_off_the_event_loop(set_env, monkeypatch):
+    """The handler is a plain ``def``, so FastAPI runs it on a threadpool worker.
+
+    Its query encode (on Metal, possibly a wait of up to a minute for the CPU
+    encoders), its database reads and its scoring would otherwise block every
+    request the server is handling.
     """
     client, _server, ids, _sets = set_env
     calls = []
 
     def spy_encode(server, pil_image):
-        try:
-            asyncio.get_running_loop()
-            on_event_loop = True
-        except RuntimeError:
-            on_event_loop = False
-        calls.append(on_event_loop)
+        calls.append(("encode", _on_event_loop()))
         # The +x unit vector the set members are seeded around.
         return np.array([1, 0, 0, 0, 0, 0, 0, 0], dtype=np.float32)
 
+    real_fetch = search_query_service.fetch_candidate_clip_embeddings
+
+    def spy_fetch(*args, **kwargs):
+        calls.append(("fetch", _on_event_loop()))
+        return real_fetch(*args, **kwargs)
+
     monkeypatch.setattr(_likeness_search_module, "_encode_query_image", spy_encode)
+    monkeypatch.setattr(
+        search_query_service, "fetch_candidate_clip_embeddings", spy_fetch
+    )
     resp = client.post(
         f"{API_PREFIX}/pictures/likeness-search",
         params={"top_n": 500},
@@ -1179,7 +1190,9 @@ def test_likeness_search_encodes_an_uploaded_image_off_the_event_loop(
     )
 
     assert resp.status_code == 200, resp.text
-    assert calls, "the upload never reached _encode_query_image"
-    assert calls == [False], "the query image was encoded on the event loop"
-    # The spy's vector is what the ranking used.
-    assert ids["m1"] in [row["picture_id"] for row in resp.json()]
+    assert [name for name, _ in calls] == ["encode", "fetch"], calls
+    assert calls == [("encode", False), ("fetch", False)], "work ran on the event loop"
+    # The spy's vector is what the ranking used: m1 is exactly +x.
+    rows = resp.json()
+    assert rows[0]["picture_id"] == ids["m1"], rows[:3]
+    assert rows[0]["likeness"] == pytest.approx(1.0, abs=1e-3), rows[0]

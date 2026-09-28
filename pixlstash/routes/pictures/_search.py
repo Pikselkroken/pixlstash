@@ -16,10 +16,7 @@ from pixlstash.db_models import (
     Picture,
     SortMechanism,
 )
-from pixlstash.inference.cpu_query_encoders import (
-    NO_GPU_WORKER_DETAIL,
-    CpuQueryEncodersNotReadyError,
-)
+from pixlstash.inference.cpu_query_encoders import CpuQueryEncodersNotReadyError
 from pixlstash.pixl_logging import get_logger
 from pixlstash.utils.service.filter_helpers import (
     collect_set_filter_ids,
@@ -362,7 +359,7 @@ def register_routes(router, server):
             logger.warning("Text search cannot encode its query yet: %s", exc)
             raise HTTPException(
                 status_code=503,
-                detail=str(exc) if exc.worker_running else NO_GPU_WORKER_DETAIL,
+                detail=str(exc),
             ) from exc
 
         def find_by_text(session, query, offset, limit):
