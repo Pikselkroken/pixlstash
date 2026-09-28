@@ -447,15 +447,15 @@ class Vault:
         since they were then the first models in the process and paid the whole
         cold-import cost.
 
-        **Called from both :meth:`ensure_ready` and :meth:`start`.** The call
-        in ``ensure_ready`` is the one that normally queues the load: at boot
+        **Called from :meth:`ensure_ready`, :meth:`start` and the lazy engine
+        build in :meth:`get_worker_future`.** The call in ``ensure_ready`` is
+        the one that queues the load in both production sequences: at boot
         ``Server.__init__`` calls ``start()`` before ``app`` calls
         ``ensure_ready()``, so the engine does not exist yet when ``start``
         runs, and on a library switch ``_bring_up`` calls ``ensure_ready()``
-        first, into a runner that accepts tasks before it starts. The call in
-        ``start`` covers a runner that was stopped when ``ensure_ready`` ran; a
-        load neither could queue is left to the first search. It is
-        idempotent, so calling it twice queues one task.
+        first, into a runner that accepts tasks before it starts. The other
+        calls are safety nets; a load none of them could queue is left to the
+        first search. It is idempotent, so calling it twice queues one task.
 
         Queued rather than awaited, so nothing blocks on it. A search that
         arrives first waits via ``CpuQueryEncoders.ensure_serving``, which

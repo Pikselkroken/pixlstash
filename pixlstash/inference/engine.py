@@ -373,9 +373,9 @@ class InferenceEngine:
 
     def close(self) -> None:
         """Unload all models and release GPU/CPU memory."""
-        # Before the lifecycle call, which ends in trim_process_memory(): these
-        # have to be dropped by then or their ~0.7 GB is still held when the
-        # code that returns memory to the OS runs.
+        # Before the lifecycle call, so the gc.collect() inside it frees their
+        # ~0.7 GB too. (Its trim_process_memory() only acts on Linux, and these
+        # exist only on Macs.)
         if self.query_encoders is not None:
             self.query_encoders.unload()
         self.lifecycle.aggressive_unload(
@@ -678,7 +678,8 @@ class InferenceEngine:
         # reading two sets of weights at this point would be the only thing in
         # create() that costs time - measured at 7.3 s against 0.003 s, because
         # they would be the first models in the process and pay every import.
-        # Vault.start queues the load onto the GPU worker instead.
+        # The Vault queues the load onto the GPU worker instead, normally from
+        # Vault.ensure_ready.
         engine.query_encoders = build_cpu_query_encoders(device)
 
         return engine

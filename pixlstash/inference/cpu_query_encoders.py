@@ -27,26 +27,26 @@ pays nothing.
 owns is lazy, so ``InferenceEngine.create`` loads nothing and returns in
 milliseconds; loading these two inline made it take 7.3 s instead, because they
 were then the first models in the process and paid the whole cold-import cost -
-measured on a real library, boot 1.95 s to 9.11 s. Instead ``Vault.start``
-queues a
-:class:`~pixlstash.tasks.cpu_query_encoder_load_task.CpuQueryEncoderLoadTask`
-once the runner is up. That keeps boot where it was **and** keeps the load off
-request threads: loading a model beside the worker's own loads races
-transformers' and accelerate's *imports* rather than Metal, and failed with
-``ImportError: cannot import name 'AcceleratorState' from partially initialized
-module 'accelerate.state'``.
+measured on a real library, boot 1.95 s to 9.11 s. Instead the Vault queues a
+:class:`~pixlstash.tasks.cpu_query_encoder_load_task.CpuQueryEncoderLoadTask`,
+normally from ``Vault.ensure_ready`` straight after building the engine. That
+keeps boot where it was **and** keeps the load off request threads: loading a
+model beside the worker's own loads races transformers' and accelerate's
+*imports* rather than Metal, and failed with ``ImportError: cannot import name
+'AcceleratorState' from partially initialized module 'accelerate.state'``.
 
 A search that arrives before the load finishes waits for it
 (:meth:`CpuQueryEncoders.ensure_serving`) rather than falling back to the Metal
 services, because with the worker running that fallback is the crash.
 
-**With no GPU worker at all, the device is safe and the caller uses it.** The
-crash needs *two* threads on Metal; a task runner that is not running has no
-GPU worker doing Metal work, so there is nothing to collide with.
-``ensure_serving`` returns ``False`` there, which is permission rather than
-failure. Refusing instead broke search in every configuration that has an
-engine but no running worker - the e2e backend, a runner stopped for a library
-switch, and the multi-project authz suite, which is what caught it.
+**When the runner refuses the load, the caller uses the device.** The crash
+needs *two* threads on Metal, and a runner that refuses tasks has no GPU worker
+doing Metal work to collide with. ``ensure_serving`` returns ``False`` there,
+which is permission rather than failure. Refusing instead broke search in
+configurations with an engine but no running worker, which the multi-project
+authz suite caught. The reasoning has two gaps: a stopping runner refuses tasks
+while its worker finishes its last batch, and two searches in that state are two
+threads on Metal (``docs/apple-metal-thread-safety.md``, "Not covered").
 """
 
 from __future__ import annotations
@@ -101,8 +101,8 @@ def build_cpu_query_encoders(device) -> Optional["CpuQueryEncoders"]:
     """Return unloaded CPU copies when *device* needs them, otherwise ``None``.
 
     Constructs only - no weights are read here, so this costs microseconds and
-    ``InferenceEngine.create`` stays as fast as it was. ``Vault.start`` queues
-    the load once there is a worker to run it.
+    ``InferenceEngine.create`` stays as fast as it was. The Vault queues the
+    load, normally from ``Vault.ensure_ready``.
 
     Args:
         device: The engine's resolved inference device.
@@ -160,9 +160,9 @@ class CpuQueryEncoders:
     def bind_loader(self, loader) -> None:
         """Give the copies a way to get themselves loaded.
 
-        Injected by ``Vault.start`` rather than taken in ``__init__`` because
-        the engine is built before the task runner exists, and the loader needs
-        the runner.
+        Injected by the Vault rather than taken in ``__init__``:
+        ``InferenceEngine.create`` builds the copies without any reference to
+        the Vault's task runner, and the loader needs that runner.
 
         Args:
             loader: Zero-argument callable that queues a load task and returns
@@ -261,11 +261,12 @@ class CpuQueryEncoders:
     def start_loading(self) -> bool:
         """Queue a load if one is not already in flight, without waiting.
 
-        Idempotent and never raises, because the Vault calls it from both
-        ``ensure_ready`` and ``start``. The call in ``ensure_ready`` normally
+        Idempotent and never raises, because the Vault calls it from
+        ``ensure_ready``, ``start`` and the lazy engine build in
+        ``get_worker_future``. The call in ``ensure_ready`` is the one that
         queues the load, since a runner accepts tasks before it starts; the
-        call in ``start`` covers a runner that was stopped at the time. A load
-        neither could queue is left to the first search.
+        others are safety nets. A load none of them could queue is left to the
+        first search.
 
         Returns:
             ``True`` when a load is queued or already done.
@@ -279,14 +280,14 @@ class CpuQueryEncoders:
     def ensure_serving(self, timeout_s: Optional[float] = None) -> bool:
         """Whether the copies will serve this query, waiting for a queued load.
 
-        **Returns ``False`` when there is no GPU worker, and that is a
+        **Returns ``False`` when the runner refuses the load, and that is a
         permission to use the accelerator rather than a failure.** The crash
-        these copies exist to prevent needs *two* threads on Metal; with no task
-        runner there is no GPU worker doing Metal work, so nothing is there to
-        collide with and the engine's own services are safe. Refusing instead
-        would break search in every configuration that has an engine but no
-        running worker - the e2e backend, a runner stopped for a library
-        switch, and the authz suites, one of which caught exactly that.
+        these copies exist to prevent needs *two* threads on Metal, and a runner
+        that refuses tasks has no GPU worker doing Metal work to collide with.
+        Refusing instead would break search in configurations with an engine
+        but no running worker, which the authz suites caught. Two gaps: a
+        stopping runner refuses tasks while its worker finishes its last batch,
+        and two searches in that state are two threads on Metal.
 
         A worker that *is* running is the opposite case: the copies are the only
         safe encoder, so a caller waits for them rather than falling back.
