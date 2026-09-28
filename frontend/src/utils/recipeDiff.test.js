@@ -106,6 +106,13 @@ describe("a default LoRA the owner added has no filename", () => {
     expect(recipeDiff(recipe, withNameless).segments).toEqual([]);
   });
 
+  it("names it as unnamed when the recipe, with digests, goes without it", () => {
+    const recipe = { loras: DEFAULT.loras };
+    expect(recipeDiff(recipe, withNameless).segments.map((s) => s.text)).toEqual([
+      "without an unnamed LoRA",
+    ]);
+  });
+
   it("says the LoRAs were not compared when the recipe has no digests", () => {
     const recipe = { loras: [{ filename: "ada.safetensors", strength: 1 }] };
     expect(recipeDiff(recipe, withNameless).segments.map((s) => s.text)).toEqual([

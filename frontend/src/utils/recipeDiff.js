@@ -91,6 +91,16 @@ function pairLoras(mine, theirs) {
   };
 }
 
+/**
+ * A LoRA's name on the line. A default LoRA the owner added is stored by
+ * digest with no filename, and pairs by digest when the recipe has them, so a
+ * recipe can really be without one; it is named as unnamed rather than
+ * printed as a blank "without ".
+ */
+function loraName(lora) {
+  return shortName(lora.filename) || "an unnamed LoRA";
+}
+
 function segment(kind, parts) {
   const list = parts.map((part) => (typeof part === "string" ? { text: part } : part));
   return { kind, parts: list, text: list.map((part) => part.text).join("") };
@@ -151,7 +161,7 @@ export function recipeDiff(recipe, defaultRecipe) {
     const { pairs, added, removed } = pairLoras(mine, defaultRecipe.loras || []);
     for (const lora of added) {
       segments.push(
-        segment("lora-add", [`+ ${shortName(lora.filename)} ${strengthText(lora.strength)}`]),
+        segment("lora-add", [`+ ${loraName(lora)} ${strengthText(lora.strength)}`]),
       );
     }
     for (const { lora, with: base } of pairs) {
@@ -159,11 +169,11 @@ export function recipeDiff(recipe, defaultRecipe) {
       const now = strengthText(lora.strength);
       if (was === now) continue;
       segments.push(
-        segment("lora-strength", [`${shortName(lora.filename)} ${was}`, ARROW, now]),
+        segment("lora-strength", [`${loraName(lora)} ${was}`, ARROW, now]),
       );
     }
     for (const lora of removed) {
-      segments.push(segment("lora-without", [`without ${shortName(lora.filename)}`]));
+      segments.push(segment("lora-without", [`without ${loraName(lora)}`]));
     }
   }
 
