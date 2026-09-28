@@ -5349,7 +5349,7 @@ def test_count_decides_the_pictures_not_the_graphs_batch_size(runnable, monkeypa
     }
     embedded["8"] = {
         "class_type": "WanImageToVideo",
-        "inputs": {"width": 512, "length": 33, "batch_size": 2},
+        "inputs": {"width": 512, "length": 33, "batch_size": 2.0},
     }
     embedded["9"] = {
         "class_type": "RebatchLatents",

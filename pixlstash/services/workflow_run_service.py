@@ -662,7 +662,8 @@ def pin_batch_size(graph: dict, object_info: Optional[dict] = None) -> list[str]
         value = inputs["batch_size"]
         if isinstance(value, bool) or value == 1:
             continue
-        if not (is_link(value) or isinstance(value, int)):
+        # A float counts: ComfyUI casts an INT input with int(), so 4.0 is 4.
+        if not (is_link(value) or isinstance(value, (int, float))):
             continue
         inputs["batch_size"] = 1
         pinned.append(str(node_id))
