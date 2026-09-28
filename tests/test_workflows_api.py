@@ -3466,6 +3466,9 @@ def test_an_unknown_workflow_is_a_404_and_a_malformed_id_a_422(workflow_env):
         f"{API}/workflows/not-a-digest",
         f"{API}/workflows/not-a-digest/pictures",
         f"{API}/workflows/{BUSY_CARD}",
+        # A real id with a trailing newline: `$` alone would have let it by.
+        f"{API}/workflows/{unknown}%0A",
+        f"{API}/workflows/{unknown}%0A/pictures",
     ):
         assert workflow_env.owner.get(path).status_code == 422, path
 

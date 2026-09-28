@@ -744,7 +744,8 @@ OVERRIDE_ADDRESS_SEPARATOR = "/"
 # A workflow is named either by ``auto:`` and the core hash that IS the
 # automatic group, or by the uuid hex a merge or split minted. Checked rather
 # than trusted, so a malformed id is a 422 naming the parameter instead of a
-# write against a workflow nothing will ever read.
+# write against a workflow nothing will ever read. Checked with `fullmatch`:
+# `$` also matches before a trailing newline, so `.match` let `<id>\n` through.
 _WORKFLOW_ID_RE = re.compile(rf"^(?:{AUTO_STACK_PREFIX}[0-9a-f]{{64}}|[0-9a-f]{{32}})$")
 
 # The extension a picture keeps when it is uploaded into ComfyUI's input folder.
@@ -2305,7 +2306,7 @@ def create_router(server) -> APIRouter:
         return read_variant_picture_counts(server.vault)
 
     def _workflow_id(workflow_id: str) -> str:
-        if not _WORKFLOW_ID_RE.match(workflow_id):
+        if not _WORKFLOW_ID_RE.fullmatch(workflow_id):
             raise HTTPException(
                 status_code=422,
                 detail="Invalid workflow_id: expected auto:<core hash> or a group id.",
