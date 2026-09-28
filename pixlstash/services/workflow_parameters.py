@@ -70,18 +70,19 @@ MODEL = "model"
 # The settings shown before "All N parameters", besides every model and seed. A
 # primitive counts when it drives one of these (Flux2-Klein sets its size so).
 # ponytail: a name list; per-class rules if custom packs name these differently.
-FEATURED_NAMES = frozenset(
-    {
-        "steps",
-        "cfg",
-        "guidance",
-        "sampler_name",
-        "scheduler",
-        "denoise",
-        "width",
-        "height",
-    }
+# The tuple is also the order a workflow's default recipe lists them in, so its
+# defaults read the same way whichever of its nodes happens to hold the size.
+FEATURED_ORDER = (
+    "steps",
+    "cfg",
+    "guidance",
+    "sampler_name",
+    "scheduler",
+    "denoise",
+    "width",
+    "height",
 )
+FEATURED_NAMES = frozenset(FEATURED_ORDER)
 
 # Nodes whose ``batch_size`` is not how many pictures come out: a chunk size, or
 # the number of views a multi-view model renders on purpose.

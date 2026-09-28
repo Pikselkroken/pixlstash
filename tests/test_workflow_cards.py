@@ -1501,6 +1501,7 @@ def test_the_default_recipe_is_the_modal_checkpoint_and_the_majority_loras(
     # Three runs at 20 steps, one at 30.
     steps = {d.input_name: d.value for d in recipe.values}
     assert steps["steps"] == 20
+    assert [d.input_name for d in recipe.values] == ["steps", "width", "height"]
     assert recipe.sampled == 4
     # The base graph has a face detailer, and three runs of four went without.
     assert recipe.stages == {"face_detailer": False}
@@ -1664,3 +1665,23 @@ def test_a_swapped_run_votes_for_its_original_loader_s_file(hub, monkeypatch):
     (vae,) = [m for m in recipe.models if m.address.endswith("/vae_name")]
     # Three runs loaded the bf16 file, two of them through the swapped loader.
     assert vae.filename == now
+
+
+def test_the_defaults_list_the_sampler_before_the_size_whatever_the_slot_labels():
+    """Slot labels are digests, so they must not decide the order."""
+    latent, sampler = "core:" + "a" * 64, "core:" + "f" * 64
+    addresses = [
+        (latent, "height"),
+        (latent, "width"),
+        (sampler, "steps"),
+        (sampler, "cfg"),
+        (sampler, "seed_extra"),
+    ]
+    ordered = sorted(addresses, key=workflow_card_service._address_order)
+    assert [name for _, name in ordered] == [
+        "steps",
+        "cfg",
+        "width",
+        "height",
+        "seed_extra",
+    ]
