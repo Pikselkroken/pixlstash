@@ -635,14 +635,18 @@ def run_seed_targets(graph: dict, object_info: Optional[dict]) -> list[dict]:
     return detect_seed_targets(graph, object_info or {}) or collect_seed_inputs(graph)
 
 
-def pin_batch_size(graph: dict) -> list[str]:
-    """Set every literal picture batch (:func:`is_picture_batch`) to 1.
+def pin_batch_size(graph: dict, object_info: Optional[dict] = None) -> list[str]:
+    """Set every picture batch (:func:`is_picture_batch`) to a literal 1.
 
     The Run popup's count is how many pictures a run makes: one submission
     each, each with its own seed. A graph saved with ``batch_size: 4`` made
-    four per submission, so a count of 1 came back as four pictures. A wired
-    value is left alone, as cutting the link would change the graph, and so is
-    a batch the graph builds on purpose (``RepeatLatentBatch``).
+    four per submission, so a count of 1 came back as four pictures.
+
+    **A wired value is replaced too**: a primitive (or a size picker's batch
+    output) setting the batch would otherwise multiply the count just the same.
+    The link is cut on the latent's input only, so whatever else the source
+    drives keeps its value. A batch the graph builds afterwards on purpose
+    (``RepeatLatentBatch``) is left as authored.
 
     Returns:
         The ids of the nodes it changed.
@@ -650,18 +654,18 @@ def pin_batch_size(graph: dict) -> list[str]:
     pinned = []
     for node_id, node in graph.items():
         inputs = node.get("inputs") if isinstance(node, dict) else None
-        if not isinstance(inputs, dict):
+        if not isinstance(inputs, dict) or "batch_size" not in inputs:
             continue
         class_type = str(node.get("class_type") or "")
-        value = inputs.get("batch_size")
-        if (
-            is_picture_batch(class_type, "batch_size")
-            and isinstance(value, int)
-            and not isinstance(value, bool)
-            and value != 1
-        ):
-            inputs["batch_size"] = 1
-            pinned.append(str(node_id))
+        if not is_picture_batch(class_type, "batch_size", object_info):
+            continue
+        value = inputs["batch_size"]
+        if isinstance(value, bool) or value == 1:
+            continue
+        if not (is_link(value) or isinstance(value, int)):
+            continue
+        inputs["batch_size"] = 1
+        pinned.append(str(node_id))
     return pinned
 
 

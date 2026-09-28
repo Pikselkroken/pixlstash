@@ -5328,10 +5328,12 @@ def test_a_kept_pictures_embedded_graph_is_the_second_source(runnable, monkeypat
 
 
 def test_count_decides_the_pictures_not_the_graphs_batch_size(runnable, monkeypatch):
-    """A graph saved with ``batch_size: 4`` runs one picture per submission.
+    """Every latent a submission creates is a batch of one, however it is set.
 
-    Wrong if a submitted latent still says 4: a count of 2 would then come
-    back as eight pictures. A wired ``batch_size`` is left alone.
+    Wrong if a submitted latent still says 4 or still reads the primitive: a
+    count of 2 would then come back as eight pictures. ComfyUI's answer
+    decides which nodes create latents, so a Wan image-to-video node counts and
+    ``RebatchLatents``, whose ``batch_size`` is a chunk size, does not.
     """
     embedded = json.loads(json.dumps(RUN_DOCUMENT))
     embedded["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
@@ -5340,21 +5342,29 @@ def test_count_decides_the_pictures_not_the_graphs_batch_size(runnable, monkeypa
         "class_type": "EmptyLatentImage",
         "inputs": {"width": 512, "height": 512, "batch_size": 4},
     }
-    embedded["6"] = {
-        "class_type": "EmptySD3LatentImage",
-        "inputs": {"width": 512, "height": 512, "batch_size": ["1", 0]},
-    }
+    embedded["6"] = {"class_type": "PrimitiveInt", "inputs": {"value": 4}}
     embedded["7"] = {
-        "class_type": "SDXL Empty Latent Image (rgthree)",
-        "inputs": {"dimensions": "1024 x 1024", "batch_size": 3},
+        "class_type": "EmptySD3LatentImage",
+        "inputs": {"width": ["6", 0], "height": 512, "batch_size": ["6", 0]},
+    }
+    embedded["8"] = {
+        "class_type": "WanImageToVideo",
+        "inputs": {"width": 512, "length": 33, "batch_size": 2},
+    }
+    embedded["9"] = {
+        "class_type": "RebatchLatents",
+        "inputs": {"latents": ["5", 0], "batch_size": 8},
     }
     object_info = json.loads(json.dumps(RUN_OBJECT_INFO))
-    for class_type in (
-        "EmptyLatentImage",
-        "EmptySD3LatentImage",
-        "SDXL Empty Latent Image (rgthree)",
-    ):
-        object_info[class_type] = {"input": {"required": {}}}
+    outputs = {
+        "EmptyLatentImage": ["LATENT"],
+        "EmptySD3LatentImage": ["LATENT"],
+        "WanImageToVideo": ["CONDITIONING", "CONDITIONING", "LATENT"],
+        "RebatchLatents": ["LATENT"],
+        "PrimitiveInt": ["INT"],
+    }
+    for class_type, output in outputs.items():
+        object_info[class_type] = {"input": {"required": {}}, "output": output}
     monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (object_info, None)
     )
@@ -5370,9 +5380,13 @@ def test_count_decides_the_pictures_not_the_graphs_batch_size(runnable, monkeypa
     assert r.status_code == 200, r.text
     assert len(runnable.submitted) == 2
     for sent in runnable.submitted:
-        assert sent["graph"]["5"]["inputs"]["batch_size"] == 1
-        assert sent["graph"]["7"]["inputs"]["batch_size"] == 1
-        assert sent["graph"]["6"]["inputs"]["batch_size"] == ["1", 0]
+        graph = sent["graph"]
+        assert graph["5"]["inputs"]["batch_size"] == 1
+        assert graph["7"]["inputs"]["batch_size"] == 1
+        # Only the batch link is cut: the primitive still sets the width.
+        assert graph["7"]["inputs"]["width"] == ["6", 0]
+        assert graph["8"]["inputs"]["batch_size"] == 1
+        assert graph["9"]["inputs"]["batch_size"] == 8
 
 
 def test_a_picture_whose_file_has_gone_falls_through_instead_of_erroring(

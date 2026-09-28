@@ -4347,7 +4347,7 @@ def create_router(server) -> APIRouter:
             # After every value: `count` is the number of pictures, one per
             # submission, and a batch saved in the graph (or a recipe) would
             # multiply it.
-            pinned = run_service.pin_batch_size(graph)
+            pinned = run_service.pin_batch_size(graph, object_info)
             if pinned:
                 logger.info(
                     "[workflows] Run of %s: batch_size pinned to 1 on nodes %s so "
