@@ -9,6 +9,7 @@ is asserted end to end: a recipe saved on a checkpoint-B card still runs on B.
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 import time
 import uuid
@@ -17,6 +18,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from sqlmodel import delete, select
 
 from pixlstash.database import DBPriority
@@ -610,3 +612,29 @@ def test_a_recipe_whose_card_became_no_workflow_is_left_and_deferred(run_env):
         '{"a/b": 1}',
         None,
     )
+
+
+def test_a_busy_vault_leaves_its_recipes_eligible(run_env):
+    """A lock surfacing through SQLAlchemy is transient, like a busy hub's
+    sqlite3 one: the batch is handed out again rather than deferred for the
+    session."""
+    server = run_env.server
+
+    def seed(session):
+        session.exec(delete(SavedRecipe))
+        recipe = SavedRecipe(name="busy", workflow_key="0" * 64, prompt="x")
+        session.add(recipe)
+        session.commit()
+        return recipe.id
+
+    recipe_id = server.vault.db.run_task(seed, priority=DBPriority.IMMEDIATE)
+    finder = MissingSavedRecipeWorkflowFinder(vault=server.vault)
+    task = finder.find_task()
+    finder.on_task_complete(
+        task,
+        SQLAlchemyOperationalError(
+            "SELECT", {}, sqlite3.OperationalError("database is locked")
+        ),
+    )
+    again = finder.find_task()
+    assert again is not None and again.params["recipe_ids"] == [recipe_id]

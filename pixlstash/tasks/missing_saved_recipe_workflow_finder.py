@@ -6,6 +6,7 @@ import sqlite3
 from typing import TYPE_CHECKING
 
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 
 from pixlstash.pixl_logging import get_logger
 from pixlstash.task_runner import TaskCancelledError
@@ -69,8 +70,12 @@ class MissingSavedRecipeWorkflowFinder(BaseTaskFinder):
         """Record which recipes must not be handed out again this session."""
         ids = (getattr(task, "params", None) or {}).get("recipe_ids") or []
         self._handed_out.difference_update(ids)
-        if isinstance(error, (TaskCancelledError, sqlite3.OperationalError)):
-            # Never ran, or a busy hub: nothing was learned, so they stay eligible.
+        if isinstance(
+            error,
+            (TaskCancelledError, sqlite3.OperationalError, SQLAlchemyOperationalError),
+        ):
+            # Never ran, or a busy hub (sqlite3) or vault (through SQLAlchemy):
+            # nothing was learned, so they stay eligible.
             logger.info(
                 "Saved-recipe conversion did not run for %d recipe(s): %s. They "
                 "stay eligible.",
