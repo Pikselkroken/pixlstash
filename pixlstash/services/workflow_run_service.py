@@ -48,6 +48,7 @@ from pixlstash.services.workflow_hash import (
 )
 from pixlstash.services.workflow_identity import model_fix_kind
 from pixlstash.services.workflow_io import api_graph
+from pixlstash.services.workflow_parameters import is_picture_batch
 from pixlstash.utils.adapter_header import FILE_TEXT_ENCODER, FILE_VAE
 from pixlstash.utils.comfyui_utilities import collect_seed_inputs, iter_model_fields_api
 from pixlstash.pixl_logging import get_logger
@@ -635,26 +636,30 @@ def run_seed_targets(graph: dict, object_info: Optional[dict]) -> list[dict]:
 
 
 def pin_batch_size(graph: dict) -> list[str]:
-    """Set every empty latent's literal ``batch_size`` to 1; return the node ids.
+    """Set every literal picture batch (:func:`is_picture_batch`) to 1.
 
     The Run popup's count is how many pictures a run makes: one submission
     each, each with its own seed. A graph saved with ``batch_size: 4`` made
-    four per submission, so a count of 1 came back as four pictures. Only the
-    ``Empty*Latent*`` sources are touched, where ``batch_size`` means pictures;
-    a wired value is left alone, as cutting the link would change the graph.
+    four per submission, so a count of 1 came back as four pictures. A wired
+    value is left alone, as cutting the link would change the graph, and so is
+    a batch the graph builds on purpose (``RepeatLatentBatch``).
+
+    Returns:
+        The ids of the nodes it changed.
     """
     pinned = []
     for node_id, node in graph.items():
-        if not isinstance(node, dict):
-            continue
-        class_type = str(node.get("class_type") or "")
-        inputs = node.get("inputs")
-        if not (class_type.startswith("Empty") and "Latent" in class_type):
-            continue
+        inputs = node.get("inputs") if isinstance(node, dict) else None
         if not isinstance(inputs, dict):
             continue
+        class_type = str(node.get("class_type") or "")
         value = inputs.get("batch_size")
-        if isinstance(value, int) and not isinstance(value, bool) and value != 1:
+        if (
+            is_picture_batch(class_type, "batch_size")
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+            and value != 1
+        ):
             inputs["batch_size"] = 1
             pinned.append(str(node_id))
     return pinned

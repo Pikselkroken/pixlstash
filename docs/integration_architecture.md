@@ -787,9 +787,11 @@ Seven rules the client must not re-derive:
    once per selected picture, times `count`, and `runs` (and the cap) count that
    product: 40 pictures at `count` 5 is 200 runs.
 
-8. **One picture per run.** Each run's empty latents (`Empty*Latent*`) have a
-   literal `batch_size` pinned to 1 (`pin_batch_size`), so a graph saved with
-   `batch_size: 4` does not turn `count` 1 into four pictures.
+**`count` is the number of pictures.** The run pins a literal latent
+`batch_size` to 1 (`pin_batch_size`, rule in `is_picture_batch`), so a graph
+saved with `batch_size: 4` does not turn `count` 1 into four pictures, and the
+parameter list does not offer it. A wired `batch_size` or a batch the graph
+builds on purpose (`RepeatLatentBatch`) is left as authored.
 
 **Edited defaults are overrides applied at run time and never written back into
 a graph.** The stored document is content-addressed, so rewriting it would

@@ -83,6 +83,23 @@ FEATURED_NAMES = frozenset(
     }
 )
 
+# Loaders that carry their own empty latent (Efficiency Nodes).
+_LATENT_LOADER_CLASSES = frozenset({"Efficient Loader", "Eff. Loader SDXL"})
+
+
+def is_picture_batch(class_type: str, name: str) -> bool:
+    """Whether *name* on *class_type* is how many pictures one submission makes.
+
+    A run pins it to 1 (``workflow_run_service.pin_batch_size``), because the
+    Run popup's count is the number of pictures, so it is not offered as a
+    parameter either: a control the run overrides would do nothing.
+    """
+    # ponytail: a name rule; per-class entries if a pack names its latent otherwise.
+    return name == "batch_size" and (
+        ("Empty" in class_type and "Latent" in class_type)
+        or class_type in _LATENT_LOADER_CLASSES
+    )
+
 
 @dataclass(frozen=True)
 class Parameter:
@@ -153,6 +170,8 @@ def describe_parameters(
             is_seed = any(_feeds_seed(info, *consumer) for consumer in consumers)
         for name, value in node["inputs"].items():
             if is_link(value) or (node_id, name) in bound:
+                continue
+            if is_picture_batch(class_type, name):
                 continue
             if _CREDENTIAL_RE.search(name) and not _NOT_CREDENTIAL_RE.search(name):
                 continue

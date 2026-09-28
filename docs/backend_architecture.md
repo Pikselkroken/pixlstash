@@ -2913,9 +2913,10 @@ route since #1410. The pieces, all called from `_plan` / `_submit_every` in
   The pre-flight shares `_plan` and never reaches `_submit_every`, so it uploads
   nothing by construction.
 - **A selection feeding an input is the repeat axis.** The group runs once per
-  selected picture, times `count`, and the `MAX_RUNS_PER_REQUEST` cap counts that
-  product. Each submission makes one picture: `pin_batch_size` sets a literal
-  `batch_size` on the graph's `Empty*Latent*` nodes to 1. With `stack: true` each pass stacks with its own picture
+  selected picture, times `count`, and the `MAX_RUNS_PER_REQUEST` cap counts
+  that product. Each submission makes one picture: `pin_batch_size` sets a
+  literal latent `batch_size` (`is_picture_batch`) to 1, in `_plan` after the
+  values. With `stack: true` each pass stacks with its own picture
   (`stack_for_picture`), and every save node's own `filename_prefix` is tagged
   with that stack and source (`_tag_for_stack`), so an output a watched folder
   imports first still lands there. That tagging applies to any stacked run, a

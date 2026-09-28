@@ -5344,8 +5344,16 @@ def test_count_decides_the_pictures_not_the_graphs_batch_size(runnable, monkeypa
         "class_type": "EmptySD3LatentImage",
         "inputs": {"width": 512, "height": 512, "batch_size": ["1", 0]},
     }
+    embedded["7"] = {
+        "class_type": "SDXL Empty Latent Image (rgthree)",
+        "inputs": {"dimensions": "1024 x 1024", "batch_size": 3},
+    }
     object_info = json.loads(json.dumps(RUN_OBJECT_INFO))
-    for class_type in ("EmptyLatentImage", "EmptySD3LatentImage"):
+    for class_type in (
+        "EmptyLatentImage",
+        "EmptySD3LatentImage",
+        "SDXL Empty Latent Image (rgthree)",
+    ):
         object_info[class_type] = {"input": {"required": {}}}
     monkeypatch.setattr(
         workflows_routes, "_read_object_info", lambda url: (object_info, None)
@@ -5363,6 +5371,7 @@ def test_count_decides_the_pictures_not_the_graphs_batch_size(runnable, monkeypa
     assert len(runnable.submitted) == 2
     for sent in runnable.submitted:
         assert sent["graph"]["5"]["inputs"]["batch_size"] == 1
+        assert sent["graph"]["7"]["inputs"]["batch_size"] == 1
         assert sent["graph"]["6"]["inputs"]["batch_size"] == ["1", 0]
 
 
