@@ -31,10 +31,10 @@ import { useLibrariesStore } from "../../stores/useLibrariesStore";
 enableAutoUnmount(afterEach);
 
 const CARDS = [
-  { key: "t2i", name: "Portrait", type: "txt2img", type_label: "Text to Image" },
-  { key: "up", name: "4x", type: "upscale", type_label: "Upscale" },
-  { key: "out", name: "Widen", type: "outpaint", type_label: "Outpaint" },
-  { key: "i2i", name: "Relight", type: "img2img", type_label: "Image to Image" },
+  { id: "t2i", name: "Portrait", type: "txt2img", type_label: "Text to Image" },
+  { id: "up", name: "4x", type: "upscale", type_label: "Upscale" },
+  { id: "out", name: "Widen", type: "outpaint", type_label: "Outpaint" },
+  { id: "i2i", name: "Relight", type: "img2img", type_label: "Image to Image" },
 ];
 
 const checkedRow = (wrapper) =>
@@ -90,7 +90,7 @@ describe("the Edit tab", () => {
     await wrapper.find(".edit-sec-act").trigger("click");
     expect(push).toHaveBeenCalledWith({
       name: "workflows",
-      query: { card: "out" },
+      query: { workflow: "out" },
     });
   });
 

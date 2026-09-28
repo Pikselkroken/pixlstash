@@ -28,8 +28,8 @@ from pixlstash.hub.workflow_card_reads import (
     card_index,
     model_fix_labels,
     model_fixes,
+    Workflow,
     topologies_in_workflow,
-    variants_in_stack,
     variants_in_workflow,
     workflow_index,
     workflow_of_topology,
@@ -38,7 +38,6 @@ from pixlstash.services import workflow_card_service
 from pixlstash.services.workflow_run_service import saved_recipe_body
 from pixlstash.hub.workflow_card_writes import (
     record_loader_swaps,
-    set_attributes,
     set_model_fix,
 )
 from pixlstash.services.workflow_card_service import _figures, _superseded_variants
@@ -1294,8 +1293,13 @@ def test_the_fixed_card_keeps_its_own_name_whoever_has_more_pictures(hub):
     new = record_api_graph(hub, _graph(ckpt="test-model-bf16.safetensors"))
     card = card_of(hub, old.structural_hash)
     other = card_of(hub, new.structural_hash)
-    set_attributes(hub, card, name="The one being fixed")
-    set_attributes(hub, other, name="The busier card")
+    # The card tables have no route writer since #1623; a model fix still
+    # carries them across a re-key, which is what is asserted.
+    with hub.transaction() as conn:
+        conn.executemany(
+            "INSERT INTO workflow_attr (workflow_key, name) VALUES (?, ?)",
+            [(card, "The one being fixed"), (other, "The busier card")],
+        )
 
     set_model_fix(
         hub,
@@ -1374,7 +1378,14 @@ def test_covers_made_with_the_replaced_model_are_flagged_and_go_last(hub):
         CoverCandidate(old.structural_hash, 1, 5, 0.9, None),
         CoverCandidate(new.structural_hash, 2, 2, 0.1, None),
     ]
-    (figure,) = _figures([card], {}, candidates, {}, superseded)
+    workflow = Workflow(
+        "auto:" + "c" * 64,
+        topologies=[old.topology_hash],
+        variants=list(card.variants),
+        cards=[key],
+        base_card=key,
+    )
+    (figure,) = _figures([workflow], [card], {}, candidates, {}, superseded)
 
     assert [(c.picture_id, c.superseded) for c in figure.covers] == [
         (2, False),
@@ -1526,26 +1537,6 @@ def test_the_owner_s_edits_replace_what_they_name(hub, monkeypatch):
     model = next(m for m in recipe.models if m.address == checkpoint.address)
     assert (model.filename, model.provenance) == ("c.safetensors", "edited")
     assert ("d" * 64, 0.5) in [(lora.sha256, lora.strength) for lora in recipe.loras]
-
-
-def test_the_stack_filter_leaves_out_a_card_taken_out_of_its_group(hub):
-    first = record_api_graph(hub, _graph(ckpt="a.safetensors"))
-    second = record_api_graph(hub, _graph(ckpt="b.safetensors"))
-    core = hub.fetchone(
-        "SELECT core_hash FROM workflow_topology_core WHERE topology_hash = ?",
-        (first.topology_hash,),
-    )["core_hash"]
-    both = {first.structural_hash, second.structural_hash}
-    assert set(variants_in_stack(hub, f"auto:{core}")) == both
-    # The bare hash is the same stack, not a different reading of it.
-    assert set(variants_in_stack(hub, core)) == both
-    with hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_unstacked (workflow_key) VALUES (?)",
-            (card_of(hub, second.structural_hash),),
-        )
-    assert variants_in_stack(hub, core) == [first.structural_hash]
-    assert variants_in_stack(hub, "no-such-stack") == []
 
 
 def test_the_stage_vote_counts_only_topologies_whose_stages_are_known(hub, monkeypatch):

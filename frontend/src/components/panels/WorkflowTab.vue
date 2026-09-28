@@ -10,40 +10,19 @@
          is not part of a workflow, so it replaces the body rather than sitting
          under it. Here so that a run started from this screen can be watched
          from this screen. -->
-    <!-- A stack selected whole reads as one workflow, its cover, with the
-         other members a pick away: expanding the stack just to read one of
-         them was the only way before. Outside the body below so a member's
-         read, or its failure, never takes the picker (or its focus) away. -->
-    <div
-      v-if="tab === 'workflow' && stackCover"
-      class="inspector-section wftab-head"
-    >
-      <AppSelect
-        :model-value="selectedKey"
-        class="wftab-pick"
-        label="Workflow in this stack"
-        hide-label
-        :options="stackOptions"
-        data-testid="wftab-stack-pick"
-        @update:model-value="store.pickStackMember"
-      />
-    </div>
-
     <TasksPanel v-if="tab === 'tasks'" />
 
-    <p v-else-if="!card && !multiple && !stackCover" class="wftab-empty">
+    <p v-else-if="!card && !multiple" class="wftab-empty">
       Pick a workflow to see what it is made of.
     </p>
 
     <!-- Before the multiple-selection body: a selection of several has a
-         Recipes answer of its own, the union of their stacks, which is what
+         Recipes answer of its own, the union of their recipes, which is what
          the owner is asking for by selecting them. -->
     <WorkflowRecipesTab
       v-else-if="showingRecipes"
-      :workflow-keys="recipeKeys"
-      :whole-stack="!recipesNarrowed"
-      :stack-name="recipesStack.name"
-      :stack-size="recipesStack.size"
+      :workflow-ids="recipeKeys"
+      :workflow-name="recipesName"
     />
 
     <!-- Several selected: the tab says so, and the VERBS ARE THE PILL'S.
@@ -51,10 +30,9 @@
          the grid a selection bar that offers the same two and eight more, and
          two surfaces deriving the same verb independently disagreed within a
          week — this Hide was hardcoded `Hide` while the pill's is a toggle
-         reading Unhide on an all-hidden selection, and this Stack said "Stack
-         together" where the pill says "Fuse into one stack" for a selection
-         that already holds one. Two live controls on one screen, one of them
-         saying the wrong thing about what it is about to do.
+         reading Unhide on an all-hidden selection. Two live controls on one
+         screen, one of them saying the wrong thing about what it is about to
+         do.
 
          So one owner. The pill is always on screen when this block is (both
          are gated on a selection, and it is docked over the grid this rail
@@ -73,7 +51,7 @@
       </div>
     </template>
 
-    <!-- A stack member the grid does not list, while its read is out. -->
+    <!-- A workflow the grid does not list, while its read is out. -->
     <p v-else-if="!card" class="wftab-empty">
       {{
         detailFailed
@@ -84,10 +62,9 @@
 
     <template v-else>
       <div class="inspector-section wftab-head">
-        <p v-if="!stackCover" class="wftab-title">{{ card.name }}</p>
+        <p class="wftab-title">{{ card.name }}</p>
         <p class="wftab-sub">
-          {{ subtitlePrefix
-          }}<button
+          <button
             v-if="card.picture_count"
             class="wftab-pictures"
             type="button"
@@ -100,8 +77,8 @@
         </p>
       </div>
 
-      <!-- What every picture here was made with: the models and the LoRAs
-           the whole stack shares, as one list of label-and-value rows, so a
+      <!-- What every picture here was made with: the default recipe's models
+           and the LoRAs every picture shares, as one list of label-and-value rows, so a
            LoRA reads like the checkpoint above it. "Edit LoRAs…" is here even
            with no loader at all: an entry point that only exists for
            workflows that already have LoRAs is how adding the first one
@@ -339,7 +316,7 @@
           </div>
         </div>
 
-        <!-- The LoRAs every picture of every workflow in the stack loaded,
+        <!-- The LoRAs every picture of the workflow loaded,
              in the order the chain applies them. The ones that change are
              the pile in the next section, never here. -->
         <div
@@ -399,8 +376,7 @@
       </div>
 
       <!-- Everything that changes, as one pile. It speaks for the whole
-           stack, like the list above, and it is where a LoRA is promoted to
-           a workflow of its own. -->
+           workflow, like the list above. -->
       <div
         v-if="summary?.varying?.length"
         class="inspector-section"
@@ -412,13 +388,7 @@
         </span>
         <div class="wftab-field">
           <span class="wftab-label">LoRA</span>
-          <WorkflowLoraPile
-            :summary="summary"
-            :member-names="memberNames"
-            :busy="Boolean(busy)"
-            @promote="promoteLora"
-            @show="showLora"
-          />
+          <WorkflowLoraPile :summary="summary" @show="showLora" />
         </div>
         <p class="wftab-note wftab-quiet">{{ pileNote }}</p>
       </div>
@@ -521,7 +491,7 @@
          row and Tasks is the app's business, so neither wants this footer. -->
     <template #footer>
       <div
-        v-if="tab === 'workflow' && (card || multiple || stackCover)"
+        v-if="tab === 'workflow' && (card || multiple)"
         class="wftab-foot"
       >
         <AppButton
@@ -584,7 +554,7 @@
           id="wftab-open-reason"
           class="wftab-note wftab-quiet"
         >
-          Open one workflow, or one whole stack, at a time
+          Open one workflow at a time
         </p>
         <p
           v-else-if="comfyuiLacksNode && canOpenComfyui"
@@ -602,7 +572,7 @@
           node in ComfyUI. Install or update it, then restart ComfyUI.
         </p>
         <p v-if="multiple" id="wftab-run-reason" class="wftab-note wftab-quiet">
-          Run one workflow, or one whole stack, at a time
+          Run one workflow at a time
         </p>
       </div>
     </template>
@@ -613,7 +583,7 @@
     <EditLorasDialog
       v-if="editKey"
       :open="Boolean(editKey)"
-      :workflow-key="editKey"
+      :workflow-id="editKey"
       :card-name="editName"
       :picture-count="editPictures"
       :drop-lora="editDrop"
@@ -630,9 +600,8 @@
 // on `/workflows` working; F1b (#1404) then deleted the shelf, its store and
 // that inspector together, and this is the rail on `/workflows`.
 //
-// What the rail shows follows the SELECTION, not the open stack: a stack
-// member selected inside its panel shows that member here, and a stack
-// selected whole shows its cover with a picker for the other members.
+// What the rail shows follows the SELECTION: one workflow, keyed by its `id`
+// (#1623). Models and Defaults read the detail's `card.default_recipe`.
 
 import { computed, onBeforeUnmount, ref, toRaw, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -647,7 +616,6 @@ import {
   readModelSwap,
   setWorkflowDefaults,
   setWorkflowModelFix,
-  setLoraPromotion,
   setWorkflowPins,
   workflowCoverUrl,
 } from "../../api/workflows";
@@ -668,7 +636,6 @@ import {
   checkpointModel,
   checkpointUnread,
   modelDisplayName,
-  stackMemberOptions,
 } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
 import AppInspector from "../widgets/AppInspector.vue";
@@ -748,7 +715,7 @@ watch(
 );
 
 // `?tab=recipes`, from the lightbox banner naming the recipe a picture matches
-// (#1480). The card itself is selected by `?topology=`, which `WorkflowsView`
+// (#1480). The workflow itself is selected by `?topology=`, which `WorkflowsView`
 // honours; this is the other half, and **it opens the rail too** - landing on
 // a selected card with the rail shut is the same dead end the link was for.
 //
@@ -773,7 +740,7 @@ watch(
  * Tasks last, and never anything but last, because it is the app's business
  * and not this workflow's.
  *
- * Recipes answers for a selection of several too — the union of their stacks —
+ * Recipes answers for a selection of several too — the union of their recipes —
  * so it is never disabled. The Workflow tab is the one with nothing to say
  * about several cards at once.
  */
@@ -792,65 +759,25 @@ const busy = ref("");
 const menuOpen = ref(false);
 const notesDraft = ref("");
 
-/**
- * The cover of a stack selected WHOLE, or null.
- *
- * Several keys, but one card on screen: the rail shows it as one workflow,
- * the cover by default, with a picker for the other members. The pick is the
- * store's (`stackPickKey`), because the grid's Run follows it too.
- */
-const stackCover = computed(() => store.stackCover);
+/** Several workflows selected. */
+const multiple = computed(() => store.selectedKeys.length > 1);
 
-/** Several cards selected that are not one whole stack. */
-const multiple = computed(
-  () => store.selectedKeys.length > 1 && !stackCover.value,
-);
-
-/** The stack's members, from the cover's own card, which lists them in order. */
-const stackOptions = computed(() => {
-  const cover = stackCover.value;
-  if (!cover) return [];
-  // One line each: the rail's picker stays a native select, so the two-line
-  // chip rows the Run popup draws are left out here.
-  const rows = stackMemberOptions(cover.members).map(({ value, label }) => ({
-    value,
-    label,
-  }));
-  return rows.length ? rows : [{ value: cover.key, label: cover.name }];
-});
-
-/**
- * The one card the body reads: the single selection, or the stack member
- * picked. Every read and write below goes through this.
- */
+/** The one workflow id the body reads, or null. Every read and write uses it. */
 const selectedKey = computed(() =>
-  store.selectedKeys.length === 1
-    ? store.selectedKeys[0]
-    : store.stackPickKey,
+  store.selectedKeys.length === 1 ? store.selectedKeys[0] : null,
 );
 
 /**
- * The selected card, wherever it sits.
- *
- * A member is never in `cards` — the grid lists one card per stack — so the
- * fetched member lists are searched too. Without that, selecting a row inside
- * an open stack panel emptied the rail.
+ * The selected card: the grid's, else the one the detail read brought back
+ * (the grid leaves out hidden cards and one-offs, so a selected workflow is
+ * not always a listed one).
  */
 const card = computed(() => {
   const key = selectedKey.value;
   if (!key) return null;
-  const top = store.cards.find((entry) => entry.key === key);
+  const top = store.cards.find((entry) => entry.id === key);
   if (top) return top;
-  for (const group of Object.values(store.members)) {
-    const found = group.find((entry) => entry.key === key);
-    if (found) return found;
-  }
-  // Last: the card the detail read brought back. The grid lists one card per
-  // stack and leaves out hidden cards and one-offs, so a selected card is not
-  // always a listed one — and a mark flip that merged this card into somebody
-  // else's stack lands exactly there, which used to empty the rail on the one
-  // gesture this tab exists for.
-  if (detail.value?.card?.key === key) return detail.value.card;
+  if (detail.value?.card?.id === key) return detail.value.card;
   return null;
 });
 
@@ -871,66 +798,16 @@ const recipeKeys = computed(() =>
   store.selectedKeys.length > 1
     ? [...store.selectedKeys]
     : card.value
-      ? [card.value.key]
+      ? [card.value.id]
       : [],
 );
 
-/**
- * Members picked inside the expanded stack, rather than the stack selected
- * whole: the Recipes list is then theirs alone. A collapsed stack card, or a
- * card the `?topology=` link selected with its stack shut, still lists the
- * whole stack's recipes, because that is what the card on screen stands for.
- */
-const recipesNarrowed = computed(() => {
-  const open = store.openStackKey;
-  if (!open || stackCover.value) return false;
-  const inside = new Set(store.stackKeys(open));
-  return recipeKeys.value.every((key) => inside.has(key));
-});
-
-/**
- * What heads the Recipes tab: the stack, when the selected card is a member.
- *
- * `stack_size` rather than `member_keys.length`, which leaves the card's own
- * key out and would call a stack of six "five workflows".
- */
-const recipesStack = computed(() => {
-  // A stack selected whole heads its Recipes as the stack, not as a count.
-  if (stackCover.value) {
-    return {
-      name: stackCover.value.name || "",
-      size: Number(stackCover.value.stack_size) || 0,
-    };
-  }
-  if (multiple.value) {
-    const count = store.selectedKeys.length;
-    return { name: `${count} workflows selected`, size: 0 };
-  }
-  // One member picked out of the open stack lists its own recipes, so it is
-  // what the header names; the size stays, since they still run on the stack.
-  if (recipesNarrowed.value) {
-    return {
-      name: card.value?.name || "",
-      size: Number((parentStack.value || card.value)?.stack_size) || 0,
-    };
-  }
-  const stack = parentStack.value || card.value;
-  return {
-    name: stack?.name || "",
-    size: Number(stack?.stack_size) || 0,
-  };
-});
-
-/** The stack this card sits in, when it is a member of one. */
-const parentStack = computed(() => {
-  const key = selectedKey.value;
-  if (!key || !card.value || card.value.key === store.openStackKey) return null;
-  return (
-    store.cards.find(
-      (entry) => entry.key !== key && (entry.member_keys ?? []).includes(key),
-    ) ?? null
-  );
-});
+/** What heads the Recipes tab. */
+const recipesName = computed(() =>
+  multiple.value
+    ? `${store.selectedKeys.length} workflows selected`
+    : card.value?.name || "",
+);
 
 // Plain numbers, as `WorkflowsView`'s own subtitle writes them: the shelf's
 // grouped spelling went with the shelf in F1b, and this screen never used it.
@@ -939,15 +816,6 @@ const parentStack = computed(() => {
 const picturesLabel = computed(() => {
   const count = card.value?.picture_count ?? 0;
   return `${count} ${count === 1 ? "picture" : "pictures"}`;
-});
-
-const subtitlePrefix = computed(() => {
-  if (stackCover.value) {
-    return `A stack of ${stackCover.value.stack_size} workflows · `;
-  }
-  if (parentStack.value) return `In the ${parentStack.value.name} stack · `;
-  if ((card.value?.stack_size ?? 1) > 1) return "Showing the cover · ";
-  return "";
 });
 
 // All three read the MODEL SHELF's name where it has one, the same preference
@@ -968,10 +836,56 @@ function withQuant(text, model) {
   return detail ? `${text} · ${detail}` : text;
 }
 
+/**
+ * The default recipe's models (#1623), from the detail read: the grid sends
+ * `default_recipe` null, so until the detail lands the card's own base-card
+ * slots answer.
+ */
+const recipeModels = computed(
+  () => detail.value?.card?.default_recipe?.models ?? null,
+);
+
+/**
+ * A default-recipe model as the rows name it: the base card's slot for the
+ * same file where there is one, for its shelf name and precision, else the
+ * file without its folders.
+ *
+ * ponytail: matched by stem prefix, because the card's `name` has its folder,
+ * extension and quant postfix stripped; a shared address on both would make
+ * this exact.
+ */
+/**
+ * A default-recipe model's `kind` is the model-fix kind (`checkpoint`, `vae`,
+ * `text_encoder`); a card slot's is the slot word. The slot words each covers.
+ */
+const RECIPE_KIND_SLOTS = {
+  checkpoint: ["checkpoint", "unet"],
+  vae: ["vae"],
+  text_encoder: ["clip"],
+};
+
+function recipeModelLabel(model) {
+  const stem = fileName(model.filename).toLowerCase();
+  const kinds = RECIPE_KIND_SLOTS[model.kind] ?? [model.kind];
+  const slot = (card.value?.models ?? []).find(
+    (entry) =>
+      kinds.includes(entry.kind) &&
+      entry.name &&
+      stem.startsWith(String(entry.name).toLowerCase()),
+  );
+  return slot
+    ? withQuant(modelDisplayName(slot), slot)
+    : fileName(model.filename);
+}
+
 // The base model, as the card's own row picks it: a Flux or SD3 graph has a
 // `unet` and no `checkpoint`, and reading "checkpoint" alone called that
-// missing.
+// missing. The default recipe's pick wins once it has been read.
 const checkpointLabel = computed(() => {
+  const recipe = (recipeModels.value ?? []).find(
+    (model) => model.kind === "checkpoint" && model.filename,
+  );
+  if (recipe) return recipeModelLabel(recipe);
   const found = card.value ? checkpointModel(card.value) : null;
   const name = modelDisplayName(found);
   return name ? withQuant(name, found) : "";
@@ -1196,7 +1110,14 @@ const supportRows = computed(() =>
         .filter((fix) => !missing.some((file) => sameFile(fix.now, file)))
         .map((fix) => ({ id: `fix:${fix.slot_label}`, fix })),
     ];
-    if (!entries.length) {
+    if (!entries.length && recipeModels.value) {
+      entries = recipeModels.value
+        .filter((model) => model.kind === spec.kind && model.filename)
+        .map((model) => ({
+          id: `model:${model.address}`,
+          text: recipeModelLabel(model),
+        }));
+    } else if (!entries.length) {
       const models = (card.value?.models ?? []).filter(
         (model) => model.kind === spec.cardKind && modelDisplayName(model),
       );
@@ -1222,9 +1143,8 @@ function replaceCheckpoint(now) {
  * Replace the missing file `was` in slots of `kind` with the shelf model
  * `now`, or undo the replacement of `was` (`now: null`).
  *
- * The card keeps its key unless a re-key moved it, so the answer's key is
- * followed; the grid is re-read because pictures already made with the
- * replacement join this card. The pre-flight is asked again: it is what says
+ * The grid is re-read because pictures already made with the replacement
+ * join this workflow. The pre-flight is asked again: it is what says
  * whether the model now loads.
  */
 function replaceModel(kind, was, now) {
@@ -1238,14 +1158,8 @@ function replaceModel(kind, was, now) {
         now,
         slot_kind: kind,
       });
-      store.forgetMembers();
-      await store.fetchCards();
+      await store.refetch();
       if (!unmoved()) return;
-      const moved = body?.card?.key;
-      if (moved && moved !== key) {
-        store.select(moved);
-        return;
-      }
       detail.value = body;
       void checkInstalled(key);
     } catch (err) {
@@ -1349,43 +1263,33 @@ async function loadChain(key) {
   }
 }
 
-// ── The stack's LoRAs: shared, and the pile ────────────────────────────────
+// ── The workflow's LoRAs: shared, and the pile ─────────────────────────────
 
-/** `GET …/lora-summary` for the selected card's stack, and its read state. */
+/** `GET …/lora-summary` for the selected workflow, and its read state. */
 const summary = ref(null);
 const summaryPending = ref(false);
 const summaryFailed = ref(false);
 
-/** The card the rail's header speaks for: the stack, when there is one. */
-const headCard = computed(
-  () => stackCover.value || parentStack.value || card.value,
-);
-
-/** The picture on top of the stack, which decides the top of the pile. */
+/** The cover picture, which decides the top of the pile. */
 const coverPictureId = computed(
-  () => headCard.value?.covers?.[0]?.picture_id ?? null,
-);
-
-/** `{key: name}` over the stack, for the fan's "only in …". */
-const memberNames = computed(() =>
-  Object.fromEntries(
-    (headCard.value?.members ?? []).map((member) => [member.key, member.name]),
-  ),
+  () => card.value?.covers?.[0]?.picture_id ?? null,
 );
 
 /** Which read is the latest, so an older answer never overwrites a newer one. */
 let summaryRead = 0;
 
 /**
- * Read the stack's LoRAs for `key`.
+ * Read the workflow's LoRAs for `key`.
  *
- * A re-read of the SAME card (after a promotion, or when the cover arrives)
- * keeps the pile on screen until the answer lands: blanking it unmounts the
- * open fan and drops focus to the page.
+ * A re-read of the SAME workflow (when the cover arrives) keeps the pile on
+ * screen until the answer lands: blanking it unmounts the open fan and drops
+ * focus to the page.
  */
+let summaryKey = null;
 async function loadSummary(key) {
   const read = ++summaryRead;
-  if (summary.value && !summary.value.keys?.includes(key)) summary.value = null;
+  if (summaryKey !== key) summary.value = null;
+  summaryKey = key;
   summaryFailed.value = false;
   if (!key) {
     summary.value = null;
@@ -1401,7 +1305,7 @@ async function loadSummary(key) {
     summary.value = body;
   } catch (err) {
     if (read !== summaryRead) return;
-    console.warn(`[workflows] could not read the LoRAs of ${key}'s stack`, err);
+    console.warn(`[workflows] could not read the LoRAs of ${key}`, err);
     summary.value = null;
     summaryFailed.value = true;
   } finally {
@@ -1418,7 +1322,7 @@ function loraFileKey(value) {
 }
 
 /**
- * The LoRAs in every picture of every workflow in the stack, in chain order.
+ * The LoRAs in every picture of the workflow, in chain order.
  *
  * The summary says WHICH (it counts pictures); the chain says in what order
  * and how strong, for the selected card. A shared LoRA the chain does not
@@ -1444,19 +1348,13 @@ const sharedLoras = computed(() => {
   return rows.sort((a, b) => a.order - b.order);
 });
 
-/** "Shared by both workflows in this stack. X is not on your shelf." */
+/** "In every picture of this workflow. X is not on your shelf." */
 const sharedNote = computed(() => {
   // No picture to count: the rows are the workflow's own chain.
   if (!summary.value?.pictures) {
     return `In the order the chain applies them. ${shelfLine.value}`;
   }
-  const size = summary.value?.keys?.length ?? 1;
-  const scope =
-    size > 2
-      ? `Shared by all ${size} workflows in this stack.`
-      : size === 2
-        ? "Shared by both workflows in this stack."
-        : "In every picture of this workflow.";
+  const scope = "In every picture of this workflow.";
   const missing = sharedLoras.value.filter((lora) => !lora.on_shelf);
   if (!missing.length) return scope;
   const names = missing.map((lora) => lora.label).join(", ");
@@ -1473,28 +1371,24 @@ const pileNote = computed(() => {
   const top = summary.value?.cover_asset
     ? "On top: the cover picture's LoRA."
     : "On top: the LoRA most pictures used.";
-  if (!rest) return `${top} Open it to see its pictures or promote it.`;
-  return `${top} Open the pile to see the other ${rest === 1 ? "one" : rest} or promote one.`;
+  if (!rest) return `${top} Open it to see its pictures.`;
+  return `${top} Open the pile to see the other ${rest === 1 ? "one" : rest}.`;
 });
 
-/** *Show N*: the grid, narrowed to this stack's pictures of one LoRA. */
+/** *Show N*: the grid, narrowed to this workflow's pictures of one LoRA. */
 function showLora(row) {
-  const head = headCard.value;
   const name = row.name || "A forgotten LoRA";
   showLoraPictures({
-    // The summary's, which names exactly the stack it counted; the grid's
-    // card leaves it null when it had to leave a member out.
-    stack: summary.value?.stack_id ?? head?.stack_id ?? null,
-    key: selectedKey.value,
+    id: selectedKey.value,
     lora: row.asset,
-    name: `${name} in ${head?.name || "this workflow"}`,
+    name: `${name} in ${card.value?.name || "this workflow"}`,
   });
 }
 
 /** Open Edit LoRAs… on `key`, with `drop` already struck through if given. */
 function openEditLoras(key, drop = "") {
   if (!key) return;
-  const shown = card.value?.key === key ? card.value : null;
+  const shown = card.value?.id === key ? card.value : null;
   editName.value = shown?.name || "";
   editPictures.value = Number(shown?.picture_count) || 0;
   editDrop.value = drop;
@@ -1509,24 +1403,23 @@ function closeEditLoras() {
 // The name and count arrive with the card when the dialog was opened from a
 // link before the grid or the detail read had landed.
 watch(card, (next) => {
-  if (!editKey.value || next?.key !== editKey.value) return;
+  if (!editKey.value || next?.id !== editKey.value) return;
   if (!editName.value) editName.value = next.name || "";
   if (!editPictures.value) editPictures.value = Number(next.picture_count) || 0;
 });
 
-// `?card=<key>&edit=loras&drop_lora=<file>`, from Save-as-recipe's "The
-// workflow" (#1478): select that card, open the rail on its Workflow tab, and
-// open Edit LoRAs… with that entry already deleted.
+// `?workflow=<id>&edit=loras&drop_lora=<file>`, from Save-as-recipe's "The
+// workflow" (#1478): select that workflow, open the rail on its Workflow tab,
+// and open Edit LoRAs… with that entry already deleted.
 //
-// By KEY rather than `?topology=`, because a topology can hold several cards
-// and the hand-over names exactly one. `edit` and `drop_lora` are one-shot:
-// they are taken back off the URL once honoured, so a reload or a Back does
-// not reopen a dialog the owner has since cancelled. `card` stays, as
-// `topology` does, and is honoured once per value.
+// `edit` and `drop_lora` are one-shot: they are taken back off the URL once
+// honoured, so a reload or a Back does not reopen a dialog the owner has since
+// cancelled. `workflow` stays, as `topology` does, and is honoured once per
+// value.
 let honouredCard = null;
 
 watch(
-  () => [route.query?.card, route.query?.edit, route.query?.drop_lora],
+  () => [route.query?.workflow, route.query?.edit, route.query?.drop_lora],
   ([wanted, edit, drop]) => {
     if (typeof wanted !== "string" || !wanted) {
       honouredCard = null;
@@ -1565,14 +1458,15 @@ const nodeNames = computed(() =>
 );
 
 /**
- * The card's defaults, each with whether it is pinned.
+ * The workflow's defaults, each with whether it is pinned: the default
+ * recipe's featured values (#1623).
  *
  * The detail read carries the pins; a card with none (`null`, not `[]`) gets
  * the default set above, which is what the server means by "the default pins
  * apply again".
  */
 const defaults = computed(() => {
-  const rows = detail.value?.card?.defaults ?? [];
+  const rows = detail.value?.card?.default_recipe?.values ?? [];
   const stored = detail.value?.pins;
   const pinned = Array.isArray(stored)
     ? new Set(stored.map((pin) => `${pin.slot_label}\u0000${pin.input_name}`))
@@ -1672,53 +1566,13 @@ function stillOn(key) {
 }
 
 /**
- * A mark over the selection itself, for the writes that re-read the grid.
- *
- * `stillOn` is not enough there: a stack member's `selectedKey` is derived
- * from the grid, so a flip or a Hide that takes the member out of its stack
- * empties it even though the reader never moved. By identity, of the
- * selection and of the stack pick: every gesture that selects, or picks
- * another member, writes a new one, so a reader who moved on meanwhile —
- * even only to another member of the same stack — is told apart.
+ * A mark over the selection itself, for the writes that re-read the grid: by
+ * identity, since every gesture that selects writes a new array, so a reader
+ * who moved on meanwhile — even back to the same workflow — is told apart.
  */
 function selectionMark() {
   const keys = toRaw(store.selectedKeys);
-  const pick = store.stackPick;
-  return () => toRaw(store.selectedKeys) === keys && store.stackPick === pick;
-}
-
-/**
- * Promote one LoRA to a workflow of its own, or put it back (the pile's one
- * verb, confirmed in the fan before it gets here).
- *
- * **This re-keys cards**: the LoRA's pictures move to a new card or back. The
- * answer's `key` is followed, since putting a LoRA back from the card made
- * for it takes that card away; the grid, the stack's members and the pile
- * are all read again because every one of them has changed.
- */
-function promoteLora(row, promoted) {
-  const key = selectedKey.value;
-  if (!key || !row?.asset) return;
-  const unmoved = selectionMark();
-  return queueWrite(`lora:${row.asset}`, async () => {
-    try {
-      const moved = await setLoraPromotion(key, row.asset, promoted);
-      store.forgetMembers();
-      await store.fetchCards();
-      if (!unmoved()) return;
-      // `select` moves `selectedKey`, which the watchers turn into every
-      // read below; when the card did not move they do not fire, so that
-      // case reads explicitly.
-      if (selectedKey.value === moved.key) {
-        await Promise.all([loadDetail(moved.key), loadSummary(moved.key)]);
-      } else store.select(moved.key);
-    } catch (err) {
-      fail(
-        err,
-        promoted ? "Could not promote that LoRA." : "Could not put that LoRA back.",
-      );
-    }
-  });
+  return () => toRaw(store.selectedKeys) === keys;
 }
 
 /**
@@ -1732,8 +1586,6 @@ function promoteLora(row, promoted) {
 function defaultsFor(key) {
   if (stillOn(key) && detail.value) return defaults.value;
   console.warn(`[workflows] a write to ${key} dropped: the selection moved`);
-  // Not "you selected another": a LoRA promotion re-keys the card and moves
-  // the selection itself.
   notices.push({
     level: "error",
     text: "That change was not saved: the workflow changed before it could be.",
@@ -1860,10 +1712,7 @@ function toggleHidden() {
       // A hidden card leaves the grid, so the rail would have nothing to
       // draw were it not for the detail fallback in `card` — which is also
       // what keeps Unhide reachable from here.
-      store.forgetMembers();
-      await store.fetchCards();
-      // A stack member hidden from the rail leaves its stack, and the stack
-      // stops being selected whole: stay on the card that was hidden.
+      await store.refetch();
       if (unmoved() && selectedKey.value !== key) store.select(key);
     } catch (err) {
       fail(
@@ -1874,16 +1723,10 @@ function toggleHidden() {
   });
 }
 
-/**
- * What Run… runs: the card on screen, which for a stack selected whole is the
- * member picked at the top. Nothing while several cards are selected.
- */
+/** What Run… runs: the card on screen. Nothing while several are selected. */
 const runTarget = computed(() => (multiple.value ? null : card.value));
 
-/**
- * Why Run… refuses, when it is a reason worth a sentence: a stack member
- * whose read is still out refuses too, but only for as long as the read.
- */
+/** Why Run… refuses, when it is a reason worth a sentence. */
 const runDescribedBy = computed(() =>
   multiple.value ? "wftab-run-reason" : undefined,
 );
@@ -1903,14 +1746,14 @@ const openDescribedBy = computed(() => {
  *
  * Refused outright while several cards are selected: the button stays on
  * screen and `aria-disabled` says why, rather than disappearing and leaving
- * nothing to explain. A stack selected whole is one card (`runTarget`).
+ * nothing to explain.
  */
 function run() {
   const target = runTarget.value;
   if (!target) return;
   runDialog.openRun({
     kind: "card",
-    workflowKey: target.key,
+    workflowId: target.id,
     name: target.name,
     // Through the helper: a raw `covers` entry is API-relative and an
     // `<img src>` resolves it against the page origin instead.
@@ -1922,9 +1765,9 @@ function run() {
 /**
  * Open ComfyUI on what Run… runs (`runTarget`), in a new tab.
  *
- * ComfyUI takes no workflow from a URL, so the key rides along as
+ * ComfyUI takes no workflow from a URL, so the id rides along as
  * `?pixlstash_workflow=` and the ComfyUI-PixlStash node fetches the graph
- * (`GET /workflows/{key}/graph`) and loads it. Synchronous on purpose: a
+ * (`GET /workflows/{id}/graph`) and loads it. Synchronous on purpose: a
  * `window.open` after an await is what popup blockers refuse.
  */
 function openInComfyui() {
@@ -1949,7 +1792,7 @@ function openInComfyui() {
   if (["0.0.0.0", "[::]"].includes(url.hostname)) {
     url.hostname = window.location.hostname;
   }
-  url.searchParams.set("pixlstash_workflow", target.key);
+  url.searchParams.set("pixlstash_workflow", target.id);
   if (desktop?.openComfyui) {
     desktop
       .openComfyui(url.toString())
@@ -2011,7 +1854,7 @@ async function checkInstalled(key) {
   if (check !== installedCheck) return;
   try {
     const answer = await preflightWorkflowRun({
-      workflow_key: key,
+      workflow_id: key,
       values: [],
     });
     if (check !== installedCheck || !stillOn(key)) return;
@@ -2136,11 +1979,6 @@ async function checkInstalled(key) {
 
 .wftab-head {
   gap: var(--space-2);
-}
-
-.wftab-pick :deep(.app-select__field) {
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
 }
 
 .wftab-actions {

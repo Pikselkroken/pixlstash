@@ -17,7 +17,7 @@ from sqlmodel import Session, select
 
 from pixlstash.database import DBPriority
 from pixlstash.hub import workflow_cards
-from pixlstash.hub.workflow_card_reads import variants_in_stack
+from pixlstash.hub.workflow_card_reads import variants_in_workflow
 from pixlstash.db_models import (
     Face,
     Picture,
@@ -347,18 +347,12 @@ class PictureListFilters:
         comfyui_lora: list[str] = Query(
             default=[], description="Filter by ComfyUI LoRA (repeatable)."
         ),
-        workflow_key: str | None = Query(
+        workflow: str | None = Query(
             None,
             description=(
-                "Only pictures made by this workflow card. Resolved to the "
-                "card's variants; a card with no variant matches nothing."
-            ),
-        ),
-        workflow_stack: str | None = Query(
-            None,
-            description=(
-                "Only pictures made by any card in this stack - a stored "
-                "stack id, or the core hash of an automatic stack."
+                "Only pictures made by this workflow, named by its id "
+                "(`auto:<core hash>` or a manual group's id). Resolved to the "
+                "workflow's variants; an unknown id matches nothing."
             ),
         ),
         workflow_lora: str | None = Query(
@@ -366,8 +360,8 @@ class PictureListFilters:
             description=(
                 "Only pictures whose workflow loaded this LoRA file, named by "
                 "its stored reference (`asset:<sha256>`, as "
-                "`GET /workflows/{key}/lora-summary` serves it). Narrows "
-                "`workflow_key` / `workflow_stack`; alone, or malformed, it "
+                "`GET /workflows/{workflow_id}/lora-summary` serves it). "
+                "Narrows `workflow`; alone, or malformed, it "
                 "matches nothing."
             ),
         ),
@@ -391,32 +385,32 @@ _ASSET_RE = re.compile(r"^asset:[0-9a-f]{64}$")
 
 
 def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
-    """``workflow_key`` / ``workflow_stack`` / ``workflow_lora`` as variants, or ``None``.
+    """``workflow`` / ``workflow_lora`` as variants, or ``None``.
 
-    The cards are in the hub and the pictures are in the vault, so there is no
-    join to write: the card is resolved to its variants here and the listing
+    The workflows are in the hub and the pictures are in the vault, so there is
+    no join to write: the workflow is resolved to its variants here and the listing
     matches ``picture.workflow_structural_hash`` against them, the way the
     ComfyUI LoRA filter matches a name against the picture's own column.
 
-    **An empty list is a filter, not the absence of one.** A card with no filed
-    variant - or a workflow the pictures of this library never ran - matches no
+    **An empty list is a filter, not the absence of one.** A workflow with no
+    filed variant - or a workflow the pictures of this library never ran - matches no
     picture, and returning ``None`` for it would widen the grid to the whole
     library instead. Given both, the two narrow each other, as every other pair
     of filters on this route does.
 
     Args:
         server: The running server, for the hub.
-        query_params: The parsed query params; both keys are popped, so an
+        query_params: The parsed query params; every key is popped, so an
             unresolved one cannot reach ``Picture.find(**query_params)``.
 
     Returns:
         The structural hashes to match, or ``None`` when neither param is set.
     """
-    # Presence, not truthiness: `?workflow_key=` names no card, and dropping
+    # Presence, not truthiness: `?workflow=` names no workflow, and dropping
     # the filter for it would answer a request for one workflow with the whole
     # library - the exact "no results means the filter was ignored" reading the
     # contract tells clients is wrong. An empty value matches nothing, like any
-    # other card no picture was made with.
+    # other workflow no picture was made with.
     # Popped whatever happens: `Picture.find` now declares this name, so a
     # client sending `?workflow_structural_hashes=abc` would otherwise reach
     # `PredicateFilter` as a bare string and 500 on its `List[str]`. It could
@@ -425,20 +419,17 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
     # its own bug. (Four sibling filters here are unpopped in the same way and
     # are the same class; this closes the one the change adds.)
     query_params.pop("workflow_structural_hashes", None)
-    key = query_params.pop("workflow_key", None)
-    stack_id = query_params.pop("workflow_stack", None)
+    workflow_id = query_params.pop("workflow", None)
     lora = query_params.pop("workflow_lora", None)
-    if key is None and stack_id is None and lora is None:
+    if workflow_id is None and lora is None:
         return None
     hub = getattr(server, "hub", None)
     matched: list[set[str]] = []
     try:
         if hub is None:
             raise LookupError("no hub is attached to this server")
-        if key is not None:
-            matched.append(set(workflow_cards.variants_on_key(hub, key)))
-        if stack_id is not None:
-            matched.append(set(variants_in_stack(hub, stack_id)))
+        if workflow_id is not None:
+            matched.append(set(variants_in_workflow(hub, workflow_id)))
         if lora is not None:
             # Only ever a narrowing, and only of a well-formed reference:
             # alone it would parse every stored graph on the hub per request,
@@ -454,10 +445,9 @@ def _resolve_workflow_filter(server, query_params: dict) -> list[str] | None:
         # grid to every picture in the library, and it must not 500 a listing
         # the rest of which is perfectly answerable from the vault.
         logger.warning(
-            "Could not resolve the workflow filter (key=%r, stack=%r, "
-            "lora=%r): %s; listing no pictures rather than every picture.",
-            key,
-            stack_id,
+            "Could not resolve the workflow filter (workflow=%r, lora=%r): "
+            "%s; listing no pictures rather than every picture.",
+            workflow_id,
             lora,
             exc,
         )

@@ -58,11 +58,11 @@
         </AppButton>
         <!-- A recipe LoRA with no loader to go in (#1478): adding one is a
              workflow edit, so the fix is the dialog that makes it, on the
-             card this notice is about. -->
+             workflow this notice is about. -->
         <AppButton
           v-else-if="read.fix === FIX_EDIT_LORAS"
           size="sm"
-          @click="emit('edit-loras', reason.workflowKey || '')"
+          @click="emit('edit-loras', reason.workflowId || '')"
         >
           Edit LoRAs…
         </AppButton>

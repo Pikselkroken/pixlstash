@@ -443,19 +443,17 @@ List and import workflow files; read the workflow a picture carries. Running one
 
 **Remix routes (v1.9).** `GET /comfyui/pictures/{picture_id}/recipe` reports whether a picture carries a replayable recipe and pre-flights it against the user's ComfyUI (see `services/comfyui_recipe_service.py`, §10). `POST /comfyui/run_recipe` used to replay it; #1410 retired it and `POST /workflows/run` (`OWNER_ONLY`) replays a picture's recipe now, still **re-extracting the graph from the file server-side on every call and never accepting a client-supplied graph**. Both refuse honestly rather than silently no-op: a graph with no seed input would re-generate a byte-identical image that the importer dedupes on `pixel_sha` and emits no event for, so the user would see literally nothing happen.
 
-**The whole recipe, not only what replays it (v1.12 B5).** The same read also carries the **negative prompt** and the **settings** (`extract_recipe_extras`, `utils/comfyui_utilities.py`: steps, cfg, sampler_name, scheduler, denoise), each LoRA slot's **strengths** (`detect_lora_targets` now reports `strengths: {model, clip}`, picked out by the slot's own numeric suffix so a stacker's second slot gets the second strength beside it), and the **`workflow_key`** of the card the picture's variant is on (`workflow_cards.key_of_variant`, a hub read on `picture.workflow_structural_hash` — never a derivation, so an unfiled or unkeyed picture honestly has none). The negative prompt is found by the same conditioning walk as the positive one, parameterised by the side it started on: a node taking both (a combine, a ControlNet applier) must be followed on the caller's side or the negative chain arrives at the positive prompt. **The settings are read from any node that names one, not from the sampler**: the split-sampler graphs — the shipped `Flux2-Klein` templates among them — put the step count on a scheduler node, the sampler name on a `KSamplerSelect` and the CFG on a `CFGGuider`, so a sampler-only read reports one field out of five for PixlStash's own workflows. The first node naming a field wins, and that is **iteration order, not execution order**: a graph that samples twice can report one pass's steps beside another's CFG, so the block says what the graph says and must not be read as "the settings of the pass that made this picture".
+**The whole recipe, not only what replays it (v1.12 B5).** The same read also carries the **negative prompt** and the **settings** (`extract_recipe_extras`, `utils/comfyui_utilities.py`: steps, cfg, sampler_name, scheduler, denoise), each LoRA slot's **strengths** (`detect_lora_targets` now reports `strengths: {model, clip}`, picked out by the slot's own numeric suffix so a stacker's second slot gets the second strength beside it), and the **`workflow_id`** of the workflow the picture's variant is in (`routes/comfyui.py::_picture_workflow_id`: the variant's topology, then `workflow_of_topology`, hub reads on `picture.workflow_structural_hash` — never a derivation, so an unfiled or ungrouped picture honestly has none; #1623 replaced the card's `workflow_key`). The negative prompt is found by the same conditioning walk as the positive one, parameterised by the side it started on: a node taking both (a combine, a ControlNet applier) must be followed on the caller's side or the negative chain arrives at the positive prompt. **The settings are read from any node that names one, not from the sampler**: the split-sampler graphs — the shipped `Flux2-Klein` templates among them — put the step count on a scheduler node, the sampler name on a `KSamplerSelect` and the CFG on a `CFGGuider`, so a sampler-only read reports one field out of five for PixlStash's own workflows. The first node naming a field wins, and that is **iteration order, not execution order**: a graph that samples twice can report one pass's steps beside another's CFG, so the block says what the graph says and must not be read as "the settings of the pass that made this picture".
 
 **A crafted value never reaches the response, and the fields are typed rather than merely finite.** `json.loads` accepts the `Infinity` and `NaN` literals while the response renders with `allow_nan=False`, so a `prompt` chunk carrying `"cfg": NaN` turned this read into a 500 for anyone holding a share token — the R3 threat model below, arriving through a field rather than a node class. `_typed_setting` takes each field at **its own** type (`steps` an int, `cfg`/`denoise` a float, `sampler_name`/`scheduler` a string), so `steps: "twenty"` and `sampler_name: 12345` are refused as well: the value's *kind* is not the field's type, and a graph's author must not be what decides which a client's formatter is handed. `_lora_strengths` and the A1111 branch's `_a1111_strengths` refuse non-finite weights on the same ground. **The A1111 seed had the same unexamined door and it was an `int()`, not a float**: `str.isdigit()` is true of `"²"` and of a digit run past CPython's 4,300-character integer limit, both of which `int()` refuses, so `reduce_a1111` now asks `int()` itself (`_integer_text`) and the route's conversion is defensive too, so the two cannot drift apart.
 
 **The infotext parser is linear, which is what makes it safe on a request path.** `_PARAM_RE`'s key run was unbounded before the literal `:`, so a line with no colon after a long run backtracked over every length: measured, 8,000 characters cost 0.14 s and 32,000 cost 2.34 s, and `_MAX_FIELDS_LINE` bounds a *line* rather than the total, so a window of such lines multiplied it. Bounding the key at 63 characters (A1111's longest real key is around 19 — `Denoising strength`, `ADetailer model 2nd`) costs the same inputs 0.0024 s and 0.011 s and parses real infotext identically. The line ceiling and the 32-line window stay as bounds on absurdity, not as the thing holding the line.
 
-**What `workflow_key` tells a share-token holder, stated rather than denied.** It is an opaque digest — no filename, no prompt, no pixels — over a graph that same token can already read whole from the `/workflow` sibling. It is **not** purely a function of that file: `workflow_key` folds in which LoRA slots the topology marks *structural*, and that mark was frozen from the filename of whichever picture of that topology was filed **first in this library** (`hub/schema.py`, `workflow_slot_mark`, `INSERT OR IGNORE`).
-
-**And the mark set is recoverable, not merely hinted at.** An earlier version of this note claimed "one bit per topology"; that bound was too tight and is corrected here, because a bound written more favourably than the code enforces is what a later reader relies on. The holder has the graph, so they can compute the key for every assignment of marks to its LoRA slots and match the one they were handed; the slot set is small, so a 2ⁿ sweep recovers the whole set exactly. The disclosure is therefore **one bit per LoRA slot of that topology** — whether the first-filed picture's file in that slot looked like a speed LoRA under a published regex — and that picture may be one the token cannot otherwise see. It is a filename-derived *classification*, never a filename, a prompt or a picture, so this stays low severity; returning `workflow_key` to the owner only would close it, and is the call to make if that is judged too much. **The key also folds in the owner's LoRA promotions** (`workflow_lora_promotion`), recoverable by the same sweep: whether the owner promoted this picture's own LoRA in a slot to a workflow of its own. That is one more bit per LoRA slot, and an owner's decision rather than a regex result, about a file the graph already names. What a key *groups* — the "workflow: 8" comparison, the saved-recipe match banner — is an owner-only question answered by the card routes, not by this one.
+**What `workflow_id` tells a share-token holder, stated rather than denied.** An automatic workflow's id is `auto:<core_hash>`, a digest of the stripped graph that same token can already read whole from the `/workflow` sibling, so it discloses nothing the graph does not. A manual one is a random uuid, and what it tells the holder is that the owner grouped this topology by hand — not with what. The card key it replaced (#1623) folded in slot marks frozen from the first-filed picture's filenames and the owner's LoRA promotions, recoverable by a sweep over the slot set; neither is in a workflow id. What an id *groups* — the saved-recipe match banner, the workflow's pictures — is an owner-only question answered by the Workflows routes, not by this one.
 
 **A picture with no graph but with A1111 infotext answers from that** (`reduce_a1111`, `services/a1111_recipe.py`), as `source: "a1111"` with `available: false` and `reason: "a1111"`: its recipe is readable but is not a graph any ComfyUI could be handed, so there is nothing to replay and nothing to pre-flight. The fields are read off the reduced nodes rather than by re-parsing the infotext, so this endpoint and the hub agree about what the picture's recipe is. `node_count` and `node_classes` stay at zero and empty on that branch on purpose: they exist for the consent decision — what would execute — and a count of the reduction the hub builds would be a number about PixlStash, not about the picture. A client that does not know the new `reason` falls through to "nothing to replay", which is true.
 
-**The picture list filters by card (v1.12 B5).** `GET /pictures?workflow_key=…` and `?workflow_stack=…` are resolved in `_resolve_workflow_filter` (`routes/pictures/_listing.py`) **before** the query is built — the cards are in the hub and the pictures are in the vault, so there is no join to write — into the variants that card holds, and `PredicateFilter.workflow_structural_hashes` matches `picture.workflow_structural_hash` against them, the way the ComfyUI LoRA filter matches a name against the picture's own column. A stack is named either by a stored `workflow_stack.stack_id` (`workflow_stack_member` holds its cards) or by the `core_hash` of an automatic grouping that has not been materialised — `card_grouping` computes that grouping and writes nothing — and `variants_in_stack` reads both in one query. Nothing writes the stack tables yet, so every answer today comes from the `core_hash` half; the membership half is there because the schema already gives a stack its own id, and a filter ignoring it would answer a stored stack with an empty grid the day one is written. `workflow_unstacked` is deliberately **not** consulted: nothing writes it either, and the step that does owns making its readers agree. **An empty resolution is a filter, not the absence of one**: a card no picture in this library was made with matches nothing, and every read of the field tests `is not None` rather than truthiness — the `find_unassigned` and smart-score-candidate branches included, which name each filter instead of splatting them.
+**The picture list filters by workflow (v1.12 B5, #1623).** `GET /pictures?workflow=<id>` is resolved in `_resolve_workflow_filter` (`routes/pictures/_listing.py`) **before** the query is built — the workflows are in the hub and the pictures are in the vault, so there is no join to write — into the variants filed under the workflow's topologies (`variants_in_workflow`), and `PredicateFilter.workflow_structural_hashes` matches `picture.workflow_structural_hash` against them, the way the ComfyUI LoRA filter matches a name against the picture's own column. It combines with `comfyui_model` / `comfyui_lora` like any other filter, which is how a workflow's pictures are narrowed to one checkpoint or LoRA: the recipe-value filter that replaced browsing a stack's members. `workflow_lora` still narrows it to one LoRA reference. **An empty resolution is a filter, not the absence of one**: a workflow no picture in this library was made with matches nothing, and every read of the field tests `is not None` rather than truthiness — the `find_unassigned` and smart-score-candidate branches included, which name each filter instead of splatting them.
 
 **The replayed graph is untrusted input (review finding R3, CWE-829).** It is authored by whoever made the image file, not by the owner, and PixlStash's premise is importing images from elsewhere: an attractive PNG from a model site can carry any API-format graph, and replaying it executes it on the owner's ComfyUI, bounded only by which node packs are installed. `sanitize_prompt_graph` is a **shape** filter (it drops non-node entries), not a capability filter, and there is deliberately no node-class allowlist — one would break every legitimate custom pack. The owner is therefore the trust anchor, and three controls make that a decision rather than an accident:
 
@@ -746,32 +744,28 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/telemetry/install-id                                                  | telemetry       | Get the anonymous install ID                                |
 | POST   | /api/v1/telemetry/install-id/recreate                                         | telemetry       | Recreate the anonymous install ID                           |
 | GET    | /api/v1/workflows                                                             | workflows       | The Workflows grid                                          |
+| POST   | /api/v1/workflows/merge                                                       | workflows       | Merge workflows                                             |
 | GET    | /api/v1/workflows/recipes/{structural_hash}/graph                             | workflows       | A recipe's stored graph                                     |
-| POST   | /api/v1/workflows/run                                                         | workflows       | Run a workflow card                                         |
+| POST   | /api/v1/workflows/run                                                         | workflows       | Run a workflow                                              |
 | POST   | /api/v1/workflows/run/preflight                                               | workflows       | Check what a run would do                                   |
-| POST   | /api/v1/workflows/stacks                                                      | workflows       | Stack workflows together                                    |
-| PUT    | /api/v1/workflows/stacks/{stack_id}/order                                     | workflows       | Reorder a stack                                             |
-| POST   | /api/v1/workflows/stacks/{stack_id}/unstack                                   | workflows       | Dissolve a stack                                            |
-| GET    | /api/v1/workflows/{workflow_key}                                              | workflows       | One workflow card                                           |
-| PATCH  | /api/v1/workflows/{workflow_key}                                              | workflows       | Edit a workflow card                                        |
-| DELETE | /api/v1/workflows/{workflow_key}                                              | workflows       | Delete an imported workflow                                 |
-| POST   | /api/v1/workflows/{workflow_key}/clone-with-models                            | workflows       | Clone a workflow onto other models                          |
-| PUT    | /api/v1/workflows/{workflow_key}/defaults                                     | workflows       | Set a card's parameter defaults                             |
-| POST   | /api/v1/workflows/{workflow_key}/duplicate                                    | workflows       | Duplicate a workflow                                        |
-| GET    | /api/v1/workflows/{workflow_key}/export                                       | workflows       | Export a workflow                                           |
-| GET    | /api/v1/workflows/{workflow_key}/graph                                        | workflows       | A workflow's runnable graph                                 |
-| PUT    | /api/v1/workflows/{workflow_key}/inputs                                       | workflows       | Set a card's picture inputs                                 |
-| POST   | /api/v1/workflows/{workflow_key}/insert-lora-loader                           | workflows       | Add a LoRA loader to a workflow                             |
-| GET    | /api/v1/workflows/{workflow_key}/lora-chain                                   | workflows       | A workflow's LoRA chain                                     |
-| PUT    | /api/v1/workflows/{workflow_key}/lora-chain                                   | workflows       | Edit a workflow's LoRA chain                                |
-| PUT    | /api/v1/workflows/{workflow_key}/lora-promotion                               | workflows       | Promote one LoRA to a workflow of its own                   |
-| GET    | /api/v1/workflows/{workflow_key}/lora-summary                                 | workflows       | The LoRAs of a workflow's stack                             |
-| PUT    | /api/v1/workflows/{workflow_key}/model-fix                                    | workflows       | Replace a missing model in a workflow                       |
-| GET    | /api/v1/workflows/{workflow_key}/model-swap                                   | workflows       | What a workflow could be cloned onto                        |
-| GET    | /api/v1/workflows/{workflow_key}/pictures                                     | workflows       | Pictures made with a card                                   |
-| PUT    | /api/v1/workflows/{workflow_key}/pins                                         | workflows       | Set a card's pinned parameters                              |
-| PUT    | /api/v1/workflows/{workflow_key}/slots                                        | workflows       | Mark a card's LoRA slots                                    |
-| POST   | /api/v1/workflows/{workflow_key}/unstack                                      | workflows       | Take a card out of its stack                                |
+| GET    | /api/v1/workflows/{workflow_id}                                               | workflows       | One workflow                                                |
+| PATCH  | /api/v1/workflows/{workflow_id}                                               | workflows       | Edit a workflow                                             |
+| DELETE | /api/v1/workflows/{workflow_id}                                               | workflows       | Delete an imported workflow's file                          |
+| POST   | /api/v1/workflows/{workflow_id}/clone-with-models                             | workflows       | Clone a workflow onto other models                          |
+| PUT    | /api/v1/workflows/{workflow_id}/defaults                                      | workflows       | Set a workflow's parameter defaults                         |
+| POST   | /api/v1/workflows/{workflow_id}/duplicate                                     | workflows       | Duplicate a workflow                                        |
+| GET    | /api/v1/workflows/{workflow_id}/export                                        | workflows       | Export a workflow                                           |
+| GET    | /api/v1/workflows/{workflow_id}/graph                                         | workflows       | A workflow's runnable graph                                 |
+| PUT    | /api/v1/workflows/{workflow_id}/inputs                                        | workflows       | Set a workflow's picture inputs                             |
+| POST   | /api/v1/workflows/{workflow_id}/insert-lora-loader                            | workflows       | Add a LoRA loader to a workflow                             |
+| GET    | /api/v1/workflows/{workflow_id}/lora-chain                                    | workflows       | A workflow's LoRA chain                                     |
+| PUT    | /api/v1/workflows/{workflow_id}/lora-chain                                    | workflows       | Edit a workflow's LoRA chain                                |
+| GET    | /api/v1/workflows/{workflow_id}/lora-summary                                  | workflows       | The LoRAs of a workflow                                     |
+| PUT    | /api/v1/workflows/{workflow_id}/model-fix                                     | workflows       | Replace a missing model in a workflow                       |
+| GET    | /api/v1/workflows/{workflow_id}/model-swap                                    | workflows       | What a workflow could be cloned onto                        |
+| GET    | /api/v1/workflows/{workflow_id}/pictures                                      | workflows       | Pictures made with a workflow                               |
+| PUT    | /api/v1/workflows/{workflow_id}/pins                                          | workflows       | Set a workflow's pinned parameters                          |
+| POST   | /api/v1/workflows/{workflow_id}/split                                         | workflows       | Split a topology out of a workflow                          |
 | GET    | /version                                                                      | server          | Read Version                                                |
 | WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                      |
 | WS     | /api/v1/ws/comfyui                                                            | comfyui         | ComfyUI workflow progress                                   |
@@ -1744,7 +1738,7 @@ Modules in [pixlstash/services/](../pixlstash/services/) contain business logic 
 | [services/a1111_recipe.py](../pixlstash/services/a1111_recipe.py) | **A1111 generation data as a recipe** (#1312): parses a PNG's `parameters` chunk or a JPEG's or WebP's EXIF `UserComment` and classifies each field as structure, asset, parameter or volatile into a reduction `workflow_hash.graph_key` keys like a ComfyUI graph. Short model hashes are stored as written and resolved against the shelf when read |
 | [services/workflow_hash.py](../pixlstash/services/workflow_hash.py) | **Content-addressed identity for a ComfyUI graph, in three tiers** (workflow library plan §3, hash spec §Node identity / §Subgraphs). `topology_hash` is node classes and named-input edges and nothing else; `structural_hash` adds the topology assets a node names (model and image filenames, and the way a ComfyUI-PixlStash loader names its model: `*_sha256`, the numbered `*_sha256_N` a second slot on one node takes, and the checkpoint loader's `checkpoint_id`, which is a shelf row id because a checkpoint's digest is NULL until the hasher has read the file) with every parameter and seed nulled. **Each of those two is checked against what such a value can be, not only against the widget's name**: a digest widget keeps a digest (`DIGEST_PREFIX_RE`, the same rule `_model_ghost_names` judges them by) and a shelf id keeps `str.isdigit()` within 12 characters, the loader node's own contract. Both branches return above the newline and 255-byte prose guards and their values are kept forever and shared, so a blank widget — the ordinary state of an unpicked one, and of the CLIP loader's second encoder on every SD/SDXL graph — names no model instead of filing the digest of the empty string as one (#1416); `instance_hash` is that recipe with one set of parameters, the prompt included and the seed excluded, and is stored on the picture rather than in the hub. `document_from_reduction` renders that same reduction back out as the graph that gets stored, so the document and the hash can never disagree about what was kept. **One walk serves all three**, because the backfill is a pass over every picture in every library. A link is `[node_id, slot]` with the id a **string**: a widget can legitimately hold a two-element list of numbers, and reading a resolution pair as a connection puts a bucket-P value into the topology, which the spec calls the unrecoverable direction. Measured, all 501,128 links across the owner's API graphs carry a string node id.<br><br>**No positional node ids are assigned, and that is the correction this module exists for.** The superseded rule relabelled by topological sort and tie-broke on `(class_type, input signature)` — a tie two twin `CLIPTextEncode` nodes do not break, so the "canonical" id fell through to JSON serialisation order and 12 of 40 real workflows re-keyed when nothing but the key order moved. Instead each node gets an order-invariant label by Weisfeiler-Leman refinement over its **sorted** neighbours, and the graph is emitted as a sorted multiset of node descriptors: genuine twins produce identical descriptors, so the automorphism stops mattering. Node ids are never read, which is also why an API-format subgraph needs no handling at all — a colon path (`75:61`) is an id. The accepted residual is that WL can over-group, which the spec calls the recoverable direction: a later `hash_version` splits recipes cleanly, whereas merging shattered ones requires guessing intent.<br><br>**The UI format is where subgraphs do matter**, and `reduce_ui_graph` inlines `definitions.subgraphs` before keying — recursively, because real files nest two deep. A subgraph instance is typed by a per-definition UUID, so keying it as one opaque node both under-counts the graph (17 nodes read as 8) and gives two people who built the same workflow different keys. An instance lists only the inputs it wires while the definition declares all of them, so the boundary is mapped by **name**, never by position (measured: 3 against 7, in a different order). A UUID-typed node with no definition raises rather than keying as a leaf, and a **bypassed** instance takes its whole contents with it — expanding one anyway leaves its inner nodes standing while every edge through it disappears, which is a key for a graph ComfyUI has never run. **Bypassing is not muting**: a muted node's consumers lose the edge, but a bypassed node is spliced out and its consumers read what fed it, by ComfyUI's rule (`bypass_input_slot`: same slot first, then the consumer's exact type, then any LiteGraph-compatible type). Dropping the edge instead keyed a workflow two ways, one per format (#1440). The two synthetic boundary nodes are installed *after* the definition's own node list, so a definition that serialises its IO nodes cannot overwrite them. Resolution refuses rather than degrades: a cycle or an over-long passthrough chain raises, because dropping the edge and returning a confident key is the silent-failure shape the house rules forbid |
 | [services/workflow_identity.py](../pixlstash/services/workflow_identity.py) | **What a workflow card is, and which cards stack** (v1.12 Workflows & Recipes, step B1). **Glossary: the word "recipe" means two things.** In the hub tables `workflow_recipe` / `structural_hash` is the graph bound to model filenames; new code and docs call that tier a **variant** (the routes already say `/variants`). A **saved recipe** is the look a user keeps: prompt, recipe LoRAs with strengths, overrides. The tables are append-only and keep their names.<br><br>Pure functions over the **stored document** (asset references, never filenames), so a backfill needs the hub alone and a forgotten model name stays forgotten. `slots` lists every model slot a document names, each labelled by its loader's Weisfeiler-Leman label at topology tier (refined until a round splits no class, so a long LoRA chain is told apart) plus the widget name, with picture inputs (widgets named `image`, `video`, `mask`) left out. **A label only means something within one topology**: at full refinement it encodes the whole graph, so marks and parameter addresses keyed by label are keyed with the topology too. Every function refuses a raw graph (`WorkflowGraphError`) rather than reading it as having no models. `workflow_key` is the **card**: topology plus every non-LoRA slot plus the LoRA slots marked structural, so a different checkpoint is a different workflow and a character LoRA is not. **A LoRA slot is one by widget name, and both spellings carry the numbered form** (`lora_name_2`, `lora_sha256_2`): a digest slot missed there is not a LoRA slot, so it reaches the card key with no mark check and a character-LoRA swap in a stacker's second slot forks the workflow into a new card (#1416). `CHECKPOINT_WIDGETS` lost the client copy it was held equal to: the retired workflow shelf's `BASE_WIDGETS` had drifted in both directions, and the guardrail asserting the pair went with the shelf in F1b (#1404). **A second server-side list survives and already disagrees** — `_SLOT_KINDS` in `workflow_card_service.py`, which is what actually labels a card's slots (`unet_name` is `unet` there and never `checkpoint`; `diffusion_model`, `model_path` and `checkpoint_id` are absent), so a Flux/SD3/Wan graph is a base-model change to `differs_by` and is not the card's headline model. The two want reconciling behind one helper; nothing asserts them today. `guess_mark` is the first-sight guess for a LoRA slot (whole words lightning/turbo/lcm/lightx2v/causvid/dmd/tcd/pcm, Hyper-SD, SDXL Flash, or a one- or two-digit step count means structural; precision over recall, because a wrong structural guess is frozen into the card key), which the caller freezes and never recomputes. `core_hash` is the **automatic stack**: the topology with plumbing (PreviewImage, Note, Reroute, Primitive*), post-processing (upscale, hires-fix sampler, face detailer and detectors) and, by default, LoRA loaders removed and the edges re-wired through them; the caller stores `CORE_VERSION` beside it. `workflow_type` reads txt2img/img2img/inpaint/outpaint/upscale from the classes. `special_groups` says which post-processing a graph actually DOES (`upscale`, `face_detailer`), for the card's generated name: the same taxonomy `core_hash` strips, but **narrower**, because a group counts only where a node does the work rather than loads the model for it — over-inclusion is free when the answer is which nodes to remove and false when it is printed as the card's only identifying text.  `differs_by` gives a member's chips against the cover; **"plumbing only" is returned only when every differing node is plumbing, the graphs are identical once plumbing is stepped through, with every asset, LoRAs included, on the same loader**. Two documents that are not the same graph never come back with no chip, and anything unclassified reads "N nodes differ" |
-| [services/workflow_export.py](../pixlstash/services/workflow_export.py) | **What a workflow file may still say once it leaves this machine** (v1.12 Workflows & Recipes, step B8). `GET /workflows/{key}/export` resolves the card's graph exactly as the run path does — the linked file, the best kept picture's embedded metadata, or a stored instance document — and the last two are *real runs*: they carry the prompt that was typed, the seed that was rolled, the character LoRA that was loaded and the name of the picture that went in. `scrub_for_export` takes those out: every widget `carries_prose` calls prose blanked, seeds nulled, every LoRA slot **not** marked `structural` emptied by filename **and by digest** (`lora_sha256`, the ComfyUI-PixlStash spelling, which `unvouched` cannot help with because the owner genuinely holds that LoRA), `_meta` titles stripped, picture loader filenames blank, output paths reset (`filename_prefix` is a folder a person names after what is in it), `checkpoint_id` dropped, and any model name the shelf cannot vouch for (`hub/workflows.unvouched_model_values`) blank — plus the *folder* of the ones it can, since that check only ever read the last component.<br><br>**Prose is found by widget name across the whole graph, and `carries_prose` is imported from the reducer rather than restated.** `detect_workflow_io` answers a different question with the opposite failure direction — where a *run* would write its prompt — so it returns nothing for a hires-fix graph whose two samplers read different prompts, and it classifies `CLIPTextEncodeSDXL` as a prompt node whose widgets (`text_g`, `text_l`) no binding names. The first shipped the prompt; the second shipped it while reporting `prompts` in `removed`. Three rules catch prose no widget name announces: `PRIMITIVE_STRING_CLASSES` handing a raw string into an encoder (`carries_prose` cannot be widened to `value`/`string` — it is the reducer's rule too, and a `value` widget feeding a LoadImage its filename is a topology asset there, so calling it prose would re-key every workflow built that way), the reducer's newline/`MAX_FILENAME_LENGTH` backstop, and whitespace, with `_names_a_file` answering first so that the 5,066 real filenames with spaces in them survive. `SECRET_FIELD_RE` is applied ahead of all of it — the reducer drops those widgets from a stored document because it "is kept forever and shared", and a file handed to somebody on purpose is the stronger case, while the two tiers this route resolves from most often are raw ComfyUI output the reducer never touched. Nested lists and dicts are walked with `is_link` telling a wire from a value, a **dict recursing on its key** and a list on its parent's name, the way the reducer's nested-asset walk does.<br><br>**That last check is stricter than `model_ghost_names` and deliberately in the opposite direction.** A ghost is judged in order to destroy a name forever, so an unjudgeable one has to be kept; here a wrong "vouched for" publishes a name the owner asked PixlStash to forget and a wrong "unvouched" only leaves a widget blank in a file they are giving away. Forgetting a name deletes its `workflow_recipe_asset` rows and rewrites no graph, so the ghost list can no longer see it while a picture's embedded metadata still says it in full — checking the shelf is what closes that. A graph that will not reduce is **refused (409) rather than exported**, and a `RecursionError` from a graph too deeply nested to walk gets the same answer (caught in `_card_source`, which all three file gestures resolve through). Nothing in the scrub needs the reduction any more — that is a belt rather than the trousers — but a graph PixlStash cannot read is one it can promise nothing about, and the export is a promise. Keeping the structural-marked slots rather than emptying the recipe-marked ones is the same choice: an unmarked slot, an unfrozen topology and a loader the label map did not reach all then fall on the side that publishes nothing |
+| [services/workflow_export.py](../pixlstash/services/workflow_export.py) | **What a workflow file may still say once it leaves this machine** (v1.12 Workflows & Recipes, step B8). `GET /workflows/{workflow_id}/export` resolves the workflow's base graph exactly as the run path does, and applies its default recipe (values, models, LoRA loaders outside it and off stages bypassed, #1623) — the linked file, the best kept picture's embedded metadata, or a stored instance document — and the last two are *real runs*: they carry the prompt that was typed, the seed that was rolled, the character LoRA that was loaded and the name of the picture that went in. `scrub_for_export` takes those out: every widget `carries_prose` calls prose blanked, seeds nulled, every LoRA slot that does not load a default-recipe LoRA (`kept_lora_slots`) emptied by filename **and by digest** (`lora_sha256`, the ComfyUI-PixlStash spelling, which `unvouched` cannot help with because the owner genuinely holds that LoRA), `_meta` titles stripped, picture loader filenames blank, output paths reset (`filename_prefix` is a folder a person names after what is in it), `checkpoint_id` dropped, and any model name the shelf cannot vouch for (`hub/workflows.unvouched_model_values`) blank — plus the *folder* of the ones it can, since that check only ever read the last component.<br><br>**Prose is found by widget name across the whole graph, and `carries_prose` is imported from the reducer rather than restated.** `detect_workflow_io` answers a different question with the opposite failure direction — where a *run* would write its prompt — so it returns nothing for a hires-fix graph whose two samplers read different prompts, and it classifies `CLIPTextEncodeSDXL` as a prompt node whose widgets (`text_g`, `text_l`) no binding names. The first shipped the prompt; the second shipped it while reporting `prompts` in `removed`. Three rules catch prose no widget name announces: `PRIMITIVE_STRING_CLASSES` handing a raw string into an encoder (`carries_prose` cannot be widened to `value`/`string` — it is the reducer's rule too, and a `value` widget feeding a LoadImage its filename is a topology asset there, so calling it prose would re-key every workflow built that way), the reducer's newline/`MAX_FILENAME_LENGTH` backstop, and whitespace, with `_names_a_file` answering first so that the 5,066 real filenames with spaces in them survive. `SECRET_FIELD_RE` is applied ahead of all of it — the reducer drops those widgets from a stored document because it "is kept forever and shared", and a file handed to somebody on purpose is the stronger case, while the two tiers this route resolves from most often are raw ComfyUI output the reducer never touched. Nested lists and dicts are walked with `is_link` telling a wire from a value, a **dict recursing on its key** and a list on its parent's name, the way the reducer's nested-asset walk does.<br><br>**That last check is stricter than `model_ghost_names` and deliberately in the opposite direction.** A ghost is judged in order to destroy a name forever, so an unjudgeable one has to be kept; here a wrong "vouched for" publishes a name the owner asked PixlStash to forget and a wrong "unvouched" only leaves a widget blank in a file they are giving away. Forgetting a name deletes its `workflow_recipe_asset` rows and rewrites no graph, so the ghost list can no longer see it while a picture's embedded metadata still says it in full — checking the shelf is what closes that. A graph that will not reduce is **refused (409) rather than exported**, and a `RecursionError` from a graph too deeply nested to walk gets the same answer (caught in `_card_source`, which all three file gestures resolve through). Nothing in the scrub needs the reduction any more — that is a belt rather than the trousers — but a graph PixlStash cannot read is one it can promise nothing about, and the export is a promise. Keeping the default recipe's slots rather than emptying the rest is the same choice: a recipe that could not be read and a loader the route could not match both fall on the side that publishes nothing |
 | [services/workflow_inbox.py](../pixlstash/services/workflow_inbox.py) | **The watched `workflows/` folder** (§5 `comfyui.py`): `reconcile` imports each file through the import route's `_store_workflow` and renames it `<stem>.<content hash>.json`; `trash_workflow` writes a deleted workflow back and sends it to the system trash; `WorkflowInboxWatcher` reconciles on file events. |
 | [services/workflow_io.py](../pixlstash/services/workflow_io.py) | **What a workflow needs and produces, from the graph alone**: save nodes, picture inputs, and positive/negative prompts found by walking each guider's own `positive` / `negative` inputs upstream to the text encoder (a `ConditioningZeroOut` on the way means no prompt). Runs over `workflow_hash`'s reductions, so UI and API format both work and subgraphs are inlined. Reports, never writes: two save nodes, two picture inputs, or samplers that read different prompts are listed in `ambiguities`, and disagreeing samplers leave the prompts empty rather than guessed. **"Editor graph or API graph?" has one answer, `comfyui_utilities.is_api_format`**, which honours all four hints ComfyUI writes (`nodes`, `links`, `last_node_id`, `last_link_id`) rather than `nodes` alone (#1482): a row of readers used to decide it by hand, and a truncated or hand-edited export was the API format to them and the editor format to `is_api_format`. `api_graph` is where the services ask it - and it asks about the **wrapped** graph, because a hint left on the outside of a `{"prompt": graph}` envelope says nothing about what the envelope holds. `_file_in_hub`, `run_targets` and `workflow_inputs._raw_node` all read the format off `api_graph`, so a document cannot be filed under one serialisation and run as the other. Four readers still answer their own, narrower questions and are right to: `is_comfy_workflow` (is this a workflow at all - the same four hints, read off `is_api_format`), `check_comfy_workflow` (what may be *stored*, stricter on purpose), `summarize_comfy_workflow` (counting, which also counts a `nodes` **dict**) and `comfyui_ui_graph.is_ui_graph` (is there a `nodes` array to **convert** - a document the hints call the editor format with no node list has nothing to rebuild, so widening that one would hand the converter an empty graph) |
 | [services/workflow_parameters.py](../pixlstash/services/workflow_parameters.py) | **A saved workflow's settings as form controls** (#1306, §5 `comfyui.py`): every widget value of an API-format graph except connected inputs, inputs a run fills and credential-named fields, typed from ComfyUI's `object_info` (ranges, options, seeds) or, with ComfyUI unreachable, from the recorded value alone with no ranges. Also the default pins, pin validation, and `apply_values`, which checks values against that description and writes them into a copy of the graph. Never writes the file |
@@ -3005,7 +2999,7 @@ route since #1410. The pieces, all called from `_plan` / `_submit_every` in
 - **The read rides on the pre-flight.** `RunGroup.picture_inputs` is every input
   with its mode, pin, `picture_id`, `picture_missing` and how this run fills it
   (`fill`): the whole set, which is what makes the whole-set
-  `PUT /workflows/{key}/inputs` safe to call after it. The PUT also takes a pin
+  `PUT /workflows/{workflow_id}/inputs` safe to call after it. The PUT also takes a pin
   as `picture_id` and stores that picture's `pixel_sha`; a picture that is not
   kept is a 400. A graph that will not reduce has no addressable inputs: it runs
   as before, and is a 400 only when the body named an input.
@@ -3160,7 +3154,7 @@ section, not a site of its own in `_plan`.
 
 #### Editing a workflow's LoRA chain (#1478)
 
-`GET /workflows/{key}/lora-chain` reads the card's graph as a chain: the model
+`GET /workflows/{workflow_id}/lora-chain` reads the workflow's base graph as a chain: the model
 source, the LoRA loaders in the order a run applies them, and what reads the
 result. `read_lora_chain` types every link from `object_info`, as
 `plan_lora_insertion` does, and refuses (the route answers `editable: false` with
@@ -3646,7 +3640,7 @@ only for a kind no recipe or ComfyUI run answered, the dialog labels it untested
 declares only the kinds the layout vocabulary can name with certainty; anything
 else still proposes nothing. LoRAs and ControlNets are the one legitimate
 family comparison (`family_of` on both sides of one vocabulary), and a mismatch
-is flagged by `GET /workflows/{key}/model-swap`, never dropped. The rewrite is
+is flagged by `GET /workflows/{workflow_id}/model-swap`, never dropped. The rewrite is
 `comfyui_recipe_service.apply_filename_swap`, deliberately not
 `apply_model_swap`: that one substitutes the same bytes under another name, this
 one replaces a file that loads with a different file. It matches the graph on
@@ -4019,13 +4013,13 @@ with `HubSchemaTooNewError`, locking the owner out of a downgrade.
 | `workflow_variant` | Which card each stored variant belongs to, with the `key_version` that keyed it. **No timestamp column**, here or on the cache below: deriving the same hub twice has to write byte-identical rows, or "the backfill runs twice with identical rows" is a claim no test can make |
 | `workflow_topology_core` | Per topology: the automatic stack key (`core_hash` + `core_version`), the workflow type, the slot list every mark and override addresses, and `specials` — the post-processing the graph carries (`upscale`, `face_detailer`), comma-joined, for the card's generated name. **No filename and no asset reference.** `specials` is NULL only for a row written before the column existed, which is exactly what `_VARIANT_PENDING` re-queues on; the empty string is the real answer "this graph has none", and only that one lets a name claim the workflow is plain. The stamped version is `CORE_RULE_VERSION`, which is `CORE_VERSION` *plus the strip flag*: `core_hash` does not carry that flag inside its digest the way `workflow_key` carries `WORKFLOW_KEY_VERSION` inside its own, so a flip would otherwise change every core hash while the stamp still read current, and the hub would hold two rules' stacks at once |
 | `workflow_slot_mark` | `structural` or `recipe` per LoRA slot, **frozen the first time the slot is seen** |
-| `workflow_lora_promotion` | One LoRA **file** promoted into the card key at one slot, per **(topology, slot label, asset reference)** (`PUT /workflows/{key}/lora-promotion`). The per-file counterpart of the slot mark: `workflow_key(..., promoted=)` keys a recipe slot only while it holds exactly that file, so only that file's pictures split off. Read by every writer of `workflow_variant.workflow_key` (`workflow_cards.promoted_pairs`, in `record_identity` and `_rekey_variants`), by the export (a promoted file is kept where the graph still loads it) and by the card description (the slot reads `structural`, named, and a generated card name gets `+ <LoRA>`). Names the file by its `asset:` reference, never the filename, so a forget leaves the split standing and nameless, as it does a mark. A card a promotion made is never a one-off |
+| `workflow_lora_promotion` | One LoRA **file** promoted into the card key at one slot, per **(topology, slot label, asset reference)**. **No longer written** (#1623: its route went with the slot marks, the same mechanism); the rows already there still key cards. The per-file counterpart of the slot mark: `workflow_key(..., promoted=)` keys a recipe slot only while it holds exactly that file, so only that file's pictures split off. Read by every writer of `workflow_variant.workflow_key` (`workflow_cards.promoted_pairs`, in `record_identity` and `_rekey_variants`) and by nothing owner-facing. Names the file by its `asset:` reference, never the filename, so a forget leaves the split standing and nameless, as it does a mark. A card a promotion made is never a one-off |
 | `workflow_file` | A stored workflow file on its card, keyed by `workflow_name` as the older file-keyed tables are. `structural_hash` NULL for a UI-format file, which has only a topology and so becomes a card with no assets — unless ComfyUI has converted it (#1530): `POST /comfyui/workflows/convert` stores the API graph beside the file as `<name>.json.api` (`{converted_from, prompt}`, the digest of the editor file it was made from), and `_file_in_hub` files that graph instead, so the row gets a structural hash. `runnable_document` is what every run, list and parameter read goes through to see it; a conversion of another version of the file is ignored, and delete removes it. Deleting the file drops the row and leaves the card, which its pictures made |
-| `workflow_model_fix` | A model the owner replaced in a workflow because the original is gone (`PUT /workflows/{key}/model-fix`), per **(topology, slot label, original file)** rather than per card. Both files are kept normalized (what the card key and asset rows match on) and as spelled (what a run rewrites and the Workflow tab shows), with `slot_kind`, the shelf `file_kind` the slot takes (`checkpoint`, `vae`, `text_encoder`; `workflow_identity.model_fix_kind`), which is what a run rewrite and the superseded-cover flag filter on. `workflow_cards.fixed_slots` reads a slot holding the replacement as holding the original, and **every writer of `workflow_variant.workflow_key` computes the key through it** (`record_identity`, `_rekey_variants`), so pictures made with the replacement file on the original card and a slot flip does not move them off it. Not in `_KEYED_TABLES`: it is keyed by topology, so a re-key never has to carry it. Forgetting either file's name (`forget_asset_names`, and the Privacy purge `forget_model_ghosts`) deletes the row; the variants already folded stay where they are until something re-keys them |
+| `workflow_model_fix` | A model the owner replaced in a workflow because the original is gone (`PUT /workflows/{workflow_id}/model-fix`, on the workflow's base topology), per **(topology, slot label, original file)** rather than per card. Both files are kept normalized (what the card key and asset rows match on) and as spelled (what a run rewrites and the Workflow tab shows), with `slot_kind`, the shelf `file_kind` the slot takes (`checkpoint`, `vae`, `text_encoder`; `workflow_identity.model_fix_kind`), which is what a run rewrite and the superseded-cover flag filter on. `workflow_cards.fixed_slots` reads a slot holding the replacement as holding the original, and **every writer of `workflow_variant.workflow_key` computes the key through it** (`record_identity`, `_rekey_variants`), so pictures made with the replacement file on the original card and a slot flip does not move them off it. Not in `_KEYED_TABLES`: it is keyed by topology, so a re-key never has to carry it. Forgetting either file's name (`forget_asset_names`, and the Privacy purge `forget_model_ghosts`) deletes the row; the variants already folded stay where they are until something re-keys them |
 | `workflow_loader_swap` | A ComfyUI-PixlStash loader a model fix swapped in for the workflow's own because that loader cannot load the replacement (#1605), per **(swapped topology, node label, fields)**. Swapping the node changes the topology and every slot label, so `workflow_identity.unswapped` puts the original loader back in a stored document (matched on label, class and exactly the references the swap recorded; two recorded originals for one node is a guess and keys as itself) before the card key is computed: `record_identity` cards the variant under the original topology (its marks, its cache, `workflow_variant.topology_hash`), and `_topology_documents` hands such variants to a re-key of that topology, read back the same way. `fields` holds asset references only, the original's naming the file loaded, so a fix's replacement then reads as its original through `fixed_slots`. Written when a swapped graph is submitted or opened with `GET …/graph` (`record_loader_swaps`), never by a preflight; `_card_variants` and the pull's has-pictures check read the swapped topologies beside the card's own, kept when the fix is undone: those pictures then card as the replacement's, as a rewritten name's do |
-| `workflow_attr`, `workflow_default_override`, `workflow_key_pins` | The owner's name, notes, hidden flag, parameter overrides and pins, keyed by `workflow_key`, with parameters addressed by **(slot label, input name)** rather than by node id — a node id is whatever the last serialisation called it |
-| `workflow_key_picture_input` (written by `PUT /workflows/{key}/inputs`), `workflow_cover` (no writer yet) | Input modes, Fixed pictures and the chosen cover, keyed by `(library_uuid, workflow_key)` and naming pictures by `pixel_sha`, for the ghost table's reason: a picture is a picture in one vault |
-| `workflow_stack`, `workflow_stack_member`, `workflow_unstacked` (written by the stack routes, B4) | Stacks of cards (`position` 0 is the cover) and the owner taking a card out of its automatic one |
+| `workflow_attr`, `workflow_default_override`, `workflow_key_pins` | The owner's name, notes, hidden flag, parameter overrides and pins per card, keyed by `workflow_key`, with parameters addressed by **(slot label, input name)**. **No route reads or writes them since #1623**: the cut-over's conversion reads them once into the `workflow_group*` tables below |
+| `workflow_key_picture_input`, `workflow_cover` | Input modes, Fixed pictures and the chosen cover per card, keyed by `(library_uuid, workflow_key)` and naming pictures by `pixel_sha`. Read once by the conversion (#1623), written by nothing; `workflow_cover` never had a production writer |
+| `workflow_stack`, `workflow_stack_member`, `workflow_unstacked` | Stacks of cards (`position` 0 is the cover) and the owner taking a card out of its automatic one. Their routes are gone (#1623): the conversion turns a manual stack into a manual workflow and reads these rows once |
 | `workflow_origin` (written by `COMFYUI_WORKFLOW_PULL`, #1440; `hub/workflow_origin.py`) | Where a pulled workflow came from: one row per `(origin, remote_path)`, the origin being the ComfyUI URL, with the `content_hash` last read there. `workflow_name` is **many-to-one** because the pull matches by content. `dismissed` is set by the delete path (`trash_user_workflow`, inside `INBOX_LOCK`) on **every** row naming the deleted file. A later pull skips a dismissed path **and any document with a dismissed content hash, at any path and any origin**, so a rename in ComfyUI, another spelling of its URL or a listing that came back empty cannot restore it; dismissed rows are never pruned, and an empty listing prunes nothing. A path whose content changed is reported `changed` and stored beside the earlier copy. The pull checks a dismissal, stores and records each entry under `INBOX_LOCK`, so a delete made mid-pull is not undone. Only deletes made through PixlStash dismiss: a file removed from the folder by hand comes back on the next pull. Its own table rather than columns on `workflow_file`, which the delete drops |
 | `workflow_pulled_file` (#1440) | The stored files a pull **wrote**, per file rather than per path, so it holds whatever ComfyUI later does to the path. `card_index` reads it as `Card.hand_imported`, the one-off test's "imported" clause, so pulled workflows can be folded into the one-off count. The hand-over paths, `POST /comfyui/workflows/import`, the watched inbox and `POST /comfyui/workflows/convert`, remove the name they store or match (`claim_stored_workflow`), and so does a delete |
 
@@ -4038,8 +4032,7 @@ each with its writer means one more guarded amendment of v2 per step. Only
 is a write cost bought for a query that does not exist.
 
 **Marks are frozen, never recomputed.** `guess_mark` reads a filename, so
-re-guessing as pictures arrive would silently re-key cards the owner has by then
-named, pinned and stacked. The name comes from `workflow_recipe_asset`, resolved
+re-guessing as pictures arrive would silently re-key cards. The name comes from `workflow_recipe_asset`, resolved
 against the document's opaque references; a reference resolving to nothing — a
 name that was forgotten, or was never filed — falls to `recipe` rather than to a
 guess, which is also the direction the guess errs in, since a wrong `structural`
@@ -4053,8 +4046,10 @@ different cards — the alternative, re-guessing per filing, silently re-keys
 cards the owner has by then named, pinned and stacked. And a mark outlives
 `forget_asset_names`: the readable filename goes, the decision that keys the
 card stays, so `structural` still says the forgotten file looked like a speed
-LoRA. That is a classification rather than the name, and the owner-facing
-correction is a flip (a later step), never a delete.
+LoRA. That is a classification rather than the name. Since #1623 it only keys
+cards, which are internal: there is no owner-facing mark and no flip, and the
+default recipe (a LoRA in more than half of the best pictures) is what says a
+LoRA belongs to a workflow.
 
 **The automatic grouping is a query, not rows.** Cards sharing a `core_hash` are
 one automatic stack and `workflow_cards.card_grouping` counts them — over rows
@@ -4093,12 +4088,15 @@ ingest and the file's import do not depend on a card, and the backfill retries.
 
 #### Workflows: identity, core addresses and the default recipe (#1622)
 
-The owner-facing **workflow** is a group of topologies, beside the cards
-rather than instead of them until the cut-over (#1623); no card route reads
-anything here. `variant (structural_hash) -> topology -> workflow (workflow_id)`,
-where the id is `auto:<core_hash>` for an automatic group (the spelling an
-automatic stack already has) or a uuid hex for an owner's split or merge.
-Pictures stay filed by `structural_hash`, so nothing in the vault moves.
+The owner-facing **workflow** is a group of topologies, and since the cut-over
+(#1623) it is what every route reads: the card is internal storage.
+`variant (structural_hash) -> topology -> workflow (workflow_id)`, where the id
+is `auto:<core_hash>` for an automatic group (the spelling an automatic stack
+already has) or a uuid hex for an owner's split or merge. A topology known only
+from a stored file (an editor-format file has a topology and no recipe, #1466)
+has no core hash and is a workflow of its own, `auto:<topology_hash>`, whose
+base card runs its file. Pictures stay filed by `structural_hash`, so nothing
+in the vault moves.
 
 | Table | Holds |
 |---|---|
@@ -4151,12 +4149,144 @@ request cannot switch a recipe-off stage back on yet (#1623 owns that control). 
 `apply_filename_swap`; a model made for another family or modality than the one
 it replaces is **flagged, never blocked** (`RunGroup.flags`, `family_mismatch`;
 `model_shelf_service.families_clash`, which the clone dialog's LoRA flags use
-too). A run by `workflow_key` applies no workflow default and is unchanged.
+too). `target` names a workflow to run instead, over the pictures selected,
+with its default recipe applied the same way. A run of pictures alone runs each
+picture's own graph with no workflow default, and reports the workflow its
+variant is in (`RunGroup.workflow_id`); `workflow_key` is no longer a source.
+
+**The API since the cut-over (#1623)** (`routes/workflows.py`):
+
+- `GET /workflows` is one entry per workflow, `id` where a card had `key`:
+  `base_topology`, `topologies` (what a split takes), and `recipe_values` (the
+  checkpoint and LoRA values its kept pictures used, with counts, spelled as
+  the picture filters' `comfyui_model` / `comfyui_lora` take them, so a value
+  filters to the pictures it counted). `default_recipe` is null on the grid
+  (it samples stored runs per workflow) and filled on the detail route and on
+  every write's answer. The stack fields (`member_keys`, `members`, `stack_id`,
+  `stack_size`, `differs_by*`), the per-slot `mark` and `recipe_loras` are gone.
+  Hidden and one-off are decided per workflow (`workflow_group_attr.hidden`).
+- Every `/workflows/{workflow_id}/…` route resolves the id with
+  `find_workflow` (a malformed id is 422, an unknown one 404). The ones that act
+  on ONE graph - the graph, export, the LoRA chain, the loader insertion, model
+  swap and fix, duplicate, clone, delete - act on the **base card**. A file one
+  of them writes answers with the `workflow_id` it landed in; a clone or a
+  chain edit changes filenames or LoRA loaders only, so it stays in the same
+  workflow, and the original's name, pins and defaults already apply to it.
+- The writes go to the `workflow_group*` tables through
+  `hub/workflow_group_writes.py`: `PATCH` (name, notes, hidden), `PUT
+  …/defaults` (the PARAMETER rows only: an address naming a model loader's
+  file or a `lora:` is a 422, and those rows, which the conversion writes, are
+  never touched), `PUT …/pins` (stored as addresses) and `PUT …/inputs`
+  (library-keyed). A run reads the picture inputs back by workflow, and puts a
+  `core:` address on the run graph's own slot label before filling it.
+- `POST /workflows/merge {ids}` puts every topology of the named workflows in
+  one manual group: the first is the cover, whose name, notes, hidden flag,
+  defaults, pins and inputs are kept; every other workflow's notes follow,
+  headed by its name, and every other distinct name is appended as `Also
+  named: …` (#1620 D4). A manual cover keeps its id, an automatic one gives way
+  to a new group. The folded-away workflows lose their rows, their saved
+  recipes move to the merge (`saved_recipe_service.rehome_recipes`), and so do
+  their `workflow_key_successor` rows, so a recipe the vault has not converted
+  yet follows too. The cover's `core:` addresses name nodes of its own core
+  graph: merged with a workflow of another core, they apply only where the
+  base topology shares that core, and an address that matches nothing is
+  logged by the run, not applied. `POST /workflows/{id}/split
+  {topology}` takes one topology into a new manual group; 400 for a workflow
+  of one topology or one it does not hold.
+- **Removed:** `PUT /workflows/{key}/slots`, `PUT /workflows/{key}/lora-promotion`,
+  `POST /workflows/{key}/unstack`, `POST /workflows/stacks`,
+  `PUT /workflows/stacks/{id}/order` and `POST /workflows/stacks/{id}/unstack`.
+  A mark and a promotion keyed a LoRA into the card, which is the layer the
+  cut-over takes away; merge and split replace the stacks.
+- **The export** is the base graph with the default recipe applied: its values
+  and models written, every LoRA loader outside it bypassed and every stage it
+  runs without switched off (`run_service.skip_requested_loras` /
+  `skip_requested_stages`, best effort as a run does it), then scrubbed with
+  the default recipe's LoRA slots kept (`scrub_for_export(kept_lora_slots=)`);
+  a loader that could not be bypassed is emptied by the scrub instead, and the
+  forgotten-asset and `unvouched_model_values` checks still decide every name.
+- `CHANGED_WORKFLOWS` names workflow ids.
 
 **Saved recipes** gain `workflow_id` and `models` (migration 0124, both
 nullable). `models` pins over the workflow's default recipe address by address,
 as a recipe's overrides do, so NULL and `[]` both leave the defaults; a recipe with a
 `workflow_id` runs as that workflow.
+
+#### Converting cards to workflows (#1623)
+
+The owner's card state moves onto workflows once, in two halves: the hub's
+rows at hub open, the vault's saved recipes in the background. **Merge, never
+drop**: the owner did not ask for this migration, so where several cards
+become one workflow the cover's value wins and every other one survives
+somewhere readable, or is logged with its value. `_rekey_variants`'
+winner-takes-all is deliberately not reused. The card tables are left in
+place (the hub is append-only); nothing reads them as owner state afterwards.
+
+**The hub half is data step 5** (`CURRENT_DATA_VERSION = 5`,
+`hub/workflow_group_convert.convert_card_state`), inside the `BEGIN
+IMMEDIATE` transaction that writes the data version, so an interrupted
+conversion is retried on the next open rather than half-applied. It computes
+every row from the card tables alone and writes with `INSERT OR REPLACE`, so a
+second run leaves identical rows. It runs through a cursor with
+`sqlite3.Row` over the migration's bare connection, which lets it reuse the
+card readers (`card_index`, `stack_rows`, `default_overrides`, `key_pins`,
+`workflow_index`). Imported inside `apply_migrations`: the card modules import
+`hub.db`, which imports `schema`.
+
+| Old state | Becomes |
+|---|---|
+| Manual `workflow_stack` + members | One manual group, **id = the stack id** (already uuid hex; anything else is `uuid5`-hashed), holding the members' topologies. A topology whose cards sat in two stacks goes to the one holding more of its variants, then the smaller stack id |
+| `auto` stack rows | Place nothing. Position 0 still names the cover |
+| `workflow_unstacked` | A topology is split into its own manual group (`uuid5` of the topology hash, so a rerun agrees) only when **every** card of it was unstacked; a partial unstack stays and is logged by card |
+| `workflow_attr.name` | The cover's. Every other distinct name is appended to the notes as `Also named: …` |
+| `workflow_attr.notes` | Concatenated in cover order, each block headed `<card name>:` (`Unnamed card` for none). Only the cover's own notes, when they are the only ones, stand unheaded |
+| `workflow_attr.hidden` | Hidden only when every member card was |
+| `workflow_default_override` | Translated to addresses (below). On conflict the first in cover order wins and the loser is logged; an untranslatable one is logged with its value and not written |
+| `workflow_key_pins` | Union in cover order, translated, stored as address strings. No row when no member had one (`None` is not `[]`) |
+| `workflow_key_picture_input` | Translated, per library; on conflict the cover's |
+| `workflow_cover` | Dropped |
+| `workflow_slot_mark` | Read once: each LoRA slot marked `structural` on the **cover** card becomes `lora:<sha256>` in `workflow_group_default`, the digest from a digest widget or the one shelf LoRA of that filename (`adapter_digest_index`), the value its modal `strength_model` over the stored runs of that variant, else `on` (not a number, so `_float_or_none` keeps the graph's own strength and logs it). No shelf file: logged and skipped |
+| `workflow_lora_promotion` | Not converted (a default LoRA is one in most of the best pictures, #1620 D2); each row is logged. A `structural` mark on a non-cover topology is logged the same way |
+| `workflow_model_fix` | Unchanged |
+| Every card | A `workflow_key_successor` row |
+
+The **cover** of a workflow is its card at stack position 0 (the manual
+stack it came from, or the ordered `auto:` stack), else the one with most
+variants, then the key. A card's workflow is its topology's manual placement,
+else `auto:<core_hash>` from the cache (any card of its topology), else
+`auto:<topology_hash>` for a file-only card (#1466, as `workflow_index`
+files it), else a core hash computed from a stored variant document (with a swapped loader put back, as
+`record_identity` reads it); a card with neither is logged and gets no
+successor. An automatic workflow that receives any owner state also gets its
+`workflow_group` row (`kind = 'auto'`). A workflow whose conversion raises
+is rolled back to its own savepoint, logged with its cards and skipped,
+rather than rolling back the rest (its successor rows stay: its saved
+recipes still belong to it):
+the step runs at hub open, where an uncaught error would refuse the hub on
+every start, and the card tables it read are still on disk.
+
+**Address translation** (`translate`, shared with the vault half). A card's
+`(slot label, input)` is looked up on its own topology (one stored graph per
+topology: `topology_node_labels` → node → `core_node_labels`, the same
+`STRIP_LORAS_FOR_STACKS` strip as the core hash). A core node becomes
+`core:<label>/<input>`; a stage node keeps its slot label only when the card's
+topology **is** the workflow's base topology (chosen by `workflow_index`, with
+no picture counts at hub open), the one graph that label means anything on.
+
+**The vault half** is `MissingSavedRecipeWorkflowFinder` /
+`SavedRecipeConvertTask`, over `saved_recipe.workflow_id IS NULL`, registered
+only on a vault opened through a hub. Per recipe: `workflow_id` from
+`workflow_key_successor`; each override key translated as above, an
+untranslatable one **kept as it was** (a run logs it and applies nothing);
+and `models`, when NULL, pinned to the source card's checkpoint, VAE and
+text-encoder loaders (`model_fix_kind`) as `[{address:
+core:<label>/<widget>, filename}]`, the filename from `workflow_recipe_asset`
+or the replacement where a model fix replaced it. That pin is what keeps a
+recipe saved on a checkpoint-B card running on B rather than on the
+workflow's default checkpoint. The update repeats `workflow_id IS NULL`, so a
+recipe re-saved meanwhile keeps what the owner chose. A recipe with no
+successor row is left untouched, logged, and deferred for the session, as the
+card backfill defers an unkeyable graph.
 
 #### The workflow scan rides the ComfyUI extraction (v1.11)
 
@@ -4362,116 +4492,67 @@ attached hub has never heard of is simply a workflow this machine does not have,
 and a library detached and reattached elsewhere still lists correctly against a
 hub that holds its recipes.
 
-The grid is **one card per stack**, not per recipe — ~192 cards against ~617
-variants on the owner's library — and a stack's other members are fetched
-separately, one detail request each, when the stack is opened. B9 (#1410)
-deleted the topology list that used to hold `GET /workflows` and the grid took
-the route; `topology_index`, `assets_by_topology`, `adapter_slots_by_topology`
-and the `WorkflowSummary` / `WorkflowScan` models that shaped it went with it.
+The grid is **one entry per workflow** (#1623), not per recipe or card: a
+workflow is a group of topologies (`workflow_card_reads.workflow_index`), and
+its entry sums every variant's counts, covers and ghosts while its `models` and
+`loras` are its base card's. B9 (#1410) deleted the topology list that used to
+hold `GET /workflows` and the grid took the route; `topology_index`,
+`assets_by_topology`, `adapter_slots_by_topology` and the `WorkflowSummary` /
+`WorkflowScan` models that shaped it went with it, and #1623 took the stacks,
+their difference chips and the recipe-LoRA pile off the entry.
 
-**The cost is fixed in the card count, not linear in it.** `read_grid`
-(`services/workflow_card_service.py`, whose module docstring holds the measured
-figures) is three vault queries in one session — one `GROUP BY
-workflow_structural_hash`, one `ROW_NUMBER()` window and one `GROUP BY
-workflow_key` over the saved recipes — a fourth only where somebody has chosen
-a cover, and eight hub statements beside them, of which one scans the variant
-table and the rest are small. Everything else is arithmetic over those results.
-A card's `models` and `loras` are a **set** for the reason the topology row's
-`assets` was: the asset table is keyed per recipe, so a family of 159 character
-LoRAs names 159 files and 159 copies of its checkpoint, and a caller describing
-a card from an un-de-duplicated list would say the graph loads 159 adapters at
-once.
+**The cost is fixed in the workflow count, not linear in it.** `read_grid`
+(`services/workflow_card_service.py`, whose module docstring holds the figures)
+is four vault statements in one session (`read_card_grid`: the per-variant
+counts, the cover window, the saved recipes per workflow and the checkpoint and
+LoRA values each variant's kept pictures used, `variant_model_values`) and a
+handful of hub statements beside them, of which `card_index` scans the variant
+table. Everything else is arithmetic over those results. A workflow's `models`
+and `loras` are a **set** for the reason the topology row's `assets` was: the
+asset table is keyed per recipe, so a family of 159 character LoRAs names 159
+files, and a LoRA slot is served without a name - which LoRA filled it is the
+recipe's business, and `recipe_values` says which did, spelled as the picture
+filters take them.
 
 **Every route in the module is `OWNER_ONLY`, and that is a decision.**
-The card counts group every non-deleted picture in the vault, so a picture-,
-set- or project-scoped token holding the response would learn the size of the
-whole library one workflow at a time — the whole-library disclosure class §16
-exists for — and `/workflows/{workflow_key}/pictures` returns vault picture ids
-with no scope filter at all. A scoped answer needs a narrowing parameter and a
-policy to check it against; inventing one with no route to check it would only
-look like the question had been settled.
+The counts group every non-deleted picture in the vault, so a picture-, set- or
+project-scoped token holding the response would learn the size of the whole
+library one workflow at a time — the whole-library disclosure class §16 exists
+for — and `/workflows/{workflow_id}/pictures` returns vault picture ids with no
+scope filter at all. A scoped answer needs a narrowing parameter and a policy to
+check it against; inventing one with no route to check it would only look like
+the question had been settled.
 
-**The write half is the owner editing their own library (v1.12 B4)**, and it is
-`OWNER_ONLY` for a plainer reason than the reads: a card's name, its pins, its
-overrides and the stack it sits in belong to no picture, set, character or
-project, so no narrower policy could describe one. Rows go through
-`hub/workflow_card_writes.py`, which is the only module that writes them;
-`routes/workflows.py` validates a request, resolves the keys with
-`workflow_cards.effective_stack_keys`, and says "look again"
-(`EventType.CHANGED_WORKFLOWS`) on the way out. Running a workflow (§F5) is
-still a later step, and forgetting ghosts is a privacy purge beside the
-retention setting (`/server-config/ghost-retention/*`, see *Picture ghosts*
-below).
+**The write half is the owner editing their own library**, and it is
+`OWNER_ONLY` for a plainer reason than the reads: a workflow's name, its pins,
+its default-recipe parameters and which topologies belong together belong to no
+picture, set, character or project, so no narrower policy could describe one.
+Rows go through `hub/workflow_group_writes.py`, which is the only module that
+writes the `workflow_group*` tables; `routes/workflows.py` validates a request,
+resolves the id with `workflow_card_reads.find_workflow`, and says "look again"
+(`EventType.CHANGED_WORKFLOWS`, naming workflow ids) on the way out. What the
+routes are, and which went, is in *Workflows: identity, core addresses and the
+default recipe* above.
 
-**`PUT /workflows/{key}/lora-promotion` is its per-file sibling**, and what the
-Workflow inspector's LoRA pile calls: it promotes one LoRA file, named by its
-`asset:` reference, in every topology of the card's stack that loaded it
-(`workflow_card_writes.set_lora_promotion`), through the same re-key and
-carry-over. Two things it does that a flip does not: the card it splits off
-**does not keep the owner's typed name** (it is cleared, so the generated
-`… + <LoRA>` shows), and putting back a file whose whole slot is marked
-`structural` turns the slot into a recipe slot and promotes every *other* file
-it has held, so only that one file folds back. It answers with the card
-addressed whenever a variant is still on it. `GET /workflows/{key}/lora-summary`
-(`workflow_card_service.stack_lora_summary`) is the read beside it: the stack's
-LoRAs counted over kept pictures, `shared` (in every one) and `varying` (the
-pile), each with its members, best picture ids and whether it is promoted. The
-picture listing's `workflow_lora` narrows a workflow filter to the variants whose
-stored graph loads that file (`workflow_cards.variants_loading`); alone it
-matches nothing, because the listing is open to scoped tokens and resolving it
-unnarrowed parses every stored graph on the hub. `set_lora_promotion` writes
-rows for the topologies the stack has *now*; a topology that joins the stack
-later is not promoted until the LoRA is promoted again, and putting back a
-structural slot's file promotes only the other files seen so far. And
-`workflow_stack` now also reads a card's own `auto:<core hash>` spelling.
+**A model fix is the one write left that re-keys cards**, internally: the
+replacement is read as the original in the card key, so every card of the base
+topology is re-keyed in one transaction and the card tables are carried across
+(`workflow_card_writes._rekey_variants`). A variant whose stored document will
+not parse keeps the key it is on, so its card survives the pass even when a
+sibling moved, and it is listed among its own successors in the `moved`
+mapping; `saved_recipe_service.rekey_in_session` reads that map to move the
+vault's saved recipes after the cards. The recipes are a second database and
+cannot join the hub's transaction, so the route's failure path logs the whole
+map at error level before it raises. The workflow's id does not move.
 
-**`PUT /workflows/{key}/slots` is the one write that changes identity.** A LoRA
-slot's mark decides whether that LoRA reaches the card key, so flipping one
-re-keys **every variant of the topology** — one card can split into several, or
-several can merge into one — and the re-key and the carry-over of everything the
-owner said about those cards are **one transaction**, or a correction silently
-empties a card somebody has named, pinned and stacked. A split **copies** the
-attributes to every successor; a merge gives them to the member with the most
-pictures (ties broken on the key, so the winner does not depend on row order),
-and the picture counts come from the vault because the hub does not hold them.
-Two cases that look like edge cases and are not: a variant whose stored document
-will not parse or will not reduce keeps the key it is on, so its card survives
-the pass even when a sibling moved; and `workflow_file.workflow_key` is re-keyed
-with it, or an imported file stops saying it runs the card until the next import.
-
-**A card that survives that way is listed among its own successors**, and the
-`moved` mapping the flip returns says so rather than naming only the keys the
-siblings went to. It is the one place the hub half and the vault half can
-disagree about the same card: the carry-over correctly keeps the old key's rows
-*and* copies them onto the new one, so a reader of `moved` that treats every key
-in it as a card that went away acts on the half that is not true.
-`saved_recipe_service.rekey_in_session` read it that way and moved an **authored**
-saved recipe off a card that was still open at its own URL. Stacked it shows
-nothing — both halves share a `core_hash`, so `GET /recipes` expands across the
-group and answers on both keys — and one Unstack makes the tab empty. The
-recipes are a second database and cannot join the hub's transaction, so the
-route's own failure path logs the whole `moved` map at error level before it
-raises: re-running the flip cannot repair it, because the marks asked for are by
-then the marks in force and a second `PUT` re-keys nothing.
-
-**`_KEYED_TABLES` is the carry-over's definition of "the owner's decisions", and
-it is derived rather than remembered**: it is exactly the hub tables carrying a
-`workflow_key` column, less `workflow_variant` and `workflow_file`, which hold a
-*derived* key and are moved by their own `UPDATE` because a split must not
-duplicate a variant onto both halves.
+**`_KEYED_TABLES` is the carry-over's definition of "the owner's decisions" on a
+card, and it is derived rather than remembered**: it is exactly the hub tables
+carrying a `workflow_key` column, less `workflow_variant` and `workflow_file`,
+which hold a *derived* key and are moved by their own `UPDATE` because a split
+must not duplicate a variant onto both halves.
 `test_a_mark_flip_carries_every_table_a_card_key_appears_in` reads that from
 `hub/schema.py`, so a new card table that nobody adds to the tuple fails the
-build instead of being dropped silently by the next flip.
-
-**A stack left with one member dissolves**, on every write that can leave one
-that way, because the read side already draws a group of one as a lone card and
-a row saying otherwise is a row the next reader believes
-(`effective_stack_keys` consults membership before the automatic grouping).
-Dissolving a stack writes a `workflow_unstacked` row per member: an automatic
-grouping is not a row, so without one it re-forms on the next read and the
-gesture reads as having done nothing. Those rows are keyed on the **card**,
-which is what makes both kinds of stack decision survive a `CORE_VERSION` bump
-regrouping everything around them.
+build instead of being dropped silently by the next re-key.
 
 **A row carries what the ghosts filter needs** (#1309): `ghosts` (the active
 library's picture ghosts, joined to a topology through the ghost's
@@ -4492,21 +4573,18 @@ calls a *variant*. It is a **vault** row (`db_models/saved_recipe.py`, migration
 workflow rows come back if the pictures are re-filed, a prompt does not, and a
 saved recipe has to travel with a snapshot or a library move.
 
-**It belongs to the workflow it was saved from, and runs on that workflow's
-stack** (implementation plan D10). The row names one `workflow_key` and nothing
-else, so `GET /recipes?workflow_key=…` resolves the effective stack in the hub
-(`hub/workflow_cards.effective_stack_keys`: an explicit `workflow_stack_member`
-row whatever its stack's kind, then `workflow_unstacked`, then the automatic
-`core_hash` group) and lists every member's recipes — and an Unstack leaves each recipe with its own workflow
-because there was never a stack id to break. `whole_stack=false` skips that resolution and reads
-only the keys named (recipes and credit alike): the Recipes tab sends it when the
-selection is members picked inside an expanded stack, and a collapsed stack card
-still gets the whole stack.
+**It belongs to the workflow it was saved from** (#1623). The row names a
+`workflow_id` (the vault conversion fills it from `workflow_key_successor` for a
+recipe saved on a card), and `GET /recipes?workflow_id=…` lists that
+workflow's recipes; the `workflow_key` column stays as internal storage (a new
+recipe is filed under the workflow's base card) and no request or answer names
+it. A merge moves the folded-away workflows' recipes onto the merged one
+(`saved_recipe_service.rehome_recipes`); a split leaves them where they were.
+There is no stack to resolve any more, and `whole_stack` went with it.
 
-**A re-keying is the one thing a saved recipe does not survive.** It names its
-workflow by `workflow_key`, so a `WORKFLOW_KEY_VERSION` bump or a flipped slot
-mark re-keys the card and leaves the recipe addressed by a key no variant
-carries — invisible in its own workflow's tab, with nothing to say where it
+**A re-keying is the one thing a saved recipe's card column does not
+survive.** A `WORKFLOW_KEY_VERSION` bump or a model fix re-keys the card and
+leaves the column naming a key no variant carries — invisible in its own workflow's tab, with nothing to say where it
 went. Unlike every hub row, a saved recipe is authored and cannot be re-derived,
 so **whoever bumps that version re-keys `saved_recipe` in the same change**; the
 old key is recoverable because the new one is derived from the same stored

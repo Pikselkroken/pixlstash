@@ -64,7 +64,7 @@ const CROPPED = {
 };
 
 const BARE = {
-  key: "w0",
+  id: "w0",
   name: "Outpaint to 16:9",
   models: [{ name: "flux1-fill-dev", kind: "checkpoint" }],
   loras: [],
@@ -77,7 +77,7 @@ const BARE = {
 // A card whose whole content is a stored editor-format workflow file (#1466):
 // no variant, so no recipe to read models off, and no pictures to cover it.
 const FILE_ONLY = {
-  key: "w9",
+  id: "w9",
   name: "z image",
   models: [
     {
@@ -103,38 +103,30 @@ const FILE_ONLY = {
 // The same card on a model the shelf holds a chosen picture for.
 const FILE_ONLY_WITH_ICON = {
   ...FILE_ONLY,
-  key: "w11",
+  id: "w11",
   models: [{ ...FILE_ONLY.models[0], icon: "a".repeat(64) }],
 };
 
 // The same card on a file the recovery could read nothing out of.
-const UNREAD = { ...FILE_ONLY, key: "w10", models: [] };
+const UNREAD = { ...FILE_ONLY, id: "w10", models: [] };
 
 // And one where the recovery found a LoRA but missed the loader beside it:
 // `models` is empty while `loras` is not, so "non-empty" cannot stand in for
 // "read".
 const HALF_READ = {
   ...FILE_ONLY,
-  key: "w12",
+  id: "w12",
   models: [],
-  loras: [{ name: "add_detail.safetensors", mark: "structural" }],
+  loras: [{ name: "add_detail.safetensors" }],
 };
 
 const CROWDED = {
   ...BARE,
-  key: "w5",
+  id: "w5",
   name: `${LONG} ${LONG}`,
   models: [{ name: LONG, kind: "checkpoint" }],
-  loras: [
-    ...Array.from({ length: 4 }, (_, i) => ({
-      name: `${LONG}-${i}`,
-      mark: "structural",
-    })),
-    { mark: "recipe" },
-  ],
-  differs_by: ["+ face detailer", "+ upscale 2×", "other checkpoint"],
+  loras: Array.from({ length: 5 }, (_, i) => ({ name: `${LONG}-${i}` })),
   imported: true,
-  stack_size: 6,
 };
 
 beforeEach(() => {
@@ -306,11 +298,11 @@ describe("WorkflowCard height", () => {
   });
 
   it("fits the strip's worst case in the narrowest card row", () => {
-    // A one-column stack panel is the narrowest host: its 1px border and
-    // padding come off the 240px column floor, then the card's own 1px border
-    // and the meta padding. The worst case is STRIP_MARKS marks, the hairline
-    // and "+N" (~20px, "+12" at --text-2xs) - and `overflow: hidden` clips the
-    // LAST item, which is the "+N", so it has to fit outright.
+    // The grid's 240px column floor is the narrowest card: its own 1px border
+    // and the meta padding come off it. The worst case is STRIP_MARKS marks,
+    // the hairline and "+N" (~20px, "+12" at --text-2xs) - and
+    // `overflow: hidden` clips the LAST item, which is the "+N", so it has to
+    // fit outright.
     const t = tokens();
     const marks = Number(
       read("./WorkflowCard.vue").match(/STRIP_MARKS = (\d+)/)[1],
@@ -318,19 +310,11 @@ describe("WorkflowCard height", () => {
     const floor = Number(
       read("../views/WorkflowsView.vue").match(/COLUMN_MIN = (\d+)/)[1],
     );
-    const panel = read("../panels/StackPanel.vue")
-      .split(".stack-panel__grid {")[1]
-      .split("}")[0];
-    const panelPad = px(panel.match(/padding: ([^;]+);/)[1], t);
-    const card = floor - 2 * 1 - 2 * panelPad;
-    const row = card - 2 * 1 - 2 * px(rule(".wf-card__meta").padding, t);
+    const row = floor - 2 * 1 - 2 * px(rule(".wf-card__meta").padding, t);
     const gap = px(rule(".wf-card__strip").gap, t);
     const hairline = px(rule(".wf-card__rule").width, t);
     const worst = marks * t["--wf-mark"] + hairline + 20 + (marks + 1) * gap;
-    expect(row).toBe(196);
     expect(worst).toBeLessThanOrEqual(row);
-    // And one more mark would not have fitted, so the cap is not loose.
-    expect(worst + t["--wf-mark"] + gap - 20).toBeGreaterThan(row);
   });
 
   it("keeps row 4 clear of the ⓘ button", () => {
@@ -346,17 +330,6 @@ describe("WorkflowCard height", () => {
     const infoLeftEdge = px(info.right) + buttonSize;
     const rowContentEnd = px(meta.padding) + px(facts["padding-right"]);
     expect(rowContentEnd).toBeGreaterThan(infoLeftEdge);
-  });
-
-  it("turns ▸'s rotation off under reduced motion", () => {
-    // The only claim in this component that a mounted test cannot reach.
-    const css = read("./WorkflowCard.vue").split("<style scoped>")[1];
-    const block = css.match(
-      /@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/,
-    );
-    expect(block, "no reduced-motion block").toBeTruthy();
-    expect(block[1]).toContain(".wf-card__toggle");
-    expect(block[1]).toContain("transition: none");
   });
 
   it("keeps every row on one line, the name ellipsized", () => {
@@ -390,8 +363,7 @@ describe("WorkflowCard", () => {
 
   it("draws the base model and every LoRA as marks, base first", () => {
     // Row 2 is the strip (#1485): the base model's mark, the hairline, then
-    // one mark per LoRA, and the recipe slot as a pile rather than a mark -
-    // here an empty one, a single LoRA glyph, since no recipe named a LoRA.
+    // one mark per LoRA.
     const strip = mountCard({
       ...CROWDED,
       loras: CROWDED.loras.slice(1),
@@ -402,10 +374,11 @@ describe("WorkflowCard", () => {
       "wf-card__rule",
       ...Array(4).fill("wf-card__mark"),
     ]);
-    expect(items.at(-1).classes()).toContain("wf-card__pile");
-    expect(items.at(-1).find(".mmark").exists()).toBe(false);
-    expect(items.at(-1).text()).toBe("mdi-layers-outline");
-    expect(items.at(-1).text()).not.toContain("mdi-plus");
+    for (const item of items.filter((li) =>
+      li.classes().includes("wf-card__mark"),
+    )) {
+      expect(item.find(".mmark").exists()).toBe(true);
+    }
     // A fact is not a model: no glyph, and no fill either.
     const facts = mountCard(CROWDED).find(".wf-card__row--facts");
     for (const chip of facts.findAll(".chip-row > .chip-row__chip")) {
@@ -416,169 +389,18 @@ describe("WorkflowCard", () => {
   it("puts each model's file string in its mark's tooltip", () => {
     const tips = mountCard({
       ...BARE,
-      loras: [
-        { name: "add detail xl", mark: "structural", quant: "bf16" },
-        { mark: "recipe" },
-      ],
+      loras: [{ name: "add detail xl", quant: "bf16" }],
     })
-      .findAll(
-        ".wf-card__strip .wf-card__mark:not(.wf-card__pile) > tooltip-stub",
-      )
+      .findAll(".wf-card__strip .wf-card__mark > tooltip-stub")
       .map((tip) => tip.attributes("text"));
     expect(tips).toEqual(["flux1-fill-dev", "add detail xl · BF16"]);
-  });
-
-  describe("the recipe pile", () => {
-    const lora = (name, recipes, character_id = null) => ({
-      name,
-      recipes,
-      character_id,
-      character_name: character_id == null ? null : `Person ${character_id}`,
-    });
-    const CAST = [
-      lora("ada", 5, 7),
-      lora("retro outfit", 3),
-      lora("bea", 2, 8),
-      lora("film grain", 1),
-      lora("noir", 1),
-    ];
-    const piled = (extra = {}) =>
-      mountCard({
-        ...BARE,
-        variant_count: 12,
-        loras: [{ name: "detail", mark: "structural" }, { mark: "recipe" }],
-        recipe_loras: CAST,
-        ...extra,
-      });
-
-    it("draws three faces, most used first, then +N", () => {
-      const pile = piled().find(".wf-card__pile");
-      const faces = pile.findAll(".wf-card__pile-face");
-      expect(faces).toHaveLength(3);
-      expect(faces[0].find("img").attributes("src")).toContain(
-        "/characters/7/thumbnail",
-      );
-      // No character: the LoRA glyph, never a guessed face.
-      expect(faces[1].find("img").exists()).toBe(false);
-      expect(faces[1].text()).toBe("mdi-layers-outline");
-      expect(faces[2].find("img").attributes("src")).toContain(
-        "/characters/8/thumbnail",
-      );
-      expect(pile.find(".wf-card__pile-more").text()).toBe("+2");
-    });
-
-    it("draws each one as a full mark, side by side, while they fit", () => {
-      // Base + one LoRA of its own leaves three marks for three recipe LoRAs.
-      const pile = piled({ recipe_loras: CAST.slice(0, 3) }).find(
-        ".wf-card__pile",
-      );
-      expect(pile.classes()).not.toContain("wf-card__pile--stacked");
-      expect(pile.findAll(".wf-card__pile-face")).toHaveLength(3);
-      expect(pile.find(".wf-card__pile-more").exists()).toBe(false);
-      // Five do not fit in three, so they stack.
-      expect(piled().find(".wf-card__pile").classes()).toContain(
-        "wf-card__pile--stacked",
-      );
-    });
-
-    it("draws a character with no thumbnail as the LoRA glyph", async () => {
-      const wrapper = piled();
-      await wrapper.find(".wf-card__pile-face img").trigger("error");
-      const first = wrapper.find(".wf-card__pile-face");
-      expect(first.find("img").exists()).toBe(false);
-      expect(first.text()).toBe("mdi-layers-outline");
-    });
-
-    it("draws one pile however many recipe slots the card has", () => {
-      const wrapper = piled({
-        loras: [{ mark: "recipe" }, { mark: "recipe" }],
-      });
-      expect(wrapper.findAll(".wf-card__pile")).toHaveLength(1);
-    });
-
-    it("counts characters apart from the other recipe LoRAs", () => {
-      expect(piled().find(".wf-card__lora-count").text()).toBe(
-        "1 LoRA · 2 characters + 3 recipe LoRAs",
-      );
-      expect(
-        piled({ loras: [{ mark: "recipe" }], recipe_loras: [lora("x", 1)] })
-          .find(".wf-card__lora-count")
-          .text(),
-      ).toBe("1 recipe LoRA");
-    });
-
-    it.each([
-      // [structural LoRAs, recipe LoRAs, whether the pile fits]
-      [1, 5, true], // base + 1 + a pile with +N (3) = 5
-      [2, 5, false], // 6
-      [2, 3, true], // three stacked faces cost two marks: 5
-      [3, 3, false], // 6
-      [3, 1, true], // one face is one mark: 5
-    ])(
-      "budgets %i marks beside a pile of %i as fitting: %s",
-      (own, cast, fits) => {
-        const wrapper = piled({
-          loras: [
-            ...Array.from({ length: own }, (_, i) => ({
-              name: `lora-${i}`,
-              mark: "structural",
-            })),
-            { mark: "recipe" },
-          ],
-          recipe_loras: CAST.slice(0, cast),
-        });
-        expect(wrapper.find(".wf-card__pile").exists()).toBe(fits);
-        expect(wrapper.find(".wf-card__mark-more").exists()).toBe(!fits);
-      },
-    );
-
-    it("lists each LoRA in its tooltip with how many recipes used it", () => {
-      const text = mount(WorkflowCard, {
-        props: {
-          card: {
-            ...BARE,
-            variant_count: 12,
-            loras: [{ mark: "recipe" }],
-            recipe_loras: CAST,
-          },
-        },
-        global: { stubs: { Tooltip: { template: "<div><slot /></div>" } } },
-      })
-        .find(".wf-card__pile")
-        .text()
-        .replace(/\s+/g, " ");
-      expect(text).toContain("Recipe LoRAs · 12 recipes");
-      expect(text).toContain("Person 7's LoRA · 5 recipes");
-      expect(text).toContain("retro outfit · no character · 3 recipes");
-      expect(text).toContain("and 1 more");
-    });
-
-    it("tells two LoRAs of one character apart by their own names", () => {
-      const label = piled({
-        recipe_loras: [
-          lora("ada v1", 3, 7),
-          lora("ada v2", 2, 7),
-          lora("bea", 1, 8),
-        ],
-      }).attributes("aria-label");
-      expect(label).toContain(
-        "recipe LoRAs used: Person 7 · ada v1; Person 7 · ada v2; Person 8's LoRA",
-      );
-    });
-
-    it("names every recipe LoRA in the accessible name", () => {
-      expect(piled().attributes("aria-label")).toContain(
-        "recipe LoRAs used: Person 7's LoRA; retro outfit; Person 8's LoRA; " +
-          "film grain; noir",
-      );
-    });
   });
 
   it("puts the hairline after the base model only when LoRAs follow it", () => {
     expect(mountCard(BARE).find(".wf-card__rule").exists()).toBe(false);
     const rule = mountCard({
       ...BARE,
-      loras: [{ name: "detail", mark: "structural" }],
+      loras: [{ name: "detail" }],
     }).find(".wf-card__rule");
     expect(rule.element.previousElementSibling.textContent).toBe(
       generatedMark({ filename: "flux1-fill-dev" }).initials,
@@ -596,7 +418,6 @@ describe("WorkflowCard", () => {
         ...BARE,
         loras: Array.from({ length: count }, (_, i) => ({
           name: `lora-${i}`,
-          mark: "structural",
         })),
       });
       expect(wrapper.findAll(".wf-card__strip .wf-card__mark")).toHaveLength(
@@ -615,21 +436,10 @@ describe("WorkflowCard", () => {
     const row = mountCard({
       ...BARE,
       models: [{ name: "juggernautXL v9", kind: "checkpoint", title: null }],
-      loras: [{ name: "detail", mark: "structural" }],
+      loras: [{ name: "detail" }],
     }).findAll(".wf-card__meta > .wf-card__row")[2];
     expect(row.find(".wf-card__base").text()).toBe("juggernautXL v9");
     expect(row.find(".wf-card__lora-count").text()).toBe("1 LoRA");
-  });
-
-  it("counts a recipe slot as a slot, not as a LoRA", () => {
-    const count = (loras) =>
-      mountCard({ ...BARE, loras })
-        .find(".wf-card__lora-count")
-        .text();
-    expect(count([{ mark: "recipe" }])).toBe("1 LoRA slot");
-    expect(
-      count([{ name: "detail", mark: "structural" }, { mark: "recipe" }]),
-    ).toBe("1 LoRA");
   });
 
   it("says No LoRAs rather than leaving the row blank", () => {
@@ -640,52 +450,10 @@ describe("WorkflowCard", () => {
 
   it("carries the full chip list in its accessible name", () => {
     const name = mountCard(CROWDED).attributes("aria-label");
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       expect(name).toContain(`${LONG}-${i}, workflow LoRA`);
     }
-    expect(name).toContain("recipe LoRA slot");
     expect(name).toContain("rated 3.4 of 5");
-  });
-
-  it("gives a stack a ▸ button outside the tab order", async () => {
-    const wrapper = mountCard(CROWDED, { panelId: "stack-panel" });
-    const toggle = wrapper.find(".wf-card__toggle");
-    expect(toggle.element.tagName).toBe("BUTTON");
-    expect(toggle.attributes("tabindex")).toBe("-1");
-    expect(toggle.attributes("aria-expanded")).toBe("false");
-    expect(toggle.attributes("aria-controls")).toBe("stack-panel");
-    await toggle.trigger("click");
-    expect(wrapper.emitted("toggle")).toHaveLength(1);
-
-    await wrapper.setProps({ expanded: true });
-    expect(toggle.attributes("aria-expanded")).toBe("true");
-    expect(toggle.classes()).toContain("wf-card__toggle--open");
-    expect(wrapper.find(".wf-card__badge--start").text()).toContain("6");
-  });
-
-  it("opens the stack from the layered count as well as from ▸", async () => {
-    const wrapper = mountCard(CROWDED, { panelId: "stack-panel" });
-    const badge = wrapper.find(".wf-card__badge--start");
-    // It is the mark that says there are cards underneath, so it is the first
-    // thing a reader aims at. A real button, but off the tab order and hidden
-    // from assistive tech: ▸ is the announced control, and hiding a second one
-    // is only honest while the two do exactly the same thing.
-    expect(badge.element.tagName).toBe("BUTTON");
-    expect(badge.attributes("tabindex")).toBe("-1");
-    expect(badge.attributes("aria-hidden")).toBe("true");
-    await badge.trigger("click");
-    expect(wrapper.emitted("toggle")).toHaveLength(1);
-  });
-
-  it("does not put a layered count on a card that is not a stack", () => {
-    const wrapper = mountCard(BARE);
-    expect(wrapper.find(".wf-card__badge--start").exists()).toBe(false);
-  });
-
-  it("keeps the layered count on a stack with no pictures", () => {
-    const wrapper = mountCard({ ...CROWDED, covers: [], picture_count: 0 });
-    expect(wrapper.find(".wf-card__cover--empty").exists()).toBe(true);
-    expect(wrapper.find(".wf-card__badge--start").text()).toContain("6");
   });
 
   it("does not claim no pictures while covers are still missing", () => {
@@ -771,32 +539,6 @@ describe("WorkflowCard", () => {
     const wrapper = mountCard({ ...BARE, rating: 0 });
     expect(wrapper.find(".wf-card__badge--bottom").exists()).toBe(false);
     expect(wrapper.attributes("aria-label")).not.toContain("of 5");
-  });
-
-  it("has no ▸ or layered count on a single workflow", () => {
-    const wrapper = mountCard(BARE);
-    expect(wrapper.find(".wf-card__toggle").exists()).toBe(false);
-    expect(wrapper.find(".wf-card__badge--start").exists()).toBe(false);
-  });
-
-  it("has none of them on a member row either, but keeps its differences", () => {
-    // A member is served the WHOLE stack's `stack_size` — deliberately, so a
-    // member opened alone still shows what it differs by — so every row in an
-    // open panel wore the layered count and a ▸ that could not expand
-    // anything, and announced itself as a stack of six while sitting inside
-    // that stack.
-    const wrapper = mountCard(CROWDED, { member: true });
-    expect(wrapper.find(".wf-card__toggle").exists()).toBe(false);
-    expect(wrapper.find(".wf-card__badge--start").exists()).toBe(false);
-    expect(wrapper.classes()).not.toContain("wf-card--stack");
-
-    const name = wrapper.attributes("aria-label");
-    expect(name).not.toContain("stack of 6 workflows");
-    // What the row is for stays: the chips, their label, and everything else
-    // the name reads.
-    expect(name).toContain("differs by: + face detailer");
-    expect(wrapper.text()).toContain("differs by");
-    expect(wrapper.text()).toContain("+ upscale 2×");
   });
 
   it("puts ⓘ on every card as a real button outside the tab order", () => {
@@ -932,7 +674,7 @@ describe("WorkflowCard", () => {
     // Accessory slots are named in ⓘ and nowhere on the card.
     const many = {
       ...FILE_ONLY,
-      key: "w13",
+      id: "w13",
       models: [
         { name: "ae.safetensors", kind: "vae" },
         { name: "qwen_3_4b.safetensors", kind: "clip" },
@@ -943,7 +685,7 @@ describe("WorkflowCard", () => {
           kind: "unet",
         },
       ],
-      loras: [{ name: "detail.safetensors", mark: "structural" }],
+      loras: [{ name: "detail.safetensors" }],
     };
     const marks = mountCard(many).findAll(".wf-card__strip .wf-card__mark");
     expect(marks).toHaveLength(2);
@@ -994,7 +736,7 @@ describe("WorkflowCard", () => {
     const wrapper = mountCard({
       ...BARE,
       models: [{ name: null, kind: "checkpoint" }],
-      loras: [{ name: "detail", kind: "lora", mark: "structural" }],
+      loras: [{ name: "detail", kind: "lora" }],
     });
     expect(wrapper.findAll(".wf-card__row")[2].text()).toContain(
       "Checkpoint missing",
@@ -1086,7 +828,7 @@ describe("WorkflowCard", () => {
   it("speaks structural LoRA precision", () => {
     const card = mountCard({
       ...BARE,
-      loras: [{ name: "Foxglove", mark: "structural", quant: "fp8_e4m3" }],
+      loras: [{ name: "Foxglove", quant: "fp8_e4m3" }],
     });
     expect(card.find("article").attributes("aria-label")).toContain(
       "LoRAs: Foxglove, FP8 E4M3, workflow LoRA",
@@ -1122,7 +864,7 @@ describe("WorkflowCard", () => {
         { name: "flux1 dev", kind: "unet", quant: "q4_k_m" },
         { name: "ae", kind: "vae", quant: null },
       ],
-      loras: [{ name: "detail", mark: "structural", quant: "bf16" }],
+      loras: [{ name: "detail", quant: "bf16" }],
     }).find('[data-testid="workflow-info-popover"]');
     // Per LINE, not over the whole panel's text: a chip on the wrong row, or
     // an empty chip on the row that records nothing, both satisfy a substring
@@ -1151,16 +893,15 @@ describe("WorkflowCard", () => {
     expect(text).toContain("vae");
   });
 
-  it("lists models, differences and defaults in the ⓘ popover", () => {
+  it("lists models and defaults in the ⓘ popover", () => {
     const popover = mountCard({
       ...CROWDED,
       defaults: [{ label: "Steps · CFG", value: "8 · 2.0" }],
       saved_recipe_count: 3,
     }).find('[data-testid="workflow-info-popover"]');
     const text = popover.text();
-    expect(text).toContain("Stack of 6 workflows · found in 22 pictures");
-    expect(text).toContain("filled by the recipe");
-    expect(text).toContain("+ upscale 2×");
+    expect(text).toContain("Found in 22 pictures");
+    expect(text).toContain("in the workflow");
     expect(text).toContain("8 · 2.0");
     expect(text).toMatch(/Saved recipes\s*3/);
   });
@@ -1287,26 +1028,6 @@ describe("the fallback crop", () => {
   });
 });
 
-// ── The stack badge says what its number counts ──────────────────────────
-describe("the layered count", () => {
-  it("says the number is workflows, not pictures", () => {
-    const wrapper = mountCard({ ...CROWDED, stack_size: 3 });
-    const badge = wrapper.find(".wf-card__badge--button");
-
-    expect(badge.text()).toContain("3");
-    // Two glyph-and-number badges sit at opposite ends of the same cover, so
-    // which one counts workflows is otherwise a guess.
-    expect(badge.findComponent({ name: "Tooltip" }).props("text")).toBe(
-      "3 workflows in this stack",
-    );
-  });
-
-  it("puts no layered badge on a card that is not a stack", () => {
-    const wrapper = mountCard({ ...BARE, stack_size: 1 });
-    expect(wrapper.find(".wf-card__badge--button").exists()).toBe(false);
-  });
-});
-
 // ── The selection mark is the card's own ─────────────────────────────────
 //
 // It used to be on the CELL each host wraps around this component, where it
@@ -1342,7 +1063,7 @@ describe("the selection mark", () => {
     expect(mark.inset).toBe("0");
     expect(mark["z-index"]).toBe("var(--z-raised)");
     // Above the badges, which sit on the cover at a bare z-index of 1.
-    expect(Number(rule(".wf-card__badge--start")["z-index"])).toBeLessThan(10);
+    expect(Number(rule(".wf-card__pic-flag")["z-index"])).toBeLessThan(10);
     // And it must not eat the clicks meant for the controls underneath.
     expect(mark["pointer-events"]).toBe("none");
   });

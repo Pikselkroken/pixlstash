@@ -28,7 +28,7 @@ vi.mock("vuetify/components", async () => {
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import ExportRecipeDialog from "./ExportRecipeDialog.vue";
 
-const KEY = "a".repeat(64);
+const KEY = `auto:${"a".repeat(64)}`;
 
 const SHARES = [
   "the name you gave it, 'Rainy tram platform'",
@@ -57,7 +57,7 @@ describe("ExportRecipeDialog", () => {
     downloads = [];
     exportSavedRecipe.mockResolvedValue({
       filename: "rainy-tram-platform.json",
-      recipe: { name: "Rainy tram platform", workflow_key: KEY },
+      recipe: { name: "Rainy tram platform", workflow_id: KEY },
       shares: SHARES,
     });
     exportWorkflow.mockResolvedValue({
@@ -139,7 +139,7 @@ describe("ExportRecipeDialog", () => {
     );
     exportSavedRecipe.mockImplementationOnce(async () => ({
       filename: "harbour-fog.json",
-      recipe: { name: "Harbour fog", workflow_key: KEY },
+      recipe: { name: "Harbour fog", workflow_id: KEY },
       shares: ["the prompt you wrote"],
     }));
 
@@ -149,7 +149,7 @@ describe("ExportRecipeDialog", () => {
 
     answerFirst({
       filename: "rainy-tram-platform.json",
-      recipe: { name: "Rainy tram platform", workflow_key: KEY },
+      recipe: { name: "Rainy tram platform", workflow_id: KEY },
       shares: SHARES,
     });
     await flushPromises();

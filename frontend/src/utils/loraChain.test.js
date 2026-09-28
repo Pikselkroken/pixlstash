@@ -53,11 +53,11 @@ describe("loraChain", () => {
   it("builds the hand-over link Save as recipe follows", () => {
     expect(editLorasRoute("k", { dropLora: "x.safetensors" })).toEqual({
       name: "workflows",
-      query: { card: "k", edit: "loras", drop_lora: "x.safetensors" },
+      query: { workflow: "k", edit: "loras", drop_lora: "x.safetensors" },
     });
     expect(editLorasRoute("k")).toEqual({
       name: "workflows",
-      query: { card: "k", edit: "loras" },
+      query: { workflow: "k", edit: "loras" },
     });
   });
 });

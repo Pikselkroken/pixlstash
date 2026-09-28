@@ -449,23 +449,29 @@ def test_membership_filters_reach_the_listing_as_query_params():
     assert len(seen) == 1
 
 
-def test_a_workflow_key_filters_the_listing_and_the_count_but_not_search():
+WORKFLOW_ID = "auto:" + "a" * 64
+
+
+def test_a_workflow_id_filters_the_listing_and_the_count_but_not_search():
     seen = []
 
     def fetch(path, params):
         seen.append((path, dict(params)))
         return 200, "application/json", b"[]"
 
-    key = "k" * 64
-    _call(fetch, "list_pictures", workflow_key=key)
-    _call(fetch, "count_pictures", workflow_key=key)
+    manual = "b" * 32
+    _call(fetch, "list_pictures", workflow_id=WORKFLOW_ID)
+    _call(fetch, "count_pictures", workflow_id=manual)
     assert [path for path, _ in seen] == ["/pictures", "/pictures/count"]
-    assert all(params["workflow_key"] == key for _, params in seen)
+    # `?workflow=` is the route's parameter (#1623); the card key is gone.
+    assert [params.get("workflow") for _, params in seen] == [WORKFLOW_ID, manual]
+    assert not any("workflow_key" in params for _, params in seen)
 
     # The search route has no such filter; ignoring it would widen the answer.
-    result = _call(fetch, "search_pictures", query="cat", workflow_key=key)
+    result = _call(fetch, "search_pictures", query="cat", workflow_id=WORKFLOW_ID)
     assert result["isError"] is True
-    assert _call(fetch, "list_pictures", workflow_key=7)["isError"] is True
+    for bad in (7, "k" * 64, "auto:xyz", "auto:" + "a" * 64 + "/x"):
+        assert _call(fetch, "list_pictures", workflow_id=bad)["isError"] is True
     assert len(seen) == 2
 
 
@@ -483,7 +489,7 @@ def test_a_rejected_token_says_to_reconnect():
         mcp_server._checked(403, "", b'{"detail":"no"}')
 
 
-def test_a_recipe_links_to_its_workflow_card():
+def test_a_recipe_links_to_its_workflow():
     def recipe(body):
         def fetch(path, params):
             return 200, "application/json", json.dumps(body).encode()
@@ -492,16 +498,30 @@ def test_a_recipe_links_to_its_workflow_card():
         assert result["isError"] is False, result
         return json.loads(result["content"][0]["text"])
 
-    key = "ab/c?d"
-    answer = recipe({"workflow_key": key, "lora_slots": [{"node_id": "10"}]})
-    assert answer["workflow_link"] == "/workflows?card=ab%2Fc%3Fd"
-    assert answer["edit_loras_link"] == "/workflows?card=ab%2Fc%3Fd&edit=loras"
+    workflow_id = "ab/c?d"
+    answer = recipe({"workflow_id": workflow_id, "lora_slots": [{"node_id": "10"}]})
+    assert answer["workflow_link"] == "/workflows?workflow=ab%2Fc%3Fd"
+    assert answer["edit_loras_link"] == "/workflows?workflow=ab%2Fc%3Fd&edit=loras"
 
-    # No LoRA to edit, no Edit LoRAs link; no card, no link at all.
-    answer = recipe({"workflow_key": key, "lora_slots": []})
+    # No LoRA to edit, no Edit LoRAs link; no workflow, no link at all.
+    answer = recipe({"workflow_id": workflow_id, "lora_slots": []})
     assert "edit_loras_link" not in answer
-    answer = recipe({"available": False, "workflow_key": None})
+    answer = recipe({"available": False, "workflow_id": None})
     assert "workflow_link" not in answer
+    # A card key is not a workflow (#1623): it links to nothing.
+    answer = recipe({"workflow_key": "k" * 64, "lora_slots": []})
+    assert "workflow_link" not in answer
+
+
+def test_no_tool_or_instruction_speaks_of_cards():
+    """The owner sees workflows (#1623); a card is internal storage."""
+    texts = [mcp_server.INSTRUCTIONS, mcp_server.WRITE_INSTRUCTIONS]
+    for tool in mcp_server.tools_for(allow_write=True):
+        texts.append(tool["description"])
+        texts.append(json.dumps(tool["inputSchema"]))
+    for text in texts:
+        assert "card" not in text.lower(), text
+        assert "workflow_key" not in text, text
 
 
 @contextmanager
@@ -649,18 +669,17 @@ def test_every_tool_path_resolves_to_a_mounted_route(env, tmp_path):
     _call(fetch, "count_pictures")
     for tool in ("list_tags", "list_sets", "list_characters", "list_projects"):
         _call(fetch, tool)
-    key = "a" * 64
     _write(fetch, "list_workflows")
-    _write(fetch, "get_workflow", workflow_key=key)
+    _write(fetch, "get_workflow", workflow_id=WORKFLOW_ID)
     _write(
         fetch,
         "export_workflow_graph",
-        workflow_key=key,
+        workflow_id=WORKFLOW_ID,
         out_path=str(tmp_path / "g.json"),
     )
     _write(fetch, "import_workflow_graph", name="x.json", workflow={})
-    _write(fetch, "preflight_workflow", workflow_key=key)
-    _write(fetch, "run_workflow", workflow_key=key)
+    _write(fetch, "preflight_workflow", workflow_id=WORKFLOW_ID)
+    _write(fetch, "run_workflow", workflow_id=WORKFLOW_ID)
     # Every tool is exercised, so a new one cannot skip this check by
     # forgetting to be listed here.
     assert len(requests) == len(mcp_server.tools_for(allow_write=True))
@@ -883,21 +902,22 @@ def test_a_created_answer_is_success_and_a_refusal_carries_its_detail():
     assert "answered 403: Owner only" in refused["content"][0]["text"]
 
 
-def test_a_workflow_key_cannot_reshape_the_request_path():
+def test_a_workflow_id_cannot_reshape_the_request_path():
     requested = []
 
     def fetch(path, params, method="GET", body=None):
         requested.append(path)
         return 200, "application/json", b"{}"
 
-    _write(fetch, "get_workflow", workflow_key="x/../../users/me/tokens")
-    assert requested == ["/workflows/x%2F..%2F..%2Fusers%2Fme%2Ftokens"]
-    # Positive control: a well-formed key is sent as it is.
-    _write(fetch, "get_workflow", workflow_key="abc123")
-    assert requested[-1] == "/workflows/abc123"
-    # And a non-string never reaches the transport.
-    assert _write(fetch, "get_workflow", workflow_key=["abc"])["isError"] is True
-    assert len(requested) == 2
+    # Not a workflow id, so it never reaches the transport at all.
+    for bad in ("x/../../users/me/tokens", "auto:" + "a" * 64 + "/..", ["abc"]):
+        assert _write(fetch, "get_workflow", workflow_id=bad)["isError"] is True
+    assert requested == []
+    # Positive control: a well-formed id is sent, its colon encoded.
+    _write(fetch, "get_workflow", workflow_id=WORKFLOW_ID)
+    assert requested == ["/workflows/auto%3A" + "a" * 64]
+    _write(fetch, "get_workflow", workflow_id="c" * 32)
+    assert requested[-1] == "/workflows/" + "c" * 32
 
 
 def test_the_graph_goes_through_a_file_in_both_directions(tmp_path):
@@ -913,7 +933,7 @@ def test_the_graph_goes_through_a_file_in_both_directions(tmp_path):
 
     out = tmp_path / "nested" / "graph.json"
     result = _write(
-        fetch, "export_workflow_graph", workflow_key="abc", out_path=str(out)
+        fetch, "export_workflow_graph", workflow_id=WORKFLOW_ID, out_path=str(out)
     )
     assert result["isError"] is False, result
     summary = json.loads(result["content"][0]["text"])
@@ -950,7 +970,7 @@ def test_the_graph_goes_through_a_file_in_both_directions(tmp_path):
     def graphless(path, params, method="GET", body=None):
         return 200, "application/json", b'{"name": "x"}'
 
-    empty = _write(graphless, "export_workflow_graph", workflow_key="abc")
+    empty = _write(graphless, "export_workflow_graph", workflow_id=WORKFLOW_ID)
     assert empty["isError"] is True
     assert "no workflow graph" in empty["content"][0]["text"]
 
@@ -960,7 +980,7 @@ def test_the_graph_goes_through_a_file_in_both_directions(tmp_path):
     refused = _write(
         fetch,
         "export_workflow_graph",
-        workflow_key="abc",
+        workflow_id=WORKFLOW_ID,
         out_path=str(blocked / "graph.json"),
     )
     assert refused["isError"] is True
@@ -1017,10 +1037,10 @@ def test_the_default_export_goes_to_the_cache_under_a_safe_name(tmp_path, monkey
     def fetch(path, params, method="GET", body=None):
         return 200, "application/json", b'{"workflow": {"1": {}}}'
 
-    result = _write(fetch, "export_workflow_graph", workflow_key="ab/../c")
+    result = _write(fetch, "export_workflow_graph", workflow_id=WORKFLOW_ID)
     path = json.loads(result["content"][0]["text"])["path"]
-    # The key cannot climb out of the cache folder through the file name.
-    assert path == str(tmp_path / "graphs" / "ab____c.json")
+    # The id's colon is not a file-name character everywhere.
+    assert path == str(tmp_path / "graphs" / ("auto_" + "a" * 64 + ".json"))
     assert json.loads(open(path).read()) == {"1": {}}
 
 

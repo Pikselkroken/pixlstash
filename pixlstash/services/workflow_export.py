@@ -12,9 +12,11 @@ rather than about the workflow (implementation plan §5.7):
 
 * every widget that carries prose, blanked;
 * seeds, nulled;
-* every LoRA slot the owner has **not** marked *structural*, emptied - a
-  lightning or turbo LoRA is part of the workflow, a character LoRA is the
-  recipe's business - by filename **and by digest**;
+* every LoRA slot that does not load a LoRA of the workflow's **default
+  recipe**, emptied - a lightning or turbo LoRA every picture loads is part of
+  the workflow, a character LoRA is a recipe's business - by filename **and
+  by digest** (the route bypasses those loaders first where ComfyUI says how,
+  so an emptied slot is the fallback, never the plan);
 * ``_meta`` titles, stripped, because a person names nodes after what they are
   making;
 * picture loader filenames, blanked;
@@ -123,19 +125,18 @@ CREDENTIALS = "values in fields named like a key or a password"
 def scrub_for_export(
     graph: dict,
     *,
-    structural_lora_slots: Iterable[tuple[str, str]] = (),
+    kept_lora_slots: Iterable[tuple[str, str]] = (),
     unvouched: Callable[[str, str], bool] = lambda _widget, _value: False,
 ) -> tuple[dict, list[str]]:
     """A copy of *graph* safe to give away, and what was taken out of it.
 
     Args:
         graph: An API-format graph, already sanitised of non-node entries.
-        structural_lora_slots: ``(node id, widget name)`` of every LoRA slot
-            the owner marked *structural*. A **slot**, not a node: a stacker
-            carries three of them on one node and they are marked
-            independently. Every other LoRA slot is emptied — **marked or
-            not**, so a topology whose marks have not been frozen yet, and a
-            loader the label map did not reach, both fall on the safe side.
+        kept_lora_slots: ``(node id, widget name)`` of every LoRA slot that
+            loads a LoRA of the workflow's default recipe. A **slot**, not a
+            node: a stacker carries three of them on one node. Every other
+            LoRA slot is emptied, so a recipe that could not be read, and a
+            loader the route could not match, both fall on the safe side.
         unvouched: ``(widget_name, value) -> bool``, true when the value names
             a model this machine cannot vouch for. The default vouches for
             nothing being wrong, which is only right for a caller that has
@@ -155,9 +156,7 @@ def scrub_for_export(
     # to be `detect_workflow_io`, a second full reduction whose only other
     # product was a log line about an ambiguity the scrub does not consult.
     structural_document(exported)
-    keep_lora = {
-        (str(node_id), str(widget)) for node_id, widget in structural_lora_slots
-    }
+    keep_lora = {(str(node_id), str(widget)) for node_id, widget in kept_lora_slots}
     removed: set[str] = set()
 
     for node_id, node in exported.items():

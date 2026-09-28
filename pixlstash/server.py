@@ -980,7 +980,7 @@ class Server(
     def _store_inbox_workflow(self, name: str, workflow: dict) -> dict:
         """Store one inbox file the way a drag and drop does: keep both.
 
-        The card it lands on is announced, so a file dropped in the folder
+        The workflow it lands in is announced, so a file dropped in the folder
         appears on an open Workflows view rather than at the next reload. No
         origin client id: nobody's tab did this, so every tab reloads. The
         start-up reconcile runs before the vault is open and announces
@@ -992,7 +992,7 @@ class Server(
         claim_stored_workflow(self.hub, result["name"])
         announce_changed_workflows(
             self,
-            [key for key in (result.get("workflow_key"),) if key],
+            [key for key in (result.get("workflow_id"),) if key],
             "imported",
         )
         return result

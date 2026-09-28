@@ -6,12 +6,14 @@
 // `listWorkflowPictures` and `getWorkflowGraph`. B9 (#1410) then deleted the
 // topology routes themselves and moved the cards onto `/workflows`, so the
 // grid and the detail are what this module fronts, with `exportWorkflow`,
-// `duplicateWorkflow`, `deleteWorkflowFile` and `dissolveStack` at the foot of
-// the file for the grid's own verb menu (#1455), and the LoRA chain editor's
-// `getLoraChain` / `saveLoraChain` after them (#1478). `GET /workflows/{key}/
-// pictures` is served and has no caller in the app - the picture grid reaches
-// a card's pictures through `GET /pictures?workflow_key=`, which filters like
-// every other facet - so there is deliberately no function for it here.
+// `duplicateWorkflow` and `deleteWorkflowFile` at the foot of the file for the
+// grid's own verb menu (#1455), and the LoRA chain editor's `getLoraChain` /
+// `saveLoraChain` after them (#1478). Since #1623 every route is addressed by
+// a workflow `id` (`auto:<core hash>` or a manual group's uuid), never by a
+// card key. `GET /workflows/{id}/pictures` is served and has no caller in the
+// app - the picture grid reaches a workflow's pictures through
+// `GET /pictures?workflow=`, which filters like every other facet - so there
+// is deliberately no function for it here.
 //
 // Every route here is owner-only: the counts are read across the whole vault,
 // so a scoped session gets 403 rather than a narrowed answer.
@@ -47,7 +49,7 @@ export function workflowCoverUrl(cover) {
 }
 
 /**
- * The Workflows grid: one card per stack, plus what it left out (v1.12 B3).
+ * The Workflows grid: one card per workflow, plus what it left out (v1.12 B3).
  *
  * `one_offs` and `hidden` are counted over the same sets whatever the two
  * flags say, so the Filters panel can label a ticked checkbox with the number
@@ -73,15 +75,15 @@ export async function listWorkflowCards({
 }
 
 /**
- * One card opened — the only way to read a stack member's whole card, which
- * the grid never lists: it draws the cover alone, naming the rest in
- * `member_keys` and `members` (each member's name and what sets it apart).
+ * One workflow opened: the card plus its notes, variants, pins and model
+ * fixes. Only this read (and a write's answer) fills `card.default_recipe`;
+ * the grid sends it null.
  *
- * @param {string} workflowKey
+ * @param {string} workflowId
  * @returns {Promise<{card: Object, notes: ?string, hidden: boolean, variants: Array<Object>, pins: ?Array<Object>}>}
  */
-export async function getWorkflowCard(workflowKey) {
-  return unwrap(apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}`));
+export async function getWorkflowCard(workflowId) {
+  return unwrap(apiClient.get(`/workflows/${encodeURIComponent(workflowId)}`));
 }
 
 /**
@@ -90,56 +92,36 @@ export async function getWorkflowCard(workflowKey) {
  * `null` for `name` or `notes` clears it, which is not the same as leaving
  * the field out — so callers pass only what they mean to change.
  *
- * @param {string} workflowKey
+ * @param {string} workflowId
  * @param {{name?: ?string, notes?: ?string, hidden?: boolean}} changes
  * @returns {Promise<Object>} the same shape `getWorkflowCard` returns
  */
-export async function patchWorkflowCard(workflowKey, changes) {
+export async function patchWorkflowCard(workflowId, changes) {
   return unwrap(
-    apiClient.patch(`/workflows/${encodeURIComponent(workflowKey)}`, changes),
+    apiClient.patch(`/workflows/${encodeURIComponent(workflowId)}`, changes),
   );
 }
 
 /**
- * The LoRAs of a card's whole stack: the ones in every picture (`shared`),
+ * The LoRAs of a workflow's pictures: the ones in every picture (`shared`),
  * the ones that change (`varying`, most pictures first) and the pictures that
  * loaded none of those (`without`).
  *
  * Each LoRA is named by `asset`, the stored graphs' reference, which is what
- * `setLoraPromotion` and the picture grid's `workflow_lora` filter take.
- * `cover` is the picture on top of the stack; `cover_asset` then says which
+ * the picture grid's `workflow_lora` filter takes.
+ * `cover` is the workflow's cover picture; `cover_asset` then says which
  * changing LoRA it loaded, for the top of the pile.
  *
- * @param {string} workflowKey
+ * @param {string} workflowId
  * @param {{cover?: number}} [options]
  * @returns {Promise<{keys: string[], pictures: number, shared: Object[],
  *   varying: Object[], without: ?Object, cover_asset: ?string}>}
  */
-export async function getLoraSummary(workflowKey, { cover } = {}) {
+export async function getLoraSummary(workflowId, { cover } = {}) {
   return unwrap(
-    apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}/lora-summary`, {
+    apiClient.get(`/workflows/${encodeURIComponent(workflowId)}/lora-summary`, {
       params: cover ? { cover } : {},
     }),
-  );
-}
-
-/**
- * Promote one LoRA to a workflow of its own inside the stack, or put it back.
- *
- * **This re-keys cards**: the pictures that loaded it move to a new card (or
- * back). `key` in the answer is where the card addressed here now lives.
- *
- * @param {string} workflowKey
- * @param {string} asset the LoRA as `getLoraSummary` names it
- * @param {boolean} promoted
- * @returns {Promise<{key: string, moved: Object}>}
- */
-export async function setLoraPromotion(workflowKey, asset, promoted) {
-  return unwrap(
-    apiClient.put(
-      `/workflows/${encodeURIComponent(workflowKey)}/lora-promotion`,
-      { asset, promoted },
-    ),
   );
 }
 
@@ -149,13 +131,13 @@ export async function setLoraPromotion(workflowKey, asset, promoted) {
  * Whole, not one: an empty list is "reset everything", and resetting one
  * value means sending the others back unchanged.
  *
- * @param {string} workflowKey
+ * @param {string} workflowId
  * @param {Array<{slot_label: string, input_name: string, value: *}>} defaults
  * @returns {Promise<Object>}
  */
-export async function setWorkflowDefaults(workflowKey, defaults) {
+export async function setWorkflowDefaults(workflowId, defaults) {
   return unwrap(
-    apiClient.put(`/workflows/${encodeURIComponent(workflowKey)}/defaults`, {
+    apiClient.put(`/workflows/${encodeURIComponent(workflowId)}/defaults`, {
       defaults,
     }),
   );
@@ -166,16 +148,15 @@ export async function setWorkflowDefaults(workflowKey, defaults) {
  *
  * `was` is the file as the graph names it, `now` a shelf model's filename or
  * `null` to load the original again. The card keeps its pictures, and a
- * picture made with the replacement is filed on it. Answers with the card;
- * follow its `card.key`.
+ * picture made with the replacement is filed on it. Answers with the card.
  *
- * @param {string} workflowKey
+ * @param {string} workflowId
  * @param {{was: string, now: ?string}} fix
  * @returns {Promise<Object>}
  */
-export async function setWorkflowModelFix(workflowKey, fix) {
+export async function setWorkflowModelFix(workflowId, fix) {
   return unwrap(
-    apiClient.put(`/workflows/${encodeURIComponent(workflowKey)}/model-fix`, fix),
+    apiClient.put(`/workflows/${encodeURIComponent(workflowId)}/model-fix`, fix),
   );
 }
 
@@ -185,13 +166,13 @@ export async function setWorkflowModelFix(workflowKey, fix) {
  * `null` forgets the choice, so the client's default pins apply again; `[]`
  * is somebody who unpinned everything, and the two are kept apart.
  *
- * @param {string} workflowKey
+ * @param {string} workflowId
  * @param {?Array<{slot_label: string, input_name: string}>} pins
  * @returns {Promise<{pins: ?Array<Object>}>}
  */
-export async function setWorkflowPins(workflowKey, pins) {
+export async function setWorkflowPins(workflowId, pins) {
   return unwrap(
-    apiClient.put(`/workflows/${encodeURIComponent(workflowKey)}/pins`, {
+    apiClient.put(`/workflows/${encodeURIComponent(workflowId)}/pins`, {
       pins,
     }),
   );
@@ -206,59 +187,47 @@ export async function setWorkflowPins(workflowKey, pins) {
  * may name its picture by `picture_id`; the server stores that picture's
  * content, so the client never has to hold a `pixel_sha` it did not read.
  *
- * @param {string} workflowKey
+ * @param {string} workflowId
  * @param {Array<{slot_label: string, input_name: string,
  *   mode: "selection"|"picker"|"fixed", pixel_sha?: ?string,
  *   picture_id?: ?number}>} inputs
  * @returns {Promise<{inputs: Array<Object>}>}
  */
-export async function setWorkflowInputs(workflowKey, inputs) {
+export async function setWorkflowInputs(workflowId, inputs) {
   return unwrap(
-    apiClient.put(`/workflows/${encodeURIComponent(workflowKey)}/inputs`, {
+    apiClient.put(`/workflows/${encodeURIComponent(workflowId)}/inputs`, {
       inputs,
     }),
   );
 }
 
 /**
- * Put several cards in one stack. `keys[0]` becomes the cover.
+ * Merge several workflows into one (#1623). `ids[0]` is the cover: its name,
+ * notes, defaults, pins and inputs are kept, and every other distinct name is
+ * appended to the notes. Every topology of every named workflow joins it.
  *
- * @param {Array<string>} keys
- * @returns {Promise<{stack_id: ?string, keys: Array<string>}>}
+ * @param {Array<string>} ids - two or more workflow ids.
+ * @returns {Promise<{id: string, ids: Array<string>}>} the merged workflow.
  */
-export async function stackWorkflows(keys) {
-  return unwrap(apiClient.post("/workflows/stacks", { keys }));
+export async function mergeWorkflows(ids) {
+  return unwrap(apiClient.post("/workflows/merge", { ids }));
 }
 
 /**
- * Set a stack's member order; `keys[0]` becomes the cover (v1.12 F2).
+ * Split one topology out of a workflow into a workflow of its own (#1623).
  *
- * The route refuses anything but a COMPLETE ordered list of what the stack
- * holds: a key left out would be deleted from the stack with no record that it
- * left, and a key added is `POST /workflows/stacks`' gesture rather than this
- * one. So callers reorder the list they already have and send all of it.
+ * `topology` is one of the card's `topologies`; the route refuses a workflow
+ * holding only one.
  *
- * @param {string} stackId — `stack_id` from the card, or `auto:<core hash>`.
- * @param {Array<string>} keys
- * @returns {Promise<{stack_id: ?string, keys: Array<string>}>}
+ * @param {string} workflowId
+ * @param {string} topology
+ * @returns {Promise<{id: string}>} the new workflow.
  */
-export async function reorderStack(stackId, keys) {
+export async function splitWorkflow(workflowId, topology) {
   return unwrap(
-    apiClient.put(`/workflows/stacks/${encodeURIComponent(stackId)}/order`, {
-      keys,
+    apiClient.post(`/workflows/${encodeURIComponent(workflowId)}/split`, {
+      topology,
     }),
-  );
-}
-
-/**
- * Stand one card on its own. Its stack dissolves if that leaves one card.
- *
- * @param {string} workflowKey
- * @returns {Promise<{stack_id: ?string, keys: Array<string>}>}
- */
-export async function unstackWorkflow(workflowKey) {
-  return unwrap(
-    apiClient.post(`/workflows/${encodeURIComponent(workflowKey)}/unstack`),
   );
 }
 
@@ -280,8 +249,9 @@ export async function preflightWorkflowRun(body) {
  * Run a workflow card.
  *
  * Exactly ONE source: `picture_ids` ("run what made these"), `saved_recipe_id`
- * ("run this look") or `workflow_key` ("run this card"). `target` overrides
- * which card actually runs, which is how a stack's other member is chosen.
+ * ("run this look") or `workflow_id` ("run this workflow"). `target` is a
+ * workflow id that overrides which workflow actually runs. `models` pins the
+ * checkpoint (`[{address, filename}]`) and `skip_stages` turns stages off.
  * `prompt` / `negative` / `loras` / `values` are overrides applied to the graph
  * at run time and are never written back into it. `inputs` fills the card's
  * picture inputs and is usually empty: the server fills the one input a
@@ -296,33 +266,18 @@ export async function runWorkflowCard(body) {
 }
 
 /**
- * Dissolve a whole stack: every member stands on its own afterwards.
- *
- * The plural counterpart of {@link unstackWorkflow}, and addressed by the
- * STACK rather than by a card - `stack_id` off any member is what names it.
- *
- * @param {string} stackId
- * @returns {Promise<{stack_id: ?string, keys: Array<string>}>}
- */
-export async function dissolveStack(stackId) {
-  return unwrap(
-    apiClient.post(`/workflows/stacks/${encodeURIComponent(stackId)}/unstack`),
-  );
-}
-
-/**
  * This card as a ComfyUI file somebody else can open (v1.12 B8).
  *
  * Scrubbed by the server - prompts and seeds blanked, recipe LoRA slots
  * emptied, model names this machine does not hold left out - so what comes
  * back is the graph, not a run of it.
  *
- * @param {string} workflowKey
+ * @param {string} workflowId
  * @returns {Promise<{filename: string, workflow: Object, removed: Array<string>, source: string}>}
  */
-export async function exportWorkflow(workflowKey) {
+export async function exportWorkflow(workflowId) {
   return unwrap(
-    apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}/export`),
+    apiClient.get(`/workflows/${encodeURIComponent(workflowId)}/export`),
   );
 }
 
@@ -331,14 +286,14 @@ export async function exportWorkflow(workflowKey) {
  *
  * Unscrubbed, unlike the export: the copy stays on this machine and is meant
  * to run. A card the library only knows from its pictures gets a file of its
- * own this way, so the answer's `workflow_key` can be a NEW card.
+ * own this way, so the answer's `workflow_id` can be a NEW workflow.
  *
- * @param {string} workflowKey
- * @returns {Promise<{name: string, workflow_key: ?string}>}
+ * @param {string} workflowId
+ * @returns {Promise<{name: string, workflow_id: ?string}>}
  */
-export async function duplicateWorkflow(workflowKey) {
+export async function duplicateWorkflow(workflowId) {
   return unwrap(
-    apiClient.post(`/workflows/${encodeURIComponent(workflowKey)}/duplicate`),
+    apiClient.post(`/workflows/${encodeURIComponent(workflowId)}/duplicate`),
   );
 }
 
@@ -359,12 +314,12 @@ export async function duplicateWorkflow(workflowKey) {
  * which) and that the loader naming that file can load, and
  * `replacements_reason` when there are none.
  *
- * @param {string} workflowKey
+ * @param {string} workflowId
  * @param {{checkpointId?: number, replacing?: string, slotKind?: string}} [options]
  * @returns {Promise<Object>}
  */
 export async function readModelSwap(
-  workflowKey,
+  workflowId,
   { checkpointId, replacing, slotKind } = {},
 ) {
   const params = {};
@@ -372,7 +327,7 @@ export async function readModelSwap(
   if (replacing != null) params.replacing = replacing;
   if (slotKind != null) params.slot_kind = slotKind;
   return unwrap(
-    apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}/model-swap`, {
+    apiClient.get(`/workflows/${encodeURIComponent(workflowId)}/model-swap`, {
       params,
     }),
   );
@@ -385,14 +340,14 @@ export async function readModelSwap(
  * naming it is rewritten. `verified` in the answer is false when ComfyUI was
  * not reachable and the names were written unchecked.
  *
- * @param {string} workflowKey
+ * @param {string} workflowId
  * @param {{name: string, swaps: Object<string, string>}} body
- * @returns {Promise<{name: string, workflow_key: ?string, swapped: Array, unswapped: Array, verified: boolean}>}
+ * @returns {Promise<{name: string, workflow_id: ?string, swapped: Array, unswapped: Array, verified: boolean}>}
  */
-export async function cloneWorkflowWithModels(workflowKey, body) {
+export async function cloneWorkflowWithModels(workflowId, body) {
   return unwrap(
     apiClient.post(
-      `/workflows/${encodeURIComponent(workflowKey)}/clone-with-models`,
+      `/workflows/${encodeURIComponent(workflowId)}/clone-with-models`,
       body,
     ),
   );
@@ -405,12 +360,12 @@ export async function cloneWorkflowWithModels(workflowKey, body) {
  * pictures answers 409, which is why every caller gates on `imported`. The
  * card and its pictures stay either way - this deletes a file, not a card.
  *
- * @param {string} workflowKey
- * @returns {Promise<{deleted: string, workflow_key: string}>}
+ * @param {string} workflowId
+ * @returns {Promise<{deleted: string, workflow_id: string}>}
  */
-export async function deleteWorkflowFile(workflowKey) {
+export async function deleteWorkflowFile(workflowId) {
   return unwrap(
-    apiClient.delete(`/workflows/${encodeURIComponent(workflowKey)}`),
+    apiClient.delete(`/workflows/${encodeURIComponent(workflowId)}`),
   );
 }
 
@@ -424,8 +379,8 @@ export async function deleteWorkflowFile(workflowKey) {
  * `refusal`, so the dialog opens read-only rather than failing. 404 is no such
  * card and 409 a card with no graph.
  *
- * @param {string} workflowKey
- * @returns {Promise<{workflow_key: string, editable: boolean, refusal: ?string,
+ * @param {string} workflowId
+ * @returns {Promise<{workflow_id: string, editable: boolean, refusal: ?string,
  *   source: ?Object, sink: ?Object, loaders: Array<Object>,
  *   added_loader_class: ?string, lanes: Array<Object>, branch_note: ?string}>}
  *   Where the model forks, `loaders` is the trunk every pass reads and `lanes`
@@ -433,9 +388,9 @@ export async function deleteWorkflowFile(workflowKey) {
  *   empty for a straight chain. `branch_note` says why loaders past a further
  *   branch are left as they are.
  */
-export async function getLoraChain(workflowKey) {
+export async function getLoraChain(workflowId) {
   return unwrap(
-    apiClient.get(`/workflows/${encodeURIComponent(workflowKey)}/lora-chain`),
+    apiClient.get(`/workflows/${encodeURIComponent(workflowId)}/lora-chain`),
   );
 }
 
@@ -448,19 +403,19 @@ export async function getLoraChain(workflowKey) {
  * and `lanes` one such list per lane, in the read's order; an existing loader
  * may sit in any of them. An existing loader left out of all is deleted. The
  * original file is never modified: a write answers 201 with the new card's
- * `workflow_key`, and `dry_run: true` answers 200 with only the `changes` the
+ * `workflow_id`, and `dry_run: true` answers 200 with only the `changes` the
  * confirm step lists.
  *
- * @param {string} workflowKey
+ * @param {string} workflowId
  * @param {{entries: Array<{node_id: ?string, sha256?: string, strength?: number}>,
  *   lanes?: Array<Array<Object>>, name: ?string, dry_run: boolean}} body
- * @returns {Promise<{dry_run: boolean, name: ?string, workflow_key: ?string,
+ * @returns {Promise<{dry_run: boolean, name: ?string, workflow_id: ?string,
  *   changes: Array<{kind: string, node_id: ?string, text: string}>}>}
  */
-export async function saveLoraChain(workflowKey, body) {
+export async function saveLoraChain(workflowId, body) {
   return unwrap(
     apiClient.put(
-      `/workflows/${encodeURIComponent(workflowKey)}/lora-chain`,
+      `/workflows/${encodeURIComponent(workflowId)}/lora-chain`,
       body,
     ),
   );

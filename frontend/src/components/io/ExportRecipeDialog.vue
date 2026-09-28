@@ -46,7 +46,7 @@
     <template #footer>
       <AppButton :disabled="busy" @click="emit('close')">Cancel</AppButton>
       <AppButton
-        v-if="payload?.recipe?.workflow_key"
+        v-if="payload?.recipe?.workflow_id"
         icon-left="sitemap-outline"
         :loading="busy"
         @click="exportTheWorkflow"
@@ -156,7 +156,7 @@ function exportTheRecipe() {
 }
 
 async function exportTheWorkflow() {
-  const key = payload.value?.recipe?.workflow_key;
+  const key = payload.value?.recipe?.workflow_id;
   if (!key) return;
   busy.value = true;
   exportError.value = "";

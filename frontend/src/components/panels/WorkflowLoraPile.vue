@@ -43,14 +43,6 @@
           {{ summary.pictures === 1 ? "picture" : "pictures" }}</span
         >
       </div>
-      <p
-        v-if="canPromote"
-        class="wfpile-quiet wfpile-explain"
-        data-testid="wftab-fan-explain"
-      >
-        Promoting a LoRA makes it part of the workflow: its pictures move to a
-        workflow that always loads it and exports with it.
-      </p>
       <ul class="wfpile-rows">
         <li
           v-for="row in rows"
@@ -87,80 +79,6 @@
             >
               Show {{ row.pictures }}
             </AppButton>
-            <template v-if="row.asset">
-              <AppButton
-                v-if="row.promoted"
-                variant="ghost"
-                size="sm"
-                :disabled="busy"
-                :aria-label="`Put ${label(row)} back in the pile`"
-                @click="confirming = row.asset"
-              >
-                Put back
-              </AppButton>
-              <AppButton
-                v-else
-                variant="ghost"
-                size="sm"
-                icon-left="arrow-up-bold-outline"
-                :disabled="busy"
-                :aria-label="`Promote ${label(row)} to a workflow of its own`"
-                @click="confirming = row.asset"
-              >
-                Promote
-              </AppButton>
-            </template>
-          </div>
-          <p v-if="row.promoted" class="wfpile-chip-line">
-            <span class="wfpile-chip">Promoted</span>
-            Its pictures are a workflow of their own in this stack.
-          </p>
-
-          <!-- Nothing is written before this is answered: promoting moves
-               pictures to another workflow, and saying which is the point. -->
-          <div
-            v-if="row.asset && confirming === row.asset"
-            class="wfpile-confirm"
-            role="group"
-            :aria-label="row.promoted ? 'Put back' : 'Promote'"
-          >
-            <template v-if="row.promoted">
-              <p class="wfpile-confirm-title">
-                Put {{ label(row) }} back in the pile?
-              </p>
-              <p class="wfpile-quiet">
-                Its {{ pictures(row.pictures) }} go back to the workflow they
-                came from, and the workflow made for them goes away.
-              </p>
-            </template>
-            <template v-else>
-              <p class="wfpile-confirm-title">
-                Promote {{ label(row) }} to a workflow?
-              </p>
-              <p class="wfpile-quiet">
-                Its {{ pictures(row.pictures) }} become
-                {{
-                  row.members.length > 1
-                    ? `a workflow of their own beside each of the ${row.members.length} they were made with`
-                    : "a workflow of their own in this stack"
-                }}. That workflow always loads it, and exports with it. The
-                other
-                {{ pictures(summary.pictures - row.pictures) }} stay where they
-                are.
-              </p>
-            </template>
-            <div class="wfpile-confirm-actions">
-              <AppButton size="sm" @click="confirming = ''">Cancel</AppButton>
-              <AppButton
-                variant="primary"
-                size="sm"
-                :disabled="busy"
-                data-testid="wftab-fan-confirm"
-                @click="answer(row)"
-              >
-                {{ row.promoted ? "Put back" : "Promote" }}
-              </AppButton>
-            </div>
           </div>
         </li>
       </ul>
@@ -171,45 +89,23 @@
 <script setup>
 // The Workflow tab's pile of LoRAs that change per picture, and the fan it
 // opens into (the "Shared LoRAs and a pile" design). It describes the whole
-// stack, not the member picked in the rail's header: `summary` is
-// `GET /workflows/{key}/lora-summary`.
-//
-// The one verb here is Promote: a LoRA's pictures become a workflow of their
-// own inside the stack, which always loads it and exports with it. The same
-// row puts it back. Both are confirmed in place, because both move pictures
-// between workflows.
+// workflow: `summary` is `GET /workflows/{id}/lora-summary`. Its one verb is
+// Show: the grid, narrowed to one LoRA's pictures.
 
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
 import { VMenu } from "vuetify/components";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
 import AppButton from "../widgets/AppButton.vue";
 
 const props = defineProps({
-  /** `GET …/lora-summary`: `{keys, pictures, varying, without, cover_asset}`. */
+  /** `GET …/lora-summary`: `{pictures, varying, without, cover_asset}`. */
   summary: { type: Object, required: true },
-  /** `{key: name}` for the stack's members, for "only in …". */
-  memberNames: { type: Object, default: () => ({}) },
-  /** A write is out, so neither verb may start another. */
-  busy: { type: Boolean, default: false },
 });
 
-const emit = defineEmits(["promote", "show"]);
+const emit = defineEmits(["show"]);
 
 const open = ref(false);
-/** The row whose confirmation is showing, by asset, or "". */
-const confirming = ref("");
-
-watch(open, (now) => {
-  if (!now) confirming.value = "";
-});
-// A write re-reads the summary; whatever was being confirmed has been answered.
-watch(
-  () => props.summary,
-  () => {
-    confirming.value = "";
-  },
-);
 
 const varying = computed(() => props.summary?.varying ?? []);
 const count = computed(() => varying.value.length);
@@ -222,8 +118,6 @@ const top = computed(
     null,
 );
 const rest = computed(() => Math.max(count.value - 1, 0));
-/** Whether any row still offers Promote, so the fan explains it. */
-const canPromote = computed(() => varying.value.some((row) => !row.promoted));
 
 /** The fan's rows: the top of the pile first, then the rest, then "No LoRA". */
 const rows = computed(() => [
@@ -242,25 +136,9 @@ function pictures(n) {
   return `${n} ${n === 1 ? "picture" : "pictures"}`;
 }
 
-/** Where in the stack a LoRA was used, in words. */
-function where(row) {
-  const keys = props.summary?.keys ?? [];
-  const members = row.members ?? [];
-  if (keys.length < 2 || !members.length) return "";
-  if (members.length === keys.length) {
-    return keys.length === 2 ? "both workflows" : `all ${keys.length} workflows`;
-  }
-  if (members.length === 1) {
-    if (row.promoted) return "its own workflow here";
-    return `only in ${props.memberNames[members[0]] || "one workflow"}`;
-  }
-  return `in ${members.length} of ${keys.length} workflows`;
-}
-
 function meta(row) {
   return [
     pictures(row.pictures),
-    where(row),
     row.asset && row.asset === props.summary?.cover_asset ? "cover" : "",
   ]
     .filter(Boolean)
@@ -270,10 +148,6 @@ function meta(row) {
 function show(row) {
   open.value = false;
   emit("show", row);
-}
-
-function answer(row) {
-  emit("promote", row, !row.promoted);
 }
 </script>
 
@@ -382,13 +256,7 @@ function answer(row) {
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
 }
 
-.wfpile-explain {
-  margin: 0;
-  padding: 0 var(--space-5) var(--space-3);
-}
-
 .wfpile-head .wfpile-quiet,
-.wfpile-explain,
 .wfpile-meta {
   font-size: var(--text-xs);
 }
@@ -444,50 +312,4 @@ function answer(row) {
   white-space: nowrap;
 }
 
-.wfpile-chip-line {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin: var(--space-2) 0 0;
-  font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
-}
-
-.wfpile-chip {
-  display: inline-flex;
-  align-items: center;
-  height: var(--control-h-sm);
-  padding: 0 var(--space-3);
-  border: 1px solid rgb(var(--v-theme-divider));
-  border-radius: var(--radius-pill);
-  color: rgb(var(--v-theme-on-surface));
-}
-
-.wfpile-confirm {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  margin-top: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid rgb(var(--v-theme-border));
-  border-radius: var(--radius-md);
-  font-size: var(--text-xs);
-  line-height: var(--leading-body);
-}
-
-.wfpile-confirm p {
-  margin: 0;
-}
-
-.wfpile-confirm-title {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-}
-
-.wfpile-confirm-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-3);
-  margin-top: var(--space-2);
-}
 </style>

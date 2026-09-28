@@ -111,7 +111,7 @@ describe('"Make more like these…" picks its popup from the server\'s answer', 
     preflightWorkflowRun.mockResolvedValue({
       ok: true,
       runs: 1,
-      groups: [{ workflow_key: CARD, picture_ids: [11, 12, 13], reasons: [] }],
+      groups: [{ workflow_id: CARD, picture_ids: [11, 12, 13], reasons: [] }],
     });
     const wrapper = mountGrid();
     const runDialog = useRunDialogStore();
@@ -122,7 +122,7 @@ describe('"Make more like these…" picks its popup from the server\'s answer', 
     expect(runDialog.makeMore).toBe(null);
     expect(runDialog.source).toMatchObject({
       kind: "selection",
-      workflowKey: CARD,
+      workflowId: CARD,
       pictureIds: [11, 12, 13],
     });
   });
@@ -132,8 +132,8 @@ describe('"Make more like these…" picks its popup from the server\'s answer', 
       ok: true,
       runs: 2,
       groups: [
-        { workflow_key: CARD, picture_ids: [11], reasons: [] },
-        { workflow_key: OTHER, picture_ids: [12], reasons: [] },
+        { workflow_id: CARD, picture_ids: [11], reasons: [] },
+        { workflow_id: OTHER, picture_ids: [12], reasons: [] },
       ],
     };
     preflightWorkflowRun.mockResolvedValue(answer);
@@ -167,14 +167,14 @@ describe('"Make more like these…" picks its popup from the server\'s answer', 
   });
 
   it("treats a group with no card as several, not as the single popup", async () => {
-    // One group whose `workflow_key` is empty is a picture on no card at all
+    // One group whose `workflow_id` is empty is a picture on no card at all
     // (A1111, or nothing runnable). The single Run popup has no card to open
     // on, so this belongs in the popup that can show a refusal per group.
     preflightWorkflowRun.mockResolvedValue({
       ok: false,
       runs: 0,
       groups: [
-        { workflow_key: "", picture_ids: [11], reasons: [{ code: "a1111" }] },
+        { workflow_id: "", picture_ids: [11], reasons: [{ code: "a1111" }] },
       ],
     });
     const wrapper = mountGrid();

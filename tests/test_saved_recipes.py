@@ -1,4 +1,4 @@
-"""Saved recipes (v1.12 B6): the routes, the stack they list, and credit.
+"""Saved recipes (v1.12 B6, #1623): the routes, the workflow they list, and credit.
 
 Environment sharing
 -------------------
@@ -12,8 +12,8 @@ planner: a warm vault's ComfyUI extraction sweep would rewrite the very
 The seeded library is shaped around what credit has to get right:
 
 * two cards, **A** and **B**, sharing a ``core_hash`` so they are one automatic
-  stack, and a third card **C** on its own — a recipe saved on A must list
-  beside B's and must not see C's pictures;
+  workflow (``WF_AB``), and a third card **C** in its own (``WF_C``) — a recipe
+  on ``WF_AB`` is credited with A's and B's pictures and never with C's;
 * pictures matching a recipe's prompt and LoRA names under a **different
   spelling** (``characters/Ada.safetensors`` against ``ada.safetensors``), which
   must credit, and one loading a **different LoRA**, which must not;
@@ -80,9 +80,13 @@ CARD_B = _h("card-b")
 CARD_C = _h("card-c")
 TOPO_A, TOPO_B, TOPO_C = _h("topo-a"), _h("topo-b"), _h("topo-c")
 VARIANT_A, VARIANT_B, VARIANT_C = _h("variant-a"), _h("variant-b"), _h("variant-c")
-# A and B differ only in what the stack rule strips, so they group; C does not.
+# A and B differ only in what the core rule strips, so they group; C does not.
 CORE_SHARED = _h("core-shared")
 CORE_OTHER = _h("core-other")
+WF_AB = f"auto:{CORE_SHARED}"
+WF_C = f"auto:{CORE_OTHER}"
+# A manual group's id: 32 hex, a uuid's.
+WF_MANUAL = _h("manual-group")[:32]
 
 PROMPT = "a cold portrait, rim light"
 OTHER_PROMPT = "a warm portrait, soft light"
@@ -99,7 +103,7 @@ _SEED_CARDS = (
 _SEED_PICTURES = (
     # Credits: the recipe's prompt, the recipe's LoRA, on the recipe's own card.
     ("a_match.png", VARIANT_A, PROMPT, [f"characters/{ADA.capitalize()}"], False),
-    # Credits too: same look, made on the stack's OTHER member.
+    # Credits too: same look, made on the workflow's OTHER card.
     ("b_match.png", VARIANT_B, PROMPT, [ADA], False),
     # Does not: a different LoRA is a different look, whatever the prompt says.
     ("a_other_lora.png", VARIANT_A, PROMPT, ["other_style.safetensors"], False),
@@ -107,15 +111,17 @@ _SEED_PICTURES = (
     ("a_other_prompt.png", VARIANT_A, OTHER_PROMPT, [ADA], False),
     # Does not: it is in the Scrapheap, so the recipe has made nothing with it.
     ("a_binned.png", VARIANT_A, PROMPT, [ADA], True),
-    # Does not: card C is not in A and B's stack.
+    # Does not: card C is not in A and B's workflow.
     ("c_match.png", VARIANT_C, PROMPT, [ADA], False),
 )
 
 
 def _seed_hub(server) -> None:
-    """Write the card tables from scratch: three cards, two of them stacked."""
+    """Write the card tables from scratch: three cards, two in one workflow."""
     with server.hub.transaction() as conn:
         # Children before parents: the hub enforces foreign keys.
+        conn.execute("DELETE FROM workflow_group_member")
+        conn.execute("DELETE FROM workflow_group")
         conn.execute("DELETE FROM workflow_stack_member")
         conn.execute("DELETE FROM workflow_stack")
         conn.execute("DELETE FROM workflow_unstacked")
@@ -255,8 +261,8 @@ def fresh_library(recipe_env):
     yield recipe_env
 
 
-def _save(client, workflow_key: str, **fields) -> dict:
-    body = {"workflow_key": workflow_key, "name": "A look", "prompt": PROMPT}
+def _save(client, workflow_id: str, **fields) -> dict:
+    body = {"workflow_id": workflow_id, "name": "A look", "prompt": PROMPT}
     body.update(fields)
     r = client.post(f"{API}/recipes", json=body)
     assert r.status_code == 201, r.text
@@ -308,7 +314,7 @@ def test_no_scoped_token_can_read_or_write_a_saved_recipe(recipe_env):
     routing, so a renamed route would 403 identically and the assertion would
     dissolve into a test of nothing.
     """
-    saved = _save(recipe_env.owner, CARD_A, loras=_ada())
+    saved = _save(recipe_env.owner, WF_AB, loras=_ada())
     token = _mint(
         recipe_env.owner,
         "recipe scope probe",
@@ -322,7 +328,7 @@ def test_no_scoped_token_can_read_or_write_a_saved_recipe(recipe_env):
 
     calls = (
         ("GET", f"{API}/recipes", None),
-        ("POST", f"{API}/recipes", {"workflow_key": CARD_A}),
+        ("POST", f"{API}/recipes", {"workflow_id": WF_AB}),
         ("PUT", f"{API}/recipes/order", {"recipe_ids": [saved["id"]]}),
         ("PATCH", f"{API}/recipes/{saved['id']}", {"name": "stolen"}),
         ("DELETE", f"{API}/recipes/{saved['id']}", None),
@@ -346,7 +352,7 @@ def test_a_saved_recipe_round_trips_with_its_loras_and_overrides(recipe_env):
     """The two JSON columns come back as objects, not as the strings they are stored as."""
     saved = _save(
         recipe_env.owner,
-        CARD_A,
+        WF_AB,
         name="Cold portrait",
         loras=_ada(0.4),
         overrides={"KSampler.steps": 28},
@@ -357,7 +363,9 @@ def test_a_saved_recipe_round_trips_with_its_loras_and_overrides(recipe_env):
     assert [row["id"] for row in listed] == [saved["id"]]
     row = listed[0]
     assert row["name"] == "Cold portrait"
-    assert row["workflow_key"] == CARD_A
+    assert row["workflow_id"] == WF_AB
+    assert "workflow_key" not in row, "the card key is internal (#1623)"
+    assert row["models"] is None
     assert row["loras"] == _ada(0.4)
     assert row["overrides"] == {"KSampler.steps": 28}
     # Text, not an integer: this seed is above SQLite's INTEGER ceiling.
@@ -366,8 +374,8 @@ def test_a_saved_recipe_round_trips_with_its_loras_and_overrides(recipe_env):
 
 
 def test_a_new_recipe_is_appended_after_the_ones_already_saved(recipe_env):
-    first = _save(recipe_env.owner, CARD_A, name="First")
-    second = _save(recipe_env.owner, CARD_A, name="Second")
+    first = _save(recipe_env.owner, WF_AB, name="First")
+    second = _save(recipe_env.owner, WF_AB, name="Second")
     assert second["position"] > first["position"]
     listed = recipe_env.owner.get(f"{API}/recipes").json()
     assert [row["name"] for row in listed] == ["First", "Second"]
@@ -375,8 +383,8 @@ def test_a_new_recipe_is_appended_after_the_ones_already_saved(recipe_env):
 
 def test_the_order_route_rewrites_positions_and_refuses_an_unknown_id(recipe_env):
     """A partial reorder would leave an order nobody chose and no error to say so."""
-    first = _save(recipe_env.owner, CARD_A, name="First")
-    second = _save(recipe_env.owner, CARD_A, name="Second")
+    first = _save(recipe_env.owner, WF_AB, name="First")
+    second = _save(recipe_env.owner, WF_AB, name="Second")
 
     r = recipe_env.owner.put(
         f"{API}/recipes/order", json={"recipe_ids": [second["id"], first["id"]]}
@@ -403,7 +411,7 @@ def test_the_order_route_rewrites_positions_and_refuses_an_unknown_id(recipe_env
 
 def test_a_patch_writes_what_it_carries_and_leaves_the_rest(recipe_env):
     saved = _save(
-        recipe_env.owner, CARD_A, name="Cold portrait", loras=_ada(0.4), seed="7"
+        recipe_env.owner, WF_AB, name="Cold portrait", loras=_ada(0.4), seed="7"
     )
     r = recipe_env.owner.patch(
         f"{API}/recipes/{saved['id']}", json={"name": "Colder portrait"}
@@ -414,7 +422,7 @@ def test_a_patch_writes_what_it_carries_and_leaves_the_rest(recipe_env):
     assert row["prompt"] == PROMPT
     assert row["loras"] == _ada(0.4)
     assert row["seed"] == "7"
-    assert row["workflow_key"] == CARD_A
+    assert row["workflow_id"] == WF_AB
 
     assert (
         recipe_env.owner.patch(f"{API}/recipes/999999", json={"name": "x"}).status_code
@@ -423,124 +431,129 @@ def test_a_patch_writes_what_it_carries_and_leaves_the_rest(recipe_env):
 
 
 def test_a_deleted_recipe_is_gone_and_deleting_it_twice_is_a_404(recipe_env):
-    saved = _save(recipe_env.owner, CARD_A)
+    saved = _save(recipe_env.owner, WF_AB)
     assert recipe_env.owner.delete(f"{API}/recipes/{saved['id']}").status_code == 200
     assert recipe_env.owner.get(f"{API}/recipes").json() == []
     assert recipe_env.owner.delete(f"{API}/recipes/{saved['id']}").status_code == 404
 
 
 # ===========================================================================
-# Ownership: the recipe belongs to its workflow, and runs on the stack (D10)
+# Ownership: the recipe belongs to one workflow (#1623)
 # ===========================================================================
 
 
-def test_the_tab_lists_every_stack_members_recipes_and_no_outsiders(recipe_env):
-    """Asked about A, the answer holds B's recipe because A and B are one stack."""
-    on_a = _save(recipe_env.owner, CARD_A, name="On A")
-    on_b = _save(recipe_env.owner, CARD_B, name="On B")
-    _save(recipe_env.owner, CARD_C, name="On C")
+def _internal_card(recipe_env, recipe_id: int) -> str:
+    """The row's internal ``workflow_key``, which no response carries."""
+    return recipe_env.server.vault.db.run_immediate_read_task(
+        lambda session: session.get(SavedRecipe, recipe_id).workflow_key
+    )
 
-    listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_key": CARD_A})
+
+def test_the_tab_lists_the_workflows_recipes_and_no_outsiders(recipe_env):
+    """Asked about one workflow, its recipes; another workflow's stay out."""
+    first = _save(recipe_env.owner, WF_AB, name="First")
+    second = _save(recipe_env.owner, WF_AB, name="Second")
+    on_c = _save(recipe_env.owner, WF_C, name="On C")
+
+    listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_id": WF_AB})
     assert listed.status_code == 200, listed.text
-    assert {row["id"] for row in listed.json()} == {on_a["id"], on_b["id"]}
-    # Each one still names the workflow it was saved from, which is what an
-    # Unstack leaves behind.
-    assert {row["workflow_key"] for row in listed.json()} == {CARD_A, CARD_B}
+    assert {row["id"] for row in listed.json()} == {first["id"], second["id"]}
+    assert {row["workflow_id"] for row in listed.json()} == {WF_AB}
+
+    both = recipe_env.owner.get(
+        f"{API}/recipes", params={"workflow_id": [WF_AB, WF_C]}
+    ).json()
+    assert {row["id"] for row in both} == {first["id"], second["id"], on_c["id"]}
 
 
-def test_whole_stack_false_reads_only_the_workflows_named(recipe_env):
-    """Members picked inside an expanded stack: their recipes, not the stack's."""
-    on_a = _save(recipe_env.owner, CARD_A, name="On A")
-    on_b = _save(recipe_env.owner, CARD_B, name="On B")
-    _save(recipe_env.owner, CARD_C, name="On C")
+def test_a_recipe_is_saved_on_a_workflow_and_its_card_stays_internal(recipe_env):
+    """``workflow_id`` in, ``workflow_id`` out; the NOT NULL card column is the
+    workflow's base card, the one a run of it starts from.
 
-    def listed(*keys):
-        r = recipe_env.owner.get(
-            f"{API}/recipes",
-            params={"workflow_key": list(keys), "whole_stack": "false"},
+    A's topology holds three kept pictures to B's one, so A's card is the base.
+    """
+    saved = _save(recipe_env.owner, WF_AB)
+    assert saved["workflow_id"] == WF_AB
+    assert "workflow_key" not in saved
+    assert _internal_card(recipe_env, saved["id"]) == CARD_A
+
+
+def test_saving_on_an_unknown_or_malformed_workflow_is_refused(recipe_env):
+    """A recipe on a workflow this hub does not hold would list nowhere."""
+    unknown = recipe_env.owner.post(
+        f"{API}/recipes", json={"workflow_id": f"auto:{_h('nowhere')}"}
+    )
+    assert unknown.status_code == 404, unknown.text
+    for bad in (CARD_A, "auto:xyz", "", "a" * 4000):
+        r = recipe_env.owner.post(f"{API}/recipes", json={"workflow_id": bad})
+        assert r.status_code == 422, f"{bad!r}: {r.status_code} {r.text}"
+    # The old body no longer saves anything.
+    r = recipe_env.owner.post(f"{API}/recipes", json={"workflow_key": CARD_A})
+    assert r.status_code == 422, r.text
+    assert recipe_env.owner.get(f"{API}/recipes").json() == []
+
+
+def test_a_recipe_pins_its_models_and_a_malformed_pin_is_refused(recipe_env):
+    """``models`` is a run's model list (``RunModel``), stored as it came."""
+    models = [
+        {"address": "core:ckpt/ckpt_name", "filename": "b.safetensors"},
+        {"address": "core:vae/vae_name", "sha256": _h("vae")},
+    ]
+    saved = _save(recipe_env.owner, WF_AB, models=models)
+    assert saved["models"] == models
+    listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_id": WF_AB})
+    assert listed.json()[0]["models"] == models
+
+    for bad in (
+        [{"address": "core:ckpt/ckpt_name"}],
+        [
+            {
+                "address": "core:ckpt/ckpt_name",
+                "filename": "b.safetensors",
+                "sha256": _h("b"),
+            }
+        ],
+        [{"address": "no-separator", "filename": "b.safetensors"}],
+    ):
+        r = recipe_env.owner.post(
+            f"{API}/recipes", json={"workflow_id": WF_AB, "models": bad}
         )
-        assert r.status_code == 200, r.text
-        return {row["id"] for row in r.json()}
-
-    assert listed(CARD_A) == {on_a["id"]}
-    assert listed(CARD_A, CARD_B) == {on_a["id"], on_b["id"]}
+        assert r.status_code == 422, f"{bad}: {r.status_code} {r.text}"
 
 
-def test_an_unstacked_card_keeps_its_own_recipes_and_only_those(recipe_env):
-    """The owner taking A out of its automatic group is a decision the read obeys."""
-    on_a = _save(recipe_env.owner, CARD_A, name="On A")
-    _save(recipe_env.owner, CARD_B, name="On B")
+def test_a_manual_group_reads_its_own_topologies(recipe_env):
+    """A and C placed in one manual group: its recipes, credited with A's and
+    C's pictures, and B's automatic workflow no longer holds A's."""
     with recipe_env.server.hub.transaction() as conn:
         conn.execute(
-            "INSERT INTO workflow_unstacked (workflow_key) VALUES (?)", (CARD_A,)
-        )
-
-    listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
-    ).json()
-    assert [row["id"] for row in listed] == [on_a["id"]]
-
-    # And the other way round, which is the half a test asking only about the
-    # excluded card cannot see: A left the group, so B's automatic stack must
-    # stop holding it. Reading CARD_A returns from the unstacked branch before
-    # the grouping query runs at all.
-    from_b = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_B}
-    ).json()
-    assert [row["name"] for row in from_b] == ["On B"]
-
-
-def test_a_stack_membership_row_beats_the_automatic_grouping(recipe_env):
-    """An explicit membership is read first, so A stacks with C and not with B."""
-    on_a = _save(recipe_env.owner, CARD_A, name="On A")
-    _save(recipe_env.owner, CARD_B, name="On B")
-    on_c = _save(recipe_env.owner, CARD_C, name="On C")
-    with recipe_env.server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_stack (stack_id, kind, core_hash) "
-            "VALUES ('manual-1', 'manual', NULL)"
+            "INSERT INTO workflow_group (workflow_id, kind) VALUES (?, 'manual')",
+            (WF_MANUAL,),
         )
         conn.executemany(
-            "INSERT INTO workflow_stack_member (stack_id, workflow_key, position) "
-            "VALUES ('manual-1', ?, ?)",
-            ((CARD_A, 0), (CARD_C, 1)),
+            "INSERT INTO workflow_group_member (topology_hash, workflow_id) "
+            "VALUES (?, ?)",
+            ((TOPO_A, WF_MANUAL), (TOPO_C, WF_MANUAL)),
         )
+    grouped = _save(recipe_env.owner, WF_MANUAL, name="Grouped", loras=_ada())
+    on_b = _save(recipe_env.owner, WF_AB, name="On B", loras=_ada())
 
     listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
+        f"{API}/recipes", params={"workflow_id": WF_MANUAL}
     ).json()
-    assert {row["id"] for row in listed} == {on_a["id"], on_c["id"]}
-
-    # B is left alone with its own: A is placed elsewhere, so the automatic
-    # group B is still in must not pick it back up. Only a read from B's side
-    # exercises that exclusion.
+    # a_match and c_match; b_match is in the other workflow.
+    assert [(row["id"], row["pictures"]) for row in listed] == [(grouped["id"], 2)]
     from_b = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_B}
+        f"{API}/recipes", params={"workflow_id": WF_AB}
     ).json()
-    assert [row["name"] for row in from_b] == ["On B"]
+    assert [(row["id"], row["pictures"]) for row in from_b] == [(on_b["id"], 1)]
 
 
-def test_a_membership_row_is_obeyed_whatever_its_stacks_kind(recipe_env):
-    """An ``auto`` stack with rows is an arrangement somebody made, like a manual one."""
-    on_a = _save(recipe_env.owner, CARD_A, name="On A")
-    _save(recipe_env.owner, CARD_B, name="On B")
-    on_c = _save(recipe_env.owner, CARD_C, name="On C")
-    with recipe_env.server.hub.transaction() as conn:
-        conn.execute(
-            "INSERT INTO workflow_stack (stack_id, kind, core_hash) "
-            "VALUES ('auto-1', 'auto', ?)",
-            (CORE_OTHER,),
-        )
-        conn.executemany(
-            "INSERT INTO workflow_stack_member (stack_id, workflow_key, position) "
-            "VALUES ('auto-1', ?, ?)",
-            ((CARD_A, 0), (CARD_C, 1)),
-        )
-
-    listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
-    ).json()
-    assert {row["id"] for row in listed} == {on_a["id"], on_c["id"]}
+def test_a_malformed_workflow_id_is_refused_on_the_reads(recipe_env):
+    """Declared on the item, so a list parameter cannot smuggle any string."""
+    for path in (f"{API}/recipes", f"{API}/recipes/used"):
+        for bad in (CARD_A, "a" * 4000):
+            r = recipe_env.owner.get(path, params={"workflow_id": bad})
+            assert r.status_code == 422, f"{path} took {bad[:20]!r}: {r.text}"
 
 
 # ===========================================================================
@@ -558,9 +571,9 @@ def test_credit_counts_the_stacks_matching_pictures_however_the_lora_is_spelled(
     point: no picture row stores one, so credit must ignore it rather than
     quietly crediting nothing.
     """
-    saved = _save(recipe_env.owner, CARD_A, loras=_ada(0.4))
+    saved = _save(recipe_env.owner, WF_AB, loras=_ada(0.4))
     listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
+        f"{API}/recipes", params={"workflow_id": WF_AB}
     ).json()
     assert [row["id"] for row in listed] == [saved["id"]]
     assert listed[0]["pictures"] == 2
@@ -570,29 +583,29 @@ def test_a_different_lora_is_a_different_look_and_credits_nothing(recipe_env):
     """The non-match the acceptance asks for: same prompt, another LoRA."""
     saved = _save(
         recipe_env.owner,
-        CARD_A,
+        WF_AB,
         loras=[{"filename": "someone_else.safetensors", "strength": 1.0}],
     )
     listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
+        f"{API}/recipes", params={"workflow_id": WF_AB}
     ).json()
     assert [row["id"] for row in listed] == [saved["id"]]
     assert listed[0]["pictures"] == 0
 
 
 def test_a_different_prompt_credits_nothing_either(recipe_env):
-    _save(recipe_env.owner, CARD_A, prompt="a prompt nobody wrote", loras=_ada())
+    _save(recipe_env.owner, WF_AB, prompt="a prompt nobody wrote", loras=_ada())
     listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
+        f"{API}/recipes", params={"workflow_id": WF_AB}
     ).json()
     assert listed[0]["pictures"] == 0
 
 
 def test_a_recipe_with_no_loras_credits_only_pictures_that_loaded_none(recipe_env):
     """``[]`` on both sides is a match; a picture that loaded a LoRA is not."""
-    _save(recipe_env.owner, CARD_A, loras=[])
+    _save(recipe_env.owner, WF_AB, loras=[])
     listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
+        f"{API}/recipes", params={"workflow_id": WF_AB}
     ).json()
     assert listed[0]["pictures"] == 0
 
@@ -612,7 +625,7 @@ def test_a_recipe_with_no_loras_credits_only_pictures_that_loaded_none(recipe_en
 
     recipe_env.server.vault.db.run_task(add, priority=DBPriority.IMMEDIATE)
     listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
+        f"{API}/recipes", params={"workflow_id": WF_AB}
     ).json()
     assert listed[0]["pictures"] == 1
 
@@ -625,9 +638,9 @@ def test_a_picture_in_the_scrapheap_is_not_credited(recipe_env):
     by. Restoring it takes the count to 3, so the assertion measures the filter
     rather than a number two other mistakes could also produce.
     """
-    _save(recipe_env.owner, CARD_A, loras=_ada())
+    _save(recipe_env.owner, WF_AB, loras=_ada())
     listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
+        f"{API}/recipes", params={"workflow_id": WF_AB}
     ).json()
     assert listed[0]["pictures"] == 2
 
@@ -641,7 +654,7 @@ def test_a_picture_in_the_scrapheap_is_not_credited(recipe_env):
 
     recipe_env.server.vault.db.run_task(restore, priority=DBPriority.IMMEDIATE)
     listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
+        f"{API}/recipes", params={"workflow_id": WF_AB}
     ).json()
     assert listed[0]["pictures"] == 3
 
@@ -649,7 +662,7 @@ def test_a_picture_in_the_scrapheap_is_not_credited(recipe_env):
 def test_the_unfiltered_list_reports_no_credit_rather_than_a_wrong_one(recipe_env):
     """Without a workflow key there is no stack to count over, and the payload
     says 0 rather than a number measured against the wrong population."""
-    _save(recipe_env.owner, CARD_A, loras=_ada())
+    _save(recipe_env.owner, WF_AB, loras=_ada())
     listed = recipe_env.owner.get(f"{API}/recipes").json()
     assert listed[0]["pictures"] == 0
 
@@ -661,12 +674,12 @@ def test_two_recipes_of_the_same_look_are_both_credited(recipe_env):
     picture row can tell — nothing stores a strength — so crediting one of them
     and not the other would be a guess the payload presents as an answer.
     """
-    weak = _save(recipe_env.owner, CARD_A, name="Weak", loras=_ada(0.3))
-    strong = _save(recipe_env.owner, CARD_A, name="Strong", loras=_ada(0.9))
+    weak = _save(recipe_env.owner, WF_AB, name="Weak", loras=_ada(0.3))
+    strong = _save(recipe_env.owner, WF_AB, name="Strong", loras=_ada(0.9))
     credit = {
         row["id"]: row["pictures"]
         for row in recipe_env.owner.get(
-            f"{API}/recipes", params={"workflow_key": CARD_A}
+            f"{API}/recipes", params={"workflow_id": WF_AB}
         ).json()
     }
     assert credit == {weak["id"]: 2, strong["id"]: 2}
@@ -697,9 +710,9 @@ def test_a_picture_never_read_for_metadata_is_credited_to_nobody(recipe_env):
         session.commit()
 
     recipe_env.server.vault.db.run_task(add, priority=DBPriority.IMMEDIATE)
-    _save(recipe_env.owner, CARD_A, name="Empty", prompt="", loras=[])
+    _save(recipe_env.owner, WF_AB, name="Empty", prompt="", loras=[])
     listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
+        f"{API}/recipes", params={"workflow_id": WF_AB}
     ).json()
     assert listed[0]["pictures"] == 0
 
@@ -712,9 +725,9 @@ def test_credit_survives_whitespace_around_the_prompt(recipe_env):
     different look, and a byte-exact match would read 0 against the very
     picture the recipe was saved from.
     """
-    _save(recipe_env.owner, CARD_A, prompt=f"  {PROMPT}\n", loras=_ada())
+    _save(recipe_env.owner, WF_AB, prompt=f"  {PROMPT}\n", loras=_ada())
     listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
+        f"{API}/recipes", params={"workflow_id": WF_AB}
     ).json()
     assert listed[0]["pictures"] == 2
 
@@ -727,12 +740,12 @@ def test_credit_survives_whitespace_around_the_prompt(recipe_env):
 def test_a_source_picture_this_library_does_not_hold_is_refused(recipe_env):
     """422, not the vault's foreign key surfacing as a 500 in the owner's log."""
     r = recipe_env.owner.post(
-        f"{API}/recipes", json={"workflow_key": CARD_A, "source_picture_id": 999999}
+        f"{API}/recipes", json={"workflow_id": WF_AB, "source_picture_id": 999999}
     )
     assert r.status_code == 422, r.text
     assert recipe_env.owner.get(f"{API}/recipes").json() == []
 
-    saved = _save(recipe_env.owner, CARD_A)
+    saved = _save(recipe_env.owner, WF_AB)
     r = recipe_env.owner.patch(
         f"{API}/recipes/{saved['id']}", json={"source_picture_id": 999999}
     )
@@ -748,7 +761,7 @@ def test_a_source_picture_this_library_does_not_hold_is_refused(recipe_env):
 
 def test_a_null_name_or_prompt_clears_it_rather_than_failing_the_write(recipe_env):
     """Both columns are NOT NULL; a null in the body means "empty"."""
-    saved = _save(recipe_env.owner, CARD_A, name="Named", prompt="something")
+    saved = _save(recipe_env.owner, WF_AB, name="Named", prompt="something")
     r = recipe_env.owner.patch(
         f"{API}/recipes/{saved['id']}", json={"name": None, "prompt": None}
     )
@@ -760,11 +773,11 @@ def test_an_oversized_overrides_map_or_seed_is_refused(recipe_env):
     """The ceiling the module claims: every free-form field has one."""
     r = recipe_env.owner.post(
         f"{API}/recipes",
-        json={"workflow_key": CARD_A, "overrides": {"k": "x" * 30000}},
+        json={"workflow_id": WF_AB, "overrides": {"k": "x" * 30000}},
     )
     assert r.status_code == 422, r.text
     r = recipe_env.owner.post(
-        f"{API}/recipes", json={"workflow_key": CARD_A, "seed": "9" * 200}
+        f"{API}/recipes", json={"workflow_id": WF_AB, "seed": "9" * 200}
     )
     assert r.status_code == 422, r.text
     assert recipe_env.owner.get(f"{API}/recipes").json() == []
@@ -778,9 +791,9 @@ def test_reordering_one_tab_leaves_every_other_recipe_where_it_was(recipe_env):
     two, and the next save — which appends after the highest position — would
     land in the middle of them.
     """
-    first_a = _save(recipe_env.owner, CARD_A, name="A1")
-    _save(recipe_env.owner, CARD_C, name="C1")
-    second_a = _save(recipe_env.owner, CARD_A, name="A2")
+    first_a = _save(recipe_env.owner, WF_AB, name="A1")
+    _save(recipe_env.owner, WF_C, name="C1")
+    second_a = _save(recipe_env.owner, WF_AB, name="A2")
 
     r = recipe_env.owner.put(
         f"{API}/recipes/order",
@@ -796,7 +809,7 @@ def test_reordering_one_tab_leaves_every_other_recipe_where_it_was(recipe_env):
     assert len(set(positions)) == len(positions), f"positions collide: {positions}"
 
     # The next save still lands last rather than in the middle of them.
-    appended = _save(recipe_env.owner, CARD_A, name="A3")
+    appended = _save(recipe_env.owner, WF_AB, name="A3")
     assert appended["position"] > max(positions)
     assert [row["name"] for row in recipe_env.owner.get(f"{API}/recipes").json()] == [
         "A2",
@@ -807,26 +820,32 @@ def test_reordering_one_tab_leaves_every_other_recipe_where_it_was(recipe_env):
 
 
 def test_the_service_refuses_to_write_a_field_the_api_does_not_offer(recipe_env):
-    """``workflow_key`` and ``position`` are not editable, at the service too.
+    """The workflow and ``position`` are not editable, at the service too.
 
     The route's payload model cannot carry either, so this is the guard behind
     it: a recipe does not move between workflows, and ordering has its own
     route.
     """
-    saved = _save(recipe_env.owner, CARD_A, name="Named")
+    saved = _save(recipe_env.owner, WF_AB, name="Named")
     updated = saved_recipe_service.update_recipe(
         recipe_env.server.vault,
         saved["id"],
-        {"workflow_key": CARD_C, "position": 99, "name": "Renamed"},
+        {
+            "workflow_id": WF_C,
+            "workflow_key": CARD_C,
+            "position": 99,
+            "name": "Renamed",
+        },
     )
     assert updated["name"] == "Renamed"
-    assert updated["workflow_key"] == CARD_A
+    assert updated["workflow_id"] == WF_AB
+    assert _internal_card(recipe_env, saved["id"]) == CARD_A
     assert updated["position"] == saved["position"]
 
 
 def test_a_recipe_whose_stored_json_will_not_parse_still_lists(recipe_env):
     """One damaged row must not take the whole tab down with it."""
-    saved = _save(recipe_env.owner, CARD_A, loras=_ada())
+    saved = _save(recipe_env.owner, WF_AB, loras=_ada())
 
     def damage(session):
         recipe = session.get(SavedRecipe, saved["id"])
@@ -837,7 +856,7 @@ def test_a_recipe_whose_stored_json_will_not_parse_still_lists(recipe_env):
 
     recipe_env.server.vault.db.run_task(damage, priority=DBPriority.IMMEDIATE)
     listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
+        f"{API}/recipes", params={"workflow_id": WF_AB}
     ).json()
     assert listed[0]["loras"] == [] and listed[0]["overrides"] == {}
     # It reads as a recipe with no LoRAs, which credits the pictures that loaded
@@ -870,9 +889,9 @@ def test_a_picture_read_with_no_prompt_matches_a_recipe_with_no_prompt(recipe_en
         session.commit()
 
     recipe_env.server.vault.db.run_task(add, priority=DBPriority.IMMEDIATE)
-    _save(recipe_env.owner, CARD_A, name="Upscale", prompt="", loras=[])
+    _save(recipe_env.owner, WF_AB, name="Upscale", prompt="", loras=[])
     listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
+        f"{API}/recipes", params={"workflow_id": WF_AB}
     ).json()
     assert listed[0]["pictures"] == 1
 
@@ -900,10 +919,10 @@ def test_stacking_the_same_lora_twice_is_a_different_look(recipe_env):
         session.commit()
 
     recipe_env.server.vault.db.run_task(add, priority=DBPriority.IMMEDIATE)
-    once = _save(recipe_env.owner, CARD_A, name="Once", loras=_ada())
+    once = _save(recipe_env.owner, WF_AB, name="Once", loras=_ada())
     twice = _save(
         recipe_env.owner,
-        CARD_A,
+        WF_AB,
         name="Twice",
         loras=[
             {"filename": ADA, "strength": 1.0},
@@ -913,7 +932,7 @@ def test_stacking_the_same_lora_twice_is_a_different_look(recipe_env):
     credit = {
         row["id"]: row["pictures"]
         for row in recipe_env.owner.get(
-            f"{API}/recipes", params={"workflow_key": CARD_A}
+            f"{API}/recipes", params={"workflow_id": WF_AB}
         ).json()
     }
     assert credit == {once["id"]: 2, twice["id"]: 1}
@@ -921,9 +940,9 @@ def test_stacking_the_same_lora_twice_is_a_different_look(recipe_env):
 
 def test_reordering_a_subset_of_one_tab_moves_only_the_rows_it_names(recipe_env):
     """Permuting means the rows left out keep their place, wherever that is."""
-    first = _save(recipe_env.owner, CARD_A, name="A1")
-    middle = _save(recipe_env.owner, CARD_A, name="A2")
-    last = _save(recipe_env.owner, CARD_A, name="A3")
+    first = _save(recipe_env.owner, WF_AB, name="A1")
+    middle = _save(recipe_env.owner, WF_AB, name="A2")
+    last = _save(recipe_env.owner, WF_AB, name="A3")
 
     r = recipe_env.owner.put(
         f"{API}/recipes/order", json={"recipe_ids": [last["id"], first["id"]]}
@@ -940,20 +959,20 @@ def test_reordering_a_subset_of_one_tab_moves_only_the_rows_it_names(recipe_env)
 
 
 def test_one_request_may_order_recipes_of_different_workflows(recipe_env):
-    """A stack's tab does exactly this: its rows belong to several members."""
-    on_a = _save(recipe_env.owner, CARD_A, name="On A")
-    on_b = _save(recipe_env.owner, CARD_B, name="On B")
+    """A selection's tab does exactly this: its rows belong to several workflows."""
+    on_a = _save(recipe_env.owner, WF_AB, name="On A")
+    on_b = _save(recipe_env.owner, WF_AB, name="On B")
     r = recipe_env.owner.put(
         f"{API}/recipes/order", json={"recipe_ids": [on_b["id"], on_a["id"]]}
     )
     assert r.status_code == 200, r.text
-    listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_key": CARD_A})
+    listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_id": WF_AB})
     assert [row["name"] for row in listed.json()] == ["On B", "On A"]
 
 
 def test_an_id_list_too_long_to_bind_is_refused_as_a_bad_request(recipe_env):
     """A database limit must not reach the caller as a 500."""
-    saved = _save(recipe_env.owner, CARD_A)
+    saved = _save(recipe_env.owner, WF_AB)
     r = recipe_env.owner.put(
         f"{API}/recipes/order",
         json={"recipe_ids": list(range(1, 100002))},
@@ -974,8 +993,8 @@ def test_a_variant_keyed_by_a_superseded_rule_neither_stacks_nor_credits(recipe_
     filter, like every other reader of ``workflow_variant`` but the grouping
     report.
 
-    Two stale rows, because there are two queries: one gives card D a place in
-    A's automatic stack, the other hangs a second variant off card B.
+    Two stale rows: one on topology D, whose current core puts it in A's
+    automatic workflow, the other a second variant on B's topology.
     """
     stale_topology = _h("topo-d")
     stale_variant = _h("variant-d")
@@ -1037,22 +1056,15 @@ def test_a_variant_keyed_by_a_superseded_rule_neither_stacks_nor_credits(recipe_
         session.commit()
 
     recipe_env.server.vault.db.run_task(add, priority=DBPriority.IMMEDIATE)
-    on_a = _save(recipe_env.owner, CARD_A, name="On A", loras=_ada())
-    on_b = _save(recipe_env.owner, CARD_B, name="On B", loras=_ada())
-    _save(recipe_env.owner, stale_card, name="On the stale card", loras=_ada())
+    saved = _save(recipe_env.owner, WF_AB, name="On AB", loras=_ada())
 
     listed = recipe_env.owner.get(
-        f"{API}/recipes", params={"workflow_key": CARD_A}
+        f"{API}/recipes", params={"workflow_id": WF_AB}
     ).json()
-    assert {row["id"] for row in listed} == {on_a["id"], on_b["id"]}, (
-        "a card known only under a superseded key rule joined the stack"
-    )
-    # Still the two pictures of the current variants: the stale variant's
-    # picture belongs to a card this build does not compute.
-    assert {row["id"]: row["pictures"] for row in listed} == {
-        on_a["id"]: 2,
-        on_b["id"]: 2,
-    }
+    # Still the two pictures of the current variants: the stale variants'
+    # pictures belong to cards this build does not compute, though topology D
+    # is in the workflow by its core.
+    assert {row["id"]: row["pictures"] for row in listed} == {saved["id"]: 2}
 
 
 # ===========================================================================
@@ -1070,7 +1082,7 @@ def test_exporting_a_recipe_hands_back_everything_it_holds(recipe_env):
     """
     saved = _save(
         recipe_env.owner,
-        CARD_A,
+        WF_AB,
         loras=_ada(0.8),
         overrides={"sampler|steps": 30},
         seed="12345",
@@ -1095,14 +1107,15 @@ def test_exporting_a_recipe_hands_back_everything_it_holds(recipe_env):
 
 def test_a_recipe_export_leaves_this_librarys_own_bookkeeping_out(recipe_env):
     """The row id, its place in the tab and the source picture mean nothing elsewhere."""
-    saved = _save(recipe_env.owner, CARD_A, source_picture_id=None)
+    saved = _save(recipe_env.owner, WF_AB, source_picture_id=None)
     recipe = recipe_env.owner.get(f"{API}/recipes/{saved['id']}/export").json()[
         "recipe"
     ]
     for local in ("id", "position", "source_picture_id", "pictures"):
         assert local not in recipe, f"{local} is this library's bookkeeping"
     # What a recipe genuinely needs to travel is still there.
-    assert recipe["workflow_key"] == CARD_A
+    assert recipe["workflow_id"] == WF_AB
+    assert "workflow_key" not in recipe
     assert recipe["keep_seed"] is False
 
 
@@ -1115,7 +1128,7 @@ def test_a_recipe_export_says_when_it_carries_a_name_the_shelf_cannot_vouch_for(
     answers by blanking the name; a recipe cannot, because the name is the
     recipe, so it answers by saying so in the list the owner reads first.
     """
-    saved = _save(recipe_env.owner, CARD_A, loras=_ada())
+    saved = _save(recipe_env.owner, WF_AB, loras=_ada())
     shares = recipe_env.owner.get(f"{API}/recipes/{saved['id']}/export").json()[
         "shares"
     ]
@@ -1157,7 +1170,7 @@ def test_the_export_stays_closed_with_the_gate_rolled_back(recipe_env):
     the gated ``test_every_untemplated_owner_class_get_is_on_the_read_blocked_belt``
     is what noticed the prefix was missing.
     """
-    saved = _save(recipe_env.owner, CARD_A, loras=_ada())
+    saved = _save(recipe_env.owner, WF_AB, loras=_ada())
     path = f"{API}/recipes/{saved['id']}/export"
     server = recipe_env.server
     scoped = _bearer(
@@ -1193,7 +1206,7 @@ def test_the_belt_and_not_only_the_gate_is_what_refuses_the_export(recipe_env):
     Without this the test above passes on the gate alone and says nothing
     about the belt it is named for.
     """
-    saved = _save(recipe_env.owner, CARD_A)
+    saved = _save(recipe_env.owner, WF_AB)
     path = f"{API}/recipes/{saved['id']}/export"
     server = recipe_env.server
     scoped = _bearer(
@@ -1234,7 +1247,7 @@ def test_a_lora_saved_without_its_extension_is_still_warned_about(recipe_env):
     bare = ADA.removesuffix(".safetensors")
     saved = _save(
         recipe_env.owner,
-        CARD_A,
+        WF_AB,
         loras=[{"filename": bare, "sha256": None, "strength": 1.0}],
     )
     shares = recipe_env.owner.get(f"{API}/recipes/{saved['id']}/export").json()[
@@ -1248,8 +1261,8 @@ def test_a_lora_saved_without_its_extension_is_still_warned_about(recipe_env):
 # ===========================================================================
 
 
-def _used(client, *keys: str) -> list[dict]:
-    r = client.get(f"{API}/recipes/used", params={"workflow_key": list(keys)})
+def _used(client, *workflow_ids: str) -> list[dict]:
+    r = client.get(f"{API}/recipes/used", params={"workflow_id": list(workflow_ids)})
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -1261,7 +1274,7 @@ def test_used_looks_are_the_stacks_own_pictures_and_no_outsiders(recipe_env):
     workflow on a full library, because "recipe" meant only what somebody had
     pressed Save on.
     """
-    looks = _used(recipe_env.owner, CARD_A)
+    looks = _used(recipe_env.owner, WF_AB)
 
     # The stack's three distinct looks, and neither card C's picture nor the
     # soft-deleted one. Compared on the base name: the two pictures of the
@@ -1283,28 +1296,6 @@ def test_used_looks_are_the_stacks_own_pictures_and_no_outsiders(recipe_env):
     ]
 
 
-def test_used_looks_with_whole_stack_false_are_the_named_cards_own(recipe_env):
-    """Card B alone: its one picture's look, not the stack's three."""
-    assert len(_used(recipe_env.owner, CARD_B)) == 3
-    r = recipe_env.owner.get(
-        f"{API}/recipes/used",
-        params={"workflow_key": [CARD_B], "whole_stack": "false"},
-    )
-    assert r.status_code == 200, r.text
-    assert [(look["prompt"], look["pictures"]) for look in r.json()] == [(PROMPT, 1)]
-
-
-def test_a_narrowed_look_is_marked_saved_by_a_siblings_recipe(recipe_env):
-    """Saved on A, it runs on B too (D10), so B's own look is already kept."""
-    _save(recipe_env.owner, CARD_A, prompt=PROMPT, loras=_ada())
-    r = recipe_env.owner.get(
-        f"{API}/recipes/used",
-        params={"workflow_key": [CARD_B], "whole_stack": "false"},
-    )
-    assert r.status_code == 200, r.text
-    assert [look["saved"] for look in r.json()] == [True]
-
-
 def test_one_look_spelled_two_ways_is_one_row(recipe_env):
     """`a_match` and `b_match` load the same file under different names.
 
@@ -1312,7 +1303,7 @@ def test_one_look_spelled_two_ways_is_one_row(recipe_env):
     Listing both would offer the same look twice with its pictures split
     between them, and credit already sums on the normalized key.
     """
-    looks = _used(recipe_env.owner, CARD_A)
+    looks = _used(recipe_env.owner, WF_AB)
     matching = [
         look
         for look in looks
@@ -1326,12 +1317,12 @@ def test_one_look_spelled_two_ways_is_one_row(recipe_env):
 
 def test_a_saved_recipe_marks_its_look_and_leaves_it_listed(recipe_env):
     """Saving a look marks it; it never takes the look out of the list."""
-    before = _used(recipe_env.owner, CARD_A)
+    before = _used(recipe_env.owner, WF_AB)
     assert not any(look["saved"] for look in before), before
 
-    _save(recipe_env.owner, CARD_A, prompt=PROMPT, loras=_ada())
+    _save(recipe_env.owner, WF_AB, prompt=PROMPT, loras=_ada())
 
-    after = _used(recipe_env.owner, CARD_A)
+    after = _used(recipe_env.owner, WF_AB)
     assert [look["pictures"] for look in after] == [
         look["pictures"] for look in before
     ], "saving moved or dropped a look"
@@ -1348,15 +1339,14 @@ def test_a_saved_recipe_marks_its_look_and_leaves_it_listed(recipe_env):
 def test_a_selection_of_several_workflows_is_the_union_counted_once(recipe_env):
     """The multi-selection ask, and the double-count it must not make.
 
-    A and B are one stack, so naming both must answer exactly as naming one:
-    the stacks are deduplicated before the pictures are read. Naming C as well
-    adds C's own picture.
+    Naming one workflow twice must answer exactly as naming it once. Naming
+    C's as well adds C's own picture.
     """
-    one = _used(recipe_env.owner, CARD_A)
-    both = _used(recipe_env.owner, CARD_A, CARD_B)
-    assert both == one, "naming two members of one stack counted its looks twice"
+    one = _used(recipe_env.owner, WF_AB)
+    both = _used(recipe_env.owner, WF_AB, WF_AB)
+    assert both == one, "naming one workflow twice counted its looks twice"
 
-    with_c = _used(recipe_env.owner, CARD_A, CARD_C)
+    with_c = _used(recipe_env.owner, WF_AB, WF_C)
     assert (
         sum(look["pictures"] for look in with_c)
         == sum(look["pictures"] for look in one) + 1
@@ -1380,7 +1370,7 @@ def test_a_look_names_a_cover_picture_to_read_its_strengths_back_from(recipe_env
     one; the cover is a real picture of the group, so the dialog can read the
     graph's own strengths when the owner saves it.
     """
-    looks = _used(recipe_env.owner, CARD_A)
+    looks = _used(recipe_env.owner, WF_AB)
     assert all(look["cover_picture_id"] for look in looks), looks
 
     def paths(session):
@@ -1425,12 +1415,12 @@ def test_no_scoped_token_can_read_the_used_looks(recipe_env):
         recipe_env.server,
         _mint(recipe_env.owner, "used-looks probe", picture_id=picture_id),
     )
-    r = scoped.get(f"{API}/recipes/used", params={"workflow_key": CARD_A})
+    r = scoped.get(f"{API}/recipes/used", params={"workflow_id": WF_AB})
     assert r.status_code == 403, r.text
 
     # The positive control, on the same seeded library: over-blocking would be
     # its own regression and this assertion is what tells the two apart.
-    assert _used(recipe_env.owner, CARD_A)
+    assert _used(recipe_env.owner, WF_AB)
 
 
 def test_the_read_token_belt_also_closes_the_used_looks(recipe_env):
@@ -1447,7 +1437,7 @@ def test_the_read_token_belt_also_closes_the_used_looks(recipe_env):
     # to survive the `AUTHZ_GATE_ENFORCING = False` rollback.
     assert "/api/v1/recipes/used" in auth.READ_BLOCKED_GET_PATHS
     scoped = _bearer(recipe_env.server, _mint(recipe_env.owner, "belt probe"))
-    r = scoped.get(f"{API}/recipes/used", params={"workflow_key": CARD_A})
+    r = scoped.get(f"{API}/recipes/used", params={"workflow_id": WF_AB})
     assert r.status_code == 403, r.text
 
 
@@ -1488,21 +1478,21 @@ def test_the_gate_alone_refuses_the_used_looks_with_the_belt_lifted(recipe_env):
     auth.READ_BLOCKED_GET_PREFIXES = without_prefix
     auth.READ_BLOCKED_GET_PATHS = without_path
     try:
-        r = scoped.get(f"{API}/recipes/used", params={"workflow_key": CARD_A})
+        r = scoped.get(f"{API}/recipes/used", params={"workflow_id": WF_AB})
         assert r.status_code == 403, (
             "with the READ-token belt lifted the gate let a scoped token read "
             f"the owner's prompts: {r.status_code} {r.text}"
         )
         # The owner is unaffected by the lift, so the 403 above is the scope
         # being refused and not the route having broken.
-        assert _used(recipe_env.owner, CARD_A)
+        assert _used(recipe_env.owner, WF_AB)
     finally:
         auth.READ_BLOCKED_GET_PREFIXES = original
         auth.READ_BLOCKED_GET_PATHS = original_paths
 
     # And the belt is back, so every later test measures the shipped shape.
     assert (
-        scoped.get(f"{API}/recipes/used", params={"workflow_key": CARD_A}).status_code
+        scoped.get(f"{API}/recipes/used", params={"workflow_id": WF_AB}).status_code
         == 403
     )
 
@@ -1546,7 +1536,7 @@ def test_used_looks_survive_sqlites_variable_ceiling(recipe_env):
     sa_event.listen(engine, "connect", _set_limit)
     engine.dispose()
     try:
-        looks = _used(recipe_env.owner, CARD_A)
+        looks = _used(recipe_env.owner, WF_AB)
         # The answer is unchanged: chunking must merge, not concatenate, or a
         # look straddling two chunks is listed twice with its pictures split.
         assert [(look["prompt"], look["pictures"]) for look in looks] == [
@@ -1554,24 +1544,11 @@ def test_used_looks_survive_sqlites_variable_ceiling(recipe_env):
             (PROMPT, 1),
             (OTHER_PROMPT, 1),
         ]
-        listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_key": CARD_A})
+        listed = recipe_env.owner.get(f"{API}/recipes", params={"workflow_id": WF_AB})
         assert listed.status_code == 200, listed.text
     finally:
         sa_event.remove(engine, "connect", _set_limit)
         engine.dispose()
-
-
-def test_a_workflow_key_longer_than_a_digest_is_refused(recipe_env):
-    """The per-key ceiling the list rewrite must not have dropped.
-
-    A workflow key is a 64-character digest. `max_length` on a `list[str]`
-    bounds the LIST, so the string ceiling has to be declared on the item or
-    it silently disappears — which is what happened when this parameter
-    stopped being a single string.
-    """
-    for path in (f"{API}/recipes", f"{API}/recipes/used"):
-        r = recipe_env.owner.get(path, params={"workflow_key": "a" * 4000})
-        assert r.status_code == 422, f"{path} took a 4000-character key: {r.text}"
 
 
 def test_a_picture_with_no_prompt_is_not_a_look(recipe_env):
@@ -1602,7 +1579,7 @@ def test_a_picture_with_no_prompt_is_not_a_look(recipe_env):
 
     recipe_env.server.vault.db.run_task(add_promptless, priority=DBPriority.IMMEDIATE)
 
-    looks = _used(recipe_env.owner, CARD_A)
+    looks = _used(recipe_env.owner, WF_AB)
     assert all(look["prompt"] or look["loras"] for look in looks), looks
     # The stack's real looks are untouched; only the nameless group goes.
     assert len(looks) == 3
@@ -1628,7 +1605,7 @@ def test_a_picture_with_no_prompt_but_a_lora_is_still_a_look(recipe_env):
 
     recipe_env.server.vault.db.run_task(add_lora_only, priority=DBPriority.IMMEDIATE)
 
-    looks = _used(recipe_env.owner, CARD_A)
+    looks = _used(recipe_env.owner, WF_AB)
     assert any(
         not look["prompt"]
         and [row["filename"] for row in look["loras"]] == ["lonely.safetensors"]
