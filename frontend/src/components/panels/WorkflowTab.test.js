@@ -1637,6 +1637,11 @@ describe("with several workflows selected", () => {
 });
 
 describe("Open in ComfyUI", () => {
+  // A real workflow id, `auto:` + core hash, which the link percent-encodes:
+  // the desktop shell's guard refuses the bare 64-hex key the ids replaced.
+  const ID = `auto:${"a".repeat(64)}`;
+  const ID_PARAM = `auto%3A${"a".repeat(64)}`;
+
   const openButton = (wrapper) => {
     const found = wrapper.find('[data-testid="wftab-open-comfyui"]');
     return found.exists() ? found : undefined;
@@ -1661,12 +1666,12 @@ describe("Open in ComfyUI", () => {
 
   it("opens the configured ComfyUI on THIS card, in a new tab", async () => {
     configure();
-    const { wrapper } = await mountWith([KEY], [card()]);
+    const { wrapper } = await mountWith([ID], [card({ id: ID })]);
 
     await openButton(wrapper).trigger("click");
 
     expect(open).toHaveBeenCalledWith(
-      `http://127.0.0.1:8188/?pixlstash_workflow=${KEY}`,
+      `http://127.0.0.1:8188/?pixlstash_workflow=${ID_PARAM}`,
       "_blank",
       "noopener,noreferrer",
     );
@@ -1674,17 +1679,17 @@ describe("Open in ComfyUI", () => {
 
   it("sends a listen-everywhere address to the machine the page came from", async () => {
     configure("http://0.0.0.0:8188/");
-    const { wrapper } = await mountWith([KEY], [card()]);
+    const { wrapper } = await mountWith([ID], [card({ id: ID })]);
 
     await openButton(wrapper).trigger("click");
 
     expect(open.mock.calls[0][0]).toBe(
-      `http://${window.location.hostname}:8188/?pixlstash_workflow=${KEY}`,
+      `http://${window.location.hostname}:8188/?pixlstash_workflow=${ID_PARAM}`,
     );
   });
 
   it("is not offered without a ComfyUI address", async () => {
-    const { wrapper } = await mountWith([KEY], [card()]);
+    const { wrapper } = await mountWith([ID], [card({ id: ID })]);
     expect(openButton(wrapper)).toBeUndefined();
 
     // The flag alone is not enough: the button is gated on the address it
@@ -1700,7 +1705,7 @@ describe("Open in ComfyUI", () => {
 
   it("is named for a screen reader, since it is only the ComfyUI mark", async () => {
     configure();
-    const { wrapper } = await mountWith([KEY], [card()]);
+    const { wrapper } = await mountWith([ID], [card({ id: ID })]);
     expect(openButton(wrapper).attributes("aria-label")).toBe("Open in ComfyUI");
   });
 
@@ -1708,12 +1713,12 @@ describe("Open in ComfyUI", () => {
     configure();
     const openComfyui = vi.fn().mockResolvedValue(true);
     window.pixlstashDesktop = { openComfyui };
-    const { wrapper } = await mountWith([KEY], [card()]);
+    const { wrapper } = await mountWith([ID], [card({ id: ID })]);
 
     await openButton(wrapper).trigger("click");
 
     expect(openComfyui).toHaveBeenCalledWith(
-      `http://127.0.0.1:8188/?pixlstash_workflow=${KEY}`,
+      `http://127.0.0.1:8188/?pixlstash_workflow=${ID_PARAM}`,
     );
     expect(open).not.toHaveBeenCalled();
   });
@@ -1721,7 +1726,7 @@ describe("Open in ComfyUI", () => {
   it("says so when the desktop shell refuses the link", async () => {
     configure();
     window.pixlstashDesktop = { openComfyui: vi.fn().mockResolvedValue(false) };
-    const { wrapper } = await mountWith([KEY], [card()]);
+    const { wrapper } = await mountWith([ID], [card({ id: ID })]);
 
     await openButton(wrapper).trigger("click");
     await flush(wrapper);
@@ -1734,7 +1739,7 @@ describe("Open in ComfyUI", () => {
   it("is not offered on an older desktop shell with no bridge", async () => {
     configure();
     window.pixlstashDesktop = {};
-    const { wrapper } = await mountWith([KEY], [card()]);
+    const { wrapper } = await mountWith([ID], [card({ id: ID })]);
     expect(openButton(wrapper)).toBeUndefined();
   });
 
@@ -1757,7 +1762,7 @@ describe("Open in ComfyUI", () => {
   it("refuses, with the reason, when ComfyUI lacks the PixlStash node", async () => {
     configure();
     getPixlstashNode.mockResolvedValue({ can_open_workflows: false });
-    const { wrapper } = await mountWith([KEY], [card()]);
+    const { wrapper } = await mountWith([ID], [card({ id: ID })]);
     await flush(wrapper);
 
     const button = openButton(wrapper);
@@ -1777,7 +1782,7 @@ describe("Open in ComfyUI", () => {
   it("still opens when ComfyUI cannot be asked about the node", async () => {
     configure();
     getPixlstashNode.mockResolvedValue({ can_open_workflows: null });
-    const { wrapper } = await mountWith([KEY], [card()]);
+    const { wrapper } = await mountWith([ID], [card({ id: ID })]);
     await flush(wrapper);
 
     await openButton(wrapper).trigger("click");
@@ -1787,7 +1792,7 @@ describe("Open in ComfyUI", () => {
 
   it("refuses an address that is not a web address", async () => {
     configure("javascript:alert(1)");
-    const { wrapper } = await mountWith([KEY], [card()]);
+    const { wrapper } = await mountWith([ID], [card({ id: ID })]);
 
     await openButton(wrapper).trigger("click");
 

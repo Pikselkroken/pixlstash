@@ -629,16 +629,27 @@ describe('main.ts window-open wiring', () => {
 });
 
 describe('comfyuiOpenTarget — the Open in ComfyUI channel opens only a workflow link', () => {
-  const KEY = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const HASH = 'a'.repeat(64);
+  // The two shapes a workflow id takes, as the Workflow tab's URLSearchParams
+  // writes them: `auto:` + core hash (the colon percent-encoded), or uuid hex.
+  const KEY = `auto%3A${HASH}`;
+  const MINTED = 'b'.repeat(32);
 
-  it('accepts plain http and https ComfyUI addresses carrying a card key', () => {
+  it('accepts plain http and https ComfyUI addresses carrying a workflow id', () => {
     for (const good of [
       `http://127.0.0.1:8188/?pixlstash_workflow=${KEY}`,
       `https://comfy.example.com/?pixlstash_workflow=${KEY}`,
       `http://192.0.2.10:8188/comfy/?pixlstash_workflow=${KEY}`,
+      `http://127.0.0.1:8188/?pixlstash_workflow=${MINTED}`,
     ]) {
       assert.equal(comfyuiOpenTarget(good), good, good);
     }
+  });
+
+  it('accepts the link exactly as the Workflow tab builds it', () => {
+    const url = new URL('http://127.0.0.1:8188/');
+    url.searchParams.set('pixlstash_workflow', `auto:${HASH}`);
+    assert.equal(comfyuiOpenTarget(url.toString()), url.toString());
   });
 
   it('refuses anything that would make it a general open-any-link door', () => {
@@ -655,6 +666,11 @@ describe('comfyuiOpenTarget — the Open in ComfyUI channel opens only a workflo
       `http://127.0.0.1:8188/?other=${KEY}`,
       'http://127.0.0.1:8188/?pixlstash_workflow=abc',
       `http://127.0.0.1:8188/?pixlstash_workflow=${KEY.toUpperCase()}`,
+      // The bare 64-hex key the ids replaced, and near misses of both shapes.
+      `http://127.0.0.1:8188/?pixlstash_workflow=${HASH}`,
+      `http://127.0.0.1:8188/?pixlstash_workflow=auto%3A${MINTED}`,
+      `http://127.0.0.1:8188/?pixlstash_workflow=${'b'.repeat(33)}`,
+      `http://127.0.0.1:8188/?pixlstash_workflow=manual%3A${HASH}`,
       `http://user:pw@127.0.0.1:8188/?pixlstash_workflow=${KEY}`,
       `http://127.0.0.1:8188/?pixlstash_workflow=${KEY}#frag`,
       `http://127.0.0.1:8188/?pixlstash_workflow=${KEY}&pixlstash_workflow=${KEY}`,

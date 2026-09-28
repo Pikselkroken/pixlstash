@@ -230,8 +230,12 @@ export function isAllowedNavigation(
   return url.protocol === 'http:' && (url.hostname === '127.0.0.1' || url.hostname === 'localhost');
 }
 
-/** A workflow card key, as `?pixlstash_workflow=` carries it. */
-const WORKFLOW_KEY_RE = /^[0-9a-f]{64}$/;
+/**
+ * A workflow id, as `?pixlstash_workflow=` carries it: `auto:` and the core
+ * hash for an automatic group, or the uuid hex a merge or split minted. The
+ * backend's `_WORKFLOW_ID_RE` is the same rule.
+ */
+const WORKFLOW_ID_RE = /^(?:auto:[0-9a-f]{64}|[0-9a-f]{32})$/;
 
 /**
  * The URL `desktop:openComfyui` may hand to the OS browser, or `null`.
@@ -240,7 +244,7 @@ const WORKFLOW_KEY_RE = /^[0-9a-f]{64}$/;
  * out over it, and a ComfyUI almost always IS plain `http:`. So the Workflow
  * tab's *Open in ComfyUI* gets its own channel, and this is the whole of what
  * it will open: an `http(s)` address with no credentials in it, no fragment,
- * and exactly one query parameter, `pixlstash_workflow`, holding a card key.
+ * and exactly one query parameter, `pixlstash_workflow`, holding a workflow id.
  * The host is not checked: ComfyUI is wherever the owner configured it, and
  * main cannot read that setting without the renderer's session. What this
  * stops is the channel being a general "open any link" door.
@@ -257,7 +261,7 @@ export function comfyuiOpenTarget(raw: unknown): string | null {
   if (url.username || url.password || url.hash) return null;
   const keys = [...url.searchParams.keys()];
   if (keys.length !== 1 || keys[0] !== 'pixlstash_workflow') return null;
-  if (!WORKFLOW_KEY_RE.test(url.searchParams.get('pixlstash_workflow') ?? '')) {
+  if (!WORKFLOW_ID_RE.test(url.searchParams.get('pixlstash_workflow') ?? '')) {
     return null;
   }
   return url.toString();
