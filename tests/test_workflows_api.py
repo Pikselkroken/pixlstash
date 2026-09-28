@@ -5327,6 +5327,44 @@ def test_a_kept_pictures_embedded_graph_is_the_second_source(runnable, monkeypat
     assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 33
 
 
+def test_count_decides_the_pictures_not_the_graphs_batch_size(runnable, monkeypatch):
+    """A graph saved with ``batch_size: 4`` runs one picture per submission.
+
+    Wrong if a submitted latent still says 4: a count of 2 would then come
+    back as eight pictures. A wired ``batch_size`` is left alone.
+    """
+    embedded = json.loads(json.dumps(RUN_DOCUMENT))
+    embedded["1"]["inputs"]["ckpt_name"] = "realvisxl.safetensors"
+    embedded["2"]["inputs"]["lora_name"] = "add_detail.safetensors"
+    embedded["5"] = {
+        "class_type": "EmptyLatentImage",
+        "inputs": {"width": 512, "height": 512, "batch_size": 4},
+    }
+    embedded["6"] = {
+        "class_type": "EmptySD3LatentImage",
+        "inputs": {"width": 512, "height": 512, "batch_size": ["1", 0]},
+    }
+    object_info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    for class_type in ("EmptyLatentImage", "EmptySD3LatentImage"):
+        object_info[class_type] = {"input": {"required": {}}}
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (object_info, None)
+    )
+    monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, picture_id, object_info=None: (embedded, []),
+    )
+    r = runnable.owner.post(
+        f"{API}/workflows/run", json={"workflow_key": RUN_CARD, "count": 2}
+    )
+    assert r.status_code == 200, r.text
+    assert len(runnable.submitted) == 2
+    for sent in runnable.submitted:
+        assert sent["graph"]["5"]["inputs"]["batch_size"] == 1
+        assert sent["graph"]["6"]["inputs"]["batch_size"] == ["1", 0]
+
+
 def test_a_picture_whose_file_has_gone_falls_through_instead_of_erroring(
     runnable, monkeypatch
 ):

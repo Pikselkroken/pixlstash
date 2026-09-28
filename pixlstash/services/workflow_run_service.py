@@ -634,6 +634,32 @@ def run_seed_targets(graph: dict, object_info: Optional[dict]) -> list[dict]:
     return detect_seed_targets(graph, object_info or {}) or collect_seed_inputs(graph)
 
 
+def pin_batch_size(graph: dict) -> list[str]:
+    """Set every empty latent's literal ``batch_size`` to 1; return the node ids.
+
+    The Run popup's count is how many pictures a run makes: one submission
+    each, each with its own seed. A graph saved with ``batch_size: 4`` made
+    four per submission, so a count of 1 came back as four pictures. Only the
+    ``Empty*Latent*`` sources are touched, where ``batch_size`` means pictures;
+    a wired value is left alone, as cutting the link would change the graph.
+    """
+    pinned = []
+    for node_id, node in graph.items():
+        if not isinstance(node, dict):
+            continue
+        class_type = str(node.get("class_type") or "")
+        inputs = node.get("inputs")
+        if not (class_type.startswith("Empty") and "Latent" in class_type):
+            continue
+        if not isinstance(inputs, dict):
+            continue
+        value = inputs.get("batch_size")
+        if isinstance(value, int) and not isinstance(value, bool) and value != 1:
+            inputs["batch_size"] = 1
+            pinned.append(str(node_id))
+    return pinned
+
+
 def replace_missing_seed_nodes(graph: dict, object_info: dict) -> list[dict]:
     """Drop every custom seed node this ComfyUI lacks, inlining its value.
 

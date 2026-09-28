@@ -4880,6 +4880,17 @@ def create_router(server) -> APIRouter:
             # against: a replaced seed node is only safe because this writes
             # every input it inlined.
             seed_targets = run_service.run_seed_targets(graph, object_info)
+            # `count` is the number of pictures, one per submission: a batch
+            # saved in the graph would multiply it.
+            pinned = run_service.pin_batch_size(graph)
+            if pinned:
+                logger.info(
+                    "[workflows] Run of %s: batch_size pinned to 1 on nodes %s so "
+                    "count (%s) decides how many pictures come out.",
+                    group.workflow_key,
+                    pinned,
+                    body.count,
+                )
             # A selection feeding an input is the run's repeat axis: one pass
             # per picture, each its own source and, with `stack`, its own
             # stack. Otherwise one pass, and the group's first picture is the
