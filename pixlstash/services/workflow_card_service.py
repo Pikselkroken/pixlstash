@@ -82,7 +82,7 @@ from pixlstash.services.workflow_library_service import (
     read_picture_variant,
     read_variant_picture_counts,
 )
-from pixlstash.services.workflow_parameters import FEATURED_NAMES
+from pixlstash.services.workflow_parameters import FEATURED_NAMES, FEATURED_ORDER
 from pixlstash.utils.adapter_header import FILE_TEXT_ENCODER
 from pixlstash.utils.known_base_models import fold
 from pixlstash.utils.model_utils import (
@@ -934,6 +934,17 @@ class Default:
     provenance: str
 
 
+def _address_order(address: tuple[str, str]) -> tuple:
+    """``FEATURED_ORDER`` rank, any other name after them, then the slot label."""
+    slot_label, input_name = address
+    rank = (
+        FEATURED_ORDER.index(input_name)
+        if input_name in FEATURED_ORDER
+        else len(FEATURED_ORDER)
+    )
+    return rank, input_name, slot_label
+
+
 def _labels(addresses: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
     """A unique, readable label per address: the input name, disambiguated.
 
@@ -1178,7 +1189,9 @@ def workflow_defaults(
         else:
             value_overrides[(slot_label, input_name)] = _stored_value(value)
 
-    addresses = sorted(set(values) | set(value_overrides))
+    # By parameter first: slot labels are digests, so sorting on them alone put
+    # the size above the sampler in one workflow and below it in the next.
+    addresses = sorted(set(values) | set(value_overrides), key=_address_order)
     labels = _labels(addresses)
     for address in addresses:
         if address in value_overrides:
