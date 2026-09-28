@@ -125,6 +125,15 @@ describe("a default LoRA the owner added has no filename", () => {
   });
 });
 
+describe("digests", () => {
+  it("pair whatever their case", () => {
+    const recipe = {
+      loras: DEFAULT.loras.map((lora) => ({ ...lora, filename: "renamed.safetensors", sha256: lora.sha256.toUpperCase() })),
+    };
+    expect(recipeDiff(recipe, DEFAULT).segments).toEqual([]);
+  });
+});
+
 describe("lookLoraDiff", () => {
   it("names the LoRAs a look adds and leaves out, by short name", () => {
     const segments = lookLoraDiff(

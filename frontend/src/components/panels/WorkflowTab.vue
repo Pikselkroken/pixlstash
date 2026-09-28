@@ -1346,6 +1346,8 @@ const chainLoaders = computed(() =>
       id: String(loader.node_id),
       node_id: String(loader.node_id),
       filename: loader.filename,
+      // What the name's tooltip carries, as on a default row.
+      file: loader.filename || "",
       sha256: loader.sha256 ? String(loader.sha256).toLowerCase() : "",
       label: loader.on_shelf
         ? loader.name || loraStem(loader.filename)
@@ -1526,7 +1528,7 @@ const otherCheckpoints = computed(() => {
   const file = recipeCheckpoint.value?.filename;
   if (!file) return [];
   return (recipeValues.value?.checkpoints ?? [])
-    .filter((value) => !sameFile(value.name, file) && value.pictures > 0)
+    .filter((value) => !sameFile(value.name, file) && showable(value))
     .map((value) => ({
       name: value.name,
       pictures: value.pictures,
@@ -1656,11 +1658,22 @@ const stageRows = computed(() =>
 );
 
 /** ALSO USED: what changes between pictures, less the default's LoRAs. */
-const alsoUsed = computed(() =>
-  (summary.value?.varying ?? []).filter(
-    (use) => !defaultDigests.value.has(digestOf(use.asset)),
-  ),
-);
+const alsoUsed = computed(() => {
+  // A default with no digest cannot be joined by one, so it is matched by
+  // its file instead, or it shows twice. Only those: a default WITH a digest
+  // never matches by name, since two folders can hold one name.
+  const digestless = (defaultRecipe.value?.loras ?? []).filter(
+    (lora) => !digestOf(lora.sha256) && lora.filename,
+  );
+  return (summary.value?.varying ?? []).filter(
+    (use) =>
+      !defaultDigests.value.has(digestOf(use.asset)) &&
+      !(
+        use.filename &&
+        digestless.some((lora) => sameFile(lora.filename, use.filename))
+      ),
+  );
+});
 
 /**
  * The summary the pile draws: its `varying` is ALSO USED. `without` ("No

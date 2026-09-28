@@ -45,7 +45,7 @@ function valueText(value) {
  * or (where either side cannot name its digest) the short names do.
  */
 function sameFile(a, b) {
-  if (a.sha256 && b.sha256) return a.sha256 === b.sha256;
+  if (a.sha256 && b.sha256) return a.sha256.toLowerCase() === b.sha256.toLowerCase();
   return shortName(a.filename).toLowerCase() === shortName(b.filename).toLowerCase();
 }
 

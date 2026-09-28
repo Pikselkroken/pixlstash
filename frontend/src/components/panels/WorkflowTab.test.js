@@ -1139,6 +1139,17 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     expect(wrapper.findComponent({ name: "WorkflowLoraPile" }).props("summary").without).toEqual(none);
   });
 
+  it("matches a default LoRA with no digest to the pile by its file", async () => {
+    getWorkflowCard.mockResolvedValue(
+      withRecipe({
+        loras: [{ filename: "loras/BO.safetensors", sha256: null, strength: 1, provenance: "best" }],
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.find(`[data-testid='wftab-fan-row-${BO}']`).exists()).toBe(false);
+    expect(wrapper.find("[data-testid='wftab-pile']").text()).toContain("Ada");
+  });
+
   it("has no ALSO USED section when every LoRA that changes is a default", async () => {
     getWorkflowCard.mockResolvedValue(
       withRecipe({
@@ -1218,6 +1229,23 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     // In every picture: it would only repeat the head's link.
     const { wrapper: every } = await mountWith([KEY], [card({ recipe_values: values(184) })]);
     expect(every.find("[data-testid='wftab-show-checkpoint']").exists()).toBe(false);
+  });
+
+  it("lists no other checkpoint that is in every picture", async () => {
+    getWorkflowCard.mockResolvedValue(withRecipe());
+    const { wrapper } = await mountWith(
+      [KEY],
+      [
+        card({
+          recipe_values: {
+            // The default's file spelled so it matches no entry here.
+            checkpoints: [{ name: "SDXL/juggernautXL_v9.safetensors", pictures: 184 }],
+            loras: [],
+          },
+        }),
+      ],
+    );
+    expect(wrapper.find("[data-testid='wftab-other-checkpoints']").exists()).toBe(false);
   });
 
   it("discloses the other checkpoints, each with its own Show N", async () => {
@@ -2155,6 +2183,15 @@ describe("the LoRA chain (#1478)", () => {
     ).toBe("In the order the chain applies them. 3 of 4 are on your model shelf.");
     // The Workflow | Recipe switches are gone.
     expect(wrapper.findComponent({ name: "Segmented" }).exists()).toBe(false);
+  });
+
+  it("gives a chain row the file its name's tooltip carries", async () => {
+    const { wrapper } = await mountChain();
+    const names = wrapper.findAll(".wftab-chain-name");
+    expect(names.length).toBeGreaterThan(0);
+    expect(names[0].find("tooltip-stub").attributes("text")).toBe(
+      "lightning-8step.safetensors",
+    );
   });
 
   it("lists the default recipe's LoRAs in the chain's order, joined by digest", async () => {
