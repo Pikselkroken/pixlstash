@@ -68,7 +68,7 @@ FACE_QUALITY_CROP_TAGS = frozenset(
 # to a face (e.g. blockiness).
 CENTRE_CROP_TAG_WHITELIST = QUALITY_CROP_TAG_WHITELIST - FACE_QUALITY_CROP_TAGS
 PIXLSTASH_TAGGER_IMAGE_SIZE_FULL = 576
-PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
+PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP = 512
 
 # ------------------------------------------------------------------------- #
 # Grad-CAM anomaly-localisation tuning

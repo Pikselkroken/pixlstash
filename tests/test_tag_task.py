@@ -552,8 +552,8 @@ def test_a_face_low_in_a_rotated_photo_still_yields_a_crop(tmp_path):
 
     Picture 4401: orientation 6, 4608x2592 stored, face bbox
     [432, 1971, 1584, 3699]. Against the untransposed frame the box's centre
-    sits below the image, `expand_bbox_to_square` clamps the bottom edge and
-    not the top, and PIL refuses: "Coordinate 'lower' is less than 'upper'".
+    sits below the image, so the crop is refused as off-frame and the picture
+    gets none.
     """
     path = _rotated_jpeg(tmp_path, "low-face.jpg")
     task = _task_for(_FakeDb(str(tmp_path)))
@@ -566,4 +566,67 @@ def test_a_face_low_in_a_rotated_photo_still_yields_a_crop(tmp_path):
     key, crop, _source, is_centre = built
     assert key.endswith("#face1"), "and it must be the FACE crop, not the fallback"
     assert is_centre is False
-    assert crop.size == (448, 448), f"a square target-sized crop; got {crop.size}"
+    # 1.4 x the 1728px long side, square: the window scales with the face.
+    assert crop.size == (2419, 2419), f"a square face-sized crop; got {crop.size}"
+
+
+def _face_crop_box(tmp_path, name, size, bbox, target=512):
+    """The box `_build_quality_crop` cut, recovered from a gradient image."""
+    from PIL import Image as PILImage
+
+    w, h = size
+    image = PILImage.new("RGB", size)
+    image.putdata(
+        [
+            (x % 256, y % 256, (x // 256) * 16 + y // 256)
+            for y in range(h)
+            for x in range(w)
+        ]
+    )
+    path = tmp_path / name
+    image.save(path)
+    task = _task_for(_FakeDb(str(tmp_path)))
+    built = task._build_quality_crop(
+        Picture(id=1, file_path=str(path)), [_FakeFace(1, bbox)], target, {}
+    )
+    assert built is not None and built[3] is False
+    crop = built[1]
+    r, g, b = crop.getpixel((0, 0))
+    x0, y0 = (b // 16) * 256 + r, (b % 16) * 256 + g
+    return x0, y0, x0 + crop.size[0], y0 + crop.size[1]
+
+
+def test_a_face_bigger_than_the_target_is_cropped_whole(tmp_path):
+    """#1648: a 400px face used to get a 320px window cut out of its middle."""
+    x1, y1, x2, y2 = _face_crop_box(
+        tmp_path, "big-face.png", (1200, 1000), [400, 300, 700, 700], target=320
+    )
+    assert (x2 - x1, y2 - y1) == (560, 560), "1.4 x the 400px long side"
+    assert x1 <= 400 and y1 <= 300 and x2 >= 700 and y2 >= 700, "the whole face"
+
+
+def test_a_face_at_the_edge_slides_the_square_inward(tmp_path):
+    """Clipping made the crop non-square, and the square resize stretched it."""
+    box = _face_crop_box(tmp_path, "edge-face.png", (800, 600), [700, 400, 800, 600])
+    assert box == (520, 320, 800, 600)
+
+
+def test_a_face_outside_the_frame_gets_no_crop(tmp_path):
+    """Sliding would otherwise turn it into a faceless corner judged as a face."""
+    task = _task_for(_FakeDb(str(tmp_path)))
+    pic = Picture(id=8, file_path=str(_png(tmp_path, "off-frame.png")))
+
+    faces = [_FakeFace(88, [5000, 5000, 5100, 5100])]
+    assert task._build_quality_crop(pic, faces, 32, {}) is None
+
+
+def test_a_zero_size_face_gets_no_crop(tmp_path):
+    task = _task_for(_FakeDb(str(tmp_path)))
+    pic = Picture(id=9, file_path=str(_png(tmp_path, "zero-face.png")))
+
+    assert task._build_quality_crop(pic, [_FakeFace(99, [5, 5, 5, 5])], 32, {}) is None
+
+
+def test_a_face_bigger_than_the_frame_takes_the_short_side(tmp_path):
+    box = _face_crop_box(tmp_path, "huge-face.png", (800, 600), [100, 50, 700, 550])
+    assert box == (100, 0, 700, 600)

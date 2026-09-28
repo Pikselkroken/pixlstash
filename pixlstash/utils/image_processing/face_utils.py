@@ -238,7 +238,11 @@ def expand_bbox_to_square(
     bbox, img_width: int, img_height: int, target_size: int
 ) -> list:
     """Expand [x1, y1, x2, y2] outward from its centre to a square of
-    ``target_size`` pixels, clamped to image bounds.
+    ``target_size`` pixels, kept inside the image.
+
+    Near an edge the square slides inward rather than being clipped, so it
+    stays square and the tagger's square resize does not stretch it. Only a
+    square larger than the image's short side shrinks, to that side.
 
     Args:
         bbox: [x1, y1, x2, y2] face bounding box.
@@ -247,14 +251,12 @@ def expand_bbox_to_square(
         target_size: Desired square side length in pixels.
 
     Returns:
-        Clamped [x1, y1, x2, y2] square region.
+        [x1, y1, x2, y2] square region inside the image.
     """
     x1, y1, x2, y2 = bbox
     cx = (x1 + x2) / 2.0
     cy = (y1 + y2) / 2.0
-    half = target_size / 2.0
-    nx1 = max(0, int(round(cx - half)))
-    ny1 = max(0, int(round(cy - half)))
-    nx2 = min(img_width, int(round(cx + half)))
-    ny2 = min(img_height, int(round(cy + half)))
-    return [nx1, ny1, nx2, ny2]
+    side = max(1, min(int(round(target_size)), img_width, img_height))
+    nx1 = max(0, min(img_width - side, int(round(cx - side / 2.0))))
+    ny1 = max(0, min(img_height - side, int(round(cy - side / 2.0))))
+    return [nx1, ny1, nx1 + side, ny1 + side]

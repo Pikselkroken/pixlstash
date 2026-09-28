@@ -51,6 +51,10 @@ logger = get_logger(__name__)
 # still resolved by the shared loader in `_load_pic`.
 _VIDEO_EXTS = frozenset({".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"})
 
+# A face's quality crop is this multiple of its box's long side, so the chin,
+# hairline and both eyes are in the window however large the face is (#1648).
+FACE_CROP_SCALE = 1.4
+
 
 def _is_transient_load_error(exc: BaseException) -> bool:
     """True when *exc* means the machine failed, not that the file is corrupt.
@@ -275,7 +279,8 @@ class TagTask(BaseTask):
                 # bottom of the frame this loader used to return.
                 # `expand_bbox_to_square` then clamped one edge and not the
                 # other, and PIL refused the crop ("Coordinate 'lower' is less
-                # than 'upper'").
+                # than 'upper'"). `_build_quality_crop` now refuses such a box
+                # itself, before cropping.
                 #
                 # The refusal was the loud half. The quiet half is worse: with
                 # the face nearer the top the box stayed valid and the crop came
@@ -315,7 +320,9 @@ class TagTask(BaseTask):
         Args:
             pic: The picture to crop.
             faces: That picture's `Face` rows, unfiltered.
-            target: Square side length the crop is expanded to.
+            target: Side of the faceless centre crop. A face crop is sized by
+                the face instead (`FACE_CROP_SCALE`); the tagger resizes every
+                crop to its own input size either way.
             preloaded_images: The task's path -> image cache; populated on a miss.
 
         Returns:
@@ -367,7 +374,23 @@ class TagTask(BaseTask):
                         * (float(face.bbox[3]) - float(face.bbox[1])),
                     ),
                 )
-                expanded = expand_bbox_to_square(largest_face.bbox, w, h, target)
+                # Sized by the face, not by `target`: a fixed window cut into
+                # the majority of faces (median long side 384px against the
+                # old 320px window) and could miss the chin or an eye.
+                x1, y1, x2, y2 = (float(v) for v in largest_face.bbox)
+                long_side = max(x2 - x1, y2 - y1)
+                if not long_side > 0:
+                    raise ValueError(f"degenerate face bbox {largest_face.bbox}")
+                # The square slides inward at an edge, so a box that does not
+                # belong to this frame would still crop - a corner with no face
+                # in it, judged for face tags. Refuse it instead.
+                if not (0 <= (x1 + x2) / 2 <= w and 0 <= (y1 + y2) / 2 <= h):
+                    raise ValueError(
+                        f"face bbox {largest_face.bbox} lies outside the {w}x{h} frame"
+                    )
+                expanded = expand_bbox_to_square(
+                    largest_face.bbox, w, h, FACE_CROP_SCALE * long_side
+                )
                 return (
                     f"{file_path}#face{largest_face.id}",
                     img.crop(expanded),
@@ -377,8 +400,8 @@ class TagTask(BaseTask):
             # No face detected: fall back to a centre crop so whole-image quality
             # defects (blockiness, blur, jpeg artifacts) still get a high-
             # resolution pass instead of relying only on the downscaled full-image
-            # pass. A zero-size box at the image centre expands to the same
-            # target-sized square the face path uses.
+            # pass. A zero-size box at the image centre expands to a target-sized
+            # square, so the crop is judged at its native resolution.
             centre_bbox = [w / 2.0, h / 2.0, w / 2.0, h / 2.0]
             expanded = expand_bbox_to_square(centre_bbox, w, h, target)
             return f"{file_path}#centre", img.crop(expanded), file_path, True
