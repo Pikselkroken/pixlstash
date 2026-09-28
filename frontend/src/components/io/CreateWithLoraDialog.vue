@@ -57,7 +57,26 @@
         <p v-if="leftOut" class="cwl-note">{{ leftOut }}</p>
       </div>
 
-      <p v-if="slotNote" class="cwl-note" role="status">{{ slotNote }}</p>
+      <div
+        v-if="placement?.mode === 'trunk' && placement.loaders.length > 1"
+        class="cwl-field"
+      >
+        <span class="cwl-l">Put it in</span>
+        <OptionRows
+          v-model="loaderKey"
+          :options="loaderOptions"
+          aria-label="Which LoRA loader"
+          :disabled="submitting"
+        />
+      </div>
+
+      <p v-if="checking" class="cwl-note" role="status">
+        Checking this workflow…
+      </p>
+      <p v-else-if="slotError" class="cwl-note cwl-note--bad" role="alert">
+        {{ slotError }}
+      </p>
+      <p v-else-if="slotNote" class="cwl-note">{{ slotNote }}</p>
 
       <div class="cwl-field">
         <span class="cwl-l">Prompt</span>
@@ -107,7 +126,15 @@
           />
         </div>
       </div>
-      <p class="cwl-note">Results go to {{ entityName }}.</p>
+      <!-- A person's results go to their reference set, which is what
+           `destination.character_id` does; they are not face-assigned. -->
+      <p class="cwl-note">
+        {{
+          source?.entityType === "character"
+            ? `Results go to ${entityName}'s reference pictures.`
+            : `Results go to ${entityName}.`
+        }}
+      </p>
 
       <div v-if="reasons.length" class="cwl-reasons" role="alert">
         <RunReasonNotice
@@ -116,9 +143,12 @@
           :reason="reason"
           :busy="checking"
           @settings="emit('open-settings', 'compute')"
-          @retry="resolveSlot"
+          @retry="preflight"
         />
       </div>
+      <p v-if="preflightError" class="cwl-note cwl-note--bad" role="alert">
+        {{ preflightError }}
+      </p>
       <p v-if="submitError" class="cwl-note cwl-note--bad" role="alert">
         {{ submitError }}
       </p>
@@ -157,9 +187,9 @@
  * with the LoRA already in the workflow's loader, and files the results to
  * the person or set. Which workflows fit is worked out here from the cards,
  * the shelf row and the hand-made workflow sets (`utils/loraWorkflows.js`);
- * the slot the LoRA goes into comes from the chosen workflow's chain read.
- * The run is the ordinary `POST /workflows/run` with `workflow_id`, one
- * addressed `loras` entry and a `destination`.
+ * the loader the LoRA goes into comes from the chosen workflow's chain read.
+ * The run is the ordinary `POST /workflows/run` with `workflow_id`, the
+ * addressed `loras` entries and a `destination`.
  */
 import { computed, ref, useId, watch } from "vue";
 
@@ -171,7 +201,13 @@ import {
   runWorkflowCard,
 } from "../../api/workflows";
 import { errorMessage } from "../../utils/apiError";
-import { fitWorkflows, pickLoraSlot } from "../../utils/loraWorkflows";
+import {
+  defaultLoader,
+  fitWorkflows,
+  loadsLora,
+  loraPlacement,
+  replacedBy,
+} from "../../utils/loraWorkflows";
 import { modelName } from "../../utils/modelShelf";
 import { modelDisplayName } from "../../utils/workflowCard";
 import AppButton from "../widgets/AppButton.vue";
@@ -208,10 +244,14 @@ const cards = ref([]);
 const handMade = ref([]);
 const loraSha = ref(null);
 const workflowId = ref(null);
-/** `{loader, replaces}` for the chosen workflow, or null. */
-const slot = ref(null);
+/** `loraPlacement(chain)` for the chosen workflow, or null. */
+const placement = ref(null);
+/** Which trunk loader the owner put the LoRA in (`loaderId`). */
+const loaderKey = ref(null);
 const slotError = ref("");
 const reasons = ref([]);
+/** A pre-flight 4xx: this body would be refused, so Run is blocked. */
+const preflightError = ref("");
 const prompt = ref("");
 const strength = ref(1);
 const count = ref(1);
@@ -237,7 +277,7 @@ const workflowOptions = computed(() =>
 
 const leftOut = computed(() => {
   const parts = [];
-  const { clash, noLoader } = fits.value;
+  const { clash, noLoader, needsPicture } = fits.value;
   if (clash.length) {
     parts.push(
       `${clash.length} ${clash.length === 1 ? "is" : "are"} for a different base model`,
@@ -248,16 +288,59 @@ const leftOut = computed(() => {
       `${noLoader.length} ${noLoader.length === 1 ? "has" : "have"} no LoRA loader`,
     );
   }
+  if (needsPicture.length) {
+    parts.push(
+      `${needsPicture.length} ${needsPicture.length === 1 ? "needs" : "need"} a picture to start from`,
+    );
+  }
   if (!parts.length) return "";
-  const total = clash.length + noLoader.length;
+  const total = clash.length + noLoader.length + needsPicture.length;
   return `${total} more ${total === 1 ? "workflow is" : "workflows are"} not listed: ${parts.join(", ")}.`;
 });
 
+/**
+ * The loaders this run writes: the one picked in the trunk, or one per pass
+ * of a forked graph, so the LoRA shapes every pass and not half the picture.
+ */
+const targets = computed(() => {
+  const plan = placement.value;
+  if (!plan) return [];
+  if (plan.mode === "lanes") {
+    return plan.loaders.map((lane) => defaultLoader(lane, lora.value));
+  }
+  const chosen = plan.loaders.find((l) => loaderId(l) === loaderKey.value);
+  return [chosen || defaultLoader(plan.loaders, lora.value)];
+});
+
+const loaderOptions = computed(() =>
+  (placement.value?.mode === "trunk" ? placement.value.loaders : []).map(
+    (loader) => ({ id: loaderId(loader), label: loaderLabel(loader) }),
+  ),
+);
+
 const slotNote = computed(() => {
-  if (slotError.value) return slotError.value;
-  if (slot.value?.replaces)
-    return `Replaces ${slot.value.replaces} in this run.`;
-  return "";
+  const plan = placement.value;
+  if (!plan) return "";
+  const notes = [];
+  if (plan.mode === "lanes") {
+    notes.push(
+      `Goes into each of this workflow's ${plan.loaders.length} passes.`,
+    );
+  }
+  const replaced = targets.value
+    .map((loader) => replacedBy(loader, lora.value))
+    .filter(Boolean);
+  if (replaced.length)
+    notes.push(`Replaces ${replaced.join(" and ")} in this run.`);
+  // A run that names a LoRA leaves the workflow's own recipe LoRAs unplaced
+  // (`_plan` only places them when the body has none), so the rest of the
+  // chain loads what the stored graph names.
+  const loaderCount =
+    plan.mode === "lanes" ? plan.loaders.flat().length : plan.loaders.length;
+  if (loaderCount > targets.value.length) {
+    notes.push("Its other LoRA loaders run as the workflow stores them.");
+  }
+  return notes.join(" ");
 });
 
 const validCount = computed(
@@ -276,13 +359,13 @@ const promptHasTriggers = computed(
 const blocker = computed(() => {
   if (loading.value || loadFailed.value || !loras.value.length) return "";
   if (!workflowId.value) return "Pick a workflow.";
-  if (checking.value) return "";
-  if (!slot.value)
+  if (checking.value) return "Checking this workflow…";
+  if (!targets.value.length)
     return slotError.value ? "This workflow cannot take the LoRA." : "";
   if (!validCount.value)
     return `How many? A whole number from 1 to ${MAX_RUNS}.`;
   if (!validStrength.value) return "Strength is a number from -10 to 10.";
-  if (reasons.value.length)
+  if (reasons.value.length || preflightError.value)
     return "This workflow cannot run; see the reason above.";
   return "";
 });
@@ -292,9 +375,19 @@ const canRun = computed(
     !submitting.value &&
     !loading.value &&
     !checking.value &&
-    Boolean(slot.value) &&
+    targets.value.length > 0 &&
     !blocker.value,
 );
+
+function loaderId(loader) {
+  return `${loader.field}@${loader.node_id}`;
+}
+
+function loaderLabel(loader) {
+  if (loadsLora(loader, lora.value)) return `${loader.name} (this LoRA)`;
+  if (!replacedBy(loader, lora.value)) return "Empty loader";
+  return loader.name || loader.filename;
+}
 
 function loraLabel(row) {
   return row ? modelName(row) : "";
@@ -318,7 +411,6 @@ function addTriggers() {
 }
 
 function runBody() {
-  const loader = slot.value?.loader;
   const destination =
     props.source?.entityType === "character"
       ? { character_id: Number(props.source.entityId) }
@@ -327,16 +419,12 @@ function runBody() {
     workflow_id: workflowId.value,
     // `null` leaves the workflow's own prompt; only typed text replaces it.
     prompt: prompt.value.trim() ? prompt.value : null,
-    loras: loader
-      ? [
-          {
-            node_id: loader.node_id,
-            field: loader.field,
-            sha256: lora.value.sha256,
-            strength_model: strength.value,
-          },
-        ]
-      : [],
+    loras: targets.value.map((loader) => ({
+      node_id: loader.node_id,
+      field: loader.field,
+      sha256: lora.value.sha256,
+      strength_model: strength.value,
+    })),
     count: count.value,
     seed_mode: "new",
     client_id: props.context?.client_id || null,
@@ -392,36 +480,75 @@ async function load() {
   }
 }
 
-/** Find the chosen workflow's loader for this LoRA, then pre-flight the run. */
-async function resolveSlot() {
+/** Read the chosen workflow's LoRA chain, then pre-flight the run. */
+async function readChain() {
   const token = (slotToken += 1);
   const mine = () => token === slotToken;
-  slot.value = null;
+  placement.value = null;
+  loaderKey.value = null;
   slotError.value = "";
   reasons.value = [];
+  preflightError.value = "";
   submitError.value = "";
   if (!workflowId.value || !lora.value) return;
   checking.value = true;
   try {
     const chain = await getLoraChain(workflowId.value);
     if (!mine()) return;
-    const picked = pickLoraSlot(chain, lora.value);
-    if (!picked) {
+    const plan = loraPlacement(chain);
+    if (!plan) {
       slotError.value = "Could not find a LoRA loader in this workflow.";
       return;
     }
-    slot.value = picked;
-    const answer = await preflightWorkflowRun(runBody());
-    if (!mine()) return;
-    reasons.value = (answer?.groups || []).flatMap(
-      (group) => group.reasons || [],
-    );
+    placement.value = plan;
+    const first =
+      plan.mode === "lanes"
+        ? defaultLoader(plan.loaders[0], lora.value)
+        : defaultLoader(plan.loaders, lora.value);
+    if (plan.mode === "trunk") loaderKey.value = loaderId(first);
+    // A loader already holding this LoRA keeps the strength the workflow
+    // tuned it to; anything else starts at full strength.
+    strength.value = loadsLora(first, lora.value) ? (first.strength ?? 1) : 1;
   } catch (err) {
     if (mine()) {
       slotError.value = errorMessage(
         err,
         "Could not read this workflow's LoRA loaders.",
       );
+    }
+    return;
+  } finally {
+    if (mine()) checking.value = false;
+  }
+  await preflight();
+}
+
+/**
+ * Ask the server whether this run would go ahead, as `RunDialog` does: a 4xx
+ * is this body being refused and blocks Run; anything else (the network, a
+ * 5xx) is the question not being asked, so the run itself answers.
+ */
+async function preflight() {
+  if (!targets.value.length || !validCount.value || !validStrength.value)
+    return;
+  const token = (slotToken += 1);
+  const mine = () => token === slotToken;
+  reasons.value = [];
+  preflightError.value = "";
+  checking.value = true;
+  try {
+    const answer = await preflightWorkflowRun(runBody());
+    if (!mine()) return;
+    reasons.value = (answer?.groups || []).flatMap(
+      (group) => group.reasons || [],
+    );
+  } catch (err) {
+    if (!mine()) return;
+    const status = err?.response?.status;
+    if (status >= 400 && status < 500) {
+      preflightError.value = errorMessage(err, "This run would be refused.");
+    } else {
+      console.warn("Could not pre-flight this run:", err);
     }
   } finally {
     if (mine()) checking.value = false;
@@ -464,7 +591,16 @@ watch(fits, (next) => {
 });
 
 watch([workflowId, loraSha], () => {
-  void resolveSlot();
+  void readChain();
+});
+
+// Another loader, or a count or strength the last answer refused, is a new
+// question for the pre-flight.
+watch(loaderKey, (next, previous) => {
+  if (previous !== null && next !== null) void preflight();
+});
+watch([count, strength], () => {
+  if (preflightError.value) void preflight();
 });
 
 watch(

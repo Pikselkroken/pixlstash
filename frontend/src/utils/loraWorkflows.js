@@ -56,6 +56,13 @@ export function pairedCheckpoints(handMade, sha256) {
 }
 
 /**
+ * The card types that make a picture from nothing. Anything else (img2img,
+ * inpaint, upscale…) needs a picture put in, which this dialog does not ask
+ * for; a card with no type is one nobody has read, and is offered.
+ */
+const TEXT_TO_IMAGE_TYPES = new Set(["txt2img"]);
+
+/**
  * How one workflow card fits one LoRA.
  *
  * `fit` is one of:
@@ -64,6 +71,7 @@ export function pairedCheckpoints(handMade, sha256) {
  *   - `no_loader` - the graph has no LoRA loader, or nobody has read whether
  *                   it has one. Putting a LoRA in one means saving a new
  *                   workflow (Edit LoRAs), which this dialog does not do.
+ *   - `needs_picture` - the workflow makes a picture FROM a picture.
  *
  * `paired` is a hand-made workflow set naming this LoRA and this checkpoint;
  * `usedBefore` is the LoRA among the ones this workflow's kept pictures used.
@@ -82,6 +90,9 @@ export function workflowFit(card, lora, paired = new Set()) {
       (value) => nameKey(value.name) === nameKey(lora?.filename),
     ),
   };
+  if (card.type && !TEXT_TO_IMAGE_TYPES.has(card.type)) {
+    return { ...base, fit: "needs_picture" };
+  }
   if (!(card.loras || []).length) return { ...base, fit: "no_loader" };
   if (familiesClash(lora?.family, checkpoint?.family)) {
     return { ...base, fit: "clash" };
@@ -93,7 +104,8 @@ export function workflowFit(card, lora, paired = new Set()) {
  * Every card, fitted against *lora*, `ready` ones ranked: known pairings
  * first, then the ones that used this LoRA before, then the server's order.
  *
- * @returns {{ready: Array<Object>, clash: Array<Object>, noLoader: Array<Object>}}
+ * @returns {{ready: Array<Object>, clash: Array<Object>, noLoader: Array<Object>,
+ *   needsPicture: Array<Object>}}
  */
 export function fitWorkflows(cards, lora, handMade) {
   const paired = pairedCheckpoints(handMade, lora?.sha256);
@@ -109,37 +121,66 @@ export function fitWorkflows(cards, lora, handMade) {
     ready,
     clash: fits.filter((entry) => entry.fit === "clash"),
     noLoader: fits.filter((entry) => entry.fit === "no_loader"),
+    needsPicture: fits.filter((entry) => entry.fit === "needs_picture"),
   };
 }
 
+/** Whether a loader holds no LoRA: an empty widget, or ComfyUI's `None`. */
+function isEmptyLoader(loader) {
+  const key = nameKey(loader?.filename);
+  return !key || key === "none";
+}
+
+/** Whether a loader already loads *lora*, by digest first, then by file name. */
+export function loadsLora(loader, lora) {
+  if (lora?.sha256 && loader?.sha256 === lora.sha256) return true;
+  const wanted = nameKey(lora?.filename);
+  return Boolean(wanted) && nameKey(loader?.filename) === wanted;
+}
+
 /**
- * Which of a workflow's LoRA slots the LoRA goes into, from its chain read.
+ * Which loader of *loaders* the LoRA goes into by default.
  *
- * The slot already loading these bytes, then one naming the same file, then an
- * empty one, then the LAST loader of the chain - so a workflow whose loaders
- * are all taken swaps its final LoRA and the dialog says which one it replaced.
- * The trunk's loaders come before any lane's.
+ * The one already loading these bytes or this file, then an empty one, then
+ * the LAST - so a workflow whose loaders are all taken swaps its final LoRA,
+ * and the dialog says which one it replaces and lets the owner pick another.
+ */
+export function defaultLoader(loaders, lora) {
+  if (!loaders?.length) return null;
+  return (
+    loaders.find((l) => loadsLora(l, lora)) ||
+    loaders.find(isEmptyLoader) ||
+    loaders[loaders.length - 1]
+  );
+}
+
+/** What putting *lora* into *loader* replaces, or null when nothing is lost. */
+export function replacedBy(loader, lora) {
+  if (!loader || isEmptyLoader(loader) || loadsLora(loader, lora)) return null;
+  return loader.name || loader.filename || null;
+}
+
+/**
+ * Where a LoRA can go in a workflow, from its chain read.
+ *
+ * `trunk` - the loaders every pass reads, one of which takes the LoRA; the
+ *           owner may pick which.
+ * `lanes` - no shared loader but one chain per pass (a two-sampler graph):
+ *           the LoRA goes into one loader of EACH pass, or it would shape only
+ *           half the picture.
  *
  * @param {Object} chain - `getLoraChain(workflowId)`.
- * @param {Object} lora - the shelf row.
- * @returns {?{loader: Object, replaces: ?string}} null when the chain has no
- *   loader at all.
+ * @returns {?{mode: "trunk"|"lanes", loaders: Array<Object>}} null when the
+ *   chain has no loader the dialog can address.
  */
-export function pickLoraSlot(chain, lora) {
-  const loaders = [
-    ...(chain?.loaders || []),
-    ...(chain?.lanes || []).flatMap((lane) => lane.loaders || []),
-  ];
-  if (!loaders.length) return null;
-  const wanted = nameKey(lora?.filename);
-  const same =
-    loaders.find((l) => lora?.sha256 && l.sha256 === lora.sha256) ||
-    loaders.find((l) => wanted && nameKey(l.filename) === wanted);
-  if (same) return { loader: same, replaces: null };
-  const empty = loaders.find(
-    (l) => !nameKey(l.filename) || nameKey(l.filename) === "none",
+export function loraPlacement(chain) {
+  const trunk = chain?.loaders || [];
+  if (trunk.length) return { mode: "trunk", loaders: trunk };
+  const lanes = (chain?.lanes || []).filter(
+    (lane) => (lane.loaders || []).length,
   );
-  if (empty) return { loader: empty, replaces: null };
-  const last = loaders[loaders.length - 1];
-  return { loader: last, replaces: last.name || last.filename || null };
+  if (lanes.length) {
+    return { mode: "lanes", loaders: lanes.map((lane) => lane.loaders) };
+  }
+  return null;
 }

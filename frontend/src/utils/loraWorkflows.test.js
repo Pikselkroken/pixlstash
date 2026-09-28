@@ -3,11 +3,13 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  defaultLoader,
   familiesClash,
   fitWorkflows,
+  loraPlacement,
   nameKey,
   pairedCheckpoints,
-  pickLoraSlot,
+  replacedBy,
 } from "./loraWorkflows";
 
 const LORA = {
@@ -19,11 +21,18 @@ const SDXL_CKPT = "c".repeat(64);
 
 function card(
   id,
-  { family = "sdxl", sha256 = null, loras = 1, used = [] } = {},
+  {
+    family = "sdxl",
+    sha256 = null,
+    loras = 1,
+    used = [],
+    type = "txt2img",
+  } = {},
 ) {
   return {
     id,
     name: id,
+    type,
     models: [{ kind: "checkpoint", name: `${id}-ckpt`, family, sha256 }],
     loras: Array.from({ length: loras }, () => ({ kind: "lora", name: null })),
     recipe_values: { loras: used.map((name) => ({ name, pictures: 1 })) },
@@ -51,19 +60,22 @@ describe("nameKey", () => {
 
 describe("fitWorkflows", () => {
   it("sorts cards into ready, clash and no loader", () => {
-    const { ready, clash, noLoader } = fitWorkflows(
+    const { ready, clash, noLoader, needsPicture } = fitWorkflows(
       [
         card("ok"),
         card("flux", { family: "flux1" }),
         card("bare", { loras: 0 }),
         card("unknown", { family: null }),
+        card("i2i", { type: "img2img" }),
+        card("untyped", { type: null }),
       ],
       LORA,
       [],
     );
-    expect(ready.map((e) => e.card.id)).toEqual(["ok", "unknown"]);
+    expect(ready.map((e) => e.card.id)).toEqual(["ok", "unknown", "untyped"]);
     expect(clash.map((e) => e.card.id)).toEqual(["flux"]);
     expect(noLoader.map((e) => e.card.id)).toEqual(["bare"]);
+    expect(needsPicture.map((e) => e.card.id)).toEqual(["i2i"]);
   });
 
   it("ranks a hand-made pairing first, then prior use, then server order", () => {
@@ -105,7 +117,7 @@ describe("pairedCheckpoints", () => {
   });
 });
 
-describe("pickLoraSlot", () => {
+describe("placing the LoRA", () => {
   const loader = (node_id, filename, extra = {}) => ({
     node_id,
     field: "lora_name",
@@ -114,51 +126,63 @@ describe("pickLoraSlot", () => {
     ...extra,
   });
 
-  it("prefers the slot already loading the same bytes", () => {
+  it("prefers the loader already loading the same bytes", () => {
+    const loaders = [
+      loader("1", "other.safetensors"),
+      loader("2", "x", { sha256: LORA.sha256 }),
+    ];
+    expect(defaultLoader(loaders, LORA)).toBe(loaders[1]);
+    expect(replacedBy(loaders[1], LORA)).toBeNull();
+  });
+
+  it("then a loader naming the same file", () => {
+    const loaders = [
+      loader("1", "other.safetensors"),
+      loader("2", "sd15/example-subject-v2.safetensors"),
+    ];
+    expect(defaultLoader(loaders, LORA).node_id).toBe("2");
+  });
+
+  it("then an empty loader, which replaces nothing", () => {
+    const loaders = [loader("1", "other.safetensors"), loader("2", "None")];
+    expect(defaultLoader(loaders, LORA)).toBe(loaders[1]);
+    expect(replacedBy(loaders[1], LORA)).toBeNull();
+  });
+
+  it("else the last loader, and names what it replaces", () => {
+    const loaders = [
+      loader("1", "first.safetensors"),
+      loader("9", "detail.safetensors"),
+    ];
+    expect(defaultLoader(loaders, LORA)).toBe(loaders[1]);
+    expect(replacedBy(loaders[1], LORA)).toBe("detail");
+  });
+
+  it("uses the trunk when it has loaders", () => {
     const chain = {
-      loaders: [
-        loader("1", "other.safetensors"),
-        loader("2", "x", { sha256: LORA.sha256 }),
-      ],
+      loaders: [loader("1", "a.safetensors")],
+      lanes: [{ loaders: [loader("9", "b.safetensors")] }],
     };
-    expect(pickLoraSlot(chain, LORA)).toEqual({
-      loader: chain.loaders[1],
-      replaces: null,
+    expect(loraPlacement(chain)).toEqual({
+      mode: "trunk",
+      loaders: chain.loaders,
     });
   });
 
-  it("then a slot naming the same file", () => {
+  it("uses every pass of a forked graph with no shared loader", () => {
+    const high = [loader("5", "None")];
+    const low = [loader("8", "None")];
     const chain = {
-      loaders: [
-        loader("1", "other.safetensors"),
-        loader("2", "sd15/example-subject-v2.safetensors"),
-      ],
+      loaders: [],
+      lanes: [{ loaders: high }, { loaders: [] }, { loaders: low }],
     };
-    expect(pickLoraSlot(chain, LORA).loader.node_id).toBe("2");
-  });
-
-  it("then an empty slot", () => {
-    const chain = {
-      loaders: [loader("1", "other.safetensors"), loader("2", "None")],
-    };
-    expect(pickLoraSlot(chain, LORA)).toEqual({
-      loader: chain.loaders[1],
-      replaces: null,
-    });
-  });
-
-  it("else replaces the last loader and names it", () => {
-    const chain = {
-      loaders: [loader("1", "first.safetensors")],
-      lanes: [{ loaders: [loader("9", "detail.safetensors")] }],
-    };
-    expect(pickLoraSlot(chain, LORA)).toEqual({
-      loader: chain.lanes[0].loaders[0],
-      replaces: "detail",
+    expect(loraPlacement(chain)).toEqual({
+      mode: "lanes",
+      loaders: [high, low],
     });
   });
 
   it("is null for a chain with no loader", () => {
-    expect(pickLoraSlot({ loaders: [] }, LORA)).toBeNull();
+    expect(loraPlacement({ loaders: [], lanes: [] })).toBeNull();
   });
 });

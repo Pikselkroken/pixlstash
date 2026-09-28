@@ -2358,6 +2358,16 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             "slot_label": None,
         }
     ]
+    # The family is the one the model shelf serves for the same file: a client
+    # compares a LoRA's shelf `family` against this, so the two must agree.
+    shelf = workflow_env.owner.get(f"{API}/checkpoints")
+    assert shelf.status_code == 200, shelf.text
+    row = next(
+        entry
+        for entry in shelf.json()["checkpoints"]
+        if entry["sha256"] == _h("realvisxl-digest")
+    )
+    assert row["family"] == card["models"][0]["family"]
     # Named, because a LoRA named in the file is one the workflow loads and
     # there is no recipe to fill it. Null title and null icon are the state:
     # the shelf does not hold this file.

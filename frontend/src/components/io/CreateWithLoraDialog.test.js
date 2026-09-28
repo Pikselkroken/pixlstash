@@ -200,6 +200,142 @@ describe("CreateWithLoraDialog", () => {
     expect(runWorkflowCard).not.toHaveBeenCalled();
   });
 
+  it("lets the owner pick another loader, and pre-flights that choice", async () => {
+    getLoraChain.mockResolvedValue({
+      loaders: [
+        { node_id: "4", field: "lora_name", filename: "None", name: "None" },
+        {
+          node_id: "12",
+          field: "lora_name",
+          filename: "lightning.safetensors",
+          name: "lightning",
+        },
+      ],
+    });
+    const wrapper = await mountDialog({
+      entityType: "character",
+      entityId: 3,
+      name: "Example",
+    });
+    // The empty loader by default: nothing the workflow needs is swapped out.
+    expect(preflightWorkflowRun.mock.calls.at(-1)[0].loras[0].node_id).toBe(
+      "4",
+    );
+    expect(wrapper.text()).not.toContain("Replaces");
+    expect(wrapper.text()).toContain(
+      "Its other LoRA loaders run as the workflow stores them.",
+    );
+    const loaderRows = wrapper
+      .findAll('[role="radio"]')
+      .filter((r) => r.text().includes("lightning"));
+    await loaderRows[0].trigger("click");
+    await flushPromises();
+    expect(preflightWorkflowRun.mock.calls.at(-1)[0].loras[0].node_id).toBe(
+      "12",
+    );
+    expect(wrapper.text()).toContain("Replaces lightning in this run.");
+  });
+
+  it("puts the LoRA into every pass of a forked graph", async () => {
+    getLoraChain.mockResolvedValue({
+      loaders: [],
+      lanes: [
+        {
+          loaders: [
+            {
+              node_id: "5",
+              field: "lora_name",
+              filename: "None",
+              name: "None",
+            },
+          ],
+        },
+        {
+          loaders: [
+            {
+              node_id: "8",
+              field: "lora_name",
+              filename: "None",
+              name: "None",
+            },
+          ],
+        },
+      ],
+    });
+    const wrapper = await mountDialog({
+      entityType: "character",
+      entityId: 3,
+      name: "Example",
+    });
+    await runButton(wrapper).trigger("click");
+    await flushPromises();
+    const body = runWorkflowCard.mock.calls[0][0];
+    expect(body.loras.map((l) => l.node_id)).toEqual(["5", "8"]);
+  });
+
+  it("keeps the workflow's strength when its loader already holds this LoRA", async () => {
+    getLoraChain.mockResolvedValue({
+      loaders: [
+        {
+          node_id: "3",
+          field: "lora_name",
+          filename: LORA.filename,
+          name: "example-subject-v2",
+          strength: 0.7,
+        },
+      ],
+    });
+    const wrapper = await mountDialog({
+      entityType: "character",
+      entityId: 3,
+      name: "Example",
+    });
+    await runButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0].loras[0].strength_model).toBe(0.7);
+  });
+
+  it("blocks Run on a pre-flight 4xx and says why", async () => {
+    preflightWorkflowRun.mockRejectedValue({
+      response: {
+        status: 400,
+        data: { detail: "ComfyUI does not have that LoRA." },
+      },
+    });
+    const wrapper = await mountDialog({
+      entityType: "character",
+      entityId: 3,
+      name: "Example",
+    });
+    expect(wrapper.text()).toContain("This workflow cannot run");
+    await runButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(runWorkflowCard).not.toHaveBeenCalled();
+  });
+
+  it("lets a run through when the pre-flight could not be asked", async () => {
+    preflightWorkflowRun.mockRejectedValue(new Error("Network Error"));
+    const wrapper = await mountDialog({
+      entityType: "character",
+      entityId: 3,
+      name: "Example",
+    });
+    await runButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(runWorkflowCard).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a person's results go to their reference pictures", async () => {
+    const wrapper = await mountDialog({
+      entityType: "character",
+      entityId: 3,
+      name: "Example",
+    });
+    expect(wrapper.text()).toContain(
+      "Results go to Example's reference pictures.",
+    );
+  });
+
   it("says so when nothing is attached", async () => {
     listAdapters.mockResolvedValue([]);
     const wrapper = await mountDialog({
