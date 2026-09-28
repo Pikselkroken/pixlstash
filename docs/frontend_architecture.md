@@ -1815,7 +1815,11 @@ The Workflows grid, **on `/workflows`** (`WORKFLOW_ROUTES`,
 `/workflows-next` route. Owner-only, and bounced for a READ session by the same
 watcher the model shelf uses. See §13.2 for the destination itself. **One card
 per workflow** (#1623), keyed by the workflow's `id`; there are no stacks, no
-member rows and no panel.
+member rows and no panel. `StackPanel.vue`, the rail that listed a stack's
+member cards and their slot marks, was deleted with `useWorkflowPrefsStore`;
+merge and split on the selection pill (below) replace it, and a checkpoint or
+LoRA that used to be a member is a recipe value the workflow's pictures are
+filtered by.
 
 - **Toolbar**: Sort (Your ratings / Recently used / Picture count / Name) in the
   shipped `.tbm` popover, *Add…*, which is today's workflow import
@@ -1967,6 +1971,12 @@ member rows and no panel.
   it.
 
 #### `WorkflowTab.vue` + `WorkflowDefaultRow.vue` (`panels/`), v1.12 F3
+
+**The two tabs are the two layers** (#1620): *Workflow* is the workflow and
+its default recipe (models, LoRAs and parameter defaults), *Recipes* the
+recipes kept against it. Nothing in the rail names a card, a stack member or a
+slot mark; the design pass that shows recipe values against the workflow's
+defaults is a follow-up, so today each tab draws its own layer.
 
 The Workflows grid's right rail, mounted by `App.vue` on `/workflows` in place
 of `StatsSidebar`. Three `AppInspector` tabs — **Recipes | Workflow | Tasks**,
