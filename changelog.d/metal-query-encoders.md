@@ -1,4 +1,2 @@
-- Fixed crash bug when searching while PixlStash was
-  tagging or embedding in the background on macOS.
-- Fixed: on macOS, a tagging or captioning plugin that loaded its own model
-  could crash PixlStash as it started.
+- Fixed: on macOS, a third-party tagging or captioning plugin that loaded its
+  own model onto the GPU could crash PixlStash while the model loaded.

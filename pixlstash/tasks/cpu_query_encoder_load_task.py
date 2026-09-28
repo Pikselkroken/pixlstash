@@ -31,7 +31,7 @@ class CpuQueryEncoderLoadTask(BaseTask):
             to load.
     """
 
-    TASK_TYPE = "cpu_query_encoder_load"
+    TASK_TYPE = "CpuQueryEncoderLoadTask"
 
     def __init__(self, encoders) -> None:
         super().__init__(self.TASK_TYPE)

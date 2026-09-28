@@ -265,8 +265,16 @@ def test_an_explicit_cpu_choice_is_honoured_at_start_up(patch_runtime):
 
 @pytest.fixture
 def no_async_load_env(monkeypatch):
-    """Start each case with the variable unset, and never leak one to the next."""
-    monkeypatch.delenv(HF_ASYNC_LOAD_ENV, raising=False)
+    """Start each case with the variable unset, and never leak one to the next.
+
+    ``setenv`` first, so monkeypatch records the variable's original state -
+    absent, usually - and restores it at teardown. The code under test writes
+    ``os.environ`` directly, and a bare ``delenv`` of an absent variable records
+    nothing to undo, so the ``1`` it set would outlive the test and make every
+    later transformers load in the shard single-threaded.
+    """
+    monkeypatch.setenv(HF_ASYNC_LOAD_ENV, "unset-by-fixture")
+    monkeypatch.delenv(HF_ASYNC_LOAD_ENV)
     return monkeypatch
 
 

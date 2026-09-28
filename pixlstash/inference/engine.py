@@ -392,10 +392,6 @@ class InferenceEngine:
 
     def safe_idle_unload(self) -> None:
         """Release non-captioning models during idle periods."""
-        # If the owner chose memory over speed, let's unload it.
-        # The next search will queue a reload and wait for it.
-        if self.query_encoders is not None:
-            self.query_encoders.unload()
         self.lifecycle.safe_idle_unload(
             clip_service=self.clip_service,
             wd14_service=self.wd14_service,

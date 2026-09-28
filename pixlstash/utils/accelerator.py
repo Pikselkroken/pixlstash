@@ -586,7 +586,7 @@ def configure_metal_model_loading(torch_module: Any = _UNSET) -> bool:
             logger.warning(
                 "Apple Metal present, but %s=%r from the environment leaves "
                 "transformers loading model weights on several threads, which "
-                "can crash or hang on Metal."
+                "can crash or hang on Metal. "
                 "The value is kept; unset it or set it to 1.",
                 HF_ASYNC_LOAD_ENV,
                 existing,
