@@ -58,7 +58,13 @@ PixlStash is designed to be served from **one origin**: the FastAPI server hosts
 
 ---
 
-### 2.1 The `/dedup` contract (v1.9)
+### 2.1 The `/dedup` contract
+
+The contract is written in two places: this section holds the full route table
+and the rules the frontend leans on (including the stack-members route, which
+§19 only names), and [§19 Duplicates Queue API](#19-duplicates-queue-api) holds
+the per-route detail, including the mixed-stacks routes. Read both, and change
+both together.
 
 The duplicate queue was built by two lanes at once, so the agreement is written
 down rather than inferred from either side. The client half lives in
@@ -76,6 +82,10 @@ copy, reconciled against `routes/dedup.py` as shipped (2026-07-29).
 | `POST /dedup/verdicts/keep-separate` | the "different pictures" verdict | `VerdictResponse` |
 | `POST /dedup/verdicts/reopen` | un-resolve a group (clearing a stacked verdict also dissolves its stack) | `{ signature, previous_verdict, reopened_at, group_returned_to_queue, batch_id, unstacked_picture_ids }` |
 | `POST /dedup/auto-stack` | bulk-stack the exact tier, `dry_run` first | `{ batch_id, dry_run, groups, pictures, scope, dry_run_summary, results, failures }` |
+| `GET /dedup/mixed-stacks` | live stacks that do not hold together at the given threshold (§19) | `{ threshold, total, kept_total, live_stack_count, offset, limit, next_offset, stacks }` |
+| `POST /dedup/mixed-stacks/{stack_id}/split` | move the stranded members out of a mixed stack (§19) | `{ stack_id, split_picture_ids, remaining_picture_ids, stack_dissolved, batch_id }` |
+| `POST /dedup/mixed-stacks/{stack_id}/unstack` | dissolve a mixed stack (§19) | as split |
+| `POST` / `DELETE /dedup/mixed-stacks/{stack_id}/keep` | set / clear the durable Keep dismissal (§19) | `{ stack_id, dismissed, created, removed, membership_fingerprint, member_count }` |
 
 Shapes and rules the frontend depends on:
 
@@ -444,7 +454,7 @@ preview, the run and the ghosting. Five points where the wiring is load-bearing:
   optimistic local copy of a count only the server can compute, and an undo has
   no local grid op at all.
 
-### 2.2b One recipe read, and one graph read (v1.12, #1313)
+### 2.2b One recipe read, and one graph read (#1313)
 
 Two routes, and the split is by **question**, not by caller:
 
@@ -581,7 +591,7 @@ Rules neither side may drift from:
    by a set like any other but never offered, since the offer is worded in
    pictures and recipes.
 
-### 2.3 The `/workflows` contract (v1.11)
+### 2.3 The `/workflows` contract
 
 The Workflows view (implementation plan §F1/§F2, the v1.12 grid and its
 writes, and since #1623 one entry per WORKFLOW rather than per card: the card
@@ -1216,7 +1226,7 @@ the workflow the picture's own variant is in. `workflow_key` and
 
 ---
 
-### 2.3 The `/libraries` contract (v1.11)
+### 2.4 The `/libraries` contract
 
 Six routes, and the split between them is a locality split rather than a
 read/write one.
@@ -1710,7 +1720,7 @@ The **Segment** action runs Florence-2 object detection over the selected pictur
        "elements":[{"type":"obj","bbox":[y_min,x_min,y_max,x_max],"desc":"dog"}]}}
     ```
 
-### 11.2 Replaying a picture's recipe (v1.9; the popup is v1.12 F5)
+### 11.2 Replaying a picture's recipe
 
 A picture's own recipe can be run again through the shipped ComfyUI engine. It follows the WebSocket branch of the rule above: the dialog submits, closes, and the app-wide `ComfyUiRunner` owns progress; the output arrives as a normal `picture_imported` event and is inserted in place (§8).
 
@@ -1979,7 +1989,10 @@ flowchart TB
 
 The contract behind the sidebar **Duplicates** destination. Every route is
 `owner_only`; a share token gets 403 on all of them. Backend design is
-`docs/backend_architecture.md` §22.
+`docs/backend_architecture.md` §22. The full route table, and the rules the
+frontend leans on (including `GET /dedup/stacks/{stack_id}/members`, which this
+section only names), are in [§2.1](#21-the-dedup-contract); read both, and keep
+the two in step.
 
 **Two rules the client must hold to.** The queue is *paged*, never fetched whole
 (`GET /dedup/groups` returns `total` so a scrollbar can be sized without a second
