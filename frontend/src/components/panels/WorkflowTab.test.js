@@ -1197,7 +1197,7 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
       setWorkflowDefaultLora.mockResolvedValueOnce(withRecipe({ loras: [] }));
       await notice.action.handler();
       await flush(wrapper);
-      expect(setWorkflowDefaultLora).toHaveBeenLastCalledWith(KEY, { asset: BO, include: null });
+      expect(setWorkflowDefaultLora).toHaveBeenLastCalledWith(KEY, { sha256: BO_SHA, include: null });
       expect(wrapper.find(`[data-testid='wftab-fan-row-${BO}']`).exists()).toBe(true);
     });
 
@@ -1415,6 +1415,36 @@ describe("a default's provenance and reset", () => {
       card: { defaults: [{ ...STEPS, value: "30", provenance: "edited" }, CFG] },
     });
     wrapper.findComponent({ name: "WorkflowRecipesTab" }).vm.$emit("defaults-changed", KEY, written);
+    await tabButton("Workflow").trigger("click");
+    await flush(wrapper);
+    await rowNamed(wrapper, "cfg").find(".wfdef-reset").trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowDefaults).toHaveBeenLastCalledWith(KEY, [
+      { slot_label: "slot-a", input_name: "steps", value: "30" },
+    ]);
+  });
+
+  it("keeps the Recipes tab's answer over a detail read that lands after it", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    // A re-read (Retry, a reselect) goes out and is slow ...
+    let late;
+    getWorkflowCard.mockImplementationOnce(() => new Promise((resolve) => (late = resolve)));
+    const tabButton = (name) =>
+      wrapper.findAll("button").find((b) => b.text().trim() === name);
+    useWorkflowsStore().selectedKeys = [];
+    await flush(wrapper);
+    useWorkflowsStore().selectedKeys = [KEY];
+    await flush(wrapper);
+    await tabButton("Recipes").trigger("click");
+    await flush(wrapper);
+    // ... the Recipes tab writes, and its answer arrives first ...
+    const written = detail({
+      card: { defaults: [{ ...STEPS, value: "30", provenance: "edited" }, CFG] },
+    });
+    wrapper.findComponent({ name: "WorkflowRecipesTab" }).vm.$emit("defaults-changed", KEY, written);
+    // ... then the stale read lands.
+    late(detail({ card: { defaults: [STEPS, CFG] } }));
+    await flush(wrapper);
     await tabButton("Workflow").trigger("click");
     await flush(wrapper);
     await rowNamed(wrapper, "cfg").find(".wfdef-reset").trigger("click");

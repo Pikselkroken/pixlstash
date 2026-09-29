@@ -4555,6 +4555,62 @@ def test_a_lora_from_the_pile_goes_into_the_default_recipe_and_back(workflow_env
         ) == {"lora:" + _BO_DIGEST: "off"}
         owner.put(route, json={"asset": _BO, "include": None})
 
+        # An edit stays removable after its file leaves the shelf, by the
+        # digest the default recipe names it with.
+        owner.put(route, json={"asset": _BO, "include": True})
+        with server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (_BO_DIGEST,))
+        assert owner.put(route, json={"asset": _BO, "include": None}).status_code == 404
+        r = owner.put(route, json={"sha256": _BO_DIGEST, "include": None})
+        assert r.status_code == 200, r.text
+        assert not server.hub.fetchall(
+            "SELECT 1 FROM workflow_group_default WHERE workflow_id = ? "
+            "AND address LIKE 'lora:%'",
+            (FLIP_WF,),
+        )
+        # Adding names the LoRA by its asset; clearing needs one of the two.
+        assert (
+            owner.put(route, json={"sha256": _BO_DIGEST, "include": True}).status_code
+            == 422
+        )
+        assert owner.put(route, json={"include": None}).status_code == 422
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+                "VALUES ('adapter', 'unknown', 'character_bo.safetensors', ?, "
+                "'scanned')",
+                (_BO_DIGEST,),
+            )
+
+        # A LoRA edit whose digest the shelf holds only as a checkpoint is not
+        # named after the checkpoint: the default recipe names LoRA files.
+        ckpt = _h("bo-as-checkpoint")
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, sha256, provenance) "
+                "VALUES ('checkpoint', 'not_a_lora.safetensors', ?, 'scanned')",
+                (ckpt,),
+            )
+            conn.execute(
+                "INSERT INTO workflow_group_default (workflow_id, address, value) "
+                "VALUES (?, ?, '1.0')",
+                (FLIP_WF, "lora:" + ckpt),
+            )
+        (odd,) = [
+            lora
+            for lora in owner.get(f"{API}/workflows/{FLIP_WF}").json()["card"][
+                "default_recipe"
+            ]["loras"]
+            if lora["sha256"] == ckpt
+        ]
+        assert (odd["asset"], odd["filename"]) == ("", None)
+        with server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (ckpt,))
+            conn.execute(
+                "DELETE FROM workflow_group_default WHERE address = ?",
+                ("lora:" + ckpt,),
+            )
+
         # Two shelf files by that name: which one is a guess, so it is refused.
         with server.hub.transaction() as conn:
             conn.execute(

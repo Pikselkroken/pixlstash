@@ -134,6 +134,12 @@ describe("parameter values", () => {
     expect(segs("40", 40)).toEqual([]);
   });
 
+  it("never read blank or hex text as a number", () => {
+    expect(segs(" ", 0)).toEqual(["V  "]);
+    expect(segs("0x10", 16)).toEqual(["V 0x10"]);
+    expect(segs(" 40 ", 40)).toEqual([]);
+  });
+
   it("never read null or a boolean as a number", () => {
     expect(segs(null, 0)).toEqual(["V null"]);
     expect(segs(true, 1)).toEqual(["V on"]);

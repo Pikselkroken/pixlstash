@@ -1397,8 +1397,8 @@ def _shelf_asset(hub: HubDatabase, sha256: str) -> tuple[str, Optional[str]]:
     """
     rows = hub.fetchall(
         "SELECT DISTINCT filename FROM model WHERE lower(sha256) = ? "
-        "AND filename IS NOT NULL",
-        (sha256.lower(),),
+        "AND filename IS NOT NULL AND file_kind IN (?, ?)",
+        (sha256.lower(), FILE_ADAPTER, FILE_UNKNOWN),
     )
     if len(rows) != 1:
         return "", None

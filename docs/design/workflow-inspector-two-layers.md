@@ -66,11 +66,13 @@ counts and "Show N" links, never as structure.
   from `default_recipe` (models, LoRAs, stages), not from `lora-summary.shared`.
 - The pile stays as it is and gets renamed **ALSO USED**. It lists only the
   LoRAs that are **not** in the default recipe: `lora-summary.varying` minus
-  the default's LoRAs, worked out on the client. **The join key is the digest**
-  (`default_recipe.loras[].sha256` against the `asset:<sha256>` reference
-  `lora-summary` carries), never the filename, which is null for a forgotten
-  name. A LoRA appears once on the tab, either as a default row or in the pile,
-  never both.
+  the default's LoRAs, worked out on the client. **The join key is the
+  `asset` reference** (`default_recipe.loras[].asset` against the `asset:`
+  reference `lora-summary` carries; both hash the file's NAME), then the shelf
+  digest (`sha256` on both sides, the file's CONTENT) for one file loaded under
+  two names. The two hashes are never compared with each other, and never the
+  filename, which is null for a forgotten name. A LoRA appears once on the
+  tab, either as a default row or in the pile, never both.
 - A default LoRA that is not in every picture says so on its own row: "in 31 of
   40" (from `lora-summary` shared/varying `pictures`). A LoRA that is in every
   picture gets no count. Having no count means "all of them".
@@ -129,8 +131,8 @@ counts and "Show N" links, never as structure.
    only if it is already open. It never opens by itself; a closed rail gets the
    standard edge-tab nudge.
 2. The head and DEFAULT RECIPE render from the `GET /workflows/{id}` detail. The
-   pile renders from `lora-summary` when it arrives. If a default LoRA's digest
-   is in `varying`, that LoRA goes into its default row with an "in N of M"
+   pile renders from `lora-summary` when it arrives. If a default LoRA's asset
+   (or shelf digest) is in `varying`, that LoRA goes into its default row with an "in N of M"
    count and leaves the pile.
 3. The owner reads down the tab. The "in N of M" counts and "Yours" answer "why
    is this the default".

@@ -27,14 +27,13 @@ function strengthText(value) {
   return String(Number((Number.isFinite(number) ? number : 1).toFixed(2)));
 }
 
-/** A number or a numeric string: never null, a boolean or "" (Number makes those 0 or 1). */
+/** A plain decimal, as text: not "", " " or "0x10", which Number() also takes. */
+const DECIMAL_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+
+/** A number or a decimal string: never null, a boolean or blank (Number makes those 0 or 1). */
 function numeric(value) {
-  return (
-    value !== "" &&
-    value != null &&
-    typeof value !== "boolean" &&
-    Number.isFinite(Number(value))
-  );
+  if (typeof value === "number") return Number.isFinite(value);
+  return typeof value === "string" && DECIMAL_RE.test(value.trim());
 }
 
 function sameValue(a, b) {

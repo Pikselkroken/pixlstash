@@ -917,6 +917,30 @@ describe("WorkflowRecipesTab", () => {
     ]);
   });
 
+  it("reads the set once per write, and sends nothing for a value already so", async () => {
+    listSavedRecipes.mockResolvedValue([
+      recipe(1, "Rainy tram platform", { overrides: { "KSampler/steps": 40, "KSampler/cfg": 5 } }),
+    ]);
+    const wrapper = render();
+    await flushPromises();
+    await wrapper.find("[data-testid='wfrt-make-defaults']").trigger("click");
+    await flushPromises();
+    // Since the dialog opened, both became edits: Steps at 40 already.
+    getWorkflowCard.mockReset().mockImplementation(async () =>
+      detail(KEY, "Cinematic portrait", {
+        values: [
+          { label: "Steps", slot_label: "core:KSampler", input_name: "steps", value: 40, provenance: "edited" },
+          { label: "CFG", slot_label: "core:KSampler", input_name: "cfg", value: 5, provenance: "edited" },
+        ],
+      }),
+    );
+    await wrapper.findAll("button").find((el) => el.text().startsWith("Make 2 defaults")).trigger("click");
+    await flushPromises();
+    // One read: the Undo snapshot and the PUT come from the same one.
+    expect(getWorkflowCard).toHaveBeenCalledTimes(1);
+    expect(setWorkflowDefaults).not.toHaveBeenCalled();
+  });
+
   it("does not undo a taken value that was edited again since", async () => {
     listSavedRecipes.mockResolvedValue([
       recipe(1, "Rainy tram platform", { overrides: { "KSampler/steps": 40 } }),

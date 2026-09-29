@@ -127,6 +127,7 @@ from pixlstash.services import workflow_run_service as run_service
 from pixlstash.services.workflow_card_service import (
     BASE_MODEL_KINDS,
     BEST_SCORE,
+    EDITED,
     LORA_OFF,
     DefaultRecipe,
     read_grid,
@@ -858,9 +859,20 @@ class DefaultLoraEdit(BaseModel):
     drops the edit so its pictures decide again.
     """
 
-    asset: str = Field(pattern=r"^asset:[0-9a-f]{64}$")
+    asset: str | None = Field(None, pattern=r"^asset:[0-9a-f]{64}$")
     include: bool | None
     strength: float | None = Field(None, ge=-100, le=100)
+    # Clearing only: the edit's own digest, as `default_recipe.loras[].sha256`
+    # has it, which names an edit whose file has since left the shelf.
+    sha256: str | None = Field(None, pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _names_one_lora(self) -> "DefaultLoraEdit":
+        if self.include is not None and self.asset is None:
+            raise ValueError("Adding or excluding a LoRA names it by `asset`.")
+        if self.include is None and self.asset is None and self.sha256 is None:
+            raise ValueError("Clearing an edit names it by `asset` or `sha256`.")
+        return self
 
 
 # A model fix's slot kinds as its refusals say them.
@@ -3135,6 +3147,32 @@ def create_router(server) -> APIRouter:
             ),
             None,
         )
+        if payload.include is None:
+            # Dropping an edit needs no shelf: the edit names its own digest,
+            # so one stays removable after its file leaves the shelf.
+            recipe = workflow_defaults(hub, server.vault, workflow_id)
+            sha256 = next(
+                (
+                    lora.sha256
+                    for lora in (recipe.loras if recipe else [])
+                    if lora.provenance == EDITED
+                    and lora.sha256
+                    and (
+                        lora.sha256.lower() == payload.sha256
+                        if payload.sha256
+                        else lora.asset == payload.asset
+                    )
+                ),
+                None if payload.sha256 else (use.sha256 if use else None),
+            )
+            if sha256 is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="This workflow's default recipe has no edit for that LoRA.",
+                )
+            set_default_lora(hub, workflow_id, sha256, None)
+            _announce(request, [workflow_id], "changed")
+            return _read_detail(hub, workflow_id)
         if use is None:
             raise HTTPException(
                 status_code=404, detail="This workflow's pictures load no such LoRA."
@@ -3150,9 +3188,7 @@ def create_router(server) -> APIRouter:
                     else "Your model shelf cannot tell which LoRA file that is."
                 ),
             )
-        if payload.include is None:
-            value = None
-        elif not payload.include:
+        if not payload.include:
             value = LORA_OFF
         else:
             strength = payload.strength

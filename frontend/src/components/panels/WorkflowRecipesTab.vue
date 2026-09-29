@@ -887,20 +887,25 @@ async function editedNow(workflowId) {
  */
 async function writeDefaults(workflowId, changes, onlyWhere = null) {
   const edited = await editedNow(workflowId);
+  // The set as this write found it: what an Undo puts back, from the SAME
+  // read the PUT is built on, so no edit can land between the two unseen.
+  const before = new Map(edited);
   let changed = 0;
   for (const [key, row] of changes) {
     // `onlyWhere` (Undo): change an address only while it still holds the
     // value this tab left there; one edited since belongs to whoever did it.
     if (onlyWhere && !sameEdit(edited.get(key), onlyWhere.get(key))) continue;
+    // Already so: nothing to send for it.
+    if (sameEdit(edited.get(key), row)) continue;
     changed += 1;
     if (row) edited.set(key, row);
     else edited.delete(key);
   }
-  if (!changed) return 0;
+  if (!changed) return { changed, before };
   const body = await setWorkflowDefaults(workflowId, [...edited.values()]);
   if (details.value[workflowId]) details.value[workflowId] = { state: "ready", body };
   emit("defaults-changed", workflowId, body);
-  return changed;
+  return { changed, before };
 }
 
 /** Whether two edited rows (or their absence) hold one value. */
@@ -934,9 +939,8 @@ async function confirmMakeDefaults(rows) {
   job.busy = true;
   job.error = "";
   try {
-    const before = await editedNow(workflowId);
+    const { before } = await writeDefaults(workflowId, taken);
     previous = new Map([...taken.keys()].map((key) => [key, before.get(key) || null]));
-    await writeDefaults(workflowId, taken);
   } catch (err) {
     job.busy = false;
     job.error = errorMessage(err, "Could not change the defaults.");
@@ -955,8 +959,8 @@ async function confirmMakeDefaults(rows) {
       label: "Undo",
       handler: async () => {
         try {
-          const reverted = await writeDefaults(workflowId, previous, taken);
-          if (!reverted) {
+          const { changed } = await writeDefaults(workflowId, previous, taken);
+          if (!changed) {
             notices.push({
               level: "info",
               text: "Nothing to undo: those values have been changed since.",

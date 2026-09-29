@@ -1891,11 +1891,19 @@ const unpinnedDefaults = computed(() =>
  * from a stale copy and drop what it wrote.
  */
 function takeDefaults(workflowId, body) {
-  if (workflowId === selectedKey.value && body) detail.value = body;
+  if (workflowId === selectedKey.value && body) {
+    // Newer than any read still out: that read's answer is the set before.
+    detailRead += 1;
+    detail.value = body;
+  }
 }
+
+/** Which detail read is the latest; a write's answer also counts as one. */
+let detailRead = 0;
 
 /** Read one card's detail, and say which of the three states it is in. */
 async function loadDetail(key) {
+  const read = ++detailRead;
   detail.value = null;
   detailFailed.value = false;
   if (!key) {
@@ -1905,8 +1913,9 @@ async function loadDetail(key) {
   detailPending.value = true;
   try {
     const body = await getWorkflowCard(key);
-    // Another card may have been selected while this was on the wire.
-    if (selectedKey.value !== key) return;
+    // Another card may have been selected while this was on the wire, or a
+    // newer answer (the Recipes tab's write) already landed.
+    if (selectedKey.value !== key || read !== detailRead) return;
     detail.value = body;
     notesDraft.value = body.notes ?? "";
   } catch (err) {
@@ -2009,8 +2018,10 @@ function addLoraToDefault(row) {
                 });
                 return;
               }
+              // By the edit's own digest, which still names it if the file
+              // has left the shelf since.
               const undone = await setWorkflowDefaultLora(key, {
-                asset: row.asset,
+                sha256: still.sha256,
                 include: null,
               });
               if (stillOn(key)) detail.value = undone;

@@ -148,10 +148,12 @@ export async function setWorkflowDefaults(workflowId, defaults) {
  *
  * `asset` is the `asset:` reference `lora-summary` names it by; `include`
  * true adds it (at `strength`, else the strength its pictures used most),
- * false keeps it out, null drops the edit. Answers with the opened workflow.
+ * false keeps it out, null drops the edit. A drop may name the edit by its
+ * `sha256` instead, which still works after the file left the shelf.
+ * Answers with the opened workflow.
  *
  * @param {string} workflowId
- * @param {{asset: string, include: boolean|null, strength?: number}} edit
+ * @param {{asset?: string, sha256?: string, include: boolean|null, strength?: number}} edit
  */
 export async function setWorkflowDefaultLora(workflowId, edit) {
   return unwrap(
