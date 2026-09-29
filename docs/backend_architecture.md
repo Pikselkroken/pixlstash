@@ -762,10 +762,10 @@ Public guest scoring and shared-link endpoints.
 | PUT    | /api/v1/workflows/{workflow_id}/defaults                                      | workflows       | Set a workflow's parameter defaults                         |
 | POST   | /api/v1/workflows/{workflow_id}/duplicate                                     | workflows       | Duplicate a workflow                                        |
 | GET    | /api/v1/workflows/{workflow_id}/export                                        | workflows       | Export a workflow                                           |
+| POST   | /api/v1/workflows/{workflow_id}/fixed-copy                                    | workflows       | Save a workflow with this ComfyUI's repairs applied         |
 | GET    | /api/v1/workflows/{workflow_id}/graph                                         | workflows       | A workflow's runnable graph                                 |
 | PUT    | /api/v1/workflows/{workflow_id}/inputs                                        | workflows       | Set a workflow's picture inputs                             |
 | POST   | /api/v1/workflows/{workflow_id}/insert-lora-loader                            | workflows       | Add a LoRA loader to a workflow                             |
-| POST   | /api/v1/workflows/{workflow_id}/fixed-copy                                    | workflows       | Save a workflow with this ComfyUI's repairs applied         |
 | GET    | /api/v1/workflows/{workflow_id}/lora-chain                                    | workflows       | A workflow's LoRA chain                                     |
 | PUT    | /api/v1/workflows/{workflow_id}/lora-chain                                    | workflows       | Edit a workflow's LoRA chain                                |
 | GET    | /api/v1/workflows/{workflow_id}/lora-summary                                  | workflows       | The LoRAs of a workflow                                     |

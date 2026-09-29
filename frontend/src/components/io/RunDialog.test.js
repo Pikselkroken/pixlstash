@@ -1766,6 +1766,21 @@ describe("Create with LoRA", () => {
     expect(runWorkflowCard.mock.calls[0][0].destination.set_id).toBe(5);
   });
 
+  it("stops narrowing once the added LoRA is taken off the run", async () => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: SDXL, name: "SDXL portrait", type: "txt2img", models: model("sdxl") },
+        { id: KREA, name: "Krea portrait", type: "txt2img", models: model("krea2") },
+      ],
+    });
+    const wrapper = await mountRun(fromPerson);
+    expect(wrapper.vm.workflowOptions.map((o) => o.value)).toEqual([KREA]);
+    wrapper.vm.removeAddedLora(0);
+    await flushPromises();
+    expect(wrapper.vm.workflowOptions.map((o) => o.value)).toContain(SDXL);
+    expect(wrapper.text()).not.toContain("Not listed:");
+  });
+
   it("says so, and narrows nothing, when no LoRA is attached", async () => {
     listAdapters.mockResolvedValue([]);
     const wrapper = await mountRun(fromPerson);

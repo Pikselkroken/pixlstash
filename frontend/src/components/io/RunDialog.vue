@@ -1496,6 +1496,10 @@ const seedOptions = [
 const loraFits = computed(() => {
   if (!loraSource.value) return null;
   const sha = addedLoras.value[0]?.sha256;
+  // The owner took the LoRA off the run: nothing left to narrow for, so the
+  // picker offers every workflow rather than one base model the run no longer
+  // carries. (With nothing attached at all the fit still runs, to say so.)
+  if (!sha && attachedLoras.value.length) return null;
   const lora =
     attachedLoras.value.find((row) => row.sha256 === sha) ||
     adapters.value.find((row) => row.sha256 === sha) ||
