@@ -280,11 +280,7 @@ watch(
 
 <template>
   <div>
-    <SettingsSection
-      title="Model Memory"
-      desc="Keep models loaded in RAM/VRAM for faster processing. Turn off to unload models when idle and save memory."
-      first
-    >
+    <SettingsSection title="Model Memory" first>
       <v-switch
         v-model="keepModelsInMemory"
         color="primary"
@@ -379,7 +375,6 @@ watch(
     <SettingsSection
       v-if="!taggerLoading && pixlstashTagger"
       title="PixlStash Tagger Settings"
-      :desc="pixlstashTagger.description"
     >
       <TaggerPluginSettingsPanel
         :plugin="pixlstashTagger"
