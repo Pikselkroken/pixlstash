@@ -9942,6 +9942,20 @@ def test_a_clone_can_carry_a_chain_with_its_loras_removed(cloneable):
     assert written["3"]["inputs"]["model"] == ["1", 0]
     assert r.json()["loaders"] == []
 
+    # The same chain edit onto the files it already loads is still a change.
+    again = cloneable.owner.post(
+        f"{API}/workflows/{RUN_WF}/clone-with-models",
+        json={
+            "name": "Portrait without LoRAs",
+            "swaps": {_SHELF_FILENAME: _SHELF_FILENAME},
+            "loras": {"entries": []},
+        },
+    )
+    assert again.status_code == 201, again.text
+    kept = json.loads((cloneable.folder / again.json()["name"]).read_text())
+    assert kept["1"]["inputs"]["ckpt_name"] == _SHELF_FILENAME
+    assert "2" not in kept
+
 
 def test_a_clone_carrying_a_chain_needs_comfyui(cloneable):
     cloneable.monkeypatch.setattr(

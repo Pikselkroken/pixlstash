@@ -1238,6 +1238,19 @@ describe("Clone onto a workflow set", () => {
     });
   });
 
+  it("names the set a dropped LoRA was added for when the set changes", async () => {
+    const wrapper = await grid();
+    await openOn(wrapper);
+    await wrapper.findAll(".cos-tab")[1].trigger("click");
+    await wrapper.find('[data-testid="cos-set-hand:8"]').trigger("click");
+    await wrapper.findComponent({ name: "EditLorasDialog" }).vm.$emit("done", {
+      rows: [{ id: "new:1", name: "mara_chroma", isNew: true, sha256: "sha-m" }],
+      body: { entries: [{ node_id: null, sha256: "sha-m", strength: 1 }] },
+    });
+    await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
+    expect(wrapper.text()).toContain("Dropped mara_chroma, added for Chroma.");
+  });
+
   it("hands per-file picking to Clone with new models", async () => {
     readModelSwap.mockResolvedValue({
       slots: [],

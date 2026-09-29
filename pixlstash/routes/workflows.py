@@ -6946,6 +6946,7 @@ def create_router(server) -> APIRouter:
                 workflow_id,
                 error,
             )
+        chain_changed = False
         if body.loras is not None:
             if object_info is None:
                 raise HTTPException(
@@ -6961,13 +6962,14 @@ def create_router(server) -> APIRouter:
             plan = _chain_plan(
                 hub, graph, object_info, body.loras.entries, body.loras.lanes
             )
-            if plan["changes"]:
+            chain_changed = bool(plan["changes"])
+            if chain_changed:
                 try:
                     apply_lora_chain(graph, plan, object_info)
                 except LookupError as exc:
                     raise HTTPException(status_code=409, detail=str(exc)) from exc
         loaders, swapped, unswapped = _swap_files(graph, body.swaps, object_info)
-        if not swapped and not unswapped:
+        if not swapped and not unswapped and not chain_changed:
             raise HTTPException(
                 status_code=409,
                 detail=(
