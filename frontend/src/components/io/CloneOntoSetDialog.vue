@@ -686,6 +686,8 @@ async function clone() {
   cloning.value = true;
   cloneError.value = "";
   try {
+    // Never rejects: the store catches every failure, logs it and answers
+    // null with the reason in `store.error`, which the branch below shows.
     const answer = await store.cloneCardWithModels(props.workflowId, {
       name: name.value.trim(),
       swaps: chosen.value.plan.swaps,
