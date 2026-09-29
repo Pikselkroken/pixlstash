@@ -23,7 +23,7 @@
 10. [Services Layer](#10-services-layer)
 11. [Utility Modules](#11-utility-modules)
 12. [Alembic Migrations](#12-alembic-migrations)
-13. [Storage Architecture](#13-storage-architecture) — incl. [Image vault](#image-vault), [Database](#database), [Stored path containment (#776)](#stored-path-containment-776), [The shelf's five verbs (shelf plan F3)](#the-shelfs-five-verbs-shelf-plan-f3), [The built-in model folder: declared, never scanned](#the-built-in-model-folder-declared-never-scanned), [The other two roots: InsightFace packs and the HuggingFace cache](#the-other-two-roots-insightface-packs-and-the-huggingface-cache), [What a cached model is FOR: the feature classifier and model_capability](#what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [The managed model store (shelf plan B7)](#the-managed-model-store-shelf-plan-b7), [Add file: one loose model onto the shelf (shelf plan F6)](#add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [A trained model's previews: <stem>_samples/](#a-trained-models-previews-stem_samples), [Delete: models off the shelf and off the disk (#933)](#delete-models-off-the-shelf-and-off-the-disk-933), [Keep one copy: merging duplicate models (#1439)](#keep-one-copy-merging-duplicate-models-1439), [Hub and library identity](#hub-and-library-identity), [Vector storage](#vector-storage), [Caches](#caches), [The library layout](#the-library-layout)
+13. [Storage Architecture](#13-storage-architecture) — incl. [Image vault](#image-vault), [Database](#database), [Stored path containment (#776)](#stored-path-containment-776), [The model shelf](#the-model-shelf), [Hub and library identity](#hub-and-library-identity), [Vector storage](#vector-storage), [Caches](#caches), [The library layout](#the-library-layout)
 14. [Server Lifecycle](#14-server-lifecycle)
 15. [Frontend Integration](#15-frontend-integration)
 16. [Authentication & Authorization](#16-authentication--authorization)
@@ -35,6 +35,7 @@
 22. [Tiered Duplicate Detection](#22-tiered-duplicate-detection)
 23. [Opt-in telemetry](#23-opt-in-telemetry-the-install-id-and-the-consent-flags)
 24. [Folder structure: read, commit, layout and moves](#24-folder-structure-read-commit-layout-and-moves) — incl. [24.1 The folder-structure read](#241-the-folder-structure-read), [24.2 The folder-structure commit](#242-the-folder-structure-commit), [24.3 The library layout](#243-the-library-layout), [24.4 The layout and the move engine](#244-the-layout-and-the-move-engine), [24.5 Reconciling moves made outside PixlStash](#245-reconciling-moves-made-outside-pixlstash)
+25. [Model Shelf](#25-model-shelf) — incl. [25.1 The shelf's five verbs (shelf plan F3)](#251-the-shelfs-five-verbs-shelf-plan-f3), [25.2 The built-in model folder: declared, never scanned](#252-the-built-in-model-folder-declared-never-scanned), [25.3 The other two roots: InsightFace packs and the HuggingFace cache](#253-the-other-two-roots-insightface-packs-and-the-huggingface-cache), [25.4 What a cached model is FOR: the feature classifier and `model_capability`](#254-what-a-cached-model-is-for-the-feature-classifier-and-model_capability), [25.5 The managed model store (shelf plan B7)](#255-the-managed-model-store-shelf-plan-b7), [25.6 `Add file`: one loose model onto the shelf (shelf plan F6)](#256-add-file-one-loose-model-onto-the-shelf-shelf-plan-f6), [25.7 A trained model's previews: `<stem>_samples/`](#257-a-trained-models-previews-stem_samples), [25.8 `Delete`: models off the shelf and off the disk (#933)](#258-delete-models-off-the-shelf-and-off-the-disk-933), [25.9 `Keep one copy`: merging duplicate models (#1439)](#259-keep-one-copy-merging-duplicate-models-1439)
 
 ---
 
@@ -1980,1763 +1981,12 @@ the sentence above as covering them.
   `_validated_destination`, and contains every pack relpath with
   `resolve_path_within` against both roots before it removes a source tree.
 
-### The shelf's five verbs (shelf plan F3)
-
-**Five verbs, two new routes.** Assign was already `PUT /adapters/{sha256}/attachments`. Rename, Set base model and Set kind write one curated hub column each and differ in nothing else, so they share `PATCH /models`; Forget is `POST /models/forget`. Adding three routes that ran the same UPDATE with a different column name would have been three sets of guards to keep in step.
-
-**Addressed by `model.id`, never by hash.** A 24 GB checkpoint is listable the moment it is registered and stays `sha256 NULL` until `MissingCheckpointHashFinder` reads it, so a hash-addressed verb layer would leave the largest files on the shelf as the only ones that cannot be corrected. `model.id` is AUTOINCREMENT and never reissued.
-
-**`PATCH /models` writes only the fields the body carries**, using `model_fields_set` rather than a null check, so an explicit `null` is a *clear* (a wrong base model back to unset, which returns the row to the filter's "not set" bucket) while an absent field is untouched. That distinction is what lets one route carry three verbs without Set base model blanking the names in the selection.
-
-Three guards on it, none of them authz:
-
-- **`display_name` is refused for more than one id.** A name is a fact about one file; in bulk it would give every selected row the same one, and there is no undo.
-- **`file_kind` cannot be cleared, only corrected.** Every file is something and `unknown` is how the shelf says so; a null would leave a row neither list block matches.
-- **A correction the hub's own CHECK would reject is refused by name.** `model` carries `CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)` and the same for `kind`. Left to SQLite a violation surfaces as a 500 naming `CHECK constraint failed`, which tells the owner nothing about the file they picked. The guard decides on the **post-write** state (`changes.get(col, row[col])`), not on the body, because three different bodies reach the same violation and only one mentions `file_kind`: promoting an unhashed checkpoint; `{"kind": null}` on a row that is already an adapter, which names no `file_kind` at all; and `{"kind": null, "file_kind": "adapter"}`, which a guard reading the *stored* kind waves through. Both of the latter were 500s until the CSO review of #869 found them.
-
-**Forget is gated on the row's state, never on the size of the selection** (ruled 2026-08-10). A model is forgettable only when no copy of it is `present` **or `unreachable`**. The second is the one that matters: `unreachable` is the we-could-not-look state an unplugged NAS produces, and acting on it would let one call wipe the curation for a whole drive. A selection of one is therefore just a legal selection and needs no special case, and the confirmation stays at every size, because what makes it confirm is that curation cannot be reconstructed — as true of one row as of four hundred.
-
-**The gate and the DELETE are one critical section.** `HubDatabase.fetchall` takes and releases the hub lock per call, so reading the states through it left a window in which a background `ModelFolderScanner` could flip a row from `missing` back to `present` between the check and the delete, and the model would be forgotten anyway. Both `SELECT`s therefore run on the transaction's own connection inside `with hub.transaction()`. Small window, unrecoverable consequence, on the one shelf operation with no undo behind it — the wrong side of that trade, and found by the CSO review of #869. `tests/test_model_shelf_api.py::test_forget_reads_its_gate_inside_the_write_transaction` counts the reads that escape the transaction rather than trying to schedule the race.
-
-**Ids that fail the gate come back under `refused` with a reason rather than failing the call.** A selection is made against a list that may be seconds old, and failing the whole request because one file came back is the wrong answer to good news. That response *is* the receipt the shelf shows.
-
-**Vault attachments survive a forget, deliberately.** `adapter_attachment` lives in each library's vault keyed by the content hash, so the rows held by libraries that are not open are unreachable from here and deleting only the active library's half would be an arbitrary subset. Left in place they are invisible (every read joins hub to vault) and they re-link by content if the file ever returns — the same property that makes folder removal a tombstone. What Forget destroys is the hub-side curation: name, base model, kind, trigger words. That is the whole reason it is one of the two confirmations while folder removal is neither.
-
-**No undo, and no operation-log half.** The v1.9 operation log is vault-only and the shelf's rows are hub-side; the decision to span it was overturned on 2026-08-09 and reaffirmed 2026-08-10. Confirmation only where the prior state cannot be reconstructed: a bulk base-model overwrite and Forget.
-
-### The built-in model folder: declared, never scanned
-
-**PixlStash downloads engines for itself, so it declares what they are.** The
-shelf catalogues by *reading* — the scanner walks a folder, reads each
-`.safetensors` header and decides. That is right for a folder of LoRAs the owner
-assembled and wrong for our own engines: half of them are ONNX or `.pt`, which
-the scanner does not even yield (it walks `SHELF_MODEL_SUFFIXES`), and every one
-of them is a file we chose to fetch. `services/builtin_models.py` declares them
-and writes the rows; nothing is parsed and nothing is hashed, so a 339 MB tagger
-costs an existence check at start-up.
-
-**`file_kind = 'engine'`, with the role in `kind`.** `kind` already holds free
-text (`lora`, `lokr`) and already renders as the row's label, so `tagger` /
-`captioner` / `scorer` / `face` ride there and `file_kind` stays four values
-wide instead of growing one entry per role. No schema change: the `model` CHECK
-constraints bind only `adapter`. `kind` holds the **primary** label only; the
-full set lives in `model_capability` (below).
-
-**The scanner must skip these folders**, which is what `model_folder.owner`
-marks. It yields `SHELF_MODEL_SUFFIXES` only and sweeps whatever it did not see
-to `missing`, so pointed here it would mark the ONNX tagger and both `.pth`
-scorers missing on every pass. `POST /model-folders/{id}/rescan` answers `skipped` for
-them, as it already does for a `source` folder.
-
-**The filenames are restated rather than imported.** Every downloader names its
-files as module constants, but those modules import onnxruntime, torch, cv2 and
-PIL at module level and start-up must not pay that to learn two strings. The
-duplicate is pinned by `tests/test_builtin_models.py`, which imports the real
-constants where the cost is free. Drift is self-announcing rather than silent: a
-renamed file makes its declared row go `not_downloaded` *and* the real file
-appear in the unclaimed readout, which is a visible pair.
-
-**Protected, because they are ours.** `DELETE` on the folder answers 409 (the
-caller is authorized; what refuses is what the target is), and every verb refuses
-an engine row: renaming our own tagger would make the shelf lie about it,
-assigning one to a character means nothing, and forgetting one deletes a row the
-next start-up declares straight back. Forget reports `is_a_builtin_engine` as a
-**refusal reason** rather than raising, which is the shape that route already
-speaks — and the check runs *inside* the delete transaction, alongside the state
-gate, rather than as a route-level read that would break the one-critical-section
-invariant.
-
-**Declared-but-absent is normal, and it has its own word.**
-`sac+logos+ava1-l14-linearMSE.pth` is fetched only for the CLIP model that needs
-it, so about half of these are absent on any given machine. That is a state, not
-a warning — which is why `declare_folder` writes **`not_downloaded`** and never
-`missing`. `missing` is the *scanner's* word for a registered file that was in a
-readable folder and is not in it any more, and the shelf draws it as a fault
-(error rail, error glyph, "The file is not where it was"): a false alarm on a
-healthy machine, which is what #926 reported. Everything declared here is
-re-fetched the moment something needs it, so the softer word is also right for a
-file that WAS here and is gone. The **sweep** at the end of `declare_folder` is
-the one exception and still writes `missing`: a row the declaration no longer
-*names* — `antelopev2` deleted out of the InsightFace store, a repo dropped by
-`huggingface-cli delete-cache` — is gone rather than pending, because nothing
-will fetch it back.
-
-**Only ENOENT is "not downloaded".** `declare_builtin_models` `stat`s each
-engine, and a `FileNotFoundError` is the one absence that means *nobody has
-fetched this yet*. Any other `OSError` — a permission denial, an IO error, a
-mount that has gone strange — is us being unable to **look**, which is
-`unreachable`, and it is logged with the path and the error. Folding those into
-`not_downloaded` would hide a real filesystem fault behind a download glyph,
-which is the same false-reassurance failure in the other direction from the one
-#926 reported. `DeclaredEntry` therefore carries the resolved `state` rather
-than a `present` flag: only the caller knows which of the three its own root
-means, and the InsightFace and HuggingFace roots — both of which read a listing
-before declaring anything, and both of which bail out entirely if that listing
-fails — can only ever mean the other two.
-
-**The unclaimed readout.** `unclaimed_files()` reports what is present and *not*
-declared — on a measured machine, `best.pt` at 339 MB, which nothing in the tree
-references by name or by pattern. It is called "not claimed by anything in this
-build", never "orphaned": we know our own manifest, we do not know that a
-previous build, a plugin or the owner did not put it there. Same epistemics as
-`missing` (a fact) against `unreachable` (the absence of one), and the same
-doctrine — detection proposes, it never applies, so nothing here deletes.
-`hf_hub_download(local_dir=…)` leaves `.cache/huggingface` beside what it writes,
-at the top level and inside every subdirectory it fills; that is the tool's, and
-reporting it would train the reader to ignore the list.
-
-**And the readout is declared, which is what makes it reachable (#927).** It
-existed, it was right, and *nothing called it* — so the shelf listed the four
-engines and said nothing about the 339 MB sitting beside them: invisible, and
-therefore impossible to act on. `declare_builtin_models` now appends one entry
-per unclaimed file, and two choices carry the fix:
-
-- **`file_kind='unknown'`, never `engine`.** Every shelf verb refuses an engine
-  row (see *Protected, because they are ours* above), so a leftover declared as
-  ours would be visible and still untouchable — half a fix that reads like a
-  whole one. `unknown` is what the shelf already calls *Unclassified*, and it is
-  the honest reading of "present, and nothing in this build claims it".
-- **Weights only** (`builtin_models.MODEL_SUFFIXES`: `.safetensors .ckpt .pt
-  .pth .bin .onnx .gguf` — a different question from the scanner's
-  `SHELF_MODEL_SUFFIXES`, and wider, because this folder is where the other
-  formats land). Every hit is now a row rather than a line in a
-  log, and a shelf that also lists a label CSV and a revision sidecar is one
-  nobody reads closely enough to notice the `.pt`. Bytes are unaffected: the
-  folder's total is read off the disk, not summed from these rows.
-
-**A re-declaration `COALESCE`s rather than restates.** That is a no-op for an
-engine — each declares its kind, role and name, and `PATCH /models` refuses one
-anyway — and it is what stops every server start from resetting a name the owner
-typed onto the one row class here they may curate. `file_kind` needs the same
-care for a sharper reason (`DeclaredEntry.restated_file_kind`): a leftover enters
-with `sha256` NULL, so `CheckpointHashTask` picks it up, and a digest that is
-already registered **merges** the two `model` rows — this folder's `model_file`
-is repointed at the survivor, which is somebody's real adapter. Restating
-`unknown` onto it would drop that adapter out of `/adapters` for its own folder,
-over a second copy the owner happened to leave in the download folder.
-
-Deleting the *file* is not this change and not this module: that is #925.
-
-### The other two roots: InsightFace packs and the HuggingFace cache
-
-**The built-in folder was never the only place models land, and the other two
-were invisible.** InsightFace keeps face packs under `~/.insightface/models`;
-everything fetched through `huggingface_hub` goes to the HuggingFace cache. On a
-measured machine that is 0.9 GB and 116 GB against the built-in folder's 1.1 GB —
-so the shelf was showing the smallest of the three and the owner had no way to
-see where the disk had gone. `services/builtin_caches.py` declares both.
-
-**Declared, never scanned, for the reason above and one more.** The scanner
-yields `SHELF_MODEL_SUFFIXES` only: InsightFace holds ONNX and would list as
-*empty*,
-and the HuggingFace cache is content-addressed, with its 37 `.safetensors` behind
-`snapshots/` symlinks onto hashed blobs. A walk would read 116 GB to learn what
-the cache's own index already knows. Both therefore carry `owner`, which is the
-marker the scanner reads to skip a folder.
-
-**Discovered rather than restated, which inverts `builtin_models`.** That module
-declares filenames because it *chose* those downloads, and duplicating two
-strings beats importing onnxruntime at start-up. Neither reason survives here:
-the contents are whatever the owner and the tools put there, so a fixed list
-would be a guess that goes stale. InsightFace is one `listdir`; HuggingFace is
-`scan_cache_dir()`, which reads the cache's bookkeeping and measured **0.01 s
-against 116 GB and 26 repos**. Start-up cost is not the reason to avoid either.
-
-**InsightFace declares the union of what is on disk and what we provision.**
-Only `KNOWN_MODEL_PACKS` would hide the `antelopev2` and `buffalo_s` a real
-machine has; only what is on disk would drop a pack we provision that has not
-downloaded yet. Both, and an absent known pack lands `missing` — the same state
-as the ViT-L/14 scorer, and no more of a warning. The `.zip` InsightFace
-downloaded a pack from sits beside it and gets no row, the same judgement
-`TOOLING_DIRS` makes about `.cache`.
-
-**HuggingFace declares a repo, not a file.** A per-file listing would show the
-same weights once per revision and mean nothing; `repo_id` is the unit a person
-recognises and `size_on_disk` the number they came for.
-
-### What a cached model is FOR: the feature classifier and `model_capability`
-
-**A cached repo is labelled by the feature it powers, not by its file format and
-not by its ML task.** `repo_type` is `model` for all 26 repos on a real machine
-and therefore says nothing. `services/model_features.py` answers from four
-sources, in order, the first one that answers winning outright: repos our own
-downloaders name (a fact, not a guess); the shipped `KNOWN_BASE_MODELS` table;
-the snapshot's own `model_index.json` / `config.json`; and then **`other`**,
-which is the part that matters — a VAE, a T5 encoder and a BERT are components
-of somebody else's pipeline, and forcing one into a feature label would put a
-confident wrong word in the column a reader uses to decide what is safe to
-delete. `…ForConditionalGeneration` is the documented trap: it is the class of
-every vision-language captioner *and* of `T5ForConditionalGeneration`, so it
-only counts as a captioner when the config also describes a vision tower.
-
-**A model that serves several features appears under each, which needs a set.**
-`features_for_repo` returns an ordered tuple, and the shelf lists the model once
-per entry. Two worked examples, and both are the reason: Florence-2 is one set
-of weights driving `get_captions` *and* `detect_objects` (what `DetectionTask`
-runs), and the CLIP the embedder loads is both the search encoder and the
-aesthetic predictor's backbone — `ImageEmbeddingTask` runs one forward pass and
-uses the result twice. A single label answers "what breaks if I delete this"
-wrongly for exactly the rows a reader is deciding about, which is the question
-the column exists for.
-
-**The set lives in `model_capability(model_id, capability)`**, the same
-one-model-many-rows idiom as `model_file` and read the same way — one whole-page
-query grouped in Python (`fetch_capabilities`), never a join onto the row SELECT
-that would fan every model row out once per capability. `model.kind` is left
-alone and keeps the **first** entry: it is the adapter-algorithm column, it
-carries a CHECK that says so, and every existing reader was written against one
-string. Only declared engines carry capabilities; a scanned adapter has none,
-because its `kind` is an algorithm and an algorithm is not a capability.
-
-**It is a child of `model` with foreign keys ON**, so every site that deletes a
-`model` row deletes its capabilities first — `forget_models` and the
-`CHECKPOINT_HASH` merge (which carries them across to the survivor, since the
-two rows are the same bytes). A forgotten child here does not leak quietly; it
-**aborts the delete**. The same rule is why `_rebuild_model_with_kind_check`
-does not have to carry this table: its guard is false forever once the rebuild
-has run, and the `CREATE TABLE` follows it. A third child would have to join
-that dance.
-
-**No index on `capability`, deliberately.** The shelf facets and filters
-client-side over rows it has already fetched, so nothing asks SQL "which models
-can X". The declaration restates the set wholesale rather than diffing it — at
-most two rows, and the declaration is the authority, so a capability it no
-longer claims has to go or the model stays listed under a feature it stopped
-serving.
-
-**`provenance` stays `builtin` on every row here.** It is a claim about how the
-row was *written* — declared by PixlStash's registration rather than scanned out
-of a folder the owner assembled — and not a claim that PixlStash chose the
-model. It did not choose most of them. `external` would say the row came from a
-scan, which is the one thing that never happens to these folders.
-
-**The shared writer is `declare_folder`.** All three roots resolve their own
-entries — an engine is one `stat`, a pack is a directory sum, a repo is a number
-from an index — and hand `DeclaredEntry` rows to one writer. Only the writing was
-ever common, so only the writing is shared.
-
-**The shelf had to be taught to ask.** `GET /adapters` defaults to
-`file_kind=adapter`, and the frontend's `Show` panel had exactly three blocks —
-adapters, checkpoints, unclassified — none of which requested `engine`. So the
-backend had answered `file_kind=engine` since #876, this document claimed the
-engines were "on the shelf for completeness", and nothing on the shelf had ever
-displayed one. The fourth block (`filters.engines`, on by default) is what makes
-that sentence true. A row's block comes from `blockOf`, so engines refetch and
-are replaced independently of the other three.
-
-**`movable` describes the folder, and gains a fourth value.** It says how a
-folder moves, not whether a route to move it is built yet:
-
-| Value | Meaning | Folders |
-|---|---|---|
-| `per_item` | files move one at a time | a folder the owner assembled |
-| `root_only` | relocates as a whole | the managed store and the InsightFace packs (both have a route), our downloads (#905 still owes one) |
-| `external` | taken *from*, never written into | an ai-toolkit output root |
-| `fixed` | **cannot relocate at all** — another tool owns where it lives | the HuggingFace cache |
-
-`fixed` exists because `root_only` would be a lie about the cache. Its location
-is `HF_HOME`, read at import by a library shared with every other tool on the
-machine, so "moving" it is a restart and a re-download rather than a move — and
-the design requires that row to render with no drag handle and no Move, its one
-action being an explanation. A value the UI can read is what makes that possible
-without special-casing a path.
-
-**The move guard names both `root_only` and `fixed`.** Neither permits a
-per-item move out, so keying on one would leave the other open — which is
-precisely how renaming this vocabulary could silently drop the protection. The
-plan originally said `external` for these two roots; that would have overloaded
-a word already meaning "ai-toolkit output root" *and*, because the guard is
-keyed on values rather than on `owner`, would have removed the protection on the
-way past. Recorded here rather than in the plan because this is the shipped
-behaviour.
-
-**A declaration sweeps what it no longer names**, and these folders have nowhere
-else to get that. The scanner marks anything it did not see on a walk `missing`,
-and it skips these precisely because they carry an `owner` — so without a sweep
-in `declare_folder` a row here could never stop being `present`. It is a no-op
-for the built-in engines, whose entry set is a fixed tuple naming every row; it
-exists for the discovered roots, where `huggingface-cli delete-cache` drops a
-repo out of the index and a deleted pack drops out of the listing. The row left
-behind would otherwise claim its bytes forever, inflating the `present_bytes`
-the folder list reports. Predicate is `seen_at <` the run's own stamp, not `!=`,
-so a concurrent declaration cannot have its rows swept by this one.
-
-**Each root is declared independently at start-up**, so one unreadable root
-cannot cost the shelf the other two, and every failure is logged and swallowed:
-a machine that has never run face detection has no InsightFace directory, and one
-that has downloaded nothing through the library has no cache. Both are normal.
-
-**Where the folder is: one accessor, and a location that can be recorded (#905,
-closing #112).** `builtin_models.builtin_model_dir()` is the single answer, and
-the declaration, `inference/engine.py` and `tasks/image_embedding_task.py` all
-ask it. They used to each build `user_data_dir("pixlstash")/downloaded_models`
-for themselves — agreeing by convention, not by construction — which is exactly
-what made the folder immovable: relocate it and the shelf would have declared the
-new location while every downloader kept filling the old one and re-fetching what
-had just been moved away. Unifying them needed
-`ImageEmbeddingTask.AESTHETIC_MODELS` to stop resolving its paths at **import**
-time; the table now holds `filename` and `_aesthetic_config()` joins the folder at
-use time. `tests/test_builtin_models.py::test_no_module_builds_the_download_path_for_itself`
-is what stops a fourth caller reintroducing the convention.
-
-Resolution order, first hit wins:
-
-1. `PIXLSTASH_BUILTIN_MODEL_DIR` — for a deployment that mounts the folder
-   elsewhere without moving anything into it. It now redirects the folder
-   *whole*, downloads included, which is what makes it safe to name here; the
-   test suite no longer uses it (see below).
-2. the location a relocation recorded, in `downloaded_models.location` beside
-   the default;
-3. `user_data_dir("pixlstash")/downloaded_models`.
-
-**A record naming a folder that is not there is still obeyed, and said so once
-per start.** Obeyed, because the folder is normally on a drive and a drive may
-be away for an afternoon; the alternative was tried and withdrawn under review,
-since falling back to the default makes a vanished folder unrelocatable
-(`relocatable_identity` recognises it by path) and leaves two copies once it
-returns. Said, because the next download re-creates the recorded path and pulls
-~750 MB into it, and nothing anywhere used to mention that — which is what made
-one stale record an investigation rather than a `grep`.
-
-The line is `_warn_if_the_recorded_folder_looks_wrong`, called from
-`declare_builtin_models` at start-up. **Not from the accessor**, which was the
-second withdrawn attempt: `builtin_model_dir()` is read on every call and sits
-behind `relocatable_identity` on the per-row path of `GET /model-folders`, which
-the frontend polls every three seconds, so a line there is a flood and its
-`stat` is a syscall against a drive that may be gone.
-
-**Two symptoms, because either alone goes quiet.** "The recorded folder cannot
-be read" is what a start sees while the drive is away — but where the record
-merely went stale, the download that follows creates the path, so that symptom
-lasts one start. The second says the same thing from the other side and does not
-heal itself: **engines still in the default folder, which a relocation should
-have emptied**. Before the re-download that is a fetch about to be repeated;
-after it, two copies with the recorded folder still filling. It is checked
-whatever the recorded folder holds, for exactly that reason — stopping at "the
-recorded folder has something in it" would report the accident only inside the
-window its own download closes. Silent when the default is empty, which is a
-relocation that worked: the files went with it.
-
-It fires only for the folder **a relocation recorded**, matched against the
-record itself. Not "anything that is not the default": the owner who symlinked
-the default folder at their big drive and then relocated onto it has a default
-that *resolves to* the recorded location, so a path test goes quiet for the
-person who did the most to move their models. And not at all while
-`PIXLSTASH_BUILTIN_MODEL_DIR` is set, since that names the folder over the
-record's head — a volume that has not mounted yet is a first start, nothing was
-ever fetched, and "delete the pointer" would be advice that does nothing. The
-record is read by a quiet reader beside `_configured_model_dir()`, which reports
-its own failures and has already been called by the time the declaration runs.
-
-It reports what `stat` says rather than asserting the folder is missing, so a
-permission error reads as one. An unmounted mount point that still exists as an
-empty directory is indistinguishable from an empty folder and is not claimed.
-
-`declare_insightface_packs` says the **first** of those about a recorded pack
-root that cannot be listed, in place of the "normal on a machine that has not
-run face detection" it logs otherwise — which is exactly wrong for a machine
-that has a recorded root, since having one means it ran face detection. A root
-recorded back onto `~/.insightface` itself falls through to that ordinary line,
-because the remedy would name the directory it starts from.
-
-It deliberately does **not** say the second, and the asymmetry is the point:
-`downloaded_models` is PixlStash's alone, so engines still sitting in it can
-only mean a relocation that did not take. `~/.insightface` is the *library's*
-root, shared with every other InsightFace tool on the host — ComfyUI's face
-nodes among them — so packs under it are just as likely to be another tool's,
-and the two states are byte-identical on disk. A line claiming a failed
-relocation there would fire forever on an ordinary machine, and its remedy would
-tell the owner to abandon the packs they moved in favour of somebody else's
-directory. Where a claim cannot be told apart from an innocent state, the claim
-is not made.
-
-**The recorded location is a file, not a hub row**, because the folder is
-machine-global — one download serves every library and every server instance on
-the host — while a hub belongs to one deployment. In the hub, a second deployment
-on the same machine would keep downloading to the old place, which is the
-divergence the accessor exists to remove. Read on every call rather than cached,
-so a relocation applies to the next download instead of to the next restart.
-
-**Relocating it is `POST /model-folders/{id}/relocate`**, the managed store's
-route, gated by `managed_model_store.relocatable_identity()` — the one place that
-says which roots relocate, read by the route *and* reported to the client as
-`relocatable` on `GET /model-folders`. It has to be reported: the download folder
-carries the same `kind`, `owner` and `movable` as the InsightFace packs
-(`declare_folder` writes all three identically), so it is told apart by **path**,
-which no client can do. The folder adds two steps to the relocation's ending,
-both after the last file has landed and before the hub is told: its **companion**
-files are carried across (they are declared but have no `model_file` row, and an
-engine without its label set is a broken engine), and the new location is
-recorded. Order matters — a pointer written before the files arrived would send
-the next download to an empty folder.
-
-**Start-up declaration is off in the test suite** (`Server.DEFAULT_DECLARE_MODEL_ROOTS`).
-These roots are machine-global, so a `Server` on a temp config dir would otherwise
-describe whichever engines the developer's machine holds — `test_workers_api`
-caught that as `assert 3 == 0` on a runner with a warm cache. Pointing the
-accessor at a temp directory instead, which is how this was handled before, stopped
-being an option the moment the downloaders started reading it: a fresh temp
-directory means every engine is downloaded again on every shard, against the model
-cache CI restores. `tests/test_builtin_models.py` covers the declaration directly
-against a `tmp_path`.
-
-**Writing the recorded locations is off in the test suite too**, and by
-construction rather than by convention: the session-scoped autouse
-`sandbox_the_recorded_model_locations` in `tests/conftest.py` redirects
-`builtin_models._pointer_path` and `insightface_model_utils._pointer_path` into a
-session temp directory, leaving a test's own redirection of `_pixlstash_data_dir`
-untouched. Both records are machine-global and outlive the process that writes
-them, so a test that writes one has changed where the real PixlStash on that
-machine downloads its engines — which is not hypothetical: a record naming a
-finished run's `tmp_path` had every later start re-create the deleted directory
-and fetch ~750 MB of engines into it, silently, while the real ones sat in the
-default folder. Per-test redirection of the seam was the previous protection and
-it is the remembered kind: it lapses when a relocation's worker thread finishes
-after the redirection is undone, and it never existed for a module that did not
-think to add it. `test_no_test_can_name_the_machines_own_recorded_locations`
-fails if the fixture goes away.
-
-Two details of that fixture are load-bearing. The redirected name carries the
-**writing test's id**, so one test's record cannot change where a later test in
-the same shard downloads — one shared file would be a flake the sharder
-reshuffles between runs. And nothing is **restored** at the end: a relocation
-records its location from a daemon worker thread the suite leaves unjoined, so
-putting the original `_pointer_path` back would reopen the machine's file for
-exactly that write. The empty-sandbox assertion is a tripwire rather than a
-census — it sees a write made while no test had redirected the seam, and a late
-thread write that lands during a test which *has* redirected it goes to that
-test's `tmp_path` instead: safe, but unreported.
-
-The write that poisoned a real machine has **not** been reproduced, and nothing
-here should be read as naming it. What was found alongside the fixture is a
-shape that lets any of this escape a test: `test_relocate_is_owner_only_and_local_only`
-ended on a real `202` relocation it never awaited, so that job's ending ran
-inside whichever test came next. **A `202` from this route is awaited, always**,
-and `no_model_move_outlives_its_test` in `tests/conftest.py` fails any test that
-leaves a move running, suite-wide — which is why a module fixture may clear
-`model_moves._job` when it sets up but never when it tears down: an autouse
-fixture tears down last, so clearing it there hides the leak from the guard.
-
-**Note what that identity rests on.** The route decides whether it is relocating
-the download folder with `is_builtin_model_dir(folder["path"])`, which compares
-against `builtin_model_dir()` — the recorded location itself. Identity is
-therefore held in a mutable file rather than in the row, so a folder whose path
-comes to equal the recorded value inherits it, including the right to rewrite
-the record when relocated. That is worth closing; it is also the loose end of
-the investigation this fixture came from, which never established which process
-wrote the record it found.
-
-#### Relocating the InsightFace packs (#906)
-
-`root_only` said the packs relocate as a whole before anything could relocate
-them; #906 made the claim true, and deliberately after #902's vocabulary change
-rather than inside it, so a rename could not put face extraction in its blast
-radius. It landed after #905 and follows it deliberately: the two roots are the
-same kind of path and are now recorded, gated and reported the same way.
-
-**The root is a recorded location, not a config key.**
-`insightface_model_utils.insightface_root()` is the single answer, and all three
-callers ask it: the `auraface` download (`_pack_dir`), the shelf's declaration
-(`builtin_caches.insightface_models_dir`) and the `FaceAnalysis(name=…, root=…)`
-the face pipeline constructs. Resolution is the recorded root, else
-`~/.insightface`; read on every call, so a relocation applies to the next
-download rather than to the next restart.
-
-It is written to `insightface.location`, **beside the download folder's own
-pointer and resolved through the same `_pixlstash_data_dir()` seam**, for the
-reason #905 gives about `downloaded_models.location` and which applies here word
-for word: this path is machine-global — InsightFace has exactly one root per
-machine, and one set of packs serves every library and every server instance on
-it — while `server-config.json` and the hub each belong to one deployment. An
-earlier revision of this change put it in `server-config.json`; that would have
-meant a second PixlStash on the same machine kept downloading packs to the old
-place, which is precisely the divergence a single accessor exists to remove.
-`insightface_model_pack` stays in server-config because it is a *preference*
-about which pack to load, not a machine path.
-
-**There is deliberately no environment override**, unlike the download folder's.
-`PIXLSTASH_INSIGHTFACE_DIR` existed and named the *models* directory — one level
-below the root that is now recorded — so the two could disagree: the shelf would
-declare the override path while downloads and `FaceAnalysis` used the root, and a
-relocation identified by `insightface_models_dir()` would repoint the row at a
-directory the next start would not declare. Inert while nothing could relocate, a
-bug the moment something could. It had no callers in the product or the suite and
-was removed; `PIXLSTASH_BUILTIN_MODEL_DIR` is safe precisely because it redirects
-its folder *whole*.
-
-**The path names the root, not the folder.** `models` is InsightFace's own layout
-— the library joins it onto whatever root it is given — so the folder follows the
-root to `<path>/models`. Naming the folder directly would mean accepting only
-paths whose last component is `models`, which is a worse thing to ask of the
-owner than one documented sentence. It is the one asymmetry in the relocate
-route's contract and it lives entirely on the server: the dialog sends the path
-the owner picked, exactly as it does for the other two.
-
-**A pack is a directory, so this one does not go through `ModelMover`.** There is
-no per-file row to repoint and no `sha256` to verify a copy against — packs are
-declared from a listing, never hashed. `model_mover.move_directory` keeps the
-guarantee that matters instead: **copy under `.pixlstash-partial` → rename into
-place → then remove the source**, so a *complete* pack survives at one end or the
-other. That is the shape of the per-file ordering and it is load-bearing for a
-different reason — a half-populated `buffalo_l/` is worse than none at all,
-because the pipeline would start, find the directory and then fail on a model
-that is not in it. Same-filesystem is `os.rename` and copies nothing.
-
-**Everything around the work is the shared relocation.** `relocatable_identity`
-names it (so `GET /model-folders` reports `relocatable` for it without the client
-knowing why), `_start_job` gives it the machine-wide `SHELF_IO_LOCK` slot and the
-job clients poll, `_validated_destination` runs the same blocklist on the same
-input, and `_finish_relocation` promotes the destination and carries every pack
-row across — the `missing` tombstones included. Validation stays in the POST: an
-unusable destination, a pack that would overwrite one already at the target, a
-relpath escaping its folder, or a copy that would not fit are 4xx before a byte
-moves.
-
-**The pointer is written before the hub is told**, the download folder's order
-and correct here for the same reason: a root recorded before the packs arrived
-would send the next download into an empty directory. If that write fails the
-packs are already at the new root and a relocation is not undoable (the cancel
-ruling), so the hub is still told the truth and the lost durability is logged as
-an error naming the pointer and the repair. Interrupted halfway, the moved packs
-are at the new root, the rest are at the old one, and the recorded root still
-names the old one — so face extraction keeps working and re-running finishes the
-job (a pack whose source is gone is skipped, not failed).
-
-**What is still refused, and why the negatives are asserted.** Widening the route
-is the kind of change that quietly opens it to everything, so
-`tests/test_insightface_relocation.py` pins the refusals beside the acceptance:
-the HuggingFace cache (`fixed`, and `foreign`/`root_only`'s neighbour — it would
-be reachable if the route ever keyed on a column instead of on
-`relocatable_identity`), a folder the owner registered, and an unknown id. The
-per-item move guard in `ModelMover._plan_one` is untouched and still names both
-`root_only` and `fixed`.
-
-### The managed model store (shelf plan B7)
-
-**Exactly one `model_folder` row with `kind='managed'` always exists.** It is
-PixlStash's own model storage, the way the vault owns picture files, and it is
-created on first run by
-[`services/managed_model_store.py`](../pixlstash/services/managed_model_store.py)
-(`ensure_managed_folder`, called from `Server.__init__` right after the hub is
-bootstrapped). It is the default destination for a drop or an ai-toolkit import.
-
-- **Why `managed` rather than a seeded `user` folder.** With zero registered
-  folders there is nowhere to drop or import a model, so drag-in is impossible
-  on a fresh install. But a `user` folder is an *association the owner made*, and
-  one the owner is forbidden to dissolve is not an association — the honest
-  answer is a kind that means "PixlStash's own storage", which was already in the
-  enum and created by nothing. `user` and `foreign` folders may legitimately
-  number **zero**; that is a normal state (nothing catalogued in place) and gets
-  no error and no message.
-- **Where it goes: beside `hub.db`, under the config directory, not at a fixed
-  `user_data_dir` path.** Same reasoning as the hub itself (#168), and stronger
-  here: this is a directory files are *copied into and unlinked from*, so a fixed
-  platform path would have every test run and every alternate deployment writing
-  into the owner's real store. A default install therefore gets it under the
-  platform user directory anyway, because that is where the config dir is.
-- **Relocatable, never removable.** `DELETE /api/v1/model-folders/{folder_id}`
-  answers **409** for this row — not 403: the caller is fully authorized and the
-  request is well formed, and what refuses it is the state of the target. A 403
-  would send an operator hunting through the §16.3 tiers for a permission that
-  does not exist. `POST /api/v1/model-folders` accepts `user` and `source` only,
-  so a second managed row cannot be made over HTTP either. Both directions are
-  asserted (`tests/test_model_shelf_api.py`): the managed row is refused, an
-  ordinary `user` row is still forgotten — over-blocking would break the shelf's
-  only tombstone.
-- **`ensure_managed_folder` never overrules a relocation.** The row's `path` is
-  the authority, so a start after the owner has moved the store to another drive
-  returns the existing row untouched rather than re-pointing it at the config
-  dir and stranding every file. It is also idempotent, promotes a pre-existing
-  `user` row at the same path rather than failing the `UNIQUE(path)` insert, and
-  degrades to "no store registered" rather than refusing to boot when the
-  directory cannot be created.
-- **`movable='root_only'`, `owner='pixlstash'`.** Nothing enforces `movable`
-  today — the mover does not read it — so it describes what the folder is rather
-  than gating an operation. Whether the UI offers moving a single file *out* of
-  the store is a verb question and is not settled here.
-- This is also what settles the integration plan's §4.1 zero-copy claim: the
-  ComfyUI picker node registers **this one store**, not an enumeration of every
-  present folder across possibly-offline drives. The store is therefore designed
-  as a single directory and must not become several.
-
-### `Add file`: one loose model onto the shelf (shelf plan F6)
-
-`POST /api/v1/model-files`
-([`routes/model_files.py`](../pixlstash/routes/model_files.py)) is the path for a
-single adapter or checkpoint that is **not** part of a training run and does not
-deserve a registered folder of its own — the file downloaded into `~/Downloads`
-an hour ago. It copies that file into a folder the shelf catalogues (the managed
-store above, unless another is named) and registers it there, so the row is on
-the shelf when the call returns and the owner never has to rescan.
-
-- **A copy, never a move.** The source is the owner's own file in a directory
-  PixlStash did not create, so nothing here unlinks it. `delete_after_import`
-  exists precisely because removing a source is a decision, and it is one made
-  about a *registered* folder rather than about an arbitrary path. The ordering
-  is therefore the mover's with its last step removed: **copy → verify by
-  SHA-256 → register the row and commit.** Every interruption leaves either
-  nothing or an unregistered file in the store, never a row naming a file that
-  is not there — and it takes the same machine-wide `SHELF_IO_LOCK` slot as a
-  move, an import and forgetting a folder, so two writers cannot race for one
-  destination filename.
-- **It is the one shelf route that takes a host path in its body**, which the
-  import block beside it deliberately does not (a run is *named*, and the server
-  joins the name to a registered root). That cannot be avoided here: the whole
-  point is a file in a folder nobody registered. So the containment is on the
-  **write** — `resolve_path_within(destination.path, basename)`, which also
-  refuses a symlink standing at the destination name — and the read is bounded
-  instead: a regular file of a `SHELF_MODEL_SUFFIXES` suffix, and refused
-  outright when it already
-  sits inside a registered folder, because copying it would put a second copy of
-  a catalogued file into the store forever and a rescan is what the owner wants.
-  It is `LOCAL_OWNER_ONLY` for both halves at once (§16.3): it takes a path like
-  `POST /model-folders` and writes files like `POST /model-moves`.
-- **Registration reuses the scanner, not a second dialect of it.**
-  `ModelFolderScanner.register_file` runs the same `_describe` → `_write_batch`
-  path a walk uses, so an added file and a scanned one are one kind of row —
-  same header parse, same `ON CONFLICT(sha256)` join onto a model the shelf
-  already knows. It sweeps nothing: a walk marks every row it did not see
-  `missing`, and this looks at one name.
-- **The bytes are hashed once, on the way in.** `copy_and_digest` digests them
-  as it writes and `file_digest` reads the copy back to prove it matches, so the
-  digest is known *and verified* by the time the row is written;
-  `register_file(…, sha256=…)` passes it to `_describe` rather than letting the
-  scanner read the whole file a third time with the caller still waiting. A walk
-  has no such digest — it found a file it knows nothing about — and passes
-  `None`, which is the path that hashes. One consequence is deliberate: a
-  **checkpoint** added this way keeps its digest instead of the NULL a scan
-  leaves for `MissingCheckpointHashFinder`. That finder exists so nobody reads
-  24 GB just to hash it; here the read has already been paid for, and deferring
-  anyway would schedule a second one for nothing.
-  A file whose header will not parse is **not** left in the store: the copy is
-  discarded and the call is a 400, because the scanner would not have registered
-  it either and a file the shelf never lists is not what "added" means.
-
-### A trained model's previews: `<stem>_samples/`
-
-An ai-toolkit run is a directory of `.safetensors` **and** a `samples/` directory
-of the previews the trainer rendered at each step. One measured run was 1.9 GB of
-which `samples/` was 15 MB, so the provenance costs 0.8 % of the bytes and the
-import takes the whole run rather than only the weights
-([`services/run_importer.py`](../pixlstash/services/run_importer.py)).
-
-- **On disk in the destination folder, not in a hub store and not in a new
-  table.** One directory per imported checkpoint, named from that checkpoint's
-  own stem — `JimmyVehicle.safetensors` → `JimmyVehicle_samples/`,
-  `JimmyVehicle_0001500.safetensors` → `JimmyVehicle_0001500_samples/` — holding
-  ai-toolkit's own filenames unchanged. `model_mover.samples_relpath` is the one
-  place that name is derived; nothing else spells the suffix. The cost of this
-  choice is that a person opening the folder sees the previews too, which is
-  also the point: they survive PixlStash not being there.
-- **Which previews go where.** A sample goes to the checkpoint whose step it
-  names. The **bare final takes the highest sample step's** — it carries no step
-  of its own and it is the stack cover, so a rule that left it blank would make
-  the most visible row of a fresh import the only empty one. Importing that same
-  step as well copies its previews twice; that duplication is accepted.
-  `TrainingRun.samples_for` is the whole rule.
-- **Ordered inside the existing crash window, never widening it.** Per
-  checkpoint: after the `model`/`model_file` rows commit and **before**
-  `unlink_source`, so `delete_after_import` can never outrun the copy. That
-  ordering is the reason this was a data-loss fix rather than a feature: before
-  it, a source folder carrying `delete_after_import` destroyed the run's
-  previews outright.
-- **A failed copy is logged and non-fatal**, reported in the outcome's `detail`
-  with `sample_count: 0` while the checkpoint stays `imported`. Losing a preview
-  must not cost the weights. The copy is written to a `.pixlstash-partial`
-  directory and renamed into place, so a failure half-way leaves no
-  half-populated directory to be read as the whole set.
-- **A pre-existing `<stem>_samples/` refuses the whole batch**, in the same pass
-  as the filename collision and before the first byte. It is the sharper of the
-  two refusals: a checkpoint collision refuses a file the owner can see, while
-  merging into an existing directory would write into one they may have put
-  there. There is no undo for shelf operations.
-- **A move carries them** (`model_mover.carry_samples`, on both the same-drive
-  rename and the cross-drive copy paths, in the same position in the ordering
-  and under the same non-fatal rule), and their bytes are counted into
-  `require_space` — 15 MB per run is small against the weights and is not
-  nothing when the destination is nearly full.
-- **Read back over `GET /models/{model_id}/samples`** and its byte sibling
-  (§16.3, `local_owner_only`). Addressed by `model.id` rather than by sha256,
-  because a checkpoint nobody has hashed has no sha256 to be addressed by. Both
-  key on `is_sample_filename` rather than on "an image in a directory whose name
-  matched", so neither can be used to read the owner's own pictures back out of
-  a directory that merely sits at the derived name — the same test the delete
-  verb uses, and the reason all three verbs agree on what a sample is.
-- **Deleted with the model when the directory holds only previews** (see the
-  `Delete` section). The name is inferred, not recorded, so the contents are
-  what decide whether it is the model's.
-
-Deliberately not here: the shelf's Sample view, the sample/icon toggle and the
-promote-a-sample verb (the "Visual identity" ruling's card, which this makes
-buildable and stops at), and any persistence of `rank` or `config.yaml`.
-
-### `Delete`: models off the shelf and off the disk (#933)
-
-`POST /api/v1/model-files/delete`
-([`routes/model_files.py`](../pixlstash/routes/model_files.py)) is the shelf's
-only destructive verb, and it lives beside `Add file` because the two are one
-authority — a file in a registered folder, written or unlinked. Before it, the
-shelf could rename a model, move it and forget a row whose file was *already*
-gone, but the only way to actually delete the 6 GB checkpoint the owner no
-longer wants was a file manager and then a rescan.
-
-- **The trash is the default and the undo.** `permanent=false` hands each path
-  to `send2trash`, so the OS keeps the bytes recoverable by the mechanism the
-  owner already knows; `permanent=true` unlinks, and there is no undo, no
-  operation-log half and no scrapheap behind it (the shelf-wide ruling of
-  2026-08-09 stands). The frontend sends `true` only for Shift+Delete, the
-  Windows-Explorer gesture. A machine with no trash we can reach — a container —
-  refuses with `trash_unavailable` rather than quietly unlinking instead, which
-  is the one substitution that could not be taken back. **Two honest limits on "the trash is the
-  undo":** Windows deletes outright anything larger than the Recycle Bin's
-  per-volume quota, which a multi-GB checkpoint routinely is, and a
-  freedesktop trash lives on the same volume as the file — so trashing frees no
-  space until the trash itself is emptied. The confirmation says the first out
-  loud; neither is something PixlStash can fix from here.
-- **Only the folders whose contents are the owner's.** `user`, and the
-  `managed` store PixlStash keeps for files it was *given* — which is where
-  `Add file` and an import land, so a shelf that could not delete from it could
-  not undo either of them. Everything else is refused whole: the engines
-  PixlStash re-declares on every start, the InsightFace packs, and the
-  HuggingFace cache, which is a symlink store shared with every other tool on
-  the machine. That is the line `model_mover._plan_one` draws for a move, drawn
-  here by `kind` rather than by `movable` because the managed store is
-  `root_only` — the *folder* moves as a unit — while the files in it are
-  individually the owner's.
-- **A directory of nothing but previews goes with the model; anything else
-  stays.** An imported checkpoint carries a `<stem>_samples/` directory beside
-  it, and the delete closes the lifecycle the import opens and a move carries:
-  skipping it leaves a directory no route lists and no rescan registers, and one
-  that then refuses the owner's *whole* re-import of that run, with the only
-  remedy outside the app. But **the model is a thing the caller named and this
-  directory is only inferred from its filename**, so removing it on the name
-  alone would destroy an owner's own folder of renders on a Shift+Delete they
-  meant for a `.safetensors`. What licenses it is the contents: ai-toolkit names
-  every preview `<timestamp>__<step>_<index>`, so a directory holding only those
-  is the model's whoever wrote them, and one file that is not — a favourite
-  render, a note, a subdirectory, a symlink — means it is the owner's and stays.
-  That is the same test `GET /models/{id}/samples` uses to decide what to list,
-  so all three verbs agree on what a sample is.
-
-  Deliberately **not** keyed on `model.provenance`. That is a fact about
-  *content* — one value shared by every copy of a model — while the risk is per
-  *copy*: a trained model with a second copy a rescan registered elsewhere would
-  have taken that folder with it, and an import onto an existing sha256 leaves
-  the row `external` (`_register`'s `ON CONFLICT` deliberately does not overwrite
-  provenance) while still writing the previews, so the gate would have been wrong
-  in both directions. Both were found by adversarial review of a draft that used
-  it.
-
-  Unlike the file it is **non-fatal**: the weights are what was asked for, so
-  previews that will not go are a warning and some occupied disk rather than a
-  failed deletion, and they are removed *after* the file for the same reason.
-  Both gestures remove it, by the call each uses — `send2trash` for the trash,
-  `shutil.rmtree` for a permanent delete — and a symlinked directory is refused
-  explicitly rather than left to whichever of those two happens to decline it.
-- **A model is deleted whole or not at all.** Every copy goes, so a model with
-  one copy in a user folder and another in the cache is refused rather than
-  half-deleted: unlinking the reachable half would leave the row the owner
-  wanted gone still on the shelf, rebuilt by the next scan. `unreachable` is
-  refused for the reason Forget refuses it — an unplugged drive is not a
-  deletion — and `missing` is not a refusal at all: there is nothing to unlink
-  and the row is exactly what was asked for.
-- **Bytes first, rows second, per model.** The unlink runs before
-  `purge_deleted_models` drops the rows, so an interruption leaves a row naming
-  a file that is not there — which the next scan marks `missing` — rather than a
-  file nothing on the shelf can see, which is the tombstone invariant the
-  mover's ordering exists to protect, read in the other direction. A model whose
-  unlink fails keeps its rows; the refusal distinguishes `delete_failed`
-  (nothing went) from **`partly_deleted`** (some copies went and one did not),
-  because "could not be deleted" over a model that has already lost half its
-  copies is the one sentence this route must not produce.
-- **The gate reads share one transaction, and the purge has a gate of its own.**
-  `forget_models` documents why the first is necessary: two `hub.fetchall` calls
-  take and release the hub lock between them, so a background
-  `ModelFolderScanner` can rewrite the states being gated on. The unlink cannot
-  run inside that transaction — a 24 GB file would hold the hub's write lock for
-  the length of a disk operation — so the remaining window is closed on the
-  other side: `purge_deleted_models` deletes the location rows this call emptied
-  and then drops a `model` row **only when no location row for it survives**. A
-  copy the scanner registered while the files were going therefore keeps its
-  model alive instead of being purged out from under a file that is really
-  there, and the route logs the difference.
-- **The link, never what the link points at.** Containment here is *not*
-  `resolve_path_within`, which returns a `realpath`: unlinking that would delete
-  the bytes a symlinked model points at and leave the link, gutting any other
-  row naming those bytes. A symlinked model is ordinary practice on this shelf
-  (`_present_copy` contains lexically for exactly that reason), so
-  `_contained_path` contains the file lexically and `realpath`s the *directory*
-  holding it — a `..` cannot escape, a symlinked directory component cannot
-  redirect the unlink out of the folder, and what is removed is the name the
-  shelf catalogues. A row that still escapes is refused as
-  `escapes_its_folder`: a broken row, never a request to unlink somebody's file
-  elsewhere on the disk.
-- **It holds the machine-wide `SHELF_IO_LOCK`** for the whole call, the same
-  slot an add, a move, an import and — since #1017 — forgetting a folder take,
-  so nothing can be copying into a folder this is emptying.
-- Authorization is `LOCAL_OWNER_ONLY` (§16.3). It takes no host path — the body
-  is a list of hub `model.id` — so it is on that tier for the destruction
-  alone, which is the unlink half of `POST /model-moves` without the copy that
-  justifies it.
-
-### `Keep one copy`: merging duplicate models (#1439)
-
-`POST /api/v1/model-files/merge`
-([`routes/model_files.py`](../pixlstash/routes/model_files.py)) is the per-copy
-delete. The shelf has always *shown* duplicates — one `model` row per SHA-256
-with several `model_file` rows, `Show → Copies → Only duplicates`, a `copies`
-count on the row — and the only verb that acted on one removed **every** copy
-and then the row. This keeps the copy the caller names and removes the rest.
-
-The design is **resolve at use, do not rewrite on delete**, and every rule below
-follows from it.
-
-- **One file under two names is refused, not merged.** Two `model_file` rows are
-  one `model` row whenever the bytes match — and a symlink or a hard link makes
-  them match *because they are the same file*. A symlinked model is ordinary
-  practice on this shelf (`_present_copy` contains lexically for exactly that
-  reason), and `_contained_path` unlinks the link rather than its target on
-  purpose, which is right for the whole-model delete because every copy goes
-  anyway and exactly inverted here: keep the link, remove the target, and the
-  bytes are gone while the shelf still calls the keeper `present`. `_same_file`
-  asks `os.path.samefile` — `st_dev`/`st_ino`, so a hard link counts too — and
-  the model is refused as `keeper_is_that_copy`. A path it cannot stat answers
-  "the same", because that is the answer that removes nothing.
-- **The keeper is what the request names**, one entry per model, and every other
-  `present` copy of that model is what goes. Two entries for one model is a 400
-  rather than a choice made on a confused client's behalf. That is structural, not arithmetic:
-  no body can empty a model, and one that names a keeper the shelf does not hold
-  as `present` is refused (`keeper_not_present`) rather than acted on — removing
-  every other copy on the word of one that is not there is a 20 GB redownload.
-- **No row is deleted.** The removed copies keep their `model_file` rows at
-  `state = 'removed'`, so the record of *which files were the same model*
-  outlives the files. Two existing readers then need no change at all:
-  `recipe_asset_index` still resolves the removed copy's filename to this model,
-  so a picture's recipe panel still names it, and `_shelf_model_names` still
-  counts it, so `model_ghost_names` does not offer the owner a name to forget
-  forever. The third reader is new — `model_name_aliases`, which is what says
-  *what to load instead*. This is the whole reason the delete stops being the
-  thing you have to be right about.
-- **`removed` is its own state, and every sweep that writes `state` skips it.**
-  Four of them: the scanner's missing sweep, its two unreachable sweeps, and
-  `builtin_models.declare_folder`'s, which runs on every start and matters here
-  because `deletes_unclaimed_files` lets the merge act on the unclaimed files in
-  PixlStash's own download folder — one of the roots that function declares. `missing` is
-  the scanner saying "I looked and the file was gone", and it would keep saying
-  it about this copy for the rest of the folder's life — so without the
-  exclusion the first unattended scan — or the next boot — after a merge destroys
-  the distinction. `_known_files` reads `present` rows only, so a file the owner
-  puts back is re-read and re-registered rather than skipped.
-- **Only the copies being REMOVED need a folder whose contents are the owner's.**
-  That is the one place this differs from the whole-model delete, which refuses a
-  model that has *any* copy outside `user`/`managed`. Keeping the copy in the
-  shared HuggingFace cache and removing one from a user folder is a legitimate
-  merge; the reverse is not ours to do. Everything else is the delete's gate
-  verbatim, including the refusal of a model with an `unreachable` copy (an
-  unplugged drive is not a deletion, and the shelf cannot know whether the copy
-  on it is one of the two being reduced to one), `_contained_path` containment,
-  the same `trash_unavailable`/`partly_deleted`/`delete_failed` reporting, and the
-  same `SHELF_IO_LOCK` slot — which the ComfyUI read is deliberately **outside**,
-  because a 15 s-per-phase HTTP call inside it refuses every move, import, add and
-  delete on the machine for the duration, with a sentence about a move that is not
-  running.
-- **A `<stem>_samples/` directory does NOT go with the copy**, which is the one
-  step of the delete this route drops. That call is licensed by the model going
-  with its previews — the directory is then an orphan no route lists, and one that
-  refuses the owner's whole re-import of that run. Here the model survives, so a
-  run's previews are still the previews of a model on the shelf; and the copy
-  carrying them is usually the *imported* one, which is exactly the copy somebody
-  tidying a folder removes. Destroying them would be a loss the gesture never
-  asked for, and `permanent=true` would `rmtree` them. The cost is the re-import
-  refusal the delete avoids, which is visible and recoverable by hand; this is
-  not. `_warn_about_samples` logs the directory it left, so a refusal days later
-  is traceable to the merge.
-- **A partial failure records the copies that did go.** They are gone either way,
-  and leaving them `present` would draw the owner a broken row for a file they
-  successfully removed — and lose, for exactly the copies that were destroyed, the
-  record the whole design rests on.
-- **`dry_run=true` plans it and removes nothing**, through the same planner. It
-  exists so the client's confirmation is built on the server's own answer rather
-  than a second implementation of these gates — and above all so the ComfyUI
-  warning arrives before the bytes go.
-- **The warning is asked of ComfyUI, not of the filesystem.** PixlStash holds a
-  ComfyUI **URL** and no path into that install's `models/` tree, so
-  `comfyui_reads` is built from the combo lists it publishes
-  (`advertised_model_names`), matching each doomed copy by relpath and by
-  basename. It carries `keeper_advertised`, because the two cases need different
-  sentences: with the keeper advertised a run **through PixlStash** is put on it
-  and only a graph queued inside ComfyUI breaks, and without it nothing can be
-  substituted there at all. An unset URL or an unreachable ComfyUI warns about
-  nothing, and the client says that the absence of a warning is not a promise.
-
-#### Filling a card's picture inputs (#1457)
-
-`POST /workflows/run` fills a card's picture inputs itself; there is no other run
-route since #1410. The pieces, all called from `_plan` / `_submit_every` in
-[`routes/workflows.py`](../pixlstash/routes/workflows.py):
-
-- **Addressed the way the card stores them**, `(slot_label, input_name)` in
-  `workflow_key_picture_input`, never by node id.
-  `workflow_inputs.card_input_modes` enumerates the inputs from the resolved
-  graph (`detect_workflow_io`), labels them with `topology_node_labels` - the
-  bridge `_apply_addressed` uses for parameter values - and lays the stored rows
-  over them through `resolve_input_modes`, so the defaulting rule (one
-  `selection`, the rest `picker`) is stated once. **Two loaders feeding one node
-  get the same topology label**, because a label does not see which input of its
-  neighbour it feeds; that is the ordinary subject-plus-reference shape, so
-  colliding picture inputs get a suffix digesting the `(consumer label, input,
-  slot)` edges they feed. Still node-id free, so a card's three source tiers
-  agree. Loaders identical even on that share one address, which fills both.
-  **A linked file with `pixlstash_bindings` keeps them**: the sanitised graph
-  has lost the key, so `Source.bindings` carries it, and only inputs an `image`
-  binding names are addressable - `[]` is a file the old import dialog stored
-  taking no picture, and detection must not opt it back in.
-- **Resolution is `workflow_inputs.resolve_fills`**, first answer wins: the
-  body's `inputs` entry (`picture_id: null` sends the selection there), a
-  `fixed` pin whose `pixel_sha` a kept picture still holds (the **oldest** kept
-  copy, `oldest_kept_by_pixel_sha`, so importing a duplicate never moves it), a
-  stored `selection` when the body has pictures and has not sent them elsewhere,
-  and then - decided over the whole card, after the rest - the one input still
-  open when exactly one is, which the selection fills unasked. A dead pin does not
-  resolve its input. That rule is what lets a two-input card with a pinned
-  reference, and "Make more like these", run with no `inputs` at all.
-- **An open input refuses only when the graph cannot run it.**
-  `picture_input_unfilled` (it replaced `fixed_input_deleted`) names the open
-  inputs whose own value is empty or in the pre-flight's `missing_input_images`,
-  and those a fill could not be written into (`workflow_bindings.picture_target`
-  is `None`). An open `LoadImage` naming a mask the owner keeps in ComfyUI's input
-  folder runs as it always did - `judge` never read image widgets. It blocks the
-  group, not the batch.
-- **Order.** Inputs are enumerated before anything rewires the graph (#1463's
-  LoRA bypass changes the topology the labels come from, and keeps every other
-  node id), filled after `judge` on the graph that is submitted. Every refusal is
-  decided in `_plan`; `_upload_files` resolves every picture a submission feeds
-  (kept, file on disk) there too, so a binned picture is a 404 before anything is
-  uploaded. `_submit_every` then uploads each distinct picture **once per
-  request**, all of them before the first submission, named
-  `pixlstash-{library}-{id}-{pixel_sha}{ext}` because ComfyUI's upload
-  overwrites by name: the library prefix because one ComfyUI may serve two, and
-  the content because ids are reused. A picture not hashed yet uses its file's
-  mtime and size in place of the `pixel_sha`. `picture_id: null` on a run with
-  no selection is a 400, and an id past SQLite's INTEGER range a 422.
-  The pre-flight shares `_plan` and never reaches `_submit_every`, so it uploads
-  nothing by construction.
-- **A selection feeding an input is the repeat axis.** The group runs once per
-  selected picture, times `count`, and the `MAX_RUNS_PER_REQUEST` cap counts
-  that product. Each submission makes one picture: `pin_batch_size` sets every
-  latent `batch_size` (`is_picture_batch`, decided by the node's `LATENT`
-  output) to a literal 1, cutting a wired one, in `_plan` after the values. With
-  `stack: true` each pass stacks with its own picture (`stack_for_picture`), and
-  every save node's own `filename_prefix` is tagged with that stack and source
-  (`_tag_for_stack`), so an output a watched folder imports first still lands
-  there. That tagging applies to any stacked run, a card with no picture inputs
-  included, as the retired run route did.
-- **The read rides on the pre-flight.** `RunGroup.picture_inputs` is every input
-  with its mode, pin, `picture_id`, `picture_missing` and how this run fills it
-  (`fill`): the whole set, which is what makes the whole-set
-  `PUT /workflows/{workflow_id}/inputs` safe to call after it. The PUT also takes a pin
-  as `picture_id` and stores that picture's `pixel_sha`; a picture that is not
-  kept is a 400. A graph that will not reduce has no addressable inputs: it runs
-  as before, and is a 400 only when the body named an input.
-
-#### Resolving a model reference at submit
-
-`detect_model_targets`/`apply_model_swap`
-([`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py))
-are the detect-then-patch pair `detect_seed_targets`/`apply_seeds` and
-`detect_lora_targets`/`apply_adapter` already are, and they are wired into
-`_plan` in [`routes/workflows.py`](../pixlstash/routes/workflows.py) — one site,
-so `POST /workflows/run/preflight` and `POST /workflows/run` can never disagree.
-
-- **Detect is `preflight_prompt`'s `missing_models` and nothing else**, which is
-  the point: a swap aimed anywhere else would patch a field ComfyUI was happy
-  with or leave one it will refuse.
-- **Applied before `judge`**, so the graph that is verified is the graph that is
-  submitted. Applied after it, the substitution would be one nothing checked and
-  the owner would be shown a missing model they cannot find.
-- **Every candidate is verified against `object_info` before it is written.** A
-  swap PixlStash believes in and ComfyUI does not advertise only moves the
-  failure to the queue. This is why `model_name_aliases` may be generous — it
-  offers each present copy's relpath *and* its basename, because a combo entry is
-  relative to one of ComfyUI's own model folders and nothing on this side knows
-  which prefix it puts in front — and the combo list decides. **Its keys are
-  folded and its candidates are not.** The key is `normalized_filename`, which
-  lowercases, so `apply_model_swap` folds its lookup the same way (`_alias_key`)
-  or the whole feature misses every mixed-case filename, which is most real ones;
-  the candidates are the scanner's own spelling, because ComfyUI compares exactly
-  and a lowercased candidate is one it would refuse.
-- **Same model, therefore same bytes.** The aliases come from one `model` row's
-  copies, and the hub is content-addressed. A name two models share is dropped
-  rather than resolved, the rule `picture_recipe_service` already applies: it
-  names neither, and a coin flip would load somebody else's weights into a run.
-  Same weights at a different precision (`weights_id`) is **not** in scope; that
-  is a different output and stays a hint the owner accepts.
-- **Never silent, and never written back.** Each substitution is reported on the
-  group as `substitutions` (on the pre-flight and on the run alike) and logged. The
-  stored recipe keeps the filename it recorded, because the structural hash is
-  keyed on the topology assets: a swap written there would make a picture's
-  provenance claim a model it was not made with. The substitution is a fact
-  about *this run*.
-- **A substituted run lands on its own card.** A loader filename is a topology
-  asset (`structural_widget_value`, rule 5), so the picture a substituted run
-  produces carries an embedded graph naming the copy that was loaded and reduces
-  to a different `structural_hash` from the card it was launched from. That
-  follows from the issue's own ruling — a graph may be changed at submit and
-  never in storage — and it is the price of the run working at all; the
-  alternative is a refusal. It is a fork of the card, not a lie about
-  provenance: the picture's recipe names the file that really was loaded.
-- **The honest limit.** A graph opened in ComfyUI and queued there runs nothing
-  of ours, so it still names the file that went — which is what the merge's
-  `comfyui_reads` warning is for. A graph on the `ComfyUI-PixlStash` loaders
-  survives either way, because those address the shelf by id or digest and ask it
-  at run time. Not wired: the picture-recipe replay routes in
-  [`routes/comfyui.py`](../pixlstash/routes/comfyui.py), which carry their own
-  pre-flight and submit; the card run path is what "run it through PixlStash"
-  means for a workflow.
-
-#### A missing LoRA bypasses its loader rather than refusing the run (#1463)
-
-`bypass_missing_loras`
-([`services/workflow_run_service.py`](../pixlstash/services/workflow_run_service.py))
-and `bypass_node`
-([`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py))
-are the substitution above's neighbour and its last resort: where no copy of the
-file can be found at all, a **LoRA** is simply left out and the run happens
-anyway. It is one entry of the **repair registry** described in the next
-section, not a site of its own in `_plan`.
-
-- **Because a LoRA is optional and nothing else in the graph is.** Installing a
-  checkpoint is a trip away from the keyboard and the graph cannot run without
-  one, so it blocks the batch and that is the kind answer. A LoRA the graph can
-  run without is not, and one absent adapter on one card used to refuse a whole
-  mixed selection. The distinction is `model_folder`'s existing answer — the
-  entry's folder is `loras` — so no new plumbing decides it.
-- **Relaxing the refusal alone would not have worked.** A graph still naming an
-  absent file is one ComfyUI's own validation refuses, so the loader has to
-  leave the chain: `bypass_node` is ComfyUI's bypass (a node set to mode 4) on
-  the API graph, each output answered by the node's **first input of the same
-  type**, typed from `object_info` for the same reason `plan_lora_insertion` is.
-  It is that function's inverse, and it rewires nothing until every consumer has
-  been checked — a graph half rewired around a node still in it is worse than
-  one that refused.
-- **Three loaders keep their refusal, and each is the honest answer.** A
-  **stacker** whose other LoRA slots are filled stays, because taking the node
-  out would drop the adapters that *are* installed — and a slot counts as filled
-  whether it names a file or is **wired** from another node, since converting
-  `lora_name` to an input is an ordinary ComfyUI gesture and `preflight_prompt`
-  skips a link, so counting only literal strings would read a live second
-  adapter as an empty slot. A loader something reads an output of that no input
-  of that type can stand in for stays, because rewiring it would leave that
-  consumer wired to nothing. And a **forgotten** LoRA stays: `FORGOTTEN_MODEL`
-  means the hub lost the reference's name, not that the file is gone, so
-  bypassing would trade `resolve_references`' intended surfacing for a run
-  quietly made without an adapter the owner has — and send them to install a
-  file called `(forgotten model)`. All three are logged with the value that
-  could not be found.
-- **Judged again after, so the graph judged is the graph submitted.** The
-  bypassed loader is gone by the time the second `judge` runs, so it is not
-  reported as a missing model the owner would go looking for; what is left in
-  `missing_models` is what genuinely blocks.
-- **Reported only on a group that is actually submitted.** The bypass happens
-  before the final verdict because the graph needs it, but the *report* is written when
-  `group.runs` is set, and cleared again when a missing model elsewhere zeroes
-  the whole batch. What it says is "the run goes ahead without this LoRA", which
-  is a lie on a card that is about to be refused for a missing checkpoint — and
-  at the point the bypass runs, most of the refusals are not known yet.
-- **A bypassed run lands on its own card**, the same way a substituted one does,
-  and harder: deleting a node changes the **topology** hash and not only the
-  structural one, so `workflow_key` moves too. The pictures ComfyUI writes back
-  carry the submitted graph, so they are filed on a card for the LoRA-free
-  shape of this workflow rather than on the one that was run, and installing
-  the file later does not re-key them. That is the price of the run happening
-  at all; the alternative is the refusal this section exists to remove. It is
-  a fork of the card, not a lie about provenance: the picture's recipe names
-  the graph that really ran.
-- **A LoRA the REQUEST asked to add is never bypassed.** `_apply_loras` reports
-  its own `missing_models` for an adapter it cannot place, which is a refusal:
-  the owner asked for that LoRA by name, and running without it silently would
-  answer a different question. The bypass is only for the loaders the stored
-  graph carries.
-- **Never silent.** Each one is reported on the group as `bypassed_loras`
-  (`{file, folder, node_id, class_type, field}`) on the pre-flight and on the run
-  alike, and logged — the rule the substitution above follows, for the same
-  reason. The Run popup draws it *before* the run: a picture generated without
-  the character LoRA the owner expected, with nothing said, is worse than a
-  refusal.
-- **The owner can skip a LoRA for one run** (#1478): `skip_loras: [{node_id,
-  field}]` on the run body. `workflow_run_service.skip_requested_loras` takes
-  each loader out through the same `bypass_node`, on the run's copy only, before
-  a saved recipe's LoRAs are placed and before `judge`. The request is the
-  consent the automatic bypass lacks, so a `(forgotten model)` loader is skipped
-  when asked. What it cannot consent to is dropping a LoRA it did not name: a
-  stacker holding another filled slot, a loader nothing can be rewired around,
-  and any skip while ComfyUI cannot be asked become the blocking reason
-  `lora_not_skippable`. A skip is reported in `bypassed_loras` with
-  `requested: true`; the automatic ones carry `requested: false`. A slot no
-  graph of the run has is a 400; one named in both `loras` and `skip_loras` is
-  a 422; and a skip on a run spanning several cards is a 400, because a node id
-  names one loader on one graph. A saved recipe's LoRAs are matched against the
-  graph as it stood before the skip, so the LoRA a skipped loader held is not
-  applied and does not move on to another loader.
-- **A saved recipe's LoRAs are placed by what they are, not by position**
-  (`place_recipe_loras`): digest first, then case-folded basename, then any
-  free slot in graph order, so a recipe that ran before still runs the same.
-  The positional `zip` it replaced put a recipe stored in the other order onto
-  the wrong loaders and dropped a third LoRA on a two-loader graph without a
-  word. A LoRA with nowhere to go, or one the shelf cannot identify, is reported
-  on `RunGroup.unplaced_loras` (`{filename, sha256, node_id, reason}`), a fact
-  like `bypassed_loras` and never a reason.
-
-#### Editing a workflow's LoRA chain (#1478)
-
-`GET /workflows/{workflow_id}/lora-chain` reads the workflow's base graph as a chain: the model
-source, the LoRA loaders in the order a run applies them, and what reads the
-result. `read_lora_chain` types every link from `object_info`, as
-`plan_lora_insertion` does, and refuses (the route answers `editable: false` with
-the sentence) a graph it cannot edit honestly: loaders that start from
-different places, a second model that itself goes several ways, or a CLIP chain
-in a different order from the MODEL one. Only the MODEL path counts: the
-graph is first cut to the nodes an output node (`output_node` in `object_info`)
-reads, as ComfyUI runs it, so a leftover UNET loader wired into nothing is not a
-second model; another kind of model (an upscaler's, `WANVIDEOMODEL`) is on a
-path of its own and ignored. Only a plain one-slot loader wired into the MODEL
-path is an editable link; any other node that loads a LoRA (a stacker, a prompt
-tag, a character prompt builder) stays as an ordinary node the chain runs
-around, so a loader can always be added between the model source and what reads
-the model. **Where the model forks, the chain is a tree**: the loaders every
-pass reads are the trunk (`loaders`), and each node reading the fork (a base
-sampler, a hires pass, a detailer) starts a **lane** (`lanes`) with the loaders
-only it reads. Readers that are not loaders are grouped by the sampler they
-reach, so a guider and a scheduler feeding one `SamplerCustomAdvanced` stay one
-straight chain. A lane is named by the nearest sampler downstream of it (its
-ComfyUI title when it has one), and branches that meet again at one node (a
-model merge) are refused, since they are not separate passes. A workflow loading one model per pass (Wan 2.2 high/low noise) has no
-trunk: `model_source` is null and each lane names its own, CLIP included when
-each pass encodes its own prompt (SDXL base and refiner). A lane off a trunk
-must take its CLIP from the trunk's CLIP end. Only a further fork inside a lane, or loaders
-past a node that is not a loader, are left as they are, and `branch_note` tells
-the owner why the list is shorter than the workflow. A refused chain,
-or one read with ComfyUI unreachable, goes through `read_lora_chain_untyped`,
-which follows the `model` links so the chain can still be looked at; when
-ComfyUI did answer it also types the two ends best effort (the model source and
-what reads the chain's end), so the read-only view names what the chain runs
-between. Each loader carries the shelf digest it loads, when exactly one shelf
-LoRA matches.
-
-`PUT` takes the whole chain as the owner left it: `entries` for the trunk and,
-for a tree, `lanes` with one list per lane (left out, every lane stays as read).
-An existing loader is kept by `node_id` (moved and re-weighted, its id kept)
-and may land in any segment, which is how it crosses the fork; a new one is
-added by shelf `sha256`, carrying a CLIP only where its segment has a CLIP
-reader; and every loader left out is deleted through `bypass_node`. The change
-list says where a lane loader's CLIP half goes, since the text encoders it
-reaches may feed every pass. The cap of 32 loaders counts the whole tree.
-`plan_lora_chain` validates the whole edit before `apply_lora_chain` touches the
-graph, and the result is written as a **new** file through `_store_copy`, so one
-save is one new card and the original file never changes. `dry_run` answers the
-change list (`deleted`, `added`, `moved`, `strength`, `rewired`) and writes
-nothing. `insert-lora-loader` is the empty-chain case and still stands on its own.
-
-#### Switching a stage off (#1621)
-
-An upscale or FaceDetailer pass is an optional **stage** of a workflow, on or
-off per run, which is why `core_hash` strips both groups and graphs with and
-without them stack. `RunRequest.skip_stages` (`upscale`, `face_detailer`) names
-the stages a run goes without; `_plan` applies them through
-`skip_requested_stages` on the run's copy, after the LoRAs are placed (the prune
-can remove a loader only the stage read, and a LoRA addressed to it must not
-become a 400) and before `judge`, so the graph judged is the graph submitted.
-
-`bypass_stage` in
-[`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py)
-finds the stage with `workflow_identity.node_groups` over `reduce_api_graph`
-(node ids survive the reduction), limited to nodes an output reads, and takes
-each out through `bypass_node`, consumers before what they read. Each output
-is answered by the node's first linked input of the same type: IMAGE by
-`image` (`ImageUpscaleWithModel`, `ImageScale*`, `UltimateSDUpscale`,
-`FaceDetailer`), LATENT by `samples` (`LatentUpscale*`) or `latent_image` (the
-hires sampler `node_groups` puts with its latent upscale). A node with no
-linked input (`UpscaleModelLoader`, `SAMLoader`, a detector provider) is not
-bypassed; it goes in the prune. **A stage runs after the picture is made**, so
-a node of the group that feeds a sampler outside it is not one: with no sampler
-before it, it prepares an input (img2img's `ImageScale`) and is left alone;
-with one, it is a hires fix in pixel space (upscale, re-encode, second
-sampler), whose re-encode and sampler `node_groups` does not claim, and the
-stage is refused rather than half taken out. Then:
-
-- **Prune**: a node some output read before and none reads now is deleted, or
-  `judge` would report an orphaned upscaler or detector model as missing and
-  refuse a run that does not need it. A node that was already dead is left.
-- **Duplicate save**: an output node the bypass rewired onto exactly the links
-  another output node of its class reads is dropped, the untouched one kept.
-  Widgets are not compared: a graph saving before and after the upscale differs
-  by `filename_prefix` and would still save one image twice. Saves that were
-  alike before the bypass are the owner's and stay.
-
-All or nothing: the work is done on a copy and written back only when every
-node of the stage went. A node that cannot go (a FaceDetailer whose MASK or
-DETAILER_PIPE is read, a class this ComfyUI does not know, a pixel-space hires
-fix, a graph that loops) raises `LookupError`
-naming it, which the run reports as `stage_not_skippable: {stage, message}`.
-It blocks the card, `allow_unchecked` included, and **never falls back to a
-full run**: the owner asked for a run without the stage. With ComfyUI
-unreachable a graph holding the stage is refused the same way; one without it
-has nothing to skip.
-
-#### The repair registry: judge, repair, judge again (#1463)
-
-Some refusals PixlStash can answer by changing the graph before it submits.
-`REPAIRS` in
-[`services/workflow_run_service.py`](../pixlstash/services/workflow_run_service.py)
-is the one place that decides which: each `Repair` names the reason code it
-answers, the `RunGroup` field that reports it, and the function that mutates the
-graph. `_plan` runs one loop over it, after the model swap:
-
-1. `judge` the graph.
-2. `repair(graph, object_info, reasons)` applies every entry
-   whose code is among the reasons, and returns `{report_field: entries}`.
-3. If anything changed, `judge` **again**. Only the second verdict says whether
-   the graph runs: a repair can leave its refusal standing. Re-judging is pure
-   over the graph and the `object_info` `_plan` already fetched, so it costs no
-   ComfyUI round-trip.
-
-Skipped when ComfyUI could not be inspected (nothing is known to repair) and
-when `_apply_loras` has already refused (that run is not happening). The
-reports go on the group only when it is actually submitted, and every
-registered field is cleared when the batch rule zeroes the request. A new
-repair is a registry entry plus its `RunGroup` field. Three ship:
-
-- **`missing_models` → `bypassed_loras`**: the LoRA bypass above.
-- **`missing_nodes` → `replaced_nodes`**: `replace_missing_seed_nodes`. A custom
-  seed node this ComfyUI lacks (`SEED_NODE_CLASSES`: rgthree's `Seed (rgthree)`,
-  WAS's `Seed`, `SeedGenerator`, `Seed Generator`, Comfyroll's `CR Seed`) only
-  hands a number to a sampler's seed widget, which the run writes itself. So
-  each link from it becomes a literal and the node leaves the graph.
-  **The seed pass overwriting that literal is what makes it safe, so it is
-  checked and not assumed**, against `run_seed_targets`, which is the same
-  finder `_submit_every` writes seeds through (one function, so the check and
-  the write cannot drift). It is checked on the **final** graph: a later
-  replacement can switch that finder from its fallback to `detect_seed_targets`
-  and strand an earlier literal, so if any inlined input is not a target once
-  all are replaced, the graph is put back whole and every node keeps its
-  refusal. A seed node wired into `steps`, or into a pack's own `SEED` dict,
-  keeps it that way. The literal is the node's own `seed` value, which is what
-  `seed_mode: "keep"` then keeps: a picture's embedded graph carries the value
-  the node really handed on. Also refused, each logged: a **placeholder** seed
-  (rgthree's `-1`, "random"), whatever the seed mode, so the pre-flight's answer
-  never depends on a control the popups do not re-ask on; a node feeding **more
-  than one** input, because the seed pass rolls each target separately and a
-  hires-fix or refiner pair built to share one seed would get two; and a node
-  whose own seed is wired from elsewhere. Each entry is `{node_id, class_type,
-  replacement: "seed", consumers: [{node_id, field}]}`.
-- **`missing_nodes` → `replaced_nodes`** (second entry, same report):
-  `replace_missing_text_nodes`. A custom text node this ComfyUI lacks
-  (`TEXT_NODE_CLASSES`: WAS's `Text Multiline`, Comfyroll's `CR Text`,
-  Chibi-Nodes' `Textbox`, core's `PrimitiveStringMultiline` on an older
-  ComfyUI) only hands its string on, so every link from it becomes that string, however many
-  inputs it fed. It runs after `_apply_prompts`, which writes a Run popup
-  prompt through `prompt_text_target`: past a linked encoder into the text
-  node itself, when that node feeds only that encoder, so the typed prompt is
-  what gets inlined. Any other wired `text` (a prompt-builder node, a shared
-  or overridden text node) is replaced by the typed prompt as a literal,
-  cutting the link, unless the prompt equals one of that node's own strings:
-  an untouched Run popup echoes a builder's recipe prompt, which was read from
-  its widgets, and the wire stays. `Text Multiline` drops its `#` comment lines as the node
-  does; one holding anything in square brackets (a WAS token) keeps its
-  refusal, as do a wired text, another input set that may override it
-  (`Textbox`'s `passthrough`), and a consumer reading any output but the first.
-  It runs before the seed repair, whose rollback restores the graph it was
-  handed. Entries carry `replacement: "text"`, which the Run popup reads to
-  word its notice.
-- **An allow-list, not a general rewriter.** A replacement that is *nearly*
-  right silently changes what the picture looks like, which is worse than the
-  refusal. The candidates the issue names for later (custom primitive nodes,
-  reroutes, notes) are each judged on their own when one is added. Anything that
-  samples, conditions or loads is not a candidate: there is no standard
-  equivalent that makes the same picture.
-- **A repaired run lands on its own card**, for the reason a bypassed one does:
-  deleting a node changes the topology.
-
-#### What a delete leaves behind: companions (#1314)
-
-`POST /api/v1/models/companions` answers the question in front of Delete that
-the shelf could not: **which VAEs and text encoders can go with this
-checkpoint.** Support files are most of a real shelf's disk, some serve several
-models, and nothing on disk says which.
-
-- **The evidence is co-occurrence in a recipe.** One `workflow_recipe` is one
-  graph that ran with exactly the files its `workflow_recipe_asset` rows name,
-  so a VAE and a checkpoint in one recipe are proven to work together. That
-  table already captures every loader by file extension rather than by node
-  class, so VAEs, encoders and custom loaders are all in it; nothing is scanned
-  again. Names resolve to shelf rows exactly as `fetch_picture_counts` resolves
-  them (`_recipe_asset_index`): a `*_sha256` widget is that model, any other
-  name is every row whose filename or copy has that basename. A third case
-  resolves to nothing and is counted as no evidence: the shelf loader's
-  `checkpoint_id` (#1416), whose value is a row id rather than a digest or a
-  filename.
-- **Every recipe on the hub counts, from every library, kept pictures or not.**
-  Scoping evidence to the active library would only ever drop evidence;
-  widening it can only make a file read as still needed, never offer one. A recipe whose
-  pictures were all deleted still proves the files ran together.
-- **Consumers are base models.** For a support file sharing a recipe with a
-  model being deleted, its consumers are every `checkpoint` or `unknown` row
-  across *all* its recipes. Adapters are excluded (a LoRA needs a base model,
-  not that base model's VAE, so counting it would keep A's VAE "in use" by A's
-  LoRA after A is gone) and `unknown` is included, because it may be a base
-  model the classifier missed and keeping a file is the answer to not knowing.
-  Every recorded consumer being deleted is **orphaned**; any kept consumer is
-  **shared** and named. **Orphaned is not "nothing uses it"**: a kept base
-  model no recipe names (downloaded and never used, or used only in graphs
-  whose pictures were never filed) may need the file, and the answer carries
-  `unrecorded`, the count of those, so the prompt can say so.
-- **`unknown` is never orphaned.** A support file a recipe reached only by a
-  basename two shelf rows share could be either of them, so it is reported as
-  unknown. So is one beside a `*_sha256` widget that matches no row while any
-  non-engine row still waits for its hash, the rule
-  `hub/workflows._model_ghost_names` already applies: the pending checkpoint may
-  be the model the digest names. A model being deleted that no recipe names is `no_evidence`: the
-  absence of a recipe is not evidence that nothing needs it, and its companions
-  are simply not examined.
-- **It offers, it never deletes.** The shelf's confirmation lists the answer;
-  an orphaned file stays on disk until the owner selects and deletes it. Every
-  path still ends at a person choosing a file.
-- **Not yet read here:** ComfyUI's own history and saved workflows. Models used
-  only in graphs that never produced a picture PixlStash filed are invisible to
-  the delete warning, which the `no_evidence` answer says out loud rather than
-  hiding. The clone's *proposals* do read ComfyUI's history (see "Clone with
-  new models proposes companions from evidence").
-
-#### Workflow sets: which models have actually run together (#1438)
-
-`GET /api/v1/models/workflow-sets` is the **same self-join, read the other way
-round**. Companions asks "what would this delete leave behind"; this asks "which
-of these files have run together", which is the question the shelf's four
-single-axis groupings could not answer: a checkpoint, its VAE and its text
-encoders are a set, the same VAE belongs to several sets at once, and a sticky
-band can only put a row in one place.
-
-- **One entry per *combination*: the model ids one recipe resolves to.** Several
-  recipes naming the same files are one combination with their recipe and
-  picture counts summed, because the combination is the fact and the recipe is
-  one witness of it. A prompt edit keeps the recipe; a rewiring forks it; neither
-  changes the files, so both land on one card.
-- **The resolution is shared, not copied.** `resolve_recipe_models` was lifted
-  out of `fetch_companions` and both call it, so the delete warning and the grid
-  cannot come to disagree about what a recipe names. It returns
-  `(recipe_models, ambiguous, unresolved)` — the members per recipe, the members
-  reached only through a name or digest prefix several rows answer to, and the
-  recipes naming a digest no row matches while some row still waits for its hash
-  (`hub/workflows._model_ghost_names`' rule).
-- **Scoped to the ACTIVE library, unlike companions.** The two differ because
-  they answer different questions: a delete warning must keep a file some other
-  library needs, so it counts every recipe on the hub; this grid is a picture of
-  what the library in front of the reader has made, so a recipe with no kept
-  picture here is not a set. A combination with a zero picture count is dropped,
-  and its members then appear under `no_set` — read off the combinations that
-  *survived*, never off the pre-filter grouping, or a model would be in neither
-  list and so on no screen at all.
-- **ComfyUI's own runs are witnesses too (#1565).** `fetch_workflow_sets` reads
-  `comfyui_history_model` through `_history_runs`, the one reader of that table
-  (`propose_companions` calls it too). Each run counts one `history_runs`
-  against the combination its stored models form *exactly*, never against every
-  subset, and is kept apart from `recipes` and `picture_count`. A combination
-  survives the cut with a kept picture here OR a stored run, so a set that has
-  only run in ComfyUI is served with no cover. Runs are hub-wide, like
-  `recipes`. They never touch `ambiguous`, and they stay out of
-  `hub_combinations`, which feeds only the hand-made sets' merge offer.
-  ComfyUI is never contacted on this path. The stored models are the names the
-  pull could pin to one shelf row; a name it could not is not stored, so a run
-  proves at least its combination ran, not that nothing else did.
-- **A member the evidence cannot pin down is flagged, never hidden.** `ambiguous`
-  is OR-ed across a combination's witnesses: one recipe that could only match a
-  basename is enough to make the membership a guess, and a cleaner second
-  witness does not unmake the first. The card draws it as a filename-only match,
-  because `unknown` is a first-class answer on this shelf.
-- **Members arrive in ONE order and the client reads its head.** Checkpoint,
-  then `unknown`, then VAE, text encoder, adapter, engine. The head is what the
-  set is named after, so the naming rule is one decision in one place rather than
-  two that can disagree. `unknown` sits second for that reason and no other:
-  `file_kind` is closed to six values and there is no diffusion kind, so a Flux
-  or Wan diffusion file arrives as `checkpoint` (most of them) or as `unknown`
-  (the rest), and second place is what keeps such a set named after its model
-  rather than after whichever VAE sorted first. It is a ranking, not a claim
-  about what the file is.
-- **A cover is served as `{picture_id, version}`, never as a URL.** An
-  `<img src>` never reaches the client's Axios interceptor, so a path built in
-  this route would arrive with no API base and no share token and the browser
-  would ask the page origin for a route it does not serve. `pictureThumbnailUrl`
-  (`api/pictures.js`) is the one place that path is spelled, and this route is
-  deliberately not the second - `routes/workflows.py` does send a path, and pays
-  for it with `workflowCoverUrl` on the client to put the base and the token back.
-- **Counts and covers are two vault queries, not one per card.**
-  `recipe_picture_counts` is the existing `GROUP BY workflow_structural_hash`;
-  the covers come from `variant_cover_candidates`, the workflows grid's own
-  `ROW_NUMBER()` window, and the per-combination pick re-sorts them with
-  `cover_order` — moved out of `workflow_card_service` to
-  `workflow_library_service`, beside the `CoverCandidate` it orders, so both
-  grids treat a NULL score the same way the window did. **The window is new work
-  on this screen and is the expensive half**: `fetch_picture_counts`, which every
-  shelf list already runs, runs only the `GROUP BY` — so this is one more pass
-  over the kept pictures than the shelf used to pay, on what is now the default
-  screen, and it is the figure to watch if the grid ever feels slow.
-- **Nothing is stored.** Membership overlaps and is derived per request; no
-  column on `model` names a set, and there is no table to migrate. The cost is
-  four unbounded hub reads (the `model` table twice — once for the asset index,
-  once for the member rows — `workflow_recipe_asset` whole, and the pending-hash
-  probe) plus the two vault queries above. None of them is paginated, because
-  every one of them is aggregated into the answer: a page of combinations cannot
-  be computed from a page of assets. The read is bounded by the size of the shelf
-  and the library rather than by a parameter, which is the same bound
-  `fetch_picture_counts` and the workflows grid already accept.
-- **The GROUPING is the client's, and this route stays per-combination.**
-  `frontend/src/utils/workflowSets.js` unions the combinations under each head to
-  make the grid's cards, and keeps the combinations themselves: the *Works with*
-  answer is a pairwise question, and a union would report two VAEs as each
-  other's companions on the strength of sharing a checkpoint. So this route
-  proposes no grouping at all and is not asked to - the per-recipe shape is the
-  evidence, and every claim the UI makes about a pair reads it rather than the
-  union drawn on top.
-
-#### Hand-made workflow sets (#1520)
-
-The owner can also say which shelf models go together, and that one IS stored:
-`model_workflow_set` and `model_workflow_set_member` in the hub (amended into v2,
-like every shelf table), read and written by
-`pixlstash/services/model_workflow_sets.py`.
-
-- **A menu, not a recipe.** Fixed slots (`checkpoint` at most one - a partial
-  unique index holds it - then `text_encoder`, `vae`, `lora`, `other`), no order,
-  no strengths. A set may be unnamed, empty, or have no checkpoint
-  (`incomplete`). The slot defaults from `file_kind`; `checkpoint` is accepted
-  for a `checkpoint` or an `unknown` file only (a diffusion file is often
-  `unknown`). Engines and files still waiting for their hash are refused (409).
-- **Members are sha256s, with no foreign key to `model`.** Forgetting or
-  deleting a file drops its `model` row; the member stays, is served
-  `on_shelf: false` under the `label` it was added with, and reconnects when a
-  row with the same digest returns. The same property makes undo simple: a
-  delete returns the set's snapshot, and re-posting its members in the
-  `{sha256, slot, label}` form recreates it, off-shelf members included.
-- **Evidence is layered on, not merged.** `attach_hand_made` takes the
-  `fetch_workflow_sets` answer unchanged and adds `covered_by` to each
-  combination (a set covers it when every model of the combination is an
-  on-shelf member; the set may hold more), a `hand_made` list whose counts and
-  covers are pooled from the combinations each set covers, and drops on-shelf
-  members from `no_set`. Covered combinations are still served: the grid hides
-  them, *Works with* reads them all. The mutators answer with the set re-read
-  through that same full evidence pass, which is a per-click cost, not per row.
-- **The merge offer is derived, and only the declines are stored (#1523).**
-  `_attach_offers` groups the combinations no set covers by their head (the
-  grid's own evidence cards, but over `hub_combinations`: every library's
-  recipes, not only those with a picture here). A set is offered its own
-  checkpoint's group; a set with no checkpoint only a group whose models
-  include all of its own. Only combinations whose missing models can all be
-  added count: hashed, not an engine, and not in `model_workflow_set_decline`
-  for that set. One group goes to one set, the one needing fewest models added.
-  The offer is `{head_id, head_name, picture_count, recipes, covers, models}`,
-  each model with the slot it would take (the head fills an empty Checkpoint,
-  a second checkpoint goes to Other). Merging is the ordinary members add;
-  Keep separate is `PUT .../declines`, a whole-list write that returns the old
-  list as its undo. `kept_separate` counts the pictures here the declines hold
-  back. The declines cascade with their set (so a build that predates the
-  table can still delete one); a delete's undo does not restore them.
-- **Clone with new models reads them first.** `propose_companions` lists, ahead
-  of the recipe ladder, the on-shelf VAEs and text encoders of every set whose
-  checkpoint member is the chosen checkpoint (`via: "grouped"`, `recipes: 0`,
-  `set_name` from the newest such set). `prepick` is true only when those sets
-  name exactly one file of that kind between them; ladder entries always carry
-  `prepick: true` and drop any file already grouped (after the ladder step is
-  chosen, so grouping never widens it). Filed by the file's own `file_kind`, not
-  by the slot it was put in.
-
-`model.family`, `model.quant` and `model.weights_id` are what the scanner reads
-off a file rather than off the shelf — `family` and `weights_id` from the
-safetensors header alone (`adapter_header.family_from_header`,
-`weights_id_from_header`), and `quant` from the header where there is one and
-from the filename postfix where there is not (see below). None of them is a
-group. `family` is the
-architecture the tensors show for a support file (`vae_4ch`, `vae_16ch`,
-`clip_l`, `clip_g`, `t5_xxl`, `umt5_xxl`), read only from top-level tensors so a
-full checkpoint's baked-in VAE never files the checkpoint as one; the shelf
-serves the family of `base_model` instead whenever that folds, so a corrected
-base model is never contradicted by the column. `weights_id` hashes tensor
-names and shapes without dtypes, so clean casts of one model share it and a
-repack with scale tensors does not. Rows registered before the columns get them
-on the next scan: the unchanged-file fast path re-reads the header, never the
-bytes, for a row whose `weights_id` is NULL. `CheckpointHashTask._merge`
-carries them to the surviving row like the other scan-derived columns.
-
-`model.base_model_canonical` and `model.base_model_source` are the base model
-the row was **identified** as, against the shipped table in
-`pixlstash/utils/known_base_models.py`, and which evidence said so.
-`known_base_models.identify(declared, filenames)` takes the header's
-declarations (`ss_base_model_version`, and the SAI `modelspec.architecture`
-with its `/lora`-style suffix dropped) and the filenames (the file's own, and
-kohya's `ss_sd_model_name`, the checkpoint it was trained against). Sources,
-strongest first: `user` (set only by `update_models`), `declared` and
-`filename` (an exact fold of a declared value, or of the filename stem or one of
-its tokens), `declared_fuzzy` (`difflib`, cutoff 0.88) and `filename_fuzzy`
-(containment, longest alias first, never an alias under four characters
-nor one that is an ordinary word, `pony`, `sana`, `lumina`, `krea`, `chroma`,
-which count only as a whole filename token).
-Quality before provenance: an exact filename beats a fuzzy declaration. A
-`closed` base is never an answer.
-
-- **Written only over a source it outranks.** `_write_identification` is one
-  guarded UPDATE, deliberately not the `COALESCE` the curatable columns use:
-  the same content reached again with better evidence (a copy under a more
-  telling name) must be able to upgrade a guess, and nothing may replace
-  `user`. An unchanged file that already has an answer is not re-read. `base_model` itself is still the trainer's string, written with
-  `COALESCE` as before.
-- **A curated base model moves both columns in the same UPDATE**
-  (`update_models`: canonical = `fold(value)`, source = `user`), including a
-  cleared one, so "none of these" sticks and the shelf never groups a corrected
-  row under the old guess.
-- **No match writes nothing.** Both columns stay NULL, and `has_header_facts`
-  requires `base_model_source IS NOT NULL`, so the fast path re-reads the
-  header of an unmatched row on every scan (never its bytes). That is how a
-  table entry added in a later release reaches files scanned before it.
-- **Existing rows** whose stored `base_model` folds exactly are identified
-  once, as `declared`, by the hub's data backfill v3
-  (`schema._backfill_base_model_canonical`). Nothing weaker is written there:
-  a stored answer stops the header being re-read, so a filename guess made
-  from the columns would never be checked against the header's
-  `modelspec.architecture`. Every other row is identified from all its
-  evidence on its next scan. The columns themselves are amended
-  into schema v2 like the header facts, not a v3, which an older build would
-  refuse.
-- The shelf **sorts and filters** on `COALESCE(base_model_canonical,
-  base_model)`; the filter also matches the raw column, so a caller holding the
-  trainer's spelling still gets its rows. `ModelResponse` serves both columns,
-  `family` from the canonical label when there is one, and `matched_name`: the
-  label for a checkpoint whose derived filename folds exactly to its own
-  non-guessed canonical label (`flux1-dev.safetensors`), never for an adapter.
-
-`quant` is **two sources folded into one vocabulary**, and the fold happens on
-the way out rather than on the way in. The column holds whichever source wrote
-it: the safetensors header's own dtype spelling (`f16`, `f8_e4m3`, `i32`, or
-`mixed` where no dtype holds a majority of the **parameters** — not tensors),
-or, for a file with no readable header, the precision its filename records
-(`fp16`, `q4_k_m`). `ModelResponse` serves
-`model_utils.canonical_quant(row["quant"])`, so a row scanned before the
-filename source existed and one scanned after it read as one id, and a client
-never has to know which branch ran. Writing folded instead would have left
-every already-scanned row unfolded, which is the same problem one migration
-later.
-
-The filename half is `model_utils.quant_from_filename`, the same parser
-`derive_model_name` pops the postfix with — so the name a row shows and the
-badge beside it can never disagree about where the name ended. The header wins
-wherever there is one: it is the only thing that knows what a file called
-`nvfp4_awq` is actually stored at. See §*The shelf catalogues more than one
-suffix* below for the file kinds that have no header at all.
-
-Nothing reads them to decide a delete: `family` speaks two vocabularies (base-model
-families and tensor layouts), and the one table joining a checkpoint's `flux1`
-to a `vae_16ch` (`COMPANION_LAYOUTS`, below) is a declaration, which a delete
-warning must not act on.
-
-**Clone with new models proposes companions from evidence first, and from a
-declared table only when there is none.**
-`model_shelf_service.propose_companions` is `fetch_companions` read forwards:
-the VAEs and text encoders that share a `workflow_recipe_asset` recipe with the
-chosen checkpoint, and when there are none, with any base model of the same
-`base_model` label, then of the same `family_of` family and `modality_of`
-modality (image or video, never across). Each proposal carries
-the step that produced it (`via`), and a support file a recipe reached only
-through an ambiguous name is not proposed. **ComfyUI's own runs are evidence
-too (#1518).** The workflow pull (`ComfyUIWorkflowPullTask`) reads
-`GET /history?max_items=500` after the saved workflows, and
-`record_comfyui_history` files each *finished* run as
-`comfyui_history_model(prompt_id, model_id)`. Names resolve to shelf rows the
-way a recipe's do, but only an unambiguous match is stored, and as an id: the
-table adds no place a model filename lives, so forgetting a name has nothing new
-to reach. The ambiguity is judged at pull time, so a same-named row added later
-does not reopen it; the next pull re-reads what ComfyUI still holds. A duplicate
-merge in `checkpoint_hash_task` carries the rows to the survivor. The two kinds
-are counted apart (`recipes`, `history_runs`; recipes rank first within a
-step), and the dialog says "in ComfyUI" when a run is the only evidence. A run
-at the `checkpoint` step answers before recipes at `base_model`, for the same
-reason the ladder exists: direct evidence beats an inference. ComfyUI forgets
-its history on restart; the rows do not, and nothing on the read path asks
-ComfyUI. A failed history read never fails the pull (`history_runs: null` in
-its summary). The shelf's Workflow sets read the same rows through the same
-`_history_runs` reader (see "Workflow sets" above). "Same base model" and "same family"
-read `known_base_model`: the shelf's identified label (`base_model_canonical`)
-unless its source is a fuzzy guess, else the stored `base_model` folded; the
-LoRA flag reads the same. A checkpoint from a family nothing has run with
-falls to a fourth step, `declared`, the one bridge between the two
-vocabularies above: `known_base_models.COMPANION_LAYOUTS` names, per
-architecture family, the tensor layouts (`vae_16ch`, `clip_l`, `t5_xxl`...) its
-VAE and text encoders take, and the shelf's support files of those layouts are
-proposed with `recipes` 0, by filename. It is a declaration, not evidence (SD
-1.5's and SDXL's VAEs share a layout, as do FLUX's and SD 3.5's), so it runs
-only for a kind no recipe or ComfyUI run answered, the dialog labels it untested, and a family
-declares only the kinds the layout vocabulary can name with certainty; anything
-else still proposes nothing. LoRAs and ControlNets are the one legitimate
-family comparison (`family_of` on both sides of one vocabulary), and a mismatch
-is flagged by `GET /workflows/{workflow_id}/model-swap`, never dropped. The rewrite is
-`comfyui_recipe_service.apply_filename_swap`, deliberately not
-`apply_model_swap`: that one substitutes the same bytes under another name, this
-one replaces a file that loads with a different file. It matches the graph on
-the whole recorded name only (separators unified, case folded): the dialog
-sends the graph's own values, and a basename match would let a swap of
-`diffusion_pytorch_model.safetensors` rewrite a ControlNet loader's file of the
-same name. It writes the name in ComfyUI's own spelling when `object_info`
-answers (whole option, then the one option with that basename; a name listed
-in two folders is refused as `several_on_comfyui`, since either could be the
-wrong model) and unchecked when it does not. Both it and the dialog's slot list
-walk the graph through `comfyui_utilities.iter_model_fields_api`. The route is
-all or nothing: any swap that did not land refuses the clone (409) rather than
-saving the old model beside the new one's VAE. It names the new card only when
-it is a card nobody has named, because a repeat clone re-keys onto the card the
-first one made. By the same rule it carries the original's pins and parameter
-defaults onto a card that has none of its own (`_carry_to_clone`): both are
-addressed by `(slot label, input name)` and a filename swap moves no label.
-A default on a loader field the swap rewrote is dropped, by address and
-whatever its value, or the first run would load another model again. Notes are not carried; they describe
-the original's history. A `CLIPVisionLoader`'s `clip_name` is reported as
-`clip_vision`, never offered text encoders. The base slot is offered only
-checkpoints of its loader's file type and, when ComfyUI answers, only ones that
-loader lists, because the shelf files a diffusion-only UNET and an all-in-one
-checkpoint under one kind. Duplicate, Insert loader, the LoRA chain edit and
-Clone all write the source file's `pixlstash_bindings` back into the copy
-(`_store_copy`), which the resolved graph has lost.
-
-**Clone onto a workflow set swaps the loader's node class when a file of
-another type needs it.** `comfyui_recipe_service.plan_loader_rewrites` decides
-by file type alone, so the plan is the same with ComfyUI down: a `.gguf` file
-into a core loader takes the ComfyUI-GGUF counterpart (`UNETLoader` to
-`UnetLoaderGGUF`, the three CLIP loaders to their `…GGUF` twins, dropping the
-core-only `weight_dtype` / `device`), and a non-GGUF file into
-`UnetLoaderGGUF` goes back to `UNETLoader` (the GGUF CLIP loaders read
-safetensors, so they stay). `apply_loader_rewrites` then changes the class in
-place, keeping every node id, file field and link. The clone route runs it
-before `apply_filename_swap` (`_swap_files`), so each file is checked against
-the loader that will read it; a class ComfyUI lacks lists nothing, so its file
-goes in unchecked and the answer's `loaders` says `installed: false`: **a
-missing node pack warns and never refuses.** GGUF is the one pack known; any
-other loader keeps its class and a file it cannot list is refused as before.
-`POST /workflows/{id}/set-clone-plans` runs that same `_swap_files` on a copy
-per set asked, so the dialog's diff is the clone's own rewrite. `_set_swaps`
-maps a set to the graph: the first base slot takes the checkpoint the caller names (`checkpoint_id`, a checkpoint or unclassified file, never guessed from the members), and a VAE or
-text-encoder slot the set's untaken file of the same layout (`family`, or the
-set's only one against the graph's only slot of that kind). Two slots of a kind
-are two different files, since the slot list merges loaders naming one, so one
-set VAE is never written over a video VAE and an image VAE alike. **LoRAs go only when the
-base model changes**: `keeps_loras` compares `_base_key` of the set's
-checkpoint with `_replaced_base_model` of the graph's, and an unknown base model
-on either side is *not* the same. The clone body's optional `loras` is the
-chain in `PUT …/lora-chain`'s shape (`_chain_plan`, shared with Edit LoRAs),
-applied before the loader rewrite because ComfyUI can type the original's
-classes even when the new pack is not installed; it needs `object_info`, so a
-clone that carries a chain answers 503 with ComfyUI down.
-
-**The model-swap route does not cache `recipe_asset_index`, on measurement
-(#1515).** It builds the index once per request and hands it to both the slot
-list and `propose_companions` → `resolve_recipe_models`. Synthetic hub (unique
-basenames, one digest widget and the rest filename widgets per recipe), median
-of seven, for index / `resolve_recipe_models` / whole `propose_companions`:
-
-| models / copies / recipe assets | index | resolve | propose |
-|---|---|---|---|
-| 2,000 / 3,000 / 12,000 | 4 ms | 11 ms | 15 ms |
-| 10,000 / 15,000 / 160,000 | 23 ms | 176 ms | 195 ms |
-| 50,000 / 75,000 / 400,000 | 189 ms | 591 ms | 712 ms |
-
-The index is the small part; the `workflow_recipe_asset` scan in
-`resolve_recipe_models` is most of the rest, and a cache of the index alone
-would not touch it. The dialog asks once on open and once per checkpoint
-choice, so a fifth of a second at 10,000 models is acceptable. Revisit if the
-dialog starts recomputing live (per keystroke or hover): the cache then belongs
-on `resolve_recipe_models`, and its key must change on UPDATEs too (a sha256
-backfill or a renamed copy keeps every row count and rowid), so row counts and
-max rowids are not enough. The workflow grid (`read_grid`) still builds the
-index twice per request, once per `_shelf_candidates` call; at these sizes that
-is tens of milliseconds, left as is.
-
-#### The shelf catalogues more than one suffix
-
-`model_folder_scanner.SHELF_MODEL_SUFFIXES` is the one answer to "is this a
-model file the shelf catalogues", and it is a **tuple**: `.safetensors` and
-`.gguf`. It is deliberately *not* named `MODEL_SUFFIXES`, which
-`services/builtin_models.py` already uses for a different and wider question —
-what in PixlStash's own engine folder counts as weights at all. Every consumer asks
-it rather than spelling an extension — the folder picker's listing
-(`routes/filesystem`), the upload rule (`routes/model_files._source_file`) and
-the model-ghost judgement (`hub/workflows`) — so the three move together and a
-`.gguf` cannot be shelved by the scan while being called a ghost by the
-recipes.
-
-`HEADER_SUFFIX` is the narrower question: which of them a safetensors header
-can be read from. A file that fails that test is described by
-`_describe_from_name`, which fills in only what its **name and its folder**
-answer:
-
-- the **quant postfix** (`flux1-dev-Q4_K_M.gguf`), the only source such a file
-  has;
-- the **folder's declared role**, through `classify_model_file((), 0, path)` —
-  which already trusts a folder above a parameter count, precisely because a
-  VAE and a text encoder carry no marker to find. `unet/` and
-  `diffusion_models/` name `checkpoint`, so a quantised Flux or Wan UNet is
-  listed by `GET /checkpoints`; hub data version 4 re-files the `unknown` rows
-  already shelved there. A GGUF outside a role folder is `unknown`, which the
-  shelf shows and the owner can correct; it is never guessed into `checkpoint`.
-
-Everything else (`family`, `weights_id`, `kind`, `param_count`, the trainer
-metadata) stays NULL, which is what an undescribed `.safetensors` records too.
-**GGUF header parsing is deliberately not built**: it is a real subsystem, and
-the filename is enough to shelve and badge the file.
-
-Two consequences worth stating:
-
-- **Hashing is unchanged.** `_describe_from_name` follows the same
-  `_DEFER_HASH_BYTES` rule as every other non-adapter kind, so a multi-gigabyte
-  GGUF is registered instantly with `sha256` NULL and left to
-  `MissingCheckpointHashFinder`. Turning the suffix on adds no reading the
-  scan was not already deferring.
-- **The unchanged-file fast path skips the header re-read for it.**
-  `has_header_facts` needs `weights_id IS NOT NULL`, which is false by
-  construction here, so without the `_reads_a_header` check a GGUF would be
-  re-opened on every sweep for a header it will never have. It is identified
-  from its filename alone on that path instead, which reads nothing.
-
-#### The unlink is authorised by exactly one committed row (#1017)
-
-`ModelMover`'s ordering — copy → verify → repoint and commit → **then** unlink —
-rests on "the row moved". SQL does not: an `UPDATE` that matches nothing reports
-success, so a `model_file` row deleted between the plan and the commit let the
-mover unlink the source and report `moved` with the destination bytes registered
-nowhere at all. That is the dangling residue inverted, and worse — a file no row
-names, after the only other copy was removed.
-
-- **`ModelMover._repoint` requires exactly one affected row** and raises
-  `RepointLost` otherwise, inside the transaction, so it rolls back. `_rename`
-  renames the file back, `_copy_verify_repoint_unlink` discards the copy, and
-  `_move_one` reports that file `failed`. Nothing is unlinked. **This is the
-  guarantee**; everything below is defence in depth.
-- **The predicate is the source key and nothing else.** `model_file` is
-  `PRIMARY KEY (model_folder_id, relpath)`, so the key already matches at most
-  one row. Adding `model_id` cannot narrow a real ambiguity and *would* miss:
-  `CheckpointHashTask` folds duplicate checkpoints by rewriting
-  `model_file.model_id` to the survivor, on the task runner and outside
-  `SHELF_IO_LOCK`, and hashing a large checkpoint overlaps a multi-minute copy
-  easily. The row is still there and still names the file; only its model was
-  consolidated. Failing on that would discard a finished copy and report a
-  legitimate move failed — pinned in both directions in
-  `tests/test_model_move.py`.
-- **`DELETE /model-folders/{folder_id}` takes the `SHELF_IO_LOCK` slot** and
-  answers 409 while it is held. That is the second, transient 409 on that route
-  (the managed-row refusal above is the other one). It is a slot, not a general
-  exclusion: a rescan writes the same rows outside this lock by design, and a
-  multi-run import is a sequence of separate lock-taking requests, so a forget
-  can still land between two of them. What it buys is a clean 4xx before the
-  batch starts instead of a file failed halfway through forty.
-- **The UI says so beforehand.** `ModelFoldersDialog`'s `forgetReason` blocks
-  Forget while `useModelMovesStore().busy`, the same guard `relocateReason`
-  already carried, and the row's note explains it — an ordinary `user` folder is
-  forgettable without being relocatable, so a guard written only for Move left
-  exactly those rows clickable and failing.
+### The model shelf
+
+The model shelf — the shelf verbs, the built-in model folder, the other roots,
+`model_capability`, the managed store, Add file, trained-model previews, Delete
+and Keep one copy — is its own subsystem and has its own section, §25. Its
+path containment stays here, under "Stored path containment" above.
 
 ### Hub and library identity
 
@@ -5486,7 +3736,7 @@ The authz refactor (§16.2) moved this class off `require_user_id` and onto decl
 
     Arithmetic, not judgement.
 
-  - **Updated 2026-08-09 (fourth change the same day) — the locality total is now `29 = 24 local + 5 loopback`.** `POST /api/v1/model-folders/{folder_id}/relocate` moves the managed model store (§13) to a **caller-supplied host path**: it is the `reference-folders/{folder_id}/relocate` class *and* carries `POST /model-moves`' file movement, so it is the one shelf route on this tier for both reasons at once. It is refused with 409 for any folder that does not relocate — since #905 that is every folder but the managed store and PixlStash's own download folder; the tier is unchanged, the set of targets is not. **Updated 2026-08-14 (#906): the InsightFace packs join that set**, which again changes no arithmetic — no route was added and the tier is unchanged — only the targets. The authority is identical on all three branches (a caller-supplied host path, plus file movement), the same `validate_reference_folder_path` runs on the same input through the shared `_validated_destination`, and `relocatable_identity` remains the single place that says which folders qualify. What must still be refused — the HuggingFace cache above all, which is `foreign` and `root_only`'s neighbour and would be reachable if the route ever keyed on a column instead — is pinned in the negative direction by `tests/test_insightface_relocation.py`.
+  - **Updated 2026-08-09 (fourth change the same day) — the locality total is now `29 = 24 local + 5 loopback`.** `POST /api/v1/model-folders/{folder_id}/relocate` moves the managed model store (§25) to a **caller-supplied host path**: it is the `reference-folders/{folder_id}/relocate` class *and* carries `POST /model-moves`' file movement, so it is the one shelf route on this tier for both reasons at once. It is refused with 409 for any folder that does not relocate — since #905 that is every folder but the managed store and PixlStash's own download folder; the tier is unchanged, the set of targets is not. **Updated 2026-08-14 (#906): the InsightFace packs join that set**, which again changes no arithmetic — no route was added and the tier is unchanged — only the targets. The authority is identical on all three branches (a caller-supplied host path, plus file movement), the same `validate_reference_folder_path` runs on the same input through the shared `_validated_destination`, and `relocatable_identity` remains the single place that says which folders qualify. What must still be refused — the HuggingFace cache above all, which is `foreign` and `root_only`'s neighbour and would be reachable if the route ever keyed on a column instead — is pinned in the negative direction by `tests/test_insightface_relocation.py`.
 
     Arithmetic, not judgement — pinned by `tests/test_authz_host_capability_16_3.py::test_host_capability_tier_split_is_25_local_5_loopback`.
 
@@ -9056,6 +7306,1770 @@ fact, not a grid view a client's filters could exclude it from). It carries no
 count — the payload is a "look again" nudge, and the client re-fetches
 `GET /moves/pending` for the real, live-classified numbers, the same reason
 the queue itself keeps no cached verdict.
+
+## 25. Model Shelf
+
+The hub's catalogue of model files and the verbs that act on it. The shelf's
+path containment is §13, "Stored path containment"; the library and hub it
+lives beside are the rest of §13.
+
+### 25.1 The shelf's five verbs (shelf plan F3)
+
+**Five verbs, two new routes.** Assign was already `PUT /adapters/{sha256}/attachments`. Rename, Set base model and Set kind write one curated hub column each and differ in nothing else, so they share `PATCH /models`; Forget is `POST /models/forget`. Adding three routes that ran the same UPDATE with a different column name would have been three sets of guards to keep in step.
+
+**Addressed by `model.id`, never by hash.** A 24 GB checkpoint is listable the moment it is registered and stays `sha256 NULL` until `MissingCheckpointHashFinder` reads it, so a hash-addressed verb layer would leave the largest files on the shelf as the only ones that cannot be corrected. `model.id` is AUTOINCREMENT and never reissued.
+
+**`PATCH /models` writes only the fields the body carries**, using `model_fields_set` rather than a null check, so an explicit `null` is a *clear* (a wrong base model back to unset, which returns the row to the filter's "not set" bucket) while an absent field is untouched. That distinction is what lets one route carry three verbs without Set base model blanking the names in the selection.
+
+Three guards on it, none of them authz:
+
+- **`display_name` is refused for more than one id.** A name is a fact about one file; in bulk it would give every selected row the same one, and there is no undo.
+- **`file_kind` cannot be cleared, only corrected.** Every file is something and `unknown` is how the shelf says so; a null would leave a row neither list block matches.
+- **A correction the hub's own CHECK would reject is refused by name.** `model` carries `CHECK (file_kind <> 'adapter' OR sha256 IS NOT NULL)` and the same for `kind`. Left to SQLite a violation surfaces as a 500 naming `CHECK constraint failed`, which tells the owner nothing about the file they picked. The guard decides on the **post-write** state (`changes.get(col, row[col])`), not on the body, because three different bodies reach the same violation and only one mentions `file_kind`: promoting an unhashed checkpoint; `{"kind": null}` on a row that is already an adapter, which names no `file_kind` at all; and `{"kind": null, "file_kind": "adapter"}`, which a guard reading the *stored* kind waves through. Both of the latter were 500s until the CSO review of #869 found them.
+
+**Forget is gated on the row's state, never on the size of the selection** (ruled 2026-08-10). A model is forgettable only when no copy of it is `present` **or `unreachable`**. The second is the one that matters: `unreachable` is the we-could-not-look state an unplugged NAS produces, and acting on it would let one call wipe the curation for a whole drive. A selection of one is therefore just a legal selection and needs no special case, and the confirmation stays at every size, because what makes it confirm is that curation cannot be reconstructed — as true of one row as of four hundred.
+
+**The gate and the DELETE are one critical section.** `HubDatabase.fetchall` takes and releases the hub lock per call, so reading the states through it left a window in which a background `ModelFolderScanner` could flip a row from `missing` back to `present` between the check and the delete, and the model would be forgotten anyway. Both `SELECT`s therefore run on the transaction's own connection inside `with hub.transaction()`. Small window, unrecoverable consequence, on the one shelf operation with no undo behind it — the wrong side of that trade, and found by the CSO review of #869. `tests/test_model_shelf_api.py::test_forget_reads_its_gate_inside_the_write_transaction` counts the reads that escape the transaction rather than trying to schedule the race.
+
+**Ids that fail the gate come back under `refused` with a reason rather than failing the call.** A selection is made against a list that may be seconds old, and failing the whole request because one file came back is the wrong answer to good news. That response *is* the receipt the shelf shows.
+
+**Vault attachments survive a forget, deliberately.** `adapter_attachment` lives in each library's vault keyed by the content hash, so the rows held by libraries that are not open are unreachable from here and deleting only the active library's half would be an arbitrary subset. Left in place they are invisible (every read joins hub to vault) and they re-link by content if the file ever returns — the same property that makes folder removal a tombstone. What Forget destroys is the hub-side curation: name, base model, kind, trigger words. That is the whole reason it is one of the two confirmations while folder removal is neither.
+
+**No undo, and no operation-log half.** The v1.9 operation log is vault-only and the shelf's rows are hub-side; the decision to span it was overturned on 2026-08-09 and reaffirmed 2026-08-10. Confirmation only where the prior state cannot be reconstructed: a bulk base-model overwrite and Forget.
+
+### 25.2 The built-in model folder: declared, never scanned
+
+**PixlStash downloads engines for itself, so it declares what they are.** The
+shelf catalogues by *reading* — the scanner walks a folder, reads each
+`.safetensors` header and decides. That is right for a folder of LoRAs the owner
+assembled and wrong for our own engines: half of them are ONNX or `.pt`, which
+the scanner does not even yield (it walks `SHELF_MODEL_SUFFIXES`), and every one
+of them is a file we chose to fetch. `services/builtin_models.py` declares them
+and writes the rows; nothing is parsed and nothing is hashed, so a 339 MB tagger
+costs an existence check at start-up.
+
+**`file_kind = 'engine'`, with the role in `kind`.** `kind` already holds free
+text (`lora`, `lokr`) and already renders as the row's label, so `tagger` /
+`captioner` / `scorer` / `face` ride there and `file_kind` stays four values
+wide instead of growing one entry per role. No schema change: the `model` CHECK
+constraints bind only `adapter`. `kind` holds the **primary** label only; the
+full set lives in `model_capability` (below).
+
+**The scanner must skip these folders**, which is what `model_folder.owner`
+marks. It yields `SHELF_MODEL_SUFFIXES` only and sweeps whatever it did not see
+to `missing`, so pointed here it would mark the ONNX tagger and both `.pth`
+scorers missing on every pass. `POST /model-folders/{id}/rescan` answers `skipped` for
+them, as it already does for a `source` folder.
+
+**The filenames are restated rather than imported.** Every downloader names its
+files as module constants, but those modules import onnxruntime, torch, cv2 and
+PIL at module level and start-up must not pay that to learn two strings. The
+duplicate is pinned by `tests/test_builtin_models.py`, which imports the real
+constants where the cost is free. Drift is self-announcing rather than silent: a
+renamed file makes its declared row go `not_downloaded` *and* the real file
+appear in the unclaimed readout, which is a visible pair.
+
+**Protected, because they are ours.** `DELETE` on the folder answers 409 (the
+caller is authorized; what refuses is what the target is), and every verb refuses
+an engine row: renaming our own tagger would make the shelf lie about it,
+assigning one to a character means nothing, and forgetting one deletes a row the
+next start-up declares straight back. Forget reports `is_a_builtin_engine` as a
+**refusal reason** rather than raising, which is the shape that route already
+speaks — and the check runs *inside* the delete transaction, alongside the state
+gate, rather than as a route-level read that would break the one-critical-section
+invariant.
+
+**Declared-but-absent is normal, and it has its own word.**
+`sac+logos+ava1-l14-linearMSE.pth` is fetched only for the CLIP model that needs
+it, so about half of these are absent on any given machine. That is a state, not
+a warning — which is why `declare_folder` writes **`not_downloaded`** and never
+`missing`. `missing` is the *scanner's* word for a registered file that was in a
+readable folder and is not in it any more, and the shelf draws it as a fault
+(error rail, error glyph, "The file is not where it was"): a false alarm on a
+healthy machine, which is what #926 reported. Everything declared here is
+re-fetched the moment something needs it, so the softer word is also right for a
+file that WAS here and is gone. The **sweep** at the end of `declare_folder` is
+the one exception and still writes `missing`: a row the declaration no longer
+*names* — `antelopev2` deleted out of the InsightFace store, a repo dropped by
+`huggingface-cli delete-cache` — is gone rather than pending, because nothing
+will fetch it back.
+
+**Only ENOENT is "not downloaded".** `declare_builtin_models` `stat`s each
+engine, and a `FileNotFoundError` is the one absence that means *nobody has
+fetched this yet*. Any other `OSError` — a permission denial, an IO error, a
+mount that has gone strange — is us being unable to **look**, which is
+`unreachable`, and it is logged with the path and the error. Folding those into
+`not_downloaded` would hide a real filesystem fault behind a download glyph,
+which is the same false-reassurance failure in the other direction from the one
+#926 reported. `DeclaredEntry` therefore carries the resolved `state` rather
+than a `present` flag: only the caller knows which of the three its own root
+means, and the InsightFace and HuggingFace roots — both of which read a listing
+before declaring anything, and both of which bail out entirely if that listing
+fails — can only ever mean the other two.
+
+**The unclaimed readout.** `unclaimed_files()` reports what is present and *not*
+declared — on a measured machine, `best.pt` at 339 MB, which nothing in the tree
+references by name or by pattern. It is called "not claimed by anything in this
+build", never "orphaned": we know our own manifest, we do not know that a
+previous build, a plugin or the owner did not put it there. Same epistemics as
+`missing` (a fact) against `unreachable` (the absence of one), and the same
+doctrine — detection proposes, it never applies, so nothing here deletes.
+`hf_hub_download(local_dir=…)` leaves `.cache/huggingface` beside what it writes,
+at the top level and inside every subdirectory it fills; that is the tool's, and
+reporting it would train the reader to ignore the list.
+
+**And the readout is declared, which is what makes it reachable (#927).** It
+existed, it was right, and *nothing called it* — so the shelf listed the four
+engines and said nothing about the 339 MB sitting beside them: invisible, and
+therefore impossible to act on. `declare_builtin_models` now appends one entry
+per unclaimed file, and two choices carry the fix:
+
+- **`file_kind='unknown'`, never `engine`.** Every shelf verb refuses an engine
+  row (see *Protected, because they are ours* above), so a leftover declared as
+  ours would be visible and still untouchable — half a fix that reads like a
+  whole one. `unknown` is what the shelf already calls *Unclassified*, and it is
+  the honest reading of "present, and nothing in this build claims it".
+- **Weights only** (`builtin_models.MODEL_SUFFIXES`: `.safetensors .ckpt .pt
+  .pth .bin .onnx .gguf` — a different question from the scanner's
+  `SHELF_MODEL_SUFFIXES`, and wider, because this folder is where the other
+  formats land). Every hit is now a row rather than a line in a
+  log, and a shelf that also lists a label CSV and a revision sidecar is one
+  nobody reads closely enough to notice the `.pt`. Bytes are unaffected: the
+  folder's total is read off the disk, not summed from these rows.
+
+**A re-declaration `COALESCE`s rather than restates.** That is a no-op for an
+engine — each declares its kind, role and name, and `PATCH /models` refuses one
+anyway — and it is what stops every server start from resetting a name the owner
+typed onto the one row class here they may curate. `file_kind` needs the same
+care for a sharper reason (`DeclaredEntry.restated_file_kind`): a leftover enters
+with `sha256` NULL, so `CheckpointHashTask` picks it up, and a digest that is
+already registered **merges** the two `model` rows — this folder's `model_file`
+is repointed at the survivor, which is somebody's real adapter. Restating
+`unknown` onto it would drop that adapter out of `/adapters` for its own folder,
+over a second copy the owner happened to leave in the download folder.
+
+Deleting the *file* is not this change and not this module: that is #925.
+
+### 25.3 The other two roots: InsightFace packs and the HuggingFace cache
+
+**The built-in folder was never the only place models land, and the other two
+were invisible.** InsightFace keeps face packs under `~/.insightface/models`;
+everything fetched through `huggingface_hub` goes to the HuggingFace cache. On a
+measured machine that is 0.9 GB and 116 GB against the built-in folder's 1.1 GB —
+so the shelf was showing the smallest of the three and the owner had no way to
+see where the disk had gone. `services/builtin_caches.py` declares both.
+
+**Declared, never scanned, for the reason above and one more.** The scanner
+yields `SHELF_MODEL_SUFFIXES` only: InsightFace holds ONNX and would list as
+*empty*,
+and the HuggingFace cache is content-addressed, with its 37 `.safetensors` behind
+`snapshots/` symlinks onto hashed blobs. A walk would read 116 GB to learn what
+the cache's own index already knows. Both therefore carry `owner`, which is the
+marker the scanner reads to skip a folder.
+
+**Discovered rather than restated, which inverts `builtin_models`.** That module
+declares filenames because it *chose* those downloads, and duplicating two
+strings beats importing onnxruntime at start-up. Neither reason survives here:
+the contents are whatever the owner and the tools put there, so a fixed list
+would be a guess that goes stale. InsightFace is one `listdir`; HuggingFace is
+`scan_cache_dir()`, which reads the cache's bookkeeping and measured **0.01 s
+against 116 GB and 26 repos**. Start-up cost is not the reason to avoid either.
+
+**InsightFace declares the union of what is on disk and what we provision.**
+Only `KNOWN_MODEL_PACKS` would hide the `antelopev2` and `buffalo_s` a real
+machine has; only what is on disk would drop a pack we provision that has not
+downloaded yet. Both, and an absent known pack lands `missing` — the same state
+as the ViT-L/14 scorer, and no more of a warning. The `.zip` InsightFace
+downloaded a pack from sits beside it and gets no row, the same judgement
+`TOOLING_DIRS` makes about `.cache`.
+
+**HuggingFace declares a repo, not a file.** A per-file listing would show the
+same weights once per revision and mean nothing; `repo_id` is the unit a person
+recognises and `size_on_disk` the number they came for.
+
+### 25.4 What a cached model is FOR: the feature classifier and `model_capability`
+
+**A cached repo is labelled by the feature it powers, not by its file format and
+not by its ML task.** `repo_type` is `model` for all 26 repos on a real machine
+and therefore says nothing. `services/model_features.py` answers from four
+sources, in order, the first one that answers winning outright: repos our own
+downloaders name (a fact, not a guess); the shipped `KNOWN_BASE_MODELS` table;
+the snapshot's own `model_index.json` / `config.json`; and then **`other`**,
+which is the part that matters — a VAE, a T5 encoder and a BERT are components
+of somebody else's pipeline, and forcing one into a feature label would put a
+confident wrong word in the column a reader uses to decide what is safe to
+delete. `…ForConditionalGeneration` is the documented trap: it is the class of
+every vision-language captioner *and* of `T5ForConditionalGeneration`, so it
+only counts as a captioner when the config also describes a vision tower.
+
+**A model that serves several features appears under each, which needs a set.**
+`features_for_repo` returns an ordered tuple, and the shelf lists the model once
+per entry. Two worked examples, and both are the reason: Florence-2 is one set
+of weights driving `get_captions` *and* `detect_objects` (what `DetectionTask`
+runs), and the CLIP the embedder loads is both the search encoder and the
+aesthetic predictor's backbone — `ImageEmbeddingTask` runs one forward pass and
+uses the result twice. A single label answers "what breaks if I delete this"
+wrongly for exactly the rows a reader is deciding about, which is the question
+the column exists for.
+
+**The set lives in `model_capability(model_id, capability)`**, the same
+one-model-many-rows idiom as `model_file` and read the same way — one whole-page
+query grouped in Python (`fetch_capabilities`), never a join onto the row SELECT
+that would fan every model row out once per capability. `model.kind` is left
+alone and keeps the **first** entry: it is the adapter-algorithm column, it
+carries a CHECK that says so, and every existing reader was written against one
+string. Only declared engines carry capabilities; a scanned adapter has none,
+because its `kind` is an algorithm and an algorithm is not a capability.
+
+**It is a child of `model` with foreign keys ON**, so every site that deletes a
+`model` row deletes its capabilities first — `forget_models` and the
+`CHECKPOINT_HASH` merge (which carries them across to the survivor, since the
+two rows are the same bytes). A forgotten child here does not leak quietly; it
+**aborts the delete**. The same rule is why `_rebuild_model_with_kind_check`
+does not have to carry this table: its guard is false forever once the rebuild
+has run, and the `CREATE TABLE` follows it. A third child would have to join
+that dance.
+
+**No index on `capability`, deliberately.** The shelf facets and filters
+client-side over rows it has already fetched, so nothing asks SQL "which models
+can X". The declaration restates the set wholesale rather than diffing it — at
+most two rows, and the declaration is the authority, so a capability it no
+longer claims has to go or the model stays listed under a feature it stopped
+serving.
+
+**`provenance` stays `builtin` on every row here.** It is a claim about how the
+row was *written* — declared by PixlStash's registration rather than scanned out
+of a folder the owner assembled — and not a claim that PixlStash chose the
+model. It did not choose most of them. `external` would say the row came from a
+scan, which is the one thing that never happens to these folders.
+
+**The shared writer is `declare_folder`.** All three roots resolve their own
+entries — an engine is one `stat`, a pack is a directory sum, a repo is a number
+from an index — and hand `DeclaredEntry` rows to one writer. Only the writing was
+ever common, so only the writing is shared.
+
+**The shelf had to be taught to ask.** `GET /adapters` defaults to
+`file_kind=adapter`, and the frontend's `Show` panel had exactly three blocks —
+adapters, checkpoints, unclassified — none of which requested `engine`. So the
+backend had answered `file_kind=engine` since #876, this document claimed the
+engines were "on the shelf for completeness", and nothing on the shelf had ever
+displayed one. The fourth block (`filters.engines`, on by default) is what makes
+that sentence true. A row's block comes from `blockOf`, so engines refetch and
+are replaced independently of the other three.
+
+**`movable` describes the folder, and gains a fourth value.** It says how a
+folder moves, not whether a route to move it is built yet:
+
+| Value | Meaning | Folders |
+|---|---|---|
+| `per_item` | files move one at a time | a folder the owner assembled |
+| `root_only` | relocates as a whole | the managed store and the InsightFace packs (both have a route), our downloads (#905 still owes one) |
+| `external` | taken *from*, never written into | an ai-toolkit output root |
+| `fixed` | **cannot relocate at all** — another tool owns where it lives | the HuggingFace cache |
+
+`fixed` exists because `root_only` would be a lie about the cache. Its location
+is `HF_HOME`, read at import by a library shared with every other tool on the
+machine, so "moving" it is a restart and a re-download rather than a move — and
+the design requires that row to render with no drag handle and no Move, its one
+action being an explanation. A value the UI can read is what makes that possible
+without special-casing a path.
+
+**The move guard names both `root_only` and `fixed`.** Neither permits a
+per-item move out, so keying on one would leave the other open — which is
+precisely how renaming this vocabulary could silently drop the protection. The
+plan originally said `external` for these two roots; that would have overloaded
+a word already meaning "ai-toolkit output root" *and*, because the guard is
+keyed on values rather than on `owner`, would have removed the protection on the
+way past. Recorded here rather than in the plan because this is the shipped
+behaviour.
+
+**A declaration sweeps what it no longer names**, and these folders have nowhere
+else to get that. The scanner marks anything it did not see on a walk `missing`,
+and it skips these precisely because they carry an `owner` — so without a sweep
+in `declare_folder` a row here could never stop being `present`. It is a no-op
+for the built-in engines, whose entry set is a fixed tuple naming every row; it
+exists for the discovered roots, where `huggingface-cli delete-cache` drops a
+repo out of the index and a deleted pack drops out of the listing. The row left
+behind would otherwise claim its bytes forever, inflating the `present_bytes`
+the folder list reports. Predicate is `seen_at <` the run's own stamp, not `!=`,
+so a concurrent declaration cannot have its rows swept by this one.
+
+**Each root is declared independently at start-up**, so one unreadable root
+cannot cost the shelf the other two, and every failure is logged and swallowed:
+a machine that has never run face detection has no InsightFace directory, and one
+that has downloaded nothing through the library has no cache. Both are normal.
+
+**Where the folder is: one accessor, and a location that can be recorded (#905,
+closing #112).** `builtin_models.builtin_model_dir()` is the single answer, and
+the declaration, `inference/engine.py` and `tasks/image_embedding_task.py` all
+ask it. They used to each build `user_data_dir("pixlstash")/downloaded_models`
+for themselves — agreeing by convention, not by construction — which is exactly
+what made the folder immovable: relocate it and the shelf would have declared the
+new location while every downloader kept filling the old one and re-fetching what
+had just been moved away. Unifying them needed
+`ImageEmbeddingTask.AESTHETIC_MODELS` to stop resolving its paths at **import**
+time; the table now holds `filename` and `_aesthetic_config()` joins the folder at
+use time. `tests/test_builtin_models.py::test_no_module_builds_the_download_path_for_itself`
+is what stops a fourth caller reintroducing the convention.
+
+Resolution order, first hit wins:
+
+1. `PIXLSTASH_BUILTIN_MODEL_DIR` — for a deployment that mounts the folder
+   elsewhere without moving anything into it. It now redirects the folder
+   *whole*, downloads included, which is what makes it safe to name here; the
+   test suite no longer uses it (see below).
+2. the location a relocation recorded, in `downloaded_models.location` beside
+   the default;
+3. `user_data_dir("pixlstash")/downloaded_models`.
+
+**A record naming a folder that is not there is still obeyed, and said so once
+per start.** Obeyed, because the folder is normally on a drive and a drive may
+be away for an afternoon; the alternative was tried and withdrawn under review,
+since falling back to the default makes a vanished folder unrelocatable
+(`relocatable_identity` recognises it by path) and leaves two copies once it
+returns. Said, because the next download re-creates the recorded path and pulls
+~750 MB into it, and nothing anywhere used to mention that — which is what made
+one stale record an investigation rather than a `grep`.
+
+The line is `_warn_if_the_recorded_folder_looks_wrong`, called from
+`declare_builtin_models` at start-up. **Not from the accessor**, which was the
+second withdrawn attempt: `builtin_model_dir()` is read on every call and sits
+behind `relocatable_identity` on the per-row path of `GET /model-folders`, which
+the frontend polls every three seconds, so a line there is a flood and its
+`stat` is a syscall against a drive that may be gone.
+
+**Two symptoms, because either alone goes quiet.** "The recorded folder cannot
+be read" is what a start sees while the drive is away — but where the record
+merely went stale, the download that follows creates the path, so that symptom
+lasts one start. The second says the same thing from the other side and does not
+heal itself: **engines still in the default folder, which a relocation should
+have emptied**. Before the re-download that is a fetch about to be repeated;
+after it, two copies with the recorded folder still filling. It is checked
+whatever the recorded folder holds, for exactly that reason — stopping at "the
+recorded folder has something in it" would report the accident only inside the
+window its own download closes. Silent when the default is empty, which is a
+relocation that worked: the files went with it.
+
+It fires only for the folder **a relocation recorded**, matched against the
+record itself. Not "anything that is not the default": the owner who symlinked
+the default folder at their big drive and then relocated onto it has a default
+that *resolves to* the recorded location, so a path test goes quiet for the
+person who did the most to move their models. And not at all while
+`PIXLSTASH_BUILTIN_MODEL_DIR` is set, since that names the folder over the
+record's head — a volume that has not mounted yet is a first start, nothing was
+ever fetched, and "delete the pointer" would be advice that does nothing. The
+record is read by a quiet reader beside `_configured_model_dir()`, which reports
+its own failures and has already been called by the time the declaration runs.
+
+It reports what `stat` says rather than asserting the folder is missing, so a
+permission error reads as one. An unmounted mount point that still exists as an
+empty directory is indistinguishable from an empty folder and is not claimed.
+
+`declare_insightface_packs` says the **first** of those about a recorded pack
+root that cannot be listed, in place of the "normal on a machine that has not
+run face detection" it logs otherwise — which is exactly wrong for a machine
+that has a recorded root, since having one means it ran face detection. A root
+recorded back onto `~/.insightface` itself falls through to that ordinary line,
+because the remedy would name the directory it starts from.
+
+It deliberately does **not** say the second, and the asymmetry is the point:
+`downloaded_models` is PixlStash's alone, so engines still sitting in it can
+only mean a relocation that did not take. `~/.insightface` is the *library's*
+root, shared with every other InsightFace tool on the host — ComfyUI's face
+nodes among them — so packs under it are just as likely to be another tool's,
+and the two states are byte-identical on disk. A line claiming a failed
+relocation there would fire forever on an ordinary machine, and its remedy would
+tell the owner to abandon the packs they moved in favour of somebody else's
+directory. Where a claim cannot be told apart from an innocent state, the claim
+is not made.
+
+**The recorded location is a file, not a hub row**, because the folder is
+machine-global — one download serves every library and every server instance on
+the host — while a hub belongs to one deployment. In the hub, a second deployment
+on the same machine would keep downloading to the old place, which is the
+divergence the accessor exists to remove. Read on every call rather than cached,
+so a relocation applies to the next download instead of to the next restart.
+
+**Relocating it is `POST /model-folders/{id}/relocate`**, the managed store's
+route, gated by `managed_model_store.relocatable_identity()` — the one place that
+says which roots relocate, read by the route *and* reported to the client as
+`relocatable` on `GET /model-folders`. It has to be reported: the download folder
+carries the same `kind`, `owner` and `movable` as the InsightFace packs
+(`declare_folder` writes all three identically), so it is told apart by **path**,
+which no client can do. The folder adds two steps to the relocation's ending,
+both after the last file has landed and before the hub is told: its **companion**
+files are carried across (they are declared but have no `model_file` row, and an
+engine without its label set is a broken engine), and the new location is
+recorded. Order matters — a pointer written before the files arrived would send
+the next download to an empty folder.
+
+**Start-up declaration is off in the test suite** (`Server.DEFAULT_DECLARE_MODEL_ROOTS`).
+These roots are machine-global, so a `Server` on a temp config dir would otherwise
+describe whichever engines the developer's machine holds — `test_workers_api`
+caught that as `assert 3 == 0` on a runner with a warm cache. Pointing the
+accessor at a temp directory instead, which is how this was handled before, stopped
+being an option the moment the downloaders started reading it: a fresh temp
+directory means every engine is downloaded again on every shard, against the model
+cache CI restores. `tests/test_builtin_models.py` covers the declaration directly
+against a `tmp_path`.
+
+**Writing the recorded locations is off in the test suite too**, and by
+construction rather than by convention: the session-scoped autouse
+`sandbox_the_recorded_model_locations` in `tests/conftest.py` redirects
+`builtin_models._pointer_path` and `insightface_model_utils._pointer_path` into a
+session temp directory, leaving a test's own redirection of `_pixlstash_data_dir`
+untouched. Both records are machine-global and outlive the process that writes
+them, so a test that writes one has changed where the real PixlStash on that
+machine downloads its engines — which is not hypothetical: a record naming a
+finished run's `tmp_path` had every later start re-create the deleted directory
+and fetch ~750 MB of engines into it, silently, while the real ones sat in the
+default folder. Per-test redirection of the seam was the previous protection and
+it is the remembered kind: it lapses when a relocation's worker thread finishes
+after the redirection is undone, and it never existed for a module that did not
+think to add it. `test_no_test_can_name_the_machines_own_recorded_locations`
+fails if the fixture goes away.
+
+Two details of that fixture are load-bearing. The redirected name carries the
+**writing test's id**, so one test's record cannot change where a later test in
+the same shard downloads — one shared file would be a flake the sharder
+reshuffles between runs. And nothing is **restored** at the end: a relocation
+records its location from a daemon worker thread the suite leaves unjoined, so
+putting the original `_pointer_path` back would reopen the machine's file for
+exactly that write. The empty-sandbox assertion is a tripwire rather than a
+census — it sees a write made while no test had redirected the seam, and a late
+thread write that lands during a test which *has* redirected it goes to that
+test's `tmp_path` instead: safe, but unreported.
+
+The write that poisoned a real machine has **not** been reproduced, and nothing
+here should be read as naming it. What was found alongside the fixture is a
+shape that lets any of this escape a test: `test_relocate_is_owner_only_and_local_only`
+ended on a real `202` relocation it never awaited, so that job's ending ran
+inside whichever test came next. **A `202` from this route is awaited, always**,
+and `no_model_move_outlives_its_test` in `tests/conftest.py` fails any test that
+leaves a move running, suite-wide — which is why a module fixture may clear
+`model_moves._job` when it sets up but never when it tears down: an autouse
+fixture tears down last, so clearing it there hides the leak from the guard.
+
+**Note what that identity rests on.** The route decides whether it is relocating
+the download folder with `is_builtin_model_dir(folder["path"])`, which compares
+against `builtin_model_dir()` — the recorded location itself. Identity is
+therefore held in a mutable file rather than in the row, so a folder whose path
+comes to equal the recorded value inherits it, including the right to rewrite
+the record when relocated. That is worth closing; it is also the loose end of
+the investigation this fixture came from, which never established which process
+wrote the record it found.
+
+#### Relocating the InsightFace packs (#906)
+
+`root_only` said the packs relocate as a whole before anything could relocate
+them; #906 made the claim true, and deliberately after #902's vocabulary change
+rather than inside it, so a rename could not put face extraction in its blast
+radius. It landed after #905 and follows it deliberately: the two roots are the
+same kind of path and are now recorded, gated and reported the same way.
+
+**The root is a recorded location, not a config key.**
+`insightface_model_utils.insightface_root()` is the single answer, and all three
+callers ask it: the `auraface` download (`_pack_dir`), the shelf's declaration
+(`builtin_caches.insightface_models_dir`) and the `FaceAnalysis(name=…, root=…)`
+the face pipeline constructs. Resolution is the recorded root, else
+`~/.insightface`; read on every call, so a relocation applies to the next
+download rather than to the next restart.
+
+It is written to `insightface.location`, **beside the download folder's own
+pointer and resolved through the same `_pixlstash_data_dir()` seam**, for the
+reason #905 gives about `downloaded_models.location` and which applies here word
+for word: this path is machine-global — InsightFace has exactly one root per
+machine, and one set of packs serves every library and every server instance on
+it — while `server-config.json` and the hub each belong to one deployment. An
+earlier revision of this change put it in `server-config.json`; that would have
+meant a second PixlStash on the same machine kept downloading packs to the old
+place, which is precisely the divergence a single accessor exists to remove.
+`insightface_model_pack` stays in server-config because it is a *preference*
+about which pack to load, not a machine path.
+
+**There is deliberately no environment override**, unlike the download folder's.
+`PIXLSTASH_INSIGHTFACE_DIR` existed and named the *models* directory — one level
+below the root that is now recorded — so the two could disagree: the shelf would
+declare the override path while downloads and `FaceAnalysis` used the root, and a
+relocation identified by `insightface_models_dir()` would repoint the row at a
+directory the next start would not declare. Inert while nothing could relocate, a
+bug the moment something could. It had no callers in the product or the suite and
+was removed; `PIXLSTASH_BUILTIN_MODEL_DIR` is safe precisely because it redirects
+its folder *whole*.
+
+**The path names the root, not the folder.** `models` is InsightFace's own layout
+— the library joins it onto whatever root it is given — so the folder follows the
+root to `<path>/models`. Naming the folder directly would mean accepting only
+paths whose last component is `models`, which is a worse thing to ask of the
+owner than one documented sentence. It is the one asymmetry in the relocate
+route's contract and it lives entirely on the server: the dialog sends the path
+the owner picked, exactly as it does for the other two.
+
+**A pack is a directory, so this one does not go through `ModelMover`.** There is
+no per-file row to repoint and no `sha256` to verify a copy against — packs are
+declared from a listing, never hashed. `model_mover.move_directory` keeps the
+guarantee that matters instead: **copy under `.pixlstash-partial` → rename into
+place → then remove the source**, so a *complete* pack survives at one end or the
+other. That is the shape of the per-file ordering and it is load-bearing for a
+different reason — a half-populated `buffalo_l/` is worse than none at all,
+because the pipeline would start, find the directory and then fail on a model
+that is not in it. Same-filesystem is `os.rename` and copies nothing.
+
+**Everything around the work is the shared relocation.** `relocatable_identity`
+names it (so `GET /model-folders` reports `relocatable` for it without the client
+knowing why), `_start_job` gives it the machine-wide `SHELF_IO_LOCK` slot and the
+job clients poll, `_validated_destination` runs the same blocklist on the same
+input, and `_finish_relocation` promotes the destination and carries every pack
+row across — the `missing` tombstones included. Validation stays in the POST: an
+unusable destination, a pack that would overwrite one already at the target, a
+relpath escaping its folder, or a copy that would not fit are 4xx before a byte
+moves.
+
+**The pointer is written before the hub is told**, the download folder's order
+and correct here for the same reason: a root recorded before the packs arrived
+would send the next download into an empty directory. If that write fails the
+packs are already at the new root and a relocation is not undoable (the cancel
+ruling), so the hub is still told the truth and the lost durability is logged as
+an error naming the pointer and the repair. Interrupted halfway, the moved packs
+are at the new root, the rest are at the old one, and the recorded root still
+names the old one — so face extraction keeps working and re-running finishes the
+job (a pack whose source is gone is skipped, not failed).
+
+**What is still refused, and why the negatives are asserted.** Widening the route
+is the kind of change that quietly opens it to everything, so
+`tests/test_insightface_relocation.py` pins the refusals beside the acceptance:
+the HuggingFace cache (`fixed`, and `foreign`/`root_only`'s neighbour — it would
+be reachable if the route ever keyed on a column instead of on
+`relocatable_identity`), a folder the owner registered, and an unknown id. The
+per-item move guard in `ModelMover._plan_one` is untouched and still names both
+`root_only` and `fixed`.
+
+### 25.5 The managed model store (shelf plan B7)
+
+**Exactly one `model_folder` row with `kind='managed'` always exists.** It is
+PixlStash's own model storage, the way the vault owns picture files, and it is
+created on first run by
+[`services/managed_model_store.py`](../pixlstash/services/managed_model_store.py)
+(`ensure_managed_folder`, called from `Server.__init__` right after the hub is
+bootstrapped). It is the default destination for a drop or an ai-toolkit import.
+
+- **Why `managed` rather than a seeded `user` folder.** With zero registered
+  folders there is nowhere to drop or import a model, so drag-in is impossible
+  on a fresh install. But a `user` folder is an *association the owner made*, and
+  one the owner is forbidden to dissolve is not an association — the honest
+  answer is a kind that means "PixlStash's own storage", which was already in the
+  enum and created by nothing. `user` and `foreign` folders may legitimately
+  number **zero**; that is a normal state (nothing catalogued in place) and gets
+  no error and no message.
+- **Where it goes: beside `hub.db`, under the config directory, not at a fixed
+  `user_data_dir` path.** Same reasoning as the hub itself (#168), and stronger
+  here: this is a directory files are *copied into and unlinked from*, so a fixed
+  platform path would have every test run and every alternate deployment writing
+  into the owner's real store. A default install therefore gets it under the
+  platform user directory anyway, because that is where the config dir is.
+- **Relocatable, never removable.** `DELETE /api/v1/model-folders/{folder_id}`
+  answers **409** for this row — not 403: the caller is fully authorized and the
+  request is well formed, and what refuses it is the state of the target. A 403
+  would send an operator hunting through the §16.3 tiers for a permission that
+  does not exist. `POST /api/v1/model-folders` accepts `user` and `source` only,
+  so a second managed row cannot be made over HTTP either. Both directions are
+  asserted (`tests/test_model_shelf_api.py`): the managed row is refused, an
+  ordinary `user` row is still forgotten — over-blocking would break the shelf's
+  only tombstone.
+- **`ensure_managed_folder` never overrules a relocation.** The row's `path` is
+  the authority, so a start after the owner has moved the store to another drive
+  returns the existing row untouched rather than re-pointing it at the config
+  dir and stranding every file. It is also idempotent, promotes a pre-existing
+  `user` row at the same path rather than failing the `UNIQUE(path)` insert, and
+  degrades to "no store registered" rather than refusing to boot when the
+  directory cannot be created.
+- **`movable='root_only'`, `owner='pixlstash'`.** Nothing enforces `movable`
+  today — the mover does not read it — so it describes what the folder is rather
+  than gating an operation. Whether the UI offers moving a single file *out* of
+  the store is a verb question and is not settled here.
+- This is also what settles the integration plan's §4.1 zero-copy claim: the
+  ComfyUI picker node registers **this one store**, not an enumeration of every
+  present folder across possibly-offline drives. The store is therefore designed
+  as a single directory and must not become several.
+
+### 25.6 `Add file`: one loose model onto the shelf (shelf plan F6)
+
+`POST /api/v1/model-files`
+([`routes/model_files.py`](../pixlstash/routes/model_files.py)) is the path for a
+single adapter or checkpoint that is **not** part of a training run and does not
+deserve a registered folder of its own — the file downloaded into `~/Downloads`
+an hour ago. It copies that file into a folder the shelf catalogues (the managed
+store above, unless another is named) and registers it there, so the row is on
+the shelf when the call returns and the owner never has to rescan.
+
+- **A copy, never a move.** The source is the owner's own file in a directory
+  PixlStash did not create, so nothing here unlinks it. `delete_after_import`
+  exists precisely because removing a source is a decision, and it is one made
+  about a *registered* folder rather than about an arbitrary path. The ordering
+  is therefore the mover's with its last step removed: **copy → verify by
+  SHA-256 → register the row and commit.** Every interruption leaves either
+  nothing or an unregistered file in the store, never a row naming a file that
+  is not there — and it takes the same machine-wide `SHELF_IO_LOCK` slot as a
+  move, an import and forgetting a folder, so two writers cannot race for one
+  destination filename.
+- **It is the one shelf route that takes a host path in its body**, which the
+  import block beside it deliberately does not (a run is *named*, and the server
+  joins the name to a registered root). That cannot be avoided here: the whole
+  point is a file in a folder nobody registered. So the containment is on the
+  **write** — `resolve_path_within(destination.path, basename)`, which also
+  refuses a symlink standing at the destination name — and the read is bounded
+  instead: a regular file of a `SHELF_MODEL_SUFFIXES` suffix, and refused
+  outright when it already
+  sits inside a registered folder, because copying it would put a second copy of
+  a catalogued file into the store forever and a rescan is what the owner wants.
+  It is `LOCAL_OWNER_ONLY` for both halves at once (§16.3): it takes a path like
+  `POST /model-folders` and writes files like `POST /model-moves`.
+- **Registration reuses the scanner, not a second dialect of it.**
+  `ModelFolderScanner.register_file` runs the same `_describe` → `_write_batch`
+  path a walk uses, so an added file and a scanned one are one kind of row —
+  same header parse, same `ON CONFLICT(sha256)` join onto a model the shelf
+  already knows. It sweeps nothing: a walk marks every row it did not see
+  `missing`, and this looks at one name.
+- **The bytes are hashed once, on the way in.** `copy_and_digest` digests them
+  as it writes and `file_digest` reads the copy back to prove it matches, so the
+  digest is known *and verified* by the time the row is written;
+  `register_file(…, sha256=…)` passes it to `_describe` rather than letting the
+  scanner read the whole file a third time with the caller still waiting. A walk
+  has no such digest — it found a file it knows nothing about — and passes
+  `None`, which is the path that hashes. One consequence is deliberate: a
+  **checkpoint** added this way keeps its digest instead of the NULL a scan
+  leaves for `MissingCheckpointHashFinder`. That finder exists so nobody reads
+  24 GB just to hash it; here the read has already been paid for, and deferring
+  anyway would schedule a second one for nothing.
+  A file whose header will not parse is **not** left in the store: the copy is
+  discarded and the call is a 400, because the scanner would not have registered
+  it either and a file the shelf never lists is not what "added" means.
+
+### 25.7 A trained model's previews: `<stem>_samples/`
+
+An ai-toolkit run is a directory of `.safetensors` **and** a `samples/` directory
+of the previews the trainer rendered at each step. One measured run was 1.9 GB of
+which `samples/` was 15 MB, so the provenance costs 0.8 % of the bytes and the
+import takes the whole run rather than only the weights
+([`services/run_importer.py`](../pixlstash/services/run_importer.py)).
+
+- **On disk in the destination folder, not in a hub store and not in a new
+  table.** One directory per imported checkpoint, named from that checkpoint's
+  own stem — `JimmyVehicle.safetensors` → `JimmyVehicle_samples/`,
+  `JimmyVehicle_0001500.safetensors` → `JimmyVehicle_0001500_samples/` — holding
+  ai-toolkit's own filenames unchanged. `model_mover.samples_relpath` is the one
+  place that name is derived; nothing else spells the suffix. The cost of this
+  choice is that a person opening the folder sees the previews too, which is
+  also the point: they survive PixlStash not being there.
+- **Which previews go where.** A sample goes to the checkpoint whose step it
+  names. The **bare final takes the highest sample step's** — it carries no step
+  of its own and it is the stack cover, so a rule that left it blank would make
+  the most visible row of a fresh import the only empty one. Importing that same
+  step as well copies its previews twice; that duplication is accepted.
+  `TrainingRun.samples_for` is the whole rule.
+- **Ordered inside the existing crash window, never widening it.** Per
+  checkpoint: after the `model`/`model_file` rows commit and **before**
+  `unlink_source`, so `delete_after_import` can never outrun the copy. That
+  ordering is the reason this was a data-loss fix rather than a feature: before
+  it, a source folder carrying `delete_after_import` destroyed the run's
+  previews outright.
+- **A failed copy is logged and non-fatal**, reported in the outcome's `detail`
+  with `sample_count: 0` while the checkpoint stays `imported`. Losing a preview
+  must not cost the weights. The copy is written to a `.pixlstash-partial`
+  directory and renamed into place, so a failure half-way leaves no
+  half-populated directory to be read as the whole set.
+- **A pre-existing `<stem>_samples/` refuses the whole batch**, in the same pass
+  as the filename collision and before the first byte. It is the sharper of the
+  two refusals: a checkpoint collision refuses a file the owner can see, while
+  merging into an existing directory would write into one they may have put
+  there. There is no undo for shelf operations.
+- **A move carries them** (`model_mover.carry_samples`, on both the same-drive
+  rename and the cross-drive copy paths, in the same position in the ordering
+  and under the same non-fatal rule), and their bytes are counted into
+  `require_space` — 15 MB per run is small against the weights and is not
+  nothing when the destination is nearly full.
+- **Read back over `GET /models/{model_id}/samples`** and its byte sibling
+  (§16.3, `local_owner_only`). Addressed by `model.id` rather than by sha256,
+  because a checkpoint nobody has hashed has no sha256 to be addressed by. Both
+  key on `is_sample_filename` rather than on "an image in a directory whose name
+  matched", so neither can be used to read the owner's own pictures back out of
+  a directory that merely sits at the derived name — the same test the delete
+  verb uses, and the reason all three verbs agree on what a sample is.
+- **Deleted with the model when the directory holds only previews** (see the
+  `Delete` section). The name is inferred, not recorded, so the contents are
+  what decide whether it is the model's.
+
+Deliberately not here: the shelf's Sample view, the sample/icon toggle and the
+promote-a-sample verb (the "Visual identity" ruling's card, which this makes
+buildable and stops at), and any persistence of `rank` or `config.yaml`.
+
+### 25.8 `Delete`: models off the shelf and off the disk (#933)
+
+`POST /api/v1/model-files/delete`
+([`routes/model_files.py`](../pixlstash/routes/model_files.py)) is the shelf's
+only destructive verb, and it lives beside `Add file` because the two are one
+authority — a file in a registered folder, written or unlinked. Before it, the
+shelf could rename a model, move it and forget a row whose file was *already*
+gone, but the only way to actually delete the 6 GB checkpoint the owner no
+longer wants was a file manager and then a rescan.
+
+- **The trash is the default and the undo.** `permanent=false` hands each path
+  to `send2trash`, so the OS keeps the bytes recoverable by the mechanism the
+  owner already knows; `permanent=true` unlinks, and there is no undo, no
+  operation-log half and no scrapheap behind it (the shelf-wide ruling of
+  2026-08-09 stands). The frontend sends `true` only for Shift+Delete, the
+  Windows-Explorer gesture. A machine with no trash we can reach — a container —
+  refuses with `trash_unavailable` rather than quietly unlinking instead, which
+  is the one substitution that could not be taken back. **Two honest limits on "the trash is the
+  undo":** Windows deletes outright anything larger than the Recycle Bin's
+  per-volume quota, which a multi-GB checkpoint routinely is, and a
+  freedesktop trash lives on the same volume as the file — so trashing frees no
+  space until the trash itself is emptied. The confirmation says the first out
+  loud; neither is something PixlStash can fix from here.
+- **Only the folders whose contents are the owner's.** `user`, and the
+  `managed` store PixlStash keeps for files it was *given* — which is where
+  `Add file` and an import land, so a shelf that could not delete from it could
+  not undo either of them. Everything else is refused whole: the engines
+  PixlStash re-declares on every start, the InsightFace packs, and the
+  HuggingFace cache, which is a symlink store shared with every other tool on
+  the machine. That is the line `model_mover._plan_one` draws for a move, drawn
+  here by `kind` rather than by `movable` because the managed store is
+  `root_only` — the *folder* moves as a unit — while the files in it are
+  individually the owner's.
+- **A directory of nothing but previews goes with the model; anything else
+  stays.** An imported checkpoint carries a `<stem>_samples/` directory beside
+  it, and the delete closes the lifecycle the import opens and a move carries:
+  skipping it leaves a directory no route lists and no rescan registers, and one
+  that then refuses the owner's *whole* re-import of that run, with the only
+  remedy outside the app. But **the model is a thing the caller named and this
+  directory is only inferred from its filename**, so removing it on the name
+  alone would destroy an owner's own folder of renders on a Shift+Delete they
+  meant for a `.safetensors`. What licenses it is the contents: ai-toolkit names
+  every preview `<timestamp>__<step>_<index>`, so a directory holding only those
+  is the model's whoever wrote them, and one file that is not — a favourite
+  render, a note, a subdirectory, a symlink — means it is the owner's and stays.
+  That is the same test `GET /models/{id}/samples` uses to decide what to list,
+  so all three verbs agree on what a sample is.
+
+  Deliberately **not** keyed on `model.provenance`. That is a fact about
+  *content* — one value shared by every copy of a model — while the risk is per
+  *copy*: a trained model with a second copy a rescan registered elsewhere would
+  have taken that folder with it, and an import onto an existing sha256 leaves
+  the row `external` (`_register`'s `ON CONFLICT` deliberately does not overwrite
+  provenance) while still writing the previews, so the gate would have been wrong
+  in both directions. Both were found by adversarial review of a draft that used
+  it.
+
+  Unlike the file it is **non-fatal**: the weights are what was asked for, so
+  previews that will not go are a warning and some occupied disk rather than a
+  failed deletion, and they are removed *after* the file for the same reason.
+  Both gestures remove it, by the call each uses — `send2trash` for the trash,
+  `shutil.rmtree` for a permanent delete — and a symlinked directory is refused
+  explicitly rather than left to whichever of those two happens to decline it.
+- **A model is deleted whole or not at all.** Every copy goes, so a model with
+  one copy in a user folder and another in the cache is refused rather than
+  half-deleted: unlinking the reachable half would leave the row the owner
+  wanted gone still on the shelf, rebuilt by the next scan. `unreachable` is
+  refused for the reason Forget refuses it — an unplugged drive is not a
+  deletion — and `missing` is not a refusal at all: there is nothing to unlink
+  and the row is exactly what was asked for.
+- **Bytes first, rows second, per model.** The unlink runs before
+  `purge_deleted_models` drops the rows, so an interruption leaves a row naming
+  a file that is not there — which the next scan marks `missing` — rather than a
+  file nothing on the shelf can see, which is the tombstone invariant the
+  mover's ordering exists to protect, read in the other direction. A model whose
+  unlink fails keeps its rows; the refusal distinguishes `delete_failed`
+  (nothing went) from **`partly_deleted`** (some copies went and one did not),
+  because "could not be deleted" over a model that has already lost half its
+  copies is the one sentence this route must not produce.
+- **The gate reads share one transaction, and the purge has a gate of its own.**
+  `forget_models` documents why the first is necessary: two `hub.fetchall` calls
+  take and release the hub lock between them, so a background
+  `ModelFolderScanner` can rewrite the states being gated on. The unlink cannot
+  run inside that transaction — a 24 GB file would hold the hub's write lock for
+  the length of a disk operation — so the remaining window is closed on the
+  other side: `purge_deleted_models` deletes the location rows this call emptied
+  and then drops a `model` row **only when no location row for it survives**. A
+  copy the scanner registered while the files were going therefore keeps its
+  model alive instead of being purged out from under a file that is really
+  there, and the route logs the difference.
+- **The link, never what the link points at.** Containment here is *not*
+  `resolve_path_within`, which returns a `realpath`: unlinking that would delete
+  the bytes a symlinked model points at and leave the link, gutting any other
+  row naming those bytes. A symlinked model is ordinary practice on this shelf
+  (`_present_copy` contains lexically for exactly that reason), so
+  `_contained_path` contains the file lexically and `realpath`s the *directory*
+  holding it — a `..` cannot escape, a symlinked directory component cannot
+  redirect the unlink out of the folder, and what is removed is the name the
+  shelf catalogues. A row that still escapes is refused as
+  `escapes_its_folder`: a broken row, never a request to unlink somebody's file
+  elsewhere on the disk.
+- **It holds the machine-wide `SHELF_IO_LOCK`** for the whole call, the same
+  slot an add, a move, an import and — since #1017 — forgetting a folder take,
+  so nothing can be copying into a folder this is emptying.
+- Authorization is `LOCAL_OWNER_ONLY` (§16.3). It takes no host path — the body
+  is a list of hub `model.id` — so it is on that tier for the destruction
+  alone, which is the unlink half of `POST /model-moves` without the copy that
+  justifies it.
+
+### 25.9 `Keep one copy`: merging duplicate models (#1439)
+
+`POST /api/v1/model-files/merge`
+([`routes/model_files.py`](../pixlstash/routes/model_files.py)) is the per-copy
+delete. The shelf has always *shown* duplicates — one `model` row per SHA-256
+with several `model_file` rows, `Show → Copies → Only duplicates`, a `copies`
+count on the row — and the only verb that acted on one removed **every** copy
+and then the row. This keeps the copy the caller names and removes the rest.
+
+The design is **resolve at use, do not rewrite on delete**, and every rule below
+follows from it.
+
+- **One file under two names is refused, not merged.** Two `model_file` rows are
+  one `model` row whenever the bytes match — and a symlink or a hard link makes
+  them match *because they are the same file*. A symlinked model is ordinary
+  practice on this shelf (`_present_copy` contains lexically for exactly that
+  reason), and `_contained_path` unlinks the link rather than its target on
+  purpose, which is right for the whole-model delete because every copy goes
+  anyway and exactly inverted here: keep the link, remove the target, and the
+  bytes are gone while the shelf still calls the keeper `present`. `_same_file`
+  asks `os.path.samefile` — `st_dev`/`st_ino`, so a hard link counts too — and
+  the model is refused as `keeper_is_that_copy`. A path it cannot stat answers
+  "the same", because that is the answer that removes nothing.
+- **The keeper is what the request names**, one entry per model, and every other
+  `present` copy of that model is what goes. Two entries for one model is a 400
+  rather than a choice made on a confused client's behalf. That is structural, not arithmetic:
+  no body can empty a model, and one that names a keeper the shelf does not hold
+  as `present` is refused (`keeper_not_present`) rather than acted on — removing
+  every other copy on the word of one that is not there is a 20 GB redownload.
+- **No row is deleted.** The removed copies keep their `model_file` rows at
+  `state = 'removed'`, so the record of *which files were the same model*
+  outlives the files. Two existing readers then need no change at all:
+  `recipe_asset_index` still resolves the removed copy's filename to this model,
+  so a picture's recipe panel still names it, and `_shelf_model_names` still
+  counts it, so `model_ghost_names` does not offer the owner a name to forget
+  forever. The third reader is new — `model_name_aliases`, which is what says
+  *what to load instead*. This is the whole reason the delete stops being the
+  thing you have to be right about.
+- **`removed` is its own state, and every sweep that writes `state` skips it.**
+  Four of them: the scanner's missing sweep, its two unreachable sweeps, and
+  `builtin_models.declare_folder`'s, which runs on every start and matters here
+  because `deletes_unclaimed_files` lets the merge act on the unclaimed files in
+  PixlStash's own download folder — one of the roots that function declares. `missing` is
+  the scanner saying "I looked and the file was gone", and it would keep saying
+  it about this copy for the rest of the folder's life — so without the
+  exclusion the first unattended scan — or the next boot — after a merge destroys
+  the distinction. `_known_files` reads `present` rows only, so a file the owner
+  puts back is re-read and re-registered rather than skipped.
+- **Only the copies being REMOVED need a folder whose contents are the owner's.**
+  That is the one place this differs from the whole-model delete, which refuses a
+  model that has *any* copy outside `user`/`managed`. Keeping the copy in the
+  shared HuggingFace cache and removing one from a user folder is a legitimate
+  merge; the reverse is not ours to do. Everything else is the delete's gate
+  verbatim, including the refusal of a model with an `unreachable` copy (an
+  unplugged drive is not a deletion, and the shelf cannot know whether the copy
+  on it is one of the two being reduced to one), `_contained_path` containment,
+  the same `trash_unavailable`/`partly_deleted`/`delete_failed` reporting, and the
+  same `SHELF_IO_LOCK` slot — which the ComfyUI read is deliberately **outside**,
+  because a 15 s-per-phase HTTP call inside it refuses every move, import, add and
+  delete on the machine for the duration, with a sentence about a move that is not
+  running.
+- **A `<stem>_samples/` directory does NOT go with the copy**, which is the one
+  step of the delete this route drops. That call is licensed by the model going
+  with its previews — the directory is then an orphan no route lists, and one that
+  refuses the owner's whole re-import of that run. Here the model survives, so a
+  run's previews are still the previews of a model on the shelf; and the copy
+  carrying them is usually the *imported* one, which is exactly the copy somebody
+  tidying a folder removes. Destroying them would be a loss the gesture never
+  asked for, and `permanent=true` would `rmtree` them. The cost is the re-import
+  refusal the delete avoids, which is visible and recoverable by hand; this is
+  not. `_warn_about_samples` logs the directory it left, so a refusal days later
+  is traceable to the merge.
+- **A partial failure records the copies that did go.** They are gone either way,
+  and leaving them `present` would draw the owner a broken row for a file they
+  successfully removed — and lose, for exactly the copies that were destroyed, the
+  record the whole design rests on.
+- **`dry_run=true` plans it and removes nothing**, through the same planner. It
+  exists so the client's confirmation is built on the server's own answer rather
+  than a second implementation of these gates — and above all so the ComfyUI
+  warning arrives before the bytes go.
+- **The warning is asked of ComfyUI, not of the filesystem.** PixlStash holds a
+  ComfyUI **URL** and no path into that install's `models/` tree, so
+  `comfyui_reads` is built from the combo lists it publishes
+  (`advertised_model_names`), matching each doomed copy by relpath and by
+  basename. It carries `keeper_advertised`, because the two cases need different
+  sentences: with the keeper advertised a run **through PixlStash** is put on it
+  and only a graph queued inside ComfyUI breaks, and without it nothing can be
+  substituted there at all. An unset URL or an unreachable ComfyUI warns about
+  nothing, and the client says that the absence of a warning is not a promise.
+
+#### Filling a card's picture inputs (#1457)
+
+`POST /workflows/run` fills a card's picture inputs itself; there is no other run
+route since #1410. The pieces, all called from `_plan` / `_submit_every` in
+[`routes/workflows.py`](../pixlstash/routes/workflows.py):
+
+- **Addressed the way the card stores them**, `(slot_label, input_name)` in
+  `workflow_key_picture_input`, never by node id.
+  `workflow_inputs.card_input_modes` enumerates the inputs from the resolved
+  graph (`detect_workflow_io`), labels them with `topology_node_labels` - the
+  bridge `_apply_addressed` uses for parameter values - and lays the stored rows
+  over them through `resolve_input_modes`, so the defaulting rule (one
+  `selection`, the rest `picker`) is stated once. **Two loaders feeding one node
+  get the same topology label**, because a label does not see which input of its
+  neighbour it feeds; that is the ordinary subject-plus-reference shape, so
+  colliding picture inputs get a suffix digesting the `(consumer label, input,
+  slot)` edges they feed. Still node-id free, so a card's three source tiers
+  agree. Loaders identical even on that share one address, which fills both.
+  **A linked file with `pixlstash_bindings` keeps them**: the sanitised graph
+  has lost the key, so `Source.bindings` carries it, and only inputs an `image`
+  binding names are addressable - `[]` is a file the old import dialog stored
+  taking no picture, and detection must not opt it back in.
+- **Resolution is `workflow_inputs.resolve_fills`**, first answer wins: the
+  body's `inputs` entry (`picture_id: null` sends the selection there), a
+  `fixed` pin whose `pixel_sha` a kept picture still holds (the **oldest** kept
+  copy, `oldest_kept_by_pixel_sha`, so importing a duplicate never moves it), a
+  stored `selection` when the body has pictures and has not sent them elsewhere,
+  and then - decided over the whole card, after the rest - the one input still
+  open when exactly one is, which the selection fills unasked. A dead pin does not
+  resolve its input. That rule is what lets a two-input card with a pinned
+  reference, and "Make more like these", run with no `inputs` at all.
+- **An open input refuses only when the graph cannot run it.**
+  `picture_input_unfilled` (it replaced `fixed_input_deleted`) names the open
+  inputs whose own value is empty or in the pre-flight's `missing_input_images`,
+  and those a fill could not be written into (`workflow_bindings.picture_target`
+  is `None`). An open `LoadImage` naming a mask the owner keeps in ComfyUI's input
+  folder runs as it always did - `judge` never read image widgets. It blocks the
+  group, not the batch.
+- **Order.** Inputs are enumerated before anything rewires the graph (#1463's
+  LoRA bypass changes the topology the labels come from, and keeps every other
+  node id), filled after `judge` on the graph that is submitted. Every refusal is
+  decided in `_plan`; `_upload_files` resolves every picture a submission feeds
+  (kept, file on disk) there too, so a binned picture is a 404 before anything is
+  uploaded. `_submit_every` then uploads each distinct picture **once per
+  request**, all of them before the first submission, named
+  `pixlstash-{library}-{id}-{pixel_sha}{ext}` because ComfyUI's upload
+  overwrites by name: the library prefix because one ComfyUI may serve two, and
+  the content because ids are reused. A picture not hashed yet uses its file's
+  mtime and size in place of the `pixel_sha`. `picture_id: null` on a run with
+  no selection is a 400, and an id past SQLite's INTEGER range a 422.
+  The pre-flight shares `_plan` and never reaches `_submit_every`, so it uploads
+  nothing by construction.
+- **A selection feeding an input is the repeat axis.** The group runs once per
+  selected picture, times `count`, and the `MAX_RUNS_PER_REQUEST` cap counts
+  that product. Each submission makes one picture: `pin_batch_size` sets every
+  latent `batch_size` (`is_picture_batch`, decided by the node's `LATENT`
+  output) to a literal 1, cutting a wired one, in `_plan` after the values. With
+  `stack: true` each pass stacks with its own picture (`stack_for_picture`), and
+  every save node's own `filename_prefix` is tagged with that stack and source
+  (`_tag_for_stack`), so an output a watched folder imports first still lands
+  there. That tagging applies to any stacked run, a card with no picture inputs
+  included, as the retired run route did.
+- **The read rides on the pre-flight.** `RunGroup.picture_inputs` is every input
+  with its mode, pin, `picture_id`, `picture_missing` and how this run fills it
+  (`fill`): the whole set, which is what makes the whole-set
+  `PUT /workflows/{workflow_id}/inputs` safe to call after it. The PUT also takes a pin
+  as `picture_id` and stores that picture's `pixel_sha`; a picture that is not
+  kept is a 400. A graph that will not reduce has no addressable inputs: it runs
+  as before, and is a 400 only when the body named an input.
+
+#### Resolving a model reference at submit
+
+`detect_model_targets`/`apply_model_swap`
+([`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py))
+are the detect-then-patch pair `detect_seed_targets`/`apply_seeds` and
+`detect_lora_targets`/`apply_adapter` already are, and they are wired into
+`_plan` in [`routes/workflows.py`](../pixlstash/routes/workflows.py) — one site,
+so `POST /workflows/run/preflight` and `POST /workflows/run` can never disagree.
+
+- **Detect is `preflight_prompt`'s `missing_models` and nothing else**, which is
+  the point: a swap aimed anywhere else would patch a field ComfyUI was happy
+  with or leave one it will refuse.
+- **Applied before `judge`**, so the graph that is verified is the graph that is
+  submitted. Applied after it, the substitution would be one nothing checked and
+  the owner would be shown a missing model they cannot find.
+- **Every candidate is verified against `object_info` before it is written.** A
+  swap PixlStash believes in and ComfyUI does not advertise only moves the
+  failure to the queue. This is why `model_name_aliases` may be generous — it
+  offers each present copy's relpath *and* its basename, because a combo entry is
+  relative to one of ComfyUI's own model folders and nothing on this side knows
+  which prefix it puts in front — and the combo list decides. **Its keys are
+  folded and its candidates are not.** The key is `normalized_filename`, which
+  lowercases, so `apply_model_swap` folds its lookup the same way (`_alias_key`)
+  or the whole feature misses every mixed-case filename, which is most real ones;
+  the candidates are the scanner's own spelling, because ComfyUI compares exactly
+  and a lowercased candidate is one it would refuse.
+- **Same model, therefore same bytes.** The aliases come from one `model` row's
+  copies, and the hub is content-addressed. A name two models share is dropped
+  rather than resolved, the rule `picture_recipe_service` already applies: it
+  names neither, and a coin flip would load somebody else's weights into a run.
+  Same weights at a different precision (`weights_id`) is **not** in scope; that
+  is a different output and stays a hint the owner accepts.
+- **Never silent, and never written back.** Each substitution is reported on the
+  group as `substitutions` (on the pre-flight and on the run alike) and logged. The
+  stored recipe keeps the filename it recorded, because the structural hash is
+  keyed on the topology assets: a swap written there would make a picture's
+  provenance claim a model it was not made with. The substitution is a fact
+  about *this run*.
+- **A substituted run lands on its own card.** A loader filename is a topology
+  asset (`structural_widget_value`, rule 5), so the picture a substituted run
+  produces carries an embedded graph naming the copy that was loaded and reduces
+  to a different `structural_hash` from the card it was launched from. That
+  follows from the issue's own ruling — a graph may be changed at submit and
+  never in storage — and it is the price of the run working at all; the
+  alternative is a refusal. It is a fork of the card, not a lie about
+  provenance: the picture's recipe names the file that really was loaded.
+- **The honest limit.** A graph opened in ComfyUI and queued there runs nothing
+  of ours, so it still names the file that went — which is what the merge's
+  `comfyui_reads` warning is for. A graph on the `ComfyUI-PixlStash` loaders
+  survives either way, because those address the shelf by id or digest and ask it
+  at run time. Not wired: the picture-recipe replay routes in
+  [`routes/comfyui.py`](../pixlstash/routes/comfyui.py), which carry their own
+  pre-flight and submit; the card run path is what "run it through PixlStash"
+  means for a workflow.
+
+#### A missing LoRA bypasses its loader rather than refusing the run (#1463)
+
+`bypass_missing_loras`
+([`services/workflow_run_service.py`](../pixlstash/services/workflow_run_service.py))
+and `bypass_node`
+([`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py))
+are the substitution above's neighbour and its last resort: where no copy of the
+file can be found at all, a **LoRA** is simply left out and the run happens
+anyway. It is one entry of the **repair registry** described in the next
+section, not a site of its own in `_plan`.
+
+- **Because a LoRA is optional and nothing else in the graph is.** Installing a
+  checkpoint is a trip away from the keyboard and the graph cannot run without
+  one, so it blocks the batch and that is the kind answer. A LoRA the graph can
+  run without is not, and one absent adapter on one card used to refuse a whole
+  mixed selection. The distinction is `model_folder`'s existing answer — the
+  entry's folder is `loras` — so no new plumbing decides it.
+- **Relaxing the refusal alone would not have worked.** A graph still naming an
+  absent file is one ComfyUI's own validation refuses, so the loader has to
+  leave the chain: `bypass_node` is ComfyUI's bypass (a node set to mode 4) on
+  the API graph, each output answered by the node's **first input of the same
+  type**, typed from `object_info` for the same reason `plan_lora_insertion` is.
+  It is that function's inverse, and it rewires nothing until every consumer has
+  been checked — a graph half rewired around a node still in it is worse than
+  one that refused.
+- **Three loaders keep their refusal, and each is the honest answer.** A
+  **stacker** whose other LoRA slots are filled stays, because taking the node
+  out would drop the adapters that *are* installed — and a slot counts as filled
+  whether it names a file or is **wired** from another node, since converting
+  `lora_name` to an input is an ordinary ComfyUI gesture and `preflight_prompt`
+  skips a link, so counting only literal strings would read a live second
+  adapter as an empty slot. A loader something reads an output of that no input
+  of that type can stand in for stays, because rewiring it would leave that
+  consumer wired to nothing. And a **forgotten** LoRA stays: `FORGOTTEN_MODEL`
+  means the hub lost the reference's name, not that the file is gone, so
+  bypassing would trade `resolve_references`' intended surfacing for a run
+  quietly made without an adapter the owner has — and send them to install a
+  file called `(forgotten model)`. All three are logged with the value that
+  could not be found.
+- **Judged again after, so the graph judged is the graph submitted.** The
+  bypassed loader is gone by the time the second `judge` runs, so it is not
+  reported as a missing model the owner would go looking for; what is left in
+  `missing_models` is what genuinely blocks.
+- **Reported only on a group that is actually submitted.** The bypass happens
+  before the final verdict because the graph needs it, but the *report* is written when
+  `group.runs` is set, and cleared again when a missing model elsewhere zeroes
+  the whole batch. What it says is "the run goes ahead without this LoRA", which
+  is a lie on a card that is about to be refused for a missing checkpoint — and
+  at the point the bypass runs, most of the refusals are not known yet.
+- **A bypassed run lands on its own card**, the same way a substituted one does,
+  and harder: deleting a node changes the **topology** hash and not only the
+  structural one, so `workflow_key` moves too. The pictures ComfyUI writes back
+  carry the submitted graph, so they are filed on a card for the LoRA-free
+  shape of this workflow rather than on the one that was run, and installing
+  the file later does not re-key them. That is the price of the run happening
+  at all; the alternative is the refusal this section exists to remove. It is
+  a fork of the card, not a lie about provenance: the picture's recipe names
+  the graph that really ran.
+- **A LoRA the REQUEST asked to add is never bypassed.** `_apply_loras` reports
+  its own `missing_models` for an adapter it cannot place, which is a refusal:
+  the owner asked for that LoRA by name, and running without it silently would
+  answer a different question. The bypass is only for the loaders the stored
+  graph carries.
+- **Never silent.** Each one is reported on the group as `bypassed_loras`
+  (`{file, folder, node_id, class_type, field}`) on the pre-flight and on the run
+  alike, and logged — the rule the substitution above follows, for the same
+  reason. The Run popup draws it *before* the run: a picture generated without
+  the character LoRA the owner expected, with nothing said, is worse than a
+  refusal.
+- **The owner can skip a LoRA for one run** (#1478): `skip_loras: [{node_id,
+  field}]` on the run body. `workflow_run_service.skip_requested_loras` takes
+  each loader out through the same `bypass_node`, on the run's copy only, before
+  a saved recipe's LoRAs are placed and before `judge`. The request is the
+  consent the automatic bypass lacks, so a `(forgotten model)` loader is skipped
+  when asked. What it cannot consent to is dropping a LoRA it did not name: a
+  stacker holding another filled slot, a loader nothing can be rewired around,
+  and any skip while ComfyUI cannot be asked become the blocking reason
+  `lora_not_skippable`. A skip is reported in `bypassed_loras` with
+  `requested: true`; the automatic ones carry `requested: false`. A slot no
+  graph of the run has is a 400; one named in both `loras` and `skip_loras` is
+  a 422; and a skip on a run spanning several cards is a 400, because a node id
+  names one loader on one graph. A saved recipe's LoRAs are matched against the
+  graph as it stood before the skip, so the LoRA a skipped loader held is not
+  applied and does not move on to another loader.
+- **A saved recipe's LoRAs are placed by what they are, not by position**
+  (`place_recipe_loras`): digest first, then case-folded basename, then any
+  free slot in graph order, so a recipe that ran before still runs the same.
+  The positional `zip` it replaced put a recipe stored in the other order onto
+  the wrong loaders and dropped a third LoRA on a two-loader graph without a
+  word. A LoRA with nowhere to go, or one the shelf cannot identify, is reported
+  on `RunGroup.unplaced_loras` (`{filename, sha256, node_id, reason}`), a fact
+  like `bypassed_loras` and never a reason.
+
+#### Editing a workflow's LoRA chain (#1478)
+
+`GET /workflows/{workflow_id}/lora-chain` reads the workflow's base graph as a chain: the model
+source, the LoRA loaders in the order a run applies them, and what reads the
+result. `read_lora_chain` types every link from `object_info`, as
+`plan_lora_insertion` does, and refuses (the route answers `editable: false` with
+the sentence) a graph it cannot edit honestly: loaders that start from
+different places, a second model that itself goes several ways, or a CLIP chain
+in a different order from the MODEL one. Only the MODEL path counts: the
+graph is first cut to the nodes an output node (`output_node` in `object_info`)
+reads, as ComfyUI runs it, so a leftover UNET loader wired into nothing is not a
+second model; another kind of model (an upscaler's, `WANVIDEOMODEL`) is on a
+path of its own and ignored. Only a plain one-slot loader wired into the MODEL
+path is an editable link; any other node that loads a LoRA (a stacker, a prompt
+tag, a character prompt builder) stays as an ordinary node the chain runs
+around, so a loader can always be added between the model source and what reads
+the model. **Where the model forks, the chain is a tree**: the loaders every
+pass reads are the trunk (`loaders`), and each node reading the fork (a base
+sampler, a hires pass, a detailer) starts a **lane** (`lanes`) with the loaders
+only it reads. Readers that are not loaders are grouped by the sampler they
+reach, so a guider and a scheduler feeding one `SamplerCustomAdvanced` stay one
+straight chain. A lane is named by the nearest sampler downstream of it (its
+ComfyUI title when it has one), and branches that meet again at one node (a
+model merge) are refused, since they are not separate passes. A workflow loading one model per pass (Wan 2.2 high/low noise) has no
+trunk: `model_source` is null and each lane names its own, CLIP included when
+each pass encodes its own prompt (SDXL base and refiner). A lane off a trunk
+must take its CLIP from the trunk's CLIP end. Only a further fork inside a lane, or loaders
+past a node that is not a loader, are left as they are, and `branch_note` tells
+the owner why the list is shorter than the workflow. A refused chain,
+or one read with ComfyUI unreachable, goes through `read_lora_chain_untyped`,
+which follows the `model` links so the chain can still be looked at; when
+ComfyUI did answer it also types the two ends best effort (the model source and
+what reads the chain's end), so the read-only view names what the chain runs
+between. Each loader carries the shelf digest it loads, when exactly one shelf
+LoRA matches.
+
+`PUT` takes the whole chain as the owner left it: `entries` for the trunk and,
+for a tree, `lanes` with one list per lane (left out, every lane stays as read).
+An existing loader is kept by `node_id` (moved and re-weighted, its id kept)
+and may land in any segment, which is how it crosses the fork; a new one is
+added by shelf `sha256`, carrying a CLIP only where its segment has a CLIP
+reader; and every loader left out is deleted through `bypass_node`. The change
+list says where a lane loader's CLIP half goes, since the text encoders it
+reaches may feed every pass. The cap of 32 loaders counts the whole tree.
+`plan_lora_chain` validates the whole edit before `apply_lora_chain` touches the
+graph, and the result is written as a **new** file through `_store_copy`, so one
+save is one new card and the original file never changes. `dry_run` answers the
+change list (`deleted`, `added`, `moved`, `strength`, `rewired`) and writes
+nothing. `insert-lora-loader` is the empty-chain case and still stands on its own.
+
+#### Switching a stage off (#1621)
+
+An upscale or FaceDetailer pass is an optional **stage** of a workflow, on or
+off per run, which is why `core_hash` strips both groups and graphs with and
+without them stack. `RunRequest.skip_stages` (`upscale`, `face_detailer`) names
+the stages a run goes without; `_plan` applies them through
+`skip_requested_stages` on the run's copy, after the LoRAs are placed (the prune
+can remove a loader only the stage read, and a LoRA addressed to it must not
+become a 400) and before `judge`, so the graph judged is the graph submitted.
+
+`bypass_stage` in
+[`services/comfyui_recipe_service.py`](../pixlstash/services/comfyui_recipe_service.py)
+finds the stage with `workflow_identity.node_groups` over `reduce_api_graph`
+(node ids survive the reduction), limited to nodes an output reads, and takes
+each out through `bypass_node`, consumers before what they read. Each output
+is answered by the node's first linked input of the same type: IMAGE by
+`image` (`ImageUpscaleWithModel`, `ImageScale*`, `UltimateSDUpscale`,
+`FaceDetailer`), LATENT by `samples` (`LatentUpscale*`) or `latent_image` (the
+hires sampler `node_groups` puts with its latent upscale). A node with no
+linked input (`UpscaleModelLoader`, `SAMLoader`, a detector provider) is not
+bypassed; it goes in the prune. **A stage runs after the picture is made**, so
+a node of the group that feeds a sampler outside it is not one: with no sampler
+before it, it prepares an input (img2img's `ImageScale`) and is left alone;
+with one, it is a hires fix in pixel space (upscale, re-encode, second
+sampler), whose re-encode and sampler `node_groups` does not claim, and the
+stage is refused rather than half taken out. Then:
+
+- **Prune**: a node some output read before and none reads now is deleted, or
+  `judge` would report an orphaned upscaler or detector model as missing and
+  refuse a run that does not need it. A node that was already dead is left.
+- **Duplicate save**: an output node the bypass rewired onto exactly the links
+  another output node of its class reads is dropped, the untouched one kept.
+  Widgets are not compared: a graph saving before and after the upscale differs
+  by `filename_prefix` and would still save one image twice. Saves that were
+  alike before the bypass are the owner's and stay.
+
+All or nothing: the work is done on a copy and written back only when every
+node of the stage went. A node that cannot go (a FaceDetailer whose MASK or
+DETAILER_PIPE is read, a class this ComfyUI does not know, a pixel-space hires
+fix, a graph that loops) raises `LookupError`
+naming it, which the run reports as `stage_not_skippable: {stage, message}`.
+It blocks the card, `allow_unchecked` included, and **never falls back to a
+full run**: the owner asked for a run without the stage. With ComfyUI
+unreachable a graph holding the stage is refused the same way; one without it
+has nothing to skip.
+
+#### The repair registry: judge, repair, judge again (#1463)
+
+Some refusals PixlStash can answer by changing the graph before it submits.
+`REPAIRS` in
+[`services/workflow_run_service.py`](../pixlstash/services/workflow_run_service.py)
+is the one place that decides which: each `Repair` names the reason code it
+answers, the `RunGroup` field that reports it, and the function that mutates the
+graph. `_plan` runs one loop over it, after the model swap:
+
+1. `judge` the graph.
+2. `repair(graph, object_info, reasons)` applies every entry
+   whose code is among the reasons, and returns `{report_field: entries}`.
+3. If anything changed, `judge` **again**. Only the second verdict says whether
+   the graph runs: a repair can leave its refusal standing. Re-judging is pure
+   over the graph and the `object_info` `_plan` already fetched, so it costs no
+   ComfyUI round-trip.
+
+Skipped when ComfyUI could not be inspected (nothing is known to repair) and
+when `_apply_loras` has already refused (that run is not happening). The
+reports go on the group only when it is actually submitted, and every
+registered field is cleared when the batch rule zeroes the request. A new
+repair is a registry entry plus its `RunGroup` field. Three ship:
+
+- **`missing_models` → `bypassed_loras`**: the LoRA bypass above.
+- **`missing_nodes` → `replaced_nodes`**: `replace_missing_seed_nodes`. A custom
+  seed node this ComfyUI lacks (`SEED_NODE_CLASSES`: rgthree's `Seed (rgthree)`,
+  WAS's `Seed`, `SeedGenerator`, `Seed Generator`, Comfyroll's `CR Seed`) only
+  hands a number to a sampler's seed widget, which the run writes itself. So
+  each link from it becomes a literal and the node leaves the graph.
+  **The seed pass overwriting that literal is what makes it safe, so it is
+  checked and not assumed**, against `run_seed_targets`, which is the same
+  finder `_submit_every` writes seeds through (one function, so the check and
+  the write cannot drift). It is checked on the **final** graph: a later
+  replacement can switch that finder from its fallback to `detect_seed_targets`
+  and strand an earlier literal, so if any inlined input is not a target once
+  all are replaced, the graph is put back whole and every node keeps its
+  refusal. A seed node wired into `steps`, or into a pack's own `SEED` dict,
+  keeps it that way. The literal is the node's own `seed` value, which is what
+  `seed_mode: "keep"` then keeps: a picture's embedded graph carries the value
+  the node really handed on. Also refused, each logged: a **placeholder** seed
+  (rgthree's `-1`, "random"), whatever the seed mode, so the pre-flight's answer
+  never depends on a control the popups do not re-ask on; a node feeding **more
+  than one** input, because the seed pass rolls each target separately and a
+  hires-fix or refiner pair built to share one seed would get two; and a node
+  whose own seed is wired from elsewhere. Each entry is `{node_id, class_type,
+  replacement: "seed", consumers: [{node_id, field}]}`.
+- **`missing_nodes` → `replaced_nodes`** (second entry, same report):
+  `replace_missing_text_nodes`. A custom text node this ComfyUI lacks
+  (`TEXT_NODE_CLASSES`: WAS's `Text Multiline`, Comfyroll's `CR Text`,
+  Chibi-Nodes' `Textbox`, core's `PrimitiveStringMultiline` on an older
+  ComfyUI) only hands its string on, so every link from it becomes that string, however many
+  inputs it fed. It runs after `_apply_prompts`, which writes a Run popup
+  prompt through `prompt_text_target`: past a linked encoder into the text
+  node itself, when that node feeds only that encoder, so the typed prompt is
+  what gets inlined. Any other wired `text` (a prompt-builder node, a shared
+  or overridden text node) is replaced by the typed prompt as a literal,
+  cutting the link, unless the prompt equals one of that node's own strings:
+  an untouched Run popup echoes a builder's recipe prompt, which was read from
+  its widgets, and the wire stays. `Text Multiline` drops its `#` comment lines as the node
+  does; one holding anything in square brackets (a WAS token) keeps its
+  refusal, as do a wired text, another input set that may override it
+  (`Textbox`'s `passthrough`), and a consumer reading any output but the first.
+  It runs before the seed repair, whose rollback restores the graph it was
+  handed. Entries carry `replacement: "text"`, which the Run popup reads to
+  word its notice.
+- **An allow-list, not a general rewriter.** A replacement that is *nearly*
+  right silently changes what the picture looks like, which is worse than the
+  refusal. The candidates the issue names for later (custom primitive nodes,
+  reroutes, notes) are each judged on their own when one is added. Anything that
+  samples, conditions or loads is not a candidate: there is no standard
+  equivalent that makes the same picture.
+- **A repaired run lands on its own card**, for the reason a bypassed one does:
+  deleting a node changes the topology.
+
+#### What a delete leaves behind: companions (#1314)
+
+`POST /api/v1/models/companions` answers the question in front of Delete that
+the shelf could not: **which VAEs and text encoders can go with this
+checkpoint.** Support files are most of a real shelf's disk, some serve several
+models, and nothing on disk says which.
+
+- **The evidence is co-occurrence in a recipe.** One `workflow_recipe` is one
+  graph that ran with exactly the files its `workflow_recipe_asset` rows name,
+  so a VAE and a checkpoint in one recipe are proven to work together. That
+  table already captures every loader by file extension rather than by node
+  class, so VAEs, encoders and custom loaders are all in it; nothing is scanned
+  again. Names resolve to shelf rows exactly as `fetch_picture_counts` resolves
+  them (`_recipe_asset_index`): a `*_sha256` widget is that model, any other
+  name is every row whose filename or copy has that basename. A third case
+  resolves to nothing and is counted as no evidence: the shelf loader's
+  `checkpoint_id` (#1416), whose value is a row id rather than a digest or a
+  filename.
+- **Every recipe on the hub counts, from every library, kept pictures or not.**
+  Scoping evidence to the active library would only ever drop evidence;
+  widening it can only make a file read as still needed, never offer one. A recipe whose
+  pictures were all deleted still proves the files ran together.
+- **Consumers are base models.** For a support file sharing a recipe with a
+  model being deleted, its consumers are every `checkpoint` or `unknown` row
+  across *all* its recipes. Adapters are excluded (a LoRA needs a base model,
+  not that base model's VAE, so counting it would keep A's VAE "in use" by A's
+  LoRA after A is gone) and `unknown` is included, because it may be a base
+  model the classifier missed and keeping a file is the answer to not knowing.
+  Every recorded consumer being deleted is **orphaned**; any kept consumer is
+  **shared** and named. **Orphaned is not "nothing uses it"**: a kept base
+  model no recipe names (downloaded and never used, or used only in graphs
+  whose pictures were never filed) may need the file, and the answer carries
+  `unrecorded`, the count of those, so the prompt can say so.
+- **`unknown` is never orphaned.** A support file a recipe reached only by a
+  basename two shelf rows share could be either of them, so it is reported as
+  unknown. So is one beside a `*_sha256` widget that matches no row while any
+  non-engine row still waits for its hash, the rule
+  `hub/workflows._model_ghost_names` already applies: the pending checkpoint may
+  be the model the digest names. A model being deleted that no recipe names is `no_evidence`: the
+  absence of a recipe is not evidence that nothing needs it, and its companions
+  are simply not examined.
+- **It offers, it never deletes.** The shelf's confirmation lists the answer;
+  an orphaned file stays on disk until the owner selects and deletes it. Every
+  path still ends at a person choosing a file.
+- **Not yet read here:** ComfyUI's own history and saved workflows. Models used
+  only in graphs that never produced a picture PixlStash filed are invisible to
+  the delete warning, which the `no_evidence` answer says out loud rather than
+  hiding. The clone's *proposals* do read ComfyUI's history (see "Clone with
+  new models proposes companions from evidence").
+
+#### Workflow sets: which models have actually run together (#1438)
+
+`GET /api/v1/models/workflow-sets` is the **same self-join, read the other way
+round**. Companions asks "what would this delete leave behind"; this asks "which
+of these files have run together", which is the question the shelf's four
+single-axis groupings could not answer: a checkpoint, its VAE and its text
+encoders are a set, the same VAE belongs to several sets at once, and a sticky
+band can only put a row in one place.
+
+- **One entry per *combination*: the model ids one recipe resolves to.** Several
+  recipes naming the same files are one combination with their recipe and
+  picture counts summed, because the combination is the fact and the recipe is
+  one witness of it. A prompt edit keeps the recipe; a rewiring forks it; neither
+  changes the files, so both land on one card.
+- **The resolution is shared, not copied.** `resolve_recipe_models` was lifted
+  out of `fetch_companions` and both call it, so the delete warning and the grid
+  cannot come to disagree about what a recipe names. It returns
+  `(recipe_models, ambiguous, unresolved)` — the members per recipe, the members
+  reached only through a name or digest prefix several rows answer to, and the
+  recipes naming a digest no row matches while some row still waits for its hash
+  (`hub/workflows._model_ghost_names`' rule).
+- **Scoped to the ACTIVE library, unlike companions.** The two differ because
+  they answer different questions: a delete warning must keep a file some other
+  library needs, so it counts every recipe on the hub; this grid is a picture of
+  what the library in front of the reader has made, so a recipe with no kept
+  picture here is not a set. A combination with a zero picture count is dropped,
+  and its members then appear under `no_set` — read off the combinations that
+  *survived*, never off the pre-filter grouping, or a model would be in neither
+  list and so on no screen at all.
+- **ComfyUI's own runs are witnesses too (#1565).** `fetch_workflow_sets` reads
+  `comfyui_history_model` through `_history_runs`, the one reader of that table
+  (`propose_companions` calls it too). Each run counts one `history_runs`
+  against the combination its stored models form *exactly*, never against every
+  subset, and is kept apart from `recipes` and `picture_count`. A combination
+  survives the cut with a kept picture here OR a stored run, so a set that has
+  only run in ComfyUI is served with no cover. Runs are hub-wide, like
+  `recipes`. They never touch `ambiguous`, and they stay out of
+  `hub_combinations`, which feeds only the hand-made sets' merge offer.
+  ComfyUI is never contacted on this path. The stored models are the names the
+  pull could pin to one shelf row; a name it could not is not stored, so a run
+  proves at least its combination ran, not that nothing else did.
+- **A member the evidence cannot pin down is flagged, never hidden.** `ambiguous`
+  is OR-ed across a combination's witnesses: one recipe that could only match a
+  basename is enough to make the membership a guess, and a cleaner second
+  witness does not unmake the first. The card draws it as a filename-only match,
+  because `unknown` is a first-class answer on this shelf.
+- **Members arrive in ONE order and the client reads its head.** Checkpoint,
+  then `unknown`, then VAE, text encoder, adapter, engine. The head is what the
+  set is named after, so the naming rule is one decision in one place rather than
+  two that can disagree. `unknown` sits second for that reason and no other:
+  `file_kind` is closed to six values and there is no diffusion kind, so a Flux
+  or Wan diffusion file arrives as `checkpoint` (most of them) or as `unknown`
+  (the rest), and second place is what keeps such a set named after its model
+  rather than after whichever VAE sorted first. It is a ranking, not a claim
+  about what the file is.
+- **A cover is served as `{picture_id, version}`, never as a URL.** An
+  `<img src>` never reaches the client's Axios interceptor, so a path built in
+  this route would arrive with no API base and no share token and the browser
+  would ask the page origin for a route it does not serve. `pictureThumbnailUrl`
+  (`api/pictures.js`) is the one place that path is spelled, and this route is
+  deliberately not the second - `routes/workflows.py` does send a path, and pays
+  for it with `workflowCoverUrl` on the client to put the base and the token back.
+- **Counts and covers are two vault queries, not one per card.**
+  `recipe_picture_counts` is the existing `GROUP BY workflow_structural_hash`;
+  the covers come from `variant_cover_candidates`, the workflows grid's own
+  `ROW_NUMBER()` window, and the per-combination pick re-sorts them with
+  `cover_order` — moved out of `workflow_card_service` to
+  `workflow_library_service`, beside the `CoverCandidate` it orders, so both
+  grids treat a NULL score the same way the window did. **The window is new work
+  on this screen and is the expensive half**: `fetch_picture_counts`, which every
+  shelf list already runs, runs only the `GROUP BY` — so this is one more pass
+  over the kept pictures than the shelf used to pay, on what is now the default
+  screen, and it is the figure to watch if the grid ever feels slow.
+- **Nothing is stored.** Membership overlaps and is derived per request; no
+  column on `model` names a set, and there is no table to migrate. The cost is
+  four unbounded hub reads (the `model` table twice — once for the asset index,
+  once for the member rows — `workflow_recipe_asset` whole, and the pending-hash
+  probe) plus the two vault queries above. None of them is paginated, because
+  every one of them is aggregated into the answer: a page of combinations cannot
+  be computed from a page of assets. The read is bounded by the size of the shelf
+  and the library rather than by a parameter, which is the same bound
+  `fetch_picture_counts` and the workflows grid already accept.
+- **The GROUPING is the client's, and this route stays per-combination.**
+  `frontend/src/utils/workflowSets.js` unions the combinations under each head to
+  make the grid's cards, and keeps the combinations themselves: the *Works with*
+  answer is a pairwise question, and a union would report two VAEs as each
+  other's companions on the strength of sharing a checkpoint. So this route
+  proposes no grouping at all and is not asked to - the per-recipe shape is the
+  evidence, and every claim the UI makes about a pair reads it rather than the
+  union drawn on top.
+
+#### Hand-made workflow sets (#1520)
+
+The owner can also say which shelf models go together, and that one IS stored:
+`model_workflow_set` and `model_workflow_set_member` in the hub (amended into v2,
+like every shelf table), read and written by
+`pixlstash/services/model_workflow_sets.py`.
+
+- **A menu, not a recipe.** Fixed slots (`checkpoint` at most one - a partial
+  unique index holds it - then `text_encoder`, `vae`, `lora`, `other`), no order,
+  no strengths. A set may be unnamed, empty, or have no checkpoint
+  (`incomplete`). The slot defaults from `file_kind`; `checkpoint` is accepted
+  for a `checkpoint` or an `unknown` file only (a diffusion file is often
+  `unknown`). Engines and files still waiting for their hash are refused (409).
+- **Members are sha256s, with no foreign key to `model`.** Forgetting or
+  deleting a file drops its `model` row; the member stays, is served
+  `on_shelf: false` under the `label` it was added with, and reconnects when a
+  row with the same digest returns. The same property makes undo simple: a
+  delete returns the set's snapshot, and re-posting its members in the
+  `{sha256, slot, label}` form recreates it, off-shelf members included.
+- **Evidence is layered on, not merged.** `attach_hand_made` takes the
+  `fetch_workflow_sets` answer unchanged and adds `covered_by` to each
+  combination (a set covers it when every model of the combination is an
+  on-shelf member; the set may hold more), a `hand_made` list whose counts and
+  covers are pooled from the combinations each set covers, and drops on-shelf
+  members from `no_set`. Covered combinations are still served: the grid hides
+  them, *Works with* reads them all. The mutators answer with the set re-read
+  through that same full evidence pass, which is a per-click cost, not per row.
+- **The merge offer is derived, and only the declines are stored (#1523).**
+  `_attach_offers` groups the combinations no set covers by their head (the
+  grid's own evidence cards, but over `hub_combinations`: every library's
+  recipes, not only those with a picture here). A set is offered its own
+  checkpoint's group; a set with no checkpoint only a group whose models
+  include all of its own. Only combinations whose missing models can all be
+  added count: hashed, not an engine, and not in `model_workflow_set_decline`
+  for that set. One group goes to one set, the one needing fewest models added.
+  The offer is `{head_id, head_name, picture_count, recipes, covers, models}`,
+  each model with the slot it would take (the head fills an empty Checkpoint,
+  a second checkpoint goes to Other). Merging is the ordinary members add;
+  Keep separate is `PUT .../declines`, a whole-list write that returns the old
+  list as its undo. `kept_separate` counts the pictures here the declines hold
+  back. The declines cascade with their set (so a build that predates the
+  table can still delete one); a delete's undo does not restore them.
+- **Clone with new models reads them first.** `propose_companions` lists, ahead
+  of the recipe ladder, the on-shelf VAEs and text encoders of every set whose
+  checkpoint member is the chosen checkpoint (`via: "grouped"`, `recipes: 0`,
+  `set_name` from the newest such set). `prepick` is true only when those sets
+  name exactly one file of that kind between them; ladder entries always carry
+  `prepick: true` and drop any file already grouped (after the ladder step is
+  chosen, so grouping never widens it). Filed by the file's own `file_kind`, not
+  by the slot it was put in.
+
+`model.family`, `model.quant` and `model.weights_id` are what the scanner reads
+off a file rather than off the shelf — `family` and `weights_id` from the
+safetensors header alone (`adapter_header.family_from_header`,
+`weights_id_from_header`), and `quant` from the header where there is one and
+from the filename postfix where there is not (see below). None of them is a
+group. `family` is the
+architecture the tensors show for a support file (`vae_4ch`, `vae_16ch`,
+`clip_l`, `clip_g`, `t5_xxl`, `umt5_xxl`), read only from top-level tensors so a
+full checkpoint's baked-in VAE never files the checkpoint as one; the shelf
+serves the family of `base_model` instead whenever that folds, so a corrected
+base model is never contradicted by the column. `weights_id` hashes tensor
+names and shapes without dtypes, so clean casts of one model share it and a
+repack with scale tensors does not. Rows registered before the columns get them
+on the next scan: the unchanged-file fast path re-reads the header, never the
+bytes, for a row whose `weights_id` is NULL. `CheckpointHashTask._merge`
+carries them to the surviving row like the other scan-derived columns.
+
+`model.base_model_canonical` and `model.base_model_source` are the base model
+the row was **identified** as, against the shipped table in
+`pixlstash/utils/known_base_models.py`, and which evidence said so.
+`known_base_models.identify(declared, filenames)` takes the header's
+declarations (`ss_base_model_version`, and the SAI `modelspec.architecture`
+with its `/lora`-style suffix dropped) and the filenames (the file's own, and
+kohya's `ss_sd_model_name`, the checkpoint it was trained against). Sources,
+strongest first: `user` (set only by `update_models`), `declared` and
+`filename` (an exact fold of a declared value, or of the filename stem or one of
+its tokens), `declared_fuzzy` (`difflib`, cutoff 0.88) and `filename_fuzzy`
+(containment, longest alias first, never an alias under four characters
+nor one that is an ordinary word, `pony`, `sana`, `lumina`, `krea`, `chroma`,
+which count only as a whole filename token).
+Quality before provenance: an exact filename beats a fuzzy declaration. A
+`closed` base is never an answer.
+
+- **Written only over a source it outranks.** `_write_identification` is one
+  guarded UPDATE, deliberately not the `COALESCE` the curatable columns use:
+  the same content reached again with better evidence (a copy under a more
+  telling name) must be able to upgrade a guess, and nothing may replace
+  `user`. An unchanged file that already has an answer is not re-read. `base_model` itself is still the trainer's string, written with
+  `COALESCE` as before.
+- **A curated base model moves both columns in the same UPDATE**
+  (`update_models`: canonical = `fold(value)`, source = `user`), including a
+  cleared one, so "none of these" sticks and the shelf never groups a corrected
+  row under the old guess.
+- **No match writes nothing.** Both columns stay NULL, and `has_header_facts`
+  requires `base_model_source IS NOT NULL`, so the fast path re-reads the
+  header of an unmatched row on every scan (never its bytes). That is how a
+  table entry added in a later release reaches files scanned before it.
+- **Existing rows** whose stored `base_model` folds exactly are identified
+  once, as `declared`, by the hub's data backfill v3
+  (`schema._backfill_base_model_canonical`). Nothing weaker is written there:
+  a stored answer stops the header being re-read, so a filename guess made
+  from the columns would never be checked against the header's
+  `modelspec.architecture`. Every other row is identified from all its
+  evidence on its next scan. The columns themselves are amended
+  into schema v2 like the header facts, not a v3, which an older build would
+  refuse.
+- The shelf **sorts and filters** on `COALESCE(base_model_canonical,
+  base_model)`; the filter also matches the raw column, so a caller holding the
+  trainer's spelling still gets its rows. `ModelResponse` serves both columns,
+  `family` from the canonical label when there is one, and `matched_name`: the
+  label for a checkpoint whose derived filename folds exactly to its own
+  non-guessed canonical label (`flux1-dev.safetensors`), never for an adapter.
+
+`quant` is **two sources folded into one vocabulary**, and the fold happens on
+the way out rather than on the way in. The column holds whichever source wrote
+it: the safetensors header's own dtype spelling (`f16`, `f8_e4m3`, `i32`, or
+`mixed` where no dtype holds a majority of the **parameters** — not tensors),
+or, for a file with no readable header, the precision its filename records
+(`fp16`, `q4_k_m`). `ModelResponse` serves
+`model_utils.canonical_quant(row["quant"])`, so a row scanned before the
+filename source existed and one scanned after it read as one id, and a client
+never has to know which branch ran. Writing folded instead would have left
+every already-scanned row unfolded, which is the same problem one migration
+later.
+
+The filename half is `model_utils.quant_from_filename`, the same parser
+`derive_model_name` pops the postfix with — so the name a row shows and the
+badge beside it can never disagree about where the name ended. The header wins
+wherever there is one: it is the only thing that knows what a file called
+`nvfp4_awq` is actually stored at. See §*The shelf catalogues more than one
+suffix* below for the file kinds that have no header at all.
+
+Nothing reads them to decide a delete: `family` speaks two vocabularies (base-model
+families and tensor layouts), and the one table joining a checkpoint's `flux1`
+to a `vae_16ch` (`COMPANION_LAYOUTS`, below) is a declaration, which a delete
+warning must not act on.
+
+**Clone with new models proposes companions from evidence first, and from a
+declared table only when there is none.**
+`model_shelf_service.propose_companions` is `fetch_companions` read forwards:
+the VAEs and text encoders that share a `workflow_recipe_asset` recipe with the
+chosen checkpoint, and when there are none, with any base model of the same
+`base_model` label, then of the same `family_of` family and `modality_of`
+modality (image or video, never across). Each proposal carries
+the step that produced it (`via`), and a support file a recipe reached only
+through an ambiguous name is not proposed. **ComfyUI's own runs are evidence
+too (#1518).** The workflow pull (`ComfyUIWorkflowPullTask`) reads
+`GET /history?max_items=500` after the saved workflows, and
+`record_comfyui_history` files each *finished* run as
+`comfyui_history_model(prompt_id, model_id)`. Names resolve to shelf rows the
+way a recipe's do, but only an unambiguous match is stored, and as an id: the
+table adds no place a model filename lives, so forgetting a name has nothing new
+to reach. The ambiguity is judged at pull time, so a same-named row added later
+does not reopen it; the next pull re-reads what ComfyUI still holds. A duplicate
+merge in `checkpoint_hash_task` carries the rows to the survivor. The two kinds
+are counted apart (`recipes`, `history_runs`; recipes rank first within a
+step), and the dialog says "in ComfyUI" when a run is the only evidence. A run
+at the `checkpoint` step answers before recipes at `base_model`, for the same
+reason the ladder exists: direct evidence beats an inference. ComfyUI forgets
+its history on restart; the rows do not, and nothing on the read path asks
+ComfyUI. A failed history read never fails the pull (`history_runs: null` in
+its summary). The shelf's Workflow sets read the same rows through the same
+`_history_runs` reader (see "Workflow sets" above). "Same base model" and "same family"
+read `known_base_model`: the shelf's identified label (`base_model_canonical`)
+unless its source is a fuzzy guess, else the stored `base_model` folded; the
+LoRA flag reads the same. A checkpoint from a family nothing has run with
+falls to a fourth step, `declared`, the one bridge between the two
+vocabularies above: `known_base_models.COMPANION_LAYOUTS` names, per
+architecture family, the tensor layouts (`vae_16ch`, `clip_l`, `t5_xxl`...) its
+VAE and text encoders take, and the shelf's support files of those layouts are
+proposed with `recipes` 0, by filename. It is a declaration, not evidence (SD
+1.5's and SDXL's VAEs share a layout, as do FLUX's and SD 3.5's), so it runs
+only for a kind no recipe or ComfyUI run answered, the dialog labels it untested, and a family
+declares only the kinds the layout vocabulary can name with certainty; anything
+else still proposes nothing. LoRAs and ControlNets are the one legitimate
+family comparison (`family_of` on both sides of one vocabulary), and a mismatch
+is flagged by `GET /workflows/{workflow_id}/model-swap`, never dropped. The rewrite is
+`comfyui_recipe_service.apply_filename_swap`, deliberately not
+`apply_model_swap`: that one substitutes the same bytes under another name, this
+one replaces a file that loads with a different file. It matches the graph on
+the whole recorded name only (separators unified, case folded): the dialog
+sends the graph's own values, and a basename match would let a swap of
+`diffusion_pytorch_model.safetensors` rewrite a ControlNet loader's file of the
+same name. It writes the name in ComfyUI's own spelling when `object_info`
+answers (whole option, then the one option with that basename; a name listed
+in two folders is refused as `several_on_comfyui`, since either could be the
+wrong model) and unchecked when it does not. Both it and the dialog's slot list
+walk the graph through `comfyui_utilities.iter_model_fields_api`. The route is
+all or nothing: any swap that did not land refuses the clone (409) rather than
+saving the old model beside the new one's VAE. It names the new card only when
+it is a card nobody has named, because a repeat clone re-keys onto the card the
+first one made. By the same rule it carries the original's pins and parameter
+defaults onto a card that has none of its own (`_carry_to_clone`): both are
+addressed by `(slot label, input name)` and a filename swap moves no label.
+A default on a loader field the swap rewrote is dropped, by address and
+whatever its value, or the first run would load another model again. Notes are not carried; they describe
+the original's history. A `CLIPVisionLoader`'s `clip_name` is reported as
+`clip_vision`, never offered text encoders. The base slot is offered only
+checkpoints of its loader's file type and, when ComfyUI answers, only ones that
+loader lists, because the shelf files a diffusion-only UNET and an all-in-one
+checkpoint under one kind. Duplicate, Insert loader, the LoRA chain edit and
+Clone all write the source file's `pixlstash_bindings` back into the copy
+(`_store_copy`), which the resolved graph has lost.
+
+**Clone onto a workflow set swaps the loader's node class when a file of
+another type needs it.** `comfyui_recipe_service.plan_loader_rewrites` decides
+by file type alone, so the plan is the same with ComfyUI down: a `.gguf` file
+into a core loader takes the ComfyUI-GGUF counterpart (`UNETLoader` to
+`UnetLoaderGGUF`, the three CLIP loaders to their `…GGUF` twins, dropping the
+core-only `weight_dtype` / `device`), and a non-GGUF file into
+`UnetLoaderGGUF` goes back to `UNETLoader` (the GGUF CLIP loaders read
+safetensors, so they stay). `apply_loader_rewrites` then changes the class in
+place, keeping every node id, file field and link. The clone route runs it
+before `apply_filename_swap` (`_swap_files`), so each file is checked against
+the loader that will read it; a class ComfyUI lacks lists nothing, so its file
+goes in unchecked and the answer's `loaders` says `installed: false`: **a
+missing node pack warns and never refuses.** GGUF is the one pack known; any
+other loader keeps its class and a file it cannot list is refused as before.
+`POST /workflows/{id}/set-clone-plans` runs that same `_swap_files` on a copy
+per set asked, so the dialog's diff is the clone's own rewrite. `_set_swaps`
+maps a set to the graph: the first base slot takes the checkpoint the caller names (`checkpoint_id`, a checkpoint or unclassified file, never guessed from the members), and a VAE or
+text-encoder slot the set's untaken file of the same layout (`family`, or the
+set's only one against the graph's only slot of that kind). Two slots of a kind
+are two different files, since the slot list merges loaders naming one, so one
+set VAE is never written over a video VAE and an image VAE alike. **LoRAs go only when the
+base model changes**: `keeps_loras` compares `_base_key` of the set's
+checkpoint with `_replaced_base_model` of the graph's, and an unknown base model
+on either side is *not* the same. The clone body's optional `loras` is the
+chain in `PUT …/lora-chain`'s shape (`_chain_plan`, shared with Edit LoRAs),
+applied before the loader rewrite because ComfyUI can type the original's
+classes even when the new pack is not installed; it needs `object_info`, so a
+clone that carries a chain answers 503 with ComfyUI down.
+
+**The model-swap route does not cache `recipe_asset_index`, on measurement
+(#1515).** It builds the index once per request and hands it to both the slot
+list and `propose_companions` → `resolve_recipe_models`. Synthetic hub (unique
+basenames, one digest widget and the rest filename widgets per recipe), median
+of seven, for index / `resolve_recipe_models` / whole `propose_companions`:
+
+| models / copies / recipe assets | index | resolve | propose |
+|---|---|---|---|
+| 2,000 / 3,000 / 12,000 | 4 ms | 11 ms | 15 ms |
+| 10,000 / 15,000 / 160,000 | 23 ms | 176 ms | 195 ms |
+| 50,000 / 75,000 / 400,000 | 189 ms | 591 ms | 712 ms |
+
+The index is the small part; the `workflow_recipe_asset` scan in
+`resolve_recipe_models` is most of the rest, and a cache of the index alone
+would not touch it. The dialog asks once on open and once per checkpoint
+choice, so a fifth of a second at 10,000 models is acceptable. Revisit if the
+dialog starts recomputing live (per keystroke or hover): the cache then belongs
+on `resolve_recipe_models`, and its key must change on UPDATEs too (a sha256
+backfill or a renamed copy keeps every row count and rowid), so row counts and
+max rowids are not enough. The workflow grid (`read_grid`) still builds the
+index twice per request, once per `_shelf_candidates` call; at these sizes that
+is tens of milliseconds, left as is.
+
+#### The shelf catalogues more than one suffix
+
+`model_folder_scanner.SHELF_MODEL_SUFFIXES` is the one answer to "is this a
+model file the shelf catalogues", and it is a **tuple**: `.safetensors` and
+`.gguf`. It is deliberately *not* named `MODEL_SUFFIXES`, which
+`services/builtin_models.py` already uses for a different and wider question —
+what in PixlStash's own engine folder counts as weights at all. Every consumer asks
+it rather than spelling an extension — the folder picker's listing
+(`routes/filesystem`), the upload rule (`routes/model_files._source_file`) and
+the model-ghost judgement (`hub/workflows`) — so the three move together and a
+`.gguf` cannot be shelved by the scan while being called a ghost by the
+recipes.
+
+`HEADER_SUFFIX` is the narrower question: which of them a safetensors header
+can be read from. A file that fails that test is described by
+`_describe_from_name`, which fills in only what its **name and its folder**
+answer:
+
+- the **quant postfix** (`flux1-dev-Q4_K_M.gguf`), the only source such a file
+  has;
+- the **folder's declared role**, through `classify_model_file((), 0, path)` —
+  which already trusts a folder above a parameter count, precisely because a
+  VAE and a text encoder carry no marker to find. `unet/` and
+  `diffusion_models/` name `checkpoint`, so a quantised Flux or Wan UNet is
+  listed by `GET /checkpoints`; hub data version 4 re-files the `unknown` rows
+  already shelved there. A GGUF outside a role folder is `unknown`, which the
+  shelf shows and the owner can correct; it is never guessed into `checkpoint`.
+
+Everything else (`family`, `weights_id`, `kind`, `param_count`, the trainer
+metadata) stays NULL, which is what an undescribed `.safetensors` records too.
+**GGUF header parsing is deliberately not built**: it is a real subsystem, and
+the filename is enough to shelve and badge the file.
+
+Two consequences worth stating:
+
+- **Hashing is unchanged.** `_describe_from_name` follows the same
+  `_DEFER_HASH_BYTES` rule as every other non-adapter kind, so a multi-gigabyte
+  GGUF is registered instantly with `sha256` NULL and left to
+  `MissingCheckpointHashFinder`. Turning the suffix on adds no reading the
+  scan was not already deferring.
+- **The unchanged-file fast path skips the header re-read for it.**
+  `has_header_facts` needs `weights_id IS NOT NULL`, which is false by
+  construction here, so without the `_reads_a_header` check a GGUF would be
+  re-opened on every sweep for a header it will never have. It is identified
+  from its filename alone on that path instead, which reads nothing.
+
+#### The unlink is authorised by exactly one committed row (#1017)
+
+`ModelMover`'s ordering — copy → verify → repoint and commit → **then** unlink —
+rests on "the row moved". SQL does not: an `UPDATE` that matches nothing reports
+success, so a `model_file` row deleted between the plan and the commit let the
+mover unlink the source and report `moved` with the destination bytes registered
+nowhere at all. That is the dangling residue inverted, and worse — a file no row
+names, after the only other copy was removed.
+
+- **`ModelMover._repoint` requires exactly one affected row** and raises
+  `RepointLost` otherwise, inside the transaction, so it rolls back. `_rename`
+  renames the file back, `_copy_verify_repoint_unlink` discards the copy, and
+  `_move_one` reports that file `failed`. Nothing is unlinked. **This is the
+  guarantee**; everything below is defence in depth.
+- **The predicate is the source key and nothing else.** `model_file` is
+  `PRIMARY KEY (model_folder_id, relpath)`, so the key already matches at most
+  one row. Adding `model_id` cannot narrow a real ambiguity and *would* miss:
+  `CheckpointHashTask` folds duplicate checkpoints by rewriting
+  `model_file.model_id` to the survivor, on the task runner and outside
+  `SHELF_IO_LOCK`, and hashing a large checkpoint overlaps a multi-minute copy
+  easily. The row is still there and still names the file; only its model was
+  consolidated. Failing on that would discard a finished copy and report a
+  legitimate move failed — pinned in both directions in
+  `tests/test_model_move.py`.
+- **`DELETE /model-folders/{folder_id}` takes the `SHELF_IO_LOCK` slot** and
+  answers 409 while it is held. That is the second, transient 409 on that route
+  (the managed-row refusal above is the other one). It is a slot, not a general
+  exclusion: a rescan writes the same rows outside this lock by design, and a
+  multi-run import is a sequence of separate lock-taking requests, so a forget
+  can still land between two of them. What it buys is a clean 4xx before the
+  batch starts instead of a file failed halfway through forty.
+- **The UI says so beforehand.** `ModelFoldersDialog`'s `forgetReason` blocks
+  Forget while `useModelMovesStore().busy`, the same guard `relocateReason`
+  already carried, and the row's note explains it — an ordinary `user` folder is
+  forgettable without being relocatable, so a guard written only for Move left
+  exactly those rows clickable and failing.
 
 ---
 
