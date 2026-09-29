@@ -57,7 +57,11 @@ function mountPane(stubOverrides = {}) {
         "v-card-text": { template: "<div><slot /></div>" },
         "v-card-actions": { template: "<div><slot /></div>" },
         "v-spacer": { template: "<span />" },
-        SettingsSection: { template: "<section><slot /></section>" },
+        // Both slots, as the real one: the tagger panel's Save sits in the
+        // heading's action slot.
+        SettingsSection: {
+          template: '<section><slot name="action" /><slot /></section>',
+        },
         SettingsTwoCol: { template: "<div><slot /></div>" },
         SettingsFieldBlock: { template: "<div><slot /></div>" },
         PluginSelect: true,

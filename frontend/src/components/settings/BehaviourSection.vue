@@ -372,15 +372,12 @@ watch(
       </div>
     </SettingsSection>
 
-    <SettingsSection
+    <TaggerPluginSettingsPanel
       v-if="!taggerLoading && pixlstashTagger"
       title="PixlStash Tagger Settings"
-    >
-      <TaggerPluginSettingsPanel
-        :plugin="pixlstashTagger"
-        v-model:settings="taggerSettings"
-      />
-    </SettingsSection>
+      :plugin="pixlstashTagger"
+      v-model:settings="taggerSettings"
+    />
 
     <AppDialog
       :open="pluginInstallHelpOpen"

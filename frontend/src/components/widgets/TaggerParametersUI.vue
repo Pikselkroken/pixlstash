@@ -17,6 +17,11 @@ const props = defineProps({
   schema: { type: Array, default: () => [] },
   /** Current param values (v-model). */
   modelValue: { type: Object, default: () => ({}) },
+  /**
+   * Fields per row. A host of fixed height (the Models tab's inline tagger
+   * panel) sets 2, so each setting a plugin adds costs half a row.
+   */
+  columns: { type: Number, default: 1 },
 });
 
 const emit = defineEmits(["update:modelValue"]);
@@ -104,7 +109,11 @@ function setScaled(field, raw) {
 </script>
 
 <template>
-  <div class="tagger-params-root">
+  <div
+    class="tagger-params-root"
+    :class="{ 'tagger-params-root--grid': columns > 1 }"
+    :style="columns > 1 ? { '--tagger-params-columns': columns } : undefined"
+  >
     <div v-if="!schema.length" class="tagger-params-empty">
       This plugin has no configurable parameters.
     </div>
@@ -113,7 +122,13 @@ function setScaled(field, raw) {
       :key="field.name"
       class="tagger-params-field"
     >
-      <label :for="fieldControlId(index)" class="tagger-params-label">
+      <!-- A yes/no setting is one checkbox named by the setting itself (below),
+           not a heading over a box that says "Enabled". -->
+      <label
+        v-if="field.type !== 'bool' && field.type !== 'boolean'"
+        :for="fieldControlId(index)"
+        class="tagger-params-label"
+      >
         {{ field.label || field.name }}
       </label>
 
@@ -183,6 +198,7 @@ function setScaled(field, raw) {
       <!-- bool -->
       <label
         v-else-if="field.type === 'bool' || field.type === 'boolean'"
+        :for="fieldControlId(index)"
         class="tagger-params-checkbox-row"
       >
         <input
@@ -191,7 +207,7 @@ function setScaled(field, raw) {
           type="checkbox"
           :aria-describedby="fieldDescriptionIds(field, index)"
         />
-        <span>Enabled</span>
+        <span>{{ field.label || field.name }}</span>
       </label>
 
       <!-- textarea -->
@@ -242,6 +258,13 @@ function setScaled(field, raw) {
   flex-direction: column;
   gap: var(--space-4);
   min-width: 0;
+}
+
+.tagger-params-root--grid {
+  display: grid;
+  grid-template-columns: repeat(var(--tagger-params-columns), minmax(0, 1fr));
+  column-gap: var(--space-6);
+  align-items: start;
 }
 
 .tagger-params-empty {

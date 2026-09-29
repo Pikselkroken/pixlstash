@@ -4,6 +4,10 @@
  * settings in the page rather than behind PluginSelect's gear (the Models tab
  * does this for the built-in PixlStash tagger).
  *
+ * Drawn as a settings section of its own (`title`), with its verbs in the
+ * section's heading row, and its fields in two columns: the Models pane is a
+ * fixed height, and a setting the plugin adds must not make it scroll.
+ *
  * Shows TaggerParametersUI, "Reset to defaults" and Save, plus a
  * label-thresholds preview for pixlstash_tagger. Saves via
  * `PATCH /users/me/config` (`tagger_settings.plugins.<name>.params`) and emits
@@ -16,8 +20,11 @@ import TaggerParametersUI from "./TaggerParametersUI.vue";
 import { errorDetail } from "../../utils/apiError";
 import AppButton from "./AppButton.vue";
 import AppDialog from "./AppDialog.vue";
+import SettingsSection from "../settings/SettingsSection.vue";
 
 const props = defineProps({
+  /** The section's heading. */
+  title: { type: String, default: "" },
   /** Plugin object from GET /taggers (includes parameter_schema, etc.) */
   plugin: { type: Object, required: true },
   /** Current tagger_settings object. */
@@ -133,23 +140,19 @@ watch(
 </script>
 
 <template>
-  <div class="tagger-panel">
-    <TaggerParametersUI
-      v-model="formParams"
-      :schema="plugin.parameter_schema"
-      @update:model-value="saved = false"
-    />
-
-    <div class="tagger-panel-actions">
+  <SettingsSection :title="title" class="tagger-panel">
+    <template #action>
+      <!-- Icon-only so the heading row keeps the title on one line beside
+           the status, Reset and Save; the tooltip is also its name. -->
       <AppButton
         v-if="plugin.name === 'pixlstash_tagger'"
         variant="ghost"
         size="sm"
         icon-left="table-eye"
+        icon-only
+        tooltip="Preview label thresholds"
         @click="openLabelThresholds"
-      >
-        Preview label thresholds
-      </AppButton>
+      />
       <span class="tagger-panel-status" role="status">
         <template v-if="dirty">Unsaved changes</template>
         <template v-else-if="saved">Saved.</template>
@@ -166,7 +169,14 @@ watch(
       >
         Save
       </AppButton>
-    </div>
+    </template>
+
+    <TaggerParametersUI
+      v-model="formParams"
+      :schema="plugin.parameter_schema"
+      :columns="2"
+      @update:model-value="saved = false"
+    />
 
     <div v-if="saveError" class="tagger-panel-error" role="alert">
       {{ saveError }}
@@ -217,31 +227,18 @@ watch(
         </tbody>
       </table>
     </AppDialog>
-  </div>
+  </SettingsSection>
 </template>
 
 <style scoped>
-.tagger-panel {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.tagger-panel-actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-/* Pushes Reset / Save to the right edge, as a dialog footer would. */
 .tagger-panel-status {
-  flex: 1 1 auto;
-  text-align: right;
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
+  white-space: nowrap;
 }
 
 .tagger-panel-error {
+  margin-top: var(--space-2);
   color: rgb(var(--v-theme-surface-error));
   font-size: var(--text-xs);
 }

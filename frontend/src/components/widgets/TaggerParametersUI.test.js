@@ -47,7 +47,8 @@ describe("TaggerParametersUI accessibility hardening", () => {
 
     expect(fields).toHaveLength(schema.length);
     for (const field of fields) {
-      const label = field.get(".tagger-params-label");
+      // The field's own label: a heading, or a checkbox row naming the box.
+      const label = field.get("label");
       const control = fieldControl(field);
       expect(label.attributes("for")).toBe(control.attributes("id"));
 
@@ -70,5 +71,16 @@ describe("TaggerParametersUI accessibility hardening", () => {
       field.get(".tagger-params-unit").attributes("id"),
       field.get(".tagger-params-help").attributes("id"),
     ]);
+  });
+});
+
+describe("a yes/no setting", () => {
+  it("is one checkbox named by the setting, not a heading over Enabled", () => {
+    const wrapper = mount(TaggerParametersUI, { props: { schema } });
+    const field = wrapper.findAll(".tagger-params-field")[2];
+    expect(field.find(".tagger-params-label").exists()).toBe(false);
+    const row = field.get("label");
+    expect(row.text()).toBe("Tag automatically");
+    expect(row.attributes("for")).toBe(field.get("input").attributes("id"));
   });
 });
