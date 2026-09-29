@@ -3619,9 +3619,11 @@ missing node pack warns and never refuses.** GGUF is the one pack known; any
 other loader keeps its class and a file it cannot list is refused as before.
 `POST /workflows/{id}/set-clone-plans` runs that same `_swap_files` on a copy
 per set asked, so the dialog's diff is the clone's own rewrite. `_set_swaps`
-maps a set to the graph: the first base slot takes the checkpoint the caller names (`checkpoint_id`, a checkpoint or unclassified file, never guessed from the members), every VAE
-slot its (first) VAE, a text-encoder slot its encoder of the same layout
-(`family`, or the only one against the only slot). **LoRAs go only when the
+maps a set to the graph: the first base slot takes the checkpoint the caller names (`checkpoint_id`, a checkpoint or unclassified file, never guessed from the members), and a VAE or
+text-encoder slot the set's untaken file of the same layout (`family`, or the
+set's only one against the graph's only slot of that kind). Two slots of a kind
+are two different files, since the slot list merges loaders naming one, so one
+set VAE is never written over a video VAE and an image VAE alike. **LoRAs go only when the
 base model changes**: `keeps_loras` compares `_base_key` of the set's
 checkpoint with `_replaced_base_model` of the graph's, and an unknown base model
 on either side is *not* the same. The clone body's optional `loras` is the

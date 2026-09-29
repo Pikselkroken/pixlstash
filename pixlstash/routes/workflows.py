@@ -6696,17 +6696,21 @@ def create_router(server) -> APIRouter:
     ) -> dict[str, str]:
         """The set's checkpoint, and which graph file each of its files replaces.
 
-        The first base slot takes the set's checkpoint; every VAE slot the
-        set's VAE; a text-encoder slot the set's encoder of the same layout
-        (``family``), or the set's only one when the graph has only one. A
-        slot the set has nothing for keeps its file.
-
-        ponytail: a set with two VAEs gives the first; the tray has no order,
-        so the plan's diff is where the owner sees which.
+        The first base slot takes the set's checkpoint. A VAE or text-encoder
+        slot takes the set's file of the same layout (``family``) nobody has
+        taken yet; with no layout to go by, the set's only file of that kind
+        when the graph has only one such slot. A slot the set has nothing for
+        keeps its file. Two slots of a kind are two different files (the
+        slot list merges loaders naming one file), so one set file is never
+        written over both.
         """
-        vaes = [m for m in members if m.file_kind == FILE_VAE]
-        encoders = [m for m in members if m.file_kind == FILE_TEXT_ENCODER]
-        clip_slots = [slot for _c, _w, slot in found if slot.kind == "clip"]
+        of_kind = {
+            "vae": [m for m in members if m.file_kind == FILE_VAE],
+            "clip": [m for m in members if m.file_kind == FILE_TEXT_ENCODER],
+        }
+        slots_of = {
+            kind: sum(slot.kind == kind for _c, _w, slot in found) for kind in of_kind
+        }
         swaps: dict[str, str] = {}
         taken: set[int] = set()
         base_done = False
@@ -6715,20 +6719,16 @@ def create_router(server) -> APIRouter:
             if slot.kind in BASE_MODEL_KINDS and not base_done:
                 base_done = True
                 new = checkpoint
-            elif slot.kind == "vae" and vaes:
-                new = vaes[0]
-            elif slot.kind == "clip":
+            elif slot.kind in of_kind:
                 family = slot.model.family if slot.model else None
-                new = next(
-                    (
-                        m
-                        for m in encoders
-                        if m.id not in taken and family and m.family == family
-                    ),
-                    None,
-                )
-                if new is None and len(clip_slots) == 1 and len(encoders) == 1:
-                    new = encoders[0]
+                files = [m for m in of_kind[slot.kind] if m.id not in taken]
+                new = next((m for m in files if family and m.family == family), None)
+                if (
+                    new is None
+                    and slots_of[slot.kind] == 1
+                    and len(of_kind[slot.kind]) == 1
+                ):
+                    new = of_kind[slot.kind][0]
                 if new is not None:
                     taken.add(new.id)
             if new is not None and normalized_filename(

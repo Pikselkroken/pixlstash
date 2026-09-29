@@ -9861,6 +9861,44 @@ def test_a_gguf_set_on_a_whole_checkpoint_loader_names_the_loader_it_needs(
     assert plans["gguf"]["reason"] == "Needs a UnetLoaderGGUF"
 
 
+def test_a_set_vae_replaces_only_the_graph_vae_of_its_layout(cloneable):
+    """Two VAE loaders are two different files: one set VAE is not both."""
+    graph = _embedded_export_graph()
+    graph["8"] = {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}}
+    graph["9"] = {
+        "class_type": "VAELoader",
+        "inputs": {"vae_name": "wan-video-vae.safetensors"},
+    }
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        ids = [
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, family, provenance) "
+                "VALUES ('vae', ?, ?, 'scanned')",
+                (filename, family),
+            ).lastrowid
+            for filename, family in (
+                ("ae.safetensors", "vae_16ch"),
+                ("wan-video-vae.safetensors", "wan_vae"),
+                ("flux2-ae.safetensors", "vae_16ch"),
+            )
+        ]
+    try:
+        _body, plans = _plans(cloneable, flux=[cloneable.checkpoint_id, ids[2]])
+    finally:
+        with hub.transaction() as conn:
+            conn.executemany("DELETE FROM model WHERE id = ?", [(i,) for i in ids])
+    assert plans["flux"]["swaps"] == {
+        _SHELF_FILENAME: CLONE_CHECKPOINT,
+        "ae.safetensors": "flux2-ae.safetensors",
+    }
+
+
 def test_two_unknown_base_models_are_not_the_same_one(cloneable):
     """Neither checkpoint's base model is known: the LoRAs are not kept."""
     cloneable.monkeypatch.setattr(
