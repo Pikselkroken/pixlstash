@@ -144,6 +144,27 @@ export async function setWorkflowDefaults(workflowId, defaults) {
 }
 
 /**
+ * Put one of a workflow's LoRAs in or out of its default recipe (#1653).
+ *
+ * `asset` is the `asset:` reference `lora-summary` names it by; `include`
+ * true adds it (at `strength`, else the strength its pictures used most),
+ * false keeps it out, null drops the edit. A drop may name the edit by its
+ * `sha256` instead, which still works after the file left the shelf.
+ * Answers with the opened workflow.
+ *
+ * @param {string} workflowId
+ * @param {{asset?: string, sha256?: string, include: boolean|null, strength?: number}} edit
+ */
+export async function setWorkflowDefaultLora(workflowId, edit) {
+  return unwrap(
+    apiClient.put(
+      `/workflows/${encodeURIComponent(workflowId)}/default-lora`,
+      edit,
+    ),
+  );
+}
+
+/**
  * Replace a model a card's workflow loads (a missing checkpoint), or undo it.
  *
  * `was` is the file as the graph names it, `now` a shelf model's filename or

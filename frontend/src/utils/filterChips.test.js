@@ -120,3 +120,47 @@ describe("scoreChipValue", () => {
     expect(scoreChipValue(min, max, unscored)).toBe(want);
   });
 });
+
+describe("a workflow and the value opened with it (#1653)", () => {
+  function opened(kind, value, label) {
+    const s = useFilterStore();
+    s.workflowFilter = { id: "w1", name: "Portrait", opened: { kind, value, label } };
+    if (kind === "model") s.comfyuiModelFilter = [value];
+    else s.comfyuiLoraFilter = [value];
+    return s;
+  }
+
+  it("puts the Workflow chip first, and the value under the tab's own name", () => {
+    const s = opened("model", "SDXL/realvisXL.safetensors", "RealVis XL");
+    expect(chipText(s)).toEqual(["Workflow Portrait", "Checkpoint RealVis XL"]);
+  });
+
+  it("drops the value and keeps the workflow on the value chip's ×", () => {
+    const s = opened("lora", "bo.safetensors", "Bo");
+    filterChips(s).find((c) => c.key === "lora:bo.safetensors").remove();
+    expect(s.comfyuiLoraFilter).toEqual([]);
+    expect(s.workflowFilter).toEqual({
+      id: "w1",
+      name: "Portrait",
+      opened: { kind: "lora", value: "bo.safetensors", label: "Bo" },
+    });
+  });
+
+  it("takes the value it was opened with on the Workflow chip's ×, and only that", () => {
+    const s = opened("model", "a.safetensors", "A");
+    s.comfyuiModelFilter = ["a.safetensors", "b.safetensors"];
+    s.comfyuiLoraFilter = ["a.safetensors"];
+    filterChips(s).find((c) => c.key === "workflow").remove();
+    expect(s.workflowFilter).toBeNull();
+    expect(s.comfyuiModelFilter).toEqual(["b.safetensors"]);
+    expect(s.comfyuiLoraFilter).toEqual(["a.safetensors"]);
+  });
+
+  it("splits the pile's LoRA into a chip of its own (F-4)", () => {
+    const s = useFilterStore();
+    s.workflowFilter = { id: "w1", name: "Portrait", lora: "asset:abc", loraName: "Bo" };
+    expect(chipText(s)).toEqual(["Workflow Portrait", "LoRA Bo"]);
+    filterChips(s).find((c) => c.key === "workflow-lora").remove();
+    expect(s.workflowFilter).toEqual({ id: "w1", name: "Portrait" });
+  });
+});

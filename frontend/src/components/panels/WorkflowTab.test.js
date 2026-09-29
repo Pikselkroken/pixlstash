@@ -24,6 +24,7 @@ const getLoraSummary = vi.fn();
 const getLoraChain = vi.fn();
 const readModelSwap = vi.fn();
 const setWorkflowModelFix = vi.fn();
+const setWorkflowDefaultLora = vi.fn();
 
 vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
@@ -39,6 +40,7 @@ vi.mock("../../api/workflows", () => ({
   getLoraChain: (...args) => getLoraChain(...args),
   readModelSwap: (...args) => readModelSwap(...args),
   setWorkflowModelFix: (...args) => setWorkflowModelFix(...args),
+  setWorkflowDefaultLora: (...args) => setWorkflowDefaultLora(...args),
 }));
 
 const getPixlstashNode = vi.fn();
@@ -129,6 +131,8 @@ function loraSummary(overrides = {}) {
         filename: "bo.safetensors",
         name: "Bo",
         on_shelf: true,
+        // The shelf file's CONTENT digest: not the hex of the asset (a name hash).
+        sha256: "b".repeat(64),
         pictures: 3,
         picture_ids: [31, 32, 33],
       },
@@ -137,6 +141,7 @@ function loraSummary(overrides = {}) {
         filename: "ada.safetensors",
         name: "Ada",
         on_shelf: true,
+        sha256: "a".repeat(64),
         pictures: 2,
         picture_ids: [21, 22],
       },
@@ -178,7 +183,7 @@ function detail({ card: cardOverrides = {}, ...overrides } = {}) {
   return {
     card: {
       default_recipe: {
-        sampled: true,
+        sampled: 3,
         // The base card's named slots at their addresses, as the server
         // samples them for a card with one variant.
         models: (shown.models ?? [])
@@ -303,6 +308,7 @@ beforeEach(() => {
   patchWorkflowCard.mockReset().mockResolvedValue(detail());
   setWorkflowDefaults.mockReset().mockResolvedValue(detail());
   setWorkflowPins.mockReset().mockResolvedValue({ pins: [] });
+  setWorkflowDefaultLora.mockReset().mockResolvedValue(detail());
   getLoraSummary.mockReset().mockResolvedValue(loraSummary());
   getLoraChain.mockReset().mockResolvedValue(loraChain());
   replace.mockReset();
@@ -1027,18 +1033,425 @@ describe("the default recipe (#1623)", () => {
   });
 });
 
+describe("the DEFAULT RECIPE section (#1653)", () => {
+  // Shelf CONTENT digests: deliberately not the hex of the `asset:` refs
+  // (BO / ADA hash the NAME), which is the join a real library needs.
+  const BO_SHA = "b".repeat(64);
+  const ADA_SHA = "a".repeat(64);
+
+  /** The detail with `loras` in its default recipe and `recipe_values` on the card. */
+  function withRecipe({ loras = [], stages, recipeValues, provenance } = {}) {
+    const shown = detail({
+      card: recipeValues ? { recipe_values: recipeValues } : {},
+    });
+    shown.card.default_recipe.loras = loras;
+    if (stages) shown.card.default_recipe.stages = stages;
+    if (provenance) {
+      shown.card.default_recipe.models.forEach((model) => {
+        model.provenance = provenance;
+      });
+    }
+    return shown;
+  }
+
+  function loraRow(wrapper, name) {
+    const row = wrapper
+      .findAll("[data-testid='wftab-default-lora']")
+      .find((entry) => entry.find(".wftab-chain-name").text() === name);
+    if (!row) throw new Error(`no default LoRA row called ${name}`);
+    return row;
+  }
+
+  it("heads the section Default recipe and says where the values come from", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    const section = wrapper.find("[data-testid='wftab-default-recipe']");
+    expect(section.find("[role='heading']").text()).toBe("Default recipe");
+    expect(section.find("[data-testid='wftab-provenance']").text()).toBe(
+      "Most used in your 4★+ pictures.",
+    );
+    expect(textOf(wrapper)).not.toContain("In every picture");
+  });
+
+  it("says so when none of its pictures is rated 4★ yet", async () => {
+    getWorkflowCard.mockResolvedValue(withRecipe({ provenance: "all" }));
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.find("[data-testid='wftab-provenance']").text()).toBe(
+      "Most used in its pictures. None is rated 4★ yet.",
+    );
+  });
+
+  it("reads its default recipe before naming any model, never the card's", async () => {
+    getWorkflowCard.mockReturnValue(new Promise(() => {}));
+    const { wrapper } = await mountWith([KEY]);
+    expect(textOf(wrapper)).toContain("Reading its default recipe…");
+    expect(wrapper.find("[data-testid='wftab-row-checkpoint']").exists()).toBe(false);
+  });
+
+  it("offers Retry when the default recipe could not be read", async () => {
+    getWorkflowCard.mockRejectedValueOnce(new Error("down"));
+    const { wrapper } = await mountWith([KEY]);
+    expect(textOf(wrapper)).toContain("Could not read its default recipe just now.");
+    await wrapper.find("[data-testid='wftab-recipe-retry']").trigger("click");
+    await flush(wrapper);
+    expect(getWorkflowCard).toHaveBeenCalledTimes(2);
+    expect(wrapper.find("[data-testid='wftab-row-checkpoint']").exists()).toBe(true);
+  });
+
+  it("counts a default LoRA not in every picture, and takes it out of the pile", async () => {
+    getWorkflowCard.mockResolvedValue(
+      withRecipe({
+        // Named differently from the summary's file: the join is the digest.
+        loras: [{ asset: BO.toUpperCase(), filename: "loras/bo_v2.safetensors", sha256: BO_SHA.toUpperCase(), strength: 0.8, provenance: "best" }],
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    const row = loraRow(wrapper, "Bo");
+    expect(row.find(".wftab-coverage").text()).toBe("in 3 of 5");
+    expect(row.find(".wftab-chain-strength").text()).toBe("0.80");
+    // Once: a default row or the pile, never both.
+    expect(wrapper.find(`[data-testid='wftab-fan-row-${BO}']`).exists()).toBe(false);
+    const pile = wrapper.find("[data-testid='wftab-pile']");
+    expect(pile.text()).toContain("Ada");
+    expect(pile.text()).not.toContain("+1");
+    expect(wrapper.find("[data-testid='wftab-changes'] [role='heading']").text()).toContain(
+      "Also used",
+    );
+  });
+
+  it("never joins by filename: a same-named LoRA with another digest stays in the pile", async () => {
+    getWorkflowCard.mockResolvedValue(
+      withRecipe({
+        loras: [{ asset: `asset:${"f".repeat(64)}`, filename: "bo.safetensors", sha256: "f".repeat(64), strength: 1, provenance: "best" }],
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.find(`[data-testid='wftab-fan-row-${BO}']`).exists()).toBe(true);
+    expect(wrapper.find(".wftab-coverage").exists()).toBe(false);
+  });
+
+  it("drops the pile's No LoRA row once a default LoRA leaves the pile", async () => {
+    const none = { asset: "", filename: null, name: null, on_shelf: true, pictures: 1, picture_ids: [9] };
+    getLoraSummary.mockResolvedValue(loraSummary({ without: none }));
+    getWorkflowCard.mockResolvedValue(
+      withRecipe({ loras: [{ asset: BO, filename: "bo.safetensors", sha256: BO_SHA, strength: 1, provenance: "best" }] }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.findComponent({ name: "WorkflowLoraPile" }).props("summary").without).toBe(null);
+  });
+
+  it("keeps the No LoRA row while the pile is the server's whole varying", async () => {
+    const none = { asset: "", filename: null, name: null, on_shelf: true, pictures: 1, picture_ids: [9] };
+    getLoraSummary.mockResolvedValue(loraSummary({ without: none }));
+    getWorkflowCard.mockResolvedValue(withRecipe({ loras: [] }));
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.findComponent({ name: "WorkflowLoraPile" }).props("summary").without).toEqual(none);
+  });
+
+  it("matches a default LoRA with no digest to the pile by its file", async () => {
+    getWorkflowCard.mockResolvedValue(
+      withRecipe({
+        loras: [{ filename: "loras/BO.safetensors", sha256: null, strength: 1, provenance: "best" }],
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.find(`[data-testid='wftab-fan-row-${BO}']`).exists()).toBe(false);
+    expect(wrapper.find("[data-testid='wftab-pile']").text()).toContain("Ada");
+  });
+
+  describe("Add to default on a pile row (#1653)", () => {
+    it("takes a default LoRA out of the pile by shelf file when its asset differs", async () => {
+      // One file loaded under another name: the default names it by one
+      // asset, the pile by another, and they are still the one LoRA.
+      getWorkflowCard.mockResolvedValue(
+        withRecipe({
+          loras: [{ asset: `asset:${"9".repeat(64)}`, filename: "bo_old.safetensors", sha256: BO_SHA, strength: 1, provenance: "best" }],
+        }),
+      );
+      const { wrapper } = await mountWith([KEY]);
+      expect(wrapper.find(`[data-testid='wftab-fan-row-${BO}']`).exists()).toBe(false);
+      expect(loraRow(wrapper, "Bo").find(".wftab-coverage").text()).toBe("in 3 of 5");
+    });
+
+
+    const boAdded = (strength = 0.8) =>
+      withRecipe({
+        loras: [{ asset: BO, filename: "bo.safetensors", sha256: BO_SHA, strength, provenance: "edited" }],
+      });
+    const addButton = (wrapper, asset) =>
+      wrapper.find(`[data-testid='wftab-fan-row-${asset}'] [data-testid='wftab-add-default']`);
+
+    it("moves the LoRA from the pile into the default recipe, and Undo takes it out", async () => {
+      getWorkflowCard.mockResolvedValue(withRecipe({ loras: [] }));
+      setWorkflowDefaultLora.mockResolvedValueOnce(boAdded());
+      const { wrapper } = await mountWith([KEY]);
+      await addButton(wrapper, BO).trigger("click");
+      await flush(wrapper);
+      expect(setWorkflowDefaultLora).toHaveBeenCalledWith(KEY, { asset: BO, include: true });
+      expect(wrapper.find(`[data-testid='wftab-fan-row-${BO}']`).exists()).toBe(false);
+      expect(loraRow(wrapper, "Bo").text()).toContain("Yours");
+
+      const notice = useNoticeStore().notices.at(-1);
+      expect(notice.level).toBe("success");
+      expect(notice.text).toContain("Your pictures stay where they are");
+      getWorkflowCard.mockResolvedValue(boAdded());
+      setWorkflowDefaultLora.mockResolvedValueOnce(withRecipe({ loras: [] }));
+      await notice.action.handler();
+      await flush(wrapper);
+      expect(setWorkflowDefaultLora).toHaveBeenLastCalledWith(KEY, { sha256: BO_SHA, include: null });
+      expect(wrapper.find(`[data-testid='wftab-fan-row-${BO}']`).exists()).toBe(true);
+    });
+
+    it("still confirms, with Undo, when the selection moved while it was out", async () => {
+      getWorkflowCard.mockResolvedValue(withRecipe({ loras: [] }));
+      let answer;
+      setWorkflowDefaultLora.mockImplementationOnce(
+        () => new Promise((resolve) => (answer = resolve)),
+      );
+      const { wrapper, store } = await mountWith([KEY]);
+      await addButton(wrapper, BO).trigger("click");
+      await flush(wrapper);
+      store.selectedKeys = [];
+      answer(boAdded());
+      await flush(wrapper);
+      const notice = useNoticeStore().notices.at(-1);
+      expect(notice.level).toBe("success");
+      expect(notice.action.label).toBe("Undo");
+    });
+
+    it("does not undo a LoRA whose strength was changed since", async () => {
+      getWorkflowCard.mockResolvedValue(withRecipe({ loras: [] }));
+      setWorkflowDefaultLora.mockResolvedValueOnce(boAdded());
+      const { wrapper } = await mountWith([KEY]);
+      await addButton(wrapper, BO).trigger("click");
+      await flush(wrapper);
+      getWorkflowCard.mockResolvedValue(boAdded(0.5));
+      await useNoticeStore().notices.at(-1).action.handler();
+      expect(setWorkflowDefaultLora).toHaveBeenCalledTimes(1);
+      expect(useNoticeStore().notices.at(-1).text).toContain("Nothing to undo");
+    });
+
+    it("offers it only on a LoRA the shelf names as one file", async () => {
+      getWorkflowCard.mockResolvedValue(withRecipe({ loras: [] }));
+      const summary = loraSummary();
+      // On the shelf, but under two files: the route could not choose.
+      summary.varying[1].sha256 = null;
+      getLoraSummary.mockResolvedValue(summary);
+      const { wrapper } = await mountWith([KEY]);
+      expect(addButton(wrapper, summary.varying[0].asset).exists()).toBe(true);
+      expect(addButton(wrapper, summary.varying[1].asset).exists()).toBe(false);
+    });
+  });
+
+  it("has no ALSO USED section when every LoRA that changes is a default", async () => {
+    getWorkflowCard.mockResolvedValue(
+      withRecipe({
+        loras: [
+          { asset: BO, filename: "bo.safetensors", sha256: BO_SHA, strength: 1, provenance: "best" },
+          { asset: ADA, filename: "ada.safetensors", sha256: ADA_SHA, strength: 1, provenance: "best" },
+        ],
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    expect(wrapper.find("[data-testid='wftab-changes']").exists()).toBe(false);
+  });
+
+  it("marks an edited LoRA Yours, with no reset and no Make default", async () => {
+    getWorkflowCard.mockResolvedValue(
+      withRecipe({
+        loras: [
+          { asset: BO, filename: "bo.safetensors", sha256: BO_SHA, strength: 1, provenance: "edited" },
+          { asset: ADA, filename: "ada.safetensors", sha256: ADA_SHA, strength: 1, provenance: "best" },
+        ],
+      }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    expect(loraRow(wrapper, "Bo").find(".wftab-yours").text()).toBe("Yours");
+    expect(loraRow(wrapper, "Ada").find(".wftab-yours").exists()).toBe(false);
+    // LoRAs have no write yet (F-1): nothing on screen may pretend otherwise.
+    expect(loraRow(wrapper, "Bo").find(".wfdef-reset").exists()).toBe(false);
+    expect(textOf(wrapper)).not.toContain("Make default");
+    expect(textOf(wrapper)).not.toContain("Take out of default");
+  });
+
+  it("says a stage is off, and why, and draws no Stages row without stages", async () => {
+    getWorkflowCard.mockResolvedValue(
+      withRecipe({ stages: { upscale: true, face_detailer: false } }),
+    );
+    const { wrapper } = await mountWith([KEY]);
+    expect(
+      wrapper.find("[data-testid='wftab-stages'] .wftab-value").text().replace(/\s+/g, " "),
+    ).toBe("Upscale · Face detailer off");
+    expect(textOf(wrapper)).toContain("Off: most of its pictures ran without it.");
+
+    getWorkflowCard.mockResolvedValue(withRecipe({ stages: {} }));
+    const { wrapper: none } = await mountWith([OTHER], [card({ id: OTHER })]);
+    expect(none.find("[data-testid='wftab-stages']").exists()).toBe(false);
+    expect(textOf(none)).not.toContain("Off: most of its pictures");
+  });
+
+  it("offers Show N on the checkpoint only below the workflow's count", async () => {
+    const values = (pictures) => ({
+      checkpoints: [
+        { name: "SDXL/realvisXL_v5.safetensors.safetensors", pictures },
+        { name: "SDXL/juggernautXL_v9.safetensors", pictures: 6 },
+      ],
+      loras: [],
+    });
+    getWorkflowCard.mockResolvedValue(withRecipe());
+    const { wrapper } = await mountWith([KEY], [card({ recipe_values: values(178) })]);
+    const show = wrapper.find("[data-testid='wftab-show-checkpoint']");
+    expect(show.text()).toBe("Show 178");
+    expect(show.attributes("aria-label")).toBe(
+      "Show the 178 pictures in Cinematic portrait made with realvisXL_v5.safetensors",
+    );
+    await show.trigger("click");
+    const filters = useFilterStore();
+    expect(filters.workflowFilter).toEqual({
+      id: KEY,
+      name: "Cinematic portrait",
+      opened: {
+        kind: "model",
+        value: "SDXL/realvisXL_v5.safetensors.safetensors",
+        label: "realvisXL_v5.safetensors",
+      },
+    });
+    expect(filters.comfyuiModelFilter).toEqual(["SDXL/realvisXL_v5.safetensors.safetensors"]);
+    expect(push).toHaveBeenCalledWith("/");
+
+    // In every picture: it would only repeat the head's link.
+    const { wrapper: every } = await mountWith([KEY], [card({ recipe_values: values(184) })]);
+    expect(every.find("[data-testid='wftab-show-checkpoint']").exists()).toBe(false);
+  });
+
+  it("lists no other checkpoint that is in every picture", async () => {
+    getWorkflowCard.mockResolvedValue(withRecipe());
+    const { wrapper } = await mountWith(
+      [KEY],
+      [
+        card({
+          recipe_values: {
+            // The default's file spelled so it matches no entry here.
+            checkpoints: [{ name: "SDXL/juggernautXL_v9.safetensors", pictures: 184 }],
+            loras: [],
+          },
+        }),
+      ],
+    );
+    expect(wrapper.find("[data-testid='wftab-other-checkpoints']").exists()).toBe(false);
+  });
+
+  it("discloses the other checkpoints, each with its own Show N", async () => {
+    getWorkflowCard.mockResolvedValue(withRecipe());
+    const { wrapper } = await mountWith(
+      [KEY],
+      [
+        card({
+          recipe_values: {
+            checkpoints: [
+              { name: "realvisXL_v5.safetensors.safetensors", pictures: 178 },
+              { name: "SDXL/juggernautXL_v9.safetensors", pictures: 6 },
+            ],
+            loras: [],
+          },
+        }),
+      ],
+    );
+    const toggle = wrapper.find("[data-testid='wftab-other-checkpoints']");
+    expect(toggle.text()).toContain("+1 other");
+    expect(toggle.attributes("aria-expanded")).toBe("false");
+    expect(wrapper.find("#wftab-other-checkpoints").exists()).toBe(false);
+    await toggle.trigger("click");
+    expect(toggle.attributes("aria-expanded")).toBe("true");
+    const item = wrapper.find("#wftab-other-checkpoints li");
+    expect(item.text().replace(/\s+/g, " ")).toBe("juggernautXL_v9 Show 6");
+    await item.find("button").trigger("click");
+    expect(useFilterStore().comfyuiModelFilter).toEqual(["SDXL/juggernautXL_v9.safetensors"]);
+  });
+
+  it("offers Show N on a default LoRA from recipe_values, matched by file", async () => {
+    getWorkflowCard.mockResolvedValue(
+      withRecipe({
+        loras: [{ asset: BO, filename: "loras/bo.safetensors", sha256: BO_SHA, strength: 1, provenance: "best" }],
+      }),
+    );
+    const { wrapper } = await mountWith(
+      [KEY],
+      [card({ recipe_values: { checkpoints: [], loras: [{ name: "Loras\\BO.safetensors", pictures: 3 }] } })],
+    );
+    const show = loraRow(wrapper, "Bo").findAll("button").find((b) => b.text() === "Show 3");
+    await show.trigger("click");
+    const filters = useFilterStore();
+    expect(filters.comfyuiLoraFilter).toEqual(["Loras\\BO.safetensors"]);
+    expect(filters.workflowFilter.opened).toEqual({
+      kind: "lora",
+      value: "Loras\\BO.safetensors",
+      label: "Bo",
+    });
+  });
+});
+
 describe("a default's provenance and reset", () => {
-  it("says where each value came from, on the row it belongs to", async () => {
+  it("marks only the edited value, as Yours, and no computed one (#1653)", async () => {
     getWorkflowCard.mockResolvedValue(
       detail({ card: { defaults: [STEPS, CFG] } }),
     );
     const { wrapper } = await mountWith([KEY]);
-    // Paired to the row, not counted across the panel: both sentences
-    // appearing SOMEWHERE is also true when the two labels are swapped.
-    expect(rowNamed(wrapper, "steps").text()).toContain(
-      "from your best pictures",
-    );
-    expect(rowNamed(wrapper, "cfg").text()).toContain("edited by you");
+    // Paired to the row, not counted across the panel: one "Yours"
+    // SOMEWHERE is also true when the condition is inverted.
+    expect(rowNamed(wrapper, "cfg").find(".wfdef-prov").text()).toBe("Yours");
+    expect(rowNamed(wrapper, "steps").find(".wfdef-prov").exists()).toBe(false);
+    expect(textOf(wrapper)).not.toContain("from your best pictures");
+  });
+
+  it("takes the defaults the Recipes tab wrote, so its own next PUT keeps them", async () => {
+    getWorkflowCard.mockResolvedValue(detail({ card: { defaults: [STEPS, CFG] } }));
+    const { wrapper } = await mountWith([KEY]);
+    const tabButton = (name) =>
+      wrapper.findAll("button").find((b) => b.text().trim() === name);
+    await tabButton("Recipes").trigger("click");
+    await flush(wrapper);
+    // "Make these the defaults" made steps an edit.
+    const written = detail({
+      card: { defaults: [{ ...STEPS, value: "30", provenance: "edited" }, CFG] },
+    });
+    wrapper.findComponent({ name: "WorkflowRecipesTab" }).vm.$emit("defaults-changed", KEY, written);
+    await tabButton("Workflow").trigger("click");
+    await flush(wrapper);
+    await rowNamed(wrapper, "cfg").find(".wfdef-reset").trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowDefaults).toHaveBeenLastCalledWith(KEY, [
+      { slot_label: "slot-a", input_name: "steps", value: "30" },
+    ]);
+  });
+
+  it("keeps the Recipes tab's answer over a detail read that lands after it", async () => {
+    const { wrapper } = await mountWith([KEY]);
+    // A re-read (Retry, a reselect) goes out and is slow ...
+    let late;
+    getWorkflowCard.mockImplementationOnce(() => new Promise((resolve) => (late = resolve)));
+    const tabButton = (name) =>
+      wrapper.findAll("button").find((b) => b.text().trim() === name);
+    useWorkflowsStore().selectedKeys = [];
+    await flush(wrapper);
+    useWorkflowsStore().selectedKeys = [KEY];
+    await flush(wrapper);
+    await tabButton("Recipes").trigger("click");
+    await flush(wrapper);
+    // ... the Recipes tab writes, and its answer arrives first ...
+    const written = detail({
+      card: { defaults: [{ ...STEPS, value: "30", provenance: "edited" }, CFG] },
+    });
+    wrapper.findComponent({ name: "WorkflowRecipesTab" }).vm.$emit("defaults-changed", KEY, written);
+    // ... then the stale read lands.
+    late(detail({ card: { defaults: [STEPS, CFG] } }));
+    await flush(wrapper);
+    await tabButton("Workflow").trigger("click");
+    await flush(wrapper);
+    await rowNamed(wrapper, "cfg").find(".wfdef-reset").trigger("click");
+    await flush(wrapper);
+    expect(setWorkflowDefaults).toHaveBeenLastCalledWith(KEY, [
+      { slot_label: "slot-a", input_name: "steps", value: "30" },
+    ]);
   });
 
   it("offers the reset only on a value the owner edited", async () => {
@@ -1151,30 +1564,8 @@ describe("an editor file ComfyUI has not converted (#1530)", () => {
 });
 
 describe("the LoRA pile", () => {
-  it("lists what every picture shares and piles what changes", async () => {
-    // Shared means every picture: the chain says in what order and how
-    // strong, the summary says which. A chain loader that changes between
-    // pictures is in the pile and never in the list.
-    getLoraSummary.mockResolvedValue(
-      loraSummary({
-        shared: [
-          {
-            asset: `asset:${"9".repeat(64)}`,
-            filename: "lightning-8step.safetensors",
-            name: "Lightning 8-step",
-            on_shelf: true,
-            pictures: 5,
-          },
-        ],
-      }),
-    );
+  it("piles what changes, with the cover's LoRA on top", async () => {
     const { wrapper } = await mountWith([KEY]);
-    const shared = wrapper.findAll("[data-testid='wftab-shared-lora']");
-    expect(shared.map((row) => row.text())).toEqual([
-      expect.stringContaining("Lightning 8-step"),
-    ]);
-    expect(textOf(wrapper)).toContain("In every picture of this workflow.");
-    expect(textOf(wrapper)).not.toContain("LoRA slots");
     // The cover's LoRA is on top, though Bo has more pictures.
     const pile = wrapper.find("[data-testid='wftab-pile']");
     expect(pile.text()).toContain("Ada");
@@ -1210,10 +1601,12 @@ describe("the LoRA pile", () => {
       .findAll("button")
       .find((button) => button.text() === "Show 3")
       .trigger("click");
+    // Two chips' worth (F-4): the workflow, and the LoRA narrowing it.
     expect(useFilterStore().workflowFilter).toEqual({
       id: KEY,
       lora: BO,
-      name: "Bo in Cinematic portrait",
+      name: "Cinematic portrait",
+      loraName: "Bo",
     });
     expect(push).toHaveBeenCalledWith("/");
   });
@@ -1867,9 +2260,13 @@ describe("the LoRA chain (#1478)", () => {
     },
   };
 
-  // No picture unless a test says so, so the chain is the whole list.
+  // No picture unless a test says so: nothing sampled, so the chain a run
+  // loads is the whole list.
   beforeEach(() => {
     getLoraSummary.mockResolvedValue(loraSummary({ pictures: 0, varying: [] }));
+    const unsampled = detail();
+    unsampled.card.default_recipe.sampled = 0;
+    getWorkflowCard.mockResolvedValue(unsampled);
   });
 
   async function mountChain(keys = [KEY]) {
@@ -1890,7 +2287,7 @@ describe("the LoRA chain (#1478)", () => {
     // are the workflow's own chain.
     const { wrapper } = await mountChain();
     expect(getLoraChain).toHaveBeenCalledWith(KEY);
-    const rows = wrapper.findAll("[data-testid='wftab-shared-lora']");
+    const rows = wrapper.findAll("[data-testid='wftab-default-lora']");
     expect(
       rows.map((row) => [
         row.find(".wftab-chain-name").text(),
@@ -1910,27 +2307,41 @@ describe("the LoRA chain (#1478)", () => {
     expect(wrapper.findComponent({ name: "Segmented" }).exists()).toBe(false);
   });
 
-  it("lists only what every picture shares, in the chain's order", async () => {
-    // Given out of order, and neon-rain changes between pictures, so it is in
-    // the pile rather than here.
-    const shared = (filename, name) => ({
-      asset: `asset:${filename}`,
-      filename,
+  it("gives a chain row the file its name's tooltip carries", async () => {
+    const { wrapper } = await mountChain();
+    const names = wrapper.findAll(".wftab-chain-name");
+    expect(names.length).toBeGreaterThan(0);
+    expect(names[0].find("tooltip-stub").attributes("text")).toBe(
+      "lightning-8step.safetensors",
+    );
+  });
+
+  it("lists the default recipe's LoRAs in the chain's order, joined by digest", async () => {
+    // Given out of order. The chain says the order, by shelf DIGEST; the
+    // summary, joined by ASSET reference (another hash), says what to call each and whether it is on the shelf; the strength is
+    // the default recipe's own.
+    const sampled = detail();
+    sampled.card.default_recipe.loras = [
+      { asset: "asset:n9", filename: "hairstyle-v3.safetensors", sha256: "S9", strength: 0.6, provenance: "best" },
+      { asset: "asset:n3", filename: "film-grain-35mm.safetensors", sha256: "s3", strength: 0.5, provenance: "best" },
+      { asset: "asset:n1", filename: "renamed.safetensors", sha256: "s1", strength: 1, provenance: "best" },
+    ];
+    getWorkflowCard.mockResolvedValue(sampled);
+    const use = (sha, name, onShelf = true) => ({
+      asset: `asset:${sha}`,
+      filename: `${name}.safetensors`,
       name,
-      on_shelf: true,
+      on_shelf: onShelf,
       pictures: 5,
     });
     getLoraSummary.mockResolvedValue(
       loraSummary({
-        shared: [
-          shared("hairstyle-v3.safetensors", "Hairstyle v3"),
-          shared("lightning-8step.safetensors", "Lightning"),
-          shared("film-grain-35mm.safetensors", "Film grain"),
-        ],
+        shared: [use("N9", "Hairstyle v3", false), use("n1", "Lightning"), use("n3", "Film grain")],
+        varying: [],
       }),
     );
     const { wrapper } = await mountChain();
-    const rows = wrapper.findAll("[data-testid='wftab-shared-lora']");
+    const rows = wrapper.findAll("[data-testid='wftab-default-lora']");
     expect(
       rows.map((row) => [
         row.find(".wftab-chain-name").text(),
@@ -1938,15 +2349,14 @@ describe("the LoRA chain (#1478)", () => {
       ]),
     ).toEqual([
       ["Lightning", "1.00"],
-      ["Film grain", "0.40"],
+      ["Film grain", "0.50"],
       ["Hairstyle v3", "0.60"],
     ]);
-    // Off the shelf by the chain's own answer, and said so in words.
+    // In every picture, so no count on any of them.
+    expect(wrapper.find(".wftab-coverage").exists()).toBe(false);
     expect(
       wrapper.find("[data-testid='wftab-shared-note']").text().replace(/\s+/g, " "),
-    ).toBe(
-      "In every picture of this workflow. Hairstyle v3 is not on your shelf.",
-    );
+    ).toBe("Hairstyle v3 is not on your shelf.");
   });
 
   it("lists a forked chain's lane loaders after its trunk", async () => {

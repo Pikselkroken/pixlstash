@@ -42,6 +42,7 @@
         :key="recipe.id"
         class="wfrt-card"
         :class="{ 'wfrt-card--dragging': draggingId === recipe.id }"
+        :aria-label="`${recipe.name || 'Untitled'}, ${recipeDiffs[recipe.id].text}`"
         @dragover.prevent
         @drop.prevent="onDrop(index)"
       >
@@ -164,25 +165,53 @@
           </v-menu>
         </div>
 
-        <p v-if="recipe.prompt" class="wfrt-prompt">{{ recipe.prompt }}</p>
-
-        <div v-if="recipe.loras?.length" class="wfrt-chips">
-          <!-- Keyed on the position: a recipe may load one file twice (a
-               stacked LoRA is a different look), which the server's own
-               `lora_key` keeps on purpose, so the filename is not unique. -->
-          <span
-            v-for="(lora, slot) in recipe.loras"
-            :key="slot"
-            class="wfrt-chip"
+        <!-- What the recipe changes against its workflow's default recipe
+             (#1653 §1.3), then the prompt. The diff comes first: the prompt
+             differs on every card, the diff is what tells them apart. -->
+        <div class="wfrt-body">
+          <p
+            :ref="(el) => registerDiff(`r:${recipe.id}`, el)"
+            class="wfrt-diff"
+            :class="{ 'wfrt-diff--open': expanded[`r:${recipe.id}`] }"
           >
-            <v-icon size="12">mdi-layers-outline</v-icon>
-            {{ lora.filename }}
-            <span class="wfrt-strength">{{ strengthOf(lora) }}</span>
-          </span>
+            <span
+              v-for="(seg, i) in recipeDiffs[recipe.id].segments"
+              :key="i"
+              class="wfrt-seg"
+            ><span v-if="i" class="wfrt-quiet"> · </span><span
+                v-for="(part, j) in seg.parts"
+                :key="j"
+                :class="{ 'wfrt-quiet': part.quiet }"
+              >{{ part.text }}</span></span>
+          </p>
+          <button
+            v-if="hidden[`r:${recipe.id}`] || expanded[`r:${recipe.id}`]"
+            class="wfrt-more"
+            type="button"
+            :aria-expanded="expanded[`r:${recipe.id}`] ? 'true' : 'false'"
+            @click="toggleMore(`r:${recipe.id}`)"
+          >
+            {{ expanded[`r:${recipe.id}`] ? "Fewer" : `+${hidden[`r:${recipe.id}`]} more` }}
+          </button>
+          <p v-if="recipe.prompt" class="wfrt-prompt">{{ recipe.prompt }}</p>
         </div>
 
         <div class="wfrt-bot">
-          <span class="wfrt-facts">{{ factsOf(recipe) }}</span>
+          <!-- On the card, not in its ⋯ menu, where nobody found it. Only
+               when a parameter differs (the defaults PUT takes parameters;
+               LoRAs go in from the Workflow tab's pile), and a verb that
+               belongs to one workflow, so not on a multi-selection. -->
+          <AppButton
+            v-if="!multi && recipeDiffs[recipe.id].params.length"
+            :ref="(el) => registerDefaultsButton(recipe.id, el)"
+            size="sm"
+            variant="ghost"
+            data-testid="wfrt-make-defaults"
+            :tooltip="`Make ${recipe.name || 'this recipe'}'s settings the workflow's defaults`"
+            @click="startMakeDefaults(recipe)"
+          >
+            Make defaults…
+          </AppButton>
           <AppButton size="sm" icon-left="play" @click="run(recipe)">
             Run…
           </AppButton>
@@ -221,21 +250,56 @@
             </span>
           </div>
 
-          <p v-if="look.prompt" class="wfrt-prompt">{{ look.prompt }}</p>
-
-          <div v-if="look.loras?.length" class="wfrt-chips">
-            <span
-              v-for="(lora, slot) in look.loras"
-              :key="slot"
-              class="wfrt-chip"
+          <!-- `/recipes/used` names LoRA files only, so a look's diff is its
+               LoRA part and its count; never "Only the prompt" (§1.3). A
+               look carries no workflow id, so a multi-selection has no one
+               default to compare with and keeps the plain LoRA list. -->
+          <div v-if="lookDiffs[look.key]" class="wfrt-body">
+            <p
+              :ref="(el) => registerDiff(`l:${look.key}`, el)"
+              class="wfrt-diff"
+              :class="{ 'wfrt-diff--open': expanded[`l:${look.key}`] }"
             >
-              <v-icon size="12">mdi-layers-outline</v-icon>
-              {{ lora.filename }}
-            </span>
+              <span
+                v-for="(seg, i) in lookDiffs[look.key].segments"
+                :key="i"
+                class="wfrt-seg"
+              ><span v-if="i" class="wfrt-quiet"> · </span><span
+                  v-for="(part, j) in seg.parts"
+                  :key="j"
+                  :class="{ 'wfrt-quiet': part.quiet }"
+                >{{ part.text }}</span></span>
+            </p>
+            <button
+              v-if="hidden[`l:${look.key}`] || expanded[`l:${look.key}`]"
+              class="wfrt-more"
+              type="button"
+              :aria-expanded="expanded[`l:${look.key}`] ? 'true' : 'false'"
+              @click="toggleMore(`l:${look.key}`)"
+            >
+              {{ expanded[`l:${look.key}`] ? "Fewer" : `+${hidden[`l:${look.key}`]} more` }}
+            </button>
+            <p v-if="look.prompt" class="wfrt-prompt">{{ look.prompt }}</p>
           </div>
 
+          <template v-else>
+            <p v-if="look.prompt" class="wfrt-prompt">{{ look.prompt }}</p>
+            <div v-if="look.loras?.length" class="wfrt-chips">
+              <span
+                v-for="(lora, slot) in look.loras"
+                :key="slot"
+                class="wfrt-chip"
+              >
+                <v-icon size="12">mdi-layers-outline</v-icon>
+                {{ lora.filename }}
+              </span>
+            </div>
+          </template>
+
           <div class="wfrt-bot">
-            <span class="wfrt-facts">{{ picturesLabel(look.pictures) }}</span>
+            <span class="wfrt-facts">{{
+              lookDiffs[look.key] ? "" : picturesLabel(look.pictures)
+            }}</span>
             <AppButton
               v-if="!look.saved"
               size="sm"
@@ -286,6 +350,16 @@
       :recipe-id="exportId"
       @close="closeExport"
     />
+
+    <MakeDefaultsDialog
+      v-if="makingDefaults"
+      :open="Boolean(makingDefaults)"
+      :rows="makingDefaults.rows"
+      :busy="makingDefaults.busy"
+      :error="makingDefaults.error"
+      @close="closeMakeDefaults"
+      @confirm="confirmMakeDefaults"
+    />
   </div>
 </template>
 
@@ -300,7 +374,7 @@
  * `PUT /recipes/order` refuses a list with an unknown id rather than leaving
  * half an order behind.
  */
-import { computed, nextTick, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { VIcon, VMenu } from "vuetify/components";
 
 import { getPictureRecipe } from "../../api/comfyui";
@@ -313,16 +387,19 @@ import {
   reorderSavedRecipes,
 } from "../../api/recipes";
 import { pictureThumbnailUrl } from "../../api/pictures";
+import { getWorkflowCard, setWorkflowDefaults } from "../../api/workflows";
 import { useConfirm } from "../../composables/useConfirm";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
+import { lookLoraDiff, recipeDiff } from "../../utils/recipeDiff";
 import { loraKey, promptKey } from "../../utils/recipeKey";
 import { resolveRecipeLoras } from "../../utils/recipeLoras";
 import { onMenuKeydown } from "../../utils/menuKeyboard";
 import { withRef } from "../../utils/withRef";
 import ExportRecipeDialog from "../io/ExportRecipeDialog.vue";
+import MakeDefaultsDialog from "../io/MakeDefaultsDialog.vue";
 import SaveRecipeDialog from "../io/SaveRecipeDialog.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppInput from "../widgets/AppInput.vue";
@@ -337,6 +414,13 @@ const props = defineProps({
   /** What the header names. */
   workflowName: { type: String, default: "" },
 });
+
+/**
+ * `defaults-changed(workflowId, detail)`: this tab wrote a workflow's defaults.
+ * The Workflow tab keeps its own copy of the detail and builds its whole-set
+ * PUTs from it, so it has to take this answer or its next write drops ours.
+ */
+const emit = defineEmits(["defaults-changed"]);
 
 const { confirm } = useConfirm();
 const notices = useNoticeStore();
@@ -403,27 +487,139 @@ function thumbnail(pictureId) {
   return pictureThumbnailUrl(pictureId);
 }
 
-function strengthOf(lora) {
-  const value = Number(lora?.strength);
-  return Number.isFinite(value) ? value.toFixed(2) : "1.00";
+// ── The diff line (#1653 §1.3) ──────────────────────────────────────────────
+
+/** Several workflows selected: each card is diffed against its own. */
+const multi = computed(() => props.workflowIds.filter(Boolean).length > 1);
+
+/**
+ * Workflow details by id, `{state: "loading" | "ready" | "failed", body}`:
+ * the default recipe a card is compared with is `body.card.default_recipe`.
+ */
+const details = ref({});
+
+/** Read one detail per distinct workflow, without holding the cards back. */
+async function readDetails(token, ids) {
+  details.value = Object.fromEntries(ids.map((id) => [id, { state: "loading" }]));
+  await Promise.all(
+    ids.map(async (id) => {
+      try {
+        const body = await getWorkflowCard(id);
+        if (token === loadToken) details.value[id] = { state: "ready", body };
+      } catch (err) {
+        console.warn(`Could not read workflow ${id} to compare its recipes:`, err);
+        if (token === loadToken) details.value[id] = { state: "failed" };
+      }
+    }),
+  );
+}
+
+/** A segment in the quiet ink: a state, a count, the workflow's name. */
+function quiet(text) {
+  return { parts: [{ text, quiet: true }], text };
+}
+
+function finish(segments, params = []) {
+  return { segments, params, text: segments.map((seg) => seg.text).join(" · ") };
+}
+
+/** The default a workflow's detail holds, or a quiet segment saying why not. */
+function defaultOf(workflowId) {
+  const entry = details.value[workflowId];
+  if (!entry || entry.state === "loading") return { wait: quiet("Comparing with the default…") };
+  const recipe = entry.body?.card?.default_recipe;
+  if (entry.state === "failed" || !recipe) {
+    return { wait: quiet("Could not compare with the default.") };
+  }
+  return { recipe, name: entry.body.card.name };
+}
+
+const recipeDiffs = computed(() => {
+  const out = {};
+  for (const recipe of recipes.value) {
+    if (!recipe.workflow_id) {
+      out[recipe.id] = finish([quiet("Not compared: not filed on a workflow")]);
+      continue;
+    }
+    const base = defaultOf(recipe.workflow_id);
+    if (base.wait) {
+      out[recipe.id] = finish([base.wait]);
+      continue;
+    }
+    const diff = recipeDiff(recipe, base.recipe);
+    const segments = diff.segments.length ? diff.segments : [quiet("Only the prompt")];
+    if (multi.value && base.name) segments.push(quiet(`on ${base.name}`));
+    out[recipe.id] = finish(segments, diff.params);
+  }
+  return out;
+});
+
+/** Looks by key; absent on a multi-selection, which keeps the LoRA list. */
+const lookDiffs = computed(() => {
+  const out = {};
+  const keys = props.workflowIds.filter(Boolean);
+  if (keys.length !== 1) return out;
+  const base = defaultOf(keys[0]);
+  for (const look of looks.value) {
+    const lora = base.wait ? [base.wait] : lookLoraDiff(look, base.recipe);
+    if (!lora) continue;
+    const segments = lora.length ? lora : [{ parts: [{ text: "Default LoRAs" }], text: "Default LoRAs" }];
+    out[look.key] = finish([...segments, quiet(picturesLabel(look.pictures))]);
+  }
+  return out;
+});
+
+/** Diff lines by `r:<id>` / `l:<key>`, for measuring the 2-line clamp. */
+const diffEls = new Map();
+/** How many segments the clamp hides, by the same key. */
+const hidden = ref({});
+/** Lines the owner expanded. */
+const expanded = ref({});
+
+/**
+ * Re-measures when a line's box changes size without its content changing:
+ * the rail animates its width open from zero, so a count taken on mount can be
+ * of a line still wrapping at a fraction of its width.
+ */
+const diffObserver = new ResizeObserver(() => measure());
+onBeforeUnmount(() => diffObserver.disconnect());
+
+function registerDiff(key, el) {
+  const previous = diffEls.get(key);
+  if (previous === el) return;
+  if (previous) diffObserver.unobserve(previous);
+  if (el) {
+    diffEls.set(key, el);
+    diffObserver.observe(el);
+  } else {
+    diffEls.delete(key);
+  }
 }
 
 /**
- * "31 pictures · steps 12" - the credit, then what the recipe changed.
- *
- * An override is addressed `slot/input`, and the input name is the part a
- * person recognises; the slot is a node label that means nothing outside the
- * graph. Two are named and the rest are counted, because this line has one
- * row of a 288px rail to live in.
+ * Count the segments the clamp cuts, after each render of the lines. The
+ * line is its segments' offset parent, so a segment ending below the line's
+ * box is (at least partly) hidden.
  */
-function factsOf(recipe) {
-  const parts = [`${recipe.pictures ?? 0} picture${recipe.pictures === 1 ? "" : "s"}`];
-  const entries = Object.entries(recipe.overrides || {});
-  for (const [addressed, value] of entries.slice(0, 2)) {
-    parts.push(`${addressed.split("/").pop()} ${value}`);
+function measure() {
+  const next = {};
+  for (const [key, el] of diffEls) {
+    if (expanded.value[key]) {
+      next[key] = hidden.value[key] || 0;
+      continue;
+    }
+    const limit = el.clientHeight;
+    next[key] = [...el.querySelectorAll(".wfrt-seg")].filter(
+      (seg) => seg.offsetTop + seg.offsetHeight > limit + 1,
+    ).length;
   }
-  if (entries.length > 2) parts.push(`+${entries.length - 2} more`);
-  return parts.join(" · ");
+  hidden.value = next;
+}
+
+watch([recipeDiffs, lookDiffs], measure, { flush: "post" });
+
+function toggleMore(key) {
+  expanded.value = { ...expanded.value, [key]: !expanded.value[key] };
 }
 
 /**
@@ -462,6 +658,7 @@ async function load() {
   const mine = () => token === loadToken;
   loadError.value = "";
   const keys = props.workflowIds.filter(Boolean);
+  details.value = {};
   if (!keys.length) {
     recipes.value = [];
     looks.value = [];
@@ -489,6 +686,11 @@ async function load() {
     if (!mine()) return;
     recipes.value = saved;
     looks.value = keyedLooks(used);
+    // The defaults the cards are diffed against: the selected workflow's
+    // (its looks need it too), and each saved recipe's own.
+    const ids = new Set(keys.length === 1 ? keys : []);
+    for (const row of saved) if (row.workflow_id) ids.add(row.workflow_id);
+    void readDetails(token, [...ids]);
   } catch (err) {
     if (mine()) {
       recipes.value = [];
@@ -611,6 +813,14 @@ function focusMenuButton(id) {
   menuButtons.get(id)?.$el?.focus?.();
 }
 
+/** Each saved card's *Make defaults…*, which its dialog hands focus back to. */
+const defaultsButtons = new Map();
+
+function registerDefaultsButton(id, el) {
+  if (el) defaultsButtons.set(id, el);
+  else defaultsButtons.delete(id);
+}
+
 function startExport(recipe) {
   menuId.value = null;
   exportId.value = recipe.id;
@@ -620,6 +830,151 @@ function closeExport() {
   const id = exportId.value;
   exportId.value = null;
   nextTick(() => focusMenuButton(id));
+}
+
+// ── Make these the defaults (#1653 §1.2) ────────────────────────────────────
+
+/** The open dialog's `{recipe, rows, busy, error}`, or null. */
+const makingDefaults = ref(null);
+
+function startMakeDefaults(recipe) {
+  menuId.value = null;
+  makingDefaults.value = {
+    recipe,
+    rows: recipeDiffs.value[recipe.id].params,
+    busy: false,
+    error: "",
+  };
+}
+
+function closeMakeDefaults() {
+  const id = makingDefaults.value?.recipe.id;
+  makingDefaults.value = null;
+  // Its button, or the card's ⋯ when the write took the last difference and
+  // the button with it.
+  nextTick(() => {
+    const button = defaultsButtons.get(id)?.$el;
+    if (button?.isConnected) button.focus();
+    else focusMenuButton(id);
+  });
+}
+
+/** A parameter's address, as the whole-set PUT keys it. */
+function addressKey(row) {
+  return `${row.slot_label}\u0000${row.input_name}`;
+}
+
+/** The workflow's edited parameters as the server has them NOW, keyed. */
+async function editedNow(workflowId) {
+  const body = await getWorkflowCard(workflowId);
+  const values = body?.card?.default_recipe?.values || [];
+  return new Map(
+    values
+      .filter((row) => row.provenance === "edited")
+      .map(({ slot_label, input_name, value }) => [
+        addressKey({ slot_label, input_name }),
+        { slot_label, input_name, value },
+      ]),
+  );
+}
+
+/**
+ * Change some addresses of a workflow's edited set, leaving every other edit
+ * as the server has it at this moment. `changes` maps an address to its new
+ * row, or to null to drop the edit (back to computed). The set is read fresh
+ * each time rather than taken from a detail read earlier: the PUT replaces the
+ * whole set, and the Workflow tab may have edited it since.
+ */
+async function writeDefaults(workflowId, changes, onlyWhere = null) {
+  const edited = await editedNow(workflowId);
+  // The set as this write found it: what an Undo puts back, from the SAME
+  // read the PUT is built on, so no edit can land between the two unseen.
+  const before = new Map(edited);
+  let changed = 0;
+  for (const [key, row] of changes) {
+    // `onlyWhere` (Undo): change an address only while it still holds the
+    // value this tab left there; one edited since belongs to whoever did it.
+    if (onlyWhere && !sameEdit(edited.get(key), onlyWhere.get(key))) continue;
+    // Already so: nothing to send for it.
+    if (sameEdit(edited.get(key), row)) continue;
+    changed += 1;
+    if (row) edited.set(key, row);
+    else edited.delete(key);
+  }
+  if (!changed) return { changed, before };
+  const body = await setWorkflowDefaults(workflowId, [...edited.values()]);
+  if (details.value[workflowId]) details.value[workflowId] = { state: "ready", body };
+  emit("defaults-changed", workflowId, body);
+  return { changed, before };
+}
+
+/** Whether two edited rows (or their absence) hold one value. */
+function sameEdit(a, b) {
+  if (!a || !b) return !a && !b;
+  return String(a.value) === String(b.value);
+}
+
+/**
+ * Take the ticked parameters into the default recipe.
+ *
+ * The PUT replaces the whole edited set, so the workflow's existing edits go
+ * back with it, the ticked rows replacing any at the same address. Undo puts
+ * the previous set back, which also returns a formerly computed value to
+ * computed.
+ */
+async function confirmMakeDefaults(rows) {
+  const job = makingDefaults.value;
+  if (!job || job.busy) return;
+  const workflowId = job.recipe.workflow_id;
+  const taken = new Map(
+    rows.map((row) => [
+      addressKey(row),
+      { slot_label: row.slot_label, input_name: row.input_name, value: row.to },
+    ]),
+  );
+  // What Undo puts back: each taken address as it was just before, an edit or
+  // nothing (computed). Only these addresses, and only those still holding
+  // what this wrote: an edit made elsewhere since is not ours to revert.
+  let previous;
+  job.busy = true;
+  job.error = "";
+  try {
+    const { before } = await writeDefaults(workflowId, taken);
+    previous = new Map([...taken.keys()].map((key) => [key, before.get(key) || null]));
+  } catch (err) {
+    job.busy = false;
+    job.error = errorMessage(err, "Could not change the defaults.");
+    return;
+  }
+  closeMakeDefaults();
+  const name = details.value[workflowId]?.body?.card?.name || "this workflow";
+  notices.push({
+    level: "success",
+    timeout: 8000,
+    text:
+      rows.length === 1
+        ? `${rows[0].label} is now a default of ${name}.`
+        : `${rows.length} values are now defaults of ${name}.`,
+    action: {
+      label: "Undo",
+      handler: async () => {
+        try {
+          const { changed } = await writeDefaults(workflowId, previous, taken);
+          if (!changed) {
+            notices.push({
+              level: "info",
+              text: "Nothing to undo: those values have been changed since.",
+            });
+          }
+        } catch (err) {
+          notices.push({
+            level: "error",
+            text: errorMessage(err, "Could not undo that change to the defaults."),
+          });
+        }
+      },
+    },
+  });
 }
 
 async function removeRecipe(recipe) {
@@ -896,14 +1251,64 @@ function run(recipe) {
   white-space: nowrap;
 }
 
-.wfrt-strength {
-  font-family: var(--font-mono);
-  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+/* The diff line, then +N more, then the prompt: one group, the in-group step. */
+.wfrt-body {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+/* Full ink, above the secondary prompt: it is what tells cards apart. Relative
+   so the segments measure their offsets against it (the clamp count). */
+.wfrt-diff {
+  position: relative;
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-body);
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+  color: rgb(var(--v-theme-on-surface));
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.wfrt-diff--open {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
+/* `.wftab-link`'s inline text button; the pointer target grown to 24px the
+   `RunResetChip` way, without padding. */
+.wfrt-more {
+  position: relative;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: rgb(var(--v-theme-on-surface));
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.wfrt-more::after {
+  content: "";
+  position: absolute;
+  inset: -4px 0;
+}
+
+.wfrt-more:hover {
+  text-decoration-thickness: 2px;
 }
 
 .wfrt-bot {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--space-2);
 }
 

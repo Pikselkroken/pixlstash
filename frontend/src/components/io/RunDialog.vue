@@ -420,21 +420,30 @@
 
         <!-- The workflow's optional stages the default recipe runs (#1623);
              an unticked stage is sent as `skip_stages`. -->
-        <div
-          v-for="stage in stageRows"
-          :key="stage.name"
-          class="rund-f rund-f--4 rund-check"
-        >
-          <input
-            :id="`${stageId}-${stage.name}`"
-            class="rund-box"
-            type="checkbox"
-            :checked="stageOn(stage.name)"
-            :disabled="submitting"
-            @change="setStage(stage.name, $event.target.checked)"
-          />
-          <label :for="`${stageId}-${stage.name}`">Run the {{ stage.label }} stage</label>
-        </div>
+        <fieldset v-if="stageRows.length" class="rund-f rund-f--4 rund-stages">
+          <legend class="rund-l">Stages</legend>
+          <div
+            v-for="stage in stageRows"
+            :key="stage.name"
+            class="rund-f rund-check"
+          >
+            <input
+              :id="`${stageId}-${stage.name}`"
+              class="rund-box"
+              type="checkbox"
+              :checked="stageOn(stage.name)"
+              :disabled="submitting"
+              @change="setStage(stage.name, $event.target.checked)"
+            />
+            <label :for="`${stageId}-${stage.name}`">{{ stage.label }}</label>
+            <RunResetChip
+              v-if="stageOn(stage.name) !== stageDefault(stage.name)"
+              :value="stageDefault(stage.name) ? 'on' : 'off'"
+              :label="stage.label.toLowerCase()"
+              @reset="setStage(stage.name, stageDefault(stage.name))"
+            />
+          </div>
+        </fieldset>
 
         <!-- The checkpoint is a MODEL of the default recipe, sent as
              `models: [{address, filename}]` (#1623), not a parameter value. -->
@@ -689,7 +698,7 @@ const SCALAR_PINNED = ["steps", "cfg", "cfg_scale", "guidance"];
 const SIZE_INPUTS = ["width", "height"];
 const CHECKPOINT_INPUT = "ckpt_name";
 /** The stages `skip_stages` takes, as a row names them. */
-const STAGE_LABELS = { upscale: "upscale", face_detailer: "face detailer" };
+const STAGE_LABELS = { upscale: "Upscale", face_detailer: "Face detailer" };
 /**
  * Said in the Save dialog when the form is set to keep the source's seed.
  *
@@ -1064,13 +1073,18 @@ const stageRows = computed(() =>
 /** stage -> the owner's on/off, over the default recipe's. */
 const stageChoice = reactive({});
 
-function stageOn(name) {
-  if (name in stageChoice) return stageChoice[name];
+/** The default recipe's on/off for a stage; a stage it does not name runs. */
+function stageDefault(name) {
   return card.value?.default_recipe?.stages?.[name] ?? true;
 }
 
+function stageOn(name) {
+  if (name in stageChoice) return stageChoice[name];
+  return stageDefault(name);
+}
+
 async function setStage(name, on) {
-  const byDefault = card.value?.default_recipe?.stages?.[name] ?? true;
+  const byDefault = stageDefault(name);
   if (on === byDefault) delete stageChoice[name];
   else stageChoice[name] = on;
   // The answer changes: a stage that cannot be taken out is refused
@@ -2401,7 +2415,23 @@ watch(
   gap: var(--space-3);
   min-height: var(--space-5);
   font-size: var(--text-xs);
-  color: rgba(var(--v-theme-on-surface), 0.6);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* A fieldset only for its legend: no browser border, inset or min-width. */
+.rund-stages {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+/* Floated, a legend is no longer the "rendered legend" drawn on the border:
+   it becomes a flex item, so `.rund-f`'s gap spaces it like every label row. */
+.rund-stages > legend {
+  float: left;
+  width: 100%;
+  padding: 0;
 }
 
 .rund-sp {

@@ -752,6 +752,7 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/workflows/{workflow_id}                                               | workflows       | Edit a workflow                                             |
 | DELETE | /api/v1/workflows/{workflow_id}                                               | workflows       | Delete an imported workflow's file                          |
 | POST   | /api/v1/workflows/{workflow_id}/clone-with-models                             | workflows       | Clone a workflow onto other models                          |
+| PUT    | /api/v1/workflows/{workflow_id}/default-lora                                  | workflows       | Put one LoRA in or out of a workflow's default recipe       |
 | PUT    | /api/v1/workflows/{workflow_id}/defaults                                      | workflows       | Set a workflow's parameter defaults                         |
 | POST   | /api/v1/workflows/{workflow_id}/duplicate                                     | workflows       | Duplicate a workflow                                        |
 | GET    | /api/v1/workflows/{workflow_id}/export                                        | workflows       | Export a workflow                                           |

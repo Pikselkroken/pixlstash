@@ -67,8 +67,11 @@ export const useFilterStore = defineStore("filter", () => {
   const stackStateFilter = ref("all");
   // One workflow's pictures (v1.12 F7's *Show all N pictures*):
   // `{id, name}`, or null. The Workflow tab's LoRA pile narrows it to one
-  // LoRA: `{id, lora, name}` (`workflowFilterParams`). The name is carried because the chip has to say
-  // which workflow, and the grid holds no workflow cards to look it up in.
+  // LoRA: `{id, lora, loraName, name}` (`workflowFilterParams`). A default-
+  // recipe row's *Show N* adds `opened: {kind, value, label}`, the
+  // `comfyuiModelFilter` / `comfyuiLoraFilter` value it set beside it, so the
+  // Workflow chip's × clears that too. The names are carried because the chips
+  // have to say which, and the grid holds no workflow cards to look them up in.
   const workflowFilter = ref(null);
 
   function resetFilters() {

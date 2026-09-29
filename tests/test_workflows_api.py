@@ -177,6 +177,7 @@ _WORKFLOW_WRITE_ROUTES = (
     ("POST", "/api/v1/workflows/{workflow_id}/split"),
     ("PUT", "/api/v1/workflows/{workflow_id}/model-fix"),
     ("PUT", "/api/v1/workflows/{workflow_id}/defaults"),
+    ("PUT", "/api/v1/workflows/{workflow_id}/default-lora"),
     ("PUT", "/api/v1/workflows/{workflow_id}/pins"),
     ("PUT", "/api/v1/workflows/{workflow_id}/inputs"),
     # The run route and its dry run (v1.12 B7). OWNER_ONLY: it resolves a card
@@ -3853,6 +3854,12 @@ _EVERY_WORKFLOW_ROUTE = (
     ),
     (
         "PUT",
+        "/workflows/{workflow_id}/default-lora",
+        f"/workflows/{BUSY_WF}/default-lora",
+        {"asset": "asset:" + "0" * 64, "include": None},
+    ),
+    (
+        "PUT",
         "/workflows/{workflow_id}/pins",
         f"/workflows/{BUSY_WF}/pins",
         {"pins": []},
@@ -4448,6 +4455,226 @@ def test_a_lora_summary_says_which_loras_change_and_how_often(workflow_env):
         ).json()["cover_asset"]
         == _BO
     )
+
+
+_BO_DIGEST = _h("character-bo-digest")
+
+
+def test_a_lora_from_the_pile_goes_into_the_default_recipe_and_back(workflow_env):
+    """*Add to default* (#1653): one LoRA of the pile in, then the edit dropped.
+
+    The route takes the pile's `asset:` reference (a hash of the NAME), stores
+    the shelf's digest, and the detail names the LoRA by that same asset, so a
+    client can join the default list to the pile. Every other default stands.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    _seed_flip_fixture(server)
+    route = f"{API}/workflows/{FLIP_WF}/default-lora"
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+            "VALUES ('adapter', 'unknown', 'character_bo.safetensors', ?, 'scanned')",
+            (_BO_DIGEST,),
+        )
+        conn.execute(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, 'core:x/steps', '30')",
+            (FLIP_WF,),
+        )
+    try:
+        # The pile says which LoRAs can go in: the one it can name by digest.
+        pile = owner.get(f"{API}/workflows/{FLIP_WF}/lora-summary").json()
+        assert {use["asset"]: use["sha256"] for use in pile["varying"]} == {
+            _ADA: None,
+            _BO: _BO_DIGEST,
+        }
+        r = owner.put(route, json={"asset": _BO, "include": True})
+        assert r.status_code == 200, r.text
+        loras = r.json()["card"]["default_recipe"]["loras"]
+        (bo,) = [lora for lora in loras if lora["sha256"] == _BO_DIGEST]
+        assert bo["asset"] == _BO
+        assert bo["filename"] == "character_bo.safetensors"
+        assert bo["provenance"] == "edited"
+        # No run of it records a strength, so it goes in at 1.
+        assert bo["strength"] == 1.0
+        rows = dict(
+            server.hub.fetchall(
+                "SELECT address, value FROM workflow_group_default "
+                "WHERE workflow_id = ?",
+                (FLIP_WF,),
+            )
+        )
+        assert rows == {"core:x/steps": "30", "lora:" + _BO_DIGEST: "1.0"}
+
+        r = owner.put(route, json={"asset": _BO, "include": None})
+        assert r.status_code == 200, r.text
+        assert _BO_DIGEST not in {
+            lora["sha256"] for lora in r.json()["card"]["default_recipe"]["loras"]
+        }
+        assert [
+            tuple(row)
+            for row in server.hub.fetchall(
+                "SELECT address FROM workflow_group_default WHERE workflow_id = ?",
+                (FLIP_WF,),
+            )
+        ] == [("core:x/steps",)]
+
+        # Not on the shelf: nothing can name it, so nothing is written.
+        assert (
+            owner.put(route, json={"asset": _ADA, "include": True}).status_code == 409
+        )
+        # Not one of this workflow's LoRAs at all.
+        other = asset_reference("somebody_else.safetensors")
+        assert (
+            owner.put(route, json={"asset": other, "include": True}).status_code == 404
+        )
+        assert (
+            owner.put(
+                route, json={"asset": "character_bo", "include": True}
+            ).status_code
+            == 422
+        )
+        # An explicit strength is stored as given; `false` keeps it out.
+        r = owner.put(route, json={"asset": _BO, "include": True, "strength": 0.4})
+        assert [
+            lora["strength"]
+            for lora in r.json()["card"]["default_recipe"]["loras"]
+            if lora["asset"] == _BO
+        ] == [0.4]
+        r = owner.put(route, json={"asset": _BO, "include": False})
+        assert r.status_code == 200, r.text
+        assert _BO not in {
+            lora["asset"] for lora in r.json()["card"]["default_recipe"]["loras"]
+        }
+        assert dict(
+            server.hub.fetchall(
+                "SELECT address, value FROM workflow_group_default "
+                "WHERE workflow_id = ? AND address LIKE 'lora:%'",
+                (FLIP_WF,),
+            )
+        ) == {"lora:" + _BO_DIGEST: "off"}
+        owner.put(route, json={"asset": _BO, "include": None})
+
+        # An edit stays removable after its file leaves the shelf, by the
+        # digest the default recipe names it with.
+        owner.put(route, json={"asset": _BO, "include": True})
+        with server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (_BO_DIGEST,))
+        assert owner.put(route, json={"asset": _BO, "include": None}).status_code == 404
+        r = owner.put(route, json={"sha256": _BO_DIGEST, "include": None})
+        assert r.status_code == 200, r.text
+        assert not server.hub.fetchall(
+            "SELECT 1 FROM workflow_group_default WHERE workflow_id = ? "
+            "AND address LIKE 'lora:%'",
+            (FLIP_WF,),
+        )
+        # Adding names the LoRA by its asset; clearing needs one of the two.
+        assert (
+            owner.put(route, json={"sha256": _BO_DIGEST, "include": True}).status_code
+            == 422
+        )
+        assert owner.put(route, json={"include": None}).status_code == 422
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+                "VALUES ('adapter', 'unknown', 'character_bo.safetensors', ?, "
+                "'scanned')",
+                (_BO_DIGEST,),
+            )
+
+        # A LoRA edit whose digest the shelf holds only as a checkpoint is not
+        # named after the checkpoint: the default recipe names LoRA files.
+        ckpt = _h("bo-as-checkpoint")
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, sha256, provenance) "
+                "VALUES ('checkpoint', 'not_a_lora.safetensors', ?, 'scanned')",
+                (ckpt,),
+            )
+            conn.execute(
+                "INSERT INTO workflow_group_default (workflow_id, address, value) "
+                "VALUES (?, ?, '1.0')",
+                (FLIP_WF, "lora:" + ckpt),
+            )
+        (odd,) = [
+            lora
+            for lora in owner.get(f"{API}/workflows/{FLIP_WF}").json()["card"][
+                "default_recipe"
+            ]["loras"]
+            if lora["sha256"] == ckpt
+        ]
+        assert (odd["asset"], odd["filename"]) == ("", None)
+        with server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (ckpt,))
+            conn.execute(
+                "DELETE FROM workflow_group_default WHERE address = ?",
+                ("lora:" + ckpt,),
+            )
+
+        # Two shelf files by that name: which one is a guess, so it is refused.
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+                "VALUES ('adapter', 'unknown', 'character_bo.safetensors', ?, "
+                "'scanned')",
+                (_h("character-bo-other"),),
+            )
+        assert owner.put(route, json={"asset": _BO, "include": True}).status_code == 409
+    finally:
+        with server.hub.transaction() as conn:
+            conn.execute(
+                "DELETE FROM model WHERE sha256 IN (?, ?)",
+                (_BO_DIGEST, _h("character-bo-other")),
+            )
+
+
+def test_an_added_lora_takes_the_strength_its_own_runs_used(workflow_env):
+    """Read off the runs that loaded it, not the default recipe's sample.
+
+    B's one picture ran it at 0.65; nothing else did, so 0.65 it is.
+    """
+    owner, server = workflow_env.owner, workflow_env.server
+    _seed_flip_fixture(server)
+    instance = _h("flip-b-instance")
+    document = json.loads(json.dumps(_FLIP_DOCUMENTS[FLIP_RECIPE_B]))
+    document["2"]["inputs"]["strength_model"] = 0.65
+    with server.hub.transaction() as conn:
+        conn.execute(
+            "INSERT INTO model (file_kind, kind, filename, sha256, provenance) "
+            "VALUES ('adapter', 'unknown', 'character_bo.safetensors', ?, 'scanned')",
+            (_BO_DIGEST,),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_recipe_instance "
+            "(library_uuid, instance_hash, structural_hash, hash_version, "
+            "document, first_seen_at) VALUES (?, ?, ?, 'v1', ?, "
+            "'2026-09-01T00:00:00Z')",
+            (server.vault.library_uuid, instance, FLIP_RECIPE_B, json.dumps(document)),
+        )
+
+    def run_b(session):
+        session.exec(
+            update(Picture)
+            .where(Picture.workflow_structural_hash == FLIP_RECIPE_B)
+            .values(workflow_instance_hash=instance)
+        )
+        session.commit()
+
+    server.vault.db.run_task(run_b, priority=DBPriority.IMMEDIATE)
+    try:
+        r = owner.put(
+            f"{API}/workflows/{FLIP_WF}/default-lora",
+            json={"asset": _BO, "include": True},
+        )
+        assert r.status_code == 200, r.text
+        assert [
+            lora["strength"]
+            for lora in r.json()["card"]["default_recipe"]["loras"]
+            if lora["asset"] == _BO
+        ] == [0.65]
+    finally:
+        with server.hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE sha256 = ?", (_BO_DIGEST,))
 
 
 def test_a_lora_in_every_picture_is_shared_not_piled(workflow_env):

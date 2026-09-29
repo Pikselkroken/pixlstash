@@ -308,22 +308,49 @@ export function filterChips(store, { allPicturesView = true } = {}) {
     );
   }
 
+  // *Show all N pictures* on a workflow card (F7). No menu row offers it: the
+  // Workflows screen is the only place that knows a card's key, so the chip is
+  // how it arrives and its × is the whole of the way back.
+  //
+  // Before the Checkpoint and LoRA chips, because a value opened from the
+  // Workflow tab (#1653) is a narrowing of the workflow: × on the value chip
+  // leaves this one standing, and × on this one takes the value it was opened
+  // with too, or a checkpoint chip would silently filter the whole library.
+  const workflow = store.workflowFilter;
+  const opened = workflow?.opened;
+  if (workflow) {
+    push("workflow", "Workflow", workflow.name, () => {
+      store.workflowFilter = null;
+      if (opened?.kind === "model") {
+        store.comfyuiModelFilter = without(store.comfyuiModelFilter, opened.value);
+      } else if (opened?.kind === "lora") {
+        store.comfyuiLoraFilter = without(store.comfyuiLoraFilter, opened.value);
+      }
+    });
+    // The pile's LoRA (`workflow_lora`) only narrows a workflow, so it stays
+    // on the workflow filter and gets a chip of its own (F-4).
+    if (workflow.lora) {
+      push("workflow-lora", "LoRA", workflow.loraName || "A forgotten LoRA", () => {
+        const rest = { ...store.workflowFilter };
+        delete rest.lora;
+        delete rest.loraName;
+        store.workflowFilter = rest;
+      });
+    }
+  }
+  /** The Workflow tab's short name for the value it opened, else the file's. */
+  const valueLabel = (kind, name) =>
+    opened?.kind === kind && opened.value === name && opened.label
+      ? opened.label
+      : modelLabel(name);
   for (const name of store.comfyuiModelFilter || []) {
-    push(`model:${name}`, "Checkpoint", modelLabel(name), () => {
+    push(`model:${name}`, "Checkpoint", valueLabel("model", name), () => {
       store.comfyuiModelFilter = without(store.comfyuiModelFilter, name);
     });
   }
   for (const name of store.comfyuiLoraFilter || []) {
-    push(`lora:${name}`, "LoRA", modelLabel(name), () => {
+    push(`lora:${name}`, "LoRA", valueLabel("lora", name), () => {
       store.comfyuiLoraFilter = without(store.comfyuiLoraFilter, name);
-    });
-  }
-  // *Show all N pictures* on a workflow card (F7). No menu row offers it: the
-  // Workflows screen is the only place that knows a card's key, so the chip is
-  // how it arrives and its × is the whole of the way back.
-  if (store.workflowFilter) {
-    push("workflow", "Workflow", store.workflowFilter.name, () => {
-      store.workflowFilter = null;
     });
   }
   return chips;

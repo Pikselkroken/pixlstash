@@ -23,6 +23,7 @@
       v-else-if="showingRecipes"
       :workflow-ids="recipeKeys"
       :workflow-name="recipesName"
+      @defaults-changed="takeDefaults"
     />
 
     <!-- Several selected: the tab says so, and the VERBS ARE THE PILL'S.
@@ -77,15 +78,23 @@
         </p>
       </div>
 
-      <!-- What every picture here was made with: the default recipe's models
-           and the LoRAs every picture shares, as one list of label-and-value rows, so a
-           LoRA reads like the checkpoint above it. "Edit LoRAs…" is here even
-           with no loader at all: an entry point that only exists for
-           workflows that already have LoRAs is how adding the first one
-           stays unreachable (#1478). -->
-      <div class="inspector-section" data-testid="wftab-every-picture">
+      <!-- What a run starts from (#1653): the default recipe's models, LoRAs
+           and stages, as one list of label-and-value rows, so a LoRA reads
+           like the checkpoint above it. Where the values come from is said
+           once, under the label; a row says so only when it is the exception
+           ("Yours", "in 31 of 40"). "Edit LoRAs…" is here even with no loader
+           at all: an entry point that only exists for workflows that already
+           have LoRAs is how adding the first one stays unreachable (#1478). -->
+      <div class="inspector-section" data-testid="wftab-default-recipe">
         <div class="wftab-sec-head">
-          <span class="section-label">In every picture</span>
+          <span
+            ref="defaultHeading"
+            class="section-label"
+            role="heading"
+            aria-level="3"
+            tabindex="-1"
+            >Default recipe</span
+          >
           <AppButton
             size="sm"
             variant="ghost"
@@ -97,8 +106,43 @@
             Edit LoRAs…
           </AppButton>
         </div>
-        <div class="wftab-field">
-          <span class="wftab-label">Checkpoint</span>
+        <p
+          v-if="provenanceNote"
+          class="wftab-note wftab-quiet"
+          data-testid="wftab-provenance"
+        >
+          {{ provenanceNote }}
+        </p>
+        <!-- The list card's `default_recipe` is null, so until the detail
+             lands there is no default to show: its base-card slots are not
+             one. -->
+        <p v-if="detailPending" class="wftab-note wftab-quiet">
+          Reading its default recipe…
+        </p>
+        <p
+          v-else-if="detailFailed"
+          class="wftab-note wftab-quiet"
+          data-testid="wftab-recipe-failed"
+        >
+          Could not read its default recipe just now.
+          <AppButton
+            size="sm"
+            variant="ghost"
+            data-testid="wftab-recipe-retry"
+            @click="loadDetail(selectedKey)"
+          >
+            Retry
+          </AppButton>
+        </p>
+        <template v-if="detail">
+        <div class="wftab-field wftab-field--top" data-testid="wftab-row-checkpoint">
+          <span class="wftab-labelcol">
+            <span class="wftab-label">Checkpoint</span>
+            <span v-if="recipeCheckpoint?.provenance === 'edited'" class="wftab-yours"
+              >Yours</span
+            >
+          </span>
+          <div class="wftab-col">
           <!-- Missing: ComfyUI does not have the file (the run pre-flight's
                answer), or - when ComfyUI cannot be asked - the card has no
                name for it. Always with the FILE it is missing, as its name
@@ -218,6 +262,59 @@
           <!-- Only when nothing anywhere names a base model: not the card, not
                the graph a run would submit, not the pre-flight. -->
           <span v-else class="wftab-value wftab-quiet">Not recorded</span>
+          <!-- Show N (§1.5): only below the workflow's own count, which the
+               head's link already shows. -->
+          <div v-if="checkpointShow" class="wftab-meta">
+            <span></span>
+            <AppButton
+              size="sm"
+              variant="ghost"
+              data-testid="wftab-show-checkpoint"
+              :aria-label="showLabel(checkpointShow.pictures, checkpointLabel)"
+              @click="showValue('model', checkpointShow.name, checkpointLabel)"
+            >
+              Show {{ checkpointShow.pictures }}
+            </AppButton>
+          </div>
+          <!-- The other checkpoints its pictures used: a disclosure, not a
+               menu, because each is a row with its own Show N. -->
+          <button
+            v-if="otherCheckpoints.length"
+            type="button"
+            class="wftab-others"
+            data-testid="wftab-other-checkpoints"
+            aria-controls="wftab-other-checkpoints"
+            :aria-expanded="othersOpen ? 'true' : 'false'"
+            @click="othersOpen = !othersOpen"
+          >
+            <v-icon size="16" aria-hidden="true">{{
+              othersOpen ? "mdi-chevron-down" : "mdi-chevron-right"
+            }}</v-icon>
+            +{{ otherCheckpoints.length }}
+            {{ otherCheckpoints.length === 1 ? "other" : "others" }}
+          </button>
+          <ul
+            v-if="othersOpen && otherCheckpoints.length"
+            id="wftab-other-checkpoints"
+            class="wftab-others-list"
+          >
+            <li v-for="other in otherCheckpoints" :key="other.name">
+              <span class="wftab-others-name"
+                ><Tooltip :text="other.name" activator="parent" />{{
+                  other.label
+                }}</span
+              >
+              <AppButton
+                size="sm"
+                variant="ghost"
+                :aria-label="showLabel(other.pictures, other.label)"
+                @click="showValue('model', other.name, other.label)"
+              >
+                Show {{ other.pictures }}
+              </AppButton>
+            </li>
+          </ul>
+          </div>
         </div>
         <!-- The VAE and the text encoders (#1596): missing and replaced the
              way the Checkpoint row is, one entry per file. -->
@@ -316,34 +413,78 @@
           </div>
         </div>
 
-        <!-- The LoRAs every picture of the workflow loaded,
-             in the order the chain applies them. The ones that change are
-             the pile in the next section, never here. -->
+        <!-- The default recipe's LoRAs, in the order the chain applies them.
+             One that is not in every picture says how many it is in; one in
+             every picture says nothing, and that silence means "all". A
+             LoRA is here or in ALSO USED, never both. -->
         <div
-          v-for="lora in sharedLoras"
+          v-for="lora in loraRows"
           :key="lora.id"
-          class="wftab-field"
-          data-testid="wftab-shared-lora"
+          class="wftab-field wftab-field--top"
+          data-testid="wftab-default-lora"
         >
-          <span class="wftab-label">LoRA</span>
-          <span class="wftab-value wftab-lora-value">
-            <v-icon
-              v-if="!lora.on_shelf"
-              size="16"
-              class="wftab-chain-flag"
-              aria-hidden="true"
-              >mdi-alert-outline</v-icon
-            >
-            <span class="wftab-chain-name">{{ lora.label }}</span>
-            <span v-if="!lora.on_shelf" class="visually-hidden"
-              >, not on your model shelf</span
-            >
-            <span v-if="lora.strengthText" class="wftab-chain-strength">{{
-              lora.strengthText
-            }}</span>
+          <span class="wftab-labelcol">
+            <span class="wftab-label">LoRA</span>
+            <span v-if="lora.edited" class="wftab-yours">Yours</span>
           </span>
+          <div class="wftab-col">
+            <span class="wftab-value wftab-lora-value">
+              <v-icon
+                v-if="!lora.on_shelf"
+                size="16"
+                class="wftab-chain-flag"
+                aria-hidden="true"
+                >mdi-alert-outline</v-icon
+              >
+              <span class="wftab-chain-name"
+                ><Tooltip v-if="lora.file" :text="lora.file" activator="parent" />{{
+                  lora.label
+                }}</span
+              >
+              <span v-if="!lora.on_shelf" class="visually-hidden"
+                >, not on your model shelf</span
+              >
+              <span v-if="lora.strengthText" class="wftab-chain-strength">{{
+                lora.strengthText
+              }}</span>
+            </span>
+            <div v-if="lora.coverage || lora.show" class="wftab-meta">
+              <span class="wftab-coverage wftab-quiet">{{ lora.coverage }}</span>
+              <AppButton
+                v-if="lora.show"
+                size="sm"
+                variant="ghost"
+                :aria-label="showLabel(lora.show.pictures, lora.label)"
+                @click="showValue('lora', lora.show.name, lora.label)"
+              >
+                Show {{ lora.show.pictures }}
+              </AppButton>
+            </div>
+          </div>
         </div>
-        <p v-if="chainPending || summaryPending" class="wftab-note wftab-quiet">
+        <!-- Read-only until the default can be written (F-3); the Run form
+             skips a stage per run. Absent when the base graph has none. -->
+        <div
+          v-if="stageRows.length"
+          class="wftab-field"
+          data-testid="wftab-stages"
+        >
+          <span class="wftab-label">Stages</span>
+          <span class="wftab-value"
+            ><template v-for="(stage, index) in stageRows" :key="stage.key"
+              ><span v-if="index" class="wftab-quiet"> · </span
+              >{{ stage.label }}{{ stage.on ? "" : " off" }}</template
+            ></span
+          >
+        </div>
+        <p
+          v-if="stageRows.some((stage) => !stage.on)"
+          class="wftab-note wftab-quiet"
+        >
+          Off: most of its pictures ran without it.
+        </p>
+        </template>
+        <p v-if="usingChain && chainPending" class="wftab-note wftab-quiet">
           Reading its LoRAs…
         </p>
         <p
@@ -354,15 +495,15 @@
           PixlStash has no graph for this workflow, so its LoRAs cannot be read
           or edited.
         </p>
-        <p v-else-if="chainFailed" class="wftab-note wftab-quiet">
+        <p v-else-if="usingChain && chainFailed" class="wftab-note wftab-quiet">
           Could not read its LoRAs just now.
         </p>
         <p
-          v-else-if="sharedLoras.length"
+          v-else-if="loraNote"
           class="wftab-note wftab-quiet"
           data-testid="wftab-shared-note"
         >
-          {{ sharedNote }}
+          {{ loraNote }}
         </p>
         <p
           v-else-if="chain && !chainLoaders.length"
@@ -370,47 +511,52 @@
         >
           No LoRA loader. Editing adds the first one.
         </p>
-        <p v-if="summaryFailed" class="wftab-note wftab-quiet">
+      </div>
+
+      <!-- The LoRAs its pictures used that the default recipe does not
+           load, as one pile. Absent, not empty, when there are none. -->
+      <div
+        v-if="alsoUsed.length || summaryFailed"
+        class="inspector-section"
+        data-testid="wftab-changes"
+      >
+        <span class="section-label" role="heading" aria-level="3">
+          Also used
+          <span v-if="alsoUsed.length" class="wftab-legend">{{
+            changingLabel
+          }}</span>
+        </span>
+        <template v-if="alsoUsed.length">
+          <div class="wftab-field">
+            <span class="wftab-label">LoRA</span>
+            <WorkflowLoraPile
+              :summary="pileSummary"
+              :adding="busy.startsWith('default-lora:') ? busy.slice(13) : ''"
+              @show="showLora"
+              @add-default="addLoraToDefault"
+            />
+          </div>
+          <p class="wftab-note wftab-quiet">{{ pileNote }}</p>
+        </template>
+        <p v-else class="wftab-note wftab-quiet">
           Could not read which LoRAs change between pictures just now.
         </p>
       </div>
 
-      <!-- Everything that changes, as one pile. It speaks for the whole
-           workflow, like the list above. -->
-      <div
-        v-if="summary?.varying?.length"
-        class="inspector-section"
-        data-testid="wftab-changes"
-      >
-        <span class="section-label">
-          Changes per picture
-          <span class="wftab-legend">{{ changingLabel }}</span>
-        </span>
-        <div class="wftab-field">
-          <span class="wftab-label">LoRA</span>
-          <WorkflowLoraPile :summary="summary" @show="showLora" />
-        </div>
-        <p class="wftab-note wftab-quiet">{{ pileNote }}</p>
-      </div>
-
       <div class="inspector-section">
-        <span class="section-label">
-          Defaults
+        <span class="section-label" role="heading" aria-level="3">
+          Parameters
           <span class="wftab-legend"
             ><v-icon size="14">mdi-pin</v-icon> = shown in Run</span
           >
         </span>
         <p v-if="detailPending" class="wftab-note wftab-quiet">
-          Reading its defaults…
+          Reading its parameters…
         </p>
         <p v-else-if="detailFailed" class="wftab-note wftab-quiet">
-          Could not read its defaults just now.
+          Could not read its parameters just now.
         </p>
         <template v-else-if="defaults.length">
-          <p class="wftab-note wftab-quiet">
-            The most used values among its pictures rated 4★ and up. Edit one to
-            make it yours.
-          </p>
           <WorkflowDefaultRow
             v-for="row in pinnedDefaults"
             :key="row.label"
@@ -603,7 +749,7 @@
 // What the rail shows follows the SELECTION: one workflow, keyed by its `id`
 // (#1623). Models and Defaults read the detail's `card.default_recipe`.
 
-import { computed, onBeforeUnmount, ref, toRaw, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, toRaw, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
@@ -614,6 +760,7 @@ import {
   patchWorkflowCard,
   preflightWorkflowRun,
   readModelSwap,
+  setWorkflowDefaultLora,
   setWorkflowDefaults,
   setWorkflowModelFix,
   setWorkflowPins,
@@ -628,6 +775,7 @@ import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { useTasksStore } from "../../stores/useTasksStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
+import { modelLabel } from "../../utils/filterChips";
 import { EDIT_LORAS, loraStem } from "../../utils/loraChain";
 import { quantBadge } from "../../utils/modelShelf";
 import { PIXLSTASH_PACK_URL } from "../../utils/runReasons";
@@ -658,7 +806,8 @@ import WorkflowRecipesTab from "./WorkflowRecipesTab.vue";
 const DEFAULT_PINS = ["steps", "cfg", "guidance", "width", "height"];
 
 const store = useWorkflowsStore();
-const { showPictures, showLoraPictures } = useWorkflowPictures();
+const { showPictures, showLoraPictures, showValuePictures } =
+  useWorkflowPictures();
 const sidebarStore = useSidebarStore();
 const notices = useNoticeStore();
 const filterStore = useFilterStore();
@@ -1208,6 +1357,9 @@ const chainLoaders = computed(() =>
       id: String(loader.node_id),
       node_id: String(loader.node_id),
       filename: loader.filename,
+      // What the name's tooltip carries, as on a default row.
+      file: loader.filename || "",
+      sha256: loader.sha256 ? String(loader.sha256).toLowerCase() : "",
       label: loader.on_shelf
         ? loader.name || loraStem(loader.filename)
         : String(loader.filename || loader.name || "").split(/[\\/]/).pop(),
@@ -1267,7 +1419,6 @@ async function loadChain(key) {
 
 /** `GET …/lora-summary` for the selected workflow, and its read state. */
 const summary = ref(null);
-const summaryPending = ref(false);
 const summaryFailed = ref(false);
 
 /** The cover picture, which decides the top of the pile. */
@@ -1293,10 +1444,8 @@ async function loadSummary(key) {
   summaryFailed.value = false;
   if (!key) {
     summary.value = null;
-    summaryPending.value = false;
     return;
   }
-  summaryPending.value = !summary.value;
   try {
     const body = await getLoraSummary(key, {
       cover: coverPictureId.value ?? undefined,
@@ -1308,80 +1457,320 @@ async function loadSummary(key) {
     console.warn(`[workflows] could not read the LoRAs of ${key}`, err);
     summary.value = null;
     summaryFailed.value = true;
-  } finally {
-    if (read === summaryRead) summaryPending.value = false;
   }
 }
 
-/** A LoRA's file as the chain and the summary both name it: lowercased, no folders. */
-function loraFileKey(value) {
+/** A digest as both reads spell it: `asset:<sha256>` or bare, lowercased. */
+function digestOf(value) {
   return String(value || "")
-    .split(/[\\/]/)
-    .pop()
+    .replace(/^asset:/i, "")
     .toLowerCase();
 }
 
+/** The default recipe itself, from the detail read, or null. */
+const defaultRecipe = computed(
+  () => detail.value?.card?.default_recipe ?? null,
+);
+
+/** The workflow's checkpoint and LoRA values with their picture counts. */
+const recipeValues = computed(
+  () =>
+    card.value?.recipe_values ?? detail.value?.card?.recipe_values ?? null,
+);
+
 /**
- * The LoRAs in every picture of the workflow, in chain order.
- *
- * The summary says WHICH (it counts pictures); the chain says in what order
- * and how strong, for the selected card. A shared LoRA the chain does not
- * name follows the chain's, by name. A workflow with no picture to count has
- * nothing to share and nothing that changes, so its chain is the list.
+ * A `recipe_values` entry worth a *Show N*: one below the workflow's own
+ * count (in every picture it only repeats the head's link) and above none.
  */
-const sharedLoras = computed(() => {
-  const shared = summary.value?.shared ?? [];
-  if (!summary.value?.pictures) return chainLoaders.value;
-  const byFile = new Map(
-    chainLoaders.value.map((loader) => [loraFileKey(loader.filename), loader]),
+function showable(value) {
+  const count = Number(value?.pictures) || 0;
+  const total = Number(card.value?.picture_count) || 0;
+  return count > 0 && count < total ? value : null;
+}
+
+/** The `recipe_values` entry for a recorded file, whatever its folders. */
+function valueFor(values, file) {
+  if (!file) return null;
+  return (values ?? []).find((value) => sameFile(value.name, file)) ?? null;
+}
+
+/**
+ * The provenance note under DEFAULT RECIPE. Provenance is decided for the
+ * whole recipe, so the first computed row speaks for it; an edited row says
+ * "Yours" on itself. Nothing sampled is nothing to be "most used".
+ */
+const provenanceNote = computed(() => {
+  const recipe = defaultRecipe.value;
+  if (!recipe?.sampled) return "";
+  const computedRow = [
+    ...(recipe.models ?? []),
+    ...(recipe.loras ?? []),
+    ...(recipe.values ?? []),
+  ].find((row) => row.provenance && row.provenance !== "edited");
+  if (computedRow?.provenance === "best") {
+    return "Most used in your 4★+ pictures.";
+  }
+  if (computedRow?.provenance === "all") {
+    return "Most used in its pictures. None is rated 4★ yet.";
+  }
+  return "";
+});
+
+/** The default recipe's checkpoint, or null (`kind` is the model-fix kind). */
+const recipeCheckpoint = computed(
+  () =>
+    (recipeModels.value ?? []).find(
+      (model) => model.kind === "checkpoint" && model.filename,
+    ) ?? null,
+);
+
+/** The checkpoint row's *Show N*, or null. */
+const checkpointShow = computed(() =>
+  showable(
+    valueFor(recipeValues.value?.checkpoints, recipeCheckpoint.value?.filename),
+  ),
+);
+
+/** Whether the Checkpoint row's "+K others" is open. */
+const othersOpen = ref(false);
+
+/** The other checkpoints its pictures used, each with its own *Show N*. */
+const otherCheckpoints = computed(() => {
+  const file = recipeCheckpoint.value?.filename;
+  if (!file) return [];
+  return (recipeValues.value?.checkpoints ?? [])
+    .filter((value) => !sameFile(value.name, file) && showable(value))
+    .map((value) => ({
+      name: value.name,
+      pictures: value.pictures,
+      label: modelLabel(fileName(value.name)),
+    }));
+});
+
+/**
+ * No sample to take a default from (a workflow with no pictures), so the
+ * LoRAs a run loads are the graph's own chain, and the rows are that.
+ */
+const usingChain = computed(
+  () =>
+    Boolean(detail.value) &&
+    !defaultRecipe.value?.sampled &&
+    !(defaultRecipe.value?.loras ?? []).length,
+);
+
+/** The summary's LoRAs by the shelf digest they resolve to, where they do. */
+const summaryByDigest = computed(() => {
+  const uses = new Map();
+  for (const use of summary.value?.shared ?? []) {
+    if (use.sha256) uses.set(digestOf(use.sha256), { use, everywhere: true });
+  }
+  for (const use of summary.value?.varying ?? []) {
+    if (use.sha256) uses.set(digestOf(use.sha256), { use, everywhere: false });
+  }
+  return uses;
+});
+
+/**
+ * The summary's LoRAs by their `asset:` reference (a hash of the file's NAME,
+ * as the stored graphs name it), and whether each is in every picture.
+ */
+const summaryUses = computed(() => {
+  const uses = new Map();
+  for (const use of summary.value?.shared ?? []) {
+    uses.set(digestOf(use.asset), { use, everywhere: true });
+  }
+  for (const use of summary.value?.varying ?? []) {
+    uses.set(digestOf(use.asset), { use, everywhere: false });
+  }
+  return uses;
+});
+
+/** The asset references of the default recipe's LoRAs, which ALSO USED leaves out. */
+const defaultAssets = computed(
+  () =>
+    new Set(
+      (defaultRecipe.value?.loras ?? [])
+        .map((lora) => digestOf(lora.asset))
+        .filter(Boolean),
+    ),
+);
+
+/**
+ * The default recipe's LoRAs as rows, in the chain's order where the chain
+ * names them.
+ *
+ * Joined to the summary by the `asset:` reference both name a LoRA by (the
+ * shelf digest is NOT that: it hashes the file's content, the reference its
+ * name), and to the chain by the shelf digest, which is what the chain has.
+ * Never by bare filename: a forgotten name has none. A default the server
+ * could not give an asset renders without a count rather than with a guess.
+ */
+const defaultLoras = computed(() => {
+  const loras = defaultRecipe.value?.loras ?? [];
+  const byDigest = new Map(
+    chainLoaders.value
+      .filter((loader) => loader.sha256)
+      .map((loader) => [loader.sha256, loader]),
   );
-  const rows = shared.map((use) => {
-    const loader = byFile.get(loraFileKey(use.filename));
+  const total = Number(summary.value?.pictures) || 0;
+  const rows = loras.map((lora, index) => {
+    const digest = digestOf(lora.sha256);
+    const asset = digestOf(lora.asset);
+    const found =
+      (asset ? summaryUses.value.get(asset) : null) ??
+      (digest ? summaryByDigest.value.get(digest) : null);
+    const loader = digest ? byDigest.get(digest) : null;
+    const edited = lora.provenance === "edited";
+    const strength = Number(lora.strength);
+    let coverage = "";
+    if (total && found && !found.everywhere && found.use.pictures) {
+      coverage = `in ${found.use.pictures} of ${total}`;
+    } else if (total && (asset || digest) && !found && edited) {
+      // In the default by the owner's edit alone.
+      coverage = "not in any picture yet";
+    }
     return {
-      id: use.asset,
-      label: use.name || loader?.label || "A LoRA whose name was forgotten",
-      on_shelf: loader ? loader.on_shelf : Boolean(use.on_shelf),
-      strengthText: loader?.strengthText ?? "",
+      id: asset || digest || lora.filename || `lora-${index}`,
+      file: lora.filename || "",
+      label:
+        found?.use.name ||
+        loader?.label ||
+        (lora.filename ? loraStem(lora.filename) : "") ||
+        "A LoRA whose name was forgotten",
+      on_shelf: found ? Boolean(found.use.on_shelf) : (loader?.on_shelf ?? true),
+      strengthText:
+        lora.strength === null || lora.strength === undefined
+          ? ""
+          : Number.isFinite(strength)
+            ? strength.toFixed(2)
+            : "",
+      edited,
+      coverage,
+      show:
+        coverage === "not in any picture yet"
+          ? null
+          : showable(valueFor(recipeValues.value?.loras, lora.filename)),
       order: loader ? chainLoaders.value.indexOf(loader) : Infinity,
     };
   });
   return rows.sort((a, b) => a.order - b.order);
 });
 
-/** "In every picture of this workflow. X is not on your shelf." */
-const sharedNote = computed(() => {
-  // No picture to count: the rows are the workflow's own chain.
-  if (!summary.value?.pictures) {
-    return `In the order the chain applies them. ${shelfLine.value}`;
+/** The LoRA rows on screen: the default recipe's, or the chain's (above). */
+const loraRows = computed(() =>
+  usingChain.value ? chainLoaders.value : defaultLoras.value,
+);
+
+/** The line under the LoRA rows: the chain's order, or who is off the shelf. */
+const loraNote = computed(() => {
+  if (usingChain.value) {
+    return chainLoaders.value.length
+      ? `In the order the chain applies them. ${shelfLine.value}`
+      : "";
   }
-  const scope = "In every picture of this workflow.";
-  const missing = sharedLoras.value.filter((lora) => !lora.on_shelf);
-  if (!missing.length) return scope;
+  const missing = defaultLoras.value.filter((lora) => !lora.on_shelf);
+  if (!missing.length) return "";
   const names = missing.map((lora) => lora.label).join(", ");
-  return `${scope} ${names} ${missing.length === 1 ? "is" : "are"} not on your shelf.`;
+  return `${names} ${missing.length === 1 ? "is" : "are"} not on your shelf.`;
 });
 
+/** What the default recipe's optional stages are called on the row. */
+const STAGE_LABELS = { upscale: "Upscale", face_detailer: "Face detailer" };
+
+/** The base graph's optional stages and whether the default runs each. */
+const stageRows = computed(() =>
+  Object.entries(defaultRecipe.value?.stages ?? {}).map(([key, on]) => ({
+    key,
+    on: Boolean(on),
+    label:
+      STAGE_LABELS[key] ??
+      key.replace(/_/g, " ").replace(/^./, (first) => first.toUpperCase()),
+  })),
+);
+
+/** ALSO USED: what changes between pictures, less the default's LoRAs. */
+const alsoUsed = computed(() => {
+  // A default with no asset reference cannot be joined by one, so it is
+  // matched by its file instead, or it shows twice. Only those: a default
+  // WITH one never matches by name, since two folders can hold one name.
+  const unjoined = (defaultRecipe.value?.loras ?? []).filter(
+    (lora) => !digestOf(lora.asset) && lora.filename,
+  );
+  const shelfFiles = new Set(
+    (defaultRecipe.value?.loras ?? [])
+      .map((lora) => digestOf(lora.sha256))
+      .filter(Boolean),
+  );
+  return (summary.value?.varying ?? []).filter(
+    (use) =>
+      !defaultAssets.value.has(digestOf(use.asset)) &&
+      !(use.sha256 && shelfFiles.has(digestOf(use.sha256))) &&
+      !(
+        use.filename &&
+        unjoined.some((lora) => sameFile(lora.filename, use.filename))
+      ),
+  );
+});
+
+/**
+ * The summary the pile draws: its `varying` is ALSO USED. `without` ("No
+ * LoRA") is counted by the server against the whole of `varying`, so once a
+ * default LoRA is taken out of the pile it answers a different question, and
+ * is dropped rather than shown with a wrong count.
+ */
+const pileSummary = computed(() => ({
+  ...summary.value,
+  varying: alsoUsed.value,
+  without:
+    alsoUsed.value.length === (summary.value?.varying?.length ?? 0)
+      ? (summary.value?.without ?? null)
+      : null,
+  cover_asset: alsoUsed.value.some(
+    (use) => use.asset === summary.value?.cover_asset,
+  )
+    ? summary.value.cover_asset
+    : null,
+}));
+
 const changingLabel = computed(() => {
-  const count = summary.value?.varying?.length ?? 0;
+  const count = alsoUsed.value.length;
   return `${count} ${count === 1 ? "LoRA" : "LoRAs"}`;
 });
 
 const pileNote = computed(() => {
-  const rest = (summary.value?.varying?.length ?? 1) - 1;
-  const top = summary.value?.cover_asset
+  const rest = alsoUsed.value.length - 1;
+  const top = pileSummary.value.cover_asset
     ? "On top: the cover picture's LoRA."
     : "On top: the LoRA most pictures used.";
   if (!rest) return `${top} Open it to see its pictures.`;
   return `${top} Open the pile to see the other ${rest === 1 ? "one" : rest}.`;
 });
 
-/** *Show N*: the grid, narrowed to this workflow's pictures of one LoRA. */
+/** A *Show N*'s accessible name, as the pile's own says it. */
+function showLabel(count, value) {
+  return `Show the ${count} ${count === 1 ? "picture" : "pictures"} in ${
+    card.value?.name || "this workflow"
+  } made with ${value}`;
+}
+
+/** *Show N* on a default-recipe row: the grid, on workflow + that value. */
+function showValue(kind, value, label) {
+  showValuePictures({
+    id: selectedKey.value,
+    name: card.value?.name || "this workflow",
+    kind,
+    value,
+    label,
+  });
+}
+
+/** *Show N* on the pile: the grid, narrowed to this workflow's pictures of one LoRA. */
 function showLora(row) {
-  const name = row.name || "A forgotten LoRA";
   showLoraPictures({
     id: selectedKey.value,
     lora: row.asset,
-    name: `${name} in ${card.value?.name || "this workflow"}`,
+    name: card.value?.name || "this workflow",
+    loraName: row.name || "A forgotten LoRA",
   });
 }
 
@@ -1496,8 +1885,25 @@ const unpinnedDefaults = computed(() =>
   defaults.value.filter((row) => !row.pinned),
 );
 
+/**
+ * The Recipes tab wrote this workflow's defaults ("Make these the defaults").
+ * Take its answer, or the next reset, pin or edit here would PUT the whole set
+ * from a stale copy and drop what it wrote.
+ */
+function takeDefaults(workflowId, body) {
+  if (workflowId === selectedKey.value && body) {
+    // Newer than any read still out: that read's answer is the set before.
+    detailRead += 1;
+    detail.value = body;
+  }
+}
+
+/** Which detail read is the latest; a write's answer also counts as one. */
+let detailRead = 0;
+
 /** Read one card's detail, and say which of the three states it is in. */
 async function loadDetail(key) {
+  const read = ++detailRead;
   detail.value = null;
   detailFailed.value = false;
   if (!key) {
@@ -1507,8 +1913,9 @@ async function loadDetail(key) {
   detailPending.value = true;
   try {
     const body = await getWorkflowCard(key);
-    // Another card may have been selected while this was on the wire.
-    if (selectedKey.value !== key) return;
+    // Another card may have been selected while this was on the wire, or a
+    // newer answer (the Recipes tab's write) already landed.
+    if (selectedKey.value !== key || read !== detailRead) return;
     detail.value = body;
     notesDraft.value = body.notes ?? "";
   } catch (err) {
@@ -1540,6 +1947,92 @@ function fail(err, fallback) {
  * is the one that shows it.
  */
 let writes = Promise.resolve();
+
+/**
+ * Whether a default-recipe LoRA is a pile row's: the same `asset` reference,
+ * or the same shelf file by digest (one file loaded under two names is one
+ * LoRA, and the default names it under only one of them).
+ */
+function sameLora(lora, use) {
+  if (digestOf(lora.asset) && digestOf(lora.asset) === digestOf(use.asset)) {
+    return true;
+  }
+  return Boolean(
+    digestOf(lora.sha256) && digestOf(lora.sha256) === digestOf(use.sha256),
+  );
+}
+
+/** The Default recipe heading: where focus goes when the last pile row leaves. */
+const defaultHeading = ref(null);
+
+/**
+ * *Add to default* on a pile row (#1653): the LoRA joins the default recipe,
+ * at the strength its pictures used most, and leaves the pile. Undo drops
+ * the edit, but only while it is still the one this made: a strength set
+ * since, or the LoRA already taken out again, is somebody else's to keep.
+ */
+function addLoraToDefault(row) {
+  const key = selectedKey.value;
+  const name = row.name || "That LoRA";
+  return queueWrite(`default-lora:${row.asset}`, async () => {
+    let body;
+    try {
+      body = await setWorkflowDefaultLora(key, { asset: row.asset, include: true });
+    } catch (err) {
+      fail(err, `Could not add ${name} to the default recipe.`);
+      return;
+    }
+    // Written either way: the notice (and its Undo) is owed even when the
+    // selection has moved on while the answer was out.
+    const added = (body?.card?.default_recipe?.loras ?? []).find((lora) =>
+      sameLora(lora, row),
+    );
+    if (stillOn(key)) {
+      detail.value = body;
+      if (!alsoUsed.value.length) {
+        await nextTick();
+        defaultHeading.value?.focus();
+      }
+    }
+    notices.push({
+      level: "success",
+      timeout: 8000,
+      text: `${name} is now in the default recipe. Your pictures stay where they are.`,
+      action: {
+        label: "Undo",
+        handler: () =>
+          queueWrite(`default-lora:${row.asset}`, async () => {
+            try {
+              const now = await getWorkflowCard(key);
+              const still = (now?.card?.default_recipe?.loras ?? []).find(
+                (lora) => sameLora(lora, row),
+              );
+              if (
+                !still ||
+                still.provenance !== "edited" ||
+                still.strength !== added?.strength
+              ) {
+                notices.push({
+                  level: "info",
+                  text: `Nothing to undo: ${name} has been changed since.`,
+                });
+                return;
+              }
+              // By the edit's own digest, which still names it if the file
+              // has left the shelf since.
+              const undone = await setWorkflowDefaultLora(key, {
+                sha256: still.sha256,
+                include: null,
+              });
+              if (stillOn(key)) detail.value = undone;
+            } catch (err) {
+              fail(err, `Could not take ${name} back out of the default recipe.`);
+            }
+          }),
+      },
+    });
+  });
+}
 
 function queueWrite(token, work) {
   writes = writes.then(async () => {
@@ -1811,6 +2304,7 @@ function openInComfyui() {
 watch(
   selectedKey,
   (key) => {
+    othersOpen.value = false;
     void loadDetail(key);
     void loadChain(key);
   },
@@ -2001,6 +2495,87 @@ async function checkInstalled(key) {
 .wftab-label {
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+}
+
+/* A row whose value column can grow below its field (a meta line, the
+   Checkpoint row's other checkpoints): the label stays level with the field,
+   not centred on the whole column. */
+.wftab-field--top {
+  align-items: start;
+}
+
+.wftab-labelcol {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: var(--control-h);
+}
+
+/* "Yours": the one exception mark, a step above the label through weight and
+   full ink, never hue; the same as `WorkflowDefaultRow`'s (design §2.1). */
+.wftab-yours {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  color: rgb(var(--v-theme-on-surface));
+}
+
+.wftab-col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Coverage on the left, Show N on the right, under the field, so the name
+   keeps the whole field. Rendered only when it has content. */
+.wftab-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: var(--control-h-sm);
+  margin-top: var(--space-1);
+}
+
+.wftab-coverage {
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.wftab-others {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  align-self: flex-start;
+  min-height: var(--control-h-sm);
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--text-xs);
+  color: rgba(var(--v-theme-on-surface), var(--opacity-text-secondary));
+  cursor: pointer;
+}
+
+.wftab-others-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wftab-others-list > li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h-sm);
+}
+
+.wftab-others-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-sm);
 }
 
 .wftab-value {

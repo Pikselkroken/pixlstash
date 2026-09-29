@@ -17,7 +17,7 @@
         class="wfpile"
         :class="{ 'wfpile--one': rest === 0, 'wfpile--two': rest === 1 }"
         :aria-expanded="open"
-        :aria-label="`${count} ${count === 1 ? 'LoRA changes' : 'LoRAs change'} per picture. On top: ${label(top)}`"
+        :aria-label="`${count} ${count === 1 ? 'LoRA' : 'LoRAs'} also used, not in the default recipe. On top: ${label(top)}`"
         data-testid="wftab-pile"
       >
         <span class="wfpile-back" aria-hidden="true"></span>
@@ -30,13 +30,15 @@
     </template>
 
     <div
+      ref="fan"
       class="tbm wfpile-fan"
+      tabindex="-1"
       role="dialog"
-      aria-label="LoRAs that change per picture"
+      aria-label="LoRAs also used, not in the default recipe"
       data-testid="wftab-fan"
     >
       <div class="wfpile-head">
-        <span class="wfpile-title">Changes per picture</span>
+        <span class="wfpile-title">Also used</span>
         <span class="wfpile-quiet"
           >{{ count }} {{ count === 1 ? "LoRA" : "LoRAs" }} across
           {{ summary.pictures }}
@@ -70,6 +72,22 @@
               </div>
               <div class="wfpile-meta">{{ meta(row) }}</div>
             </div>
+            <!-- Only a LoRA the shelf names as one file (`sha256`): the default
+                 recipe names a LoRA by that digest, and the route takes
+                 exactly the LoRAs the summary gives one. -->
+            <AppButton
+              v-if="row.asset && row.sha256"
+              variant="ghost"
+              size="sm"
+              data-testid="wftab-add-default"
+              :loading="adding === row.asset"
+              :disabled="Boolean(adding) && adding !== row.asset"
+              :aria-label="`Add ${label(row)} to the default recipe`"
+              tooltip="Add to the workflow's default LoRAs"
+              @click="addDefault(row)"
+            >
+              Add to default
+            </AppButton>
             <AppButton
               v-if="row.asset && row.pictures"
               variant="ghost"
@@ -87,12 +105,13 @@
 </template>
 
 <script setup>
-// The Workflow tab's pile of LoRAs that change per picture, and the fan it
-// opens into (the "Shared LoRAs and a pile" design). It describes the whole
-// workflow: `summary` is `GET /workflows/{id}/lora-summary`. Its one verb is
-// Show: the grid, narrowed to one LoRA's pictures.
+// The Workflow tab's ALSO USED pile: the LoRAs its pictures used that are not
+// in the default recipe, and the fan it opens into (#1653). It describes the
+// whole workflow: `summary` is `GET /workflows/{id}/lora-summary` with the
+// default recipe's LoRAs already taken out of `varying` by the tab. Its one
+// verb is Show: the grid, narrowed to one LoRA's pictures.
 
-import { computed, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { VMenu } from "vuetify/components";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
@@ -101,9 +120,13 @@ import AppButton from "../widgets/AppButton.vue";
 const props = defineProps({
   /** `GET …/lora-summary`: `{pictures, varying, without, cover_asset}`. */
   summary: { type: Object, required: true },
+  /** The `asset` of the LoRA being added to the default recipe, while it is. */
+  adding: { type: String, default: "" },
 });
 
-const emit = defineEmits(["show"]);
+const emit = defineEmits(["show", "add-default"]);
+
+const fan = ref(null);
 
 const open = ref(false);
 
@@ -149,6 +172,41 @@ function show(row) {
   open.value = false;
   emit("show", row);
 }
+
+/** Where the row being added stood, so focus can stay there when it leaves. */
+let addedAt = -1;
+let addedAsset = "";
+
+function addDefault(row) {
+  addedAt = rows.value.indexOf(row);
+  addedAsset = row.asset;
+  emit("add-default", row);
+}
+
+// A failed add leaves its row where it was: forget it, or a later change that
+// takes that row out for another reason would move focus unasked.
+watch(
+  () => props.adding,
+  (now, before) => {
+    if (before && before === addedAsset && !now) {
+      nextTick(() => {
+        if (rows.value.some((row) => row.asset === addedAsset)) addedAsset = "";
+      });
+    }
+  },
+);
+
+// An added LoRA leaves the pile, and its button with it: focus moves to the
+// row that took its place (its first button), else the fan itself, rather
+// than falling to the page.
+watch(rows, async (now) => {
+  if (!addedAsset || now.some((row) => row.asset === addedAsset)) return;
+  const index = Math.min(addedAt, now.length - 1);
+  addedAsset = "";
+  await nextTick();
+  const next = fan.value?.querySelectorAll(".wfpile-row-wrap")[index];
+  (next?.querySelector("button") ?? fan.value)?.focus();
+});
 </script>
 
 <style scoped>
@@ -190,9 +248,11 @@ function show(row) {
   outline: none;
 }
 
+/* The global ink ring, on the top card rather than the button's box (which
+   includes the cards peeking out below it). */
 .wfpile:focus-visible .wfpile-top {
-  outline: 2px solid rgb(var(--v-theme-primary));
-  outline-offset: 1px;
+  outline: var(--focus-width) solid var(--focus-stroke);
+  outline-offset: var(--focus-offset);
 }
 
 .wfpile-back {

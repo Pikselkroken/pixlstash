@@ -113,6 +113,31 @@ def replace_parameter_defaults(
         )
 
 
+def set_default_lora(
+    hub: HubDatabase, workflow_id: str, sha256: str, value: Optional[str]
+) -> None:
+    """Put one LoRA's edit in the default recipe, or take the edit out.
+
+    ``value`` is its strength as text, ``"off"`` to keep it out of the default
+    recipe, or ``None`` to drop the edit so the pictures decide again. The row
+    is ``lora:<sha256>``; every other default row stands.
+    """
+    address = LORA_ADDRESS_PREFIX + sha256.lower()
+    with hub.transaction() as conn:
+        if value is None:
+            conn.execute(
+                "DELETE FROM workflow_group_default WHERE workflow_id = ? AND address = ?",
+                (workflow_id, address),
+            )
+            return
+        conn.execute(
+            "INSERT INTO workflow_group_default (workflow_id, address, value) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(workflow_id, address) DO UPDATE SET value = excluded.value",
+            (workflow_id, address, value),
+        )
+
+
 def replace_group_pins(
     hub: HubDatabase, workflow_id: str, pins: Optional[list[str]]
 ) -> None:

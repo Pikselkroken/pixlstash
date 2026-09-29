@@ -1037,8 +1037,13 @@ describe("the body it sends", () => {
       }),
     });
     const wrapper = await mountRun({ kind: "card", workflowId: KEY });
-    expect(wrapper.text()).toContain("Run the upscale stage");
-    expect(wrapper.text()).toContain("Run the face detailer stage");
+    // One "Stages" group, each row named by the stage alone.
+    const fieldset = wrapper.find("fieldset");
+    expect(fieldset.find("legend").text()).toBe("Stages");
+    expect(fieldset.findAll("label").map((l) => l.text())).toEqual([
+      "Upscale",
+      "Face detailer",
+    ]);
     await wrapper.vm.setStage("face_detailer", false);
     await flushPromises();
     // Asked again, so a stage that cannot come out is refused before Run.
@@ -1067,8 +1072,8 @@ describe("the body it sends", () => {
       }),
     });
     const wrapper = await mountRun({ kind: "card", workflowId: KEY });
-    expect(wrapper.text()).not.toContain("Run the upscale stage");
-    expect(wrapper.text()).toContain("Run the face detailer stage");
+    const labels = wrapper.findAll("fieldset label").map((l) => l.text());
+    expect(labels).toEqual(["Face detailer"]);
     await wrapper.vm.submit();
     await flushPromises();
     expect(runWorkflowCard.mock.calls[0][0]).not.toHaveProperty("skip_stages");
@@ -1079,6 +1084,36 @@ describe("the body it sends", () => {
       card: card({ specials: ["upscale"], default_recipe: { stages: {} } }),
     });
     const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await wrapper.vm.submit();
+    await flushPromises();
+    expect(runWorkflowCard.mock.calls[0][0]).not.toHaveProperty("skip_stages");
+  });
+
+  it("draws no Stages fieldset when the workflow has no optional stage", async () => {
+    getWorkflowCard.mockResolvedValue({
+      card: card({ specials: [], default_recipe: { stages: {} } }),
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(wrapper.find("fieldset").exists()).toBe(false);
+  });
+
+  it("puts a stage turned off back on from its reset chip", async () => {
+    getWorkflowCard.mockResolvedValue({
+      card: card({ specials: ["upscale"], default_recipe: { stages: {} } }),
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const row = () => wrapper.find("fieldset .rund-check");
+    expect(row().findComponent({ name: "RunResetChip" }).exists()).toBe(false);
+    await row().find("input").setValue(false);
+    await flushPromises();
+    const chip = row().find("button");
+    expect(chip.attributes("aria-label")).toBe(
+      "Put upscale back to on",
+    );
+    await chip.trigger("click");
+    await flushPromises();
+    expect(row().find("input").element.checked).toBe(true);
+    expect(row().findComponent({ name: "RunResetChip" }).exists()).toBe(false);
     await wrapper.vm.submit();
     await flushPromises();
     expect(runWorkflowCard.mock.calls[0][0]).not.toHaveProperty("skip_stages");
