@@ -783,12 +783,24 @@ describe("on a clone that is not written yet (pending)", () => {
     );
     await button(wrapper, "Done").trigger("click");
     await flushPromises();
-    const [[{ body }]] = wrapper.emitted("done");
+    const [[{ body, changes }]] = wrapper.emitted("done");
+    expect(changes).toBe(1);
     expect(body).toEqual({
       entries: [{ node_id: null, sha256: "sha-mara", strength: 1 }],
       lanes: null,
     });
     expect(saveLoraChain).not.toHaveBeenCalled();
+  });
+
+  it("says the base model hid the shelf's LoRAs, never that it has none", async () => {
+    listAdapters.mockResolvedValue([
+      { id: 1, filename: "flux-only.safetensors", sha256: "sha-flux", base_model: "FLUX.1 dev" },
+    ]);
+    const wrapper = await mountDialog({ pending });
+    expect(textOf(wrapper)).toContain(
+      "1 LoRA trained on other base models is not offered.",
+    );
+    expect(textOf(wrapper)).not.toContain("Your model shelf has no LoRA to add.");
   });
 
   it("offers no Done while the chain is still being read", async () => {

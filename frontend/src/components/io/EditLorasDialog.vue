@@ -69,7 +69,7 @@
           >
             {{ spliceIn ? "Insert LoRA between these nodes" : "Add a LoRA" }}
           </AppButton>
-          <span v-if="editable && !offered.length && shelfRead" class="eld-note eld-quiet">
+          <span v-if="editable && !shelf.length && shelfRead" class="eld-note eld-quiet">
             Your model shelf has no LoRA to add.
           </span>
         </div>
@@ -207,7 +207,7 @@
             </div>
           </section>
         </div>
-        <span v-if="editable && !offered.length && shelfRead" class="eld-note eld-quiet">
+        <span v-if="editable && !shelf.length && shelfRead" class="eld-note eld-quiet">
           Your model shelf has no LoRA to add.
         </span>
       </div>
@@ -1162,6 +1162,7 @@ function done() {
   const body = requestBody(false);
   emit("done", {
     rows: rows.value.map((row) => ({ ...row })),
+    changes: changeCount.value,
     body: { entries: body.entries, lanes: body.lanes ?? null },
   });
   emit("close");

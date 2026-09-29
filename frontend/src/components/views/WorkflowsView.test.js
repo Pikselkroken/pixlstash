@@ -1246,9 +1246,28 @@ describe("Clone onto a workflow set", () => {
     await wrapper.findComponent({ name: "EditLorasDialog" }).vm.$emit("done", {
       rows: [{ id: "new:1", name: "mara_chroma", isNew: true, sha256: "sha-m" }],
       body: { entries: [{ node_id: null, sha256: "sha-m", strength: 1 }] },
+      changes: 1,
     });
     await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
-    expect(wrapper.text()).toContain("Dropped mara_chroma, added for Chroma.");
+    expect(wrapper.text()).toContain(
+      "Dropped the LoRA edits made for Chroma, including mara_chroma.",
+    );
+  });
+
+  it("says a dropped edit that only deleted a LoRA was dropped too", async () => {
+    const wrapper = await grid();
+    await openOn(wrapper);
+    await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
+    await wrapper.findComponent({ name: "EditLorasDialog" }).vm.$emit("done", {
+      rows: [{ id: "n:5", name: "mara_v3", isNew: false, deleted: true }],
+      body: { entries: [] },
+      changes: 1,
+    });
+    await wrapper.findAll(".cos-tab")[1].trigger("click");
+    await wrapper.find('[data-testid="cos-set-hand:8"]').trigger("click");
+    expect(wrapper.text()).toContain(
+      "Dropped the LoRA edits made for Flux dev GGUF.",
+    );
   });
 
   it("counts the LoRAs an edit leaves, not the ones the plan kept", async () => {

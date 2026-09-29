@@ -6828,6 +6828,14 @@ def create_router(server) -> APIRouter:
         ]
         plans = []
         for ask in body.sets:
+            # A model the dialog read that has since left the shelf: planning
+            # the rest would present a partial set as this one, so the set is
+            # refused on its own, never the whole read.
+            gone = [
+                i
+                for i in (*ask.model_ids, ask.checkpoint_id)
+                if i is not None and i not in models
+            ]
             members = [models[i] for i in ask.model_ids if i in models]
             # Named by the caller, never guessed from the members: a set's
             # checkpoint slot takes a checkpoint or an unclassified diffusion
@@ -6848,6 +6856,8 @@ def create_router(server) -> APIRouter:
             reason = (
                 "This workflow loads no checkpoint"
                 if base is None
+                else "A model of this set is no longer on the shelf"
+                if gone
                 else "Has no checkpoint"
                 if checkpoint is None
                 else _wont_load(found, unswapped, object_info)

@@ -9856,6 +9856,14 @@ def test_a_family_read_off_the_graphs_loras_makes_a_set_of_that_family(cloneable
     assert plans["krea"]["keeps_loras"] is False
 
 
+def test_a_set_whose_model_left_the_shelf_is_refused_on_its_own(cloneable):
+    """A stale id refuses that set, not the read: the other set still plans."""
+    _body, plans = _plans(cloneable, stale=[987654321], krea=[cloneable.checkpoint_id])
+    assert plans["stale"]["fit"] == "wont_load"
+    assert plans["stale"]["reason"] == "A model of this set is no longer on the shelf"
+    assert plans["krea"]["fit"] != "wont_load"
+
+
 def test_two_sets_asked_under_one_key_are_a_422(cloneable):
     ask = {"key": "same", "checkpoint_id": cloneable.checkpoint_id, "model_ids": []}
     r = cloneable.owner.post(

@@ -674,12 +674,12 @@ async function load() {
 function choose(key) {
   if (key === chosenKey.value) return;
   // The rule is re-applied from the original, never from the last pick: LoRAs
-  // added for another set do not follow the owner here.
+  // added for another set do not follow the owner here, and nor does any
+  // other edit (a deleted or re-weighted LoRA), so the notice covers them all.
   const added = edited.value?.rows?.filter((row) => row.isNew && row.sha256) ?? [];
-  dropNotice.value = added.length
-    ? `Dropped ${added.map((row) => row.name).join(", ")}, added for ${
-        chosen.value?.name
-      }.`
+  dropNotice.value = edited.value?.changes
+    ? `Dropped the LoRA edits made for ${chosen.value?.name}` +
+      (added.length ? `, including ${added.map((row) => row.name).join(", ")}.` : ".")
     : "";
   edited.value = null;
   chosenKey.value = key;
@@ -689,8 +689,8 @@ function choose(key) {
   }
 }
 
-function takeEdit({ rows, body }) {
-  edited.value = { key: chosenKey.value, rows, body };
+function takeEdit({ rows, body, changes }) {
+  edited.value = { key: chosenKey.value, rows, body, changes };
   dropNotice.value = "";
 }
 
