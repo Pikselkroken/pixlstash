@@ -1853,6 +1853,40 @@ describe("Save fixed workflow", () => {
     expect(saveButton(wrapper)).toBeUndefined();
   });
 
+  it("does not count a swap for a LoRA the form asked for", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      ...swapping,
+      groups: [
+        {
+          ...swapping.groups[0],
+          swapped_loaders: [{ ...swapping.groups[0].swapped_loaders[0], requested: true }],
+        },
+      ],
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    // Said, since the run does it; not offered, since the copy would not.
+    expect(wrapper.vm.bypassed.map((note) => note.code)).toContain("loras_fetched");
+    expect(saveButton(wrapper)).toBeUndefined();
+  });
+
+  it("does not move the popup when it moved while the copy was written", async () => {
+    preflightWorkflowRun.mockResolvedValueOnce(swapping);
+    let finish;
+    saveFixedWorkflow.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await saveButton(wrapper).trigger("click");
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    finish({ name: "Cinematic portrait (fixed).json", workflow_id: "auto:fixed" });
+    await flushPromises();
+    expect(getWorkflowCard).not.toHaveBeenCalledWith("auto:fixed");
+    expect(wrapper.text()).not.toContain("Saved as");
+  });
+
   it("says why when the save is refused", async () => {
     preflightWorkflowRun.mockResolvedValue(swapping);
     saveFixedWorkflow.mockRejectedValue({

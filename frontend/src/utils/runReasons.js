@@ -446,11 +446,14 @@ export function swappedNotice(group) {
 }
 
 /**
- * Whether a group's run changes nodes of the graph on this ComfyUI - a node
- * replaced, or a LoRA loader swapped - which a saved copy could keep.
+ * Whether a group's run changes nodes of the workflow itself on this ComfyUI -
+ * a node replaced, or one of the workflow's own LoRA loaders swapped - which
+ * "Save fixed workflow" keeps. A swap for a LoRA the form named
+ * (`requested: true`) is not counted: the saved copy writes no form.
  */
 export function changesNodes(group) {
   return Boolean(
-    (group?.replaced_nodes || []).length || (group?.swapped_loaders || []).length,
+    (group?.replaced_nodes || []).length ||
+      (group?.swapped_loaders || []).some((loader) => !loader?.requested),
   );
 }

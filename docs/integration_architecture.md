@@ -704,11 +704,14 @@ Seven rules the client must not re-derive:
    workflow has no loader left for it, or the shelf cannot identify it.
    `skip_loras` is refused (400) on a run spanning several cards: a node id
    names one loader on one graph.
-   `swapped_loaders: [{node_id, class_type, file, sha256}]` is a fifth fact of
-   the same kind: a core LoRA loader whose file this ComfyUI lacks, loading the
-   shelf LoRA through the ComfyUI-PixlStash loader by its hash instead of being
-   refused. It and `replaced_nodes` are what the Run popup offers
-   **Save fixed workflow** for (`POST /workflows/{workflow_id}/fixed-copy`).
+   `swapped_loaders: [{node_id, class_type, file, sha256, requested}]` is a
+   fifth fact of the same kind: a core LoRA loader whose file this ComfyUI
+   lacks, loading the shelf LoRA through the ComfyUI-PixlStash loader by its
+   hash instead of being refused. `requested: true` is a swap for a LoRA this
+   request named (`loras`, `add_loras`); `false` is the workflow's own recipe
+   LoRA. `replaced_nodes` and the `requested: false` swaps are what the Run
+   popup offers **Save fixed workflow** for
+   (`POST /workflows/{workflow_id}/fixed-copy`), which writes no form.
    `add_loras: [{sha256, strength_model, strength_clip}]` adds shelf LoRAs in
    loaders of their own, spliced in after the model source on the run's copy:
    no slot is named and nothing the graph loads is replaced, so it works on a

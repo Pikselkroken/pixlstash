@@ -975,6 +975,9 @@ const workflowId = computed({
 });
 
 async function switchCard(key, keepEdits) {
+  // What the last pre-flight and save said is about the card being left.
+  changedNodes.value = false;
+  fixedNote.value = "";
   // A pick is addressed by a slot of the card it was made on; another card's
   // slots are other slots, so nothing carries over - and neither do the rows,
   // which are the set a pin would be written from.
@@ -1655,17 +1658,29 @@ async function saveFixed() {
   if (!canSaveFixed.value || savingFixed.value) return;
   savingFixed.value = true;
   fixedNote.value = "";
+  // The popup can move while the copy is written (another workflow picked, or
+  // closed and reopened on another source): the answer is then about a card
+  // nobody is looking at, and must not pull the popup onto its copy.
+  const token = loadToken;
+  const savedFrom = activeKey.value;
+  const stillHere = () => token === loadToken && savedFrom === activeKey.value;
   try {
-    const saved = await saveFixedWorkflow(activeKey.value);
-    fixedNote.value = `Saved as ${String(saved?.name || "").replace(/\.json$/i, "")}.`;
+    const saved = await saveFixedWorkflow(savedFrom);
+    if (!stillHere()) return;
+    const note = `Saved as ${String(saved?.name || "").replace(/\.json$/i, "")}.`;
     if (saved?.workflow_id) {
       if (props.source?.pickWorkflow) {
         cards.value = (await listWorkflowCards()).cards;
+        if (!stillHere()) return;
       }
+      // After the switch, which clears what was said about the card left.
       workflowId.value = saved.workflow_id;
     }
+    fixedNote.value = note;
   } catch (err) {
-    fixedNote.value = errorMessage(err, "Could not save the fixed workflow.");
+    if (stillHere()) {
+      fixedNote.value = errorMessage(err, "Could not save the fixed workflow.");
+    }
   } finally {
     savingFixed.value = false;
   }

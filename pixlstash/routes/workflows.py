@@ -1352,9 +1352,11 @@ class RunGroup(BaseModel):
     replaced_nodes: list[dict] = Field(default_factory=list)
     # A core LoRA loader whose file this ComfyUI does not have, loading the
     # shelf LoRA through the ComfyUI-PixlStash loader instead, by its hash:
-    # `[{node_id, class_type, file, sha256}]`. A repair like `replaced_nodes`:
-    # the graph that runs is not the one the card names, which is what
-    # "Save fixed workflow" (`POST /workflows/{workflow_id}/fixed-copy`) keeps.
+    # `[{node_id, class_type, file, sha256, requested}]`. A repair like
+    # `replaced_nodes`: the graph that runs is not the one the card names.
+    # `requested: false` is a swap of the workflow's own LoRA, which "Save
+    # fixed workflow" (`POST /workflows/{workflow_id}/fixed-copy`) keeps;
+    # `true` is one for a LoRA this request named, which it does not.
     swapped_loaders: list[dict] = Field(default_factory=list)
     # What this run does that the owner may not expect, and runs anyway
     # (#1620 Q3): `family_mismatch` for a model loaded in place of one made for
@@ -4768,8 +4770,12 @@ def create_router(server) -> APIRouter:
             # which `apply_adapter` would report as a missing node class.
             found: list[run_service.Reason] = list(skip_reasons)
             # LoRA loaders swapped to the ComfyUI-PixlStash loader on the way
-            # (`swapped_loaders`); reported like the repairs, below.
+            # (`swapped_loaders`); reported like the repairs, below. Apart by
+            # cause: a swap for a LoRA this request named (`loras`,
+            # `add_loras`) is the form's, and "Save fixed workflow" writes no
+            # form, so only the recipe's own count towards it.
             lora_swaps: list[dict] = []
+            recipe_swaps: list[dict] = []
             # What the repair registry changed in this graph, by `RunGroup`
             # field; put on the group only if it ends up being submitted. See
             # the assignment below.
@@ -4830,7 +4836,7 @@ def create_router(server) -> APIRouter:
                             for target, saved in placements
                         ],
                         object_info,
-                        lora_swaps,
+                        recipe_swaps,
                     )
             if body.add_loras and not found:
                 found += _add_loras(
@@ -5009,7 +5015,9 @@ def create_router(server) -> APIRouter:
             # every refusal is in, and what the notice claims is true.
             for report, entries in repaired.items():
                 setattr(group, report, entries)
-            group.swapped_loaders = lora_swaps
+            group.swapped_loaders = [
+                {**entry, "requested": False} for entry in recipe_swaps
+            ] + [{**entry, "requested": True} for entry in lora_swaps]
             # The owner's own skips ride in the same field, marked requested.
             group.bypassed_loras = skipped + group.bypassed_loras
             planned.append(group)

@@ -1653,7 +1653,9 @@ def swap_to_adapter_loader(
     if outputs is None:
         raise LookupError(f"Node {node_id} ({class_type}) is not a single LoRA loader.")
     spec = object_info.get(PIXLSTASH_ADAPTER_LOADER)
-    if not spec:
+    # The spec is ComfyUI's verbatim, from a third-party pack: a malformed one
+    # is "cannot stand in", never an AttributeError that 500s the run.
+    if not isinstance(spec, dict) or not spec:
         raise LookupError(
             f"This ComfyUI does not have ComfyUI-PixlStash, which could fetch the "
             f"LoRA by its hash. {PIXLSTASH_PACK_INSTALL_HINT}"

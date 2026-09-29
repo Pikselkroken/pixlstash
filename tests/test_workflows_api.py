@@ -10556,9 +10556,10 @@ def test_a_shelf_lora_comfyui_lacks_loads_through_the_pixlstash_loader(runnable)
     assert group["bypassed_loras"] == [], group["reasons"]
     assert runnable.submitted, group["reasons"]
     # Reported, so the popup can offer to save the fixed workflow.
-    assert [(e["node_id"], e["sha256"]) for e in group["swapped_loaders"]] == [
-        ("2", RUN_ADAPTER_DIGEST)
-    ]
+    # The workflow's own recipe LoRA, so not `requested`: a saved copy keeps it.
+    assert [
+        (e["node_id"], e["sha256"], e["requested"]) for e in group["swapped_loaders"]
+    ] == [("2", RUN_ADAPTER_DIGEST, False)]
     node = runnable.submitted[0]["graph"]["2"]
     assert node["class_type"] == "PixlStashAdapterLoader"
     assert node["inputs"]["adapter_sha256"] == RUN_ADAPTER_DIGEST
@@ -10595,7 +10596,28 @@ def test_an_added_lora_in_a_loader_comfyui_cannot_fill_is_swapped_not_dropped(
     assert graph["2"]["class_type"] == "PixlStashAdapterLoader"
     assert graph["2"]["inputs"]["adapter_sha256"] == RUN_ADAPTER_DIGEST
     assert graph["2"]["inputs"]["strength_model"] == 0.7
-    assert r.json()["groups"][0]["bypassed_loras"] == []
+    group = r.json()["groups"][0]
+    assert group["bypassed_loras"] == []
+    # The workflow's own recipe names this LoRA in this loader, so the swap
+    # is the recipe's (`requested: false`) and the added LoRA only re-weights it.
+    assert [e["requested"] for e in group["swapped_loaders"]] == [False]
+
+
+def test_a_swap_for_a_lora_the_request_named_is_marked_requested(runnable):
+    """`loras` naming the slot is the form's choice, which a saved copy never keeps."""
+    _graph_loads_a_shelf_lora_comfyui_lacks(runnable)
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "loras": [{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    group = r.json()["groups"][0]
+    assert [(e["node_id"], e["requested"]) for e in group["swapped_loaders"]] == [
+        ("2", True)
+    ]
 
 
 def test_without_the_pixlstash_loader_nothing_is_swapped(runnable):
