@@ -99,6 +99,7 @@ from pixlstash.services.comfyui_recipe_service import (
     PIXLSTASH_ADAPTER_LOADER,
     apply_adapter,
     apply_filename_swap,
+    apply_loader_rewrites,
     apply_lora_chain,
     apply_model_swap,
     apply_seeds,
@@ -108,6 +109,8 @@ from pixlstash.services.comfyui_recipe_service import (
     listed_as,
     listed_options,
     lora_display_name,
+    model_filename_fields,
+    plan_loader_rewrites,
     plan_lora_chain,
     plan_lora_insertion,
     read_lora_chain,
@@ -210,6 +213,7 @@ from pixlstash.utils.adapter_header import (
     FILE_CHECKPOINT,
     FILE_ENGINE,
     FILE_TEXT_ENCODER,
+    FILE_UNKNOWN,
     FILE_VAE,
 )
 from pixlstash.utils.image_processing.image_utils import ImageUtils
@@ -1807,6 +1811,29 @@ class ModelSwapOptions(BaseModel):
 # Ceiling on one clone's swap map. A graph names a handful of model files; the
 # bound is here so a hand-made request cannot post an unbounded map.
 MAX_SWAPS = 64
+# Workflow sets one clone-plan read may ask about: a shelf's worth.
+MAX_SET_PLANS = 500
+
+
+class CloneLoras(BaseModel):
+    """The LoRA chain a clone is written with, in ``PUT …/lora-chain``'s shape.
+
+    Read against the ORIGINAL workflow's chain: a kept loader by ``node_id``,
+    a new one by shelf ``sha256``, and every loader left out deleted, so
+    ``entries: []`` clears them.
+    """
+
+    entries: list[LoraChainEntry] = Field(
+        default_factory=list, max_length=MAX_RUN_LORAS
+    )
+    lanes: list[list[LoraChainEntry]] | None = Field(None, max_length=MAX_RUN_LORAS)
+
+    @model_validator(mode="after")
+    def _within_the_cap(self) -> "CloneLoras":
+        total = len(self.entries) + sum(len(lane) for lane in self.lanes or [])
+        if total > MAX_RUN_LORAS:
+            raise ValueError(f"at most {MAX_RUN_LORAS} loaders in one chain")
+        return self
 
 
 class CloneWithModels(BaseModel):
@@ -1815,6 +1842,12 @@ class CloneWithModels(BaseModel):
     name: str = Field(min_length=1, max_length=MAX_NAME_LENGTH)
     swaps: dict[str, str] = Field(
         description="The graph's filename -> the filename to load instead."
+    )
+    loras: CloneLoras | None = Field(
+        None,
+        description=(
+            "The LoRA chain to write the clone with; null keeps the workflow's own."
+        ),
     )
 
     @field_validator("swaps")
@@ -1832,10 +1865,75 @@ class CloneWithModels(BaseModel):
         return swaps
 
 
+class SetCloneAsk(BaseModel):
+    """One workflow set to plan a clone onto: a key of the caller's, its models."""
+
+    key: str = Field(min_length=1, max_length=MAX_LABEL_LENGTH)
+    model_ids: list[int] = Field(max_length=MAX_SWAPS)
+
+
+class SetClonePlansRequest(BaseModel):
+    """``POST /workflows/{workflow_id}/set-clone-plans``."""
+
+    sets: list[SetCloneAsk] = Field(max_length=MAX_SET_PLANS)
+
+
+class LoaderDiff(BaseModel):
+    """One model loader of the graph, before and after the clone."""
+
+    node_id: str
+    kind: str = Field(description="checkpoint, unet, vae or clip.")
+    was_class: str
+    now_class: str
+    was: list[str] = Field(description="The files it loads now, in field order.")
+    now: list[str] = Field(description="The files the clone loads there.")
+    pack: str | None = Field(
+        None, description="The node pack now_class comes from, when it changed."
+    )
+    installed: bool | None = Field(
+        None, description="Whether ComfyUI has now_class; null when not asked."
+    )
+
+
+class SetClonePlan(BaseModel):
+    """What cloning the workflow onto one set would write."""
+
+    key: str
+    fit: Literal["same_base_model", "same_family", "other", "wont_load"]
+    reason: str | None = Field(None, description="Why it will not load.")
+    base_model: str | None = Field(None, description="The set checkpoint's.")
+    keeps_loras: bool = Field(
+        description=(
+            "True when the set's checkpoint has the workflow's base model, so "
+            "its LoRAs come along; an unknown base model on either side is "
+            "not the same."
+        )
+    )
+    swaps: dict[str, str] = Field(
+        description="The graph's filename -> the set's file, as the clone takes it."
+    )
+    loaders: list[LoaderDiff]
+
+
+class SetClonePlans(BaseModel):
+    """The workflow's own base model, and one plan per set asked."""
+
+    base_filename: str | None = None
+    base_model: str | None = None
+    plans: list[SetClonePlan]
+
+
 class ClonedWorkflow(WorkflowFile):
     """The file ``POST /workflows/{workflow_id}/clone-with-models`` wrote."""
 
     swapped: list[dict] = Field(description="One entry per loader field rewritten.")
+    loaders: list[dict] = Field(
+        default_factory=list,
+        description=(
+            "One {node_id, was, now, pack, installed} per loader whose node "
+            "class changed for a file of another type (GGUF)."
+        ),
+    )
     unswapped: list[dict] = Field(
         description="Swaps that did not land: not_in_graph or not_on_comfyui."
     )
@@ -6016,56 +6114,19 @@ def create_router(server) -> APIRouter:
         _shelf_chain(hub, chain)
         return _chain_payload(workflow_id, chain, refusal, object_info)
 
-    @router.put(
-        "/workflows/{workflow_id}/lora-chain",
-        summary="Edit a workflow's LoRA chain",
-        description=(
-            "Write a copy of this workflow with its LoRA chain as the owner "
-            "left it: entries in apply order (and, for a forked chain, lanes: "
-            "one list per pass), an existing loader by node_id "
-            "(moved and re-weighted, its id kept), a new one by the shelf "
-            "sha256 of its LoRA, and every loader left out deleted. One call "
-            "is one new file; the original file is never changed. dry_run "
-            "answers the list of changes and writes nothing."
-        ),
-        response_model=LoraChainSaved,
-        status_code=201,
-        responses={
-            200: {
-                "model": LoraChainSaved,
-                "description": "A dry run: the changes, nothing written.",
-            },
-            404: {"description": "This machine has no such card."},
-            409: {
-                "description": (
-                    "No graph, nothing changed, an unknown or repeated loader, a "
-                    "LoRA not on the shelf or not on this ComfyUI, or a chain "
-                    "PixlStash cannot edit honestly."
-                )
-            },
-            503: {"description": "ComfyUI could not be reached."},
-        },
-    )
-    def edit_lora_chain(
-        request: Request,
-        response: Response,
-        workflow_id: str,
-        payload: LoraChainEdit = Body(...),
-    ):
-        server.auth.ensure_secure_when_required(request)
-        hub = _hub()
-        workflow, card = _require_base(hub, workflow_id)
-        source = _card_source(card)
-        object_info, error = _read_object_info(_comfyui_url(_user(request)))
-        if object_info is None:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "PixlStash could not ask ComfyUI what its nodes hand on, so "
-                    f"it cannot rewire this workflow's LoRAs: {error}"
-                ),
-            )
-        graph = deepcopy(source.graph)
+    def _chain_plan(
+        hub,
+        graph: dict,
+        object_info: dict,
+        asked_entries: list[LoraChainEntry],
+        asked_lanes: list[list[LoraChainEntry]] | None,
+    ) -> dict:
+        """``plan_lora_chain`` for a chain asked in ``LoraChainEdit``'s shape.
+
+        Shared by Edit LoRAs and the clone that carries a chain. Raises the
+        409 an unknown loader, a LoRA not on the shelf or a chain PixlStash
+        cannot edit honestly answers.
+        """
         try:
             chain = read_lora_chain(graph, object_info)
         except LookupError as exc:
@@ -6118,12 +6179,65 @@ def create_router(server) -> APIRouter:
                 )
             return entries
 
-        entries = planned(payload.entries)
-        lanes = (
-            None if payload.lanes is None else [planned(lane) for lane in payload.lanes]
-        )
+        entries = planned(asked_entries)
+        lanes = None if asked_lanes is None else [planned(lane) for lane in asked_lanes]
         try:
-            plan = plan_lora_chain(graph, chain, entries, object_info, lanes)
+            return plan_lora_chain(graph, chain, entries, object_info, lanes)
+        except LookupError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.put(
+        "/workflows/{workflow_id}/lora-chain",
+        summary="Edit a workflow's LoRA chain",
+        description=(
+            "Write a copy of this workflow with its LoRA chain as the owner "
+            "left it: entries in apply order (and, for a forked chain, lanes: "
+            "one list per pass), an existing loader by node_id "
+            "(moved and re-weighted, its id kept), a new one by the shelf "
+            "sha256 of its LoRA, and every loader left out deleted. One call "
+            "is one new file; the original file is never changed. dry_run "
+            "answers the list of changes and writes nothing."
+        ),
+        response_model=LoraChainSaved,
+        status_code=201,
+        responses={
+            200: {
+                "model": LoraChainSaved,
+                "description": "A dry run: the changes, nothing written.",
+            },
+            404: {"description": "This machine has no such card."},
+            409: {
+                "description": (
+                    "No graph, nothing changed, an unknown or repeated loader, a "
+                    "LoRA not on the shelf or not on this ComfyUI, or a chain "
+                    "PixlStash cannot edit honestly."
+                )
+            },
+            503: {"description": "ComfyUI could not be reached."},
+        },
+    )
+    def edit_lora_chain(
+        request: Request,
+        response: Response,
+        workflow_id: str,
+        payload: LoraChainEdit = Body(...),
+    ):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        workflow, card = _require_base(hub, workflow_id)
+        source = _card_source(card)
+        object_info, error = _read_object_info(_comfyui_url(_user(request)))
+        if object_info is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "PixlStash could not ask ComfyUI what its nodes hand on, so "
+                    f"it cannot rewire this workflow's LoRAs: {error}"
+                ),
+            )
+        graph = deepcopy(source.graph)
+        plan = _chain_plan(hub, graph, object_info, payload.entries, payload.lanes)
+        try:
             if not plan["changes"]:
                 raise HTTPException(
                     status_code=409,
@@ -6567,6 +6681,211 @@ def create_router(server) -> APIRouter:
                 )
         return options
 
+    def _set_swaps(
+        found: list[tuple[str, str, SwapSlot]], members: list[SwapModel]
+    ) -> tuple[SwapModel | None, dict[str, str]]:
+        """The set's checkpoint, and which graph file each of its files replaces.
+
+        The first base slot takes the set's checkpoint; every VAE slot the
+        set's VAE; a text-encoder slot the set's encoder of the same layout
+        (``family``), or the set's only one when the graph has only one. A
+        slot the set has nothing for keeps its file.
+
+        ponytail: a set with two VAEs gives the first; the tray has no order,
+        so the plan's diff is where the owner sees which.
+        """
+        checkpoint = next(
+            (m for m in members if m.file_kind == FILE_CHECKPOINT), None
+        ) or next((m for m in members if m.file_kind == FILE_UNKNOWN), None)
+        vaes = [m for m in members if m.file_kind == FILE_VAE]
+        encoders = [m for m in members if m.file_kind == FILE_TEXT_ENCODER]
+        clip_slots = [slot for _c, _w, slot in found if slot.kind == "clip"]
+        swaps: dict[str, str] = {}
+        taken: set[int] = set()
+        base_done = False
+        for _cls, _widget, slot in found:
+            new = None
+            if slot.kind in BASE_MODEL_KINDS and not base_done:
+                base_done = True
+                new = checkpoint
+            elif slot.kind == "vae" and vaes:
+                new = vaes[0]
+            elif slot.kind == "clip":
+                family = slot.model.family if slot.model else None
+                new = next(
+                    (
+                        m
+                        for m in encoders
+                        if m.id not in taken and family and m.family == family
+                    ),
+                    None,
+                )
+                if new is None and len(clip_slots) == 1 and len(encoders) == 1:
+                    new = encoders[0]
+                if new is not None:
+                    taken.add(new.id)
+            if new is not None and normalized_filename(
+                new.filename
+            ) != normalized_filename(slot.filename):
+                swaps[slot.filename] = new.filename
+        return checkpoint, swaps
+
+    def _wont_load(
+        found, unswapped: list[dict], object_info: dict | None
+    ) -> str | None:
+        """Why a set's clone would be refused, in words, or None.
+
+        The base loader's refusal names the loader that would read the file,
+        as far as ComfyUI says one does.
+        """
+        if not unswapped:
+            return None
+        first = unswapped[0]
+        base = next(
+            (slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS), None
+        )
+        if base is not None and first["was"] == base.filename and object_info:
+            for cls, widget in (
+                ("CheckpointLoaderSimple", "ckpt_name"),
+                ("UNETLoader", "unet_name"),
+                ("UnetLoaderGGUF", "unet_name"),
+            ):
+                options = listed_options(object_info, cls, widget)
+                if options and listed_as(first["now"], options):
+                    return f"Needs a {cls}"
+        name = os.path.basename(first["now"].replace("\\", "/"))
+        if first["reason"] == "several_on_comfyui":
+            return f"ComfyUI has two files named {name}"
+        return f"ComfyUI does not list {name}"
+
+    @router.post(
+        "/workflows/{workflow_id}/set-clone-plans",
+        summary="What cloning a workflow onto each workflow set would write",
+        description=(
+            "For each set asked (its shelf model ids), the files the clone "
+            "would take from it, each model loader before and after (its node "
+            "class too, when a file of another type needs another loader, and "
+            "the node pack that loader comes from), whether the set's "
+            "checkpoint has the workflow's base model so its LoRAs are kept, "
+            "and, when the clone would be refused, why. Nothing is written."
+        ),
+        response_model=SetClonePlans,
+        responses={
+            404: {"description": "This machine has no such workflow."},
+            409: {"description": "There is no graph to clone."},
+        },
+    )
+    def plan_set_clones(request: Request, workflow_id: str, body: SetClonePlansRequest):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        _workflow, card = _require_base(hub, workflow_id)
+        graph = _card_source(card).graph
+        models = _swap_models(hub)
+        index = recipe_asset_index(hub)
+        found = _swap_slots(graph, models, index)
+        base = next(
+            (slot for _c, _w, slot in found if slot.kind in BASE_MODEL_KINDS), None
+        )
+        old_base = (
+            _replaced_base_model(
+                graph, models, index, normalized_filename(base.filename)
+            )
+            if base is not None
+            else None
+        )
+        # Once per request, for every set: the dialog asks on open.
+        object_info, _error = _read_object_info(_comfyui_url(_user(request)))
+        loader_nodes = [
+            (node_id, class_type)
+            for node_id, class_type in dict.fromkeys(
+                (node_id, class_type)
+                for node_id, class_type, widget, _value in iter_model_fields_api(graph)
+                if slot_kind(widget) in (*BASE_MODEL_KINDS, "vae", "clip")
+                and "CLIPVision" not in class_type
+            )
+        ]
+        plans = []
+        for ask in body.sets:
+            members = [models[i] for i in ask.model_ids if i in models]
+            checkpoint, swaps = _set_swaps(found, members)
+            new_base = _base_key(checkpoint.base_model) if checkpoint else None
+            keeps = old_base is not None and new_base == old_base
+            pending = deepcopy(graph)
+            loaders, _swapped, unswapped = _swap_files(pending, swaps, object_info)
+            rewritten = {row["node_id"]: row for row in loaders}
+            reason = (
+                "Has no checkpoint"
+                if checkpoint is None
+                else "This workflow loads no checkpoint"
+                if base is None
+                else _wont_load(found, unswapped, object_info)
+            )
+            if reason:
+                fit = "wont_load"
+            elif keeps:
+                fit = "same_base_model"
+            elif (
+                base is not None
+                and base.model is not None
+                and family_of(checkpoint.base_model)
+                and family_of(checkpoint.base_model) == family_of(base.model.base_model)
+            ):
+                fit = "same_family"
+            else:
+                fit = "other"
+            diffs = []
+            for node_id, class_type in loader_nodes:
+                fields = model_filename_fields(class_type)
+                was_inputs = graph[node_id].get("inputs", {})
+                now_node = pending[node_id]
+                now_inputs = now_node.get("inputs", {})
+                row = rewritten.get(str(node_id))
+                diffs.append(
+                    LoaderDiff(
+                        node_id=str(node_id),
+                        kind=next(
+                            (
+                                slot_kind(f)
+                                for f in fields
+                                if isinstance(was_inputs.get(f), str)
+                            ),
+                            "model",
+                        ),
+                        was_class=class_type,
+                        now_class=now_node.get("class_type", class_type),
+                        was=[
+                            was_inputs[f]
+                            for f in fields
+                            if isinstance(was_inputs.get(f), str) and was_inputs[f]
+                        ],
+                        now=[
+                            now_inputs[f]
+                            for f in model_filename_fields(
+                                now_node.get("class_type", class_type)
+                            )
+                            if isinstance(now_inputs.get(f), str) and now_inputs[f]
+                        ],
+                        pack=row["pack"] if row else None,
+                        installed=row["installed"] if row else None,
+                    )
+                )
+            plans.append(
+                SetClonePlan(
+                    key=ask.key,
+                    fit=fit,
+                    reason=reason,
+                    base_model=checkpoint.base_model if checkpoint else None,
+                    keeps_loras=keeps,
+                    swaps=swaps,
+                    loaders=diffs,
+                )
+            )
+        return SetClonePlans(
+            base_filename=base.filename if base else None,
+            base_model=base.model.base_model if base and base.model else None,
+            plans=plans,
+        )
+
     @router.post(
         "/workflows/{workflow_id}/clone-with-models",
         summary="Clone a workflow onto other models",
@@ -6595,6 +6914,7 @@ def create_router(server) -> APIRouter:
         graph = deepcopy(source.graph)
         # Not `insert_lora_loader`'s 503: nothing here depends on ComfyUI's link
         # types, so an unreachable ComfyUI means "write the names unchecked".
+        # A chain to rewire is the exception, below.
         object_info, error = _read_object_info(_comfyui_url(_user(request)))
         if object_info is None:
             logger.info(
@@ -6603,7 +6923,27 @@ def create_router(server) -> APIRouter:
                 workflow_id,
                 error,
             )
-        swapped, unswapped = apply_filename_swap(graph, body.swaps, object_info)
+        if body.loras is not None:
+            if object_info is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "PixlStash could not ask ComfyUI what its nodes hand on, "
+                        f"so it cannot rewire this clone's LoRAs: {error}"
+                    ),
+                )
+            # Before the loader rewrite: the chain is read against the
+            # original's classes, which ComfyUI can type even when the new
+            # loader's pack is not installed. A rewrite keeps every node id.
+            plan = _chain_plan(
+                hub, graph, object_info, body.loras.entries, body.loras.lanes
+            )
+            if plan["changes"]:
+                try:
+                    apply_lora_chain(graph, plan, object_info)
+                except LookupError as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+        loaders, swapped, unswapped = _swap_files(graph, body.swaps, object_info)
         if not swapped and not unswapped:
             raise HTTPException(
                 status_code=409,
@@ -6624,9 +6964,9 @@ def create_router(server) -> APIRouter:
                     + "; ".join(f"{u['now']} ({u['reason']})" for u in unswapped)
                 ),
             )
-        # Only filenames change, so the clone has the original's topology and
-        # is a file of the same workflow: its name, pins and defaults already
-        # apply to it, and there is nothing to carry.
+        # Where only filenames changed the clone has the original's topology
+        # and is a file of the same workflow (#1623); a new loader class or
+        # chain makes it another one, as Edit LoRAs' copy is.
         name, key = _store_copy(
             hub, download_stem(body.name) or "workflow", graph, source.bindings
         )
@@ -6637,8 +6977,27 @@ def create_router(server) -> APIRouter:
             workflow_id=landed,
             swapped=swapped,
             unswapped=unswapped,
+            loaders=loaders,
             verified=all(entry["verified"] for entry in swapped),
         )
+
+    def _swap_files(
+        graph: dict, swaps: dict[str, str], object_info: dict | None
+    ) -> tuple[list[dict], list[dict], list[dict]]:
+        """The clone's rewrite of *graph*, in place: loader classes, then files.
+
+        The class goes first so each file is checked against the loader that
+        will read it. A loader whose pack ComfyUI lacks lists nothing, so its
+        file goes in unchecked: a missing pack warns and does not refuse.
+
+        Returns:
+            ``(loaders, swapped, unswapped)``: :func:`plan_loader_rewrites`'s
+            rows and :func:`apply_filename_swap`'s two lists.
+        """
+        loaders = plan_loader_rewrites(graph, swaps, object_info)
+        apply_loader_rewrites(graph, loaders)
+        swapped, unswapped = apply_filename_swap(graph, swaps, object_info)
+        return loaders, swapped, unswapped
 
     def _store_copy(
         hub, stem: str, graph: dict, bindings: list | None = None

@@ -637,11 +637,27 @@ export const useWorkflowsStore = defineStore("workflows", () => {
     pictureToOpen.value = pictureId;
   }
 
+  /**
+   * The card *Clone onto a workflow set…* is asked for, or "".
+   *
+   * The same shape as `pictureToOpen`: the Workflow tab's button lives in the
+   * rail, the dialog in `WorkflowsView`, and the selection bar's row asks the
+   * same way, so both entry points open one dialog.
+   */
+  const cloneOntoSetKey = ref("");
+
+  /** Ask the Workflows view to open *Clone onto a workflow set…* on one card. */
+  function requestCloneOntoSet(key) {
+    cloneOntoSetKey.value = key || "";
+  }
+
   return {
     recipesEpoch,
     notedRecipesChanged,
     pictureToOpen,
     requestOpenPicture,
+    cloneOntoSetKey,
+    requestCloneOntoSet,
     cards,
     oneOffs,
     hidden,

@@ -214,7 +214,7 @@ const emit = defineEmits([
   "hide",
   "export",
   "duplicate",
-  "clone-with-models",
+  "clone-onto-set",
   "delete",
 ]);
 
@@ -496,7 +496,7 @@ const duplicateTitle = computed(() =>
 
 const cloneTitle = computed(() =>
   single.value
-    ? "Write a copy that loads a different checkpoint, VAE or text encoder"
+    ? "Write a copy that loads another workflow set's models"
     : "Select one workflow to clone it",
 );
 
@@ -686,9 +686,10 @@ const VerbMenu = (props) => {
         disabled: !props.single,
         title: props.duplicateTitle,
       }),
-      item("mdi-swap-horizontal", "Clone with new models…", {
-        verb: "clone-with-models",
-        on: () => props.onVerb("clone-with-models"),
+      // One clone row: per-file picking is the dialog's "Pick files myself".
+      item("mdi-swap-horizontal", "Clone onto a workflow set…", {
+        verb: "clone-onto-set",
+        on: () => props.onVerb("clone-onto-set"),
         disabled: !props.single,
         title: props.cloneTitle,
       }),

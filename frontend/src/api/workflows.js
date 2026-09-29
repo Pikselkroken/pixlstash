@@ -371,15 +371,42 @@ export async function readModelSwap(
 }
 
 /**
+ * What cloning this workflow onto each workflow set would write.
+ *
+ * One plan per set asked: the files it takes from the set (`swaps`), each model
+ * loader before and after (`loaders`, with the node `pack` a new loader class
+ * comes from and whether ComfyUI has it), whether the set's checkpoint has the
+ * workflow's base model so its LoRAs are kept, and `fit` / `reason`. Asked once
+ * per open, for every set on the shelf; nothing is written.
+ *
+ * @param {string} workflowId
+ * @param {Array<{key: string, model_ids: Array<number>}>} sets
+ * @returns {Promise<{base_filename: ?string, base_model: ?string, plans: Array<Object>}>}
+ */
+export async function planSetClones(workflowId, sets) {
+  return unwrap(
+    apiClient.post(
+      `/workflows/${encodeURIComponent(workflowId)}/set-clone-plans`,
+      { sets },
+    ),
+  );
+}
+
+/**
  * Write a copy of this workflow with model files replaced, as a new card.
  *
  * `swaps` maps the graph's filename to the one to load instead; every loader
  * naming it is rewritten. `verified` in the answer is false when ComfyUI was
  * not reachable and the names were written unchecked.
  *
+ * `loras`, when given, is the chain to write it with in `PUT …/lora-chain`'s
+ * shape (read against the original's chain; `{entries: []}` clears it), and
+ * `loaders` in the answer names each loader whose node class changed for a file
+ * of another type.
+ *
  * @param {string} workflowId
- * @param {{name: string, swaps: Object<string, string>}} body
- * @returns {Promise<{name: string, workflow_id: ?string, swapped: Array, unswapped: Array, verified: boolean}>}
+ * @param {{name: string, swaps: Object<string, string>, loras?: Object}} body
+ * @returns {Promise<{name: string, workflow_id: ?string, swapped: Array, unswapped: Array, loaders: Array, verified: boolean}>}
  */
 export async function cloneWorkflowWithModels(workflowId, body) {
   return unwrap(

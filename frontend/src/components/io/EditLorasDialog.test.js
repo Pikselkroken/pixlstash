@@ -732,3 +732,69 @@ describe("a forked chain, drawn side by side", () => {
     ]);
   });
 });
+
+describe("on a clone that is not written yet (pending)", () => {
+  const pending = {
+    name: "Portrait · Chroma",
+    clear: true,
+    sourceClass: "UnetLoaderGGUF",
+    rows: null,
+    baseModel: "Chroma",
+    setLoraIds: [3],
+    ranWith: { 4: 5 },
+    checkpointName: "chroma-hd",
+  };
+
+  beforeEach(() => {
+    listAdapters.mockResolvedValue([
+      { id: 1, filename: "flux-only.safetensors", sha256: "sha-flux", base_model: "FLUX.1 dev" },
+      { id: 2, filename: "soft-bokeh.safetensors", sha256: "sha-bokeh", base_model: "Chroma" },
+      { id: 3, filename: "mara-chroma.safetensors", sha256: "sha-mara", base_model: "Chroma" },
+      { id: 4, filename: "film-look.safetensors", sha256: "sha-film", base_model: "Chroma" },
+    ]);
+  });
+
+  it("starts from the clone's chain and offers only its base model's LoRAs", async () => {
+    const wrapper = await mountDialog({ pending });
+    // Cleared: the card's four loaders are not the clone's.
+    expect(wrapper.findAll(".eld-row")).toHaveLength(0);
+    expect(textOf(wrapper)).toContain("UnetLoaderGGUF");
+    expect(textOf(wrapper)).toContain("not saved yet");
+    expect(textOf(wrapper)).toContain(
+      "1 LoRA trained on other base models is not offered.",
+    );
+
+    await button(wrapper, "Insert LoRA between these nodes").trigger("click");
+    await flushPromises();
+    const select = wrapper.find(".eld-row select");
+    // The set's own first, then what ran with its checkpoint, then the rest
+    // of its base model; never the Flux LoRA the clone removed.
+    expect(select.findAll("option").map((option) => option.text())).toEqual([
+      "Pick a LoRA from your shelf…",
+      "mara-chroma",
+      "film-look · 5 recipes",
+      "soft-bokeh",
+    ]);
+    await select.setValue("sha-mara");
+    await flushPromises();
+
+    expect(labelOf(wrapper.findAll(".app-dialog__footer button").at(-1))).toBe(
+      "Done",
+    );
+    await button(wrapper, "Done").trigger("click");
+    await flushPromises();
+    const [[{ body }]] = wrapper.emitted("done");
+    expect(body).toEqual({
+      entries: [{ node_id: null, sha256: "sha-mara", strength: 1 }],
+      lanes: null,
+    });
+    expect(saveLoraChain).not.toHaveBeenCalled();
+  });
+
+  it("keeps the card's loaders when the base model is the same", async () => {
+    const wrapper = await mountDialog({
+      pending: { ...pending, clear: false, baseModel: "FLUX.1 dev" },
+    });
+    expect(wrapper.findAll(".eld-row")).toHaveLength(4);
+  });
+});

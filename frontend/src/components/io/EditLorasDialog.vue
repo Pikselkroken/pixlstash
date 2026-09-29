@@ -2,7 +2,7 @@
   <AppDialog
     :open="open"
     title="Edit LoRAs"
-    :subtitle="cardName"
+    :subtitle="pending ? `${pending.name} · not saved yet` : cardName"
     :size="branched ? 'xl' : 'md'"
     :fullscreen="lanes.length > 2"
     @close="close"
@@ -69,7 +69,7 @@
           >
             {{ spliceIn ? "Insert LoRA between these nodes" : "Add a LoRA" }}
           </AppButton>
-          <span v-if="editable && !shelf.length && shelfRead" class="eld-note eld-quiet">
+          <span v-if="editable && !offered.length && shelfRead" class="eld-note eld-quiet">
             Your model shelf has no LoRA to add.
           </span>
         </div>
@@ -207,7 +207,7 @@
             </div>
           </section>
         </div>
-        <span v-if="editable && !shelf.length && shelfRead" class="eld-note eld-quiet">
+        <span v-if="editable && !offered.length && shelfRead" class="eld-note eld-quiet">
           Your model shelf has no LoRA to add.
         </span>
       </div>
@@ -226,7 +226,11 @@
         {{ firstLoaderNote }}
       </p>
 
-      <p v-if="editable" class="eld-note eld-quiet">
+      <p v-if="offerNote" class="eld-note eld-quiet" data-testid="eld-offer-note">
+        {{ offerNote }}
+      </p>
+
+      <p v-if="editable && !pending" class="eld-note eld-quiet">
         Saving writes a new workflow. <b class="eld-strong">{{ cardName }}</b>
         and its {{ picturesLabel }} stay as they are.
       </p>
@@ -276,8 +280,18 @@
           {{ changeLabel }}
         </span>
         <AppButton @click="close">{{ editable ? "Cancel" : "Close" }}</AppButton>
+        <!-- On a clone's pending chain there is nothing to save here: Done
+             hands the chain back and the clone is the one write. -->
         <AppButton
-          v-if="editable"
+          v-if="editable && pending"
+          variant="primary"
+          :disabled="!canFinish"
+          @click="done"
+        >
+          Done
+        </AppButton>
+        <AppButton
+          v-else-if="editable"
           variant="primary"
           :disabled="!canContinue"
           @click="toConfirm"
@@ -326,6 +340,14 @@
  * loaders that start from different places… The refusal is the server's
  * sentence and is shown instead of letting an edit be arranged that cannot be
  * saved.
+ *
+ * **Pending mode** (`pending`, Clone onto a workflow set): the same dialog on
+ * a clone that is not written yet. It reads the card's chain and then shows
+ * the clone's: the source node under its new class, and no loader at all when
+ * the clone clears them. Kept loaders are ordinary rows, added ones are new.
+ * The picker offers only LoRAs for the clone's base model, the set's own
+ * first. *Done* emits `done` with the rows and the chain body and writes
+ * nothing; the clone dialog sends that body with its one write.
  */
 import { computed, nextTick, ref, watch } from "vue";
 import { VIcon } from "vuetify/components";
@@ -335,6 +357,7 @@ import { getLoraChain, saveLoraChain } from "../../api/workflows";
 import { useNoticeStore } from "../../stores/useNoticeStore";
 import { useWorkflowsStore } from "../../stores/useWorkflowsStore";
 import { errorMessage } from "../../utils/apiError";
+import { rowBaseModel } from "../../utils/workflowSets";
 import {
   chainEntries,
   countChanges,
@@ -362,9 +385,16 @@ const props = defineProps({
    * it rather than asking them to find it again.
    */
   dropLora: { type: String, default: "" },
+  /**
+   * A clone's pending chain instead of the card's, or null: `{name, clear,
+   * sourceClass, rows, baseModel, setLoraIds, ranWith, checkpointName}`.
+   * `rows` is the last Done's, `ranWith` adapter id -> recipes beside the
+   * set's checkpoint. See "Pending mode" above.
+   */
+  pending: { type: Object, default: null },
 });
 
-const emit = defineEmits(["close", "saved"]);
+const emit = defineEmits(["close", "saved", "done"]);
 
 const notices = useNoticeStore();
 const workflows = useWorkflowsStore();
@@ -474,12 +504,73 @@ const changeLabel = computed(() => {
   return `${count} ${count === 1 ? "change" : "changes"}`;
 });
 
+function adapterLabel(adapter) {
+  return adapter.display_name || loraStem(adapter.filename) || adapter.sha256;
+}
+
+/**
+ * On a clone: the shelf's LoRAs grouped as the set would suggest them, and
+ * only those for the clone's base model — the same test that decided which
+ * LoRAs the clone keeps, so the picker cannot offer one it would remove. With
+ * no known base model nothing can be filtered, and every LoRA is offered.
+ */
+const pendingOffer = computed(() => {
+  const pend = props.pending;
+  if (!pend) return null;
+  const wanted = String(pend.baseModel || "").trim().toLowerCase();
+  const inSet = new Set(pend.setLoraIds || []);
+  const ran = pend.ranWith || {};
+  const groups = { set: [], ran: [], base: [] };
+  let others = 0;
+  for (const adapter of shelf.value) {
+    const own = String(rowBaseModel(adapter) || "").trim().toLowerCase();
+    if (inSet.has(adapter.id)) groups.set.push(adapter);
+    else if (ran[adapter.id]) groups.ran.push(adapter);
+    else if (!wanted || own === wanted) groups.base.push(adapter);
+    else others += 1;
+  }
+  const ranLabel = `Ran with ${pend.checkpointName || "this checkpoint"}`;
+  const baseLabel = wanted ? `Trained on ${pend.baseModel}` : "Your shelf";
+  return {
+    options: [
+      ...groups.set.map((a) => ({ adapter: a, group: "In this set" })),
+      ...groups.ran
+        .sort((a, b) => ran[b.id] - ran[a.id])
+        .map((a) => ({
+          adapter: a,
+          group: ranLabel,
+          hint: `${ran[a.id]} ${ran[a.id] === 1 ? "recipe" : "recipes"}`,
+        })),
+      ...groups.base.map((a) => ({ adapter: a, group: baseLabel })),
+    ],
+    others,
+  };
+});
+
+const offerNote = computed(() => {
+  const others = pendingOffer.value?.others;
+  if (!others) return "";
+  return `${others} ${others === 1 ? "LoRA" : "LoRAs"} trained on other base models ${others === 1 ? "is" : "are"} not offered.`;
+});
+
+const offered = computed(() =>
+  pendingOffer.value
+    ? pendingOffer.value.options.map((o) => o.adapter)
+    : shelf.value,
+);
+
 const pickerOptions = computed(() => [
   { value: "", label: "Pick a LoRA from your shelf…" },
-  ...shelf.value.map((adapter) => ({
-    value: String(adapter.sha256),
-    label: adapter.display_name || loraStem(adapter.filename) || adapter.sha256,
-  })),
+  ...(pendingOffer.value
+    ? pendingOffer.value.options.map(({ adapter, group, hint }) => ({
+        value: String(adapter.sha256),
+        label: hint ? `${adapterLabel(adapter)} · ${hint}` : adapterLabel(adapter),
+        group,
+      }))
+    : shelf.value.map((adapter) => ({
+        value: String(adapter.sha256),
+        label: adapterLabel(adapter),
+      }))),
 ]);
 
 /**
@@ -525,7 +616,13 @@ const canAdd = computed(
     editable.value &&
     !saving.value &&
     !unpicked.value &&
-    shelf.value.length > 0,
+    offered.value.length > 0,
+);
+
+/** Done on a clone: a chain that can be handed back, changed or not. */
+const canFinish = computed(
+  () =>
+    editable.value && !unpicked.value && !rows.value.some(strengthInvalid),
 );
 
 const canContinue = computed(
@@ -731,16 +828,18 @@ async function load() {
   if (!props.workflowId) return;
   loading.value = true;
   try {
-    const read = await getLoraChain(props.workflowId);
+    const read = pendingChain(await getLoraChain(props.workflowId));
     if (!mine()) return;
     chain.value = read;
-    rows.value = [
-      ...(read?.loaders || []).map((loader) => rowOf(loader, null)),
-      ...(read?.lanes || []).flatMap((lane, index) =>
-        (lane.loaders || []).map((loader) => rowOf(loader, index)),
-      ),
-    ];
-    applyDrop();
+    rows.value = props.pending?.rows
+      ? props.pending.rows.map((row) => ({ ...row }))
+      : [
+          ...(read?.loaders || []).map((loader) => rowOf(loader, null)),
+          ...(read?.lanes || []).flatMap((lane, index) =>
+            (lane.loaders || []).map((loader) => rowOf(loader, index)),
+          ),
+        ];
+    if (!props.pending) applyDrop();
   } catch (err) {
     if (!mine()) return;
     console.warn(
@@ -752,6 +851,28 @@ async function load() {
     if (mine()) loading.value = false;
   }
   void loadShelf();
+}
+
+/**
+ * The card's chain as the clone will have it: its source under the new
+ * loader class, and with no loader left when the clone clears them. A clear
+ * empties the READ chain rather than striking the rows, so the count and the
+ * body are about what is added, and every loader not sent is deleted.
+ */
+function pendingChain(read) {
+  const pend = props.pending;
+  if (!pend || !read) return read;
+  return {
+    ...read,
+    source:
+      read.source && pend.sourceClass
+        ? { ...read.source, class_type: pend.sourceClass }
+        : read.source,
+    loaders: pend.clear ? [] : read.loaders,
+    lanes: (read.lanes || []).map((lane) =>
+      pend.clear ? { ...lane, loaders: [] } : lane,
+    ),
+  };
 }
 
 /**
@@ -846,7 +967,7 @@ async function add(lane = null) {
 }
 
 function pick(row, sha256) {
-  const found = shelf.value.find((adapter) => String(adapter.sha256) === sha256);
+  const found = offered.value.find((adapter) => String(adapter.sha256) === sha256);
   row.sha256 = sha256 || "";
   row.name = found
     ? found.display_name || loraStem(found.filename)
@@ -1030,8 +1151,20 @@ async function save() {
   }
 }
 
+/** Hand the chain back to the clone dialog; nothing is written here. */
+function done() {
+  if (!canFinish.value) return;
+  const body = requestBody(false);
+  emit("done", {
+    rows: rows.value.map((row) => ({ ...row })),
+    body: { entries: body.entries, lanes: body.lanes ?? null },
+  });
+  emit("close");
+}
+
 function onAccept() {
-  if (step.value === "edit") void toConfirm();
+  if (props.pending) done();
+  else if (step.value === "edit") void toConfirm();
   else void save();
 }
 

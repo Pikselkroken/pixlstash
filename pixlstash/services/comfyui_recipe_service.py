@@ -140,9 +140,25 @@ MODEL_FILENAME_FIELDS: dict[str, tuple[str, ...]] = {
     "UpscaleModelLoader": ("model_name",),
     "HypernetworkLoader": ("hypernetwork_name",),
     "PhotoMakerLoader": ("photomaker_model_name",),
-    # The GGUF pack's CLIP loader, sibling of `UnetLoaderGGUF` above.
+    # The GGUF pack's CLIP loaders, siblings of `UnetLoaderGGUF` above.
     "CLIPLoaderGGUF": ("clip_name",),
+    "DualCLIPLoaderGGUF": ("clip_name1", "clip_name2"),
+    "TripleCLIPLoaderGGUF": ("clip_name1", "clip_name2", "clip_name3"),
 }
+
+# The node pack a clone onto GGUF files needs, and each core loader's GGUF
+# counterpart in it: the same outputs, the same file fields, minus the inputs
+# only the core loader takes (with what a core loader gets for them back).
+GGUF_PACK = "ComfyUI-GGUF"
+_GGUF_LOADERS: dict[str, tuple[str, dict]] = {
+    "UNETLoader": ("UnetLoaderGGUF", {"weight_dtype": "default"}),
+    "CLIPLoader": ("CLIPLoaderGGUF", {"device": "default"}),
+    "DualCLIPLoader": ("DualCLIPLoaderGGUF", {"device": "default"}),
+    "TripleCLIPLoader": ("TripleCLIPLoaderGGUF", {}),
+}
+# Only the UNET loader goes back: the GGUF pack's CLIP loaders read
+# safetensors too, and its UNET loader reads nothing else.
+_GGUF_UNET_LOADERS = frozenset({"UnetLoaderGGUF", "UNETLoaderGGUF"})
 
 # ComfyUI-MultiGPU wraps a loader to add device placement and names the wrapper
 # after it: `UNETLoaderDisTorch2MultiGPU` is `UNETLoader` plus placement inputs.
@@ -854,6 +870,75 @@ def apply_filename_swap(
         if was not in matched
     )
     return substitutions, unswapped
+
+
+def plan_loader_rewrites(
+    prompt_graph: dict, swaps: dict[str, str], object_info: dict | None = None
+) -> list[dict]:
+    """The loaders a filename swap needs another node class for.
+
+    A core loader cannot read a GGUF file and the GGUF pack's UNET loader reads
+    nothing else, so a swap across that line swaps the node too: ``UNETLoader``
+    to ``UnetLoaderGGUF`` and back, the CLIP loaders one way. Decided by file
+    type, never by what ComfyUI lists, so the plan is the same with ComfyUI
+    down; *object_info* only says whether the new class is installed.
+
+    ponytail: GGUF is the one pack known here. Another pack's loader (NF4,
+    MultiGPU) keeps its class, and a file it cannot read is then refused by
+    :func:`apply_filename_swap` as not listed.
+
+    Returns:
+        One ``{node_id, was, now, pack, installed}`` per node to rewrite:
+        ``pack`` names the node pack ``now`` comes from (``None`` for core
+        ComfyUI), ``installed`` is ``None`` when ComfyUI was not asked.
+    """
+    # Local for the cycle, as in apply_filename_swap.
+    from pixlstash.utils.comfyui_utilities import iter_model_fields_api
+
+    new_files: dict[str, list[str]] = {}
+    for node_id, _class_type, _field, value in iter_model_fields_api(prompt_graph):
+        key = _swap_key(value, swaps)
+        if key is not None:
+            new_files.setdefault(node_id, []).append(swaps[key])
+    rewrites = []
+    for node_id, files in new_files.items():
+        class_type = prompt_graph[node_id].get("class_type", "")
+        gguf = any(name.lower().endswith(".gguf") for name in files)
+        if gguf and class_type in _GGUF_LOADERS:
+            now, pack = _GGUF_LOADERS[class_type][0], GGUF_PACK
+        elif not gguf and class_type in _GGUF_UNET_LOADERS:
+            now, pack = "UNETLoader", None
+        else:
+            continue
+        rewrites.append(
+            {
+                "node_id": str(node_id),
+                "was": class_type,
+                "now": now,
+                "pack": pack,
+                "installed": None if object_info is None else now in object_info,
+            }
+        )
+    return rewrites
+
+
+def apply_loader_rewrites(prompt_graph: dict, rewrites: list[dict]) -> None:
+    """Give each node of *rewrites* its new class, in place.
+
+    The file fields and the links stay as they are (the counterparts share
+    them); an input only the core loader takes is dropped on the way to GGUF
+    and set to its default on the way back.
+    """
+    for rewrite in rewrites:
+        node = prompt_graph[rewrite["node_id"]]
+        inputs = node.setdefault("inputs", {})
+        if rewrite["was"] in _GGUF_LOADERS:
+            for field in _GGUF_LOADERS[rewrite["was"]][1]:
+                inputs.pop(field, None)
+        else:
+            for field, value in _GGUF_LOADERS[rewrite["now"]][1].items():
+                inputs.setdefault(field, value)
+        node["class_type"] = rewrite["now"]
 
 
 def detect_seed_targets(prompt_graph: dict, object_info: dict) -> list[dict]:

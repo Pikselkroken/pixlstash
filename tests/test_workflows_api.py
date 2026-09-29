@@ -192,6 +192,8 @@ _WORKFLOW_WRITE_ROUTES = (
     ("POST", "/api/v1/workflows/{workflow_id}/fixed-copy"),
     ("PUT", "/api/v1/workflows/{workflow_id}/lora-chain"),
     ("POST", "/api/v1/workflows/{workflow_id}/clone-with-models"),
+    # Its plans read the graph and the whole shelf; POST, so no GET belt.
+    ("POST", "/api/v1/workflows/{workflow_id}/set-clone-plans"),
     ("DELETE", "/api/v1/workflows/{workflow_id}"),
     # ComfyUI's conversion of an editor file (#1530): writes stored files.
     ("POST", "/api/v1/comfyui/workflows/convert"),
@@ -3811,6 +3813,7 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
             f"{API}/workflows/{BUSY_WF}/clone-with-models",
             {"name": "nope", "swaps": {"a.safetensors": "b.safetensors"}},
         ),
+        ("POST", f"{API}/workflows/{BUSY_WF}/set-clone-plans", {"sets": []}),
         ("DELETE", f"{API}/workflows/{BUSY_WF}", None),
         (
             "POST",
@@ -3930,6 +3933,12 @@ _EVERY_WORKFLOW_ROUTE = (
         "/workflows/{workflow_id}/clone-with-models",
         f"/workflows/{BUSY_WF}/clone-with-models",
         {"name": "c", "swaps": {"a.safetensors": "b.safetensors"}},
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/set-clone-plans",
+        f"/workflows/{BUSY_WF}/set-clone-plans",
+        {"sets": []},
     ),
     (
         "POST",
@@ -9760,6 +9769,142 @@ def test_cloning_a_card_with_no_graph_is_a_409(workflow_env):
 
 def test_a_replacement_that_is_not_a_model_file_is_a_422(cloneable):
     assert _clone(cloneable, {_SHELF_FILENAME: "krea2"}).status_code == 422
+
+
+def _plans(env, **sets):
+    r = env.owner.post(
+        f"{API}/workflows/{RUN_WF}/set-clone-plans",
+        json={"sets": [{"key": k, "model_ids": ids} for k, ids in sets.items()]},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    return body, {plan["key"]: plan for plan in body["plans"]}
+
+
+def test_a_set_plan_names_the_swap_and_the_loader_before_and_after(cloneable):
+    body, plans = _plans(cloneable, krea=[cloneable.checkpoint_id])
+    assert body["base_filename"] == _SHELF_FILENAME
+    krea = plans["krea"]
+    assert krea["swaps"] == {_SHELF_FILENAME: CLONE_CHECKPOINT}
+    # The workflow's checkpoint has no known base model: not the same one, so
+    # its LoRAs would not come along, and nothing guessed it did.
+    assert (krea["fit"], krea["keeps_loras"], krea["reason"]) == ("other", False, None)
+    assert krea["loaders"] == [
+        {
+            "node_id": "1",
+            "kind": "checkpoint",
+            "was_class": "CheckpointLoaderSimple",
+            "now_class": "CheckpointLoaderSimple",
+            "was": [_SHELF_FILENAME],
+            "now": [f"flux/{CLONE_CHECKPOINT}"],
+            "pack": None,
+            "installed": None,
+        }
+    ]
+    # A plan writes nothing.
+    assert list(cloneable.folder.glob("*.json")) == []
+
+
+def test_a_set_plan_says_which_sets_will_not_load_and_why(cloneable):
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        vae_id = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('vae', 'ae.safetensors', 'scanned')"
+        ).lastrowid
+        unlisted_id = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('checkpoint', 'unlisted.safetensors', 'scanned')"
+        ).lastrowid
+    try:
+        _body, plans = _plans(cloneable, vae_only=[vae_id], unlisted=[unlisted_id])
+    finally:
+        with hub.transaction() as conn:
+            conn.executemany(
+                "DELETE FROM model WHERE id = ?", [(vae_id,), (unlisted_id,)]
+            )
+    assert plans["vae_only"]["fit"] == "wont_load"
+    assert plans["vae_only"]["reason"] == "Has no checkpoint"
+    assert plans["unlisted"]["fit"] == "wont_load"
+    assert plans["unlisted"]["reason"] == "ComfyUI does not list unlisted.safetensors"
+
+
+def test_a_set_of_the_same_base_model_keeps_the_loras(cloneable):
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'FLUX.1 dev' WHERE filename = ?",
+            (_SHELF_FILENAME,),
+        )
+    try:
+        _body, plans = _plans(cloneable, krea=[cloneable.checkpoint_id])
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET base_model = NULL WHERE filename = ?",
+                (_SHELF_FILENAME,),
+            )
+    assert plans["krea"]["fit"] == "same_base_model"
+    assert plans["krea"]["keeps_loras"] is True
+
+
+def test_a_clone_can_carry_a_chain_with_its_loras_removed(cloneable):
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].append(
+        f"flux/{CLONE_CHECKPOINT}"
+    )
+    info["CheckpointLoaderSimple"]["output"] = ["MODEL", "CLIP", "VAE"]
+    info["KSampler"]["input"]["required"].update(
+        {
+            "model": ["MODEL", {}],
+            "positive": ["CONDITIONING", {}],
+            "negative": ["CONDITIONING", {}],
+        }
+    )
+    info["KSampler"]["output"] = ["LATENT"]
+    info["SaveImage"]["input"]["required"]["images"] = ["IMAGE", {}]
+    info["CLIPTextEncode"] = {
+        "input": {"required": {"text": ["STRING", {}], "clip": ["CLIP", {}]}},
+        "output": ["CONDITIONING"],
+    }
+    info["LoadImage"] = {
+        "input": {"required": {"image": [["a-private-photo.png"], {}]}},
+        "output": ["IMAGE", "MASK"],
+    }
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    r = cloneable.owner.post(
+        f"{API}/workflows/{RUN_WF}/clone-with-models",
+        json={
+            "name": "Portrait on Krea",
+            "swaps": {_SHELF_FILENAME: CLONE_CHECKPOINT},
+            "loras": {"entries": []},
+        },
+    )
+    assert r.status_code == 201, r.text
+    written = json.loads((cloneable.folder / r.json()["name"]).read_text())
+    assert written["1"]["inputs"]["ckpt_name"] == f"flux/{CLONE_CHECKPOINT}"
+    # The loader is gone and the wires are joined past it.
+    assert "2" not in written
+    assert written["3"]["inputs"]["model"] == ["1", 0]
+    assert r.json()["loaders"] == []
+
+
+def test_a_clone_carrying_a_chain_needs_comfyui(cloneable):
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "unreachable")
+    )
+    r = cloneable.owner.post(
+        f"{API}/workflows/{RUN_WF}/clone-with-models",
+        json={
+            "name": "x",
+            "swaps": {_SHELF_FILENAME: CLONE_CHECKPOINT},
+            "loras": {"entries": []},
+        },
+    )
+    assert r.status_code == 503, r.text
+    assert list(cloneable.folder.glob("*.json")) == []
 
 
 def test_the_swap_options_name_the_graphs_files_and_the_shelf(cloneable):

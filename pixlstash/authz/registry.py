@@ -1851,6 +1851,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="A workflow's model files, the shelf's models and the recipes' co-occurrence, all whole-library; owner only",
     ),
+    ("POST", "/api/v1/workflows/{workflow_id}/set-clone-plans"): RoutePolicy(
+        _OWNER,
+        justification="What a workflow's clone onto each shelf workflow set would write: its graph and the whole shelf; POST blocked for READ tokens; owner only",
+    ),
     ("POST", "/api/v1/workflows/{workflow_id}/clone-with-models"): RoutePolicy(
         _OWNER,
         justification="Write a copy of a workflow's graph with model files replaced; POST blocked for READ tokens; owner only",
