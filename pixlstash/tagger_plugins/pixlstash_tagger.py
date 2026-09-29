@@ -68,7 +68,11 @@ FACE_QUALITY_CROP_TAGS = frozenset(
 # to a face (e.g. blockiness).
 CENTRE_CROP_TAG_WHITELIST = QUALITY_CROP_TAG_WHITELIST - FACE_QUALITY_CROP_TAGS
 PIXLSTASH_TAGGER_IMAGE_SIZE_FULL = 576
-PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP = 320
+# The quality crop's input size. By default the crop is a fixed 320px window
+# taken at its native size; with the `whole_face_crop` setting on (#1648) it is
+# sized by the face and resized to 512.
+PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP = 512
+PIXLSTASH_TAGGER_IMAGE_SIZE_FIXED_QUALITY_CROP = 320
 
 # ------------------------------------------------------------------------- #
 # Grad-CAM anomaly-localisation tuning
@@ -642,6 +646,7 @@ class PixlStashTaggerService:
         stop_event=None,
         threshold_offset: float = 0.0,
         out_raw_scores: dict | None = None,
+        image_size: int | None = None,
     ) -> dict:
         """Run the PixlStash tagger on quality-crop images and return only whitelist tags.
 
@@ -655,6 +660,8 @@ class PixlStashTaggerService:
             out_raw_scores: When provided, raw confidence scores for every label
                 above ``min_confidence`` are merged into this dict
                 (``{key: {label: float}}``) during the same GPU pass.
+            image_size: Square input size the crops are resized to; defaults
+                to ``PIXLSTASH_TAGGER_IMAGE_SIZE_QUALITY_CROP``.
 
         Returns:
             Dict mapping key to list of whitelist-filtered quality tags.
@@ -668,7 +675,7 @@ class PixlStashTaggerService:
                 stop_event=stop_event,
                 threshold_offset=threshold_offset,
                 threshold=None,
-                image_size=self._image_size_quality_crop,
+                image_size=image_size or self._image_size_quality_crop,
                 pass_name="quality_crops",
             )
             out_raw_scores.update(scores_by_key)
@@ -678,7 +685,7 @@ class PixlStashTaggerService:
                 stop_event=stop_event,
                 threshold_offset=threshold_offset,
                 threshold=None,
-                image_size=self._image_size_quality_crop,
+                image_size=image_size or self._image_size_quality_crop,
                 pass_name="quality_crops",
             )
         filtered = {}
@@ -1119,6 +1126,18 @@ class PixlStashTaggerPlugin(TaggerPlugin):
                 "description": (
                     "Percentage points added to each label's base threshold. "
                     "Positive values raise the bar; negative values lower it."
+                ),
+            },
+            {
+                "name": "whole_face_crop",
+                "label": "Whole-face close-up",
+                "type": "bool",
+                "default": False,
+                "description": (
+                    "Check faces for malformed eyes, teeth and chins on a close-up "
+                    "of the whole face at higher resolution. More accurate, but "
+                    "tagging takes longer. Off uses a smaller fixed window that "
+                    "can cut off part of a large face."
                 ),
             },
         ]

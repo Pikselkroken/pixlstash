@@ -673,6 +673,9 @@ class _StubWorkflow:
     def active_model_version(self, engine_override=None):
         return "wd14:v3"
 
+    def whole_face_crop(self):
+        return True
+
     def pixlstash_tagger_image_size_quality_crop(self):
         return 32
 
