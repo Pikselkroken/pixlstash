@@ -52,14 +52,23 @@ function mountPanel(params, plugin = PLUGIN) {
   });
 }
 
-async function saveWith(wrapper, whole_face_crop) {
-  wrapper.vm.formParams.whole_face_crop = whole_face_crop;
-  await wrapper.vm.save();
+const form = (wrapper) => wrapper.findComponent({ name: "TaggerParametersUI" });
+
+/** Edit the form as the user would, then let the auto-save debounce run. */
+async function edit(wrapper, values) {
+  form(wrapper).vm.$emit("update:modelValue", {
+    ...wrapper.vm.formParams,
+    ...values,
+  });
+  await vi.advanceTimersByTimeAsync(500);
   await flushPromises();
 }
 
+const saveWith = (wrapper, whole_face_crop) => edit(wrapper, { whole_face_crop });
+
 describe("TaggerPluginSettingsPanel: whole-face re-check offer", () => {
   beforeEach(() => {
+    vi.useFakeTimers();
     patchUserConfig.mockReset().mockResolvedValue({});
     retagFaceCrops.mockReset().mockResolvedValue({ count: 42 });
     confirm.mockReset().mockResolvedValue(false);
@@ -111,7 +120,8 @@ describe("TaggerPluginSettingsPanel: whole-face re-check offer", () => {
     const wrapper = mountPanel({ whole_face_crop: before });
     await saveWith(wrapper, after);
 
-    expect(patchUserConfig).toHaveBeenCalledOnce();
+    // An unchanged setting is not even saved.
+    expect(patchUserConfig).toHaveBeenCalledTimes(before === after ? 0 : 1);
     expect(retagFaceCrops).not.toHaveBeenCalled();
     expect(confirm).not.toHaveBeenCalled();
   });
@@ -140,5 +150,122 @@ describe("TaggerPluginSettingsPanel: whole-face re-check offer", () => {
     await saveWith(wrapper, true);
 
     expect(retagFaceCrops).not.toHaveBeenCalled();
+  });
+});
+
+describe("TaggerPluginSettingsPanel: saves as you go", () => {
+  const OFFSET_PLUGIN = {
+    name: "pixlstash_tagger",
+    parameter_schema: [
+      { name: "threshold_offset", type: "number", default: 0 },
+      { name: "whole_face_crop", type: "bool", default: false },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    patchUserConfig.mockReset().mockResolvedValue({});
+    retagFaceCrops.mockReset().mockResolvedValue({ count: 0 });
+  });
+
+  const saved = () =>
+    patchUserConfig.mock.calls.map(
+      (c) => c[0].tagger_settings.plugins.pixlstash_tagger.params,
+    );
+
+  it("coalesces typing into one save after the pause", async () => {
+    const wrapper = mountPanel({ threshold_offset: 0 }, OFFSET_PLUGIN);
+    form(wrapper).vm.$emit("update:modelValue", {
+      threshold_offset: 0.1,
+      whole_face_crop: false,
+    });
+    await vi.advanceTimersByTimeAsync(200);
+    form(wrapper).vm.$emit("update:modelValue", {
+      threshold_offset: 0.12,
+      whole_face_crop: false,
+    });
+    await vi.advanceTimersByTimeAsync(499);
+    expect(patchUserConfig).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await flushPromises();
+
+    expect(saved()).toEqual([{ threshold_offset: 0.12, whole_face_crop: false }]);
+    expect(wrapper.text()).toContain("Saved.");
+    expect(wrapper.findAll("button").map((b) => b.text())).not.toContain(
+      "Save",
+    );
+  });
+
+  it("does not save a number box cleared mid-edit", async () => {
+    const wrapper = mountPanel({ threshold_offset: 0.1 }, OFFSET_PLUGIN);
+    await edit(wrapper, { threshold_offset: null });
+
+    expect(patchUserConfig).not.toHaveBeenCalled();
+  });
+
+  it("resets to defaults and saves that", async () => {
+    const wrapper = mountPanel(
+      { threshold_offset: 0.3, whole_face_crop: false },
+      OFFSET_PLUGIN,
+    );
+    const reset = wrapper
+      .findAll("button")
+      .find((b) => b.text() === "Reset to defaults");
+    await reset.trigger("click");
+    await vi.advanceTimersByTimeAsync(500);
+    await flushPromises();
+
+    expect(saved()).toEqual([{ threshold_offset: 0, whole_face_crop: false }]);
+  });
+
+  it("saves a pending edit when Settings closes inside the pause", async () => {
+    const wrapper = mountPanel({ threshold_offset: 0 }, OFFSET_PLUGIN);
+    form(wrapper).vm.$emit("update:modelValue", {
+      threshold_offset: 0.2,
+      whole_face_crop: false,
+    });
+    wrapper.unmount();
+    await flushPromises();
+
+    expect(saved()).toEqual([{ threshold_offset: 0.2, whole_face_crop: false }]);
+  });
+
+  // The save echoes back through `settings`; that must not overwrite what was
+  // typed while the save was in flight.
+  it("keeps an edit typed while the previous save was in flight", async () => {
+    let finish;
+    patchUserConfig.mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve)),
+    );
+    const wrapper = mountPanel({ threshold_offset: 0 }, OFFSET_PLUGIN);
+    await edit(wrapper, { threshold_offset: 0.1 });
+    form(wrapper).vm.$emit("update:modelValue", {
+      threshold_offset: 0.15,
+      whole_face_crop: false,
+    });
+    finish({});
+    await flushPromises();
+    const echoed = wrapper.emitted("update:settings")[0][0];
+    await wrapper.setProps({ settings: echoed });
+
+    expect(wrapper.vm.formParams.threshold_offset).toBe(0.15);
+    await vi.advanceTimersByTimeAsync(500);
+    await flushPromises();
+    expect(saved().at(-1).threshold_offset).toBe(0.15);
+  });
+
+  it("saves an edit whose pause ends while the last save is still in flight", async () => {
+    let finish;
+    patchUserConfig.mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve)),
+    );
+    const wrapper = mountPanel({ threshold_offset: 0 }, OFFSET_PLUGIN);
+    await edit(wrapper, { threshold_offset: 0.1 });
+    await edit(wrapper, { threshold_offset: 0.2 });
+    expect(patchUserConfig).toHaveBeenCalledOnce();
+    finish({});
+    await flushPromises();
+
+    expect(saved().map((p) => p.threshold_offset)).toEqual([0.1, 0.2]);
   });
 });

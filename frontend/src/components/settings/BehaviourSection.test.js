@@ -297,16 +297,18 @@ describe("the PixlStash tagger's settings sit in the pane", () => {
     expect(panel(await openPane(null)).exists()).toBe(false);
   });
 
-  it("saves the edited params and hands them to the pickers", async () => {
+  it("saves an edit by itself and hands it to the pickers", async () => {
     const { patchUserConfig } = await import("../../api/config");
     patchUserConfig.mockResolvedValue({});
     const w = await openPane("pixlstash_tagger");
+    // Saves as you go, like the rest of the tab: no Save button.
+    expect(w.findAll("button").map((b) => b.text())).not.toContain("Save");
 
+    vi.useFakeTimers();
     form(w).vm.$emit("update:modelValue", { threshold_offset: -0.2 });
-    await nextTick();
-    const save = w.findAll("button").find((b) => b.text() === "Save");
-    await save.trigger("click");
+    await vi.advanceTimersByTimeAsync(500);
     await flushPromises();
+    vi.useRealTimers();
 
     expect(patchUserConfig).toHaveBeenCalledWith({
       tagger_settings: {
@@ -320,22 +322,19 @@ describe("the PixlStash tagger's settings sit in the pane", () => {
     expect(w.text()).toContain("Saved.");
   });
 
-  it("says the form holds unsaved edits, and alerts rather than claiming Saved on failure", async () => {
+  it("alerts rather than claiming Saved when the save fails", async () => {
     const { patchUserConfig } = await import("../../api/config");
     patchUserConfig.mockRejectedValueOnce(new Error("boom"));
     const w = await openPane("pixlstash_tagger");
-    const save = () => w.findAll("button").find((b) => b.text() === "Save");
-    expect(save().attributes("disabled")).toBeDefined();
 
+    vi.useFakeTimers();
     form(w).vm.$emit("update:modelValue", { threshold_offset: -0.2 });
-    await nextTick();
-    expect(w.text()).toContain("Unsaved changes");
-    await save().trigger("click");
+    await vi.advanceTimersByTimeAsync(500);
     await flushPromises();
+    vi.useRealTimers();
 
     expect(w.find('[role="alert"]').exists()).toBe(true);
     expect(w.text()).not.toContain("Saved.");
-    expect(w.text()).toContain("Unsaved changes");
   });
 
   // The pane polls is_loaded every few seconds and replaces each plugin object.

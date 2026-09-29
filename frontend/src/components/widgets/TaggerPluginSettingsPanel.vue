@@ -4,19 +4,20 @@
  * settings in the page rather than behind PluginSelect's gear (the Models tab
  * does this for the built-in PixlStash tagger).
  *
- * Drawn as a settings section of its own (`title`), with its verbs in the
- * section's heading row, and its fields in two columns: the Models pane is a
- * fixed height, and a setting the plugin adds must not make it scroll.
+ * Drawn as a settings section of its own (`title`), with its fields in two
+ * columns: the Models pane is a fixed height, and a setting the plugin adds
+ * must not make it scroll.
  *
- * Shows TaggerParametersUI, "Reset to defaults" and Save, plus a
- * label-thresholds preview for pixlstash_tagger. Saves via
- * `PATCH /users/me/config` (`tagger_settings.plugins.<name>.params`) and emits
- * the merged settings, the same `update:settings` contract as PluginSelect.
+ * Shows TaggerParametersUI and "Reset to defaults", plus a label-thresholds
+ * preview for pixlstash_tagger. Saves as you go, like the rest of the Models
+ * tab (debounced, as the VRAM budget is), via `PATCH /users/me/config`
+ * (`tagger_settings.plugins.<name>.params`) and emits the merged settings, the
+ * same `update:settings` contract as PluginSelect.
  *
  * Switching `whole_face_crop` on only changes pictures tagged afterwards, so
  * after that save the panel offers to re-check the library's faces (#1662).
  */
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { getLabelThresholds, retagFaceCrops } from "../../api/taggers";
 import { patchUserConfig } from "../../api/config";
 import { useConfirm } from "../../composables/useConfirm";
@@ -46,6 +47,12 @@ const formParams = ref({});
 const saving = ref(false);
 const saveError = ref("");
 const saved = ref(false);
+const SAVE_DEBOUNCE_MS = 500;
+let saveTimer = null;
+let saveAgain = false;
+// What this panel last wrote, as JSON: its own echo coming back through
+// `settings` must not reseed the form over an edit typed since.
+let lastSavedJson = null;
 
 const labelThresholdsOpen = ref(false);
 const labelThresholdsData = ref([]);
@@ -59,18 +66,47 @@ function defaultParams() {
   return out;
 }
 
-// The rest of the Models tab saves as you go; this form does not, so it says
-// when it holds edits that closing Settings would drop.
 const dirty = computed(
   () =>
     JSON.stringify(formParams.value) !==
     JSON.stringify({ ...defaultParams(), ...params.value }),
 );
 
+// A number box cleared mid-edit holds null; saving that would store "no
+// value" for a setting that has a default, so wait for a real one.
+function incomplete(values) {
+  return (props.plugin.parameter_schema ?? []).some(
+    (f) => f.default != null && values[f.name] == null,
+  );
+}
+
+function scheduleSave() {
+  saved.value = false;
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    save();
+  }, SAVE_DEBOUNCE_MS);
+}
+
+function onFormChange(next) {
+  formParams.value = next;
+  if (dirty.value) scheduleSave();
+}
+
 function resetToDefaults() {
   formParams.value = defaultParams();
-  saved.value = false;
+  if (dirty.value) scheduleSave();
 }
+
+onBeforeUnmount(() => {
+  // Closing Settings inside the debounce must not drop the last edit.
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    save();
+  }
+});
 
 // Compared by value, not the plugin or settings object: the pane's is_loaded
 // poll replaces the plugin every few seconds, and a reseed on a new object with
@@ -82,6 +118,7 @@ watch(
     () => JSON.stringify(params.value),
   ],
   () => {
+    if (JSON.stringify(params.value) === lastSavedJson) return;
     // Merge stored params over defaults so missing keys are filled.
     formParams.value = { ...defaultParams(), ...params.value };
   },
@@ -128,11 +165,15 @@ async function offerFaceCropRetag() {
 }
 
 async function save() {
-  if (saving.value) return;
-  saving.value = true;
-  saveError.value = "";
+  if (saving.value) {
+    saveAgain = true;
+    return;
+  }
   const name = props.plugin.name;
   const next = { ...formParams.value };
+  if (!dirty.value || incomplete(next)) return;
+  saving.value = true;
+  saveError.value = "";
   // The backend reads this setting off the PixlStash tagger only.
   const turnedOnWholeFace =
     name === "pixlstash_tagger" &&
@@ -142,6 +183,7 @@ async function save() {
     await patchUserConfig({
       tagger_settings: { plugins: { [name]: { params: next } } },
     });
+    lastSavedJson = JSON.stringify({ ...params.value, ...next });
     emit("update:settings", {
       ...(props.settings || {}),
       plugins: {
@@ -153,11 +195,18 @@ async function save() {
       },
     });
     saved.value = true;
+    setTimeout(() => {
+      saved.value = false;
+    }, 2000);
     if (turnedOnWholeFace) offerFaceCropRetag();
   } catch (e) {
     saveError.value = errorDetail(e) || "Failed to save settings.";
   } finally {
     saving.value = false;
+    if (saveAgain) {
+      saveAgain = false;
+      save();
+    }
   }
 }
 
@@ -193,7 +242,7 @@ watch(
   <SettingsSection :title="title" class="tagger-panel">
     <template #action>
       <!-- Icon-only so the heading row keeps the title on one line beside
-           the status, Reset and Save; the tooltip is also its name. -->
+           the status; the tooltip is also its name. -->
       <AppButton
         v-if="plugin.name === 'pixlstash_tagger'"
         variant="ghost"
@@ -204,29 +253,26 @@ watch(
         @click="openLabelThresholds"
       />
       <span class="tagger-panel-status" role="status">
-        <template v-if="dirty">Unsaved changes</template>
+        <template v-if="saving">Saving…</template>
         <template v-else-if="saved">Saved.</template>
       </span>
-      <AppButton variant="ghost" size="sm" @click="resetToDefaults">
-        Reset to defaults
-      </AppButton>
-      <AppButton
-        variant="primary"
-        size="sm"
-        :loading="saving"
-        :disabled="!dirty"
-        @click="save"
-      >
-        Save
-      </AppButton>
     </template>
 
     <TaggerParametersUI
-      v-model="formParams"
+      :model-value="formParams"
       :schema="plugin.parameter_schema"
       :columns="2"
-      @update:model-value="saved = false"
+      @update:model-value="onFormChange"
     />
+
+    <AppButton
+      variant="ghost"
+      size="sm"
+      class="tagger-panel-reset"
+      @click="resetToDefaults"
+    >
+      Reset to defaults
+    </AppButton>
 
     <div v-if="saveError" class="tagger-panel-error" role="alert">
       {{ saveError }}
@@ -285,6 +331,10 @@ watch(
   font-size: var(--text-xs);
   color: rgba(var(--v-theme-on-surface), 0.6);
   white-space: nowrap;
+}
+
+.tagger-panel-reset {
+  align-self: flex-start;
 }
 
 .tagger-panel-error {
