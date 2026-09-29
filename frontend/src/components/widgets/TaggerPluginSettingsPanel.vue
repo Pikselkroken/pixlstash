@@ -47,6 +47,14 @@ function defaultParams() {
   return out;
 }
 
+// The rest of the Models tab saves as you go; this form does not, so it says
+// when it holds edits that closing Settings would drop.
+const dirty = computed(
+  () =>
+    JSON.stringify(formParams.value) !==
+    JSON.stringify({ ...defaultParams(), ...params.value }),
+);
+
 function resetToDefaults() {
   formParams.value = defaultParams();
   saved.value = false;
@@ -138,12 +146,19 @@ watch(
         Preview label thresholds
       </AppButton>
       <span class="tagger-panel-status" role="status">
-        <template v-if="saved">Saved.</template>
+        <template v-if="dirty">Unsaved changes</template>
+        <template v-else-if="saved">Saved.</template>
       </span>
       <AppButton variant="ghost" size="sm" @click="resetToDefaults">
         Reset to defaults
       </AppButton>
-      <AppButton variant="primary" size="sm" :loading="saving" @click="save">
+      <AppButton
+        variant="primary"
+        size="sm"
+        :loading="saving"
+        :disabled="!dirty"
+        @click="save"
+      >
         Save
       </AppButton>
     </div>

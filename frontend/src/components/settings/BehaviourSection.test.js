@@ -315,6 +315,24 @@ describe("the PixlStash tagger's settings sit in the pane", () => {
     expect(w.text()).toContain("Saved.");
   });
 
+  it("says the form holds unsaved edits, and alerts rather than claiming Saved on failure", async () => {
+    const { patchUserConfig } = await import("../../api/config");
+    patchUserConfig.mockRejectedValueOnce(new Error("boom"));
+    const w = await openPane("pixlstash_tagger");
+    const save = () => w.findAll("button").find((b) => b.text() === "Save");
+    expect(save().attributes("disabled")).toBeDefined();
+
+    form(w).vm.$emit("update:modelValue", { threshold_offset: -0.2 });
+    await nextTick();
+    expect(w.text()).toContain("Unsaved changes");
+    await save().trigger("click");
+    await flushPromises();
+
+    expect(w.find('[role="alert"]').exists()).toBe(true);
+    expect(w.text()).not.toContain("Saved.");
+    expect(w.text()).toContain("Unsaved changes");
+  });
+
   // The pane polls is_loaded every few seconds and replaces each plugin object.
   // Reseeding the form on that would silently discard what the user typed.
   it("keeps an unsaved edit when the loaded-state poll replaces the plugin", async () => {
