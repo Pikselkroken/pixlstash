@@ -47,3 +47,17 @@ export async function getLabelThresholds(offset) {
     params: offset != null ? { offset } : {},
   }));
 }
+
+/**
+ * Re-run the face quality crop on every picture with a face: drops the
+ * crop-owned tags and queues each picture for the background tagger. Other
+ * tags and human labels are kept. Owner only.
+ * @param {Object} [options]
+ * @param {boolean} [options.dryRun] - only count the pictures.
+ * @returns {Promise<{count: number}>}
+ */
+export async function retagFaceCrops({ dryRun = false } = {}) {
+  return unwrap(
+    apiClient.post("/taggers/face-crop-retag", { dry_run: dryRun }),
+  );
+}

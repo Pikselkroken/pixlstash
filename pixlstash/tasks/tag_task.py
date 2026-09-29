@@ -641,7 +641,10 @@ class TagTask(BaseTask):
 
         # The tagger never deletes a tag it did not write (#1357). Every writer of
         # a retag sentinel either creates the picture or deletes all of its Tag
-        # rows first (`reset_pictures_tags`, sidecar reconciliation), and this
+        # rows first (`reset_pictures_tags`, sidecar reconciliation), except
+        # `retag_face_crops` (#1662), which deletes only the crop-owned tags and
+        # keeps the rest on purpose - so after it, a kept tag the model did not
+        # reproduce is expected and the warning below is benign. And this
         # pass is the only thing that removes the sentinel, and a pass that read
         # the picture before such a reset is dropped by `_add_tags_unless_reset`
         # (#1361). So a non-sentinel row present now was written by someone

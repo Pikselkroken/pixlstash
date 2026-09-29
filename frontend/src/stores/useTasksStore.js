@@ -236,13 +236,26 @@ export const useTasksStore = defineStore("tasks", () => {
     const lastTime = Number(last?.t || 0);
     if (!lastTime) return 0;
     const cutoff = lastTime - RATE_AVERAGE_WINDOW_SECONDS;
-    const first = samples.find((s) => Number(s?.t || 0) >= cutoff);
+    // `current` is total minus what is still to do, so queuing work (a retag
+    // puts N pictures back in the queue) or deleting pictures drops it. Measure
+    // from the most recent drop: a window straddling it nets out negative and
+    // read 0.00/s for a full minute while the worker was busy.
+    let start = 0;
+    for (let i = samples.length - 1; i > 0; i -= 1) {
+      if (Number(samples[i].current || 0) < Number(samples[i - 1].current || 0)) {
+        start = i;
+        break;
+      }
+    }
+    const first = samples
+      .slice(start)
+      .find((s) => Number(s?.t || 0) >= cutoff);
     if (!first || first === last) return 0;
     const elapsed = lastTime - Number(first.t || 0);
     const done = Number(last.current || 0) - Number(first.current || 0);
-    // `done` goes negative when pictures are deleted under a running worker,
-    // and the window is briefly shorter than one batch when polling starts
-    // mid-batch; both read as no measurement rather than as a wrong one.
+    // The window is briefly shorter than one batch when polling starts
+    // mid-batch, or right after a drop; that reads as no measurement rather
+    // than as a wrong one.
     if (elapsed <= 0 || done <= 0) return 0;
     return done / elapsed;
   }

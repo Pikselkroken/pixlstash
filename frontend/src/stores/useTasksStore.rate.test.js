@@ -114,6 +114,19 @@ describe("the displayed throughput", () => {
     expect(store.getLatestRate(KEY)).toBe(0);
   });
 
+  // A retag queues pictures, which drops `current` by that many. The window
+  // used to straddle the drop, net out negative and read 0.00/s for a whole
+  // minute while the tagger was visibly working (#1662).
+  it("measures from the drop when work is queued mid-pass", async () => {
+    const store = useTasksStore();
+    await runBatch(store, { from: 900, size: 32, seconds: 10, startedAt: 0 });
+    await pollAt(store, 12, 100);
+    await runBatch(store, { from: 100, size: 64, seconds: 8, startedAt: 14 });
+
+    // 64 pictures over the 10s since the drop was first seen.
+    expect(store.getLatestRate(KEY)).toBeCloseTo(64 / 10, 2);
+  });
+
   it("reads zero for a worker with no samples", () => {
     expect(useTasksStore().getLatestRate("NeverSeenTask")).toBe(0);
   });

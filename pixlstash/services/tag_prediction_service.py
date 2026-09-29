@@ -9,13 +9,18 @@ from typing import TYPE_CHECKING
 from sqlalchemy import delete
 from sqlmodel import Session, select
 
-from pixlstash.db_models import Picture, Tag
-from pixlstash.db_models.tag import make_tag_sentinel
+from pixlstash.db_models import Face, Picture, Tag
+from pixlstash.db_models.tag import is_tag_sentinel, make_tag_sentinel
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.pixl_logging import get_logger
-from pixlstash.services.set_lock_service import enforce_pictures_not_locked
+from pixlstash.services.set_lock_service import (
+    enforce_pictures_not_locked,
+    locked_picture_ids,
+)
+from pixlstash.tagger_plugins.pixlstash_tagger import QUALITY_CROP_TAG_WHITELIST
 from pixlstash.utils.sql_chunking import chunked
 from pixlstash.utils.service.label_ledger import (
+    HUMAN,
     NEG,
     POS,
     not_human_labeled,
@@ -368,3 +373,98 @@ def reset_pictures_tags(
         return reset_ids
 
     return vault.db.run_task(_reset)
+
+
+def retag_face_crops(vault: "Vault", dry_run: bool = False) -> list[int]:
+    """Re-run the quality-crop pass on every picture with a face.
+
+    For the `whole_face_crop` setting (#1662): switching it changes how a face
+    is cropped, so the library's existing crop tags were judged the old way.
+    Narrower than :func:`reset_pictures_tags` on purpose: that deletes EVERY
+    Tag row, and a tag added by hand outside the tagger's vocabulary has no
+    ledger row to bring it back, so a library-wide reset would lose them. Here
+    only the crop-owned tags (and their non-human predictions) go, and a crop
+    tag a human confirmed stays. The tagger never deletes a tag it did not
+    write, so everything else survives and the retag sentinel makes the
+    background tagger add what the crop now finds.
+
+    Skips soft-deleted pictures and pictures frozen by a locked set. Commits
+    per chunk so a large library does not hold the writer for the whole run.
+
+    Args:
+        vault: Application vault, used for DB task dispatch.
+        dry_run: Count the pictures only; change nothing.
+
+    Returns:
+        The picture ids that were (or, on a dry run, would be) queued.
+    """
+    sentinel = make_tag_sentinel(None)
+    crop_tags = sorted(QUALITY_CROP_TAG_WHITELIST)
+
+    def _candidates(session: Session) -> list[int]:
+        # Same faces the crop pass uses: a box, a real face, frame 0.
+        ids = list(
+            session.exec(
+                select(Face.picture_id)
+                .join(Picture, Picture.id == Face.picture_id)
+                .where(
+                    Face.frame_index == 0,
+                    Face.face_index >= 0,
+                    Face.bbox_.is_not(None),
+                    Picture.deleted.is_(False),
+                )
+                .distinct()
+            ).all()
+        )
+        locked = locked_picture_ids(session, ids) if ids else set()
+        return sorted(set(ids) - locked)
+
+    def _retag_chunk(session: Session, chunk: list[int]) -> None:
+        pending = {
+            pid
+            for pid, tag in session.exec(
+                select(Tag.picture_id, Tag.tag).where(Tag.picture_id.in_(chunk))
+            ).all()
+            if is_tag_sentinel(tag)
+        }
+        human_pos = set(
+            session.exec(
+                select(TagPrediction.picture_id, TagPrediction.tag).where(
+                    TagPrediction.picture_id.in_(chunk),
+                    TagPrediction.tag.in_(crop_tags),
+                    TagPrediction.label_source == HUMAN,
+                    TagPrediction.label_state == POS,
+                )
+            ).all()
+        )
+        # Background work: no interactive rescore registry (see its docstring).
+        with invalidate_on_anomaly_change(session, chunk, context="retag face crops"):
+            session.exec(
+                delete(TagPrediction)
+                .where(TagPrediction.picture_id.in_(chunk))
+                .where(TagPrediction.tag.in_(crop_tags))
+                .where(not_human_labeled())
+            )
+            for row in session.exec(
+                select(Tag).where(Tag.picture_id.in_(chunk), Tag.tag.in_(crop_tags))
+            ).all():
+                if (row.picture_id, row.tag) not in human_pos:
+                    session.delete(row)
+            # A picture already waiting on the tagger keeps its sentinel (and
+            # the engine it names); a second one would break the
+            # (picture_id, tag) unique constraint.
+            for pic_id in chunk:
+                if pic_id not in pending:
+                    session.add(Tag(tag=sentinel, picture_id=pic_id))
+        session.commit()
+
+    if dry_run:
+        return vault.db.run_immediate_read_task(_candidates)
+    ids = vault.db.run_task(_candidates)
+    for chunk in chunked(ids):
+        vault.db.run_task(_retag_chunk, list(chunk))
+        # After the commit, so a task that read the old tags is never judged
+        # newer than the reset (see TagResetRegistry).
+        vault.db.tag_resets.mark_reset(list(chunk))
+    logger.info("Queued %d picture(s) with faces for a quality-crop retag", len(ids))
+    return ids

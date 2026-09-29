@@ -35,7 +35,13 @@ from datetime import datetime, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from pixlstash.db_models import Picture, Tag, is_description_sentinel, is_tag_sentinel
+from pixlstash.db_models import (
+    Face,
+    Picture,
+    Tag,
+    is_description_sentinel,
+    is_tag_sentinel,
+)
 from pixlstash.db_models.tag_prediction import TagPrediction
 from pixlstash.server import Server
 from pixlstash.tasks.task_type import TaskType
@@ -307,6 +313,141 @@ def test_bulk_reset_tags_scope(env):
     assert server.vault.db.run_immediate_read_task(sentinel_owners) == sorted(
         picture_ids
     )
+
+
+def test_face_crop_retag_redoes_only_face_pictures_crop_tags(env):
+    """POST /taggers/face-crop-retag (#1662): owner only, and narrower than
+    reset_tags - on a picture with a frame-0 face it drops only the crop-owned
+    tags and non-human predictions, keeps hand-added tags and human labels,
+    and queues the picture; a picture without a face is left alone."""
+    server, client, anon, picture_ids, scoped = env
+    _detach_finders(
+        server, [TaskType.TAGGER, TaskType.FACE_EXTRACTION, TaskType.FACE_MODEL_REFRESH]
+    )
+    face_pic, faceless_pic = picture_ids[0], picture_ids[1]
+
+    def seed(session):
+        from sqlmodel import delete
+
+        session.exec(delete(Face).where(Face.picture_id.in_(picture_ids)))
+        session.exec(delete(Tag).where(Tag.picture_id.in_(picture_ids)))
+        session.add(Face(picture_id=face_pic, frame_index=0, bbox=[1, 1, 40, 40]))
+        # No-face marker, and a face only on a later frame: neither is cropped.
+        session.add(Face(picture_id=faceless_pic, frame_index=0, face_index=-1))
+        session.add(Face(picture_id=faceless_pic, frame_index=3, bbox=[1, 1, 40, 40]))
+        for pid in picture_ids:
+            session.add(Tag(picture_id=pid, tag="malformed eyes"))
+            session.add(Tag(picture_id=pid, tag="my own tag"))
+        # A crop tag a human confirmed, and a tag LIKE '__tag%' would match.
+        session.add(Tag(picture_id=face_pic, tag="flux chin"))
+        session.add(Tag(picture_id=face_pic, tag="a tagline"))
+        session.add(
+            TagPrediction(
+                picture_id=face_pic,
+                tag="flux chin",
+                confidence=0.9,
+                model_version="test-v1",
+                status="ACCEPTED",
+                label_source="human",
+                label_state="POS",
+            )
+        )
+        # A crop tag a human rejected: the rejection must outlive the reset,
+        # because it is what vetoes the tagger re-adding the tag
+        # (test_tag_task.py::test_add_tags_bulk_honours_human_labels).
+        session.add(
+            TagPrediction(
+                picture_id=face_pic,
+                tag="malformed teeth",
+                confidence=0.0,
+                model_version="test-v1",
+                status="REJECTED",
+                label_source="human",
+                label_state="NEG",
+            )
+        )
+        session.commit()
+
+    server.vault.db.run_task(seed)
+    _seed_prediction(server, face_pic, "malformed eyes")
+
+    def tags(session):
+        from sqlmodel import select
+
+        rows = session.exec(select(Tag).where(Tag.picture_id.in_(picture_ids)))
+        out = {pid: set() for pid in picture_ids}
+        for row in rows:
+            out[row.picture_id].add("__tag" if is_tag_sentinel(row.tag) else row.tag)
+        return out
+
+    before = server.vault.db.run_immediate_read_task(tags)
+
+    r = anon.post(
+        "/taggers/face-crop-retag", json={"dry_run": False}, headers=_bearer(scoped)
+    )
+    assert r.status_code == 403, r.text
+    r = client.post("/taggers/face-crop-retag", json={"dry_run": True})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"count": 1}
+    assert server.vault.db.run_immediate_read_task(tags) == before, (
+        "neither the refused call nor the dry run may change anything"
+    )
+
+    r = client.post("/taggers/face-crop-retag", json={})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"count": 1}
+    after = server.vault.db.run_immediate_read_task(tags)
+    assert after[face_pic] == {"my own tag", "flux chin", "a tagline", "__tag"}
+    assert after[faceless_pic] == {"malformed eyes", "my own tag"}
+    assert not _prediction_exists(server, face_pic, "malformed eyes")
+    assert _prediction_exists(server, face_pic, "flux chin"), (
+        "a human label must survive the retag"
+    )
+    assert _prediction_exists(server, face_pic, "malformed teeth"), (
+        "a human rejection must survive the retag"
+    )
+
+
+def test_face_crop_retag_skips_deleted_and_keeps_a_pending_sentinel(env):
+    """A picture already waiting on the tagger keeps its own sentinel (and the
+    engine it names) instead of failing on the unique constraint; a
+    soft-deleted picture is neither counted nor touched."""
+    server, client, _anon, picture_ids, _scoped = env
+    _detach_finders(
+        server, [TaskType.TAGGER, TaskType.FACE_EXTRACTION, TaskType.FACE_MODEL_REFRESH]
+    )
+    pending_pic, deleted_pic = picture_ids[0], picture_ids[1]
+
+    def seed(session):
+        from sqlmodel import delete
+
+        session.exec(delete(Face).where(Face.picture_id.in_(picture_ids)))
+        session.exec(delete(Tag).where(Tag.picture_id.in_(picture_ids)))
+        for pid in picture_ids:
+            session.add(Face(picture_id=pid, frame_index=0, bbox=[1, 1, 40, 40]))
+            session.add(Tag(picture_id=pid, tag="malformed eyes"))
+        session.add(Tag(picture_id=pending_pic, tag="__tag:some_engine"))
+        session.get(Picture, deleted_pic).deleted = True
+        session.commit()
+
+    server.vault.db.run_task(seed)
+
+    r = client.post("/taggers/face-crop-retag", json={})
+    assert r.status_code == 200, r.text
+    assert r.json() == {"count": 1}
+
+    def tags(session):
+        from sqlmodel import select
+
+        rows = session.exec(select(Tag).where(Tag.picture_id.in_(picture_ids)))
+        out = {pid: set() for pid in picture_ids}
+        for row in rows:
+            out[row.picture_id].add(row.tag)
+        return out
+
+    after = server.vault.db.run_immediate_read_task(tags)
+    assert after[pending_pic] == {"__tag:some_engine"}
+    assert after[deleted_pic] == {"malformed eyes"}
 
 
 # ---------------------------------------------------------------------------
