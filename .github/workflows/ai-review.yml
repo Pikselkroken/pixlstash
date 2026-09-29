@@ -3,7 +3,7 @@ name: AI Review
 # PR-Agent (https://github.com/The-PR-Agent/pr-agent) reviewing through
 # OpenRouter. Needs the OPENROUTER_API_KEY secret; the model is the
 # OPENROUTER_MODEL repository variable (an OpenRouter slug such as
-# `z-ai/glm-5.3-flash`), defaulting to that when unset.
+# `xiaomi/mimo-v2.6-pro`), defaulting to that when unset.
 #
 # Reviews automatically only when the review owner (REVIEW_OWNER_ID) is the one
 # acting: opening a PR, pushing to one (their own or a contributor's fork PR), or marking
@@ -56,7 +56,7 @@ jobs:
       # against it, and PR-Agent subtracts it from MAX_MODEL_TOKENS for the diff.
       OPENROUTER.MAX_TOKENS: "40000"
       OPENROUTER.REASONING_EFFORT: "medium"
-      CONFIG.MODEL: openrouter/${{ vars.OPENROUTER_MODEL || 'z-ai/glm-5.3-flash' }}
+      CONFIG.MODEL: openrouter/${{ vars.OPENROUTER_MODEL || 'xiaomi/mimo-v2.6-pro' }}
       # The upstream default fallback is an OpenAI model we hold no key for.
       CONFIG.FALLBACK_MODELS: "[]"
       # Required for models missing from PR-Agent's token table; each step's
