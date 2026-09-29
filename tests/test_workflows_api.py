@@ -192,6 +192,8 @@ _WORKFLOW_WRITE_ROUTES = (
     ("POST", "/api/v1/workflows/{workflow_id}/fixed-copy"),
     ("PUT", "/api/v1/workflows/{workflow_id}/lora-chain"),
     ("POST", "/api/v1/workflows/{workflow_id}/clone-with-models"),
+    # Its plans read the graph and the whole shelf; POST, so no GET belt.
+    ("POST", "/api/v1/workflows/{workflow_id}/set-clone-plans"),
     ("DELETE", "/api/v1/workflows/{workflow_id}"),
     # ComfyUI's conversion of an editor file (#1530): writes stored files.
     ("POST", "/api/v1/comfyui/workflows/convert"),
@@ -3811,6 +3813,7 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
             f"{API}/workflows/{BUSY_WF}/clone-with-models",
             {"name": "nope", "swaps": {"a.safetensors": "b.safetensors"}},
         ),
+        ("POST", f"{API}/workflows/{BUSY_WF}/set-clone-plans", {"sets": []}),
         ("DELETE", f"{API}/workflows/{BUSY_WF}", None),
         (
             "POST",
@@ -3930,6 +3933,12 @@ _EVERY_WORKFLOW_ROUTE = (
         "/workflows/{workflow_id}/clone-with-models",
         f"/workflows/{BUSY_WF}/clone-with-models",
         {"name": "c", "swaps": {"a.safetensors": "b.safetensors"}},
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/set-clone-plans",
+        f"/workflows/{BUSY_WF}/set-clone-plans",
+        {"sets": []},
     ),
     (
         "POST",
@@ -9758,8 +9767,346 @@ def test_cloning_a_card_with_no_graph_is_a_409(workflow_env):
     assert r.status_code == 409, r.text
 
 
+def test_planning_clones_of_a_card_with_no_graph_is_a_409(workflow_env):
+    r = workflow_env.owner.post(
+        f"{API}/workflows/{BINNED_WF}/set-clone-plans", json={"sets": []}
+    )
+    assert r.status_code == 409, r.text
+
+
 def test_a_replacement_that_is_not_a_model_file_is_a_422(cloneable):
     assert _clone(cloneable, {_SHELF_FILENAME: "krea2"}).status_code == 422
+
+
+def _plans(env, **sets):
+    r = env.owner.post(
+        f"{API}/workflows/{RUN_WF}/set-clone-plans",
+        # The first id is the set's checkpoint, the rest its other models.
+        json={
+            "sets": [
+                {"key": k, "checkpoint_id": ids[0], "model_ids": ids[1:]}
+                for k, ids in sets.items()
+            ]
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    return body, {plan["key"]: plan for plan in body["plans"]}
+
+
+def test_a_set_plan_names_the_swap_and_the_loader_before_and_after(cloneable):
+    body, plans = _plans(cloneable, krea=[cloneable.checkpoint_id])
+    assert body["base_filename"] == _SHELF_FILENAME
+    krea = plans["krea"]
+    assert krea["swaps"] == {_SHELF_FILENAME: CLONE_CHECKPOINT}
+    # The workflow's checkpoint has no known base model: not the same one, so
+    # its LoRAs would not come along, and nothing guessed it did.
+    assert (krea["fit"], krea["keeps_loras"], krea["reason"]) == ("other", False, None)
+    assert krea["loaders"] == [
+        {
+            "node_id": "1",
+            "kind": "checkpoint",
+            "was_class": "CheckpointLoaderSimple",
+            "now_class": "CheckpointLoaderSimple",
+            "was": [_SHELF_FILENAME],
+            "now": [f"flux/{CLONE_CHECKPOINT}"],
+            "pack": None,
+            "installed": None,
+        }
+    ]
+    # A plan writes nothing.
+    assert list(cloneable.folder.glob("*.json")) == []
+
+
+def test_a_workflow_with_no_checkpoint_says_so_for_every_set(cloneable):
+    """Its own reason, not the set's: none of them can be cloned onto."""
+    graph = _embedded_export_graph()
+    del graph["1"]
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        vae_id = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('vae', 'ae.safetensors', 'scanned')"
+        ).lastrowid
+    try:
+        _body, plans = _plans(cloneable, vae_only=[vae_id])
+    finally:
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE id = ?", (vae_id,))
+    assert plans["vae_only"]["fit"] == "wont_load"
+    assert plans["vae_only"]["reason"] == "This workflow loads no checkpoint"
+
+
+def test_a_family_read_off_the_graphs_loras_makes_a_set_of_that_family(cloneable):
+    """The checkpoint has no known base model; its LoRA says FLUX.1 schnell."""
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        lora_id = conn.execute(
+            "INSERT INTO model "
+            "(file_kind, kind, filename, sha256, base_model, provenance) "
+            "VALUES ('adapter', 'lora', ?, ?, 'FLUX.1 schnell', 'scanned')",
+            (FORGOTTEN_LORA, _h("schnell-lora")),
+        ).lastrowid
+    try:
+        _body, plans = _plans(cloneable, krea=[cloneable.checkpoint_id])
+    finally:
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE id = ?", (lora_id,))
+    # FLUX.1 dev is another base model of the same family: LoRAs go, but the
+    # set is offered with the family, as `keeps` reads the same source.
+    assert plans["krea"]["fit"] == "same_family"
+    assert plans["krea"]["keeps_loras"] is False
+
+
+def test_a_set_whose_model_left_the_shelf_is_refused_on_its_own(cloneable):
+    """A stale id refuses that set, not the read: the other set still plans."""
+    _body, plans = _plans(cloneable, stale=[987654321], krea=[cloneable.checkpoint_id])
+    assert plans["stale"]["fit"] == "wont_load"
+    assert plans["stale"]["reason"] == "A model of this set is no longer on the shelf"
+    assert plans["krea"]["fit"] != "wont_load"
+
+
+def test_two_sets_asked_under_one_key_are_a_422(cloneable):
+    ask = {"key": "same", "checkpoint_id": cloneable.checkpoint_id, "model_ids": []}
+    r = cloneable.owner.post(
+        f"{API}/workflows/{RUN_WF}/set-clone-plans", json={"sets": [ask, ask]}
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_a_set_plan_says_which_sets_will_not_load_and_why(cloneable):
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        vae_id = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('vae', 'ae.safetensors', 'scanned')"
+        ).lastrowid
+        unlisted_id = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('checkpoint', 'unlisted.safetensors', 'scanned')"
+        ).lastrowid
+    try:
+        _body, plans = _plans(cloneable, vae_only=[vae_id], unlisted=[unlisted_id])
+    finally:
+        with hub.transaction() as conn:
+            conn.executemany(
+                "DELETE FROM model WHERE id = ?", [(vae_id,), (unlisted_id,)]
+            )
+    assert plans["vae_only"]["fit"] == "wont_load"
+    assert plans["vae_only"]["reason"] == "Has no checkpoint"
+    assert plans["unlisted"]["fit"] == "wont_load"
+    assert plans["unlisted"]["reason"] == "ComfyUI does not list unlisted.safetensors"
+
+
+def test_a_gguf_set_on_a_whole_checkpoint_loader_names_the_loader_it_needs(
+    cloneable,
+):
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["UnetLoaderGGUF"] = {
+        "input": {"required": {"unet_name": [["flux1-dev-Q8_0.gguf"], {}]}}
+    }
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        gguf_id = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('unknown', 'flux1-dev-Q8_0.gguf', 'scanned')"
+        ).lastrowid
+    try:
+        _body, plans = _plans(cloneable, gguf=[gguf_id])
+    finally:
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE id = ?", (gguf_id,))
+    # A whole-checkpoint loader has no GGUF twin: refused with the reason.
+    assert plans["gguf"]["fit"] == "wont_load"
+    assert plans["gguf"]["reason"] == "Needs a UnetLoaderGGUF"
+
+
+def test_a_set_vae_replaces_only_the_graph_vae_of_its_layout(cloneable):
+    """Two VAE loaders are two different files: one set VAE is not both."""
+    graph = _embedded_export_graph()
+    graph["8"] = {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}}
+    graph["9"] = {
+        "class_type": "VAELoader",
+        "inputs": {"vae_name": "wan-video-vae.safetensors"},
+    }
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        ids = [
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, family, provenance) "
+                "VALUES ('vae', ?, ?, 'scanned')",
+                (filename, family),
+            ).lastrowid
+            for filename, family in (
+                ("ae.safetensors", "vae_16ch"),
+                ("wan-video-vae.safetensors", "wan_vae"),
+                ("flux2-ae.safetensors", "vae_16ch"),
+            )
+        ]
+    try:
+        _body, plans = _plans(cloneable, flux=[cloneable.checkpoint_id, ids[2]])
+    finally:
+        with hub.transaction() as conn:
+            conn.executemany("DELETE FROM model WHERE id = ?", [(i,) for i in ids])
+    assert plans["flux"]["swaps"] == {
+        _SHELF_FILENAME: CLONE_CHECKPOINT,
+        "ae.safetensors": "flux2-ae.safetensors",
+    }
+
+
+def test_a_set_vae_of_another_known_layout_is_not_swapped_in(cloneable):
+    """One slot, one set VAE, two known layouts that differ: no fallback."""
+    graph = _embedded_export_graph()
+    graph["8"] = {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}}
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        ids = [
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, family, provenance) "
+                "VALUES ('vae', ?, ?, 'scanned')",
+                (filename, family),
+            ).lastrowid
+            for filename, family in (
+                ("ae.safetensors", "vae_16ch"),
+                ("wan-video-vae.safetensors", "wan_vae"),
+            )
+        ]
+    try:
+        _body, plans = _plans(cloneable, wan=[cloneable.checkpoint_id, ids[1]])
+    finally:
+        with hub.transaction() as conn:
+            conn.executemany("DELETE FROM model WHERE id = ?", [(i,) for i in ids])
+    assert plans["wan"]["swaps"] == {_SHELF_FILENAME: CLONE_CHECKPOINT}
+
+
+def test_two_unknown_base_models_are_not_the_same_one(cloneable):
+    """Neither checkpoint's base model is known: the LoRAs are not kept."""
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "down")
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        unknown_id = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('checkpoint', 'no-base.safetensors', 'scanned')"
+        ).lastrowid
+    try:
+        _body, plans = _plans(cloneable, unknown=[unknown_id])
+    finally:
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE id = ?", (unknown_id,))
+    assert plans["unknown"]["fit"] == "other"
+    assert plans["unknown"]["keeps_loras"] is False
+
+
+def test_a_set_of_the_same_base_model_keeps_the_loras(cloneable):
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET base_model = 'FLUX.1 dev' WHERE filename = ?",
+            (_SHELF_FILENAME,),
+        )
+    try:
+        _body, plans = _plans(cloneable, krea=[cloneable.checkpoint_id])
+    finally:
+        with hub.transaction() as conn:
+            conn.execute(
+                "UPDATE model SET base_model = NULL WHERE filename = ?",
+                (_SHELF_FILENAME,),
+            )
+    assert plans["krea"]["fit"] == "same_base_model"
+    assert plans["krea"]["keeps_loras"] is True
+
+
+def test_a_clone_can_carry_a_chain_with_its_loras_removed(cloneable):
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["CheckpointLoaderSimple"]["input"]["required"]["ckpt_name"][0].append(
+        f"flux/{CLONE_CHECKPOINT}"
+    )
+    info["CheckpointLoaderSimple"]["output"] = ["MODEL", "CLIP", "VAE"]
+    info["KSampler"]["input"]["required"].update(
+        {
+            "model": ["MODEL", {}],
+            "positive": ["CONDITIONING", {}],
+            "negative": ["CONDITIONING", {}],
+        }
+    )
+    info["KSampler"]["output"] = ["LATENT"]
+    info["SaveImage"]["input"]["required"]["images"] = ["IMAGE", {}]
+    info["CLIPTextEncode"] = {
+        "input": {"required": {"text": ["STRING", {}], "clip": ["CLIP", {}]}},
+        "output": ["CONDITIONING"],
+    }
+    info["LoadImage"] = {
+        "input": {"required": {"image": [["a-private-photo.png"], {}]}},
+        "output": ["IMAGE", "MASK"],
+    }
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    r = cloneable.owner.post(
+        f"{API}/workflows/{RUN_WF}/clone-with-models",
+        json={
+            "name": "Portrait on Krea",
+            "swaps": {_SHELF_FILENAME: CLONE_CHECKPOINT},
+            "loras": {"entries": []},
+        },
+    )
+    assert r.status_code == 201, r.text
+    written = json.loads((cloneable.folder / r.json()["name"]).read_text())
+    assert written["1"]["inputs"]["ckpt_name"] == f"flux/{CLONE_CHECKPOINT}"
+    # The loader is gone and the wires are joined past it.
+    assert "2" not in written
+    assert written["3"]["inputs"]["model"] == ["1", 0]
+    assert r.json()["loaders"] == []
+
+    # The same chain edit onto the files it already loads is still a change.
+    again = cloneable.owner.post(
+        f"{API}/workflows/{RUN_WF}/clone-with-models",
+        json={
+            "name": "Portrait without LoRAs",
+            "swaps": {_SHELF_FILENAME: _SHELF_FILENAME},
+            "loras": {"entries": []},
+        },
+    )
+    assert again.status_code == 201, again.text
+    kept = json.loads((cloneable.folder / again.json()["name"]).read_text())
+    assert kept["1"]["inputs"]["ckpt_name"] == _SHELF_FILENAME
+    assert "2" not in kept
+
+
+def test_a_clone_carrying_a_chain_needs_comfyui(cloneable):
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "unreachable")
+    )
+    r = cloneable.owner.post(
+        f"{API}/workflows/{RUN_WF}/clone-with-models",
+        json={
+            "name": "x",
+            "swaps": {_SHELF_FILENAME: CLONE_CHECKPOINT},
+            "loras": {"entries": []},
+        },
+    )
+    assert r.status_code == 503, r.text
+    assert list(cloneable.folder.glob("*.json")) == []
 
 
 def test_the_swap_options_name_the_graphs_files_and_the_shelf(cloneable):

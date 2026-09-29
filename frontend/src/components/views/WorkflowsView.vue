@@ -322,7 +322,7 @@
         @hide="hideSelected"
         @export="exportSelected"
         @duplicate="duplicateSelected"
-        @clone-with-models="startCloneWithModels"
+        @clone-onto-set="startCloneOntoSet"
         @delete="confirmDelete"
       />
     </div>
@@ -359,6 +359,15 @@
         >
       </template>
     </AppDialog>
+
+    <CloneOntoSetDialog
+      :open="Boolean(ontoSetKey)"
+      :workflow-id="ontoSetKey"
+      :card-name="ontoSetName"
+      @close="closeCloneOntoSet"
+      @cloned="clonedWithModels"
+      @pick-files="pickFilesMyself"
+    />
 
     <CloneWithModelsDialog
       :open="cloneOpen"
@@ -411,6 +420,7 @@ import TbGlobalActions from "../panels/TbGlobalActions.vue";
 import WorkflowFilterMenu from "../panels/WorkflowFilterMenu.vue";
 import WorkflowPullSummary from "../panels/WorkflowPullSummary.vue";
 import WorkflowSelectionBar from "../panels/WorkflowSelectionBar.vue";
+import CloneOntoSetDialog from "../io/CloneOntoSetDialog.vue";
 import CloneWithModelsDialog from "../io/CloneWithModelsDialog.vue";
 import AppBarButton from "../widgets/AppBarButton.vue";
 import AppButton from "../widgets/AppButton.vue";
@@ -1206,17 +1216,35 @@ async function duplicateSelected() {
   notices.push({ level: "success", text: `Copied to ${body.name}.` });
 }
 
-// Clone with new models: one dialog, one new card. Held by id rather than by
-// the selection, so the dialog keeps its card if the selection moves under it.
+// Clone onto a workflow set: one dialog, one new card, asked for through the
+// store so the Workflow tab's button and the menu's row open the same one.
+// Held by id rather than by the selection, so the dialog keeps its card if the
+// selection moves under it.
+const ontoSetKey = computed(() => store.cloneOntoSetKey);
+const ontoSetName = computed(
+  () => store.cards.find((card) => card.id === ontoSetKey.value)?.name || "",
+);
+
+function startCloneOntoSet() {
+  const card = onlyCard.value;
+  if (card) store.requestCloneOntoSet(card.id);
+}
+
+function closeCloneOntoSet() {
+  store.requestCloneOntoSet("");
+  focusCursorRow();
+}
+
+// Clone with new models, the per-file dialog: behind the set chooser's
+// "Pick files myself" card, on the same workflow.
 const cloneOpen = ref(false);
 const cloneKey = ref("");
 const cloneName = ref("");
 
-function startCloneWithModels() {
-  const card = onlyCard.value;
-  if (!card) return;
-  cloneKey.value = card.id;
-  cloneName.value = card.name || "";
+function pickFilesMyself() {
+  cloneKey.value = ontoSetKey.value;
+  cloneName.value = ontoSetName.value;
+  store.requestCloneOntoSet("");
   cloneOpen.value = true;
 }
 
@@ -1227,13 +1255,35 @@ function closeClone() {
 
 /** Name the file written, say when ComfyUI could not check it, select the card. */
 function clonedWithModels(body) {
-  notices.push(
+  // A loader whose node pack ComfyUI lacks: the clone is written, and the
+  // first run would fail on the missing node, so that is the news.
+  const packs = (installed) => [
+    ...new Set(
+      (body.loaders ?? [])
+        .filter((row) => row.pack && row.installed === installed)
+        .map((row) => row.pack),
+    ),
+  ];
+  const missing = packs(false);
+  // null: ComfyUI did not answer, so nobody could ask whether it has the pack.
+  const unasked = [...packs(null), ...packs(undefined)];
+  // Each fact its own sentence in one notice: a missing pack does not make
+  // the unchecked names any less worth saying.
+  const warnings = [
+    missing.length
+      ? `It needs ${missing.join(", ")}, which your ComfyUI does not have yet.`
+      : "",
+    unasked.length
+      ? `It needs ${unasked.join(", ")}, and PixlStash could not ask ComfyUI whether it has ${unasked.length === 1 ? "it" : "them"}.`
+      : "",
     body.verified
-      ? { level: "success", text: `Cloned to ${body.name}.` }
-      : {
-          level: "warning",
-          text: `Cloned to ${body.name}. ComfyUI did not confirm every new model name, so run it once to check.`,
-        },
+      ? ""
+      : "ComfyUI did not confirm every new model name, so run it once to check.",
+  ].filter(Boolean);
+  notices.push(
+    warnings.length
+      ? { level: "warning", text: `Cloned to ${body.name}. ${warnings.join(" ")}` }
+      : { level: "success", text: `Cloned to ${body.name}.` },
   );
   if (body.workflow_id) store.select(body.workflow_id);
 }

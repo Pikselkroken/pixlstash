@@ -16,6 +16,7 @@ from pixlstash.services.comfyui_recipe_service import (
     advertised_model_names,
     apply_adapter,
     apply_filename_swap,
+    apply_loader_rewrites,
     apply_lora_chain,
     apply_model_swap,
     apply_seeds,
@@ -28,6 +29,7 @@ from pixlstash.services.comfyui_recipe_service import (
     insert_adapter,
     model_filename_fields,
     pass_label,
+    plan_loader_rewrites,
     plan_lora_chain,
     plan_lora_insertion,
     preflight_prompt,
@@ -2408,6 +2410,102 @@ class TestModelSwap:
             == []
         )
         assert graph["4"]["inputs"]["ckpt_name"] == "kept/kept.safetensors"
+
+
+class TestLoaderRewrite:
+    """Clone onto a set: a GGUF file needs the GGUF pack's loader, and back."""
+
+    def _graph(self):
+        return {
+            "1": {
+                "class_type": "UNETLoader",
+                "inputs": {
+                    "unet_name": "flux1-dev-fp8.safetensors",
+                    "weight_dtype": "fp8",
+                },
+            },
+            "2": {
+                "class_type": "DualCLIPLoader",
+                "inputs": {
+                    "clip_name1": "t5xxl_fp8.safetensors",
+                    "clip_name2": "clip_l.safetensors",
+                    "type": "flux",
+                    "device": "default",
+                },
+            },
+            "3": {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}},
+            "4": {"class_type": "KSampler", "inputs": {"model": ["1", 0]}},
+        }
+
+    SWAPS = {
+        "flux1-dev-fp8.safetensors": "flux1-dev-Q8_0.gguf",
+        "t5xxl_fp8.safetensors": "t5-v1_1-xxl-Q8_0.gguf",
+    }
+
+    def test_a_gguf_file_swaps_its_core_loader_for_the_packs(self):
+        graph = self._graph()
+        rewrites = plan_loader_rewrites(graph, self.SWAPS, {"UnetLoaderGGUF": {}})
+        assert {(r["node_id"], r["was"], r["now"]) for r in rewrites} == {
+            ("1", "UNETLoader", "UnetLoaderGGUF"),
+            ("2", "DualCLIPLoader", "DualCLIPLoaderGGUF"),
+        }
+        installed = {r["node_id"]: r["installed"] for r in rewrites}
+        assert installed == {"1": True, "2": False}
+        assert {r["pack"] for r in rewrites} == {"ComfyUI-GGUF"}
+
+        apply_loader_rewrites(graph, rewrites)
+        # The core-only inputs go; the files, the type and the links stay.
+        assert graph["1"] == {
+            "class_type": "UnetLoaderGGUF",
+            "inputs": {"unet_name": "flux1-dev-fp8.safetensors"},
+        }
+        assert graph["2"]["inputs"] == {
+            "clip_name1": "t5xxl_fp8.safetensors",
+            "clip_name2": "clip_l.safetensors",
+            "type": "flux",
+        }
+        assert graph["3"]["class_type"] == "VAELoader"
+        assert graph["4"]["inputs"]["model"] == ["1", 0]
+
+        # A pack ComfyUI lacks lists nothing, so its file goes in unchecked.
+        swapped, unswapped = apply_filename_swap(graph, self.SWAPS, {})
+        assert unswapped == []
+        assert graph["1"]["inputs"]["unet_name"] == "flux1-dev-Q8_0.gguf"
+        assert graph["2"]["inputs"]["clip_name1"] == "t5-v1_1-xxl-Q8_0.gguf"
+        assert not any(entry["verified"] for entry in swapped)
+
+    def test_a_graph_keyed_by_integers_is_rewritten_by_its_own_keys(self):
+        graph = {int(k): v for k, v in self._graph().items()}
+        rewrites = plan_loader_rewrites(graph, self.SWAPS)
+        apply_loader_rewrites(graph, rewrites)
+        assert graph[1]["class_type"] == "UnetLoaderGGUF"
+        assert graph[2]["class_type"] == "DualCLIPLoaderGGUF"
+
+    def test_the_plan_is_the_same_without_comfyui(self):
+        rewrites = plan_loader_rewrites(self._graph(), self.SWAPS)
+        assert [r["now"] for r in rewrites] == ["UnetLoaderGGUF", "DualCLIPLoaderGGUF"]
+        assert {r["installed"] for r in rewrites} == {None}
+
+    def test_a_file_of_the_same_type_keeps_the_loader(self):
+        swaps = {"flux1-dev-fp8.safetensors": "chroma-hd.safetensors"}
+        assert plan_loader_rewrites(self._graph(), swaps) == []
+
+    def test_a_gguf_unet_loader_goes_back_for_a_safetensors_file(self):
+        graph = {
+            "1": {"class_type": "UnetLoaderGGUF", "inputs": {"unet_name": "a.gguf"}},
+            "2": {"class_type": "CLIPLoaderGGUF", "inputs": {"clip_name": "t5.gguf"}},
+        }
+        swaps = {"a.gguf": "b.safetensors", "t5.gguf": "t5.safetensors"}
+        rewrites = plan_loader_rewrites(graph, swaps)
+        # The GGUF CLIP loader reads safetensors too, so only the UNET moves.
+        assert [(r["node_id"], r["now"], r["pack"]) for r in rewrites] == [
+            ("1", "UNETLoader", None)
+        ]
+        apply_loader_rewrites(graph, rewrites)
+        assert graph["1"]["inputs"] == {
+            "unet_name": "a.gguf",
+            "weight_dtype": "default",
+        }
 
 
 class TestFilenameSwap:

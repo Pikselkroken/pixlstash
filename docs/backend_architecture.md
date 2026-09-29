@@ -773,6 +773,7 @@ Public guest scoring and shared-link endpoints.
 | GET    | /api/v1/workflows/{workflow_id}/model-swap                                    | workflows       | What a workflow could be cloned onto                        |
 | GET    | /api/v1/workflows/{workflow_id}/pictures                                      | workflows       | Pictures made with a workflow                               |
 | PUT    | /api/v1/workflows/{workflow_id}/pins                                          | workflows       | Set a workflow's pinned parameters                          |
+| POST   | /api/v1/workflows/{workflow_id}/set-clone-plans                               | workflows       | What cloning a workflow onto each workflow set would write  |
 | POST   | /api/v1/workflows/{workflow_id}/split                                         | workflows       | Split a topology out of a workflow                          |
 | GET    | /version                                                                      | server          | Read Version                                                |
 | WS     | /api/v1/ws/updates                                                            | config          | Real-time event stream                                      |
@@ -3601,6 +3602,35 @@ loader lists, because the shelf files a diffusion-only UNET and an all-in-one
 checkpoint under one kind. Duplicate, Insert loader, the LoRA chain edit and
 Clone all write the source file's `pixlstash_bindings` back into the copy
 (`_store_copy`), which the resolved graph has lost.
+
+**Clone onto a workflow set swaps the loader's node class when a file of
+another type needs it.** `comfyui_recipe_service.plan_loader_rewrites` decides
+by file type alone, so the plan is the same with ComfyUI down: a `.gguf` file
+into a core loader takes the ComfyUI-GGUF counterpart (`UNETLoader` to
+`UnetLoaderGGUF`, the three CLIP loaders to their `…GGUF` twins, dropping the
+core-only `weight_dtype` / `device`), and a non-GGUF file into
+`UnetLoaderGGUF` goes back to `UNETLoader` (the GGUF CLIP loaders read
+safetensors, so they stay). `apply_loader_rewrites` then changes the class in
+place, keeping every node id, file field and link. The clone route runs it
+before `apply_filename_swap` (`_swap_files`), so each file is checked against
+the loader that will read it; a class ComfyUI lacks lists nothing, so its file
+goes in unchecked and the answer's `loaders` says `installed: false`: **a
+missing node pack warns and never refuses.** GGUF is the one pack known; any
+other loader keeps its class and a file it cannot list is refused as before.
+`POST /workflows/{id}/set-clone-plans` runs that same `_swap_files` on a copy
+per set asked, so the dialog's diff is the clone's own rewrite. `_set_swaps`
+maps a set to the graph: the first base slot takes the checkpoint the caller names (`checkpoint_id`, a checkpoint or unclassified file, never guessed from the members), and a VAE or
+text-encoder slot the set's untaken file of the same layout (`family`, or the
+set's only one against the graph's only slot of that kind). Two slots of a kind
+are two different files, since the slot list merges loaders naming one, so one
+set VAE is never written over a video VAE and an image VAE alike. **LoRAs go only when the
+base model changes**: `keeps_loras` compares `_base_key` of the set's
+checkpoint with `_replaced_base_model` of the graph's, and an unknown base model
+on either side is *not* the same. The clone body's optional `loras` is the
+chain in `PUT …/lora-chain`'s shape (`_chain_plan`, shared with Edit LoRAs),
+applied before the loader rewrite because ComfyUI can type the original's
+classes even when the new pack is not installed; it needs `object_info`, so a
+clone that carries a chain answers 503 with ComfyUI down.
 
 **The model-swap route does not cache `recipe_asset_index`, on measurement
 (#1515).** It builds the index once per request and hands it to both the slot

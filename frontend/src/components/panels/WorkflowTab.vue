@@ -95,16 +95,31 @@
             tabindex="-1"
             >Default recipe</span
           >
-          <AppButton
-            size="sm"
-            variant="ghost"
-            data-testid="wftab-edit-loras"
-            :disabled="chainNoGraph"
-            :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
-            @click="openEditLoras(selectedKey)"
-          >
-            Edit LoRAs…
-          </AppButton>
+          <!-- The two verbs on what a run starts from: the clone's on its
+               models, beside Edit LoRAs… on its LoRAs. Both open the same
+               LoRA dialog in the end, one on this card, one on the clone. -->
+          <span class="wftab-sec-verbs">
+            <AppButton
+              size="sm"
+              variant="ghost"
+              data-testid="wftab-clone-onto-set"
+              :disabled="chainNoGraph"
+              :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
+              @click="store.requestCloneOntoSet(selectedKey)"
+            >
+              Clone onto a set…
+            </AppButton>
+            <AppButton
+              size="sm"
+              variant="ghost"
+              data-testid="wftab-edit-loras"
+              :disabled="chainNoGraph"
+              :aria-describedby="chainNoGraph ? 'wftab-chain-reason' : undefined"
+              @click="openEditLoras(selectedKey)"
+            >
+              Edit LoRAs…
+            </AppButton>
+          </span>
         </div>
         <p
           v-if="provenanceNote"
@@ -2599,6 +2614,11 @@ async function checkInstalled(key) {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+}
+
+.wftab-sec-verbs {
+  display: flex;
+  gap: var(--space-1);
 }
 
 .wftab-lora-value {

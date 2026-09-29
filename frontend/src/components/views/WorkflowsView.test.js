@@ -51,6 +51,8 @@ const deleteWorkflowFile = vi.fn();
 const exportWorkflow = vi.fn();
 const readModelSwap = vi.fn();
 const cloneWorkflowWithModels = vi.fn();
+const planSetClones = vi.fn();
+const getLoraChain = vi.fn();
 vi.mock("../../api/workflows", () => ({
   listWorkflowCards: (...args) => listWorkflowCards(...args),
   getWorkflowCard: (...args) => getWorkflowCard(...args),
@@ -69,6 +71,14 @@ vi.mock("../../api/workflows", () => ({
   exportWorkflow: (...args) => exportWorkflow(...args),
   readModelSwap: (...args) => readModelSwap(...args),
   cloneWorkflowWithModels: (...args) => cloneWorkflowWithModels(...args),
+  planSetClones: (...args) => planSetClones(...args),
+  getLoraChain: (...args) => getLoraChain(...args),
+  saveLoraChain: vi.fn(),
+}));
+const fetchWorkflowSets = vi.fn();
+vi.mock("../../api/modelShelf", () => ({
+  fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
+  listAdapters: vi.fn(async () => []),
 }));
 const listImportFolders = vi.fn();
 vi.mock("../../api/folders", () => ({
@@ -1088,62 +1098,257 @@ describe("the verbs the bar fires", () => {
   });
 });
 
-describe("Clone with new models", () => {
+describe("Clone onto a workflow set", () => {
   const bar = (wrapper) =>
     wrapper.findComponent({ name: "WorkflowSelectionBar" });
 
-  it("opens on the selected card and selects the clone it made", async () => {
-    const checkpoint = (id, filename) => ({
-      id,
-      filename,
-      display_name: null,
-      base_model: null,
-      file_kind: "checkpoint",
-    });
-    readModelSwap.mockResolvedValue({
-      slots: [
+  const loader = (was, now, extra = {}) => ({
+    node_id: "1",
+    kind: "unet",
+    was_class: "UNETLoader",
+    now_class: "UNETLoader",
+    was: [was],
+    now: [now],
+    pack: null,
+    installed: null,
+    ...extra,
+  });
+
+  beforeEach(() => {
+    fetchWorkflowSets.mockResolvedValue({
+      combinations: [],
+      no_set: [],
+      hand_made: [
         {
-          filename: "old.safetensors",
-          kind: "checkpoint",
-          model: checkpoint(1, "old.safetensors"),
+          id: 7,
+          name: "Flux dev GGUF",
+          members: [
+            { id: 11, slot: "checkpoint", on_shelf: true, name: "flux1-dev-Q8_0" },
+            { id: 12, slot: "lora", on_shelf: true, name: "mara" },
+          ],
+          covers: [],
+          picture_count: 0,
+        },
+        {
+          id: 8,
+          name: "Chroma",
+          members: [{ id: 21, slot: "checkpoint", on_shelf: true, name: "chroma" }],
+          covers: [],
+          picture_count: 0,
         },
       ],
-      checkpoints: [
-        checkpoint(1, "old.safetensors"),
-        checkpoint(2, "new.safetensors"),
+    });
+    getLoraChain.mockResolvedValue({
+      editable: true,
+      loaders: [{ node_id: "5", name: "mara_v3", strength: 0.85 }],
+      lanes: [],
+    });
+    planSetClones.mockResolvedValue({
+      base_filename: "flux1-dev-fp8.safetensors",
+      base_model: "FLUX.1 dev",
+      plans: [
+        {
+          key: "hand:7",
+          fit: "same_base_model",
+          reason: null,
+          base_model: "FLUX.1 dev",
+          keeps_loras: true,
+          swaps: { "flux1-dev-fp8.safetensors": "flux1-dev-Q8_0.gguf" },
+          loaders: [
+            loader("flux1-dev-fp8.safetensors", "flux1-dev-Q8_0.gguf", {
+              now_class: "UnetLoaderGGUF",
+              pack: "ComfyUI-GGUF",
+              installed: false,
+            }),
+          ],
+        },
+        {
+          key: "hand:8",
+          fit: "other",
+          reason: null,
+          base_model: "Chroma",
+          keeps_loras: false,
+          swaps: { "flux1-dev-fp8.safetensors": "chroma.safetensors" },
+          loaders: [loader("flux1-dev-fp8.safetensors", "chroma.safetensors")],
+        },
       ],
+    });
+    cloneWorkflowWithModels.mockResolvedValue({
+      name: "a · Chroma.json",
+      workflow_id: "c",
+      swapped: [],
+      unswapped: [],
+      loaders: [],
+      verified: true,
+    });
+  });
+
+  async function openOn(wrapper) {
+    useWorkflowsStore().selectRange(["a"]);
+    await bar(wrapper).vm.$emit("clone-onto-set");
+    await flush();
+    await flush();
+  }
+
+  const cloneButton = (wrapper) =>
+    wrapper
+      .findAll(".app-dialog__footer button")
+      .find((b) => b.text().includes("Clone"));
+
+  it("plans every set and clones with the LoRAs removed on another base model", async () => {
+    const wrapper = await grid();
+    await openOn(wrapper);
+    expect(planSetClones).toHaveBeenCalledWith("a", [
+      { key: "hand:7", checkpoint_id: 11, model_ids: [] },
+      { key: "hand:8", checkpoint_id: 21, model_ids: [] },
+    ]);
+    // "Fits this graph" hides the set of another base model.
+    expect(wrapper.find('[data-testid="cos-set-hand:8"]').exists()).toBe(false);
+    await wrapper.findAll(".cos-tab")[1].trigger("click");
+    await wrapper.find('[data-testid="cos-set-hand:8"]').trigger("click");
+    expect(wrapper.find('[data-testid="cos-removed"]').text()).toContain(
+      "mara_v3",
+    );
+    await cloneButton(wrapper).trigger("click");
+    await flush();
+    expect(cloneWorkflowWithModels).toHaveBeenCalledWith("a", {
+      name: "a · Chroma",
+      swaps: { "flux1-dev-fp8.safetensors": "chroma.safetensors" },
+      loras: { entries: [], lanes: null },
+    });
+    expect(useWorkflowsStore().selectedKeys).toEqual(["c"]);
+  });
+
+  it("keeps the chain on the same base model and warns of a missing pack", async () => {
+    const wrapper = await grid();
+    await openOn(wrapper);
+    await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
+    expect(wrapper.find('[data-testid="cos-set-hand:7"]').text()).toContain(
+      "Keeps its 1 LoRA",
+    );
+    expect(wrapper.find('[data-testid="cos-pack-note"]').text()).toContain(
+      "ComfyUI-GGUF is not installed",
+    );
+    await cloneButton(wrapper).trigger("click");
+    await flush();
+    expect(cloneWorkflowWithModels).toHaveBeenLastCalledWith("a", {
+      name: "a · Flux dev GGUF",
+      swaps: { "flux1-dev-fp8.safetensors": "flux1-dev-Q8_0.gguf" },
+      loras: null,
+    });
+  });
+
+  it("names the set a dropped LoRA was added for when the set changes", async () => {
+    const wrapper = await grid();
+    await openOn(wrapper);
+    await wrapper.findAll(".cos-tab")[1].trigger("click");
+    await wrapper.find('[data-testid="cos-set-hand:8"]').trigger("click");
+    await wrapper.findComponent({ name: "EditLorasDialog" }).vm.$emit("done", {
+      rows: [{ id: "new:1", name: "mara_chroma", isNew: true, sha256: "sha-m" }],
+      body: { entries: [{ node_id: null, sha256: "sha-m", strength: 1 }] },
+      changes: 1,
+    });
+    await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
+    expect(wrapper.text()).toContain(
+      "Dropped the LoRA edits made for Chroma, including mara_chroma.",
+    );
+  });
+
+  it("says a dropped edit that only deleted a LoRA was dropped too", async () => {
+    const wrapper = await grid();
+    await openOn(wrapper);
+    await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
+    await wrapper.findComponent({ name: "EditLorasDialog" }).vm.$emit("done", {
+      rows: [{ id: "n:5", name: "mara_v3", isNew: false, deleted: true }],
+      body: { entries: [] },
+      changes: 1,
+    });
+    await wrapper.findAll(".cos-tab")[1].trigger("click");
+    await wrapper.find('[data-testid="cos-set-hand:8"]').trigger("click");
+    expect(wrapper.text()).toContain(
+      "Dropped the LoRA edits made for Flux dev GGUF.",
+    );
+  });
+
+  it("counts the LoRAs an edit leaves, not the ones the plan kept", async () => {
+    const wrapper = await grid();
+    await openOn(wrapper);
+    await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
+    expect(wrapper.find('[data-testid="cos-summary"]').text()).toBe(
+      "1 loader rewritten · LoRAs kept · 1 node pack",
+    );
+    // Same base model, but the owner deleted the kept LoRA and added one.
+    await wrapper.findComponent({ name: "EditLorasDialog" }).vm.$emit("done", {
+      rows: [
+        { id: "n:5", name: "mara_v3", isNew: false, deleted: true },
+        { id: "new:1", name: "film-look", isNew: true, sha256: "sha-f" },
+      ],
+      body: { entries: [{ node_id: null, sha256: "sha-f", strength: 1 }] },
+    });
+    expect(wrapper.find('[data-testid="cos-summary"]').text()).toBe(
+      "1 loader rewritten · 1 LoRA removed, 1 LoRA added · 1 node pack",
+    );
+  });
+
+  it("names a missing pack and unchecked names in one notice", async () => {
+    cloneWorkflowWithModels.mockResolvedValue({
+      name: "a · Flux dev GGUF.json",
+      workflow_id: "c",
+      swapped: [],
+      unswapped: [],
+      loaders: [{ node_id: "1", pack: "ComfyUI-GGUF", installed: false }],
+      verified: false,
+    });
+    const wrapper = await grid();
+    await openOn(wrapper);
+    await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
+    await cloneButton(wrapper).trigger("click");
+    await flush();
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.level).toBe("warning");
+    expect(notice.text).toContain("It needs ComfyUI-GGUF");
+    expect(notice.text).toContain("run it once to check");
+  });
+
+  it("names a pack nobody could check, beside the unchecked names", async () => {
+    cloneWorkflowWithModels.mockResolvedValue({
+      name: "a · Flux dev GGUF.json",
+      workflow_id: "c",
+      swapped: [],
+      unswapped: [],
+      loaders: [{ node_id: "1", pack: "ComfyUI-GGUF", installed: null }],
+      verified: false,
+    });
+    const wrapper = await grid();
+    await openOn(wrapper);
+    await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
+    await cloneButton(wrapper).trigger("click");
+    await flush();
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.level).toBe("warning");
+    expect(notice.text).toContain(
+      "It needs ComfyUI-GGUF, and PixlStash could not ask ComfyUI whether it has it.",
+    );
+  });
+
+  it("hands per-file picking to Clone with new models", async () => {
+    readModelSwap.mockResolvedValue({
+      slots: [],
+      checkpoints: [],
       vaes: [],
       text_encoders: [],
       proposals: {},
       flags: [],
     });
-    cloneWorkflowWithModels.mockResolvedValue({
-      name: "a (new models).json",
-      workflow_id: "c",
-      swapped: [],
-      unswapped: [],
-      verified: false,
-    });
     const wrapper = await grid();
-    const store = useWorkflowsStore();
-    store.selectRange(["a"]);
-
-    await bar(wrapper).vm.$emit("clone-with-models");
+    await openOn(wrapper);
+    await wrapper.findAll(".cos-tab")[1].trigger("click");
+    await wrapper.find('[data-testid="cos-pick-files"]').trigger("click");
     await flush();
     expect(readModelSwap).toHaveBeenCalledWith("a");
-    await wrapper.find(".app-dialog select").setValue("2");
-    await flush();
-    const clone = wrapper
-      .findAll(".app-dialog__footer button")
-      .find((b) => b.text().includes("Clone"));
-    await clone.trigger("click");
-    await flush();
-
-    expect(cloneWorkflowWithModels).toHaveBeenCalledWith("a", {
-      name: "a — new.safetensors",
-      swaps: { "old.safetensors": "new.safetensors" },
-    });
-    expect(store.selectedKeys).toEqual(["c"]);
+    expect(useWorkflowsStore().cloneOntoSetKey).toBe("");
   });
 });
 
