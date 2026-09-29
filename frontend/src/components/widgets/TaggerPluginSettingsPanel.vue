@@ -60,10 +60,15 @@ function resetToDefaults() {
   saved.value = false;
 }
 
-// Separate sources, not the plugin object: the pane's is_loaded poll replaces
-// that object every few seconds and would wipe an unsaved edit.
+// Compared by value, not the plugin or settings object: the pane's is_loaded
+// poll replaces the plugin every few seconds, and a reseed on a new object with
+// the same content would wipe an unsaved edit.
 watch(
-  [() => props.plugin.name, () => props.plugin.parameter_schema, params],
+  [
+    () => props.plugin.name,
+    () => JSON.stringify(props.plugin.parameter_schema ?? []),
+    () => JSON.stringify(params.value),
+  ],
   () => {
     // Merge stored params over defaults so missing keys are filled.
     formParams.value = { ...defaultParams(), ...params.value };

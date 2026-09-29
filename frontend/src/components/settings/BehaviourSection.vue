@@ -352,7 +352,6 @@ watch(
             v-else
             kind="description"
             :plugins="taggerPlugins"
-            :inline-settings-for="PIXLSTASH_TAGGER"
             v-model:settings="taggerSettings"
           />
         </SettingsFieldBlock>

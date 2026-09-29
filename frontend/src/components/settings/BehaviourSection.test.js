@@ -280,10 +280,11 @@ describe("the PixlStash tagger's settings sit in the pane", () => {
     const w = await openPane("pixlstash_tagger");
     expect(panel(w).exists()).toBe(true);
     expect(form(w).props("modelValue")).toEqual({ threshold_offset: 0.1 });
+    // Only the tag picker: the PixlStash tagger does not caption.
     const pickers = w.findAllComponents({ name: "PluginSelect" });
     expect(pickers.map((p) => p.props("inlineSettingsFor"))).toEqual([
       "pixlstash_tagger",
-      "pixlstash_tagger",
+      "",
     ]);
   });
 
@@ -344,5 +345,28 @@ describe("the PixlStash tagger's settings sit in the pane", () => {
     await nextTick();
 
     expect(form(w).props("modelValue")).toEqual({ threshold_offset: -0.2 });
+  });
+
+  it("keeps an unsaved edit when the settings object is replaced by an equal copy", async () => {
+    const w = await openPane("pixlstash_tagger");
+    form(w).vm.$emit("update:modelValue", { threshold_offset: -0.2 });
+    await nextTick();
+
+    w.vm.taggerSettings = JSON.parse(JSON.stringify(w.vm.taggerSettings));
+    w.vm.taggerPlugins = JSON.parse(JSON.stringify(w.vm.taggerPlugins));
+    await nextTick();
+
+    expect(form(w).props("modelValue")).toEqual({ threshold_offset: -0.2 });
+  });
+
+  it("does reseed when the saved params really change", async () => {
+    const w = await openPane("pixlstash_tagger");
+    w.vm.taggerSettings = {
+      ...w.vm.taggerSettings,
+      plugins: { pixlstash_tagger: { params: { threshold_offset: 0.3 } } },
+    };
+    await nextTick();
+
+    expect(form(w).props("modelValue")).toEqual({ threshold_offset: 0.3 });
   });
 });
