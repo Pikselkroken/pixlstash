@@ -27,12 +27,18 @@ function strengthText(value) {
   return String(Number((Number.isFinite(number) ? number : 1).toFixed(2)));
 }
 
+/** A number or a numeric string: never null, a boolean or "" (Number makes those 0 or 1). */
+function numeric(value) {
+  return (
+    value !== "" &&
+    value != null &&
+    typeof value !== "boolean" &&
+    Number.isFinite(Number(value))
+  );
+}
+
 function sameValue(a, b) {
-  const x = Number(a);
-  const y = Number(b);
-  if (a !== "" && b !== "" && Number.isFinite(x) && Number.isFinite(y)) {
-    return x === y;
-  }
+  if (numeric(a) && numeric(b)) return Number(a) === Number(b);
   return String(a) === String(b);
 }
 

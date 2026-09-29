@@ -125,6 +125,22 @@ describe("a default LoRA the owner added has no filename", () => {
   });
 });
 
+describe("parameter values", () => {
+  const withDefault = (value) => ({ ...DEFAULT, values: [{ label: "V", slot_label: "core:S", input_name: "v", value }] });
+  const segs = (override, base) =>
+    recipeDiff({ overrides: { "core:S/v": override } }, withDefault(base)).segments.map((s) => s.text);
+
+  it("match a number and its text", () => {
+    expect(segs("40", 40)).toEqual([]);
+  });
+
+  it("never read null or a boolean as a number", () => {
+    expect(segs(null, 0)).toEqual(["V null"]);
+    expect(segs(true, 1)).toEqual(["V on"]);
+    expect(segs(false, 0)).toEqual(["V off"]);
+  });
+});
+
 describe("digests", () => {
   it("pair whatever their case", () => {
     const recipe = {
