@@ -9811,6 +9811,14 @@ def test_a_set_plan_names_the_swap_and_the_loader_before_and_after(cloneable):
     assert list(cloneable.folder.glob("*.json")) == []
 
 
+def test_two_sets_asked_under_one_key_are_a_422(cloneable):
+    ask = {"key": "same", "checkpoint_id": cloneable.checkpoint_id, "model_ids": []}
+    r = cloneable.owner.post(
+        f"{API}/workflows/{RUN_WF}/set-clone-plans", json={"sets": [ask, ask]}
+    )
+    assert r.status_code == 422, r.text
+
+
 def test_a_set_plan_says_which_sets_will_not_load_and_why(cloneable):
     hub = cloneable.server.hub
     with hub.transaction() as conn:

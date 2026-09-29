@@ -1885,6 +1885,14 @@ class SetClonePlansRequest(BaseModel):
 
     sets: list[SetCloneAsk] = Field(max_length=MAX_SET_PLANS)
 
+    @model_validator(mode="after")
+    def _keys_unique(self) -> "SetClonePlansRequest":
+        # The plans come back by key: two sets sharing one would lose one.
+        keys = [ask.key for ask in self.sets]
+        if len(keys) != len(set(keys)):
+            raise ValueError("each set needs a key of its own")
+        return self
+
 
 class LoaderDiff(BaseModel):
     """One model loader of the graph, before and after the clone."""
