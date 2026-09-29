@@ -214,6 +214,19 @@ describe("TaggerPluginSettingsPanel: saves as you go", () => {
     expect(patchUserConfig).not.toHaveBeenCalled();
   });
 
+  it("still saves the other fields while a number box is left empty", async () => {
+    const wrapper = mountPanel(
+      { threshold_offset: 0.1, whole_face_crop: false },
+      OFFSET_PLUGIN,
+    );
+    await edit(wrapper, { threshold_offset: null });
+    await edit(wrapper, { whole_face_crop: true });
+
+    // The empty box keeps its stored value rather than blocking the save.
+    expect(saved()).toEqual([{ threshold_offset: 0.1, whole_face_crop: true }]);
+  });
+
+
   it("resets to defaults and saves that", async () => {
     const wrapper = mountPanel(
       { threshold_offset: 0.3, whole_face_crop: false },

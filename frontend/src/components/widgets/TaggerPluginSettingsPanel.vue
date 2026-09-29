@@ -73,11 +73,16 @@ const dirty = computed(
 );
 
 // A number box cleared mid-edit holds null; saving that would store "no
-// value" for a setting that has a default, so wait for a real one.
-function incomplete(values) {
-  return (props.plugin.parameter_schema ?? []).some(
-    (f) => f.default != null && values[f.name] == null,
-  );
+// value" for a setting that has a default. Keep the stored value for that
+// field, so the rest of the form still saves.
+function withoutClearedFields(values, stored) {
+  const out = { ...values };
+  for (const f of props.plugin.parameter_schema ?? []) {
+    if (f.default != null && out[f.name] == null) {
+      out[f.name] = stored[f.name] ?? f.default;
+    }
+  }
+  return out;
 }
 
 function scheduleSave() {
@@ -172,14 +177,18 @@ async function save() {
     return;
   }
   const name = props.plugin.name;
-  const next = { ...formParams.value };
-  if (!dirty.value || incomplete(next)) return;
-  saving.value = true;
-  saveError.value = "";
   // What is stored now: this panel's last save when it has one, since a
   // re-save can run before that save's echo reaches `settings`, and would
   // otherwise read the setting as still off and offer the re-check twice.
   const stored = lastSavedJson ? JSON.parse(lastSavedJson) : params.value;
+  const next = withoutClearedFields(formParams.value, stored);
+  if (
+    JSON.stringify(next) === JSON.stringify({ ...defaultParams(), ...stored })
+  ) {
+    return;
+  }
+  saving.value = true;
+  saveError.value = "";
   // The backend reads this setting off the PixlStash tagger only.
   const turnedOnWholeFace =
     name === "pixlstash_tagger" &&
