@@ -10603,6 +10603,30 @@ def test_an_added_lora_in_a_loader_comfyui_cannot_fill_is_swapped_not_dropped(
     assert [e["requested"] for e in group["swapped_loaders"]] == [False]
 
 
+def test_an_added_lora_is_reported_even_behind_another_refusal(runnable):
+    """`add_loras` answers for itself when a `loras` entry has already refused.
+
+    Here neither can be placed (ComfyUI lists neither file, and there is no
+    ComfyUI-PixlStash or model-only loader to add one in): both say so, rather
+    than the added LoRA going unmentioned behind the first refusal.
+    """
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["LoraLoader"]["input"]["required"]["lora_name"] = [
+        ["unrelated.safetensors"],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    payload = _preflight(
+        runnable.owner,
+        workflow_id=RUN_WF,
+        loras=[{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
+        add_loras=[{"sha256": RUN_ADAPTER_DIGEST}],
+    )
+    assert {"missing_models", "lora_not_insertable"} <= _reasons(payload), payload
+
+
 def test_a_swap_for_a_lora_the_request_named_is_marked_requested(runnable):
     """`loras` naming the slot is the form's choice, which a saved copy never keeps."""
     _graph_loads_a_shelf_lora_comfyui_lacks(runnable)

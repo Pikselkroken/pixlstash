@@ -4838,7 +4838,10 @@ def create_router(server) -> APIRouter:
                         object_info,
                         recipe_swaps,
                     )
-            if body.add_loras and not found:
+            # Not gated on `found`: an added LoRA is applied, or its own reason
+            # reported, whatever else refused. Skipped behind an earlier
+            # refusal, a consented run would go ahead without it unsaid.
+            if body.add_loras:
                 found += _add_loras(
                     graph,
                     body.add_loras,
