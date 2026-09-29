@@ -119,6 +119,7 @@ watch(
   ],
   () => {
     if (JSON.stringify(params.value) === lastSavedJson) return;
+    lastSavedJson = null;
     // Merge stored params over defaults so missing keys are filled.
     formParams.value = { ...defaultParams(), ...params.value };
   },
@@ -150,10 +151,11 @@ async function offerFaceCropRetag() {
       cancelLabel: "Not now",
     });
     if (!ok) return;
-    await retagFaceCrops();
+    // The dry run's count can be stale by the time the user answers.
+    const { count: queued } = await retagFaceCrops();
     useNoticeStore().success(
-      `Re-checking ${count} ${many ? "pictures" : "picture"} with faces. ` +
-        "Follow it in the sidebar's Tasks tab.",
+      `Re-checking ${queued} ${queued !== 1 ? "pictures" : "picture"} with ` +
+        "faces. Follow it in the sidebar's Tasks tab.",
     );
   } catch (e) {
     console.error("Whole-face close-up re-check failed:", errorDetail(e) || e);
@@ -174,16 +176,20 @@ async function save() {
   if (!dirty.value || incomplete(next)) return;
   saving.value = true;
   saveError.value = "";
+  // What is stored now: this panel's last save when it has one, since a
+  // re-save can run before that save's echo reaches `settings`, and would
+  // otherwise read the setting as still off and offer the re-check twice.
+  const stored = lastSavedJson ? JSON.parse(lastSavedJson) : params.value;
   // The backend reads this setting off the PixlStash tagger only.
   const turnedOnWholeFace =
     name === "pixlstash_tagger" &&
-    !params.value.whole_face_crop &&
+    !stored.whole_face_crop &&
     next.whole_face_crop === true;
   try {
     await patchUserConfig({
       tagger_settings: { plugins: { [name]: { params: next } } },
     });
-    lastSavedJson = JSON.stringify({ ...params.value, ...next });
+    lastSavedJson = JSON.stringify({ ...stored, ...next });
     emit("update:settings", {
       ...(props.settings || {}),
       plugins: {

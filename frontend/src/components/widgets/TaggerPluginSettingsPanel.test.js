@@ -99,6 +99,17 @@ describe("TaggerPluginSettingsPanel: whole-face re-check offer", () => {
     expect(notice.success.mock.calls[0][0]).toContain("42");
   });
 
+  it("reports what the retag queued, not the dry run's count", async () => {
+    confirm.mockResolvedValue(true);
+    retagFaceCrops
+      .mockResolvedValueOnce({ count: 42 })
+      .mockResolvedValueOnce({ count: 40 });
+    const wrapper = mountPanel({ whole_face_crop: false });
+    await saveWith(wrapper, true);
+
+    expect(notice.success.mock.calls[0][0]).toContain("Re-checking 40 ");
+  });
+
   it("says so when the re-check cannot be started", async () => {
     confirm.mockResolvedValue(true);
     retagFaceCrops
@@ -267,5 +278,26 @@ describe("TaggerPluginSettingsPanel: saves as you go", () => {
     await flushPromises();
 
     expect(saved().map((p) => p.threshold_offset)).toEqual([0.1, 0.2]);
+  });
+
+  // The re-save runs before the first save's echo reaches `settings`.
+  it("offers the re-check once when a re-save follows the switch", async () => {
+    retagFaceCrops.mockResolvedValue({ count: 3 });
+    const confirmMock = confirm.mockReset().mockResolvedValue(false);
+    let finish;
+    patchUserConfig.mockImplementationOnce(
+      () => new Promise((resolve) => (finish = resolve)),
+    );
+    const wrapper = mountPanel(
+      { threshold_offset: 0, whole_face_crop: false },
+      OFFSET_PLUGIN,
+    );
+    await edit(wrapper, { whole_face_crop: true });
+    await edit(wrapper, { threshold_offset: 0.1 });
+    finish({});
+    await flushPromises();
+
+    expect(saved().length).toBe(2);
+    expect(confirmMock).toHaveBeenCalledOnce();
   });
 });
