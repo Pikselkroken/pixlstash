@@ -3919,6 +3919,9 @@ def create_router(server) -> APIRouter:
             )
         hub = getattr(server, "hub", None)
         shelf_index = adapter_digest_index(hub)
+        # Every LoRA answers for itself: one that cannot be added does not
+        # hide the next, so the owner sees them all rather than one per retry.
+        refused: list[run_service.Reason] = []
         for item in loras:
             sha256 = item.sha256.strip().lower()
             adapter = _shelf_adapter(hub, sha256)
@@ -3945,19 +3948,19 @@ def create_router(server) -> APIRouter:
                     object_info,
                     swaps,
                 )
-                if found:
-                    return found
+                refused += found
                 continue
             try:
                 plan = plan_lora_insertion(graph, object_info)
                 loader = insert_adapter(graph, plan, adapter, object_info)
             except LookupError as exc:
                 logger.info("LoRA %s cannot be added to this workflow: %s", sha256, exc)
-                return [
+                refused.append(
                     run_service.Reason(
                         run_service.LORA_NOT_INSERTABLE, {"detail": str(exc)}
                     )
-                ]
+                )
+                continue
             inputs = (graph.get(loader["node_id"]) or {}).get("inputs") or {}
             if item.strength_model is not None:
                 for name in ("strength_model", "strength"):
@@ -3966,7 +3969,7 @@ def create_router(server) -> APIRouter:
                         break
             if item.strength_clip is not None and "strength_clip" in inputs:
                 inputs["strength_clip"] = item.strength_clip
-        return []
+        return refused
 
     def _slot_digests(slots: list[dict], shelf_index) -> dict:
         """``{(node_id, field): sha256 or None}``: which shelf LoRA each slot loads.

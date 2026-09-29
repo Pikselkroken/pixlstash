@@ -10471,6 +10471,22 @@ def test_a_lora_that_cannot_be_added_is_a_reason_with_the_splices_sentence(
     assert "ComfyUI-PixlStash" in refused[0]["detail"]
 
 
+def test_every_added_lora_that_cannot_be_added_says_so(loaderless):
+    """One refusal per LoRA, not only the first: the rest are not hidden behind it."""
+    payload = _preflight(
+        loaderless.owner,
+        workflow_id=RUN_WF,
+        add_loras=[{"sha256": RUN_ADAPTER_DIGEST}, {"sha256": RUN_ADAPTER_DIGEST}],
+    )
+    refused = [
+        reason
+        for group in payload["groups"]
+        for reason in group["reasons"]
+        if reason["code"] == "lora_not_insertable"
+    ]
+    assert len(refused) == 2, payload
+
+
 def test_an_added_lora_without_comfyui_is_the_unreachable_reason(loaderless):
     """Not a 400: the pre-flight's own refusal, which the popup offers a Retry for."""
     loaderless.monkeypatch.setattr(
