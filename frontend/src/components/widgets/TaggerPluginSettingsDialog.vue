@@ -8,10 +8,12 @@
  *   - "Reset to defaults" button
  *   - Save / Cancel actions
  *   - "Downloaded models" panel (rendered when list_downloaded_artifacts is non-empty)
- *   - Label-thresholds preview (for pixlstash_tagger only)
+ *
+ * The built-in PixlStash tagger does not open this: its settings, with the
+ * label-thresholds preview, are inline in the Models tab
+ * (TaggerPluginSettingsPanel).
  */
 import { computed, ref, watch } from "vue";
-import { getLabelThresholds } from "../../api/taggers";
 import { patchUserConfig } from "../../api/config";
 import TaggerParametersUI from "./TaggerParametersUI.vue";
 import { errorDetail } from "../../utils/apiError";
@@ -36,10 +38,6 @@ const open = computed({
 const formParams = ref({});
 const saving = ref(false);
 const saveError = ref("");
-
-const labelThresholdsOpen = ref(false);
-const labelThresholdsData = ref([]);
-const labelThresholdsLoading = ref(false);
 
 function defaultParams() {
   const out = {};
@@ -86,32 +84,6 @@ async function save() {
     saving.value = false;
   }
 }
-
-async function fetchLabelThresholds() {
-  labelThresholdsLoading.value = true;
-  try {
-    // Preview the offset currently in the form, even before it is saved.
-    const offset = formParams.value?.threshold_offset;
-    labelThresholdsData.value = await getLabelThresholds(offset);
-  } catch {
-    labelThresholdsData.value = [];
-  } finally {
-    labelThresholdsLoading.value = false;
-  }
-}
-
-function openLabelThresholds() {
-  labelThresholdsOpen.value = true;
-  fetchLabelThresholds();
-}
-
-// Keep the open preview in sync with edits to the offset.
-watch(
-  () => formParams.value?.threshold_offset,
-  () => {
-    if (labelThresholdsOpen.value) fetchLabelThresholds();
-  },
-);
 </script>
 
 <template>
@@ -130,18 +102,6 @@ watch(
         v-model="formParams"
         :schema="plugin.parameter_schema"
       />
-
-      <!-- Label-thresholds preview for pixlstash_tagger -->
-      <div v-if="plugin.name === 'pixlstash_tagger'">
-        <AppButton
-          variant="ghost"
-          size="sm"
-          icon-left="table-eye"
-          @click="openLabelThresholds"
-        >
-          Preview label thresholds
-        </AppButton>
-      </div>
 
       <!-- Downloaded artifacts panel (dormant in 1.3a) -->
       <div
@@ -190,49 +150,6 @@ watch(
       </AppButton>
     </template>
   </AppDialog>
-
-  <!-- Label thresholds sub-dialog -->
-  <AppDialog
-    :open="labelThresholdsOpen"
-    title="PixlStash Tagger - Label Thresholds"
-    @close="labelThresholdsOpen = false"
-  >
-    <div v-if="labelThresholdsLoading" class="label-thresholds-loading">
-      Loading…
-    </div>
-    <div v-else-if="!labelThresholdsData.length" class="label-thresholds-empty">
-      No label thresholds found. Ensure the PixlStash tagger model is installed.
-    </div>
-    <table v-else class="label-thresholds-table">
-      <thead>
-        <tr>
-          <th class="lth-col-name">Tag</th>
-          <th class="lth-col-base">Base threshold</th>
-          <th class="lth-col-eff">After offset</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr v-for="row in labelThresholdsData" :key="row.label">
-          <td class="lth-col-name">{{ row.label }}</td>
-          <td class="lth-col-base">
-            {{ (row.base_threshold * 100).toFixed(1) }}%
-          </td>
-          <td
-            class="lth-col-eff"
-            :class="
-              row.effective_threshold > row.base_threshold
-                ? 'lth-penalised'
-                : row.effective_threshold < row.base_threshold
-                  ? 'lth-boosted'
-                  : ''
-            "
-          >
-            {{ (row.effective_threshold * 100).toFixed(1) }}%
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </AppDialog>
 </template>
 
 <style scoped>
@@ -273,32 +190,5 @@ watch(
 /* Reset sits on the footer's left edge, apart from Cancel / Save. */
 .tagger-settings-reset {
   margin-right: auto;
-}
-
-.label-thresholds-loading,
-.label-thresholds-empty {
-  font-size: var(--text-sm);
-  color: rgba(var(--v-theme-on-surface), 0.6);
-}
-
-.label-thresholds-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--text-xs);
-}
-
-.label-thresholds-table th,
-.label-thresholds-table td {
-  text-align: left;
-  padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid rgba(var(--v-theme-on-surface), 0.1);
-}
-
-.lth-penalised {
-  color: rgb(var(--v-theme-surface-error));
-}
-
-.lth-boosted {
-  color: rgb(var(--v-theme-surface-success));
 }
 </style>

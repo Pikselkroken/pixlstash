@@ -6,7 +6,9 @@
  * an explicit None row, then a `menuitemradio` row per plugin. Each plugin row
  * leads with a loaded / not-loaded icon and carries a tooltip with the plugin's
  * description, so readiness and purpose can be read without choosing, which
- * saves. The gear configures the chosen plugin and refuses while None is.
+ * saves. The gear configures the chosen plugin and refuses while None is, or
+ * while the chosen plugin is `inlineSettingsFor`, whose settings the host
+ * shows in the page instead.
  *
  * Was a radio table (issue #1344), then briefly a native <select>, whose popup
  * cannot take the menu styling or a tooltip per option.
@@ -35,6 +37,11 @@ const props = defineProps({
     required: true,
     validator: (v) => ["tag", "description"].includes(v),
   },
+  /**
+   * A plugin whose settings the host renders inline (the Models tab does so
+   * for the built-in PixlStash tagger): the gear greys out while it is chosen.
+   */
+  inlineSettingsFor: { type: String, default: "" },
 });
 
 const emit = defineEmits(["update:settings"]);
@@ -132,7 +139,19 @@ const dialogOpen = ref(false);
 
 // aria-disabled rather than disabled: a natively disabled button takes no hover
 // or focus, so the reason in its tooltip could never be read.
+const settingsInline = computed(
+  () =>
+    !!props.inlineSettingsFor &&
+    activePluginInfo.value?.name === props.inlineSettingsFor,
+);
+const gearEnabled = computed(
+  () => !!activePluginInfo.value && !settingsInline.value,
+);
+
 const gearTooltip = computed(() => {
+  if (settingsInline.value) {
+    return `${labelOf(activePluginInfo.value)} settings are below`;
+  }
   if (activePluginInfo.value) {
     return `${labelOf(activePluginInfo.value)} settings`;
   }
@@ -142,7 +161,7 @@ const gearTooltip = computed(() => {
 });
 
 function openSettings() {
-  if (!activePluginInfo.value) return;
+  if (!gearEnabled.value) return;
   dialogPlugin.value = activePluginInfo.value;
   dialogOpen.value = true;
 }
@@ -279,7 +298,7 @@ function onParamsSaved({ name, params }) {
         icon-only
         icon-left="cog"
         :tooltip="gearTooltip"
-        :aria-disabled="activePluginInfo ? undefined : 'true'"
+        :aria-disabled="gearEnabled ? undefined : 'true'"
         @click="openSettings"
       />
     </div>
