@@ -6801,7 +6801,14 @@ def create_router(server) -> APIRouter:
             else None
         )
         # Once per request, for every set: the dialog asks on open.
-        object_info, _error = _read_object_info(_comfyui_url(_user(request)))
+        object_info, error = _read_object_info(_comfyui_url(_user(request)))
+        if object_info is None:
+            logger.info(
+                "Planning clones of workflow %s onto workflow sets without "
+                "ComfyUI (names unchecked, node packs unknown): %s",
+                workflow_id,
+                error,
+            )
         loader_nodes = [
             (node_id, class_type)
             for node_id, class_type in dict.fromkeys(
