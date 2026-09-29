@@ -5,6 +5,7 @@ Provides:
     GET  /taggers/plugin-diagnostics       - scanned folders + load failures (local owner)
     POST /taggers/{name}/download          - kick off an artifact download for a plugin
     DELETE /taggers/{name}/artifacts/{id}  - remove a downloaded artifact
+    POST /taggers/face-crop-retag          - re-run the face crop pass on every face picture
 """
 
 from __future__ import annotations
@@ -16,8 +17,10 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
+from pixlstash.event_types import EventType
 from pixlstash.pixl_logging import get_logger
 from pixlstash.hub.cli_hint import cli_hint
+from pixlstash.services import tag_prediction_service
 from pixlstash.tagger_plugins.registry import get_tagger_plugin_manager
 
 logger = get_logger(__name__)
@@ -79,6 +82,18 @@ class TaggerArtifactDeleteResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     status: str
+
+
+class FaceCropRetagRequest(BaseModel):
+    """``dry_run`` counts the pictures without queuing anything."""
+
+    dry_run: bool = False
+
+
+class FaceCropRetagResponse(BaseModel):
+    """How many pictures with faces were (or would be) queued."""
+
+    count: int
 
 
 def create_router(server) -> APIRouter:
@@ -251,5 +266,35 @@ def create_router(server) -> APIRouter:
 
         plugin.delete_artifact(artifact_id)
         return {"status": "deleted"}
+
+    @router.post(
+        "/taggers/face-crop-retag",
+        summary="Re-run the face quality crop on every picture with a face",
+        description=(
+            "Drops the crop-owned quality tags (and their non-human predictions) "
+            "on every picture with a frame-0 face and queues it for the "
+            "background tagger, so the whole_face_crop setting applies to the "
+            "existing library. Other tags and human labels are kept; locked and "
+            "deleted pictures are skipped. dry_run returns the count only."
+        ),
+        response_model=FaceCropRetagResponse,
+    )
+    def face_crop_retag(request: Request, payload: FaceCropRetagRequest):
+        server.auth.ensure_secure_when_required(request)
+        ids = tag_prediction_service.retag_face_crops(
+            server.vault, dry_run=payload.dry_run
+        )
+        if ids and not payload.dry_run:
+            server.vault.notify(
+                EventType.CHANGED_TAGS,
+                {
+                    "picture_ids": ids,
+                    "origin_client_id": getattr(
+                        request.state, "origin_client_id", None
+                    ),
+                    "change_kind": "updated",
+                },
+            )
+        return {"count": len(ids)}
 
     return router
