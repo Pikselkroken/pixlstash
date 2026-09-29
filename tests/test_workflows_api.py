@@ -9811,6 +9811,30 @@ def test_a_set_plan_names_the_swap_and_the_loader_before_and_after(cloneable):
     assert list(cloneable.folder.glob("*.json")) == []
 
 
+def test_a_workflow_with_no_checkpoint_says_so_for_every_set(cloneable):
+    """Its own reason, not the set's: none of them can be cloned onto."""
+    graph = _embedded_export_graph()
+    del graph["1"]
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        vae_id = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('vae', 'ae.safetensors', 'scanned')"
+        ).lastrowid
+    try:
+        _body, plans = _plans(cloneable, vae_only=[vae_id])
+    finally:
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE id = ?", (vae_id,))
+    assert plans["vae_only"]["fit"] == "wont_load"
+    assert plans["vae_only"]["reason"] == "This workflow loads no checkpoint"
+
+
 def test_two_sets_asked_under_one_key_are_a_422(cloneable):
     ask = {"key": "same", "checkpoint_id": cloneable.checkpoint_id, "model_ids": []}
     r = cloneable.owner.post(

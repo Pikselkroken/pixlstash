@@ -6844,11 +6844,12 @@ def create_router(server) -> APIRouter:
             pending = deepcopy(graph)
             loaders, _swapped, unswapped = _swap_files(pending, swaps, object_info)
             rewritten = {str(row["node_id"]): row for row in loaders}
+            # The workflow's own reason first: it applies to every set.
             reason = (
-                "Has no checkpoint"
-                if checkpoint is None
-                else "This workflow loads no checkpoint"
+                "This workflow loads no checkpoint"
                 if base is None
+                else "Has no checkpoint"
+                if checkpoint is None
                 else _wont_load(found, unswapped, object_info)
             )
             if reason:
