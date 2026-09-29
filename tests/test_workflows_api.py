@@ -9967,6 +9967,36 @@ def test_a_set_vae_replaces_only_the_graph_vae_of_its_layout(cloneable):
     }
 
 
+def test_a_set_vae_of_another_known_layout_is_not_swapped_in(cloneable):
+    """One slot, one set VAE, two known layouts that differ: no fallback."""
+    graph = _embedded_export_graph()
+    graph["8"] = {"class_type": "VAELoader", "inputs": {"vae_name": "ae.safetensors"}}
+    cloneable.monkeypatch.setattr(
+        workflows_routes,
+        "_load_embedded_api_prompt",
+        lambda server, pid, object_info=None: (graph, []),
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        ids = [
+            conn.execute(
+                "INSERT INTO model (file_kind, filename, family, provenance) "
+                "VALUES ('vae', ?, ?, 'scanned')",
+                (filename, family),
+            ).lastrowid
+            for filename, family in (
+                ("ae.safetensors", "vae_16ch"),
+                ("wan-video-vae.safetensors", "wan_vae"),
+            )
+        ]
+    try:
+        _body, plans = _plans(cloneable, wan=[cloneable.checkpoint_id, ids[1]])
+    finally:
+        with hub.transaction() as conn:
+            conn.executemany("DELETE FROM model WHERE id = ?", [(i,) for i in ids])
+    assert plans["wan"]["swaps"] == {_SHELF_FILENAME: CLONE_CHECKPOINT}
+
+
 def test_two_unknown_base_models_are_not_the_same_one(cloneable):
     """Neither checkpoint's base model is known: the LoRAs are not kept."""
     cloneable.monkeypatch.setattr(

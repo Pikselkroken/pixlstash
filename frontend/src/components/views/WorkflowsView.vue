@@ -1257,18 +1257,24 @@ function closeClone() {
 function clonedWithModels(body) {
   // A loader whose node pack ComfyUI lacks: the clone is written, and the
   // first run would fail on the missing node, so that is the news.
-  const missing = [
+  const packs = (installed) => [
     ...new Set(
       (body.loaders ?? [])
-        .filter((row) => row.pack && row.installed === false)
+        .filter((row) => row.pack && row.installed === installed)
         .map((row) => row.pack),
     ),
   ];
+  const missing = packs(false);
+  // null: ComfyUI did not answer, so nobody could ask whether it has the pack.
+  const unasked = [...packs(null), ...packs(undefined)];
   // Each fact its own sentence in one notice: a missing pack does not make
   // the unchecked names any less worth saying.
   const warnings = [
     missing.length
       ? `It needs ${missing.join(", ")}, which your ComfyUI does not have yet.`
+      : "",
+    unasked.length
+      ? `It needs ${unasked.join(", ")}, and PixlStash could not ask ComfyUI whether it has ${unasked.length === 1 ? "it" : "them"}.`
       : "",
     body.verified
       ? ""

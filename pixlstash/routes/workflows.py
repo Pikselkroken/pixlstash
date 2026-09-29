@@ -6731,12 +6731,16 @@ def create_router(server) -> APIRouter:
                 family = slot.model.family if slot.model else None
                 files = [m for m in of_kind[slot.kind] if m.id not in taken]
                 new = next((m for m in files if family and m.family == family), None)
+                only = of_kind[slot.kind][0] if len(of_kind[slot.kind]) == 1 else None
+                # With no layout to go by on one side or the other: two known
+                # layouts that differ are a mismatch, never a fallback.
                 if (
                     new is None
+                    and only is not None
                     and slots_of[slot.kind] == 1
-                    and len(of_kind[slot.kind]) == 1
+                    and (family is None or only.family is None)
                 ):
-                    new = of_kind[slot.kind][0]
+                    new = only
                 if new is not None:
                     taken.add(new.id)
             if new is not None and normalized_filename(
