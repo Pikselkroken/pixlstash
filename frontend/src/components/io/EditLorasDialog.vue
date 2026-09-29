@@ -524,10 +524,15 @@ const pendingOffer = computed(() => {
   let others = 0;
   for (const adapter of shelf.value) {
     const own = String(rowBaseModel(adapter) || "").trim().toLowerCase();
+    // Every group, the set's own included: a LoRA of another base model is
+    // one the clone would have removed.
+    if (wanted && own !== wanted) {
+      others += 1;
+      continue;
+    }
     if (inSet.has(adapter.id)) groups.set.push(adapter);
     else if (ran[adapter.id]) groups.ran.push(adapter);
-    else if (!wanted || own === wanted) groups.base.push(adapter);
-    else others += 1;
+    else groups.base.push(adapter);
   }
   const ranLabel = `Ran with ${pend.checkpointName || "this checkpoint"}`;
   const baseLabel = wanted ? `Trained on ${pend.baseModel}` : "Your shelf";

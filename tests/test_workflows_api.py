@@ -9774,7 +9774,13 @@ def test_a_replacement_that_is_not_a_model_file_is_a_422(cloneable):
 def _plans(env, **sets):
     r = env.owner.post(
         f"{API}/workflows/{RUN_WF}/set-clone-plans",
-        json={"sets": [{"key": k, "model_ids": ids} for k, ids in sets.items()]},
+        # The first id is the set's checkpoint, the rest its other models.
+        json={
+            "sets": [
+                {"key": k, "checkpoint_id": ids[0], "model_ids": ids[1:]}
+                for k, ids in sets.items()
+            ]
+        },
     )
     assert r.status_code == 200, r.text
     body = r.json()
@@ -9827,6 +9833,52 @@ def test_a_set_plan_says_which_sets_will_not_load_and_why(cloneable):
     assert plans["vae_only"]["reason"] == "Has no checkpoint"
     assert plans["unlisted"]["fit"] == "wont_load"
     assert plans["unlisted"]["reason"] == "ComfyUI does not list unlisted.safetensors"
+
+
+def test_a_gguf_set_on_a_whole_checkpoint_loader_names_the_loader_it_needs(
+    cloneable,
+):
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["UnetLoaderGGUF"] = {
+        "input": {"required": {"unet_name": [["flux1-dev-Q8_0.gguf"], {}]}}
+    }
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        gguf_id = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('unknown', 'flux1-dev-Q8_0.gguf', 'scanned')"
+        ).lastrowid
+    try:
+        _body, plans = _plans(cloneable, gguf=[gguf_id])
+    finally:
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE id = ?", (gguf_id,))
+    # A whole-checkpoint loader has no GGUF twin: refused with the reason.
+    assert plans["gguf"]["fit"] == "wont_load"
+    assert plans["gguf"]["reason"] == "Needs a UnetLoaderGGUF"
+
+
+def test_two_unknown_base_models_are_not_the_same_one(cloneable):
+    """Neither checkpoint's base model is known: the LoRAs are not kept."""
+    cloneable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "down")
+    )
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        unknown_id = conn.execute(
+            "INSERT INTO model (file_kind, filename, provenance) "
+            "VALUES ('checkpoint', 'no-base.safetensors', 'scanned')"
+        ).lastrowid
+    try:
+        _body, plans = _plans(cloneable, unknown=[unknown_id])
+    finally:
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE id = ?", (unknown_id,))
+    assert plans["unknown"]["fit"] == "other"
+    assert plans["unknown"]["keeps_loras"] is False
 
 
 def test_a_set_of_the_same_base_model_keeps_the_loras(cloneable):

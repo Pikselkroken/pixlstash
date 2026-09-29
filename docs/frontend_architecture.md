@@ -1483,7 +1483,10 @@ on the Workflow tab's Default recipe heading, both through
   opens `EditLorasDialog` in pending mode and its Done is what Clone sends. A
   set change re-applies the rule from the original and drops the edit, saying
   which added LoRAs went. Clone is off while a removal is needed and the chain
-  is not editable (ComfyUI down): it would be refused.
+  is not editable (ComfyUI down): it would be refused; and off onto another
+  base model when the chain could not be read at all, since it may hold LoRAs
+  of the old one. A second base loader the set leaves alone (a refiner, Wan
+  2.2's other expert) is named in a warning: only the first one changes.
 - The name defaults to "<card> · <set>" until typed in. The view's notice
   names a missing pack after the write.
 

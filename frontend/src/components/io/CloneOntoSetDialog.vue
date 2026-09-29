@@ -132,6 +132,13 @@
               </span>
             </li>
           </ul>
+          <p v-if="baseKept" class="cos-note cos-warn" data-testid="cos-base-kept">
+            <v-icon size="14" aria-hidden="true">mdi-alert-outline</v-icon>
+            <span
+              >Only the first base model changes. {{ baseKept }} stays as the
+              workflow has it.</span
+            >
+          </p>
           <p
             v-for="pack in packs"
             :key="pack.name"
@@ -158,7 +165,11 @@
             </AppButton>
           </div>
           <p v-if="dropNotice" class="cos-note" role="status">{{ dropNotice }}</p>
-          <p v-if="!loraCount && !addedRows.length" class="cos-note">
+          <p v-if="!chain" class="cos-note cos-bad" role="alert">
+            Could not read this workflow's LoRAs, so PixlStash cannot tell
+            which to keep.
+          </p>
+          <p v-else-if="!loraCount && !addedRows.length" class="cos-note">
             This workflow has no LoRAs.
           </p>
           <template v-else-if="chosen.plan.keeps_loras">
@@ -400,6 +411,22 @@ const packs = computed(() => {
   return [...found.values()];
 });
 
+/**
+ * A second base loader the set leaves alone (a refiner, Wan 2.2's other
+ * expert): the plan swaps the first one only, and says so rather than letting
+ * a mixed graph pass as a clone onto the set.
+ */
+const baseKept = computed(() => {
+  const bases = (chosen.value?.plan.loaders ?? []).filter(
+    (row) => row.kind === "checkpoint" || row.kind === "unet",
+  );
+  return bases
+    .slice(1)
+    .filter((row) => !changed(row))
+    .map((row) => fileNames(row.was))
+    .join(", ");
+});
+
 const sameFiles = computed(
   () => Boolean(chosen.value) && !Object.keys(chosen.value.plan.swaps).length,
 );
@@ -438,7 +465,9 @@ const canClone = computed(
     !sameFiles.value &&
     Boolean(name.value.trim()) &&
     !cloning.value &&
-    // Removing LoRAs rewires the graph, which needs the chain's planner.
+    // Removing LoRAs rewires the graph, which needs the chain's planner; an
+    // unread chain may hold LoRAs of the old base model.
+    (chosen.value.plan.keeps_loras || Boolean(chain.value)) &&
     (lorasBody.value === null || chainEditable.value),
 );
 
@@ -535,7 +564,6 @@ function candidates(payload) {
   const handMade = (payload.hand_made ?? []).map((set) => {
     const members = (set.members ?? []).filter((m) => m.on_shelf && m.id != null);
     const checkpoint = setCheckpoint(set);
-    // The checkpoint first: the plan takes the first one it is given.
     const ordered = [
       ...members.filter((m) => m.slot === "checkpoint"),
       ...members.filter((m) => m.slot !== "checkpoint"),
@@ -547,7 +575,10 @@ function candidates(payload) {
       files: filesLine(ordered),
       cover: (set.covers ?? [])[0] ?? null,
       pictures: Number(set.picture_count) || 0,
-      modelIds: ordered.map((m) => m.id),
+      // The plan uses a set's VAEs and encoders; its LoRAs only feed the picker.
+      modelIds: ordered
+        .filter((m) => m.slot !== "checkpoint" && m.slot !== "lora")
+        .map((m) => m.id),
       loraIds: members.filter((m) => m.slot === "lora").map((m) => m.id),
       checkpointId: checkpoint?.on_shelf ? checkpoint.id : null,
       checkpointName: checkpoint?.name || "",
@@ -562,10 +593,9 @@ function candidates(payload) {
       files: filesLine(models),
       cover: (group.covers ?? [])[0] ?? null,
       pictures: group.pictures || 0,
-      modelIds: [
-        group.head.id,
-        ...models.filter((m) => m.id !== group.head.id).map((m) => m.id),
-      ],
+      modelIds: models
+        .filter((m) => m.id !== group.head.id && m.kind !== "adapter")
+        .map((m) => m.id),
       loraIds: models.filter((m) => m.kind === "adapter").map((m) => m.id),
       checkpointId: group.head.id,
       checkpointName: group.head?.name || "",
@@ -591,7 +621,8 @@ async function load() {
     const [payload, read] = await Promise.all([
       fetchWorkflowSets(),
       getLoraChain(props.workflowId).catch((err) => {
-        // Only the LoRA half needs it; the dialog says so there.
+        // Only the LoRA half needs it; the dialog says so there, and will not
+        // clone onto another base model without knowing what to remove.
         console.warn(
           `[workflows] could not read the LoRA chain of ${props.workflowId}`,
           err,
@@ -603,7 +634,11 @@ async function load() {
     const found = candidates(payload);
     const answer = await planSetClones(
       props.workflowId,
-      found.map((set) => ({ key: set.key, model_ids: set.modelIds })),
+      found.map((set) => ({
+        key: set.key,
+        checkpoint_id: set.checkpointId,
+        model_ids: set.modelIds,
+      })),
     );
     if (mine !== token) return;
     const plans = new Map((answer?.plans ?? []).map((plan) => [plan.key, plan]));

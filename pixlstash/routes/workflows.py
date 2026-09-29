@@ -1811,8 +1811,10 @@ class ModelSwapOptions(BaseModel):
 # Ceiling on one clone's swap map. A graph names a handful of model files; the
 # bound is here so a hand-made request cannot post an unbounded map.
 MAX_SWAPS = 64
-# Workflow sets one clone-plan read may ask about: a shelf's worth.
-MAX_SET_PLANS = 500
+# Workflow sets one clone-plan read may ask about, and models per set: a
+# shelf's worth, since one refusal blanks the whole dialog.
+MAX_SET_PLANS = 2000
+MAX_SET_MODELS = 1000
 
 
 class CloneLoras(BaseModel):
@@ -1869,7 +1871,13 @@ class SetCloneAsk(BaseModel):
     """One workflow set to plan a clone onto: a key of the caller's, its models."""
 
     key: str = Field(min_length=1, max_length=MAX_LABEL_LENGTH)
-    model_ids: list[int] = Field(max_length=MAX_SWAPS)
+    checkpoint_id: int | None = Field(
+        None, description="The set's checkpoint (or diffusion file); null when none."
+    )
+    model_ids: list[int] = Field(
+        max_length=MAX_SET_MODELS,
+        description="Its other models: VAEs and text encoders are used.",
+    )
 
 
 class SetClonePlansRequest(BaseModel):
@@ -6682,8 +6690,10 @@ def create_router(server) -> APIRouter:
         return options
 
     def _set_swaps(
-        found: list[tuple[str, str, SwapSlot]], members: list[SwapModel]
-    ) -> tuple[SwapModel | None, dict[str, str]]:
+        found: list[tuple[str, str, SwapSlot]],
+        checkpoint: SwapModel | None,
+        members: list[SwapModel],
+    ) -> dict[str, str]:
         """The set's checkpoint, and which graph file each of its files replaces.
 
         The first base slot takes the set's checkpoint; every VAE slot the
@@ -6694,9 +6704,6 @@ def create_router(server) -> APIRouter:
         ponytail: a set with two VAEs gives the first; the tray has no order,
         so the plan's diff is where the owner sees which.
         """
-        checkpoint = next(
-            (m for m in members if m.file_kind == FILE_CHECKPOINT), None
-        ) or next((m for m in members if m.file_kind == FILE_UNKNOWN), None)
         vaes = [m for m in members if m.file_kind == FILE_VAE]
         encoders = [m for m in members if m.file_kind == FILE_TEXT_ENCODER]
         clip_slots = [slot for _c, _w, slot in found if slot.kind == "clip"]
@@ -6728,7 +6735,7 @@ def create_router(server) -> APIRouter:
                 new.filename
             ) != normalized_filename(slot.filename):
                 swaps[slot.filename] = new.filename
-        return checkpoint, swaps
+        return swaps
 
     def _wont_load(
         found, unswapped: list[dict], object_info: dict | None
@@ -6807,7 +6814,16 @@ def create_router(server) -> APIRouter:
         plans = []
         for ask in body.sets:
             members = [models[i] for i in ask.model_ids if i in models]
-            checkpoint, swaps = _set_swaps(found, members)
+            # Named by the caller, never guessed from the members: a set's
+            # checkpoint slot takes a checkpoint or an unclassified diffusion
+            # file, and an upscaler beside no checkpoint is no base model.
+            checkpoint = models.get(ask.checkpoint_id)
+            if checkpoint is not None and checkpoint.file_kind not in (
+                FILE_CHECKPOINT,
+                FILE_UNKNOWN,
+            ):
+                checkpoint = None
+            swaps = _set_swaps(found, checkpoint, members)
             new_base = _base_key(checkpoint.base_model) if checkpoint else None
             keeps = old_base is not None and new_base == old_base
             pending = deepcopy(graph)
