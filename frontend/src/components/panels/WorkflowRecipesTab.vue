@@ -143,20 +143,6 @@
                 <v-icon size="16">mdi-pencil</v-icon>
                 Rename
               </button>
-              <!-- Parameters only until the defaults PUT takes models and
-                   LoRAs (F-1), so offered only when there is one to take;
-                   a verb that belongs to one workflow, so not on a
-                   multi-selection. -->
-              <button
-                v-if="!multi && recipeDiffs[recipe.id].params.length"
-                class="ctx-item"
-                type="button"
-                role="menuitem"
-                @click="startMakeDefaults(recipe)"
-              >
-                <v-icon size="16">mdi-star-outline</v-icon>
-                Make these the defaults…
-              </button>
               <button
                 class="ctx-item"
                 type="button"
@@ -211,6 +197,21 @@
         </div>
 
         <div class="wfrt-bot">
+          <!-- On the card, not in its ⋯ menu, where nobody found it. Only
+               when a parameter differs (the defaults PUT takes parameters;
+               LoRAs go in from the Workflow tab's pile), and a verb that
+               belongs to one workflow, so not on a multi-selection. -->
+          <AppButton
+            v-if="!multi && recipeDiffs[recipe.id].params.length"
+            :ref="(el) => registerDefaultsButton(recipe.id, el)"
+            size="sm"
+            variant="ghost"
+            data-testid="wfrt-make-defaults"
+            :tooltip="`Make ${recipe.name || 'this recipe'}'s settings the workflow's defaults`"
+            @click="startMakeDefaults(recipe)"
+          >
+            Make defaults…
+          </AppButton>
           <AppButton size="sm" icon-left="play" @click="run(recipe)">
             Run…
           </AppButton>
@@ -812,6 +813,14 @@ function focusMenuButton(id) {
   menuButtons.get(id)?.$el?.focus?.();
 }
 
+/** Each saved card's *Make defaults…*, which its dialog hands focus back to. */
+const defaultsButtons = new Map();
+
+function registerDefaultsButton(id, el) {
+  if (el) defaultsButtons.set(id, el);
+  else defaultsButtons.delete(id);
+}
+
 function startExport(recipe) {
   menuId.value = null;
   exportId.value = recipe.id;
@@ -841,7 +850,13 @@ function startMakeDefaults(recipe) {
 function closeMakeDefaults() {
   const id = makingDefaults.value?.recipe.id;
   makingDefaults.value = null;
-  nextTick(() => focusMenuButton(id));
+  // Its button, or the card's ⋯ when the write took the last difference and
+  // the button with it.
+  nextTick(() => {
+    const button = defaultsButtons.get(id)?.$el;
+    if (button?.isConnected) button.focus();
+    else focusMenuButton(id);
+  });
 }
 
 /** A parameter's address, as the whole-set PUT keys it. */
@@ -1289,6 +1304,7 @@ function run(recipe) {
 .wfrt-bot {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--space-2);
 }
 

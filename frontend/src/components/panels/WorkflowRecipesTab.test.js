@@ -645,7 +645,7 @@ describe("WorkflowRecipesTab", () => {
     expect(listUsedLooks).toHaveBeenCalledTimes(reads);
   });
 
-  // ── The diff line and "Make these the defaults…" (#1653) ─────────────────
+  // ── The diff line and "Make defaults…" (#1653) ─────────────────
 
   it("states only what a recipe changes, in the fixed order", async () => {
     listSavedRecipes.mockResolvedValue([
@@ -717,7 +717,7 @@ describe("WorkflowRecipesTab", () => {
     // A look carries no workflow, so it keeps its LoRA list.
     expect(wrapper.find(".wfrt-chip").text()).toContain("ada.safetensors");
     // The defaults verb belongs to one workflow.
-    expect(wrapper.text()).not.toContain("Make these the defaults");
+    expect(wrapper.find("[data-testid='wfrt-make-defaults']").exists()).toBe(false);
   });
 
   it("gives a look from pictures its LoRA part and its count", async () => {
@@ -833,8 +833,9 @@ describe("WorkflowRecipesTab", () => {
     setWorkflowDefaults.mockImplementation(async () => detail());
     const wrapper = render();
     await flushPromises();
-    const item = wrapper.findAll(".ctx-item").find((el) => el.text().includes("Make these the defaults"));
-    await item.trigger("click");
+    // On the card itself, not in its ⋯ menu.
+    expect(wrapper.findAll(".ctx-item").some((el) => el.text().includes("defaults"))).toBe(false);
+    await wrapper.find("[data-testid='wfrt-make-defaults']").trigger("click");
     await flushPromises();
 
     const boxes = wrapper.findAll(".mkd-box");
@@ -886,7 +887,7 @@ describe("WorkflowRecipesTab", () => {
         values: [...detail().card.default_recipe.values, denoise],
       });
     getWorkflowCard.mockImplementation(async () => withDenoise());
-    await wrapper.findAll(".ctx-item").find((el) => el.text().includes("Make these")).trigger("click");
+    await wrapper.find("[data-testid='wfrt-make-defaults']").trigger("click");
     await flushPromises();
     await wrapper.findAll("button").find((el) => el.text().startsWith("Make 1 default")).trigger("click");
     await flushPromises();
@@ -923,7 +924,7 @@ describe("WorkflowRecipesTab", () => {
     setWorkflowDefaults.mockImplementation(async () => detail());
     const wrapper = render();
     await flushPromises();
-    await wrapper.findAll(".ctx-item").find((el) => el.text().includes("Make these")).trigger("click");
+    await wrapper.find("[data-testid='wfrt-make-defaults']").trigger("click");
     await flushPromises();
     await wrapper.findAll("button").find((el) => el.text().startsWith("Make 1 default")).trigger("click");
     await flushPromises();
@@ -948,7 +949,7 @@ describe("WorkflowRecipesTab", () => {
     ]);
     const wrapper = render();
     await flushPromises();
-    await wrapper.findAll(".ctx-item").find((el) => el.text().includes("Make these")).trigger("click");
+    await wrapper.find("[data-testid='wfrt-make-defaults']").trigger("click");
     await flushPromises();
     await wrapper.find(".mkd-box").setValue(false);
     const primary = wrapper.findAll("button").find((el) => el.text().startsWith("Make 0"));
@@ -961,6 +962,6 @@ describe("WorkflowRecipesTab", () => {
   it("offers no defaults verb when no parameter differs", async () => {
     const wrapper = render();
     await flushPromises();
-    expect(wrapper.text()).not.toContain("Make these the defaults");
+    expect(wrapper.find("[data-testid='wfrt-make-defaults']").exists()).toBe(false);
   });
 });

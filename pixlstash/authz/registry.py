@@ -1788,6 +1788,10 @@ ROUTE_POLICIES: dict[tuple[str, str], RoutePolicy] = {
         _OWNER,
         justification="Replace a missing model in a workflow's base graph, which re-keys the cards of its topology; PUT blocked for READ tokens; owner only",
     ),
+    ("PUT", "/api/v1/workflows/{workflow_id}/default-lora"): RoutePolicy(
+        _OWNER,
+        justification="Puts one LoRA in or out of a workflow's default recipe; PUT blocked for READ tokens; owner only",
+    ),
     ("PUT", "/api/v1/workflows/{workflow_id}/defaults"): RoutePolicy(
         _OWNER,
         justification="A workflow's default-recipe parameters; PUT blocked for READ tokens; owner only",

@@ -3,7 +3,10 @@
 Status: **shipped on the current API** (#1653, follow-up to #1620). Flows by
 the `ui-ux-expert`, visual spec by the `lead-designer`, reconciled here; where
 they disagreed the settlement is recorded in §2.10. Everything not marked
-**[needs F-n]** is built, including F-4. The data model and API are #1622 /
+**[needs F-n]** is built, including F-4, and F-1's LoRA half: **Add to
+default** on a pile row (`PUT …/default-lora`). The recipe card's verb is a
+visible **Make defaults…** button beside Run…, not a ⋯ menu item (§1.2 is
+superseded on that point: in the menu it went unfound). The data model and API are #1622 /
 #1623 and were not changed: a control that needs a field the API does not have
 is marked **[needs F-n]**, is not rendered, and its field is named under
 "Follow-up issues" (§1.8). Not built yet, with no API blocker: the
@@ -564,7 +567,10 @@ counts and "Show N" links, never as structure.
 
 ### 1.8 Follow-up issues
 
-- **F-1: write the default recipe's models and LoRAs.** Extend
+- **F-1: write the default recipe's models and LoRAs.** *LoRA half built
+  (#1653): `PUT /workflows/{id}/default-lora` adds, excludes or clears one
+  LoRA by its `asset:` reference. Still open: models, "Take out of default"
+  in the UI, and the LoRA rows of the recipe-card dialog.* Extend
   `PUT /workflows/{id}/defaults` (or add `PUT /workflows/{id}/default-recipe`)
   with `models: [{address, filename}]` and
   `loras: [{filename, sha256, strength} | {filename, remove: true}]`, each

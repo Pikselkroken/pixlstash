@@ -2071,16 +2071,25 @@ can no longer see.
   the default; a failed read offers Retry. Provenance is said once, as a note
   under the label (`best` / `all`); a row is marked only when it is the
   exception, "Yours" (`provenance: edited`) under its label, and only a
-  parameter row has a reset, because `PUT …/defaults` writes parameters only
-  (no "Make default" / "Take out of default" until F-1).
-  - **Default LoRAs join `lora-summary` and the chain by DIGEST**
-    (`default_recipe.loras[].sha256` against `asset:<sha256>` and the chain
-    loaders' `sha256`), never by filename, which is null for a forgotten name.
+  parameter row has a reset, because `PUT …/defaults` writes parameters only.
+  A LoRA goes INTO the default recipe from the pile: each ALSO USED fan row
+  whose LoRA is on the shelf has **Add to default** (`PUT …/default-lora`,
+  #1653), queued with the tab's other writes; the answer is the new detail,
+  the row leaves the pile (focus to the row that took its place, else the
+  fan, else the Default recipe heading), and a `success` notice offers Undo,
+  which re-reads the workflow and drops the edit only while it is still the
+  one this made. No "Take out of default" or checkpoint verb yet.
+  - **Default LoRAs join `lora-summary` by `asset` and the chain by digest**:
+    `default_recipe.loras[].asset` against the summary's `asset:` reference
+    (both hash the file's NAME), and `sha256` against the chain loaders'
+    `sha256` (the shelf's CONTENT digest). The two hashes are never
+    interchangeable. Never by filename, which is null for a forgotten name,
+    except for a default the server could not give an `asset`.
     The summary names the row and says whether it is on the shelf; the chain
     gives the order; the strength is the recipe's. A default LoRA in `varying`
     says "in N of M"; one in every picture says nothing. A workflow with
     nothing sampled lists the chain itself.
-  - **ALSO USED** is `lora-summary.varying` minus the default's digests, drawn
+  - **ALSO USED** is `lora-summary.varying` minus the default's `asset`s, drawn
     as the pile (`WorkflowLoraPile.vue`: the cover's LoRA on top, "+N", a
     `v-menu` fan with each LoRA's strip and *Show N*). No section when it is
     empty.
@@ -2255,10 +2264,13 @@ new code calls a *variant*. Owner-only, like everything under `/workflows`.
   line clamps at two lines; the hidden count behind "+N more" is **measured**
   after each render (a segment ending below the line's box), since the clamp
   is CSS. The card's `aria-label` is "<name>, <diff text>".
-- **"Make these the defaults…"** (card ⋯, `io/MakeDefaultsDialog.vue`) takes
-  a recipe's **parameter** differences only: `PUT /workflows/{id}/defaults`
-  refuses models and LoRAs (F-1), so the item is not offered when no
-  parameter differs, nor on a multi-selection. The PUT **replaces the whole
+- **"Make defaults…"** (a ghost button beside the card's Run…, not in its
+  ⋯ menu, where it went unfound; `io/MakeDefaultsDialog.vue`) takes a
+  recipe's **parameter** differences only: `PUT /workflows/{id}/defaults`
+  refuses models and LoRAs (a LoRA goes in from the Workflow tab's pile), so
+  the button is not drawn when no parameter differs, nor on a
+  multi-selection. Its dialog hands focus back to it, or to the card's ⋯
+  when the write took the last difference and the button with it. The PUT **replaces the whole
   edited set**, so the tab re-reads the workflow's edited rows just before
   each PUT (the Workflow tab may have edited them since) and sends them back
   with the ticked ones over them. It keeps the answer for its own diffs and

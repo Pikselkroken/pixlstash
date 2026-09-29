@@ -1038,6 +1038,9 @@ class DefaultRecipe:
     models: list[DefaultModel] = field(default_factory=list)
     loras: list[DefaultLora] = field(default_factory=list)
     stages: dict[str, bool] = field(default_factory=dict)
+    # Every LoRA the sample loaded, by asset reference, at its modal strength:
+    # what a LoRA the owner adds to the default recipe starts at (#1653).
+    seen_strengths: dict[str, float] = field(default_factory=dict)
 
     def recipe_loras(self) -> list[dict]:
         """The LoRAs as a saved recipe holds them, for ``place_recipe_loras``."""
@@ -1225,8 +1228,8 @@ def workflow_defaults(
             )
 
     by_name, _digests = adapter_digest_index(hub)
-    majority = sorted(asset for asset, seen in lora_seen.items() if seen * 2 > sampled)
-    for asset in majority:
+
+    def shelf_digest(asset: str) -> Optional[str]:
         filename = names.get(asset)
         if (
             filename is not None
@@ -1234,10 +1237,17 @@ def workflow_defaults(
             and re.fullmatch(r"[0-9a-f]{64}", filename.lower())
         ):
             # A whole digest only: an A1111 short hash names no one file.
-            sha256 = filename.lower()
-        else:
-            shelf = by_name.get(normalized_filename(filename or ""), set())
-            sha256 = next(iter(shelf)) if len(shelf) == 1 else None
+            return filename.lower()
+        shelf = by_name.get(normalized_filename(filename or ""), set())
+        return next(iter(shelf)) if len(shelf) == 1 else None
+
+    recipe.seen_strengths = {
+        asset: _mode(counter) for asset, counter in lora_strengths.items()
+    }
+    majority = sorted(asset for asset, seen in lora_seen.items() if seen * 2 > sampled)
+    for asset in majority:
+        filename = names.get(asset)
+        sha256 = shelf_digest(asset)
         strengths = lora_strengths.get(asset)
         lora = DefaultLora(
             asset,
@@ -1253,11 +1263,21 @@ def workflow_defaults(
             recipe.loras.append(
                 replace(lora, strength=_float_or_none(edited), provenance=EDITED)
             )
+    # A LoRA in the default by the owner's edit alone: named by the asset the
+    # sample saw it under, else by the shelf's file, so a client can join it to
+    # the pile it came from (the pile names LoRAs by asset, not by digest).
+    seen_by_digest = {}
+    for asset in sorted(lora_seen):
+        digest = shelf_digest(asset)
+        if digest:
+            seen_by_digest.setdefault(digest, (asset, names.get(asset)))
     for sha256, value in sorted(lora_overrides.items()):
-        if value != LORA_OFF:
-            recipe.loras.append(
-                DefaultLora("", None, sha256, _float_or_none(value), EDITED)
-            )
+        if value == LORA_OFF:
+            continue
+        asset, filename = seen_by_digest.get(sha256) or _shelf_asset(hub, sha256)
+        recipe.loras.append(
+            DefaultLora(asset, filename, sha256, _float_or_none(value), EDITED)
+        )
     recipe.loras_decided = (
         bool(majority)
         or bare * 2 > sampled
@@ -1336,6 +1356,22 @@ def _stored_value(text: str) -> bool | int | float | str:
 def _mode(counter: Counter):
     """Most often, and on a tie the value whose text sorts last (``card_defaults``)."""
     return max(counter.items(), key=lambda item: (item[1], str(item[0])))[0]
+
+
+def _shelf_asset(hub: HubDatabase, sha256: str) -> tuple[str, Optional[str]]:
+    """The asset reference and filename the shelf names a LoRA digest by.
+
+    ``("", None)`` when the shelf holds no such file, or more than one name.
+    """
+    rows = hub.fetchall(
+        "SELECT DISTINCT filename FROM model WHERE lower(sha256) = ? "
+        "AND filename IS NOT NULL",
+        (sha256.lower(),),
+    )
+    if len(rows) != 1:
+        return "", None
+    filename = rows[0]["filename"]
+    return asset_reference(normalized_filename(filename)), filename
 
 
 def _float_or_none(value) -> Optional[float]:

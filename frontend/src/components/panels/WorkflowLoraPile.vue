@@ -30,7 +30,9 @@
     </template>
 
     <div
+      ref="fan"
       class="tbm wfpile-fan"
+      tabindex="-1"
       role="dialog"
       aria-label="LoRAs also used, not in the default recipe"
       data-testid="wftab-fan"
@@ -70,6 +72,20 @@
               </div>
               <div class="wfpile-meta">{{ meta(row) }}</div>
             </div>
+            <!-- Only a LoRA the shelf holds: the default recipe names a LoRA
+                 by the shelf's digest, and a run could not load another. -->
+            <AppButton
+              v-if="row.asset && row.on_shelf"
+              variant="ghost"
+              size="sm"
+              data-testid="wftab-add-default"
+              :loading="adding === row.asset"
+              :aria-label="`Add ${label(row)} to the default recipe`"
+              tooltip="Add to the workflow's default LoRAs"
+              @click="addDefault(row)"
+            >
+              Add to default
+            </AppButton>
             <AppButton
               v-if="row.asset && row.pictures"
               variant="ghost"
@@ -93,7 +109,7 @@
 // default recipe's LoRAs already taken out of `varying` by the tab. Its one
 // verb is Show: the grid, narrowed to one LoRA's pictures.
 
-import { computed, ref } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import { VMenu } from "vuetify/components";
 
 import { pictureThumbnailUrl } from "../../api/pictures";
@@ -102,9 +118,13 @@ import AppButton from "../widgets/AppButton.vue";
 const props = defineProps({
   /** `GET …/lora-summary`: `{pictures, varying, without, cover_asset}`. */
   summary: { type: Object, required: true },
+  /** The `asset` of the LoRA being added to the default recipe, while it is. */
+  adding: { type: String, default: "" },
 });
 
-const emit = defineEmits(["show"]);
+const emit = defineEmits(["show", "add-default"]);
+
+const fan = ref(null);
 
 const open = ref(false);
 
@@ -150,6 +170,28 @@ function show(row) {
   open.value = false;
   emit("show", row);
 }
+
+/** Where the row being added stood, so focus can stay there when it leaves. */
+let addedAt = -1;
+let addedAsset = "";
+
+function addDefault(row) {
+  addedAt = rows.value.indexOf(row);
+  addedAsset = row.asset;
+  emit("add-default", row);
+}
+
+// An added LoRA leaves the pile, and its button with it: focus moves to the
+// row that took its place (its first button), else the fan itself, rather
+// than falling to the page.
+watch(rows, async (now) => {
+  if (!addedAsset || now.some((row) => row.asset === addedAsset)) return;
+  const index = Math.min(addedAt, now.length - 1);
+  addedAsset = "";
+  await nextTick();
+  const next = fan.value?.querySelectorAll(".wfpile-row-wrap")[index];
+  (next?.querySelector("button") ?? fan.value)?.focus();
+});
 </script>
 
 <style scoped>

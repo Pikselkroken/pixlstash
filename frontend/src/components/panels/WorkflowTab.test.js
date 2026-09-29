@@ -24,6 +24,7 @@ const getLoraSummary = vi.fn();
 const getLoraChain = vi.fn();
 const readModelSwap = vi.fn();
 const setWorkflowModelFix = vi.fn();
+const setWorkflowDefaultLora = vi.fn();
 
 vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
@@ -39,6 +40,7 @@ vi.mock("../../api/workflows", () => ({
   getLoraChain: (...args) => getLoraChain(...args),
   readModelSwap: (...args) => readModelSwap(...args),
   setWorkflowModelFix: (...args) => setWorkflowModelFix(...args),
+  setWorkflowDefaultLora: (...args) => setWorkflowDefaultLora(...args),
 }));
 
 const getPixlstashNode = vi.fn();
@@ -303,6 +305,7 @@ beforeEach(() => {
   patchWorkflowCard.mockReset().mockResolvedValue(detail());
   setWorkflowDefaults.mockReset().mockResolvedValue(detail());
   setWorkflowPins.mockReset().mockResolvedValue({ pins: [] });
+  setWorkflowDefaultLora.mockReset().mockResolvedValue(detail());
   getLoraSummary.mockReset().mockResolvedValue(loraSummary());
   getLoraChain.mockReset().mockResolvedValue(loraChain());
   replace.mockReset();
@@ -1028,8 +1031,10 @@ describe("the default recipe (#1623)", () => {
 });
 
 describe("the DEFAULT RECIPE section (#1653)", () => {
-  const BO_SHA = "2".repeat(64);
-  const ADA_SHA = "1".repeat(64);
+  // Shelf CONTENT digests: deliberately not the hex of the `asset:` refs
+  // (BO / ADA hash the NAME), which is the join a real library needs.
+  const BO_SHA = "b".repeat(64);
+  const ADA_SHA = "a".repeat(64);
 
   /** The detail with `loras` in its default recipe and `recipe_values` on the card. */
   function withRecipe({ loras = [], stages, recipeValues, provenance } = {}) {
@@ -1093,7 +1098,7 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     getWorkflowCard.mockResolvedValue(
       withRecipe({
         // Named differently from the summary's file: the join is the digest.
-        loras: [{ filename: "loras/bo_v2.safetensors", sha256: BO_SHA.toUpperCase(), strength: 0.8, provenance: "best" }],
+        loras: [{ asset: BO.toUpperCase(), filename: "loras/bo_v2.safetensors", sha256: BO_SHA.toUpperCase(), strength: 0.8, provenance: "best" }],
       }),
     );
     const { wrapper } = await mountWith([KEY]);
@@ -1113,7 +1118,7 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
   it("never joins by filename: a same-named LoRA with another digest stays in the pile", async () => {
     getWorkflowCard.mockResolvedValue(
       withRecipe({
-        loras: [{ filename: "bo.safetensors", sha256: "f".repeat(64), strength: 1, provenance: "best" }],
+        loras: [{ asset: `asset:${"f".repeat(64)}`, filename: "bo.safetensors", sha256: "f".repeat(64), strength: 1, provenance: "best" }],
       }),
     );
     const { wrapper } = await mountWith([KEY]);
@@ -1125,7 +1130,7 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     const none = { asset: "", filename: null, name: null, on_shelf: true, pictures: 1, picture_ids: [9] };
     getLoraSummary.mockResolvedValue(loraSummary({ without: none }));
     getWorkflowCard.mockResolvedValue(
-      withRecipe({ loras: [{ filename: "bo.safetensors", sha256: BO_SHA, strength: 1, provenance: "best" }] }),
+      withRecipe({ loras: [{ asset: BO, filename: "bo.safetensors", sha256: BO_SHA, strength: 1, provenance: "best" }] }),
     );
     const { wrapper } = await mountWith([KEY]);
     expect(wrapper.findComponent({ name: "WorkflowLoraPile" }).props("summary").without).toBe(null);
@@ -1150,12 +1155,64 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     expect(wrapper.find("[data-testid='wftab-pile']").text()).toContain("Ada");
   });
 
+  describe("Add to default on a pile row (#1653)", () => {
+    const boAdded = (strength = 0.8) =>
+      withRecipe({
+        loras: [{ asset: BO, filename: "bo.safetensors", sha256: BO_SHA, strength, provenance: "edited" }],
+      });
+    const addButton = (wrapper, asset) =>
+      wrapper.find(`[data-testid='wftab-fan-row-${asset}'] [data-testid='wftab-add-default']`);
+
+    it("moves the LoRA from the pile into the default recipe, and Undo takes it out", async () => {
+      getWorkflowCard.mockResolvedValue(withRecipe({ loras: [] }));
+      setWorkflowDefaultLora.mockResolvedValueOnce(boAdded());
+      const { wrapper } = await mountWith([KEY]);
+      await addButton(wrapper, BO).trigger("click");
+      await flush(wrapper);
+      expect(setWorkflowDefaultLora).toHaveBeenCalledWith(KEY, { asset: BO, include: true });
+      expect(wrapper.find(`[data-testid='wftab-fan-row-${BO}']`).exists()).toBe(false);
+      expect(loraRow(wrapper, "Bo").text()).toContain("Yours");
+
+      const notice = useNoticeStore().notices.at(-1);
+      expect(notice.level).toBe("success");
+      expect(notice.text).toContain("Your pictures stay where they are");
+      getWorkflowCard.mockResolvedValue(boAdded());
+      setWorkflowDefaultLora.mockResolvedValueOnce(withRecipe({ loras: [] }));
+      await notice.action.handler();
+      await flush(wrapper);
+      expect(setWorkflowDefaultLora).toHaveBeenLastCalledWith(KEY, { asset: BO, include: null });
+      expect(wrapper.find(`[data-testid='wftab-fan-row-${BO}']`).exists()).toBe(true);
+    });
+
+    it("does not undo a LoRA whose strength was changed since", async () => {
+      getWorkflowCard.mockResolvedValue(withRecipe({ loras: [] }));
+      setWorkflowDefaultLora.mockResolvedValueOnce(boAdded());
+      const { wrapper } = await mountWith([KEY]);
+      await addButton(wrapper, BO).trigger("click");
+      await flush(wrapper);
+      getWorkflowCard.mockResolvedValue(boAdded(0.5));
+      await useNoticeStore().notices.at(-1).action.handler();
+      expect(setWorkflowDefaultLora).toHaveBeenCalledTimes(1);
+      expect(useNoticeStore().notices.at(-1).text).toContain("Nothing to undo");
+    });
+
+    it("offers it only on a LoRA the shelf holds", async () => {
+      getWorkflowCard.mockResolvedValue(withRecipe({ loras: [] }));
+      const summary = loraSummary();
+      summary.varying[1].on_shelf = false;
+      getLoraSummary.mockResolvedValue(summary);
+      const { wrapper } = await mountWith([KEY]);
+      expect(addButton(wrapper, summary.varying[0].asset).exists()).toBe(true);
+      expect(addButton(wrapper, summary.varying[1].asset).exists()).toBe(false);
+    });
+  });
+
   it("has no ALSO USED section when every LoRA that changes is a default", async () => {
     getWorkflowCard.mockResolvedValue(
       withRecipe({
         loras: [
-          { filename: "bo.safetensors", sha256: BO_SHA, strength: 1, provenance: "best" },
-          { filename: "ada.safetensors", sha256: ADA_SHA, strength: 1, provenance: "best" },
+          { asset: BO, filename: "bo.safetensors", sha256: BO_SHA, strength: 1, provenance: "best" },
+          { asset: ADA, filename: "ada.safetensors", sha256: ADA_SHA, strength: 1, provenance: "best" },
         ],
       }),
     );
@@ -1167,8 +1224,8 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
     getWorkflowCard.mockResolvedValue(
       withRecipe({
         loras: [
-          { filename: "bo.safetensors", sha256: BO_SHA, strength: 1, provenance: "edited" },
-          { filename: "ada.safetensors", sha256: ADA_SHA, strength: 1, provenance: "best" },
+          { asset: BO, filename: "bo.safetensors", sha256: BO_SHA, strength: 1, provenance: "edited" },
+          { asset: ADA, filename: "ada.safetensors", sha256: ADA_SHA, strength: 1, provenance: "best" },
         ],
       }),
     );
@@ -1279,7 +1336,7 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
   it("offers Show N on a default LoRA from recipe_values, matched by file", async () => {
     getWorkflowCard.mockResolvedValue(
       withRecipe({
-        loras: [{ filename: "loras/bo.safetensors", sha256: BO_SHA, strength: 1, provenance: "best" }],
+        loras: [{ asset: BO, filename: "loras/bo.safetensors", sha256: BO_SHA, strength: 1, provenance: "best" }],
       }),
     );
     const { wrapper } = await mountWith(
@@ -2195,14 +2252,14 @@ describe("the LoRA chain (#1478)", () => {
   });
 
   it("lists the default recipe's LoRAs in the chain's order, joined by digest", async () => {
-    // Given out of order. The chain says the order, by DIGEST; the summary
-    // says what to call each and whether it is on the shelf; the strength is
+    // Given out of order. The chain says the order, by shelf DIGEST; the
+    // summary, joined by ASSET reference (another hash), says what to call each and whether it is on the shelf; the strength is
     // the default recipe's own.
     const sampled = detail();
     sampled.card.default_recipe.loras = [
-      { filename: "hairstyle-v3.safetensors", sha256: "S9", strength: 0.6, provenance: "best" },
-      { filename: "film-grain-35mm.safetensors", sha256: "s3", strength: 0.5, provenance: "best" },
-      { filename: "renamed.safetensors", sha256: "s1", strength: 1, provenance: "best" },
+      { asset: "asset:n9", filename: "hairstyle-v3.safetensors", sha256: "S9", strength: 0.6, provenance: "best" },
+      { asset: "asset:n3", filename: "film-grain-35mm.safetensors", sha256: "s3", strength: 0.5, provenance: "best" },
+      { asset: "asset:n1", filename: "renamed.safetensors", sha256: "s1", strength: 1, provenance: "best" },
     ];
     getWorkflowCard.mockResolvedValue(sampled);
     const use = (sha, name, onShelf = true) => ({
@@ -2214,7 +2271,7 @@ describe("the LoRA chain (#1478)", () => {
     });
     getLoraSummary.mockResolvedValue(
       loraSummary({
-        shared: [use("s9", "Hairstyle v3", false), use("s1", "Lightning"), use("s3", "Film grain")],
+        shared: [use("N9", "Hairstyle v3", false), use("n1", "Lightning"), use("n3", "Film grain")],
         varying: [],
       }),
     );

@@ -87,7 +87,12 @@
            have LoRAs is how adding the first one stays unreachable (#1478). -->
       <div class="inspector-section" data-testid="wftab-default-recipe">
         <div class="wftab-sec-head">
-          <span class="section-label" role="heading" aria-level="3"
+          <span
+            ref="defaultHeading"
+            class="section-label"
+            role="heading"
+            aria-level="3"
+            tabindex="-1"
             >Default recipe</span
           >
           <AppButton
@@ -524,7 +529,12 @@
         <template v-if="alsoUsed.length">
           <div class="wftab-field">
             <span class="wftab-label">LoRA</span>
-            <WorkflowLoraPile :summary="pileSummary" @show="showLora" />
+            <WorkflowLoraPile
+              :summary="pileSummary"
+              :adding="busy.startsWith('default-lora:') ? busy.slice(13) : ''"
+              @show="showLora"
+              @add-default="addLoraToDefault"
+            />
           </div>
           <p class="wftab-note wftab-quiet">{{ pileNote }}</p>
         </template>
@@ -739,7 +749,7 @@
 // What the rail shows follows the SELECTION: one workflow, keyed by its `id`
 // (#1623). Models and Defaults read the detail's `card.default_recipe`.
 
-import { computed, onBeforeUnmount, ref, toRaw, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, toRaw, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { VIcon, VMenu } from "vuetify/components";
 
@@ -750,6 +760,7 @@ import {
   patchWorkflowCard,
   preflightWorkflowRun,
   readModelSwap,
+  setWorkflowDefaultLora,
   setWorkflowDefaults,
   setWorkflowModelFix,
   setWorkflowPins,
@@ -1547,7 +1558,10 @@ const usingChain = computed(
     !(defaultRecipe.value?.loras ?? []).length,
 );
 
-/** The summary's LoRAs by digest, and whether each is in every picture. */
+/**
+ * The summary's LoRAs by their `asset:` reference (a hash of the file's NAME,
+ * as the stored graphs name it), and whether each is in every picture.
+ */
 const summaryUses = computed(() => {
   const uses = new Map();
   for (const use of summary.value?.shared ?? []) {
@@ -1559,12 +1573,12 @@ const summaryUses = computed(() => {
   return uses;
 });
 
-/** The digests of the default recipe's LoRAs, which ALSO USED leaves out. */
-const defaultDigests = computed(
+/** The asset references of the default recipe's LoRAs, which ALSO USED leaves out. */
+const defaultAssets = computed(
   () =>
     new Set(
       (defaultRecipe.value?.loras ?? [])
-        .map((lora) => digestOf(lora.sha256))
+        .map((lora) => digestOf(lora.asset))
         .filter(Boolean),
     ),
 );
@@ -1573,9 +1587,11 @@ const defaultDigests = computed(
  * The default recipe's LoRAs as rows, in the chain's order where the chain
  * names them.
  *
- * Joined to the summary and the chain by DIGEST, never by filename: a
- * forgotten name has no filename, and two folders can hold one name. A
- * default with no digest renders without a count rather than with a guess.
+ * Joined to the summary by the `asset:` reference both name a LoRA by (the
+ * shelf digest is NOT that: it hashes the file's content, the reference its
+ * name), and to the chain by the shelf digest, which is what the chain has.
+ * Never by bare filename: a forgotten name has none. A default the server
+ * could not give an asset renders without a count rather than with a guess.
  */
 const defaultLoras = computed(() => {
   const loras = defaultRecipe.value?.loras ?? [];
@@ -1587,19 +1603,20 @@ const defaultLoras = computed(() => {
   const total = Number(summary.value?.pictures) || 0;
   const rows = loras.map((lora, index) => {
     const digest = digestOf(lora.sha256);
-    const found = digest ? summaryUses.value.get(digest) : null;
+    const asset = digestOf(lora.asset);
+    const found = asset ? summaryUses.value.get(asset) : null;
     const loader = digest ? byDigest.get(digest) : null;
     const edited = lora.provenance === "edited";
     const strength = Number(lora.strength);
     let coverage = "";
     if (total && found && !found.everywhere && found.use.pictures) {
       coverage = `in ${found.use.pictures} of ${total}`;
-    } else if (total && digest && !found && edited) {
+    } else if (total && (asset || digest) && !found && edited) {
       // In the default by the owner's edit alone.
       coverage = "not in any picture yet";
     }
     return {
-      id: digest || lora.filename || `lora-${index}`,
+      id: asset || digest || lora.filename || `lora-${index}`,
       file: lora.filename || "",
       label:
         found?.use.name ||
@@ -1659,18 +1676,18 @@ const stageRows = computed(() =>
 
 /** ALSO USED: what changes between pictures, less the default's LoRAs. */
 const alsoUsed = computed(() => {
-  // A default with no digest cannot be joined by one, so it is matched by
-  // its file instead, or it shows twice. Only those: a default WITH a digest
-  // never matches by name, since two folders can hold one name.
-  const digestless = (defaultRecipe.value?.loras ?? []).filter(
-    (lora) => !digestOf(lora.sha256) && lora.filename,
+  // A default with no asset reference cannot be joined by one, so it is
+  // matched by its file instead, or it shows twice. Only those: a default
+  // WITH one never matches by name, since two folders can hold one name.
+  const unjoined = (defaultRecipe.value?.loras ?? []).filter(
+    (lora) => !digestOf(lora.asset) && lora.filename,
   );
   return (summary.value?.varying ?? []).filter(
     (use) =>
-      !defaultDigests.value.has(digestOf(use.asset)) &&
+      !defaultAssets.value.has(digestOf(use.asset)) &&
       !(
         use.filename &&
-        digestless.some((lora) => sameFile(lora.filename, use.filename))
+        unjoined.some((lora) => sameFile(lora.filename, use.filename))
       ),
   );
 });
@@ -1901,6 +1918,73 @@ function fail(err, fallback) {
  * is the one that shows it.
  */
 let writes = Promise.resolve();
+
+/** The Default recipe heading: where focus goes when the last pile row leaves. */
+const defaultHeading = ref(null);
+
+/**
+ * *Add to default* on a pile row (#1653): the LoRA joins the default recipe,
+ * at the strength its pictures used most, and leaves the pile. Undo drops
+ * the edit, but only while it is still the one this made: a strength set
+ * since, or the LoRA already taken out again, is somebody else's to keep.
+ */
+function addLoraToDefault(row) {
+  const key = selectedKey.value;
+  const name = row.name || "That LoRA";
+  return queueWrite(`default-lora:${row.asset}`, async () => {
+    let body;
+    try {
+      body = await setWorkflowDefaultLora(key, { asset: row.asset, include: true });
+    } catch (err) {
+      fail(err, `Could not add ${name} to the default recipe.`);
+      return;
+    }
+    if (!stillOn(key)) return;
+    detail.value = body;
+    const added = (body?.card?.default_recipe?.loras ?? []).find(
+      (lora) => lora.asset === row.asset,
+    );
+    if (!alsoUsed.value.length) {
+      await nextTick();
+      defaultHeading.value?.focus();
+    }
+    notices.push({
+      level: "success",
+      timeout: 8000,
+      text: `${name} is now in the default recipe. Your pictures stay where they are.`,
+      action: {
+        label: "Undo",
+        handler: () =>
+          queueWrite(`default-lora:${row.asset}`, async () => {
+            try {
+              const now = await getWorkflowCard(key);
+              const still = (now?.card?.default_recipe?.loras ?? []).find(
+                (lora) => lora.asset === row.asset,
+              );
+              if (
+                !still ||
+                still.provenance !== "edited" ||
+                still.strength !== added?.strength
+              ) {
+                notices.push({
+                  level: "info",
+                  text: `Nothing to undo: ${name} has been changed since.`,
+                });
+                return;
+              }
+              const undone = await setWorkflowDefaultLora(key, {
+                asset: row.asset,
+                include: null,
+              });
+              if (stillOn(key)) detail.value = undone;
+            } catch (err) {
+              fail(err, `Could not take ${name} back out of the default recipe.`);
+            }
+          }),
+      },
+    });
+  });
+}
 
 function queueWrite(token, work) {
   writes = writes.then(async () => {
