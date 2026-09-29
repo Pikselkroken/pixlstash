@@ -1766,6 +1766,17 @@ describe("Create with LoRA", () => {
     expect(runWorkflowCard.mock.calls[0][0].destination.set_id).toBe(5);
   });
 
+  it("never narrows by an attached LoRA other than the one on the run", async () => {
+    const wrapper = await mountRun(fromPerson);
+    wrapper.vm.addedLoras[0].sha256 = "z".repeat(64);
+    await flushPromises();
+    expect(wrapper.vm.workflowOptions.map((o) => o.value)).toEqual([
+      SDXL,
+      UNREAD,
+      KREA,
+    ]);
+  });
+
   it("stops narrowing once the added LoRA is taken off the run", async () => {
     listWorkflowCards.mockResolvedValue({
       cards: [

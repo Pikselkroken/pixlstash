@@ -1500,10 +1500,11 @@ const loraFits = computed(() => {
   // picker offers every workflow rather than one base model the run no longer
   // carries. (With nothing attached at all the fit still runs, to say so.)
   if (!sha && attachedLoras.value.length) return null;
+  // A LoRA neither list names narrows nothing: every workflow is then an
+  // "unknown" fit, rather than one judged against a different attached LoRA.
   const lora =
     attachedLoras.value.find((row) => row.sha256 === sha) ||
     adapters.value.find((row) => row.sha256 === sha) ||
-    attachedLoras.value[0] ||
     null;
   return { lora, ...fitWorkflows(cards.value, lora, handMadeSets.value) };
 });
