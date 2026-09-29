@@ -201,6 +201,15 @@ export function readReason(reason) {
             .filter(Boolean),
         ),
       ];
+      if (!files.length) {
+        // A loader the server named no file for: still said, without a subject.
+        return read(
+          "A LoRA this ComfyUI does not have loads through the ComfyUI-PixlStash LoRA loader, which fetches it by hash.",
+          null,
+          [],
+          false,
+        );
+      }
       return read(
         `${files.length === 1 ? `${files[0]} is` : `${files.join(", ")} are`} not on this ComfyUI, so ${files.length === 1 ? "it loads" : "they load"} through the ComfyUI-PixlStash LoRA loader, which fetches ${files.length === 1 ? "it" : "them"} by hash.`,
         null,

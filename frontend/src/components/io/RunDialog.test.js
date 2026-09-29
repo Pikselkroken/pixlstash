@@ -1775,6 +1775,7 @@ describe("Create with LoRA", () => {
       UNREAD,
       KREA,
     ]);
+    expect(wrapper.text()).toContain("This LoRA is not on the Models shelf");
   });
 
   it("stops narrowing once the added LoRA is taken off the run", async () => {

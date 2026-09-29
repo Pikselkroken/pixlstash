@@ -1516,7 +1516,10 @@ const loraFitNote = computed(() => {
   if (!attachedLoras.value.length) {
     return `No LoRA is attached to ${loraSource.value.name}. Assign one from the Models shelf, or add one below.`;
   }
-  if (!fits.lora?.base_model_family) {
+  if (!fits.lora) {
+    return "This LoRA is not on the Models shelf, so every workflow is listed.";
+  }
+  if (!fits.lora.base_model_family) {
     return "This LoRA has no base model recorded, so every workflow is listed.";
   }
   const parts = [];
