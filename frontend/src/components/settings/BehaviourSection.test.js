@@ -30,6 +30,7 @@ vi.mock("../../api/config", () => ({
 vi.mock("../../api/workers", () => ({ getWorkerProgress: vi.fn().mockResolvedValue({}) }));
 vi.mock("../../api/taggers", () => ({
   listTaggers: vi.fn().mockResolvedValue({ plugins: [], settings: {} }),
+  getLabelThresholds: vi.fn().mockResolvedValue([]),
   listTaggerPluginDiagnostics: vi.fn().mockResolvedValue({
     plugin_dirs: { user: "/home/me/.pixlstash/plugins" },
     load_errors: [],
@@ -243,3 +244,129 @@ describe("a plugin's saved parameters survive reopening its dialog", () => {
   });
 });
 
+
+describe("the PixlStash tagger's settings sit in the pane", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const TAGGER = {
+    name: "pixlstash_tagger",
+    display_name: "PixlStash Tagger",
+    supports_tags: true,
+    parameter_schema: [
+      { name: "threshold_offset", label: "Threshold offset", type: "number", min: -0.5, max: 0.5, step: 0.01, default: 0 },
+    ],
+  };
+  const WD14 = { name: "wd14", display_name: "WD14", supports_tags: true, parameter_schema: [] };
+
+  async function openPane(active) {
+    const { listTaggers } = await import("../../api/taggers");
+    listTaggers.mockResolvedValue({
+      plugins: [TAGGER, WD14],
+      settings: {
+        active_tag_plugin: active,
+        plugins: { pixlstash_tagger: { params: { threshold_offset: 0.1 } } },
+      },
+    });
+    const w = mountPane();
+    await flushPromises();
+    await nextTick();
+    return w;
+  }
+
+  const panel = (w) => w.findComponent({ name: "TaggerPluginSettingsPanel" });
+  const form = (w) => w.findComponent({ name: "TaggerParametersUI" });
+
+  it("shows while it is the active tag plugin, seeded with its saved params", async () => {
+    const w = await openPane("pixlstash_tagger");
+    expect(panel(w).exists()).toBe(true);
+    expect(form(w).props("modelValue")).toEqual({ threshold_offset: 0.1 });
+    // Only the tag picker: the PixlStash tagger does not caption.
+    const pickers = w.findAllComponents({ name: "PluginSelect" });
+    expect(pickers.map((p) => p.props("inlineSettingsFor"))).toEqual([
+      "pixlstash_tagger",
+      "",
+    ]);
+  });
+
+  it("is absent while another plugin, or None, is chosen", async () => {
+    expect(panel(await openPane("wd14")).exists()).toBe(false);
+    expect(panel(await openPane(null)).exists()).toBe(false);
+  });
+
+  it("saves the edited params and hands them to the pickers", async () => {
+    const { patchUserConfig } = await import("../../api/config");
+    patchUserConfig.mockResolvedValue({});
+    const w = await openPane("pixlstash_tagger");
+
+    form(w).vm.$emit("update:modelValue", { threshold_offset: -0.2 });
+    await nextTick();
+    const save = w.findAll("button").find((b) => b.text() === "Save");
+    await save.trigger("click");
+    await flushPromises();
+
+    expect(patchUserConfig).toHaveBeenCalledWith({
+      tagger_settings: {
+        plugins: { pixlstash_tagger: { params: { threshold_offset: -0.2 } } },
+      },
+    });
+    const picker = w.findAllComponents({ name: "PluginSelect" })[0];
+    expect(
+      picker.props("settings").plugins.pixlstash_tagger.params,
+    ).toEqual({ threshold_offset: -0.2 });
+    expect(w.text()).toContain("Saved.");
+  });
+
+  it("says the form holds unsaved edits, and alerts rather than claiming Saved on failure", async () => {
+    const { patchUserConfig } = await import("../../api/config");
+    patchUserConfig.mockRejectedValueOnce(new Error("boom"));
+    const w = await openPane("pixlstash_tagger");
+    const save = () => w.findAll("button").find((b) => b.text() === "Save");
+    expect(save().attributes("disabled")).toBeDefined();
+
+    form(w).vm.$emit("update:modelValue", { threshold_offset: -0.2 });
+    await nextTick();
+    expect(w.text()).toContain("Unsaved changes");
+    await save().trigger("click");
+    await flushPromises();
+
+    expect(w.find('[role="alert"]').exists()).toBe(true);
+    expect(w.text()).not.toContain("Saved.");
+    expect(w.text()).toContain("Unsaved changes");
+  });
+
+  // The pane polls is_loaded every few seconds and replaces each plugin object.
+  // Reseeding the form on that would silently discard what the user typed.
+  it("keeps an unsaved edit when the loaded-state poll replaces the plugin", async () => {
+    const w = await openPane("pixlstash_tagger");
+    form(w).vm.$emit("update:modelValue", { threshold_offset: -0.2 });
+    await nextTick();
+
+    w.vm.taggerPlugins = w.vm.taggerPlugins.map((p) => ({ ...p, is_loaded: true }));
+    await nextTick();
+
+    expect(form(w).props("modelValue")).toEqual({ threshold_offset: -0.2 });
+  });
+
+  it("keeps an unsaved edit when the settings object is replaced by an equal copy", async () => {
+    const w = await openPane("pixlstash_tagger");
+    form(w).vm.$emit("update:modelValue", { threshold_offset: -0.2 });
+    await nextTick();
+
+    w.vm.taggerSettings = JSON.parse(JSON.stringify(w.vm.taggerSettings));
+    w.vm.taggerPlugins = JSON.parse(JSON.stringify(w.vm.taggerPlugins));
+    await nextTick();
+
+    expect(form(w).props("modelValue")).toEqual({ threshold_offset: -0.2 });
+  });
+
+  it("does reseed when the saved params really change", async () => {
+    const w = await openPane("pixlstash_tagger");
+    w.vm.taggerSettings = {
+      ...w.vm.taggerSettings,
+      plugins: { pixlstash_tagger: { params: { threshold_offset: 0.3 } } },
+    };
+    await nextTick();
+
+    expect(form(w).props("modelValue")).toEqual({ threshold_offset: 0.3 });
+  });
+});

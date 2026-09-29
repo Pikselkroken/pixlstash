@@ -279,6 +279,35 @@ describe("PluginSelect settings gear", () => {
     ).toBe(false);
   });
 
+  it("greys out for the plugin whose settings the host shows inline", async () => {
+    const w = mountPicker("pixlstash_tagger", "tag", PLUGINS, {
+      props: {
+        plugins: PLUGINS.map((p) => ({ ...p, supports_tags: true })),
+        kind: "tag",
+        settings: { active_tag_plugin: "pixlstash_tagger" },
+        inlineSettingsFor: "pixlstash_tagger",
+      },
+    });
+    expect(gear(w).attributes("aria-disabled")).toBe("true");
+    expect(gear(w).attributes("aria-label")).toBe(
+      "PixlStash settings are below",
+    );
+    await gear(w).trigger("click");
+    expect(w.vm.dialogOpen).toBe(false);
+  });
+
+  it("still configures other plugins when one is shown inline", () => {
+    const w = mountPicker("wd14", "tag", PLUGINS, {
+      props: {
+        plugins: PLUGINS.map((p) => ({ ...p, supports_tags: true })),
+        kind: "tag",
+        settings: { active_tag_plugin: "wd14" },
+        inlineSettingsFor: "pixlstash_tagger",
+      },
+    });
+    expect(gear(w).attributes("aria-disabled")).toBeUndefined();
+  });
+
   it("says a no-longer-installed plugin is not installed", () => {
     const w = mountPicker("gone");
     expect(gear(w).attributes("aria-disabled")).toBe("true");

@@ -1,10 +1,11 @@
 <script setup>
-import { onUnmounted, ref, watch } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import { getUserConfig, patchUserConfig } from "../../api/config";
 import { getWorkerProgress } from "../../api/workers";
 import { listTaggers, listTaggerPluginDiagnostics } from "../../api/taggers";
 import { VSlider, VSwitch } from "vuetify/components";
 import PluginSelect from "../widgets/PluginSelect.vue";
+import TaggerPluginSettingsPanel from "../widgets/TaggerPluginSettingsPanel.vue";
 import AppButton from "../widgets/AppButton.vue";
 import AppDialog from "../widgets/AppDialog.vue";
 import SettingsSection from "./SettingsSection.vue";
@@ -35,6 +36,15 @@ const taggerCliSearchHint = ref(
 );
 const taggerCliListHint = ref("pixlstash-cli plugins list");
 const pluginInstallHelpOpen = ref(false);
+
+// The built-in tagger's settings sit in the pane below the pickers rather than
+// behind PluginSelect's gear, shown while it is the active tag plugin.
+const PIXLSTASH_TAGGER = "pixlstash_tagger";
+const pixlstashTagger = computed(() =>
+  taggerSettings.value?.active_tag_plugin === PIXLSTASH_TAGGER
+    ? (taggerPlugins.value.find((p) => p.name === PIXLSTASH_TAGGER) ?? null)
+    : null,
+);
 
 // ── VRAM budget ───────────────────────────────────────────────────────────────
 const VRAM_BUDGET_MIN_GB = 2;
@@ -270,11 +280,7 @@ watch(
 
 <template>
   <div>
-    <SettingsSection
-      title="Model Memory"
-      desc="Keep models loaded in RAM/VRAM for faster processing. Turn off to unload models when idle and save memory."
-      first
-    >
+    <SettingsSection title="Model Memory" first>
       <v-switch
         v-model="keepModelsInMemory"
         color="primary"
@@ -330,6 +336,7 @@ watch(
             v-else
             kind="tag"
             :plugins="taggerPlugins"
+            :inline-settings-for="PIXLSTASH_TAGGER"
             v-model:settings="taggerSettings"
           />
         </SettingsFieldBlock>
@@ -363,6 +370,16 @@ watch(
           How to install plugins
         </AppButton>
       </div>
+    </SettingsSection>
+
+    <SettingsSection
+      v-if="!taggerLoading && pixlstashTagger"
+      title="PixlStash Tagger Settings"
+    >
+      <TaggerPluginSettingsPanel
+        :plugin="pixlstashTagger"
+        v-model:settings="taggerSettings"
+      />
     </SettingsSection>
 
     <AppDialog
