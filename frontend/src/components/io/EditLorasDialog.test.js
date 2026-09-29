@@ -791,6 +791,19 @@ describe("on a clone that is not written yet (pending)", () => {
     expect(saveLoraChain).not.toHaveBeenCalled();
   });
 
+  it("offers no Done while the chain is still being read", async () => {
+    getLoraChain.mockReturnValue(new Promise(() => {}));
+    const wrapper = await mountDialog({ pending: { ...pending, clear: false } });
+    const labels = wrapper
+      .findAll(".app-dialog__footer button")
+      .map((b) => labelOf(b));
+    expect(labels).not.toContain("Done");
+    // Enter reaches the same gate: an empty chain is never handed back.
+    wrapper.findComponent({ name: "AppDialog" }).vm.$emit("accept");
+    await flushPromises();
+    expect(wrapper.emitted("done")).toBeUndefined();
+  });
+
   it("keeps the card's loaders when the base model is the same", async () => {
     const wrapper = await mountDialog({
       pending: { ...pending, clear: false, baseModel: "FLUX.1 dev" },

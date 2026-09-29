@@ -2474,6 +2474,13 @@ class TestLoaderRewrite:
         assert graph["2"]["inputs"]["clip_name1"] == "t5-v1_1-xxl-Q8_0.gguf"
         assert not any(entry["verified"] for entry in swapped)
 
+    def test_a_graph_keyed_by_integers_is_rewritten_by_its_own_keys(self):
+        graph = {int(k): v for k, v in self._graph().items()}
+        rewrites = plan_loader_rewrites(graph, self.SWAPS)
+        apply_loader_rewrites(graph, rewrites)
+        assert graph[1]["class_type"] == "UnetLoaderGGUF"
+        assert graph[2]["class_type"] == "DualCLIPLoaderGGUF"
+
     def test_the_plan_is_the_same_without_comfyui(self):
         rewrites = plan_loader_rewrites(self._graph(), self.SWAPS)
         assert [r["now"] for r in rewrites] == ["UnetLoaderGGUF", "DualCLIPLoaderGGUF"]

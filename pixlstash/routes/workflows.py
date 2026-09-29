@@ -6835,7 +6835,7 @@ def create_router(server) -> APIRouter:
             keeps = old_base is not None and new_base == old_base
             pending = deepcopy(graph)
             loaders, _swapped, unswapped = _swap_files(pending, swaps, object_info)
-            rewritten = {row["node_id"]: row for row in loaders}
+            rewritten = {str(row["node_id"]): row for row in loaders}
             reason = (
                 "Has no checkpoint"
                 if checkpoint is None

@@ -912,7 +912,9 @@ def plan_loader_rewrites(
             continue
         rewrites.append(
             {
-                "node_id": str(node_id),
+                # The graph's own key, so the rewrite can index it whatever
+                # its type; a JSON graph's keys are strings anyway.
+                "node_id": node_id,
                 "was": class_type,
                 "now": now,
                 "pack": pack,
