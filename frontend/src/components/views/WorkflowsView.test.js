@@ -1271,6 +1271,27 @@ describe("Clone onto a workflow set", () => {
     );
   });
 
+  it("names a missing pack and unchecked names in one notice", async () => {
+    cloneWorkflowWithModels.mockResolvedValue({
+      name: "a · Flux dev GGUF.json",
+      workflow_id: "c",
+      swapped: [],
+      unswapped: [],
+      loaders: [{ node_id: "1", pack: "ComfyUI-GGUF", installed: false }],
+      verified: false,
+    });
+    const wrapper = await grid();
+    await openOn(wrapper);
+    await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
+    await cloneButton(wrapper).trigger("click");
+    await flush();
+    const { useNoticeStore } = await import("../../stores/useNoticeStore");
+    const notice = useNoticeStore().notices.at(-1);
+    expect(notice.level).toBe("warning");
+    expect(notice.text).toContain("It needs ComfyUI-GGUF");
+    expect(notice.text).toContain("run it once to check");
+  });
+
   it("hands per-file picking to Clone with new models", async () => {
     readModelSwap.mockResolvedValue({
       slots: [],

@@ -1264,18 +1264,20 @@ function clonedWithModels(body) {
         .map((row) => row.pack),
     ),
   ];
-  notices.push(
+  // Each fact its own sentence in one notice: a missing pack does not make
+  // the unchecked names any less worth saying.
+  const warnings = [
     missing.length
-      ? {
-          level: "warning",
-          text: `Cloned to ${body.name}. It needs ${missing.join(", ")}, which your ComfyUI does not have yet.`,
-        }
-      : body.verified
-        ? { level: "success", text: `Cloned to ${body.name}.` }
-        : {
-            level: "warning",
-            text: `Cloned to ${body.name}. ComfyUI did not confirm every new model name, so run it once to check.`,
-          },
+      ? `It needs ${missing.join(", ")}, which your ComfyUI does not have yet.`
+      : "",
+    body.verified
+      ? ""
+      : "ComfyUI did not confirm every new model name, so run it once to check.",
+  ].filter(Boolean);
+  notices.push(
+    warnings.length
+      ? { level: "warning", text: `Cloned to ${body.name}. ${warnings.join(" ")}` }
+      : { level: "success", text: `Cloned to ${body.name}.` },
   );
   if (body.workflow_id) store.select(body.workflow_id);
 }

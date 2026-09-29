@@ -9835,6 +9835,27 @@ def test_a_workflow_with_no_checkpoint_says_so_for_every_set(cloneable):
     assert plans["vae_only"]["reason"] == "This workflow loads no checkpoint"
 
 
+def test_a_family_read_off_the_graphs_loras_makes_a_set_of_that_family(cloneable):
+    """The checkpoint has no known base model; its LoRA says FLUX.1 schnell."""
+    hub = cloneable.server.hub
+    with hub.transaction() as conn:
+        lora_id = conn.execute(
+            "INSERT INTO model "
+            "(file_kind, kind, filename, sha256, base_model, provenance) "
+            "VALUES ('adapter', 'lora', ?, ?, 'FLUX.1 schnell', 'scanned')",
+            (FORGOTTEN_LORA, _h("schnell-lora")),
+        ).lastrowid
+    try:
+        _body, plans = _plans(cloneable, krea=[cloneable.checkpoint_id])
+    finally:
+        with hub.transaction() as conn:
+            conn.execute("DELETE FROM model WHERE id = ?", (lora_id,))
+    # FLUX.1 dev is another base model of the same family: LoRAs go, but the
+    # set is offered with the family, as `keeps` reads the same source.
+    assert plans["krea"]["fit"] == "same_family"
+    assert plans["krea"]["keeps_loras"] is False
+
+
 def test_two_sets_asked_under_one_key_are_a_422(cloneable):
     ask = {"key": "same", "checkpoint_id": cloneable.checkpoint_id, "model_ids": []}
     r = cloneable.owner.post(

@@ -6856,12 +6856,11 @@ def create_router(server) -> APIRouter:
                 fit = "wont_load"
             elif keeps:
                 fit = "same_base_model"
-            elif (
-                base is not None
-                and base.model is not None
-                and family_of(checkpoint.base_model)
-                and family_of(checkpoint.base_model) == family_of(base.model.base_model)
-            ):
+            # The same source as `keeps`: the graph's base model as the shelf
+            # or its LoRAs know it (`family_of` reads either spelling).
+            elif family_of(checkpoint.base_model) and family_of(
+                checkpoint.base_model
+            ) == family_of(old_base):
                 fit = "same_family"
             else:
                 fit = "other"
