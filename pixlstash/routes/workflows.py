@@ -131,6 +131,7 @@ from pixlstash.services.workflow_card_service import (
     DefaultRecipe,
     read_grid,
     slot_kind,
+    lora_modal_strength,
     workflow_defaults,
     workflow_lora_summary,
 )
@@ -977,6 +978,14 @@ class WorkflowLoraUse(BaseModel):
         ),
     )
     on_shelf: bool = False
+    sha256: str | None = Field(
+        None,
+        description=(
+            "The one shelf LoRA file this is, by content digest (not the "
+            "`asset` hash, which is of its name), or null when the shelf "
+            "cannot say. `PUT …/default-lora` accepts exactly these."
+        ),
+    )
     pictures: int = 0
     picture_ids: list[int] = Field(
         default_factory=list,
@@ -3097,8 +3106,10 @@ def create_router(server) -> APIRouter:
         description=(
             "Add one of this workflow's LoRAs (`asset`, as `lora-summary` names "
             "it) to its default recipe, keep it out, or drop that edit. Every "
-            "other default stands. The LoRA must be on the model shelf under "
-            "one digest, which is how the default recipe names it."
+            "other default stands. Only a LoRA `lora-summary` gives a `sha256` "
+            "can go in: that digest is how the default recipe names it. Added "
+            "without a `strength`, it takes the one its pictures used most, "
+            "else 1."
         ),
         response_model=WorkflowCardDetail,
         responses={
@@ -3128,18 +3139,17 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=404, detail="This workflow's pictures load no such LoRA."
             )
-        by_name, _digests = adapter_digest_index(hub)
-        shelf = by_name.get(normalized_filename(use.filename or ""), set())
-        if len(shelf) != 1:
+        # The summary's own resolution, the one the pile offers the button
+        # by, so the two can never disagree about which LoRAs can go in.
+        if use.sha256 is None:
             raise HTTPException(
                 status_code=409,
                 detail=(
                     "That LoRA is not on your model shelf."
-                    if not shelf
-                    else "Your model shelf holds more than one file by that name."
+                    if not use.on_shelf
+                    else "Your model shelf cannot tell which LoRA file that is."
                 ),
             )
-        (sha256,) = shelf
         if payload.include is None:
             value = None
         elif not payload.include:
@@ -3147,12 +3157,11 @@ def create_router(server) -> APIRouter:
         else:
             strength = payload.strength
             if strength is None:
-                recipe = workflow_defaults(hub, server.vault, workflow_id)
-                strength = (recipe.seen_strengths if recipe else {}).get(
-                    payload.asset, 1.0
+                strength = lora_modal_strength(
+                    hub, server.vault, workflow_id, payload.asset
                 )
-            value = _stored_value(float(strength))
-        set_default_lora(hub, workflow_id, sha256, value)
+            value = _stored_value(float(1.0 if strength is None else strength))
+        set_default_lora(hub, workflow_id, use.sha256, value)
         _announce(request, [workflow_id], "changed")
         return _read_detail(hub, workflow_id)
 

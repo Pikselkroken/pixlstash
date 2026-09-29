@@ -2073,7 +2073,8 @@ can no longer see.
   exception, "Yours" (`provenance: edited`) under its label, and only a
   parameter row has a reset, because `PUT …/defaults` writes parameters only.
   A LoRA goes INTO the default recipe from the pile: each ALSO USED fan row
-  whose LoRA is on the shelf has **Add to default** (`PUT …/default-lora`,
+  the summary gives a `sha256` (the one shelf file it is, the route's own
+  resolution) has **Add to default** (`PUT …/default-lora`,
   #1653), queued with the tab's other writes; the answer is the new detail,
   the row leaves the pile (focus to the row that took its place, else the
   fan, else the Default recipe heading), and a `success` notice offers Undo,
@@ -2083,7 +2084,9 @@ can no longer see.
     `default_recipe.loras[].asset` against the summary's `asset:` reference
     (both hash the file's NAME), and `sha256` against the chain loaders'
     `sha256` (the shelf's CONTENT digest). The two hashes are never
-    interchangeable. Never by filename, which is null for a forgotten name,
+    interchangeable, but a summary row carries its `sha256` too, so a default
+    under one name still takes a pile row under another name of the same file
+    out of the pile. Never by filename, which is null for a forgotten name,
     except for a default the server could not give an `asset`.
     The summary names the row and says whether it is on the shelf; the chain
     gives the order; the strength is the recipe's. A default LoRA in `varying`

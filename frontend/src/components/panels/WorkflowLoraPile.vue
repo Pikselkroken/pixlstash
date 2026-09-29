@@ -72,14 +72,16 @@
               </div>
               <div class="wfpile-meta">{{ meta(row) }}</div>
             </div>
-            <!-- Only a LoRA the shelf holds: the default recipe names a LoRA
-                 by the shelf's digest, and a run could not load another. -->
+            <!-- Only a LoRA the shelf names as one file (`sha256`): the default
+                 recipe names a LoRA by that digest, and the route takes
+                 exactly the LoRAs the summary gives one. -->
             <AppButton
-              v-if="row.asset && row.on_shelf"
+              v-if="row.asset && row.sha256"
               variant="ghost"
               size="sm"
               data-testid="wftab-add-default"
               :loading="adding === row.asset"
+              :disabled="Boolean(adding) && adding !== row.asset"
               :aria-label="`Add ${label(row)} to the default recipe`"
               tooltip="Add to the workflow's default LoRAs"
               @click="addDefault(row)"
@@ -180,6 +182,19 @@ function addDefault(row) {
   addedAsset = row.asset;
   emit("add-default", row);
 }
+
+// A failed add leaves its row where it was: forget it, or a later change that
+// takes that row out for another reason would move focus unasked.
+watch(
+  () => props.adding,
+  (now, before) => {
+    if (before && before === addedAsset && !now) {
+      nextTick(() => {
+        if (rows.value.some((row) => row.asset === addedAsset)) addedAsset = "";
+      });
+    }
+  },
+);
 
 // An added LoRA leaves the pile, and its button with it: focus moves to the
 // row that took its place (its first button), else the fan itself, rather

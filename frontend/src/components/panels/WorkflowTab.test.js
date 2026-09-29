@@ -131,6 +131,8 @@ function loraSummary(overrides = {}) {
         filename: "bo.safetensors",
         name: "Bo",
         on_shelf: true,
+        // The shelf file's CONTENT digest: not the hex of the asset (a name hash).
+        sha256: "b".repeat(64),
         pictures: 3,
         picture_ids: [31, 32, 33],
       },
@@ -139,6 +141,7 @@ function loraSummary(overrides = {}) {
         filename: "ada.safetensors",
         name: "Ada",
         on_shelf: true,
+        sha256: "a".repeat(64),
         pictures: 2,
         picture_ids: [21, 22],
       },
@@ -1156,6 +1159,20 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
   });
 
   describe("Add to default on a pile row (#1653)", () => {
+    it("takes a default LoRA out of the pile by shelf file when its asset differs", async () => {
+      // One file loaded under another name: the default names it by one
+      // asset, the pile by another, and they are still the one LoRA.
+      getWorkflowCard.mockResolvedValue(
+        withRecipe({
+          loras: [{ asset: `asset:${"9".repeat(64)}`, filename: "bo_old.safetensors", sha256: BO_SHA, strength: 1, provenance: "best" }],
+        }),
+      );
+      const { wrapper } = await mountWith([KEY]);
+      expect(wrapper.find(`[data-testid='wftab-fan-row-${BO}']`).exists()).toBe(false);
+      expect(loraRow(wrapper, "Bo").find(".wftab-coverage").text()).toBe("in 3 of 5");
+    });
+
+
     const boAdded = (strength = 0.8) =>
       withRecipe({
         loras: [{ asset: BO, filename: "bo.safetensors", sha256: BO_SHA, strength, provenance: "edited" }],
@@ -1184,6 +1201,23 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
       expect(wrapper.find(`[data-testid='wftab-fan-row-${BO}']`).exists()).toBe(true);
     });
 
+    it("still confirms, with Undo, when the selection moved while it was out", async () => {
+      getWorkflowCard.mockResolvedValue(withRecipe({ loras: [] }));
+      let answer;
+      setWorkflowDefaultLora.mockImplementationOnce(
+        () => new Promise((resolve) => (answer = resolve)),
+      );
+      const { wrapper, store } = await mountWith([KEY]);
+      await addButton(wrapper, BO).trigger("click");
+      await flush(wrapper);
+      store.selectedKeys = [];
+      answer(boAdded());
+      await flush(wrapper);
+      const notice = useNoticeStore().notices.at(-1);
+      expect(notice.level).toBe("success");
+      expect(notice.action.label).toBe("Undo");
+    });
+
     it("does not undo a LoRA whose strength was changed since", async () => {
       getWorkflowCard.mockResolvedValue(withRecipe({ loras: [] }));
       setWorkflowDefaultLora.mockResolvedValueOnce(boAdded());
@@ -1196,10 +1230,11 @@ describe("the DEFAULT RECIPE section (#1653)", () => {
       expect(useNoticeStore().notices.at(-1).text).toContain("Nothing to undo");
     });
 
-    it("offers it only on a LoRA the shelf holds", async () => {
+    it("offers it only on a LoRA the shelf names as one file", async () => {
       getWorkflowCard.mockResolvedValue(withRecipe({ loras: [] }));
       const summary = loraSummary();
-      summary.varying[1].on_shelf = false;
+      // On the shelf, but under two files: the route could not choose.
+      summary.varying[1].sha256 = null;
       getLoraSummary.mockResolvedValue(summary);
       const { wrapper } = await mountWith([KEY]);
       expect(addButton(wrapper, summary.varying[0].asset).exists()).toBe(true);

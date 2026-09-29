@@ -1558,6 +1558,18 @@ const usingChain = computed(
     !(defaultRecipe.value?.loras ?? []).length,
 );
 
+/** The summary's LoRAs by the shelf digest they resolve to, where they do. */
+const summaryByDigest = computed(() => {
+  const uses = new Map();
+  for (const use of summary.value?.shared ?? []) {
+    if (use.sha256) uses.set(digestOf(use.sha256), { use, everywhere: true });
+  }
+  for (const use of summary.value?.varying ?? []) {
+    if (use.sha256) uses.set(digestOf(use.sha256), { use, everywhere: false });
+  }
+  return uses;
+});
+
 /**
  * The summary's LoRAs by their `asset:` reference (a hash of the file's NAME,
  * as the stored graphs name it), and whether each is in every picture.
@@ -1604,7 +1616,9 @@ const defaultLoras = computed(() => {
   const rows = loras.map((lora, index) => {
     const digest = digestOf(lora.sha256);
     const asset = digestOf(lora.asset);
-    const found = asset ? summaryUses.value.get(asset) : null;
+    const found =
+      (asset ? summaryUses.value.get(asset) : null) ??
+      (digest ? summaryByDigest.value.get(digest) : null);
     const loader = digest ? byDigest.get(digest) : null;
     const edited = lora.provenance === "edited";
     const strength = Number(lora.strength);
@@ -1682,9 +1696,15 @@ const alsoUsed = computed(() => {
   const unjoined = (defaultRecipe.value?.loras ?? []).filter(
     (lora) => !digestOf(lora.asset) && lora.filename,
   );
+  const shelfFiles = new Set(
+    (defaultRecipe.value?.loras ?? [])
+      .map((lora) => digestOf(lora.sha256))
+      .filter(Boolean),
+  );
   return (summary.value?.varying ?? []).filter(
     (use) =>
       !defaultAssets.value.has(digestOf(use.asset)) &&
+      !(use.sha256 && shelfFiles.has(digestOf(use.sha256))) &&
       !(
         use.filename &&
         unjoined.some((lora) => sameFile(lora.filename, use.filename))
@@ -1919,6 +1939,20 @@ function fail(err, fallback) {
  */
 let writes = Promise.resolve();
 
+/**
+ * Whether a default-recipe LoRA is a pile row's: the same `asset` reference,
+ * or the same shelf file by digest (one file loaded under two names is one
+ * LoRA, and the default names it under only one of them).
+ */
+function sameLora(lora, use) {
+  if (digestOf(lora.asset) && digestOf(lora.asset) === digestOf(use.asset)) {
+    return true;
+  }
+  return Boolean(
+    digestOf(lora.sha256) && digestOf(lora.sha256) === digestOf(use.sha256),
+  );
+}
+
 /** The Default recipe heading: where focus goes when the last pile row leaves. */
 const defaultHeading = ref(null);
 
@@ -1939,14 +1973,17 @@ function addLoraToDefault(row) {
       fail(err, `Could not add ${name} to the default recipe.`);
       return;
     }
-    if (!stillOn(key)) return;
-    detail.value = body;
-    const added = (body?.card?.default_recipe?.loras ?? []).find(
-      (lora) => lora.asset === row.asset,
+    // Written either way: the notice (and its Undo) is owed even when the
+    // selection has moved on while the answer was out.
+    const added = (body?.card?.default_recipe?.loras ?? []).find((lora) =>
+      sameLora(lora, row),
     );
-    if (!alsoUsed.value.length) {
-      await nextTick();
-      defaultHeading.value?.focus();
+    if (stillOn(key)) {
+      detail.value = body;
+      if (!alsoUsed.value.length) {
+        await nextTick();
+        defaultHeading.value?.focus();
+      }
     }
     notices.push({
       level: "success",
@@ -1959,7 +1996,7 @@ function addLoraToDefault(row) {
             try {
               const now = await getWorkflowCard(key);
               const still = (now?.card?.default_recipe?.loras ?? []).find(
-                (lora) => lora.asset === row.asset,
+                (lora) => sameLora(lora, row),
               );
               if (
                 !still ||

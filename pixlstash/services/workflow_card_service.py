@@ -83,7 +83,7 @@ from pixlstash.services.workflow_library_service import (
     read_variant_picture_counts,
 )
 from pixlstash.services.workflow_parameters import FEATURED_NAMES, FEATURED_ORDER
-from pixlstash.utils.adapter_header import FILE_TEXT_ENCODER
+from pixlstash.utils.adapter_header import FILE_ADAPTER, FILE_TEXT_ENCODER, FILE_UNKNOWN
 from pixlstash.utils.known_base_models import fold
 from pixlstash.utils.model_utils import (
     canonical_quant,
@@ -1038,9 +1038,6 @@ class DefaultRecipe:
     models: list[DefaultModel] = field(default_factory=list)
     loras: list[DefaultLora] = field(default_factory=list)
     stages: dict[str, bool] = field(default_factory=dict)
-    # Every LoRA the sample loaded, by asset reference, at its modal strength:
-    # what a LoRA the owner adds to the default recipe starts at (#1653).
-    seen_strengths: dict[str, float] = field(default_factory=dict)
 
     def recipe_loras(self) -> list[dict]:
         """The LoRAs as a saved recipe holds them, for ``place_recipe_loras``."""
@@ -1241,9 +1238,6 @@ def workflow_defaults(
         shelf = by_name.get(normalized_filename(filename or ""), set())
         return next(iter(shelf)) if len(shelf) == 1 else None
 
-    recipe.seen_strengths = {
-        asset: _mode(counter) for asset, counter in lora_strengths.items()
-    }
     majority = sorted(asset for asset, seen in lora_seen.items() if seen * 2 > sampled)
     for asset in majority:
         filename = names.get(asset)
@@ -1358,6 +1352,44 @@ def _mode(counter: Counter):
     return max(counter.items(), key=lambda item: (item[1], str(item[0])))[0]
 
 
+def lora_modal_strength(
+    hub: HubDatabase, vault, workflow_id: str, asset: str
+) -> Optional[float]:
+    """The strength a workflow's pictures loaded one LoRA at most often.
+
+    Read off the runs of the variants that load *asset* (up to
+    ``DEFAULT_SAMPLE`` of them, newest first), not the default recipe's
+    sample, which a LoRA in a few pictures may not reach. ``None`` when no run
+    records one.
+    """
+    library_uuid = getattr(vault, "library_uuid", None)
+    workflow = find_workflow(hub, workflow_id) if library_uuid else None
+    if workflow is None:
+        return None
+    reads = _variant_reads(hub, workflow, set(workflow.variants))
+    loading = sorted(
+        structural_hash
+        for structural_hash, read in reads.items()
+        if any(slot.is_lora and slot.asset == asset for slot in read.slots)
+    )
+    if not loading:
+        return None
+    hashes = read_instance_hashes(vault, loading, None, DEFAULT_SAMPLE)
+    seen: Counter = Counter()
+    for structural_hash, document in instance_documents(hub, library_uuid, hashes):
+        for slot in reads[structural_hash].slots:
+            if not (slot.is_lora and slot.asset == asset):
+                continue
+            strength = (
+                (document.get(slot.node_id) or {})
+                .get("inputs", {})
+                .get("strength_model")
+            )
+            if isinstance(strength, (int, float)) and not isinstance(strength, bool):
+                seen[float(strength)] += 1
+    return _mode(seen) if seen else None
+
+
 def _shelf_asset(hub: HubDatabase, sha256: str) -> tuple[str, Optional[str]]:
     """The asset reference and filename the shelf names a LoRA digest by.
 
@@ -1416,6 +1448,10 @@ class LoraUse:
     filename: Optional[str] = None
     name: Optional[str] = None
     on_shelf: bool = False
+    # The one shelf LoRA file this is, by content digest, or ``None`` when the
+    # shelf cannot say (not there, or several files answer): what the default
+    # recipe names a LoRA by, so a client offers *Add to default* only here.
+    sha256: Optional[str] = None
     pictures: int = 0
     picture_ids: list[int] = field(default_factory=list)
 
@@ -1507,12 +1543,22 @@ def workflow_lora_summary(
         if is_lora_widget(widget)
     }
     candidates, titles = _shelf_candidates(hub, sorted(set(filenames.values())))
+    lora_digests = {
+        row["id"]: str(row["sha256"]).lower()
+        for row in hub.fetchall(
+            "SELECT id, sha256 FROM model "
+            "WHERE sha256 IS NOT NULL AND file_kind IN (?, ?)",
+            (FILE_ADAPTER, FILE_UNKNOWN),
+        )
+    }
     for use in uses.values():
         use.filename = filenames.get(use.asset)
-        models = candidates.get(use.filename or "", set())
+        models = candidates.get((use.filename or "").lower(), set())
         use.on_shelf = bool(models)
         title = titles.get(next(iter(models))) if len(models) == 1 else None
         use.name = title or _derived(use.filename)
+        digests = {lora_digests[m] for m in models if m in lora_digests}
+        use.sha256 = next(iter(digests)) if len(digests) == 1 else None
 
     summary.shared = sorted(
         (use for use in uses.values() if use.pictures == summary.pictures),
