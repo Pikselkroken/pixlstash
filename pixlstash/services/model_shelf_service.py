@@ -72,6 +72,7 @@ from pixlstash.utils.adapter_header import (
 )
 from pixlstash.utils.known_base_models import (
     COMPANION_LAYOUTS,
+    SOURCE_DECLARED,
     SOURCE_FILENAME,
     SOURCE_USER,
     family_of,
@@ -694,6 +695,37 @@ def models_for_digest(
     bisect rather than a scan of the shelf.
     """
     return {by_digest[digest] for digest in digests_with_prefix(value, sorted_digests)}
+
+
+def served_family(row) -> Optional[str]:
+    """The architecture family to serve for a ``model`` row.
+
+    From the identified base model only when it was stated (by the file or a
+    person), never from a guess: the family is what the LoRA swap labels
+    compatibility with, and a guessed family there would be stated as fact.
+    *row* needs ``base_model``, ``base_model_canonical``, ``base_model_source``
+    and ``family``; the shelf rows and a workflow card's model marks both
+    read it here, so the two cannot disagree about one file.
+    """
+    stated = row["base_model_source"] in (SOURCE_USER, SOURCE_DECLARED)
+    return (
+        family_of(row["base_model"])
+        or (family_of(row["base_model_canonical"]) if stated else None)
+        or row["family"]
+    )
+
+
+def base_model_family(row) -> Optional[str]:
+    """The family of the base model a ``model`` row was identified as, guesses included.
+
+    Unlike :func:`served_family` this takes the identified label whatever its
+    source, a filename guess included, and never the tensors' own family of a
+    support file. It is for narrowing a list to what probably fits (a LoRA
+    against a workflow's checkpoint), where a guess the shelf already shows
+    beside the row is better than no answer; it is never stated as a fact.
+    *row* needs ``base_model`` and ``base_model_canonical``.
+    """
+    return family_of(row["base_model_canonical"]) or family_of(row["base_model"])
 
 
 def families_clash(base_model: Optional[str], other_base_model: Optional[str]) -> bool:

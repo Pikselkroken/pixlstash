@@ -34,6 +34,7 @@ from pixlstash.services.comfyui_recipe_service import (
     read_lora_chain,
     read_lora_chain_untyped,
     sanitize_prompt_graph,
+    swap_to_adapter_loader,
     unchecked_preflight,
 )
 from pixlstash.routes.comfyui import _describe_lora_chain
@@ -2716,3 +2717,75 @@ class TestWrappedLoaders:
             "wan/wan_2.1_vae.safetensors",
             "wan_2.1_vae.safetensors",
         }
+
+
+# ── swap_to_adapter_loader: a LoRA this ComfyUI lacks, loaded by hash ─────────
+
+_ADAPTER_LOADER_SPEC = {
+    "input": {
+        "required": {
+            "model": ["MODEL", {}],
+            "adapter_kind": [["— Any —"], {}],
+            "base_model": [["— Any —"], {}],
+            "adapter_sha256": ["STRING", {"default": ""}],
+        },
+        "optional": {
+            "clip": ["CLIP", {}],
+            "strength_model": ["FLOAT", {"default": 1.0}],
+            "strength_clip": ["FLOAT", {"default": 1.0}],
+        },
+    },
+    "output": ["MODEL", "CLIP", "STRING"],
+}
+
+
+def _lora_graph(class_type="LoraLoader", **extra):
+    return {
+        "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "x"}},
+        "2": {
+            "class_type": class_type,
+            "inputs": {
+                "lora_name": "missing.safetensors",
+                "strength_model": 0.6,
+                "strength_clip": 0.4,
+                "model": ["1", 0],
+                "clip": ["1", 1],
+                **extra,
+            },
+        },
+    }
+
+
+def test_a_swapped_loader_keeps_its_wiring_and_strengths():
+    graph = _lora_graph()
+    swap_to_adapter_loader(
+        graph, "2", "a" * 64, {"PixlStashAdapterLoader": _ADAPTER_LOADER_SPEC}
+    )
+    node = graph["2"]
+    assert node["class_type"] == "PixlStashAdapterLoader"
+    assert node["inputs"]["adapter_sha256"] == "a" * 64
+    assert (node["inputs"]["model"], node["inputs"]["clip"]) == (["1", 0], ["1", 1])
+    assert (node["inputs"]["strength_model"], node["inputs"]["strength_clip"]) == (
+        0.6,
+        0.4,
+    )
+    assert "lora_name" not in node["inputs"]
+
+
+@pytest.mark.parametrize("spec", [None, "PixlStashAdapterLoader", ["MODEL"], {}])
+def test_a_missing_or_malformed_pack_declaration_is_a_lookup_error(spec):
+    """ComfyUI's spec is a third-party pack's, verbatim: never an AttributeError."""
+    graph = _lora_graph()
+    info = {} if spec is None else {"PixlStashAdapterLoader": spec}
+    with pytest.raises(LookupError):
+        swap_to_adapter_loader(graph, "2", "a" * 64, info)
+    assert graph["2"]["class_type"] == "LoraLoader"
+
+
+def test_a_stacker_is_never_half_swapped():
+    graph = _lora_graph(class_type="LoraStacker")
+    with pytest.raises(LookupError):
+        swap_to_adapter_loader(
+            graph, "2", "a" * 64, {"PixlStashAdapterLoader": _ADAPTER_LOADER_SPEC}
+        )
+    assert graph["2"]["class_type"] == "LoraStacker"

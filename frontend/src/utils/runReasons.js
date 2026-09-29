@@ -75,6 +75,14 @@ export const PICTURE_INPUT_UNFILLED = "picture_input_unfilled";
 export const NODES_REPLACED = "nodes_replaced";
 
 /**
+ * Not a refusal either: a LoRA this ComfyUI lacks, loaded through the
+ * ComfyUI-PixlStash loader by its hash (`RunGroup.swapped_loaders`). The run
+ * gets the LoRA; the graph that runs is not the one the card names, which is
+ * what "Save fixed workflow" keeps.
+ */
+export const LORAS_FETCHED = "loras_fetched";
+
+/**
  * Where the ComfyUI-PixlStash node pack lives, and how to get it.
  *
  * The backend says the same in `PIXLSTASH_PACK_INSTALL_HINT`
@@ -185,6 +193,30 @@ export function readReason(reason) {
         false,
       );
     }
+    case LORAS_FETCHED: {
+      const files = [
+        ...new Set(
+          (reason.loaders || [])
+            .map((loader) => String(loader?.file || "").split(/[\\/]/).pop())
+            .filter(Boolean),
+        ),
+      ];
+      if (!files.length) {
+        // A loader the server named no file for: still said, without a subject.
+        return read(
+          "A LoRA this ComfyUI does not have loads through the ComfyUI-PixlStash LoRA loader, which fetches it by hash.",
+          null,
+          [],
+          false,
+        );
+      }
+      return read(
+        `${files.length === 1 ? `${files[0]} is` : `${files.join(", ")} are`} not on this ComfyUI, so ${files.length === 1 ? "it loads" : "they load"} through the ComfyUI-PixlStash LoRA loader, which fetches ${files.length === 1 ? "it" : "them"} by hash.`,
+        null,
+        [],
+        false,
+      );
+    }
     case LORAS_SKIPPED: {
       const files = (reason.models || []).filter(Boolean);
       return read(
@@ -273,12 +305,20 @@ export function readReason(reason) {
       return read(sentences.join(" "));
     }
     case "no_lora_loader":
-      // The reason only ever fires because the run is PUTTING a LoRA in, so
-      // taking it out again is the fix this route can actually carry out.
-      // Inserting a loader is the shipped replay route's trick (#1376) and
-      // `POST /workflows/run` has no field for it.
+      // Fires only for a LoRA addressed to a slot (`loras`), so taking it out
+      // is a fix that works; Add LoRA puts one in a loader of its own instead.
       return read(
         "This workflow has no LoRA loader, so the LoRA has nowhere to go.",
+        FIX_DROP_LORA,
+      );
+    case "lora_not_insertable":
+      // An added LoRA (`add_loras`) the run could not splice in. The server's
+      // sentence says why - no model source to add it after, or the file is
+      // not on this ComfyUI and ComfyUI-PixlStash is not there to fetch it.
+      return read(
+        reason.detail
+          ? `The LoRA cannot be added to this workflow. ${reason.detail}`
+          : "The LoRA cannot be added to this workflow.",
         FIX_DROP_LORA,
       );
     case "pixlstash_nodes": {
@@ -399,5 +439,30 @@ export function replacedNotice(group) {
  * @returns {Array<Object>}
  */
 export function repairNotices(group) {
-  return [...bypassNotice(group), ...replacedNotice(group)];
+  return [...bypassNotice(group), ...replacedNotice(group), ...swappedNotice(group)];
+}
+
+/**
+ * The LoRA loaders one pre-flight group swapped to the ComfyUI-PixlStash
+ * loader, in the reason shape.
+ *
+ * @param {{swapped_loaders?: Array<Object>}} group
+ * @returns {Array<Object>} zero or one entry, so a caller can spread it.
+ */
+export function swappedNotice(group) {
+  const loaders = (group?.swapped_loaders || []).filter(Boolean);
+  return loaders.length ? [{ code: LORAS_FETCHED, loaders }] : [];
+}
+
+/**
+ * Whether a group's run changes nodes of the workflow itself on this ComfyUI -
+ * a node replaced, or one of the workflow's own LoRA loaders swapped - which
+ * "Save fixed workflow" keeps. A swap for a LoRA the form named
+ * (`requested: true`) is not counted: the saved copy writes no form.
+ */
+export function changesNodes(group) {
+  return Boolean(
+    (group?.replaced_nodes || []).length ||
+      (group?.swapped_loaders || []).some((loader) => !loader?.requested),
+  );
 }

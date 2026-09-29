@@ -86,7 +86,7 @@ from pixlstash.services.workflow_run_service import (
     replace_missing_text_nodes,
     skip_requested_loras,
 )
-from pixlstash.utils.known_base_models import fold
+from pixlstash.utils.known_base_models import family_of, fold
 import pixlstash.routes.workflows as workflows_routes
 from pixlstash.routes.comfyui import MAX_RUNS_PER_REQUEST
 from pixlstash.routes.workflows import RunRequest, UNNAMED_CARD
@@ -189,6 +189,7 @@ _WORKFLOW_WRITE_ROUTES = (
     # whole library the way the run route does, and two of them write a file.
     ("POST", "/api/v1/workflows/{workflow_id}/duplicate"),
     ("POST", "/api/v1/workflows/{workflow_id}/insert-lora-loader"),
+    ("POST", "/api/v1/workflows/{workflow_id}/fixed-copy"),
     ("PUT", "/api/v1/workflows/{workflow_id}/lora-chain"),
     ("POST", "/api/v1/workflows/{workflow_id}/clone-with-models"),
     ("DELETE", "/api/v1/workflows/{workflow_id}"),
@@ -1735,6 +1736,9 @@ def test_a_card_is_served_in_the_shape_the_frontend_already_reads(workflow_env):
             "icon": None,
             "base_model": None,
             "base_model_folded": None,
+            # No file, so no shelf row to name or to read a family off.
+            "sha256": None,
+            "base_model_family": None,
             "kind": "lora",
             # A recipe slot names no file at all, so there is nothing to read a
             # precision off either - and nothing is what it serves.
@@ -2244,6 +2248,7 @@ _EDITOR_ICON = _h("editor-card-icon")
 # real fold to do rather than passing a canonical label through untouched.
 _EDITOR_BASE_MODEL = "flux.1-dev"
 _EDITOR_BASE_MODEL_FOLDED = fold(_EDITOR_BASE_MODEL)
+_EDITOR_FAMILY = family_of(_EDITOR_BASE_MODEL)
 
 
 def _file_a_workflow(server, tmp_path, monkeypatch, name, workflow, keys=None) -> str:
@@ -2332,6 +2337,7 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
     # `folded or raw`, so the same model has to arrive here spelled the way it
     # arrives on the shelf or one file gets two colours in two places.
     assert _EDITOR_BASE_MODEL_FOLDED not in (None, _EDITOR_BASE_MODEL)
+    assert _EDITOR_FAMILY is not None
     assert card["models"] == [
         {
             "name": _SHELF_DERIVED,
@@ -2339,6 +2345,11 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             "icon": _EDITOR_ICON,
             "base_model": _EDITOR_BASE_MODEL,
             "base_model_folded": _EDITOR_BASE_MODEL_FOLDED,
+            # Which shelf file it is, and the family the shelf serves for it,
+            # so a client can check a character's LoRA against this workflow
+            # without a second read.
+            "sha256": _h("realvisxl-digest"),
+            "base_model_family": _EDITOR_FAMILY,
             "kind": "unet",
             # Null and not an empty string: neither the shelf's column nor the
             # filename records a precision for this file.
@@ -2348,6 +2359,17 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             "slot_label": None,
         }
     ]
+    # The family is the one the model shelf serves for the same file: a client
+    # compares a LoRA's shelf `base_model_family` against this, so the two
+    # must agree.
+    shelf = workflow_env.owner.get(f"{API}/checkpoints")
+    assert shelf.status_code == 200, shelf.text
+    row = next(
+        entry
+        for entry in shelf.json()["checkpoints"]
+        if entry["sha256"] == _h("realvisxl-digest")
+    )
+    assert row["base_model_family"] == card["models"][0]["base_model_family"]
     # Named, because a LoRA named in the file is one the workflow loads and
     # there is no recipe to fill it. Null title and null icon are the state:
     # the shelf does not hold this file.
@@ -2358,6 +2380,8 @@ def test_an_editor_format_cards_models_are_read_off_its_own_file(
             "icon": None,
             "base_model": None,
             "base_model_folded": None,
+            "sha256": None,
+            "base_model_family": None,
             "kind": "lora",
             "quant": None,
             "slot_label": None,
@@ -3780,6 +3804,7 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
         ),
         ("POST", f"{API}/workflows/{BUSY_WF}/duplicate", None),
         ("POST", f"{API}/workflows/{BUSY_WF}/insert-lora-loader", None),
+        ("POST", f"{API}/workflows/{BUSY_WF}/fixed-copy", None),
         ("PUT", f"{API}/workflows/{BUSY_WF}/lora-chain", {"entries": []}),
         (
             "POST",
@@ -3892,6 +3917,12 @@ _EVERY_WORKFLOW_ROUTE = (
         "POST",
         "/workflows/{workflow_id}/insert-lora-loader",
         f"/workflows/{BUSY_WF}/insert-lora-loader",
+        None,
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/fixed-copy",
+        f"/workflows/{BUSY_WF}/fixed-copy",
         None,
     ),
     (
@@ -10332,6 +10363,352 @@ def test_inserting_a_lora_loader_writes_a_copy_with_a_slot_to_swap_into(loaderle
     # The sampler now reads the loader rather than the checkpoint, or the run
     # would go through without the LoRA and say nothing.
     assert written["2"]["inputs"]["model"] == [body["node_id"], 0]
+
+
+def _serve_the_adapter_on(fixture, object_info: dict) -> None:
+    """Make *object_info*'s model-only loader list the run tests' shelf LoRA."""
+    info = json.loads(json.dumps(object_info))
+    options = info["LoraLoaderModelOnly"]["input"]["required"]["lora_name"][0]
+    options.append(RUN_ADAPTER_FILENAME)
+    fixture.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+
+def test_a_run_adds_a_lora_in_a_loader_of_its_own(loaderless):
+    """`add_loras` splices a loader in on the run's copy (Create with LoRA…).
+
+    The workflow has no LoRA loader at all, which is the case a slot-addressed
+    `loras` entry cannot serve; the stored file is not touched.
+    """
+    _serve_the_adapter_on(loaderless, LOADERLESS_OBJECT_INFO)
+    r = loaderless.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "add_loras": [{"sha256": RUN_ADAPTER_DIGEST, "strength_model": 0.6}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    graph = loaderless.submitted[0]["graph"]
+    added = [
+        node_id
+        for node_id, node in graph.items()
+        if node["class_type"] == "LoraLoaderModelOnly"
+    ]
+    assert len(added) == 1, graph
+    inputs = graph[added[0]]["inputs"]
+    assert inputs["lora_name"] == RUN_ADAPTER_FILENAME
+    assert inputs["strength_model"] == 0.6
+    assert inputs["model"] == ["1", 0]
+    # The sampler reads the LoRA, or the run would go through without it.
+    assert graph["2"]["inputs"]["model"] == [added[0], 0]
+
+
+def test_an_added_lora_replaces_none_of_the_workflows_own(runnable):
+    """The graph's own loader keeps its LoRA; the added one goes in beside it."""
+    info = json.loads(json.dumps({**RUN_OBJECT_INFO, **LOADERLESS_OBJECT_INFO}))
+    info["LoraLoader"] = json.loads(json.dumps(RUN_OBJECT_INFO["LoraLoader"]))
+    info["CheckpointLoaderSimple"]["output"] = ["MODEL", "CLIP", "VAE"]
+    info["KSampler"]["output"] = ["LATENT"]
+    info["SaveImage"]["output"] = []
+    # The graph's CLIP never reaches a text encoder, so the splice is a
+    # model-only loader.
+    info["LoraLoaderModelOnly"]["input"]["required"]["lora_name"] = [
+        ["add_detail.safetensors", RUN_ADAPTER_FILENAME],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={"workflow_id": RUN_WF, "add_loras": [{"sha256": RUN_ADAPTER_DIGEST}]},
+    )
+    assert r.status_code == 200, r.text
+    assert runnable.submitted, [g["reasons"] for g in r.json()["groups"]]
+    graph = runnable.submitted[0]["graph"]
+    assert graph["2"]["inputs"]["lora_name"] == "add_detail.safetensors"
+    loaders = [
+        node["inputs"]["lora_name"]
+        for node in graph.values()
+        if node["class_type"] in ("LoraLoader", "LoraLoaderModelOnly")
+    ]
+    assert sorted(loaders) == ["add_detail.safetensors", RUN_ADAPTER_FILENAME]
+
+
+def test_an_added_lora_the_graph_already_loads_is_not_added_twice(runnable):
+    """Its strength is set on the loader that has it instead of a second copy."""
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "loras": [{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
+            "add_loras": [{"sha256": RUN_ADAPTER_DIGEST, "strength_model": 0.3}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    graph = runnable.submitted[0]["graph"]
+    assert [n for n in graph.values() if n["class_type"] == "LoraLoader"] == [
+        graph["2"]
+    ]
+    assert graph["2"]["inputs"]["lora_name"] == RUN_ADAPTER_FILENAME
+    assert graph["2"]["inputs"]["strength_model"] == 0.3
+
+
+def test_a_lora_that_cannot_be_added_is_a_reason_with_the_splices_sentence(
+    loaderless,
+):
+    """Not on this ComfyUI, and no ComfyUI-PixlStash to fetch it: said, not run."""
+    payload = _preflight(
+        loaderless.owner,
+        workflow_id=RUN_WF,
+        add_loras=[{"sha256": RUN_ADAPTER_DIGEST}],
+    )
+    reasons = [r for group in payload["groups"] for r in group["reasons"]]
+    refused = [r for r in reasons if r["code"] == "lora_not_insertable"]
+    assert refused, reasons
+    assert "ComfyUI-PixlStash" in refused[0]["detail"]
+
+
+def test_every_added_lora_that_cannot_be_added_says_so(loaderless):
+    """One refusal per LoRA, not only the first: the rest are not hidden behind it."""
+    payload = _preflight(
+        loaderless.owner,
+        workflow_id=RUN_WF,
+        add_loras=[{"sha256": RUN_ADAPTER_DIGEST}, {"sha256": RUN_ADAPTER_DIGEST}],
+    )
+    refused = [
+        reason
+        for group in payload["groups"]
+        for reason in group["reasons"]
+        if reason["code"] == "lora_not_insertable"
+    ]
+    assert len(refused) == 2, payload
+
+
+def test_an_added_lora_without_comfyui_is_the_unreachable_reason(loaderless):
+    """Not a 400: the pre-flight's own refusal, which the popup offers a Retry for."""
+    loaderless.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+    )
+    payload = _preflight(
+        loaderless.owner,
+        workflow_id=RUN_WF,
+        add_loras=[{"sha256": RUN_ADAPTER_DIGEST}],
+    )
+    # Refused by the pre-flight's own ComfyUI reason (this owner has no
+    # address set), never by a 400 the popup would read as a refusal of the body.
+    assert _reasons(payload) & {"comfyui_unreachable", "comfyui_not_configured"}
+    r = loaderless.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "add_loras": [{"sha256": RUN_ADAPTER_DIGEST}],
+            "allow_unchecked": True,
+        },
+    )
+    # Consent to run unchecked is not consent to run without the LoRA.
+    assert r.status_code == 400, r.text
+    assert loaderless.submitted == []
+
+
+# The ComfyUI-PixlStash LoRA loader as its node pack declares it: resolved by
+# digest, so it loads a shelf LoRA this ComfyUI has no file of.
+PIXLSTASH_ADAPTER_LOADER_INFO = {
+    "input": {
+        "required": {
+            "model": ["MODEL", {}],
+            "adapter_kind": [["— Any —"], {}],
+            "base_model": [["— Any —"], {}],
+            "adapter_sha256": ["STRING", {"default": ""}],
+        },
+        "optional": {
+            "clip": ["CLIP", {}],
+            "strength_model": ["FLOAT", {"default": 1.0}],
+            "strength_clip": ["FLOAT", {"default": 1.0}],
+        },
+    },
+    "output": ["MODEL", "CLIP", "STRING"],
+}
+
+
+def _graph_loads_a_shelf_lora_comfyui_lacks(runnable, with_pixlstash=True):
+    """RUN_CARD's loader names the shelf LoRA's file, which ComfyUI does not list.
+
+    The shelf row is renamed to the file the graph's loader names, so the
+    shelf can name that slot's digest; ComfyUI's LoraLoader lists only the
+    other file, so without a swap the #1463 bypass would take the loader out.
+    """
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET filename = 'add_detail.safetensors' WHERE sha256 = ?",
+            (RUN_ADAPTER_DIGEST,),
+        )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["LoraLoader"]["input"]["required"]["lora_name"] = [
+        ["unrelated.safetensors"],
+        {},
+    ]
+    if with_pixlstash:
+        info["PixlStashAdapterLoader"] = json.loads(
+            json.dumps(PIXLSTASH_ADAPTER_LOADER_INFO)
+        )
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+
+def test_a_shelf_lora_comfyui_lacks_loads_through_the_pixlstash_loader(runnable):
+    """The workflow's own recipe LoRA, on the shelf but not on this ComfyUI.
+
+    Swapped to the digest loader rather than refused or bypassed: the LoRA is
+    loaded, fetched by its hash.
+    """
+    _graph_loads_a_shelf_lora_comfyui_lacks(runnable)
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    group = r.json()["groups"][0]
+    assert group["bypassed_loras"] == [], group["reasons"]
+    assert runnable.submitted, group["reasons"]
+    # Reported, so the popup can offer to save the fixed workflow.
+    # The workflow's own recipe LoRA, so not `requested`: a saved copy keeps it.
+    assert [
+        (e["node_id"], e["sha256"], e["requested"]) for e in group["swapped_loaders"]
+    ] == [("2", RUN_ADAPTER_DIGEST, False)]
+    node = runnable.submitted[0]["graph"]["2"]
+    assert node["class_type"] == "PixlStashAdapterLoader"
+    assert node["inputs"]["adapter_sha256"] == RUN_ADAPTER_DIGEST
+    # Wired where the core loader was, so the sampler still reads the LoRA.
+    assert node["inputs"]["model"] == ["1", 0]
+    assert runnable.submitted[0]["graph"]["3"]["inputs"]["model"] == ["2", 0]
+
+
+def test_an_added_lora_in_a_loader_comfyui_cannot_fill_is_swapped_not_dropped(
+    runnable,
+):
+    """Create with LoRA on a workflow that already names the person's LoRA.
+
+    The loader holding it names a file this ComfyUI lacks; the added LoRA is
+    loaded there through the digest loader, at the asked strength, and not a
+    second time in a loader of its own.
+    """
+    _graph_loads_a_shelf_lora_comfyui_lacks(runnable)
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "add_loras": [{"sha256": RUN_ADAPTER_DIGEST, "strength_model": 0.7}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    graph = runnable.submitted[0]["graph"]
+    loaders = [
+        node_id
+        for node_id, node in graph.items()
+        if node["class_type"] in ("LoraLoader", "PixlStashAdapterLoader")
+    ]
+    assert loaders == ["2"], graph
+    assert graph["2"]["class_type"] == "PixlStashAdapterLoader"
+    assert graph["2"]["inputs"]["adapter_sha256"] == RUN_ADAPTER_DIGEST
+    assert graph["2"]["inputs"]["strength_model"] == 0.7
+    group = r.json()["groups"][0]
+    assert group["bypassed_loras"] == []
+    # The workflow's own recipe names this LoRA in this loader, so the swap
+    # is the recipe's (`requested: false`) and the added LoRA only re-weights it.
+    assert [e["requested"] for e in group["swapped_loaders"]] == [False]
+
+
+def test_an_added_lora_is_reported_even_behind_another_refusal(runnable):
+    """`add_loras` answers for itself when a `loras` entry has already refused.
+
+    Here neither can be placed (ComfyUI lists neither file, and there is no
+    ComfyUI-PixlStash or model-only loader to add one in): both say so, rather
+    than the added LoRA going unmentioned behind the first refusal.
+    """
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["LoraLoader"]["input"]["required"]["lora_name"] = [
+        ["unrelated.safetensors"],
+        {},
+    ]
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+    payload = _preflight(
+        runnable.owner,
+        workflow_id=RUN_WF,
+        loras=[{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
+        add_loras=[{"sha256": RUN_ADAPTER_DIGEST}],
+    )
+    assert {"missing_models", "lora_not_insertable"} <= _reasons(payload), payload
+
+
+def test_a_swap_for_a_lora_the_request_named_is_marked_requested(runnable):
+    """`loras` naming the slot is the form's choice, which a saved copy never keeps."""
+    _graph_loads_a_shelf_lora_comfyui_lacks(runnable)
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "loras": [{"node_id": "2", "sha256": RUN_ADAPTER_DIGEST}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    group = r.json()["groups"][0]
+    assert [(e["node_id"], e["requested"]) for e in group["swapped_loaders"]] == [
+        ("2", True)
+    ]
+
+
+def test_without_the_pixlstash_loader_nothing_is_swapped(runnable):
+    """No node pack to fetch it by hash: the recipe's LoRA is refused as before.
+
+    `missing_models`, naming the file, and nothing submitted: the swap is only
+    ever to a loader this ComfyUI actually has.
+    """
+    _graph_loads_a_shelf_lora_comfyui_lacks(runnable, with_pixlstash=False)
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    group = r.json()["groups"][0]
+    assert {reason["code"] for reason in group["reasons"]} == {"missing_models"}
+    assert runnable.submitted == []
+
+
+def test_the_fixed_workflow_is_saved_with_the_loader_swapped(runnable, tmp_path):
+    """Save fixed workflow: this ComfyUI's repair written into a NEW file.
+
+    The LoRA this ComfyUI lacks loads through the digest loader in the copy,
+    wired where the core loader was; the original is not the file written.
+    """
+    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
+    _graph_loads_a_shelf_lora_comfyui_lacks(runnable)
+    r = runnable.owner.post(f"{API}/workflows/{RUN_WF}/fixed-copy")
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"].endswith("(fixed).json"), body
+    assert len(body["changes"]) == 1 and "ComfyUI-PixlStash" in body["changes"][0]
+    written = json.loads((tmp_path / body["name"]).read_text())
+    assert written["2"]["class_type"] == "PixlStashAdapterLoader"
+    assert written["2"]["inputs"]["adapter_sha256"] == RUN_ADAPTER_DIGEST
+    assert written["3"]["inputs"]["model"] == ["2", 0]
+
+
+def test_a_workflow_with_nothing_to_fix_is_not_copied(runnable, tmp_path):
+    """Every file here is on this ComfyUI: 409, and no file written."""
+    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
+    r = runnable.owner.post(f"{API}/workflows/{RUN_WF}/fixed-copy")
+    assert r.status_code == 409, r.text
+    assert not list(tmp_path.glob("*(fixed)*"))
+
+
+def test_a_fixed_copy_needs_comfyui(runnable, tmp_path):
+    """What needs fixing is what this ComfyUI lacks: no ComfyUI, no answer."""
+    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+    )
+    r = runnable.owner.post(f"{API}/workflows/{RUN_WF}/fixed-copy")
+    assert r.status_code == 503, r.text
 
 
 def test_inserting_a_loader_leaves_the_original_workflow_alone(loaderless):

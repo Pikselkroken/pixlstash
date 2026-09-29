@@ -267,6 +267,22 @@ export async function preflightWorkflowRun(body) {
 }
 
 /**
+ * Save this workflow with the repairs a run on this ComfyUI makes (#1661):
+ * the owner's model replacements, same-model renames, LoRAs this ComfyUI
+ * lacks loaded through the ComfyUI-PixlStash loader, and missing seed or text
+ * nodes replaced. Written as a NEW workflow; the original is not changed.
+ * 409 when nothing needs fixing, 503 when ComfyUI cannot be asked.
+ *
+ * @param {string} workflowId
+ * @returns {Promise<{name: string, workflow_id: ?string, changes: Array<string>}>}
+ */
+export async function saveFixedWorkflow(workflowId) {
+  return unwrap(
+    apiClient.post(`/workflows/${encodeURIComponent(workflowId)}/fixed-copy`),
+  );
+}
+
+/**
  * Run a workflow card.
  *
  * Exactly ONE source: `picture_ids` ("run what made these"), `saved_recipe_id`

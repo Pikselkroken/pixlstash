@@ -96,6 +96,7 @@ from pixlstash.services.a1111_recipe import reduce_a1111
 from pixlstash.services.comfyui_recipe_service import (
     LORA_FILENAME_FIELD_RE,
     MAX_SEED_64,
+    PIXLSTASH_ADAPTER_LOADER,
     apply_adapter,
     apply_filename_swap,
     apply_lora_chain,
@@ -111,6 +112,7 @@ from pixlstash.services.comfyui_recipe_service import (
     plan_lora_insertion,
     read_lora_chain,
     read_lora_chain_untyped,
+    swap_to_adapter_loader,
 )
 from pixlstash.services.comfyui_service import (
     PIXLSTASH_PICTURE_LOADER,
@@ -344,6 +346,26 @@ class WorkflowSlotModel(BaseModel):
             "a generated mark's colour out of `base_model_folded or "
             "base_model`, so serving one of them would give the same model "
             "two colours in two places."
+        ),
+    )
+    sha256: str | None = Field(
+        None,
+        description=(
+            "The shelf file this slot loads, or null where the shelf does not "
+            "hold it or the name could be more than one file. A LoRA slot "
+            "carries one only where it carries a `name`: on a card known from "
+            "its file alone."
+        ),
+    )
+    base_model_family: str | None = Field(
+        None,
+        description=(
+            "The family of the base model the shelf identified this file as "
+            "(`sdxl`, `flux1`, `krea2`, …), filename guesses included: the "
+            "same value as `base_model_family` on its `GET /adapters` or "
+            "`GET /checkpoints` row, or null where the shelf cannot say. What "
+            "a client compares a LoRA's `base_model_family` against to narrow "
+            "the workflows it fits."
         ),
     )
     kind: str
@@ -1043,6 +1065,22 @@ class RunLora(BaseModel):
     strength_clip: float | None = Field(None, ge=-10.0, le=10.0)
 
 
+class RunAddedLora(BaseModel):
+    """One shelf LoRA a run ADDS, in a loader of its own, over whatever the graph loads.
+
+    No slot is named: a new loader is spliced in right after the model source
+    on the run's own copy (``plan_lora_insertion`` / ``insert_adapter``, the
+    same splice ``insert-lora-loader`` writes into a stored copy), so the
+    workflow keeps every LoRA it already loads and a graph with no loader at
+    all can still take one. A LoRA the graph already loads is not added a
+    second time; its strengths are set on the loader that has it.
+    """
+
+    sha256: str = Field(min_length=1, max_length=64)
+    strength_model: float | None = Field(None, ge=-10.0, le=10.0)
+    strength_clip: float | None = Field(None, ge=-10.0, le=10.0)
+
+
 class RunLoraSlot(BaseModel):
     """One LoRA slot a run skips (#1478), addressed as :class:`RunLora` addresses it.
 
@@ -1131,6 +1169,14 @@ class RunRequest(BaseModel):
     prompt: str | None = Field(None, max_length=MAX_PROMPT_LENGTH)
     negative: str | None = Field(None, max_length=MAX_PROMPT_LENGTH)
     loras: list[RunLora] = Field(default_factory=list, max_length=MAX_RUN_LORAS)
+    # LoRAs this run adds in new loaders of their own, after `loras` and the
+    # recipe's LoRAs are placed: nothing the graph loads is replaced, so a
+    # workflow's own LoRAs keep running (Create with LoRA…). Needs ComfyUI's
+    # node types, so an unreachable ComfyUI is a 400 rather than a run that
+    # quietly leaves the LoRA out.
+    add_loras: list[RunAddedLora] = Field(
+        default_factory=list, max_length=MAX_RUN_LORAS
+    )
     # LoRA slots this run goes without (#1478): each loader is bypassed on the
     # run's copy, its consumers reading its inputs. Applied to every group of
     # the run whose graph has that slot; a slot no graph has is a 400.
@@ -1304,6 +1350,14 @@ class RunGroup(BaseModel):
     # graph that runs is not the one the card names, and the owner is told so
     # before the run rather than after.
     replaced_nodes: list[dict] = Field(default_factory=list)
+    # A core LoRA loader whose file this ComfyUI does not have, loading the
+    # shelf LoRA through the ComfyUI-PixlStash loader instead, by its hash:
+    # `[{node_id, class_type, file, sha256, requested}]`. A repair like
+    # `replaced_nodes`: the graph that runs is not the one the card names.
+    # `requested: false` is a swap of the workflow's own LoRA, which "Save
+    # fixed workflow" (`POST /workflows/{workflow_id}/fixed-copy`) keeps;
+    # `true` is one for a LoRA this request named, which it does not.
+    swapped_loaders: list[dict] = Field(default_factory=list)
     # What this run does that the owner may not expect, and runs anyway
     # (#1620 Q3): `family_mismatch` for a model loaded in place of one made for
     # another family or modality, `model_not_applied` for one this ComfyUI
@@ -1392,6 +1446,15 @@ class InsertedLoader(WorkflowFile):
 
     node_id: str = Field(description="The id the new loader has in the graph.")
     class_type: str = Field(description="Which loader node was added.")
+
+
+class FixedWorkflowCopy(WorkflowFile):
+    """The file written by ``POST /workflows/{workflow_id}/fixed-copy``."""
+
+    changes: list[str] = Field(
+        default_factory=list,
+        description="What the copy does differently from the original, one line each.",
+    )
 
 
 class LoraChainSource(BaseModel):
@@ -2144,6 +2207,8 @@ def _slot_models(slots) -> list[WorkflowSlotModel]:
             icon=slot.icon,
             base_model=slot.base_model,
             base_model_folded=slot.base_model_folded,
+            sha256=slot.sha256,
+            base_model_family=slot.base_model_family,
             kind=slot.kind,
             slot_label=slot.label,
         )
@@ -3673,8 +3738,57 @@ def create_router(server) -> APIRouter:
                 if target is not None:
                     graph[target[0]]["inputs"][target[1]] = text
 
+    def _swapped_to_digest_loader(
+        graph: dict,
+        item: RunLora,
+        adapter: dict,
+        object_info: dict | None,
+        swaps: list[dict] | None = None,
+    ) -> bool:
+        """Load *item*'s LoRA through the ComfyUI-PixlStash loader, if one can.
+
+        The fallback for a filename slot this ComfyUI cannot fill with the
+        shelf LoRA (its file is not there): the node becomes
+        ``PixlStashAdapterLoader``, keyed by the adapter's digest, and keeps its
+        wiring. False, with the graph untouched, where the pack is not
+        installed or the node is not a core single-slot loader.
+        """
+        if not object_info or PIXLSTASH_ADAPTER_LOADER not in object_info:
+            return False
+        node = graph.get(item.node_id) or {}
+        was = {
+            "node_id": item.node_id,
+            "class_type": node.get("class_type"),
+            "file": str((node.get("inputs") or {}).get(item.field) or ""),
+            "sha256": adapter["sha256"],
+        }
+        try:
+            swap_to_adapter_loader(graph, item.node_id, adapter["sha256"], object_info)
+        except LookupError as exc:
+            logger.info(
+                "LoRA loader %s cannot take %s through %s: %s",
+                item.node_id,
+                adapter["sha256"],
+                PIXLSTASH_ADAPTER_LOADER,
+                exc,
+            )
+            return False
+        logger.info(
+            "LoRA %s is not on this ComfyUI, so loader %s now loads it by its "
+            "hash through %s.",
+            adapter["sha256"],
+            item.node_id,
+            PIXLSTASH_ADAPTER_LOADER,
+        )
+        if swaps is not None:
+            swaps.append(was)
+        return True
+
     def _apply_loras(
-        graph: dict, loras: list[RunLora], object_info: dict | None
+        graph: dict,
+        loras: list[RunLora],
+        object_info: dict | None,
+        swaps: list[dict] | None = None,
     ) -> list[run_service.Reason]:
         """Fill each named slot with its shelf adapter, then its strengths.
 
@@ -3723,30 +3837,37 @@ def create_router(server) -> APIRouter:
             try:
                 apply_adapter(graph, [target], adapter, object_info or {})
             except LookupError as exc:
-                # The adapter is on the shelf and not on this ComfyUI, which is
-                # the same fact as any other model the graph names and must not
-                # be a different kind of answer: a dry run that 400s instead of
-                # reporting `missing_models` is not a dry run.
-                logger.info(
-                    "LoRA %s cannot be placed in slot %s %s: %s",
-                    item.sha256,
-                    item.node_id,
-                    item.field,
-                    exc,
-                )
-                return [
-                    run_service.Reason(
-                        run_service.MISSING_MODELS,
-                        {
-                            "models": [
-                                {
-                                    "file": (adapter.get("filenames") or [""])[-1],
-                                    "folder": "loras",
-                                }
-                            ]
-                        },
+                # The adapter is on the shelf and not on this ComfyUI. Where
+                # ComfyUI-PixlStash is installed, the loader is swapped to its
+                # digest loader, which resolves the LoRA by hash and fetches it,
+                # so the LoRA asked for is loaded rather than refused.
+                if not _swapped_to_digest_loader(
+                    graph, item, adapter, object_info, swaps
+                ):
+                    # The same fact as any other model the graph names and it
+                    # must not be a different kind of answer: a dry run that
+                    # 400s instead of reporting `missing_models` is not a dry
+                    # run.
+                    logger.info(
+                        "LoRA %s cannot be placed in slot %s %s: %s",
+                        item.sha256,
+                        item.node_id,
+                        item.field,
+                        exc,
                     )
-                ]
+                    return [
+                        run_service.Reason(
+                            run_service.MISSING_MODELS,
+                            {
+                                "models": [
+                                    {
+                                        "file": (adapter.get("filenames") or [""])[-1],
+                                        "folder": "loras",
+                                    }
+                                ]
+                            },
+                        )
+                    ]
             inputs = (graph.get(item.node_id) or {}).get("inputs")
             if not isinstance(inputs, dict):
                 continue
@@ -3764,6 +3885,91 @@ def create_router(server) -> APIRouter:
                 if "strength_clip" in inputs:
                     inputs["strength_clip"] = item.strength_clip
         return []
+
+    def _add_loras(
+        graph: dict,
+        loras: list[RunAddedLora],
+        object_info: dict | None,
+        allow_unchecked: bool,
+        swaps: list[dict] | None = None,
+    ) -> list[run_service.Reason]:
+        """Splice a loader per LoRA into *graph*, after the model source.
+
+        A LoRA the graph already loads gets its strengths set on that loader
+        instead of a second copy. Each new loader goes in after the previous
+        one, so they stack in the order given. Returns the reasons that stop
+        this card: ``lora_not_insertable`` with the splice's own sentence,
+        which says why (no model source to splice after, or the LoRA is not on
+        this ComfyUI and ComfyUI-PixlStash is not there to fetch it).
+        """
+        if object_info is None:
+            # The splice is typed by ComfyUI (#1376): without its node list an
+            # input reading the model could be missed, and that branch would
+            # run without the LoRA. `judge` already refuses an uninspected
+            # graph as `comfyui_unreachable`; a caller that consented to run
+            # unchecked asked for the LoRA, not for a run without it.
+            if not allow_unchecked:
+                return []
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "PixlStash could not reach ComfyUI, so it cannot tell where "
+                    "to add the LoRA. Start ComfyUI, or run without it."
+                ),
+            )
+        hub = getattr(server, "hub", None)
+        shelf_index = adapter_digest_index(hub)
+        # Every LoRA answers for itself: one that cannot be added does not
+        # hide the next, so the owner sees them all rather than one per retry.
+        refused: list[run_service.Reason] = []
+        for item in loras:
+            sha256 = item.sha256.strip().lower()
+            adapter = _shelf_adapter(hub, sha256)
+            slots = detect_lora_targets(graph)
+            digests = _slot_digests(slots, shelf_index) if slots else {}
+            present = [
+                slot
+                for slot in slots
+                if digests.get((str(slot["node_id"]), str(slot["field"]))) == sha256
+            ]
+            if present:
+                found = _apply_loras(
+                    graph,
+                    [
+                        RunLora(
+                            node_id=str(slot["node_id"]),
+                            field=str(slot["field"]),
+                            sha256=sha256,
+                            strength_model=item.strength_model,
+                            strength_clip=item.strength_clip,
+                        )
+                        for slot in present
+                    ],
+                    object_info,
+                    swaps,
+                )
+                refused += found
+                continue
+            try:
+                plan = plan_lora_insertion(graph, object_info)
+                loader = insert_adapter(graph, plan, adapter, object_info)
+            except LookupError as exc:
+                logger.info("LoRA %s cannot be added to this workflow: %s", sha256, exc)
+                refused.append(
+                    run_service.Reason(
+                        run_service.LORA_NOT_INSERTABLE, {"detail": str(exc)}
+                    )
+                )
+                continue
+            inputs = (graph.get(loader["node_id"]) or {}).get("inputs") or {}
+            if item.strength_model is not None:
+                for name in ("strength_model", "strength"):
+                    if name in inputs:
+                        inputs[name] = item.strength_model
+                        break
+            if item.strength_clip is not None and "strength_clip" in inputs:
+                inputs["strength_clip"] = item.strength_clip
+        return refused
 
     def _slot_digests(slots: list[dict], shelf_index) -> dict:
         """``{(node_id, field): sha256 or None}``: which shelf LoRA each slot loads.
@@ -4566,6 +4772,13 @@ def create_router(server) -> APIRouter:
             # slot, and an unreachable ComfyUI cannot resolve a filename slot,
             # which `apply_adapter` would report as a missing node class.
             found: list[run_service.Reason] = list(skip_reasons)
+            # LoRA loaders swapped to the ComfyUI-PixlStash loader on the way
+            # (`swapped_loaders`); reported like the repairs, below. Apart by
+            # cause: a swap for a LoRA this request named (`loras`,
+            # `add_loras`) is the form's, and "Save fixed workflow" writes no
+            # form, so only the recipe's own count towards it.
+            lora_swaps: list[dict] = []
+            recipe_swaps: list[dict] = []
             # What the repair registry changed in this graph, by `RunGroup`
             # field; put on the group only if it ends up being submitted. See
             # the assignment below.
@@ -4575,7 +4788,7 @@ def create_router(server) -> APIRouter:
                 # ComfyUI could not be asked is how a consented run silently
                 # kept the stored graph's LoRA instead of the one that was
                 # asked for. `_apply_loras` answers for that state itself.
-                found += _apply_loras(graph, body.loras, object_info)
+                found += _apply_loras(graph, body.loras, object_info, lora_swaps)
             elif not body.loras and recipe_loras:
                 # "Run this saved look" has to place the look's own LoRAs. A
                 # saved one names a file and a digest but no slot, so each is
@@ -4626,7 +4839,19 @@ def create_router(server) -> APIRouter:
                             for target, saved in placements
                         ],
                         object_info,
+                        recipe_swaps,
                     )
+            # Not gated on `found`: an added LoRA is applied, or its own reason
+            # reported, whatever else refused. Skipped behind an earlier
+            # refusal, a consented run would go ahead without it unsaid.
+            if body.add_loras:
+                found += _add_loras(
+                    graph,
+                    body.add_loras,
+                    object_info,
+                    body.allow_unchecked,
+                    lora_swaps,
+                )
             # The stages the owner switched off, after the LoRAs are placed:
             # the prune can take out a loader only the stage read, and a LoRA
             # addressed to it before then would be a 400 for a slot the graph
@@ -4796,6 +5021,9 @@ def create_router(server) -> APIRouter:
             # every refusal is in, and what the notice claims is true.
             for report, entries in repaired.items():
                 setattr(group, report, entries)
+            group.swapped_loaders = [
+                {**entry, "requested": False} for entry in recipe_swaps
+            ] + [{**entry, "requested": True} for entry in lora_swaps]
             # The owner's own skips ride in the same field, marked requested.
             group.bypassed_loras = skipped + group.bypassed_loras
             planned.append(group)
@@ -4849,6 +5077,7 @@ def create_router(server) -> APIRouter:
                 # no longer true of any of them.
                 for entry in run_service.REPAIRS:
                     setattr(group, entry.report, [])
+                group.swapped_loaders = []
             submittable = []
             loader_swaps = []
         total = sum(group.runs for group in planned)
@@ -5480,6 +5709,137 @@ def create_router(server) -> APIRouter:
             node_id=loader["node_id"],
             class_type=loader["class_type"],
         )
+
+    def _swap_missing_loras(graph: dict, object_info: dict) -> list[dict]:
+        """Load each LoRA this ComfyUI lacks through the ComfyUI-PixlStash loader.
+
+        Every core single-slot loader naming a file this ComfyUI does not list,
+        whose digest the shelf can name, becomes ``PixlStashAdapterLoader``
+        keyed by it (:func:`swap_to_adapter_loader`). Loaders the shelf cannot
+        name, and every loader where the pack is not installed, are left as
+        they are. Returns ``[{node_id, class_type, file, sha256}]``.
+        """
+        if PIXLSTASH_ADAPTER_LOADER not in object_info:
+            return []
+        missing = {
+            str(item.get("node_id"))
+            for item in detect_model_targets(graph, object_info)
+            if item
+            and run_service.model_folder(item.get("class_type"), item.get("field"))
+            == "loras"
+        }
+        slots = [
+            slot
+            for slot in detect_lora_targets(graph)
+            if str(slot["node_id"]) in missing and slot.get("by") != "digest"
+        ]
+        if not slots:
+            return []
+        digests = _slot_digests(slots, adapter_digest_index(_hub()))
+        swapped = []
+        for slot in slots:
+            node_id, field = str(slot["node_id"]), str(slot["field"])
+            sha256 = digests.get((node_id, field))
+            if not sha256:
+                continue
+            node = graph[node_id]
+            entry = {
+                "node_id": node_id,
+                "class_type": node.get("class_type"),
+                "file": str((node.get("inputs") or {}).get(field) or ""),
+                "sha256": sha256,
+            }
+            try:
+                swap_to_adapter_loader(graph, node_id, sha256, object_info)
+            except LookupError as exc:
+                logger.info(
+                    "LoRA loader %s keeps its file, which this ComfyUI lacks: %s",
+                    node_id,
+                    exc,
+                )
+                continue
+            swapped.append(entry)
+        return swapped
+
+    @router.post(
+        "/workflows/{workflow_id}/fixed-copy",
+        summary="Save a workflow with this ComfyUI's repairs applied",
+        description=(
+            "Write a copy of this workflow with the repairs a run on this "
+            "ComfyUI makes on the fly: the owner's model replacements, a model "
+            "loaded under the name this ComfyUI has for the same file, a LoRA "
+            "this ComfyUI lacks loaded through the ComfyUI-PixlStash loader by "
+            "its hash, and a missing seed or text node replaced. A LoRA that "
+            "cannot be loaded is kept, not removed, and nothing a run's own "
+            "form sets (prompt, parameters, added LoRAs) is written. The "
+            "original file is not changed; the copy is a workflow of its own."
+        ),
+        response_model=FixedWorkflowCopy,
+        status_code=201,
+        responses={
+            404: {"description": "This machine has no such card."},
+            409: {"description": "No graph, or nothing this ComfyUI needs fixed."},
+            503: {"description": "ComfyUI could not be reached."},
+        },
+    )
+    def save_fixed_workflow(request: Request, workflow_id: str):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        workflow, card = _require_base(hub, workflow_id)
+        # What needs fixing is what THIS ComfyUI lacks, so without its node
+        # list there is nothing to decide it from.
+        object_info, error = _read_object_info(_comfyui_url(_user(request)))
+        if object_info is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "PixlStash could not ask ComfyUI what it has, so it cannot "
+                    f"tell what this workflow needs fixed: {error}"
+                ),
+            )
+        source = _card_source(card)
+        graph = deepcopy(source.graph)
+        changes: list[str] = []
+        for entry in _apply_model_fixes(card, graph, object_info, {}):
+            changes.append(f"Loads {entry.get('now')} in place of {entry.get('was')}.")
+        for entry in apply_model_swap(
+            graph,
+            detect_model_targets(graph, object_info),
+            model_name_aliases(hub),
+            object_info,
+        ):
+            changes.append(f"Loads {entry['now']} in place of {entry['was']}.")
+        for entry in _swap_missing_loras(graph, object_info):
+            changes.append(
+                f"Loads {entry['file'] or 'its LoRA'} through the ComfyUI-PixlStash "
+                "LoRA loader, which fetches it by its hash."
+            )
+        # The node repairs a run makes (#1463), and not the LoRA bypass: a copy
+        # saved without a LoRA would lose it for good on every later run.
+        for entry in run_service.replace_missing_text_nodes(
+            graph, object_info
+        ) + run_service.replace_missing_seed_nodes(graph, object_info):
+            changes.append(
+                f"Replaces {entry['class_type']} (node {entry['node_id']}), which "
+                "this ComfyUI does not have."
+            )
+        if not changes:
+            raise HTTPException(
+                status_code=409,
+                detail="Nothing in this workflow needs fixing on this ComfyUI.",
+            )
+        name, key = _store_copy(
+            hub, f"{_file_stem(card, workflow.name)} (fixed)", graph, source.bindings
+        )
+        landed = _workflow_of_card(hub, key)
+        _announce(request, sorted({workflow_id, landed} - {None}), "imported")
+        logger.info(
+            "Workflow %s saved as %s with this ComfyUI's repairs: %s",
+            workflow_id,
+            name,
+            " ".join(changes),
+        )
+        return FixedWorkflowCopy(name=name, workflow_id=landed, changes=changes)
 
     # ── The LoRA chain (#1478) ──────────────────────────────────────────────
     # Read and written whole: the editor lists the loaders in the order a run

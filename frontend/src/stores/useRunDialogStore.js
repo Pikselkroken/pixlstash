@@ -33,6 +33,11 @@ export const useRunDialogStore = defineStore("runDialog", () => {
    *                   overrides and seed in underneath the form.
    *   prompt        - the prompt box's starting text, when the caller already
    *                   shows one; still an editable prefill, not a lock.
+   *   lora          - "Create with LoRA…" from a person's or a set's menu:
+   *                   `{entityType: "character" | "set", entityId, name}`.
+   *                   The picker narrows to the workflows that fit the LoRA
+   *                   attached to it, that LoRA starts as an added row, and
+   *                   the results go to the person or set.
    */
   const source = ref(null);
   /**

@@ -24,6 +24,7 @@ const preflightWorkflowRun = vi.fn();
 const runWorkflowCard = vi.fn();
 const getPictureRecipe = vi.fn();
 const setWorkflowInputs = vi.fn();
+const saveFixedWorkflow = vi.fn();
 
 vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
@@ -31,14 +32,17 @@ vi.mock("../../api/workflows", () => ({
   preflightWorkflowRun: (...args) => preflightWorkflowRun(...args),
   runWorkflowCard: (...args) => runWorkflowCard(...args),
   setWorkflowInputs: (...args) => setWorkflowInputs(...args),
+  saveFixedWorkflow: (...args) => saveFixedWorkflow(...args),
   workflowCoverUrl: (cover) => (cover?.url ? `/api/v1${cover.url}` : ""),
 }));
 vi.mock("../../api/comfyui", () => ({
   getPictureRecipe: (...args) => getPictureRecipe(...args),
 }));
 const listAdapters = vi.fn();
+const fetchWorkflowSets = vi.fn();
 vi.mock("../../api/modelShelf", () => ({
   listAdapters: (...args) => listAdapters(...args),
+  fetchWorkflowSets: (...args) => fetchWorkflowSets(...args),
 }));
 const listSavedRecipes = vi.fn();
 vi.mock("../../api/recipes", () => ({
@@ -155,6 +159,7 @@ beforeEach(() => {
       : { card: card() },
   );
   listWorkflowCards.mockResolvedValue({ cards: [] });
+  fetchWorkflowSets.mockResolvedValue({ hand_made: [] });
   setWorkflowInputs.mockResolvedValue({ inputs: [] });
   listSavedRecipes.mockResolvedValue([]);
   preflightWorkflowRun.mockResolvedValue({ ok: true, runs: 1, groups: [] });
@@ -1679,3 +1684,249 @@ describe("the pictures a workflow takes", () => {
   });
 });
 
+
+// "Create with LoRA…" from a person's or a set's menu: the regular Run popup,
+// narrowed to the workflows that fit the LoRA attached to it, with that LoRA
+// added in a loader of its own and the results filed back to it.
+describe("Create with LoRA", () => {
+  const KREA = `auto:${"c".repeat(64)}`;
+  const SDXL = `auto:${"d".repeat(64)}`;
+  const UNREAD = `auto:${"e".repeat(64)}`;
+  const PERSON_LORA = {
+    sha256: "k".repeat(64),
+    filename: "example-subject-krea2.safetensors",
+    base_model: "Krea 2",
+    base_model_family: "krea2",
+  };
+  const model = (family) => [
+    { kind: "unet", name: "model", base_model_family: family },
+  ];
+  const fromPerson = {
+    kind: "card",
+    pickWorkflow: true,
+    emptyPrompt: true,
+    name: "Example",
+    lora: { entityType: "character", entityId: 3, name: "Example" },
+  };
+
+  beforeEach(() => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: SDXL, name: "SDXL portrait", type: "txt2img", models: model("sdxl") },
+        { id: UNREAD, name: "Unread", type: "txt2img", models: [] },
+        { id: KREA, name: "Krea portrait", type: "txt2img", models: model("krea2") },
+      ],
+    });
+    listAdapters.mockImplementation(async ({ fileKind, characterId, setId } = {}) =>
+      (characterId || setId) && fileKind === "adapter" ? [PERSON_LORA] : [],
+    );
+    getWorkflowCard.mockImplementation(async (key) => ({
+      card: card({ id: key, name: key }),
+    }));
+  });
+
+  it("narrows the picker to the LoRA's base model, unknowns after", async () => {
+    const wrapper = await mountRun(fromPerson);
+    expect(listAdapters).toHaveBeenCalledWith({ fileKind: "adapter", characterId: 3 });
+    expect(wrapper.vm.workflowOptions).toEqual([
+      { value: KREA, label: "Krea portrait" },
+      { value: UNREAD, label: "Unread (base model not known)" },
+    ]);
+    expect(wrapper.text()).toContain("Not listed: 1 for another base model.");
+    // It opens on the best fit rather than on an empty picker.
+    expect(getWorkflowCard).toHaveBeenCalledWith(KREA);
+  });
+
+  it("adds the person's LoRA in a loader of its own and files to them", async () => {
+    const wrapper = await mountRun(fromPerson);
+    await wrapper.vm.submit();
+    const body = runWorkflowCard.mock.calls[0][0];
+    expect(body.workflow_id).toBe(KREA);
+    expect(body.add_loras).toEqual([
+      { sha256: PERSON_LORA.sha256, strength_model: 1 },
+    ]);
+    // Nothing the graph loads is addressed or replaced.
+    expect(body.loras).toEqual([]);
+    expect(body.destination).toEqual({
+      set_id: null,
+      project_id: null,
+      character_id: 3,
+    });
+    expect(wrapper.text()).toContain("Example's reference pictures");
+  });
+
+  it("files a set's run into that set", async () => {
+    const wrapper = await mountRun({
+      ...fromPerson,
+      name: "Beach",
+      lora: { entityType: "set", entityId: 5, name: "Beach" },
+    });
+    expect(listAdapters).toHaveBeenCalledWith({ fileKind: "adapter", setId: 5 });
+    await wrapper.vm.submit();
+    expect(runWorkflowCard.mock.calls[0][0].destination.set_id).toBe(5);
+  });
+
+  it("never narrows by an attached LoRA other than the one on the run", async () => {
+    const wrapper = await mountRun(fromPerson);
+    wrapper.vm.addedLoras[0].sha256 = "z".repeat(64);
+    await flushPromises();
+    expect(wrapper.vm.workflowOptions.map((o) => o.value)).toEqual([
+      SDXL,
+      UNREAD,
+      KREA,
+    ]);
+    expect(wrapper.text()).toContain("This LoRA is not on the Models shelf");
+  });
+
+  it("stops narrowing once the added LoRA is taken off the run", async () => {
+    listWorkflowCards.mockResolvedValue({
+      cards: [
+        { id: SDXL, name: "SDXL portrait", type: "txt2img", models: model("sdxl") },
+        { id: KREA, name: "Krea portrait", type: "txt2img", models: model("krea2") },
+      ],
+    });
+    const wrapper = await mountRun(fromPerson);
+    expect(wrapper.vm.workflowOptions.map((o) => o.value)).toEqual([KREA]);
+    wrapper.vm.removeAddedLora(0);
+    await flushPromises();
+    expect(wrapper.vm.workflowOptions.map((o) => o.value)).toContain(SDXL);
+    expect(wrapper.text()).not.toContain("Not listed:");
+  });
+
+  it("says so, and narrows nothing, when no LoRA is attached", async () => {
+    listAdapters.mockResolvedValue([]);
+    const wrapper = await mountRun(fromPerson);
+    expect(wrapper.text()).toContain("No LoRA is attached to Example.");
+    expect(wrapper.vm.workflowOptions.map((o) => o.value)).toEqual([
+      SDXL,
+      UNREAD,
+      KREA,
+    ]);
+    await wrapper.vm.submit();
+    expect(runWorkflowCard.mock.calls[0][0].add_loras).toBeUndefined();
+  });
+});
+
+describe("Add LoRA", () => {
+  it("adds a loader of its own when the graph has no free slot", async () => {
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    const add = wrapper.findAll("button").find((b) => b.text() === "Add LoRA");
+    expect(add).toBeTruthy();
+    await add.trigger("click");
+    // Nothing chosen yet: blocked with a reason rather than sent empty.
+    expect(wrapper.vm.runBlocker).toBe(
+      "Choose a LoRA for each added row, or remove it.",
+    );
+    wrapper.vm.addedLoras[0].sha256 = "s".repeat(64);
+    await flushPromises();
+    await wrapper.vm.submit();
+    expect(runWorkflowCard.mock.calls[0][0].add_loras).toEqual([
+      { sha256: "s".repeat(64), strength_model: 1 },
+    ]);
+  });
+});
+
+describe("Save fixed workflow", () => {
+  const saveButton = (wrapper) =>
+    wrapper.findAll("button").find((b) => b.text() === "Save fixed workflow");
+  const swapping = {
+    ok: true,
+    runs: 1,
+    groups: [
+      {
+        reasons: [],
+        swapped_loaders: [
+          {
+            node_id: "7",
+            class_type: "LoraLoader",
+            file: "loras/example-subject.safetensors",
+            sha256: "s".repeat(64),
+          },
+        ],
+      },
+    ],
+  };
+
+  it("is not offered when the run changes no node", async () => {
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(saveButton(wrapper)).toBeUndefined();
+  });
+
+  it("is offered when a loader is swapped, and says why", async () => {
+    preflightWorkflowRun.mockResolvedValue(swapping);
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(saveButton(wrapper)).toBeTruthy();
+    expect(wrapper.vm.bypassed.map((note) => note.code)).toContain(
+      "loras_fetched",
+    );
+  });
+
+  it("saves a copy and moves the popup onto it", async () => {
+    preflightWorkflowRun.mockResolvedValueOnce(swapping);
+    saveFixedWorkflow.mockResolvedValue({
+      name: "Cinematic portrait (fixed).json",
+      workflow_id: OTHER,
+      changes: [
+        "Loads example-subject through the ComfyUI-PixlStash LoRA loader.",
+      ],
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await saveButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(saveFixedWorkflow).toHaveBeenCalledWith(KEY);
+    expect(getWorkflowCard).toHaveBeenLastCalledWith(OTHER);
+    expect(wrapper.text()).toContain("Saved as Cinematic portrait (fixed).");
+    // The copy loads the LoRA as saved, so nothing is left to fix.
+    expect(saveButton(wrapper)).toBeUndefined();
+  });
+
+  it("does not count a swap for a LoRA the form asked for", async () => {
+    preflightWorkflowRun.mockResolvedValue({
+      ...swapping,
+      groups: [
+        {
+          ...swapping.groups[0],
+          swapped_loaders: [{ ...swapping.groups[0].swapped_loaders[0], requested: true }],
+        },
+      ],
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    // Said, since the run does it; not offered, since the copy would not.
+    expect(wrapper.vm.bypassed.map((note) => note.code)).toContain("loras_fetched");
+    expect(saveButton(wrapper)).toBeUndefined();
+  });
+
+  it("does not move the popup when it moved while the copy was written", async () => {
+    preflightWorkflowRun.mockResolvedValueOnce(swapping);
+    let finish;
+    saveFixedWorkflow.mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await saveButton(wrapper).trigger("click");
+    wrapper.vm.workflowId = OTHER;
+    await flushPromises();
+    finish({ name: "Cinematic portrait (fixed).json", workflow_id: "auto:fixed" });
+    await flushPromises();
+    expect(getWorkflowCard).not.toHaveBeenCalledWith("auto:fixed");
+    expect(wrapper.text()).not.toContain("Saved as");
+  });
+
+  it("says why when the save is refused", async () => {
+    preflightWorkflowRun.mockResolvedValue(swapping);
+    saveFixedWorkflow.mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          detail: "Nothing in this workflow needs fixing on this ComfyUI.",
+        },
+      },
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await saveButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Nothing in this workflow needs fixing");
+  });
+});

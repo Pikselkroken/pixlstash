@@ -82,6 +82,10 @@
           />
         </div>
 
+        <p v-if="loraFitNote" class="rund-f rund-f--4 rund-note">
+          {{ loraFitNote }}
+        </p>
+
         <p v-if="fellBack.length" class="rund-f rund-f--4 rund-note" role="status">
           {{ fellBackLine }}
         </p>
@@ -219,11 +223,7 @@
             <span class="rund-x-gap" />
           </span>
           <p v-if="!loraSlots.length" class="rund-note">
-            {{
-              hasRecipe
-                ? "This workflow has no LoRA loader."
-                : "Open one of this workflow's pictures to change its LoRAs."
-            }}
+            {{ ownLorasLine }}
           </p>
           <template v-for="(row, index) in loras" :key="row.key">
           <!-- A graph LoRA skipped for this run. The popup never changes the
@@ -305,14 +305,47 @@
             {{ loraFlag(row) }}
           </p>
           </template>
+          <!-- LoRAs this run adds in loaders of their own (`add_loras`):
+               nothing the graph loads is replaced, so these work on any
+               workflow. Their × takes the addition away. -->
+          <div
+            v-for="(row, index) in addedLoras"
+            :key="row.key"
+            class="rund-lora"
+            :data-lora="row.key"
+          >
+            <AppSelect
+              v-model="row.sha256"
+              :label="`Added LoRA ${index + 1}`"
+              hide-label
+              compact
+              :options="adapterOptions"
+              :disabled="submitting"
+            />
+            <AppInput
+              v-model.number="row.strength"
+              :aria-label="`Strength of added LoRA ${index + 1}`"
+              type="number"
+              min="-10"
+              max="10"
+              :disabled="submitting"
+              @keydown.stop
+            />
+            <AppBarButton
+              class="rund-lora-act"
+              icon="close"
+              :tooltip="`Remove added LoRA ${index + 1}`"
+              :disabled="submitting"
+              @click="removeAddedLora(index)"
+            />
+          </div>
           <p class="visually-hidden" role="status" aria-live="polite">
             {{ loraLive }}
           </p>
           <AppButton
-            v-if="loraSlots.length"
             size="sm"
             icon-left="plus"
-            :disabled="submitting || loras.length >= loraSlots.length"
+            :disabled="submitting"
             @click="addLora"
           >
             Add LoRA
@@ -528,6 +561,24 @@
           @edit-loras="editLoras"
         />
         </div>
+        <!-- Save fixed workflow: the run changes nodes on this ComfyUI (a
+             replaced seed or text node, a LoRA loaded through the
+             ComfyUI-PixlStash loader), so the repaired graph can be kept as a
+             workflow of its own. The original is not changed. -->
+        <div v-if="canSaveFixed || fixedNote" class="rund-f rund-f--4 rund-fixed">
+          <AppButton
+            v-if="canSaveFixed"
+            size="sm"
+            icon-left="content-save-outline"
+            :loading="savingFixed"
+            :disabled="submitting || savingFixed"
+            tooltip="Save a copy of this workflow with these changes, so it runs on this ComfyUI as it is"
+            @click="saveFixed"
+          >
+            Save fixed workflow
+          </AppButton>
+          <p v-if="fixedNote" class="rund-note" role="status">{{ fixedNote }}</p>
+        </div>
         <p v-if="submitError" class="rund-f rund-f--4 rund-note rund-note--bad" role="alert">
           {{ submitError }}
         </p>
@@ -633,7 +684,7 @@ import { useRoute, useRouter } from "vue-router";
 import { VIcon } from "vuetify/components";
 
 import { getPictureRecipe } from "../../api/comfyui";
-import { listAdapters } from "../../api/modelShelf";
+import { fetchWorkflowSets, listAdapters } from "../../api/modelShelf";
 import { pictureThumbnailUrl } from "../../api/pictures";
 import { listSavedRecipes } from "../../api/recipes";
 import {
@@ -641,6 +692,7 @@ import {
   listWorkflowCards,
   preflightWorkflowRun,
   runWorkflowCard,
+  saveFixedWorkflow,
   setWorkflowInputs,
   workflowCoverUrl,
 } from "../../api/workflows";
@@ -648,8 +700,10 @@ import { useEntityListsStore } from "../../stores/useEntityListsStore";
 import { useRunDialogStore } from "../../stores/useRunDialogStore";
 import { errorMessage } from "../../utils/apiError";
 import { editLorasRoute, loraStem } from "../../utils/loraChain";
+import { fitWorkflows } from "../../utils/loraWorkflows";
 import { wouldDuplicate } from "../../utils/recipeKey";
 import {
+  changesNodes,
   PICTURE_INPUT_UNFILLED,
   LORAS_BYPASSED,
   reasonsBlock,
@@ -766,6 +820,24 @@ const seedMode = ref("new");
  */
 const seed = ref("0");
 const loras = ref([]);
+/**
+ * LoRAs this run ADDS in a loader of their own (`add_loras`), rows of
+ * `{key, sha256, strength}`. Nothing the graph loads is replaced, so they work
+ * on a workflow with no loader, or one whose loaders are all taken.
+ */
+const addedLoras = ref([]);
+/** The added rows as the form opened with them, for `dirty`. */
+const addedAtOpen = ref("[]");
+let addedKey = 0;
+/**
+ * "Create with LoRA…": the person or picture set the popup was opened on,
+ * `{entityType: "character" | "set", entityId, name}`, or null.
+ */
+const loraSource = computed(() => props.source?.lora || null);
+/** The shelf LoRAs attached to `loraSource`, both attachable file kinds. */
+const attachedLoras = ref([]);
+/** The owner's hand-made workflow sets, which rank the picker. */
+const handMadeSets = ref([]);
 const destinationSetId = ref("");
 
 // ── Picture inputs (#1457) ───────────────────────────────────────────────
@@ -859,7 +931,21 @@ const dirty = computed(
     Object.keys(edits).length > 0 ||
     Object.keys(picks).length > 0 ||
     loras.value.length !== initialLoraCount.value ||
-    changedLoras.value.length > 0,
+    changedLoras.value.length > 0 ||
+    addedSignature.value !== addedAtOpen.value,
+);
+
+/** The added rows as `add_loras` takes them; a row with no LoRA picked is left out. */
+const addLorasBody = computed(() =>
+  addedLoras.value
+    .filter((row) => row.sha256)
+    .map((row) => ({
+      sha256: row.sha256,
+      strength_model: Number.isFinite(row.strength) ? row.strength : null,
+    })),
+);
+const addedSignature = computed(() =>
+  JSON.stringify(addedLoras.value.map((row) => [row.sha256, row.strength])),
 );
 
 /** How many LoRA rows the form opened with, for `dirty`. */
@@ -889,6 +975,9 @@ const workflowId = computed({
 });
 
 async function switchCard(key, keepEdits) {
+  // What the last pre-flight and save said is about the card being left.
+  changedNodes.value = false;
+  fixedNote.value = "";
   // A pick is addressed by a slot of the card it was made on; another card's
   // slots are other slots, so nothing carries over - and neither do the rows,
   // which are the set a pin would be written from.
@@ -937,6 +1026,23 @@ const defaults = computed(() => {
     : all;
 });
 const hasRecipe = computed(() => Boolean(recipe.value));
+/**
+ * What the LoRA section says when it has no graph rows to show: a card run
+ * reads no picture's recipe, so the workflow's own LoRAs are named from its
+ * default recipe and run as it stores them.
+ */
+const ownLorasLine = computed(() => {
+  if (hasRecipe.value) {
+    return "This workflow has no LoRA loader. Add LoRA puts one in for this run.";
+  }
+  const own = (card.value?.default_recipe?.loras || [])
+    .map((row) => loraStem(row.filename || "") || row.filename)
+    .filter(Boolean);
+  if (own.length) {
+    return `This workflow's own LoRAs run as it stores them: ${own.join(", ")}.`;
+  }
+  return "Add LoRA puts a LoRA in for this run; the workflow keeps its own.";
+});
 const loraSlots = computed(() => recipe.value?.lora_slots || []);
 const pictureIds = computed(() => props.source?.pictureIds || []);
 const kind = computed(() => props.source?.kind || "picture");
@@ -951,8 +1057,14 @@ const kind = computed(() => props.source?.kind || "picture");
  * would otherwise be overwritten by the card's own default.
  */
 const savedRecipe = computed(() => props.source?.savedRecipe || null);
-/** A card with no source picture picks where its output is filed. */
-const picksDestination = computed(() => !pictureIds.value.length);
+/**
+ * A card with no source picture picks where its output is filed - unless it
+ * was opened on a person, whose results go to that person (their reference
+ * set, which is what `destination.character_id` does).
+ */
+const picksDestination = computed(
+  () => !pictureIds.value.length && loraSource.value?.entityType !== "character",
+);
 
 /**
  * "edit" is "Edit with ComfyUI…" (the grid's menus): the built-in image edit
@@ -962,6 +1074,7 @@ const picksDestination = computed(() => !pictureIds.value.length);
 const isEdit = computed(() => kind.value === "edit");
 const title = computed(() => {
   if (isEdit.value) return "Edit with ComfyUI";
+  if (loraSource.value) return "Create with LoRA";
   return kind.value === "card" ? "Run workflow" : "Run recipe";
 });
 const subtitle = computed(() => card.value?.name || "");
@@ -987,6 +1100,11 @@ const seedText = computed(() => recipe.value?.seed_text || "");
 
 const sourceKindLine = computed(() => {
   const many = pictureIds.value.length;
+  if (loraSource.value) {
+    return loraSource.value.entityType === "character"
+      ? "Person, with their LoRA added"
+      : "Picture set, with its LoRA added";
+  }
   if (kind.value === "card") return "Workflow, with no picture behind it";
   if (isEdit.value) {
     return many > 1 ? `${many} pictures to edit, one run each` : "The picture to edit";
@@ -1370,7 +1488,68 @@ const seedOptions = [
  * workflow on these…" - the whole library. Workflows only (#1623): there are
  * no stack members to switch between any more.
  */
+/**
+ * Create with LoRA's narrowing, for the LoRA the first added row carries (or
+ * the first one attached, before the owner changes it): see
+ * `utils/loraWorkflows.js`.
+ */
+const loraFits = computed(() => {
+  if (!loraSource.value) return null;
+  const sha = addedLoras.value[0]?.sha256;
+  // The owner took the LoRA off the run: nothing left to narrow for, so the
+  // picker offers every workflow rather than one base model the run no longer
+  // carries. (With nothing attached at all the fit still runs, to say so.)
+  if (!sha && attachedLoras.value.length) return null;
+  // A LoRA neither list names narrows nothing: every workflow is then an
+  // "unknown" fit, rather than one judged against a different attached LoRA.
+  const lora =
+    attachedLoras.value.find((row) => row.sha256 === sha) ||
+    adapters.value.find((row) => row.sha256 === sha) ||
+    null;
+  return { lora, ...fitWorkflows(cards.value, lora, handMadeSets.value) };
+});
+
+/** What the narrowing left out, said rather than hidden without a word. */
+const loraFitNote = computed(() => {
+  const fits = loraFits.value;
+  if (!fits) return "";
+  if (!attachedLoras.value.length) {
+    return `No LoRA is attached to ${loraSource.value.name}. Assign one from the Models shelf, or add one below.`;
+  }
+  if (!fits.lora) {
+    return "This LoRA is not on the Models shelf, so every workflow is listed.";
+  }
+  if (!fits.lora.base_model_family) {
+    return "This LoRA has no base model recorded, so every workflow is listed.";
+  }
+  const parts = [];
+  if (fits.clash.length) {
+    parts.push(`${fits.clash.length} for another base model`);
+  }
+  if (fits.needsPicture.length) {
+    parts.push(`${fits.needsPicture.length} that start from a picture`);
+  }
+  if (!fits.match.length && !fits.unknown.length) {
+    return `None of your workflows is for ${fits.lora.base_model || "this base model"}.`;
+  }
+  return parts.length ? `Not listed: ${parts.join(", ")}.` : "";
+});
+
 const workflowOptions = computed(() => {
+  const fits = loraFits.value;
+  if (fits) {
+    // Matches first, then the workflows whose base model nobody has read,
+    // said so: they may fit, and hiding them would hide every workflow on a
+    // model the shelf has not identified.
+    const known = Boolean(fits.lora?.base_model_family);
+    return [
+      ...fits.match.map((entry) => ({ value: entry.card.id, label: entry.card.name })),
+      ...fits.unknown.map((entry) => ({
+        value: entry.card.id,
+        label: known ? `${entry.card.name} (base model not known)` : entry.card.name,
+      })),
+    ];
+  }
   const rows = card.value ? [{ value: card.value.id, label: card.value.name }] : [];
   for (const row of props.source?.pickWorkflow ? cards.value : []) {
     if (!rows.some((option) => option.value === row.id)) {
@@ -1381,7 +1560,14 @@ const workflowOptions = computed(() => {
 });
 
 const adapterOptions = computed(() =>
-  adapters.value
+  [
+    ...adapters.value,
+    // An attached LoRA the shelf classes `unknown` is not in `adapters`,
+    // which reads `file_kind=adapter` only.
+    ...attachedLoras.value.filter(
+      (row) => !adapters.value.some((adapter) => adapter.sha256 === row.sha256),
+    ),
+  ]
     .filter((adapter) => adapter?.sha256)
     .map((adapter) => ({
       value: adapter.sha256,
@@ -1407,6 +1593,9 @@ const setOptions = computed(() => [
  * promising they will appear beside their source.
  */
 const destinationLine = computed(() => {
+  if (loraSource.value?.entityType === "character") {
+    return `${loraSource.value.name}'s reference pictures`;
+  }
   const setId = props.context?.set_id;
   const row = entityLists.pictureSets.find(
     (item) => String(item.id) === String(setId),
@@ -1436,6 +1625,9 @@ const runBlocker = computed(() => {
   if (!Number.isInteger(count.value) || count.value < 1 || count.value > MAX_COUNT)
     return `Between 1 and ${MAX_COUNT} runs at a time.`;
   if (preflightError.value) return preflightError.value;
+  if (addedLoras.value.some((row) => !row.sha256)) {
+    return "Choose a LoRA for each added row, or remove it.";
+  }
   // Before the generic refusal: an empty slot is "no picture yet", said in
   // the words of the slot, and its fix is right there in the Pictures rows.
   if (unfilledInputs.value.length) {
@@ -1457,6 +1649,50 @@ const shownRefusals = computed(() =>
 );
 /** One list on screen: the refusals first, then what the run will do anyway. */
 const runNotes = computed(() => [...shownRefusals.value, ...bypassed.value]);
+
+/** Whether the last pre-flight said the run changes nodes a copy could keep. */
+const changedNodes = ref(false);
+const savingFixed = ref(false);
+/** What the last Save fixed workflow said, success or failure. */
+const fixedNote = ref("");
+const canSaveFixed = computed(() => changedNodes.value && Boolean(activeKey.value));
+
+/**
+ * Save fixed workflow: a copy with this ComfyUI's repairs applied, and the
+ * popup moved onto it, so this run and the next ones run the copy as saved.
+ * The run's own form (prompt, values, LoRAs) is not written into it.
+ */
+async function saveFixed() {
+  if (!canSaveFixed.value || savingFixed.value) return;
+  savingFixed.value = true;
+  fixedNote.value = "";
+  // The popup can move while the copy is written (another workflow picked, or
+  // closed and reopened on another source): the answer is then about a card
+  // nobody is looking at, and must not pull the popup onto its copy.
+  const token = loadToken;
+  const savedFrom = activeKey.value;
+  const stillHere = () => token === loadToken && savedFrom === activeKey.value;
+  try {
+    const saved = await saveFixedWorkflow(savedFrom);
+    if (!stillHere()) return;
+    const note = `Saved as ${String(saved?.name || "").replace(/\.json$/i, "")}.`;
+    if (saved?.workflow_id) {
+      if (props.source?.pickWorkflow) {
+        cards.value = (await listWorkflowCards()).cards;
+        if (!stillHere()) return;
+      }
+      // After the switch, which clears what was said about the card left.
+      workflowId.value = saved.workflow_id;
+    }
+    fixedNote.value = note;
+  } catch (err) {
+    if (stillHere()) {
+      fixedNote.value = errorMessage(err, "Could not save the fixed workflow.");
+    }
+  } finally {
+    savingFixed.value = false;
+  }
+}
 
 /** The inputs nothing fills, which is what keeps the Run button back. */
 const unfilledInputs = computed(() =>
@@ -1748,6 +1984,8 @@ function runBody() {
   // are any: the route rewires around each, and a key it is not sent cannot
   // refuse a run over a feature nobody used.
   if (skippedLoras.value.length) body.skip_loras = skippedLoras.value;
+  // LoRAs added in loaders of their own: only when there are any.
+  if (addLorasBody.value.length) body.add_loras = addLorasBody.value;
   // The same for the stages the owner turned off (#1623).
   if (skippedStages.value.length) body.skip_stages = skippedStages.value;
   // The checkpoint row, by the default recipe's loader address (#1623).
@@ -1763,6 +2001,15 @@ function runBody() {
     body.workflow_id = activeKey.value;
   }
   const setId = picksDestination.value ? destinationSetId.value : props.context?.set_id;
+  if (loraSource.value?.entityType === "character") {
+    // The person the popup was opened on, never the view behind it.
+    body.destination = {
+      set_id: null,
+      project_id: null,
+      character_id: Number(loraSource.value.entityId),
+    };
+    return body;
+  }
   const destination = {
     set_id: setId ? Number(setId) : null,
     project_id: picksDestination.value ? null : props.context?.project_id ?? null,
@@ -1798,13 +2045,30 @@ function displayedValues() {
   return rows.slice(0, MAX_VALUES);
 }
 
+/**
+ * Add a LoRA row: into a free loader of the graph where there is one, else as
+ * a LoRA the run adds in a loader of its own (`add_loras`), so the button
+ * works on a workflow with no loader, or none free.
+ */
 function addLora() {
   const used = new Set(loras.value.map((row) => `${row.field}@${row.node_id}`));
   const slot = loraSlots.value.find(
     (item) => !used.has(`${item.field}@${item.node_id}`),
   );
-  if (!slot) return;
-  loras.value.push(loraRow(slot, { added: true }));
+  if (slot) {
+    loras.value.push(loraRow(slot, { added: true }));
+    return;
+  }
+  addedLoras.value.push(addedRow(""));
+}
+
+function addedRow(sha256, strength = 1) {
+  addedKey += 1;
+  return { key: `added-${addedKey}`, sha256, strength };
+}
+
+function removeAddedLora(index) {
+  addedLoras.value.splice(index, 1);
 }
 
 /**
@@ -1980,6 +2244,7 @@ function removeLora(index) {
  */
 async function dropLoras() {
   loras.value = [];
+  addedLoras.value = [];
   await runPreflight();
 }
 
@@ -2007,6 +2272,33 @@ function openInWorkflows() {
   const key = activeKey.value;
   emit("close");
   void router?.push?.({ name: "workflows", query: { workflow: key } });
+}
+
+/**
+ * Create with LoRA: the LoRAs attached to the person or set, and the workflow
+ * sets that rank the picker. The first attached LoRA starts as an added row.
+ * Read as `AdapterTray` reads them: both attachable file kinds, since the
+ * route's `file_kind` takes one.
+ */
+async function loadLoraSource() {
+  const source = loraSource.value;
+  const filter = source.entityType === "character" ? "characterId" : "setId";
+  const [kinds, sets] = await Promise.all([
+    Promise.all(
+      ["adapter", "unknown"].map((fileKind) =>
+        listAdapters({ fileKind, [filter]: Number(source.entityId) }),
+      ),
+    ),
+    // A set only ranks the list; without it every workflow is still offered.
+    fetchWorkflowSets().catch((err) => {
+      console.warn("Workflow sets unavailable; ranking without them.", err);
+      return { hand_made: [] };
+    }),
+  ]);
+  attachedLoras.value = kinds.flat().filter((row) => row?.sha256);
+  handMadeSets.value = sets?.hand_made || [];
+  const first = attachedLoras.value[0];
+  addedLoras.value = first ? [addedRow(first.sha256)] : [];
 }
 
 async function loadAdapters() {
@@ -2085,6 +2377,7 @@ async function runPreflight(token = loadToken) {
       ...repairNotices(group),
       ...unplacedNotice(group),
     ]);
+    changedNodes.value = (answer?.groups || []).some(changesNodes);
     plannedRuns.value = Number(answer?.runs) || 0;
     // One group: this popup always runs one workflow (`target`, an id or a saved
     // recipe), so the first group's inputs are the card's.
@@ -2099,6 +2392,7 @@ async function runPreflight(token = loadToken) {
     if (!mine()) return;
     reasons.value = [];
     bypassed.value = [];
+    changedNodes.value = false;
     // What the card's inputs are is no longer known, so nothing may be
     // written from the last answer: that is how a pin reverted the one before.
     pictureInputs.value = [];
@@ -2129,6 +2423,11 @@ async function load() {
   card.value = null;
   cards.value = [];
   loras.value = [];
+  addedLoras.value = [];
+  changedNodes.value = false;
+  fixedNote.value = "";
+  attachedLoras.value = [];
+  handMadeSets.value = [];
   count.value = 1;
   seedMode.value = "new";
   saveOpen.value = false;
@@ -2144,6 +2443,10 @@ async function load() {
     if (props.source?.pickWorkflow) {
       cards.value = (await listWorkflowCards()).cards;
     }
+    if (loraSource.value) {
+      await loadLoraSource();
+      if (!mine()) return;
+    }
     // One picture is a recipe to prefill from; several are a card the server
     // already agreed they share, so the card alone is the honest source.
     if (pictureIds.value.length === 1 && !isEdit.value) {
@@ -2151,7 +2454,12 @@ async function load() {
       if (!mine()) return;
       recipe.value = data?.reason === "no_prompt_chunk" ? null : data;
     }
-    const key = props.source?.workflowId || recipe.value?.workflow_id || "";
+    const key =
+      props.source?.workflowId ||
+      recipe.value?.workflow_id ||
+      // Create with LoRA opens on the best fit, not on an empty picker.
+      (loraSource.value ? workflowOptions.value[0]?.value : "") ||
+      "";
     activeKey.value = key;
     if (key) await loadCard(key);
     if (!mine()) return;
@@ -2171,9 +2479,13 @@ async function load() {
     await loadAdapters();
     loras.value = loraSlots.value.map((slot) => loraRow(slot));
     initialLoraCount.value = loras.value.length;
+    addedAtOpen.value = addedSignature.value;
     applySavedRecipe();
     destinationSetId.value =
-      readLastSet() || (props.context?.set_id ? String(props.context.set_id) : "");
+      loraSource.value?.entityType === "set"
+        ? String(loraSource.value.entityId)
+        : readLastSet() ||
+          (props.context?.set_id ? String(props.context.set_id) : "");
     void loadAdapters();
     // Both branches need the names: one to pick a set, the other to say which
     // one the output is going into.
@@ -2590,6 +2902,13 @@ button.rund-in-tile.rund-in-tile--off {
 .rund-reasons {
   display: flex;
   flex-direction: column;
+  gap: var(--space-3);
+}
+
+.rund-fixed {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-3);
 }
 

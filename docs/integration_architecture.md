@@ -704,6 +704,22 @@ Seven rules the client must not re-derive:
    workflow has no loader left for it, or the shelf cannot identify it.
    `skip_loras` is refused (400) on a run spanning several cards: a node id
    names one loader on one graph.
+   `swapped_loaders: [{node_id, class_type, file, sha256, requested}]` is a
+   fifth fact of the same kind: a core LoRA loader whose file this ComfyUI
+   lacks, loading the shelf LoRA through the ComfyUI-PixlStash loader by its
+   hash instead of being refused. `requested: true` is a swap for a LoRA this
+   request named (`loras`, `add_loras`); `false` is the workflow's own recipe
+   LoRA. `replaced_nodes` and the `requested: false` swaps are what the Run
+   popup offers **Save fixed workflow** for
+   (`POST /workflows/{workflow_id}/fixed-copy`), which writes no form.
+   `add_loras: [{sha256, strength_model, strength_clip}]` adds shelf LoRAs in
+   loaders of their own, spliced in after the model source on the run's copy:
+   no slot is named and nothing the graph loads is replaced, so it works on a
+   graph with no loader. A LoRA the graph already loads has its strengths set
+   instead. A splice that cannot be made is the reason `lora_not_insertable`
+   (`{detail}`, the server's sentence); with ComfyUI unreachable the run is
+   refused as `comfyui_unreachable`, and `allow_unchecked` does not run it
+   without the LoRA (400).
    `skip_stages: ["upscale" | "face_detailer"]` (#1621) switches an optional
    stage off for the run: its nodes are bypassed on the run's copy and what
    only they read is pruned. A card that has no such stage runs unchanged; one
@@ -825,6 +841,7 @@ exports and duplicates like any other:
 | `GET /api/v1/workflows/{workflow_id}/graph` | The workflow as Run… would submit it (resolved against ComfyUI's own model list, #1439 swaps applied, credential widgets blanked), for *Open in ComfyUI*: the Workflow tab opens the configured ComfyUI at `?pixlstash_workflow=<workflow_id>`; the ComfyUI-PixlStash node (`web/js/open_workflow.js`) strips the param so a reload does not refetch, fetches this through `/pixlstash/workflow_graph` with its configured API token, which must be an owner token (a scoped or READ token gets 403), loads it with `app.loadApiJson`, and warns on `seedless`/`forgotten` | `{name, workflow, source, seedless, forgotten}` |
 | `POST /api/v1/workflows/{workflow_id}/duplicate` | A second copy of the base graph in the user's workflow folder | `201 {name, workflow_id}`, the workflow the copy was filed in (null when it could not be filed) |
 | `POST /api/v1/workflows/{workflow_id}/insert-lora-loader` | A copy with a LoRA loader spliced in | `201 {name, workflow_id, node_id, class_type}` |
+| `POST /api/v1/workflows/{workflow_id}/fixed-copy` | A copy with this ComfyUI's repairs applied (Save fixed workflow) | `201 {name, workflow_id, changes}`; 409 nothing to fix; 503 no ComfyUI |
 | `GET /api/v1/workflows/{workflow_id}/lora-chain` | The LoRA chain in apply order, for the editor (#1478) | `{workflow_id, editable, refusal, source, clip_source, sink: {summary, consumers}, loaders: [{node_id, class_type, field, filename, name, strength, strength_clip, sha256, on_shelf}], added_loader_class, lanes: [{source, sampler: {node_id, class_type, title}, sink, loaders, added_loader_class}], branch_note}`; ComfyUI down is still a 200 with `editable: false`; where the model forks `loaders` is the trunk and `lanes` one entry per pass (empty for a straight chain; `source` null on the chain and set per lane when each pass loads its own model); `branch_note` says why loaders past a further branch are left as they are |
 | `PUT /api/v1/workflows/{workflow_id}/lora-chain` | A copy with the chain as the owner left it: `{entries: [{node_id?, sha256?, strength?}], lanes?: [[entry…]…], name?, dry_run}`, `lanes` one list per lane of the read, in its order | `201 {dry_run, name, workflow_id, changes: [{kind, node_id, text}]}`; a dry run is `200` with `name` and `workflow_id` null |
 | `GET /api/v1/workflows/{workflow_id}/model-swap[?checkpoint_id=][&replacing=&slot_kind=]` | What the Clone with new models dialog draws: the graph's model files (each resolved to one shelf row or `null`), the shelf's checkpoints, VAEs and text encoders; with `checkpoint_id`, the companions recipes, and ComfyUI runs read at the last workflow pull, have run beside it (or, when none has, the files whose layout its family declares, `via: "declared"`) and the LoRAs/ControlNets trained on another family **With `replacing`** (the Workflow tab's "Replace with…" for `PUT …/model-fix`, #1596), `replacements: [{id, filename, display_name, via, loader}]` answers instead, and `replacements_reason` (`no_checkpoint` \| `none_go_with_it` \| `none_same_base_model` \| `none_loadable` \| `needs_pixlstash_nodes`) says why it is empty. Every filter is required: a VAE or text encoder must go with the graph's base model (`propose_companions`: the owner's workflow sets, then recipes and ComfyUI runs; `declared` is the untested cold case), a checkpoint must share the missing one's base model (its shelf row's, else the one base model the graph's LoRAs and ControlNets agree on; unnarrowed when neither says), and every kind must be loadable by every loader naming the file, checked with the rewrite's own rule (`listed_as`) when ComfyUI answers and by file type when it does not, so a core loader is never offered GGUF. Read off the graph with the owner's fixes applied; 409 when it loads the file in no slot a fix can fill (of `slot_kind`, when given), or in slots of two kinds and `slot_kind` does not say which. A file the loader does not list is offered anyway when a run can load it through a PixlStash loader (`PUT …/model-fix`'s swap rule, `plan_pixlstash_swap`), with `loader` naming that node; `needs_pixlstash_nodes` says that is the only thing missing | `{slots: [{filename, kind, model}], checkpoints, vaes, text_encoders, checkpoint_family, checkpoint_modality, proposals: {vae, text_encoder: [{id, filename, display_name, family, via, recipes, history_runs}]}, flags: [{filename, kind, base_model, family, modality}]}`. `modality` is `image`, `video` or null (the base model does not fold to a known one); a LoRA or ControlNet is flagged when its family OR its modality differs from the checkpoint's, the dialog names both modalities when they differ, and the `family` proposal step never crosses modalities. `checkpoints` is filled on the call without `checkpoint_id` only, narrowed to what the workflow's first base loader could load |
@@ -958,7 +975,7 @@ the two sides have agreed:
    backend serves that document** with no mapping layer. Since #1623 it is one
    entry per workflow keyed `id`, and the fields are the ones in the `GET
    /workflows` row above; each slot is `{name, title, icon, base_model,
-   base_model_folded, kind, quant, slot_label}` with no `mark`, and the stack
+   base_model_folded, sha256, base_model_family, kind, quant, slot_label}` with no `mark`, and the stack
    fields are gone. The historical notes below that speak of a card, a stack
    or a mark describe the contract before #1623.
 
@@ -1100,6 +1117,16 @@ the two sides have agreed:
    these: they are what the model shelf draws a model with, and a card that has
    to draw itself out of its models rather than its pictures would otherwise
    need a second request per model to do it.
+
+   `sha256` and `base_model_family` name the shelf file a slot loads and the
+   family of the base model the shelf identified it as
+   (`model_shelf_service.base_model_family`: filename guesses included, the
+   same value as `base_model_family` on its `GET /adapters` or
+   `GET /checkpoints` row, where `family` stays the stated-only one). Both are
+   null where the shelf does not hold the file or the name could be more than
+   one file. They let a client narrow workflows to a LoRA's base model, and
+   match the checkpoint against a hand-made workflow set, without another
+   request: Create with LoRA… does both (`frontend/src/utils/loraWorkflows.js`).
 
    **A stored workflow is put on its card on request.** `POST
    /api/v1/comfyui/workflows/{workflow_name}/card` (`OWNER_ONLY`) files a

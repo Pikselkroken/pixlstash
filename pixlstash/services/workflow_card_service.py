@@ -55,6 +55,7 @@ from pixlstash.services.model_shelf_service import (
     adapter_digest_index,
     models_for_digest,
     recipe_asset_index,
+    base_model_family,
 )
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
@@ -199,6 +200,13 @@ class SlotModel:
     icon: Optional[str] = None
     base_model: Optional[str] = None
     base_model_folded: Optional[str] = None
+    # Which shelf file this is, and the family of the base model the shelf
+    # identified it as (``base_model_family``), so a client can ask "does this
+    # LoRA fit this workflow's checkpoint?" with the shelf's own answer. Both
+    # ``None`` for a model the shelf does not hold or cannot pin down to one
+    # file.
+    sha256: Optional[str] = None
+    base_model_family: Optional[str] = None
 
 
 @dataclass
@@ -580,6 +588,9 @@ class ShelfMark:
     ``quant`` is the shelf's own column, read from the safetensors header
     where there is one - so it is the authoritative answer, and the filename
     postfix a card falls back to is only for a file nothing has scanned.
+    ``sha256`` names the file and ``base_model_family`` is the shelf's own
+    (:func:`base_model_family`), for a client that checks a LoRA against the
+    card.
 
     All of it is null far more often than not: PixlStash generates no sample
     for a checkpoint it registers in place, and most adapters carry no base
@@ -592,6 +603,8 @@ class ShelfMark:
     base_model: Optional[str] = None
     base_model_folded: Optional[str] = None
     quant: Optional[str] = None
+    sha256: Optional[str] = None
+    base_model_family: Optional[str] = None
 
 
 def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
@@ -640,7 +653,8 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
     for batch in chunked(sorted(single)):
         placeholders = ",".join("?" * len(batch))
         for row in hub.fetchall(
-            "SELECT id, icon_sha256, base_model, base_model_canonical, quant "
+            "SELECT id, icon_sha256, base_model, base_model_canonical, "
+            "quant, sha256 "
             f"FROM model WHERE id IN ({placeholders})",
             tuple(batch),
         ):
@@ -650,12 +664,14 @@ def model_marks(hub: HubDatabase, names: list[str]) -> dict[str, ShelfMark]:
                     row["base_model"],
                     row["base_model_canonical"] or fold(row["base_model"]),
                     canonical_quant(row["quant"]),
+                    row["sha256"],
+                    base_model_family(row),
                 )
     marks = {}
     for value, models in candidates.items():
         claimed = {titles.get(model_id) for model_id in models}
         title = claimed.pop() if len(claimed) == 1 and None not in claimed else None
-        marks[value] = ShelfMark(title, *pictures.get(value, (None, None, None, None)))
+        marks[value] = ShelfMark(title, *pictures.get(value, (None,) * 6))
     return marks
 
 
@@ -826,6 +842,8 @@ def _mark_fields(mark: Optional[ShelfMark], name: Optional[str] = None) -> dict:
         "base_model": mark.base_model,
         "base_model_folded": mark.base_model_folded,
         "quant": quant,
+        "sha256": mark.sha256,
+        "base_model_family": mark.base_model_family,
     }
 
 

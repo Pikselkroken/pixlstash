@@ -119,3 +119,21 @@ describe("loras_unplaced names its workflow by id (#1623)", () => {
     expect(notice).not.toHaveProperty("workflowKey");
   });
 });
+
+describe("loras_fetched", () => {
+  it("names the files the digest loader fetches, and is not a refusal", () => {
+    const read = readReason({
+      code: "loras_fetched",
+      loaders: [{ file: "loras/example-subject.safetensors" }],
+    });
+    expect(read.text).toBe(
+      "example-subject.safetensors is not on this ComfyUI, so it loads through the ComfyUI-PixlStash LoRA loader, which fetches it by hash.",
+    );
+    expect(read.blocking).toBe(false);
+  });
+
+  it("still reads as a sentence when no file is named", () => {
+    const read = readReason({ code: "loras_fetched", loaders: [{}] });
+    expect(read.text).toMatch(/^A LoRA this ComfyUI does not have loads through/);
+  });
+});
