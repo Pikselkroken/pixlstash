@@ -189,6 +189,7 @@ _WORKFLOW_WRITE_ROUTES = (
     # whole library the way the run route does, and two of them write a file.
     ("POST", "/api/v1/workflows/{workflow_id}/duplicate"),
     ("POST", "/api/v1/workflows/{workflow_id}/insert-lora-loader"),
+    ("POST", "/api/v1/workflows/{workflow_id}/fixed-copy"),
     ("PUT", "/api/v1/workflows/{workflow_id}/lora-chain"),
     ("POST", "/api/v1/workflows/{workflow_id}/clone-with-models"),
     ("DELETE", "/api/v1/workflows/{workflow_id}"),
@@ -3803,6 +3804,7 @@ def test_no_scoped_token_can_write_a_workflow_card(workflow_env):
         ),
         ("POST", f"{API}/workflows/{BUSY_WF}/duplicate", None),
         ("POST", f"{API}/workflows/{BUSY_WF}/insert-lora-loader", None),
+        ("POST", f"{API}/workflows/{BUSY_WF}/fixed-copy", None),
         ("PUT", f"{API}/workflows/{BUSY_WF}/lora-chain", {"entries": []}),
         (
             "POST",
@@ -3915,6 +3917,12 @@ _EVERY_WORKFLOW_ROUTE = (
         "POST",
         "/workflows/{workflow_id}/insert-lora-loader",
         f"/workflows/{BUSY_WF}/insert-lora-loader",
+        None,
+    ),
+    (
+        "POST",
+        "/workflows/{workflow_id}/fixed-copy",
+        f"/workflows/{BUSY_WF}/fixed-copy",
         None,
     ),
     (
@@ -10547,6 +10555,10 @@ def test_a_shelf_lora_comfyui_lacks_loads_through_the_pixlstash_loader(runnable)
     group = r.json()["groups"][0]
     assert group["bypassed_loras"] == [], group["reasons"]
     assert runnable.submitted, group["reasons"]
+    # Reported, so the popup can offer to save the fixed workflow.
+    assert [(e["node_id"], e["sha256"]) for e in group["swapped_loaders"]] == [
+        ("2", RUN_ADAPTER_DIGEST)
+    ]
     node = runnable.submitted[0]["graph"]["2"]
     assert node["class_type"] == "PixlStashAdapterLoader"
     assert node["inputs"]["adapter_sha256"] == RUN_ADAPTER_DIGEST
@@ -10598,6 +10610,43 @@ def test_without_the_pixlstash_loader_nothing_is_swapped(runnable):
     group = r.json()["groups"][0]
     assert {reason["code"] for reason in group["reasons"]} == {"missing_models"}
     assert runnable.submitted == []
+
+
+def test_the_fixed_workflow_is_saved_with_the_loader_swapped(runnable, tmp_path):
+    """Save fixed workflow: this ComfyUI's repair written into a NEW file.
+
+    The LoRA this ComfyUI lacks loads through the digest loader in the copy,
+    wired where the core loader was; the original is not the file written.
+    """
+    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
+    _graph_loads_a_shelf_lora_comfyui_lacks(runnable)
+    r = runnable.owner.post(f"{API}/workflows/{RUN_WF}/fixed-copy")
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["name"].endswith("(fixed).json"), body
+    assert len(body["changes"]) == 1 and "ComfyUI-PixlStash" in body["changes"][0]
+    written = json.loads((tmp_path / body["name"]).read_text())
+    assert written["2"]["class_type"] == "PixlStashAdapterLoader"
+    assert written["2"]["inputs"]["adapter_sha256"] == RUN_ADAPTER_DIGEST
+    assert written["3"]["inputs"]["model"] == ["2", 0]
+
+
+def test_a_workflow_with_nothing_to_fix_is_not_copied(runnable, tmp_path):
+    """Every file here is on this ComfyUI: 409, and no file written."""
+    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
+    r = runnable.owner.post(f"{API}/workflows/{RUN_WF}/fixed-copy")
+    assert r.status_code == 409, r.text
+    assert not list(tmp_path.glob("*(fixed)*"))
+
+
+def test_a_fixed_copy_needs_comfyui(runnable, tmp_path):
+    """What needs fixing is what this ComfyUI lacks: no ComfyUI, no answer."""
+    _isolate_workflow_folders(tmp_path, runnable.monkeypatch)
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+    )
+    r = runnable.owner.post(f"{API}/workflows/{RUN_WF}/fixed-copy")
+    assert r.status_code == 503, r.text
 
 
 def test_inserting_a_loader_leaves_the_original_workflow_alone(loaderless):

@@ -561,6 +561,24 @@
           @edit-loras="editLoras"
         />
         </div>
+        <!-- Save fixed workflow: the run changes nodes on this ComfyUI (a
+             replaced seed or text node, a LoRA loaded through the
+             ComfyUI-PixlStash loader), so the repaired graph can be kept as a
+             workflow of its own. The original is not changed. -->
+        <div v-if="canSaveFixed || fixedNote" class="rund-f rund-f--4 rund-fixed">
+          <AppButton
+            v-if="canSaveFixed"
+            size="sm"
+            icon-left="content-save-outline"
+            :loading="savingFixed"
+            :disabled="submitting || savingFixed"
+            tooltip="Save a copy of this workflow with these changes, so it runs on this ComfyUI as it is"
+            @click="saveFixed"
+          >
+            Save fixed workflow
+          </AppButton>
+          <p v-if="fixedNote" class="rund-note" role="status">{{ fixedNote }}</p>
+        </div>
         <p v-if="submitError" class="rund-f rund-f--4 rund-note rund-note--bad" role="alert">
           {{ submitError }}
         </p>
@@ -674,6 +692,7 @@ import {
   listWorkflowCards,
   preflightWorkflowRun,
   runWorkflowCard,
+  saveFixedWorkflow,
   setWorkflowInputs,
   workflowCoverUrl,
 } from "../../api/workflows";
@@ -684,6 +703,7 @@ import { editLorasRoute, loraStem } from "../../utils/loraChain";
 import { fitWorkflows } from "../../utils/loraWorkflows";
 import { wouldDuplicate } from "../../utils/recipeKey";
 import {
+  changesNodes,
   PICTURE_INPUT_UNFILLED,
   LORAS_BYPASSED,
   reasonsBlock,
@@ -1619,6 +1639,38 @@ const shownRefusals = computed(() =>
 /** One list on screen: the refusals first, then what the run will do anyway. */
 const runNotes = computed(() => [...shownRefusals.value, ...bypassed.value]);
 
+/** Whether the last pre-flight said the run changes nodes a copy could keep. */
+const changedNodes = ref(false);
+const savingFixed = ref(false);
+/** What the last Save fixed workflow said, success or failure. */
+const fixedNote = ref("");
+const canSaveFixed = computed(() => changedNodes.value && Boolean(activeKey.value));
+
+/**
+ * Save fixed workflow: a copy with this ComfyUI's repairs applied, and the
+ * popup moved onto it, so this run and the next ones run the copy as saved.
+ * The run's own form (prompt, values, LoRAs) is not written into it.
+ */
+async function saveFixed() {
+  if (!canSaveFixed.value || savingFixed.value) return;
+  savingFixed.value = true;
+  fixedNote.value = "";
+  try {
+    const saved = await saveFixedWorkflow(activeKey.value);
+    fixedNote.value = `Saved as ${String(saved?.name || "").replace(/\.json$/i, "")}.`;
+    if (saved?.workflow_id) {
+      if (props.source?.pickWorkflow) {
+        cards.value = (await listWorkflowCards()).cards;
+      }
+      workflowId.value = saved.workflow_id;
+    }
+  } catch (err) {
+    fixedNote.value = errorMessage(err, "Could not save the fixed workflow.");
+  } finally {
+    savingFixed.value = false;
+  }
+}
+
 /** The inputs nothing fills, which is what keeps the Run button back. */
 const unfilledInputs = computed(() =>
   pictureInputs.value.filter((input) => input.fill === null),
@@ -2302,6 +2354,7 @@ async function runPreflight(token = loadToken) {
       ...repairNotices(group),
       ...unplacedNotice(group),
     ]);
+    changedNodes.value = (answer?.groups || []).some(changesNodes);
     plannedRuns.value = Number(answer?.runs) || 0;
     // One group: this popup always runs one workflow (`target`, an id or a saved
     // recipe), so the first group's inputs are the card's.
@@ -2316,6 +2369,7 @@ async function runPreflight(token = loadToken) {
     if (!mine()) return;
     reasons.value = [];
     bypassed.value = [];
+    changedNodes.value = false;
     // What the card's inputs are is no longer known, so nothing may be
     // written from the last answer: that is how a pin reverted the one before.
     pictureInputs.value = [];
@@ -2347,6 +2401,8 @@ async function load() {
   cards.value = [];
   loras.value = [];
   addedLoras.value = [];
+  changedNodes.value = false;
+  fixedNote.value = "";
   attachedLoras.value = [];
   handMadeSets.value = [];
   count.value = 1;
@@ -2823,6 +2879,13 @@ button.rund-in-tile.rund-in-tile--off {
 .rund-reasons {
   display: flex;
   flex-direction: column;
+  gap: var(--space-3);
+}
+
+.rund-fixed {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-3);
 }
 

@@ -75,6 +75,14 @@ export const PICTURE_INPUT_UNFILLED = "picture_input_unfilled";
 export const NODES_REPLACED = "nodes_replaced";
 
 /**
+ * Not a refusal either: a LoRA this ComfyUI lacks, loaded through the
+ * ComfyUI-PixlStash loader by its hash (`RunGroup.swapped_loaders`). The run
+ * gets the LoRA; the graph that runs is not the one the card names, which is
+ * what "Save fixed workflow" keeps.
+ */
+export const LORAS_FETCHED = "loras_fetched";
+
+/**
  * Where the ComfyUI-PixlStash node pack lives, and how to get it.
  *
  * The backend says the same in `PIXLSTASH_PACK_INSTALL_HINT`
@@ -180,6 +188,21 @@ export function readReason(reason) {
         ]
           .filter(Boolean)
           .join(" "),
+        null,
+        [],
+        false,
+      );
+    }
+    case LORAS_FETCHED: {
+      const files = [
+        ...new Set(
+          (reason.loaders || [])
+            .map((loader) => String(loader?.file || "").split(/[\\/]/).pop())
+            .filter(Boolean),
+        ),
+      ];
+      return read(
+        `${files.length === 1 ? `${files[0]} is` : `${files.join(", ")} are`} not on this ComfyUI, so ${files.length === 1 ? "it loads" : "they load"} through the ComfyUI-PixlStash LoRA loader, which fetches ${files.length === 1 ? "it" : "them"} by hash.`,
         null,
         [],
         false,
@@ -407,5 +430,27 @@ export function replacedNotice(group) {
  * @returns {Array<Object>}
  */
 export function repairNotices(group) {
-  return [...bypassNotice(group), ...replacedNotice(group)];
+  return [...bypassNotice(group), ...replacedNotice(group), ...swappedNotice(group)];
+}
+
+/**
+ * The LoRA loaders one pre-flight group swapped to the ComfyUI-PixlStash
+ * loader, in the reason shape.
+ *
+ * @param {{swapped_loaders?: Array<Object>}} group
+ * @returns {Array<Object>} zero or one entry, so a caller can spread it.
+ */
+export function swappedNotice(group) {
+  const loaders = (group?.swapped_loaders || []).filter(Boolean);
+  return loaders.length ? [{ code: LORAS_FETCHED, loaders }] : [];
+}
+
+/**
+ * Whether a group's run changes nodes of the graph on this ComfyUI - a node
+ * replaced, or a LoRA loader swapped - which a saved copy could keep.
+ */
+export function changesNodes(group) {
+  return Boolean(
+    (group?.replaced_nodes || []).length || (group?.swapped_loaders || []).length,
+  );
 }

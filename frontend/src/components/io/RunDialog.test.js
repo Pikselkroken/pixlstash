@@ -24,6 +24,7 @@ const preflightWorkflowRun = vi.fn();
 const runWorkflowCard = vi.fn();
 const getPictureRecipe = vi.fn();
 const setWorkflowInputs = vi.fn();
+const saveFixedWorkflow = vi.fn();
 
 vi.mock("../../api/workflows", () => ({
   getWorkflowCard: (...args) => getWorkflowCard(...args),
@@ -31,6 +32,7 @@ vi.mock("../../api/workflows", () => ({
   preflightWorkflowRun: (...args) => preflightWorkflowRun(...args),
   runWorkflowCard: (...args) => runWorkflowCard(...args),
   setWorkflowInputs: (...args) => setWorkflowInputs(...args),
+  saveFixedWorkflow: (...args) => saveFixedWorkflow(...args),
   workflowCoverUrl: (cover) => (cover?.url ? `/api/v1${cover.url}` : ""),
 }));
 vi.mock("../../api/comfyui", () => ({
@@ -1794,5 +1796,76 @@ describe("Add LoRA", () => {
     expect(runWorkflowCard.mock.calls[0][0].add_loras).toEqual([
       { sha256: "s".repeat(64), strength_model: 1 },
     ]);
+  });
+});
+
+describe("Save fixed workflow", () => {
+  const saveButton = (wrapper) =>
+    wrapper.findAll("button").find((b) => b.text() === "Save fixed workflow");
+  const swapping = {
+    ok: true,
+    runs: 1,
+    groups: [
+      {
+        reasons: [],
+        swapped_loaders: [
+          {
+            node_id: "7",
+            class_type: "LoraLoader",
+            file: "loras/example-subject.safetensors",
+            sha256: "s".repeat(64),
+          },
+        ],
+      },
+    ],
+  };
+
+  it("is not offered when the run changes no node", async () => {
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(saveButton(wrapper)).toBeUndefined();
+  });
+
+  it("is offered when a loader is swapped, and says why", async () => {
+    preflightWorkflowRun.mockResolvedValue(swapping);
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    expect(saveButton(wrapper)).toBeTruthy();
+    expect(wrapper.vm.bypassed.map((note) => note.code)).toContain(
+      "loras_fetched",
+    );
+  });
+
+  it("saves a copy and moves the popup onto it", async () => {
+    preflightWorkflowRun.mockResolvedValueOnce(swapping);
+    saveFixedWorkflow.mockResolvedValue({
+      name: "Cinematic portrait (fixed).json",
+      workflow_id: OTHER,
+      changes: [
+        "Loads example-subject through the ComfyUI-PixlStash LoRA loader.",
+      ],
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await saveButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(saveFixedWorkflow).toHaveBeenCalledWith(KEY);
+    expect(getWorkflowCard).toHaveBeenLastCalledWith(OTHER);
+    expect(wrapper.text()).toContain("Saved as Cinematic portrait (fixed).");
+    // The copy loads the LoRA as saved, so nothing is left to fix.
+    expect(saveButton(wrapper)).toBeUndefined();
+  });
+
+  it("says why when the save is refused", async () => {
+    preflightWorkflowRun.mockResolvedValue(swapping);
+    saveFixedWorkflow.mockRejectedValue({
+      response: {
+        status: 409,
+        data: {
+          detail: "Nothing in this workflow needs fixing on this ComfyUI.",
+        },
+      },
+    });
+    const wrapper = await mountRun({ kind: "card", workflowId: KEY });
+    await saveButton(wrapper).trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("Nothing in this workflow needs fixing");
   });
 });
