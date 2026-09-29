@@ -96,6 +96,7 @@ from pixlstash.services.a1111_recipe import reduce_a1111
 from pixlstash.services.comfyui_recipe_service import (
     LORA_FILENAME_FIELD_RE,
     MAX_SEED_64,
+    PIXLSTASH_ADAPTER_LOADER,
     apply_adapter,
     apply_filename_swap,
     apply_lora_chain,
@@ -111,6 +112,7 @@ from pixlstash.services.comfyui_recipe_service import (
     plan_lora_insertion,
     read_lora_chain,
     read_lora_chain_untyped,
+    swap_to_adapter_loader,
 )
 from pixlstash.services.comfyui_service import (
     PIXLSTASH_PICTURE_LOADER,
@@ -3719,6 +3721,39 @@ def create_router(server) -> APIRouter:
                 if target is not None:
                     graph[target[0]]["inputs"][target[1]] = text
 
+    def _swapped_to_digest_loader(
+        graph: dict, item: RunLora, adapter: dict, object_info: dict | None
+    ) -> bool:
+        """Load *item*'s LoRA through the ComfyUI-PixlStash loader, if one can.
+
+        The fallback for a filename slot this ComfyUI cannot fill with the
+        shelf LoRA (its file is not there): the node becomes
+        ``PixlStashAdapterLoader``, keyed by the adapter's digest, and keeps its
+        wiring. False, with the graph untouched, where the pack is not
+        installed or the node is not a core single-slot loader.
+        """
+        if not object_info or PIXLSTASH_ADAPTER_LOADER not in object_info:
+            return False
+        try:
+            swap_to_adapter_loader(graph, item.node_id, adapter["sha256"], object_info)
+        except LookupError as exc:
+            logger.info(
+                "LoRA loader %s cannot take %s through %s: %s",
+                item.node_id,
+                adapter["sha256"],
+                PIXLSTASH_ADAPTER_LOADER,
+                exc,
+            )
+            return False
+        logger.info(
+            "LoRA %s is not on this ComfyUI, so loader %s now loads it by its "
+            "hash through %s.",
+            adapter["sha256"],
+            item.node_id,
+            PIXLSTASH_ADAPTER_LOADER,
+        )
+        return True
+
     def _apply_loras(
         graph: dict, loras: list[RunLora], object_info: dict | None
     ) -> list[run_service.Reason]:
@@ -3769,30 +3804,35 @@ def create_router(server) -> APIRouter:
             try:
                 apply_adapter(graph, [target], adapter, object_info or {})
             except LookupError as exc:
-                # The adapter is on the shelf and not on this ComfyUI, which is
-                # the same fact as any other model the graph names and must not
-                # be a different kind of answer: a dry run that 400s instead of
-                # reporting `missing_models` is not a dry run.
-                logger.info(
-                    "LoRA %s cannot be placed in slot %s %s: %s",
-                    item.sha256,
-                    item.node_id,
-                    item.field,
-                    exc,
-                )
-                return [
-                    run_service.Reason(
-                        run_service.MISSING_MODELS,
-                        {
-                            "models": [
-                                {
-                                    "file": (adapter.get("filenames") or [""])[-1],
-                                    "folder": "loras",
-                                }
-                            ]
-                        },
+                # The adapter is on the shelf and not on this ComfyUI. Where
+                # ComfyUI-PixlStash is installed, the loader is swapped to its
+                # digest loader, which resolves the LoRA by hash and fetches it,
+                # so the LoRA asked for is loaded rather than refused.
+                if not _swapped_to_digest_loader(graph, item, adapter, object_info):
+                    # The same fact as any other model the graph names and it
+                    # must not be a different kind of answer: a dry run that
+                    # 400s instead of reporting `missing_models` is not a dry
+                    # run.
+                    logger.info(
+                        "LoRA %s cannot be placed in slot %s %s: %s",
+                        item.sha256,
+                        item.node_id,
+                        item.field,
+                        exc,
                     )
-                ]
+                    return [
+                        run_service.Reason(
+                            run_service.MISSING_MODELS,
+                            {
+                                "models": [
+                                    {
+                                        "file": (adapter.get("filenames") or [""])[-1],
+                                        "folder": "loras",
+                                    }
+                                ]
+                            },
+                        )
+                    ]
             inputs = (graph.get(item.node_id) or {}).get("inputs")
             if not isinstance(inputs, dict):
                 continue

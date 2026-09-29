@@ -10489,6 +10489,117 @@ def test_an_added_lora_without_comfyui_is_the_unreachable_reason(loaderless):
     assert loaderless.submitted == []
 
 
+# The ComfyUI-PixlStash LoRA loader as its node pack declares it: resolved by
+# digest, so it loads a shelf LoRA this ComfyUI has no file of.
+PIXLSTASH_ADAPTER_LOADER_INFO = {
+    "input": {
+        "required": {
+            "model": ["MODEL", {}],
+            "adapter_kind": [["— Any —"], {}],
+            "base_model": [["— Any —"], {}],
+            "adapter_sha256": ["STRING", {"default": ""}],
+        },
+        "optional": {
+            "clip": ["CLIP", {}],
+            "strength_model": ["FLOAT", {"default": 1.0}],
+            "strength_clip": ["FLOAT", {"default": 1.0}],
+        },
+    },
+    "output": ["MODEL", "CLIP", "STRING"],
+}
+
+
+def _graph_loads_a_shelf_lora_comfyui_lacks(runnable, with_pixlstash=True):
+    """RUN_CARD's loader names the shelf LoRA's file, which ComfyUI does not list.
+
+    The shelf row is renamed to the file the graph's loader names, so the
+    shelf can name that slot's digest; ComfyUI's LoraLoader lists only the
+    other file, so without a swap the #1463 bypass would take the loader out.
+    """
+    with runnable.server.hub.transaction() as conn:
+        conn.execute(
+            "UPDATE model SET filename = 'add_detail.safetensors' WHERE sha256 = ?",
+            (RUN_ADAPTER_DIGEST,),
+        )
+    info = json.loads(json.dumps(RUN_OBJECT_INFO))
+    info["LoraLoader"]["input"]["required"]["lora_name"] = [
+        ["unrelated.safetensors"],
+        {},
+    ]
+    if with_pixlstash:
+        info["PixlStashAdapterLoader"] = json.loads(
+            json.dumps(PIXLSTASH_ADAPTER_LOADER_INFO)
+        )
+    runnable.monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (info, None)
+    )
+
+
+def test_a_shelf_lora_comfyui_lacks_loads_through_the_pixlstash_loader(runnable):
+    """The workflow's own recipe LoRA, on the shelf but not on this ComfyUI.
+
+    Swapped to the digest loader rather than refused or bypassed: the LoRA is
+    loaded, fetched by its hash.
+    """
+    _graph_loads_a_shelf_lora_comfyui_lacks(runnable)
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    group = r.json()["groups"][0]
+    assert group["bypassed_loras"] == [], group["reasons"]
+    assert runnable.submitted, group["reasons"]
+    node = runnable.submitted[0]["graph"]["2"]
+    assert node["class_type"] == "PixlStashAdapterLoader"
+    assert node["inputs"]["adapter_sha256"] == RUN_ADAPTER_DIGEST
+    # Wired where the core loader was, so the sampler still reads the LoRA.
+    assert node["inputs"]["model"] == ["1", 0]
+    assert runnable.submitted[0]["graph"]["3"]["inputs"]["model"] == ["2", 0]
+
+
+def test_an_added_lora_in_a_loader_comfyui_cannot_fill_is_swapped_not_dropped(
+    runnable,
+):
+    """Create with LoRA on a workflow that already names the person's LoRA.
+
+    The loader holding it names a file this ComfyUI lacks; the added LoRA is
+    loaded there through the digest loader, at the asked strength, and not a
+    second time in a loader of its own.
+    """
+    _graph_loads_a_shelf_lora_comfyui_lacks(runnable)
+    r = runnable.owner.post(
+        f"{API}/workflows/run",
+        json={
+            "workflow_id": RUN_WF,
+            "add_loras": [{"sha256": RUN_ADAPTER_DIGEST, "strength_model": 0.7}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    graph = runnable.submitted[0]["graph"]
+    loaders = [
+        node_id
+        for node_id, node in graph.items()
+        if node["class_type"] in ("LoraLoader", "PixlStashAdapterLoader")
+    ]
+    assert loaders == ["2"], graph
+    assert graph["2"]["class_type"] == "PixlStashAdapterLoader"
+    assert graph["2"]["inputs"]["adapter_sha256"] == RUN_ADAPTER_DIGEST
+    assert graph["2"]["inputs"]["strength_model"] == 0.7
+    assert r.json()["groups"][0]["bypassed_loras"] == []
+
+
+def test_without_the_pixlstash_loader_nothing_is_swapped(runnable):
+    """No node pack to fetch it by hash: the recipe's LoRA is refused as before.
+
+    `missing_models`, naming the file, and nothing submitted: the swap is only
+    ever to a loader this ComfyUI actually has.
+    """
+    _graph_loads_a_shelf_lora_comfyui_lacks(runnable, with_pixlstash=False)
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    group = r.json()["groups"][0]
+    assert {reason["code"] for reason in group["reasons"]} == {"missing_models"}
+    assert runnable.submitted == []
+
+
 def test_inserting_a_loader_leaves_the_original_workflow_alone(loaderless):
     """The stored file is never rewritten: the loader goes into a NEW file.
 

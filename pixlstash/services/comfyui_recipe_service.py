@@ -1622,6 +1622,63 @@ def insert_adapter(
     return {"node_id": node_id, "class_type": loader}
 
 
+# The core single-slot LoRA loaders a digest loader can stand in for, with the
+# outputs each hands on, in order. Stackers are left alone: their other slots
+# are other LoRAs, and one node cannot be half swapped.
+_SWAPPABLE_LORA_LOADERS = {
+    "LoraLoader": ("MODEL", "CLIP"),
+    "LoraLoaderModelOnly": ("MODEL",),
+}
+
+
+def swap_to_adapter_loader(
+    prompt_graph: dict, node_id: str, sha256: str, object_info: dict
+) -> None:
+    """Load node *node_id*'s LoRA through the ComfyUI-PixlStash loader, by digest.
+
+    For a core loader naming a file this ComfyUI does not have, where the shelf
+    knows the file: ``PixlStashAdapterLoader`` resolves *sha256* itself and
+    fetches the file when it has to, so the LoRA is loaded rather than bypassed.
+    The node keeps its id, its wiring and its strengths; only its class and its
+    file widget change, so every consumer reads it where it did.
+
+    Raises:
+        LookupError: When the node is not a core single-slot LoRA loader, when
+            this ComfyUI has no ComfyUI-PixlStash loader, or when that loader's
+            outputs do not start with the ones the node's consumers read.
+    """
+    node = prompt_graph.get(node_id)
+    class_type = node.get("class_type") if isinstance(node, dict) else None
+    outputs = _SWAPPABLE_LORA_LOADERS.get(class_type)
+    if outputs is None:
+        raise LookupError(f"Node {node_id} ({class_type}) is not a single LoRA loader.")
+    spec = object_info.get(PIXLSTASH_ADAPTER_LOADER)
+    if not spec:
+        raise LookupError(
+            f"This ComfyUI does not have ComfyUI-PixlStash, which could fetch the "
+            f"LoRA by its hash. {PIXLSTASH_PACK_INSTALL_HINT}"
+        )
+    offered = spec.get("output") if isinstance(spec.get("output"), list) else []
+    if tuple(offered[: len(outputs)]) != outputs:
+        raise LookupError(
+            f"{PIXLSTASH_ADAPTER_LOADER} on this ComfyUI does not hand on "
+            f"{', '.join(outputs)} first, so it cannot stand in for {class_type}."
+        )
+    old = node.get("inputs") or {}
+    inputs = _widget_defaults(spec)
+    inputs["adapter_sha256"] = sha256
+    for wire in ("model", "clip"):
+        if wire in old:
+            inputs[wire] = old[wire]
+    model_strength = old.get("strength_model", old.get("strength"))
+    if model_strength is not None:
+        inputs["strength_model"] = model_strength
+    if old.get("strength_clip") is not None:
+        inputs["strength_clip"] = old["strength_clip"]
+    node["class_type"] = PIXLSTASH_ADAPTER_LOADER
+    node["inputs"] = inputs
+
+
 def bypass_node(prompt_graph: dict, node_id: str, object_info: dict) -> None:
     """Take one node out of the chain, wiring its consumers to its own inputs.
 
