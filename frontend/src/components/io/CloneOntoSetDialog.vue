@@ -444,14 +444,27 @@ const summary = computed(() => {
   if (!plan) return "";
   const rewritten = plan.loaders.filter(changed).length;
   const parts = [`${rewritten} ${rewritten === 1 ? "loader" : "loaders"} rewritten`];
+  // Counted off the rows Clone sends (an Edit LoRAs… Done included), so the
+  // line matches the write: an edit can delete a kept LoRA or add one.
+  const lora = (n) => (n === 1 ? "LoRA" : "LoRAs");
   const added = addedRows.value.length;
-  if (loraCount.value && plan.keeps_loras && !added) parts.push("LoRAs kept");
-  else if (loraCount.value && !plan.keeps_loras) {
-    parts.push(
-      `${loraCount.value} ${checkpointName.value} ${loraCount.value === 1 ? "LoRA" : "LoRAs"} removed` +
-        (added ? `, ${added} added` : ""),
-    );
-  } else if (added) parts.push(`${added} ${added === 1 ? "LoRA" : "LoRAs"} added`);
+  const kept = shownRows.value.length - added;
+  const removed = loraCount.value - kept;
+  if (!added && !removed && kept) parts.push("LoRAs kept");
+  else {
+    const bits = [];
+    if (kept) bits.push(`${kept} ${lora(kept)} kept`);
+    // Named by the checkpoint only when the base model change removed them.
+    if (removed) {
+      bits.push(
+        plan.keeps_loras
+          ? `${removed} ${lora(removed)} removed`
+          : `${removed} ${checkpointName.value} ${lora(removed)} removed`,
+      );
+    }
+    if (added) bits.push(`${added} ${lora(added)} added`);
+    if (bits.length) parts.push(bits.join(", "));
+  }
   if (packs.value.length) {
     parts.push(`${packs.value.length} node ${packs.value.length === 1 ? "pack" : "packs"}`);
   }

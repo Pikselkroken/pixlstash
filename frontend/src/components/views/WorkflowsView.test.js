@@ -1251,6 +1251,26 @@ describe("Clone onto a workflow set", () => {
     expect(wrapper.text()).toContain("Dropped mara_chroma, added for Chroma.");
   });
 
+  it("counts the LoRAs an edit leaves, not the ones the plan kept", async () => {
+    const wrapper = await grid();
+    await openOn(wrapper);
+    await wrapper.find('[data-testid="cos-set-hand:7"]').trigger("click");
+    expect(wrapper.find('[data-testid="cos-summary"]').text()).toBe(
+      "1 loader rewritten · LoRAs kept · 1 node pack",
+    );
+    // Same base model, but the owner deleted the kept LoRA and added one.
+    await wrapper.findComponent({ name: "EditLorasDialog" }).vm.$emit("done", {
+      rows: [
+        { id: "n:5", name: "mara_v3", isNew: false, deleted: true },
+        { id: "new:1", name: "film-look", isNew: true, sha256: "sha-f" },
+      ],
+      body: { entries: [{ node_id: null, sha256: "sha-f", strength: 1 }] },
+    });
+    expect(wrapper.find('[data-testid="cos-summary"]').text()).toBe(
+      "1 loader rewritten · 1 LoRA removed, 1 LoRA added · 1 node pack",
+    );
+  });
+
   it("hands per-file picking to Clone with new models", async () => {
     readModelSwap.mockResolvedValue({
       slots: [],
