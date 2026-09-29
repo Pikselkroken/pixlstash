@@ -12,10 +12,15 @@
  * label-thresholds preview for pixlstash_tagger. Saves via
  * `PATCH /users/me/config` (`tagger_settings.plugins.<name>.params`) and emits
  * the merged settings, the same `update:settings` contract as PluginSelect.
+ *
+ * Switching `whole_face_crop` on only changes pictures tagged afterwards, so
+ * after that save the panel offers to re-check the library's faces (#1662).
  */
 import { computed, ref, watch } from "vue";
-import { getLabelThresholds } from "../../api/taggers";
+import { getLabelThresholds, retagFaceCrops } from "../../api/taggers";
 import { patchUserConfig } from "../../api/config";
+import { useConfirm } from "../../composables/useConfirm";
+import { useNoticeStore } from "../../stores/useNoticeStore";
 import TaggerParametersUI from "./TaggerParametersUI.vue";
 import { errorDetail } from "../../utils/apiError";
 import AppButton from "./AppButton.vue";
@@ -83,12 +88,56 @@ watch(
   { immediate: true },
 );
 
+// Asked only after the save has landed, so the answer never decides whether
+// the setting is stored. A failure leaves the setting on; saving it off and on
+// again offers the re-check again.
+async function offerFaceCropRetag() {
+  try {
+    const { count } = await retagFaceCrops({ dryRun: true });
+    if (!count) return;
+    const many = count !== 1;
+    const ok = await useConfirm().confirm({
+      title: `Re-check ${count} ${many ? "pictures" : "picture"} with faces?`,
+      message:
+        "Whole-face close-up only applies to pictures tagged from now on. " +
+        (many
+          ? `Re-checking redoes the face quality tags on these ${count} in the ` +
+            "background. Their current face quality tags disappear until each " +
+            "picture is done. "
+          : "Re-checking redoes its face quality tags in the background. They " +
+            "disappear until it is done. ") +
+        "It can't be stopped once started, and on a large library it takes a " +
+        "while; follow it in the sidebar's Tasks tab. Other tags and your " +
+        "review decisions are kept.",
+      confirmLabel: "Re-check now",
+      cancelLabel: "Not now",
+    });
+    if (!ok) return;
+    await retagFaceCrops();
+    useNoticeStore().success(
+      `Re-checking ${count} ${many ? "pictures" : "picture"} with faces. ` +
+        "Follow it in the sidebar's Tasks tab.",
+    );
+  } catch (e) {
+    console.error("Whole-face close-up re-check failed:", errorDetail(e) || e);
+    useNoticeStore().error(
+      "Couldn't start the face re-check. Whole-face close-up is still on; " +
+        "save it off and on again to retry.",
+    );
+  }
+}
+
 async function save() {
   if (saving.value) return;
   saving.value = true;
   saveError.value = "";
   const name = props.plugin.name;
   const next = { ...formParams.value };
+  // The backend reads this setting off the PixlStash tagger only.
+  const turnedOnWholeFace =
+    name === "pixlstash_tagger" &&
+    !params.value.whole_face_crop &&
+    next.whole_face_crop === true;
   try {
     await patchUserConfig({
       tagger_settings: { plugins: { [name]: { params: next } } },
@@ -104,6 +153,7 @@ async function save() {
       },
     });
     saved.value = true;
+    if (turnedOnWholeFace) offerFaceCropRetag();
   } catch (e) {
     saveError.value = errorDetail(e) || "Failed to save settings.";
   } finally {
