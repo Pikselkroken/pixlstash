@@ -9767,6 +9767,13 @@ def test_cloning_a_card_with_no_graph_is_a_409(workflow_env):
     assert r.status_code == 409, r.text
 
 
+def test_planning_clones_of_a_card_with_no_graph_is_a_409(workflow_env):
+    r = workflow_env.owner.post(
+        f"{API}/workflows/{BINNED_WF}/set-clone-plans", json={"sets": []}
+    )
+    assert r.status_code == 409, r.text
+
+
 def test_a_replacement_that_is_not_a_model_file_is_a_422(cloneable):
     assert _clone(cloneable, {_SHELF_FILENAME: "krea2"}).status_code == 422
 
