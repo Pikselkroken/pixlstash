@@ -2266,8 +2266,9 @@ new code calls a *variant*. Owner-only, like everything under `/workflows`.
   its detail: that tab builds its own whole-set PUTs (reset, edit) from its
   copy, and a stale one would drop what this wrote. The `success` notice (8 s)
   offers Undo, which re-reads the set too and reverts **only the addresses
-  this write changed**, each to its previous edit or to computed, so an edit
-  made elsewhere in between survives. Focus returns to the card's ⋯.
+  this write changed that still hold what it wrote**, each to its previous
+  edit or to computed, so an edit made elsewhere in between survives, on any
+  address; when nothing is left to revert it says so in an `info` notice. Focus returns to the card's ⋯.
 - **`SaveRecipeDialog` is a list of checkboxes, and the seed is off.** "What
   the recipe keeps" is a promise about the row, so every line can be unticked
   and an unticked line is not sent. **`keep_seed` is what makes a stored seed

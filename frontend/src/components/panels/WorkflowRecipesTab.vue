@@ -870,15 +870,28 @@ async function editedNow(workflowId) {
  * each time rather than taken from a detail read earlier: the PUT replaces the
  * whole set, and the Workflow tab may have edited it since.
  */
-async function writeDefaults(workflowId, changes) {
+async function writeDefaults(workflowId, changes, onlyWhere = null) {
   const edited = await editedNow(workflowId);
+  let changed = 0;
   for (const [key, row] of changes) {
+    // `onlyWhere` (Undo): change an address only while it still holds the
+    // value this tab left there; one edited since belongs to whoever did it.
+    if (onlyWhere && !sameEdit(edited.get(key), onlyWhere.get(key))) continue;
+    changed += 1;
     if (row) edited.set(key, row);
     else edited.delete(key);
   }
+  if (!changed) return 0;
   const body = await setWorkflowDefaults(workflowId, [...edited.values()]);
   if (details.value[workflowId]) details.value[workflowId] = { state: "ready", body };
   emit("defaults-changed", workflowId, body);
+  return changed;
+}
+
+/** Whether two edited rows (or their absence) hold one value. */
+function sameEdit(a, b) {
+  if (!a || !b) return !a && !b;
+  return String(a.value) === String(b.value);
 }
 
 /**
@@ -900,8 +913,8 @@ async function confirmMakeDefaults(rows) {
     ]),
   );
   // What Undo puts back: each taken address as it was just before, an edit or
-  // nothing (computed). Only these addresses: an edit made elsewhere between
-  // now and Undo is not ours to revert.
+  // nothing (computed). Only these addresses, and only those still holding
+  // what this wrote: an edit made elsewhere since is not ours to revert.
   let previous;
   job.busy = true;
   job.error = "";
@@ -927,7 +940,13 @@ async function confirmMakeDefaults(rows) {
       label: "Undo",
       handler: async () => {
         try {
-          await writeDefaults(workflowId, previous);
+          const reverted = await writeDefaults(workflowId, previous, taken);
+          if (!reverted) {
+            notices.push({
+              level: "info",
+              text: "Nothing to undo: those values have been changed since.",
+            });
+          }
         } catch (err) {
           notices.push({
             level: "error",

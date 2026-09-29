@@ -857,6 +857,15 @@ describe("WorkflowRecipesTab", () => {
     const notice = useNoticeStore().notices.at(-1);
     expect(notice.level).toBe("success");
     expect(notice.timeout).toBe(8000);
+    // The server now holds what the write left.
+    getWorkflowCard.mockImplementation(async () =>
+      detail(KEY, "Cinematic portrait", {
+        values: [
+          { label: "Steps", slot_label: "core:KSampler", input_name: "steps", value: 40, provenance: "edited" },
+          { label: "CFG", slot_label: "core:KSampler", input_name: "cfg", value: 7, provenance: "edited" },
+        ],
+      }),
+    );
     await notice.action.handler();
     expect(setWorkflowDefaults).toHaveBeenLastCalledWith(KEY, [
       { slot_label: "core:KSampler", input_name: "cfg", value: 7 },
@@ -905,6 +914,32 @@ describe("WorkflowRecipesTab", () => {
       { slot_label: "core:KSampler", input_name: "cfg", value: 9 },
       { slot_label: "core:KSampler", input_name: "denoise", value: 0.5 },
     ]);
+  });
+
+  it("does not undo a taken value that was edited again since", async () => {
+    listSavedRecipes.mockResolvedValue([
+      recipe(1, "Rainy tram platform", { overrides: { "KSampler/steps": 40 } }),
+    ]);
+    setWorkflowDefaults.mockImplementation(async () => detail());
+    const wrapper = render();
+    await flushPromises();
+    await wrapper.findAll(".ctx-item").find((el) => el.text().includes("Make these")).trigger("click");
+    await flushPromises();
+    await wrapper.findAll("button").find((el) => el.text().startsWith("Make 1 default")).trigger("click");
+    await flushPromises();
+    const writes = setWorkflowDefaults.mock.calls.length;
+    // Steps was set to 50 on the Workflow tab after the change.
+    getWorkflowCard.mockImplementation(async () =>
+      detail(KEY, "Cinematic portrait", {
+        values: [
+          { label: "Steps", slot_label: "core:KSampler", input_name: "steps", value: 50, provenance: "edited" },
+          { label: "CFG", slot_label: "core:KSampler", input_name: "cfg", value: 7, provenance: "edited" },
+        ],
+      }),
+    );
+    await useNoticeStore().notices.at(-1).action.handler();
+    expect(setWorkflowDefaults.mock.calls.length).toBe(writes);
+    expect(useNoticeStore().notices.at(-1).text).toContain("Nothing to undo");
   });
 
   it("will not make nothing the default", async () => {
