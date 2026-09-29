@@ -352,6 +352,20 @@ def test_face_crop_retag_redoes_only_face_pictures_crop_tags(env):
                 label_state="POS",
             )
         )
+        # A crop tag a human rejected: the rejection must outlive the reset,
+        # because it is what vetoes the tagger re-adding the tag
+        # (test_tag_task.py::test_add_tags_bulk_honours_human_labels).
+        session.add(
+            TagPrediction(
+                picture_id=face_pic,
+                tag="malformed teeth",
+                confidence=0.0,
+                model_version="test-v1",
+                status="REJECTED",
+                label_source="human",
+                label_state="NEG",
+            )
+        )
         session.commit()
 
     server.vault.db.run_task(seed)
@@ -388,6 +402,9 @@ def test_face_crop_retag_redoes_only_face_pictures_crop_tags(env):
     assert not _prediction_exists(server, face_pic, "malformed eyes")
     assert _prediction_exists(server, face_pic, "flux chin"), (
         "a human label must survive the retag"
+    )
+    assert _prediction_exists(server, face_pic, "malformed teeth"), (
+        "a human rejection must survive the retag"
     )
 
 
