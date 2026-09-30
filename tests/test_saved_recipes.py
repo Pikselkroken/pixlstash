@@ -68,6 +68,8 @@ _RECIPE_ROUTES = (
     # The looks the pictures themselves carry (v1.12 F6): the same picture
     # rows credit is grouped from, returned as groups instead of a count.
     ("GET", "/api/v1/recipes/used"),
+    # Manual workflows: a recipe's run graph stored as a workflow of its own.
+    ("POST", "/api/v1/recipes/{recipe_id}/extract-workflow"),
 )
 
 
@@ -334,14 +336,43 @@ def test_no_scoped_token_can_read_or_write_a_saved_recipe(recipe_env):
         ("PATCH", f"{API}/recipes/{saved['id']}", {"name": "stolen"}),
         ("DELETE", f"{API}/recipes/{saved['id']}", None),
         ("GET", f"{API}/recipes/{saved['id']}/export", None),
+        ("GET", f"{API}/recipes?unfiled=true", None),
+        ("POST", f"{API}/recipes/{saved['id']}/extract-workflow", None),
     )
     for method, path, body in calls:
-        assert_real_route(recipe_env.server.api, method, path)
+        assert_real_route(recipe_env.server.api, method, path.split("?")[0])
         r = client.request(method, path, json=body)
         assert r.status_code == 403, f"{method} {path}: {r.status_code} {r.text}"
 
     # The owner's own recipe is untouched by any of that.
     assert recipe_env.owner.get(f"{API}/recipes").json()[0]["id"] == saved["id"]
+    assert (
+        recipe_env.server.hub.fetchone("SELECT COUNT(*) FROM workflow_document")[0] == 0
+    )
+
+
+def test_the_owner_extracts_a_recipe_and_lists_the_unfiled(recipe_env):
+    """The positive controls beside the refusals above: the same two new
+    reads and writes answer the owner."""
+    hub = recipe_env.server.hub
+    manual = create_manual_workflow(
+        hub,
+        "Mine",
+        {
+            "1": {"class_type": "EmptyLatentImage", "inputs": {"width": 512}},
+            "2": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}},
+        },
+        "import",
+    )
+    saved = _save(recipe_env.owner, manual, name="On mine")
+    r = recipe_env.owner.post(f"{API}/recipes/{saved['id']}/extract-workflow")
+    assert r.status_code == 201, r.text
+    assert r.json()["name"] == "On mine"
+    assert r.json()["workflow_id"].startswith("manual:")
+
+    r = recipe_env.owner.get(f"{API}/recipes", params={"unfiled": "true"})
+    assert r.status_code == 200, r.text
+    assert saved["id"] not in [row["id"] for row in r.json()]
 
 
 # ===========================================================================

@@ -701,6 +701,7 @@ Public guest scoring and shared-link endpoints.
 | PATCH  | /api/v1/recipes/{recipe_id}                                                   | recipes         | Edit a saved recipe                                         |
 | DELETE | /api/v1/recipes/{recipe_id}                                                   | recipes         | Delete a saved recipe                                       |
 | GET    | /api/v1/recipes/{recipe_id}/export                                            | recipes         | Export a saved recipe                                       |
+| POST   | /api/v1/recipes/{recipe_id}/extract-workflow                                  | workflows       | Make a saved recipe a manual workflow of its own            |
 | POST   | /api/v1/reviews                                                               | reviews         | Create a review session for one tag                         |
 | GET    | /api/v1/reviews                                                               | reviews         | List review sessions                                        |
 | DELETE | /api/v1/reviews                                                               | reviews         | Bulk-delete review sessions by status (clear all archived)  |
@@ -756,7 +757,7 @@ Public guest scoring and shared-link endpoints.
 | POST   | /api/v1/workflows/run/preflight                                               | workflows       | Check what a run would do                                   |
 | GET    | /api/v1/workflows/{workflow_id}                                               | workflows       | One workflow                                                |
 | PATCH  | /api/v1/workflows/{workflow_id}                                               | workflows       | Edit a workflow                                             |
-| DELETE | /api/v1/workflows/{workflow_id}                                               | workflows       | Delete an imported workflow's file                          |
+| DELETE | /api/v1/workflows/{workflow_id}                                               | workflows       | Delete a manual workflow                                    |
 | POST   | /api/v1/workflows/{workflow_id}/clone-with-models                             | workflows       | Clone a workflow onto other models                          |
 | PUT    | /api/v1/workflows/{workflow_id}/default-lora                                  | workflows       | Put one LoRA in or out of a workflow's default recipe       |
 | PUT    | /api/v1/workflows/{workflow_id}/defaults                                      | workflows       | Set a workflow's parameter defaults                         |
@@ -2250,7 +2251,7 @@ with `HubSchemaTooNewError`, locking the owner out of a downgrade.
 | `workflow_attr`, `workflow_default_override`, `workflow_key_pins` | The owner's name, notes, hidden flag, parameter overrides and pins per card, keyed by `workflow_key`, with parameters addressed by **(slot label, input name)**. **No route reads or writes them since #1623**: the cut-over's conversion reads them once into the `workflow_group*` tables below |
 | `workflow_key_picture_input`, `workflow_cover` | Input modes, Fixed pictures and the chosen cover per card, keyed by `(library_uuid, workflow_key)` and naming pictures by `pixel_sha`. Read once by the conversion (#1623), written by nothing; `workflow_cover` never had a production writer |
 | `workflow_stack`, `workflow_stack_member`, `workflow_unstacked` | Stacks of cards (`position` 0 is the cover) and the owner taking a card out of its automatic one. Their routes are gone (#1623): the conversion turns a manual stack into a manual workflow and reads these rows once |
-| `workflow_origin` (written by `COMFYUI_WORKFLOW_PULL`, #1440; `hub/workflow_origin.py`) | Where a pulled workflow came from: one row per `(origin, remote_path)`, the origin being the ComfyUI URL, with the `content_hash` last read there. `workflow_name` is **many-to-one** because the pull matches by content. `dismissed` is set by the delete path (`trash_user_workflow`, inside `INBOX_LOCK`) on **every** row naming the deleted file. A later pull skips a dismissed path **and any document with a dismissed content hash, at any path and any origin**, so a rename in ComfyUI, another spelling of its URL or a listing that came back empty cannot restore it; dismissed rows are never pruned, and an empty listing prunes nothing. A path whose content changed is reported `changed` and stored beside the earlier copy. The pull checks a dismissal, stores and records each entry under `INBOX_LOCK`, so a delete made mid-pull is not undone. Only deletes made through PixlStash dismiss: a file removed from the folder by hand comes back on the next pull. Its own table rather than columns on `workflow_file`, which the delete drops |
+| `workflow_origin` (written by `COMFYUI_WORKFLOW_PULL`, #1440; `hub/workflow_origin.py`) | Where a pulled workflow came from: one row per `(origin, remote_path)`, the origin being the ComfyUI URL, with the `content_hash` last read there. `workflow_name` names the **manual workflow** it is stored as (a file name before data step 7), and the inbox and built-ins record rows here too (Manual workflows, below). It is **many-to-one** because the pull matches by content. `dismissed` is set by the delete path (`trash_user_workflow`, inside `INBOX_LOCK`) on **every** row naming the deleted file. A later pull skips a dismissed path **and any document with a dismissed content hash, at any path and any origin**, so a rename in ComfyUI, another spelling of its URL or a listing that came back empty cannot restore it; dismissed rows are never pruned, and an empty listing prunes nothing. A path whose content changed is reported `changed` and stored beside the earlier copy. The pull checks a dismissal, stores and records each entry under `INBOX_LOCK`, so a delete made mid-pull is not undone. Only deletes made through PixlStash dismiss: a file removed from the folder by hand comes back on the next pull. Its own table rather than columns on `workflow_file`, which the delete drops |
 | `workflow_pulled_file` (#1440) | The stored files a pull **wrote**, per file rather than per path, so it holds whatever ComfyUI later does to the path. `card_index` reads it as `Card.hand_imported`, the one-off test's "imported" clause, so pulled workflows can be folded into the one-off count. The hand-over paths, `POST /comfyui/workflows/import`, the watched inbox and `POST /comfyui/workflows/convert`, remove the name they store or match (`claim_stored_workflow`), and so does a delete |
 
 **Eight of those tables had no writer in B2**, and were created ahead of the
@@ -2314,11 +2315,12 @@ The owner-facing **workflow** is a group of topologies, and since the cut-over
 (#1623) it is what every route reads: the card is internal storage.
 `variant (structural_hash) -> topology -> workflow (workflow_id)`, where the id
 is `auto:<core_hash>` for an automatic group (the spelling an automatic stack
-already has) or a uuid hex for an owner's split or merge. A topology known only
-from a stored file (an editor-format file has a topology and no recipe, #1466)
-has no core hash and is a workflow of its own, `auto:<topology_hash>`, whose
-base card runs its file. Pictures stay filed by `structural_hash`, so nothing
-in the vault moves.
+already has), or `manual:<uuid hex>` for a manual workflow, which is a record
+of its own and on no topology (next subsection). One pattern,
+`utils/workflow_ids.WORKFLOW_ID_PATTERN`, is what every route and the MCP
+server check an id against. Pictures stay filed by `structural_hash`, so
+nothing in the vault moves; a manual workflow's own runs are the one exception
+(`picture.run_workflow_id`, below).
 
 | Table | Holds |
 |---|---|
@@ -2433,6 +2435,100 @@ variant is in (`RunGroup.workflow_id`); `workflow_key` is no longer a source.
 nullable). `models` pins over the workflow's default recipe address by address,
 as a recipe's overrides do, so NULL and `[]` both leave the defaults; a recipe with a
 `workflow_id` runs as that workflow.
+
+#### Manual workflows
+
+Workflows are **automatic** (`auto:<core hash>`, the topologies sharing a core)
+or **manual**: a hub record holding one document, `manual:<uuid4 hex>`. Every
+way a workflow arrives makes a manual one: `POST /comfyui/workflows/import`,
+the watched inbox, the ComfyUI pull, a built-in asked for by
+`POST /comfyui/workflows/{name}/card`, Duplicate, Save fixed workflow, Clone
+with new models, Insert LoRA loader, a LoRA chain edit, and
+`POST /recipes/{id}/extract-workflow`. All go through
+`routes/comfyui.store_manual_workflow` (shape check, placeholder migration)
+into `hub/workflow_group_writes.create_manual_workflow`. **No file is written
+and none is read at runtime**: the user workflow folder is legacy, listed and
+deletable by its old routes, and read once by data step 7.
+
+| Table | Holds |
+|---|---|
+| `workflow_document` | `workflow_id` PK, `document` (as imported: editor or API format, placeholders migrated, `pixlstash_bindings` kept), `api_document` (the API graph `POST /comfyui/workflows/convert` stored for an editor document, on every row holding that document), `origin` (`import`, `inbox`, `pull`, `builtin`, `duplicate`, `fixed`, `clone`, `chain`, `recipe`; a CHECK), `from_workflow_id` and `from_name` (what a copy or an extract was made from, as it was called then), `created_at`. Name, notes, hidden, defaults, pins and picture inputs are the `workflow_group_*` rows keyed by the same id; there is no `workflow_group` row |
+
+**Its own record, never grouped.** `card_index` appends one `Card` per row
+with `manual=True` and **the id as its topology**, so nothing keyed per
+topology (a core hash, a slot mark, a model fix) reaches it from an automatic
+workflow or the other way; `workflow_index` files it as a `Workflow` with no
+topologies, no variants and itself as `base_card`. Identical copies are
+allowed and stay apart. `hand_imported` is `origin != 'pull'`, so a pulled
+manual workflow with no pictures is a one-off and an imported, copied or
+extracted one never is. A model fix is refused on it (409): its graph changes
+by cloning.
+
+**Run, defaults, addresses.** `_source_graph_for` answers a manual card with
+its row (`manual_document`: the document, or the API conversion over it, as
+`runnable_document` reads a file and its sidecar) and never a picture or an
+instance. `workflow_defaults` samples the document's own API graph once and
+addresses it by **its own slot labels, never `core:`**, with model names read
+off the graph and the `workflow_group_default` edits over it; a document with
+no API graph samples nothing. The grid reads its models off the document
+(`routes/workflows._manual_model_widgets`, cached per id: a row's document is
+never rewritten). A saved recipe on a manual workflow stores the id as both
+`workflow_id` and `workflow_key`.
+
+**Its pictures** (vault migration 0126). `picture.run_workflow_id` names the
+manual workflow whose run made the picture: `_submit_every` passes the run's
+`workflow_id` when it is `manual:`, and `_process_comfyui_outputs` sets it on
+the pictures it imported and the ids a PixlStash saver reported, never on a
+duplicate. **Filing is exclusive while the workflow lives**: every grid read
+groups by `workflow_library_service._filed_as(live)` - the manual id for a
+picture made by a live manual workflow, the variant otherwise - with the hub's
+live ids handed in as one JSON array (`json_each`, one bound parameter
+whatever the count), and `GET /workflows/{id}/pictures`, the
+`GET /pictures?workflow=` filter (`predicate_filter.workflow_keys_predicate`)
+and a picture's own workflow (`_picture_workflow_id`) read the same way.
+Deleting a manual workflow therefore needs no vault write: its pictures fall
+back to the automatic workflow their variant is in. Ceiling (logged in the
+code): an output the watch folder imports before the poller sees it is not
+marked.
+
+**Deduplication is on `workflow_origin` alone** (`workflow_origin.stored_as`),
+never on a folder. A pull records `(ComfyUI URL, path)` naming the manual id
+and matches a content some origin already stored as a live workflow, so a
+restart re-imports nothing; the inbox records `(inbox, content hash)` the same
+way; a built-in records `(builtin, file name)` so it becomes a workflow once.
+The import route always makes a new workflow.
+
+**Delete** (`DELETE /workflows/{id}` on a manual id): the document is written
+to the inbox and sent to the trash from there (`workflow_inbox.trash_workflow`,
+under `INBOX_LOCK`), then one transaction
+(`workflow_group_writes.delete_manual_workflow`) deletes its inbox and built-in
+origin rows (handing the content over again stores it again), **dismisses**
+its pull rows (the next pull does not bring it back), and deletes its document
+and `workflow_group_*` rows. Its saved recipes stay, unfiled. An automatic id
+is a 409: hide it instead.
+
+**Extract** (`POST /recipes/{id}/extract-workflow`): the graph is
+`_plan(RunRequest(saved_recipe_id, count=1, allow_unchecked=True),
+extract=True)`'s first submittable graph - the run planner's own, so there is
+one way a recipe becomes a graph - with ComfyUI not asked and every resolved
+graph kept whatever would stop a run; seeds and picture inputs are left for a
+run. A recipe whose workflow is gone (or malformed) runs, and extracts, on the
+card it was saved from with no default recipe; with that gone too it is a 409.
+`GET /recipes?unfiled=true` lists the recipes on no workflow this machine
+holds (NULL, deleted or moved), with no credit.
+
+**Data step 7** (`workflow_group_convert.adopt_workflow_files`, at hub open):
+every `workflow_file` row whose file is in the user folder becomes a manual
+workflow (its sidecar conversion as `api_document`), named after its stem,
+`origin` `pull` where `workflow_pulled_file` holds it and `import` otherwise;
+the `workflow_origin` rows naming the file are renamed to the id. A file-only
+card's owner state, which steps 5 and 6 carried to `auto:<topology hash>`, is
+carried on to it (`_carry_group_state`), which is also why those steps keep a
+frozen copy of the file-only card reader (`_cards_as_filed`). The id is a
+uuid5 of the file name and every write keeps what is there, so a second run
+writes nothing. Files and `workflow_file` rows are left in place; nothing
+writes a `workflow_file` row any more, and a legacy row on an automatic card
+still names it.
 
 #### Converting cards to workflows (#1623)
 

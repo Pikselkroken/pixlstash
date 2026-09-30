@@ -5482,6 +5482,98 @@ def test_a_manual_workflow_runs_its_own_document_and_nothing_else(runnable):
     assert [kwargs["run_workflow_id"] for kwargs in importing] == [manual, None]
 
 
+def _saved_on_run_card(runnable, **fields) -> int:
+    body = {"workflow_id": RUN_WF, "name": "A look to keep", **fields}
+    r = runnable.owner.post(f"{API}/recipes", json=body)
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def _set_recipe_workflow(runnable, recipe_id, workflow_id, workflow_key=None):
+    def write(session):
+        row = session.get(SavedRecipe, recipe_id)
+        row.workflow_id = workflow_id
+        if workflow_key is not None:
+            row.workflow_key = workflow_key
+        session.add(row)
+        session.commit()
+
+    runnable.server.vault.db.run_task(write, priority=DBPriority.IMMEDIATE)
+
+
+def test_extracting_a_recipe_stores_its_run_graph_with_comfyui_down(
+    runnable, monkeypatch
+):
+    """The run planner's own graph, recipe applied, seeds left unfilled, and
+    ComfyUI never asked: a manual workflow made from the recipe."""
+
+    def no_comfyui(url):
+        raise AssertionError("extraction asked ComfyUI")
+
+    monkeypatch.setattr(workflows_routes, "_read_object_info", no_comfyui)
+    steps = f"{topology_node_labels(RUN_DOCUMENT)['3']}/steps"
+    recipe_id = _saved_on_run_card(runnable, overrides={steps: 17})
+
+    r = runnable.owner.post(f"{API}/recipes/{recipe_id}/extract-workflow")
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert set(body) == {"workflow_id", "name"}
+    assert body["name"] == "A look to keep"
+    manual = body["workflow_id"]
+    assert manual.startswith("manual:")
+    document = manual_document(runnable.server.hub, manual)
+    assert document["3"]["inputs"]["steps"] == 17
+    # Built from a stored run, which keeps no seed (its placeholder is 0):
+    # the seed pass belongs to a run, and a run of this workflow draws one.
+    assert document["3"]["inputs"]["seed"] == 0
+    row = runnable.server.hub.fetchone(
+        "SELECT origin, from_workflow_id, from_name FROM workflow_document "
+        "WHERE workflow_id = ?",
+        (manual,),
+    )
+    assert tuple(row) == ("recipe", RUN_WF, "A look to keep")
+    card = _by_key(_cards(runnable.owner))[manual]
+    assert (card["manual"], card["from_name"]) == (True, "A look to keep")
+    assert runnable.submitted == []
+
+    assert (
+        runnable.owner.post(f"{API}/recipes/999999/extract-workflow").status_code == 404
+    )
+
+
+def test_a_recipe_on_a_gone_workflow_is_unfiled_and_still_extracts(runnable):
+    """Its workflow gone, a recipe runs - and extracts - on the card it was
+    saved from; with that gone too there is nothing to build on (409)."""
+    kept = _saved_on_run_card(runnable, name="On a gone workflow")
+    stranded = _saved_on_run_card(runnable, name="On nothing at all")
+    filed = _saved_on_run_card(runnable, name="Still filed")
+    _set_recipe_workflow(runnable, kept, AUTO_STACK_PREFIX + _h("gone"))
+    _set_recipe_workflow(
+        runnable,
+        stranded,
+        "manual:" + "d" * 32,
+        workflow_key="manual:" + "d" * 32,
+    )
+
+    r = runnable.owner.get(f"{API}/recipes", params={"unfiled": "true"})
+    assert r.status_code == 200, r.text
+    unfiled = {row["id"]: row for row in r.json()}
+    assert set(unfiled) == {kept, stranded}
+    assert filed not in unfiled
+    assert {row["pictures"] for row in unfiled.values()} == {0}
+    both = runnable.owner.get(
+        f"{API}/recipes", params={"unfiled": "true", "workflow_id": RUN_WF}
+    )
+    assert both.status_code == 400, both.text
+
+    r = runnable.owner.post(f"{API}/recipes/{kept}/extract-workflow")
+    assert r.status_code == 201, r.text
+    assert manual_document(runnable.server.hub, r.json()["workflow_id"])["3"]
+    r = runnable.owner.post(f"{API}/recipes/{stranded}/extract-workflow")
+    assert r.status_code == 409, r.text
+    assert "no_runnable_source" in r.json()["detail"]
+
+
 def test_a_kept_pictures_embedded_graph_is_the_second_source(runnable, monkeypatch):
     """Tier 2: a real run of the card, with real filenames, off the best picture."""
     embedded = json.loads(json.dumps(RUN_DOCUMENT))

@@ -1955,6 +1955,13 @@ class ClonedWorkflow(WorkflowFile):
     )
 
 
+class ExtractedWorkflow(BaseModel):
+    """``POST /recipes/{recipe_id}/extract-workflow``: the manual workflow made."""
+
+    workflow_id: str = Field(description="The new manual workflow's id.")
+    name: str = Field(description="What it is called: the recipe's name.")
+
+
 class WorkflowDeleted(BaseModel):
     """Which manual workflow was deleted, by name and id."""
 
@@ -4530,7 +4537,7 @@ def create_router(server) -> APIRouter:
             )
         return [(key, ids, []) for key, ids in sorted(grouped.items())] + orphans
 
-    def _plan(request: Request, body: RunRequest) -> Plan:
+    def _plan(request: Request, body: RunRequest, *, extract: bool = False) -> Plan:
         """Resolve, judge and prepare every run this body asks for.
 
         ComfyUI is asked for its ``object_info`` **once** and the answer is
@@ -4538,6 +4545,10 @@ def create_router(server) -> APIRouter:
         detection and the run all need it, and re-fetching it would also let
         the run submit against a different answer than the one it was judged
         against.
+
+        *extract* is ``POST /recipes/{id}/extract-workflow``: the graph is to
+        be stored, not submitted, so ComfyUI is not asked and every resolved
+        graph is kept whatever would stop a run.
         """
         hub = _hub()
         _require_one_source(body)
@@ -4546,6 +4557,24 @@ def create_router(server) -> APIRouter:
         # the request - or the saved recipe it names - over it. A target is
         # the workflow that runs instead, over the source's pictures.
         workflow_id = body.target or body.workflow_id or recipe_workflow
+        if (
+            workflow_id == recipe_workflow
+            and workflow_id
+            and (
+                not _WORKFLOW_ID_RE.fullmatch(workflow_id)
+                or find_workflow(hub, workflow_id) is None
+            )
+        ):
+            # The recipe's workflow is gone (deleted, or refiled by a rule
+            # change): it runs on the card it was saved from, with no default
+            # recipe under it, or not at all.
+            logger.warning(
+                "[workflows] Saved recipe %s names workflow %s, which this hub "
+                "no longer holds; it runs on its own card.",
+                body.saved_recipe_id,
+                workflow_id,
+            )
+            workflow_id = None
         recipe = _workflow_recipe(workflow_id) if workflow_id else None
         if recipe is not None:
             body = _under_defaults(body, recipe)
@@ -4554,7 +4583,11 @@ def create_router(server) -> APIRouter:
         user = _user(request)
         configured = bool(getattr(user, "comfyui_url", None))
         comfyui_url = _comfyui_url(user)
-        object_info, object_info_error = _read_object_info(comfyui_url)
+        object_info, object_info_error = (
+            (None, "not asked: the workflow is extracted, not run")
+            if extract
+            else _read_object_info(comfyui_url)
+        )
 
         if body.seed_mode == "fixed" and body.seed is None:
             raise HTTPException(
@@ -5024,6 +5057,11 @@ def create_router(server) -> APIRouter:
             if unfed:
                 found = run_service.with_pixlstash_refusals(found, unfed)
             group.reasons = [r.as_dict() for r in found]
+            if extract:
+                # Stored, never submitted: nothing here stops it.
+                planned.append(group)
+                submittable.append((graph, group, feeds))
+                continue
             if run_service.blocks_group(found, allow_unchecked=body.allow_unchecked):
                 planned.append(group)
                 continue
@@ -7018,6 +7056,69 @@ def create_router(server) -> APIRouter:
                 status_code=500,
                 detail="PixlStash could not store the workflow copy.",
             ) from exc
+
+    @router.post(
+        "/recipes/{recipe_id}/extract-workflow",
+        summary="Make a saved recipe a manual workflow of its own",
+        description=(
+            "Store the graph this saved recipe runs - its workflow's graph "
+            "with the recipe applied, exactly as Run would build it, seeds "
+            "and picture inputs left for a run to fill - as a new manual "
+            "workflow named after the recipe, remembering the recipe and "
+            "workflow it came from. ComfyUI is not asked. A recipe whose "
+            "workflow is gone is built on the graph it was saved from."
+        ),
+        response_model=ExtractedWorkflow,
+        status_code=201,
+        responses={
+            404: {"description": "No such saved recipe."},
+            409: {"description": "The recipe has no graph left to build on."},
+        },
+    )
+    def extract_workflow(request: Request, recipe_id: int):
+        server.auth.ensure_secure_when_required(request)
+        hub = _hub()
+        saved = saved_recipe_service.read_recipe(server.vault, recipe_id)
+        if saved is None:
+            raise HTTPException(status_code=404, detail="Unknown saved recipe.")
+        # The run's own planner, so there is one way a recipe becomes a
+        # graph. `allow_unchecked`: no ComfyUI is asked, and that is consent
+        # to nothing here, since nothing is submitted.
+        plan = _plan(
+            request,
+            RunRequest(saved_recipe_id=recipe_id, count=1, allow_unchecked=True),
+            extract=True,
+        )
+        if not plan.submittable:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This recipe has no graph left to build a workflow on: "
+                    + ", ".join(
+                        reason["code"]
+                        for group in plan.groups
+                        for reason in group.reasons
+                    )
+                ),
+            )
+        graph = plan.submittable[0][0]
+        name = (saved.name or "").strip() or "Extracted workflow"
+        try:
+            workflow_id = store_manual_workflow(
+                hub,
+                name,
+                graph,
+                "recipe",
+                from_workflow_id=saved.workflow_id,
+                from_name=saved.name or None,
+            )
+        except (NotAWorkflowError, RecursionError, sqlite3.Error) as exc:
+            logger.error("Saved recipe %s could not be extracted: %s", recipe_id, exc)
+            raise HTTPException(
+                status_code=500, detail="PixlStash could not store the workflow."
+            ) from exc
+        _announce(request, [workflow_id], "imported")
+        return ExtractedWorkflow(workflow_id=workflow_id, name=name)
 
     @router.delete(
         "/workflows/{workflow_id}",
