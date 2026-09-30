@@ -1012,7 +1012,7 @@ the two sides have agreed:
    (`Upscale`), else `Workflow`. The described one names the base model as the
    model shelf names it and falls back to the filename stem for a model this
    machine has never scanned. Two cards that would print one generated name are
-   numbered (`Upscale (2)`, in `workflow_key` order); the ⓘ panel carries what
+   numbered (`Upscale (2)`, in `workflow_id` order); the ⓘ panel carries what
    the number does not say.
 
    **A slot's `name` is DERIVED, and `quant` is what was taken out of it.** The
