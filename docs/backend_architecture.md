@@ -2524,7 +2524,13 @@ workflow (its sidecar conversion as `api_document`), named after its stem,
 the `workflow_origin` rows naming the file are renamed to the id. A file-only
 card's owner state, which steps 5 and 6 carried to `auto:<topology hash>`, is
 carried on to it (`_carry_group_state`), which is also why those steps keep a
-frozen copy of the file-only card reader (`_cards_as_filed`). The id is a
+frozen copy of the file-only card reader (`_cards_as_filed`). The retired
+`auto:<topology hash>` is recorded in `workflow_id_successor` (retired id →
+the manual id), and `MissingSavedRecipeWorkflowFinder` hands out every saved
+recipe naming a retired id as well as the NULL ones, so
+`SavedRecipeConvertTask` re-files a recipe of that file-only card - converted
+or not - onto the manual workflow, with the manual id as its card: nothing the
+owner saved changes where it lists. The id is a
 uuid5 of the file name and every write keeps what is there, so a second run
 writes nothing. Files and `workflow_file` rows are left in place; nothing
 writes a `workflow_file` row any more, and a legacy row on an automatic card

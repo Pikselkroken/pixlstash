@@ -26,6 +26,7 @@ from pixlstash.db_models import Picture, SavedRecipe
 from pixlstash.hub.db import HubDatabase
 from pixlstash.hub.schema import CURRENT_DATA_VERSION
 from pixlstash.hub.workflow_card_reads import card_index, manual_document
+from pixlstash.hub.workflow_group_writes import delete_manual_workflow
 import pixlstash.routes.comfyui as comfyui_routes
 import pixlstash.hub.workflow_group_convert as convert
 from pixlstash.hub.workflow_group_convert import (
@@ -957,3 +958,91 @@ def test_a_busy_vault_leaves_its_recipes_eligible(run_env):
     )
     again = finder.find_task()
     assert again is not None and again.params["recipe_ids"] == [recipe_id]
+
+
+def test_a_recipe_on_a_file_only_card_follows_its_file_into_step_7(
+    run_env, tmp_path, monkeypatch
+):
+    """Nothing the owner saved changes where it lists across the upgrade.
+
+    A recipe on a file-only card (#1466) named `auto:<topology hash>` once
+    step 5 converted it, or still names only the card; step 7 makes the file a
+    manual workflow and retires that id, and the conversion re-files both
+    recipes there: they list on the manual workflow and run its document.
+    """
+    server = run_env.server
+    hub = server.hub
+    folder = tmp_path / "user"
+    folder.mkdir()
+    (folder / "editor.json").write_text(json.dumps(_EDITOR), encoding="utf-8")
+    (folder / "editor.json.api").write_text(
+        json.dumps(
+            {
+                "converted_from": comfyui_routes._editor_digest(_EDITOR),
+                "prompt": _EDITOR_AS_API,
+            }
+        ),
+        encoding="utf-8",
+    )
+    topology = record_ui_graph(hub, _EDITOR)
+    key = workflow_cards.topology_only_key(topology)
+    retired = f"auto:{topology}"
+    with hub.transaction() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO workflow_file (workflow_name, topology_hash, "
+            "structural_hash, workflow_key) VALUES ('editor.json', ?, NULL, ?)",
+            (topology, key),
+        )
+        convert_card_state(conn)
+        assert convert.adopt_workflow_files(conn, str(folder)) == 1
+    manual = hub.fetchone(
+        "SELECT successor_id FROM workflow_id_successor WHERE workflow_id = ?",
+        (retired,),
+    )[0]
+    assert manual.startswith("manual:")
+
+    def seed(session):
+        session.exec(delete(SavedRecipe))
+        converted = SavedRecipe(
+            name="converted", workflow_key=key, workflow_id=retired, prompt="x"
+        )
+        pending = SavedRecipe(name="pending", workflow_key=key, prompt="x")
+        session.add(converted)
+        session.add(pending)
+        session.commit()
+        return converted.id, pending.id
+
+    ids = server.vault.db.run_task(seed, priority=DBPriority.IMMEDIATE)
+    finder = MissingSavedRecipeWorkflowFinder(vault=server.vault)
+    task = finder.find_task()
+    assert sorted(task.params["recipe_ids"]) == sorted(ids)
+    task.result = task._run_task()
+    finder.on_task_complete(task, None)
+    assert finder.find_task() is None, "a re-filed recipe was handed out again"
+    stored = server.vault.db.run_immediate_read_task(
+        lambda session: session.exec(select(SavedRecipe)).all()
+    )
+    # A manual workflow is its own card, as `POST /recipes` stores one.
+    assert {(row.workflow_id, row.workflow_key) for row in stored} == {(manual, manual)}
+
+    listed = run_env.owner.get(f"{API}/recipes", params={"workflow_id": manual})
+    assert sorted(row["id"] for row in listed.json()) == sorted(ids)
+    unfiled = run_env.owner.get(f"{API}/recipes", params={"unfiled": "true"})
+    assert not set(ids) & {row["id"] for row in unfiled.json()}
+
+    monkeypatch.setattr(
+        workflows_routes, "_read_object_info", lambda url: (None, "refused")
+    )
+    for recipe_id in ids:
+        r = run_env.owner.post(
+            f"{API}/workflows/run/preflight", json={"saved_recipe_id": recipe_id}
+        )
+        assert r.status_code == 200, r.text
+        (group,) = r.json()["groups"]
+        assert (group["workflow_id"], group["source"]) == (manual, "file"), group
+
+    delete_manual_workflow(hub, manual)
+    server.vault.db.run_task(
+        lambda session: (session.exec(delete(SavedRecipe)), session.commit()),
+        priority=DBPriority.IMMEDIATE,
+    )

@@ -196,6 +196,16 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
     ]
 
 
+def workflow_id_successors(hub: HubDatabase) -> dict[str, str]:
+    """``{retired workflow id: the workflow that took its place}``."""
+    return {
+        row[0]: row[1]
+        for row in hub.fetchall(
+            "SELECT workflow_id, successor_id FROM workflow_id_successor"
+        )
+    }
+
+
 def manual_workflow_ids(hub: HubDatabase) -> list[str]:
     """Every live manual workflow's id, sorted: what the vault reads file under."""
     return [

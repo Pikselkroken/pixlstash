@@ -1283,6 +1283,17 @@ CREATE TABLE IF NOT EXISTS workflow_document (
 )
 """
 
+# A workflow id that is gone, and the workflow that took its place: data step
+# 7 retires `auto:<topology hash>` of a file-only card (#1466) for the manual
+# workflow it made of that file. Read by the vault's saved-recipe conversion,
+# which re-files a recipe still naming the retired id.
+_V2_WORKFLOW_ID_SUCCESSOR = """
+CREATE TABLE IF NOT EXISTS workflow_id_successor (
+    workflow_id   TEXT PRIMARY KEY,
+    successor_id  TEXT NOT NULL
+)
+"""
+
 _V2_WORKFLOW_INDEXES = (
     # "Which recipes are variants of this workflow" - the library view's expand
     # interaction, and the only query here that is not a primary-key lookup.
@@ -1354,6 +1365,7 @@ _V2_WORKFLOW_TABLES = (
     _V2_WORKFLOW_GROUP_PICTURE_INPUT,
     _V2_WORKFLOW_KEY_SUCCESSOR,
     _V2_WORKFLOW_DOCUMENT,
+    _V2_WORKFLOW_ID_SUCCESSOR,
     *_V2_WORKFLOW_INDEXES,
 )
 

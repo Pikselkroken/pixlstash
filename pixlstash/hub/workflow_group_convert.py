@@ -453,6 +453,13 @@ def adopt_workflow_files(conn: sqlite3.Connection, folder: str) -> int:
             # Once: the carry moves the rows, so a second file of the same
             # topology, or a second run, finds nothing left to carry.
             _carry_group_state(conn, f"{AUTO_STACK_PREFIX}{topology_hash}", workflow_id)
+            # And its saved recipes: the vault's conversion re-files a recipe
+            # naming the retired id on this workflow.
+            conn.execute(
+                "INSERT OR IGNORE INTO workflow_id_successor "
+                "(workflow_id, successor_id) VALUES (?, ?)",
+                (f"{AUTO_STACK_PREFIX}{topology_hash}", workflow_id),
+            )
         stem = name[: -len(".json")] if name.lower().endswith(".json") else name
         conn.execute(
             "INSERT INTO workflow_group_attr (workflow_id, name) VALUES (?, ?) "
