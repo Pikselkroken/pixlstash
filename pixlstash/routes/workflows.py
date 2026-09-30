@@ -82,7 +82,6 @@ from pixlstash.hub.workflow_group_writes import (
     set_default_lora,
     set_group_attributes,
     split_topology,
-    unmerge_workflow,
 )
 from pixlstash.hub.workflows import (
     assets_for_topology_recipes,
@@ -136,8 +135,6 @@ from pixlstash.services.workflow_card_service import (
     EDITED,
     LORA_OFF,
     DefaultRecipe,
-    merge_checkpoints,
-    merge_refusal,
     read_grid,
     slot_kind,
     lora_modal_strength,
@@ -670,18 +667,6 @@ class WorkflowCard(BaseModel):
             "on the detail route and on every write's answer."
         ),
     )
-    merge_checkpoints: list[str] = Field(
-        default_factory=list,
-        description=(
-            "The checkpoints a merge compares, lowercase basenames: the base "
-            "graph's and every one its pictures used. Workflows merge only "
-            "when they share a `type` and one of these."
-        ),
-    )
-    unmergeable: bool = Field(
-        False,
-        description="A merged workflow `unmerge` can take apart again.",
-    )
 
 
 class WorkflowCards(BaseModel):
@@ -1007,12 +992,6 @@ class WorkflowSplitResult(BaseModel):
     """The new workflow holding just the topology that was split out."""
 
     id: str
-
-
-class WorkflowUnmerged(BaseModel):
-    """The workflows an unmerge put the merged one's topologies back into."""
-
-    ids: list[str]
 
 
 class WorkflowLoraUse(BaseModel):
@@ -2392,16 +2371,6 @@ def _entry(figure, recipe=None, names=None) -> WorkflowCard:
             }
         ),
         default_recipe=_recipe_payload(recipe) if recipe else None,
-        merge_checkpoints=merge_checkpoints(figure),
-        unmergeable=_unmergeable(workflow),
-    )
-
-
-def _unmergeable(workflow) -> bool:
-    """A manual workflow of several topologies: what a merge leaves behind."""
-    return (
-        not workflow.workflow_id.startswith(AUTO_STACK_PREFIX)
-        and len(workflow.topologies) > 1
     )
 
 
@@ -2980,11 +2949,6 @@ def create_router(server) -> APIRouter:
         responses={
             400: {"description": "Fewer than two workflows, or one named twice."},
             404: {"description": "One of the workflows does not exist."},
-            409: {
-                "description": (
-                    "The workflows are of different types or share no checkpoint."
-                )
-            },
         },
     )
     def merge(request: Request, payload: WorkflowMerge = Body(...)):
@@ -2999,10 +2963,6 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=404, detail=f"Unknown workflow {missing[0]}."
             )
-        grid = read_grid(hub, server.vault, file_models=_file_models)
-        refusal = merge_refusal([grid.figure(workflow_id) for workflow_id in ids])
-        if refusal:
-            raise HTTPException(status_code=409, detail=refusal)
         merged = merge_workflows(
             hub,
             ids,
@@ -3059,60 +3019,6 @@ def create_router(server) -> APIRouter:
         new_id = split_topology(hub, workflow_id, payload.topology)
         _announce(request, [workflow_id, new_id], "changed")
         return WorkflowSplitResult(id=new_id)
-
-    @router.post(
-        "/workflows/{workflow_id}/unmerge",
-        summary="Unmerge a workflow",
-        description=(
-            "Undo the newest merge into this workflow: each workflow it folded "
-            "in comes back with its own name, notes and settings, and the "
-            "cover's are as they were. A merge made before this was recorded "
-            "goes back to the automatic grouping instead, its name and "
-            "settings kept by the workflow its base graph returns to. Saved "
-            "recipes follow the graph each was saved on."
-        ),
-        response_model=WorkflowUnmerged,
-        responses={
-            400: {"description": "The workflow is not a merge."},
-            404: {"description": "This machine has no such workflow."},
-        },
-    )
-    def unmerge(request: Request, workflow_id: str):
-        server.auth.ensure_secure_when_required(request)
-        hub = _hub()
-        workflow = _require_workflow(hub, workflow_id)
-        if not _unmergeable(workflow):
-            raise HTTPException(
-                status_code=400, detail="This workflow is not a merge of others."
-            )
-        topology_of = {
-            key: card.topology_hash
-            for key in workflow.cards
-            if (card := find_card(hub, key)) is not None
-        }
-        unmerge_workflow(hub, workflow.workflow_id, workflow.base_topology)
-        now_in = {
-            topology_hash: workflow_of_topology(hub, topology_hash)
-            for topology_hash in workflow.topologies
-        }
-        if _library_uuid() is not None:
-            try:
-                saved_recipe_service.rehome_by_card(
-                    server.vault,
-                    workflow.workflow_id,
-                    {key: now_in[t] for key, t in topology_of.items() if now_in[t]},
-                    now_in.get(workflow.base_topology),
-                )
-            except Exception:
-                logger.exception(
-                    "Unmerged workflow %s, but could not move its saved "
-                    "recipes; they still name it.",
-                    workflow.workflow_id,
-                )
-                raise
-        ids = sorted({i for i in now_in.values() if i})
-        _announce(request, sorted({workflow.workflow_id, *ids}), "changed")
-        return WorkflowUnmerged(ids=ids)
 
     @router.patch(
         "/workflows/{workflow_id}",

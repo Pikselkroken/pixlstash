@@ -75,8 +75,6 @@ const card = (id, extra = {}) => ({
   topologies: ["t-" + id],
   imported: false,
   hidden: false,
-  type: "txt2img",
-  merge_checkpoints: ["realvisxl"],
   ...extra,
 });
 
@@ -89,10 +87,6 @@ const CARDS = [
     topologies: ["a".repeat(64), "b".repeat(64), "c".repeat(64)],
   }),
   card("d", { hidden: true }),
-  card("i", { type: "img2img" }),
-  card("f", { merge_checkpoints: ["flux dev"] }),
-  // What a merge leaves: a manual workflow of two topologies.
-  card("m", { topologies: ["m1", "m2"], unmergeable: true }),
   card("p", {
     picture_count: 3,
     covers: [
@@ -173,32 +167,6 @@ describe("the pill's gates", () => {
     expect(tooltip(two, "merge")).toContain("Merge these 2");
     await verb(two, "merge").trigger("click");
     expect(two.emitted("merge")).toHaveLength(1);
-  });
-
-  it("Merge refuses unlike workflows, the server's rule and its sentences", () => {
-    const types = bar(["a", "i"]).wrapper;
-    expect(enabled(types, "merge")).toBe(false);
-    expect(tooltip(types, "merge")).toContain("same type");
-
-    const checkpoints = bar(["a", "f"]).wrapper;
-    expect(enabled(checkpoints, "merge")).toBe(false);
-    expect(tooltip(checkpoints, "merge")).toContain("share a checkpoint");
-  });
-
-  it("a merged workflow offers Unmerge where Merge was", async () => {
-    // The pill's button, not the menu row: the menu lists both verbs always.
-    const pill = (wrapper, name) =>
-      wrapper.find(`[data-verb="${name}"][data-tooltip]`);
-    const plain = bar(["a"]).wrapper;
-    expect(pill(plain, "unmerge").exists()).toBe(false);
-    expect(pill(plain, "merge").exists()).toBe(true);
-
-    const merged = bar(["m"]).wrapper;
-    expect(pill(merged, "merge").exists()).toBe(false);
-    expect(enabled(merged, "unmerge")).toBe(true);
-    expect(tooltip(merged, "unmerge")).toContain("Undo the last merge");
-    await verb(merged, "unmerge").trigger("click");
-    expect(merged.emitted("unmerge")).toHaveLength(1);
   });
 
   it("offers one Split row per topology, only on a workflow holding several", async () => {

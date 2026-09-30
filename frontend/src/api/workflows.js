@@ -253,19 +253,6 @@ export async function splitWorkflow(workflowId, topology) {
 }
 
 /**
- * Undo the newest merge into a workflow: each workflow it folded in comes
- * back with its own name, notes and settings.
- *
- * @param {string} workflowId - a card whose `unmergeable` is true.
- * @returns {Promise<{ids: Array<string>}>} the workflows it came apart into.
- */
-export async function unmergeWorkflow(workflowId) {
-  return unwrap(
-    apiClient.post(`/workflows/${encodeURIComponent(workflowId)}/unmerge`),
-  );
-}
-
-/**
  * What a run would do, doing none of it (v1.12 B7).
  *
  * The same body `runWorkflowCard` takes. Every card the request resolves to

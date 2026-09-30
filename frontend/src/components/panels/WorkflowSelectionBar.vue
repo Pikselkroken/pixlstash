@@ -85,22 +85,7 @@
       @click="emit('run')"
     />
 
-    <!-- One slot, two verbs, as Hide/Unhide: a merged workflow selected on
-         its own offers Unmerge where Merge was, which is where the reader
-         who just merged it is pointing. -->
     <AppBarButton
-      v-if="unmergeable"
-      shape="round"
-      icon="call-split"
-      data-verb="unmerge"
-      aria-label="Unmerge"
-      :disabled="busy"
-      :loading="running('unmerge')"
-      :tooltip="unmergeTitle"
-      @click="emit('unmerge')"
-    />
-    <AppBarButton
-      v-else
       shape="round"
       icon="call-merge"
       data-verb="merge"
@@ -224,7 +209,6 @@ const emit = defineEmits([
   "open-cover",
   "run",
   "merge",
-  "unmerge",
   "split",
   "rename",
   "hide",
@@ -412,35 +396,13 @@ const renameTitle = computed(() =>
 
 /**
  * Merge (#1623): two or more workflows become one, the first selected its
- * cover. Only workflows of one type sharing a checkpoint, the server's rule
- * (`merge_refusal`) read off the same card fields; the server still refuses.
+ * cover. One gate, one refusal sentence.
  */
-const mergeRefusal = computed(() => {
-  const picked = cards.value;
-  if (picked.length < 2) return "Select two or more workflows to merge them";
-  if (new Set(picked.map((card) => card.type ?? null)).size > 1)
-    return "Only workflows of the same type can be merged";
-  const shared = picked
-    .map((card) => new Set(card.merge_checkpoints ?? []))
-    .reduce((a, b) => new Set([...a].filter((name) => b.has(name))));
-  if (!shared.size) return "Only workflows that share a checkpoint can be merged";
-  return "";
-});
-const mergeable = computed(() => !mergeRefusal.value);
-const mergeTitle = computed(
-  () =>
-    mergeRefusal.value ||
-    `Merge these ${cards.value.length.toLocaleString()} workflows into one. The first selected keeps its name and settings`,
-);
-
-/** Unmerge: one merged workflow selected, taken back apart. */
-const unmergeable = computed(
-  () => single.value && Boolean(cards.value[0]?.unmergeable),
-);
-const unmergeTitle = computed(() =>
-  unmergeable.value
-    ? "Undo the last merge into this workflow. Each workflow gets its own name and settings back"
-    : "Select one merged workflow to unmerge it",
+const mergeable = computed(() => store.selectedKeys.length >= 2);
+const mergeTitle = computed(() =>
+  mergeable.value
+    ? `Merge these ${store.selectedKeys.length.toLocaleString()} workflows into one. The first selected keeps its name and settings`
+    : "Select two or more workflows to merge them",
 );
 
 /**
@@ -551,8 +513,6 @@ const verbHandlers = computed(() => ({
   runTitle: runTitle.value,
   mergeable: mergeable.value,
   mergeTitle: mergeTitle.value,
-  unmergeable: unmergeable.value,
-  unmergeTitle: unmergeTitle.value,
   splitTopologies: splitTopologies.value,
   renameTitle: renameTitle.value,
   hideLabel: allHidden.value ? "Unhide" : "Hide",
@@ -676,12 +636,6 @@ const VerbMenu = (props) => {
         disabled: !props.mergeable,
         title: props.mergeTitle,
       }),
-      item("mdi-call-split", "Unmerge", {
-        verb: "unmerge",
-        on: () => props.onVerb("unmerge"),
-        disabled: !props.unmergeable,
-        title: props.unmergeTitle,
-      }),
       // One row per topology, only on a workflow holding more than one: a
       // topology is a graph shape and has no name of its own, so the row
       // counts it and the tooltip names its hash.
@@ -762,7 +716,6 @@ defineExpose({
   coverOpenable,
   runnable,
   mergeable,
-  unmergeable,
   splitTopologies,
   allHidden,
   deletable,
