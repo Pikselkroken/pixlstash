@@ -2504,7 +2504,12 @@ under `INBOX_LOCK`), then one transaction
 (`workflow_group_writes.delete_manual_workflow`) deletes its inbox and built-in
 origin rows (handing the content over again stores it again), **dismisses**
 its pull rows (the next pull does not bring it back), and deletes its document
-and `workflow_group_*` rows. Its saved recipes stay, unfiled. An automatic id
+and `workflow_group_*` rows. The inbox is swept of the document's content only
+when the workflow owns its inbox row: an identical copy can be another live
+workflow's. A workflow data step 7 made of a user file (a `file` origin row)
+takes that file to the trash instead (`trash_user_workflow`), so it no longer
+lists; `POST /comfyui/workflows/{name}/card` takes built-ins only. A stored
+document is capped at `MAX_WORKFLOW_FILE_BYTES` serialised (413). Its saved recipes stay, unfiled. An automatic id
 is a 409: hide it instead.
 
 **Extract** (`POST /recipes/{id}/extract-workflow`): the graph is

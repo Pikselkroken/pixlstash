@@ -160,8 +160,11 @@ from pixlstash.routes.comfyui import (
     _read_object_info,
     _resolve_workflow_path,
     _shelf_adapter,
+    WorkflowFileTooLarge,
     runnable_document,
     store_manual_workflow,
+    trash_user_workflow,
+    user_workflow_exists,
 )
 from pixlstash.services.workflow_export import (
     LORA_SLOTS,
@@ -217,6 +220,7 @@ from pixlstash.utils.adapter_header import (
 from pixlstash.utils.image_processing.image_utils import ImageUtils
 from pixlstash.utils.known_base_models import family_of, modality_of
 from pixlstash.utils.comfyui_utilities import NotAWorkflowError
+from pixlstash.hub.workflow_origin import FILE_ORIGIN, INBOX_ORIGIN
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX, WORKFLOW_ID_PATTERN
 from send2trash import TrashPermissionError
 
@@ -7050,6 +7054,8 @@ def create_router(server) -> APIRouter:
                 from_workflow_id=workflow.workflow_id,
                 from_name=shown or workflow.name or _display_name(card),
             )
+        except WorkflowFileTooLarge as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         except (NotAWorkflowError, RecursionError, sqlite3.Error) as exc:
             logger.error("A workflow copy named %r could not be stored: %s", stem, exc)
             raise HTTPException(
@@ -7112,6 +7118,8 @@ def create_router(server) -> APIRouter:
                 from_workflow_id=saved.workflow_id,
                 from_name=saved.name or None,
             )
+        except WorkflowFileTooLarge as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         except (NotAWorkflowError, RecursionError, sqlite3.Error) as exc:
             logger.error("Saved recipe %s could not be extracted: %s", recipe_id, exc)
             raise HTTPException(
@@ -7155,18 +7163,43 @@ def create_router(server) -> APIRouter:
             "SELECT document FROM workflow_document WHERE workflow_id = ?",
             (workflow_id,),
         )
+        if row is None:
+            # Deleted by another request since it was found.
+            raise HTTPException(status_code=404, detail="Unknown workflow.")
         name = workflow.name or "workflow"
+        owned = {
+            origin: remote_path
+            for origin, remote_path in hub.fetchall(
+                "SELECT origin, remote_path FROM workflow_origin "
+                "WHERE workflow_name = ? AND origin IN (?, ?) AND dismissed = 0",
+                (workflow_id, INBOX_ORIGIN, FILE_ORIGIN),
+            )
+        }
+        # Only what THIS workflow owns is swept from the inbox: an inbox file
+        # of identical content can be another live workflow's.
+        sweep = INBOX_ORIGIN in owned
+        adopted = owned.get(FILE_ORIGIN)
         try:
-            with workflow_inbox.INBOX_LOCK:
-                # The trash copy first, the rows once it is there: a failed
-                # trash never loses the workflow. Under the lock a pull
-                # checks its dismissals under, so it cannot land between.
-                workflow_inbox.trash_workflow(
-                    workflow_inbox.workflow_inbox_dir(),
-                    f"{download_stem(name) or 'workflow'}.json",
-                    json.loads(row["document"]),
-                )
-                delete_manual_workflow(hub, workflow_id)
+            if adopted is not None and user_workflow_exists(adopted):
+                # A user-folder file data step 7 made this workflow of: the
+                # file itself goes to the trash (through the inbox, as a
+                # delete always did), or it would still list and re-adopt.
+                trash_user_workflow(hub, adopted, sweep=sweep)
+                with workflow_inbox.INBOX_LOCK:
+                    delete_manual_workflow(hub, workflow_id)
+            else:
+                with workflow_inbox.INBOX_LOCK:
+                    # The trash copy first, the rows once it is there: a
+                    # failed trash never loses the workflow. Under the lock a
+                    # pull checks its dismissals under, so it cannot land
+                    # between.
+                    workflow_inbox.trash_workflow(
+                        workflow_inbox.workflow_inbox_dir(),
+                        f"{download_stem(name) or 'workflow'}.json",
+                        json.loads(row["document"]),
+                        sweep=sweep,
+                    )
+                    delete_manual_workflow(hub, workflow_id)
         except (OSError, ValueError, RecursionError, TrashPermissionError) as exc:
             logger.warning("Failed to delete workflow %s: %s", workflow_id, exc)
             raise HTTPException(

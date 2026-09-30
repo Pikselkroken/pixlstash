@@ -534,9 +534,24 @@ def test_step_7_makes_every_stored_file_a_manual_workflow_once(tmp_path):
     assert manual_document(hub, editor["workflow_id"]) == _EDITOR_AS_API
     # The pull that wrote a file now names its workflow.
     assert (
-        hub.fetchone("SELECT workflow_name FROM workflow_origin")[0]
+        hub.fetchone(
+            "SELECT workflow_name FROM workflow_origin WHERE origin != 'file'"
+        )[0]
         == (rows["pulled"]["workflow_id"])
     )
+    # Each adopted file is on record, so deleting its workflow trashes it.
+    adopted = {
+        row[0]: row[1]
+        for row in hub.fetchall(
+            "SELECT remote_path, workflow_name FROM workflow_origin "
+            "WHERE origin = 'file'"
+        )
+    }
+    assert adopted == {
+        "api.json": rows["api"]["workflow_id"],
+        "editor.json": editor["workflow_id"],
+        "pulled.json": rows["pulled"]["workflow_id"],
+    }
     assert {c.workflow_key for c in card_index(hub) if c.manual} == {
         row["workflow_id"] for row in rows.values()
     }

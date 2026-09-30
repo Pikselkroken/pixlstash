@@ -309,9 +309,13 @@ def store_manual_workflow(
     Raises:
         NotAWorkflowError: *workflow* is not shaped like a ComfyUI workflow.
         RecursionError: The document nests too deeply to read.
+        WorkflowFileTooLarge: It is past :data:`MAX_WORKFLOW_FILE_BYTES`.
     """
     check_comfy_workflow(workflow)
     workflow, _migrated = workflow_bindings.migrate_placeholders(workflow)
+    _within_the_cap(workflow)
+    if api_document is not None:
+        _within_the_cap(api_document)
     return create_manual_workflow(
         hub,
         name,
@@ -321,6 +325,22 @@ def store_manual_workflow(
         from_name=from_name,
         api_document=api_document,
     )
+
+
+def _within_the_cap(document: dict) -> None:
+    """Refuse a document past :data:`MAX_WORKFLOW_FILE_BYTES` serialised.
+
+    The file loader's cap, held for a stored row too: a hub row is read on the
+    grid and every run as a file was.
+
+    Raises:
+        WorkflowFileTooLarge: It is.
+    """
+    size = len(json.dumps(document))
+    if size > MAX_WORKFLOW_FILE_BYTES:
+        raise WorkflowFileTooLarge(
+            f"{size} bytes, past the {MAX_WORKFLOW_FILE_BYTES} a workflow may be"
+        )
 
 
 def _topology_of(workflow: dict) -> str | None:
@@ -396,7 +416,7 @@ def store_inbox_workflow(hub, name: str, workflow: dict) -> dict:
     return {"name": _stem(name), "matched": False, "workflow_id": workflow_id}
 
 
-def _trash_stored_workflow(path: str, name: str) -> None:
+def _trash_stored_workflow(path: str, name: str, sweep: bool = True) -> None:
     """Move a stored workflow to the system trash by way of the inbox.
 
     The trash copy comes first and the stored file goes only once it is there,
@@ -416,11 +436,25 @@ def _trash_stored_workflow(path: str, name: str) -> None:
         )
         send2trash(path)
         return
-    workflow_inbox.trash_workflow(workflow_inbox.workflow_inbox_dir(), name, workflow)
+    workflow_inbox.trash_workflow(
+        workflow_inbox.workflow_inbox_dir(), name, workflow, sweep=sweep
+    )
     os.remove(path)
 
 
-def trash_user_workflow(hub, workflow_name: str) -> str:
+def user_workflow_exists(workflow_name: str) -> bool:
+    """Whether the user folder still holds a workflow file called *workflow_name*."""
+    try:
+        path = resolve_path_within(
+            workflow_user_dir(), _normalize_workflow_name(workflow_name)
+        )
+    except ValueError:
+        logger.warning("Workflow file %r is not inside the user folder.", workflow_name)
+        return False
+    return os.path.isfile(path)
+
+
+def trash_user_workflow(hub, workflow_name: str, *, sweep: bool = True) -> str:
     """Send one stored workflow to the trash and forget its rows.
 
     Shared with ``DELETE /workflows/{key}``, so the card route and the file
@@ -452,7 +486,7 @@ def trash_user_workflow(hub, workflow_name: str) -> str:
     stored_name = _on_disk_name(path)
     try:
         with workflow_inbox.INBOX_LOCK:
-            _trash_stored_workflow(path, normalized)
+            _trash_stored_workflow(path, normalized, sweep)
             # Inside the lock, unlike the forgets below: a pull checks for a
             # dismissal and stores under this same lock, so a delete landing
             # mid-pull is seen by the very next entry instead of being undone.
@@ -523,6 +557,21 @@ def _dismiss_from_pulls(hub, stored_name: str, normalized: str) -> None:
             normalized,
             exc,
         )
+
+
+def _builtin_path(name: str) -> str | None:
+    """The built-in workflow file called *name*, or ``None``. Never a user file."""
+    normalized = _normalize_workflow_name(name)
+    for source, folder in _workflow_dirs():
+        if source != "built-in" or not normalized:
+            continue
+        try:
+            path = resolve_path_within(folder, normalized)
+        except ValueError:
+            return None
+        if os.path.isfile(path):
+            return path
+    return None
 
 
 def _builtin_copy(wanted: str) -> str | None:
@@ -2135,13 +2184,14 @@ def create_router(server) -> APIRouter:
 
     @router.post(
         "/comfyui/workflows/{workflow_name}/card",
-        summary="Make a stored workflow file a manual workflow",
+        summary="Make a built-in workflow a manual workflow",
         description=(
-            "Stores a workflow file, built-in or user, as a manual workflow "
+            "Stores a workflow PixlStash ships as a manual workflow "
             "and returns its id so the Run popup can open on it. A built-in "
             "becomes one only when something asks: Edit with ComfyUI asks for "
             "the built-in image edit workflow. Idempotent: a file already made "
-            "a workflow answers that workflow, while it lives."
+            "a workflow answers that workflow, while it lives. A user file "
+            "is not a built-in (404): data step 7 already made it a workflow."
         ),
         response_model=ComfyUIWorkflowCardResponse,
         responses={
@@ -2156,8 +2206,15 @@ def create_router(server) -> APIRouter:
             raise HTTPException(
                 status_code=503, detail="The workflow library is not open."
             )
+        name = _normalize_workflow_name(workflow_name)
+        path = _builtin_path(name)
+        if path is None:
+            # Built-ins only: a user file is a manual workflow already (data
+            # step 7), and one its owner deleted must not come back as one.
+            raise HTTPException(
+                status_code=404, detail="No built-in workflow has this name."
+            )
         with workflow_inbox.INBOX_LOCK:
-            name, path, _document = _load_stored_workflow(workflow_name)
             workflow_id = workflow_origin.stored_at(
                 hub, workflow_origin.BUILTIN_ORIGIN, name
             )
@@ -2237,6 +2294,9 @@ def create_router(server) -> APIRouter:
             )
         try:
             workflow_id = store_manual_workflow(hub, _stem(name), workflow, "import")
+        except WorkflowFileTooLarge as exc:
+            logger.warning("Refused importing %s: %s", name, exc)
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         except NotAWorkflowError as exc:
             logger.warning("Refused importing %s: %s", name, exc)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2305,6 +2365,7 @@ def create_router(server) -> APIRouter:
         name = _stem(payload.get("name") or "workflow")
         try:
             migrated, _ = workflow_bindings.migrate_placeholders(workflow)
+            _within_the_cap(output)
             matched = manual_documents_holding(
                 hub, workflow_bindings.canonical(migrated)
             )
@@ -2316,6 +2377,9 @@ def create_router(server) -> APIRouter:
                 workflow_id = store_manual_workflow(
                     hub, name, workflow, "import", api_document=output
                 )
+        except WorkflowFileTooLarge as exc:
+            logger.warning("Refused a conversion of %s: %s", name, exc)
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
         except RecursionError as exc:
             logger.warning("Refused a conversion that nests too deeply: %s", exc)
             raise HTTPException(

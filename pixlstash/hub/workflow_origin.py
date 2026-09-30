@@ -44,6 +44,10 @@ from pixlstash.hub.db import HubDatabase
 # reads every inbox file again matches each.
 INBOX_ORIGIN = "inbox"
 
+# The origin a user-folder file data step 7 made a manual workflow is recorded
+# under, keyed by its file name: deleting the workflow trashes the file too.
+FILE_ORIGIN = "file"
+
 # The origin a built-in stored as a manual workflow is recorded under, keyed by
 # its file name, so ``POST /comfyui/workflows/{name}/card`` makes it once.
 BUILTIN_ORIGIN = "builtin"

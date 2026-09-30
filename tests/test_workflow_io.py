@@ -17,7 +17,9 @@ import pixlstash.routes.comfyui as comfyui_module
 import pixlstash.routes.workflows as workflows_module
 import pixlstash.server as server_module
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.workflow_card_reads import manual_document
+from pixlstash.hub import workflow_origin
+from pixlstash.hub.workflow_card_reads import Workflow, manual_document
+from pixlstash.hub.workflow_group_writes import create_manual_workflow
 from pixlstash.services import workflow_bindings, workflow_inbox
 from pixlstash.services.workflow_inputs import (
     FIXED,
@@ -697,6 +699,10 @@ def import_route(tmp_path, monkeypatch):
         workflows_module.create_router(server), "/workflows/{workflow_id}", "DELETE"
     )
     call.delete_workflow = lambda workflow_id: delete_workflow(_request(), workflow_id)
+    card = _route(
+        comfyui_module.create_router(server), "/comfyui/workflows/{workflow_name}/card"
+    )
+    call.card = lambda name: card(_request(), name)
     try:
         yield call, user_dir, built_in, hub
     finally:
@@ -897,11 +903,14 @@ def test_a_broken_inbox_file_is_left_and_the_rest_imported(import_route, caplog)
 def test_deleting_a_workflow_trashes_it_by_way_of_the_inbox(import_route):
     call, _user_dir, _built_in, hub = import_route
     graph = _t2i_graph()
-    workflow_id = call(name="flow", workflow=graph)["workflow_id"]
+    call.inbox.mkdir()
+    (call.inbox / "flow.json").write_text(json.dumps(graph), encoding="utf-8")
+    workflow_inbox.reconcile(str(call.inbox), call.store)
+    (workflow_id,) = _manual(hub)
     digest = workflow_inbox.content_hash(graph)
     # A copy dropped under another name carries the same hash and goes too, or
-    # the next start would import the deleted workflow again.
-    call.inbox.mkdir()
+    # the next start would import the deleted workflow again: the inbox is
+    # this workflow's.
     (call.inbox / f"copy.{digest}.json").write_text(json.dumps(graph), encoding="utf-8")
     # And one the watcher has not renamed yet.
     (call.inbox / "fresh.json").write_text(json.dumps(graph), encoding="utf-8")
@@ -918,6 +927,7 @@ def test_deleting_a_workflow_trashes_it_by_way_of_the_inbox(import_route):
     assert _inbox_names(call) == []
     assert sorted(p.name for p in call.trash.iterdir()) == [
         f"copy.{digest}.json",
+        f"flow (2).{digest}.json",
         f"flow.{digest}.json",
         "fresh.json",
     ]
@@ -927,6 +937,82 @@ def test_deleting_a_workflow_trashes_it_by_way_of_the_inbox(import_route):
     shutil.move(call.trash / f"flow.{digest}.json", call.inbox)
     assert workflow_inbox.reconcile(str(call.inbox), call.store) == 1
     assert list(_manual(hub).values()) == [("flow", "inbox", graph)]
+
+
+def test_deleting_a_workflow_leaves_another_live_copys_inbox_file(import_route):
+    """Identical copies are allowed, so an inbox file of the same content can
+    be another live workflow's: a delete sweeps only what it owns."""
+    call, _user_dir, _built_in, hub = import_route
+    graph = _t2i_graph()
+    imported = call(name="flow", workflow=graph)["workflow_id"]
+    call.inbox.mkdir()
+    (call.inbox / "flow.json").write_text(json.dumps(graph), encoding="utf-8")
+    workflow_inbox.reconcile(str(call.inbox), call.store)
+    (dropped,) = set(_manual(hub)) - {imported}
+    digest = workflow_inbox.content_hash(graph)
+
+    call.delete_workflow(imported)
+
+    assert _inbox_names(call) == [f"flow.{digest}.json"]
+    assert [p.name for p in call.trash.iterdir()] == [f"flow (2).{digest}.json"]
+    assert workflow_inbox.reconcile(str(call.inbox), call.store) == 0
+    assert list(_manual(hub)) == [dropped]
+
+
+def test_deleting_an_adopted_workflow_trashes_its_file_and_never_a_built_in(
+    import_route,
+):
+    """A workflow data step 7 made of a user file takes the file with it, or
+    the file would still list and could be made a workflow again; a built-in
+    made a workflow is shipped data and its file is never touched."""
+    call, user_dir, built_in, hub = import_route
+    user_dir.mkdir()
+    graph = _t2i_graph()
+    (user_dir / "old.json").write_text(json.dumps(graph), encoding="utf-8")
+    adopted = create_manual_workflow(hub, "old", graph, "import")
+    workflow_origin.record_pulled(
+        hub, workflow_origin.FILE_ORIGIN, "old.json", adopted, None, None
+    )
+    shipped = _t2i_graph()
+    shipped["2"]["inputs"]["text"] = "shipped"
+    (built_in / "Shipped.json").write_text(json.dumps(shipped), encoding="utf-8")
+
+    # Built-ins only: a user file is not made a workflow by name.
+    with pytest.raises(HTTPException) as refused:
+        call.card("old.json")
+    assert refused.value.status_code == 404
+    builtin_id = call.card("Shipped.json")["workflow_id"]
+
+    call.delete_workflow(adopted)
+    assert not (user_dir / "old.json").exists()
+    assert [_load(p) for p in call.trash.iterdir()] == [graph]
+    call.delete_workflow(builtin_id)
+    assert _load(built_in / "Shipped.json") == shipped
+    assert _manual(hub) == {}
+
+
+def test_a_document_past_the_size_cap_is_refused(import_route, monkeypatch):
+    call, _user_dir, _built_in, hub = import_route
+    monkeypatch.setattr(comfyui_module, "MAX_WORKFLOW_FILE_BYTES", 50)
+    with pytest.raises(HTTPException) as refused:
+        call(name="big", workflow=_t2i_graph())
+    assert refused.value.status_code == 413
+    assert _manual(hub) == {}
+
+
+def test_a_workflow_deleted_twice_at_once_is_a_404(import_route, monkeypatch):
+    """The second of two concurrent deletes finds the row gone: a 404, never
+    a 500 out of reading a row that is not there."""
+    call, _user_dir, _built_in, hub = import_route
+    workflow_id = call(name="flow", workflow=_t2i_graph())["workflow_id"]
+    call.delete_workflow(workflow_id)
+    # As if this request had found it before the other one deleted it.
+    monkeypatch.setattr(
+        workflows_module, "find_workflow", lambda *a, **k: Workflow(workflow_id)
+    )
+    with pytest.raises(HTTPException) as gone:
+        call.delete_workflow(workflow_id)
+    assert gone.value.status_code == 404
 
 
 def test_deleting_an_inbox_workflow_lets_its_content_back_in(import_route):

@@ -1146,10 +1146,13 @@ the two sides have agreed:
    `overwrite` and `keep_both` are gone with the folder). The watched inbox
    and the ComfyUI pull deduplicate on `workflow_origin` only, so a restart
    re-imports nothing. `POST /api/v1/comfyui/workflows/{workflow_name}/card`
-   (`OWNER_ONLY`) makes a stored workflow file, built-in or user, a manual
-   workflow once (`origin: builtin`) and answers `{name, workflow_id}`: Edit
-   with ComfyUI asks it for the Flux.2 Klein edit workflow and opens the Run
-   popup on the id. 404 for an unknown name, 409 when it is not a workflow.
+   (`OWNER_ONLY`) makes a **built-in** workflow file a manual workflow once
+   (`origin: builtin`) and answers `{name, workflow_id}`: Edit with ComfyUI
+   asks it for the Flux.2 Klein edit workflow and opens the Run popup on the
+   id. 404 for an unknown name or a user file (data step 7 made that a
+   workflow already, and one deleted must not come back), 409 when it is not
+   a workflow. A document past `MAX_WORKFLOW_FILE_BYTES` serialised is a 413
+   on every route that stores one.
 
    **ComfyUI converts such a document, PixlStash does not (#1530).** `POST
    /api/v1/comfyui/workflows/convert` (`OWNER_ONLY`) takes `{name, workflow,

@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from pixlstash.hub.db import HubDatabase
-from pixlstash.hub.workflow_origin import BUILTIN_ORIGIN, INBOX_ORIGIN
+from pixlstash.hub.workflow_origin import BUILTIN_ORIGIN, FILE_ORIGIN, INBOX_ORIGIN
 from pixlstash.pixl_logging import get_logger
 from pixlstash.services.workflow_identity import model_fix_kind
 from pixlstash.utils.workflow_ids import MANUAL_PREFIX
@@ -245,8 +245,9 @@ def delete_manual_workflow(hub: HubDatabase, workflow_id: str) -> None:
     """
     with hub.transaction() as conn:
         conn.execute(
-            "DELETE FROM workflow_origin WHERE workflow_name = ? AND origin IN (?, ?)",
-            (workflow_id, INBOX_ORIGIN, BUILTIN_ORIGIN),
+            "DELETE FROM workflow_origin WHERE workflow_name = ? "
+            "AND origin IN (?, ?, ?)",
+            (workflow_id, INBOX_ORIGIN, BUILTIN_ORIGIN, FILE_ORIGIN),
         )
         conn.execute(
             "UPDATE workflow_origin SET dismissed = 1 WHERE workflow_name = ?",

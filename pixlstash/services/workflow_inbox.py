@@ -135,12 +135,15 @@ def reconcile(folder: str, store: Callable[[str, dict], dict]) -> int:
         return imported
 
 
-def trash_workflow(folder: str, name: str, workflow: dict) -> None:
+def trash_workflow(
+    folder: str, name: str, workflow: dict, *, sweep: bool = True
+) -> None:
     """Write *workflow* back to the inbox and move it to the system trash.
 
-    Every inbox file holding the workflow goes, not just the one written here,
-    or a copy dropped under another name would import it again at the next
-    reconcile. What a file holds is read from it, never taken from its name: a
+    With *sweep*, every inbox file holding the workflow goes, not just the one
+    written here, or a copy dropped under another name would import it again
+    at the next reconcile. The caller sweeps only what the workflow it deletes
+    owns: an inbox file of identical content can be another live workflow's. What a file holds is read from it, never taken from its name: a
     file edited in place still carries its old hash until the watcher renames
     it, and that edit must stay for the watcher to import. For the same reason
     the copy is written to a name no file has yet. Call it holding
@@ -168,6 +171,9 @@ def trash_workflow(folder: str, name: str, workflow: dict) -> None:
         except FileExistsError:
             written = f"{stem} ({counter}).{digest}.json"
             counter += 1
+    if not sweep:
+        send2trash(path)
+        return
     for entry in _entries(folder):
         path = os.path.join(folder, entry)
         if _file_hash(path) == digest:

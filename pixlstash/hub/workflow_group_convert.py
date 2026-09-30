@@ -471,6 +471,13 @@ def adopt_workflow_files(conn: sqlite3.Connection, folder: str) -> int:
             "UPDATE workflow_origin SET workflow_name = ? WHERE workflow_name = ?",
             (workflow_id, name),
         )
+        # Which file it was, so deleting the workflow trashes the file too
+        # (`DELETE /workflows/{id}`); a file left behind would still list.
+        conn.execute(
+            "INSERT OR IGNORE INTO workflow_origin (origin, remote_path, "
+            "workflow_name, first_pulled_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
+            ("file", name, workflow_id, created, created),
+        )
         adopted += 1
     logger.info("Made %d stored workflow file(s) manual workflows.", adopted)
     return adopted
