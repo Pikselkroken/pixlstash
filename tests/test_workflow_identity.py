@@ -9,8 +9,10 @@ import json
 
 import pytest
 
+from pixlstash.hub.workflow_group_convert import _core_strip_v1
 from pixlstash.services.workflow_hash import (
     WorkflowGraphError,
+    graph_key,
     asset_reference,
     structural_document,
     structural_hash,
@@ -19,6 +21,7 @@ from pixlstash.services.workflow_hash import (
 from pixlstash.services.workflow_identity import (
     FACE_DETAILER,
     RECIPE,
+    SEED_VARIANCE,
     STRUCTURAL,
     UPSCALE,
     Difference,
@@ -331,6 +334,133 @@ def test_core_labels_tell_the_nodes_of_one_graph_apart_and_skip_stripped_ones():
     assert not {"L0", "30", "31"} & set(labels)
 
 
+# ── core rule v2: what the second pass strips ─────────────────────────────
+
+
+def _positive_through(node_id: str, node: dict) -> dict:
+    """``extra`` putting *node* between the positive prompt and the sampler."""
+    sampler = _graph()["5"]
+    sampler["inputs"]["positive"] = [node_id, 0]
+    return {node_id: node, "5": sampler}
+
+
+# name: (the clean graph's extra, its twin's extra)
+CORE_V2_TWINS = {
+    "orphan-encoder": (
+        None,
+        {"97": _node("CLIPTextEncode", text="left", clip=["1", 1])},
+    ),
+    "orphan-chain": (
+        None,
+        {
+            "96": _node("Textbox", text="left"),
+            "97": _node("CLIPTextEncode", text=["96", 0], clip=["1", 1]),
+        },
+    ),
+    "textbox": (
+        None,
+        {
+            "96": _node("Textbox", text="a cat"),
+            "2": _node("CLIPTextEncode", text=["96", 0], clip=["1", 1]),
+        },
+    ),
+    "text-multiline": (
+        None,
+        {
+            "96": _node("Text Multiline", text="a cat"),
+            "2": _node("CLIPTextEncode", text=["96", 0], clip=["1", 1]),
+        },
+    ),
+    "film-grain": (
+        None,
+        {
+            "95": _node("PhotoFilmGrain", images=["6", 0], grain_intensity=0.1),
+            "7": _node("SaveImage", images=["95", 0], filename_prefix="out"),
+        },
+    ),
+    "gguf-unet": (
+        {"1": _node("UNETLoader", unet_name="base.gguf")},
+        {"1": _node("UnetLoaderGGUF", unet_name="base.gguf")},
+    ),
+    "multigpu-unet": (
+        {"1": _node("UNETLoader", unet_name="base.gguf")},
+        {"1": _node("UNETLoaderDisTorch2MultiGPU", unet_name="base.gguf")},
+    ),
+    "shelf-checkpoint": (
+        None,
+        {"1": _node("PixlStashCheckpointLoader", checkpoint_id="7")},
+    ),
+    "seed-variance": (
+        None,
+        _positive_through(
+            "94", _node("SeedVarianceEnhancer", conditioning=["2", 0], strength=0.5)
+        ),
+    ),
+}
+
+
+@pytest.mark.parametrize("pair", CORE_V2_TWINS.values(), ids=CORE_V2_TWINS.keys())
+def test_core_v2_stacks_a_graph_with_its_clean_twin(pair):
+    """Left-over nodes, film grain, a loader variant or seed variance: one core."""
+    clean, member = _graph(extra=pair[0]), _graph(extra=pair[1])
+    assert topology_hash(clean) != topology_hash(member)
+    assert core_hash(_doc(clean)) == core_hash(_doc(member))
+    for node_id in ("1", "4", "5", "6", "7"):
+        assert _core_label(clean, node_id) == _core_label(member, node_id)
+
+
+def test_the_prune_is_refused_when_it_would_take_every_sampler():
+    """A graph whose only output was a (stripped) preview keeps its sampler."""
+    previewed = _graph(preview=True)
+    # The only save left saves an input: the prune would keep that and nothing
+    # else, which is what the guard is for.
+    previewed["7"] = _node("SaveImage", images=["60", 0])
+    previewed["60"] = _node("LoadImage", image="in.png")
+    labels = core_node_labels(_doc(previewed))
+    assert {"5", "6"} <= set(labels), "the only sampler was pruned"
+    # Refused whole: the orphan encoder beside it is kept too.
+    orphan = dict(previewed, **CORE_V2_TWINS["orphan-encoder"][1])
+    assert "97" in core_node_labels(_doc(orphan))
+    assert core_hash(_doc(orphan)) != core_hash(_doc(previewed))
+
+
+def test_a_dead_node_that_is_not_the_last_sampler_is_pruned():
+    extra = {
+        "97": _node(
+            "KSampler", model=["1", 0], positive=["2", 0], latent_image=["4", 0]
+        )
+    }
+    assert "97" not in core_node_labels(_doc(_graph(extra=extra)))
+
+
+def test_seed_variance_is_a_stage_the_card_has_and_chips():
+    member = _doc(_graph(extra=CORE_V2_TWINS["seed-variance"][1]))
+    assert special_groups(member) == (SEED_VARIANCE,)
+    assert differs_by(_doc(_graph()), member) == ["+ seed variance"]
+
+
+def test_core_v2_is_a_function_of_the_v1_core():
+    """Many-to-one: graphs sharing a v1 core share a v2 core (data step 8)."""
+    graphs = [
+        _graph(**variant, extra=extra)
+        for variant in ({}, {"preview": True}, {"upscale": True}, {"loras": ("a",)})
+        for extra in [None, *(twin for pair in CORE_V2_TWINS.values() for twin in pair)]
+    ]
+    # A node read only by a preview (which v1 strips) and the same node read by
+    # nothing have one v1 core: pruning before the strip would split them.
+    shown = {"80": _node("LoadImage", image="x.png")}
+    graphs += [
+        _graph(extra=shown),
+        _graph(extra=dict(shown, **{"81": _node("PreviewImage", images=["80", 0])})),
+    ]
+    v2_of_v1: dict[str, set[str]] = {}
+    for graph in graphs:
+        doc = _doc(graph)
+        v2_of_v1.setdefault(graph_key(_core_strip_v1(doc)), set()).add(core_hash(doc))
+    assert len(v2_of_v1) > 1
+    assert all(len(v2) == 1 for v2 in v2_of_v1.values())
+
+
 def test_an_extra_lora_loader_splits_when_loras_are_not_stripped():
     plain, member = _doc(_graph()), _doc(_graph(loras=("a.safetensors",)))
     assert core_hash(plain, strip_loras=False) != core_hash(member, strip_loras=False)
@@ -341,7 +471,13 @@ def test_img2img_and_txt2img_do_not_stack():
 
 
 def test_a_real_step_added_does_not_stack():
-    extra = {"98": _node("ControlNetLoader", control_net_name="canny.safetensors")}
+    # Wired in: a loader nothing reads is a dead node, and the core prunes it.
+    extra = {
+        "98": _node("ControlNetLoader", control_net_name="canny.safetensors"),
+        "99": _node("ControlNetApply", conditioning=["2", 0], control_net=["98", 0]),
+    }
+    extra["5"] = _graph()["5"]
+    extra["5"]["inputs"]["positive"] = ["99", 0]
     assert core_hash(_doc(_graph())) != core_hash(_doc(_graph(extra=extra)))
 
 

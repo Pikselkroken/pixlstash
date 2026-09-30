@@ -639,8 +639,8 @@ class WorkflowCard(BaseModel):
     specials: list[str] | None = Field(
         None,
         description=(
-            "The post-processing the base graph carries, from `upscale` and "
-            "`face_detailer`. **Null and `[]` are different answers**: null "
+            "The post-processing the base graph carries, from `upscale`, "
+            "`face_detailer` and `seed_variance`. **Null and `[]` are different answers**: null "
             "means the graph has not been read for it yet, `[]` means it was "
             "read and has none."
         ),
@@ -1188,8 +1188,8 @@ class RunRequest(BaseModel):
     # Optional stages this run goes without (#1621): each is bypassed on the
     # run's copy, what the stage alone read is pruned, and a card whose stage
     # cannot be taken out is refused with `stage_not_skippable`, never run whole.
-    skip_stages: list[Literal["upscale", "face_detailer"]] = Field(
-        default_factory=list, max_length=2
+    skip_stages: list[Literal["upscale", "face_detailer", "seed_variance"]] = Field(
+        default_factory=list, max_length=3
     )
     values: list[RunValue] = Field(default_factory=list, max_length=MAX_DEFAULTS)
     # The models this run loads, by loader address (#1622). A model from
@@ -5187,7 +5187,7 @@ def create_router(server) -> APIRouter:
             "and reported in bypassed_loras with requested true, and one that "
             "cannot be skipped without dropping another LoRA is "
             "lora_not_skippable. skip_stages names optional stages (upscale, "
-            "face_detailer) this run goes without; a card whose stage cannot "
+            "face_detailer, seed_variance) this run goes without; a card whose stage cannot "
             "be taken out is stage_not_skippable. Likewise a custom seed node this ComfyUI "
             "lacks (rgthree's Seed and its kin) is replaced by the run's own "
             "seed and named in replaced_nodes, where every input it fed is one "

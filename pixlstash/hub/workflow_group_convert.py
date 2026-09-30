@@ -58,6 +58,7 @@ from pixlstash.services.comfyui_recipe_service import LORA_DIGEST_FIELD_RE
 from pixlstash.services.model_shelf_service import adapter_digest_index
 from pixlstash.services.workflow_card_service import LORA_ADDRESS_PREFIX
 from pixlstash.services.workflow_hash import (
+    ReducedNode,
     WorkflowGraphError,
     asset_reference,
     normalized_filename,
@@ -69,6 +70,9 @@ from pixlstash.services.workflow_identity import (
     core_node_labels,
     model_fix_kind,
     WORKFLOW_KEY_VERSION,
+    _core_strip,
+    _reduce,
+    _strip,
     slots,
     topology_node_labels,
     unswapped,
@@ -482,6 +486,15 @@ def adopt_workflow_files(conn: sqlite3.Connection, folder: str) -> int:
         adopted += 1
     logger.info("Made %d stored workflow file(s) manual workflows.", adopted)
     return adopted
+
+
+# The stamp core rule v1 wrote, which data step 8 re-derives from.
+_CORE_RULE_V1 = f"v1-loras-{'stripped' if STRIP_LORAS_FOR_STACKS else 'kept'}"
+
+
+def _core_strip_v1(document: dict) -> dict[str, ReducedNode]:
+    """Core rule v1's graph, for data step 8's label maps. Not the live rule."""
+    return _strip(_reduce(document), _core_strip(STRIP_LORAS_FOR_STACKS))
 
 
 def _carry_group_state(conn: sqlite3.Connection, group: str, heir: str) -> None:

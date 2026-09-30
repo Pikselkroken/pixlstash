@@ -752,7 +752,11 @@ const SCALAR_PINNED = ["steps", "cfg", "cfg_scale", "guidance"];
 const SIZE_INPUTS = ["width", "height"];
 const CHECKPOINT_INPUT = "ckpt_name";
 /** The stages `skip_stages` takes, as a row names them. */
-const STAGE_LABELS = { upscale: "Upscale", face_detailer: "Face detailer" };
+const STAGE_LABELS = {
+  upscale: "Upscale",
+  face_detailer: "Face detailer",
+  seed_variance: "Seed variance",
+};
 /**
  * Said in the Save dialog when the form is set to keep the source's seed.
  *

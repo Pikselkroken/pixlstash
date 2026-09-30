@@ -239,7 +239,10 @@ export function readReason(reason) {
       // Blocking, never a full run instead: the owner asked for this run
       // without the stage (#1621). The server's sentence already says which
       // stage and which node, so it is the whole notice when there is one.
-      const stage = reason.stage === "face_detailer" ? "FaceDetailer" : "upscale";
+      const stage =
+        { face_detailer: "FaceDetailer", seed_variance: "seed variance" }[
+          reason.stage
+        ] ?? "upscale";
       const said = String(reason.message || "").trim();
       return read(
         said || `The ${stage} pass cannot be switched off for this run.`,
