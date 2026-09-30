@@ -813,9 +813,9 @@ Tools: `search_pictures`, `list_pictures`, `count_pictures`, `get_picture`,
 `get_recipe`.
 `list_pictures` and `search_pictures` also narrow by `set_id`, `character_id`,
 `project_id` and `tags`; `list_pictures` and `count_pictures` also by the
-`workflow_key` a recipe names. `get_recipe` says whether the model forks into
+`workflow_id` a recipe names. `get_recipe` says whether the model forks into
 several sampler passes and which LoRAs feed each, and gives the path that opens
-the picture's workflow card in PixlStash.
+the picture's workflow in PixlStash.
 
 The MCP server reads `PIXLSTASH_TOKEN` once, when it starts. After you replace
 or revoke the token, restart or reconnect it in your MCP client.
