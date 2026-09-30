@@ -659,10 +659,9 @@ function defaultView() {
     folderLayout: "drive",
     // How an open set's tray draws its models: as cards or as a comparison
     // list. Carried at all times and only read under `workflow_set`, exactly as
-    // `folderLayout` is only read under `folder`. The same two views the
-    // Workflows grid's stack panel offers, and remembered the same way - for
-    // every tray rather than per tray, because the switch answers "how do I read
-    // a tray" rather than anything about the one in front of you.
+    // `folderLayout` is only read under `folder`. Remembered for every tray
+    // rather than per tray, because the switch answers "how do I read a tray"
+    // rather than anything about the one in front of you.
     trayView: "grid",
     columnWidths: { ...DEFAULT_COLUMN_WIDTHS },
   };
