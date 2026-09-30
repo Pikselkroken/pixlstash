@@ -28,6 +28,7 @@ from pixlstash.hub import workflow_cards, workflow_origin
 from pixlstash.hub.workflow_card_reads import (
     find_workflow,
     manual_documents_holding,
+    manual_workflow_ids,
     workflow_of_topology,
 )
 from pixlstash.hub.workflow_group_writes import (
@@ -1078,8 +1079,12 @@ def _picture_workflow_id(server, pic_id: int) -> str | None:
         pics = server.vault.db.run_immediate_read_task(
             Picture.find,
             id=pic_id,
-            select_fields=["id", "workflow_structural_hash"],
+            select_fields=["id", "workflow_structural_hash", "run_workflow_id"],
         )
+        made_by = getattr(pics[0], "run_workflow_id", None) if pics else None
+        if made_by and made_by in manual_workflow_ids(hub):
+            # Filed on the manual workflow that made it, while that lives.
+            return made_by
         structural_hash = (
             getattr(pics[0], "workflow_structural_hash", None) if pics else None
         )

@@ -196,6 +196,16 @@ def _manual_cards(hub: HubDatabase) -> list[Card]:
     ]
 
 
+def manual_workflow_ids(hub: HubDatabase) -> list[str]:
+    """Every live manual workflow's id, sorted: what the vault reads file under."""
+    return [
+        row[0]
+        for row in hub.fetchall(
+            "SELECT workflow_id FROM workflow_document ORDER BY workflow_id"
+        )
+    ]
+
+
 def manual_documents_holding(hub: HubDatabase, canonical: str) -> list[str]:
     """Every manual workflow whose document is *canonical*, sorted by id.
 

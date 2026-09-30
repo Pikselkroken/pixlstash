@@ -265,9 +265,9 @@ class _FakeServer:
 
 
 class TestOutputProcessing:
-    def _run(self, monkeypatch, images, pixlstash_ids, imported=()):
+    def _run(self, monkeypatch, images, pixlstash_ids, imported=(), **kwargs):
         server = _FakeServer()
-        calls = {"downloads": 0, "stacked": None, "sourced": None}
+        calls = {"downloads": 0, "stacked": None, "sourced": None, "filed": None}
 
         monkeypatch.setattr(
             comfyui_service,
@@ -298,11 +298,33 @@ class TestOutputProcessing:
         monkeypatch.setattr(
             comfyui_service, "_copy_set_and_project_assignments", lambda *a, **kw: None
         )
+        monkeypatch.setattr(
+            comfyui_service,
+            "_set_run_workflow_id",
+            lambda srv, workflow_id, ids: calls.__setitem__(
+                "filed", (workflow_id, ids)
+            ),
+        )
 
         comfyui_service._process_comfyui_outputs(
-            server, "http://comfy", "prompt-1", ["9"], 7, None
+            server, "http://comfy", "prompt-1", ["9"], 7, None, **kwargs
         )
         return server, calls
+
+    def test_a_manual_workflows_run_files_what_it_made_on_it(self, monkeypatch):
+        """Imported and saver-reported pictures both; a plain run files none."""
+        _server, calls = self._run(
+            monkeypatch,
+            images=[{"filename": "out_00001.png", "subfolder": "", "type": "output"}],
+            pixlstash_ids=[41],
+            imported=[40],
+            run_workflow_id="manual:" + "a" * 32,
+        )
+        assert calls["filed"] == ("manual:" + "a" * 32, [40, 41])
+        _server, calls = self._run(
+            monkeypatch, images=[], pixlstash_ids=[41], imported=[]
+        )
+        assert calls["filed"] is None
 
     def test_ids_reported_by_the_saver_are_stacked_and_announced(self, monkeypatch):
         server, calls = self._run(

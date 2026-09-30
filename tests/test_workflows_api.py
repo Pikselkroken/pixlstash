@@ -59,7 +59,10 @@ from pixlstash.hub.workflow_card_reads import (
     variant_documents,
 )
 from pixlstash.hub.workflow_card_reads import manual_document
-from pixlstash.hub.workflow_group_writes import create_manual_workflow
+from pixlstash.hub.workflow_group_writes import (
+    create_manual_workflow,
+    delete_manual_workflow,
+)
 from pixlstash.hub.workflow_cards import CORE_RULE_VERSION
 from pixlstash.hub.workflows import (
     PictureGhost,
@@ -3439,6 +3442,71 @@ def test_card_pictures_are_every_variants_newest_kept_pictures(workflow_env):
     assert limited.json() == [ids["busy_four.png"]]
 
 
+def test_a_manual_runs_pictures_count_on_it_and_fall_back_when_it_goes(
+    workflow_env,
+):
+    """Filing is exclusive: a picture a manual workflow's run made counts on
+    the manual card and not on the automatic one its graph is in - in the
+    grid's counts, covers and values, its picture strip, the picture filter
+    and a picture's own workflow. Deleting the manual workflow puts it back,
+    with no write to the vault."""
+    server, owner = workflow_env.server, workflow_env.owner
+    _set_picture_models(
+        server,
+        {
+            "busy_one.png": (["SDXL/RealVisXL.safetensors"], "[]"),
+            "busy_two.png": (["SDXL/RealVisXL.safetensors"], "[]"),
+        },
+    )
+    before = _by_key(_cards(owner))[BUSY_WF]
+    manual = create_manual_workflow(
+        server.hub, "Mine", {"1": {"class_type": "SaveImage", "inputs": {}}}, "import"
+    )
+    ids = _picture_ids_by_path(server)
+    pid = ids["busy_one.png"]
+    comfyui_service._set_run_workflow_id(server, manual, [pid])
+
+    def pictures(workflow_id):
+        r = owner.get(f"{API}/workflows/{workflow_id}/pictures?limit=60")
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    def filtered(workflow_id):
+        r = owner.get(f"{API}/pictures", params={"workflow": workflow_id})
+        assert r.status_code == 200, r.text
+        return {picture["id"] for picture in r.json()}
+
+    cards = _by_key(_cards(owner))
+    mine, busy = cards[manual], cards[BUSY_WF]
+    assert (mine["picture_count"], mine["rating"]) == (1, 5)
+    assert [cover["picture_id"] for cover in mine["covers"]] == [pid]
+    assert mine["recipe_values"]["checkpoints"] == [
+        {"name": "SDXL/RealVisXL.safetensors", "pictures": 1}
+    ]
+    assert busy["picture_count"] == before["picture_count"] - 1
+    assert pid not in [cover["picture_id"] for cover in busy["covers"]]
+    assert busy["recipe_values"]["checkpoints"] == [
+        {"name": "SDXL/RealVisXL.safetensors", "pictures": 1}
+    ]
+    assert pictures(manual) == [pid]
+    assert pid not in pictures(BUSY_WF)
+    assert filtered(manual) == {pid}
+    assert pid not in filtered(BUSY_WF) and ids["busy_two.png"] in filtered(BUSY_WF)
+    assert comfyui_module._picture_workflow_id(server, pid) == manual
+
+    delete_manual_workflow(server.hub, manual)
+
+    assert _by_key(_cards(owner))[BUSY_WF]["picture_count"] == before["picture_count"]
+    assert pid in pictures(BUSY_WF) and pid in filtered(BUSY_WF)
+    assert comfyui_module._picture_workflow_id(server, pid) == BUSY_WF
+
+    def run_workflow_id(session):
+        return session.get(Picture, pid).run_workflow_id
+
+    # No vault write: the picture still names the workflow that made it.
+    assert server.vault.db.run_task(run_workflow_id) == manual
+
+
 def test_an_unknown_workflow_is_a_404_and_a_malformed_id_a_422(workflow_env):
     """Both read routes: an empty 200 would read as "this workflow has nothing"
     rather than "this machine has no such workflow". A card key is no longer
@@ -5394,11 +5462,24 @@ def test_a_manual_workflow_runs_its_own_document_and_nothing_else(runnable):
     values = _detail(runnable.owner, manual)["card"]["default_recipe"]["values"]
     assert values and not any(v["slot_label"].startswith("core:") for v in values)
 
+    importing: list[dict] = []
+    runnable.monkeypatch.setattr(
+        workflows_routes,
+        "_process_comfyui_outputs",
+        lambda *args, **kwargs: importing.append(kwargs),
+    )
     r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": manual})
     assert r.status_code == 200, r.text
     (group,) = r.json()["groups"]
     assert (group["source"], group["workflow_id"]) == ("file", manual), group
     assert runnable.submitted[0]["graph"]["3"]["inputs"]["steps"] == 13
+    # What it makes is filed on it; a run of an automatic workflow files none.
+    r = runnable.owner.post(f"{API}/workflows/run", json={"workflow_id": RUN_WF})
+    assert r.status_code == 200, r.text
+    deadline = time.monotonic() + 5
+    while len(importing) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)  # the import runs on a thread of its own
+    assert [kwargs["run_workflow_id"] for kwargs in importing] == [manual, None]
 
 
 def test_a_kept_pictures_embedded_graph_is_the_second_source(runnable, monkeypatch):

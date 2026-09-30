@@ -1351,6 +1351,46 @@ def test_0124_adds_workflow_id_and_models_on_a_fresh_and_a_populated_vault():
             ).fetchall() == [("a look", "a-key", None, None)]
 
 
+def test_0126_adds_run_workflow_id_on_a_fresh_and_a_populated_vault():
+    """The column and its index arrive either way; existing pictures are NULL.
+
+    NULL is right for every picture the upgrade finds: no manual workflow
+    existed to make one.
+    """
+
+    def shape(conn):
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(picture)")}
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(picture)")}
+        return "run_workflow_id" in columns, "ix_picture_run_workflow_id" in indexes
+
+    with tempfile.TemporaryDirectory() as tmp:
+        db_path = os.path.join(tmp, "vault.db")
+        db_url = f"sqlite:///{db_path}"
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert shape(conn) == (True, True), "the baseline's create_all()"
+
+        down = _run_alembic(
+            ["downgrade", "0125_refile_recipes_off_hand_made_workflows"],
+            db_url,
+            _MIGRATIONS_DIR,
+        )
+        assert down.returncode == 0, down.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert shape(conn) == (False, False)
+            _insert_minimal_row(conn, "picture", file_path="before.png")
+            conn.commit()
+
+        up = _run_alembic(["upgrade", "head"], db_url, _MIGRATIONS_DIR)
+        assert up.returncode == 0, up.stderr
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+            assert shape(conn) == (True, True), "migration 0126"
+            assert conn.execute(
+                "SELECT file_path, run_workflow_id FROM picture"
+            ).fetchall() == [("before.png", None)]
+
+
 def test_the_migration_chain_has_exactly_one_head():
     """The v1.8.1 merge left two 0086 revisions; only one may be a head.
 

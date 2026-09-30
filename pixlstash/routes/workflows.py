@@ -63,6 +63,7 @@ from pixlstash.hub.workflow_card_reads import (
     group_pins,
     instance_documents,
     manual_document,
+    manual_workflow_ids,
     model_fix_labels,
     model_fixes,
     workflow_of_topology,
@@ -2869,8 +2870,12 @@ def create_router(server) -> APIRouter:
         ),
     ):
         server.auth.ensure_secure_when_required(request)
-        workflow = _require_workflow(_hub(), workflow_id)
-        return read_card_picture_ids(server.vault, workflow.variants, limit)
+        hub = _hub()
+        workflow = _require_workflow(hub, workflow_id)
+        live = manual_workflow_ids(hub)
+        # A manual workflow's pictures are filed under its own id.
+        keys = [workflow_id] if workflow_id in live else workflow.variants
+        return read_card_picture_ids(server.vault, keys, limit, live)
 
     # ── The writes (#1623) ──────────────────────────────────────────────────
     # Every one of these emits `CHANGED_WORKFLOWS` naming workflow ids, which
@@ -5331,6 +5336,10 @@ def create_router(server) -> APIRouter:
                                 "view_context": destination,
                                 "origin_generation": lease.generation,
                                 "origin_library_uuid": lease.library_uuid,
+                                # A manual workflow's run is filed on it.
+                                "run_workflow_id": group.workflow_id
+                                if (group.workflow_id or "").startswith(MANUAL_PREFIX)
+                                else None,
                             },
                             daemon=True,
                         ).start()

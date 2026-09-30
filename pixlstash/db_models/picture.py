@@ -344,6 +344,18 @@ class Picture(SQLModel, table=True):
             "workflow_instance_hash", String, default=None, nullable=True, index=True
         ),
     )
+    # The MANUAL workflow (``manual:<uuid>``, a hub row) a run of which made
+    # this picture, or NULL. Written once, by the import of a manual run's
+    # outputs; filing is exclusive, so such a picture counts on the manual
+    # workflow and not on the automatic one its graph is in - while the
+    # manual workflow lives. Delete it and the picture falls back, with no
+    # write here (the reads take the hub's list of live ids).
+    run_workflow_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(
+            "run_workflow_id", String, default=None, nullable=True, index=True
+        ),
+    )
     # The scanned-marker, and the re-hash selector when the rule changes.
     # NULL means never scanned; set means scanned, with ALL THREE
     # `workflow_*_hash` columns above NULL when the picture carried no

@@ -324,8 +324,15 @@ def _figures(
         members = [by_key[key] for key in workflow.cards if key in by_key]
         base = by_key.get(workflow.base_card or "")
         head = base or members[0]
-        variants = list(
-            dict.fromkeys([*(base.variants if base else ()), *workflow.variants])
+        # A manual workflow's pictures are filed under its own id (the vault
+        # reads group by it, `workflow_library_service._filed_as`), so that id
+        # is the one key its counts, covers and values are read under.
+        variants = (
+            [workflow.workflow_id]
+            if base is not None and base.manual
+            else list(
+                dict.fromkeys([*(base.variants if base else ()), *workflow.variants])
+            )
         )
         files = [card.file_name for card in [head, *members] if card.file_name]
         card = replace(
@@ -490,7 +497,7 @@ def read_grid(
     )
     workflows = workflow_index(hub, counts, cards)
     activity, candidates, saved_recipes, model_values = read_card_grid(
-        vault, COVER_DEPTH
+        vault, COVER_DEPTH, [card.workflow_key for card in cards if card.manual]
     )
     figures = _figures(
         workflows,

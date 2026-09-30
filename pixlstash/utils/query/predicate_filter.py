@@ -28,12 +28,13 @@ scope*: they resolve to candidate-id sets and stay in ``filter_helpers.py``.  Co
 with a pre-resolved set via the caller's own ``Picture.id.in_(...)`` clause.
 """
 
+import json
 import os
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from fastapi import HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, exists, or_, text
+from sqlalchemy import and_, exists, func, not_, or_, text
 from sqlalchemy.sql.elements import ColumnElement
 from sqlmodel import select
 
@@ -44,6 +45,45 @@ from pixlstash.utils.service.person_tags import (
     OBJECT_META_TAGS,
     PERSON_TAGS,
 )
+
+# In a workflow filter's key list, a live manual workflow whose pictures are
+# NOT the filtered workflow's (``!manual:<uuid>``). See
+# :func:`workflow_keys_predicate`.
+NOT_MADE_BY = "!"
+
+
+def made_by_live_manual(live: Sequence[str]) -> ColumnElement:
+    """``picture.run_workflow_id`` names one of the *live* manual workflows.
+
+    One bound JSON array, however many ids, through ``json_each``: an ``IN``
+    list would bind one parameter per id and meet SQLite's cap. A picture
+    naming a manual workflow that has since been deleted is in none.
+    """
+    ids = func.json_each(json.dumps(sorted(live))).table_valued("value")
+    return Picture.run_workflow_id.in_(select(ids.c.value))
+
+
+def workflow_keys_predicate(keys: Sequence[str]) -> ColumnElement:
+    """The pictures a resolved workflow filter names.
+
+    *keys* is what ``routes/pictures/_listing._resolve_workflow_filter``
+    resolves ``?workflow=`` to: a manual workflow's own id (its runs, by
+    ``run_workflow_id``), or an automatic one's variants plus every live
+    manual id prefixed :data:`NOT_MADE_BY` - a manual run's picture is that
+    workflow's and never the automatic one's, while it lives. Empty matches
+    nothing.
+    """
+    manual = [key for key in keys if key.startswith("manual:")]
+    excluded = [key[1:] for key in keys if key.startswith(NOT_MADE_BY)]
+    variants = [key for key in keys if key not in manual and key[:1] != NOT_MADE_BY]
+    auto = Picture.workflow_structural_hash.in_(variants)
+    if excluded:
+        auto = and_(
+            auto,
+            or_(Picture.run_workflow_id.is_(None), not_(made_by_live_manual(excluded))),
+        )
+    return or_(Picture.run_workflow_id.in_(manual), auto) if manual else auto
+
 
 # Tag vocabularies for the live "Impossible tags" grid filters, lowercased once for
 # case-insensitive SQL membership.
@@ -161,12 +201,13 @@ class PredicateFilter(BaseModel):
     resolution_bucket: Optional[str] = None
     comfyui_models_filter: Optional[List[str]] = None
     comfyui_loras_filter: Optional[List[str]] = None
-    # "The pictures made by this workflow": the variants of one card (or of
-    # every card in one stack), resolved from the hub BEFORE the query is
-    # built, because the cards live in the hub and the pictures live in the
-    # vault - there is no join to write. ``None`` is no filter; an empty list
-    # is a card with no filed variant and must match nothing, so every read of
-    # this field tests ``is not None`` rather than truthiness.
+    # "The pictures made by this workflow": its variants (or a manual one's
+    # own id), resolved from the hub BEFORE the query is built, because the
+    # workflows live in the hub and the pictures live in the vault - there is
+    # no join to write (:func:`workflow_keys_predicate`). ``None`` is no
+    # filter; an empty list is a workflow with no filed variant and must match
+    # nothing, so every read of this field tests ``is not None`` rather than
+    # truthiness.
     workflow_structural_hashes: Optional[List[str]] = None
     tags_filter: Optional[List[str]] = None
     tags_rejected_filter: Optional[List[str]] = None
@@ -425,9 +466,7 @@ class PredicateFilter(BaseModel):
             # ponytail: one expanding IN, unchunked. SQLite's parameter ceiling
             # is 32,766 on the bundled builds, so a card would need that many
             # variants to reach it; a temp table and a join if one ever does.
-            preds.append(
-                Picture.workflow_structural_hash.in_(self.workflow_structural_hashes)
-            )
+            preds.append(workflow_keys_predicate(self.workflow_structural_hashes))
 
         preds.extend(self.face_predicates())
 
